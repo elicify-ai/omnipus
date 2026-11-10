@@ -25,7 +25,7 @@ import (
 )
 
 // newCompressedCfg builds a minimal config with Compressed=true and the four
-// core agents seeded (Mia, Jim, Ava, Ray).
+// core agents seeded (Mia, Jim, Omnipus, Ray).
 // firstPreviewedLazyName returns the first previewed (Tier 2) lazy tool in the
 // given policy-filtered set, failing the test when there is none. ADR-090
 // §5.4 shrinks the previewed set to exactly serve_web, so only General
@@ -158,7 +158,7 @@ func TestCompressedToolDefs_FullTierAlwaysPresent(t *testing.T) {
 	policyFiltered, _ := tools.FilterToolsByPolicy(allTools, jimAgent.AgentType, jimAgent.LoadToolPolicy())
 
 	ts := fakeTurnState(jimAgent, "sess-test")
-	defs := al.buildCompressedToolDefs(ts, policyFiltered)
+	defs := mustBuildCompressedToolDefs(t, al, ts, policyFiltered)
 
 	defNames := make(map[string]bool, len(defs))
 	for _, d := range defs {
@@ -198,7 +198,7 @@ func TestCompressedToolDefs_LazyTierAbsentWhenNotLoaded(t *testing.T) {
 	require.True(t, hasLazy, "Jim must have at least one lazy tool in policy-filtered set")
 
 	ts := fakeTurnState(jimAgent, "sess-lazy")
-	defs := al.buildCompressedToolDefs(ts, policyFiltered)
+	defs := mustBuildCompressedToolDefs(t, al, ts, policyFiltered)
 
 	defNames := make(map[string]bool, len(defs))
 	for _, d := range defs {
@@ -235,7 +235,7 @@ func TestCompressedToolDefs_LazyToolAppearsAfterLoad(t *testing.T) {
 	al.markToolsLoaded(bucketFor(jimAgent, sessionID), []string{lazyName})
 
 	ts := fakeTurnState(jimAgent, sessionID)
-	defs := al.buildCompressedToolDefs(ts, policyFiltered)
+	defs := mustBuildCompressedToolDefs(t, al, ts, policyFiltered)
 
 	defNames := make(map[string]bool, len(defs))
 	for _, d := range defs {
@@ -271,7 +271,7 @@ func TestCompressedToolDefs_DifferentSessionNoInheritance(t *testing.T) {
 
 	// Session B must not see the loaded tool.
 	tsB := fakeTurnState(jimAgent, "sess-B")
-	defsB := al.buildCompressedToolDefs(tsB, policyFiltered)
+	defsB := mustBuildCompressedToolDefs(t, al, tsB, policyFiltered)
 	for _, d := range defsB {
 		if d.Function.Name == lazyName {
 			t.Errorf("sess-B must not inherit sess-A's loaded tool %q", lazyName)
@@ -293,7 +293,7 @@ func TestCompressedToolDefs_InfraAlwaysPresent(t *testing.T) {
 	policyFiltered, _ := tools.FilterToolsByPolicy(allTools, jimAgent.AgentType, jimAgent.LoadToolPolicy())
 
 	ts := fakeTurnState(jimAgent, "sess-infra")
-	defs := al.buildCompressedToolDefs(ts, policyFiltered)
+	defs := mustBuildCompressedToolDefs(t, al, ts, policyFiltered)
 	defNames := make(map[string]bool, len(defs))
 	for _, d := range defs {
 		defNames[d.Function.Name] = true
@@ -353,7 +353,7 @@ func TestCompressedToolDefs_LegacyPath(t *testing.T) {
 
 	// Compressed path must be strictly smaller.
 	ts := fakeTurnState(jimOn, "sess-compare")
-	compressedDefs := alOn.buildCompressedToolDefs(ts, pfOn)
+	compressedDefs := mustBuildCompressedToolDefs(t, alOn, ts, pfOn)
 	assert.Less(t, len(compressedDefs), len(pfOn),
 		"compressed defs must be a strict subset of all policy-filtered tools (token win)")
 }
@@ -373,7 +373,7 @@ func TestCompressedToolDefs_TokenWin(t *testing.T) {
 	fullDefs := tools.ToolsToProviderDefs(policyFiltered)
 
 	ts := fakeTurnState(jimAgent, "sess-token")
-	compressedDefs := al.buildCompressedToolDefs(ts, policyFiltered)
+	compressedDefs := mustBuildCompressedToolDefs(t, al, ts, policyFiltered)
 
 	assert.Less(t, len(compressedDefs), len(fullDefs),
 		"compressed defs must be fewer than full defs (token win); compressed=%d full=%d",
@@ -629,7 +629,7 @@ func TestReachabilityInvariant_AllCoreAgents(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
 	defer al.Close()
 
-	for _, agentID := range []string{"mia", "jim", "ava", "worker"} {
+	for _, agentID := range []string{"mia", "jim", "omnipus", "worker"} {
 		// capture
 		t.Run(agentID, func(t *testing.T) {
 			agentInst, ok := al.registry.GetAgent(agentID)
@@ -645,7 +645,7 @@ func TestReachabilityInvariant_AllCoreAgents(t *testing.T) {
 
 			sessionID := "sess-reachability-" + agentID
 			ts := fakeTurnState(agentInst, sessionID)
-			defs := al.buildCompressedToolDefs(ts, policyFiltered)
+			defs := mustBuildCompressedToolDefs(t, al, ts, policyFiltered)
 			note := al.buildToolManifestNote(ts, policyFiltered)
 
 			defNames := make(map[string]bool, len(defs))
@@ -706,7 +706,7 @@ func TestReachabilityInvariant_AllCoreAgents(t *testing.T) {
 }
 
 // TestReachabilityInvariant_ToolsInfra_DenyDefaultAgent proves that even for
-// Ava (deny-by-default), the unified `ToolSearch` infra tool is always present in
+// Omnipus (deny-by-default), the unified `ToolSearch` infra tool is always present in
 // the compressed defs. This is the critical infra invariant: an agent must
 // always be able to search and load tools.
 func TestReachabilityInvariant_ToolsInfra_DenyDefaultAgent(t *testing.T) {
@@ -714,14 +714,14 @@ func TestReachabilityInvariant_ToolsInfra_DenyDefaultAgent(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
 	defer al.Close()
 
-	avaAgent, ok := al.registry.GetAgent("ava")
-	require.True(t, ok, "ava must be in registry")
+	omnipusAgent, ok := al.registry.GetAgent("omnipus")
+	require.True(t, ok, "omnipus must be in registry")
 
-	allTools := avaAgent.Tools.GetAll()
-	policyFiltered, _ := tools.FilterToolsByPolicy(allTools, avaAgent.AgentType, avaAgent.LoadToolPolicy())
+	allTools := omnipusAgent.Tools.GetAll()
+	policyFiltered, _ := tools.FilterToolsByPolicy(allTools, omnipusAgent.AgentType, omnipusAgent.LoadToolPolicy())
 
-	ts := fakeTurnState(avaAgent, "sess-ava-infra")
-	defs := al.buildCompressedToolDefs(ts, policyFiltered)
+	ts := fakeTurnState(omnipusAgent, "sess-omnipus-infra")
+	defs := mustBuildCompressedToolDefs(t, al, ts, policyFiltered)
 
 	defNames := make(map[string]bool, len(defs))
 	for _, d := range defs {
@@ -729,38 +729,38 @@ func TestReachabilityInvariant_ToolsInfra_DenyDefaultAgent(t *testing.T) {
 	}
 
 	assert.True(t, defNames["ToolSearch"],
-		"`ToolSearch` must always be in compressed defs even for deny-default agent (ava)")
+		"`ToolSearch` must always be in compressed defs even for deny-default agent (omnipus)")
 }
 
 // ─── canLoad guard tests ─────────────────────────────────────────────────────
 
 // TestCanLoad_LazyAllowedTool proves that canLoad returns true for a
-// policy-allowed lazy tool for Ava. We use find_skills: it is explicitly in
-// Ava's allow-list and is ManifestLazy (registered by registerSharedTools).
+// policy-allowed lazy tool for Omnipus. We use find_skills: it is explicitly in
+// Omnipus's supporting set (§6.5) and is ManifestLazy (registered by registerSharedTools).
 func TestCanLoad_LazyAllowedTool(t *testing.T) {
 	cfg := newCompressedCfg(t)
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
 	defer al.Close()
 
-	avaAgent, ok := al.registry.GetAgent("ava")
+	omnipusAgent, ok := al.registry.GetAgent("omnipus")
 	require.True(t, ok)
 
-	// find_skills is in Ava's allow-list and is a lazy tool. It is registered
+	// find_skills is in Omnipus's supporting set (§6.5) and is a lazy tool. It is registered
 	// by registerSharedTools (no sysagent deps needed).
 	require.Equal(t, tools.ManifestLazy, tools.ToolManifestTier("find_skills"),
 		"find_skills must be a lazy tool for this test to be meaningful")
 
-	// Verify find_skills is actually registered for Ava.
-	_, findSkillsRegistered := avaAgent.Tools.Get("find_skills")
-	require.True(t, findSkillsRegistered, "find_skills must be registered for ava")
+	// Verify find_skills is actually registered for Omnipus.
+	_, findSkillsRegistered := omnipusAgent.Tools.Get("find_skills")
+	require.True(t, findSkillsRegistered, "find_skills must be registered for omnipus")
 
 	// Build ctx as the tools tool's resolver would see it.
-	ctx := tools.WithAgentID(context.Background(), "ava")
+	ctx := tools.WithAgentID(context.Background(), "omnipus")
 	ctx = tools.WithTranscriptSessionID(ctx, "sess-canload")
 
 	// Retrieve the actual ToolsTool (unified infra tool) via the registered instance.
-	toolsToolRaw, ok := avaAgent.Tools.Get("ToolSearch")
-	require.True(t, ok, "`ToolSearch` infra tool must be registered for ava in compressed mode")
+	toolsToolRaw, ok := omnipusAgent.Tools.Get("ToolSearch")
+	require.True(t, ok, "`ToolSearch` infra tool must be registered for omnipus in compressed mode")
 
 	tt, ok := toolsToolRaw.(*tools.ToolsTool)
 	require.True(t, ok, "`ToolSearch` infra tool must be *tools.ToolsTool")
@@ -770,7 +770,7 @@ func TestCanLoad_LazyAllowedTool(t *testing.T) {
 	// succeeds (schema is returned); if false, it returns an error.
 	result := tt.Execute(ctx, map[string]any{"names": []any{"find_skills"}})
 	assert.False(t, result.IsError,
-		"find_skills must be loadable by ava; got error: %s", result.ForLLM)
+		"find_skills must be loadable by omnipus; got error: %s", result.ForLLM)
 }
 
 // TestCanLoad_FullTierNotLoadable proves that a full-tier tool requested via
@@ -811,20 +811,20 @@ func TestCanLoad_FullTierNotLoadable(t *testing.T) {
 // Note: read_file is ManifestFull — full-tier tools now return a no-op success
 // (C2 fix) regardless of policy. This test used to hardcode "send_file" as its
 // denied-lazy example, but ADR-071 D3 promoted send_file to Full tier — so the
-// candidate is now found DYNAMICALLY: any tool registered on Ava's registry
-// that is ManifestLazy AND absent from her policy-filtered set. This is
+// candidate is now found DYNAMICALLY: any tool registered on Omnipus's registry
+// that is ManifestLazy AND absent from its policy-filtered set. This is
 // future-proof against further tier reclassification, unlike a hardcoded name.
 func TestCanLoad_PolicyDeniedToolRejected(t *testing.T) {
 	cfg := newCompressedCfg(t)
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
 	defer al.Close()
 
-	// Ava has deny-by-default.
-	avaAgent, ok := al.registry.GetAgent("ava")
+	// Omnipus has deny-by-default.
+	omnipusAgent, ok := al.registry.GetAgent("omnipus")
 	require.True(t, ok)
 
-	allTools := avaAgent.Tools.GetAll()
-	policyFiltered, _ := tools.FilterToolsByPolicy(allTools, avaAgent.AgentType, avaAgent.LoadToolPolicy())
+	allTools := omnipusAgent.Tools.GetAll()
+	policyFiltered, _ := tools.FilterToolsByPolicy(allTools, omnipusAgent.AgentType, omnipusAgent.LoadToolPolicy())
 	allowed := make(map[string]bool, len(policyFiltered))
 	for _, tool := range policyFiltered {
 		allowed[tool.Name()] = true
@@ -838,20 +838,20 @@ func TestCanLoad_PolicyDeniedToolRejected(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, deniedLazyName,
-		"ava must have at least one registered ManifestLazy tool that policy denies — "+
-			"if this is empty, ava's deny-by-default posture has regressed to allow-everything")
+		"omnipus must have at least one registered ManifestLazy tool that policy denies — "+
+			"if this is empty, omnipus's deny-by-default posture has regressed to allow-everything")
 
-	ctx := tools.WithAgentID(context.Background(), "ava")
+	ctx := tools.WithAgentID(context.Background(), "omnipus")
 	ctx = tools.WithTranscriptSessionID(ctx, "sess-denied")
 
-	toolsToolRaw, ok := avaAgent.Tools.Get("ToolSearch")
-	require.True(t, ok, "`ToolSearch` infra tool must be registered for ava")
+	toolsToolRaw, ok := omnipusAgent.Tools.Get("ToolSearch")
+	require.True(t, ok, "`ToolSearch` infra tool must be registered for omnipus")
 	tt, ok := toolsToolRaw.(*tools.ToolsTool)
 	require.True(t, ok)
 
 	result := tt.Execute(ctx, map[string]any{"names": []any{deniedLazyName}})
 	assert.True(t, result.IsError,
-		"%s must be rejected for ava (policy denied); got: %s", deniedLazyName, result.ForLLM)
+		"%s must be rejected for omnipus (policy denied); got: %s", deniedLazyName, result.ForLLM)
 }
 
 // ─── FIX 2 regression: session-ID consistency ──────────────────────────────
@@ -905,7 +905,7 @@ func TestSessionID_NoTranscript_LoadedToolsVisible(t *testing.T) {
 	ts := fakeTurnStateNoTranscript(jimAgent, sessionKey)
 
 	// Reader: buildCompressedToolDefs must find the loaded tool.
-	defs := al.buildCompressedToolDefs(ts, policyFiltered)
+	defs := mustBuildCompressedToolDefs(t, al, ts, policyFiltered)
 	defNames := make(map[string]bool, len(defs))
 	for _, d := range defs {
 		defNames[d.Function.Name] = true
@@ -1073,9 +1073,9 @@ func TestManifestSessionID_BothEmpty(t *testing.T) {
 
 // ─── injectManifestNote unit tests ─────────────────────────────────────────
 
-// TestInjectManifestNote_InsertsAtIndex1 proves the note lands at index 1,
-// with role "system", inserted exactly once, when msgs has ≥2 elements.
-func TestInjectManifestNote_InsertsAtIndex1(t *testing.T) {
+// TestInjectManifestNote_AppendsUserTail locks FR-007: the note follows the
+// unchanged conversation exactly once, as user-role text rather than system.
+func TestInjectManifestNote_AppendsUserTail(t *testing.T) {
 	msgs := []providers.Message{
 		{Role: "system", Content: "system prompt"},
 		{Role: "user", Content: "hello"},
@@ -1084,11 +1084,9 @@ func TestInjectManifestNote_InsertsAtIndex1(t *testing.T) {
 	result := injectManifestNote(msgs, "## More tools\n  - create_agent")
 
 	require.Len(t, result, 4, "injectManifestNote must add exactly 1 message")
-	assert.Equal(t, "system", result[0].Role, "index 0 must remain the system prompt")
-	assert.Equal(t, "system", result[1].Role, "index 1 must be the injected note (role=system)")
-	assert.Contains(t, result[1].Content, "More tools", "index 1 must contain the note content")
-	assert.Equal(t, "user", result[2].Role, "index 2 must be the original user message")
-	assert.Equal(t, "assistant", result[3].Role, "index 3 must be the original assistant message")
+	assert.Equal(t, msgs, result[:3], "system, user and assistant history remain unchanged and in order")
+	assert.Equal(t, providers.Message{Role: "user", Content: "## More tools\n  - create_agent", Volatile: true}, result[3],
+		"FR-007: the exact manifest note follows history as a user-role text block")
 }
 
 // TestInjectManifestNote_EmptyNoteNoOp proves no injection when note is "".
@@ -1115,7 +1113,9 @@ func TestInjectManifestNote_SingleMsg(t *testing.T) {
 	}
 	result := injectManifestNote(msgs, "## More tools")
 	require.Len(t, result, 2)
-	assert.Equal(t, "system", result[1].Role)
+	assert.Equal(t, msgs[0], result[0], "the original system prompt is unchanged")
+	assert.Equal(t, providers.Message{Role: "user", Content: "## More tools", Volatile: true}, result[1],
+		"FR-007: even without history, a manifest note is user-role text, not a system message")
 }
 
 // TestInjectManifestNote_NotInjectedTwice proves calling injectManifestNote
@@ -1164,7 +1164,7 @@ func TestLoadToCallableRoundTrip(t *testing.T) {
 
 	// Before load: lazyName must NOT be in compressed defs.
 	tsBefore := fakeTurnState(jimAgent, transcriptID)
-	defsBefore := al.buildCompressedToolDefs(tsBefore, policyFiltered)
+	defsBefore := mustBuildCompressedToolDefs(t, al, tsBefore, policyFiltered)
 	for _, d := range defsBefore {
 		require.NotEqual(t, lazyName, d.Function.Name,
 			"lazy tool %q must not be callable before tools{names:[...]} is called", lazyName)
@@ -1186,7 +1186,7 @@ func TestLoadToCallableRoundTrip(t *testing.T) {
 
 	// After load: lazyName must appear in compressed defs.
 	tsAfter := fakeTurnState(jimAgent, transcriptID)
-	defsAfter := al.buildCompressedToolDefs(tsAfter, policyFiltered)
+	defsAfter := mustBuildCompressedToolDefs(t, al, tsAfter, policyFiltered)
 	defNamesAfter := make(map[string]bool, len(defsAfter))
 	for _, d := range defsAfter {
 		defNamesAfter[d.Function.Name] = true
@@ -1200,7 +1200,7 @@ func TestLoadToCallableRoundTrip(t *testing.T) {
 }
 
 // TestInfraToolsExecutable_DenyDefaultAgent is the regression test for the bug
-// found by live validation: a deny-by-default agent (Ava/Mia) was SHOWN the
+// found by live validation: a deny-by-default agent (Omnipus/Mia) was SHOWN the
 // `ToolSearch` infra tool in its provider defs (force-included) but the EXECUTION
 // gate denied it, so every lazy tool was unreachable in practice. This asserts
 // the full authorization chain now allows infra-tool execution.
@@ -1214,10 +1214,10 @@ func TestInfraToolsExecutable_DenyDefaultAgent(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
 	defer al.Close()
 
-	// Ava and Mia are deny-by-default overall, but `ToolSearch` is a structural
+	// Omnipus and Mia are deny-by-default overall, but `ToolSearch` is a structural
 	// floor BOTH explicitly seed "allow" for (pkg/coreagent/core.go) — every
 	// agent needs it to reach any tiered/lazy tool at all.
-	for _, agentID := range []string{"ava", "mia"} {
+	for _, agentID := range []string{"omnipus", "mia"} {
 		t.Run(agentID, func(t *testing.T) {
 			agentInst, ok := al.registry.GetAgent(agentID)
 			require.True(t, ok)
@@ -1284,7 +1284,7 @@ func TestInfraToolsExecutable_DenyDefaultAgent(t *testing.T) {
 // CLAUDE.md hard-constraint-6 violation and has been removed) and is seeded
 // "allow" as real, explicit data for every agent (pkg/coreagent/core.go), so
 // `ToolSearch` is already present in policyMap as "allow" after the filter —
-// even for a deny-default agent (Ava), because that is its real resolved
+// even for a deny-default agent (Omnipus), because that is its real resolved
 // policy. Therefore ensureInfraToolsExecutable is an idempotent no-op: it
 // must not double-add the tool nor change the "allow" verdict.
 //
@@ -1295,18 +1295,18 @@ func TestEnsureInfraToolsExecutable_IdempotentAfterUnifiedResolver(t *testing.T)
 	cfg := newCompressedCfg(t)
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
 	defer al.Close()
-	ava, ok := al.registry.GetAgent("ava")
+	omnipus, ok := al.registry.GetAgent("omnipus")
 	require.True(t, ok)
-	allTools := ava.Tools.GetAll()
-	policyFiltered, policyMap := tools.FilterToolsByPolicy(allTools, ava.AgentType, ava.LoadToolPolicy())
+	allTools := omnipus.Tools.GetAll()
+	policyFiltered, policyMap := tools.FilterToolsByPolicy(allTools, omnipus.AgentType, omnipus.LoadToolPolicy())
 
 	// ToolSearch resolves "allow" from its own real seeded policy entry, even
-	// for deny-default Ava.
+	// for deny-default Omnipus.
 	require.Equal(t, "allow", policyMap["ToolSearch"],
 		"ToolSearch must resolve allow from its own seeded policy entry for a deny-default agent")
 	before := len(policyFiltered)
 
-	out := ensureInfraToolsExecutable(ava.Tools, policyFiltered, policyMap)
+	out := ensureInfraToolsExecutable(omnipus.Tools, policyFiltered, policyMap)
 	require.Len(t, out, before,
 		"ensureInfraToolsExecutable must not double-add infra")
 	require.Equal(t, "allow", policyMap["ToolSearch"],
@@ -1321,10 +1321,10 @@ func TestStripInfraToolDefs_RemovesLoadTool(t *testing.T) {
 	cfg := newCompressedCfg(t)
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
 	defer al.Close()
-	ava, ok := al.registry.GetAgent("ava")
+	omnipus, ok := al.registry.GetAgent("omnipus")
 	require.True(t, ok)
-	allTools := ava.Tools.GetAll()
-	policyFiltered, policyMap := tools.FilterToolsByPolicy(allTools, ava.AgentType, ava.LoadToolPolicy())
+	allTools := omnipus.Tools.GetAll()
+	policyFiltered, policyMap := tools.FilterToolsByPolicy(allTools, omnipus.AgentType, omnipus.LoadToolPolicy())
 
 	// Precondition: the unified resolver kept ToolSearch in the filtered slice.
 	require.Contains(t, toolNameSet(policyFiltered), "ToolSearch")
@@ -1394,7 +1394,7 @@ func TestTokenWin_ByteSizeMaterially(t *testing.T) {
 
 	// Step 0: zero lazy tools loaded — compressed must be < full.
 	ts0 := fakeTurnState(jimAgent, sessionID)
-	defs0 := al.buildCompressedToolDefs(ts0, policyFiltered)
+	defs0 := mustBuildCompressedToolDefs(t, al, ts0, policyFiltered)
 	json0, err := json.Marshal(defs0)
 	require.NoError(t, err)
 	prevBytes := len(json0)
@@ -1413,7 +1413,7 @@ func TestTokenWin_ByteSizeMaterially(t *testing.T) {
 		al.markToolsLoaded(bucketFor(jimAgent, sessionID), []string{lazyNames[i]})
 
 		ts := fakeTurnState(jimAgent, sessionID)
-		defs := al.buildCompressedToolDefs(ts, policyFiltered)
+		defs := mustBuildCompressedToolDefs(t, al, ts, policyFiltered)
 		defsJSON, err := json.Marshal(defs)
 		require.NoError(t, err)
 		curBytes := len(defsJSON)
@@ -1464,7 +1464,7 @@ func TestTokenWin_LoadingAllLazyReachesFullSize(t *testing.T) {
 	pfDefs := tools.ToolsToProviderDefs(policyFiltered)
 
 	ts := fakeTurnState(jimAgent, sessionID)
-	compressedDefs := al.buildCompressedToolDefs(ts, policyFiltered)
+	compressedDefs := mustBuildCompressedToolDefs(t, al, ts, policyFiltered)
 
 	// Once all lazy tools are loaded, compressed defs must be >= pf count
 	// (infra tools are force-included so compressed may be slightly larger).
@@ -1517,7 +1517,7 @@ func TestSearchThenLoad_Reachability(t *testing.T) {
 	// Step 2: Before load, it must NOT be in compressed defs.
 	transcriptID := "sess-search-load-chain"
 	tsBefore := fakeTurnState(jimAgent, transcriptID)
-	defsBefore := al.buildCompressedToolDefs(tsBefore, policyFiltered)
+	defsBefore := mustBuildCompressedToolDefs(t, al, tsBefore, policyFiltered)
 	for _, d := range defsBefore {
 		require.NotEqual(t, lazyName, d.Function.Name,
 			"lazy tool %q must not be callable before tools{names:[...]} is called", lazyName)
@@ -1540,7 +1540,7 @@ func TestSearchThenLoad_Reachability(t *testing.T) {
 
 	// Step 4: After load, the tool must appear in compressed defs (callable).
 	tsAfter := fakeTurnState(jimAgent, transcriptID)
-	defsAfter := al.buildCompressedToolDefs(tsAfter, policyFiltered)
+	defsAfter := mustBuildCompressedToolDefs(t, al, tsAfter, policyFiltered)
 	defNamesAfter := make(map[string]bool, len(defsAfter))
 	for _, d := range defsAfter {
 		defNamesAfter[d.Function.Name] = true
@@ -1582,7 +1582,7 @@ func TestVisibility_SearchOnlyToolFoundByDescriptionBecomesUsable(t *testing.T) 
 	// Before the query: nothing new is loaded, so the manifest note is
 	// unaffected by this test's own future actions (baseline).
 	tsBefore := fakeTurnState(jimAgent, transcriptID)
-	defsBefore := al.buildCompressedToolDefs(tsBefore, policyFiltered)
+	defsBefore := mustBuildCompressedToolDefs(t, al, tsBefore, policyFiltered)
 	beforeNames := make(map[string]bool, len(defsBefore))
 	for _, d := range defsBefore {
 		beforeNames[d.Function.Name] = true
@@ -1635,7 +1635,7 @@ func TestVisibility_SearchOnlyToolFoundByDescriptionBecomesUsable(t *testing.T) 
 	// stray loads) and no fewer (a promotion that never reached the manifest
 	// builder) — proving the query-path promotion is usable end to end.
 	tsAfter := fakeTurnState(jimAgent, transcriptID)
-	defsAfter := al.buildCompressedToolDefs(tsAfter, policyFiltered)
+	defsAfter := mustBuildCompressedToolDefs(t, al, tsAfter, policyFiltered)
 
 	var newlyCallable []string
 	for _, d := range defsAfter {
@@ -1691,13 +1691,13 @@ func TestManifestDeterminism_LoadSameToolTwice(t *testing.T) {
 	// Load the tool once.
 	al.markToolsLoaded(bucketFor(jimAgent, sessionID), []string{lazyName})
 	ts1 := fakeTurnState(jimAgent, sessionID)
-	defs1 := al.buildCompressedToolDefs(ts1, policyFiltered)
+	defs1 := mustBuildCompressedToolDefs(t, al, ts1, policyFiltered)
 	note1 := al.buildToolManifestNote(ts1, policyFiltered)
 
 	// Load the same tool again (idempotent).
 	al.markToolsLoaded(bucketFor(jimAgent, sessionID), []string{lazyName})
 	ts2 := fakeTurnState(jimAgent, sessionID)
-	defs2 := al.buildCompressedToolDefs(ts2, policyFiltered)
+	defs2 := mustBuildCompressedToolDefs(t, al, ts2, policyFiltered)
 	note2 := al.buildToolManifestNote(ts2, policyFiltered)
 
 	// Sent-defs set must be identical (no duplicates introduced by double-load).
@@ -1766,7 +1766,7 @@ func TestManifestDeterminism_LoadChurn(t *testing.T) {
 // gate used only GetAll() — so it rejected the hidden tool as "unknown", breaking
 // search→load→use for MCP. canLoad is now hidden-aware (GetIncludingHidden +
 // per-tool policy). An allow-default agent (the seeded worker tier) must be able to load a
-// policy-allowed hidden tool; a deny-default agent (Ava) must not. The 4 core
+// policy-allowed hidden tool; a deny-default agent (Omnipus) must not. The 4 core
 // agents are all deny-default now, so a worker is the allow-default fixture.
 func TestCanLoad_HiddenMCPTool_AllowDefaultAgent(t *testing.T) {
 	cfg := newCompressedCfg(t)
@@ -1792,7 +1792,7 @@ func TestCanLoad_HiddenMCPTool_AllowDefaultAgent(t *testing.T) {
 	// constraint 6): the 4 core agents and the seeded worker/explorer/
 	// researcher tier are ALL deny-default. This subtest grants worker an
 	// explicit allow for the hidden tool's name to prove the ToolSearch
-	// mechanism succeeds when policy permits it, mirroring how ava's paired
+	// mechanism succeeds when policy permits it, mirroring how omnipus's paired
 	// subtest below proves it correctly blocks when policy denies.
 	t.Run("explicitly_allowed_agent_loads_hidden", func(t *testing.T) {
 		worker, ok := al.registry.GetAgent("worker")
@@ -1814,11 +1814,11 @@ func TestCanLoad_HiddenMCPTool_AllowDefaultAgent(t *testing.T) {
 	})
 
 	t.Run("ava_deny_default_rejects_hidden", func(t *testing.T) {
-		res := loadHidden(t, "ava")
+		res := loadHidden(t, "omnipus")
 		require.NotNil(t, res)
-		// Ava is deny-by-default and mock_custom is not in her allow-list, so the
+		// Omnipus is deny-by-default and mock_custom is not in its supporting set, so the
 		// hidden tool must be rejected (no policy escalation via load).
-		require.True(t, res.IsError, "ava (deny-default) must reject the unlisted hidden tool")
+		require.True(t, res.IsError, "omnipus (deny-default) must reject the unlisted hidden tool")
 	})
 }
 
@@ -1833,7 +1833,7 @@ func TestCanLoad_HiddenMCPTool_AllowDefaultAgent(t *testing.T) {
 //     round 2); ADR-071 D3 §4.1 demoted navigate to the previewed lazy tier,
 //     and the F1 review finding retired navigate outright, so the mechanism
 //     under test moved to `get_workspace` (then a ScopeCore Tier-2 previewed
-//     tool, tested via Ava).
+//     tool, tested via Omnipus).
 //   - ADR-090 §5.4 ("Locate inputs" row of the global upfront set) promotes
 //     get_workspace BACK to the always-callable full tier: a registered,
 //     permitted tool in the 37-name global set has its full callable
@@ -1841,11 +1841,17 @@ func TestCanLoad_HiddenMCPTool_AllowDefaultAgent(t *testing.T) {
 //     require ToolSearch. This rewrite pins the promotion:
 //     1. ToolManifestTier("get_workspace") == ManifestFull.
 //     2. On turn 1, with no prior markToolsLoaded call, get_workspace IS in
-//     buildCompressedToolDefs for Ava (whose seeded policy allows it).
+//     buildCompressedToolDefs for Omnipus (whose seeded policy allows it).
 //     3. It has NO manifest-note presence (the full tier has none).
 //     4. Boundary preserved (ADR-090 §5.4: "initial visibility does not
 //     grant permission"): for Jim, whose seeded ADR-090 policy denies
-//     get_workspace, the upfront name never reaches the defs.
+//     bash, the upfront name never reaches the defs. Spec change (founder
+//     Q85, 2026-10-25): the 2026-10-22 default-tools table wins — Jim
+//     (Main) now holds get_workspace allow, so the boundary probe moved
+//     from get_workspace to bash, the one per-agent carve-out the table
+//     kept (jim bash deny survives, pkg/coreagent/seed.go) and itself an
+//     ADR-090 §5.4 upfront name (pkg/tools/manifest.go
+//     fullManifestToolNames).
 //
 // Traces to: ADR-090 §5.4; pkg/tools/manifest.go fullManifestToolNames;
 // superseding the ADR-071 D3 §4.1 pin this function previously held.
@@ -1867,14 +1873,14 @@ func TestGetWorkspace_UpfrontFullTier_ADR090(t *testing.T) {
 	// create a circular import: pkg/agent → pkg/sysagent/tools → pkg/agent).
 	// Inject the same minimal stub the previous revisions of this test used.
 	stub := &fakeGetWorkspaceTool{}
-	avaAgent, ok := al.registry.GetAgent("ava")
-	require.True(t, ok, "ava must be in registry")
-	avaAgent.Tools.Register(stub)
+	omnipusAgent, ok := al.registry.GetAgent("omnipus")
+	require.True(t, ok, "omnipus must be in registry")
+	omnipusAgent.Tools.Register(stub)
 
-	// Ava's ADR-090 seeded policy allows get_workspace, so the stub must
+	// get_workspace is in Omnipus's supporting set (§6.5), so the stub must
 	// survive the policy filter.
-	allTools := avaAgent.Tools.GetAll()
-	policyFiltered, _ := tools.FilterToolsByPolicy(allTools, avaAgent.AgentType, avaAgent.LoadToolPolicy())
+	allTools := omnipusAgent.Tools.GetAll()
+	policyFiltered, _ := tools.FilterToolsByPolicy(allTools, omnipusAgent.AgentType, omnipusAgent.LoadToolPolicy())
 
 	var getWorkspaceInPF bool
 	for _, t2 := range policyFiltered {
@@ -1884,13 +1890,13 @@ func TestGetWorkspace_UpfrontFullTier_ADR090(t *testing.T) {
 		}
 	}
 	require.True(t, getWorkspaceInPF,
-		"POLICY REGRESSION: `get_workspace` must be in Ava's policy-filtered set. "+
-			"Check the ADR-090 role policy for Ava in pkg/coreagent/role_policies_adr090.go.")
+		"POLICY REGRESSION: `get_workspace` must be in Omnipus's policy-filtered set. "+
+			"Check the ADR-090 role policy for Omnipus in pkg/coreagent/role_policies_adr090.go.")
 
 	// Turn 1: no markToolsLoaded call — the upfront name is directly callable.
-	sessionID := "sess-ava-get-workspace-adr090"
-	ts := fakeTurnState(avaAgent, sessionID)
-	defs := al.buildCompressedToolDefs(ts, policyFiltered)
+	sessionID := "sess-omnipus-get-workspace-adr090"
+	ts := fakeTurnState(omnipusAgent, sessionID)
+	defs := mustBuildCompressedToolDefs(t, al, ts, policyFiltered)
 	defNames := make(map[string]bool, len(defs))
 	for _, d := range defs {
 		defNames[d.Function.Name] = true
@@ -1899,12 +1905,12 @@ func TestGetWorkspace_UpfrontFullTier_ADR090(t *testing.T) {
 	// CONTROL: send_message (Full-tier, always registered) must be in defs —
 	// proves the Full-tier path itself still works (not a vacuous assertion).
 	assert.True(t, defNames["send_message"],
-		"send_message (Full-tier, always registered) must be in Ava's compressed defs as a control")
+		"send_message (Full-tier, always registered) must be in Omnipus's compressed defs as a control")
 
 	// PRIMARY ASSERTION: the ADR-090 upfront name is present on turn 1 without
 	// any ToolSearch load — "callable without ToolSearch" (ADR-090 §10).
 	assert.True(t, defNames["get_workspace"],
-		"ADR-090 §5.4: get_workspace (global upfront set) must appear in Ava's "+
+		"ADR-090 §5.4: get_workspace (global upfront set) must appear in Omnipus's "+
 			"compressed defs on turn 1 without a load call.")
 
 	// The full tier has NO manifest-note presence.
@@ -1913,23 +1919,29 @@ func TestGetWorkspace_UpfrontFullTier_ADR090(t *testing.T) {
 		"get_workspace (ManifestFull) must have no manifest-note presence")
 
 	// BOUNDARY (ADR-090 §5.4: upfront visibility never grants permission):
-	// Jim's ADR-090 seeded policy denies get_workspace, so the same upfront
-	// name must never reach his defs.
+	// a seeded policy deny must keep an upfront name out of the defs even
+	// though the name is in the global upfront set. Spec change (founder
+	// Q85, 2026-10-25): the 2026-10-22 default-tools table wins, so Jim
+	// (Main) now holds get_workspace allow and the probe moved to bash —
+	// the one per-agent carve-out the table kept (Jim's bash deny survives
+	// the seed, pkg/coreagent/seed.go), itself an ADR-090 §5.4 upfront name
+	// (pkg/tools/manifest.go fullManifestToolNames) and registered for
+	// every agent (pkg/agent/loop_wire.go wireExecToolDepsOn).
 	jimAgent, ok := al.registry.GetAgent("jim")
 	require.True(t, ok, "jim must be in registry")
-	jimAgent.Tools.Register(&fakeGetWorkspaceTool{})
 	jimFiltered, _ := tools.FilterToolsByPolicy(jimAgent.Tools.GetAll(), jimAgent.AgentType, jimAgent.LoadToolPolicy())
-	var jimHasGetWorkspace bool
+	var jimHasBash bool
 	for _, t2 := range jimFiltered {
-		if t2.Name() == "get_workspace" {
-			jimHasGetWorkspace = true
+		if t2.Name() == "bash" {
+			jimHasBash = true
 		}
 	}
-	require.False(t, jimHasGetWorkspace,
-		"fixture: Jim's ADR-090 seeded policy must deny get_workspace for the boundary half to be non-vacuous")
-	jimDefs := al.buildCompressedToolDefs(fakeTurnState(jimAgent, "sess-jim-get-workspace-adr090"), jimFiltered)
+	require.False(t, jimHasBash,
+		"fixture: Jim's ADR-090 seeded policy must deny bash (founder Q85, 2026-10-25: the 2026-10-22 "+
+			"default-tools table keeps bash per-agent and deny for Jim) for the boundary half to be non-vacuous")
+	jimDefs := mustBuildCompressedToolDefs(t, al, fakeTurnState(jimAgent, "sess-jim-boundary-adr090"), jimFiltered)
 	for _, d := range jimDefs {
-		assert.NotEqual(t, "get_workspace", d.Function.Name,
+		assert.NotEqual(t, "bash", d.Function.Name,
 			"ADR-090 §5.4 boundary: the upfront name must NOT reach the defs of an agent whose policy denies it")
 	}
 }
@@ -2037,7 +2049,7 @@ func TestPromotedTaskTools_CallableOnTurn1_NoLoad(t *testing.T) {
 
 			// Turn 1: NO markToolsLoaded call — the upfront trio is directly callable.
 			ts := fakeTurnState(agentInst, tc.sessionID)
-			defs := al.buildCompressedToolDefs(ts, policyFiltered)
+			defs := mustBuildCompressedToolDefs(t, al, ts, policyFiltered)
 
 			defNames := make(map[string]bool, len(defs))
 			for _, d := range defs {
@@ -2109,7 +2121,7 @@ func TestPromotedTaskTools_DifferentiationCheck(t *testing.T) {
 
 	// Turn 1: no load call.
 	ts := fakeTurnState(miaAgent, "sess-gap2-diff")
-	defs := al.buildCompressedToolDefs(ts, policyFiltered)
+	defs := mustBuildCompressedToolDefs(t, al, ts, policyFiltered)
 
 	defNames := make(map[string]bool, len(defs))
 	for _, d := range defs {
@@ -2166,7 +2178,7 @@ func TestPromotedTaskTools_DifferentiationCheck(t *testing.T) {
 		"DIFFERENTIATION: environment_setup (search-only lazy) must NOT appear in the manifest note")
 	// And serve_web must NOT be in worker's turn-1 defs (it still pays the
 	// discovery cost — previewed is a listing, not a grant of full defs).
-	workerDefs := al.buildCompressedToolDefs(workerTS, workerFiltered)
+	workerDefs := mustBuildCompressedToolDefs(t, al, workerTS, workerFiltered)
 	for _, d := range workerDefs {
 		assert.NotEqual(t, "serve_web", d.Function.Name,
 			"DIFFERENTIATION: serve_web (previewed lazy) must NOT be in defs on turn 1 without a load call")
@@ -2216,9 +2228,9 @@ func TestLoadToolRegistered_UncompressedBoot(t *testing.T) {
 //     the fix; IS registered after the fix).
 //   - A live tools_on_demand false→true toggle occurs (Compressed is flipped in
 //     SwapConfig, not by re-running registration).
-//   - After the toggle, Get("ToolSearch") succeeds for a deny-default agent (Ava).
-//   - buildCompressedToolDefs for Ava includes ToolSearch in its defs.
-//   - A lazy tool is reachable for Ava: it appears in the manifest note and can
+//   - After the toggle, Get("ToolSearch") succeeds for a deny-default agent (Omnipus).
+//   - buildCompressedToolDefs for Omnipus includes ToolSearch in its defs.
+//   - A lazy tool is reachable for Omnipus: it appears in the manifest note and can
 //     be loaded via ToolSearch.Execute.
 //
 // The toggle is simulated by calling buildCompressedToolDefs with a modified
@@ -2232,61 +2244,61 @@ func TestLoadTool_LiveToggle_CompressedDefsWork(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
 	defer al.Close()
 
-	// Deny-default agent: Ava. She is the hardest case — ToolSearch is not in her
+	// Deny-default agent: Omnipus. It is the hardest case — ToolSearch is not in its
 	// explicit allow-list, so FilterToolsByPolicy denies it; only the infra
 	// force-include in buildCompressedToolDefs makes it reachable.
-	avaAgent, ok := al.registry.GetAgent("ava")
-	require.True(t, ok, "ava must be in registry")
+	omnipusAgent, ok := al.registry.GetAgent("omnipus")
+	require.True(t, ok, "omnipus must be in registry")
 
 	// ASSERTION 1: After an uncompressed boot, ToolSearch IS registered (the fix).
 	// Before the fix this would return !ok, making every lazy tool unreachable
 	// after a live toggle.
-	_, registeredAfterUncompressedBoot := avaAgent.Tools.Get("ToolSearch")
+	_, registeredAfterUncompressedBoot := omnipusAgent.Tools.Get("ToolSearch")
 	require.True(t, registeredAfterUncompressedBoot,
-		"ToolSearch must be registered for ava even after Compressed=false boot "+
+		"ToolSearch must be registered for omnipus even after Compressed=false boot "+
 			"(the fix: unconditional registration)")
 
 	// Simulate the live toggle: Compressed is now true (PUT tools_on_demand:true
 	// called SwapConfig). The per-turn code in runTurn will call
 	// buildCompressedToolDefs with the updated cfg. We simulate that here.
-	allTools := avaAgent.Tools.GetAll()
-	policyFiltered, policyMap := tools.FilterToolsByPolicy(allTools, avaAgent.AgentType, avaAgent.LoadToolPolicy())
+	allTools := omnipusAgent.Tools.GetAll()
+	policyFiltered, policyMap := tools.FilterToolsByPolicy(allTools, omnipusAgent.AgentType, omnipusAgent.LoadToolPolicy())
 
 	// Force infra into execution snapshot (mirrors the runTurn path).
-	policyFiltered = ensureInfraToolsExecutable(avaAgent.Tools, policyFiltered, policyMap)
+	policyFiltered = ensureInfraToolsExecutable(omnipusAgent.Tools, policyFiltered, policyMap)
 
 	// ASSERTION 2: ToolSearch is now in the execution policy snapshot as "allow".
 	require.Equal(t, "allow", policyMap["ToolSearch"],
-		"after live toggle: ToolSearch must be allow in Ava's exec policy snapshot")
+		"after live toggle: ToolSearch must be allow in Omnipus's exec policy snapshot")
 
 	// ASSERTION 3: buildCompressedToolDefs includes ToolSearch in the sent defs.
-	ts := fakeTurnState(avaAgent, "sess-live-toggle-ava")
-	defs := al.buildCompressedToolDefs(ts, policyFiltered)
+	ts := fakeTurnState(omnipusAgent, "sess-live-toggle-omnipus")
+	defs := mustBuildCompressedToolDefs(t, al, ts, policyFiltered)
 	defNames := make(map[string]bool, len(defs))
 	for _, d := range defs {
 		defNames[d.Function.Name] = true
 	}
 	assert.True(t, defNames["ToolSearch"],
-		"after live toggle: ToolSearch must be in compressed defs for deny-default agent ava")
+		"after live toggle: ToolSearch must be in compressed defs for deny-default agent omnipus")
 
-	// ASSERTION 4: A lazy tool is reachable for Ava (find_skills is in her allow-list
+	// ASSERTION 4: A lazy tool is reachable for Omnipus (find_skills is in its supporting set
 	// and is ManifestLazy). Without the fix the entire lazy tier becomes unreachable
 	// because ToolSearch.Execute would not exist. With the fix it works.
 	require.Equal(t, tools.ManifestLazy, tools.ToolManifestTier("find_skills"),
 		"find_skills must be ManifestLazy for this assertion to be meaningful")
-	_, findSkillsReg := avaAgent.Tools.Get("find_skills")
-	require.True(t, findSkillsReg, "find_skills must be registered for ava")
+	_, findSkillsReg := omnipusAgent.Tools.Get("find_skills")
+	require.True(t, findSkillsReg, "find_skills must be registered for omnipus")
 
-	toolsToolRaw, ok := avaAgent.Tools.Get("ToolSearch")
-	require.True(t, ok, "ToolSearch must be Get-able for ava after uncompressed boot (the fix)")
+	toolsToolRaw, ok := omnipusAgent.Tools.Get("ToolSearch")
+	require.True(t, ok, "ToolSearch must be Get-able for omnipus after uncompressed boot (the fix)")
 	tt, ok := toolsToolRaw.(*tools.ToolsTool)
 	require.True(t, ok, "ToolSearch must be *tools.ToolsTool")
 
-	ctx := tools.WithAgentID(context.Background(), "ava")
-	ctx = tools.WithTranscriptSessionID(ctx, "sess-live-toggle-ava")
+	ctx := tools.WithAgentID(context.Background(), "omnipus")
+	ctx = tools.WithTranscriptSessionID(ctx, "sess-live-toggle-omnipus")
 	result := tt.Execute(ctx, map[string]any{"names": []any{"find_skills"}})
 	assert.False(t, result.IsError,
-		"after live toggle: find_skills must be loadable by ava via ToolSearch; got error: %s", result.ForLLM)
+		"after live toggle: find_skills must be loadable by omnipus via ToolSearch; got error: %s", result.ForLLM)
 }
 
 // TestLoadTool_UncompressedDefs_LoadToolNotSentToModel proves that in uncompressed
@@ -2317,7 +2329,7 @@ func TestLoadTool_UncompressedDefs_LoadToolNotSentToModel(t *testing.T) {
 	// denied) — so it resolves "allow" and is present in the filtered slice
 	// like any other allowed tool, regardless of what the agent's own role
 	// policy says about the rest of the catalog.
-	for _, agentID := range []string{"mia", "jim", "ava", "worker"} {
+	for _, agentID := range []string{"mia", "jim", "omnipus", "worker"} {
 		t.Run("deny-default/"+agentID, func(t *testing.T) {
 			agentInst, ok := al.registry.GetAgent(agentID)
 			require.True(t, ok)
@@ -2351,16 +2363,16 @@ func TestLoadTool_UncompressedDefs_LoadToolNotSentToModel(t *testing.T) {
 	// unconditional infra force-allow to put ToolSearch in policyFiltered —
 	// that bypass is gone (CLAUDE.md hard constraint 6), so the cfg here
 	// carries a real, explicit "ToolSearch": allow entry instead. We borrow
-	// Ava's registry (ToolSearch is always registered there).
+	// Omnipus's registry (ToolSearch is always registered there).
 	t.Run("explicit-allow/synthetic", func(t *testing.T) {
-		ava, ok := al.registry.GetAgent("ava")
+		omnipus, ok := al.registry.GetAgent("omnipus")
 		require.True(t, ok)
-		allTools := ava.Tools.GetAll()
+		allTools := omnipus.Tools.GetAll()
 
 		explicitAllow := &tools.ToolPolicyCfg{
 			Policies: map[string]config.ToolPolicy{"ToolSearch": config.ToolPolicyAllow},
 		}
-		policyFiltered, policyMap := tools.FilterToolsByPolicy(allTools, ava.AgentType, explicitAllow)
+		policyFiltered, policyMap := tools.FilterToolsByPolicy(allTools, omnipus.AgentType, explicitAllow)
 
 		// ToolSearch resolves "allow" from its own real seeded policy entry.
 		require.Equal(t, "allow", policyMap["ToolSearch"],

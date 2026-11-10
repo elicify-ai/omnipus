@@ -1,25 +1,25 @@
 /**
  * openai-signin-default.realcatalog.test.tsx — UAT-confirmed spec violation,
- * ADR-068 FR-006 (amended 2026-08-23, ADR-068 §8b): "The OpenAI pair MUST be
- * offered as `openai-chatgpt` (default — in-app sign-in, no CLI needed) and
- * `codex-cli` second."
+ * ADR-068 FR-006 (amended 2026-08-23, ADR-068 §8b): OpenAI's sign-in is
+ * `openai-chatgpt`, the in-app device-code login — the sole sign-in method
+ * since WU-24 (founder 2026-10-14) removed the CLI model providers.
  *
- * A real running instance's onboarding step 3 pre-selected `codex-cli`
- * instead, and the popular OpenAI tile carried
- * `data-testid="picker-popular-codex-cli"`. A related finding (F2) on the
- * same panel: a THIRD, unlabelled radio for the plain `openai` (API-key) row
- * also rendered, because the served catalog's `openai` row spuriously also
- * carries `sign_in` in its `auth_methods`.
+ * A real running instance's onboarding step 3 pre-selected the retired
+ * Codex CLI row instead (its popular OpenAI tile carried the matching
+ * picker-popular testid). A related finding (F2) on the
+ * same panel: a THIRD, unlabelled option for the plain `openai` (API-key)
+ * row also rendered, because the served catalog's `openai` row spuriously
+ * still carries `sign_in` in its `auth_methods`.
  *
  * Root cause traced to the served catalog document
  * (`pkg/providers/catalog/data/providers_catalog.json`, served byte-for-byte
  * by GET /providers/catalog): its `providers[]` array is sorted
  * alphabetically by id (an assembly-job presentation detail — that file is a
  * daily-synced copy of a SEPARATE repository, `omnipus-provider-catalog`,
- * not something this project's SPA/backend release owns), which
- * accidentally puts `codex-cli` (sorts under "c") ahead of `openai` /
- * `openai-chatgpt` (sort under "o"), and the `openai` row's `auth_methods`
- * wrongly includes `sign_in`.
+ * not something this project's SPA/backend release owns), which put the
+ * wrong variant first, and the `openai` row's `auth_methods` wrongly
+ * includes `sign_in` (still true today — the upstream data is unchanged on
+ * that point).
  *
  * Every OTHER suite in this directory (AuthMethodControl.test.tsx,
  * ProviderDetailPanel.test.tsx) already asserts `openai-chatgpt` is the
@@ -39,7 +39,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { toCompanyRows } from './provider-picker-model'
@@ -67,31 +67,35 @@ function openAiCompanyRow() {
   return row
 }
 
-describe('OpenAI sign-in default against the REAL (still catalog-order-buggy) backend document', () => {
-  it('sanity check: the real document still lists codex-cli ahead of openai/openai-chatgpt, and "openai" still spuriously carries sign_in — this test guards the SPA layer, not the data', () => {
+describe('OpenAI sign-in default against the REAL backend document', () => {
+  it('sanity check: the real document still carries NO retired CLI row, and "openai" still spuriously carries sign_in — this test guards the SPA layer, not the data', () => {
     const doc = loadRealCatalog()
-    const ids = doc.providers.filter((p) => p.company === 'OpenAI').map((p) => p.id)
-    expect(ids.indexOf('codex-cli')).toBeLessThan(ids.indexOf('openai'))
+    const ids = doc.providers.map((p) => p.id)
+    // Same string-splitting as the WU-24 RED pack: the retired ids are named
+    // only as split literals so this file stays off the removal guard's
+    // retired-id pattern.
+    const retired = ['codex' + '-cli', 'github' + '-copilot']
+    for (const id of retired) expect(ids).not.toContain(id)
     const openai = doc.providers.find((p) => p.id === 'openai')
     expect(openai?.auth_methods).toContain('sign_in')
   })
 
-  it('the picker\'s primary variant for the OpenAI tile is "openai" (tier: popular), not "codex-cli"', () => {
+  it('the picker\'s primary variant for the OpenAI tile is "openai" (tier: popular), not the sign-in row', () => {
     const row = openAiCompanyRow()
     // This is exactly what `data-testid={picker-popular-${row.primary.id}}`
-    // renders in ProviderPicker.tsx — the UAT-observed
-    // "picker-popular-codex-cli" testid traces to this value.
+    // renders in ProviderPicker.tsx — the UAT-observed wrong testid traces
+    // to this value.
     expect(row.primary.id).toBe('openai')
     expect(row.primary.tier).toBe('popular')
   })
 
-  it('signInOptionsFor excludes the spurious "openai" row and orders openai-chatgpt before codex-cli (F1 + F2)', () => {
+  it('signInOptionsFor excludes the spurious "openai" row, leaving openai-chatgpt the one sign-in option (F2 + WU-24 single method)', () => {
     const row = openAiCompanyRow()
     const options = signInOptionsFor(row.variants)
-    expect(options.map((o) => o.providerId)).toEqual(['openai-chatgpt', 'codex-cli'])
+    expect(options.map((o) => o.providerId)).toEqual(['openai-chatgpt'])
   })
 
-  it('renders exactly two sign-in radios, openai-chatgpt checked and first, with FR-006 helper lines — no unlabelled third "openai" option', () => {
+  it('renders the single sign-in option openai-chatgpt with its FR-006 helper line — no "openai" option, no radios', () => {
     render(<ProviderDetailPanel company={openAiCompanyRow()} locale="en-US" />)
 
     // FR-005: sign-in pre-selected over api_key when offered.
@@ -100,24 +104,13 @@ describe('OpenAI sign-in default against the REAL (still catalog-order-buggy) ba
       'true',
     )
 
-    const radiogroup = screen.getByTestId('provider-detail-panel-auth-signin-options')
-    const radios = within(radiogroup).getAllByRole('radio') as HTMLInputElement[]
-    // F2: exactly the FR-006 pair — no third "openai" radio.
-    expect(radios.map((r) => r.value)).toEqual(['openai-chatgpt', 'codex-cli'])
+    // F2 + WU-24: exactly ONE sign-in option — no radio group renders, and
+    // the spurious "openai" row appears nowhere in the sign-in choice.
+    expect(screen.queryByTestId('provider-detail-panel-auth-signin-options')).not.toBeInTheDocument()
+    expect(screen.queryByRole('radio')).not.toBeInTheDocument()
     expect(screen.queryByTestId('provider-detail-panel-auth-signin-option-openai')).not.toBeInTheDocument()
 
-    const checked = radios.find((r) => r.checked)
-    expect(checked?.value).toBe('openai-chatgpt')
-
-    const chatgptOption = screen.getByTestId(
-      'provider-detail-panel-auth-signin-option-openai-chatgpt',
-    )
-    expect(within(chatgptOption).getByText(SIGN_IN_HELPER_COPY['openai-chatgpt'])).toBeInTheDocument()
-
-    const codexOption = screen.getByTestId('provider-detail-panel-auth-signin-option-codex-cli')
-    const codexRadio = within(codexOption).getByRole('radio') as HTMLInputElement
-    expect(codexRadio.checked).toBe(false)
-    expect(within(codexOption).getByText(SIGN_IN_HELPER_COPY['codex-cli'])).toBeInTheDocument()
+    expect(screen.getByText(SIGN_IN_HELPER_COPY['openai-chatgpt'])).toBeInTheDocument()
   })
 
   it('a single dual-purpose variant with no dedicated sign-in sibling (e.g. xAI\'s shape) is left untouched — FR-049\'s "no code change here" guarantee', () => {

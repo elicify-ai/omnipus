@@ -1,0 +1,47 @@
+{
+  "anthropic": {
+    "body": "{\"max_tokens\":4096,\"messages\":[{\"content\":[{\"text\":\"affinity-fixture-user\",\"cache_control\":{\"ttl\":\"5m\",\"type\":\"ephemeral\"},\"type\":\"text\"}],\"role\":\"user\"}],\"model\":\"affinity-fixture-model\",\"system\":[{\"text\":\"affinity-fixture-instructions\",\"cache_control\":{\"ttl\":\"1h\",\"type\":\"ephemeral\"},\"type\":\"text\"}]}",
+    "content-type": "application/json",
+    "method": "POST",
+    "path": "/v1/messages",
+    "session-id": "",
+    "x-grok-conv-id": "",
+    "x-session-affinity": ""
+  },
+  "azure": {
+    "body": "{\"instructions\":\"affinity-fixture-instructions\",\"store\":false,\"prompt_cache_key\":\"affinity-fixture-session\",\"input\":[{\"content\":\"affinity-fixture-user\",\"role\":\"user\"}],\"model\":\"affinity-fixture-model\"}",
+    "content-type": "application/json",
+    "method": "POST",
+    "path": "/openai/v1/responses",
+    "session-id": "",
+    "x-grok-conv-id": "",
+    "x-session-affinity": ""
+  },
+  "openai": {
+    "body": "{\"messages\":[{\"role\":\"system\",\"content\":\"affinity-fixture-instructions\"},{\"role\":\"user\",\"content\":\"affinity-fixture-user\"}],\"model\":\"affinity-fixture-model\",\"prompt_cache_key\":\"affinity-fixture-session\"}",
+    "content-type": "application/json",
+    "method": "POST",
+    "path": "/v1/chat/completions",
+    "session-id": "",
+    "x-grok-conv-id": "",
+    "x-session-affinity": ""
+  },
+  "openrouter": {
+    "body": "{\"messages\":[{\"role\":\"system\",\"content\":\"affinity-fixture-instructions\"},{\"content\":[{\"cache_control\":{\"type\":\"ephemeral\"},\"text\":\"affinity-fixture-user\",\"type\":\"text\"}],\"role\":\"user\"}],\"model\":\"affinity-fixture-model\",\"session_id\":\"affinity-fixture-session\"}",
+    "content-type": "application/json",
+    "method": "POST",
+    "path": "/v1/chat/completions",
+    "session-id": "",
+    "x-grok-conv-id": "",
+    "x-session-affinity": ""
+  },
+  "xai": {
+    "body": "{\"messages\":[{\"role\":\"system\",\"content\":\"affinity-fixture-instructions\"},{\"role\":\"user\",\"content\":\"affinity-fixture-user\"}],\"model\":\"affinity-fixture-model\"}",
+    "content-type": "application/json",
+    "method": "POST",
+    "path": "/v1/chat/completions",
+    "session-id": "",
+    "x-grok-conv-id": "affinity-fixture-session",
+    "x-session-affinity": ""
+  }
+}

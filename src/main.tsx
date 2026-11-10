@@ -1,4 +1,4 @@
-import { StrictMode } from 'react'
+import { Component, StrictMode, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { createRouter, RouterProvider, createHashHistory } from '@tanstack/react-router'
 import { QueryClientProvider } from '@tanstack/react-query'
@@ -7,6 +7,22 @@ import { routeTree } from './routeTree.gen'
 import { RouteFallback } from './components/shared/RouteFallback'
 import { RouteErrorFallback } from './components/shared/RouteErrorFallback'
 import './styles/globals.css'
+
+class RootErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false }
+
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+
+  componentDidCatch(error: unknown) {
+    console.error('[app] Uncaught render error:', error)
+  }
+
+  render() {
+    return this.state.failed ? <RouteErrorFallback /> : this.props.children
+  }
+}
 
 // Hash routing — required for go:embed static file serving.
 // go:embed serves a single index.html; history mode would 404 on deep links.
@@ -51,7 +67,9 @@ if (!rootElement) {
 createRoot(rootElement).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
+      <RootErrorBoundary>
+        <RouterProvider router={router} />
+      </RootErrorBoundary>
     </QueryClientProvider>
   </StrictMode>
 )

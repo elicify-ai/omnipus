@@ -13,7 +13,7 @@ properties:
     description: Unix epoch milliseconds of the most recent run.
   last_status:
     type: string
-    description: Status of the most recent run (ok/error/skipped/timeout), empty if never run.
+    description: Status of the most recent run (ok/error/skipped, or the historical timeout), empty if never run.
   last_error:
     type: string
     description: Error from the most recent failed run.

@@ -9,13 +9,11 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -24,7 +22,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/providers"
-	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // buildTrimTestAgentLoop builds a minimal AgentLoop whose default agent has
@@ -92,16 +89,16 @@ func makeTurnWithTool(userContent, toolCallID, toolResult string) []providers.Me
 // seedHistory installs a pre-built history into a session and saves it.
 func seedHistory(t *testing.T, al *AgentLoop, sessionKey string, history []providers.Message) {
 	t.Helper()
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent)
-	agent.Sessions.SetHistory(sessionKey, history)
+	seedWindowHistory(agent.Sessions, sessionKey, history)
 	require.NoError(t, agent.Sessions.Save(sessionKey))
 }
 
 // windowAfterTrim runs windowTrim and returns the live window afterward.
 func windowAfterTrim(t *testing.T, al *AgentLoop, sessionKey string) ([]providers.Message, compressionResult, bool) {
 	t.Helper()
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent)
 	result, ok := al.windowTrim(agent, "", sessionKey)
 	window := agent.Sessions.GetHistory(sessionKey)
@@ -154,7 +151,7 @@ func TestWindowTrim_KeepLastTurnAlignedFit(t *testing.T) {
 		"RemainingMessages must equal the post-trim window length")
 
 	// Skip must have advanced — verify by reloading history from the session.
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	reloaded := agent.Sessions.GetHistory(sessionKey)
 	assert.Equal(t, window, reloaded,
 		"session GetHistory must reflect the trimmed window")
@@ -214,7 +211,7 @@ func TestWindowTrim_CutsOnTurnBoundary(t *testing.T) {
 		seedHistory(t, al, sk, history)
 
 		// First trim.
-		agent := al.GetRegistry().GetDefaultAgent()
+		agent := al.GetRegistry().primaryChatAgentForTest()
 		al.windowTrim(agent, "", sk)
 
 		// Second trim to exercise Skip>0 path.
@@ -298,18 +295,24 @@ func TestWindowTrim_SingleHugeTurn_KeepsLastUser(t *testing.T) {
 
 	// B-21b: Skip stopped at the floor (the kept turn's user message) — the
 	// emptying that followed is not a cut and moved it no further.
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	skip := archiveLineCount(t, al, sk) - len(window)
 	assert.Equal(t, 2, skip, "Skip = the floor's position, unchanged by emptying")
 	assert.Equal(t, archiveBefore, archiveLineCount(t, al, sk), "B-23: no archive line changes")
 
-	// Marks present: tc1 and tc2 emptied (oldest first), tc3 is the floor
-	// set and stays. Persisted state keyed by the ARCHIVE line (skip + idx).
+	// Marks present: tc1, tc2 AND tc3 (the floor set) all reach mark-only
+	// under this extreme single-huge-turn pressure. ADR-066 MAJ-CW-002
+	// (already confirmed against this code): "Newest-step text is
+	// shortenable to head/tail plus mark, down to mark-only if necessary;
+	// its slots are not removable." The floor's SLOTS survive (window stays
+	// 7 messages, Skip stays at 2, asserted above) but its TEXT is not
+	// exempt from shortening like any other result. Persisted state keyed
+	// by the ARCHIVE line (skip + idx).
 	pm := agent.Sessions.Projection(sk)
 	assert.Equal(t, memory.ProjectionEmptied, pm.Entries[memory.ProjectionKey{ToolCallID: "tc1", ArchiveLine: 4}])
 	assert.Equal(t, memory.ProjectionEmptied, pm.Entries[memory.ProjectionKey{ToolCallID: "tc2", ArchiveLine: 6}])
-	_, tc3Marked := pm.Entries[memory.ProjectionKey{ToolCallID: "tc3", ArchiveLine: 8}]
-	assert.False(t, tc3Marked, "the floor set is never emptied")
+	assert.Equal(t, memory.ProjectionEmptied, pm.Entries[memory.ProjectionKey{ToolCallID: "tc3", ArchiveLine: 8}],
+		"MAJ-CW-002: the floor set's text reaches mark-only under extreme pressure — only its slot is protected")
 	// Must terminate — not an infinite loop (test itself would hang if it looped).
 }
 
@@ -338,7 +341,7 @@ func TestWindowTrim_NoDroppedMarker(t *testing.T) {
 	}
 	seedHistory(t, al, sk, history)
 
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 
 	al.windowTrim(agent, "", sk)
 
@@ -405,7 +408,7 @@ func TestWindowTrim_RecallSpanDropAloneReturnsOK(t *testing.T) {
 	}
 	al.setRecallSpan(sk, newRecallSpan(1, 1, recallMsgs, []int{1}))
 
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent)
 	windowBefore := agent.Sessions.GetHistory(sk)
 
@@ -441,7 +444,7 @@ func TestModelSwitch_ReWindowsNoSummary(t *testing.T) {
 	al, _, cleanup19 := newSwitchTestAgentLoop(t, "test-model", newModel)
 	defer cleanup19()
 
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent)
 
 	// Start with a large context window and a conversation that fits easily.
@@ -454,7 +457,7 @@ func TestModelSwitch_ReWindowsNoSummary(t *testing.T) {
 	for i := 0; i < 6; i++ {
 		history = append(history, makeTurn(bigContent, bigContent)...)
 	}
-	agent.Sessions.SetHistory(sk, history)
+	seedWindowHistory(agent.Sessions, sk, history)
 	require.NoError(t, agent.Sessions.Save(sk))
 
 	// Also set the global default window (ADR-066 D2 rung 3) to the new
@@ -498,7 +501,7 @@ func TestModelSwitch_ReWindowsNoSummary(t *testing.T) {
 		const newSmallModel = "openrouter/tiny-window-model"
 		al2, _, cleanup19b := newSwitchTestAgentLoop(t, "test-model", newSmallModel)
 		defer cleanup19b()
-		ag2 := al2.GetRegistry().GetDefaultAgent()
+		ag2 := al2.GetRegistry().primaryChatAgentForTest()
 		require.NotNil(t, ag2)
 
 		ag2.ContextWindow = 100000
@@ -509,7 +512,7 @@ func TestModelSwitch_ReWindowsNoSummary(t *testing.T) {
 
 		const sk2 = "t19-floor-session"
 		hugeContent := strings.Repeat("h", 3000) // alone exceeds 500-token window
-		ag2.Sessions.SetHistory(sk2, []providers.Message{
+		seedWindowHistory(ag2.Sessions, sk2, []providers.Message{
 			trimTestMsg("user", "earlier small msg"),
 			trimTestMsg("assistant", "earlier small response"),
 			trimTestMsg("user", hugeContent),
@@ -547,7 +550,7 @@ func TestModelSwitch_UpsizeKeepsSkipForward(t *testing.T) {
 	al, _, cleanup24 := newSwitchTestAgentLoop(t, "test-model", largerModel)
 	defer cleanup24()
 
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent)
 
 	// Start with a small window that forces an eviction, then switch to larger.
@@ -560,7 +563,7 @@ func TestModelSwitch_UpsizeKeepsSkipForward(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		history = append(history, makeTurn(bigContent, bigContent)...)
 	}
-	agent.Sessions.SetHistory(sk, history)
+	seedWindowHistory(agent.Sessions, sk, history)
 	require.NoError(t, agent.Sessions.Save(sk))
 
 	// Trim once so Skip > 0.
@@ -673,10 +676,17 @@ func readOwnedFileForTest(t *testing.T, filename string) string {
 // "// ---- file: <name> ----" banner. Guard tests that used to read "loop.go"
 // alone must read this instead: loop.go was split into loop_*.go files by
 // lifecycle on 2026-09-15, so a symbol scanned by name may live in any of them.
+//
+// R1's consolidation (#1081) moved genuine loop call sites out of the
+// loop*.go glob — admitAndCheckpoint/checkpointRecordedResult (the two
+// shared admitted-result checkpoint helpers) into tool_result_checkpoint.go,
+// and windowTrim's checked wiring into window_trim_checked.go. Both are
+// included explicitly so a scan of "every loop source" still sees them.
 func readLoopSourcesForTest(t *testing.T) string {
 	t.Helper()
 	matches, err := filepath.Glob("loop*.go")
 	require.NoError(t, err, "readLoopSourcesForTest: glob")
+	matches = append(matches, "tool_result_checkpoint.go", "window_trim_checked.go")
 	var b strings.Builder
 	n := 0
 	for _, name := range matches {
@@ -709,7 +719,7 @@ func sliceFromMarkerForTest(t *testing.T, src, marker string) string {
 // given session key (ReadArchive, ignores Skip).
 func archiveLineCount(t *testing.T, al *AgentLoop, sessionKey string) int {
 	t.Helper()
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent)
 	archived, err := agent.Sessions.ReadArchive(context.Background(), sessionKey)
 	require.NoError(t, err)
@@ -742,7 +752,7 @@ func TestArchive_FloorPathPreservesEvicted(t *testing.T) {
 	beforeArchive := archiveLineCount(t, al, sk)
 	require.Equal(t, len(history), beforeArchive, "archive must start with all messages")
 
-	_, ok := al.windowTrim(al.GetRegistry().GetDefaultAgent(), "", sk)
+	_, ok := al.windowTrim(al.GetRegistry().primaryChatAgentForTest(), "", sk)
 	require.True(t, ok, "floor-path trim must return ok=true")
 
 	afterArchive := archiveLineCount(t, al, sk)
@@ -760,7 +770,7 @@ func TestArchive_ModelSwitchPreservesEvicted(t *testing.T) {
 	al, _, cleanup := newSwitchTestAgentLoop(t, "test-model", newModel)
 	defer cleanup()
 
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent)
 
 	agent.ContextWindow = 4000
@@ -773,7 +783,7 @@ func TestArchive_ModelSwitchPreservesEvicted(t *testing.T) {
 	for i := 0; i < 6; i++ {
 		history = append(history, makeTurn(bigContent, bigContent)...)
 	}
-	agent.Sessions.SetHistory(sk, history)
+	seedWindowHistory(agent.Sessions, sk, history)
 	require.NoError(t, agent.Sessions.Save(sk))
 
 	// First eviction: advance Skip > 0.
@@ -797,92 +807,19 @@ func TestArchive_ModelSwitchPreservesEvicted(t *testing.T) {
 		"archive must be unchanged after model-switch downsize (SC-001)")
 }
 
-// TestWindowTrim_SetHistoryNeverCalled verifies that windowTrim (both normal
-// and floor paths) never calls SetHistory by checking that the on-disk archive
-// line count is UNCHANGED after a floor-path eviction (the only path that
-// previously called SetHistory). A SetHistory call would reset the archive.
-func TestWindowTrim_SetHistoryNeverCalled(t *testing.T) {
-	// This is equivalent to TestArchive_FloorPathPreservesEvicted but with an
-	// explicit grep of the owned file to assert the symbol is absent.
-	content := readLoopSourcesForTest(t)
-	// SetHistory must not be called in the windowTrim function body.
-	// We look for the pattern "agent.Sessions.SetHistory" inside windowTrim.
-	// The safest check: the pattern must not appear anywhere in loop.go
-	// for the windowTrim path (it's legitimate for other unrelated paths, but
-	// we verify the archive test above proves no data loss).
-	_ = content // archive test above is the primary guard; this is belt-and-suspenders
-}
+// TestWindowTrim_SetHistoryNeverCalled and TestArchive_AppendOnlyWithAttachStep
+// were DELETED with the SetHistory/hydration surface (session-core DEL-10/DEL-12;
+// ARCHITECT-ANSWER-CUTOVER-SLICE4.md Q4). SetHistoryNeverCalled was vacuous (its
+// body was `_ = content`, asserting nothing) and is superseded by the K-compile
+// absence of SetHistory. AppendOnlyWithAttachStep's surviving assertions (trim
+// advances Skip without deleting bytes; a re-read changes nothing) are covered
+// by TestArchive_FloorPathPreservesEvicted and TestArchive_ModelSwitchPreservesEvicted,
+// and on the chat archive by attach_window_test.go.
 
 // newSwitchTestAgentLoop is defined in switch_compress_test.go which is also
 // in the agent package — no redefinition needed here.
 
-// TestArchive_AppendOnlyWithAttachStep — ADR-066 FR-048 / B-53d (test 58):
-// the ADR-028 append-only invariant with an attach step. A session is
-// hydrated once from the transcript (empty archive), grows by live turns,
-// is trimmed (Skip advances, no bytes deleted), and is then re-attached:
-// the attach path's hydration must leave the archive byte-identical and
-// meta.skip unchanged. Before D5.5 that re-attach rewrote the whole file
-// and reset skip to 0 (the verified US-15 operator bug).
-func TestArchive_AppendOnlyWithAttachStep(t *testing.T) {
-	h := newHydrateTestHarness(t, "archive-attach")
-	now := time.Now().UTC()
-	h.append(t,
-		session.TranscriptEntry{Role: "user", Content: "first", AgentID: h.agentID, TurnID: "A", Timestamp: now},
-		session.TranscriptEntry{Role: "assistant", Content: "working", AgentID: h.agentID, TurnID: "A", Timestamp: now.Add(time.Second)},
-		standaloneToolCall(h.agentID, "A", "call-1", "bash", map[string]any{"output": "x"}, now.Add(2*time.Second)),
-		session.TranscriptEntry{Role: "assistant", Content: "done", AgentID: h.agentID, TurnID: "A", Timestamp: now.Add(3 * time.Second)},
-	)
-	require.NoError(t, h.al.HydrateAgentHistoryFromTranscript(h.transcriptID))
-	key := h.key()
-	require.Len(t, h.ag.Sessions.GetHistory(key), 4, "hydrated window: user, assistant(+call), tool, assistant")
-
-	// Live turns appended by the turn path, then a trim that advances Skip.
-	big := strings.Repeat("w", 3000)
-	for i := 0; i < 4; i++ {
-		h.ag.Sessions.AddMessage(key, "user", big)
-		h.ag.Sessions.AddMessage(key, "assistant", big)
-	}
-	require.NoError(t, h.ag.Sessions.Save(key))
-	linesBeforeTrim, err := h.ag.Sessions.ReadArchive(context.Background(), key)
-	require.NoError(t, err)
-	require.Len(t, linesBeforeTrim, 12)
-
-	h.ag.ContextWindow = 2000
-	h.ag.MaxTokens = 200
-	_, ok := h.al.windowTrim(h.ag, "", key)
-	require.True(t, ok, "trim must succeed")
-	windowAfterTrim := len(h.ag.Sessions.GetHistory(key))
-	require.Less(t, windowAfterTrim, 12, "trim must have advanced Skip")
-
-	archiveBytes, err := os.ReadFile(h.archivePath())
-	require.NoError(t, err)
-	metaBytes, err := os.ReadFile(h.metaPath())
-	require.NoError(t, err)
-	var metaBefore struct {
-		Skip int `json:"skip"`
-	}
-	require.NoError(t, json.Unmarshal(metaBytes, &metaBefore))
-	require.Greater(t, metaBefore.Skip, 0)
-
-	// Attach step: what the WS attach_session path does (FR-045).
-	require.True(t, h.al.AgentArchiveNonEmpty(h.transcriptID), "attach pre-check must see the archive")
-	require.NoError(t, h.al.HydrateAgentHistoryFromTranscript(h.transcriptID))
-
-	archiveAfter, err := os.ReadFile(h.archivePath())
-	require.NoError(t, err)
-	assert.Equal(t, string(archiveBytes), string(archiveAfter), "attach must leave the archive byte-identical")
-	metaAfterBytes, err := os.ReadFile(h.metaPath())
-	require.NoError(t, err)
-	var metaAfter struct {
-		Skip int `json:"skip"`
-	}
-	require.NoError(t, json.Unmarshal(metaAfterBytes, &metaAfter))
-	assert.Equal(t, metaBefore.Skip, metaAfter.Skip, "attach must not move Skip")
-	assert.Equal(t, windowAfterTrim, len(h.ag.Sessions.GetHistory(key)), "window unchanged by attach")
-	linesAfter, err := h.ag.Sessions.ReadArchive(context.Background(), key)
-	require.NoError(t, err)
-	assert.Len(t, linesAfter, 12, "no archive line deleted (ADR-028)")
-}
+// (TestArchive_AppendOnlyWithAttachStep's port lives in attach_window_test.go.)
 
 // TestWindowTrim_AlreadyFitsEvictsNothing pins the missing "already fits"
 // guard.
@@ -909,7 +846,7 @@ func TestWindowTrim_AlreadyFitsEvictsNothing(t *testing.T) {
 	}
 	seedHistory(t, al, sessionKey, history)
 
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	before := agent.Sessions.GetHistory(sessionKey)
 	require.Len(t, before, len(history), "precondition: the whole window is live")
 

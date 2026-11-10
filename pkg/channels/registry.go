@@ -66,3 +66,23 @@ func getPrerequisite(channelType string) (PrerequisiteChecker, bool) {
 	f, ok := prerequisites[channelType]
 	return f, ok
 }
+
+// SwapFactoryForTesting replaces the factory registered under name and
+// returns a function that restores the previous one. Tests use it to drive the
+// real manager lifecycle with a fake platform client (gate r3 T1); production
+// code must never call it.
+func SwapFactoryForTesting(name string, f ChannelFactory) (restore func()) {
+	factoriesMu.Lock()
+	prev, had := factories[name]
+	factories[name] = f
+	factoriesMu.Unlock()
+	return func() {
+		factoriesMu.Lock()
+		defer factoriesMu.Unlock()
+		if had {
+			factories[name] = prev
+		} else {
+			delete(factories, name)
+		}
+	}
+}

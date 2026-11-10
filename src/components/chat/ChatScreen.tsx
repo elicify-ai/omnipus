@@ -1,101 +1,98 @@
-import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
-import { useVirtualizer } from '@tanstack/react-virtual'
+import React, { useContext, useEffect, useRef, useState, useCallback, useMemo } from 'react'
+import { VirtualizedMessageList } from './ChatMessageList'
 import { useQuery } from '@tanstack/react-query'
 import {
   ThreadPrimitive,
   MessagePrimitive,
-  ComposerPrimitive,
-  AttachmentPrimitive,
-  useAttachment,
   ActionBarPrimitive,
   AuiIf,
-  useComposerRuntime,
   useMessage,
   useThreadViewportStore,
 } from '@assistant-ui/react'
 import {
   ArrowCounterClockwise,
   User,
-  Robot,
-  PaperPlaneRight,
-  Stop,
   Copy,
   Check,
-  ListChecks,
-  Plus,
-  File,
   Lightning,
 } from '@phosphor-icons/react'
-import OmnipusAvatar from '@/assets/logo/omnipus-avatar.svg?url'
-import { IconRenderer } from '@/components/shared/IconRenderer'
+import { OMNIPUS_MARK_URL as OmnipusAvatar } from '@/lib/brandAssets'
 import { Wordmark } from '@/components/shared/Wordmark'
 import { GenericToolCall } from './tools/GenericToolCall'
+import { resolvedToolPartStatus } from '@/lib/assistant-tool-status'
 import { detectToolResultSentinels } from './tools/toolResultSentinels'
-import { WebServeBlock } from './tools/WebServeUI'
-import { SetGoalCardBlock, classifySetGoalCall } from './tools/SetGoalToolUI'
-import { BrowserToolReplayBlock, isReplayBrowserToolName } from './tools/BrowserTool'
-import { BashOutputBlock, isBashToolName } from './tools/BashOutput'
-import { FileReadBlock } from './tools/FileReadPreview'
-import { FileTreeBlock } from './tools/FileTreeView'
-import { WebSearchBlock } from './tools/WebSearchResult'
-import { WebFetchBlock } from './tools/WebFetchPreview'
+import { renderHistoricalToolCall } from './tools/HistoricalToolCallBlock'
+import { classifySetGoalCall } from './tools/SetGoalToolUI'
 import { RateLimitIndicator } from './RateLimitIndicator'
+import { ProviderRetryIndicator } from './ProviderRetryIndicator'
+import { ProviderWaitingIndicator } from './ProviderWaitingIndicator'
 import { GoalIndicator } from './GoalIndicator'
 import { GoalPillTray } from './GoalPillTray'
 import { AskUserQuestionThreadTail } from './AskUserQuestionCard'
-import { JudgeVerdictThreadCard } from './JudgeVerdictThreadCard'
-import { ActivityBar } from './ActivityBar'
-import { AgentPicker } from './composer/AgentPicker'
-import { ModelPicker } from './composer/ModelPicker'
-import { AutoApprovePicker } from './composer/AutoApprovePicker'
-import { TokenCounter } from './composer/TokenCounter'
+import { SecretRequestThreadTail } from './SecretRequestCard'
+import { ToolApprovalThreadTail } from '@/components/agents/ToolApprovalPanel'
+import { OmnipusComposer } from './composer/OmnipusComposer'
 import { MarkdownText } from './markdown-text'
-import { ModelFooter } from './ModelFooter'
+import { CATCH_UP_SMOOTH, ThreadRevealContext } from './useOpenReveal'
+import { ModelFooter, TurnEffortNote } from './ModelFooter'
 import { Button } from '@/components/ui/button'
-import { IconButton } from '@/components/ui/icon-button'
-import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { isClearCommandText } from '@/lib/clearMarker'
+import { ErrorDetailDisclosure } from './ErrorDetailDisclosure'
+import { AgentReplyLabel, ParticipantMessageRow, useParticipantLabelParts } from './ParticipantLabels'
+import { assistantRowCorrelationAttributes } from './assistantRowAttributes'
+import { isSendChipHiddenByReply, replyHeaderParts } from './participantLabel'
 import { useChatStore } from '@/store/chat'
+import { stampToolCallOffset } from '@/store/chat/session'
 import type { ChatMessage, PositionedToolCall, QueuedOutboundMessage } from '@/store/chat'
 import type { DelegationEvent } from '@/lib/delegationEvents.types'
-import type { MessagePartStatus } from '@assistant-ui/react'
-import { splitMessageParts } from '@/lib/messageParts'
+import { HistoryShowRest, historyCallPosition, useHistoryPartGroups, useHistoryUserText, type DisplayPart } from './historyTextOverlay'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
-import { useUiStore } from '@/store/ui'
+import { workspaceEntryBlocksSend } from '@/lib/nav/workspaceEntry'
+import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
-import { shouldRenderToolCall, shouldRenderJudgeVerdictInThread } from '@/lib/toolVisibility'
+import { shouldRenderToolCall, shouldRenderContextWindowNoticeInThread } from '@/lib/toolVisibility'
 import {
-  delegationEventsAtEnd,
   liveSnapshotIds,
   splitAnchoredDelegationEvents,
   type DelegationPlacementMessage,
 } from '@/lib/delegationEventPlacement'
-import { DelegationEventLineList, DelegationInlineProvider, DelegationLiveTail, DelegationToolGroup, delegationSlotted, useClaimedCallIds } from './DelegationEventLine'
-import { useChatDelegationEvents } from './useChatDelegationEvents'
+import { DelegationEventLineList, DelegationInlineProvider, DelegationLiveTail, DelegationToolGroup, useClaimedCallIds } from './DelegationEventLine'
 import { isGoalRecordEmpty } from '@/lib/goalSetupState'
 import { messageSetsGoal } from '@/lib/goalCommandMessage'
-import { getMessageStatusSuffix, INTERRUPTED_SUFFIX_TEXT, CUT_OFF_SUFFIX_TEXT } from '@/lib/truncation'
+import { getMessageStatusSuffix } from '@/lib/truncation'
 import { GoalCommandMarker } from '@/components/chat/GoalCommandMarker'
 import { GoalSetupFailureLine } from './tools/GoalSetupFailureLine'
-import { GoalOutcomeRow } from './GoalOutcomeRow'
-import { fetchAgents, fetchSessionMessages, fetchCommands, fetchSkills } from '@/lib/api'
-import type { SlashCommand, Skill, Agent } from '@/lib/api'
-import { AttachmentCard, AttachmentRemoveX, useFilePreview } from './AttachmentCard'
-import { ComposerMediaLibraryButton, LibraryAttachmentChips } from './ComposerMediaLibrary'
-import { cn, initialOf } from '@/lib/utils'
+import { fetchAgents, fetchCommands, fetchSkills } from '@/lib/api'
+import { INLINE_TOOL_APPROVALS_ENABLED, SECRET_CARDS_ENABLED } from '@/lib/featureSwitches'
+import type { SlashCommand, Skill } from '@/lib/api'
+import {
+  AgentStatusIndicator,
+  feedMarkLabel,
+  ReplyStatusFallbackProvider,
+  showsFeedMark,
+  useReplySlotPhase,
+} from './AgentStatusIndicator'
+import { useChatAgents } from './useChatAgents'
 import { HistoricalMessageMarkdown } from './historical-markdown'
 import { ChatImage } from './ChatImage'
-import { useSlashMenu, SECTION_CAP } from '@/hooks/useSlashMenu'
-import { useFileUpload } from '@/hooks/useFileUpload'
-import { useCancelState } from '@/hooks/useCancelState'
 import {
   AssistantMessageConnectionStatus,
   UnansweredUserMessageStatus,
   ChatConnectionNotice,
-  UserMessageDeliveryStatus,
+  RestartInterruptedNotice,
 } from './ConnectionStatus'
+import { RowDeliveryStatus } from './RowDeliveryStatus'
+import { useChatHistory, HistoryOpenState } from './useChatHistory'
+import { useConversationKind, useConversationSource } from './conversationSource'
+import { ChatFileAttachment } from './ChatFileAttachment'
 
-function placementOf(message: ChatMessage): DelegationPlacementMessage {
+// #1449 FR-005: a group row never reads the foreground session's live state.
+const NO_LIVE_TOOL_CALLS: ReturnType<typeof useChatStore.getState>['toolCalls'] = {}
+const NO_LIVE_TOOL_ORDER: string[] = []
+const NO_LIVE_TEXT_OFFSETS: Record<string, string> = {}
+
+export function placementOf(message: ChatMessage): DelegationPlacementMessage {
   return {
     spans: message.spans,
     toolCalls: message.tool_calls as DelegationPlacementMessage['toolCalls'],
@@ -250,105 +247,23 @@ export function UserMessage() {
             </MessagePrimitive.Parts>
           </div>
         ))}
-        {storeMessage?.deliveryStatus && storeMessage.deliveryStatus !== 'sending' && (
-          <UserMessageDeliveryStatus
+        {storeMessage?.deliveryStatus && (storeMessage.firstSendStatus || storeMessage.deliveryStatus !== 'sending') && (
+          <RowDeliveryStatus
+            content={storeMessage.content}
             state={storeMessage.deliveryStatus}
+            firstSendStatus={storeMessage.firstSendStatus}
             agentName={agentName}
             latest
+            isClearCommand={isClearCommandText(storeMessage.content)}
             onRetry={() => useChatStore.getState().resendMessage(storeMessage.id)}
+            onGenerateAgain={() => useChatStore.getState().generateFirstSendAgain(storeMessage.id)}
           />
         )}
-        <UnansweredUserMessageStatus messageId={message.id} agentName={agentName} />
+        {(!storeMessage?.firstSendStatus || storeMessage.firstSendStatus === 'saved') && <UnansweredUserMessageStatus messageId={message.id} agentName={agentName} />}
       </div>
     </MessagePrimitive.Root>
   )
 }
-
-function SystemMessage() {
-  const message = useMessage()
-  // Operator-reported UX fix, 2026-09-08: the goal-ack line is a synthetic
-  // `role: 'system'` ChatMessage (chat.ts's `case 'goal_status'` handler,
-  // buildGoalAckInsertion) carrying `goalAckGoalId` — everything else on
-  // this generic system-banner surface (help text, `/new`, etc.) has none,
-  // so this stays a no-op for those. Cross-referencing the store message
-  // (rather than AssistantUI's own `message`) mirrors AssistantMessage's
-  // identical storeMsg lookup a few components up.
-  const storeMsg = useChatStore((s) => s.messagesById[message.id])
-  const isGoalAck = !!storeMsg?.goalAckGoalId
-  // ADR-085 BROWSER-FR-042/FR-044 (wave B8, C-90): the browser-handover
-  // waiting notice is the same kind of synthetic `role: 'system'`
-  // ChatMessage, this time carrying `browserHandoverNoticeId` (chat.ts's
-  // `case 'browser_handover_notice'` handler, buildBrowserHandoverInsertion)
-  // — copying the shipped two-site `isGoalAck` pattern exactly. The e2e spec
-  // (tests/e2e/browser-control-handover.spec.ts) names this discriminator
-  // as its positive observable.
-  const isBrowserHandoverNotice = !!storeMsg?.browserHandoverNoticeId
-  // Goal outcome line (founder decision 2026-09-14): how a goal ended —
-  // always shown, never gated by Verbose chat. See src/lib/goalOutcome.ts.
-  if (storeMsg?.goalOutcome) {
-    return (
-      <MessagePrimitive.Root className="flex justify-center px-[var(--space-3)] py-[var(--space-2)]">
-        <GoalOutcomeRow outcome={storeMsg.goalOutcome} />
-      </MessagePrimitive.Root>
-    )
-  }
-  return (
-    <MessagePrimitive.Root
-      className="flex justify-center py-[var(--space-2)]"
-      data-testid={isGoalAck ? 'goal-ack-line' : isBrowserHandoverNotice ? 'browser-handover-notice' : undefined}
-    >
-      <div className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] bg-[var(--color-surface-2)] px-[var(--space-2-5)] py-[var(--space-1)] rounded-full">
-        <MessagePrimitive.Parts>
-          {({ part }) => {
-            if (part.type !== 'text') return null
-            return <span>{part.text}</span>
-          }}
-        </MessagePrimitive.Parts>
-      </div>
-    </MessagePrimitive.Root>
-  )
-}
-
-// Animated thinking indicator with rotating status messages. The first
-// shown phrase is always 'Thinking…' (deterministic opening beat); every
-// tick after that picks a random phrase from the pool, never immediately
-// repeating the one just shown. A caller (InlineThinkingIndicator) can
-// override the rotation entirely with a stable, context-specific `label`
-// — e.g. naming the hidden tool currently running — via ThinkingIndicator's
-// `label` prop.
-const THINKING_MESSAGES = [
-  'Thinking…',
-  'Working on it…',
-  'Composing a response…',
-  'Processing your request…',
-  'Analyzing…',
-  'Considering the details…',
-  'Piecing it together…',
-  'Reasoning it through…',
-  'Working through this…',
-  'Gathering my thoughts…',
-  'Figuring out the approach…',
-  'Reviewing the context…',
-  'Drafting a response…',
-  'Making sense of it…',
-  'Weighing the options…',
-]
-
-/** Picks a random phrase from THINKING_MESSAGES that differs from `current` — never an immediate repeat. */
-function pickNextThinkingPhrase(current: string): string {
-  if (THINKING_MESSAGES.length <= 1) return THINKING_MESSAGES[0]
-  let next = current
-  while (next === current) {
-    next = THINKING_MESSAGES[Math.floor(Math.random() * THINKING_MESSAGES.length)]
-  }
-  return next
-}
-
-// ADR-051 — cap on the verbose-only "Technical details" disclosure content
-// in VirtualAssistantMessageRow (historical/replay render path). Mirrors
-// MessageItem.tsx's cap (live render path) so live and replay show the same
-// truncated length when a provider's error payload is verbose.
-const ERROR_DETAIL_MAX_CHARS = 512
 
 // Caps a context-specific thinking label (a bash `description`) to a single
 // line and ~48 chars — long enough to be informative, short enough to read
@@ -408,8 +323,8 @@ function deriveBashThinkingLabel(args: Record<string, unknown> | undefined): str
 }
 
 // `deriveDelegateThinkingLabel` stays deleted. A hidden `delegate` call
-// (every action, unless verbose chat is on) has no specific thinking label
-// and falls through to the generic rotating pool, same as a status poll.
+// (every action, unless verbose chat is on) has no tool-specific label.
+// Its running status still selects Working, with the generic working copy.
 
 /**
  * Finds the LAST tool-call part in a live message's `content` whose live
@@ -418,12 +333,12 @@ function deriveBashThinkingLabel(args: Record<string, unknown> | undefined): str
  * — only when that call is hidden from the thread per toolVisibility.ts's
  * shouldRenderToolCall — derives a specific, stable label for it.
  *
- * Returns null (generic rotating pool applies) when: the tool is visible
- * (its own chip already shows progress), it's a hidden `delegate` call
- * (no specific label — the event line carries that), it's ToolSearch, or
- * any other hidden tool with no specific-label rule, or nothing is
- * currently running. Defensive: never throws — an unexpected
- * message/part shape falls back to the generic pool via the null return,
+ * Returns null when: the tool is visible (its own chip already shows progress),
+ * it's a hidden `delegate` call (no specific label — the event line carries
+ * that), it's ToolSearch, any other hidden tool with no specific-label rule,
+ * or nothing is currently running. This selects copy only, not the phase:
+ * runningToolNamesFromLiveContent supplies the correlated execution signal. Defensive: never throws — an unexpected
+ * message/part shape supplies no specific copy via the null return,
  * exactly like "nothing found".
  */
 function deriveHiddenRunningToolLabel(
@@ -453,7 +368,26 @@ function deriveHiddenRunningToolLabel(
       if (toolName === 'bash') {
         return deriveBashThinkingLabel(args)
       }
-      return null // ToolSearch, any delegate action, or any other hidden tool with no rule — generic pool.
+      return null // ToolSearch, any delegate action, or another hidden tool without specific copy.
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+/** Plain/replay twin of deriveHiddenRunningToolLabel. The virtual row has no AssistantUI parts. */
+function derivePositionedHiddenRunningLabel(
+  calls: readonly { tool: string; params?: Record<string, unknown>; status?: string }[],
+  verboseChatEnabled: boolean,
+): string | null {
+  try {
+    for (let i = calls.length - 1; i >= 0; i--) {
+      const call = calls[i]
+      if (!call || call.status !== 'running') continue
+      if (shouldRenderToolCall(call.tool, call.params, verboseChatEnabled, false)) return null
+      if (call.tool === 'bash') return deriveBashThinkingLabel(call.params)
+      return null
     }
     return null
   } catch {
@@ -484,53 +418,48 @@ function deriveGoalAwareThinkingLabel(runningToolNames: string[], goalRecordEmpt
   return runningToolNames.includes('set_goal') ? 'Setting acceptance criteria' : 'Framing your goal'
 }
 
-/** Extracts the tool names of currently-`running` tool-call parts from a
- * LIVE AssistantUI message's `content` array — the same shape
- * deriveHiddenRunningToolLabel scans, but collecting every running name
- * (there's normally at most one) rather than stopping at the first hidden
- * one. Never throws; an unexpected shape yields an empty array. */
+/**
+ * Reads a producing message's goal association off an AssistantUI message
+ * (FR-039) — carried in `metadata.custom.goalId` by `convertMessage`
+ * (src/lib/omnipus-runtime.ts). Returns undefined for anything that is not a
+ * non-empty string, so an unknown/malformed value stays NEUTRAL.
+ */
+function messageGoalIdFromAssistantUi(message: {
+  metadata?: { custom?: { goalId?: unknown } }
+}): string | undefined {
+  const value = message.metadata?.custom?.goalId
+  return typeof value === 'string' && value.length > 0 ? value : undefined
+}
+
+/** One execution discriminator for both the live and plain/replay reply slots.
+ * Visibility and label selection must not change whether a tool is running. */
+function runningToolNamesForReply(
+  calls: readonly Pick<PositionedToolCall, 'tool' | 'status'>[],
+): string[] {
+  return calls.filter((call) => call.status === 'running').map((call) => call.tool)
+}
+
+/** Adapts live AssistantUI parts to the same execution records used by replay.
+ * Status comes from the store record correlated by toolCallId; an unexpected
+ * content shape yields no calls, not a guessed execution phase. */
 function runningToolNamesFromLiveContent(
   content: unknown,
-  storeToolCalls: Record<string, { status?: string }>,
+  storeToolCalls: Record<string, Pick<PositionedToolCall, 'status'>>,
 ): string[] {
   if (!Array.isArray(content)) return []
-  const names: string[] = []
+  const calls: Pick<PositionedToolCall, 'tool' | 'status'>[] = []
   try {
     for (const part of content) {
       const p = part as { type?: string; toolCallId?: string; toolName?: string } | undefined
       if (!p || p.type !== 'tool-call') continue
       if (typeof p.toolCallId !== 'string' || typeof p.toolName !== 'string') continue
-      if (storeToolCalls[p.toolCallId]?.status === 'running') names.push(p.toolName)
+      const call = storeToolCalls[p.toolCallId]
+      if (call) calls.push({ tool: p.toolName, status: call.status })
     }
   } catch {
     return []
   }
-  return names
-}
-
-function ThinkingIndicator({ label }: { label?: string | null } = {}) {
-  const [rotatingPhrase, setRotatingPhrase] = useState<string>(THINKING_MESSAGES[0])
-
-  useEffect(() => {
-    if (label) return // a stable context-specific label overrides rotation entirely.
-    const interval = setInterval(() => {
-      setRotatingPhrase((prev) => pickNextThinkingPhrase(prev))
-    }, 2000)
-    return () => clearInterval(interval)
-  }, [label])
-
-  const displayText = label ?? rotatingPhrase
-
-  return (
-    <span className="text-[var(--color-muted)] italic flex items-center gap-[var(--space-2)] py-[var(--space-1)]">
-      <span className="flex gap-[var(--space-1)]">
-        <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] animate-bounce" style={{ animationDelay: '0ms' }} />
-        <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] animate-bounce" style={{ animationDelay: '150ms' }} />
-        <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] animate-bounce" style={{ animationDelay: '300ms' }} />
-      </span>
-      <span className="text-[length:var(--type-utility-xs-size)] transition-opacity duration-300">{displayText}</span>
-    </span>
-  )
+  return runningToolNamesForReply(calls)
 }
 
 // Custom text renderer with streaming cursor.
@@ -553,49 +482,86 @@ class TextPartErrorBoundary extends React.Component<{ children: React.ReactNode 
 }
 
 function AssistantTextPart() {
+  // A reply already in progress when the chat opened must show its text so
+  // far, not re-type it from empty (the open flicker): catch-up pacing while
+  // the opened conversation is covered, normal pacing after the reveal.
+  const revealed = useContext(ThreadRevealContext)
   return (
     <TextPartErrorBoundary>
       <div>
-        <MarkdownText />
+        <MarkdownText smooth={revealed ? true : CATCH_UP_SMOOTH} />
       </div>
     </TextPartErrorBoundary>
   )
 }
 
-// Shows thinking dots inside the assistant message while it is still running.
-// Stays visible the entire turn — including between tool-call steps after some
-// text has streamed — so the user always knows the agent is still working.
-// Uses useMessage() for reactive state (not getState() which is a snapshot).
-//
-// Context-aware: when the current in-progress step is a HIDDEN tool call
-// (ToolSearch, background bash, any delegate action — see toolVisibility.ts)
-// whose tool-call part is present in message.content but rendered invisible,
-// this shows a specific, stable label for it (e.g. "Running the test suite…")
-// instead of the generic rotating pool — see deriveHiddenRunningToolLabel
-// above. Every delegate action is hidden in the non-verbose thread (spec D2);
-// the grey event line is that surface, and a running delegate call has no
-// specific label of its own here. Verbose chat shows every delegate badge,
-// so the call is already visible and this label is not used.
-function InlineThinkingIndicator() {
+// Motion follows correlated execution; all work renderers share the status
+// episode owned above their split, including the identity-loading fallback.
+function InlineThinkingIndicator({ agentId }: { agentId: string | null }) {
   const message = useMessage()
+  const turnId = useChatStore((state) => state.messagesById[message.id]?.turnId ?? null)
   const isRunning = message.status?.type === 'running'
   const storeToolCalls = useChatStore((s) => s.toolCalls)
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
   // Operator-reported UX fix, 2026-09-08: goal-aware override, checked
   // BEFORE the hidden-tool label — see deriveGoalAwareThinkingLabel's doc
-  // comment. goalStatus is the foreground session's latest goal_status
-  // frame (same field GoalIndicator already reads), so this needs no extra
-  // subscription setup.
-  const goalStatus = useChatStore((s) => s.goalStatus)
-
-  if (!isRunning) return null
-
-  const goalRecordEmpty = isGoalRecordEmpty(goalStatus)
+  // comment. FR-039 (DEL-F39–40): the override joins the PRODUCING message's
+  // own goal_id (carried on the AssistantUI message's metadata.custom) to the
+  // exact keyed criteria in `goalPills` — never the session's latest-goal
+  // scalar. Subscribing to `goalPills` keeps the label reactive when a
+  // `goal_status` frame changes the record. An unknown association (no
+  // goalId) is neutral.
+  const goalPills = useChatStore((s) => s.goalPills)
+  const goalId = messageGoalIdFromAssistantUi(message)
+  const goalRecordEmpty = isGoalRecordEmpty(goalId, goalPills)
+  const runningToolNames = runningToolNamesFromLiveContent(message.content, storeToolCalls)
   const goalLabel = goalRecordEmpty
-    ? deriveGoalAwareThinkingLabel(runningToolNamesFromLiveContent(message.content, storeToolCalls), true)
+    ? deriveGoalAwareThinkingLabel(runningToolNames, true)
     : null
-  const label = goalLabel ?? deriveHiddenRunningToolLabel(message.content, storeToolCalls, verboseChatEnabled)
-  return <ThinkingIndicator label={label} />
+  const toolLabel = deriveHiddenRunningToolLabel(message.content, storeToolCalls, verboseChatEnabled)
+  const phase = useReplySlotPhase({
+    streaming: isRunning,
+    hasRunningTool: runningToolNames.length > 0,
+    toolLabel,
+    goalLabel,
+    idleEligible: false,
+  })
+
+  if (!showsFeedMark(phase)) return null
+  const label = feedMarkLabel(phase)
+  return (
+    <React.Suspense
+      fallback={<AgentStatusIndicator phase={phase.kind} label={label} turnId={turnId} />}
+    >
+      <ResolvedAgentMark agentId={agentId} phase={phase.kind} label={label} turnId={turnId} />
+    </React.Suspense>
+  )
+}
+
+function ResolvedAgentMark({
+  agentId,
+  phase,
+  label,
+  turnId,
+}: {
+  agentId: string | null
+  phase: 'thinking' | 'working' | 'waiting' | 'unavailable'
+  label: string | null
+  turnId: string | null
+}) {
+  const agents = useChatAgents()
+  const agent = agents.find((item) => item.id === agentId)
+  return (
+    <AgentStatusIndicator
+      phase={phase}
+      label={label}
+      turnId={turnId}
+      figure={agent?.figure}
+      role={agent?.role}
+      color={agent?.color}
+      name={agent?.name ?? ''}
+    />
+  )
 }
 
 // Fallback tool UI for tools without a registered makeAssistantToolUI component.
@@ -636,14 +602,20 @@ function FallbackToolUI(props: {
   args: unknown
   result: unknown
   status: import('@assistant-ui/react').MessagePartStatus
+  artifact?: unknown
   isError?: boolean
 }) {
   const storeToolCalls = useChatStore((s) => s.toolCalls)
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
   // Operator-reported UX fix, 2026-09-08: see GoalSetupFailureLine.tsx's
-  // file doc comment. goalStatus drives isGoalRecordEmpty below.
-  const goalStatus = useChatStore((s) => s.goalStatus)
+  // file doc comment. FR-039: the failure line is gated on the PRODUCING
+  // message's own goal_id (the AssistantUI message this tool part belongs
+  // to) joined to the exact keyed criteria in `goalPills` — never the
+  // session's latest-goal scalar.
+  const message = useMessage()
+  const goalPills = useChatStore((s) => s.goalPills)
+  const goalId = messageGoalIdFromAssistantUi(message)
   const liveCall = storeToolCalls[props.toolCallId]
   const isError = props.isError ?? liveCall?.status === 'error'
 
@@ -658,7 +630,7 @@ function FallbackToolUI(props: {
     isError &&
     !verboseChatEnabled &&
     props.toolName !== 'set_goal' &&
-    isGoalRecordEmpty(goalStatus) &&
+    isGoalRecordEmpty(goalId, goalPills) &&
     shouldRenderToolCall(props.toolName, props.args as Record<string, unknown> | undefined, false, true)
   ) {
     return (
@@ -675,7 +647,7 @@ function FallbackToolUI(props: {
       toolName={props.toolName}
       args={props.args}
       result={liveCall?.result ?? props.result}
-      status={props.status}
+      status={resolvedToolPartStatus(props.status, props.artifact)}
       isError={isError}
       error={liveCall?.error}
       durationMs={liveCall?.duration_ms}
@@ -745,15 +717,8 @@ function InlineMedia() {
             )}
           </div>
         ) : (
-          <a tabIndex={0}
-            key={`${m.url}-${i}`}
-            href={m.url}
-            download={m.filename}
-            className="inline-flex items-center gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-2)] rounded-lg border border-[var(--color-border)] text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
-          >
-            <File size={14} />
-            {m.filename}
-          </a>
+          // FR-081: the same file card as the settled rows.
+          <ChatFileAttachment key={`${m.url}-${i}`} media={m} />
         ),
       )}
     </div>
@@ -776,22 +741,6 @@ function isMarshalErrorSentinel(value: unknown): boolean {
     value !== null &&
     typeof (value as Record<string, unknown>)['_marshal_error'] === 'string'
   )
-}
-
-/**
- * F2: derives the replay MessagePartStatus object from the store's resolved
- * ToolCall.status, instead of the old hardcoded `{type:'complete'}`.
- * BrowserToolReplayBlock and GenericToolCall both consult `status` (via
- * isCancelledStatus) to decide whether to render the cancelled treatment —
- * hardcoding 'complete' meant isCancelledStatus could never be true on
- * replay, so a genuinely cancelled call rendered as a plain success. The
- * `isError` prop each of those two components also takes is passed
- * separately and explicitly at each call site (issue #617), so widening
- * `status.type` to 'incomplete' here does not reopen #617 — it is never
- * consulted for the error bit once an explicit `isError` prop is supplied.
- */
-function replayPartStatus(status: 'running' | 'success' | 'error' | 'cancelled'): MessagePartStatus {
-  return status === 'cancelled' ? { type: 'incomplete', reason: 'cancelled' } : { type: 'complete' }
 }
 
 /**
@@ -857,9 +806,10 @@ function wouldToolCallBeVisible(
     // (SetGoalCardBlock), which pre-empts GenericToolCall on both paths.
     // "Visible" here must mean "that UI actually renders something", so
     // this consults the SAME decision table the block renders from
-    // (classifySetGoalCall, review S4) — verbose chat shows the raw call,
-    // a failed call shows its quiet failure line, a record shows the card,
-    // a present-but-unparseable result shows a chip; only a still-running
+    // (classifySetGoalCall, review S4) — a record shows the card, with the
+    // raw call added below it in verbose chat. Non-verbose failures show
+    // their quiet failure line; a present-but-unparseable result shows a
+    // chip (or the raw call in verbose chat). Only a still-running
     // call (no result yet) or a completed call with no result at all is
     // hidden, so a bubble consisting solely of one still shows the
     // ThinkingIndicator rather than a blank shell.
@@ -886,91 +836,10 @@ function wouldToolCallBeVisible(
 // directly) and in the child's own session, opened via its
 // `childSessionId`.
 
-// Bug 2 (UAT, ADR-040 browser-panel round): renders the agent the CALLER
-// already resolved per-message (`message.agentId ?? activeAgentId`), passed in
-// as `agent`. It must NOT re-derive from the live activeAgentId — otherwise
-// switching the agent picker mid-turn would instantly repaint the currently
-// streaming bubble's avatar to the newly-picked agent while its (correctly
-// per-message-scoped) name label kept the original: a live, user-visible
-// mismatch that only self-corrected on reload. Taking the resolved agent as a
-// prop keeps a single source of truth between the label and the avatar.
-function AssistantMessageAvatar({ agent }: { agent?: Agent }) {
-  return (
-    <div
-      className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-[var(--color-secondary)]"
-      style={{ backgroundColor: agent?.color ?? 'var(--color-surface-3)' }}
-      title={agent?.name}
-    >
-      {agent?.icon ? (
-        <IconRenderer icon={agent.icon} size={14} />
-      ) : (
-        <Robot size={14} weight="bold" />
-      )}
-    </div>
-  )
-}
-
-
-// FR-21: Renders (interrupted) status markers for assistant messages that have
-// status:'interrupted' in the Zustand store.
-//
-// This component is rendered OUTSIDE ThreadPrimitive.Root and outside the
-// scrollable Viewport. This guarantees two properties:
-//   1. It subscribes directly to Zustand (bypasses AssistantUI rendering).
-//   2. It is not inside any overflow-clipped container (Playwright can see it).
-//
-// Each marker is rendered as a visually small but non-zero text span so that
-// E2E tests can locate it with page.locator('text=(interrupted)') combined
-// with toBeVisible(). The span has non-zero height because it contains text.
-//
-// The visible (interrupted) label rendered inside AssistantMessage handles
-// the correct visual positioning within the message bubble for human users.
-// This component is the reliable E2E-detectable fallback.
-//
-// ADR-087 D1 — extended to also render the "(cut off at the output limit)"
-// notice for a truncated (max_output_tokens) assistant message, in a second
-// pass over the same message list, still outside the scroll viewport for the
-// same Playwright-visibility reason. `getMessageStatusSuffix`
-// (src/lib/truncation.ts) is the single source of the precedence rule
-// (interrupted/cancelled always wins over a cutoff) — this component derives
-// which list a message lands in from its return value rather than
-// re-implementing the precedence check, so it can never disagree with the
-// in-bubble renderers below.
-function InterruptedMessageMarkers() {
-  const messages = useChatStore((s) => s.messages)
-  const interrupted: ChatMessage[] = []
-  const cutOff: ChatMessage[] = []
-  for (const m of messages) {
-    const suffix = getMessageStatusSuffix(m)
-    if (suffix === INTERRUPTED_SUFFIX_TEXT) interrupted.push(m)
-    else if (suffix === CUT_OFF_SUFFIX_TEXT) cutOff.push(m)
-  }
-  if (interrupted.length === 0 && cutOff.length === 0) return null
-  return (
-    <>
-      {interrupted.map((m) => (
-        <div
-          key={m.id}
-          data-testid="interrupted-marker"
-          data-message-id={m.id}
-          className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic text-center pb-[var(--space-1)]"
-        >
-          (interrupted)
-        </div>
-      ))}
-      {cutOff.map((m) => (
-        <div
-          key={m.id}
-          data-testid="truncated-marker"
-          data-message-id={m.id}
-          className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic text-center pb-[var(--space-1)]"
-        >
-          (cut off at the output limit)
-        </div>
-      ))}
-    </>
-  )
-}
+// Bug 2 (UAT, ADR-040): the name label is the per-message agent
+// (`message.agentId ?? activeAgentId`), never the picker selection. The
+// avatar column is gone (names-only bubbles). The label's title keeps that
+// same identity so a mid-turn picker change cannot repaint the row.
 
 // ── Standalone message row components (virtualizer) ──────────────────────────
 // Render ChatMessage from props (no AssistantUI context) for use by the virtualizer.
@@ -979,7 +848,7 @@ function InterruptedMessageMarkers() {
 /** Standalone user message row for the virtualizer. */
 // useSkillChipData fetches the skills + web commands ONCE per message list (not
 // per row) for the R2 skill-chip detection. Cache hits are free (staleTime 60s).
-function useSkillChipData(): { skills: Skill[]; commandLabels: string[] } {
+export function useSkillChipData(): { skills: Skill[]; commandLabels: string[] } {
   const { data: skills = [] } = useQuery<Skill[]>({
     queryKey: ['skills'],
     queryFn: () => fetchSkills(),
@@ -1017,9 +886,20 @@ export function VirtualUserMessageRow({
   // covered: this one by ChatScreen.goalCommandMarker.test.tsx, the live one
   // by ChatScreen.goalCommandMarker.live.test.tsx.
   const setsGoal = messageSetsGoal(message.content)
+  // #1449: a group row carries no session send state (the group's send
+  // outcome lives in its message box notice area, ADR A3.2).
+  const sessionRow = useConversationKind() === 'session'
+  const userSessionId = useSessionStore((state) => (sessionRow ? state.activeSessionId : null)) ?? ''
+  const userText = useHistoryUserText(message, userSessionId) // #1452 D2: a shortened saved message
+
+  // U8/F15/F17: a user entry carrying a server-stamped participant is a
+  // LEFT-side message from another participant (channel input, peer request) —
+  // never the web user's own bubble, which is exactly why the backend stamps
+  // no participant on it. Same row component every list path routes through.
+  if (message.participant) return <ParticipantMessageRow message={message} />
 
   return (
-    <div
+    <article
       data-testid="user-message"
       data-message-role="user"
       data-message-id={message.id}
@@ -1042,7 +922,8 @@ export function VirtualUserMessageRow({
                 // toolbar (copy/share/download/enlarge) + click-to-enlarge lightbox.
                 <ChatImage key={`${m.url}-${i}`} src={m.url} alt={m.filename} filename={m.filename} className="max-w-[240px]" />
               ) : (
-                <AttachmentCard key={`${m.url}-${i}`} filename={m.filename} contentType={m.contentType} />
+                // FR-002: a keyboard-operable download with an inline error and Retry.
+                <ChatFileAttachment key={`${m.url}-${i}`} media={m} />
               ),
             )}
           </div>
@@ -1054,52 +935,27 @@ export function VirtualUserMessageRow({
             commandLabels,
             () => (
               <div className="rounded-xl rounded-tr-sm bg-[var(--color-surface-2)] px-[var(--space-3)] py-[var(--space-2-5)] text-[length:var(--type-body-compact-size)] leading-relaxed text-[var(--color-secondary)]">
-                <p className="whitespace-pre-wrap break-words">{message.content}</p>
+                <p className="whitespace-pre-wrap break-words">{userText.content}</p>
               </div>
             ),
           )
         )}
-        {message.deliveryStatus && message.deliveryStatus !== 'sending' && (
-          <UserMessageDeliveryStatus
+        {userText.more && <HistoryShowRest sessionId={userSessionId} position={userText.more.position} originalSizeBytes={userText.more.originalSizeBytes} />}
+        {sessionRow && message.deliveryStatus && (message.firstSendStatus || message.deliveryStatus !== 'sending') && (
+          <RowDeliveryStatus
+            content={message.content}
             state={message.deliveryStatus}
+            firstSendStatus={message.firstSendStatus}
             agentName={agentName}
             latest={latest}
+            isClearCommand={isClearCommandText(message.content)}
             onRetry={() => useChatStore.getState().resendMessage(message.id)}
+            onGenerateAgain={() => useChatStore.getState().generateFirstSendAgain(message.id)}
           />
         )}
-        <UnansweredUserMessageStatus messageId={message.id} agentName={agentName} />
+        {sessionRow && (!message.firstSendStatus || message.firstSendStatus === 'saved') && <UnansweredUserMessageStatus messageId={message.id} agentName={agentName} />}
       </div>
-    </div>
-  )
-}
-
-/** Standalone system message row for the virtualizer. */
-function VirtualSystemMessageRow({ message }: { message: ChatMessage }) {
-  // Operator-reported UX fix, 2026-09-08: see SystemMessage's identical
-  // discriminator (live path) for the full rationale.
-  const isGoalAck = !!message.goalAckGoalId
-  // ADR-085 BROWSER-FR-042/FR-044 (wave B8, C-90): see SystemMessage's
-  // identical isBrowserHandoverNotice discriminator for the full rationale.
-  const isBrowserHandoverNotice = !!message.browserHandoverNoticeId
-  // Goal outcome line — see SystemMessage's identical branch (live path).
-  if (message.goalOutcome) {
-    return (
-      <div data-message-role="system" data-message-id={message.id} className="flex justify-center px-[var(--space-3)] py-[var(--space-2)]">
-        <GoalOutcomeRow outcome={message.goalOutcome} />
-      </div>
-    )
-  }
-  return (
-    <div
-      data-message-role="system"
-      data-message-id={message.id}
-      data-testid={isGoalAck ? 'goal-ack-line' : isBrowserHandoverNotice ? 'browser-handover-notice' : undefined}
-      className="flex justify-center py-[var(--space-2)]"
-    >
-      <div className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] bg-[var(--color-surface-2)] px-[var(--space-2-5)] py-[var(--space-1)] rounded-full">
-        <span>{message.content}</span>
-      </div>
-    </div>
+    </article>
   )
 }
 
@@ -1160,19 +1016,35 @@ function StaticCopyButton({ text }: { text: string }) {
  * chat.ts's `produce`/`withBucket`/`applyMessageArray`/`getMessages`, not
  * assumed.
  */
-const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRow({
+export const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRow({
   message,
   liteMode,
   delegationEvents,
+  pairedReplyToIds,
 }: {
   message: ChatMessage
   liteMode: boolean
   delegationEvents: readonly DelegationEvent[]
+  /** F17 (1): reply_to ids that have a reply bubble in the thread — the send_message chips paired with one are hidden. */
+  pairedReplyToIds: ReadonlySet<string>
 }) {
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
+  // #1449 FR-005 / ADR A3.2: a group row never shows the live tool calls or
+  // status of whichever chat session is in the foreground.
+  const liveRow = useConversationKind() === 'session'
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
-  const activeSessionId = useSessionStore((s) => s.activeSessionId)
-  const toolCalls = useChatStore((s) => s.toolCalls)
+  const activeSessionId = useSessionStore((s) => (liveRow ? s.activeSessionId : null))
+  const toolCalls = useChatStore((s) => (liveRow ? s.toolCalls : NO_LIVE_TOOL_CALLS))
+  const toolCallOrder = useChatStore((s) => (liveRow ? s.toolCallOrder : NO_LIVE_TOOL_ORDER))
+  const textAtToolCallStart = useChatStore((s) => (liveRow ? s.textAtToolCallStart : NO_LIVE_TEXT_OFFSETS))
+  const toolCallOwners = useChatStore((s) =>
+    activeSessionId ? s.sessionsById[activeSessionId]?.toolCallOwnerMessageId : undefined,
+  )
+  // 6c Done card: this row may hold a still-running call (a saved row of the
+  // active turn after a mid-turn join, or the bubble a steer closed).
+  const activeTurnId = useChatStore((s) =>
+    activeSessionId ? s.sessionsById[activeSessionId]?.activeTurnId ?? null : null,
+  )
   // Fix 2 (user-approved 2026-07-16): same thread-gating rule as the live
   // path's SubagentSpansRenderer, applied here for the historical/virtualized
   // render tree. This component is React.memo'd, so the selector MUST be
@@ -1183,50 +1055,83 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   // Operator-reported UX fix, 2026-09-08: goal-aware thinking-indicator
   // label + goal-setup failure line (replay/historical path) — see
   // deriveGoalAwareThinkingLabel's and GoalSetupFailureLine's doc comments.
-  const goalStatus = useChatStore((s) => s.goalStatus)
-  const goalRecordEmpty = isGoalRecordEmpty(goalStatus)
+  // FR-039 (DEL-F39–40): the row joins this message's OWN goal_id
+  // (`message.goalId`) to the exact keyed criteria in `goalPills` — never the
+  // session's latest-goal scalar. Subscribing to `goalPills` keeps the row
+  // reactive when a `goal_status` frame changes the record. An unknown
+  // association (no goalId) is neutral.
+  const goalPills = useChatStore((s) => s.goalPills)
+  const goalRecordEmpty = isGoalRecordEmpty(message.goalId, goalPills)
+  const isLastAssistant = useChatStore((s) => {
+    if (!liveRow) return false
+    const list = s.messages
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (list[i]?.role === 'assistant') return list[i]?.id === message.id
+    }
+    return false
+  })
+
+  // Replay finalizes saved bubbles even when their producing turn is still
+  // running. Keep the existing indicator on the last confirmed active reply,
+  // without waiting for another token or marking older replies as running.
+  const recoveredRunning = useChatStore((state) => {
+    if (!isLastAssistant || !activeSessionId || !message.turnId) return false
+    const bucket = state.sessionsById[activeSessionId]
+    return bucket?.isStreaming === true && !bucket.isReplaying && bucket.activeTurnId === message.turnId
+  })
+  const replyStreaming = !!message.isStreaming || recoveredRunning
 
   const messageAgentId = message.agentId ?? activeAgentId
   const agent = agents.find((a) => a.id === messageAgentId)
   const agentDisplayName = agent?.name ?? (messageAgentId || null)
+  // U8/F15/F17 — the reply header ("Ava → Alice · Telegram") replaces the
+  // plain author label on a reply bubble; the label parts (workspaces +
+  // current workspace) come from the same cached lookups the participant
+  // rows use.
+  const { workspaces: labelWorkspaces, currentWorkspaceId } = useParticipantLabelParts()
+  const replyHeader = replyHeaderParts(message, agents, currentWorkspaceId, labelWorkspaces)
   // ADR-087 D1 — the muted footer suffix: "(interrupted)" (FR-21, unchanged)
   // or "(cut off at the output limit)" for a max_output_tokens truncation.
   // getMessageStatusSuffix owns the precedence (interrupted/cancelled wins).
   const statusSuffix = getMessageStatusSuffix(message)
+  // #1449 FR-004 (FR-170/FR-217): a group answer posted after a pause keeps its muted mark.
+  const afterPause = message.roomMarks?.afterPause === true
 
   // Render media attachments.
   const mediaItems = message.media ?? []
 
-  // Build tool-call parts from the message's stored tool_calls list.
-  // In lite mode, tool calls start collapsed (expanded=false by default in GenericToolCall).
-  const positionedToolCalls = (message.tool_calls ?? []) as PositionedToolCall[]
+  // PlainMessageList receives raw messages, bypassing the AssistantUI live
+  // projection. Pending calls live separately until turn-end bake: project
+  // only this reply's calls, without mutating the stored message. Unowned
+  // legacy calls follow the runtime adapter's last-assistant fallback.
+  const positionedToolCalls = useMemo(() => {
+    const calls = new Map<string, PositionedToolCall>()
+    for (const call of (message.tool_calls ?? []) as PositionedToolCall[]) {
+      const live = toolCalls[call.id]
+      calls.set(call.id, live
+        ? stampToolCallOffset(call.id, live, textAtToolCallStart, call.textOffset)
+        : call)
+    }
+    for (const id of toolCallOrder) {
+      if (calls.has(id)) continue
+      const call = toolCalls[id]
+      const owner = toolCallOwners?.[id]
+      if (call && (owner === message.id || (owner === undefined && isLastAssistant))) {
+        calls.set(id, stampToolCallOffset(id, call, textAtToolCallStart, undefined))
+      }
+    }
+    // F17 (1): a send_message chip whose reply_to names a request some reply
+    // bubble in the thread answers is hidden — the reply bubble IS that
+    // chip's display. Render-only: the persisted transcript keeps every call.
+    return [...calls.values()].filter((tc) => !isSendChipHiddenByReply(tc.tool, tc.params, pairedReplyToIds))
+  }, [message.id, message.tool_calls, toolCalls, toolCallOrder, textAtToolCallStart, toolCallOwners, isLastAssistant, pairedReplyToIds])
 
-  // Perf (gate 5 MEDIUM): memoized on the message's OWN content/tool_calls
-  // fields (not the derived `positionedToolCalls`, which gets a brand-new
-  // `[]` identity every render whenever message.tool_calls is undefined —
-  // keying on that would defeat the memo, recomputing every render exactly
-  // like before). splitMessageParts does real work (a sort + a content
-  // slice per positioned call) that was previously re-run inline in JSX on
-  // every render of this row, including renders triggered by state this
-  // row doesn't even display (e.g. liteMode toggling on OTHER rows, before
-  // the React.memo above cut most of those). This memo is still valuable
-  // even with the row memoized: message.content mutates in place many
-  // times per second while a turn is streaming (each `token` frame), so
-  // this row itself legitimately re-renders often — the memo just stops
-  // re-running the split when a re-render was triggered by something OTHER
-  // than a content/tool_calls change (e.g. liteMode).
-  const messageParts = useMemo(
-    () => splitMessageParts(message.content ?? '', positionedToolCalls),
-     
-    // message's raw fields (stable references unless the message actually
-    // changed), not the freshly-allocated `positionedToolCalls` derived
-    // above — see comment.
-    [message.content, message.tool_calls],
-  )
-  const inlineByCall = splitAnchoredDelegationEvents(delegationEvents, message.id, {
+  // Live results must invalidate the split even without a message bake.
+  const partGroups = useHistoryPartGroups(message, positionedToolCalls, activeSessionId ?? '') // #1452 D2 saved-preview text controls; S11 per-part markers
+  const delegationSplit = splitAnchoredDelegationEvents(delegationEvents, message.id, {
     spans: message.spans,
     toolCalls: positionedToolCalls,
-  }).byCall
+  })
 
   // D-fix: this row is also used by PlainMessageList (the ResizeObserver-
   // unavailable fallback), which — unlike VirtualizedMessageListInner — does
@@ -1253,20 +1158,9 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   // (ActivityPanel.tsx, fed by useRunningActivity.ts reading message.spans
   // directly) is where a delegation's status lives now.
   const hasContent = !!message.content?.trim().length
-  // F4 (second review wave on branch fix/615-617-618-hardening): `tc` here
-  // is a baked PositionedToolCall, which — like every other #617-era call
-  // site in this file — carries BOTH a `.status` and a (frequently empty)
-  // `.error` string. `!!tc.error` alone is exactly the signal #617
-  // established is empty for an ordinary failure (pkg/gateway/websocket.go
-  // deliberately leaves `Result.Error` unset when `Result` still holds the
-  // text). This call's two siblings already moved off that proxy — the live
-  // path below passes `!!part.isError`, and the actual render for this same
-  // `tc` uses `tc.status === 'error'` — but this one was left on it, so a
-  // failed tool call with status:'error' and no `error` string (e.g. a
-  // failed ToolSearch) computed isError:false here while the row itself
-  // (whose own visibility gate reads `tc.status === 'error'` directly)
-  // still rendered — producing a ghost ThinkingIndicator ABOVE the visible
-  // failed row (see hasVisibleToolCalls/showEmptyPlaceholder below).
+  // F4: ordinary failures can carry status:'error' with no error string.
+  // Visibility must use the same resolved outcome as the tool renderer,
+  // otherwise a failed ToolSearch shares its row with a ghost Thinking mark.
   const visibleToolCalls = positionedToolCalls.filter((tc) =>
     wouldToolCallBeVisible(tc.tool, tc.params, tc.result, tc.status === 'error' || !!tc.error, verboseChatEnabled),
   )
@@ -1283,40 +1177,46 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   // InlineThinkingIndicator, applied to the historical/virtualized "still
   // streaming" placeholder (PlainMessageList renders an in-flight message
   // through THIS row too — see the D-fix comment on hasContent above).
+  const runningToolNames = runningToolNamesForReply(positionedToolCalls)
   const emptyPlaceholderLabel = goalRecordEmpty
-    ? deriveGoalAwareThinkingLabel(
-        positionedToolCalls.filter((tc) => tc.status === 'running').map((tc) => tc.tool),
-        true,
-      )
+    ? deriveGoalAwareThinkingLabel(runningToolNames, true)
     : null
+  const positionedToolLabel = derivePositionedHiddenRunningLabel(positionedToolCalls, verboseChatEnabled)
+  const replyPhase = useReplySlotPhase({
+    streaming: replyStreaming,
+    hasRunningTool: runningToolNames.length > 0,
+    toolLabel: positionedToolLabel,
+    goalLabel: emptyPlaceholderLabel,
+    idleEligible: isLastAssistant && !replyStreaming,
+  })
+  // 1b (founder UI feedback 2026-10-11): while THIS reply is streaming, the
+  // inline indicator never disappears — streamed text, a visible tool card,
+  // or a reconnecting link change only the phrase and the motion, never the
+  // mark's presence (previously the mark was gated to the empty-placeholder /
+  // waiting / unavailable windows and vanished the moment real content
+  // showed). A settled row paints only a still-pending approval/question:
+  // no "Idle" word and no "Unavailable/reconnecting" word on a finished
+  // reply — connection state has its own surfaces
+  // (ChatConnectionStatusLine / UnavailableChatNotice).
+  const showMark = showsFeedMark(replyPhase) && (replyPhase.kind === 'waiting' || replyStreaming)
 
-  return (
-    <div
+  const row = (
+    <article
       data-testid="assistant-message"
       data-message-role="assistant"
       data-message-id={message.id}
+      {...assistantRowCorrelationAttributes(message)}
       data-status="complete"
       className="group flex gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-2-5)]"
     >
-      <div
-        className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-[var(--color-secondary)]"
-        style={{ backgroundColor: agent?.color ?? 'var(--color-surface-3)' }}
-        title={agent?.name}
-      >
-        {agent?.icon ? (
-          <IconRenderer icon={agent.icon} size={14} />
-        ) : (
-          <Robot size={14} weight="bold" />
-        )}
-      </div>
       <div className="flex flex-col gap-[var(--space-1)] max-w-[85%] min-w-0 flex-1">
-        {agentDisplayName && (
-          <span data-testid="agent-label" className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
-            {agentDisplayName}
-          </span>
+        {(replyHeader || agentDisplayName) && (
+          // Founder UI feedback 2026-10-11: the label is the small agent mark
+          // beside the name (or the U8 reply header) — and nothing else. The
+          // old inline "Idle" status word next to the name is gone.
+          <AgentReplyLabel agent={agent} name={agentDisplayName ?? ''} header={replyHeader} />
         )}
         <div className="text-[length:var(--type-body-compact-size)] leading-relaxed text-[var(--color-secondary)]">
-          {showEmptyPlaceholder && <ThinkingIndicator label={emptyPlaceholderLabel} />}
           {/* Media attachments */}
           {!showEmptyPlaceholder && mediaItems.length > 0 && (
             <div className="flex flex-col gap-[var(--space-2)] mb-[var(--space-2)]">
@@ -1333,15 +1233,8 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
                     )}
                   </div>
                 ) : (
-                  <a tabIndex={0}
-                    key={`${m.url}-${i}`}
-                    href={m.url}
-                    download={m.filename}
-                    className="inline-flex items-center gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-2)] rounded-lg border border-[var(--color-border)] text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
-                  >
-                    <File size={14} />
-                    {m.filename}
-                  </a>
+                  // FR-002: a keyboard-operable download with an inline error and Retry.
+                  <ChatFileAttachment key={`${m.url}-${i}`} media={m} />
                 ),
               )}
             </div>
@@ -1372,210 +1265,43 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
               text-segment boundary — so the finished view now matches what
               was on screen while it was still streaming, instead of
               (incorrectly) rendering the paragraph as one unbroken block. */}
-          {messageParts.map((part, idx) => {
+          {partGroups.map(group => <div key={group.key} data-history-part={group.position}>{group.parts.map((part: DisplayPart, idx) => {
             if (part.type === 'text') {
               return <HistoricalMessageMarkdown key={`text-${idx}`} content={part.text} />
             }
+            if (part.type === 'more') return <HistoryShowRest key={`more-${part.position}`} sessionId={activeSessionId ?? ''} position={part.position} originalSizeBytes={part.originalSizeBytes} />
             const callId = part.call.id
             const tc = toolCalls[callId] ?? part.call
-            // Parity with the live AssistantUI dispatch in OmnipusRuntimeProvider:
-            // web_serve / serve_workspace / run_in_workspace go through WebServeBlock
-            // here too, so replayed sessions render the preview link (or the malformed
-            // result block) instead of a collapsed generic badge.
-            if (tc.tool === 'serve_workspace' || tc.tool === 'run_in_workspace' || tc.tool === 'web_serve') {
-              return delegationSlotted(callId, inlineByCall.get(callId), (
-                <WebServeBlock
-                  key={callId}
-                  args={(tc.params ?? {}) as { path?: string; command?: string; port?: number; duration_seconds?: number }}
-                  result={tc.result ?? null}
-                  isRunning={false}
-                  // Issue #617: replay must reflect the tool call's real
-                  // outcome, mirroring GenericToolCall's `error={tc.error}`
-                  // below — previously this row always rendered "Done"
-                  // regardless of whether the call actually failed.
-                  isError={tc.status === 'error'}
-                  // F2: same fix for the CANCELLED case — WebServeBlock has no
-                  // `status` prop to derive cancellation from (unlike
-                  // BrowserToolReplayBlock/GenericToolCall), so it needs the
-                  // outcome threaded explicitly.
-                  isCancelled={tc.status === 'cancelled'}
-                  toolName={tc.tool}
-                />
-              ))
-            }
-            // B-fix: the six browser.*/browser_* tools also have a registered
-            // live UI (BrowserToolBlock, dispatched via makeAssistantToolUI in
-            // OmnipusRuntimeProvider) that parses the tool's result into a
-            // screenshot/text/error card instead of showing raw JSON. Route
-            // replay through the same block for live/replay parity — see
-            // BrowserToolReplayBlock's doc comment for the full story.
-            //
-            // Issue #617: `status` used to be hardcoded to `{type:'complete'}`
-            // with no error signal threaded at all, so every replayed browser
-            // tool call rendered "OK" unconditionally — mirror the
-            // GenericToolCall branch below (`error={tc.error}`) by passing the
-            // store's real outcome as `isError`.
-            //
-            // #617 follow-up (F2): `status` itself was ALSO hardcoded to
-            // `{type:'complete'}`, so a CANCELLED replayed call (tc.status ===
-            // 'cancelled') fell through the isError check (false, correctly)
-            // but still rendered as a plain success — isCancelledStatus(status)
-            // can only ever be true when status.type is 'incomplete' with
-            // reason 'cancelled', never 'complete'. replayPartStatus derives
-            // the real status object so both BrowserToolReplayBlock's and
-            // GenericToolCall's own isCancelledStatus checks see it.
-            if (isReplayBrowserToolName(tc.tool)) {
-              return delegationSlotted(callId, inlineByCall.get(callId), (
-                <BrowserToolReplayBlock
-                  key={callId}
-                  toolName={tc.tool}
-                  args={tc.params}
-                  result={tc.result}
-                  status={replayPartStatus(tc.status)}
-                  isError={tc.status === 'error'}
-                />
-              ))
-            }
-            // ADR-082 D9: set_goal renders its dedicated record card
-            // (SetGoalCardBlock) at the call's own interleaved position,
-            // built from the call's own result — never GenericToolCall
-            // (which self-gates set_goal to null; see toolVisibility.ts's
-            // `set_goal` case). Mirrors the live registration
-            // (SetGoalToolUI, OmnipusRuntimeProvider.tsx) so replay and
-            // live render identically.
-            if (tc.tool === 'set_goal') {
-              // `tc.result` is passed UNCHANGED (review S12): on replay it
-              // is the persisted `{ text: "<payload json>" }` envelope,
-              // which SetGoalCardBlock's parser unwraps itself. The store's
-              // resolved outcome (`status`/`error`) is passed explicitly so
-              // a failed registration renders its quiet trace (review S4).
-              return delegationSlotted(callId, inlineByCall.get(callId), (
-                <SetGoalCardBlock
-                  key={callId}
-                  args={tc.params}
-                  result={tc.result}
-                  status={replayPartStatus(tc.status)}
-                  isRunning={tc.status === 'running'}
-                  isError={tc.status === 'error'}
-                  error={tc.error}
-                  durationMs={tc.duration_ms}
-                  sessionId={activeSessionId ?? ''}
-                />
-              ))
-            }
-            // toolui-analysis item 2 + item 4 (founder-approved 2026-09-26):
-            // the dedicated tool rows route through the SAME components on
-            // replay as live, so a reloaded session matches what was on
-            // screen while the turn happened. These branches mirror the live
-            // makeAssistantToolUI registrations (OmnipusRuntimeProvider.tsx);
-            // everything they render is collapsed-by-default. They sit BEFORE
-            // the GoalSetupFailureLine override below because live, a
-            // registered dedicated UI pre-empts that fallback for these tools
-            // too (FallbackToolUI is only reached by unregistered tools).
-            if (isBashToolName(tc.tool)) {
-              return delegationSlotted(callId, inlineByCall.get(callId), (
-                <BashOutputBlock
-                  key={callId}
-                  toolName={tc.tool}
-                  args={(tc.params ?? {}) as { command?: string; description?: string; action?: string }}
-                  result={tc.result}
-                  isRunning={false}
-                  isError={tc.status === 'error'} isCancelled={tc.status === 'cancelled'}
-                  error={tc.error} sessionId={activeSessionId ?? ''}
-                />
-              ))
-            }
-            if (tc.tool === 'read_file' || tc.tool === 'file.read') {
-              return delegationSlotted(callId, inlineByCall.get(callId), (
-                <FileReadBlock
-                  key={callId}
-                  toolName={tc.tool}
-                  args={(tc.params ?? {}) as { path?: string }}
-                  result={tc.result}
-                  isRunning={false}
-                  isError={tc.status === 'error'} isCancelled={tc.status === 'cancelled'}
-                  error={tc.error} sessionId={activeSessionId ?? ''}
-                />
-              ))
-            }
-            if (tc.tool === 'list_dir' || tc.tool === 'list_directory' || tc.tool === 'file.list') {
-              return delegationSlotted(callId, inlineByCall.get(callId), (
-                <FileTreeBlock
-                  key={callId}
-                  toolName={tc.tool}
-                  args={(tc.params ?? {}) as { path?: string }}
-                  result={tc.result}
-                  isRunning={false}
-                  isError={tc.status === 'error'} isCancelled={tc.status === 'cancelled'}
-                  error={tc.error} sessionId={activeSessionId ?? ''}
-                />
-              ))
-            }
-            if (tc.tool === 'web_search' || tc.tool === 'search_web') {
-              return delegationSlotted(callId, inlineByCall.get(callId), (
-                <WebSearchBlock
-                  key={callId}
-                  toolName={tc.tool}
-                  args={(tc.params ?? {}) as { query?: string }}
-                  result={tc.result}
-                  isRunning={false}
-                  isError={tc.status === 'error'} isCancelled={tc.status === 'cancelled'}
-                  error={tc.error} sessionId={activeSessionId ?? ''}
-                />
-              ))
-            }
-            if (tc.tool === 'fetch_url' || tc.tool === 'web_fetch') {
-              return delegationSlotted(callId, inlineByCall.get(callId), (
-                <WebFetchBlock
-                  key={callId}
-                  toolName={tc.tool}
-                  args={(tc.params ?? {}) as { url?: string }}
-                  result={tc.result}
-                  isRunning={false}
-                  isError={tc.status === 'error'} isCancelled={tc.status === 'cancelled'}
-                  error={tc.error} sessionId={activeSessionId ?? ''}
-                />
-              ))
-            }
-            // Operator-reported UX fix, 2026-09-08: same narrow override as
-            // the live path's FallbackToolUI — see GoalSetupFailureLine.tsx's
-            // file doc comment. Only intercepts a call that would otherwise
-            // render visibly (toolVisibility.ts's hidden-tool contract for
-            // background delegate/bash calls is unaffected — they stay
-            // hidden regardless), outside verbose chat, while a goal is
-            // active with an empty record.
-            if (
-              tc.status === 'error' &&
-              !verboseChatEnabled &&
-              goalRecordEmpty &&
-              shouldRenderToolCall(tc.tool, tc.params as Record<string, unknown> | undefined, false, true)
-            ) {
-              return delegationSlotted(
-                callId,
-                inlineByCall.get(callId),
-                <GoalSetupFailureLine key={callId} toolName={tc.tool} result={tc.result} error={tc.error} />,
-              )
-            }
-            return delegationSlotted(callId, inlineByCall.get(callId), (
-              <GenericToolCall
-                key={callId}
-                toolName={tc.tool}
-                args={tc.params}
-                result={tc.result}
-                status={replayPartStatus(tc.status)}
-                error={tc.error}
-                // Issue #617: pass the store's real outcome explicitly rather
-                // than letting GenericToolCall infer it from `status`/`error`
-                // — see GenericToolCallProps.isError's doc comment for why the
-                // inferred fallback misses a real failure whose `result` was
-                // offloaded/replaced server-side with `error` left empty.
-                isError={tc.status === 'error'}
-                durationMs={tc.duration_ms}
-                defaultCollapsed={liteMode}
-                sessionId={activeSessionId ?? ''}
-              />
-            ))
-          })}
+            return <div key={callId} data-history-tool-row={callId}>{renderHistoricalToolCall({
+              tc,
+              callId,
+              inlineEvents: delegationSplit.byCall.get(callId),
+              activeSessionId,
+              verboseChatEnabled,
+              goalRecordEmpty,
+              liteMode,
+              historyPosition: historyCallPosition(message, callId),
+              // A running call is live only when the live store holds it or
+              // its row belongs to the active turn; another turn's saved
+              // pending call never borrows that turn's Running label.
+              running: tc.status === 'running' && (callId in toolCalls || (!!activeTurnId && message.turnId === activeTurnId)),
+            })}</div>
+          })}</div>)}
+          {/* Inline indicator — 1b (founder UI feedback 2026-10-11): rendered
+              AFTER the parts, pinned at the bottom of the running reply, in
+              the position where the next text/tool will appear. While
+              message.isStreaming it never unmounts (see showMark above). */}
+          {showMark && (
+            <AgentStatusIndicator
+              phase={replyPhase.kind}
+              label={feedMarkLabel(replyPhase)}
+              turnId={message.turnId}
+              figure={agent?.figure}
+              role={agent?.role}
+              color={agent?.color}
+              name={agent?.name ?? ''}
+            />
+          )}
         </div>
 
         {/* Action bar — always visible at reduced opacity, fully opaque on hover.
@@ -1595,138 +1321,31 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
         {statusSuffix && (
           <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic px-[var(--space-1)]">{statusSuffix}</span>
         )}
-
-        {/* ADR-051 — verbose-only "Technical details" disclosure for typed
-            LLM errors. Parity with MessageItem.tsx's live-render disclosure:
-            mounted ONLY when (status==='error' && errorCode && verbose &&
-            errorDetail), ABSENT from the DOM otherwise. Replay frames carry
-            no errorDetail (gateway strips it before persisting), so on the
-            historical path this effectively fires only when a live error
-            bubble with detail set is still in the ring buffer after a
-            reload. `verboseChatEnabled` is already read at the top of this
-            row (the tool-call visibility gate uses the same hook). */}
-        {message.status === 'error'
-          && message.errorCode
-          && verboseChatEnabled
-          && message.errorDetail
-          && message.errorDetail.length > 0 && (
-          <details className="px-[var(--space-1)] mt-[var(--space-1)]" data-testid="error-detail-disclosure">
-            <summary
-              tabIndex={0}
-              className={cn(
-                'text-[length:var(--type-caption-size)] text-[var(--color-muted)] cursor-pointer select-none',
-                'inline-flex items-center gap-[var(--space-1)] hover:text-[var(--color-secondary)] transition-colors',
-              )}
-            >
-              Technical details
-            </summary>
-            <pre
-              className={cn(
-                'mt-[var(--space-1)] px-[var(--space-2)] py-[var(--space-1)] rounded-md',
-                'bg-[var(--color-surface-2)] text-[var(--color-secondary)]',
-                'font-mono text-[length:var(--type-caption-size)] leading-relaxed whitespace-pre-wrap break-all',
-                'max-h-40 overflow-y-auto',
-              )}
-            >
-              {message.errorDetail.slice(0, ERROR_DETAIL_MAX_CHARS)}
-            </pre>
-          </details>
+        {afterPause && (
+          <span data-testid="after-pause-mark" className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic px-[var(--space-1)]">after pause</span>
         )}
+
+        {/* ADR-051 — verbose-only "Technical details" disclosure (replay
+            path). Extracted verbatim to ErrorDetailDisclosure.tsx; same mount
+            gate, same DOM. */}
+        <ErrorDetailDisclosure message={message} verboseChatEnabled={verboseChatEnabled} />
 
         {/* Per-turn model record (FR-014). Mirrors MessageItem.tsx so
             replay sessions show the same model footer as the live
             AssistantUI render. */}
-        {message.role === 'assistant' && <ModelFooter model={message.model} />}
-        <AssistantMessageConnectionStatus messageId={message.id} agentName={agentDisplayName ?? 'Omnipus'} />
+        {message.role === 'assistant' && <TurnEffortNote effort={message.effort} />}
+        {message.role === 'assistant' && <ModelFooter model={message.model} effort={message.effort} turnReasoningTokens={message.turnReasoningTokens} />}
+        {liveRow && <AssistantMessageConnectionStatus messageId={message.id} agentName={agentDisplayName ?? 'Omnipus'} />}
       </div>
-    </div>
+    </article>
+  )
+  return (
+    <>
+      {row}
+      <DelegationEventLineList events={delegationSplit.trailing} />
+    </>
   )
 })
-
-/** Plain (non-virtualized) message list — fallback when ResizeObserver is unavailable. */
-function PlainMessageList({ messages, liteMode, agentName }: { messages: ChatMessage[]; liteMode: boolean; agentName: string }) {
-  const { skills, commandLabels } = useSkillChipData()
-  // ADR-049 SD-C10: judge-verdict thread visibility (panel-only by default,
-  // verbose-only inline) — same store read as every other verbose-gated row.
-  const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
-  const sessionId = useSessionStore((s) => s.activeSessionId)
-  const delegationEvents = useChatDelegationEvents(sessionId)
-  const messageIds = useMemo(() => new Set(messages.map((message) => message.id)), [messages])
-  const latestUserMessageId = [...messages].reverse().find((message) => message.role === 'user')?.id
-  return (
-    <div
-      data-testid="virtualized-message-list"
-      className="flex-1 overflow-y-auto overscroll-contain pt-[var(--space-3)] pb-[var(--space-2)]"
-    >
-      <div className="max-w-4xl mx-auto w-full">
-        {messages.map((msg) => {
-          // ADR-049 D2/SD-C10: a persisted `Message.type: judge_verdict`
-          // entry never renders via the normal role-based rows — it is
-          // panel-only by default (ActivityPanel's judge row, fed live by
-          // the judge_verdict WS frame — see chat.ts), inline in the thread
-          // ONLY under verbose chat.
-          let row: React.ReactNode
-          if (msg.type === 'judge_verdict') {
-            row = shouldRenderJudgeVerdictInThread(verboseChatEnabled) && msg.verdict
-              ? <JudgeVerdictThreadCard verdict={msg.verdict} />
-              : null
-          } else if (msg.role === 'user') {
-            row = (
-              <VirtualUserMessageRow
-                message={msg}
-                skills={skills}
-                commandLabels={commandLabels}
-                agentName={agentName}
-                latest={msg.id === latestUserMessageId}
-              />
-            )
-          } else if (msg.role === 'system') {
-            row = <VirtualSystemMessageRow message={msg} />
-          } else {
-            row = <VirtualAssistantMessageRow message={msg} liteMode={liteMode} delegationEvents={delegationEvents} />
-          }
-          const trailing = splitAnchoredDelegationEvents(delegationEvents, msg.id, placementOf(msg)).trailing
-          return (
-            <React.Fragment key={msg.id}>
-              {row}
-              <DelegationEventLineList events={trailing} />
-            </React.Fragment>
-          )
-        })}
-        <DelegationEventLineList events={delegationEventsAtEnd(delegationEvents, messageIds)} />
-      </div>
-    </div>
-  )
-}
-
-let _resizeObserverWarnEmitted = false
-
-/**
- * Virtualized historical message list (AssistantUI constraint: the live
- * streaming message stays in ThreadPrimitive.Messages below for full context).
- */
-function VirtualizedMessageList({
-  messages,
-  liteMode,
-  agentName,
-}: {
-  messages: ChatMessage[]
-  liteMode: boolean
-  agentName: string
-}) {
-  // Feature-detect ResizeObserver at render time (not module load) so test
-  // environments that stub it in beforeEach are detected correctly.
-  // iOS < 13.4 and some enterprise Android WebViews lack it — use the plain
-  // fallback to avoid a white-screen crash.
-  if (typeof ResizeObserver === 'undefined') {
-    if (!_resizeObserverWarnEmitted) {
-      _resizeObserverWarnEmitted = true
-      console.warn('[chat] ResizeObserver unavailable — rendering full message list without virtualization')
-    }
-    return <PlainMessageList messages={messages} liteMode={liteMode} agentName={agentName} />
-  }
-  return <VirtualizedMessageListInner messages={messages} liteMode={liteMode} agentName={agentName} />
-}
 
 /**
  * Re-pins the scroll container to the bottom when the VIRTUALIZER grows the
@@ -1742,7 +1361,7 @@ function VirtualizedMessageList({
  * bottom (reused via the Viewport store), so a user who scrolled up to read is
  * never yanked down. MUST render inside ThreadPrimitive.Viewport to read its store.
  */
-function VirtualizerAutoFollow({
+export function VirtualizerAutoFollow({
   scrollRef,
   contentRef,
 }: {
@@ -1750,176 +1369,76 @@ function VirtualizerAutoFollow({
   contentRef: React.RefObject<HTMLDivElement | null>
 }) {
   const viewportStore = useThreadViewportStore()
+  // #1449 FE-1: follow the conversation on screen — a group never replays,
+  // and its reader mode is its own, not the last visited session's.
+  const source = useConversationSource()
+  const sessionList = source.kind === 'session'
+  const isReplaying = useChatStore((s) => s.isReplaying) && sessionList
+  const sourceRef = useRef(source)
+  sourceRef.current = source
+  const pin = useRef<number | null>(null)
+  const userScrolledUp = useRef(false)
   useEffect(() => {
     const el = scrollRef.current
     const content = contentRef.current
     if (!el || !content) return undefined
     let raf = 0
-    const ro = new ResizeObserver(() => {
-      // Only follow if the engine still considers us at the bottom — this reuses
-      // its scrollTop-direction "did the user scroll up" detection, so we never
-      // fight a user reading history. isAtBottom is unchanged by a content-growth
-      // resize (the engine updates it on scroll events, not on resize), so it
-      // still reflects the pre-growth position here.
-      if (!viewportStore.getState().isAtBottom) return
+    let pointerActive = false
+    const observeScroll = () => {
+      if (pointerActive && pin.current !== null && el.scrollTop < pin.current) userScrolledUp.current = true
+      if (el.scrollHeight - el.clientHeight - el.scrollTop <= 1) userScrolledUp.current = false
+    }
+    const onWheel = (event: WheelEvent) => { if (isReplaying && event.deltaY < 0) userScrolledUp.current = true }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (isReplaying && (['ArrowUp', 'PageUp', 'Home'].includes(event.key) || (event.key === ' ' && event.shiftKey))) userScrolledUp.current = true
+    }
+    const onPointerDown = () => { pointerActive = isReplaying }
+    const onPointerUp = () => { pointerActive = false }
+    const viewMode = () => (sourceRef.current.kind === 'session' ? useChatStore.getState().history.viewMode : sourceRef.current.read()?.history.viewMode)
+    const canFollow = () => viewMode() !== 'historical' && !userScrolledUp.current && (viewportStore.getState().isAtBottom || el.scrollTop === pin.current)
+    // Keep explicit upward intent across the replay-completion effect. Row
+    // measurement can move scrollTop too, so position changes alone are not
+    // evidence of a user scroll. Never prevent any native input here.
+    el.addEventListener('scroll', observeScroll, { passive: true })
+    el.addEventListener('wheel', onWheel, { passive: true })
+    el.addEventListener('keydown', onKeyDown)
+    el.addEventListener('pointerdown', onPointerDown, { passive: true })
+    window.addEventListener('pointerup', onPointerUp, { passive: true })
+    const follow = () => {
+      // A measurement can grow the spacer after a successful pin and dispatch
+      // a scroll event before ResizeObserver: the engine then reports "not at
+      // bottom" even though scrollTop never moved. Preserve that known pin,
+      // not an old offset after the user has actually scrolled away from it.
+      if (!canFollow()) return
       cancelAnimationFrame(raf)
       raf = requestAnimationFrame(() => {
+        // Recheck after scheduling: an upward scroll must win over this resize.
+        if (!canFollow()) return
         el.scrollTop = el.scrollHeight
+        pin.current = el.scrollTop
       })
-    })
+    }
+    const ro = new ResizeObserver(follow)
     ro.observe(content)
+    // A buffered attach replaces the whole transcript at once. Recheck its
+    // measured bottom on completion, even if the virtualizer reused a spacer
+    // of the same size. Keep the existing viewport's user-follow preference.
+    if (!isReplaying) follow()
     return () => {
       cancelAnimationFrame(raf)
       ro.disconnect()
+      el.removeEventListener('scroll', observeScroll)
+      el.removeEventListener('wheel', onWheel)
+      el.removeEventListener('keydown', onKeyDown)
+      el.removeEventListener('pointerdown', onPointerDown)
+      window.removeEventListener('pointerup', onPointerUp)
     }
-  }, [viewportStore, scrollRef, contentRef])
+  }, [viewportStore, scrollRef, contentRef, isReplaying])
   return null
 }
 
-function VirtualizedMessageListInner({
-  messages,
-  liteMode,
-  agentName,
-}: {
-  messages: ChatMessage[]
-  liteMode: boolean
-  agentName: string
-}) {
-  const isStreaming = useChatStore((s) => s.isStreaming)
-  const scrollContainerRef = useRef<HTMLDivElement>(null)
-  const contentRef = useRef<HTMLDivElement>(null)
-  const { skills, commandLabels } = useSkillChipData()
-  // ADR-049 SD-C10: judge-verdict thread visibility (panel-only by default, verbose-only inline).
-  const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
-  const sessionId = useSessionStore((s) => s.activeSessionId)
-  const delegationEvents = useChatDelegationEvents(sessionId)
-  const textAtToolCallStart = useChatStore((s) => s.textAtToolCallStart)
-  const toolCallOwners = useChatStore((s) => (sessionId ? s.sessionsById[sessionId]?.toolCallOwnerMessageId : undefined))
-  const messageIds = useMemo(() => new Set(messages.map((message) => message.id)), [messages])
-  const latestUserMessageId = [...messages].reverse().find((message) => message.role === 'user')?.id
 
-  // Separate the live streaming message from completed history.
-  const hasStreamingMessage = isStreaming && messages.length > 0 && messages[messages.length - 1]?.isStreaming
-  const historicalMessages = hasStreamingMessage ? messages.slice(0, messages.length - 1) : messages
-
-  const virtualizer = useVirtualizer({
-    count: historicalMessages.length,
-    getScrollElement: () => scrollContainerRef.current,
-    estimateSize: () => 80,
-    overscan: 5,
-    // measureElement default (getBoundingClientRect().height) is correct; no override needed.
-  })
-
-  const virtualItems = virtualizer.getVirtualItems()
-
-  const rowForMessage = (msg: ChatMessage) => {
-    // ADR-049 D2/SD-C10: see PlainMessageList's identical branch above.
-    if (msg.type === 'judge_verdict') {
-      if (!shouldRenderJudgeVerdictInThread(verboseChatEnabled) || !msg.verdict) return null
-      return <JudgeVerdictThreadCard verdict={msg.verdict} />
-    }
-    if (msg.role === 'user')
-      return <VirtualUserMessageRow message={msg} skills={skills} commandLabels={commandLabels} agentName={agentName} latest={msg.id === latestUserMessageId} />
-    if (msg.role === 'system') return <VirtualSystemMessageRow message={msg} />
-    return <VirtualAssistantMessageRow message={msg} liteMode={liteMode} delegationEvents={delegationEvents} />
-  }
-
-  // Stick-to-bottom is delegated to assistant-ui's Viewport engine
-  // (useThreadViewportAutoScroll + useOnResizeContent, via ThreadPrimitive
-  // .Viewport). It attaches a ResizeObserver + a subtree MutationObserver to THIS
-  // scroll container, so it follows ALL content growth — streamed tokens,
-  // tool-call blocks, inline images/mermaid that render late, our virtualizer's
-  // row add/remove, AND the live→virtualized finalize hand-off — and scrolls to
-  // the bottom only while the user is already at the bottom. isAtBottom is keyed
-  // off real scrollTop movement (not a touch-gesture heuristic), so a user
-  // scroll-up correctly suspends auto-follow on touch/momentum — the failure mode
-  // of the previous hand-rolled engine. We keep our custom virtualizer for row
-  // rendering and only let Viewport own the scroll element + autoscroll. The
-  // Viewport self-provides its viewport context; it runs within the chat's
-  // AssistantRuntimeProvider + ThreadPrimitive.Root (the live ThreadPrimitive
-  // .Messages below needs the runtime). The parent feature-detects ResizeObserver
-  // and falls back to PlainMessageList where it is unavailable.
-  //
-  // VirtualizerAutoFollow (rendered inside the Viewport) covers the one growth the
-  // engine can't see: the virtualizer grows the transcript by setting the spacer's
-  // inline `style` height (row measurement, the live→virtualized finalize, and
-  // late mermaid/image render), and the engine's MutationObserver deliberately
-  // ignores style-only mutations (to avoid a translateY feedback loop). Without
-  // this, the tail of a finalized/diagram message sits below the fold on slower
-  // devices (iPad). It re-pins only when the engine still reports isAtBottom.
-  return (
-    <ThreadPrimitive.Viewport
-      ref={scrollContainerRef}
-      autoScroll
-      data-testid="virtualized-message-list"
-      className="flex-1 overflow-y-auto overscroll-contain pt-[var(--space-3)] pb-[var(--space-2)]"
-      style={{ position: 'relative' }}
-    >
-      <VirtualizerAutoFollow scrollRef={scrollContainerRef} contentRef={contentRef} />
-      <div ref={contentRef} className="max-w-4xl mx-auto w-full">
-        <div
-          style={{
-            height: `${virtualizer.getTotalSize()}px`,
-            position: 'relative',
-          }}
-        >
-          <div
-            style={{
-              position: 'absolute',
-              top: 0,
-              left: 0,
-              width: '100%',
-              transform: `translateY(${virtualItems[0]?.start ?? 0}px)`,
-            }}
-          >
-            {virtualItems.map((virtualRow) => {
-              const msg = historicalMessages[virtualRow.index]
-              if (!msg) return null
-              return (
-                <div
-                  key={virtualRow.key}
-                  data-index={virtualRow.index}
-                  ref={virtualizer.measureElement}
-                >
-                  {rowForMessage(msg)}
-                  <DelegationEventLineList
-                    events={splitAnchoredDelegationEvents(delegationEvents, msg.id, placementOf(msg)).trailing}
-                  />
-                </div>
-              )
-            })}
-          </div>
-        </div>
-
-        {/* Live streaming message — kept in ThreadPrimitive.Messages for full
-            AssistantUI context (streaming primitives, registered tool UIs). */}
-        {hasStreamingMessage && messages[messages.length - 1] && (
-          <StreamingDelegation
-            message={messages[messages.length - 1]}
-            events={delegationEvents}
-            snapshots={textAtToolCallStart}
-            owners={toolCallOwners}
-          >
-            <div data-testid="streaming-message-anchor">
-              <ThreadPrimitive.Messages>
-                {({ message }) => {
-                  const isLast = message.id === messages[messages.length - 1]?.id
-                  if (!isLast) return null
-                  if (message.role === 'user') return <UserMessage />
-                  if (message.role === 'system') return <SystemMessage />
-                  return <AssistantMessage />
-                }}
-              </ThreadPrimitive.Messages>
-            </div>
-          </StreamingDelegation>
-        )}
-        <DelegationEventLineList events={delegationEventsAtEnd(delegationEvents, messageIds)} />
-      </div>
-    </ThreadPrimitive.Viewport>
-  )
-}
-
-function StreamingDelegation({
+export function StreamingDelegation({
   message,
   events,
   snapshots,
@@ -1949,7 +1468,7 @@ function StreamingDelegation({
   )
 }
 
-function AssistantMessage() {
+export function AssistantMessage() {
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
   const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
   const message = useMessage()
@@ -2040,25 +1559,18 @@ function AssistantMessage() {
     <MessagePrimitive.Root
       data-testid="assistant-message"
       data-message-id={message.id}
+      {...assistantRowCorrelationAttributes(storeMsg)}
       data-status={message.status?.type ?? 'complete'}
       className="group flex gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-2-5)]"
     >
-      <AssistantMessageAvatar agent={agent} />
       <div className="flex flex-col gap-[var(--space-1)] max-w-[85%] min-w-0 flex-1">
         {agentDisplayName && (
-          <span data-testid="agent-label" className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{agentDisplayName}</span>
+          // Founder UI feedback 2026-10-11: same label as the settled rows —
+          // small agent mark beside the name, no status word.
+          <AgentReplyLabel agent={agent} name={agentDisplayName} header={null} />
         )}
         <div className="text-[length:var(--type-body-compact-size)] leading-relaxed text-[var(--color-secondary)]">
-          {showEmptyPlaceholder ? (
-            // Nothing has streamed in yet — show only the thinking indicator,
-            // not an empty text bubble + Copy affordance (D-fix).
-            <InlineThinkingIndicator />
-          ) : isTerminalEmpty ? (
-            // Terminal-empty variant (D-fix): the turn is over and there is
-            // still nothing to show. Render nothing rather than an empty
-            // Copy-only bubble — see isTerminalEmpty's doc comment above.
-            null
-          ) : (
+          {!showEmptyPlaceholder && !isTerminalEmpty && (
             <>
               {/* Media (screenshots, files) renders BEFORE the parts so the image
                   shows directly under the tool-call pill that produced it, with
@@ -2079,14 +1591,12 @@ function AssistantMessage() {
                   },
                 }}
               />
-              {/* Trailing thinking indicator — sits at the bottom of the bubble
-                  while the turn is running so the user always sees a "still
-                  working" cue at the position where the next text/tool will
-                  appear. Once a token streams in, the streamed text renders
-                  above the indicator and pushes it further down. */}
-              <InlineThinkingIndicator />
             </>
           )}
+          {/* One mount point before and after the first visible token/tool.
+              Text can appear above it without reselecting the fixed phrase
+              or restarting the synchronized icon/text animation clocks. */}
+          {!isTerminalEmpty && <InlineThinkingIndicator agentId={messageAgentId ?? null} />}
         </div>
 
         {/* Action bar — Copy + Retry buttons, always visible at reduced opacity.
@@ -2129,1161 +1639,16 @@ function AssistantMessage() {
 }
 
 // ── Composer ──────────────────────────────────────────────────────────────────
-
-function composerPlaceholder(
-  canSendOrQueue: boolean,
-  isStreaming: boolean,
-  isReplaying: boolean,
-  agentName: string,
-  gaveUp: boolean,
-): string {
-  if (gaveUp) return 'Connection lost — click Reconnect now above'
-  if (!canSendOrQueue) return 'Connecting to gateway...'
-  if (isReplaying) return 'Loading session history...'
-  if (isStreaming) return 'Waiting for response...'
-  return `Message ${agentName}…`
-}
-
-/**
- * Renders one pending composer attachment as a ChatGPT-style card — an image
- * preview (from the local File) or a colour-coded, type-specific file card —
- * via the native useAttachment() context that ComposerPrimitive.Attachments
- * provides. Removal uses the native AttachmentPrimitive.Remove.
- */
-function ComposerAttachmentChip() {
-  const attachment = useAttachment()
-  const file = attachment.file
-  const contentType = attachment.contentType ?? file?.type
-  const imageUrl = useFilePreview(file, contentType)
-
-  return (
-    <AttachmentCard
-      filename={attachment.name}
-      contentType={contentType}
-      imageUrl={imageUrl}
-      className={cn('group', !!imageUrl && 'w-16 h-16')}
-      removeButton={
-        <AttachmentPrimitive.Remove
-          tabIndex={0}
-          className="absolute -top-1.5 -right-1.5 opacity-0 group-hover:opacity-100 focus:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity"
-          aria-label={`Remove ${attachment.name}`}
-        >
-          <AttachmentRemoveX />
-        </AttachmentPrimitive.Remove>
-      }
-    />
-  )
-}
-
-// Exported for unit testing (TDD row 22).
-export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boolean }) {
-  const isStreaming = useChatStore((s) => s.isStreaming)
-  // FR-I-014: disable send while replay frames are still arriving
-  const isReplaying = useChatStore((s) => s.isReplaying)
-  const isConnected = useConnectionStore((s) => s.isConnected)
-  const reconnectPhase = useConnectionStore((s) => s.reconnectPhase)
-  const cancelStream = useChatStore((s) => s.cancelStream)
-  const appendMessage = useChatStore((s) => s.appendMessage)
-  const activeAgentId = useSessionStore((s) => s.activeAgentId)
-  const startNewSession = useSessionStore((s) => s.startNewSession)
-  const composerRuntime = useComposerRuntime()
-
-  const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
-  const activeAgentName = agents.find((a) => a.id === activeAgentId)?.name ?? 'Omnipus'
-
-  // Tracks whether we already warned for the current large-input threshold crossing,
-  // so we only fire one toast per paste/input event that exceeds 1MB.
-  const hasWarnedLargeInput = useRef(false)
-
-  // Input is enabled unless: agent removed, replaying, or gave up on reconnect.
-  // While reconnecting (fast or slow phase), input stays enabled — messages go to the
-  // outbound queue (useChatStore's outboundQueue/enqueueOutboundMessage) and are sent
-  // automatically once the connection recovers (drainOutboundQueue, wired in
-  // OmnipusRuntimeProvider's onConnected). See the outbound-queue-indicator banner
-  // below and composerPlaceholder's `canSendOrQueue` argument, both of which already
-  // treated "connected OR reconnecting/slow" as usable — but this flag itself required
-  // strict `isConnected`, so the actual `disabled` attribute silently blocked the very
-  // typing/sending those UI affordances promised, leaving the whole queue mechanism
-  // unreachable from real user interaction (#105). Only a fully-lost connection with no
-  // more automatic retries (`gave_up`), or the brief pre-first-connect / just-dropped
-  // window (isConnected:false with reconnectPhase still null — "Connecting to
-  // gateway..."), leaves the composer disabled; see tests/e2e/chat.spec.ts "(f)
-  // queue-on-disconnect" and ChatScreen.outbound-queue.test.tsx for regression coverage.
-  // askuserquestion-tool-spec v3 US-1 S1: the composer is LOCKED while an
-  // AskUserQuestion card is pending — free-form answering happens through
-  // the card, never the chat box; Cancel (always present on the card)
-  // unlocks. Terminal cards (answered/cancelled) release the lock.
-  const askLocked = useChatStore((s) => s.pendingAsk?.status === 'pending')
-
-  const inputEnabled =
-    !agentRemoved &&
-    !isReplaying &&
-    !askLocked &&
-    !(reconnectPhase === 'gave_up') &&
-    (isConnected || reconnectPhase === 'reconnecting' || reconnectPhase === 'slow')
-
-  // Attach affordance gate — shared by the AddAttachment button AND the
-  // drag-drop handlers/overlay below (same read-only conditions: agent
-  // removed, replaying, gateway unreachable, or gave up on reconnect). A
-  // single source of truth keeps the two from drifting: without this, a
-  // drag-drop in a read-only (agentRemoved / gave_up) session could attach a
-  // chip that can never be sent, even though the attach button itself was
-  // correctly disabled.
-  //
-  // Deliberately does NOT include isStreaming (bugfixes3 follow-up): pasted
-  // images already ride a mid-stream steer correctly end-to-end (paste ->
-  // useFileUpload's commitFiles -> composerRuntime.addAttachment ->
-  // BaseComposerRuntimeCore.send() -> onNew -> store sendMessage's steer
-  // branch, which threads opts.mediaRefs into the WS `media` field
-  // unconditionally on isStreaming — see src/store/chat.ts's `if
-  // (isStreaming)` steer branch). The AddAttachment button and drag-drop
-  // funnel into that exact same commitFiles -> addAttachment call (see
-  // useFileUpload.ts) — there is no separate mid-stream attachment code
-  // path to diverge from paste, so gating the button/drag-drop on
-  // isStreaming was just an inconsistent affordance (paste allowed it, the
-  // button forbade the identical action) rather than a real safety gate.
-  const attachDisabled = !isConnected || isReplaying || reconnectPhase === 'gave_up' || agentRemoved
-
-  // The 3 previously-tangled composer concerns (slash/skill palette, file
-  // upload incl. harmful-file confirm, stop/cancel state machine) each own
-  // their own state via a dedicated hook — see src/hooks/useSlashMenu.ts,
-  // useFileUpload.ts, useCancelState.ts. cancelState is instantiated first
-  // because the slash menu's `/cancel` command delegates to it.
-  // Focus discipline: the chat input is the page's home position. Focus it
-  // (1) on arrival at the chat page (mount), (2) when the search modal
-  // closes, and (3) when the slash menu closes — the user should never have
-  // to click back into the input after any of these.
-  // Ref-based (not a `[data-testid="chat-input"]` querySelector): the testid
-  // stays on the element for tests, but a testid rename would otherwise kill
-  // this whole focus-discipline feature silently (no type error, no runtime
-  // error — just a `null` element and a focus() that quietly no-ops). The
-  // ref is threaded straight to the ComposerPrimitive.Input textarea below.
-  const chatInputRef = useRef<HTMLTextAreaElement>(null)
-  const focusChatInput = useCallback(() => {
-    // rAF: run after Radix's own focus-restore (Dialog returns focus to its
-    // trigger on close) so ours wins.
-    requestAnimationFrame(() => {
-      chatInputRef.current?.focus()
-    })
-  }, [])
-  useEffect(() => {
-    focusChatInput()
-  }, [focusChatInput])
-  const searchModalOpenForFocus = useUiStore((s) => s.searchModalOpen)
-  const prevSearchOpenRef = useRef(searchModalOpenForFocus)
-  useEffect(() => {
-    if (prevSearchOpenRef.current && !searchModalOpenForFocus) focusChatInput()
-    prevSearchOpenRef.current = searchModalOpenForFocus
-  }, [searchModalOpenForFocus, focusChatInput])
-
-  const cancelState = useCancelState(isStreaming, cancelStream)
-  const fileUpload = useFileUpload(composerRuntime)
-  const slashMenu = useSlashMenu({
-    isStreaming,
-    isReplaying,
-    inputEnabled,
-    composerRuntime,
-    appendMessage,
-    startNewSession,
-    cancelIfStreaming: cancelState.cancelIfStreaming,
-  })
-
-  // Fix E (bugfixes3 sign-off): `shouldShowSlash` alone is not "the menu
-  // has content to render" — the LOW S8 commandsError carve-out
-  // (useSlashMenu.ts) deliberately keeps it true even when `slashItems` is
-  // empty, so the container below could mount with NEITHER a real item NOR
-  // the error row inside it (e.g. "/skills" + commandsError + zero skills:
-  // the error row hides itself via `!isSkillsFilter` failing, and there are
-  // no skill items either) — an empty bordered box with nothing in it.
-  // Gate on whatever will actually render: at least one item, OR the exact
-  // condition the error row's own JSX uses below (kept identical on
-  // purpose so the two can't drift apart).
-  const hasMenuContent =
-    slashMenu.slashItems.length > 0 ||
-    (slashMenu.commandsError && !slashMenu.isSkillsFilter && !slashMenu.isMentionMode)
-
-  // Deferred item 2: single source of truth for "the menu is actually
-  // mounted right now" — reused by the render gate below, the combobox
-  // `aria-expanded`/`aria-controls`/`aria-activedescendant` on the textarea,
-  // and the scroll-into-view effect just below. Previously this exact
-  // three-way `&&` was duplicated inline at the JSX render site; centralizing
-  // it means the ARIA attributes literally cannot drift out of sync with
-  // what's actually rendered.
-  const menuIsRendered = slashMenu.shouldShowSlash && slashMenu.slashOpen && hasMenuContent
-
-  // ARIA clamp (gates 2+4): `slashMenu.slashHighlight` can point at an index
-  // that no longer exists in `slashItems` for exactly one render — the
-  // highlight is reset to 0 by a useEffect INSIDE useSlashMenu.ts (keyed on
-  // the joined item keys), which necessarily runs AFTER the render where the
-  // list already narrowed (e.g. a keystroke shrinks slashItems from 5 rows
-  // to 2 while slashHighlight was still 3 from the previous, longer list).
-  // Between that render and the effect's correction, an UNCLAMPED
-  // `aria-activedescendant`/`aria-selected`/`data-highlighted` would
-  // reference a row that doesn't exist in the DOM this render — invisible to
-  // sighted users (no row LOOKS highlighted either, since the loop below
-  // never finds `globalIndex === 3` in a 2-item list) but a broken/absent
-  // announcement for screen-reader users, who rely on activedescendant
-  // pointing at a real, currently-rendered option. Clamping at render time
-  // (rather than waiting for the effect) means these ARIA attributes are
-  // always consistent with what's actually in the DOM THIS render,
-  // regardless of when the highlight-reset effect catches up. `undefined`
-  // when there are zero items — there is no valid index to clamp to.
-  const clampedSlashHighlight =
-    slashMenu.slashItems.length > 0
-      ? Math.min(slashMenu.slashHighlight, slashMenu.slashItems.length - 1)
-      : undefined
-
-  // Cap-footer copy (gate 2 LOW) + SR gap (gate 4 MODERATE): single source of
-  // truth for the currently-active capped section's overflow state, shared
-  // by the VISIBLE "+N more" footer row below AND its sr-only announcement
-  // mirror (menuFooterAnnouncement) — computed once so the two can never say
-  // different things. Only one capped section can be showing a footer at a
-  // time: "/" mode caps skills (commands has no cap), "@" mode caps agents,
-  // and the two triggers are mutually exclusive by construction (see
-  // useSlashMenu.ts's file header), so `isMentionMode` alone picks the right
-  // count.
-  const activeSectionHiddenCount = slashMenu.isMentionMode ? slashMenu.agentsHiddenCount : slashMenu.skillsHiddenCount
-  // Cap-footer copy (gate 2 LOW): in the "/skills" special-filter state (D9
-  // — exact input "/skills" shows every skill, capped, ignoring "skills"
-  // itself as a filter string), "keep typing to narrow" is impossible advice
-  // — ANY further keystroke changes inputValue away from the exact
-  // "/skills" string, which ENDS this special view rather than narrowing it
-  // (the next filter is evaluated as a normal skill-name prefix/substring
-  // match against the new text, not a continuation of "showing everything").
-  // Switch to a purely informational count in that state instead of a CTA
-  // that can't do what it claims.
-  const footerCopy =
-    activeSectionHiddenCount > 0
-      ? slashMenu.isSkillsFilter
-        ? `Showing ${SECTION_CAP} of ${SECTION_CAP + activeSectionHiddenCount} skills`
-        : `+${activeSectionHiddenCount} more — keep typing to narrow`
-      : null
-  // SR gap (gate 4 MODERATE): sr-only mirror of the same cap state, worded
-  // for a listener with no visual context of the row list above it. Reuses
-  // the exact same activeSectionHiddenCount/isSkillsFilter inputs as
-  // `footerCopy` so the two can never drift on the underlying numbers, even
-  // though the wording is deliberately more explicit for a non-visual
-  // medium.
-  const menuFooterAnnouncement =
-    activeSectionHiddenCount > 0
-      ? slashMenu.isSkillsFilter
-        ? `${SECTION_CAP} of ${SECTION_CAP + activeSectionHiddenCount} skills shown`
-        : `${SECTION_CAP} options shown, ${activeSectionHiddenCount} more — keep typing`
-      : null
-
-  // Deferred item 2: replaces the old inline ref-callback scroll hack (which
-  // called `el.scrollIntoView()` from INSIDE a per-row `ref` callback on
-  // every render where that row happened to be the highlighted one — a side
-  // effect smuggled into a ref callback, re-running on every re-render of
-  // the menu, not just on highlight changes). A `useEffect` keyed on the
-  // highlight index (and whether the menu is even mounted) runs exactly
-  // once per actual highlight change; the row's `id` (composer-option-N,
-  // assigned in the render loop below) makes the lookup a plain
-  // `getElementById` — no ref plumbing needed since ids are already unique
-  // within this single-instance composer (verified: OmnipusComposer has
-  // exactly one call site, ChatScreen.tsx's own render below).
-  //
-  // Scroll effect (gate 2 LOW): also keyed on the item-SET (joined item
-  // keys), not just the numeric highlight index. Without this, a keystroke
-  // that changes WHICH items are at each index (e.g. a filter narrowing from
-  // one set of skills to a different set, where the highlighted numeric
-  // index happens to stay the same) never re-ran this effect — the row now
-  // highlighted at that index could be freshly scrolled off-screen with
-  // nothing to bring it back into view, since neither `menuIsRendered` nor
-  // `slashHighlight` (the number) changed.
-  const menuItemKeysForScroll = slashMenu.slashItems.map((i) => i.key).join(',')
-  useEffect(() => {
-    if (!menuIsRendered) return
-    const highlighted = document.getElementById(`composer-option-${slashMenu.slashHighlight}`)
-    highlighted?.scrollIntoView({ block: 'nearest' })
-  }, [menuIsRendered, slashMenu.slashHighlight, menuItemKeysForScroll])
-
-  // Top-level keydown orchestration.
-  //
-  // Fix 3 (precedence): menu-close now wins over stream-cancel. Previously
-  // cancel-Escape (below) ran BEFORE slashMenu.handleKeyDown, so pressing
-  // Escape with the "/" or "@" menu open mid-stream killed the generation
-  // AND left the menu open — the menu was unreachable-by-Escape the entire
-  // time a turn was streaming. When the menu is showing, Escape now closes
-  // ONLY the menu; a second Escape (menu now closed) falls through to the
-  // cancel branch exactly as before. Applies identically to "/" and "@"
-  // mode — `shouldShowSlash` already covers both.
-  //
-  // Correctness of the stopPropagation guard: useCancelState also owns a
-  // document-level Escape listener (`document.addEventListener('keydown',
-  // ...)`, no `capture: true` — see useCancelState's global-escape effect,
-  // src/hooks/useCancelState.ts) so a turn can be
-  // cancelled even when the input isn't focused. That listener is
-  // BUBBLE-phase on `document`. This app mounts via `createRoot(#root)`
-  // (src/main.tsx), and React 17+ (including the React 19 used here)
-  // delegates synthetic events at the ROOT CONTAINER (`#root`), not at
-  // `document` — `document` is a plain DOM ANCESTOR of that container, not
-  // where React's own listener lives. When a synthetic handler calls
-  // `e.stopPropagation()`, React synchronously calls the underlying native
-  // event's `stopPropagation()` too, which happens while the native event is
-  // still bubbling — at the `#root` container, on its way up to `document`.
-  // That halts the native bubble right there, so useCancelState's
-  // document-level listener never sees the keydown at all. No extra
-  // isMenuOpen plumbing into useCancelState is needed; `e.stopPropagation()`
-  // here is sufficient and provably correct for this app's actual mount
-  // topology (verified against src/main.tsx and useCancelState.ts, not
-  // assumed).
-  // Mid-turn steering send (bugfixes3 — enable mid-turn queued sends in the
-  // composer): the actual send/append mechanism used by BOTH (1) Enter
-  // pressed mid-stream, below, and (2) the mid-stream Send button rendered
-  // next to Stop, further down. Verified (not assumed — read against the
-  // installed @assistant-ui/react@0.14.14 / @assistant-ui/core@0.2.10
-  // sources under node_modules) that AssistantUI's OWN submission paths are
-  // both unusable mid-stream for this app's runtime:
-  //   - ComposerPrimitive.Input's internal Enter handling
-  //     (node_modules/@assistant-ui/react/dist/primitives/composer/
-  //     ComposerInput.js, handleKeyPress) hard-blocks submission whenever
-  //     `thread.isRunning && !thread.capabilities.queue`.
-  //   - ComposerPrimitive.Root's internal onSubmit (ComposerRoot.js) sends
-  //     via `useComposerSend()` (@assistant-ui/core's React hook), which
-  //     computes `disabled = !composer.canSend || (thread.isRunning &&
-  //     !thread.capabilities.queue)` — so the callback is `null` while
-  //     running and `handleSubmit`'s `if (!send) return` silently no-ops.
-  //     `form.requestSubmit()` therefore does nothing mid-stream.
-  // Our runtime is built via `useExternalStoreRuntime` (an ExternalStoreAdapter
-  // — see src/lib/omnipus-runtime.ts). `ExternalStoreThreadRuntimeCore`
-  // (node_modules/@assistant-ui/core/dist/runtimes/external-store/
-  // external-store-thread-runtime-core.js) hardcodes `queue: false` into
-  // `capabilities` unconditionally on every adapter update — there is no
-  // ExternalStoreAdapter option that flips it (`unstable_capabilities` only
-  // covers `copy`), so `thread.capabilities.queue` can never be true here.
-  //
-  // The fix bypasses that UI-only isRunning gate by calling the composer
-  // RUNTIME's own `.send()` instance method directly (`composerRuntime` from
-  // `useComposerRuntime()` above — a `ComposerRuntimeImpl`), NOT the
-  // `useComposerSend()` hook `ComposerPrimitive.Send`/`.Root` use internally.
-  // `ComposerRuntimeImpl.send()` (node_modules/@assistant-ui/core/dist/
-  // runtime/api/composer-runtime.js) forwards straight to
-  // `BaseComposerRuntimeCore.send()` (.../runtime/base/
-  // base-composer-runtime-core.js), which is gated ONLY by `canSend`
-  // (`!isEmpty && !isSendDisabled`) — there is no `isRunning` check anywhere
-  // in that call path, and `ExternalStoreThreadRuntimeCore.append()` →
-  // `adapter.onNew()` (src/lib/omnipus-runtime.ts's `onNew`, which forwards
-  // straight to `useChatStore.getState().sendMessage()`) has none either.
-  // This is therefore a genuine, intentional use of a real public API, not a
-  // workaround around business logic: the `isRunning` gate exists only to
-  // disable the PRESENTATIONAL button/keyboard-submit for runtimes that
-  // don't support mid-run sends — ours explicitly does (the gateway queues
-  // and injects mid-turn messages server-side), so this drives the send
-  // explicitly instead of going through the gated presentational path.
-  function submitMidStreamMessage() {
-    // Mirrors ComposerPrimitive.Root's onSubmit below: a typed client
-    // command (e.g. "/cancel") still intercepts locally instead of steering
-    // into the running turn as chat text.
-    if (slashMenu.interceptClientCommand()) return
-    // BaseComposerRuntimeCore.send() no-ops on its own `canSend` check
-    // (empty composer / isSendDisabled, which trims) — no separate emptiness
-    // guard is needed before calling it, matching the native Enter/click-Send
-    // behavior when idle. But that means a whitespace-only composer makes
-    // `.send()` below a no-op too, leaving the composer's actual text
-    // untouched — so the mirror-clear must be gated the same way: read
-    // whether there's real (non-whitespace) text BEFORE sending, and only
-    // clear the slash-menu mirror when there was something to actually send.
-    // Unconditionally clearing it here would desync the mirror from the
-    // real, unchanged composer text (still whitespace) — hasComposerText
-    // (which reads the mirror) would wrongly flip false, hiding the
-    // mid-stream Send button/hint even though the composer visually still
-    // holds that whitespace.
-    const hadSendableText = slashMenu.inputValue.trim().length > 0
-    composerRuntime.send()
-    if (hadSendableText) {
-      // Fix-4 mirror resync — see the identical call + comment in onSubmit
-      // below; the runtime clears its own text on a successful send without
-      // firing the textarea's onChange.
-      slashMenu.onInputChange('')
-    }
-  }
-
-  function handleKeyDown(e: React.KeyboardEvent) {
-    if (e.key === 'Escape' && slashMenu.slashOpen && slashMenu.shouldShowSlash) {
-      slashMenu.handleKeyDown(e) // closes the menu (its own Escape branch)
-      e.preventDefault()
-      e.stopPropagation()
-      return
-    }
-
-    // US-1.4 / FR-23: Escape cancels a turn.
-    // Only morph the button to "Stopping..." if the turn is actively streaming
-    // (same logic as the /cancel command and the stop button click). Pressing
-    // Escape on a completed turn still marks the message as interrupted via
-    // cancelStream() → markLastMessageInterrupted(), but there is no streaming
-    // button to morph — setting 'stopping' when isStreaming is false would leave
-    // the button stuck because the reset effect does not fire again.
-    if (e.key === 'Escape' && (isStreaming || cancelState.stopLabel === 'stopping')) {
-      e.preventDefault()
-      cancelState.cancelIfStreaming()
-      return
-    }
-
-    // Mid-turn steering send: Enter pressed WHILE a turn is streaming no
-    // longer swallows the keystroke — it sends, and the gateway steers the
-    // message into the RUNNING turn (see submitMidStreamMessage's doc
-    // comment above for the full, verified mechanism). Still deferred to
-    // the slash/mention menu below when it's actually VISIBLE (menu-open
-    // Enter selects the highlighted row, not "send") — `slashOpen` alone is
-    // not enough (Fix F, bugfixes3 sign-off): it can be true while the menu
-    // renders nothing at all (e.g. "/zzz"/"@zzz" typed — no match,
-    // `shouldShowSlash` false), so this checks `shouldShowSlash` too. Also
-    // deferred on Shift+Enter — that is universally "insert a newline" in
-    // this composer (mirrors useSlashMenu.ts's own Fix 8 for the in-menu
-    // case), including mid-stream: falls through to the textarea's native
-    // handling below via `slashMenu.handleKeyDown(e)` (a no-op when the menu
-    // isn't open) and, past that, the internal ComposerPrimitive.Input
-    // handling, which inserts the newline.
-    //
-    // Explicit `inputEnabled` check (defense-in-depth): the textarea's own
-    // native `disabled` attribute (set from `!inputEnabled`, see the
-    // ComposerPrimitive.Input below) already stops a real browser from ever
-    // dispatching a keydown into a read-only composer, but that native
-    // attribute is the ONLY thing currently gating this branch against
-    // replay / agentRemoved / gave_up-reconnect — none of which clear
-    // `isStreaming`. Guarding here too means this branch stays correct even
-    // if the textarea is ever rendered without `disabled` wired up (e.g. a
-    // future refactor, or a test that dispatches the event directly against
-    // the element), instead of relying solely on the DOM to enforce it.
-    if (e.key === 'Enter' && isStreaming && inputEnabled && !e.shiftKey && !(slashMenu.slashOpen && slashMenu.shouldShowSlash)) {
-      e.preventDefault()
-      submitMidStreamMessage()
-      return
-    }
-
-    slashMenu.handleKeyDown(e)
-  }
-
-  // Mid-turn Send affordance gate: the plain Send button rendered next to
-  // Stop while streaming (below), and the "Sends into the running response"
-  // hint line, both only show once there's actually something to steer.
-  // Reuses the slash-menu's own live text mirror (`inputValue`, kept in sync
-  // via the textarea's onChange) rather than a fresh subscription — trimmed
-  // to match `canSend`'s own emptiness semantics (whitespace-only text is
-  // not sendable).
-  const hasComposerText = slashMenu.inputValue.trim().length > 0
-
-  return (
-    // @container on the composer root: TokenCounter's `@2xl:flex` gate in the
-    // context row below reads THIS element's width. It sat on the card while
-    // the context row lived inside it; the row now renders outside the card
-    // (bare, on the black shell), so the query context moved up here.
-    <div
-      className="relative @container"
-      onDragOver={attachDisabled ? undefined : fileUpload.onDragOver}
-      onDragLeave={attachDisabled ? undefined : fileUpload.onDragLeave}
-      onDrop={attachDisabled ? undefined : fileUpload.onDrop}
-    >
-      {/* a11y HIGH: "@" mention-selection announcement. Selecting an agent
-          via "@" silently empties the composer and silently changes where
-          the next message routes — zero non-visual feedback for a
-          screen-reader user. Mirrors the sr-only aria-live pattern in
-          ChatScreen (see the message-list's own `aria-live="polite"`
-          region near the top of the ChatScreen component) so a mention
-          selection reads the same way a new assistant response does.
-          Content-change-triggers-announcement: re-selecting the SAME agent
-          leaves the text unchanged, so it does not re-announce (see
-          useSlashMenu.ts's mentionAnnouncement doc comment) — acceptable,
-          nothing actually changed. */}
-      <div aria-live="polite" aria-atomic="true" className="sr-only" data-testid="agent-mention-announcement">
-        {slashMenu.mentionAnnouncement && <span>Now chatting with {slashMenu.mentionAnnouncement}</span>}
-      </div>
-
-      {/* SR gap (gate 4 MODERATE): the "Commands unavailable" error row
-          inside the listbox below is deliberately `role="presentation"` —
-          excluded from the listbox's accessible option children (see that
-          row's own comment) — which means it is entirely silent to screen
-          readers: a sighted user sees the italic error text, but nothing is
-          ever announced. Mirror it (and the cap-footer's overflow state —
-          see `menuFooterAnnouncement` above) into a dedicated sr-only
-          `role="status"` region OUTSIDE the listbox, reusing the same
-          sr-only live-region pattern as the "@" mention announcement just
-          above, so both states reach assistive tech without changing a
-          single visible pixel of the rows themselves. Unconditionally
-          mounted (content conditionally populated) — a live region must
-          already exist in the DOM before its content changes for most
-          screen readers to reliably announce the change; a freshly-mounted
-          region with content already inside it is not guaranteed to fire.
-          `role="status"` carries an implicit `aria-live="polite"` +
-          `aria-atomic="true"`, matching the pattern above explicitly for
-          clarity. */}
-      <div role="status" aria-atomic="true" className="sr-only" data-testid="slash-menu-status">
-        {menuIsRendered && slashMenu.commandsError && !slashMenu.isSkillsFilter && !slashMenu.isMentionMode && (
-          <span>Commands unavailable</span>
-        )}
-        {menuIsRendered && menuFooterAnnouncement && <span>{menuFooterAnnouncement}</span>}
-      </div>
-
-      {fileUpload.isDragging && !attachDisabled && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-[var(--color-primary)]/80 border-2 border-dashed border-[var(--color-accent)] rounded-lg">
-          <p className="text-[var(--color-accent)] font-medium">Drop files here</p>
-        </div>
-      )}
-
-
-      {/* Slash command + skills + "@" agent-mention partitioned dropdown
-          (FR-005). One container/list renders three different sections
-          depending on the trigger: "/" opens Commands+Skills, "@" opens
-          Agents (see useSlashMenu.ts's isMentionMode) — the two triggers
-          are mutually exclusive by construction, so `slashItems` is always
-          either [commands, skills] or [agents], never a mix (J.4
-          correction, bugfixes3 sign-off — this comment previously only
-          mentioned the "/" side).
-          F6: unified slashItems.map() — emits a section header on each section
-          transition, making the `section` field load-bearing and removing the
-          duplicate render blocks + the off-by-one `globalIndex` variable.
-          FR-014/R3: skill items show their argument_hint as muted help text.
-          Fix E / deferred item 2: gated on `menuIsRendered` (declared above,
-          alongside `slashMenu`), which folds in `hasMenuContent` —
-          `shouldShowSlash` alone can be true with nothing to actually
-          render; see that constant's own comment.
-
-          Deferred item 2 (W3C APG combobox pattern): this container is the
-          combobox's `listbox` — `role="listbox"`, a stable `id` the
-          textarea's `aria-controls` points to, and an `aria-label` since the
-          listbox has no visible heading of its own (its rows have section
-          headers, but the LISTBOX itself doesn't). Rows below are
-          `role="option"` with `tabIndex={-1}` (NOT 0 — see the row's own
-          comment) and `aria-selected`; the textarea (ChatScreen.tsx's
-          ComposerPrimitive.Input, below) carries
-          `aria-activedescendant={composer-option-${slashHighlight}}` so
-          screen readers announce the highlighted row without moving DOM
-          focus off the input, per APG's combobox-with-listbox-popup
-          pattern. */}
-      {menuIsRendered && (
-        <div
-          data-testid="slash-menu"
-          id="composer-slash-menu"
-          role="listbox"
-          aria-label="Commands, skills and agents"
-          // max-h + scroll: the menu opens UPWARD from the composer, so a tall
-          // list (many commands + skills) pushed its top rows above the
-          // viewport. 40dvh caps it to the visible area; overflow-y scrolls.
-          className="mb-[var(--space-2)] rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-0)] overflow-hidden shadow-2xl max-h-[40dvh] overflow-y-auto overscroll-contain"
-        >
-          {/* LOW S8: fetchCommands('web') errored — surface the gap instead
-              of letting every backend command silently vanish from the
-              palette. Hidden during the "/skills" filter (D9 already hides
-              the whole Commands section there, so an error row would be a
-              non-sequitur). Muted styling matches SearchModal's own
-              query-error row (src/components/search/SearchModal.tsx).
-              Fix 1: also hidden in "@" mention mode — a commands-fetch
-              error has nothing to do with the agent-mention menu, and this
-              render gate must match useSlashMenu's own shouldShowSlash
-              fallback (useSlashMenu.ts), which already excludes
-              isMentionMode from the "keep the menu open on error" carve-out.
-              Without this clause the row leaked into the "@" menu whenever
-              the commands query happened to be erroring, even though the
-              "@" menu has nothing to do with commands.
-              Deferred item 2: `role="presentation"` — this row is
-              informational text, not a selectable listbox option; without
-              this it would silently pollute the `listbox`'s accessible
-              children with a non-option row. */}
-          {slashMenu.commandsError && !slashMenu.isSkillsFilter && !slashMenu.isMentionMode && (
-            <div
-              data-testid="slash-commands-error"
-              role="presentation"
-              className="px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] italic"
-            >
-              Commands unavailable
-            </div>
-          )}
-          {slashMenu.slashItems.map((item, globalIndex) => {
-            const prevSection = globalIndex > 0 ? slashMenu.slashItems[globalIndex - 1].section : null
-            const isFirstInSection = item.section !== prevSection
-            const nextSection = globalIndex < slashMenu.slashItems.length - 1 ? slashMenu.slashItems[globalIndex + 1].section : null
-            const isLastInSection = item.section !== nextSection
-            // Deferred item 3: the section's overflow count, rendered as a
-            // muted footer row right after that section's last visible row.
-            // Only skills/agents are capped (commands has no cap — see
-            // useSlashMenu.ts) — 0 for commands, so the footer simply never
-            // renders there.
-            const sectionHiddenCount =
-              item.section === 'skills' ? slashMenu.skillsHiddenCount :
-              item.section === 'agents' ? slashMenu.agentsHiddenCount : 0
-            return (
-              <React.Fragment key={item.key}>
-                {isFirstInSection && (
-                  <div
-                    role="presentation"
-                    className={cn(
-                      'px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)]',
-                      globalIndex === 0
-                        ? 'border-b border-[var(--color-border)]'
-                        : 'border-t border-[var(--color-border)]',
-                    )}>
-                    {item.section === 'commands' ? 'Commands' : item.section === 'skills' ? 'Skills' : 'Agents'}
-                  </div>
-                )}
-                <button
-                  type="button"
-                  id={`composer-option-${globalIndex}`}
-                  role="option"
-                  aria-selected={globalIndex === clampedSlashHighlight}
-                  // Deferred item 2 (APG combobox pattern, amends the eb4de2a2
-                  // blanket tabIndex=0 stamp for THIS widget specifically):
-                  // options inside a combobox's listbox popup are NOT
-                  // separately tabbable — focus stays on the textarea the
-                  // whole time the menu is open (that's the entire point of
-                  // aria-activedescendant), and ArrowUp/ArrowDown move the
-                  // active-descendant highlight without ever moving real DOM
-                  // focus. tabIndex=0 here was actively harmful: Tab-focusing
-                  // a row started the textarea's 150ms blur-close timer
-                  // (onInputBlur, useSlashMenu.ts), which unmounted the menu
-                  // out from under the just-focused row and dropped focus to
-                  // `body` — a keyboard dead end. Selection still works via
-                  // onMouseDown (mouse) and Enter (keyboard, through the
-                  // textarea's own onKeyDown → slashMenu.handleKeyDown) —
-                  // neither depends on this button ever receiving focus.
-                  tabIndex={-1}
-                  // "@" mention menu rows only — mirrors the slash-command/skill
-                  // rows' shared markup exactly, so this testid is additive
-                  // rather than a fork of the row.
-                  data-testid={item.section === 'agents' ? 'agent-mention-item' : undefined}
-                  // Fix 11: semantic highlight marker — lets a test assert the
-                  // highlighted row without depending on the visual class
-                  // string below (which stays purely presentational; `undefined`
-                  // when not highlighted, so the attribute doesn't render at all
-                  // rather than serializing as `data-highlighted="false"`).
-                  data-highlighted={globalIndex === clampedSlashHighlight || undefined}
-                  className={cn(
-                    'w-full flex items-baseline gap-[var(--space-2-5)] px-[var(--space-2-5)] py-[var(--space-2)] text-left transition-colors',
-                    globalIndex === clampedSlashHighlight
-                      ? 'bg-[var(--color-accent)]/10 text-[var(--color-secondary)]'
-                      : 'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]',
-                  )}
-                  onMouseDown={(e) => {
-                    e.preventDefault()
-                    item.onSelect()
-                    // Click-selecting a slash item must land focus back in the
-                    // input (keyboard selection never loses it; mouse would).
-                    focusChatInput()
-                  }}
-                  onMouseEnter={() => slashMenu.onHoverItem(globalIndex)}
-                >
-                  {/* Agent rows only — same avatar-dot markup as AgentPicker's
-                      DropdownMenuItem rows (composer/AgentPicker.tsx) so the
-                      mention menu and the picker dropdown read as the same
-                      "agent row" everywhere in the composer.
-                      Fix 9: aria-hidden — the initial/icon is decorative; the
-                      row BUTTON's accessible name should come from the label/
-                      description text, not this dot's text content. Initial is
-                      derived from `item.agentName` (astral-safe via
-                      `initialOf`), not `label.charAt(1)` — the old approach
-                      assumed `label` was always "@" + exactly one BMP
-                      character, which breaks for a name whose first character
-                      is outside the BMP (e.g. an emoji). */}
-                  {item.section === 'agents' && (
-                    <div
-                      aria-hidden="true"
-                      className="w-5 h-5 rounded-full flex items-center justify-center text-[length:var(--type-caption-size)] font-bold shrink-0"
-                      style={{ backgroundColor: item.agentColor ?? 'var(--color-surface-3)' }}
-                    >
-                      {item.agentIcon
-                        ? <IconRenderer icon={item.agentIcon} size={11} />
-                        : initialOf(item.agentName ?? '')}
-                    </div>
-                  )}
-                  {/* Fixed-width label column so descriptions align across rows
-                      (a two-column table, not per-row flow). 9.5rem fits the
-                      longest current label; truncate guards outliers. */}
-                  <span className="w-[9.5rem] shrink-0 truncate font-mono text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)]">{item.label}</span>
-                  <span className="text-[length:var(--type-caption-size)] flex-1 min-w-0 truncate">{item.description}</span>
-                  {/* FR-014/R3: show argument_hint as muted help text for skills;
-                      SD-C7 extends this to `delivery: agent` commands (e.g. /goal, /loop). */}
-                  {(item.section === 'skills' || item.section === 'commands') && item.argumentHint && (
-                    <span className="ml-auto text-[length:var(--type-caption-size)] text-[var(--color-muted)] opacity-70 font-mono shrink-0">
-                      {item.argumentHint}
-                    </span>
-                  )}
-                  {/* Mirrors AgentPicker's "active" marker (composer/AgentPicker.tsx) */}
-                  {item.section === 'agents' && item.isActiveAgent && (
-                    <span className="ml-auto shrink-0 text-[var(--color-success)] text-[length:var(--type-caption-size)]">active</span>
-                  )}
-                </button>
-                {/* Deferred item 3: "+N more" footer — rendered right after
-                    the LAST visible row of a capped section that still has
-                    overflow. Deliberately `role="presentation"` and OUTSIDE
-                    `slashMenu.slashItems` entirely (not just visually
-                    de-emphasized) — it is not part of `globalIndex`'s
-                    sequence, so it can never receive an
-                    `id="composer-option-N"`, can never be `aria-selected`,
-                    and ArrowUp/ArrowDown (which cycle modulo
-                    `slashItems.length`) can never land the highlight on it. */}
-                {isLastInSection && sectionHiddenCount > 0 && (
-                  <div
-                    data-testid="slash-menu-footer"
-                    role="presentation"
-                    className="px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic"
-                  >
-                    {/* Cap-footer copy fix (gate 2 LOW): `footerCopy` (declared
-                        above, alongside `menuIsRendered`) already accounts for
-                        the "/skills" special-filter state, where "keep typing
-                        to narrow" is impossible advice — see its own comment.
-                        `sectionHiddenCount > 0` here is guaranteed to equal the
-                        `activeSectionHiddenCount` `footerCopy` was computed
-                        from (only one capped section can be rendering a footer
-                        at a time — "/" caps skills, "@" caps agents, and the
-                        two triggers are mutually exclusive), so reusing the
-                        single shared value here (rather than re-deriving the
-                        copy per-row) is exactly correct, not a coincidence. */}
-                    {footerCopy}
-                  </div>
-                )}
-              </React.Fragment>
-            )
-          })}
-        </div>
-      )}
-
-      {/* Context row — per-message scope (attach · agent · model · tokens).
-          Renders BARE on the black shell, deliberately outside the card
-          frame (operator direction: only the input surface reads as a card;
-          the scope controls float above it). Agent/model/tokens relocated
-          here from the workspace top-bar (Gestalt proximity); attach moved
-          up from the old input row. */}
-      {/* py-0.5 (not overflow-clipping padding-bottom only): the row uses
-          overflow-x-auto, which also clips vertically — without symmetric
-          vertical breathing room the focus ring on the controls was cut off
-          at the top. Compact h-7 controls + py-0.5 keeps the ring visible. */}
-      <div
-        className="flex items-center gap-[var(--space-1)] min-w-0 overflow-x-auto px-[var(--space-1)] py-[var(--space-1)]"
-        style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' } as React.CSSProperties}
-      >
-        {/* Agent → model. Attach lives INSIDE the input card (leading the
-            textarea, ChatGPT/Claude-style) — it was visually lost up here. */}
-        <AgentPicker disabled={agentRemoved} tabIndex={3} />
-        <ModelPicker disabled={agentRemoved} tabIndex={4} />
-        {/* ADR-092: per-chat Auto-approve quick switch. Deliberately NO
-            explicit tabIndex — the closed 1-8 composer ring documented
-            above (see ChatControls.tsx) stays exactly as numbered; this
-            control falls into natural DOM tab order after it, same as the
-            header tab menu. */}
-        <AutoApprovePicker disabled={agentRemoved} />
-        <span className="flex-1" />
-        {/* Token counter — status; hidden below @2xl of the composer root's
-            @container (~42rem). */}
-        <TokenCounter className="hidden @2xl:flex" />
-      </div>
-
-      {/* Composer card — now just the input surface: a single
-          ComposerPrimitive.Root (textarea + send/stop on one items-end
-          baseline) plus pending-attachment chips. The context row above and
-          the activity pills below render outside the frame on the shell
-          background. */}
-      <div
-        data-testid="composer-card"
-        // focus-within gold border: the textarea opts out of the central ring
-        // (data-no-focus-ring) BECAUSE this card is its focus surface — this
-        // class is the promised replacement (WCAG 2.4.7). Border swap, not an
-        // outline: the card's overflow-hidden would clip an inset outline.
-        className="rounded-2xl border border-[var(--color-border)] focus-within:border-[var(--color-accent)] bg-[var(--color-surface-2)] overflow-hidden transition-colors"
-      >
-        {/* Input row — single ComposerPrimitive.Root, items-end: textarea and
-            send/stop share one flex container + one bottom baseline. */}
-        <ComposerPrimitive.Root
-          className="flex items-end gap-[var(--space-2)] p-[var(--space-2)]"
-          onSubmit={(e) => {
-            // Mid-turn steering: this native form-submit path is NEVER
-            // actually reached while streaming (verified — see
-            // submitMidStreamMessage's doc comment above): Enter mid-stream
-            // is fully handled by handleKeyDown's own branch (which calls
-            // e.preventDefault(), so ComposerPrimitive.Input's internal
-            // handleKeyPress — the only thing that would call
-            // form.requestSubmit() — never runs), and the mid-stream Send
-            // button below is `type="button"`, so a click never fires this
-            // form's submit event either. The isStreaming preventDefault
-            // that used to sit here was therefore removed for coherence, not
-            // because it was blocking a live path — leaving it in place
-            // would misleadingly suggest Enter/Send still route through here
-            // while a turn is running.
-            // Send-path interception: if the typed text is exactly a client-delivery
-            // slash command (e.g. "/new", "/help", "/model", "/cancel"), handle it
-            // locally and prevent it from reaching the backend. This converges the
-            // typed+Enter path with the palette selection path.
-            if (slashMenu.interceptClientCommand()) {
-              e.preventDefault()
-              return
-            }
-            // Fix 4: resync the text mirror after a real send. assistant-ui's
-            // composerRuntime clears its own text on a successful submit
-            // WITHOUT firing the textarea's onChange (no synthetic change
-            // event is dispatched for the runtime-driven clear), so
-            // `slashMenu.inputValue` — which only updates via onInputChange —
-            // kept the just-sent text (e.g. "@mia hello everyone") even
-            // though the visible textarea was now empty. A subsequent
-            // ArrowDown in the (visually empty) textarea then read the STALE
-            // "@..." mirror, reopened the full agent-mention menu, and Enter
-            // silently switched the active agent with no text on screen to
-            // explain why. Only reached here when the send actually
-            // proceeded (neither the isStreaming guard nor
-            // interceptClientCommand() intercepted it above), so this can't
-            // clear the mirror out from under a blocked/intercepted send.
-            slashMenu.onInputChange('')
-          }}
-        >
-          {/* Attach — leading the input, ChatGPT/Claude-style. Plus (add
-              context: files, images, anything) instead of the email-era
-              paperclip. items-end row → mb-1.5 = (40px single-line input − 28px)/2 centers it against
-              the single-line textarea baseline. */}
-          <ComposerPrimitive.AddAttachment
-            disabled={attachDisabled}
-            tabIndex={5}
-            className="shrink-0 h-7 w-7 mb-[var(--space-1)] rounded-full flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-3)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-            aria-label="Add files or context"
-            title="Add files or context"
-          >
-            <Plus size={16} />
-          </ComposerPrimitive.AddAttachment>
-
-          {/* ADR-051 Rev 4 (Slice H) — attach an existing workspace-library
-              entry without re-uploading (FR-022). Disabled alongside the file
-              attach button in read-only / disconnected sessions. */}
-          <ComposerMediaLibraryButton disabled={attachDisabled} tabIndex={5} />
-
-          {/* Ghost text wrapper — positioned overlay approach */}
-          <div className="relative flex-1 min-w-0">
-            <ComposerPrimitive.Input
-              ref={chatInputRef}
-              data-testid="chat-input"
-              data-no-focus-ring
-              // Composer tab ring — see the full map in ChatControls.tsx.
-              tabIndex={2}
-              placeholder={agentRemoved ? 'Agent has been removed — this session is read-only' : composerPlaceholder(isConnected || reconnectPhase === 'reconnecting' || reconnectPhase === 'slow', isStreaming, isReplaying, activeAgentName, reconnectPhase === 'gave_up')}
-              // FR-3a: the slash menu must be reachable mid-stream, which means the
-              // textarea has to accept keystrokes during streaming. Submission is
-              // blocked elsewhere: the ComposerPrimitive.Root's onSubmit handler
-              // above preventDefaults while isStreaming, and the composer's
-              // onKeyDown handler (handleKeyDown) swallows Enter while streaming
-              // unless the slash menu is open. So gate visual-only
-              // (cursor-not-allowed/opacity) on isStreaming via the className
-              // below, not the disabled attribute.
-              disabled={!inputEnabled}
-              // aria-disabled (gate 4 LOW): deliberately does NOT include
-              // isStreaming. `disabled` (native, above) is likewise gated on
-              // `!inputEnabled` alone — the textarea genuinely accepts
-              // keystrokes mid-stream by design (FR-3a: the slash menu must
-              // stay reachable while a turn is streaming). Including
-              // isStreaming here previously told assistive tech the input
-              // was disabled mid-turn even though it demonstrably was not —
-              // a screen-reader user would be misinformed that they could
-              // not type, when they could. Submission-blocking during a
-              // stream is conveyed by the Stop button replacing Send (see
-              // the ternary below), not by marking the TEXT INPUT disabled.
-              aria-disabled={!inputEnabled || undefined}
-              rows={1}
-              cancelOnEscape={false}
-              className={cn(
-                // Transparent + borderless: the card is the visible surface now,
-                // so the textarea blends in (flat) instead of drawing its own box.
-                // `block`: textareas are inline-block by default, which leaves a
-                // ~6px descender line-box gap below the element inside its block
-                // wrapper — the wrapper (not the textarea) is what items-end
-                // aligns, so the gap read as send sitting below the input.
-                'block w-full resize-none bg-transparent px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] outline-none',
-                'placeholder:text-[var(--color-muted)] min-h-[24px] max-h-[200px] leading-6 overflow-hidden',
-                'focus:outline-none focus:ring-0',
-                (!inputEnabled || isStreaming) ? 'opacity-60 cursor-not-allowed' : undefined,
-              )}
-              aria-label="Message input"
-              // Deferred item 2 (W3C APG combobox pattern — combobox with
-              // listbox popup). Verified against node_modules/@assistant-ui/
-              // react/dist/primitives/composer/ComposerInput.js: the real
-              // ComposerPrimitive.Input destructures a fixed, small prop list
-              // (autoFocus/asChild/render/disabled/onChange/onKeyDown/onPaste/
-              // onSelect/submitOnEnter/submitMode/cancelOnEscape/unstable_*/
-              // addAttachmentOnPaste) and spreads everything ELSE — including
-              // `role` and any `aria-*` prop — via `...rest` straight onto the
-              // underlying `TextareaAutosize` element (only overridden if this
-              // app used `Unstable_TriggerPopoverRoot`, which it doesn't — that
-              // context is optional and unset here). So `role="combobox"` and
-              // the aria-* props below reach the real DOM node unmodified; no
-              // fallback is needed.
-              role="combobox"
-              aria-expanded={menuIsRendered}
-              aria-controls={menuIsRendered ? 'composer-slash-menu' : undefined}
-              // Undefined (not rendered) when the menu is closed OR has zero
-              // navigable items (the LOW S8 commandsError carve-out can leave
-              // shouldShowSlash true with slashItems empty — see
-              // useSlashMenu.ts's Fix D) — there is no real option for the id
-              // to point at in either case.
-              aria-activedescendant={
-                menuIsRendered && clampedSlashHighlight !== undefined
-                  ? `composer-option-${clampedSlashHighlight}`
-                  : undefined
-              }
-              aria-autocomplete="list"
-              onChange={(e) => {
-                const val = (e.target as HTMLTextAreaElement).value
-                slashMenu.onInputChange(val)
-                if (val.length > 1_000_000) {
-                  if (!hasWarnedLargeInput.current) {
-                    hasWarnedLargeInput.current = true
-                    useUiStore.getState().addToast({
-                      message: `Large input (${(val.length / 1_000_000).toFixed(1)}MB). This may be slow to process.`,
-                      variant: 'default',
-                    })
-                  }
-                } else {
-                  hasWarnedLargeInput.current = false
-                }
-              }}
-              onKeyDown={handleKeyDown}
-              onBlur={slashMenu.onInputBlur}
-              onPaste={fileUpload.onPaste}
-            />
-            {/* Ghost text overlay — shown when value is exactly `/<skillId> ` after skill selection.
-                F3-frontend/FR-006/R3: shows the skill's argument_hint when declared, else `<message>`.
-                The hint comes from the skill selected from the menu. */}
-            {slashMenu.showGhostText && (
-              <div
-                aria-hidden="true"
-                className="pointer-events-none absolute inset-0 px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-body-compact-size)] leading-6 flex items-start"
-                data-testid="ghost-text"
-              >
-                <span className="invisible whitespace-pre">{slashMenu.inputValue}</span>
-                <span className="text-[var(--color-muted)] opacity-60">
-                  {slashMenu.ghostText}
-                </span>
-              </div>
-            )}
-          </div>
-
-          {isStreaming || cancelState.stopLabel === 'stopping' ? (
-            // tabIndex={6}: this button replaces Send in the exact same ring
-            // slot mid-stream (see the composer tab-ring map in
-            // ChatControls.tsx) — it must keep Send's slot, not default to 0,
-            // or the ring silently drops a stop the whole time a turn is
-            // streaming. Mid-turn steering (below): the plain Send button
-            // that now sits next to Stop shares this same slot 6 (both are
-            // "the send/stop action cluster") — cancel must stay reachable
-            // in exactly one keystroke even when steering is also available,
-            // so Stop keeps its own dedicated element rather than being
-            // folded into a menu/toggle.
-            <>
-              <Button
-                tabIndex={6}
-                variant="ghost"
-                data-testid="stop-btn"
-                onClick={() => {
-                  // EC-15 / FR-21: cancelUnconditional() sets the label synchronously
-                  // so the UI updates within the same React render tick, before the
-                  // cancel network round-trip starts (no perceived latency). It does
-                  // NOT guard on isStreaming — see useCancelState's doc comment for
-                  // why guarding here would silently no-op on the render/click race.
-                  cancelState.cancelUnconditional()
-                }}
-                className={cn(
-                  // h-9 + mb-0.5: same footprint as the send button it replaces
-                  // mid-stream (keeps the row from jumping on morph).
-                  'h-auto shrink-0 rounded-lg mb-[var(--space-0-5)]',
-                  cancelState.stopLabel === 'stopping'
-                    ? 'px-[var(--space-2-5)] h-9 gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30 hover:text-[var(--color-error)]'
-                    : 'w-9 h-9 p-0',
-                  isStreaming
-                    ? 'bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30 hover:text-[var(--color-error)]'
-                    : 'bg-[var(--color-surface-3)] text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-muted)] cursor-wait',
-                )}
-                aria-label={cancelState.stopLabel === 'stopping' ? 'Stopping...' : 'Stop generation'}
-                title="Stop (Escape)"
-              >
-                <Stop size={15} weight="fill" />
-                {cancelState.stopLabel === 'stopping' && <span>Stopping...</span>}
-              </Button>
-              {/* Mid-turn steering Send — a PLAIN button, deliberately not
-                  ComposerPrimitive.Send: verified (see submitMidStreamMessage's
-                  doc comment above) that the primitive's own useComposerSend()
-                  hook hard-disables it whenever thread.isRunning &&
-                  !thread.capabilities.queue, and our ExternalStoreAdapter
-                  runtime always reports capabilities.queue === false — so the
-                  primitive would render permanently disabled here no matter
-                  what `disabled` prop it's given. `type="button"` (not
-                  "submit"): a click must NOT fire ComposerPrimitive.Root's
-                  form submit event — submitMidStreamMessage() drives the send
-                  directly. Only rendered once there's text to steer — an
-                  empty composer has nothing to send, and Stop alone already
-                  covers "I have nothing more to add, stop the response." */}
-              {hasComposerText && (
-                <IconButton
-                  tabIndex={6}
-                  type="button"
-                  data-testid="chat-send-mid-stream"
-                  disabled={!inputEnabled}
-                  onClick={submitMidStreamMessage}
-                  className={cn(
-                    'shrink-0 w-9 h-9 mb-[var(--space-0-5)] rounded-lg',
-                    inputEnabled
-                      ? 'bg-[var(--color-accent)] text-[var(--color-primary)] hover:bg-[var(--color-accent-hover)] hover:text-[var(--color-primary)]'
-                      : 'bg-[var(--color-surface-3)] text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-muted)] cursor-not-allowed',
-                  )}
-                  aria-label="Send into the running response"
-                  title="Send into the running response"
-                  aria-describedby="mid-stream-send-hint"
-                >
-                  <PaperPlaneRight size={15} weight="bold" />
-                </IconButton>
-              )}
-            </>
-          ) : (
-            // FR-I-014: also disabled during replay so user cannot send out-of-order.
-            // Fix 3: when reconnecting (fast or slow), allow send — messages go to
-            // the outbound queue and drain automatically on reconnect.
-            //
-            // Native ComposerPrimitive.Send (bugfixes3 sign-off — J correction;
-            // FIXED bugfixes3 deferred item 1, below): verified against
-            // node_modules/@assistant-ui/react/dist/utils/createActionButton.js +
-            // primitives/composer/ComposerSend.js — the Send button is built via
-            // createActionButton, which renders a plain `type="button"` whose
-            // onClick is `composeEventHandlers(primitiveProps.onClick, callback)`
-            // (from `@radix-ui/primitive`, checkForDefaultPrevented=true by
-            // default — verified in node_modules/@radix-ui/primitive/dist/
-            // index.js): OUR `onClick` prop below runs FIRST; `callback` (which
-            // invokes `composer.send()` DIRECTLY, NOT `form.requestSubmit()`) only
-            // runs afterward if our handler did NOT call `e.preventDefault()`. A
-            // mouse click on Send therefore never fires this ComposerPrimitive.
-            // Root's onSubmit above — Send and Enter do NOT share a code path —
-            // so the interception below intentionally duplicates (not reuses)
-            // onSubmit's `interceptClientCommand()` check for this button's own
-            // click path, converging typed-"/new"-then-click-Send with
-            // typed-"/new"-then-Enter.
-            //
-            // No isStreaming guard here (unlike onSubmit's own preventDefault
-            // check): this button is swapped for the Stop button above whenever
-            // `isStreaming || cancelState.stopLabel === 'stopping'` is true, so
-            // ComposerPrimitive.Send is never even mounted while a turn is
-            // streaming — verified against the ternary a few lines up — there is
-            // no click path to guard against.
-            //
-            // The Fix-4 text-mirror resync (onSubmit, above) is NOT duplicated
-            // here either: it is unconditionally handled by useSlashMenu.ts's Fix
-            // A, which subscribes directly to composerRuntime so `inputValue`
-            // stays correct after ANY out-of-band clear — click-Send included,
-            // not just the keyboard path. Send still auto-disables when the
-            // composer is empty (no text and no attachments) via the runtime's
-            // canSend, so no manual empty-check is needed here either.
-            <ComposerPrimitive.Send
-              disabled={!inputEnabled || isReplaying}
-              data-testid="chat-send"
-              tabIndex={6}
-              onClick={(e) => {
-                if (slashMenu.interceptClientCommand()) {
-                  e.preventDefault()
-                }
-              }}
-              className={cn(
-                'shrink-0 w-9 h-9 mb-[var(--space-0-5)] rounded-lg flex items-center justify-center transition-colors',
-                inputEnabled && !isReplaying
-                  ? reconnectPhase === 'reconnecting' || reconnectPhase === 'slow'
-                    // Muted accent while reconnecting — functional but visually signals
-                    // the message will queue rather than send immediately.
-                    ? 'bg-[var(--color-accent)]/50 text-[var(--color-primary)] hover:bg-[var(--color-accent)]/70'
-                    : 'bg-[var(--color-accent)] text-[var(--color-primary)] hover:bg-[var(--color-accent-hover)] disabled:bg-[var(--color-surface-3)] disabled:text-[var(--color-muted)] disabled:cursor-not-allowed'
-                  : 'bg-[var(--color-surface-3)] text-[var(--color-muted)] cursor-not-allowed',
-              )}
-              aria-label={
-                reconnectPhase === 'reconnecting' || reconnectPhase === 'slow'
-                  ? 'Queue message (will send on reconnect)'
-                  : 'Send message'
-              }
-              aria-disabled={isReplaying || undefined}
-            >
-              <PaperPlaneRight size={15} weight="bold" />
-            </ComposerPrimitive.Send>
-          )}
-        </ComposerPrimitive.Root>
-
-        {/* Mid-turn steering affordance: the empty-composer case already says
-            "Waiting for response..." via the placeholder (composerPlaceholder,
-            above) — but a NATIVE placeholder only shows on an empty input, so
-            once the user has actually typed something mid-stream it goes
-            invisible right when the affordance matters most. This small,
-            muted line (tokens only, no emoji) fills that gap: it appears
-            only once there's live text to steer with, right where the Send
-            button next to Stop just appeared. Microcopy unified with that
-            button's own title/aria-label (one phrase, three surfaces); `id`
-            is targeted by the button's `aria-describedby` above so a
-            screen-reader user gets the same explanation the sighted hint
-            line provides. Safe to reference unconditionally from the button
-            (no dangling id): the button only renders when hasComposerText is
-            also true (its own parent condition additionally requires
-            isStreaming), which is exactly this line's render condition too. */}
-        {isStreaming && hasComposerText && (
-          <div
-            id="mid-stream-send-hint"
-            data-testid="mid-stream-send-hint"
-            className="px-[var(--space-2-5)] pb-[var(--space-1)] -mt-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
-          >
-            Send into the running response
-          </div>
-        )}
-
-        {/* Pending attachments — native AssistantUI composer attachments. Shows a
-            chip for each attached file (via the attach (+) button, drag-drop, or
-            paste); the AttachmentAdapter (src/lib/attachment-adapter.ts) uploads
-            them on send and threads the media:// ref into our transport via onNew.
-            LibraryAttachmentChips renders staged workspace-library reuse refs
-            (ADR-051 Rev 4 / Slice H) alongside them. */}
-        <div className="flex flex-wrap gap-[var(--space-2)] px-[var(--space-2)] empty:hidden [&:has(*)]:pb-[var(--space-2)]">
-          <ComposerPrimitive.Attachments components={{ Attachment: ComposerAttachmentChip }} />
-          <LibraryAttachmentChips />
-        </div>
-
-      </div>
-
-      {/* Live background activity (delegate spans + background bash runs) —
-          pills render BELOW the card, bare on the shell background (operator
-          direction), Claude-Code style. Opens the ActivityPanel slide-out on
-          click. ActivityBar renders null when idle, so `empty:hidden`
-          collapses this wrapper — no stray padding when nothing runs. */}
-      <div className="px-[var(--space-1)] pt-[var(--space-1)] empty:hidden">
-        <ActivityBar />
-      </div>
-
-      {/* Harmful-file upload double-confirm — replaces the native window.confirm pair.
-          Stage 1 warns and lists the flagged files; stage 2 is the second
-          confirmation. Files are only attached after the user confirms stage 2.
-          Two catalogued ConfirmDialogs, mutually exclusive on `harmfulStage`
-          (only one is ever `open` at a time), rather than one dialog switching
-          its content by stage — ConfirmDialog's closed API takes static
-          title/description/confirmLabel per instance, not a stage switch. */}
-      <ConfirmDialog
-        open={fileUpload.harmfulConfirm !== null && fileUpload.harmfulStage === 1}
-        onOpenChange={(open) => {
-          if (!open) fileUpload.dismissHarmfulConfirm()
-        }}
-        title="Potentially harmful file(s)"
-        description={
-          fileUpload.harmfulConfirm
-            ? `${fileUpload.harmfulConfirm.harmfulNames.join(', ')} may be potentially harmful file(s).\n\nAre you sure you want to upload?`
-            : ''
-        }
-        confirmLabel="Continue"
-        destructive
-        onConfirm={fileUpload.advanceHarmfulStage}
-      />
-      <ConfirmDialog
-        open={fileUpload.harmfulConfirm !== null && fileUpload.harmfulStage === 2}
-        onOpenChange={(open) => {
-          if (!open) fileUpload.dismissHarmfulConfirm()
-        }}
-        title="Confirm upload"
-        description={
-          fileUpload.harmfulConfirm
-            ? `Please confirm again: Upload ${fileUpload.harmfulConfirm.harmfulNames.length} potentially harmful file(s)?`
-            : ''
-        }
-        confirmLabel="Upload"
-        destructive
-        onConfirm={fileUpload.confirmHarmfulUpload}
-      />
-    </div>
-  )
-}
+// #1449 FE-0: the message box lives in composer/OmnipusComposer.tsx. Re-exported
+// here because existing tests and ActivityBar import it from this module.
+export { OmnipusComposer }
 
 // ── Welcome state ─────────────────────────────────────────────────────────────
 
 function WelcomeState({ hasAgent }: { hasAgent: boolean }) {
+  const workspaceId = useWorkspacesStore((state) => state.activeWorkspaceId)
+  const entryBlocked = useSessionStore((state) => workspaceEntryBlocksSend(state, workspaceId))
+  if (entryBlocked) return null
   return (
     <div className="flex flex-col items-center justify-center h-full min-h-[60vh] gap-[var(--space-5)] p-[var(--space-5)]">
       <div className="flex flex-col items-center gap-[var(--space-4)] text-center max-w-md">
@@ -3299,7 +1664,7 @@ function WelcomeState({ hasAgent }: { hasAgent: boolean }) {
           <p className="text-[var(--color-muted)] text-[length:var(--type-body-compact-size)]">
             {hasAgent
               ? 'Your agent is ready. Start a conversation below.'
-              : 'Select an agent in the session bar to get started.'}
+              : 'Select an agent in the sidebar list to get started.'}
           </p>
         </div>
       </div>
@@ -3314,14 +1679,16 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
   const rateLimitEvent = useChatStore((s) => s.rateLimitEvent)
   const clearRateLimitEvent = useChatStore((s) => s.clearRateLimitEvent)
+  const providerRetryEvent = useChatStore((s) => s.providerRetryEvent)
+  // Issues #1478/#1280 — the provider_status "waiting" notice slot (the
+  // model has gone quiet). Cleared by the frame handler on responding/
+  // recovered; like the retry line it renders only while the turn streams.
+  const providerStatusEvent = useChatStore((s) => s.providerStatusEvent)
+  const isStreaming = useChatStore((s) => s.isStreaming)
   // ADR-049 D6/US-12/SD-C9: loop indicator state, same session-scoped
   // foreground field as rateLimitEvent above. (Goal pill state is read
   // directly by GoalPillTray via its own useChatStore subscription — FE-1.)
   const loopStatus = useChatStore((s) => s.loopStatus ?? null)
-  const setMessages = useChatStore((s) => s.setMessages)
-  const mergeJudgeVerdictHistory = useChatStore((s) => s.mergeJudgeVerdictHistory)
-  const attachedSessionType = useSessionStore((s) => s.attachedSessionType)
-  const attachedTaskTitle = useSessionStore((s) => s.attachedTaskTitle)
   // For the ARIA live region: track the last assistant message id for screen reader announcements.
   // Select the pre-derived single id from the store (companion to `messagesById`)
   // rather than subscribing to the whole `messages` array + reversing/scanning it per
@@ -3347,7 +1714,15 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
         deliveryStatus: 'queued',
       }))
   }, [activeSessionId, messages, outboundQueue, pendingDrainQueue])
-  const displayMessages = useMemo(() => [...messages, ...queuedMessages], [messages, queuedMessages])
+  const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
+  // One presentation gate for live, REST and replay, before either list renders.
+  // Hidden diagnostics remain in the bucket, with no empty virtualized row.
+  const displayMessages = useMemo(
+    () => [...messages, ...queuedMessages].filter((message) =>
+      shouldRenderContextWindowNoticeInThread(message.type, verboseChatEnabled),
+    ),
+    [messages, queuedMessages, verboseChatEnabled],
+  )
   const lastAssistantMessageId = useChatStore((s) => s.lastAssistantMessageId)
   const lastAssistantMessage = useChatStore((s) =>
     lastAssistantMessageId === null
@@ -3366,94 +1741,8 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
   const { data: agentsForAria = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
   const activeAgentName = agentsForAria.find((a) => a.id === activeAgentId)?.name ?? 'Omnipus'
 
-  // Load message history when session changes
-  const isConnected = useConnectionStore((s) => s.isConnected)
-
-  const {
-    data: historyData,
-    isError: historyError,
-    refetch: refetchHistory,
-  } = useQuery({
-    queryKey: ['messages', activeSessionId],
-    queryFn: () => fetchSessionMessages(activeSessionId!),
-    // '__pending' is the optimistic-send sentinel (store/chat.ts) used before the
-    // real session_id arrives over WS — it has no server-side history, so fetching
-    // it 404s (spurious console errors + a historyError that tears down the composer).
-    // Mirror the same guard used in attachment-adapter.ts.
-    enabled: !!activeSessionId && activeSessionId !== '__pending',
-    gcTime: 0,
-    // Never re-fetch on window focus — the WebSocket delivers live updates
-    refetchOnWindowFocus: false,
-    // Skip re-fetch on mount when the WebSocket is already connected and delivering messages
-    refetchOnMount: !isConnected,
-  })
-
-  // WS attach_session + streamReplay is the authoritative history loader.
-  // Skip the REST-based setMessages overwrite when WS replay is active OR has already
-  // populated the store — otherwise the filter below strips tool_call frames already
-  // attached by the reducer and historical tool-call-badge elements disappear.
-  const isReplaying = useChatStore((s) => s.isReplaying)
-  const storeMessageCount = useChatStore((s) => s.messages.length)
-  // replayCompletedForSession tracks whether WS replay finished for the active session.
-  // When set, the REST fallback is skipped even if the store has 0 messages (empty session).
-  const replayCompletedForSession = useChatStore((s) => s.replayCompletedForSession)
-  useEffect(() => {
-    if (!historyData) return
-    // Don't overwrite during replay — WS frames are the source of truth.
-    if (isReplaying) return
-    // Don't overwrite if WS replay already completed for this session.
-    // This gates the fallback more precisely than storeMessageCount > 0 alone —
-    // an empty session would pass the count check but still had a successful replay.
-    if (replayCompletedForSession === activeSessionId) return
-    // Don't overwrite if the store already has messages for this session (replay done).
-    if (storeMessageCount > 0) return
-    // Fallback: REST fetched history before WS replay fired (e.g., WS unavailable).
-    // Filter out tool_call entries that have no role — they crash AssistantUI's convertMessages.
-    const validMessages = historyData.filter(
-      (m: { role?: string }) => m.role === 'user' || m.role === 'assistant' || m.role === 'system',
-    )
-    setMessages(validMessages)
-  }, [historyData, isReplaying, storeMessageCount, replayCompletedForSession, activeSessionId, setMessages])
-
-  // ADR-049 D2/D4/SD-C10 (verdict-card fix): backfill any `judge_verdict`
-  // entries from the REST-fetched transcript, independent of the OVERWRITE
-  // condition above (isReplaying/replayCompletedForSession/storeMessageCount
-  // gate whether `setMessages` replaces the whole bucket) but NOT
-  // independent of timing. WS replay never inserts a judge_verdict entry
-  // into the thread at all (it is a GLOBAL frame routed to the
-  // ActivityPanel only, see chat.ts's `case 'judge_verdict'`), so without
-  // this second, narrower effect a verdict card could never appear in the
-  // thread, reload or not, even though `historyData` carries it
-  // (rawToMessage forwards it).
-  //
-  // The `!isReplaying && storeMessageCount > 0` gate is load-bearing, not
-  // cosmetic — reproduced live against a real gateway: `historyData` (REST)
-  // routinely resolves BEFORE WS attach_session + replay has delivered this
-  // session's own messages. Running the timestamp-positioned merge
-  // (chat.ts's `mergeJudgeVerdictHistory`) against an empty or PARTIAL
-  // bucket has nothing (or too little) to position the verdict against, so
-  // it lands at index 0 (or 1, 2, ... for each subsequent round in the same
-  // pass) — and because the merge dedupes by id, a later re-run once the
-  // rest of replay lands can never CORRECT that first, premature placement.
-  // `!isReplaying` alone is not enough (replay's isReplaying flag is only
-  // raised when the FIRST replay frame arrives — an early-arriving
-  // historyData can slip in before it), and neither is
-  // `replayCompletedForSession` (chat.ts only sets it when a live turn was
-  // announced or at a real turn's done — a completed session's
-  // replay-terminator done NEVER sets it, live-verified). So: wait until
-  // replay is not in flight AND the bucket actually has messages. The
-  // effect re-runs whenever either flips, so the normal sequence
-  // (historyData → isReplaying=true → replay_message* → terminator
-  // isReplaying=false) always lands one run of this with the full bucket.
-  // In the WS-unavailable REST-fallback path, `setMessages` above already
-  // includes verdict entries correctly ordered via its own
-  // `role: 'system'` filter — this effect then finds them already present
-  // and no-ops (mergeJudgeVerdictHistory is id-deduped).
-  useEffect(() => {
-    if (!historyData || !activeSessionId || activeSessionId === '__pending') return
-    if (isReplaying || storeMessageCount === 0) return
-    mergeJudgeVerdictHistory(activeSessionId, historyData)
-  }, [historyData, activeSessionId, isReplaying, storeMessageCount, mergeJudgeVerdictHistory])
+  const historyRead = useChatHistory()
+  const sessionGone = historyRead.sessionGone
 
   const liteMode = useConnectionStore((s) => s.liteMode)
 
@@ -3469,71 +1758,59 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
     // a test can type into the old surface and the message rides the stale
     // session binding — see openSessionByDeepLink in
     // tests/e2e/fixtures/session-setup.ts.
+    <ReplyStatusFallbackProvider>
     <div
       className="flex flex-col absolute inset-0 overflow-hidden"
       data-active-session-id={activeSessionId ?? ''}
     >
-      {/* Agent-removed banner — shown when the session's agent has been deleted (#103) */}
-      {agentRemoved && (
+      {/* Dead-session banner (D5 + C10). Two truths, keyed on what the server
+          actually said: agentRemoved (the agent_removed signal from the
+          session detail) is the only grounds for "Agent removed"; a confirmed
+          404 from the history read proves only that the CHAT is gone, so the
+          copy says exactly that — not "Agent removed". */}
+      {(agentRemoved || sessionGone) && (
         <div
           data-testid="agent-removed-banner"
           className="px-[var(--space-3)] py-[var(--space-2)] bg-[var(--color-error)]/10 border-b border-[var(--color-error)]/20 flex items-center gap-[var(--space-2)]"
         >
           <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] flex-1">
-            Agent removed — this session is read-only
+            {agentRemoved ? 'Agent removed — this session is read-only' : 'This chat no longer exists'}
           </span>
         </div>
       )}
 
-      {/* Task session banner — shown when viewing a task execution transcript */}
-      {attachedSessionType === 'task' && (
-        <div className="px-[var(--space-3)] py-[var(--space-2)] bg-[var(--color-surface-2)] border-b border-[var(--color-border)] flex items-center gap-[var(--space-2)]">
-          <ListChecks size={14} className="text-[var(--color-accent)] shrink-0" />
-          <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] flex-1 truncate">
-            Task: {attachedTaskTitle ?? 'Task Execution'}
-          </span>
-        </div>
-      )}
+      {/* #1449 D13 (founder 2026-10-28): the chat's own chrome — the kind
+          label / helper breadcrumb and "Add participant" — lives in the
+          workspace header line's right-end slot (ChatHeaderSlot), not in a
+          row above the feed. */}
 
-      {/* History fetch error */}
-      {historyError ? (
-        <div className="flex flex-col items-center justify-center flex-1 gap-[var(--space-2-5)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
-          <p>Could not load messages.</p>
-          <Button variant="outline" size="sm" onClick={() => refetchHistory()}>
-            <ArrowCounterClockwise size={14} /> Retry
-          </Button>
-        </div>
-      ) : (
         <ThreadPrimitive.Root className="flex flex-col flex-1 min-h-0">
           {/* ARIA live region: announces new assistant messages to screen readers.
               Only fires when a genuinely new message ID arrives and is complete. */}
           <div aria-live="polite" aria-atomic="true" className="sr-only">
-            {shouldAnnounce && lastAssistantMessage?.status === 'done' && (
+            {shouldAnnounce && lastAssistantMessage?.status === 'done' && !lastAssistantMessage.historyPosition && (
               <span>New response from {activeAgentName}</span>
             )}
           </div>
 
+          <HistoryOpenState read={historyRead} />
           {/* Virtualized message list — only visible rows (+ 5-message overscan) are mounted as DOM nodes. */}
-          {displayMessages.length === 0 ? (
+          {displayMessages.length === 0 && historyRead.showWelcome ? (
             <div className="flex-1 overflow-y-auto pt-[var(--space-3)] pb-[var(--space-2)]">
               <WelcomeState hasAgent={!!activeAgentId} />
             </div>
           ) : (
-            <VirtualizedMessageList messages={displayMessages} liteMode={liteMode} agentName={activeAgentName} />
+            /* key = active session: each chat gets a fresh scroll engine, so switching
+                chats lands at the bottom instead of keeping the previous chat's offset. */
+            <VirtualizedMessageList key={activeSessionId ?? '__none'} messages={displayMessages} liteMode={liteMode} agentName={activeAgentName} openFailed={historyRead.isError} />
           )}
 
-          {/* FR-21: Interrupted-message status markers — rendered inside
-              ThreadPrimitive.Root but OUTSIDE the scrollable Viewport. This
-              position has guaranteed non-zero height because it's in the
-              non-scrolling flex layout between the Viewport and the composer.
-              Playwright locates these elements via text=(interrupted). */}
-          <InterruptedMessageMarkers />
-
           <ChatConnectionNotice />
+          <RestartInterruptedNotice />
 
           {/* Rate-limit indicator — shown above composer. Tool-approval requests
-              (including `bash`) are handled by the global ToolApprovalModal
-              (ADR-036 §3.4 retired the dedicated exec-only approval flow). */}
+              (including `bash`) are handled by the app-wide ToolApprovalModal
+              in L1 stage 1, the inline ToolApprovalPanel later (ADR-036 §3.4 retired the dedicated exec-only approval flow). */}
           {rateLimitEvent && (
             <div className="px-[var(--space-3)] space-y-[var(--space-2)] pb-[var(--space-2)]">
               <RateLimitIndicator
@@ -3543,6 +1820,43 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
                 retryAfterSeconds={rateLimitEvent.retryAfterSeconds}
                 tool={rateLimitEvent.tool}
                 onDismiss={clearRateLimitEvent}
+              />
+            </div>
+          )}
+
+          {/* Provider failover-chain indicator — provider-messages spec §8:
+              the chain's provider_retry countdown, above the composer next to
+              the own-limiter indicator. Parent-level removal only — no
+              dismiss control; Stop is the chain's only early exit. */}
+          {providerRetryEvent && isStreaming && (
+            <div className="px-[var(--space-3)] pb-[var(--space-2)]">
+              <ProviderRetryIndicator
+                provider={providerRetryEvent.provider}
+                model={providerRetryEvent.model}
+                retryAt={providerRetryEvent.retryAt}
+                sentAt={providerRetryEvent.sentAt}
+                receivedAt={providerRetryEvent.receivedAt}
+                attempt={providerRetryEvent.attempt}
+                maxAttempts={providerRetryEvent.maxAttempts}
+                errorCode={providerRetryEvent.errorCode}
+                previousProvider={providerRetryEvent.previousProvider}
+                previousModel={providerRetryEvent.previousModel}
+              />
+            </div>
+          )}
+
+          {/* Issues #1478/#1280 — the "model has gone quiet" notice: the
+              provider_status waiting frame, same above-composer slot. The
+              frame handler clears it on responding/recovered; the streaming
+              gate removes it with the turn. No dismiss control — Stop stays
+              available the whole time (docs/troubleshooting.md). */}
+          {providerStatusEvent && isStreaming && (
+            <div className="px-[var(--space-3)] pb-[var(--space-2)]">
+              <ProviderWaitingIndicator
+                silentSince={providerStatusEvent.silentSince}
+                sentAt={providerStatusEvent.sentAt}
+                receivedAt={providerStatusEvent.receivedAt}
+                stallAt={providerStatusEvent.stallAt}
               />
             </div>
           )}
@@ -3580,6 +1894,16 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
               OmnipusComposer's askLocked). */}
           <AskUserQuestionThreadTail />
 
+          {/* Secure secret card (omnipus-system-agent K1, FR-061/FR-074):
+              pending cards rooted in this chat, plus the latest result.
+              WU-4 enables cards independently of WU-5's private-secrets list. */}
+          {SECRET_CARDS_ENABLED && <SecretRequestThreadTail />}
+
+          {/* Inline tool approvals rooted in this chat (#1263, L1 amendment
+              §1.2 R6) — hidden until WU-8 (stage 2): founder design = card in
+              parent chat, no banner, menu-bar attention animation. */}
+          {INLINE_TOOL_APPROVALS_ENABLED && <ToolApprovalThreadTail />}
+
           {/* Composer — centered, ChatGPT-style floating layout. The context
               row and ActivityBar pills render bare on the shell (above /
               below the card); only the input surface reads as a card. */}
@@ -3591,14 +1915,13 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
                 pointer-events-none on the tray wrapper so it never blocks
                 composer interaction (each pill re-enables pointer events). */}
             <GoalPillTray />
-            {/* Gradient fade above composer */}
-            <div className="absolute -top-8 left-0 right-0 h-8 bg-gradient-to-t from-[var(--color-primary)] to-transparent pointer-events-none" />
+            {/* No gradient fade here: it painted the container's top edge (founder feedback 2026-10-11 p5; ChatScreen.composer-topedge.test.tsx). */}
             <div className="w-full max-w-3xl mx-auto px-[var(--space-3)] pt-[var(--space-2)] pb-[max(var(--space-2),env(safe-area-inset-bottom,var(--space-0)))]">
-              <OmnipusComposer agentRemoved={agentRemoved} />
+              <OmnipusComposer agentRemoved={agentRemoved || sessionGone} />
             </div>
           </div>
         </ThreadPrimitive.Root>
-      )}
     </div>
+    </ReplyStatusFallbackProvider>
   )
 }

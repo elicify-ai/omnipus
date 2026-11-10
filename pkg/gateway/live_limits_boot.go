@@ -106,8 +106,9 @@ func primeUnknownWindows(al windowReloader) {
 		if !ok || inst == nil || !inst.WindowUnknown {
 			continue
 		}
-		provider := agentPrimaryProviderID(cfg, ac)
-		model := agentPrimaryModelID(cfg, ac)
+		// H4: resolve a provider-less stored model to the provider it
+		// runs on, so its unknown window is primed like any other.
+		provider, model := agent.RuntimeWindowPair(cfg, agentPrimaryProviderID(cfg, ac), agentPrimaryModelID(cfg, ac))
 		if provider == "" || model == "" {
 			continue
 		}
@@ -116,6 +117,14 @@ func primeUnknownWindows(al windowReloader) {
 		_ = agent.ResolveWindow(cfg, provider, model, ac.ID)
 	}
 }
+
+// primeUnknownWindowsFn is the primer pass the boot WaitGroup goroutine runs
+// (gateway.go::initializeAgentLoop). It is a variable only so the
+// writer-lifecycle test can hold the pass mid-flight and prove the boot
+// drain's join waits for it — the pass is otherwise unobservable from
+// outside the goroutine, which is exactly the gap the primer WaitGroup
+// mutant exploits. Production always uses the real primeUnknownWindows.
+var primeUnknownWindowsFn = primeUnknownWindows
 
 // providerCredential resolves provider's API key from its configured
 // api_key_ref, or "" when there is none.

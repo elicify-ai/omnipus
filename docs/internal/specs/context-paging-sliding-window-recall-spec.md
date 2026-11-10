@@ -4,6 +4,8 @@
 
 - **Source ADR:** `docs/internal/architecture/ADR-028-context-paging-sliding-window-recall.md` (rev. 3, post re-grill)
 - **Status:** Draft for `/grill-spec` → `/taskify` → implement
+
+Status: Draft
 - **Priority:** P0 (hottest path — every agent turn)
 - **Branch target:** `hotfix/v0.1.1` (operator-directed; v0.3-flavoured, noted)
 

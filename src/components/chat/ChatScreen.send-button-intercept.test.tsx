@@ -50,92 +50,55 @@ import { OmnipusComposer } from './ChatScreen'
 // ChatScreen.tsx's own onClick prop did.
 const mockComposerSend = vi.fn()
 
-vi.mock('@assistant-ui/react', () => {
-  return {
-    useThreadViewportStore: () => ({ getState: () => ({ isAtBottom: true }) }),
-    ThreadPrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Viewport: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Messages: () => null,
-    },
-    MessagePrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Parts: () => null,
-    },
-    ComposerPrimitive: {
-      Root: ({ children, className, onSubmit }: { children: React.ReactNode; className?: string; onSubmit?: (e: React.FormEvent) => void }) =>
-        React.createElement('form', { className, onSubmit, 'data-testid': 'composer-form' }, children),
-      Input: ({ disabled, placeholder, className, onChange, onKeyDown, onBlur }: {
-        disabled?: boolean; placeholder?: string; className?: string;
-        onChange?: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
-        onKeyDown?: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
-        onBlur?: () => void;
-      }) =>
-        React.createElement('textarea', {
-          disabled, placeholder, className,
-          onChange, onKeyDown, onBlur,
-          'data-testid': 'composer-input',
+import { MockButton } from '@/test/assistantUiMock'
+vi.mock('@assistant-ui/react', async () => (await import('@/test/assistantUiMock')).createAssistantUiMock({
+  ThreadPrimitive: {
+    Viewport: ({ children, className }: { children: React.ReactNode; className?: string }) =>
+              React.createElement('div', { className }, children),
+  },
+  ComposerPrimitive: {
+    Root: ({ children, className, onSubmit }: { children: React.ReactNode; className?: string; onSubmit?: (e: React.FormEvent) => void }) =>
+              React.createElement('form', { className, onSubmit, 'data-testid': 'composer-form' }, children),
+    Send: ({ disabled, children, className, 'data-testid': testId, 'aria-label': ariaLabel, onClick }: {
+              disabled?: boolean; children?: React.ReactNode; className?: string;
+              'data-testid'?: string; 'aria-label'?: string; onClick?: (e: React.MouseEvent) => void
+            }) =>
+              React.createElement(MockButton, {
+                type: 'button', disabled, className,
+                'data-testid': testId ?? 'chat-send',
+                'aria-label': ariaLabel,
+                onClick: (e: React.MouseEvent) => {
+                  onClick?.(e)
+                  if (!e.defaultPrevented) {
+                    mockComposerSend()
+                  }
+                }, children: children}),
+    AddAttachment: ({ disabled, children, className, 'aria-label': ariaLabel }: {
+              disabled?: boolean; children?: React.ReactNode; className?: string; 'aria-label'?: string
+            }) =>
+              React.createElement(MockButton, { type: 'button', disabled, className, 'aria-label': ariaLabel, 'data-testid': 'add-attachment', children: children}),
+  },
+  AttachmentPrimitive: {
+    Remove: ({ children, className, 'aria-label': ariaLabel }: { children?: React.ReactNode; className?: string; 'aria-label'?: string }) =>
+              React.createElement(MockButton, { type: 'button', className, 'aria-label': ariaLabel, children: children}),
+  },
+  ActionBarPrimitive: {
+    Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
+              React.createElement('div', { className }, children),
+  },
+  useComposerRuntime: vi.fn(() => ({
+          getState: () => ({ text: '' }),
+          setText: vi.fn(),
+          addAttachment: vi.fn(),
+          subscribe: vi.fn(() => vi.fn()),
+        })),
+  useMessage: () => ({
+          id: 'msg_1',
+          role: 'assistant',
+          status: { type: 'complete' },
+          content: [],
         }),
-      // Reproduces assistant-ui's real createActionButton +
-      // composeEventHandlers(primitiveProps.onClick, callback) contract
-      // (checkForDefaultPrevented=true): the caller's `onClick` (ChatScreen.
-      // tsx's interception) runs FIRST; `mockComposerSend` (standing in for
-      // the real internal `composer.send()`) only runs afterward if that
-      // onClick did NOT call `e.preventDefault()`.
-      Send: ({ disabled, children, className, 'data-testid': testId, 'aria-label': ariaLabel, onClick }: {
-        disabled?: boolean; children?: React.ReactNode; className?: string;
-        'data-testid'?: string; 'aria-label'?: string; onClick?: (e: React.MouseEvent) => void
-      }) =>
-        React.createElement('button', {
-          type: 'button', disabled, className,
-          'data-testid': testId ?? 'chat-send',
-          'aria-label': ariaLabel,
-          onClick: (e: React.MouseEvent) => {
-            onClick?.(e)
-            if (!e.defaultPrevented) {
-              mockComposerSend()
-            }
-          },
-        }, children),
-      AddAttachment: ({ disabled, children, className, 'aria-label': ariaLabel }: {
-        disabled?: boolean; children?: React.ReactNode; className?: string; 'aria-label'?: string
-      }) =>
-        React.createElement('button', { type: 'button', disabled, className, 'aria-label': ariaLabel, 'data-testid': 'add-attachment' }, children),
-      Attachments: () => null,
-    },
-    AttachmentPrimitive: {
-      Root: ({ children, className }: { children?: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Name: () => null,
-      Remove: ({ children, className, 'aria-label': ariaLabel }: { children?: React.ReactNode; className?: string; 'aria-label'?: string }) =>
-        React.createElement('button', { type: 'button', className, 'aria-label': ariaLabel }, children),
-      Thumb: () => null,
-    },
-    MessagePartPrimitive: { InProgress: () => null },
-    ActionBarPrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Copy: ({ children }: { children: React.ReactNode }) => React.createElement('span', {}, children),
-    },
-    AuiIf: () => null,
-    useComposerRuntime: vi.fn(() => ({
-      getState: () => ({ text: '' }),
-      setText: vi.fn(),
-      addAttachment: vi.fn(),
-      subscribe: vi.fn(() => vi.fn()),
-    })),
-    useMessage: () => ({
-      id: 'msg_1',
-      role: 'assistant',
-      status: { type: 'complete' },
-      content: [],
-    }),
-    makeAssistantToolUI: () => () => null,
-  }
-})
+}))
 
 vi.mock('@tanstack/react-query', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-query')>()
@@ -147,7 +110,7 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
     { name: 'cancel',  label: '/cancel',  description: 'Cancel the current turn',     delivery: 'client', available_while_streaming: true  },
   ]
   const mockSkills = [
-    { id: 'web-research',  name: 'Web Research',  version: '1.0', description: 'Web search and extraction', verified: true,  status: 'active' },
+    { has_local_changes: false, id: 'web-research',  name: 'Web Research',  version: '1.0', description: 'Web search and extraction', verified: true,  status: 'active' },
   ]
   return {
     ...actual,
@@ -159,7 +122,7 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
       if (Array.isArray(key) && key[0] === 'skills') {
         return { data: mockSkills, isError: false, refetch: vi.fn() }
       }
-      return { data: [], isError: false, refetch: vi.fn() }
+      return { data: queryDataWithEmptyHistory(key), isError: false, refetch: vi.fn() }
     },
     useMutation: () => ({ mutate: vi.fn(), isPending: false }),
     useQueryClient: () => ({ invalidateQueries: vi.fn(), removeQueries: vi.fn() }),
@@ -175,12 +138,14 @@ vi.mock('@tanstack/react-router', () => ({
 // importOriginal: useSlashMenu calls useChatAgents unconditionally (the "@"
 // mention menu), which needs real `fetchWorkspaces`/`workspacesQueryKeys`/
 // `isWorker` even though this file doesn't exercise mentions.
+import { emptyHistoryPage, queryDataWithEmptyHistory, type HistoryReadPort } from '../../../tests/chat-history-paging/legacy-fixtures'
+
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([]),
-    fetchSessionMessages: vi.fn().mockResolvedValue([]),
+    fetchSessionMessages: vi.fn<HistoryReadPort>(async (sessionId) => emptyHistoryPage(sessionId)),
     fetchCommands: vi.fn().mockResolvedValue([]),
     fetchSkills: vi.fn().mockResolvedValue([]),
     fetchProviders: vi.fn().mockResolvedValue([]),
@@ -192,8 +157,6 @@ vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avata
 vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
 vi.mock('./markdown-text', () => ({ MarkdownText: () => null }))
 vi.mock('./tools/GenericToolCall', () => ({ GenericToolCall: () => null }))
-vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
-vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
 vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 
@@ -222,11 +185,11 @@ function resetStores() {
 
 beforeEach(() => {
   resetStores()
-  mockComposerSend.mockClear()
+  mockComposerSend.mockReset()
 })
 
 describe('Send-button click — client-command interception (bugfixes3 deferred item 1)', () => {
-  it('typing "/clear" (a client command) and clicking Send runs the command locally — nothing is sent', async () => {
+  it('typing "/clear" and clicking Send does not start a new chat', async () => {
     const realStartNewSession = useSessionStore.getState().startNewSession
     const startNewSession = vi.fn()
     act(() => { useSessionStore.setState({ startNewSession }) })
@@ -236,11 +199,17 @@ describe('Send-button click — client-command interception (bugfixes3 deferred 
     // nullish) — mirrors ChatScreen.agents-command.test.tsx's own
     // send-path-interception test, which does the same for the Enter path.
     const { useComposerRuntime } = await import('@assistant-ui/react')
+    let composerText = '/clear'
+    const sentTexts: string[] = []
+    // Observe text at the actual send callback. setText updates live state so
+    // a client rewrite before sending cannot masquerade as an unchanged send.
+    mockComposerSend.mockImplementation(() => { sentTexts.push(composerText) })
     ;(useComposerRuntime as ReturnType<typeof vi.fn>).mockReturnValue({
-      getState: () => ({ text: '/clear' }),
-      setText: vi.fn(),
+      getState: () => ({ text: composerText }),
+      setText: vi.fn((text: string) => { composerText = text }),
       addAttachment: vi.fn(),
       subscribe: vi.fn(() => vi.fn()),
+      send: mockComposerSend,
     })
 
     try {
@@ -251,12 +220,10 @@ describe('Send-button click — client-command interception (bugfixes3 deferred 
       act(() => { fireEvent.change(input, { target: { value: '/clear' } }) })
       act(() => { fireEvent.click(sendButton) })
 
-      // The client command ran locally (runClientCommand's 'clear' branch
-      // calls startNewSession — see useSlashMenu.ts).
-      expect(startNewSession).toHaveBeenCalledTimes(1)
-      // The internal composer.send() callback must NOT have run — the
-      // literal text "/clear" was never dispatched as a chat message.
-      expect(mockComposerSend).not.toHaveBeenCalled()
+      // Founder X3: /clear is server-owned, not a client new-chat command.
+      expect(startNewSession).not.toHaveBeenCalled()
+      expect(mockComposerSend).toHaveBeenCalledTimes(1)
+      expect(sentTexts).toEqual(['/clear'])
     } finally {
       act(() => { useSessionStore.setState({ startNewSession: realStartNewSession }) })
     }
@@ -307,6 +274,9 @@ describe('Send-button click — client-command interception (bugfixes3 deferred 
     const messages = useChatStore.getState().messages
     expect(messages).toHaveLength(1)
     expect(messages[0].role).toBe('system')
+    expect(messages[0].content).toContain('/help')
     expect(messages[0].content).toContain('/clear')
+    expect(messages[0].content).not.toContain('/new')
+    expect(messages[0].content).not.toContain('switch agents')
   })
 })

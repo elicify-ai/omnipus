@@ -1,4 +1,4 @@
-import { makeAssistantToolUI } from '@assistant-ui/react'
+import { makeAssistantToolUI } from '@/lib/assistant-tool-status'
 import { getToolBadgeStatusConfig, isCancelledStatus } from '@/lib/toolStatusConfig'
 import { isFileExistsRefusal } from './toolResultSentinels'
 import { useChatStore } from '@/store/chat'

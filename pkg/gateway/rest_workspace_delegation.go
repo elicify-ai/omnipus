@@ -33,16 +33,22 @@ import (
 // (rest_workspaces.go, x2). Also consumed by defaultWorkspaceDelegationEdges
 // for the ADR-090 FR-006 self-edge pin: a lowered ceiling must clamp a
 // fresh jim→jim / worker→worker depth so Validate cannot drop the edge.
-const delegationDepthCeilingFallback = 3
+const delegationDepthCeilingFallback = 10
 
 var workspaceSaveDelegationFn = workspace.SaveDelegation
 
 // delegationDepthCeiling returns the effective maximum delegation chain depth a
 // caller may request. It uses performance.max_delegation_depth when set (> 0),
-// otherwise the shared default of 3.
+// otherwise the shared default of 10. An invalid (negative) value fails closed: 0, which rejects every positive edge depth, with an ERROR naming the config key.
 func delegationDepthCeiling(cfg *config.Config) int {
 	if cfg != nil {
-		if depth, err := cfg.Performance.EffectiveMaxDelegationDepth(); err == nil && depth > 0 {
+		depth, valid := config.ConfiguredMaxDelegationDepth(cfg.Performance, "gateway workspace delegation edge validation")
+		if !valid {
+			// Invalid limit: a ceiling no positive edge depth satisfies, so a
+			// saved edge cannot be validated against a made-up default.
+			return 0
+		}
+		if depth > 0 {
 			return depth
 		}
 	}
@@ -154,8 +160,11 @@ func (a *restAPI) handleWorkspaceDelegationGet(w http.ResponseWriter, _ *http.Re
 //   - every from_agent / to_agent must be a member of the workspace team
 //     (core_team ∪ existing-edge endpoints) — an edge write may NOT silently
 //     expand the team with an off-team agent
-//   - self-edges are allowed only for Jim and General Purpose (worker)
-//   - excluding those permitted self-edges, the graph must be acyclic
+//   - a same-agent row (from_agent == to_agent) is an ORDINARY edge for any
+//     member (session-core FR-014); the shipped default seeds one self-edge per
+//     agent, except the hidden System Agents
+//   - self-edges are excluded from the acyclicity check, which below rejects
+//     only multi-hop cycles
 //   - modes ⊆ {direct, task}
 //   - depth must be >= 0 and <= the global subturn depth ceiling
 //
@@ -268,9 +277,9 @@ func (a *restAPI) handleWorkspaceDelegationPut(w http.ResponseWriter, r *http.Re
 // workspace directly from coreagent's seeded trust graph (ADR-037, Wave 2).
 // Each core agent ID's coreagent.SeedDelegationEdges result becomes one edge
 // per target, carrying that policy's modes and (for non-self edges) depth.
-// Fresh Jim→Jim and Worker→Worker edges get an explicit max_depth of 3 or
-// the lower configured global ceiling (ADR-090 FR-006) rather than inheriting
-// a raised cap. This keeps a single source of truth: coreagent's seeded trust
+// Fresh self-edges (for ANY agent — the seed gives every agent except the hidden
+// System Agents a self-edge) get an explicit max_depth of 3 or the lower
+// configured global ceiling (ADR-090 FR-006) rather than inheriting a raised cap. This keeps a single source of truth: coreagent's seeded trust
 // graph) is
 // replayed onto the workspace graph so a fresh workspace works out of the box.
 // Remote-a2a refs and wildcard ("*") refs are skipped — they have no concrete
@@ -306,6 +315,22 @@ func defaultWorkspaceDelegationEdges(cfg *config.Config) []storedDelegationEdge 
 	}
 	ceiling := delegationDepthCeiling(cfg)
 	var edges []storedDelegationEdge
+
+	// Ordinary self-rows for every agent on the fresh roster, minus the
+	// operator's exclusion data (config.workspace_seed_defaults.self_edge.
+	// exclude_agent_ids). session-core C-DELEGATE (FR-014/015, BDD-05.7): the
+	// self-edge pre-seed is default CONFIG DATA consumed by the shared
+	// workspace-graph computation — NOT a Go identity predicate. A fresh
+	// workspace introduces its entire roster, so `introduced` is every listed
+	// agent; existing is nil. seedEdgesForTeam below then narrows the result to
+	// the workspace's actual team, so an off-team agent (Admin, the hidden
+	// system agents) never reaches the store.
+	introduced := make([]string, 0, len(cfg.Agents.List))
+	for i := range cfg.Agents.List {
+		introduced = append(introduced, cfg.Agents.List[i].ID)
+	}
+	edges = append(edges, workspace.SelfEdgeSeedRows(introduced, nil, cfg.SelfEdgeExcludeAgentIDSet(), ceiling)...)
+
 	// TestDefaultWorkspaceDelegationEdges_MatchesCoreagentSeed deliberately replays
 	// this exact loop independently (not via a shared helper) so it can catch a
 	// regression in THIS transformation logic; sharing a helper would make that test
@@ -334,7 +359,11 @@ func defaultWorkspaceDelegationEdges(cfg *config.Config) []storedDelegationEdge 
 			modes = append(modes, wm)
 		}
 		for _, ref := range dp.To {
-			if ref.Kind != config.AgentRefKindLocal || ref.ID == "*" || (ref.ID == ac.ID && !workspace.PermittedSelfDelegationID(ac.ID)) {
+			// Self refs are supplied generically by workspace.SelfEdgeSeedRows
+			// above (for every ordinary agent, not just the built-ins whose
+			// policy happens to name themselves); a policy self ref would only
+			// duplicate that row. Cross-agent refs are expanded here.
+			if ref.Kind != config.AgentRefKindLocal || ref.ID == "*" || ref.ID == ac.ID {
 				continue
 			}
 			edges = append(edges, storedDelegationEdge{
@@ -355,11 +384,12 @@ func defaultWorkspaceDelegationEdges(cfg *config.Config) []storedDelegationEdge 
 // that actually exist in the live config so a lite/custom roster never
 // produces a dangling team member.
 //
-// This is NOT used for ordinary user-created workspaces any more — those seed
-// via newWorkspaceSetupTeam (Ava-only + setup_pending) so Ava can interview
-// the user and build out the team herself. defaultWorkspaceTeam remains
-// reserved for ensureDefaultWorkspace's one-time boot seed, which still needs
-// a working full roster out of the box with no interview step.
+// This is NOT used for ordinary user-created workspaces — those start with an
+// empty team that Omnipus builds from its own chat (omnipus-system-agent
+// W1/W18). defaultWorkspaceTeam remains reserved for ensureDefaultWorkspace's
+// one-time boot seed, which still needs a working full roster out of the box
+// with no interview step. Omnipus is on it as an ordinary hidden member
+// (FR-003).
 //
 // Worker is intentionally included. Omitting it used to drop every →worker
 // seed edge in seedEdgesForTeam (both endpoints must be on-team), so Jim/Mia/
@@ -367,59 +397,22 @@ func defaultWorkspaceDelegationEdges(cfg *config.Config) []storedDelegationEdge 
 // though coreagent.SeedDelegationEdges defines those edges. That was UAT
 // DEF-001 (2026-07-13).
 //
-// Admin and the hidden System Agents are intentionally EXCLUDED
-// (coreagent.ExcludedFromWorkspaceTeams, ADR-090 FR-001): Admin is the
-// standalone operator — chat-able core, "no team membership" — so blindly
-// iterating coreagent.All() (which includes Admin) used to seed exactly the
-// membership every write path now refuses.
+// The hidden System Agents are intentionally EXCLUDED
+// (coreagent.ExcludedFromWorkspaceTeams).
 func defaultWorkspaceTeam(cfg *config.Config) []string {
 	if cfg == nil {
 		return nil
 	}
-	present := make(map[string]bool, len(cfg.Agents.List))
+	configuredIDs := make([]string, 0, len(cfg.Agents.List))
 	for i := range cfg.Agents.List {
-		present[cfg.Agents.List[i].ID] = true
+		configuredIDs = append(configuredIDs, cfg.Agents.List[i].ID)
 	}
-	// Display order follows coreagent.All() so the Team tab matches the
-	// Agents library seed order (Mia first, then Jim/Ava/Ray, Worker, then
-	// the three specialists).
-	all := coreagent.All()
-	team := make([]string, 0, len(all))
-	for _, a := range all {
-		id := string(a.ID)
-		if present[id] && !coreagent.ExcludedFromWorkspaceTeams(a.ID) {
-			team = append(team, id)
-		}
-	}
-	return team
-}
-
-// newWorkspaceSetupTeam returns the seed roster for a NEW user-created
-// workspace (POST /api/v1/workspaces with no explicit core_team): just Ava,
-// filtered to whether her ID is actually present in the live config (same
-// presence-filter pattern as defaultWorkspaceTeam, so a lite/custom install
-// that omitted Ava never produces a dangling team member).
-//
-// This is deliberately NOT the full install roster. New workspaces now start
-// with only Ava on the team; she interviews the user and builds out the rest
-// of the team herself (the setup_pending flow — handleWorkspacePost sets
-// ws.SetupPending=true alongside this seed, cleared once the setup kickoff
-// turn is accepted). defaultWorkspaceTeam above remains unchanged and is used
-// exclusively by ensureDefaultWorkspace for the auto-created boot default
-// workspace ("My Workspace"), which still gets the full roster.
-func newWorkspaceSetupTeam(cfg *config.Config) []string {
-	if cfg == nil {
-		return nil
-	}
-	present := make(map[string]bool, len(cfg.Agents.List))
-	for i := range cfg.Agents.List {
-		present[cfg.Agents.List[i].ID] = true
-	}
-	avaID := string(coreagent.IDAva)
-	if !present[avaID] {
-		return nil
-	}
-	return []string{avaID}
+	// The derivation moved to pkg/workspace (founder ruling 2026-10-11) so the
+	// REST PUT's built-in-removal refusal and the update_workspace tool decide
+	// "built-in" from the ONE list; display order is unchanged (it follows
+	// coreagent.All() there just as it did here — Mia first, then Jim/Ava/Ray,
+	// Worker, then the three specialists).
+	return workspace.DefaultWorkspaceTeamIDs(configuredIDs)
 }
 
 // seedEdgesForTeam filters a set of default edges down to those whose endpoints
@@ -543,9 +536,12 @@ func buildWorkspaceDelegationEdges(
 			depth = &d
 		}
 
-		// Single shared authority for the per-edge invariants (non-empty, no
-		// self-edge, endpoints ∈ team, modes ⊆ {direct,task}, depth in
-		// [0, ceiling]). Validate returns the canonical wire messages verbatim, so
+		// Single shared authority for the per-edge invariants (non-empty
+		// endpoints, endpoints ∈ team, modes ⊆ {direct,task}, depth in
+		// [0, ceiling]); a same-agent row (from_agent == to_agent) is an
+		// ORDINARY edge for any member — session-core FR-014 deleted the former
+		// self-edge prohibition, so no self-edge check remains here. Validate
+		// returns the canonical wire messages verbatim, so
 		// the 400 body is byte-identical to the previous inline checks. The
 		// whole-graph acyclicity check stays below (it is graph-level, not
 		// per-edge). Build the candidate stored edge and validate it.
@@ -564,8 +560,12 @@ func buildWorkspaceDelegationEdges(
 	}
 
 	// Rebuild adjacency from the deduplicated edge set, then reject cycles.
+	// A self-edge is a legal ORDINARY edge, not a cycle: skip every diagonal row
+	// so the DFS below still rejects a real multi-hop loop (A→B→A) but never
+	// trips on A→A. The skip is structural — no identity allowlist. Otherwise
+	// every seeded self-row would look like a cycle.
 	for _, e := range out {
-		if e.FromAgent == e.ToAgent && workspace.PermittedSelfDelegationID(e.FromAgent) {
+		if e.FromAgent == e.ToAgent {
 			continue
 		}
 		adj[e.FromAgent] = append(adj[e.FromAgent], e.ToAgent)

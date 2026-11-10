@@ -181,7 +181,16 @@ async function getMermaid() {
         // Brand: Sovereign Deep — Deep Space Black, Liquid Silver text, Forge Gold accent;
         // neutral surfaces (NOT the previous blue-purple #1a1a2e family).
         theme: 'base',
-        flowchart: { curve: 'basis', htmlLabels: true },
+        // Scope the v12 ELK-to-Dagre compatibility settings to the affected types.
+        // A global layout would also override mindmaps' unchanged cose-bilkent default.
+        look: 'classic',
+        flowchart: { layout: 'dagre', curve: 'basis', htmlLabels: true },
+        state: { layout: 'dagre' },
+        class: { layout: 'dagre' },
+        er: { layout: 'dagre' },
+        requirement: { layout: 'dagre' },
+        usecase: { layout: 'dagre' },
+        agentflow: { layout: 'dagre' },
         // Quadrant layout: default padding lets the title clip against the viewBox top
         // and seats the 4 quadrant labels on the divider lines. Reserve top space and
         // push the labels/point-labels off the lines.

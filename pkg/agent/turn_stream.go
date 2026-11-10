@@ -4,7 +4,10 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/session"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/logger"
@@ -81,7 +84,7 @@ func (ts *turnState) stampStreamerProducerAgentID(streamer bus.Streamer) {
 // carries no TurnID at all — confirmed via live verification to break BOTH
 // the frontend's turn_canceled -> assistant-message replay correlation
 // (chatTurnCanceledNoMatch fires on every reload after a mid-stream cancel)
-// and MarkLastEntryTruncated's own turn-scoped backward-walk matching
+// and the former truncation rewrite's own turn-scoped backward-walk matching
 // (pkg/session/unified.go), silently disabling the Truncated flag for every
 // real cancel.
 //
@@ -195,6 +198,38 @@ func (ts *turnState) stampStreamerMessageID(streamer bus.Streamer) {
 	}
 }
 
+// stampStreamerGoalID stamps this turn's captured goal id (session-core
+// FR-039 / C-GOAL) onto a freshly-obtained streamer, before any token can flow
+// through it. Mirrors stampStreamerTurnID exactly.
+//
+// Without this, the live TokenFrame/DoneFrame and the assistant entry
+// wsStreamer.Finalize persists carry no goal_id, so the SPA cannot join the
+// bubble to its own exact keyed goal criteria and falls back to the
+// latest-goal scalar the spec forbids (FR-039). The value is captured ONCE at
+// turn start (turnState.goalID) and never changes, so a later goal's frame can
+// never rebind this turn's output. An empty goalID stamps nothing (UNKNOWN
+// association), unlike SetTurnID/SetMessageID this is a legitimate common
+// value (`no proven goal`), so the empty case is left to the setter's own
+// no-op rather than treated as an error.
+//
+// Uses a type-assertion to an inline interface so bus.Streamer needs no new
+// method — non-webchat streamers (telegram, wecom, sse) are untouched; only
+// wsStreamer implements SetGoalID.
+func (ts *turnState) stampStreamerGoalID(streamer bus.Streamer) {
+	if gid, ok := streamer.(GoalIDStreamer); ok {
+		gid.SetGoalID(ts.goalID)
+	}
+}
+
+// GoalIDStreamer is the optional capability a Streamer implements to receive the
+// goal the turn was dispatched under (FR-039). It is a NAMED, exported interface
+// so the one implementer (the gateway's wsStreamer) can assert it at compile time:
+// a renamed or re-signed SetGoalID there fails the build instead of silently
+// dropping goal_id from stream frames (final-gate M11).
+type GoalIDStreamer interface {
+	SetGoalID(goalID string)
+}
+
 // streamerStatsSetter is an optional interface a Streamer may implement to
 // receive turn-end stats (tokens, cost, duration) before Finalize is called.
 // The ws streamer uses this to populate the "done" frame so the chat UI shows
@@ -256,7 +291,7 @@ type streamerContinuationSetter interface {
 // streamer's own Finalize call is the choke point that actually persists the
 // assistant transcript entry, so it must stamp Truncated/TruncationReason
 // itself, on the SAME write, rather than have finalizeStreamer call
-// MarkLastEntryTruncated AFTER Finalize returns. That post-hoc call was
+// the former post-hoc truncation rewrite AFTER Finalize returns. That post-hoc call was
 // confirmed live-broken two ways: for a D4a zero-content turn, Finalize's own
 // `content != ""` gate wrote no entry at all, so the backward-walk found
 // nothing to flag (silent no-op — replay showed no assistant entry, and the
@@ -286,7 +321,32 @@ type streamOwnershipReleaser interface {
 	ReleaseStreamOwnership()
 }
 
-func (ts *turnState) finalizeStreamer(ctx context.Context) {
+// finalizeStreamer hands the turn's stats, failure flag, truncation reason and
+// final content to the turn's streamer and runs its Finalize — the late write
+// that persists the streamed answer and publishes the done frame. It returns
+// that Finalize's error (#1178, amendment §4.1): finalizeTurn calls it BEFORE
+// building the completed result, so a failed late write becomes the turn's
+// real outcome; runTurn's deferred call (the other exits) discards the error —
+// those turns already end failed/aborted, and the WARN below stays as
+// operator detail there.
+// CallAccountingStreamer receives the exact per-call producer records. It is
+// optional for channels; non-persisting streamers use the turn's own store.
+type CallAccountingStreamer interface {
+	SetCallAccounting(entries []session.TranscriptEntry)
+}
+
+// TurnReasoningStreamer receives the turn's reasoning-token sum over EVERY
+// provider call of the turn (nil when no call reported a count). The calls
+// handed to SetCallAccounting are only the ones still pending at the end: a
+// no-text call (a tool-call response) books its accounting the moment it
+// completes, so a sum over the pending calls alone undercounts the turn
+// (effort-levels S-95, FR-058).
+type TurnReasoningStreamer interface {
+	SetTurnReasoningTokens(n *int)
+}
+
+func (ts *turnState) finalizeStreamer(ctx context.Context) error {
+	accountingErr := ts.callAccountingError()
 	// B4: if the turn has been abandoned, suppress the final "done" frame so
 	// a stuck goroutine cannot send a spurious done signal to the frontend.
 	if ts.abandoned.Load() {
@@ -305,7 +365,7 @@ func (ts *turnState) finalizeStreamer(ctx context.Context) {
 				releaser.ReleaseStreamOwnership()
 			}
 		}
-		return
+		return nil
 	}
 	ts.mu.Lock()
 	s := ts.lastStreamer
@@ -322,6 +382,21 @@ func (ts *turnState) finalizeStreamer(ctx context.Context) {
 	ts.lastStreamer = nil
 	ts.mu.Unlock()
 	if s != nil {
+		if setter, ok := s.(CallAccountingStreamer); ok {
+			pending, seen := ts.takeCallAccounting()
+			if seen {
+				setter.SetCallAccounting(pending)
+			}
+			if rs, ok := s.(TurnReasoningStreamer); ok {
+				rs.SetTurnReasoningTokens(ts.turnReasoningTokens())
+			}
+		} else {
+			accountingErr = errors.Join(accountingErr, ts.flushPendingCallAccounting())
+		}
+	} else {
+		accountingErr = errors.Join(accountingErr, ts.flushPendingCallAccounting())
+	}
+	if s != nil {
 		if setter, ok := s.(streamerStatsSetter); ok {
 			setter.SetTurnStats(tokens, cost, duration)
 		}
@@ -329,7 +404,7 @@ func (ts *turnState) finalizeStreamer(ctx context.Context) {
 			iosetter.SetTurnIOStats(promptTokens, completionTokens, cacheRead, cacheWrite)
 		}
 		if fsetter, ok := s.(streamerFailedSetter); ok {
-			fsetter.SetTurnFailed(failed)
+			fsetter.SetTurnFailed(failed || accountingErr != nil)
 		}
 		// ADR-087 D6.1 (§9 fixed E→C interface): a continued answer's
 		// per-call streamer buffer holds only the LAST round's text — hand
@@ -348,7 +423,7 @@ func (ts *turnState) finalizeStreamer(ctx context.Context) {
 		// assistant transcript entry — including the D4a zero-content case,
 		// which Finalize's own content-gate previously skipped writing an
 		// entry for at all. This REPLACES the old post-hoc
-		// MarkLastEntryTruncated call that used to run AFTER Finalize
+		// the former post-hoc truncation rewrite call that used to run AFTER Finalize
 		// returned: on the streamed path that call either found no entry to
 		// flag (D4a: Finalize wrote nothing) or, worse, walked back and
 		// mis-stamped an EARLIER same-turn narration entry sharing this
@@ -357,7 +432,7 @@ func (ts *turnState) finalizeStreamer(ctx context.Context) {
 		// non-streaming path (loop.go's own write choke point, gated on
 		// !hasActiveStreamer) now has an equivalent single-write fix of its
 		// own — appendAssistantTranscriptTruncated — so neither path calls
-		// MarkLastEntryTruncated post-hoc anymore; this streamer probe only
+		// the former post-hoc truncation rewrite post-hoc anymore; this streamer probe only
 		// covers the streamed case.
 		if truncReason != "" {
 			if tset, ok := s.(streamerTruncationSetter); ok {
@@ -370,7 +445,12 @@ func (ts *turnState) finalizeStreamer(ctx context.Context) {
 		// silently failed against a closed sendCh, leaving the streamer
 		// without any tokens to record.
 		if err := s.Finalize(ctx, finalContent); err != nil {
+			// #1178 (amendment §4.1): the late write's error is returned to the
+			// caller — the turn loop decides the outcome from it. The WARN
+			// stays as operator detail.
 			logger.WarnCF("agent", "Turn-end streaming finalize error", map[string]any{"error": err.Error()})
+			return errors.Join(accountingErr, err)
 		}
 	}
+	return accountingErr
 }

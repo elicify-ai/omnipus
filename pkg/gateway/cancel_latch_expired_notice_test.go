@@ -6,23 +6,22 @@
 // (cancelPreArmTTL) with no turn ever registering to consume it — the user
 // was told "acknowledged" and then never told it didn't happen. This file
 // proves the fix: buildCancelHooks' OnLatchExpired wiring sends an honest
-// ErrorFrame ("did not take effect"), never a second cancel_stage frame
-// (which would over-signal — see the wiring's own doc comment for why
-// cancel_stage's closed {graceful, hard, detached} enum has no member for
-// this case, and why ErrorFrame is the correct existing wire type instead).
+// stop_notice ("did not take effect"), never a terminal chat error or a second
+// cancel_stage frame. The latter's closed {graceful, hard, detached} enum has
+// no member for this case. The historical test identifier is retained below.
 //
 // Two tests, matching the two failure modes CancelHooks.OnLatchExpired must
 // avoid:
 //
 //   - TestHandleCancel_LatchExpiredUnfired_SendsHonestErrorFrame proves the
 //     fix: a latch armed for a session that never registers a turn, once it
-//     ages past cancelPreArmTTL, produces an honest ErrorFrame — not silence,
+//     ages past cancelPreArmTTL, produces an honest stop_notice — not silence,
 //     not a second "graceful" claiming progress that never happened.
 //
 //   - TestHandleCancel_FiredImmediately_NoLatchExpiredFalseAlarm is the
 //     over-signaling guard: an ordinary, immediately-successful cancel
 //     (Fired:true from the start — a live turn was found, no latch ever
-//     armed) must NEVER produce this ErrorFrame, across the whole real
+//     armed) must NEVER produce this false-alarm notice, across the whole real
 //     graceful→hard→detached escalation. Without this test, a wiring bug
 //     that called OnLatchExpired (or an equivalent frame) on every cancel
 //     would ship a false alarm on every successful Stop click.
@@ -30,21 +29,36 @@ package gateway
 
 import (
 	"encoding/json"
+	"testing"
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/notifications"
 )
+
+// configureStopNoticeTestUser makes the live socket authenticate a named
+// recipient through the real auth path instead of anonymous development bypass.
+func configureStopNoticeTestUser(t *testing.T, h *WSHandler) {
+	t.Helper()
+	h.agentLoop.GetConfig().Gateway.Users = []config.UserConfig{{Username: "stop-notice-test-user", TokenHash: mustBcryptHash(t, "dev-token")}}
+	h.notifStore = notifications.NewStore(t.TempDir())
+}
 
 // genericWSTestFrame decodes the union of fields this file's assertions need
 // across multiple frame types (cancel_stage's "stage", error's "message",
 // every frame's "session_id") — replayFrameDecoder (websocket_session_test.go)
 // covers everything except "stage", so a dedicated local decoder is simpler
 // than extending that shared one for a single field only this file needs.
+// not-wire-format: assertion projection, not a product transport type.
 type genericWSTestFrame struct {
-	Type      string `json:"type"`
-	Stage     string `json:"stage,omitempty"`
-	Message   string `json:"message,omitempty"`
-	SessionID string `json:"session_id,omitempty"`
+	Type             string `json:"type"`
+	Stage            string `json:"stage,omitempty"`
+	Message          string `json:"message,omitempty"`
+	SessionID        string `json:"session_id,omitempty"`
+	Body             string `json:"body,omitempty"`
+	NotificationType string `json:"notification_type,omitempty"`
 }
 
 // readAllWSFramesFor drains every frame conn delivers for exactly one bounded

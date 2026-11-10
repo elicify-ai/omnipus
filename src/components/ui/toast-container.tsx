@@ -1,17 +1,20 @@
 import { X, CheckCircle, Warning, WarningCircle } from '@phosphor-icons/react'
 import { useUiStore } from '@/store/ui'
+import { useSessionStore } from '@/store/session'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 
 export function ToastContainer() {
   const { toasts, removeToast } = useUiStore()
+  const activeSessionId = useSessionStore((s) => s.activeSessionId)
+  const visibleToasts = toasts.filter(toast => !toast.sessionId || toast.sessionId === activeSessionId)
 
-  if (toasts.length === 0) return null
+  if (visibleToasts.length === 0) return null
 
   return (
     <div className="fixed bottom-4 right-4 z-[100] flex flex-col gap-[var(--space-2)] max-w-sm w-full pointer-events-none">
-      {toasts.map((toast) => {
+      {visibleToasts.map((toast) => {
         return (
         <div
           key={toast.id}
@@ -28,6 +31,12 @@ export function ToastContainer() {
           // scripts/design-system-locks/controls.mjs, FIX-ROLEBUTTON notes,
           // which name this exact call site).
           role={toast.variant === 'error' ? 'alert' : 'status'}
+          // #1639: a toast sits outside any open sheet or dialog, so a
+          // pointerdown on it (e.g. Dismiss) reached Radix's document-level
+          // outside-press listener and closed the open editor, discarding its
+          // unsaved draft. Pressing a toast is never a request to dismiss the
+          // surface underneath it.
+          onPointerDown={(event) => event.stopPropagation()}
           className={cn(
             'flex items-start gap-[var(--space-2-5)] rounded-lg border px-[var(--space-3)] py-[var(--space-2-5)] shadow-lg pointer-events-auto',
             'animate-in slide-in-from-bottom-2 fade-in',

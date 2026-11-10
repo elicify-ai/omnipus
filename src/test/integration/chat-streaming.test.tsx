@@ -6,6 +6,7 @@ import { useChatStore, makeBucketMessages } from '@/store/chat'
 import type { WsConnection } from '@/lib/ws'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
+import { emptyHistoryFixture } from '../../../tests/chat-history-paging/empty-history'
 import { ChatThread } from '@/components/chat/ChatThread'
 
 // test_chat_streaming_integration (test #24)
@@ -13,9 +14,11 @@ import { ChatThread } from '@/components/chat/ChatThread'
 // Traces to: wave5a-wire-ui-spec.md — Scenario: User sends message and receives streaming response
 //             wave5a-wire-ui-spec.md — Scenario: Cancel during streaming preserves partial response
 
+import { emptyHistoryPage, type HistoryReadPort } from '../../../tests/chat-history-paging/legacy-fixtures'
+
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
-  return { ...actual, fetchSessionMessages: vi.fn().mockResolvedValue([]) }
+  return { ...actual, fetchSessionMessages: vi.fn<HistoryReadPort>(async (sessionId) => emptyHistoryPage(sessionId)) }
 })
 
 function makeClient() {
@@ -181,6 +184,7 @@ describe('cancel integration (test #40)', () => {
       useChatStore.setState({
         sessionsById: {
           'sess_cancel': {
+            ...emptyHistoryFixture(),
             ...makeBucketMessages([cancelMsg]),
             toolCalls: {},
             toolCallOrder: [],

@@ -19,11 +19,15 @@ properties:
       - queued
       - running
       - needs_input
-      - paused
+      - stopped
       - completed
       - failed
-      - cancelled
-      - timed_out
+      - interrupted
+    description: >
+      `interrupted` is a helper session a gateway restart cut off (a lifecycle
+      `failed` record whose failed_reason is `interrupted`; founder rule
+      2026-10-06: a session does not fail because of a restart). `failed` is a
+      genuine failure only.
     example: "running"
   latest_checkpoint_summary:
     type: string

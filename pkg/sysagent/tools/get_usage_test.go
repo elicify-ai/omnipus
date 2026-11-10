@@ -24,14 +24,13 @@ import (
 func makeSession(id, agentID string, tokensIn, tokensOut int, updatedAt time.Time) *session.UnifiedMeta {
 	sm := &session.UnifiedMeta{
 		SessionMeta: session.SessionMeta{
-			ID:            id,
-			AgentID:       agentID,
-			ActiveAgentID: agentID,
-			AgentIDs:      []string{agentID},
-			Status:        "active",
-			Channel:       "webchat",
-			CreatedAt:     updatedAt,
-			UpdatedAt:     updatedAt,
+			ID:        id,
+			AgentID:   agentID,
+			AgentIDs:  []string{agentID},
+			Status:    "active",
+			Channel:   "webchat",
+			CreatedAt: updatedAt,
+			UpdatedAt: updatedAt,
 			Stats: session.SessionStats{
 				TokensIn:    tokensIn,
 				TokensOut:   tokensOut,
@@ -65,7 +64,7 @@ func newTestDepsWithSessions(cfg *config.Config, sessions []*session.UnifiedMeta
 // When get_usage is called,
 // Then an error result with code USAGE_UNAVAILABLE is returned.
 func TestGetUsage_NilListSessions(t *testing.T) {
-	deps, _ := newTestDeps() // newTestDeps does not wire ListSessions
+	deps, _ := newTestDeps(t) // newTestDeps does not wire ListSessions
 	tool := systools.NewUsageQueryTool(deps)
 
 	res := tool.Execute(context.Background(), map[string]any{})

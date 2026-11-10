@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, within } from '@testing-library/react'
 import { act } from 'react'
 import { ToolCallBadge } from './ToolCallBadge'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
@@ -632,11 +632,17 @@ describe('ToolCallBadge — verbose chat gate', () => {
 // hides the raw `set_goal` chip by default — so a worker's own attempt used
 // to vanish entirely from this component's rendering. It now routes to the
 // dedicated UI: the quiet "Goal registration failed" trace for the refusal,
-// the record card for a success, and the ordinary raw badge once verbose
-// chat is on.
+// the record card for a success, plus expandable raw details below that
+// card when verbose chat is on.
 
 describe('ToolCallBadge — set_goal routes to the dedicated goal UI (S11)', () => {
   beforeEach(() => {
+    act(() => {
+      useChatPreferencesStore.setState({ verboseChatEnabled: false })
+    })
+  })
+
+  afterEach(() => {
     act(() => {
       useChatPreferencesStore.setState({ verboseChatEnabled: false })
     })
@@ -657,9 +663,11 @@ describe('ToolCallBadge — set_goal routes to the dedicated goal UI (S11)', () 
     expect(failed).not.toBeNull()
     expect(failed?.textContent).toContain('Goal registration failed')
     expect(container.querySelector('[data-testid="set-goal-failed-detail"]')?.textContent).toContain('owner-session-only')
+    expect(container.querySelector('[data-testid="goal-echo-card"]')).toBeNull()
+    expect(container.querySelector('[data-testid="tool-call-badge"]')).toBeNull()
   })
 
-  it('a successful set_goal step renders the record card', () => {
+  it('verbose OFF: a successful set_goal step renders the record card only', () => {
     const payload = JSON.stringify({
       mode: 'register',
       goal_id: 'goal-badge-1',
@@ -672,11 +680,69 @@ describe('ToolCallBadge — set_goal routes to the dedicated goal UI (S11)', () 
         toolCall={makeToolCall({ tool: 'set_goal', params: { mode: 'register' }, status: 'success', result: { text: payload }, duration_ms: 3 })}
       />,
     )
-    expect(container.querySelector('[data-testid="goal-echo-card"]')).not.toBeNull()
+    expect(container.querySelectorAll('[data-testid="goal-echo-card"]')).toHaveLength(1)
     expect(container.querySelector('[data-testid="goal-echo-statement"]')?.textContent).toBe('Ship the thing.')
+    expect(container.querySelector('[data-testid="tool-call-badge"]')).toBeNull()
   })
 
-  it('verbose chat ON: the ordinary raw badge renders (data-tool="set_goal"), not the dedicated UI', () => {
+  it.each(['live JSON', 'replay envelope'] as const)('verbose ON: a successful %s step keeps the card first and adds expandable raw details', (shape) => {
+    act(() => {
+      useChatPreferencesStore.setState({ verboseChatEnabled: true })
+    })
+    const payload = JSON.stringify({
+      mode: 'register',
+      goal_id: 'goal-badge-verbose',
+      definition: 'Ship the thing.',
+      criteria: [{ text: 'it ships', judgment: 'boolean', status: 'pending' }],
+      dod: [],
+    })
+    const params = { mode: 'register', definition: 'Ship the thing.' }
+    const result = shape === 'live JSON' ? payload : { text: payload }
+    const { container } = render(
+      <ToolCallBadge toolCall={makeToolCall({ tool: 'set_goal', params, status: 'success', result, duration_ms: 3 })} />,
+    )
+    const blocks = Array.from(container.querySelectorAll('[data-testid="goal-echo-card"], [data-testid="tool-call-badge"]'))
+    expect(blocks.map((node) => node.getAttribute('data-testid'))).toEqual(['goal-echo-card', 'tool-call-badge'])
+    expect(screen.getByTestId('goal-echo-statement').textContent).toBe('Ship the thing.')
+    const raw = screen.getByTestId('tool-call-badge')
+    expect(raw).toHaveAttribute('data-tool', 'set_goal')
+    expect(raw.querySelectorAll('pre')).toHaveLength(0)
+    const toggle = within(raw).getByTestId('tool-call-toggle')
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(toggle)
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(Array.from(raw.querySelectorAll('pre'), (node) => node.textContent)).toEqual([
+      JSON.stringify(params, null, 2),
+      shape === 'live JSON' ? payload : JSON.stringify({ text: payload }, null, 2),
+    ])
+  })
+
+  it('keeps the same goal card mounted when verbose chat toggles on and off', () => {
+    const result = JSON.stringify({
+      goal_id: 'goal-badge-toggle',
+      definition: 'Keep the goal visible.',
+      criteria: [{ text: 'the card stays visible', judgment: 'boolean', status: 'pending' }],
+      dod: [],
+    })
+    const { container } = render(
+      <ToolCallBadge toolCall={makeToolCall({ tool: 'set_goal', status: 'success', result })} />,
+    )
+    const card = screen.getByTestId('goal-echo-card')
+    expect(screen.getByTestId('goal-echo-statement').textContent).toBe('Keep the goal visible.')
+    expect(screen.queryByTestId('tool-call-badge')).toBeNull()
+    act(() => {
+      useChatPreferencesStore.setState({ verboseChatEnabled: true })
+    })
+    expect(screen.getByTestId('goal-echo-card')).toBe(card)
+    expect(Array.from(container.querySelectorAll('[data-testid="goal-echo-card"], [data-testid="tool-call-badge"]'), (node) => node.getAttribute('data-testid'))).toEqual(['goal-echo-card', 'tool-call-badge'])
+    act(() => {
+      useChatPreferencesStore.setState({ verboseChatEnabled: false })
+    })
+    expect(screen.getByTestId('goal-echo-card')).toBe(card)
+    expect(screen.queryByTestId('tool-call-badge')).toBeNull()
+  })
+
+  it('verbose chat ON: a failed set_goal keeps the ordinary raw failure display', () => {
     act(() => {
       useChatPreferencesStore.setState({ verboseChatEnabled: true })
     })
@@ -685,6 +751,12 @@ describe('ToolCallBadge — set_goal routes to the dedicated goal UI (S11)', () 
         toolCall={makeToolCall({ tool: 'set_goal', params: { mode: 'register' }, status: 'error', error: 'refused' })}
       />,
     )
-    expect(screen.getByTestId('tool-call-badge')).toHaveAttribute('data-tool', 'set_goal')
+    const raw = screen.getByTestId('tool-call-badge')
+    expect(raw).toHaveAttribute('data-tool', 'set_goal')
+    expect(within(raw).getByText('Failed')).toBeInTheDocument()
+    expect(screen.queryByTestId('goal-echo-card')).toBeNull()
+    expect(screen.queryByTestId('set-goal-failed')).toBeNull()
+    fireEvent.click(within(raw).getByTestId('tool-call-toggle'))
+    expect(within(raw).getByText('refused')).toBeInTheDocument()
   })
 })

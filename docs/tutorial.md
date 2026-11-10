@@ -22,41 +22,41 @@ You need an artificial intelligence provider account or a local provider. Keep i
 
    **If it does not look like that:** Check that the Omnipus process or container is running. If the page does not open, or another app is using port `5000`, follow [troubleshooting](troubleshooting.md).
 
-2. **Create the admin account.** On **What should I call you?**, enter your admin username. Continue to **Set your password**, enter at least eight characters, and enter the same password again.
+2. **Create the admin account and set your preferences.** On **What should I call you?**, enter your admin username. Continue to **Set your password**, enter at least eight characters, and enter the same password again. Continue through the personal-preferences screen: enter your name and choose the tone and level of detail you prefer. Then open **Select your model provider and default model**.
 
-   **What you see:** The wizard advances to **Add a model key**. Password guidance appears while you type.
+   **What you see:** Password guidance appears while you type. After the password, another **What should I call you?** screen asks for your name, **Tone** and **How much detail**. Continuing opens **Select your model provider and default model**.
 
    **If it does not look like that:** Remove any blank username. If you cannot continue from the password screen, check its length and make sure both entries match.
 
-3. **Connect a provider.** Choose a provider on **Add a model key**. Use its sign-in option when offered, or enter its key. Choose a model for your first agent and run **Check connection**.
+3. **Connect a provider.** Choose a provider on **Select your model provider and default model**. Use its sign-in option when offered, or enter its key. Choose **Default model** and run **Check connection** (or **Check sign-in** for a sign-in provider).
 
    **What you see:** A successful check unlocks **Finish**. Select it to create the account, save the provider, and sign you in. The last screen introduces **Mia — Assistant**.
 
    **If it does not look like that:** Read the message beside the connection check. Recopy a rejected key, complete any provider sign-in, or check the custom endpoint when the provider requires one. A local provider must already be running. The [settings](settings.md) page owns the full provider guide.
 
-4. **Have your first conversation with Mia.** Select **Start chatting**. In **My Workspace**, type: `Give me three useful ways to test this workspace.` Send the message.
+4. **Have your first conversation with Mia.** Select **Start chatting**, then open the sidebar and select **Mia** under **My Workspace**. In Mia's chat, type: `Give me three useful ways to test this workspace.` Send the message once the chat is available.
 
-   **What you see:** The **Chat** tab opens with Mia selected in the agent picker. Mia's answer appears in the conversation.
+   **What you see:** There is no agent picker beside the message box. Selecting **Mia** opens her main chat when the matching server update is available. If it says **Main chat unavailable**, select **Retry**; [workspaces](workspaces.md) explains unavailable chats. Mia's answer appears in the conversation.
 
    **If it does not look like that:** If the composer says it is connecting, wait for the connection before sending. If sending fails, return to the provider check in Settings and confirm that the selected model is available.
 
 5. **Create a workspace for real work.** Open the sidebar and select **New workspace**. Name it `First project` and confirm the name.
 
-   **What you see:** Omnipus opens the new workspace on its **Chat** tab. Its other tabs are **Tasks**, **Calendar**, **Library**, and **Team**. Select the workspace name to open its Settings. [Workspaces](workspaces.md) explains what belongs inside one.
+   **What you see:** Omnipus opens the new workspace on **Chat**, its base page. The workspace bar offers **Tasks**, **Calendar**, **Library**, **Mail**, and **Team** as panel toggles. Select the workspace name, or **Settings** in the compact panels menu, to open workspace settings. [Workspaces](workspaces.md) explains what belongs inside one.
 
    **If it does not look like that:** A blank name cannot be saved. If creation fails, keep working in **My Workspace** and retry after checking the error message.
 
-6. **Create a teammate agent.** Open **Agents** from the sidebar and select **+ New Main**. On **Identity**, give the agent a name, short description, and a model from your connected provider. On **Personality**, write a direct instruction such as `You turn research into short, factual briefings.` Review **Tools**, then select **Create agent**.
+6. **Create a teammate agent with Omnipus.** Your provider from step 1 must be working first — Omnipus uses a model to plan the agent. In `First project`, open **Team**, select **Add agent**, then **Create with Omnipus**. (The **Add agent** row under the workspace in the sidebar does the same.) Omnipus's chat opens with "Create an agent in First project" already sent. Answer its questions — for example, that the agent turns research into short, factual briefings — and choose **Go** on its summary.
 
-   **What you see:** The new agent appears in the Agents list. The wizard shows **Identity**, **Personality**, and **Tools** as its three steps.
+   **What you see:** You stay in `First project`; Omnipus's chat opens from its entry at the top of the sidebar. After **Go**, Omnipus reports each part (created, joined the team, main chat ready) as working or not, and the new agent appears on `First project`'s **Team** list and under the workspace in the sidebar.
 
-   **If it does not look like that:** **Next** stays unavailable until the required fields on that step are complete. If no model appears, reconnect a provider in Settings. If creation fails, leave the advanced options unchanged and retry with the required fields only. See [agents](agents.md) before choosing a different agent type.
+   **If it does not look like that:** If Omnipus says no model works, fix the provider in **Settings → Providers**, or Omnipus's own model in **Settings → System agents**, then try again. If the entry says **Omnipus unavailable**, select **Retry**. See [Omnipus](using-omnipus-ui.md#omnipus).
 
-7. **Add the agent to your workspace team.** Return to `First project`, open **Team**, and select **Add agent**. Choose the agent you created.
+7. **Or add an agent you already have.** In **Team**, select **Add agent**, then **Add an existing agent**, and choose one from the list. The **Not in any workspace** badge is based on the loaded active-workspace list; archived memberships can still exist. Check archived teams before relying on it as proof that an agent is unassigned.
 
-   **What you see:** The agent appears in **Team & delegation**. It also becomes available where the workspace asks you to choose an agent.
+   **What you see:** The agent appears on the **Team** list with a short "Added" notice and **Undo**. It also becomes available where the workspace asks you to choose an agent.
 
-   **If it does not look like that:** The picker only offers agents that are not already on the team. Return to **Agents** and confirm that your new agent exists, then reopen the Team tab. [Workspaces](workspaces.md) covers team membership and delegation.
+   **If it does not look like that:** The list offers only agents that are not already on the team. If the change says it was **not confirmed**, select **Retry**. [Workspaces](workspaces.md) covers team membership and delegation.
 
 8. **Give the agent a task.** Open **Tasks**, choose **Board**, and select **New task**. Enter a short title and a concrete goal. Add at least one acceptance criterion and one definition-of-done item. Choose your new agent, then select **Create & Run**.
 
@@ -72,7 +72,7 @@ You need an artificial intelligence provider account or a local provider. Keep i
 
    **If it does not look like that:** Refresh the workspace if the Board stops updating. Open the task detail before rerunning anything: it may be waiting for an approval or information from you. Use [tasks](tasks.md) for recovery choices.
 
-10. **Set one goal in chat.** Return to the workspace **Chat** tab, choose Mia or your new agent, and send a goal command. For example: `/goal Produce a final customer interview brief with five questions and an opening script.`
+10. **Set one goal in chat.** Close the open workspace panel to return to **Chat**, choose Mia or your new agent, and send a goal command. For example: `/goal Produce a final customer interview brief with five questions and an opening script.`
 
     **What you see:** The goal starts immediately. Chat shows goal-specific progress while the agent frames the goal and its acceptance criteria. The active goal remains visible while work continues.
 
@@ -89,16 +89,16 @@ The table below shows the trail you should have after this walkthrough.
 | You created | Where you can find it | What confirms it worked |
 |---|---|---|
 | Admin account and provider | Settings | You can sign in and Mia can answer |
-| `First project` workspace | Sidebar | Its Chat, Tasks, Calendar, Library, Team, and Settings tabs open |
-| Teammate agent | Agents and the workspace Team tab | The agent is available for workspace work |
-| First task | Workspace Tasks tab | Its Board card reaches a final status |
-| First goal | Workspace Chat tab | Chat reports a met or not-met outcome |
+| `First project` workspace | Sidebar | Chat opens; Tasks, Calendar, Library, Mail and Team toggle panels; the workspace name or compact-menu Settings opens workspace settings |
+| Teammate agent | Agents and the workspace Team panel | The agent is available for workspace work |
+| First task | Workspace Tasks panel | Its Board card reaches a final status |
+| First goal | Workspace Chat | Chat reports a met or not-met outcome |
 
 ## Limits and things to watch
 
 - This walkthrough uses a small, reversible task. Review provider permissions, agent tools, and workspace access before assigning sensitive work.
 - A task and a goal are related but different. The task is a Board item. The chat goal is a running outcome that the Judge checks. Follow [tasks](tasks.md) and [goals](goals.md) for their separate controls.
-- Creating an agent does not add it to every workspace. Add it from the workspace's Team tab where you want it to work.
+- Creating an agent does not add it to every workspace. Add it from the workspace's Team panel where you want it to work.
 - Provider errors can appear after setup if a key expires, a model becomes unavailable, or the provider limits requests. Recheck the provider in Settings before changing the task.
 - **Done** is final for a task. Read the task detail and result before deciding whether you need a new task.
 

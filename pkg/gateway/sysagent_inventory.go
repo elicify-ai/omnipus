@@ -4,6 +4,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // sysagentAgentConfigInventory snapshots installed skills and live connector
@@ -43,6 +44,23 @@ func sysagentAgentConfigInventory(rc *runContextWithOptions) systools.AgentConfi
 		inv.Skills[id] = struct{}{}
 	}
 	return inv
+}
+
+// sysagentToolCatalog reads existing metadata without constructing new tools
+// or executing them. Resolve the registries at call time so MCP reconnects
+// and the boot-time builtin registry replacement are reflected immediately.
+func sysagentToolCatalog(rc *runContextWithOptions) []tools.Tool {
+	if rc == nil || rc.centralBuiltinReg == nil {
+		return nil
+	}
+	catalog := rc.centralBuiltinReg.All()
+	if len(catalog) == 0 {
+		return nil
+	}
+	if rc.centralMCPReg != nil {
+		catalog = append(catalog, rc.centralMCPReg.All()...)
+	}
+	return catalog
 }
 
 func sysagentAgentIsLive(rc *runContextWithOptions, id string) bool {

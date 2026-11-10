@@ -129,9 +129,14 @@ func newTestRestAPI(t *testing.T) (*restAPI, func()) {
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 
+	// homePath is the test's own temp home. Left empty, handlers that read the
+	// entity store (listAgents) resolved "entities/agents" against the working
+	// directory and left <id>.lock files under pkg/gateway (see TestMain's leak
+	// guard).
 	api := &restAPI{
 		agentLoop:     al,
 		allowedOrigin: "http://localhost:3000",
+		homePath:      tmpDir,
 	}
 	return api, func() {}
 }
@@ -166,7 +171,7 @@ func TestAgentListStatus_CoreAgentNeverDraft(t *testing.T) {
 	}
 	coreagent.SeedConfig(cfg)
 	al := mustAgentLoop(t, cfg, bus.NewMessageBus(), &restMockProvider{})
-	api := &restAPI{agentLoop: al}
+	api := &restAPI{agentLoop: al, homePath: tmpDir} // own temp home: see TestMain's leak guard
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/agents", nil)
@@ -214,7 +219,7 @@ func TestAgentListStatus_CustomAgentIdle(t *testing.T) {
 	}
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
-	api := &restAPI{agentLoop: al}
+	api := &restAPI{agentLoop: al, homePath: tmpDir} // own temp home: see TestMain's leak guard
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/agents", nil)
@@ -269,37 +274,6 @@ func TestAgentListStatus_CustomAgentActive(t *testing.T) {
 }
 
 // --- Tool Visibility Endpoints (Issue #41) ---
-
-// TestHandleBuiltinToolsDeprecated_Returns404 verifies GET /api/v1/tools/builtin
-// now returns 404 — the legacy catalog endpoint was removed in the central tool
-// registry redesign (FR-029). Callers must use GET /api/v1/tools instead.
-// Traces to: central tool registry redesign spec — FR-029.
-func TestHandleBuiltinToolsDeprecated_Returns404(t *testing.T) {
-	api, cleanup := newTestRestAPI(t)
-	defer cleanup()
-
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, "/api/v1/tools/builtin", nil)
-	api.HandleBuiltinToolsDeprecated(w, r)
-
-	require.Equal(t, http.StatusNotFound, w.Code)
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
-	assert.Contains(t, body, "error")
-}
-
-// TestHandleBuiltinToolsDeprecated_AnyMethodReturns404 verifies all HTTP methods
-// return 404 on the deprecated endpoint.
-func TestHandleBuiltinToolsDeprecated_AnyMethodReturns404(t *testing.T) {
-	api, cleanup := newTestRestAPI(t)
-	defer cleanup()
-
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/tools/builtin", nil)
-	api.HandleBuiltinToolsDeprecated(w, r)
-
-	assert.Equal(t, http.StatusNotFound, w.Code)
-}
 
 // TestAgent_MemoryEnabled_DefaultsTrueAndRoundTripsOnPUT proves the
 // ADR-052 FR-039 memory_enabled wire field: (1) an agent with no persisted

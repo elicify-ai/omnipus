@@ -21,6 +21,13 @@ import (
 
 // --- MCP Servers ---
 
+// mcpTestFailureText logs the real cause of an MCP connection-test failure and
+// returns the fixed diagnostic for the HTTP 200 response.
+func mcpTestFailureText(text, id string, cause error) string {
+	slog.Warn("rest: mcp server test failed", "id", id, "error", cause)
+	return text + "; details are in the server log."
+}
+
 // HandleMCPServers handles GET/POST /api/v1/mcp-servers and DELETE /api/v1/mcp-servers/{id}.
 // GET returns McpServer[] shaped from cfg.Tools.MCP.Servers (contracts/components/schemas/McpServer.yaml).
 // POST accepts McpServerCreate (contracts/components/schemas/McpServerCreate.yaml) and
@@ -65,19 +72,37 @@ func (a *restAPI) HandleMCPServers(w http.ResponseWriter, r *http.Request) {
 // mcpLiveStatus maps AgentLoop.MCPServerStatus's live status string
 // ("connected"|"error"|"disconnected") to the generated McpServerStatus enum,
 // alongside the live tool_count (entries this server has in the central MCP
-// registry; 0 when unset or not connected). addMCPServer, patchMCPServer, and
-// listMCPServers all derive status/tool_count through this single path so the
-// three endpoints never disagree on what "connected" means.
-func (a *restAPI) mcpLiveStatus(name string) (gen.McpServerStatus, int) {
-	status, toolCount, _ := a.agentLoop.MCPServerStatus(name)
+// registry; 0 when unset or not connected) and the ref-naming error reason
+// (#1277) surfaced through McpServer.status_reason when the status is error.
+// addMCPServer, patchMCPServer, and listMCPServers all derive
+// status/tool_count/reason through this single path so the three endpoints
+// never disagree on what "connected" — or "error, because which secret" —
+// means.
+func (a *restAPI) mcpLiveStatus(name string) (gen.McpServerStatus, int, string) {
+	status, toolCount, reason := a.agentLoop.MCPServerStatus(name)
 	switch status {
 	case "connected":
-		return gen.McpServerStatusConnected, toolCount
+		return gen.McpServerStatusConnected, toolCount, ""
 	case "error":
-		return gen.McpServerStatusError, toolCount
+		return gen.McpServerStatusError, toolCount, reason
 	default:
-		return gen.McpServerStatusDisconnected, toolCount
+		return gen.McpServerStatusDisconnected, toolCount, ""
 	}
+}
+
+// mcpStatusReason builds the optional status_reason pointer: present only for
+// an error status, never empty, and capped to the contract's 1000-character
+// bound (WU-0a McpServer.status_reason maxLength).
+func mcpStatusReason(status gen.McpServerStatus, reason string) *string {
+	if status != gen.McpServerStatusError || strings.TrimSpace(reason) == "" {
+		return nil
+	}
+	if runes := []rune(reason); len(runes) > 1000 {
+		truncated := string(runes[:1000])
+		return &truncated
+	}
+	r := reason
+	return &r
 }
 
 // listMCPServers reads configured MCP servers from config and returns them as
@@ -114,7 +139,7 @@ func (a *restAPI) listMCPServers(w http.ResponseWriter, _ *http.Request) {
 		// these are the SAME registry instance (gateway.go wires both to
 		// centralMCPReg), but keeping this path independent matches the existing
 		// GET /mcp-servers/{id}/tools contract, which also reads a.mcpRegistry.
-		status, _ := a.mcpLiveStatus(name)
+		status, _, reason := a.mcpLiveStatus(name)
 		toolCount := 0
 		var toolNames []string
 		if a.mcpRegistry != nil {
@@ -127,12 +152,13 @@ func (a *restAPI) listMCPServers(w http.ResponseWriter, _ *http.Request) {
 		}
 
 		entry := gen.McpServer{
-			Id:        name,
-			Name:      name,
-			Transport: transport,
-			Status:    status,
-			ToolCount: toolCount,
-			Enabled:   &enabled,
+			Id:           name,
+			Name:         name,
+			Transport:    transport,
+			Status:       status,
+			StatusReason: mcpStatusReason(status, reason),
+			ToolCount:    toolCount,
+			Enabled:      &enabled,
 		}
 		if len(toolNames) > 0 {
 			sort.Strings(toolNames)
@@ -303,7 +329,7 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 			credKey := mcpEnvCredKey(req.Name, key)
 			if _, err := a.storeCredential(credKey, value); err != nil {
 				slog.Error("rest: add mcp server: store env credential", "server", req.Name, "env_key", key, "error", err)
-				jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not store env credential %q: %v", key, err))
+				jsonServerFailure(w, http.StatusInternalServerError, "could not store an env credential", err)
 				return
 			}
 			envRefs[key] = credKey
@@ -417,7 +443,7 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		slog.Error("rest: add mcp server", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
 		return
 	}
 	// Config write succeeded — reconcile the live manager so the server actually
@@ -440,13 +466,14 @@ func (a *restAPI) addMCPServer(w http.ResponseWriter, r *http.Request) {
 	default:
 		respTransport = gen.McpServerTransportStdio
 	}
-	status, toolCount := a.mcpLiveStatus(req.Name)
+	status, toolCount, reason := a.mcpLiveStatus(req.Name)
 	resp := gen.McpServer{
-		Id:        req.Name,
-		Name:      req.Name,
-		Transport: respTransport,
-		Status:    status,
-		ToolCount: toolCount,
+		Id:           req.Name,
+		Name:         req.Name,
+		Transport:    respTransport,
+		Status:       status,
+		StatusReason: mcpStatusReason(status, reason),
+		ToolCount:    toolCount,
 	}
 	jsonCreated(w, resp)
 }
@@ -643,7 +670,7 @@ func (a *restAPI) deleteMCPServer(w http.ResponseWriter, r *http.Request, id str
 		return nil
 	}); err != nil {
 		slog.Error("rest: delete mcp server", "id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
 		return
 	}
 	if !found {
@@ -728,7 +755,7 @@ func (a *restAPI) testMCPServer(w http.ResponseWriter, r *http.Request, id strin
 	if err != nil {
 		jsonOK(w, gen.McpServerTestResponse{
 			Success: false,
-			Message: fmt.Sprintf("env_file: %s", err.Error()),
+			Message: mcpTestFailureText("env_file could not be resolved. Check the env_file path and its permissions", id, err),
 		})
 		return
 	}
@@ -744,7 +771,7 @@ func (a *restAPI) testMCPServer(w http.ResponseWriter, r *http.Request, id strin
 	if err != nil {
 		jsonOK(w, gen.McpServerTestResponse{
 			Success: false,
-			Message: fmt.Sprintf("env credential reference: %s", err.Error()),
+			Message: mcpTestFailureText("an environment credential reference could not be resolved. Check that each referenced credential exists", id, err),
 		})
 		return
 	}
@@ -778,7 +805,7 @@ func (a *restAPI) testMCPServer(w http.ResponseWriter, r *http.Request, id strin
 	if err := tmpMgr.ConnectServer(ctx, id, resolvedSrv); err != nil {
 		resp := gen.McpServerTestResponse{
 			Success: false,
-			Message: fmt.Sprintf("connection failed: %s", err.Error()),
+			Message: mcpTestFailureText("connection failed: the server did not start or did not answer. Check its command, arguments and environment", id, err),
 		}
 		jsonOK(w, resp)
 		return
@@ -1027,7 +1054,7 @@ func (a *restAPI) patchMCPServer(w http.ResponseWriter, r *http.Request, id stri
 			return
 		}
 		slog.Error("rest: patch mcp server", "id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
 		return
 	}
 	// Config write succeeded — reconcile the live manager so an edited server
@@ -1048,14 +1075,15 @@ func (a *restAPI) patchMCPServer(w http.ResponseWriter, r *http.Request, id stri
 		transport = gen.McpServerTransportHttp
 	}
 	enabled := updatedEntry.Enabled
-	status, toolCount := a.mcpLiveStatus(id)
+	status, toolCount, reason := a.mcpLiveStatus(id)
 	resp := gen.McpServer{
-		Id:        id,
-		Name:      id,
-		Transport: transport,
-		Status:    status,
-		ToolCount: toolCount,
-		Enabled:   &enabled,
+		Id:           id,
+		Name:         id,
+		Transport:    transport,
+		Status:       status,
+		StatusReason: mcpStatusReason(status, reason),
+		ToolCount:    toolCount,
+		Enabled:      &enabled,
 	}
 	jsonOK(w, resp)
 }

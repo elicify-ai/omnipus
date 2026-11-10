@@ -1,0 +1,42 @@
+title: HelperEvent
+description: >
+  An immutable helper event shown in the addressed chat independently of the
+  model's reply. Source-event identity plus destination transcript determines
+  the message id. Live, replay and cold load carry the same filtered payload.
+type: object
+additionalProperties: false
+required:
+  - helper_session_id
+  - kind
+  - text
+  - created_at
+properties:
+  helper_session_id:
+    type: string
+    minLength: 1
+  helper_title:
+    type: string
+    minLength: 1
+  kind:
+    type: string
+    enum:
+      - verdict_unmet
+      - not_verified
+      - stopped
+      - restarted
+      - resume_refused
+      - timed_out
+      - finished
+      - question
+      - blocker
+      - failed
+  text:
+    type: string
+    minLength: 1
+    description: Sensitive-data-filtered sentence saved before live publication.
+  goal_id:
+    type: string
+    minLength: 1
+  created_at:
+    type: string
+    format: date-time

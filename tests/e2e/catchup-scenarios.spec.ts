@@ -29,9 +29,14 @@
  * auto-reconnect/reattach to the SAME session all verified (see `h`'s own
  * comment for the `restart({relogin:false})` harness-bug fix that came out
  * of that pass). Pass 3 still could not reliably catch a turn genuinely
- * mid-answer at kill time — z-ai/glm-5.2 answers fast enough in this
- * environment that three different timing strategies produced three
- * different outcomes. Pass 4 closes that gap with the backend's new
+ * mid-answer at kill time — the then-configured model answered fast enough
+ * in that environment that three different timing strategies produced three
+ * different outcomes. The central e2e model (tests/e2e/e2e-model.json, see
+ * fixtures/e2e-model.ts) streams
+ * much more slowly (measured full real turns ran 17s-1.8m across scenarios
+ * a-f, 2026-09-27 local run), which widens the window, and pass 4's
+ * stream-delay knob makes it model-independent anyway. Pass 4 closed that
+ * gap with the backend's
  * test-only knob, `OMNIPUS_TEST_ONLY_STREAM_TOKEN_DELAY_MS`
  * (`pkg/gateway/ws_session_hub.go`'s `streamTokenDelayEnvOverrideVar`,
  * read once at gateway start): set to 300ms on `h`'s OWN `GatewayProcess`
@@ -39,33 +44,33 @@
  * after each published token, so the turn now stays genuinely mid-stream
  * for many seconds — plenty of margin for kill9()/restart() and a
  * Playwright poll, without touching the assertion itself.
+ *
+ * STATUS (#1661, 2026-11-06): the token-delay knob is retired for b/c/h.
+ * The held-stream provider (fixtures/held-stream-provider.ts) scripts the
+ * stream itself and holds the mid-turn window open by construction, so the
+ * mid-turn gates no longer depend on any model's emission profile (on the
+ * CI primary model the whole answer used to arrive only at completion).
  */
 
 import { expect, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
-import { chatInput, waitForConnected, startNewChat, assistantMessages, userMessages } from './fixtures/selectors'
+import { chatInput, waitForConnected, assistantMessages, userMessages } from './fixtures/selectors'
+import { freshChat, openSessionByDeepLink, originOf } from './fixtures/session-setup'
 import { installFreezeProxy } from './helpers/freezeProxy'
 import { GatewayProcess } from './fixtures/gateway-process'
+import { E2E_FALLBACK } from './fixtures/e2e-model'
+import {
+  attachHeldStreamEvidence,
+  expectTurnHeldMidStream,
+  startHeldStreamProvider,
+  type HeldStreamProvider,
+} from './fixtures/held-stream-provider'
 
 const stopButton = (page: Page) => page.locator('[data-testid="stop-btn"]')
 const assistantConnectionStatus = (page: Page) => page.getByTestId('assistant-connection-status')
 
 const LONG_PROMPT =
   'Do NOT use any tools. Plain prose only. Write eight short paragraphs about the tide, about 600 words total.'
-
-// Scenario h only: real-browser follow-up (orchestrator) — the ordinary
-// LONG_PROMPT above genuinely raced kill9() in practice against a fast
-// model (z-ai/glm-5.2 completed the full ~600-word answer, `done` and all,
-// before this test's kill9()/restart() cycle finished — confirmed by a
-// local run whose failure screenshot showed a COMPLETE, model-footer-
-// stamped answer with no "Generate again", i.e. nothing was actually
-// interrupted, not a real product bug). Item h's whole premise is a turn
-// that is GENUINELY still in flight at the moment of the crash, so this
-// scenario alone asks for a much longer answer to widen that window well
-// past kill9()'s own real-world latency (SIGKILL + wait-for-exit + re-spawn
-// + health-check).
-const VERY_LONG_PROMPT =
-  'Do NOT use any tools. Plain prose only. Write twenty long, detailed paragraphs about the history and science of tides, at least 3000 words total.'
 
 // Real-browser follow-up (orchestrator): assertNoDuplicateOrGapText compared
 // the whole bubble's innerText, which includes bubble CHROME (the model
@@ -85,22 +90,66 @@ const VERY_LONG_PROMPT =
 async function bubbleText(row: import('@playwright/test').Locator): Promise<string> {
   return row.evaluate((el) => {
     const clone = el.cloneNode(true) as HTMLElement
-    clone.querySelectorAll('[data-testid="message-model"]').forEach((n) => n.remove())
+    // Chrome with its own testid: model footer (MessageItem/ChatScreen
+    // "Mirrors MessageItem.tsx" pair), the agent name above assistant
+    // messages, participant/reply headers, and the connection-status chip.
+    clone
+      .querySelectorAll(
+        '[data-testid="message-model"], [data-testid="agent-label"], ' +
+          '[data-testid="participant-label"], [data-testid="reply-header"], ' +
+          '[data-testid="assistant-connection-status"]',
+      )
+      .forEach((n) => n.remove())
+    // Volatile status phrases WITHOUT a testid (AgentStatusIndicator.tsx
+    // exports: IDLE_STATUS_TEXT, UNAVAILABLE_STATUS_TEXT; plus the
+    // thinking placeholder): they prefix the row text and CHANGE across the
+    // exact events this file tests (a network cut flips Idle →
+    // Unavailable/reconnecting), so a whole-row read compared status chrome,
+    // not content — scenario (a) failed on before="AvaIdleThe tide…" vs
+    // after="AvaUnavailable/reconnectingThe tide…" while the essay itself
+    // was byte-identical across the cut (measured locally, lane nav-e2e-ff).
+    // EXACT-text match only, so essay words are never touched.
+    const statusPhrases = new Set(['Idle', 'Unavailable/reconnecting', 'Thinking...'])
+    clone.querySelectorAll('span, div').forEach((n) => {
+      if (statusPhrases.has((n.textContent ?? '').trim()) && n.children.length === 0) n.remove()
+    })
+    // The message text itself renders inside MessageBubble's `.prose-sm`
+    // div on historical rows (MessageItem.tsx — the only prose-sm in
+    // src/components/chat); the live AssistantUI row has none, so read the
+    // chrome-stripped remainder there.
+    const bubbles = Array.from(clone.querySelectorAll('.prose-sm'))
+    if (bubbles.length > 0) return bubbles.map((n) => (n as HTMLElement).innerText).join('\n')
     return (clone as HTMLElement).innerText
   })
 }
 
-async function startLongTurn(page: Page, prompt: string = LONG_PROMPT): Promise<string> {
+async function startLongTurn(
+  page: Page, prompt: string = LONG_PROMPT, options: { requireRunning?: boolean } = {},
+): Promise<string> {
   const input = chatInput(page)
   await expect(input).toBeVisible({ timeout: 15_000 })
   await waitForConnected(page)
-  await startNewChat(page)
+  await freshChat(page)
   await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
+  // Bounded (fail fast): an unbounded fill/press rides the locator default
+  // (config sets no actionTimeout) out to the whole test timeout when a modal
+  // or a dead composer blocks it — the same fail-slow class that burned the
+  // llm-agents shard (run 38112714098). The composer was already asserted
+  // visible+enabled above, so 15s is generous headroom, not a new budget.
   await input.fill(prompt)
-  await input.press('Enter')
+  await input.press('Enter', { timeout: 15_000 })
   await expect(stopButton(page)).toBeVisible({ timeout: 30_000 })
-  const row = assistantMessages(page).first()
+  // A completed-only selector waits for done before returning, so it cannot
+  // establish the mid-turn precondition b/c require. Other cases retain their
+  // existing completed-content baseline until their own coverage is audited.
+  const row = options.requireRunning
+    ? page.locator('[data-message-id]:not(.flex-row-reverse)').first()
+    : assistantMessages(page).first()
   await expect.poll(async () => (await bubbleText(row).catch(() => '')).trim().length, { timeout: 60_000 }).toBeGreaterThan(80)
+  if (options.requireRunning) {
+    await expect(row, 'real content has arrived while the assistant is still streaming').toHaveAttribute('data-status', 'running')
+    await expect(stopButton(page)).toBeVisible()
+  }
   return (await bubbleText(row)).trim()
 }
 
@@ -135,120 +184,32 @@ async function waitTurnDoneAfterReload(page: Page) {
   await waitTurnDone(page)
 }
 
-// Sidebar toggle: ScreenHeader.tsx's hamburger, aria-label="Toggle
-// navigation sidebar" (NOT the "sidebar-toggle" testid the previous draft
-// of this scenario guessed at and silently swallowed the failure of via
-// `.catch(() => {})` — that selector does not exist in the app).
-const sidebarToggle = (page: Page) => page.getByRole('button', { name: 'Toggle navigation sidebar' })
+// Fresh browser contexts start with the sidebar closed, even on wide windows.
+// Showing it is a real user action; never seed the sidebar store or press Escape
+// to dismiss it while a turn is running (Escape can cancel the turn).
 
-// A session's sidebar row (Sidebar.tsx's SidebarSessionRow) is a ghost
-// Button whose accessible name is the session's title — there is no
-// dedicated testid per row, the title text IS the selector.
-// Real-browser follow-up (orchestrator, scenarios b and c — traced from the
-// actual trace.zip execution log, not guessed): scoping the row lookup to
-// the WHOLE page matched the WRONG element. The header's "My Workspace"
-// workspace tab apparently ALSO carries aria-current="page" (the tablist's
-// own "currently selected view" semantics) and, being earlier in the DOM
-// than the sidebar drawer, `.first()` picked IT — so a captured "title"
-// was literally the string "My Workspace", and clicking it again later hit
-// the SAME header tab, never a real session row. That explains both bugs
-// from one root cause: the drawer's onClose (wired only to an actual
-// session row's own click handler) never fired, so its backdrop stayed
-// open indefinitely — not a transient fade, exactly what was observed.
-// Scoped to the drawer panel specifically (`#sidebar-overlay-panel`,
-// Sidebar.tsx) so nothing outside it can ever match.
-const sidebarPanel = (page: Page) => page.locator('#sidebar-overlay-panel')
-const sessionRowByTitle = (page: Page, title: string) => sidebarPanel(page).getByRole('button', { name: title, exact: true })
-
-// Real-browser follow-up (orchestrator, scenario c): Sidebar.tsx's own
-// "click-outside overlay dismiss" backdrop (`aria-hidden="true"`,
-// `className="absolute inset-0 z-30"`, `onClick={close}`) is wrapped in
-// AnimatePresence with a 150ms exit fade — after close() fires (either the
-// hamburger's own toggle, or a session row's auto-close via onClose), this
-// element stays mounted and still intercepts pointer events for that
-// window. CI evidence: a composer click timed out with this exact element
-// ("<div aria-hidden=true class=absolute inset-0 z-30>") named as the
-// interceptor. Never `force` the composer (masks a real reachability
-// problem for an actual user) — wait for the backdrop to actually leave
-// the DOM instead, the same way a real click has to wait for it.
-const sidebarBackdrop = (page: Page) => page.locator('div[aria-hidden="true"].absolute.inset-0.z-30')
-// Real-browser follow-up (orchestrator): a silently-swallowed timeout here
-// masked the real bug for two whole debugging rounds — the drawer failing
-// to close surfaced as a much more confusing failure much later (a
-// composer click blocked by the same backdrop, in an unrelated helper).
-// Never weaken this to a soft catch again: if the drawer doesn't actually
-// close, this must fail HERE, loudly, at the point that is actually wrong.
-async function waitForSidebarClosed(page: Page) {
-  await sidebarBackdrop(page).waitFor({ state: 'hidden', timeout: 10_000 })
+// Capture which chat is on screen so it can be reopened later (see below).
+async function activeChatSessionId(page: Page): Promise<string> {
+  // The sidebar no longer lists per-session rows, so a chat has no sidebar
+  // title to capture and re-find (the old read - the last
+  // `button[aria-current="page"]` - now only ever matches the workspace header
+  // "My Workspace"). The stable handle for "this chat" is the session id the
+  // chat surface itself is bound to (ChatScreen stamps data-active-session-id).
+  const bound = page.locator('[data-active-session-id]').first()
+  await expect(bound).toBeAttached({ timeout: 15_000 })
+  const id = ((await bound.getAttribute('data-active-session-id')) ?? '').trim()
+  expect(id, 'the chat surface must be bound to a session').not.toBe('')
+  return id
 }
 
-// The currently-active row carries aria-current="page" (SidebarSessionRow).
-// Used to capture chat A's real, server-assigned title (which is a model-
-// generated summary of the first message, not the prompt text verbatim —
-// reading it back from the DOM, rather than guessing what the title will
-// be, is what makes re-selecting the row later reliable).
-async function activeSidebarTitle(page: Page): Promise<string> {
-  await sidebarToggle(page).click()
-  // Real-browser follow-up (orchestrator, traced from the actual trace.zip
-  // execution log): even scoped to the sidebar panel, `aria-current="page"`
-  // ALSO matches the workspace accordion header (Sidebar.tsx's own
-  // per-project button — "you're currently in this workspace"), which
-  // renders BEFORE its session tree in DOM order. `.first()` picked that
-  // header, not the actual active session row (SidebarSessionRow, line
-  // ~987 of that file) — captured title was literally "My Workspace",
-  // which later matched the SAME header again, never a real session,
-  // leaving the drawer's onClose never triggered (explains scenario c's
-  // "not a 150ms fade, the layer stays" too — same root cause). The
-  // active SESSION row renders AFTER the workspace header within its
-  // expanded accordion section, so `.last()` is the real one.
-  const row = sidebarPanel(page).locator('button[aria-current="page"]').last()
-  await expect(row).toBeVisible({ timeout: 10_000 })
-  const title = (await row.innerText()).trim()
-  // Real-browser follow-up (orchestrator, corrected after a live-traced
-  // misdiagnosis): the drawer panel (#sidebar-overlay-panel, z-40) and its
-  // own click-outside backdrop (z-30) both sit ON TOP of the header while
-  // open — including the hamburger's own screen position, which the panel
-  // visually covers. A `force: true` click still resolves via real
-  // coordinate-based input (Playwright dispatches at the element's
-  // bounding box, but the browser's own hit-testing still delivers it to
-  // whatever is topmost AT THAT SCREEN POINT), so it was actually landing
-  // on the drawer/backdrop rather than the hamburger underneath — the
-  // drawer never genuinely closed (confirmed against the real gateway:
-  // the backdrop stayed for the ENTIRE remainder of the test, not a 150ms
-  // fade). Escape is the sidebar's own designed close key but stays
-  // off-limits regardless — it also cancels a running turn. Fixed per the
-  // orchestrator's own working harness: click the backdrop directly, at a
-  // point clearly OUTSIDE the drawer panel's own width (the right edge of
-  // the viewport) so there is no coordinate ambiguity about which layer
-  // receives the click.
-  const viewport = page.viewportSize() ?? { width: 1280, height: 720 }
-  await sidebarBackdrop(page).click({ position: { x: viewport.width - 20, y: viewport.height / 2 } })
-  await waitForSidebarClosed(page)
-  return title
-}
-
-// Real sidebar navigation (orchestrator follow-up — the previous draft left
-// this "for the orchestrator to wire once runnable"): open the drawer,
-// click the session's OWN row by its title. Escape is never used here — it
-// cancels the running turn (ADR-057's cancel state machine), which would
-// defeat the entire point of this scenario.
-async function switchToSessionByTitle(page: Page, title: string) {
-  await sidebarToggle(page).click()
-  // Real-browser follow-up (orchestrator, traced locally against a real
-  // gateway): the sidebar title is a plain 60-char truncation of the first
-  // message (confirmed: a captured title's own .length was exactly 60,
-  // ending in a literal "..." baked into the text, not a CSS-only
-  // truncation). Every scenario in this file that calls startLongTurn uses
-  // the SAME hardcoded LONG_PROMPT, so once more than one of them has run
-  // against the SAME gateway process (true for CI too — the whole spec
-  // file runs sequentially against one worker's gateway, not just this
-  // isolated local run) their titles collide exactly, and getByRole's
-  // {exact: true} — needing a single match to click — hangs against the
-  // resulting ambiguity instead of erroring cleanly. `.first()` is the most
-  // recently created matching session (the sidebar lists newest-first),
-  // which is always the one THIS test just made.
-  await sessionRowByTitle(page, title).first().click()
-  await waitForSidebarClosed(page)
+// Go (back) to a chat through the SPA's own /#/sessions/<id> route. Not
+// page.goto of a different document: the router is a hash router
+// (createHashHistory, src/main.tsx), so a same-origin hash goto is a
+// same-document navigation - the in-memory cursor survives, which the
+// "no reload" marker check in scenario c proves. Escape is never used - it
+// cancels the running turn (ADR-057).
+async function switchToSession(page: Page, sessionId: string) {
+  await openSessionByDeepLink(page, sessionId, originOf(page))
 }
 
 // Round-3/round-4 open item (orchestrator, both rounds): the previous version
@@ -272,7 +233,14 @@ async function switchToSessionByTitle(page: Page, title: string) {
 // opening, catching a wholesale content swap early with a clearer failure).
 async function assertNoDuplicateOrGapText(page: Page, before: string, after: string, title?: string) {
   const norm = (s: string) => s.replace(/\s+/g, ' ').trim()
-  expect(norm(after).startsWith(norm(before).slice(0, 60))).toBeTruthy()
+  expect(
+    norm(after).startsWith(norm(before).slice(0, 60)),
+    // Named, with both readings printed: a bare toBeTruthy() made this
+    // failure undiagnosable from the report alone (the two texts are the
+    // whole question — live-streamed prefix vs reloaded final text).
+    `the reloaded final text must begin with the pre-cut streamed prefix — ` +
+      `before=${JSON.stringify(norm(before).slice(0, 160))} after=${JSON.stringify(norm(after).slice(0, 160))}`,
+  ).toBeTruthy()
   await page.reload()
   await expect(chatInput(page)).toBeVisible({ timeout: 15_000 })
   await waitForConnected(page)
@@ -284,14 +252,37 @@ async function assertNoDuplicateOrGapText(page: Page, before: string, after: str
   // already moved off session A's own deep link, this bare reload had
   // nothing to restore it. Reopen the same way when a title is given.
   if (title !== undefined && (await assistantMessages(page).count()) === 0) {
-    await switchToSessionByTitle(page, title)
+    await switchToSession(page, title)
   }
   await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
   const reloaded = (await bubbleText(assistantMessages(page).first())).trim()
   expect(norm(reloaded)).toBe(norm(after))
 }
 
+/** b/c need a real turn that remains in flight while the UI is moved away —
+ * for as long as the test wants, independent of any model's emission profile
+ * (#1661): their gateway is pointed at the held-stream provider, which keeps
+ * the scripted stream open until the test calls release(). Turn engine,
+ * persistence, reattach and catch-up stay real. Fails safe: a failed boot or
+ * navigation stops the provider along with the gateway. */
+async function openHeldCatchupChat(page: Page, provider: HeldStreamProvider): Promise<GatewayProcess> {
+  const gw = await GatewayProcess.start({ apiBase: provider.url, model: E2E_FALLBACK.model })
+  try {
+    await page.context().addCookies((await gw.browserStorageState()).cookies)
+    await page.goto(gw.baseURL)
+    return gw
+  } catch (error) {
+    await gw.stop()
+    await provider.close()
+    throw error
+  }
+}
+
 test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
+  // Shared-page scenarios only. The #1661 deterministic describe below
+  // deliberately has NO such hook: its tests point the page at their own
+  // isolated gateways, and a file-level goto('/') needs a shared baseURL
+  // the keyless private runner does not have.
   test.beforeEach(async ({ page }) => {
     await page.goto('/')
   })
@@ -312,62 +303,6 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
     // asserts the user-visible outcome, which is the contract.
   })
 
-  test('b: dead connection ~60s, server still thinks attached — new connection catches up, no duplicate', async ({ page }) => {
-    test.setTimeout(420_000)
-    const freeze = await installFreezeProxy(page)
-    const before = await startLongTurn(page)
-    // Real-browser follow-up (orchestrator): a hard reload lands on the
-    // welcome/empty chat, not the previous session — the tab does not
-    // reopen the last session on its own (checked: this is release
-    // behaviour too, not something to change the product for). Capture
-    // chat A's real, server-assigned sidebar title BEFORE the reload, the
-    // same way scenario c already does, so it can be reopened afterward.
-    const titleA = await activeSidebarTitle(page)
-    await freeze.freeze()
-    await page.waitForTimeout(60_000)
-    // The new connection (opened by a reload) attaches independently while
-    // the frozen one is still nominally bound server-side.
-    await page.reload()
-    await expect(chatInput(page)).toBeVisible({ timeout: 15_000 })
-    await waitForConnected(page)
-    // Reopen chat A via the sidebar — the same real navigation scenario c
-    // uses, not page.goto (a second reload would just repeat the same
-    // welcome-screen landing).
-    await switchToSessionByTitle(page, titleA)
-    await waitTurnDoneAfterReload(page)
-    await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
-    const after = (await bubbleText(assistantMessages(page).first())).trim()
-    await assertNoDuplicateOrGapText(page, before, after, titleA)
-  })
-
-  test('c: tab switched to another chat while the turn finishes — incremental on return', async ({ page }) => {
-    test.setTimeout(420_000)
-    const before = await startLongTurn(page)
-    // Capture chat A's real, server-assigned sidebar title BEFORE switching
-    // away — this is what makes finding it again reliable (see
-    // activeSidebarTitle's own comment on why this beats guessing).
-    const titleA = await activeSidebarTitle(page)
-    // Switch to a fresh chat B while chat A's turn is still running
-    // server-side (the turn never depends on a UI connection, ADR-082 P1 —
-    // switching the VIEW away changes nothing about it).
-    await startNewChat(page)
-    await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
-    // Switch back to chat A via the sidebar (not page.goto — a reload would
-    // clear the in-memory cursor and defeat the point of this scenario; see
-    // reconnect-mid-turn.spec.ts's own S-11 note on the same trap). Escape
-    // is never pressed — it cancels the running turn.
-    await switchToSessionByTitle(page, titleA)
-    // Only NOW does the DOM reflect chat A again, so only now does
-    // waitTurnDone's stop-button check actually observe chat A's own
-    // state — checking it while chat B was active (the previous draft's
-    // sequencing) would have passed immediately regardless of whether A's
-    // turn had genuinely finished, since chat B never shows a stop button.
-    await waitTurnDone(page)
-    await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
-    const after = (await bubbleText(assistantMessages(page).first())).trim()
-    await assertNoDuplicateOrGapText(page, before, after, titleA)
-  })
-
   test('d: no tab at all while the turn finishes (laptop sleep) — reopen shows the complete answer', async ({ page, context }) => {
     test.setTimeout(420_000)
     const before = await startLongTurn(page)
@@ -385,6 +320,12 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
     await expect(assistantMessages(page2)).toHaveCount(1, { timeout: 30_000 })
     const after = (await bubbleText(assistantMessages(page2).first())).trim()
     await assertNoDuplicateOrGapText(page2, before, after)
+  })
+})
+
+test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/')
   })
 
   test('e: two tabs on one chat — second tab shows the user message and the identical answer, cursors equal', async ({ page, context }) => {
@@ -407,7 +348,9 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
   test('f: two chats active during an outage — A incremental, B complete on switch', async ({ page, context }) => {
     test.setTimeout(420_000)
     const beforeA = await startLongTurn(page)
-    await startNewChat(page)
+    // startLongTurn opens its OWN fresh chat (it calls freshChat itself), so a
+    // standalone freshChat here only created a second session and abandoned it
+    // (S5-09/F11). Chat B is the one startLongTurn opens below.
     const beforeB = await startLongTurn(page)
     await context.setOffline(true)
     await page.waitForTimeout(45_000)
@@ -425,7 +368,7 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
     const input = chatInput(page)
     await expect(input).toBeVisible({ timeout: 15_000 })
     await waitForConnected(page)
-    await startNewChat(page)
+    await freshChat(page)
     // Founder decision Q6: real wait. Lane A's test-only idle-eviction
     // shortcut (`b588bbb04`) is `OMNIPUS_TEST_ONLY_HUB_IDLE_EVICT_SECONDS`
     // — an env var read once at gateway startup
@@ -439,221 +382,468 @@ test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
     // minutes here as the safe default when the knob is NOT set.
     await page.waitForTimeout(31 * 60_000)
     await input.fill('are you still there?')
-    await input.press('Enter')
+    await input.press('Enter', { timeout: 15_000 })
     await expect(stopButton(page)).toBeVisible({ timeout: 30_000 })
     await waitTurnDone(page)
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
     expect((await bubbleText(assistantMessages(page).first())).trim().length).toBeGreaterThan(0)
   })
+})
 
-  // Un-skipped (pass 3, orchestrator): the earlier `.skip` reasoning ("this
-  // spec file has no process control to restart the binary unattended") no
-  // longer holds — `tests/e2e/fixtures/gateway-process.ts`'s `GatewayProcess`
-  // was purpose-built for exactly this (its own doc comment: "needs to
-  // `kill -9` a REAL gateway process mid-task and restart it"), already
-  // proven out by `conformance-design-exec-e2e.spec.ts`'s E.1 boot-sweep
-  // test. It owns its OWN ephemeral port and its OWN mkdtemp'd OMNIPUS_HOME
-  // (never the shared worker's OMNIPUS_HOME/port the rest of this file's
-  // `page` fixture is wired to via playwright.config.ts's `baseURL`) — so
-  // this test drives a SEPARATE browser navigation (`page.goto(gw.baseURL)`,
-  // an absolute URL, which overrides the configured relative baseURL) and a
-  // real UI login against its own isolated process, entirely independent of
-  // the shared gateway every other scenario in this file uses. `kill9()`
-  // sends a real SIGKILL and waits for the OS to actually reap the process
-  // (no `--allow-empty`/graceful-shutdown path involved — this is a genuine
-  // crash, matching item h's "gateway restart" framing), and `restart()`
-  // re-spawns the SAME binary against the SAME OMNIPUS_HOME/port, which
-  // mints a fresh in-process boot id (§3.4) while the on-disk session/
-  // transcript state survives — exactly the `boot_mismatch` precondition.
-  //
-  // Deliberately NOT `page.reload()`d after the restart: item h is "tab
-  // OPEN" (still-live tab), not "tab reloaded" — the existing WS client
-  // (`src/lib/ws.ts`) already owns exponential-backoff auto-reconnect
-  // (`_scheduleReconnect`) once the SIGKILL surfaces as a socket close, so
-  // the live tab reconnects to the restarted process on its own, sends its
-  // stale (pre-restart) `{since_seq, boot_id}` on `attach_session`, and the
-  // new process's differing boot id is what actually drives the
-  // `boot_mismatch` snapshot path — reloading first would discard that
-  // stale cursor and prove a different (if related) code path instead.
-  // RE-UN-SKIPPED (pass 4, orchestrator): pass 3's `test.skip` reasoning
-  // ("no flaky tests" — the mid-answer kill window wasn't reliably
-  // reproducible against a real, fast model) no longer applies now that the
-  // backend's test-only `OMNIPUS_TEST_ONLY_STREAM_TOKEN_DELAY_MS` knob
-  // exists (`pkg/gateway/ws_session_hub.go`'s
-  // `streamTokenDelayEnvOverrideVar` — read once at gateway start; the web
-  // streamer pauses that long after each published token; unset/0/invalid
-  // = no pause, same pattern as scenario g's
-  // `OMNIPUS_TEST_ONLY_HUB_IDLE_EVICT_SECONDS`). Set to 300ms below, ONLY
-  // on THIS test's own isolated `GatewayProcess` (never the shared gateway
-  // every other scenario in this file uses), via `GatewayProcess.start({
-  // env })` — `restart()` re-spawns through the SAME `spawnProcess()` that
-  // reads this env, so the respawned process after SIGKILL keeps the exact
-  // same pause without anything extra needed here. With a 300ms pause per
-  // token, the turn now stays genuinely mid-stream for many seconds, so
-  // the kill point below (first token visibly landed — a non-empty answer
-  // bubble) reliably lands well before the answer completes; see the
-  // comments below the `try` block for the pass-3 investigation that found
-  // this precise kill point (too early = no session/no content yet; too
-  // late used to race full completion, no longer a risk with the knob).
-  test('h: gateway restart with tab open — snapshot boot_mismatch, "couldn\'t be finished · Generate again"', async ({ page }) => {
+test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
+  // #1661: these are the deterministic held-stream scenarios — b, c and h
+  // (both orderings, below) now script ONLY the external provider
+  // (fixtures/held-stream-provider.ts) behind their own GatewayProcess,
+  // because on the CI primary model (see tests/e2e/e2e-model.json) the
+  // ">80 chars while running" mid-turn window never opens: answer text
+  // becomes visible only at/near completion, so the old gates failed every
+  // attempt even though the gateway streams correctly. Scenario titles,
+  // preconditions and assertions are unchanged; the mid-turn proof is now
+  // the provider evidence (expectTurnHeldMidStream) on top of the unchanged
+  // UI gates, and is model-independent. Zero retries: a broken catch-up is
+  // a property no retry establishes.
+  test.describe.configure({ retries: 0 })
+
+  test('b: dead connection ~60s, server still thinks attached — new connection catches up, no duplicate', async ({ page }, info) => {
     test.setTimeout(420_000)
-    const gw = await GatewayProcess.start({ env: { OMNIPUS_TEST_ONLY_STREAM_TOKEN_DELAY_MS: '300' } })
+    const provider = await startHeldStreamProvider({ promptIncludes: LONG_PROMPT })
+    const freeze = await installFreezeProxy(page)
+    const gw = await openHeldCatchupChat(page, provider)
     try {
-      // Real UI login against the isolated process — GatewayProcess.start()
-      // onboarded the admin/provider via REST (its own APIRequestContext),
-      // which does NOT extend to this test's separate browser `page`
-      // context, so a genuine login-form submission is required here (mirrors
-      // `fixtures/login.ts`'s `completeLoginForm`, inlined because that
-      // helper's own `loginAs` hardcodes `page.goto('/')` — relative to the
-      // SHARED gateway's configured baseURL, not this isolated one).
-      await page.goto(gw.baseURL)
-      await expect(page.locator('#login-username')).toBeVisible({ timeout: 15_000 })
-      await page.locator('#login-username').pressSequentially(gw.adminUsername)
-      await page.locator('#login-password').pressSequentially(gw.adminPassword)
-      await page.getByRole('button', { name: 'Sign in' }).click()
-      await expect(page).not.toHaveURL(/\/#\/login/, { timeout: 15_000 })
-
-      // Deliberately NOT `startLongTurn()` here: that helper polls for
-      // >80 characters of streamed bubble text before returning, which two
-      // pass-3 runs proved fatal for this scenario specifically (before the
-      // stream-delay knob existed) — the configured model (z-ai/glm-5.2,
-      // per GatewayProcess's own default) answered BOTH the original
-      // 600-word LONG_PROMPT and a 3000-word VERY_LONG_PROMPT so fast
-      // (screenshots showed the COMPLETE, model-footer-stamped answer,
-      // 16-20k tokens, already rendered) that by the time that poll
-      // resolved, the turn had already finished — nothing was left to
-      // interrupt. Pass 4's `OMNIPUS_TEST_ONLY_STREAM_TOKEN_DELAY_MS: '300'`
-      // (above) removes that race at the source (300ms per token keeps the
-      // turn mid-stream for many seconds), but the kill point below still
-      // waits for the minimum real signal rather than any particular amount
-      // of content — see the "two rounds" comment just below for why.
-      const input = chatInput(page)
-      await expect(input).toBeVisible({ timeout: 15_000 })
+      const before = await startLongTurn(page, LONG_PROMPT, { requireRunning: true })
+      await expect(stopButton(page), 'the turn must still be running before the outage or switch').toBeVisible()
+      // MID-TURN SIGNAL (#1661): the held-stream provider proves the turn is
+      // genuinely still streaming (stream open, deltas flowing). The old
+      // ">80 chars while running" gate could coincide with completion on a
+      // burst-emitting model; this evidence cannot.
+      await expectTurnHeldMidStream(provider, 'catchup b')
+      // Real-browser follow-up (orchestrator): a hard reload lands on the
+      // welcome/empty chat, not the previous session — the tab does not
+      // reopen the last session on its own (checked: this is release
+      // behaviour too, not something to change the product for). Capture
+      // chat A's real, server-assigned sidebar title BEFORE the reload, the
+      // same way scenario c already does, so it can be reopened afterward.
+      const titleA = await activeChatSessionId(page)
+      await expect(stopButton(page), 'freeze begins during the real turn, not after done').toBeVisible()
+      await freeze.freeze()
+      await page.waitForTimeout(60_000)
+      // The new connection (opened by a reload) attaches independently while
+      // the frozen one is still nominally bound server-side.
+      await page.reload()
+      await expect(chatInput(page)).toBeVisible({ timeout: 15_000 })
       await waitForConnected(page)
-      await startNewChat(page)
-      await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
-      await input.fill(VERY_LONG_PROMPT)
-      await input.press('Enter')
-      // Precondition, asserted explicitly rather than assumed: the turn
-      // must still be genuinely in flight the instant before the crash —
-      // this is item h's whole premise. If the model somehow answers before
-      // even THIS appears, this fails here with a clear, honest reason,
-      // instead of silently proceeding to kill a process with nothing left
-      // to interrupt and producing a confusing "Generate again never
-      // appeared" failure three steps later.
-      await expect(stopButton(page)).toBeVisible({ timeout: 15_000 })
-      // Real-browser follow-up (orchestrator, this scenario, two rounds):
-      // round 1 killed THIS early (immediately on the stop button, no wait
-      // for any content) — too early: it landed on the blank "Welcome to
-      // omnipus.ai" screen after reconnecting, because the client's own
-      // pre-turn assistant placeholder (a LOCAL `generateId()`, never
-      // anything the server echoes) had captured NO real content and NO
-      // real message_id yet, so `ConnectionStatus.tsx::AssistantMessage
-      // ConnectionStatus`'s `disconnectedAssistantMessageId === messageId`
-      // gate could never match anything the post-restart snapshot rebuild
-      // reconstructs — a wiped, orphaned local id, not the turn's real one.
-      // Round 2 waited for the bubble to merely EXIST (any `[data-message-
-      // id]`, not `assistantMessages()`'s completion-only definition) —
-      // still too early for the SAME reason: existing is not the same as
-      // having received real content, i.e. the point at which
-      // `resolveTokenBubbleByMessageId` (slices/frames.ts) registers the
-      // server's own `message_id` onto this bubble — before that, it is
-      // still the orphaned local placeholder id. Waiting for the bubble to
-      // hold actual TEXT (any non-empty content, not any particular
-      // amount — that's what raced full completion in an earlier pass) is
-      // the minimum signal that at least one real token — and therefore
-      // the server's real message_id — has been applied to it.
-      const anyAssistantBubble = page.locator('[data-message-id]:not(.flex-row-reverse)')
-      await expect(anyAssistantBubble).toHaveCount(1, { timeout: 15_000 })
-      await expect.poll(
-        async () => (await bubbleText(anyAssistantBubble.first()).catch(() => '')).trim().length,
-        { timeout: 15_000 },
-      ).toBeGreaterThan(0)
-
-      // A real crash, not a graceful shutdown — SIGKILL, waited out to a
-      // genuine 'exit', then the SAME binary re-spawned against the SAME
-      // OMNIPUS_HOME/port (see gateway-process.ts's own doc comments on
-      // kill9()/restart() for why both steps must be awaited in full before
-      // proceeding, not just fired-and-forgotten).
-      //
-      // `relogin: false` — restart()'s own default re-login (a second
-      // `POST /api/v1/auth/login` for the SAME `admin` account this test's
-      // `page` already logged in as, above) would overwrite `admin`'s
-      // single-slot session-token hash and silently sign THIS page out from
-      // under itself (`src/lib/authLogout.ts`'s 'elsewhere' banner — this is
-      // exactly what a first pass of this test hit, traced to this race, not
-      // a real product bug: see gateway-process.ts's own corrected doc
-      // comment on `restart()`). This test only needs the process back up,
-      // never `gw.apiFetch()`, so skipping the internal re-login is correct.
-      await gw.kill9()
-      await gw.restart({ relogin: false })
-
-      await expect(page.getByRole('button', { name: /Generate again/i })).toBeVisible({ timeout: 60_000 })
-      await expect(assistantConnectionStatus(page)).toContainText('couldn\'t be finished')
+      // Reopen chat A via the sidebar — the same real navigation scenario c
+      // uses, not page.goto (a second reload would just repeat the same
+      // welcome-screen landing).
+      await switchToSession(page, titleA)
+      // Chat A is reattached and its turn is STILL live — the freeze only cut
+      // the browser side; the provider stream never ended. Release it now so
+      // the remaining deltas and the completion must arrive over the
+      // reattached connection to satisfy the assertions below. release() ends
+      // the SAME stream, so anything the turn loses here is a real catch-up
+      // defect, not a fixture artifact.
+      provider.release()
+      await waitTurnDoneAfterReload(page)
+      await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
+      const after = (await bubbleText(assistantMessages(page).first())).trim()
+      await assertNoDuplicateOrGapText(page, before, after, titleA)
+      // The turn ran to its scripted end and was delivered complete: exactly
+      // one held stream, finished by the scripted release, nothing unexpected.
+      expect(provider.evidence.streamRequests, 'catchup b: exactly the scripted turn reached the provider').toBe(1)
+      expect(provider.evidence.released, 'catchup b: the finish came from the scripted release').toBe(1)
+      expect(provider.evidence.errors, 'catchup b: no unexpected scripted-provider request').toEqual([])
     } finally {
-      // Always tear down the isolated process/home, pass or fail — never
-      // leaves an orphaned gateway or a leaked mkdtemp directory behind.
-      await gw.stop()
+      try {
+        await attachHeldStreamEvidence(info, 'catchup-b', provider)
+      } finally {
+        await gw.stop()
+        await provider.close()
+      }
     }
   })
 
-  test('i: message typed while offline — appears at the end, then its answer; no duplicate; ticks received → working', async ({ page, context }) => {
+  test('c: tab switched to another chat while the turn finishes — incremental on return', async ({ page }, info) => {
+    test.setTimeout(420_000)
+    const provider = await startHeldStreamProvider({ promptIncludes: LONG_PROMPT })
+    const gw = await openHeldCatchupChat(page, provider)
+    try {
+      const before = await startLongTurn(page, LONG_PROMPT, { requireRunning: true })
+      await expect(stopButton(page), 'the turn must still be running before the outage or switch').toBeVisible()
+      // MID-TURN SIGNAL (#1661) — same as scenario b: the provider evidence
+      // proves the turn is genuinely still streaming before the UI moves.
+      await expectTurnHeldMidStream(provider, 'catchup c')
+      // Capture chat A's real, server-assigned sidebar title BEFORE switching
+      // away — this is what makes finding it again reliable (see
+      // activeChatSessionId's own comment on why this beats guessing).
+      const titleA = await activeChatSessionId(page)
+      // Switch to a fresh chat B while chat A's turn is still running
+      // server-side (the turn never depends on a UI connection, ADR-082 P1 —
+      // switching the VIEW away changes nothing about it).
+      // The sidebar "New chat" button this used to click is REMOVED (founder
+      // decision D7 — no New-chat UI entry anywhere; the /new palette item
+      // filters itself out while streaming anyway), so chat B comes from
+      // freshChat: a public-REST create opened through the SPA's own
+      // /#/sessions/<id> deep-link route. That goto is hash-only on the
+      // origin the page is already on, the router is a hash router
+      // (createHashHistory, src/main.tsx), and Playwright defines a
+      // same-URL-different-hash goto as a same-document navigation — so the
+      // view switches WITHOUT the document reload that would clear the
+      // in-memory cursor and reduce the return below to the full-replay
+      // path (the trap the switch-back comment names). The surviving
+      // marker assertion after the return makes that precondition
+      // machine-checked, not argued.
+      await expect(stopButton(page), 'the view switches away while chat A is still running').toBeVisible()
+      await page.evaluate(() => { (window as { navCatchupMark?: string }).navCatchupMark = 'scenario-c' })
+      const chatB = await freshChat(page)
+      await expect(
+        page.locator(`[data-active-session-id="${chatB.sessionId}"]`),
+        'the view switched to fresh chat B (bound) without a page reload',
+      ).toBeVisible({ timeout: 15_000 })
+      await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
+      // Switch back to chat A via the sidebar (not page.goto — a reload would
+      // clear the in-memory cursor and defeat the point of this scenario; see
+      // reconnect-mid-turn.spec.ts's own S-11 note on the same trap). Escape
+      // is never pressed — it cancels the running turn.
+      await switchToSession(page, titleA)
+      await expect(stopButton(page), 'reattach reconstructs the still-running turn').toBeVisible()
+      // The window marker set before the switch survived: no document reload
+      // happened across the away-and-back round trip, so the catch-up below
+      // really exercises the in-memory cursor. A reload would silently turn
+      // this scenario into the post-reload replay path — the exact weaker
+      // behaviour this scenario exists to distinguish — and pass vacuously.
+      // awaited: expect(<Promise>).toBe(...) compares the Promise object itself
+      // ("Received: Promise {}"), so this check could never pass - the scenario
+      // never got far enough before to expose it.
+      expect(
+        await page.evaluate(() => (window as { navCatchupMark?: string }).navCatchupMark),
+        'no reload across the away-and-back switch',
+      ).toBe('scenario-c')
+      // Only NOW does the DOM reflect chat A again, so only now does
+      // waitTurnDone's stop-button check actually observe chat A's own
+      // state — checking it while chat B was active (the previous draft's
+      // sequencing) would have passed immediately regardless of whether A's
+      // turn had genuinely finished, since chat B never shows a stop button.
+      // Chat A's turn is still live (the provider stream never ended);
+      // release it so the remaining deltas and the completion must arrive
+      // over the reattached in-memory-cursor connection below.
+      provider.release()
+      await waitTurnDone(page)
+      await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
+      const after = (await bubbleText(assistantMessages(page).first())).trim()
+      await assertNoDuplicateOrGapText(page, before, after, titleA)
+      // The turn ran to its scripted end and was delivered complete: exactly
+      // one held stream, finished by the scripted release, nothing unexpected.
+      expect(provider.evidence.streamRequests, 'catchup c: exactly the scripted turn reached the provider').toBe(1)
+      expect(provider.evidence.released, 'catchup c: the finish came from the scripted release').toBe(1)
+      expect(provider.evidence.errors, 'catchup c: no unexpected scripted-provider request').toEqual([])
+    } finally {
+      try {
+        await attachHeldStreamEvidence(info, 'catchup-c', provider)
+      } finally {
+        await gw.stop()
+        await provider.close()
+      }
+    }
+  })
+})
+
+// Same deterministic describe, split at the h scenarios only for the 240-line
+// function budget (scripts/check-function-budget.sh): the identical title
+// keeps every full test name byte-identical, and the zero-retry scope carries
+// over — a broken catch-up is a property no retry establishes.
+test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
+  test.describe.configure({ retries: 0 })
+
+  // F1: the held-open tab must choose the same single status regardless of
+  // whether the optional lifecycle list or the boot-mismatch attach arrives first.
+  for (const ordering of ['catch-up first', 'lifecycle first'] as const) {
+    test(`h: gateway restart with tab open — Interrupted alone, Generate again completes (${ordering})`, async ({ page }, info) => {
+      test.setTimeout(420_000)
+      // #1661: the held-stream provider replaces the pass-4 token-delay knob —
+      // the interrupted turn stays mid-stream because the provider holds the
+      // SSE stream open, not because the gateway paces a live model.
+      const provider = await startHeldStreamProvider({ promptIncludes: LONG_PROMPT })
+      const gw = await GatewayProcess.start({ apiBase: provider.url, model: E2E_FALLBACK.model })
+      let crashed = false
+      let releaseList!: () => void
+      let listReachedPage = false
+      const listHeld = new Promise<void>((resolve) => { releaseList = resolve })
+      const waitForLifecycleList = () => expect.poll(() => listReachedPage, {
+        timeout: 60_000, message: 'The SPA must refetch its lifecycle list after reconnecting; the ordering gate cannot wait forever.',
+      }).toBe(true)
+      let regenerating = false
+      let retryHasContent = false
+      let targetSessionId: string | null = null
+      const retryDone: import('@/lib/api/generated/asyncapi-types').DoneFrame[] = []
+      const retryErrors: import('@/lib/api/generated/asyncapi-types').ErrorFrame[] = []
+      page.on('websocket', (socket) => socket.on('framereceived', ({ payload }) => {
+        const frame = JSON.parse(payload.toString()) as import('@/lib/api/generated/asyncapi-types').ServerFrame
+        if (!regenerating || !('session_id' in frame) || frame.session_id !== targetSessionId) return
+        if (frame.type === 'token' && /\S/.test(frame.content)) retryHasContent = true
+        if (frame.type === 'done') retryDone.push(frame)
+        if (frame.type === 'error') retryErrors.push(frame)
+      }))
+      try {
+        // Delay a real response, never fabricate lifecycle state or mock the UI.
+        await page.route(/\/api\/v1\/sessions(?:\?.*)?$/, async (route) => {
+          if (!crashed) { await route.continue(); return }
+          let response
+          try { response = await route.fetch() }
+          catch (error) {
+            // A request hitting the intentional SIGKILL window must still fail
+            // on the wire, just as it would without this timing interceptor.
+            if (!/ECONNREFUSED/.test(String(error))) throw error
+            await route.abort('connectionrefused')
+            return
+          }
+          if (ordering === 'catch-up first') await listHeld
+          await route.fulfill({ response })
+          listReachedPage = true
+        })
+        if (ordering === 'lifecycle first') {
+          await page.routeWebSocket(/\/api\/v1\/chat\/ws/, (socket) => {
+            const server = socket.connectToServer()
+            socket.onMessage((message) => server.send(message))
+            server.onMessage(async (message) => {
+              const frame = JSON.parse(message.toString()) as import('@/lib/api/generated/asyncapi-types').ServerFrame
+              if (crashed && frame.type === 'catch_up_complete') await waitForLifecycleList()
+              socket.send(message)
+            })
+            socket.onClose((code, reason) => server.close({ code, reason }))
+            server.onClose((code, reason) => socket.close({ code, reason }))
+          })
+        }
+
+        // The isolated process owns its own login; never replace its cookie
+        // with the shared gateway's, or re-login behind this open tab on restart.
+        await page.goto(gw.baseURL)
+        await expect(page.locator('#login-username')).toBeVisible({ timeout: 15_000 })
+        await page.locator('#login-username').pressSequentially(gw.adminUsername)
+        await page.locator('#login-password').pressSequentially(gw.adminPassword)
+        await page.getByRole('button', { name: 'Sign in' }).click()
+        await expect(page).not.toHaveURL(/\/#\/login/, { timeout: 15_000 })
+        const input = chatInput(page)
+        await expect(input).toBeVisible({ timeout: 15_000 })
+        await waitForConnected(page)
+        await freshChat(page)
+        await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
+        // The held-stream provider keeps the answer open until the SIGKILL,
+        // so the explicit running precondition below cannot race completion.
+        await input.fill(LONG_PROMPT)
+        await input.press('Enter', { timeout: 15_000 })
+        await expect(stopButton(page)).toBeVisible({ timeout: 15_000 })
+        const liveAnswer = page.locator('[data-message-id]:not(.flex-row-reverse)')
+        await expect(liveAnswer).toHaveCount(1, { timeout: 15_000 })
+        // Entire bubble text includes the agent name and Thinking… before any
+        // token. Only rendered markdown proves real answer content arrived.
+        await expect(liveAnswer.locator('.prose-sm')).toContainText(/\S/, { timeout: 60_000 })
+        const chat = page.locator('[data-active-session-id]')
+        const sessionId = await chat.getAttribute('data-active-session-id')
+        expect(sessionId).not.toBeNull()
+        expect(sessionId).not.toBe('')
+        expect(sessionId).not.toBe('__pending')
+        targetSessionId = sessionId
+        await expect(liveAnswer).toHaveAttribute('data-status', 'running')
+        await expect(stopButton(page)).toBeVisible()
+        // MID-TURN SIGNAL (#1661): the stream is provably still open right
+        // before the SIGKILL — the Interrupted state below is then a real
+        // mid-answer cut, never a post-completion fake.
+        await expectTurnHeldMidStream(provider, `catchup h (${ordering})`)
+        crashed = true
+        await gw.kill9()
+        // The old 25ms/frame pacing existed to keep a live-model retry
+        // finishable within the wait budgets; the scripted retry is answered
+        // complete in one deterministic response, so the restart needs no
+        // env knob (#1661).
+        await gw.restart({ relogin: false })
+
+        const notice = page.getByTestId('restart-interrupted-notice')
+        const generateAgain = page.getByRole('button', { name: /Generate again/i })
+        const assertSingleStatus = async () => {
+          await expect(notice).toHaveCount(1, { timeout: 60_000 })
+          await expect(notice).toContainText('Interrupted · The restart cut this answer off. Send a message to continue.')
+          await expect(assistantConnectionStatus(page)).toHaveCount(0)
+          await expect(page.getByText(/couldn't be finished/i)).toHaveCount(0)
+          await expect(generateAgain).toHaveCount(1)
+          await expect(notice.getByRole('button', { name: 'Generate again', exact: true })).toBeVisible()
+          await expect(stopButton(page)).toBeHidden()
+          await expect(chat).toHaveAttribute('data-active-session-id', sessionId!)
+        }
+        await assertSingleStatus()
+        // The late-list case has already asserted the status while REST is
+        // held. Releasing it must not replace or duplicate that same status.
+        releaseList()
+        await waitForLifecycleList()
+        await assertSingleStatus()
+        await test.info().attach(`interrupted-${ordering}`, { body: await page.screenshot(), contentType: 'image/png' })
+
+        regenerating = true
+        await generateAgain.click()
+        await expect(notice).toHaveCount(0)
+        await expect(generateAgain).toHaveCount(0)
+        // Resend only shows Stop after the first token; its working acknowledgement
+        // changes delivery ticks, not streaming state. Do not turn model startup
+        // latency into a 30s UI deadline. Use waitTurnDone's existing turn budget,
+        // but fail immediately on an error or an empty terminal response.
+        await expect.poll(() => retryHasContent || retryErrors.length > 0 || retryDone.length > 0, {
+          timeout: 240_000, message: 'Generate again must produce real answer content within the turn budget.',
+        }).toBe(true)
+        expect(retryErrors, 'Generate again must start without a provider/turn error').toEqual([])
+        expect(retryHasContent, 'Generate again must not finish without real answer content').toBe(true)
+        const retryAnswer = page.locator('[data-message-id]:not(.flex-row-reverse)[data-status="running"]')
+        await expect(retryAnswer.locator('.prose-sm')).toContainText(/\S/)
+        await expect(stopButton(page)).toBeVisible({ timeout: 30_000 })
+        await waitTurnDone(page)
+        const answer = assistantMessages(page)
+        await expect(answer).toHaveCount(1, { timeout: 30_000 })
+        await expect(answer).toHaveAttribute('data-status', 'complete')
+        await expect(answer.locator('p').first()).toContainText(/\S/)
+        expect(retryErrors, 'Generate again must not end in a provider/turn error').toEqual([])
+        expect(retryDone, 'Generate again must complete exactly one new answer').toHaveLength(1)
+        expect(retryDone[0].stats?.turn_failed).not.toBe(true)
+        expect(retryDone[0].stats?.truncated).not.toBe(true)
+        expect(retryDone[0].stats?.replay_error).not.toBe(true)
+        await expect(userMessages(page)).toHaveCount(1)
+        await expect(chat).toHaveAttribute('data-active-session-id', sessionId!)
+        await expect(notice).toHaveCount(0)
+        await expect(generateAgain).toHaveCount(0)
+        await expect(assistantConnectionStatus(page)).toHaveCount(0)
+        await expect(page.getByText(/couldn't be finished/i)).toHaveCount(0)
+        await test.info().attach(`completed-${ordering}`, { body: await page.screenshot(), contentType: 'image/png' })
+        // End-of-test provider evidence: the SIGKILL tore down the held
+        // stream (streamsClosed, without any release), and "Generate again"
+        // reached the provider exactly once more and was answered complete —
+        // the retry completed deterministically.
+        expect(provider.evidence.streamsClosed, `catchup h (${ordering}): the crash closed the held stream`).toBe(1)
+        expect(provider.evidence.released, `catchup h (${ordering}): no scripted release was involved`).toBe(0)
+        expect(provider.evidence.retried, `catchup h (${ordering}): Generate again was answered complete`).toBe(1)
+        expect(provider.evidence.streamRequests, `catchup h (${ordering}): exactly the held turn and the retry reached the provider`).toBe(2)
+        expect(provider.evidence.errors, `catchup h (${ordering}): no unexpected scripted-provider request`).toEqual([])
+      } finally {
+        releaseList()
+        // done refreshes the lifecycle list. Drain its active route.fetch
+        // before stopping the server or letting Playwright close the context;
+        // wait preserves handler failures, unlike ignoreErrors.
+        try {
+          try { await page.unrouteAll({ behavior: 'wait' }) }
+          finally { await gw.stop() }
+        } finally {
+          try {
+            await attachHeldStreamEvidence(info, `catchup-h-${ordering}`, provider)
+          } finally {
+            await provider.close()
+          }
+        }
+      }
+    })
+  }
+})
+
+test.describe('BE-DESIGN.md §8.3 real-browser catch-up scenarios', () => {
+  // #1661: scenario i joins the deterministic held-stream scenarios — it
+  // scripts ONLY the external provider (fixtures/held-stream-provider.ts)
+  // behind its own GatewayProcess, via the same openHeldCatchupChat harness
+  // b and c use. Reason: on the CI primary model (see tests/e2e/e2e-model.json)
+  // the offline-typed turn completed within roughly 430 ms of delivery, so the
+  // transient "working" delivery tick was already gone (turn done) before its
+  // 30 s check ran (CI llm-agents: flaky on #1668). With the held stream the
+  // delivered message's turn stays open until the scripted release(), so the
+  // tick, once shown, stays observable — completion cannot race the check.
+  // Scenario title, preconditions and every post-event assertion are
+  // unchanged; the added proof is provider evidence (expectTurnHeldMidStream
+  // + the end-of-test counters), which is model-independent. Zero retries: a
+  // lost or duplicated offline-typed message is a property no retry establishes.
+  test.describe.configure({ retries: 0 })
+
+  test('i: message typed while offline — appears at the end, then its answer; no duplicate; ticks received → working', async ({ page, context }, info) => {
     test.setTimeout(180_000)
-    const input = chatInput(page)
-    await expect(input).toBeVisible({ timeout: 15_000 })
-    await waitForConnected(page)
-    await startNewChat(page)
-    await context.setOffline(true)
-    await page.evaluate(() => window.dispatchEvent(new Event('offline')))
-    await input.fill('typed while offline')
-    await input.press('Enter')
-    // Real-browser follow-up (orchestrator): the previous version of this
-    // scenario asserted the CONNECTION banner (`connection-status-line`)
-    // within 20s of going offline. That contradicts the quiet-disconnect
-    // design on purpose (ConnectionStatus.tsx's own CHAT_NOTICE_MS = 120s —
-    // no chat-connection indicator is SUPPOSED to appear for a drop this
-    // short, to avoid flickering a banner for a brief blip; #833/ADR-082).
-    // Not a product regression — a test asserting behaviour the design
-    // deliberately prevents. The scenario's OWN title names the real
-    // signal: the per-message delivery ticks
-    // (`user-message-delivery-status`, ConnectionStatus.tsx's
-    // UserMessageDeliveryStatus) — 'queued' while offline ("Not sent yet,
-    // will be sent automatically"), transitioning to 'working' once the
-    // agent picks it up after the reconnect delivers it.
-    //
-    // Real-browser follow-up (orchestrator): UserMessageDeliveryStatus's
-    // own text is not a visible text node at all — StatusTooltip renders
-    // only an icon as the visible child and puts the whole description on
-    // the inner IconButton's aria-label (ConnectionStatus.tsx's
-    // StatusTooltip). toHaveText() on the container therefore always saw
-    // an empty string (CI: "Received string: \"\""). Read the accessible
-    // name instead, via the role query that actually matches how this
-    // renders.
-    const deliveryStatus = page.getByTestId('user-message-delivery-status')
-    await expect(deliveryStatus.getByRole('button', { name: /not sent yet/i })).toBeVisible({ timeout: 15_000 })
-    await context.setOffline(false)
-    await page.evaluate(() => window.dispatchEvent(new Event('online')))
-    await expect(deliveryStatus.getByRole('button', { name: /is working on it/i })).toBeVisible({ timeout: 30_000 })
-    await waitTurnDone(page)
-    await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
-    // The user's own message is the pending tail (§4.7) — it must render at
-    // the end of history, never duplicated, once user_message reconciles it.
-    //
-    // Real-browser follow-up (orchestrator): an unscoped page.getByText
-    // resolved to 2 elements — investigated (Sidebar.tsx's isPinned
-    // defaults false, so the drawer isn't rendered at all without an
-    // explicit open, ruling out a stale sidebar row; the two sr-only
-    // aria-live announcers in ChatScreen.tsx don't echo user message text
-    // either) without being able to pin down the second match from CI
-    // evidence alone (the 382MB trace artifact did not finish downloading
-    // in time — noted honestly, not guessed past). Scoped to actual
-    // message bubbles specifically (userMessages — every real chat row
-    // carries data-message-id, which nothing else on the page does) rather
-    // than broad page text — this directly answers what this assertion is
-    // actually for ("is the message duplicated IN THE CHAT"), and does NOT
-    // mask a real duplicate: if both of CI's two matches turn out to be
-    // actual message bubbles, this scoped locator still finds both and
-    // still fails.
-    await expect(userMessages(page).filter({ hasText: 'typed while offline' })).toHaveCount(1)
+    const provider = await startHeldStreamProvider({ promptIncludes: 'typed while offline' })
+    const gw = await openHeldCatchupChat(page, provider)
+    try {
+      const input = chatInput(page)
+      await expect(input).toBeVisible({ timeout: 15_000 })
+      await waitForConnected(page)
+      await freshChat(page)
+      await context.setOffline(true)
+      await page.evaluate(() => window.dispatchEvent(new Event('offline')))
+      await input.fill('typed while offline')
+      await input.press('Enter', { timeout: 15_000 })
+      // Real-browser follow-up (orchestrator): the previous version of this
+      // scenario asserted the CONNECTION banner (`connection-status-line`)
+      // within 20s of going offline. That contradicts the quiet-disconnect
+      // design on purpose (ConnectionStatus.tsx's own CHAT_NOTICE_MS = 120s —
+      // no chat-connection indicator is SUPPOSED to appear for a drop this
+      // short, to avoid flickering a banner for a brief blip; #833/ADR-082).
+      // Not a product regression — a test asserting behaviour the design
+      // deliberately prevents. The scenario's OWN title names the real
+      // signal: the per-message delivery ticks
+      // (`user-message-delivery-status`, ConnectionStatus.tsx's
+      // UserMessageDeliveryStatus) — 'queued' while offline ("Not sent yet,
+      // will be sent automatically"), transitioning to 'working' once the
+      // agent picks it up after the reconnect delivers it.
+      //
+      // Real-browser follow-up (orchestrator): UserMessageDeliveryStatus's
+      // own text is not a visible text node at all — StatusTooltip renders
+      // only an icon as the visible child and puts the whole description on
+      // the inner IconButton's aria-label (ConnectionStatus.tsx's
+      // StatusTooltip). toHaveText() on the container therefore always saw
+      // an empty string (CI: "Received string: \"\""). Read the accessible
+      // name instead, via the role query that actually matches how this
+      // renders.
+      const deliveryStatus = page.getByTestId('user-message-delivery-status')
+      await expect(deliveryStatus.getByRole('button', { name: /not sent yet/i })).toBeVisible({ timeout: 15_000 })
+      await context.setOffline(false)
+      await page.evaluate(() => window.dispatchEvent(new Event('online')))
+      // MID-TURN SIGNAL (#1661): the reconnect delivers the queued message
+      // and the held stream keeps that turn open until release() below — so
+      // the "working" tick below cannot be racing completion, and the gate
+      // right after proves the tick meant something real: exactly one
+      // provider stream, deltas flowing, still open. A turn that never
+      // started cannot show the tick at all; a turn that already finished
+      // cannot pass the gate (its stream would be closed before the check).
+      await expect(deliveryStatus.getByRole('button', { name: /is working on it/i })).toBeVisible({ timeout: 30_000 })
+      await expectTurnHeldMidStream(provider, 'catchup i')
+      // The tick is observed and the turn is provably live mid-stream.
+      // release() ends the SAME stream, so the remaining deltas and the
+      // completion must arrive over the reconnected connection to satisfy
+      // the assertions below; anything lost here is a real catch-up defect,
+      // not a fixture artifact.
+      provider.release()
+      await waitTurnDone(page)
+      await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })
+      // The user's own message is the pending tail (§4.7) — it must render at
+      // the end of history, never duplicated, once user_message reconciles it.
+      //
+      // Real-browser follow-up (orchestrator): an unscoped page.getByText
+      // resolved to 2 elements — investigated (Sidebar.tsx's isPinned
+      // defaults false, so the drawer isn't rendered at all without an
+      // explicit open, ruling out a stale sidebar row; the two sr-only
+      // aria-live announcers in ChatScreen.tsx don't echo user message text
+      // either) without being able to pin down the second match from CI
+      // evidence alone (the 382MB trace artifact did not finish downloading
+      // in time — noted honestly, not guessed past). Scoped to actual
+      // message bubbles specifically (userMessages — every real chat row
+      // carries data-message-id, which nothing else on the page does) rather
+      // than broad page text — this directly answers what this assertion is
+      // actually for ("is the message duplicated IN THE CHAT"), and does NOT
+      // mask a real duplicate: if both of CI's two matches turn out to be
+      // actual message bubbles, this scoped locator still finds both and
+      // still fails.
+      await expect(userMessages(page).filter({ hasText: 'typed while offline' })).toHaveCount(1)
+      // End-of-test provider evidence: the offline-typed message really
+      // started the turn (exactly one request reached the provider) and the
+      // answer was finished by the scripted release — never by an early
+      // model answer racing the tick check.
+      expect(provider.evidence.streamRequests, 'catchup i: exactly the scripted turn reached the provider').toBe(1)
+      expect(provider.evidence.released, 'catchup i: the finish came from the scripted release').toBe(1)
+      expect(provider.evidence.errors, 'catchup i: no unexpected scripted-provider request').toEqual([])
+    } finally {
+      try {
+        await attachHeldStreamEvidence(info, 'catchup-i', provider)
+      } finally {
+        await gw.stop()
+        await provider.close()
+      }
+    }
   })
 })

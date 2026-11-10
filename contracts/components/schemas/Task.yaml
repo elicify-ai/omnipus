@@ -106,6 +106,12 @@ properties:
       Display name of the assigned agent. Read-time only (resolved from the agent
       registry; never authoritative storage).
     example: "Jim"
+  run_isolated:
+    type: boolean
+    description: >
+      True forces every run of this work into a fresh independent
+      chat, for either role (session-core FR-017).
+    example: false
   priority:
     type: integer
     minimum: 1

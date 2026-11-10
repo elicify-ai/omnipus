@@ -1,5 +1,19 @@
 # ADR-091 WP-D — Cancel cascade, dispatch reservation, revival, boot recovery
 
+**Amended 2026-10-06 (founder):** Stop click 1 / Esc 1 / `/stop` stops **this chat's current turn only** and opens a **3 s window**. A second Stop / Esc / `/stop` within that window stops **this chat and its whole helper tree**; `/cancel` does that immediately. **No separate button or offer.** `/stop-redirect <instruction>` stops this chat's turn and continues **this chat** with the instruction, in **any root or helper chat**. Same semantics on web, CLI and channels. Plain Stop leaves background shells running; a second Stop / Esc within 3 s, or `/cancel`, kills them. Agent delegate `stop` / `stop_all` is unchanged (one helper's turn / its tree). Authority: founder decision, 2026-10-06.
+
+**Qualification, 2026-10-10 (external-CLI helpers):** the native steering and continuation rules in this document do not describe a helper on an external command-line tool. A live external delegation takes an instruction by interrupting its subprocess and resuming the same retained CLI conversation (a live task run too); with no CLI run in flight the request is refused as `not_steerable`. Its chat's `/stop-redirect` returns `not_steerable` while it is running or stopped, and a finished helper has no turn to replace (Resume guidance is shown). Resume, Respond and a typed message continue the same CLI conversation when it started and the gateway still retains it, run it for the first time if it never started, and otherwise refuse visibly; none of them creates a new worker session. External workers have no `message_parent`, and `delegate redirect` and `clear_goal` are refused. See [Agents guide](../../agents.md)::Workers and delegation.
+
+## Amended 2026-10-06 — founder decision
+
+[The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](../architecture/ADR-20260928-sub-agent-control-plane.md) and [Steering commands: no person question](../architecture/ADR-20261004-steering-commands-no-person-question.md) supersede conflicting session-control requirements and old acceptance expectations in this spec. Human and agent triggers use `AgentLoop.StopSession`: polite immediately, forced after 3 s, detach 3 s after force. `cancel_grace`, the agent 5-second grace and public `hard` option are removed.
+
+Landed stopped resumes the same generation with a fresh execution identity; committed done/failed starts the next round. Boot never dispatches from old messages. A finished root is lifecycle completed/done, **not archived/hidden**; human input continues it, and a new scheduled/heartbeat run may revive completed as the system principal, **never stopped**. A helper final is consumed once by poll OR wake; a stopped parent holds it unconsumed until resumed, and the tree-scope stop supersedes queued hand-back wakes without deleting saved results.
+
+Delegated input is delivered only after exact text/identity is durably in the transcript; a failed write stays queued with a visible error. One route/record for all senders (transcript as record), waiting-message restart reconstruction, 256 KiB aggregate cap, ledger compaction and live failed-descendant-stop retry are **deferred to #1198 (founder 2026-10-06)**. F6 is the later post-landing simplification review, not authorization to remove safeguards now. Stop-control wording below is corrected in place; unrelated historical generation, person-question and automatic-boot-run oracles remain superseded, not current acceptance.
+
+Status: Draft
+
 - **Decision record:** [ADR-091](../architecture/ADR-091-steered-sessions-replace-subagents.md) D8, §7
 - **Landing order:** [adr-091-landing-order.md](adr-091-landing-order.md) — consumes I-1, I-3, I-8, I-9; publishes I-6; WP-A's dispatch calls I-6
 - **Owner files:** landing order §3, row D
@@ -7,7 +21,7 @@
 
 ## Summary
 
-Stop must reach everything under the session it is pressed on — including a sub-agent that was woken after its own child finished, and one whose wake is queued but has not started — and it must still hold after a restart. Today Stop follows an in-memory link that a woken session loses. This package makes Stop stamp a durable marker on every session it reaches, makes every dispatch check its own session's marker and generation first, defines how a stopped session is revived by a newer instruction, reports partial results honestly when part of the tree cannot be read, and makes boot recovery classify every record, deliver failures to the parent, and re-wake entries whose wake was lost.
+A tree-scope stop must reach this chat and everything under it — including a sub-agent that was woken after its own child finished, and one whose wake is queued but has not started — and it must still hold after a restart. Today Stop follows an in-memory link that a woken session loses. This package makes Stop stamp a durable marker on every session it reaches, makes every dispatch check its own session's marker and generation first, defines how a stopped session is revived by a newer instruction, reports partial results honestly when part of the tree cannot be read, and makes boot recovery classify every record, deliver failures to the parent, and re-wake entries whose wake was lost.
 
 ## Existing codebase context
 
@@ -36,16 +50,16 @@ Stop must reach everything under the session it is pressed on — including a su
 
 ## User stories and acceptance criteria
 
-### US-1 — Stop reaches the whole tree, durably (P0)
+### US-1 — A second Stop / Esc or `/cancel` reaches the chat and its whole helper tree, durably (P0)
 
-1. **Given** R → A → B → C where B was re-entered after C completed, **When** Stop is pressed on R, **Then** R's, A's, B's and C's records carry a Stop marker for their current generation, and A, B and C's live turns are cancelled.
-2. **Given** C's completion has queued a wake for B that has not started, **When** Stop is pressed on R before it starts, **Then** the wake is refused at reservation and B does not run.
-3. **Given** the same, **When** Stop is pressed on R after B's re-entry registered, **Then** B is cancelled.
-4. **Given** B's record is unreadable, **When** Stop is pressed on R, **Then** A and C (if reachable) are stamped and cancelled, the report names B as unreachable, the Stop response carries `partial: true`, and one line reaches the channel the Stop came from (founder decision, round 6).
-5. **Given** Stop is pressed on middle node B, **When** the cascade runs, **Then** B's and C's records are stamped; A's and R's are not; A's next re-entry runs.
-6. **Given** Stop on R stamped B in generation g, **When** B is revived by a newer instruction as generation g+1, **Then** the old marker does not cancel it; an unrelated session on the same agent was never stamped and is unaffected.
-7. **Given** a Stop cascade in flight, **When** a launch under A lands after A was stamped, **Then** the child is stamped at launch (WP-A, FR-A-015) and never starts.
-8. **Given** a Stop on R, **When** the process restarts, **Then** every stamped session stays stopped.
+1. **Given** R → A → B → C where B was re-entered after C completed, **When** the tree-scope stop is requested on R, **Then** R's, A's, B's and C's records carry a Stop marker for their current generation, and A, B and C's live turns are cancelled.
+2. **Given** C's completion has queued a wake for B that has not started, **When** the tree-scope stop is requested on R before it starts, **Then** the wake is refused at reservation and B does not run.
+3. **Given** the same, **When** the tree-scope stop is requested on R after B's re-entry registered, **Then** B is cancelled.
+4. **Given** B's record is unreadable, **When** the tree-scope stop is requested on R, **Then** A and C (if reachable) are stamped and cancelled, the report names B as unreachable, the Stop response carries `partial: true`, and one line reaches the channel the Stop came from (founder decision, round 6).
+5. **Given** the tree-scope stop is requested on middle node B, **When** the cascade runs, **Then** B's and C's records are stamped; A's and R's are not; A's next re-entry runs.
+6. **Given** a tree-scope stop on R stamped B in generation g, **When** B is revived by a newer instruction as generation g+1, **Then** the old marker does not cancel it; an unrelated session on the same agent was never stamped and is unaffected.
+7. **Given** a cascade stopping the chat and its helper tree in flight, **When** a launch under A lands after A was stamped, **Then** the child is stamped at launch (WP-A, FR-A-015) and never starts.
+8. **Given** a tree-scope stop on R, **When** the process restarts, **Then** every stamped session stays stopped.
 9. **Given** the cascade stamped B in generation 1 and, before it reached the cancel step, B was revived and registered in generation 2, **When** the cascade cancels B with generation 1, **Then** the registry refuses it, B's generation-2 turn keeps running, and the report lists B under `SkippedNewerGeneration`.
 10. **Given** a descendant that is already terminal, **When** the cascade reaches it, **Then** nothing is written (terminal records are immutable) and it is listed under `SkippedTerminal`.
 11. **Given** the cascade is between enumerating A's children and stamping them, **When** A publishes a new child under its record lock, **Then** the cascade's second enumeration stamps it — no child is left unstamped.
@@ -72,14 +86,16 @@ Stop must reach everything under the session it is pressed on — including a su
 |---|---|
 | Stop on a leaf | only the leaf |
 | Ancestor pruned by retention while a descendant lives | prevented by WP-A's invariant; if encountered, reported as unreachable |
-| Stop issued twice | idempotent; one report |
+| the tree-scope stop issued twice | idempotent; one report |
+| First Stop/Esc or `/stop` on root or helper | this chat's turn only; helpers and background shells keep running; open 3 s |
+| Second Stop/Esc within 3 s, or `/cancel` | tree scope even if the first turn ended; kill the tree's background shells; no extra button |
 | Root record itself unreadable | Stop still cancels live turns found in memory; reported partial |
 | Revive then Stop within the same second | both applied in arrival order under the record lock; the later one wins |
-| Stop on a root whose only descendant is `queued` | the descendant is stamped and never starts; `subagent_state(cancelled)` written |
+| a tree-scope stop on a root whose only descendant is `queued` | the descendant is stamped and never starts; `subagent_state(cancelled)` written |
 
 ## Behavioral contract
 
-- When Stop is pressed on a session, the system stamps that session and every descendant it can reach by the durable edge, cancels their live turns, refuses their queued wakes, and reports what it could not reach.
+- When the tree-scope stop is requested on a session, the system stamps that session and every descendant it can reach by the durable edge, cancels their live turns, refuses their queued wakes, and reports what it could not reach.
 - When a steered session is dispatched, the system first checks its own record — marker, generation, registration.
 - When a newer instruction arrives for a stopped session, the system revives it as a new generation.
 - When the process boots, the system classifies every record, fails interrupted steered sessions and tells their parents, recovers parked sessions from their record, keeps stopped sessions stopped, re-wakes lost wakes, and surfaces unreadable records.
@@ -100,12 +116,12 @@ Conventions: landing order §5 item 6.
 
 | Constraint | Exact check |
 |---|---|
-| Full cascade | in the 3-level fixture with B re-entered, Stop on R → every record of R, A, B, C has `Stop.Generation == Generation`; `activeTurnStates` contains none of A, B, C within 2 s |
+| Full cascade (a tree-scope stop only) | in the 3-level fixture with B re-entered, a tree-scope stop on R → every record of R, A, B, C has `Stop.Generation == Generation`; `activeTurnStates` contains none of A, B, C within 2 s |
 | Queued re-entry refused | `ReserveDispatch(B, gen)` returns false after Stop stamped B's record for its current generation; `Dispatch` registers nothing |
 | Stale wake refused | `ReserveDispatch(B, 1)` false when `B.Generation == 2`; the wake is acknowledged |
-| Siblings independent | Stop on B; `ReserveDispatch(C', gen)` for sibling C' returns true |
-| Middle node | Stop on B; A's and R's records carry no marker for their generation; A's next re-entry runs |
-| Durable | Stop on R; `Reboot()`; `ReserveDispatch` false for every stamped session |
+| Siblings independent | a tree-scope stop on B; `ReserveDispatch(C', gen)` for sibling C' returns true |
+| Middle node | a tree-scope stop on B; A's and R's records carry no marker for their generation; A's next re-entry runs |
+| Durable | a tree-scope stop on R; `Reboot()`; `ReserveDispatch` false for every stamped session |
 | Revival | newer instruction → `Generation` incremented; `ReserveDispatch(B, 2)` true; `subagent_state(running)` written |
 | Order under lock | 100 randomized Stop/Revive interleavings → the record reflects the last write, never a torn state |
 | Cancel carries generation | stamp B (gen 1); revive + register B (gen 2); cancel with gen 1 → refused; B's gen-2 turn alive; `SkippedNewerGeneration == [B]` |
@@ -137,37 +153,37 @@ Conventions: landing order §5 item 6.
 Feature: Cancel cascade, reservation, revival and boot recovery
 
   # Happy Path — Traces to: US-1 / AS-1
-  Scenario: Stop stamps and cancels the whole tree
+  Scenario: A second Stop / Esc or `/cancel` stops the chat and its helper tree
     Given a chain R -> A -> B -> C and B has been re-entered after C completed
-    When the operator presses Stop on R
+    When the operator requests a tree-scope stop on R
     Then R, A, B and C carry a Stop marker for their current generation
     And A, B and C are cancelled
 
   # Error Path — Traces to: US-1 / AS-2
   Scenario: Stop beats a queued wake
     Given C has completed and B's wake is queued but not started
-    When the operator presses Stop on R
+    When the operator requests a tree-scope stop on R
     Then B's dispatch is refused at reservation
     And B never runs
 
   # Error Path — Traces to: US-1 / AS-4
   Scenario: Partial cascade is reported everywhere it should be
     Given B's lifecycle record is unreadable
-    When the operator presses Stop on R from Telegram
+    When the operator requests a tree-scope stop on R from Telegram
     Then A and C are cancelled
     And the Stop report lists B as unreachable and is marked partial
     And Telegram receives one line: "stopped 2 of 3; 1 unreachable"
 
   # Alternate Path — Traces to: US-1 / AS-5
   Scenario: Stop on a middle node leaves its ancestors alone
-    When the operator presses Stop on B
+    When the operator requests a tree-scope stop on B
     Then B and C are stamped and cancelled
     And A and R carry no marker
     And A's next re-entry runs
 
   # Alternate Path — Traces to: US-1 / AS-6
   Scenario: A newer instruction revives a stopped session
-    Given Stop on R stamped B's record in generation 2
+    Given a tree-scope stop on R stamped B's record in generation 2
     When the operator writes into B
     Then B is revived as generation 3 and its turn runs
 
@@ -179,7 +195,7 @@ Feature: Cancel cascade, reservation, revival and boot recovery
 
   # Error Path — Traces to: US-1 / AS-8
   Scenario: Stop survives a restart
-    Given Stop on R stamped A, B and C
+    Given a tree-scope stop on R stamped A, B and C
     When the process restarts
     Then A, B and C stay stopped
 
@@ -307,7 +323,7 @@ Implementers load the `test-driven-development` skill first.
 
 | ID | Input | Expected | Traces to |
 |---|---|---|---|
-| D-1 | Stop on R / A / B / C in the fixture | stamps and cancels {R,A,B,C} / {A,B,C} / {B,C} / {C} | US-1 |
+| D-1 | a tree-scope stop on R / A / B / C in the fixture | stamps and cancels {R,A,B,C} / {A,B,C} / {B,C} / {C} | US-1 |
 | D-2 | queued wake at t−1 ms / t+1 ms relative to Stop | refused / cancelled after registration | US-1/AS-2,3 |
 | D-3 | unreadable ∈ {B, C, root} | partial report naming it; one channel line | US-1/AS-4 |
 | D-4 | B stamped in g / B revived as g+1 / sibling never stamped / wake with g after revival | cancelled / not / not / stale-refused | US-1/AS-6, US-2/AS-3 |
@@ -321,25 +337,27 @@ Preserved: existing cancellation tests for live descendants (`subturn_*cancel*_t
 
 ## Functional requirements
 
+**Amended 2026-10-06:** FR-D-004's stopped-resume generation bump is superseded: same generation, fresh execution identity, with old effects refused at every effect boundary. FR-D-001's traversal/stamping lock must not span interrupt/model calls/waits. Live incomplete-descendant-stop retry is deferred to #1198 (founder 2026-10-06); incomplete results remain visible and accepted Stop intents retain boot finishing.
+
 | ID | Requirement |
 |---|---|
-| FR-D-001 | Stop MUST be one operation under the stopped node's cascade lock: enumerate, stamp every reachable non-terminal descendant, cancel each live turn **with the stamped generation**, enumerate once more for late children; MUST skip terminal descendants without writing (`SkippedTerminal`); and MUST report unreachable ones as partial — in the report, on the Stop response frame, and as one line on the originating channel. |
+| FR-D-001 | **Amended 2026-10-06:** `/cancel` or a second Stop / Esc within 3 s MUST be one operation under the stopped node's cascade lock: enumerate, stamp every reachable non-terminal descendant, cancel each live turn **with the stamped generation**, enumerate once more for late children; MUST skip terminal descendants without writing (`SkippedTerminal`); and MUST report unreachable ones as partial — in the report, on the Stop response frame, and as one line on the originating channel. |
 | FR-D-002 | Every steered dispatch MUST reserve against the session's own record (I-6): refused when it carries a Stop marker for its current generation, when the wake's generation is older than the record's, when the record is terminal without a follow-up, or when a turn is already registered; exactly one of two concurrent dispatches wins; siblings are independent. |
 | FR-D-003 | The pre-arm latch MUST treat a queued descendant wake as imminent under the stopped node. |
-| FR-D-004 | A Stop marker MUST name the generation it stops; a cancel MUST carry that generation and MUST be refused by the registry when the registered turn's generation differs (`SkippedNewerGeneration`); a session revived by a newer instruction or given a terminal follow-up MUST get a new generation to which the old marker no longer applies; a Stop on a middle node MUST stamp only that node's subtree; Stop and revive on one record MUST be serialised by the record's lock in arrival order. |
-| FR-D-005 | Boot recovery MUST deliver an `error` entry (`fatal: true`, `interrupted:`) to the parent of an interrupted steered session. |
-| FR-D-006 | Boot recovery MUST recover a parked session from its record without requiring a checkpoint. |
+| FR-D-004 | A Stop marker MUST name the generation it stops; a cancel MUST carry that generation and MUST be refused by the registry when the registered turn's generation differs (`SkippedNewerGeneration`); a session revived by a newer instruction or given a terminal follow-up MUST get a new generation to which the old marker no longer applies; a tree-scope stop on a middle node MUST reach only that node's subtree; plain Stop reaches only its current turn; Stop and revive on one record MUST be serialised by the record's lock in arrival order. |
+| FR-D-005 | **Amended 2026-10-06:** boot stops interrupted working steered sessions as `stopped(restart)` and preserves their goals/history; the direct parent receives a stop notice, not a fatal interrupted failure. Boot starts no turn. |
+| FR-D-006 | **Superseded by Steering commands: no person question, restated 2026-10-06:** the helper person-question park is removed; ordinary upward questions do not park or expire. Root clarification cards are a separate mechanism. |
 | FR-D-007 | Boot recovery MUST classify every record per I-8 and apply the stated consequence; `legacy_delegate` and `damaged_child` MUST never be resumed. |
 | FR-D-008 | Boot MUST consume the I-9 index report and surface every unreadable record to the operator. |
 | FR-D-009 | A Stop MUST survive a restart: stamped sessions stay stopped; only a newer instruction revives. |
-| FR-D-010 | Boot MUST re-wake every **wake-eligible** (I-5 table) unacknowledged inbox entry without a consumed marker, once, and MUST NOT wake progress or checkpoint entries. |
-| FR-D-011 | Boot MUST repair a half-written terminal outcome in either order: finish a non-terminal record whose `<child>:<gen>:final` entry exists, or recreate the entry (same id) for a terminal record whose parent inbox lacks it; then wake once. |
+| FR-D-010 | **Amended 2026-10-06:** boot reconciles saved finals/notices without dispatch. A stopped recipient keeps a hand-back unconsumed until resumed; progress/checkpoint never wake. Waiting-message reconstruction is deferred to #1198 (founder 2026-10-06). |
+| FR-D-011 | **Amended 2026-10-06:** recover only a committed lifecycle/outbox final (control-plane D2; R1), never promote an inbox-only candidate into completed. Preserve exact final identity and one consumption; no boot dispatch and no stopped-parent wake. |
 
 ## Success criteria
 
 | ID | Criterion |
 |---|---|
-| SC-D-1 | 100% of fixture Stops stamp and reach every readable descendant within 2 s, and hold after `Reboot()`. |
+| SC-D-1 | 100% of fixture request to stop the chat and its helper trees stamp and reach every readable descendant within 2 s, and hold after `Reboot()`. |
 | SC-D-2 | 0 queued or stale re-entries run after a Stop in 1,000 randomized timings. |
 | SC-D-3 | 100% of simulated crash states produce exactly one parent notification. |
 
@@ -372,14 +390,14 @@ ADR ACs covered: AC-8, AC-11 (the walked-root containment becomes reconstruction
 
 ## Holdout evaluation scenarios (not for development)
 
-1. Delegate three levels deep, let the bottom finish, press Stop at the top: everything stops, no orphan keeps running.
-2. Press Stop at the exact moment a middle worker is about to be woken: it never wakes.
-3. Corrupt one middle record; press Stop: the others stop and the UI says the Stop was partial and why.
+1. Delegate three levels deep, let the bottom finish, request the tree-scope stop at the top: everything stops, no orphan keeps running.
+2. Request the tree-scope stop at the exact moment a middle worker is about to be woken: it never wakes.
+3. Corrupt one middle record; request the tree-scope stop: the others stop and the UI says the Stop was partial and why.
 4. Kill the process mid-delegation; restart: the parent is told the child failed.
 5. Kill the process while a worker is waiting for an answer; restart; answer it: the worker continues.
 6. Upgrade an instance with an old running delegation: it is failed and reported, not resumed.
 7. Press Stop, then write into the stopped worker: it continues as a new generation.
-8. Press Stop, restart the process: nothing under that session runs.
+8. Request the tree-scope stop, restart the process: nothing under that session runs.
 
 ## Definition of done
 

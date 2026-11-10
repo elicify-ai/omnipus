@@ -130,10 +130,7 @@ func TestSchedulesAPI_Update400WorkerOwner(t *testing.T) {
 	api, cs := newSchedulesTestAPI(t)
 
 	// Seed a base-owned schedule we will try to reassign to a worker.
-	job, err := cs.AddJob(
-		"daily",
-		cron.CronSchedule{Kind: "every", EveryMS: i64p(60000)},
-		"go")
+	job, err := cs.AddJobFull(cron.JobSpec{Name: "daily", Schedule: cron.CronSchedule{Kind: "every", EveryMS: i64p(60000)}, Message: "go", AgentID: "u6-test-owner"})
 	require.NoError(t, err)
 	job.AgentID = "mia"
 	job.CreatedBy = "alice"
@@ -293,10 +290,7 @@ func TestSchedulesAPI_NotFound404(t *testing.T) {
 func TestSchedulesAPI_ListMapsTriggerStateRuns(t *testing.T) {
 	api, cs := newSchedulesTestAPI(t)
 	// Seed a job directly with history + state.
-	job, err := cs.AddJob(
-		"nightly",
-		cron.CronSchedule{Kind: "every", EveryMS: i64p(60000)},
-		"go")
+	job, err := cs.AddJobFull(cron.JobSpec{Name: "nightly", Schedule: cron.CronSchedule{Kind: "every", EveryMS: i64p(60000)}, Message: "go", AgentID: "u6-test-owner"})
 	require.NoError(t, err)
 	job.AgentID = "mia"
 	job.SessionMode = cron.SessionModeContinue
@@ -335,7 +329,7 @@ func TestSchedulesAPI_ListMapsTriggerStateRuns(t *testing.T) {
 
 func TestSchedulesAPI_PauseToggles(t *testing.T) {
 	api, cs := newSchedulesTestAPI(t)
-	job, err := cs.AddJob("j", cron.CronSchedule{Kind: "every", EveryMS: i64p(60000)}, "m")
+	job, err := cs.AddJobFull(cron.JobSpec{Name: "j", Schedule: cron.CronSchedule{Kind: "every", EveryMS: i64p(60000)}, Message: "m", AgentID: "u6-test-owner"})
 	require.NoError(t, err)
 	job.AgentID = "mia"
 	require.NoError(t, cs.UpdateJob(job))
@@ -372,7 +366,7 @@ func TestSchedulesAPI_RunNow(t *testing.T) {
 		msgBus, api.notifStore, api.agentLoop.GetConfig,
 	))
 
-	job, err2 := cs.AddJob("rn", cron.CronSchedule{Kind: "every", EveryMS: i64p(60000)}, "hi")
+	job, err2 := cs.AddJobFull(cron.JobSpec{Name: "rn", Schedule: cron.CronSchedule{Kind: "every", EveryMS: i64p(60000)}, Message: "hi", AgentID: "u6-test-owner"})
 	require.NoError(t, err2)
 	job.AgentID = "mia"
 	require.NoError(t, cs.UpdateJob(job))
@@ -391,7 +385,7 @@ func TestSchedulesAPI_RunNow(t *testing.T) {
 
 func TestSchedulesAPI_DeleteAndGet(t *testing.T) {
 	api, cs := newSchedulesTestAPI(t)
-	job, err := cs.AddJob("d", cron.CronSchedule{Kind: "every", EveryMS: i64p(60000)}, "m")
+	job, err := cs.AddJobFull(cron.JobSpec{Name: "d", Schedule: cron.CronSchedule{Kind: "every", EveryMS: i64p(60000)}, Message: "m", AgentID: "u6-test-owner"})
 	require.NoError(t, err)
 	job.AgentID = "mia"
 	require.NoError(t, cs.UpdateJob(job))
@@ -520,27 +514,4 @@ func TestSchedulesAPI_Create_AtomicOwner(t *testing.T) {
 	assert.Equal(t, "mia", jobs[0].AgentID, "owner must be set atomically on create")
 	assert.Equal(t, "alice", jobs[0].CreatedBy)
 	assert.Equal(t, got.Id, jobs[0].ID)
-}
-
-// TestSchedulesAPI_Update_InvalidSessionMode400 asserts an invalid session_mode
-// on update is rejected with 400 before persisting (M5b).
-func TestSchedulesAPI_Update_InvalidSessionMode400(t *testing.T) {
-	api, cs := newSchedulesTestAPI(t)
-	job := seedJob(t, cs, "mia", "alice")
-
-	bad := gen.ScheduleUpdateSessionMode("bogus-mode")
-	body, err := json.Marshal(gen.ScheduleUpdate{SessionMode: &bad})
-	require.NoError(t, err)
-	r := withUser(
-		httptest.NewRequest(http.MethodPut, "/api/v1/schedules/"+job.ID, bytes.NewBuffer(body)),
-		"alice",
-	)
-	w := httptest.NewRecorder()
-	api.HandleSchedules(w, r)
-	assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
-
-	// Stored mode unchanged.
-	stored, ok := cs.GetJob(job.ID)
-	require.True(t, ok)
-	assert.NotEqual(t, cron.SessionMode("bogus-mode"), stored.SessionMode)
 }

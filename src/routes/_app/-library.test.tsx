@@ -8,14 +8,18 @@
 // selected, the same contract as LibraryPanel's docked opener), every address
 // change from the explorer is written back to the URL as a PUSH so the back
 // button returns to the previously selected file (ADR-067 FR-012 / US-3),
-// unsaved Library edits block a back-button navigation, and closing the tab
-// (pagehide) announces the library pop-out-closed handoff signal.
+// and unsaved Library edits block a back-button navigation.
 
 import React from 'react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, within } from '@testing-library/react'
 
-let mockSearch: { workspace?: string; path?: string; folder?: string } = {}
+let mockSearch: { workspace?: string; path?: string; folder?: string; popout?: string } = {}
+
+vi.mock('@/lib/constants', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/constants')>()),
+  generateId: () => 'route-popout-test',
+}))
 
 const { mockNavigate, mockUseBlocker } = vi.hoisted(() => ({
   mockNavigate: vi.fn(),
@@ -37,17 +41,8 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
   }
 })
 
-const { mockAnnounceLibraryPopoutClosed, mockAnnounceLibraryWorkspaceChanged, mockLibraryExplorerProps } = vi.hoisted(
-  () => ({
-    mockAnnounceLibraryPopoutClosed: vi.fn(),
-    mockAnnounceLibraryWorkspaceChanged: vi.fn(),
-    mockLibraryExplorerProps: vi.fn(),
-  }),
-)
-
-vi.mock('@/lib/libraryHandoff', () => ({
-  announceLibraryPopoutClosed: mockAnnounceLibraryPopoutClosed,
-  announceLibraryWorkspaceChanged: mockAnnounceLibraryWorkspaceChanged,
+const { mockLibraryExplorerProps } = vi.hoisted(() => ({
+  mockLibraryExplorerProps: vi.fn(),
 }))
 
 // The real LibraryExplorer hosts the ONE discard-unsaved-edits ConfirmDialog
@@ -109,8 +104,6 @@ function MockLibraryExplorer() {
 const LibraryRoute = (Route as unknown as { component: React.ComponentType }).component
 
 beforeEach(() => {
-  mockAnnounceLibraryPopoutClosed.mockClear()
-  mockAnnounceLibraryWorkspaceChanged.mockClear()
   mockLibraryExplorerProps.mockClear()
   mockNavigate.mockClear()
   mockUseBlocker.mockClear()
@@ -167,120 +160,6 @@ describe('/library pop-out route', () => {
     )
   })
 
-  it('announces the library pop-out-closed handoff on pagehide, for the exact workspace shown', () => {
-    mockSearch = { workspace: 'ws-7' }
-    render(<LibraryRoute />)
-
-    window.dispatchEvent(new Event('pagehide'))
-
-    expect(mockAnnounceLibraryPopoutClosed).toHaveBeenCalledWith('ws-7')
-  })
-
-  it('announces with undefined (virtual root) when no workspace was scoped', () => {
-    mockSearch = {}
-    render(<LibraryRoute />)
-
-    window.dispatchEvent(new Event('pagehide'))
-
-    expect(mockAnnounceLibraryPopoutClosed).toHaveBeenCalledWith(undefined)
-  })
-
-  // UAT fix: `handlePageHide` used to close over the `workspace` value the
-  // tab was opened with, so closing the tab after navigating elsewhere
-  // announced the STALE original workspace and the docked panel re-docked to
-  // the wrong place. Deep-linking now also writes the param on every
-  // workspace change, but the announcement deliberately still comes from
-  // `onWorkspaceChange` and not from the param — a router navigation settles
-  // a tick after the navigation itself, and at `pagehide` there is no later
-  // tick. This test therefore drives `onWorkspaceChange` WITHOUT touching
-  // `mockSearch`, which is exactly the case reading the URL would get wrong.
-  it('announces the CURRENTLY-VIEWED workspace at pagehide time, even after in-tab navigation changed it since mount', () => {
-    mockSearch = { workspace: 'ws-7' }
-    render(<LibraryRoute />)
-
-    const { onWorkspaceChange } = mockLibraryExplorerProps.mock.calls[0][0] as {
-      onWorkspaceChange?: (workspaceId: string | null) => void
-    }
-    // Simulate the user navigating from the tab's initial workspace to a
-    // different one purely inside LibraryExplorer — this does NOT touch the
-    // route's `workspace` search param.
-    onWorkspaceChange?.('ws-99')
-
-    window.dispatchEvent(new Event('pagehide'))
-
-    expect(mockAnnounceLibraryPopoutClosed).toHaveBeenCalledWith('ws-99')
-  })
-
-  it('announces undefined once in-tab navigation returns to the virtual root', () => {
-    mockSearch = { workspace: 'ws-7' }
-    render(<LibraryRoute />)
-
-    const { onWorkspaceChange } = mockLibraryExplorerProps.mock.calls[0][0] as {
-      onWorkspaceChange?: (workspaceId: string | null) => void
-    }
-    onWorkspaceChange?.(null)
-
-    window.dispatchEvent(new Event('pagehide'))
-
-    expect(mockAnnounceLibraryPopoutClosed).toHaveBeenCalledWith(undefined)
-  })
-
-  // UAT fix (Dana, re-verified v8 — "pop-out re-dock STILL does not restore
-  // the workspace"): root-causing that regression required checking EVERY
-  // link in the chain rather than re-guessing. This link — does the
-  // callback fire on in-tab navigation, and does it publish CONTINUOUSLY
-  // rather than only at `pagehide` teardown — is the one the first attempt
-  // never actually verified with a test. `pagehide` + BroadcastChannel
-  // delivery is asynchronous and a message posted during unload may never
-  // arrive, so the workspace is now published the moment navigation
-  // happens, not only when the tab is closing.
-  describe('continuous workspace-changed broadcast (not only at pagehide teardown)', () => {
-    it('announces the workspace-changed broadcast on the initial mount', () => {
-      mockSearch = { workspace: 'ws-7' }
-      render(<LibraryRoute />)
-
-      const { onWorkspaceChange } = mockLibraryExplorerProps.mock.calls[0][0] as {
-        onWorkspaceChange?: (workspaceId: string | null) => void
-      }
-      // LibraryExplorer's own effect fires onWorkspaceChange on mount too —
-      // simulate that here since LibraryExplorer itself is mocked.
-      onWorkspaceChange?.('ws-7')
-
-      expect(mockAnnounceLibraryWorkspaceChanged).toHaveBeenCalledWith('ws-7')
-    })
-
-    it('announces EACH in-tab navigation immediately, well before any pagehide', () => {
-      mockSearch = { workspace: 'ws-7' }
-      render(<LibraryRoute />)
-
-      const { onWorkspaceChange } = mockLibraryExplorerProps.mock.calls[0][0] as {
-        onWorkspaceChange?: (workspaceId: string | null) => void
-      }
-
-      onWorkspaceChange?.('ws-99')
-      expect(mockAnnounceLibraryWorkspaceChanged).toHaveBeenCalledWith('ws-99')
-      // Not waiting for pagehide — the whole point of publishing
-      // continuously is that the docked side already knows before teardown.
-      expect(mockAnnounceLibraryPopoutClosed).not.toHaveBeenCalled()
-
-      onWorkspaceChange?.('ws-other')
-      expect(mockAnnounceLibraryWorkspaceChanged).toHaveBeenCalledWith('ws-other')
-      expect(mockAnnounceLibraryWorkspaceChanged).toHaveBeenCalledTimes(2)
-    })
-
-    it('announces undefined (virtual root) as a workspace-changed broadcast too', () => {
-      mockSearch = { workspace: 'ws-7' }
-      render(<LibraryRoute />)
-
-      const { onWorkspaceChange } = mockLibraryExplorerProps.mock.calls[0][0] as {
-        onWorkspaceChange?: (workspaceId: string | null) => void
-      }
-      onWorkspaceChange?.(null)
-
-      expect(mockAnnounceLibraryWorkspaceChanged).toHaveBeenCalledWith(undefined)
-    })
-  })
-
   // ── Deep-linking (ADR-067 FR-012 / US-3) ────────────────────────────────
   // The route is the only place that knows about URLs, so it is the only
   // place these can be asserted. LibraryExplorer's half — what it does with
@@ -301,7 +180,7 @@ describe('/library pop-out route', () => {
 
       expect(mockNavigate).toHaveBeenCalledWith({
         to: '/library',
-        search: { workspace: 'ws-1', path: 'notes/plan.md' },
+        search: { workspace: 'ws-1', path: 'notes/plan.md', popout: 'route-popout-test' },
       })
     })
 
@@ -313,7 +192,7 @@ describe('/library pop-out route', () => {
 
       expect(mockNavigate).toHaveBeenCalledWith({
         to: '/library',
-        search: { workspace: 'ws-1', path: undefined },
+        search: { workspace: 'ws-1', path: undefined, popout: 'route-popout-test' },
       })
     })
 

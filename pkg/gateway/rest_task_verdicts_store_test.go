@@ -2,7 +2,7 @@
 // the store mismatch behind CI "E2E — llm-verifier-eval".
 //
 // handleTaskVerdicts resolved its transcript store by AGENT
-// (agentLoop.GetAgentStore(t.AgentID) — the legacy per-agent store under the
+// (agentLoop.GetSessionStore() — the legacy per-agent store under the
 // agent's own workspace) rather than by SESSION. Since ADR-091 routes task
 // starts through SteerLauncher.Launch, a started task's session is minted in
 // the SHARED store, so the per-agent lookup found no transcript.jsonl at all
@@ -90,21 +90,4 @@ func TestHandleTaskVerdicts_SharedStoreSession_ReturnsVerdict(t *testing.T) {
 	require.Equal(t, "verdict-1", out[0].Id)
 	require.False(t, out[0].Met)
 	require.Len(t, out[0].PerCriterion, 1)
-}
-
-// TestHandleTaskVerdicts_LegacyPerAgentSession_ReturnsVerdict keeps the
-// pre-ADR-091 path covered: ExecuteTask's createTaskSessionSync still mints
-// into the per-agent store, and those verdicts must keep coming back too.
-func TestHandleTaskVerdicts_LegacyPerAgentSession_ReturnsVerdict(t *testing.T) {
-	api := newTestRestAPIWithAgent(t)
-	perAgent := api.agentLoop.GetAgentStore("01JXTESTAGENTSTARTTEST001")
-	require.NotNil(t, perAgent)
-
-	meta, err := perAgent.NewSession(session.SessionTypeTask, "", "01JXTESTAGENTSTARTTEST001")
-	require.NoError(t, err)
-	taskID := seedTaskWithVerdict(t, api, perAgent, meta.ID, "01JXTESTAGENTSTARTTEST001")
-
-	out := getTaskVerdicts(t, api, taskID)
-	require.Len(t, out, 1)
-	require.Equal(t, "verdict-1", out[0].Id)
 }

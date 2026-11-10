@@ -28,7 +28,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { act } from 'react'
 import { useChatStore, getMessages, __resetFinishedTurnIdsForTests } from '../chat'
 import { useSessionStore } from '../session'
-import type { WsSessionStateFrame, TokenFrame, DoneFrame } from '@/lib/ws'
+import type { SessionStateFrame, TokenFrame, DoneFrame } from '@/lib/ws'
 
 const SID_A = 'routing-session-a'
 const SID_B = 'routing-session-b'
@@ -62,7 +62,7 @@ function resetStores() {
 
 beforeEach(resetStores)
 
-function sessionStateFor(sessionId: string, turnId = TURN_ID): WsSessionStateFrame {
+function sessionStateFor(sessionId: string, turnId = TURN_ID): SessionStateFrame {
   return {
     type: 'session_state',
     user_id: 'user-1',
@@ -77,7 +77,7 @@ function sessionStateFor(sessionId: string, turnId = TURN_ID): WsSessionStateFra
   }
 }
 
-function sessionStateNoTurnFor(sessionId: string): WsSessionStateFrame {
+function sessionStateNoTurnFor(sessionId: string): SessionStateFrame {
   return {
     type: 'session_state',
     user_id: 'user-1',

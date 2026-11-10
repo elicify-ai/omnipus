@@ -96,7 +96,7 @@ func u19FixtureTurns(t *testing.T, al *AgentLoop, tag string) (parent, child, gr
 // proof for the ADR-057 D8/R-13 scope choice (formerly
 // TestSetCancelHooks_ScopeSelfOnlyNotSubtree, inverted — see file header).
 // It calls al.Interrupt — the exact method session_messaging_wire.go's
-// SetCancelHooks closures invoke for a delegate(action="cancel") soft stop —
+// SetCancelHooks closures invoke for a delegate(action="stop_all") soft stop —
 // with the delegate CHILD's own sessionKey, once per scope, and shows:
 //
 //   - ScopeSubtree (what is actually wired, post-fix): reaches the named
@@ -149,7 +149,7 @@ func TestSetCancelHooks_ChildCancelReachesSubtree(t *testing.T) {
 		assert.ElementsMatch(t, []string{child.turnID}, descendants,
 			"ScopeSelfOnly reaches ONLY the named child — demonstrating that had "+
 				"session_messaging_wire.go's SetCancelHooks call stayed wired with ScopeSelfOnly "+
-				"instead of ScopeSubtree, a single delegate(action=\"cancel\") on the child would leave "+
+				"instead of ScopeSubtree, a single delegate(action=\"stop_all\") on the child would leave "+
 				"the grandchild (and any background shells it owns) running forever: the exact live "+
 				"leak ADR-057 D8/R-13 closes")
 

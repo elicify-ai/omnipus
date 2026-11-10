@@ -72,7 +72,6 @@ func TestSeedWorker(t *testing.T) {
 	assert.True(t, worker.IsWorker(), "IsWorker() must be true for the worker")
 	assert.False(t, worker.IsChatTarget(), "a worker must NOT be a chat target")
 	assert.True(t, worker.Locked, "worker must be Locked like the core agents")
-	assert.False(t, worker.Default, "worker must never be the default agent")
 
 	require.NotNil(t, worker.Subagents, "worker must carry a Subagents config holding the executor")
 	require.NotNil(t, worker.Subagents.Executor, "worker must carry an executor (Spec-4 field)")
@@ -96,10 +95,11 @@ func TestWorkerNotCoreAgent(t *testing.T) {
 }
 
 // TestSeedBaseDelegationPolicies verifies fresh defaults: Jim delegates to
-// Planner, Researcher, General Purpose, Jim and Ava; Planner delegates only
-// to Researcher with depth 2; General Purpose delegates to itself. Other
-// roles have no onward defaults. SeededEdgeDepth bounds self-edge depth.
-// The workspace graph remains the runtime authority.
+// Planner, Researcher, General Purpose, Jim and Ava; Planner delegates to
+// itself and to Researcher with depth 2; General Purpose delegates to itself.
+// Every other role (Mia, Ava, Admin, Researcher, and customs) ships a single
+// self-edge (settled design, 2026-10-09). SeededEdgeDepth bounds self-edge
+// depth. The workspace graph remains the runtime authority.
 func TestSeedBaseDelegationPolicies(t *testing.T) {
 	cfg := &config.Config{}
 	require.True(t, coreagent.SeedConfig(cfg))
@@ -108,8 +108,7 @@ func TestSeedBaseDelegationPolicies(t *testing.T) {
 	// the delegation-edges check below is independent of AgentConfig.
 	findSeeded(t, cfg, string(coreagent.IDJim))
 	findSeeded(t, cfg, string(coreagent.IDMia))
-	findSeeded(t, cfg, string(coreagent.IDAdmin))
-	findSeeded(t, cfg, string(coreagent.IDAva))
+	findSeeded(t, cfg, string(coreagent.IDOmnipus))
 	findSeeded(t, cfg, string(coreagent.IDWorker))
 
 	hasTarget := func(p *config.DelegationPolicy, id string) bool {
@@ -152,8 +151,15 @@ func TestSeedBaseDelegationPolicies(t *testing.T) {
 		seedModesToEdgeModes(jimDP.Modes),
 		"Jim's seeded modes, translated onto a workspace graph edge, must collapse to [direct, task]")
 
-	for _, id := range []coreagent.CoreAgentID{coreagent.IDMia, coreagent.IDAva, coreagent.IDAdmin, coreagent.IDResearcher} {
-		assert.Nil(t, coreagent.SeedDelegationEdges(id), "%s has no shipped delegation edge", id)
+	// Settled design: every non-system agent ships a single self-edge — Ava,
+	// Admin and Researcher included (Mia ships her self-edge PLUS the
+	// General Purpose edge, seedfix gap 6; see seedfix_retro_mia_test.go) (Admin's is dropped from any workspace
+	// graph because Admin is off-team, but the SEED must still carry it).
+	for _, id := range []coreagent.CoreAgentID{coreagent.IDOmnipus, coreagent.IDResearcher} {
+		idp := coreagent.SeedDelegationEdges(id)
+		require.NotNil(t, idp, "%s must ship a default self-edge", id)
+		assert.Len(t, idp.To, 1, "%s ships exactly one edge (its self-edge)", id)
+		assert.True(t, hasTarget(idp, string(id)), "%s must seed a self-edge to itself", id)
 	}
 	workerDP := coreagent.SeedDelegationEdges(coreagent.IDWorker)
 	require.NotNil(t, workerDP)
@@ -161,12 +167,12 @@ func TestSeedBaseDelegationPolicies(t *testing.T) {
 }
 
 // TestSeedDelegationPolicies_SelfRolesDoNotPinRoleWideDepth guards the SHAPE
-// of the ADR-090 FR-006 fix: "Fresh self-edges explicitly set max_depth 3 (or
+// of the ADR-090 FR-006 fix: "Fresh self-edges explicitly set max_depth 10 (or
 // the lower configured ceiling)" is a PER-EDGE statement about the workspace
 // graph, and config.DelegationPolicy.Depth is POLICY-WIDE — one value covering
 // every target the role seeds. Setting Depth on Jim's or Worker's seed policy
 // here would clamp their NON-self edges (jim→ava, jim→worker, jim→planner,
-// jim→researcher) to the same 3, which FR-006 does not ask for and the
+// jim→researcher) to the same 10, which FR-006 does not ask for and the
 // founder's task explicitly forbids. The pin is applied where policies become
 // edges: defaultWorkspaceDelegationEdges (pkg/gateway) and
 // seedDelegationEdgesForNewMembers (pkg/sysagent/tools).
@@ -195,7 +201,8 @@ func TestSeedDelegationPolicies_SelfRolesDoNotPinRoleWideDepth(t *testing.T) {
 // policy retains required denies and explicit workflow entries while
 // inheriting unchanged ceiling values.
 func TestWorkerToolPolicyTightensGlobalCeiling(t *testing.T) {
-	cfg := &config.Config{}
+	// SPEC.md Table (2026-10-22): check new core grants against the real shipped ceiling.
+	cfg := config.DefaultConfig()
 	require.True(t, coreagent.SeedConfig(cfg))
 	worker := findSeeded(t, cfg, string(coreagent.IDWorker))
 
@@ -207,19 +214,19 @@ func TestWorkerToolPolicyTightensGlobalCeiling(t *testing.T) {
 		"enable_channel", "configure_channel", "disable_channel", "list_channels", "test_channel",
 		"configure_provider", "list_providers", "test_provider", "list_models",
 		"get_config", "set_config", "run_doctor", "get_usage",
-		"create_agent", "update_agent", "delete_agent", "read_agent_metadata",
-		"create_task", "delete_task", "create_task_in_workspace", "update_task_in_workspace",
-		"delete_task_in_workspace", "list_tasks_in_workspace",
-		"create_workspace", "update_workspace", "delete_workspace", "list_workspaces", "get_workspace",
-		// inspect_session (fix-wave finding #2): the global ceiling now seeds
-		// "allow" for this tool (defaults.go), so an absent entry here would
-		// silently inherit that allow — the worker must tighten it to an
-		// explicit "deny" like every other seeded non-Judge agent.
-		"inspect_session",
+		"create_agent", "update_agent", "delete_agent",
+		// SPEC.md Table (2026-10-22): create_task and management writes remain Off; read-only workspace/session tools do not.
+		"create_task",
+		"create_workspace", "update_workspace", "delete_workspace",
 	} {
 		got, ok := pol[tool]
 		require.True(t, ok, "worker must have an explicit deny for tightened tool %q", tool)
 		assert.Equal(t, config.ToolPolicyDeny, got, "worker tool %q must be explicit 'deny'", tool)
+	}
+
+	// SPEC.md Table (2026-10-22): these four old-deny entries now resolve to the Worker column values.
+	for name, want := range map[string]string{"delete_task": "ask", "list_workspaces": "allow", "get_workspace": "allow", "inspect_session": "allow"} {
+		assert.Equal(t, want, resolveFor(t, cfg, string(coreagent.IDWorker), name, nil), "Worker %s", name)
 	}
 
 	// Deliberately absent from the worker's own map — inherits the global

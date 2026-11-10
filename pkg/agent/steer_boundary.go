@@ -14,6 +14,8 @@ package agent
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
@@ -58,7 +60,7 @@ func (al *AgentLoop) SetSteerAudienceDeps(resolver steer.AudienceResolver, obser
 	}
 	for _, agentID := range reg.ListAgentIDs() {
 		if inst, ok := reg.GetAgent(agentID); ok && inst != nil {
-			al.wireSessionMessagingForAgent(inst)
+			al.wireSessionMessagingForAgent(inst, al.GetConfig())
 		}
 	}
 }
@@ -77,7 +79,7 @@ func (al *AgentLoop) SetSteerSessionLauncher(launcher steer.SessionLauncher) {
 	}
 	for _, agentID := range reg.ListAgentIDs() {
 		if inst, ok := reg.GetAgent(agentID); ok && inst != nil {
-			al.wireSessionMessagingForAgent(inst)
+			al.wireSessionMessagingForAgent(inst, al.GetConfig())
 		}
 	}
 }
@@ -154,5 +156,34 @@ func (al *AgentLoop) toolFeedbackReachesUser(ctx context.Context, boundary steer
 			origin = rec.Origin.Kind
 		}
 	}
-	return origin != session.OriginKindTask && origin != session.OriginKindVerifier
+	return toolFeedbackOriginAllowsUser(origin)
+}
+
+// toolFeedbackOriginAllowsUser is only the existing Task/Verifier veto. The
+// real-turn wrapper deliberately keeps its canonical-over-turn fallback.
+func toolFeedbackOriginAllowsUser(kind session.OriginKind) bool {
+	return kind != session.OriginKindTask && kind != session.OriginKindVerifier
+}
+
+// asyncNotifyOriginReachesUser is stricter than real-turn feedback: a failed
+// notification has no turn-origin fallback and cannot infer human authority.
+func (al *AgentLoop) asyncNotifyOriginReachesUser(ctx context.Context, sessionID string) (bool, error) {
+	if al.getSteerAudienceResolver() == nil {
+		al.getBoundaryObserver().Observe(steer.BoundaryAsyncToolFeedback, sessionID, steer.AudienceNone)
+		return false, nil
+	}
+	audience := al.audienceFor(ctx, steer.BoundaryAsyncToolFeedback, sessionID)
+	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil || sessionID == "" {
+		return false, nil
+	}
+	rec, err := lifecycle.Load(sessionID)
+	if errors.Is(err, session.ErrLifecycleNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("async notification origin warning: read canonical origin: %w", err)
+	}
+	return audience == steer.AudienceUser && rec.SessionID == sessionID && rec.SteeredBy == nil &&
+		rec.Origin != nil && session.IsValidOriginKind(rec.Origin.Kind) && toolFeedbackOriginAllowsUser(rec.Origin.Kind), nil
 }

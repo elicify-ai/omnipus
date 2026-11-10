@@ -78,6 +78,7 @@ func newWave5bTestAPI(t *testing.T) *restAPI {
 	return &restAPI{
 		agentLoop:     al,
 		allowedOrigin: "http://localhost:3000",
+		homePath:      tmpDir, // own temp home: see TestMain's leak guard
 	}
 }
 
@@ -267,8 +268,10 @@ func TestCoreAgentDefaults(t *testing.T) {
 	assert.False(t, sysFound,
 		"omnipus-system (retired system agent) must NOT be seeded by production SeedConfig")
 
-	// ADR-090 §2.0 base core agents must all be present with type "core".
-	coreAgents := []string{"mia", "jim", "ava", "admin"}
+	// Base core agents must all be present with type "core" (ADR-090 §2.0 as
+	// amended by omnipus-system-agent FR-001/FR-008: Omnipus replaces Ava and
+	// Admin).
+	coreAgents := []string{"mia", "jim", "omnipus"}
 	for _, id := range coreAgents {
 		t.Run(id+" is present with type core", func(t *testing.T) {
 			agType, found := agentsByID[id]

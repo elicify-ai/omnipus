@@ -369,7 +369,7 @@ func TestHardCeilingAppliesToBothOwnerKinds_GOALFR026(t *testing.T) {
 					rec := t3ArmGoalRecord(t, sid, tc.ownerKind, ownerID, 2*t3ArmedGoalMaxRounds)
 
 					steered := false
-					met := al.runGoalAdjudication(context.Background(), agentInst, "", sid, store, rec,
+					met, _ := al.runGoalAdjudication(context.Background(), agentInst, "", sid, store, rec,
 						"[goal:evidence] painted it green", func(string) { steered = true })
 
 					if met {

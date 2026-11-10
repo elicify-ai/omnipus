@@ -1,0 +1,102 @@
+title: LibraryEntryView
+description: >
+  The saved-view facts carried by a LibraryEntry that is a saved view (#1017).
+  Present exactly when the parent entry's `is_view` is true, and only in a
+  GET /library/{workspace_id}/entries response requested with
+  include_views=true.
+
+
+  A saved view is the file `<collection root>/.omnipus-vault/views/<slug>.yaml`
+  that the collection's view loader ACCEPTED (the same load GET
+  .../knowledge/views uses: the same parser and record schemas, reading
+  only regular files inside the knowledge base, within the listing's size
+  limits). Every
+  field here is read from that loaded view, never re-derived by the client:
+  the same no-re-derivation rule KnowledgeBaseView states.
+
+
+  To show the view's rows, pass `collection_id` and `name` VERBATIM to
+  GET /library/{workspace_id}/knowledge/view (its `collection_id` and `view`
+  query parameters). The entry's own `path` is the saved view FILE; reading
+  it returns the view's YAML definition, not its rows.
+
+
+  Every emitted (`collection_id`, `name`) can be opened: GET
+  .../knowledge/views?collection_id=<collection_id> lists `name`, and GET
+  .../knowledge/view with the pair returns the view rather than
+  `unknown_view`. That is why only a knowledge base that is itself a
+  collection of the workspace's knowledge scope carries view entries; a
+  knowledge base nested inside another one carries none (see the
+  include_views parameter of GET .../entries).
+
+
+  Grouping a nested group of optional facts behind one presence check follows
+  the `mount` precedent (LibraryEntryMount.yaml).
+type: object
+additionalProperties: false
+required:
+  - name
+  - label
+  - collection_id
+properties:
+  name:
+    type: string
+    minLength: 1
+    description: >
+      The saved view's own name (records.SavedView.Name) — the server's slug
+      and the view's only address. Pass it VERBATIM as the `view` query
+      parameter of GET .../knowledge/view. Never reconstructed by a client,
+      and not the same thing as the entry's `name` (which is the file name,
+      `<slug>.yaml`).
+    example: "projects--active-projects"
+  label:
+    type: string
+    minLength: 1
+    description: >
+      What to show a reader: the view's declared `label` when it has one,
+      otherwise its `name` (records.SavedView.DisplayLabel, the same value
+      KnowledgeBaseView.label carries).
+    example: "Active projects"
+  collection_id:
+    type: string
+    minLength: 1
+    description: >
+      The opaque id of the knowledge base that owns this view — the same
+      value KnowledgeBaseInfo.collection_id and
+      KnowledgeCollectionViews.collection_id carry for that knowledge base.
+      Pass it as `collection_id` to GET .../knowledge/view. Never parse a path
+      out of it.
+    example: "kb_3d1c9a7e5b2f4806"
+  kind:
+    type: string
+    minLength: 1
+    description: >
+      The view kind declared in the view file (ViewDef.kind), echoed
+      verbatim — today one of table, list, tiles, board, calendar, summary,
+      trend or breakdown, the values ViewDef.kind allows. Absent when the
+      file declares no kind: views imported from a `.base` file and views
+      written before the kinds existed usually have none, and no kind is
+      ever invented for them. A plain string rather than an enum, like
+      KnowledgeBaseView.kind and ViewResult.kind, so a kind added to ViewDef
+      later can never make this listing fail client-side validation; a
+      client that does not recognise a value shows its generic view icon.
+    example: "summary"
+  source:
+    type: string
+    minLength: 1
+    description: >
+      The `.base` file this view was imported from: the view file's own
+      `source` key (records.SavedView.DeclaredSource), echoed verbatim — a
+      path relative to the knowledge base root, exactly as
+      KnowledgeBaseView.source reports it. Absent for a view authored in
+      place (knowledge_configure create_view / write_view), which belongs to
+      the knowledge base as a whole rather than to any file. It is also what
+      decides which folder lists the view (see the include_views parameter
+      of GET .../entries); it does not imply the `.base` file still exists.
+    example: "CRM/Invoices.base"
+example:
+  name: "invoices--outstanding"
+  label: "Outstanding"
+  collection_id: "kb_3d1c9a7e5b2f4806"
+  kind: "summary"
+  source: "CRM/Invoices.base"

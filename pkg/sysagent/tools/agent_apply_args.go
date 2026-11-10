@@ -2,28 +2,62 @@ package systools
 
 import (
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/agentmutation"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
+// agentUpdateArgNames is update_agent's field vocabulary. Per-agent tool
+// policies (tool_policy_changes) and connector assignments (mcp_servers) are
+// NOT in it: set_agent_permissions is the only agent-tool path for those on an
+// existing agent (omnipus-system-agent FR-024), and update_agent refuses them
+// by name (permissionFieldRefusal) rather than as unknown fields.
 var agentUpdateArgNames = map[string]struct{}{
 	"id": {}, "revision": {}, "name": {}, "description": {}, "soul": {},
-	"model": {}, "provider": {}, "fallback_models": {}, "color": {}, "icon": {},
-	"max_tool_iterations": {}, "skills": {}, "mcp_servers": {}, "tool_policy_changes": {},
-	"memory_enabled": {}, "default": {}, "voice": {},
+	"model": {}, "provider": {}, "fallback_models": {}, "color": {},
+	"figure": {}, "role": {}, // visual identity (#1303); protection per ADR-090 in ValidateFields
+	"max_tool_iterations": {}, "skills": {},
+	"reasoning_effort": {}, // primary-model effort (effort-levels spec FR-048)
+	"memory_enabled":   {}, "voice": {},
 	"context_window_override": {}, "model_params": {},
+	"agent_md": {}, // AGENT.md (#1064), written beside the record
+	// r17 §3.9 ExecutorConfigUpdate: external-CLI worker settings only.
+	"env_overrides": {}, "env_overrides_remove": {}, "cli_args": {},
+}
+
+// permissionFieldNames are the capability fields only set_agent_permissions
+// may write on an existing agent (FR-024).
+var permissionFieldNames = []string{"tool_policy_changes", "mcp_servers"}
+
+// permissionFieldRefusal returns update_agent's refusal when args carries a
+// permission field — present at all, a clear or a null included — so the
+// whole call is refused before any write (BDD-14.2). Nil otherwise.
+func permissionFieldRefusal(args map[string]any) *tools.ToolResult {
+	for _, name := range permissionFieldNames {
+		if _, present := args[name]; present {
+			return tools.ErrorResult(errorJSON("USE_SET_AGENT_PERMISSIONS",
+				name+" cannot be changed with update_agent; per-agent tool policies and connector assignments change only through set_agent_permissions",
+				"Call set_agent_permissions with the agent id, its revision and the capability change"))
+		}
+	}
+	return nil
 }
 
 var agentCreateArgNames = map[string]struct{}{
-	"name": {}, "description": {}, "soul": {}, "model": {}, "color": {}, "icon": {},
-	"agent_type": {}, "cli": {}, "cli_path": {}, "provider": {}, "fallback_models": {},
-	"heartbeat": {}, "max_tool_iterations": {}, "skills": {}, "mcp_servers": {},
-	"tool_policy_changes": {}, "memory_enabled": {}, "default": {}, "voice": {},
+	"name": {}, "description": {}, "soul": {}, "model": {}, "color": {},
+	"figure": {}, "role": {}, // visual identity (#1303); defaults resolved in validate
+	"agent_type": {}, "cli": {}, "env_overrides": {}, "cli_args": {}, "provider": {}, "fallback_models": {},
+	"reasoning_effort":    {}, // primary-model effort (effort-levels spec FR-048)
+	"max_tool_iterations": {}, "skills": {}, "mcp_servers": {},
+	"tool_policy_changes": {}, "memory_enabled": {}, "voice": {},
 	"context_window_override": {}, "model_params": {},
+	workspaceIDParam: {}, // destination workspace (FR-040), not an agent field
 }
 
 func rejectUnknownAgentFields(args map[string]any, allowed map[string]struct{}) error {
@@ -38,7 +72,8 @@ func rejectUnknownAgentFields(args map[string]any, allowed map[string]struct{}) 
 func mutationFieldNames(args map[string]any) []string {
 	fields := make([]string, 0, len(args))
 	for name := range args {
-		if name == "id" || name == "revision" || name == "agent_type" || name == "cli" || name == "cli_path" || name == "heartbeat" {
+		if name == "id" || name == "revision" || name == "agent_type" || name == "cli" ||
+			name == "agent_md" || name == workspaceIDParam {
 			continue
 		}
 		fields = append(fields, name)
@@ -46,8 +81,14 @@ func mutationFieldNames(args map[string]any) []string {
 	return fields
 }
 
-func applyAgentToolArgs(a *config.AgentConfig, args map[string]any, known map[string]struct{}, inv AgentConfigInventory) error {
-	if err := applyIdentityAndModelArgs(a, args); err != nil {
+// applyAgentToolArgs applies create_agent/update_agent args onto a. defaults
+// is the global agent config in force (may be nil — the resolver then uses
+// the shipped default); the #904 per-agent tool-iteration limit is checked
+// against it (D15).
+func applyAgentToolArgs(a *config.AgentConfig, args map[string]any, known map[string]struct{}, inv AgentConfigInventory,
+	defaults *config.AgentDefaults,
+) error {
+	if err := applyIdentityAndModelArgs(a, args, defaults); err != nil {
 		return err
 	}
 	if err := applyCapabilityArgs(a, args, known, inv); err != nil {
@@ -56,10 +97,13 @@ func applyAgentToolArgs(a *config.AgentConfig, args map[string]any, known map[st
 	return applySharedConfigArgs(a, args)
 }
 
-func applyIdentityAndModelArgs(a *config.AgentConfig, args map[string]any) error {
+func applyIdentityAndModelArgs(a *config.AgentConfig, args map[string]any, defaults *config.AgentDefaults) error {
 	if err := applyOptionalString(args, "name", func(v string) error {
 		if strings.TrimSpace(v) == "" {
 			return fieldErr("name", "name must be nonblank")
+		}
+		if coreagent.AgentNameTooLong(v) {
+			return fieldErr("name", coreagent.AgentNameTooLongRefusal)
 		}
 		a.Name = v
 		return nil
@@ -73,23 +117,21 @@ func applyIdentityAndModelArgs(a *config.AgentConfig, args map[string]any) error
 		return err
 	}
 	if err := applyOptionalString(args, "color", func(v string) error {
-		if err := validateAgentColor(v); err != nil {
+		canon, err := canonicalAgentColor(v)
+		if err != nil {
 			return err
 		}
-		a.Color = v
+		a.Color = canon
 		return nil
 	}); err != nil {
 		return err
 	}
-	if err := applyOptionalString(args, "icon", func(v string) error {
-		if err := validateAgentIcon(v); err != nil {
-			return err
-		}
-		a.Icon = v
-		return nil
-	}); err != nil {
+	if err := applyVisualIdentityArgs(a, args); err != nil {
 		return err
 	}
+	// The primary pair before this write: a model change without an effort
+	// maps the stored effort onto the new pair (S-58).
+	effortPairBefore := primaryEffortPair(a, defaults)
 	if err := applyOptionalString(args, "model", func(v string) error {
 		if a.Model == nil {
 			a.Model = &config.AgentModelConfig{}
@@ -113,17 +155,48 @@ func applyIdentityAndModelArgs(a *config.AgentConfig, args map[string]any) error
 			return err
 		}
 	}
+	if err := applyPrimaryEffortArg(a, args, effortPairBefore, defaults); err != nil {
+		return err
+	}
 	if raw, present := args["max_tool_iterations"]; present {
-		n, err := jsonInt(raw, "max_tool_iterations")
-		if err != nil {
-			return err
-		}
-		if n < 0 {
-			return fieldErr("max_tool_iterations", "max_tool_iterations must be >= 0")
-		}
-		a.MaxToolIterations = n
+		return applyMaxToolIterationsArg(a, raw, defaults)
 	}
 	return nil
+}
+
+// applyMaxToolIterationsArg applies the #904 per-agent tool-iteration limit
+// (D15 — the same rules as REST): an explicit JSON null clears the own value
+// (0 is omitted from the record, so the agent rides the global — FR-008);
+// checked BEFORE jsonInt, whose float64 assertion would reject nil. A number
+// must be a whole number within 1..1000 and not above the global in force
+// (FR-006, FR-007, D10), with the resolver's exact messages.
+func applyMaxToolIterationsArg(a *config.AgentConfig, raw any, defaults *config.AgentDefaults) error {
+	if raw == nil {
+		a.MaxToolIterations = 0
+		return nil
+	}
+	n, err := jsonInt(raw, "max_tool_iterations")
+	if err != nil {
+		return err
+	}
+	if err := config.ValidateAgentMaxToolIterations(n, defaults); err != nil {
+		return fieldErr("max_tool_iterations", err.Error())
+	}
+	a.MaxToolIterations = n
+	return nil
+}
+
+// agentDefaults returns the global agent config in force, or nil when no
+// config is wired (tests); nil resolves to the shipped default.
+func (d *Deps) agentDefaults() *config.AgentDefaults {
+	if d == nil || d.GetCfg == nil {
+		return nil
+	}
+	cfg := d.GetCfg()
+	if cfg == nil {
+		return nil
+	}
+	return &cfg.Agents.Defaults
 }
 
 func applyCapabilityArgs(a *config.AgentConfig, args map[string]any, known map[string]struct{}, inv AgentConfigInventory) error {
@@ -183,16 +256,6 @@ func applySharedConfigArgs(a *config.AgentConfig, args map[string]any) error {
 			return fieldErr("memory_enabled", "memory_enabled must be a boolean")
 		}
 		a.MemoryEnabled = &b
-	}
-	if raw, present := args["default"]; present {
-		b, ok := raw.(bool)
-		if !ok {
-			return fieldErr("default", "default must be a boolean")
-		}
-		if b && a.IsWorker() {
-			return fieldErr("default", "a worker agent cannot be set as the default agent (workers are not chat targets)")
-		}
-		a.Default = b
 	}
 	if err := applyOptionalString(args, "voice", func(v string) error {
 		if a.IsWorker() && strings.TrimSpace(v) != "" {
@@ -277,16 +340,33 @@ func applyModelParams(a *config.AgentConfig, raw any) error {
 	return nil
 }
 
+// jsonInt reads a whole number: a JSON-decoded float64 without a fraction,
+// or a Go integer from an in-process caller.
 func jsonInt(raw any, field string) (int, error) {
-	f, ok := raw.(float64)
-	if !ok {
-		return 0, fieldErr(field, field+" must be an integer")
+	switch v := raw.(type) {
+	case int:
+		return v, nil
+	case int32:
+		return int(v), nil
+	case int64:
+		if v < math.MinInt || v > math.MaxInt {
+			return 0, fieldErr(field, field+" must be an integer")
+		}
+		return int(v), nil
+	case float64:
+		// Check the signed-int range BEFORE conversion: an out-of-range float
+		// converts implementation-dependently, and ARM64 can saturate to MaxInt.
+		// float64(MaxInt64) rounds up to 2^63, so a round-trip alone misses it.
+		limit := math.Ldexp(1, strconv.IntSize-1)
+		if v < -limit || v >= limit {
+			return 0, fieldErr(field, field+" must be an integer")
+		}
+		n := int(v)
+		if float64(n) == v {
+			return n, nil
+		}
 	}
-	n := int(f)
-	if float64(n) != f {
-		return 0, fieldErr(field, field+" must be an integer")
-	}
-	return n, nil
+	return 0, fieldErr(field, field+" must be an integer")
 }
 
 func requiredStringArray(raw any, field string) ([]string, error) {
@@ -381,55 +461,90 @@ func decodePolicyPatch(raw any) (agentmutation.ToolPolicyChanges, error) {
 	return p, nil
 }
 
-func requireDefaultWriter(deps *Deps) error {
-	if deps == nil || deps.MutateConfig == nil {
-		return fieldErr("default", "default singleton writer is not wired")
-	}
-	return nil
-}
-
-func defaultSingletonPartialResult(id, revision string, fields []string) *tools.ToolResult {
-	return tools.ErrorResult(successJSON(map[string]any{
-		"id":                 id,
-		"code":               "SAVE_FAILED",
-		"message":            "agent was saved but the default-agent singleton could not be updated. Read current state before retrying.",
-		"persistence_status": agentstore.PersistencePartial,
-		"activation_status":  agentstore.ActivationNotAttempted,
-		"revision":           revision,
-		"changed_fields":     fields,
-		"error_stage":        "defaults_singleton",
-	}))
-}
-
-func writeDefaultSingleton(deps *Deps, id string, want bool) error {
-	if err := requireDefaultWriter(deps); err != nil {
-		return err
-	}
-	return deps.WithConfig(func(cfg *config.Config) error {
-		cur := cfg.Agents.Defaults.DefaultAgentID
-		if want {
-			if cur != id {
-				cfg.Agents.Defaults.DefaultAgentID = id
-			}
-			return nil
-		}
-		if cur == id {
-			cfg.Agents.Defaults.DefaultAgentID = ""
-		}
-		return nil
-	})
-}
-
+// publishAgentActivation publishes id into the live, in-memory config/registry
+// that pkg/gateway/rest_agents.go::listAgents reads, and returns the resulting
+// activation status. It must NEVER report ActivationActive while the agent
+// might still be missing from that live list — see publishAndRespond's gate for
+// the caller-side enforcement; this function's job is to block until publication
+// has actually landed so that gate has a real, observable signal to trust.
+//
+// The fast path (UpsertAgentFastFunc, issue #571 sysagent half) is what
+// AgentCreateTool/AgentUpdateTool prefer, but the production wired
+// implementation (pkg/gateway/gateway.go's closure) DOES NOT promise a
+// synchronous live-list update on its nil return: it re-derives
+// cfg.Agents.List via MutateConfig first, then calls
+// agentLoop.UpsertAgentFast — and on any step's failure (IsReloadPending at
+// entry, MutateConfig error, or UpsertAgentFast error) it falls back to
+// rc.reloadTrigger(), which is ASYNCHRONOUS (it only enqueues onto
+// manualReloadChan / claims the coalescing slot and returns nil — the actual
+// registry rebuild happens on a separate goroutine, see
+// pkg/gateway/gateway_reload.go::newReloadTrigger). A nil return from
+// UpsertAgentFastFunc therefore means "publication was accepted, but may still
+// be in flight on the reload goroutine" — NOT "the agent is already live in
+// the registry". The fallback ReloadFunc below is also fire-and-forget for the
+// same reason.
+//
+// Closing that race: after the publish hook returns nil, call
+// deps.WaitForPendingReloadFunc when wired — the wait-only IsReloadPending
+// poll (pkg/gateway/rest_auth.go::waitForPendingReload), which NEVER calls
+// TriggerReload / reloadTrigger. This blocks until any reload already queued
+// by the fallback path has rebuilt the live registry the gate consults, so a
+// nil return from THIS function is now a genuine "agent is live and listable"
+// — not just "agent was queued for publication". On the fast-path-success
+// branch (UpsertAgentFastFunc updated the live registry inline, nothing
+// queued) the pending flag is already clear so this returns IMMEDIATELY — a
+// genuine no-op, exactly what the agent-picker-freshness fix (#1009) needs.
+//
+// WHY WaitForPendingReloadFunc AND NOT WaitForReloadFunc: WaitForReloadFunc's
+// production implementation (pkg/gateway/rest_auth.go::waitForReload, which
+// delegates to that same file's waitForReloadOutcome) calls
+// agentLoop.TriggerReload as its FIRST statement, unconditionally — it does
+// NOT check IsReloadPending before triggering. That shape is correct for
+// delete_agent (AgentDeleteTool.reload, no fast path available, reload must
+// happen) but is WRONG here: on the fast-path-success branch the live
+// in-memory registry is already up-to-date and NOTHING is pending, so calling
+// WaitForReloadFunc would kick off a brand-new, unnecessary full reload cycle
+// (channels/cron/plan-engine/schedulers all restart — up to ~60s under load,
+// the exact mechanism issue #571 exists to avoid) just to wait for it. The
+// round-3 version of this comment (commit 500beb747) claimed the wait "is a
+// no-op in that case but a real block in the queued-reload case" — that
+// claim was FALSE for WaitForReloadFunc (it always triggers) and is TRUE for
+// the new WaitForPendingReloadFunc this function now uses.
+//
+// WaitForPendingReloadFunc is nil in tests / degraded wiring where there is no
+// real reload to wait on (those tests either stub the fast path itself to
+// update the registry inline, or use a synchronous ReloadFunc stand-in).
+// When it is nil, fall back to the old behaviour: the publish hook's nil
+// return is taken at face value — adequate for the test wiring, and
+// explicitly NOT claimed as safe in production (the production gateway
+// always wires both).
 func publishAgentActivation(deps *Deps, id string) (agentstore.ActivationStatus, string) {
+	// r17 SR-2: the write just saved may have set or cleared env values;
+	// the live masking set follows the stored records before anything else.
+	if deps != nil && deps.GetCfg != nil {
+		if cfg := deps.GetCfg(); cfg != nil {
+			cfg.RefreshAgentEnvSensitiveValues()
+		}
+	}
 	if deps != nil && deps.UpsertAgentFastFunc != nil {
 		if err := deps.UpsertAgentFastFunc(id); err != nil {
 			return agentstore.ActivationFailed, err.Error()
+		}
+		if deps.WaitForPendingReloadFunc != nil {
+			if err := deps.WaitForPendingReloadFunc(); err != nil {
+				return agentstore.ActivationFailed, err.Error()
+			}
 		}
 		return agentstore.ActivationActive, ""
 	}
 	if deps != nil && deps.ReloadFunc != nil {
 		if err := deps.ReloadFunc(); err != nil {
 			return agentstore.ActivationFailed, err.Error()
+		}
+		if deps.WaitForPendingReloadFunc != nil {
+			if err := deps.WaitForPendingReloadFunc(); err != nil {
+				return agentstore.ActivationFailed, err.Error()
+			}
 		}
 		return agentstore.ActivationActive, ""
 	}

@@ -68,19 +68,23 @@ func TestDefinition_EffectiveDelivery_ReturnsSetValue(t *testing.T) {
 	}
 }
 
-// TestDefinition_AvailableWhileStreaming_CancelOnly verifies that only the
-// /cancel definition has AvailableWhileStreaming=true in BuiltinDefinitions.
-func TestDefinition_AvailableWhileStreaming_CancelOnly(t *testing.T) {
-	defs := BuiltinDefinitions()
-	for _, d := range defs {
-		if d.Name == "cancel" {
-			if !d.AvailableWhileStreaming {
-				t.Errorf("/cancel must have AvailableWhileStreaming=true")
-			}
-		} else {
-			if d.AvailableWhileStreaming {
-				t.Errorf("%q must NOT have AvailableWhileStreaming=true", d.Name)
-			}
+// TestDefinition_AvailableWhileStreaming_StopFamilyOnly verifies that only
+// /cancel, /stop and /stop-redirect have AvailableWhileStreaming=true in
+// BuiltinDefinitions. ADR-20260928 (sub-agent control plane) D9 adds /stop and
+// /stop-redirect as their own commands next to /cancel; every other command
+// stays false while a turn streams.
+func TestDefinition_AvailableWhileStreaming_StopFamilyOnly(t *testing.T) {
+	streaming := map[string]bool{"cancel": true, "stop": true, "stop-redirect": true}
+	seen := map[string]bool{}
+	for _, d := range BuiltinDefinitions() {
+		seen[d.Name] = true
+		if want := streaming[d.Name]; d.AvailableWhileStreaming != want {
+			t.Errorf("%q: AvailableWhileStreaming=%v, want %v", d.Name, d.AvailableWhileStreaming, want)
+		}
+	}
+	for name := range streaming {
+		if !seen[name] {
+			t.Errorf("/%s is not registered in BuiltinDefinitions", name)
 		}
 	}
 }

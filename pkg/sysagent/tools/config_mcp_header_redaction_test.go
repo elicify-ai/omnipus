@@ -49,7 +49,7 @@ func seedMCPLiteralHeader(cfg *config.Config) {
 func TestConfigGet_MCPLiteralHeader_AbsentFromAncestorReads(t *testing.T) {
 	for _, key := range []string{"tools.mcp", "tools"} {
 		t.Run(key, func(t *testing.T) {
-			deps, cfg := newTestDeps()
+			deps, cfg := newTestDeps(t)
 			seedMCPLiteralHeader(cfg)
 			tool := systools.NewConfigGetTool(deps)
 
@@ -86,7 +86,7 @@ func TestConfigGet_MCPLiteralHeader_AbsentFromDeeperReads_Control(t *testing.T) 
 		"tools.mcp.servers.remote.headers.Authorization",
 	} {
 		t.Run(key, func(t *testing.T) {
-			deps, cfg := newTestDeps()
+			deps, cfg := newTestDeps(t)
 			seedMCPLiteralHeader(cfg)
 			tool := systools.NewConfigGetTool(deps)
 

@@ -44,6 +44,7 @@ import { useChatStore, getMessages, makeBucketMessages } from './chat'
 import type { ChatMessage } from './chat'
 import { useSessionStore } from './session'
 import { useWorkspacesStore } from './workspacesStore'
+import { emptySessionState } from './chat/session'
 
 const SID = 'test-session-verdict-merge'
 
@@ -122,7 +123,7 @@ function seedWSReplayedBucket(messages: ChatMessage[]): void {
     ...s,
     sessionsById: {
       [SID]: {
-        ...((s.sessionsById ?? {})[SID] ?? {}),
+        ...((s.sessionsById ?? {})[SID] ?? emptySessionState()),
         ...bucket,
         isStreaming: false,
         isReplaying: false,

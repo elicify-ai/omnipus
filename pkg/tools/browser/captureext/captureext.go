@@ -61,7 +61,7 @@ const ExtensionID = "nibcmjlmohchocjndnbajhmlhkeldobo"
 // UAT 2026-07-31 and none of them ran, while every layer reported success.
 // TestEmbeddedAssetsRequireVersionBump pins the embedded content hash to
 // this constant so that omission is now a test failure, not a silent no-op.
-const Version = "1.0.24"
+const Version = "1.0.27"
 
 // manifestKeyDoc is the minimal shape needed to read the "key" field back
 // out of the embedded manifest.json for ID verification. It is not a wire
@@ -118,7 +118,7 @@ func ManifestExtensionID() (string, error) {
 
 // Seed seeds the embedded capture extension into
 // <destRoot>/captureext/<Version>/ via a staged-tmpdir + atomic rename (the
-// pkg/skills.SeedDefaults pattern). Safe to call on every boot.
+// staged-publish pattern the skills pipeline also uses). Safe to call on every boot.
 //
 // The gate is CONTENT-verified, not existence-verified: if the directory
 // already exists AND every embedded file matches it byte-for-byte, Seed does

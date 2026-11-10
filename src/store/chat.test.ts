@@ -1,13 +1,14 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { act } from 'react'
-import { useChatStore, getMessages, makeBucketMessages, MAX_MESSAGES_PER_SESSION, clampToolResult, isClientTruncatedResult, evictMessageFromBucket, findLastAssistantMessageId, findAssistantMessageIdByTurnId } from './chat'
+import { useChatStore, getMessages, makeBucketMessages, MAX_MESSAGES_PER_SESSION, clampToolResult, isClientTruncatedResult, findLastAssistantMessageId, findAssistantMessageIdByTurnId } from './chat'
 import type { SessionChatState, ChatMessage } from './chat'
 import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
+import { emptyHistoryFixture } from '../../tests/chat-history-paging/empty-history'
 import { useWhatsAppPairingStore } from './whatsappPairing'
 import { useWorkspacesStore } from './workspacesStore'
 import type { WhatsAppPairingFrame } from '@/lib/api/generated/asyncapi-types'
-import type { WsConnection, WsReceiveFrame } from '@/lib/ws'
+import type { WsConnection, ServerFrame } from '@/lib/ws'
 
 // test_chat_store (test #22)
 // Traces to: wave5a-wire-ui-spec.md — Scenario: User sends message and receives streaming response
@@ -140,7 +141,7 @@ describe('chat store — message handling', () => {
     expect(messages).toHaveLength(1)
     expect(messages[0].content).toBe('New message')
     expect(Object.keys(toolCalls)).toHaveLength(0)
-    expect(sessionTokens).toBe(0)
+    expect(sessionTokens, 'D16: message hydration without an aggregate observation leaves usage unknown').toBeUndefined()
   })
 })
 
@@ -180,7 +181,7 @@ describe('chat store — streaming via handleFrame', () => {
         isStreaming: true,
       })
       useChatStore.setState({ isStreaming: true })
-      useChatStore.getState().handleFrame({ type: 'done', stats: { tokens: 150, cost: 0.02, duration_ms: 0 }, session_id: TEST_SESSION_ID })
+      useChatStore.getState().handleFrame({ type: 'done', stats: { tokens: 150, session_tokens_total: 150, cost: 0.02, duration_ms: 0 }, session_id: TEST_SESSION_ID })
     })
     const state = useChatStore.getState()
     expect(state.isStreaming).toBe(false)
@@ -284,19 +285,17 @@ describe('chat store — streaming via handleFrame', () => {
     expect(useConnectionStore.getState().connectionError).toBeNull()
   })
 
-  it('handleFrame(error) with no assistant message sets connectionError banner', () => {
-    // When no assistant message exists, the error is connection-level (e.g. the WS frame
-    // arrived before the server could even start a reply). Both the error message AND
-    // connectionError are set so the banner shows.
+  it('handleFrame(error) with no assistant message still stays local to the selected chat', () => {
+    // U5 supersedes the old banner oracle: absence of a reply is not proof
+    // of a broken connection. Keep the exact error in the chat instead.
     act(() => {
       useChatStore.setState({ isStreaming: true })
       useChatStore.getState().handleFrame({ type: 'error', message: 'Connection lost' })
     })
     const chatState = useChatStore.getState()
     expect(chatState.isStreaming).toBe(false)
-    expect(useConnectionStore.getState().connectionError).toBe('Connection lost')
-    const errMsg = chatState.messages.find((m) => m.status === 'error')
-    expect(errMsg).toBeDefined()
+    expect(useConnectionStore.getState().connectionError).toBeNull()
+    expect(chatState.messages.filter((m) => m.status === 'error').map((m) => m.content)).toStrictEqual(['Connection lost'])
   })
 })
 
@@ -472,6 +471,7 @@ describe('chat store — cancel/interrupt (test_cancel_preserves_partial)', () =
   // acting on activeSessionId.
   function bucketFor(msgs: ChatMessage[]): SessionChatState {
     return {
+      ...emptyHistoryFixture(),
       ...makeBucketMessages(msgs),
       toolCalls: {},
       toolCallOrder: [],
@@ -659,8 +659,8 @@ describe('chat store — cancel/interrupt (test_cancel_preserves_partial)', () =
     })
     act(() => {
       // Untagged token+done, mirroring the UAT report's literal claim.
-      useChatStore.getState().handleFrame({ type: 'token', content: 'Error processing message: turn canceled' } as unknown as WsReceiveFrame)
-      useChatStore.getState().handleFrame({ type: 'done', stats: { tokens: 1, cost: 0, duration_ms: 5 } } as unknown as WsReceiveFrame)
+      useChatStore.getState().handleFrame({ type: 'token', content: 'Error processing message: turn canceled' } as unknown as ServerFrame)
+      useChatStore.getState().handleFrame({ type: 'done', stats: { tokens: 1, cost: 0, duration_ms: 5 } } as unknown as ServerFrame)
     })
 
     const state = useChatStore.getState()
@@ -940,88 +940,15 @@ describe('chat store — sendMessage rebakes pending tool calls into prior assis
   })
 })
 
-// ── M4 (BLOCKER 1): workspace→turn binding ───────────────────────────────────
-// Traces to: wave5a-wire-ui-spec.md M4 — a chat sent inside a workspace must
-// stamp metadata.workspace_id so created/delegated tasks land on THIS workspace.
-describe('chat store — M4 workspace→turn binding (metadata.workspace_id)', () => {
-  it('attaches metadata.workspace_id when chatting inside a workspace', () => {
-    const mockSend = vi.fn().mockReturnValue(true)
-    act(() => {
-      useChatStore.setState({ isStreaming: false })
-      useConnectionStore.setState({
-        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
-        isConnected: true,
-      })
-      useSessionStore.setState({ activeSessionId: TEST_SESSION_ID, activeAgentId: 'general-assistant' })
-      useWorkspacesStore.setState({ activeWorkspaceId: '01JXWORKSPACE0000000000001' })
-      useChatStore.getState().sendMessage('do this in the workspace')
-    })
-    expect(mockSend).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: 'message',
-        content: 'do this in the workspace',
-        metadata: expect.objectContaining({ workspace_id: '01JXWORKSPACE0000000000001' }),
-      }),
-    )
-  })
+// ── #253: no-session send preservation ───────────────────────────────────────
+// Oracle: /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-1090/design-1090.md,
+// C2 ruling: uncertain delivery keeps the text and same-ID Retry, not an error bubble.
 
-  it('omits metadata entirely on the global (non-workspace) chat', () => {
-    const mockSend = vi.fn().mockReturnValue(true)
-    act(() => {
-      useChatStore.setState({ isStreaming: false })
-      useConnectionStore.setState({
-        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
-        isConnected: true,
-      })
-      useSessionStore.setState({ activeSessionId: TEST_SESSION_ID, activeAgentId: 'general-assistant' })
-      useWorkspacesStore.setState({ activeWorkspaceId: null })
-      useChatStore.getState().sendMessage('global chat, no workspace')
-    })
-    const payload = mockSend.mock.calls[0]?.[0] as Record<string, unknown>
-    expect(payload).toMatchObject({ type: 'message', content: 'global chat, no workspace' })
-    // No workspace and no per-turn model → metadata is omitted, matching the
-    // backend's default-workspace fallback.
-    expect(payload).not.toHaveProperty('metadata')
-  })
-
-  it('merges workspace_id with a per-turn model_name override', () => {
-    const mockSend = vi.fn().mockReturnValue(true)
-    act(() => {
-      useChatStore.setState({ isStreaming: false })
-      useConnectionStore.setState({
-        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
-        isConnected: true,
-      })
-      useSessionStore.setState({ activeSessionId: TEST_SESSION_ID, activeAgentId: 'general-assistant' })
-      useWorkspacesStore.setState({ activeWorkspaceId: '01JXWORKSPACE0000000000002' })
-      useChatStore.getState().sendMessage('use a specific model here', { model_name: 'z-ai/glm-5-turbo' })
-    })
-    expect(mockSend).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: 'message',
-        metadata: expect.objectContaining({
-          workspace_id: '01JXWORKSPACE0000000000002',
-          model_name: 'z-ai/glm-5-turbo',
-        }),
-      }),
-    )
-  })
-})
-
-// ── #253: recovery error-bubble tests ────────────────────────────────────────
-// Traces to: sprint-258 review finding #253 — failed send must preserve typed
-// content as a retriable error bubble, not silently drop the message.
-
-describe('chat store — #253 no-session send failure creates retriable error bubble', () => {
-  it('when activeSessionId is null and send() fails, user message gets status:error (not dropped)', () => {
-    // BDD:
-    //   Given no active session (activeSessionId = null)
-    //   And the WS send() returns false (connection dropped mid-send)
-    //   When sendMessage('Hello') is called
-    //   Then a user message with content 'Hello' and status 'error' is present in the store
-    //   And isStreaming is false (no phantom spinner)
-    //   And a Retry affordance is reachable (the message is in the store with status:'error')
-    const mockSend = vi.fn().mockReturnValue(false) // send fails
+describe('chat store — #253 no-session send failure preserves a retriable unconfirmed message', () => {
+  it('when send() fails, keeps exact text with done/unconfirmed and retries the original identity', () => {
+    const content = 'Hello no-session'
+    const clientMessageId = '253-no-session-client'
+    const mockSend = vi.fn<WsConnection['send']>().mockReturnValue(false)
     act(() => {
       useChatStore.setState({ isStreaming: false })
       useConnectionStore.setState({
@@ -1029,32 +956,34 @@ describe('chat store — #253 no-session send failure creates retriable error bu
         isConnected: true,
         connectionError: null,
       })
-      // No active session — null triggers the no-session path
-      useSessionStore.setState({
-        activeSessionId: null,
-        activeAgentId: 'general-assistant',
-      })
-      useChatStore.getState().sendMessage('Hello no-session')
+      useSessionStore.setState({ activeSessionId: null, activeAgentId: 'general-assistant' })
+      useChatStore.getState().sendMessage(content, { clientMessageId })
     })
 
-    // After the failed send, the user message must be preserved with status:'error'
     const state = useChatStore.getState()
+    expect(mockSend.mock.calls, 'C2: the original send was attempted exactly once').toHaveLength(1)
+    const originalFrame = structuredClone(mockSend.mock.calls[0][0])
+    expect(originalFrame, 'C2: retain the requested text and wire identity').toMatchObject({
+      type: 'message', content, client_message_id: clientMessageId, agent_id: 'general-assistant',
+    })
+    expect(originalFrame, 'C2: first send has no confirmed session').not.toHaveProperty('session_id')
+    expect(state.messages.filter((m) => m.role === 'user')
+      .map(({ id, clientMessageId: wireId, content: text, status, firstSendStatus }) =>
+        ({ id, wireId, text, status, firstSendStatus })), 'C2: exact retained bubble, not confirmed non-delivery')
+      .toStrictEqual([{ id: clientMessageId, wireId: clientMessageId, text: content, status: 'done', firstSendStatus: 'unconfirmed' }])
+    expect(state.isStreaming, 'C2: no phantom spinner after uncertainty').toBe(false)
+    expect(state.pendingFirstSend?.clientMessageId, 'C2: recovery keeps the original ID').toBe(clientMessageId)
+    expect(state.pendingFirstSend?.payload, 'C2: recovery retains the complete original request').toStrictEqual(originalFrame)
+    expect(state.pendingFirstSend?.status, 'C2: uncertainty permits Retry').toBe('unconfirmed')
 
-    // The message must be in SOME bucket (either the pending one or the active one)
-    // Check the global messages selector which reflects the active session.
-    // The pending bucket is activated via setActiveSession('__pending', ...)
-    const userMsg = state.messages.find((m) => m.role === 'user' && m.content === 'Hello no-session')
-    expect(userMsg).toBeDefined()
-    expect(userMsg?.status).toBe('error')
-
-    // isStreaming must be false — no phantom spinner
-    expect(state.isStreaming).toBe(false)
-
-    // The Retry affordance: VirtualUserMessageRow renders UserMessageRetryButton
-    // when message.status === 'error'. Assert the store state that drives it:
-    // the user message with status:'error' IS reachable in the messages array.
-    const errorMessages = state.messages.filter((m) => m.role === 'user' && m.status === 'error')
-    expect(errorMessages.length).toBeGreaterThan(0)
+    // Exercise the real action used by the user-message Retry button.
+    mockSend.mockReturnValue(true)
+    act(() => useChatStore.getState().resendMessage(clientMessageId))
+    expect(mockSend.mock.calls.map(([frame]) => frame), 'C2: usable Retry sends the identical request once')
+      .toStrictEqual([originalFrame, originalFrame])
+    expect(useChatStore.getState().pendingFirstSend?.status, 'C2: explicit Retry starts a delivery check').toBe('retrying')
+    expect(useChatStore.getState().messages.filter((m) => m.role === 'user').map(({ id, content: text }) => ({ id, text })),
+      'C2: Retry must not duplicate or replace the original text').toStrictEqual([{ id: clientMessageId, text: content }])
   })
 
   it('when activeSessionId is null and send() succeeds, user message is rendered optimistically', () => {
@@ -1799,7 +1728,7 @@ describe('chat store — done frame for unknown targetSid (B1.3d)', () => {
       useChatStore.getState().handleFrame({
         type: 'done',
         session_id: TEST_SESSION_ID,
-        stats: { tokens: 42, cost: 0.001, duration_ms: 100 },
+        stats: { tokens: 42, session_tokens_total: 42, cost: 0.001, duration_ms: 100 },
       })
     })
 
@@ -1942,7 +1871,7 @@ describe('ChatStore — subagent_message/subagent_state missing session_id are d
         sender_identity: 'agent-child',
         untrusted_origin: false,
         created_at: '2026-01-01T00:00:00.000Z',
-      } as unknown as WsReceiveFrame)
+      } as unknown as ServerFrame)
     })
     expect(errorSpy.mock.calls.some((args) => typeof args[0] === 'string' && args[0].includes('session_id'))).toBe(true)
     const msg = useChatStore.getState().messages.find((m) => (m.spans?.length ?? 0) > 0)
@@ -1968,7 +1897,7 @@ describe('ChatStore — subagent_message/subagent_state missing session_id are d
         span_id: 'span-drop-state',
         state: 'needs_input',
         created_at: '2026-01-01T00:00:00.000Z',
-      } as unknown as WsReceiveFrame)
+      } as unknown as ServerFrame)
     })
     expect(errorSpy.mock.calls.some((args) => typeof args[0] === 'string' && args[0].includes('session_id'))).toBe(true)
     const msg = useChatStore.getState().messages.find((m) => (m.spans?.length ?? 0) > 0)
@@ -1996,6 +1925,7 @@ describe('chat store — H1-FE: unknown-sid done does not corrupt active stream'
         sessionsById: {
           ...state.sessionsById,
           [ACTIVE_SID]: {
+            ...emptyHistoryFixture(),
             ...makeBucketMessages(seedMsgs),
             toolCalls: {},
             toolCallOrder: [],
@@ -2075,6 +2005,7 @@ describe('chat store — cancel_stage frame (B3)', () => {
         sessionsById: {
           [TEST_SESSION_ID]: {
             ...useChatStore.getState().sessionsById[TEST_SESSION_ID] ?? {
+              ...emptyHistoryFixture(),
               ...makeBucketMessages([]),
               toolCalls: {},
               toolCallOrder: [],
@@ -2442,95 +2373,6 @@ describe('G5: lastReceivedEventTime advances on each replay_message with a newer
   })
 })
 
-// ── evictMessageFromBucket unit tests ─────────────────────────────────────────
-
-describe('evictMessageFromBucket — full sweep of dependent maps', () => {
-  it('removes the message from messagesById and messageOrder', () => {
-    const bucket: SessionChatState = {
-      messagesById: { 'm1': { id: 'm1', role: 'user', content: 'hi', timestamp: '', status: 'done' } },
-      messageOrder: ['m1'],
-      trimmedCount: 0,
-      toolCalls: {},
-      toolCallOrder: [],
-      textAtToolCallStart: {},
-      isStreaming: false,
-      isReplaying: false,
-      replayCompletedForSession: null,
-      sessionTokens: 0,
-      sessionCost: 0,
-      rateLimitEvent: null,
-      lastUserMessageAt: null,
-      cancelStage: null,
-      lastReceivedEventTime: null,
-    }
-    evictMessageFromBucket(bucket, 'm1')
-    expect(bucket.messageOrder).toHaveLength(0)
-    expect(bucket.messagesById['m1']).toBeUndefined()
-  })
-
-  it('removes tool calls owned by the evicted message (via tool_calls array)', () => {
-    const bucket: SessionChatState = {
-      messagesById: {
-        'm1': {
-          id: 'm1', role: 'assistant', content: '', timestamp: '', status: 'done',
-          tool_calls: [{ id: 'tc1', tool: 'exec', params: {}, status: 'success' }],
-        },
-      },
-      messageOrder: ['m1'],
-      trimmedCount: 0,
-      toolCalls: { tc1: { id: 'tc1', call_id: 'tc1', tool: 'exec', params: {}, status: 'success' } },
-      toolCallOrder: ['tc1'],
-      textAtToolCallStart: { tc1: 'some text' },
-      isStreaming: false,
-      isReplaying: false,
-      replayCompletedForSession: null,
-      sessionTokens: 0,
-      sessionCost: 0,
-      rateLimitEvent: null,
-      lastUserMessageAt: null,
-      cancelStage: null,
-      lastReceivedEventTime: null,
-    }
-    evictMessageFromBucket(bucket, 'm1')
-    expect(bucket.toolCalls['tc1']).toBeUndefined()
-    expect(bucket.toolCallOrder).toHaveLength(0)
-    expect(bucket.textAtToolCallStart['tc1']).toBeUndefined()
-  })
-
-  // ADR-091 D10: spanByParentCallId is deleted along with the child-step-
-  // nesting mechanism it served; spanBySpanId is now the only span index —
-  // this test is updated to prove the surviving index's eviction.
-  it('removes spanBySpanId entries pointing at the evicted message', () => {
-    const bucket: SessionChatState = {
-      messagesById: {
-        'm1': { id: 'm1', role: 'assistant', content: '', timestamp: '', status: 'done' },
-      },
-      messageOrder: ['m1'],
-      trimmedCount: 0,
-      toolCalls: {},
-      toolCallOrder: [],
-      textAtToolCallStart: {},
-      spanBySpanId: {
-        'span1': { messageId: 'm1', spanIdx: 0 },
-        'span2': { messageId: 'm2', spanIdx: 0 }, // belongs to a different message — must survive
-      },
-      isStreaming: false,
-      isReplaying: false,
-      replayCompletedForSession: null,
-      sessionTokens: 0,
-      sessionCost: 0,
-      rateLimitEvent: null,
-      lastUserMessageAt: null,
-      cancelStage: null,
-      lastReceivedEventTime: null,
-    }
-    evictMessageFromBucket(bucket, 'm1')
-    expect(bucket.spanBySpanId?.['span1']).toBeUndefined()
-    // span2 belongs to a different message and must not be touched.
-    expect(bucket.spanBySpanId?.['span2']).toBeDefined()
-  })
-})
-
 // ── Eviction-leak regression: applyMessageArray path ─────────────────────────
 // Seeds 600 messages where every assistant message has 3 tool calls and 1 span.
 // Trims via appendMessage (applyMessageArray path) and asserts dependent maps
@@ -2585,6 +2427,7 @@ describe('eviction-leak regression — applyMessageArray evicts spanBySpanId and
         sessionsById: {
           ...s.sessionsById,
           [TEST_SESSION_ID]: {
+            ...emptyHistoryFixture(),
             ...makeBucketMessages(msgs),
             toolCalls,
             toolCallOrder,

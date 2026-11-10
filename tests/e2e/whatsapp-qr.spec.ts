@@ -108,7 +108,7 @@ const WHATSAPP_CONFIG_NATIVE = {}
 const EMPTY_ROUTING = {}
 
 /** Minimal agents list (non-empty so routing section renders). */
-const AGENTS_LIST = [{ id: 'mia', name: 'Mia' }]
+const AGENTS_LIST = [{ figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia' }]
 
 /** The injected QR payload — a static sentinel, never valid for scanning. */
 const TEST_QR_PAYLOAD = '2@E2E_TEST_QR_PAYLOAD_DO_NOT_SCAN'

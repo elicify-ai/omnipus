@@ -92,12 +92,12 @@ func (al *AgentLoop) SessionModes() *SessionModeStore {
 }
 
 // SessionAutoApprove reports the resolved Auto-approve setting for
-// sessionID's chat driven by agentID: the global default, the agent's
-// off-switch, then the chat's own modifier (ResolveAutoApprove). This is the
+// sessionID's chat: the chat's own modifier when set, otherwise the global
+// default (ResolveAutoApprove). This is the
 // value the session_mode_updated frame reports; it does not fold in whether
 // a kernel sandbox is active (the SPA combines it with
 // SandboxStatus.kernel_sandbox_active).
-func (al *AgentLoop) SessionAutoApprove(agentID, sessionID string) bool {
+func (al *AgentLoop) SessionAutoApprove(sessionID string) bool {
 	if al == nil {
 		return false
 	}
@@ -105,7 +105,7 @@ func (al *AgentLoop) SessionAutoApprove(agentID, sessionID string) bool {
 	if v, ok := al.sessionModes.Get(sessionID); ok {
 		chat = &v
 	}
-	return ResolveAutoApprove(al.GetConfig(), agentID, chat)
+	return ResolveAutoApprove(al.GetConfig(), chat)
 }
 
 // SandboxBackend returns the active sandbox backend, or nil if sandboxing is
@@ -221,56 +221,6 @@ func (al *AgentLoop) GetConfig() *config.Config {
 	return al.cfg
 }
 
-// GetSessionActiveAgent returns the agent that the handoff tool last switched
-// the given session to. Returns ("", false) if no handoff override is active
-// for this session_id.
-func (al *AgentLoop) GetSessionActiveAgent(sessionID string) (string, bool) {
-	if sessionID == "" {
-		return "", false
-	}
-	if v, ok := al.sessionActiveAgent.Load("session:" + sessionID); ok {
-		s, ok := v.(string)
-		if !ok {
-			logger.ErrorCF("agent", "sessionActiveAgent: invariant violated — unexpected value type",
-				map[string]any{"session_id": sessionID, "got_type": fmt.Sprintf("%T", v)})
-			return "", false
-		}
-		return s, true
-	}
-	return "", false
-}
-
-// GetLastSwitchToDefault returns whether the most recent switch_agent call
-// on the given session was a return-to-default (true) or a named-agent
-// hand-off (false), as reported by the tool itself
-// (tools.HandoffEvent.ToDefault) rather than re-derived from the resulting
-// agent id. Returns (false, false) if no such record is pending — e.g. no
-// switch_agent has run yet for this session, or it has already been
-// consumed.
-//
-// One-shot: this LoadAndDeletes the entry, since it exists only to answer
-// "was the switch that just completed a return-to-default" once, at the WS
-// agent_switched frame builder that reads it right after the matching
-// ToolExecEnd event fires. Leaving stale entries around risks a later,
-// unrelated switch_agent call on the same session silently reusing a value
-// it never itself observed.
-func (al *AgentLoop) GetLastSwitchToDefault(sessionID string) (bool, bool) {
-	if sessionID == "" {
-		return false, false
-	}
-	v, ok := al.lastSwitchToDefault.LoadAndDelete("session:" + sessionID)
-	if !ok {
-		return false, false
-	}
-	b, ok := v.(bool)
-	if !ok {
-		logger.ErrorCF("agent", "lastSwitchToDefault: invariant violated — unexpected value type",
-			map[string]any{"session_id": sessionID, "got_type": fmt.Sprintf("%T", v)})
-		return false, false
-	}
-	return b, true
-}
-
 // SetPlanEngine installs the single hybrid plan-coordinator instance
 // (ADR-049 D4) so command handlers and REST handlers can reach its Admit/
 // Release admission authority and PausePlansOwnedBy/ResumePlansOwnedBy/
@@ -346,19 +296,26 @@ func (al *AgentLoop) SetPlanStore(store *plan.Store) {
 				taskCreate.SetPlanStore(store)
 			}
 		}
+		// update_task's plan_id attach (r17 TK-11) needs the same store.
+		if raw, ok := inst.Tools.Get("update_task"); ok {
+			if taskUpdate, ok := raw.(*tools.TaskUpdateTool); ok {
+				taskUpdate.SetPlanStore(store)
+			}
+		}
 	}
 
 	// UAT fix (fix/uat-defects-2026-08-22): re-wire the system.* tool surface
-	// (create_task_in_workspace, pkg/sysagent/tools) with the real plan store
-	// too. WireSysagentDeps runs at boot BEFORE this store exists — the
-	// gateway constructs sysAgentDeps and calls WireSysagentDeps well ahead
-	// of plan.New/SetPlanStore (see gateway.go's boot wiring region) — so
-	// every system.* tool instance registered by then was built with a nil
-	// deps.PlanStore. Without this, create_task_in_workspace(plan_id=...)
-	// fails closed with "plan store is not configured" FOREVER, for every
-	// agent, even against a plan that was just created in the very same
-	// workspace by the very same turn (the plain create_task tool above was
-	// already re-wired here; the system.* twin was not).
+	// (pkg/sysagent/tools) with the real plan store too. WireSysagentDeps runs
+	// at boot BEFORE this store exists — the gateway constructs sysAgentDeps
+	// and calls WireSysagentDeps well ahead of plan.New/SetPlanStore (see
+	// gateway.go's boot wiring region) — so every system.* tool instance
+	// registered by then was built with a nil deps.PlanStore. Without this,
+	// any system.* tool that consults deps.PlanStore fails closed — today
+	// delete_agent's active-plan ownership check (agentOwnsActivePlan) — for
+	// every agent, even against a plan that was just created in the very same
+	// workspace by the very same turn. (The original motivating caller was
+	// create_task_in_workspace, retired by DEL-23; the plan-store consumers
+	// that remain still need this re-wire.)
 	//
 	// al.sysagentDeps is read-modify-written under al.mu (mirrors the
 	// al.planStore guard a few lines up in this same function) because the
@@ -535,14 +492,13 @@ func (al *AgentLoop) GetStartupInfo() map[string]any {
 	// validation entirely and ACCEPT unknown skill ids. A fail-open reached
 	// through three layers of indirection.
 	//
-	// Any agent answers these questions identically, so ask any.
-	agent := registry.GetDefaultAgent()
-	if agent == nil {
-		for _, id := range registry.ListAgentIDs() {
-			if ag, ok := registry.GetAgent(id); ok && ag != nil {
-				agent = ag
-				break
-			}
+	// Any agent answers these questions identically, so ask any — there is
+	// no default agent (§6.4). An empty registry gives explicit empty info.
+	var agent *AgentInstance
+	for _, id := range registry.ListAgentIDs() {
+		if ag, ok := registry.GetAgent(id); ok && ag != nil {
+			agent = ag
+			break
 		}
 	}
 	if agent == nil {
@@ -569,21 +525,12 @@ func (al *AgentLoop) GetStartupInfo() map[string]any {
 }
 
 // ListSkillsDetailed returns the full per-skill metadata (name, source,
-// description, author, version) for every installed skill, sourced from the
-// default agent's ContextBuilder skills loader — the same loader that feeds
-// GetStartupInfo's skills summary. This is the data path GET /api/v1/skills uses
-// to enrich its response beyond bare names. Returns nil when there is no default
-// agent or its ContextBuilder is unset (e.g. an uninitialized loop).
+// description, author, version) for every skill installed on this install —
+// read by the shared, install-level skill loader, never through an agent or
+// its grants (omnipus-system-agent FR-124, §6.4). This is the data path GET
+// /api/v1/skills uses to enrich its response beyond bare names.
 func (al *AgentLoop) ListSkillsDetailed() []skills.SkillInfo {
-	registry := al.GetRegistry()
-	if registry == nil {
-		return nil
-	}
-	agent := registry.GetDefaultAgent()
-	if agent == nil || agent.ContextBuilder == nil {
-		return nil
-	}
-	return agent.ContextBuilder.ListSkillsDetailed()
+	return installSkillsLoader(al.GetConfig()).ListSkills()
 }
 
 // ChannelOwnership returns the stored resolver, or nil before wiring.

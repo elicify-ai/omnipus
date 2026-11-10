@@ -197,12 +197,12 @@ func TestFormatFieldValue(t *testing.T) {
 		{
 			name:     "String with newline",
 			input:    "line1\nline2",
-			expected: "\nline1\nline2",
+			expected: `"line1\nline2"`,
 		},
 		{
 			name:     "Quoted string with newline (Unquote -> newline)",
 			input:    `"line1\nline2"`, // Escaped \n that Unquote will resolve
-			expected: "\nline1\nline2",
+			expected: `"line1\nline2"`,
 		},
 
 		// Strings with spaces test (which should be quoted)

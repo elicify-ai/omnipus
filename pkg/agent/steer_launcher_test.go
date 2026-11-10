@@ -11,6 +11,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -99,13 +100,55 @@ func (p *dispatchContextProvider) GetDefaultModel() string { return "dispatch-co
 // test's own cleanup was about to release anyway).
 func newSteerAL(t *testing.T) (*AgentLoop, func()) {
 	t.Helper()
-	al, cleanup := newAL(t)
+	// newAL(t)'s own cleanup now closes al directly (loop_test.go's
+	// newTestAgentLoop no longer returns a no-op) — discard it here rather
+	// than return it a second time, since the t.Cleanup below is what fixes
+	// this helper's LIFO ordering against a caller's own provider-release
+	// cleanup (see the doc comment above): a caller that also `defer
+	// cleanup()`s the returned func must not double-close al.
+	al, _ := newAL(t)
 	home := al.GetConfig().Agents.Defaults.Home
 	lifecycle := session.NewLifecycleStore(filepath.Join(home, "session_lifecycle"))
 	inbox := session.NewMessageInboxStore(filepath.Join(home, "session_messages"))
 	al.SetSessionMessagingStores(inbox, lifecycle)
+	// SETUP Mint genuine boot epoch: a real BootEpochStore, one Mint,
+	// SetBootEpochStore. Never a hard-coded number. Dispatch admission
+	// (execution_identity.go) refuses boot_seq 0 — an unwired store reads
+	// Current 0 — so every steered session started through this helper
+	// needs one genuinely minted epoch, mirroring the gateway's boot-time
+	// mint (the same setup steer_drain_execution_identity_q2_test.go's
+	// q2DrainHarness performs for itself).
+	//
+	// The store's directory is a dedicated subdirectory of home, NOT home
+	// itself: BootEpochStore persists the counter at <dir>/boot_epoch.json,
+	// and callers that mint their OWN epoch over home after this helper
+	// (setupQueuedReplacementHarness in
+	// execution_identity_queued_replacement_test.go, q2DrainHarness,
+	// goal_followup_round3_984_test.go, steer_turn_drain_1020_test.go)
+	// require THEIR mint to be the first on a fresh <home>/boot_epoch.json
+	// — the queued-replacement harness asserts its mint returns exactly 1
+	// ("one genuine mint on a fresh store"). A Mint here over home would
+	// hand them 2 and fail them in setup. The subdirectory keeps home's
+	// counter file absent for them while admission still reads a genuine,
+	// persisted, nonzero Current from the store wired here.
+	// The gateway mints over an already-existing home; this subdirectory is
+	// new, so create it before Mint — BootEpochStore's flock needs its
+	// parent dir to exist (fileutil.WithFlock opens <dir>/boot_epoch.json.lock).
+	epochDir := filepath.Join(home, "boot_epoch")
+	if mkdirErr := os.MkdirAll(epochDir, 0o700); mkdirErr != nil {
+		t.Fatalf("SETUP create boot epoch dir: %v", mkdirErr)
+	}
+	boot := session.NewBootEpochStore(epochDir)
+	epoch, err := boot.Mint()
+	if err != nil {
+		t.Fatalf("SETUP Mint genuine boot epoch: %v", err)
+	}
+	if epoch == 0 || boot.Current() != epoch {
+		t.Fatalf("SETUP minted/current boot epoch = %d/%d, require one genuine nonzero epoch", epoch, boot.Current())
+	}
+	al.SetBootEpochStore(boot)
 	t.Cleanup(func() { al.Close() })
-	return al, cleanup
+	return al, func() {}
 }
 
 // newTestSteeringSession creates a real chat session (the target agent is
@@ -113,7 +156,23 @@ func newSteerAL(t *testing.T) (*AgentLoop, func()) {
 // returns its id, for use as a Launch request's SteeringSessionID.
 func newTestSteeringSession(t *testing.T, al *AgentLoop, workspaceID string) string {
 	t.Helper()
-	meta, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", testDefaultAgentID)
+	return newTestSteeringSessionOwnedBy(t, al, workspaceID, testDefaultAgentID)
+}
+
+// newTestSteeringSessionOwnedBy creates a real chat session whose IMMUTABLE
+// owner (meta.AgentID) is ownerAgentID — the delegating agent the launcher's
+// graph gate reads (steer_launcher.go::launchSteered's
+// `parentAgentID := steererMeta.AgentID` and
+// ordinary_root_record.go::initializeOrdinaryRootRecord).
+//
+// session-core U1 / DEL-11 deleted the mutable handover owner: a session's
+// delegating identity is its immutable AgentID, set once at creation, and
+// SwitchAgent only moves the retired ActiveAgentID. A fixture that must pin a
+// caller therefore CREATES the session owned by that caller; there is no way to
+// change the owner afterwards.
+func newTestSteeringSessionOwnedBy(t *testing.T, al *AgentLoop, workspaceID, ownerAgentID string) string {
+	t.Helper()
+	meta, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", ownerAgentID)
 	if err != nil {
 		t.Fatalf("NewSession(steerer): %v", err)
 	}
@@ -133,7 +192,8 @@ func newTestSteeringSession(t *testing.T, al *AgentLoop, workspaceID string) str
 // call), not read live. Callers MUST create any skill fixture (writeSkill/
 // writeSkillWithName) under home BEFORE calling this, mirroring
 // loop_test.go's TestProcessMessage_SkillCommandLoadsRequestedSkill fixture
-// order.
+// order. r15 SD-30 also requires a persisted matching binding; this opt-in
+// helper obtains it through the real store, leaving absent names unbound.
 func newSteerALWithSkills(t *testing.T, home string, grantedSkills []string) (*AgentLoop, func()) {
 	t.Helper()
 	cfg := &config.Config{
@@ -144,7 +204,7 @@ func newSteerALWithSkills(t *testing.T, home string, grantedSkills []string) (*A
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: testDefaultAgentID, Home: home, Skills: grantedSkills}},
+			List: []config.AgentConfig{persistSkillGrantFixture(t, home, config.AgentConfig{ID: testDefaultAgentID, Home: home, Skills: grantedSkills})},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -153,7 +213,7 @@ func newSteerALWithSkills(t *testing.T, home string, grantedSkills []string) (*A
 	lifecycle := session.NewLifecycleStore(filepath.Join(home, "session_lifecycle"))
 	inbox := session.NewMessageInboxStore(filepath.Join(home, "session_messages"))
 	al.SetSessionMessagingStores(inbox, lifecycle)
-	return al, func() {}
+	return al, al.Close
 }
 
 func TestLaunch_TitleRequired(t *testing.T) {
@@ -197,47 +257,26 @@ func TestLaunch_TaskOriginWithoutTaskID_Refused(t *testing.T) {
 	}
 }
 
-func TestLaunch_SteeredEmptyParentAgentHonorsFailClosedSwitch(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		strict  bool
-		wantErr bool
-	}{
-		{name: "strict default refuses", strict: true, wantErr: true},
-		{name: "operator override permits", strict: false, wantErr: false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			al, cleanup := newSteerAL(t)
-			defer cleanup()
-			al.GetConfig().Tools.Delegate.RequireParentAgentID = &tc.strict
-			steerer, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", "")
-			if err != nil {
-				t.Fatalf("NewSession(steerer): %v", err)
-			}
+// TestLaunch_SteeredEmptyParentAgent_Refused (F9): the fail-closed switch that
+// used to permit an empty steered-parent agent under an operator override is
+// DELETED — founder ruling F9, there is no switch-off. A delegate launch whose
+// steering session has no agent identity is refused unconditionally.
+func TestLaunch_SteeredEmptyParentAgent_Refused(t *testing.T) {
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	steerer, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", "")
+	if err != nil {
+		t.Fatalf("NewSession(steerer): %v", err)
+	}
 
-			result, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
-				SteeringSessionID: steerer.ID,
-				TargetAgentID:     testDefaultAgentID,
-				Task:              "do something",
-				Origin:            steer.Origin{Kind: steer.OriginKindDelegate, CallID: "call-empty-parent"},
-			})
-			if tc.wantErr {
-				if !errors.Is(err, steer.ErrInvalidEdge) || result.SessionID != "" {
-					t.Fatalf("Launch() = %+v, %v; want no child and ErrInvalidEdge", result, err)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("Launch() with operator override: %v", err)
-			}
-			record, err := al.GetSessionLifecycleStore().Load(result.SessionID)
-			if err != nil {
-				t.Fatalf("Load(child): %v", err)
-			}
-			if record.ParentAgentID != "" {
-				t.Fatalf("ParentAgentID = %q, want empty under explicit override", record.ParentAgentID)
-			}
-		})
+	result, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
+		SteeringSessionID: steerer.ID,
+		TargetAgentID:     testDefaultAgentID,
+		Task:              "do something",
+		Origin:            steer.Origin{Kind: steer.OriginKindDelegate, CallID: "call-empty-parent"},
+	})
+	if !errors.Is(err, steer.ErrInvalidEdge) || result.SessionID != "" {
+		t.Fatalf("Launch() = %+v, %v; want no child and ErrInvalidEdge (F9: no switch-off)", result, err)
 	}
 }
 
@@ -425,10 +464,7 @@ func TestLaunch_DepthBudgetUsesEdgeAndPerformancePrecedence(t *testing.T) {
 			defer cleanup()
 			al.GetConfig().Performance.MaxDelegationDepth = tc.globalDepth
 
-			parentID := newTestSteeringSession(t, al, workspaceID)
-			if err := al.GetSessionStore().SwitchAgent(parentID, parentAgentID); err != nil {
-				t.Fatalf("SwitchAgent(parent): %v", err)
-			}
+			parentID := newTestSteeringSessionOwnedBy(t, al, workspaceID, parentAgentID)
 			result, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
 				SteeringSessionID: parentID,
 				TargetAgentID:     testDefaultAgentID,
@@ -647,6 +683,55 @@ func TestLaunch_UnderStampedParent_ChildStampedAtLaunch(t *testing.T) {
 	}
 }
 
+// TestLaunch_OrdinaryRootRecordCarriesTheSessionOwnerAgentID is the direct
+// oracle for session-core U1 / DEL-11: a session's delegating identity is its
+// IMMUTABLE owner, meta.AgentID — the mutable ActiveAgentID is retired and a
+// never-switched session leaves it empty. The ordinary-root lifecycle record
+// the launcher mints for the steering session
+// (ordinary_root_record.go::initializeOrdinaryRootRecord) must therefore carry
+// meta.AgentID.
+//
+// The body proves it two ways at once. The graph carries ONLY the owner→target
+// edge, so the launch is authorized solely because the U5a gate
+// (steer_launcher.go::startingRemainingDepth) matched that edge against the
+// session's owner — with an empty record AgentID the launch refuses with
+// steer.ErrInvalidEdge. And the record itself is read back and asserted to
+// carry the owner id, so a regression to ActiveAgentID dies even if some later
+// change made the empty-caller path lenient again.
+func TestLaunch_OrdinaryRootRecordCarriesTheSessionOwnerAgentID(t *testing.T) {
+	const owner = "ordinary-root-owner"
+	const workspaceID = "01JORDINARYROOT0000000001"
+	seedWorkspaceGraph(t, workspaceID, true, []graphEdge{
+		edge(owner, testDefaultAgentID, nil, nil),
+	})
+
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+
+	steerer := newTestSteeringSessionOwnedBy(t, al, workspaceID, owner)
+	res, err := NewSteerLauncher(al).Launch(ctxWS(workspaceID, 0), steer.LaunchRequest{
+		SteeringSessionID: steerer, TargetAgentID: testDefaultAgentID,
+		Task: "record the root's owner",
+		Origin: steer.Origin{
+			Kind: steer.OriginKindDelegate, CallID: "call-ordinary-root-owner",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Launch under a session owned by %q: %v (an empty record AgentID both skips the U5a gate and fails the edge match)", owner, err)
+	}
+	if res.SessionID == "" {
+		t.Fatal("expected a child session for a launch with a real owner→target edge")
+	}
+	rootRec, err := al.GetSessionLifecycleStore().Load(steerer)
+	if err != nil {
+		t.Fatalf("Load(ordinary root): %v", err)
+	}
+	if rootRec.AgentID != owner {
+		t.Fatalf("ordinary-root record AgentID = %q, want the session's immutable owner %q "+
+			"(DEL-11: the record takes meta.AgentID, never the retired ActiveAgentID)", rootRec.AgentID, owner)
+	}
+}
+
 // TestLaunch_BothFrontDoors_DifferOnlyInOrigin is US-1/AS-6.
 func TestLaunch_BothFrontDoors_DifferOnlyInOrigin(t *testing.T) {
 	al, cleanup := newSteerAL(t)
@@ -749,82 +834,6 @@ func TestLaunch_NestedSameShardDoesNotDeadlock(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("nested Launch deadlocked while loading an ancestor on the direct parent's lifecycle shard")
 	}
-}
-
-// TestLaunch_DefaultTimeoutIsThirtyMinutes proves D9's founder-set default: a
-// steered launch with no per-call timeout_seconds and no configured
-// performance.delegation_timeout_minutes records a 30-minute lifetime on the
-// edge (SteeredBy.Limits.TimeoutSeconds == 1800).
-func TestLaunch_DefaultTimeoutIsThirtyMinutes(t *testing.T) {
-	al, cleanup := newSteerAL(t)
-	defer cleanup()
-	l := NewSteerLauncher(al)
-	steerer := newTestSteeringSession(t, al, "ws-1")
-
-	res, err := l.Launch(context.Background(), steer.LaunchRequest{
-		SteeringSessionID: steerer, TargetAgentID: testDefaultAgentID, Task: "long work",
-		Origin: steer.Origin{Kind: steer.OriginKindDelegate, CallID: "call-default-timeout"},
-	})
-	if err != nil {
-		t.Fatalf("Launch: %v", err)
-	}
-	rec, err := al.GetSessionLifecycleStore().Load(res.SessionID)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if rec.SteeredBy == nil {
-		t.Fatal("SteeredBy = nil, want the edge carrying the resolved timeout")
-	}
-	if got := rec.SteeredBy.Limits.TimeoutSeconds; got != 30*60 {
-		t.Fatalf("Limits.TimeoutSeconds = %d, want %d (30 minutes)", got, 30*60)
-	}
-}
-
-// TestLaunch_TimeoutPrecedence proves that an explicit call-level timeout and
-// a configured performance.delegation_timeout_minutes each override the
-// 30-minute default, with the explicit per-call value winning.
-func TestLaunch_TimeoutPrecedence(t *testing.T) {
-	t.Run("explicit call-level timeout wins", func(t *testing.T) {
-		al, cleanup := newSteerAL(t)
-		defer cleanup()
-		steerer := newTestSteeringSession(t, al, "ws-1")
-		res, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
-			SteeringSessionID: steerer, TargetAgentID: testDefaultAgentID, Task: "quick work",
-			Origin: steer.Origin{Kind: steer.OriginKindDelegate, CallID: "call-explicit-timeout"},
-			Limits: steer.Limits{TimeoutSeconds: 90},
-		})
-		if err != nil {
-			t.Fatalf("Launch: %v", err)
-		}
-		rec, err := al.GetSessionLifecycleStore().Load(res.SessionID)
-		if err != nil {
-			t.Fatalf("Load: %v", err)
-		}
-		if got := rec.SteeredBy.Limits.TimeoutSeconds; got != 90 {
-			t.Fatalf("Limits.TimeoutSeconds = %d, want 90 (explicit call-level)", got)
-		}
-	})
-
-	t.Run("configured value wins over the default", func(t *testing.T) {
-		al, cleanup := newSteerAL(t)
-		defer cleanup()
-		al.GetConfig().Performance.DelegationTimeoutMinutes = 10
-		steerer := newTestSteeringSession(t, al, "ws-1")
-		res, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
-			SteeringSessionID: steerer, TargetAgentID: testDefaultAgentID, Task: "configured work",
-			Origin: steer.Origin{Kind: steer.OriginKindDelegate, CallID: "call-configured-timeout"},
-		})
-		if err != nil {
-			t.Fatalf("Launch: %v", err)
-		}
-		rec, err := al.GetSessionLifecycleStore().Load(res.SessionID)
-		if err != nil {
-			t.Fatalf("Load: %v", err)
-		}
-		if got := rec.SteeredBy.Limits.TimeoutSeconds; got != 10*60 {
-			t.Fatalf("Limits.TimeoutSeconds = %d, want %d (configured 10 minutes)", got, 10*60)
-		}
-	})
 }
 
 // ============================== Dispatch ==============================
@@ -989,131 +998,6 @@ func TestDispatch_ChildLifetimeIndependentOfCallerContext(t *testing.T) {
 		case <-time.After(3 * time.Second):
 			t.Fatal("child did not finish after the provider was released")
 		}
-	}
-}
-
-// TestSteeredTurnRunContext is ADR-091 fix lane 1's Finding E (MEDIUM) unit
-// coverage: rec.SteeredBy.Limits.TimeoutSeconds used to be read only from
-// runDispatchedSteeredTurn (the first-run/dispatch path); this is the ONE
-// helper both that path and the wake/re-entry path
-// (loop_inbound.go::processSteeredSystemWake) now share — D9's "the
-// timeout's scope is the session's lifetime across re-entries" only holds if
-// there is one function computing it.
-func TestSteeredTurnRunContext(t *testing.T) {
-	t.Run("no SteeredBy: no deadline", func(t *testing.T) {
-		ctx, cancel := steeredTurnRunContext(context.Background(), &session.LifecycleRecord{})
-		defer cancel()
-		if _, ok := ctx.Deadline(); ok {
-			t.Fatal("an ordinary_root record (SteeredBy == nil) produced a deadline")
-		}
-	})
-	t.Run("timeout_seconds=0: no deadline", func(t *testing.T) {
-		rec := &session.LifecycleRecord{SteeredBy: &session.SteeredBy{Limits: session.Limits{TimeoutSeconds: 0}}}
-		ctx, cancel := steeredTurnRunContext(context.Background(), rec)
-		defer cancel()
-		if _, ok := ctx.Deadline(); ok {
-			t.Fatal("timeout_seconds=0 produced a deadline")
-		}
-	})
-	t.Run("configured timeout with a real CreatedAt: deadline anchored there", func(t *testing.T) {
-		created := time.Now().Add(-90 * time.Second)
-		rec := &session.LifecycleRecord{CreatedAt: created, SteeredBy: &session.SteeredBy{Limits: session.Limits{TimeoutSeconds: 120}}}
-		ctx, cancel := steeredTurnRunContext(context.Background(), rec)
-		defer cancel()
-		dl, ok := ctx.Deadline()
-		if !ok {
-			t.Fatal("expected a deadline")
-		}
-		want := created.Add(120 * time.Second)
-		if diff := dl.Sub(want); diff < -time.Second || diff > time.Second {
-			t.Fatalf("deadline = %v, want ~%v (CreatedAt + TimeoutSeconds)", dl, want)
-		}
-	})
-	// Finding E's second half: a zero CreatedAt used to turn the timeout OFF
-	// entirely (the old inline check in runDispatchedSteeredTurn gated on
-	// !rec.CreatedAt.IsZero()) — a missing/unset timestamp silently removed
-	// a configured limit instead of just meaning "no better anchor is known
-	// yet".
-	t.Run("zero CreatedAt: deadline counts from now, never silently unlimited", func(t *testing.T) {
-		rec := &session.LifecycleRecord{SteeredBy: &session.SteeredBy{Limits: session.Limits{TimeoutSeconds: 60}}}
-		before := time.Now()
-		ctx, cancel := steeredTurnRunContext(context.Background(), rec)
-		defer cancel()
-		dl, ok := ctx.Deadline()
-		if !ok {
-			t.Fatal("a missing CreatedAt silently removed the configured timeout (Finding E regression)")
-		}
-		if dl.Before(before.Add(59*time.Second)) || dl.After(time.Now().Add(61*time.Second)) {
-			t.Fatalf("deadline = %v, want ~60s from now (%v..%v)", dl, before.Add(59*time.Second), time.Now().Add(61*time.Second))
-		}
-	})
-}
-
-// wakeBlocksUntilCtxDoneProvider blocks in Chat until its context is done,
-// then returns ctx.Err() — used to observe whether a run context actually
-// carries a deadline, without depending on wall-clock timing beyond the
-// test's own bounded wait.
-type wakeBlocksUntilCtxDoneProvider struct{}
-
-func (p *wakeBlocksUntilCtxDoneProvider) Chat(ctx context.Context, _ []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any) (*providers.LLMResponse, error) {
-	<-ctx.Done()
-	return nil, ctx.Err()
-}
-
-func (p *wakeBlocksUntilCtxDoneProvider) GetDefaultModel() string { return "wake-timeout-test" }
-
-// TestWake_AppliesConfiguredTimeout is ADR-091 fix lane 1's Finding E
-// integration proof: the wake/re-entry path
-// (loop_inbound.go::processSteeredSystemWake) must honor
-// rec.SteeredBy.Limits.TimeoutSeconds exactly like the first-run/dispatch
-// path does — before the fix, a woken turn ran with a bare, undeadlined
-// context and could run forever regardless of its configured timeout.
-//
-// wakeBlocksUntilCtxDoneProvider blocks until ITS context is done; the test
-// bounds the WHOLE call in a 5s select so a missing deadline fails this test
-// deterministically (a timeout, not a hang) instead of blocking forever.
-func TestWake_AppliesConfiguredTimeout(t *testing.T) {
-	al, cleanup := newSteerALWithProvider(t, &wakeBlocksUntilCtxDoneProvider{})
-	defer cleanup()
-	wireSteerCompletionDeps(t, al)
-	rootID := newTestSteeringSession(t, al, "ws-1")
-	child := launchRunningChild(t, al, rootID, "call-wake-timeout")
-	if err := al.GetSessionLifecycleStore().Mutate(child.SessionID, func(r *session.LifecycleRecord) error {
-		r.SteeredBy.Limits.TimeoutSeconds = 1
-		r.CreatedAt = time.Now().Add(-500 * time.Millisecond) // half the budget already spent
-		return nil
-	}); err != nil {
-		t.Fatalf("Mutate(timeout): %v", err)
-	}
-
-	wake := bus.InboundMessage{
-		Channel:                  "system",
-		ChatID:                   "system:steer:" + child.SessionID,
-		Sender:                   bus.SenderInfo{CanonicalID: "test"},
-		Content:                  "nudge",
-		AsyncTranscriptSessionID: child.SessionID,
-		AsyncOriginAgentID:       child.AgentID,
-		Metadata:                 map[string]string{"steer_message_id": "wake-1", "steer_generation": "1"},
-	}
-
-	done := make(chan error, 1)
-	go func() {
-		_, err := al.processSystemMessage(context.Background(), wake)
-		done <- err
-	}()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("processSteeredSystemWake did not return within 5s — Finding E: " +
-			"the edge's configured timeout is not being applied on a wake/re-entry")
-	}
-
-	rec, err := al.GetSessionLifecycleStore().Load(child.SessionID)
-	if err != nil {
-		t.Fatalf("Load(child): %v", err)
-	}
-	if rec.State != session.LifecycleTimedOut {
-		t.Fatalf("child state after a wake that exceeded its configured timeout = %q, want timed_out", rec.State)
 	}
 }
 
@@ -1284,5 +1168,76 @@ func TestLaunch_LongTaskNoLabel_SubagentStartTaskLabelSurvivesContractCap(t *tes
 	if frame.TaskLabel != wantLabel {
 		t.Fatalf("task_label = %q, want %q (60-rune truncation matching pkg/gateway/replay.go::resolveTaskLabel, "+
 			"so live and replay agree)", frame.TaskLabel, wantLabel)
+	}
+}
+
+// TestLaunch_Steered_SeedsSnapshotIntoFirstMessage: issue #1212 — a launch
+// carrying the delegate snapshot seeds its notes and references into the
+// child's first (model-visible) message, after the task text; the session
+// title stays the task/label, never the snapshot.
+func TestLaunch_Steered_SeedsSnapshotIntoFirstMessage(t *testing.T) {
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	steerer := newTestSteeringSession(t, al, "ws-1")
+
+	res, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
+		SteeringSessionID: steerer,
+		TargetAgentID:     testDefaultAgentID,
+		Task:              "inspect the cart",
+		Origin:            steer.Origin{Kind: steer.OriginKindDelegate},
+		ContextNotes:      "MARKER-NOTES-7731",
+		ContextReferences: []string{"docs/marker-ref-7731.md"},
+	})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	hist := al.GetSessionStore().GetHistory(res.SessionID)
+	if len(hist) != 1 {
+		t.Fatalf("GetHistory = %v, want exactly one seeded message", hist)
+	}
+	c := hist[0].Content
+	if !strings.HasPrefix(c, "inspect the cart") || !strings.Contains(c, "MARKER-NOTES-7731") || !strings.Contains(c, "docs/marker-ref-7731.md") {
+		t.Fatalf("first message = %q, want task text followed by the snapshot notes and reference", c)
+	}
+	meta, err := al.GetSessionStore().GetMeta(res.SessionID)
+	if err != nil {
+		t.Fatalf("GetMeta: %v", err)
+	}
+	if meta.Title != "inspect the cart" {
+		t.Fatalf("title = %q, want the task text only", meta.Title)
+	}
+}
+
+// TestLaunch_SnapshotIsSeededOnceAcrossARevival: the snapshot rides only the
+// launch's first message. A revival appends just its own instruction
+// (appendSteeredInstruction) and never re-seeds the snapshot.
+func TestLaunch_SnapshotIsSeededOnceAcrossARevival(t *testing.T) {
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	steerer := newTestSteeringSession(t, al, "ws-1")
+	res, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
+		SteeringSessionID: steerer, TargetAgentID: testDefaultAgentID, Task: "inspect the cart",
+		Origin: steer.Origin{Kind: steer.OriginKindDelegate}, ContextNotes: "MARKER-ONCE-7731",
+	})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if aerr := al.appendSteeredInstruction(res.SessionID, testDefaultAgentID, "carry on", false); aerr != nil {
+		t.Fatalf("appendSteeredInstruction: %v", aerr)
+	}
+	count := 0
+	for _, m := range al.GetSessionStore().GetHistory(res.SessionID) {
+		count += strings.Count(m.Content, "MARKER-ONCE-7731")
+	}
+	entries, rerr := al.GetSessionStore().ReadTranscript(res.SessionID)
+	if rerr != nil {
+		t.Fatalf("ReadTranscript: %v", rerr)
+	}
+	tcount := 0
+	for _, e := range entries {
+		tcount += strings.Count(e.Content, "MARKER-ONCE-7731")
+	}
+	if count != 1 || tcount != 1 {
+		t.Fatalf("snapshot marker appears %d times in history and %d in transcript after a revival instruction, want 1 and 1", count, tcount)
 	}
 }

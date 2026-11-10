@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { makeAssistantToolUI } from '@assistant-ui/react'
+import { makeAssistantToolUI } from '@/lib/assistant-tool-status'
 import { Folder, File, CaretDown, CaretUp } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -90,7 +90,7 @@ export function FileTreeBlock({
   // failure renders its dedicated display instead of `String(result)`'s
   // "[object Object]". Entries derive ONLY from a plain-string listing
   // (honest 0 for any other shape) — never from a stringified object.
-  const resolved = resolveToolResult(result)
+  const resolved = resolveToolResult(result, error)
   const content = resolved.kind === 'text' ? resolved.text : ''
   const entries = content ? parseTree(content) : []
 

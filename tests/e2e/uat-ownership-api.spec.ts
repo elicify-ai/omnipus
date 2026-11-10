@@ -56,13 +56,17 @@ import {
   type APIResponse,
   type TestInfo,
 } from '@playwright/test';
+import { startOwnershipCookieFixture, type OwnershipBrowserTarget } from './fixtures/ownership-cookie-origin.js';
 
-/** the-internet.herokuapp.com / example.com — the plan's §3.4 fixture hosts. */
-const PAGE_A = 'https://the-internet.herokuapp.com/dropdown';
+/**
+ * example.org / example.com — two distinct IANA-served fixture hosts (the plan's §3.4
+ * needs two distinguishable hosts). PAGE_A was the-internet.herokuapp.com/dropdown, a
+ * slow third-party host that missed the 2 s interactive-navigate budget on a cold
+ * Chrome in ~8-20% of ui-browser runs; no assertion depended on its content.
+ */
+const PAGE_A = 'https://example.org/';
 const PAGE_B = 'https://example.com/';
-/** Public cookie echo. No account, no credential — it just reports the jar. */
-const COOKIE_SET = 'https://httpbin.org/cookies/set?uatws=';
-const COOKIE_READ = 'https://httpbin.org/cookies';
+/** UAT-09b owns its deterministic cookie origin and disposable gateway below. */
 
 type Frame = Record<string, unknown>;
 
@@ -110,10 +114,11 @@ async function wsExchange(
   channel: '/api/v1/chat/ws' | '/api/v1/browser/ws',
   frames: Array<{ afterMs?: number; afterAttachedMs?: number; frame: Frame }>,
   collectMs: number,
+  target?: OwnershipBrowserTarget,
 ): Promise<Frame[]> {
-  const base = (process.env.OMNIPUS_URL || 'http://localhost:6060').replace(/^http/, 'ws');
+  const base = (target?.baseURL ?? (process.env.OMNIPUS_URL || 'http://localhost:6060')).replace(/^http/, 'ws');
   const received: Frame[] = [];
-  const token = cliToken();
+  const token = target?.token ?? cliToken();
   await new Promise<void>((resolve, reject) => {
     const ws = new WebSocket(base + channel);
     const send = (frame: Frame): void => {
@@ -172,11 +177,13 @@ async function attach(
   agentId: string,
   extra: Array<{ afterMs?: number; afterAttachedMs?: number; frame: Frame }> = [],
   collectMs = 20_000,
+  target?: OwnershipBrowserTarget,
 ): Promise<{ tabs: Array<{ url?: string; title?: string }>; statuses: Frame[]; error: string | null }> {
   const frames = await wsExchange(
     '/api/v1/browser/ws',
     [{ afterMs: 400, frame: { type: 'browser_attach', session_id: sessionId, agent_id: agentId } }, ...extra],
     collectMs,
+    target,
   );
   const statuses = frames.filter((f) => f.type === 'browser_status');
   const tabFrames = frames.filter((f) => f.type === 'browser_tabs');
@@ -213,9 +220,9 @@ function isMemoryRefusal(message: string | null): boolean {
 const LIVE_NAVIGATE_DEADLINE = /input dispatch failed: context deadline exceeded/;
 
 /** The same browser_inspect read UAT-09b uses as its cookie oracle. */
-async function pageText(agentId: string): Promise<string> {
+async function pageText(agentId: string, target?: OwnershipBrowserTarget): Promise<string> {
   const ctx = await apiRequest.newContext({
-    baseURL: process.env.OMNIPUS_URL || 'http://localhost:6060',
+    baseURL: target?.baseURL ?? (process.env.OMNIPUS_URL || 'http://localhost:6060'),
   });
   const headers = await csrf(ctx);
   const res = await ctx.post('/api/v1/browser/inspect', {
@@ -241,10 +248,11 @@ async function errorUnlessPageShows(
   marker: string,
   testInfo: TestInfo,
   label: string,
+  target?: OwnershipBrowserTarget,
 ): Promise<string | null> {
   if (result.error === null || !LIVE_NAVIGATE_DEADLINE.test(result.error)) return result.error;
   try {
-    const text = await pageText(agentId);
+    const text = await pageText(agentId, target);
     await note(testInfo, label, text);
     return text.includes(marker) ? null : result.error;
   } catch (err) {
@@ -265,12 +273,13 @@ async function attachRetryingMemory(
   extra: Array<{ afterMs?: number; afterAttachedMs?: number; frame: Frame }> = [],
   collectMs = 20_000,
   attempts = 3,
+  target?: OwnershipBrowserTarget,
 ): Promise<Awaited<ReturnType<typeof attach>> & { attempts: number }> {
-  let last = await attach(sessionId, agentId, extra, collectMs);
+  let last = await attach(sessionId, agentId, extra, collectMs, target);
   let used = 1;
   while (used < attempts && isMemoryRefusal(last.error)) {
     await new Promise((r) => setTimeout(r, 15_000));
-    last = await attach(sessionId, agentId, extra, collectMs);
+    last = await attach(sessionId, agentId, extra, collectMs, target);
     used += 1;
   }
   return { ...last, attempts: used };
@@ -477,7 +486,15 @@ test('UAT-CTRL a chat reaches its own workspace browser and can drive it', async
   if (isMemoryRefusal(opened.error)) {
     throw new Error(`BLOCKED by the memory ceiling (the feature working, not a defect): ${opened.error}`);
   }
-  expect(opened.error, 'attach must not error').toBeNull();
+  // Row 55: a LIVE_NAVIGATE_DEADLINE dispatch error is stale once the tab
+  // strip already shows PAGE_A — the same "Chrome commits the load anyway"
+  // race errorUnlessPageShows already tolerates for UAT-09b above. Deferring
+  // to the tabs assertion right below (which already exists and is
+  // unconditional) as the real oracle; any OTHER error still fails here
+  // immediately, same as before.
+  if (opened.error === null || !LIVE_NAVIGATE_DEADLINE.test(opened.error)) {
+    expect(opened.error, 'attach must not error').toBeNull();
+  }
   expect(opened.statuses.some((s) => s.state === 'attached'), 'panel must report attached').toBe(true);
   expect(opened.tabs.map((t) => t.url).join(','), 'the workspace tab must be on the page we drove it to').toContain(PAGE_A);
 });
@@ -526,7 +543,7 @@ test('UAT-09 a second workspace gets its own browser, profile and process', asyn
   if (isMemoryRefusal(b.error)) throw new Error(`BLOCKED by the memory ceiling: ${b.error}`);
   expect(b.error).toBeNull();
   expect(b.tabs.map((t) => t.url).join(','), "workspace B must be on its own page").toContain(PAGE_B);
-  expect(b.tabs.map((t) => t.url).join(','), "workspace B must NOT be showing workspace A's tab").not.toContain('the-internet');
+  expect(b.tabs.map((t) => t.url).join(','), "workspace B must NOT be showing workspace A's tab").not.toContain('example.org');
 
   const dirs = execFileSync('/bin/ps', ['ax', '-o', 'command'], { encoding: 'utf8' })
     .split('\n')
@@ -542,45 +559,65 @@ test('UAT-09 a second workspace gets its own browser, profile and process', asyn
 
 /**
  * UAT-09's substance: a cookie set in one workspace does not exist in the
- * other. This is the "a login in one workspace does not exist in another"
- * assertion, made with a public cookie echo rather than an account, because the
- * run forbids entering any credential anywhere.
+ * other. httpbin.org returned a settled HTTP 502 in CI, failing the positive
+ * control before cookie isolation could be judged. Use a deterministic local
+ * echo on its OWN disposable gateway, never broaden shared gateway SSRF.
  */
 test('UAT-09b a cookie set in one workspace is absent from the other', async ({}, testInfo) => {
-  const a = await attachRetryingMemory(fx.chatA1, fx.agentA, [
-    { afterAttachedMs: 500, frame: { type: 'browser_control', action: 'take' } },
-    { afterAttachedMs: 1_500, frame: { type: 'browser_input', kind: 'navigate', url: `${COOKIE_SET}ownA` } },
-    { afterAttachedMs: 12_000, frame: { type: 'browser_control', action: 'release' } },
-  ], 22_000);
-  if (isMemoryRefusal(a.error)) throw new Error(`BLOCKED by the memory ceiling: ${a.error}`);
-  // The dispatch deadline is not the oracle. ownA on A's page is, and it is
-  // only present once the cookie-set navigation has committed.
-  a.error = await errorUnlessPageShows(a, fx.agentA, 'ownA', testInfo, 'workspace A after cookie set');
-  expect(a.error).toBeNull();
+  const fixture = await startOwnershipCookieFixture();
+  try {
+    await note(testInfo, 'deterministic cookie fixture', `origin=${fixture.origin}; disposable gateway=${fixture.baseURL}`);
+    const cookieRead = `${fixture.origin}/cookies`;
+    const a = await attachRetryingMemory(fixture.chatA, fixture.agentA, [
+      { afterAttachedMs: 500, frame: { type: 'browser_control', action: 'take' } },
+      { afterAttachedMs: 1_500, frame: { type: 'browser_input', kind: 'navigate', url: `${fixture.origin}/cookies/set?uatws=ownA` } },
+      { afterAttachedMs: 12_000, frame: { type: 'browser_control', action: 'release' } },
+    ], 22_000, 3, fixture);
+    if (isMemoryRefusal(a.error)) throw new Error(`BLOCKED by the memory ceiling: ${a.error}`);
+    // The dispatch deadline is not the oracle. ownA on A's page is, and it is
+    // only present once the cookie-set navigation has committed.
+    a.error = await errorUnlessPageShows(a, fixture.agentA, 'ownA', testInfo, 'workspace A after cookie set', fixture);
+    expect(a.error).toBeNull();
 
-  const b = await attachRetryingMemory(fx.chatB1, fx.agentB, [
-    { afterAttachedMs: 500, frame: { type: 'browser_control', action: 'take' } },
-    { afterAttachedMs: 1_500, frame: { type: 'browser_input', kind: 'navigate', url: COOKIE_READ } },
-    { afterAttachedMs: 12_000, frame: { type: 'browser_control', action: 'release' } },
-  ], 22_000);
-  if (isMemoryRefusal(b.error)) throw new Error(`BLOCKED by the memory ceiling: ${b.error}`);
-  b.error = await errorUnlessPageShows(b, fx.agentB, 'cookies', testInfo, 'workspace B after cookie read');
-  expect(b.error).toBeNull();
+    const b = await attachRetryingMemory(fixture.chatB, fixture.agentB, [
+      { afterAttachedMs: 500, frame: { type: 'browser_control', action: 'take' } },
+      { afterAttachedMs: 1_500, frame: { type: 'browser_input', kind: 'navigate', url: cookieRead } },
+      { afterAttachedMs: 12_000, frame: { type: 'browser_control', action: 'release' } },
+    ], 22_000, 3, fixture);
+    if (isMemoryRefusal(b.error)) throw new Error(`BLOCKED by the memory ceiling: ${b.error}`);
+    b.error = await errorUnlessPageShows(b, fixture.agentB, 'cookies', testInfo, 'workspace B after cookie read', fixture);
+    expect(b.error).toBeNull();
 
-  const inB = await pageText(fx.agentB);
-  await note(testInfo, 'workspace B cookie jar', inB);
-  expect(inB, "workspace B must not hold workspace A's cookie").not.toContain('ownA');
-  expect(inB, 'workspace B must actually be on the cookie page (so the absence means something)').toContain('cookies');
+    const inB = await pageText(fixture.agentB, fixture);
+    await note(testInfo, 'workspace B cookie jar', inB);
+    expect(inB, 'workspace B must actually be on the cookie page (so the absence means something)').toContain('cookies');
+    // Verify the literal managers too, not merely two apparently separate jars.
+    // Canonical paths handle macOS /var -> /private/var without hard-coding it.
+    const expectedProfiles = [fs.realpathSync(fixture.profileA), fs.realpathSync(fixture.profileB)];
+    const liveProfiles = [...new Set(execFileSync('/bin/ps', ['ax', '-o', 'command'], { encoding: 'utf8' })
+      .split('\n')
+      .flatMap((command) => /--user-data-dir=(\S+)/.exec(command)?.[1] ?? [])
+      .filter((dir) => fs.existsSync(dir))
+      .map((dir) => fs.realpathSync(dir)))];
+    await note(testInfo, 'workspace browser profile keys', JSON.stringify({ workspaceA: fixture.workspaceA, workspaceB: fixture.workspaceB, expectedProfiles, matchedLiveProfiles: liveProfiles.filter((dir) => expectedProfiles.includes(dir)) }));
+    expect(expectedProfiles[0], 'A/B workspace browser profiles must differ').not.toBe(expectedProfiles[1]);
+    expect(liveProfiles, 'the real managers must use each created ws-<workspace-id> profile').toEqual(expect.arrayContaining(expectedProfiles));
+    expect(inB, "workspace B must not hold workspace A's cookie").not.toContain('ownA');
+    expect(JSON.parse(inB), 'workspace B must have a genuine empty cookie echo').toEqual({ cookies: {} });
 
-  const backInA = await attachRetryingMemory(fx.chatA1, fx.agentA, [
-    { afterAttachedMs: 500, frame: { type: 'browser_control', action: 'take' } },
-    { afterAttachedMs: 1_500, frame: { type: 'browser_input', kind: 'navigate', url: COOKIE_READ } },
-    { afterAttachedMs: 12_000, frame: { type: 'browser_control', action: 'release' } },
-  ], 20_000);
-  if (isMemoryRefusal(backInA.error)) throw new Error(`BLOCKED by the memory ceiling: ${backInA.error}`);
-  const inA = await pageText(fx.agentA);
-  await note(testInfo, 'workspace A cookie jar', inA);
-  expect(inA, 'workspace A must still hold its own cookie — otherwise "absent in B" proves nothing').toContain('ownA');
+    const backInA = await attachRetryingMemory(fixture.chatA, fixture.agentA, [
+      { afterAttachedMs: 500, frame: { type: 'browser_control', action: 'take' } },
+      { afterAttachedMs: 1_500, frame: { type: 'browser_input', kind: 'navigate', url: cookieRead } },
+      { afterAttachedMs: 12_000, frame: { type: 'browser_control', action: 'release' } },
+    ], 20_000, 3, fixture);
+    if (isMemoryRefusal(backInA.error)) throw new Error(`BLOCKED by the memory ceiling: ${backInA.error}`);
+    const inA = await pageText(fixture.agentA, fixture);
+    await note(testInfo, 'workspace A cookie jar', inA);
+    expect(inA, 'workspace A must still hold its own cookie — otherwise "absent in B" proves nothing').toContain('ownA');
+    expect(JSON.parse(inA), 'workspace A positive control must retain the exact cookie').toEqual({ cookies: { uatws: 'ownA' } });
+  } finally {
+    await fixture.close();
+  }
 });
 
 /**
@@ -600,19 +637,27 @@ test('UAT-SEC an agent not on the chat workspace never reaches that workspace br
   // workspaces must be showing DIFFERENT pages at the moment of the crossing,
   // or "it showed httpbin" cannot tell A's browser from B's and the case proves
   // nothing while still going green.
+  // Row 55 UAT-SEC: this collect window was 20_000ms, shorter than UAT-CTRL's
+  // structurally-identical navigate-to-PAGE_A operation above (28_000ms) for
+  // no evident reason. markA/markB.tabs is a snapshot captured when the
+  // collect window closes — a navigation still in flight because a slow
+  // external site (example.org) hadn't committed yet reads as
+  // the tab never having moved (the exact failure this row is about: the
+  // tab caught showing a leftover page from an earlier test). Matching
+  // UAT-CTRL's window gives the same slow-navigation class the same runway.
   const markA = await attachRetryingMemory(fx.chatA1, fx.agentA, [
     { afterAttachedMs: 500, frame: { type: 'browser_control', action: 'take' } },
     { afterAttachedMs: 1_500, frame: { type: 'browser_input', kind: 'navigate', url: PAGE_A } },
     { afterAttachedMs: 12_000, frame: { type: 'browser_control', action: 'release' } },
-  ], 20_000);
+  ], 28_000);
   if (isMemoryRefusal(markA.error)) throw new Error(`BLOCKED by the memory ceiling: ${markA.error}`);
-  expect(markA.tabs.map((t) => t.url).join(','), 'workspace A must be marked before the crossing').toContain('the-internet');
+  expect(markA.tabs.map((t) => t.url).join(','), 'workspace A must be marked before the crossing').toContain('example.org');
 
   const markB = await attachRetryingMemory(fx.chatB1, fx.agentB, [
     { afterAttachedMs: 500, frame: { type: 'browser_control', action: 'take' } },
     { afterAttachedMs: 1_500, frame: { type: 'browser_input', kind: 'navigate', url: PAGE_B } },
     { afterAttachedMs: 12_000, frame: { type: 'browser_control', action: 'release' } },
-  ], 20_000);
+  ], 28_000);
   if (isMemoryRefusal(markB.error)) throw new Error(`BLOCKED by the memory ceiling: ${markB.error}`);
   expect(markB.tabs.map((t) => t.url).join(','), 'workspace B must be marked before the crossing').toContain('example.com');
 
@@ -621,7 +666,7 @@ test('UAT-SEC an agent not on the chat workspace never reaches that workspace br
   if (isMemoryRefusal(crossed.error)) throw new Error(`BLOCKED by the memory ceiling: ${crossed.error}`);
 
   const urls = crossed.tabs.map((t) => t.url ?? '').join(',');
-  expect(urls, "an agent off the team must NOT be shown the named workspace's browsing").not.toContain('the-internet');
+  expect(urls, "an agent off the team must NOT be shown the named workspace's browsing").not.toContain('example.org');
   if (crossed.error === null) {
     expect(urls, "if it attached at all, it must be to its OWN workspace's browser").toContain('example.com');
   }
@@ -632,7 +677,7 @@ test('UAT-SEC an agent not on the chat workspace never reaches that workspace br
   const mirroredUrls = mirrored.tabs.map((t) => t.url ?? '').join(',');
   expect(mirroredUrls, "an agent off the team must NOT be shown the named workspace's browsing").not.toContain('example.com');
   if (mirrored.error === null) {
-    expect(mirroredUrls, "if it attached at all, it must be to its OWN workspace's browser").toContain('the-internet');
+    expect(mirroredUrls, "if it attached at all, it must be to its OWN workspace's browser").toContain('example.org');
   }
 });
 

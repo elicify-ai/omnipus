@@ -35,6 +35,16 @@ properties:
       - error
     description: Current connection status of the MCP server.
     example: "connected"
+  status_reason:
+    type: string
+    minLength: 1
+    maxLength: 1000
+    description: >
+      Human-readable reason for the current status, safe to display — for
+      example the missing secret reference that keeps an enabled server from
+      starting (#1277). Present only when status is "error"; never contains a
+      secret value.
+    example: "secret reference MCP_NOTION_TOKEN is missing"
   tool_count:
     type: integer
     minimum: 0

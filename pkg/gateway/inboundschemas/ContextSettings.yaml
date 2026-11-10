@@ -11,7 +11,7 @@ required:
   - mcp_result_cap
   - builtin_success_cap
   - builtin_failure_cap
-  - absolute_trigger_chars
+  - tool_result_share_fraction
   - ingest_bound_bytes
   - model_overrides
 additionalProperties: false
@@ -42,13 +42,19 @@ properties:
       builtin or MCP (D4 "builtin-failure" surface). Default 10,000;
       ceiling 150,000.
     example: 10000
-  absolute_trigger_chars:
-    type: integer
-    minimum: 1
+  tool_result_share_fraction:
+    type: number
+    format: double
+    minimum: 0
+    exclusiveMinimum: true
+    maximum: 1
     description: >
-      Absolute tool-result share trigger (chars) for the mid-turn window
-      check (D6); the token share is this ÷ 2.5. Default 400,000.
-    example: 400000
+      Finite fraction of the resolved model window W used for the tool-result
+      share limit (ADR-066 MAJ-CW-007, FR-036): 0 < f ≤ 1. Default 0.5.
+      S = max(1, floor(f × W)); this is a fraction of W, not the total-request
+      budget B. Settings → Models displays it as a percentage (default 50%);
+      the wire carries the dimensionless fraction, so 12.5% is 0.125.
+    example: 0.5
   ingest_bound_bytes:
     type: integer
     minimum: 1

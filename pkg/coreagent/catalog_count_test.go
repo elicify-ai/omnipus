@@ -134,7 +134,59 @@ import (
 // left as the campaign wrote it and the post-merge delta is carried here.
 // ADR-090 adds get_agent and get_agent_tools management readback (107 -> 109)
 // and environment_setup (109 -> 110, ES-FR-01).
-const catalogSizeToday = 110
+//
+// Bumped 110 -> 111 adding "create_email_draft"
+// (email-mail-view-spec §2.7 point 6, FR-013): the Drafts-only compose tool —
+// it writes a Drafts copy and cannot send — registered alongside the five
+// existing email tools so the catalog↔ceiling parity test
+// (TestCatalog_MatchesGlobalCeilingEntryForEntry) stays one-for-one with the
+// new shipped defaults.go entry. POST-MERGE addition, same rule as grep and
+// the knowledge_list pair above. Policy wiring rides the ADR-090 inventory
+// grant (allow for every role) and the D19 configure-time fill.
+//
+// Bumped 111 -> 114 adding the three agent attachment tools for RECEIVED
+// mail attachments (ADR-20261001 F3, w4 spec US-3, #1171; founder Q4=A,
+// 2026-10-02): list_email_attachments (descriptors only — no body bytes,
+// no Seen change), read_email_attachment (text-only first wave; binary
+// returns an explicit unsupported outcome plus the Save option), and
+// download_email_attachment (the shared mailattachment service — same cap,
+// naming, audit and refusals as the panel; destination always the
+// workspace mail hierarchy, no path argument). All three are POST-MERGE
+// additions, same rule as grep and create_email_draft above. Shipped
+// ceiling: allow/allow/ask (defaults.go) — the save tool is a normal
+// download-shaped write with the ordinary ask default and the ordinary
+// Auto-approve classification, per the founder's explicit "no exception,
+// no special mechanism" ruling; no new blocklist, scanner or third policy
+// layer was added. Registered at every Hard-Constraint-6 touch point in
+// the same commit (seed.go, defaults.go, ADR-090 inventory, Auto classes,
+// EmailToolset).
+//
+// Bumped 114 -> 109: -4 for U9/DEL-23 (the four *_in_workspace sysagent task
+// tools, deleted in aedb007a4 without moving this pin) and -1 for
+// "switch_agent" (session-core DEL-07, U8: the agent-switch tool is gone; peer
+// messaging and session navigation replace it).
+//
+// Bumped 109 -> 110 adding "answer_request" (founder, 2026-10-11, hands-on
+// test Gap 5: "a reply should be a TOOL"): the explicit tool for answering a
+// request a peer or connector sent. A plain conversational reply reaches
+// nobody, so answering needed its own unambiguous call; it fronts the same
+// reply admission as send_message reply_to. POST-MERGE addition, same rule as
+// grep; ceiling "allow" (defaults.go), granted to every conversational role.
+// 110 -> 119 (2026-10-13, omnipus-system-agent WU-2, spec §6.5 / FR-007 /
+// FR-021): +9 request_secret, list_secrets, remove_secret,
+// select_secret_version, connect_channel, connect_mailbox,
+// set_agent_permissions, read_conversation, list_mailboxes — classified in
+// the catalogue, ceiling, role inventories, custom constructor and Auto table
+// in one commit.
+// 119 -> 121 (T8, tool-parity r17): +3 get_task, get_plan, get_goal (§7.9
+// read-back tools), -2 get_agent_tools and read_agent_metadata (retired by
+// §7.12 in favour of get_agent), net +1; the other +1 reconciles a count the
+// earlier pins had already left behind the catalog (the static list was 120 at
+// the T8 checkpoint). The real count is len(allStaticToolNames), asserted below.
+// 121 -> 120 (merge of skills r15 §10): retire create_skill/remove_skill (-2),
+// add get_skill (+1); edit_skill remains under its supported action contract.
+// 120 -> 121 (merge of channels FR-032): add set_channel_outbound (+1).
+const catalogSizeToday = 121
 
 // currentKnowledgeToolNames is every knowledge_* tool presently in the
 // catalog: ADR-068 D15.3's original six (the replacement for ADR-067's
@@ -338,14 +390,14 @@ func TestCatalog_MergeArithmetic(t *testing.T) {
 	const (
 		releaseV011BaselineSize = 95
 		newKnowledgeToolCount   = 6
-		// postMergeAdditions: three so far — "grep" (ADR-081 D11, FR-009),
+		// postMergeAdditions started with "grep" (ADR-081 D11, FR-009),
 		// then knowledge_list and knowledge_base_create (KB-1/KB-2,
 		// defect-list-knowledge-base-ux-2026-09-08.md, founder-ratified
 		// 2026-09-08) — all added to allStaticToolNames ahead of (grep) or
 		// alongside (the two knowledge names) their own implementation.
 		// Bump this alongside catalogSizeToday, in the same commit,
 		// whenever a tool is added post-merge.
-		postMergeAdditions = 9 // +3 goal-flow tools; +2 ADR-090 management readback tools; +1 environment_setup (ES-FR-01)
+		postMergeAdditions = 20 // +1 set_channel_outbound (channels FR-032); r15 §10: -2 retired skill verbs +1 get_skill; +9 omnipus-system-agent §6.5 tools (WU-2, 2026-10-13); +1 answer_request (founder Gap 5, 2026-10-11); +3 goal-flow; +2 ADR-090 readback; +1 environment_setup; +1 create_email_draft (email-mail-view spec §2.7 point 6); +3 mail attachment tools (ADR-20261001 F3, w4 spec US-3, founder Q4=A); -4 four *_in_workspace task tools (U9/DEL-23); -1 switch_agent (U8/DEL-07); +3 get_task/get_plan/get_goal and -2 get_agent_tools/read_agent_metadata (T8 r17 7.9, 7.12), +1 reconciling the earlier count
 	)
 	// Checked against the FROZEN adr068OriginalSixKnowledgeToolNames, not
 	// currentKnowledgeToolNames — this arithmetic is a fact about what the

@@ -1,5 +1,7 @@
 # Spec Output Template
 
+Process version: 2026-10-29.1 (template header only; removed from the final spec with the rest of this block)
+
 Structural template for `docs/internal/specs/<name>-spec.md`. Fill in every section.
 Replace all `[bracketed placeholders]` with actual content. A section marked
 "remove if not applicable" may be dropped, but only with an explicit one-line reason
@@ -8,19 +10,27 @@ this header block itself from the final output.
 
 The section order below is fixed by `plan-spec/SKILL.md` and the S1 lane brief:
 contract changes first, then backend and frontend covered equally, BDD scenarios with
-oracles from this spec, a traceability table, and Reachability.
+oracles from this spec, Reachability, user-facing documentation TODOs, and a traceability
+table.
 
 ---
 
 `Status: Draft`
 
-`ADR: [ADR-NNN — Title](../architecture/ADR-NNN-title.md)` — or, if none:
-`ADR: none — no open design decision`
+`ADR: [Title](../architecture/<ADR's actual filename>.md)` — cite the ADR's own filename and
+title, whatever its naming scheme (`.claude/agents/architect.md`'s "ADR naming" bullet states
+the current rule for a NEW ADR; an existing ADR keeps whatever filename it already has —
+never invent a placeholder pattern here). If none: `ADR: none — no open design decision`
 
 # Feature Specification: [Feature Name]
 
 **Created**: [YYYY-MM-DD]
 **Input**: interview-me output at `[path]`; ADR at `[path]` (if any)
+**Epic**: #[n] (Stage/Horizon on the board)
+**Riders**: [open issues on the same files, confirmed with the architect — or "none found"]
+**Agent tool field table**: [for every agent-managed object this spec changes: object,
+property, user can set, agent can set, reason if different — or "no agent-managed
+object changed"]
 
 ---
 
@@ -219,6 +229,15 @@ because [reason].
 | Integration | [module interactions]         | [components work together]                  |
 | E2E         | [full user workflows]         | [complete feature from user view]           |
 
+### Hands-on UAT rows (written at spec time)
+
+Root `CLAUDE.md` ("Hands-on pipeline") defines execution/version independence. Fill
+the rows here so qa-lead refines a campaign from the spec, not from the implementation.
+
+| Row | Acceptance criterion | Steps | Expected result | Affected area | Validator critical path | Automation candidate |
+|---|---|---|---|---|---|---|
+| [id] | [US / scenario] | [human actions] | [spec-derived oracle] | [diff-selection area] | [independent re-drive] | [stable row / reason not yet] |
+
 ### Test Implementation Order
 
 | Order | Test Name | Level | Traces to BDD Scenario | Description |
@@ -273,14 +292,25 @@ protected by: [existing tests covering the boundary, if any].
   justified because…"].
 - **Test plan execution**: [where in RED/GREEN/CHECK this gets run, not merely written].
 
+## User-facing documentation
+
+> Root `CLAUDE.md` ("Definition of Done"): name specific TODOs for every UI or
+> behaviour change, pointing to user-facing `docs/` pages outside `docs/internal/`.
+> If none applies, state the reason here.
+
+| TODO | UI / behaviour change | User-facing page | Matching update |
+|---|---|---|---|
+| DOC-001 | [what changes for users] | `docs/[existing-or-new-page].md` | [what the page must explain] |
+
 ## Traceability Matrix
 
-| Requirement | User Story | BDD Scenario(s)          | Test Name(s)            |
-|-------------|-----------|---------------------------|--------------------------|
-| FR-001      | US-1      | Scenario: [title]         | [test_name]              |
+| Requirement | User Story | BDD Scenario(s)          | Test Name(s)            | Documentation TODO(s) |
+|-------------|-----------|---------------------------|-------------------------|-----------------------|
+| FR-001      | US-1      | Scenario: [title]         | [test_name]             | DOC-001               |
 
 **Completeness check**: every FR-xxx has at least one BDD scenario and one test; every
-BDD scenario appears at least once.
+BDD scenario appears at least once; each UI/behaviour change traces to a DOC-xxx TODO
+(or an explicit reason no user-facing documentation update applies).
 
 ---
 

@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Info } from '@phosphor-icons/react'
 import {
@@ -32,6 +32,8 @@ import { cn } from '@/lib/utils'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useUiStore } from '@/store/ui'
 import { planDependencyReconnect } from './dependencyReconnect'
+import { filterByTags } from '@/lib/planFilter'
+import { filterTasks } from '@/lib/taskFilters'
 
 // ── F2 COMPONENT BOUNDARY ────────────────────────────────────────────────────
 // The Graph (Task DAG) tab. Tasks as nodes, `blocked_by` as dependency edges,
@@ -46,6 +48,7 @@ import { planDependencyReconnect } from './dependencyReconnect'
 // null sentinel in `planFilter.ts` — Select just can't carry `null` as an
 // item value).
 const GRAPH_PLAN_ALL = '__all__'
+const EMPTY_TAGS: string[] = []
 
 interface WorkspaceGraphTabProps {
   workspaceId: string
@@ -55,6 +58,9 @@ interface WorkspaceGraphTabProps {
    * false so standalone use of this tab is unaffected. The plan info strip
    * (state/objective/progress) still renders regardless. */
   hidePlanSelector?: boolean
+  /** Visible shared Tasks toolbar scope; standalone Graph defaults to unfiltered. */
+  ownerAgentId?: string | null
+  activeTags?: string[]
 }
 
 /**
@@ -62,7 +68,7 @@ interface WorkspaceGraphTabProps {
  * cache (for avatar colour/icon), renders the DAG canvas, and opens the shared
  * task detail slide-over on node click — mirroring the Board's onTaskClick.
  */
-export function WorkspaceGraphTab({ workspaceId, hidePlanSelector = false }: WorkspaceGraphTabProps) {
+export function WorkspaceGraphTab({ workspaceId, hidePlanSelector = false, ownerAgentId = null, activeTags = EMPTY_TAGS }: WorkspaceGraphTabProps) {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
 
   // Plan scope (ADR-051 — plans-as-filter): the SAME store field the Board's
@@ -99,6 +105,7 @@ export function WorkspaceGraphTab({ workspaceId, hidePlanSelector = false }: Wor
   })
 
   const activePlan = activePlanId != null ? (plans.find((p) => p.id === activePlanId) ?? null) : null
+  const filteredTasks = useMemo(() => filterTasks(filterByTags(tasks, activeTags), { planId: null, ownerAgentId }), [tasks, activeTags, ownerAgentId])
 
   const selectedTask =
     selectedTaskId != null ? (tasks.find((t) => t.id === selectedTaskId) ?? null) : null
@@ -358,8 +365,9 @@ export function WorkspaceGraphTab({ workspaceId, hidePlanSelector = false }: Wor
 
       <div className="relative flex-1 min-h-0">
         <GraphView
-          tasks={tasks}
+          tasks={filteredTasks}
           agents={agents}
+          plans={plans}
           selectedTaskId={selectedTaskId}
           onTaskClick={(task) => setSelectedTaskId(task.id)}
           // Only scope the canvas to a plan once it's actually resolvable

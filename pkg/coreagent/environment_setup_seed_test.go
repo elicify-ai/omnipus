@@ -50,13 +50,15 @@ func TestEnvironmentSetup_GlobalCeilingShipsAsk(t *testing.T) {
 // defaults in the declared inventory (ADR090RolePolicyInventory).
 func TestEnvironmentSetup_FounderRoleMatrix(t *testing.T) {
 	want := map[CoreAgentID]config.ToolPolicy{
-		IDMia:            config.ToolPolicyAsk,
-		IDWorker:         config.ToolPolicyAsk, // General Purpose
-		IDAdmin:          config.ToolPolicyAsk,
-		IDJim:            config.ToolPolicyDeny,
-		IDAva:            config.ToolPolicyDeny,
-		IDPlanner:        config.ToolPolicyDeny,
-		IDResearcher:     config.ToolPolicyDeny,
+		IDMia:    config.ToolPolicyAsk,
+		IDWorker: config.ToolPolicyAsk, // General Purpose
+		// Omnipus rides the ask ceiling with NO per-agent entry
+		// (omnipus-system-agent §6.5, FR-022); its inventory value is the
+		// ceiling's ask.
+		IDOmnipus:        config.ToolPolicyAsk,
+		IDJim:            config.ToolPolicyAsk,  // SPEC.md Table (2026-10-22): environment_setup Ask for both columns.
+		IDPlanner:        config.ToolPolicyAsk,  // SPEC.md Table (2026-10-22): environment_setup Ask for both columns.
+		IDResearcher:     config.ToolPolicyAsk,  // SPEC.md Table (2026-10-22): environment_setup Ask for both columns.
 		IDJudge:          config.ToolPolicyDeny, // locked (systemAgentSeed, re-enforced)
 		IDPlanSupervisor: config.ToolPolicyDeny, // locked (systemAgentSeed, re-enforced)
 	}
@@ -83,7 +85,7 @@ func TestEnvironmentSetup_PerAgentSeedsStoreExplicitPolicies(t *testing.T) {
 	for _, a := range cfg.Agents.List {
 		byID[a.ID] = a
 	}
-	askRoles := []string{string(IDMia), string(IDWorker), string(IDAdmin)}
+	askRoles := []string{string(IDMia), string(IDWorker)}
 	for _, id := range askRoles {
 		a, ok := byID[id]
 		if !ok {
@@ -100,18 +102,20 @@ func TestEnvironmentSetup_PerAgentSeedsStoreExplicitPolicies(t *testing.T) {
 			t.Errorf("%s environment_setup = %q, want ask", id, got)
 		}
 	}
-	denied := []string{string(IDJim), string(IDAva), string(IDPlanner), string(IDResearcher)}
-	for _, id := range denied {
+	// SPEC.md Table (2026-10-22): Jim, Planner and Researcher now store the ordinary Ask posture too.
+	newAskRoles := []string{string(IDJim), string(IDPlanner), string(IDResearcher)}
+	for _, id := range newAskRoles {
 		a, ok := byID[id]
 		if !ok {
 			t.Fatalf("seeded roster missing %q", id)
 		}
 		got, stored := a.Tools.Builtin.Policies["environment_setup"]
 		if !stored {
-			t.Fatalf("%s must carry an explicit persisted environment_setup Deny (ceiling is ask; absence would inherit ask)", id)
+			t.Fatalf("%s must carry its deliberate persisted environment_setup Ask", id)
 		}
-		if got != config.ToolPolicyDeny {
-			t.Errorf("%s environment_setup = %q, want deny", id, got)
+		// SPEC.md Table (2026-10-22): environment_setup is Ask for both Main and Worker.
+		if got != config.ToolPolicyAsk {
+			t.Errorf("%s environment_setup = %q, want ask", id, got)
 		}
 	}
 }
@@ -230,7 +234,9 @@ func TestEnvironmentSetup_ConstructorOtherDefaultsUnchanged(t *testing.T) {
 // role's persisted seed — INCLUDING the ceiling-equal asks, which the
 // deliberate-posture list retains instead of pruning.
 func TestEnvironmentSetup_SparseRolePoliciesMatchInventory(t *testing.T) {
-	for _, id := range []CoreAgentID{IDMia, IDJim, IDAva, IDAdmin, IDPlanner, IDResearcher, IDWorker} {
+	// Omnipus is excluded on purpose: it stores no per-agent entry for its
+	// ask-list tools (§6.5, FR-022) — see TestL1WU2OmnipusPolicies_*.
+	for _, id := range []CoreAgentID{IDMia, IDJim, IDPlanner, IDResearcher, IDWorker} {
 		intended := ADR090RolePolicyInventory(id)["environment_setup"]
 		sparse, stored := adr090SparseRolePolicies(id)["environment_setup"]
 		if !stored {
@@ -253,7 +259,7 @@ func TestEnvironmentSetup_PostureListRetainsCeilingEqualAsk(t *testing.T) {
 	if ceiling != string(config.ToolPolicyAsk) {
 		t.Fatalf("precondition: shipped ceiling environment_setup = %q, want ask", ceiling)
 	}
-	for _, id := range []CoreAgentID{IDMia, IDWorker, IDAdmin} {
+	for _, id := range []CoreAgentID{IDMia, IDWorker} {
 		sparse, stored := adr090SparseRolePolicies(id)["environment_setup"]
 		if !stored {
 			t.Fatalf("%s: ceiling-equal environment_setup ask was pruned — the deliberate-posture list must retain it", id)

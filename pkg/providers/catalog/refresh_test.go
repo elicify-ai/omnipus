@@ -248,6 +248,7 @@ func TestRefresh_Downgrade_Refused(t *testing.T) {
 
 	err := c.Refresh(context.Background())
 	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrRegressed)
 
 	requireOneWarnWithReason(t, log, "regressed")
 	assert.Equal(t, "v2026.8.22", c.Version().String(), "no downgrade")
@@ -272,6 +273,18 @@ func TestRefresh_TooLarge_WarnsTooLargeNeverChecksum(t *testing.T) {
 }
 
 // ── FR-009 reason=invalid ────────────────────────────────────────────────────
+
+func TestApplyDoc_SerializationFailure_WrapsInvalid(t *testing.T) {
+	doc, err := ParseDocument(loadFixture(t))
+	require.NoError(t, err)
+	doc.UpdatedAt = time.Date(10000, time.January, 1, 0, 0, 0, 0, time.UTC)
+
+	c := New()
+	err = c.applyDoc(doc, ServedPulled)
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalid)
+}
 
 func TestRefresh_InvalidDocument_Retains(t *testing.T) {
 	log := &captureLogger{}

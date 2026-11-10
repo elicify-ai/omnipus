@@ -4,6 +4,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -12,12 +13,76 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
-	"github.com/google/uuid"
 )
 
-// checkSteerCaps enforces the steer/respond body-size cap (16 KiB default)
-// and per-target-session rate cap (6/min default) — ADR-053 §Contract
-// Surface "Caps". Returns a clear, typed error naming the exceeded cap;
+// followupRefusalError is a refusal sentence authored in this file (a race the
+// caller can act on). It is the only error text from a lifecycle Mutate that
+// may reach the calling agent as written; every other Mutate error is
+// store-level and is replaced by a fixed sentence.
+type followupRefusalError struct{ text string }
+
+func (e *followupRefusalError) Error() string { return e.text }
+
+// refusalTexter is implemented by an error whose text was authored for a
+// person or model to read (the agent package's curated revival refusals), so
+// the tool may show it as written. Any other revival error is shown as a fixed
+// sentence.
+type refusalTexter interface{ RefusalText() string }
+
+// controlFailure is the curated refusal for a store or revival failure whose
+// own text can carry filesystem paths or session-file detail: the calling agent
+// reads a fixed sentence, the gateway log keeps the cause, and the cause stays
+// reachable through errors.Is/As on the result's error.
+func controlFailure(action, fixed string, cause error) *ToolResult {
+	slog.Error("delegate: "+action+" failed; the caller was given a fixed sentence", "error", cause)
+	return ErrorResult("delegate: " + action + ": " + fixed).WithError(cause)
+}
+
+// displayableCause returns the text of err that may reach the calling agent: an
+// authored refusal's own sentence (refusalTexter), or the fixed text of a plain
+// context error. Anything else — a wrapped store error that can carry paths —
+// is not displayable.
+func displayableCause(err error) (string, bool) {
+	var texter refusalTexter
+	if errors.As(err, &texter) {
+		return texter.RefusalText(), true
+	}
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return context.DeadlineExceeded.Error(), true
+	case errors.Is(err, context.Canceled):
+		return context.Canceled.Error(), true
+	}
+	return "", false
+}
+
+// lifecycleLoadFailure is controlFailure for a failed lifecycle Load. A genuinely
+// absent record names the looked-up id (so a mistyped id is visible); anything
+// else is a store fault shown as a fixed sentence.
+func lifecycleLoadFailure(action, sessionID string, cause error) *ToolResult {
+	if errors.Is(cause, session.ErrLifecycleNotFound) {
+		return ErrorResult(fmt.Sprintf("delegate: %s: session %s was not found", action, sessionID)).WithError(cause)
+	}
+	return controlFailure(action, fmt.Sprintf("the record of session %s could not be read or updated right now; retry shortly", sessionID), cause)
+}
+
+// reviveFailure is controlFailure for a failed revival: a curated refusal is
+// shown as written, anything else as a fixed sentence.
+func reviveFailure(action, sessionID string, cause error) *ToolResult {
+	var curated refusalTexter
+	if errors.As(cause, &curated) {
+		return ErrorResult("delegate: " + action + ": " + curated.RefusalText()).WithError(cause)
+	}
+	return controlFailure(action, fmt.Sprintf("session %s could not be revived right now; retry shortly", sessionID), cause)
+}
+
+// checkSteerCaps enforces the steer/respond body-size cap (65,536 bytes by
+// default, session.DefaultSteerBodyBytes) and the per-target-session rate cap
+// (60 per minute by default, session.DefaultSteerRatePerMinute) — ADR-053
+// §Contract Surface "Caps", defaults per session-core C-LIMIT. The rate window
+// is keyed by target session_id on THIS tool instance, and each agent has its
+// own DelegateTool (pkg/agent/loop_wire.go::registerDelegationTools), so the
+// effective limit is per sending agent per target. Returns a clear, typed error naming the exceeded cap;
 // callers surface it as a tool error (never-silent-drop applies to
 // parent->child delivery too — a rejected steer must be visible to the
 // PARENT, not silently dropped).
@@ -104,7 +169,7 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 	// below, deliberately OUTSIDE the atomic closure — unlike the terminal
 	// check (see the TOCTOU comment below), ownership cannot race: a
 	// session's SteeringSessionID is stamped once at mint time and carried
-	// forward unchanged even across follow_up generations (see
+	// forward unchanged even across resume generations (see
 	// spawnCorrectiveFollowUp's whole-struct-copy comment), so a Load taken
 	// a moment before Mutate observes the exact same value Mutate itself
 	// would. Verifying it here, rather than inside the closure below, is
@@ -117,72 +182,71 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 	// inside that closure instead.
 	rec, lerr := t.lifecycle.Load(sessionID)
 	if lerr != nil {
-		return ErrorResult(fmt.Sprintf("delegate: steer: %v", lerr))
+		return lifecycleLoadFailure("steer", sessionID, lerr)
 	}
 	by, verr := t.verifyCallerPrincipal(ctx, rec)
 	if verr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: steer: %v", verr))
 	}
-	// Not available to external-CLI (3P) sessions: every steering-queue drain
-	// site lives in the native turn engine (pkg/agent/loop.go,
-	// pkg/agent/steering.go) — runExternalCLISubTurn
-	// (pkg/agent/external_dispatch.go) never drains it, so a message queued
-	// here for a 3P child is silently orphaned forever (no live consumer ever
-	// reads it, and there is no "next tool boundary" concept for an external
-	// CLI's own turn loop). Unlike respond/follow_up, steer has no corrective-
-	// redispatch fallback to degrade to — injecting an instruction mid-turn is
-	// meaningless for a session that isn't running on this engine's turn loop
-	// at all. Mirrors message_parent's identical Is3P posture (D5).
+	// External-CLI (3P) sessions deliver a live instruction by interrupt + real
+	// native-conversation resume (FR-043), not by the native steering queue:
+	// the production steering sink exposes DeliverExternalCLIInstruction, which
+	// lands the instruction in the child's queue AND interrupts its live CLI run
+	// so the post-turn drain re-enters the external-CLI body with resume set —
+	// the new instruction S reaches the SAME native conversation. When the sink
+	// cannot deliver (a fake, or a session with genuinely NO live conversation)
+	// the named not_steerable refusal is kept, so the instruction is never
+	// silently dropped and the "no no-op success" rule (BDD-05.6) holds.
+	// Mirrors message_parent's identical Is3P posture (D5) for the fallback.
 	if rec.Is3P {
-		return ErrorResult(fmt.Sprintf(
-			"delegate: steer: not_steerable: external command-line session %s runs on an external CLI "+
-				"(claude-code/codex/opencode) with no steering-queue drain in its dispatch path; use "+
-				"action=\"respond\" (which redispatches a corrective session) or action=\"follow_up\" instead",
-			sessionID,
-		))
+		return t.steerExternalCLI(ctx, args, sessionID, text, rec)
 	}
 
-	// [Finding 1, ADR-091 fix lane 2 — Q17/D8] A session carrying a Stop
-	// marker for its OWN current generation — OR a terminal record (ADR-093
-	// D4) — is checked FIRST, off the plain Load above: the founder's
+	// [Finding 1, ADR-091 fix lane 2 — Q17/D8] A terminal record (ADR-093
+	// D4) or a record whose stop has already LANDED (state LifecycleStopped;
+	// TransitionSession cleared the current-generation fence the moment it
+	// landed) is checked FIRST, off the plain Load above: the founder's
 	// decision is that only a newer instruction revives a stopped session,
 	// as a new generation, never the steering queue (which a stopped session
-	// has no live consumer left to drain). BOTH states revive through
-	// ReviveStoppedSession in the branch below. Deliberately NOT folded into the
-	// Mutate-based terminal-rejection closure below: a Stop marker, once
-	// stamped for a generation, is retained forever as inert history (see
-	// SteerCanceller.Revive's own doc comment) — the same "checked off a
-	// naked Load is safe because the fact cannot become stale" reasoning
-	// executeRespond's own resumeNative uses for its terminal predicate.
-	// Reviver.ReviveStoppedSession re-validates atomically under Revive's
-	// own record lock regardless, so no window is opened here. This ALSO
-	// avoids a real bug the Mutate-closure version of this check had: once
-	// a stamped-but-never-ran session is terminalised by its own Stop
-	// (Finding 5, pkg/agent/steer_cancel.go::terminaliseNeverRanStop),
-	// persisting an UNCHANGED copy of that now-terminal record through
-	// Mutate (the "harmless no-op" pattern the terminal-rejection closure
-	// below relies on) trips the store's own immutable-terminal invariant
-	// (ErrLifecycleTerminalImmutable) — Mutate's no-op persist is only
-	// harmless when the record is NOT terminal.
+	// has no live consumer left to drain). BOTH shapes revive through
+	// ReviveStoppedSession in the branch below. A stop fence still IN FLIGHT
+	// (stamped for the current generation while the state is still running
+	// or queued) is NEITHER shape — an in-flight fence is not a landed stop:
+	// the dying turn is still registered, so a revive here would clear the
+	// fence, re-queue the record and strand it queued with nobody running it
+	// (admission then refuses because the dying turn is still registered).
+	// It is refused visibly right below, before any queueing; the caller
+	// retries once the stop has landed. Deliberately NOT folded into the
+	// Mutate-based terminal-rejection closure below: a landed stop-state is
+	// left only through Revive, which re-validates atomically under Revive's
+	// own record lock, so the fact cannot become stale under this Load the
+	// way a live fence can — a fence not yet landed can land, and
+	// TransitionSession then clears it, at any moment; that moving fact is
+	// exactly what the closure's own in-flight-fence check below re-reads
+	// under the lock. This ALSO avoids a real bug the Mutate-closure version
+	// of this check had: once a stamped-but-never-ran session is terminalised
+	// by its own Stop (Finding 5, pkg/agent/steer_cancel.go::
+	// terminaliseNeverRanStop), persisting an UNCHANGED copy of that
+	// now-terminal record through Mutate (the "harmless no-op" pattern the
+	// terminal-rejection closure below relies on) trips the store's own
+	// immutable-terminal invariant (ErrLifecycleTerminalImmutable) —
+	// Mutate's no-op persist is only harmless when the record is NOT
+	// terminal.
 	// ADR-093 D4: a terminal record, stopped or not, takes this same revive.
-	if rec.Terminal() || rec.Stopped() {
-		if cerr := t.checkSteerCaps(sessionID, text); cerr != nil {
-			return ErrorResult(fmt.Sprintf("delegate: steer: %v", cerr)).WithError(cerr)
-		}
-		reviver, ok := t.steering.(steerReviver)
-		if !ok {
-			return ErrorResult(fmt.Sprintf("delegate: steer: session %s is stopped and cannot be revived: no reviver configured", sessionID))
-		}
-		revived, rerr := reviver.ReviveStoppedSession(ctx, sessionID, by, text)
-		if rerr != nil {
-			return ErrorResult(fmt.Sprintf("delegate: steer: revive stopped session %s: %v", sessionID, rerr)).WithError(rerr)
-		}
-		if !revived {
-			return ErrorResult(fmt.Sprintf("delegate: steer: session %s could not be revived", sessionID))
-		}
-		return NewToolResult(fmt.Sprintf(
-			"Session %s was stopped; the steering message revived it as a new generation and it has been redispatched.", sessionID,
-		))
+	if rec.Terminal() || rec.State == session.LifecycleStopped {
+		return t.steerReviveStopped(ctx, sessionID, by, text, rec.Terminal())
+	}
+
+	// A current-generation fence that has NOT yet landed (state still
+	// running or queued) is neither queueable nor revivable: the dying turn
+	// is still registered, so reviving now would strand the record queued
+	// with nobody running it, and queueing would put the message in a queue
+	// the dying turn's unwinding may never drain. Refuse visibly — never
+	// queue, never revive; the caller retries once the stop has landed.
+	// (A fence for an EARLIER generation is inert history — Stopped() is
+	// false for it — and takes the ordinary queueing path below.)
+	if rec.Stop != nil && rec.Stop.Generation == rec.Generation {
+		return ErrorResult(fmt.Sprintf("delegate: steer: session %s is stopping (a stop is in flight for its current generation); retry the steer once it has stopped", sessionID))
 	}
 
 	// TOCTOU race guard: a plain Load() followed by a branch on
@@ -207,26 +271,61 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 	// persisting an unchanged copy of the tail record is a harmless,
 	// deliberate byproduct of reusing the RMW primitive purely for its
 	// locking guarantee, PROVIDED the record is not terminal — which is
-	// exactly why the Stop-marker (possibly-terminal) case above is handled
-	// before ever reaching here, never inside this closure. Ownership is
+	// exactly why the stop cases above are handled before ever reaching
+	// here (landed-stopped and terminal revive; an in-flight fence refuses),
+	// never inside this closure. Ownership is
 	// deliberately NOT re-checked here — see the comment above for why a
 	// stale ownership read cannot happen.
+	// The same race has a second shape (ADR-20260928, founder decision
+	// 2026-10-04): the helper can LAND LifecycleStopped in the window between
+	// the plain Load above and this lock-protected re-read — its stop
+	// finished unwinding (TransitionSession cleared the fence) and no live
+	// consumer will ever drain the steering queue. Queueing there would
+	// strand the message, so the closure signals the landed-stopped shape out
+	// via stoppedInRace and the revive below runs AFTER the store lock is
+	// released — the same way the earlier stopped branch revives (the
+	// striped lock is not reentrant, so ReviveStoppedSession, which takes the
+	// record lock itself, must never run inside this closure; its own
+	// re-read under that lock re-validates whatever changed since). A stop
+	// fence still IN FLIGHT (stamped for the current generation, state not
+	// yet LifecycleStopped) is neither queueable nor revivable: the old turn
+	// is still registered, so an early revive would strand the record queued
+	// with nobody running it — refused visibly, the caller retries once the
+	// stop has landed.
+	stoppedInRace := false
 	if merr := t.lifecycle.Mutate(sessionID, func(cur *session.LifecycleRecord) error {
 		if cur == nil {
 			return session.ErrLifecycleNotFound
 		}
-		// A record already terminal (or Stop-stamped) never reaches this
-		// closure — the branch above revived it. This check exists ONLY for
-		// the race where the record becomes terminal between the plain Load
-		// and this lock-protected re-read; its "cannot be steered" string is
-		// a refusal for that race alone.
+		// A record already terminal never reaches this closure — the branch
+		// above revived it — and one carrying a live in-flight fence is
+		// refused by the branch above too. These checks exist ONLY for the
+		// race where the record becomes terminal or Stop-stamped between the
+		// plain Load and this lock-protected re-read; their strings are
+		// refusals for those races alone.
 		if cur.Terminal() {
-			return fmt.Errorf("session %s is terminal (%s) and cannot be steered", sessionID, cur.State)
+			return &followupRefusalError{fmt.Sprintf("session %s is terminal (%s) and cannot be steered", sessionID, cur.State)}
+		}
+		if cur.State == session.LifecycleStopped {
+			stoppedInRace = true
+			rec = cur
+			return nil
+		}
+		if cur.Stop != nil && cur.Stop.Generation == cur.Generation {
+			return &followupRefusalError{fmt.Sprintf("session %s is stopping (a stop is in flight for its current generation); retry the steer once it has stopped", sessionID)}
 		}
 		rec = cur
 		return nil
 	}); merr != nil {
-		return ErrorResult(fmt.Sprintf("delegate: steer: %v", merr))
+		var refusal *followupRefusalError
+		if errors.As(merr, &refusal) {
+			return ErrorResult("delegate: steer: " + refusal.text).WithError(merr)
+		}
+		return lifecycleLoadFailure("steer", sessionID, merr)
+	}
+
+	if stoppedInRace {
+		return t.steerReviveStopped(ctx, sessionID, by, text, false)
 	}
 
 	if cerr := t.checkSteerCaps(sessionID, text); cerr != nil {
@@ -240,10 +339,26 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 	// EnqueueSteeringMessage mints a server-assigned reference and hands it
 	// back below regardless, so the receipt is always correlatable.
 	requestedCorrelationID, _ := stringArg(args, "correlation_id")
-	resolvedCorrelationID, serr := t.steering.EnqueueSteeringMessage(sessionID, rec.AgentID,
+	resolvedCorrelationID, serr, postFinish := enqueueSteeringWithStatus(t.steering, sessionID, rec.AgentID,
 		providers.Message{Role: "user", Content: text}, requestedCorrelationID)
 	if serr != nil {
-		return ErrorResult(fmt.Sprintf("delegate: steer: %v", serr)).WithError(serr)
+		if text, ok := displayableCause(serr); ok {
+			return ErrorResult("delegate: steer: " + text).WithError(serr)
+		}
+		return controlFailure("steer", fmt.Sprintf("the steering message for session %s could not be queued right now; retry shortly", sessionID), serr)
+	}
+	if postFinish {
+		// Round-4 correction: a steer that landed in a terminal-transition
+		// finishing window (rather than the main queue) is reported with
+		// the spec's exact wording — "queued; the child is finishing and
+		// will see it next" — so the caller can tell apart the two
+		// outcomes (an ordinary queued steer vs. one the closing hand-off
+		// will revive the child to consume). correlation_id is still
+		// returned so a receipt-based caller (issue #870) can correlate.
+		return NewToolResult(fmt.Sprintf(
+			"queued; the child is finishing and will see it next (correlation_id=%s, session_id=%s).",
+			resolvedCorrelationID, sessionID,
+		))
 	}
 	return NewToolResult(fmt.Sprintf(
 		"Steering message queued for session %s (correlation_id=%s); it will apply at the child's next tool boundary.",
@@ -251,9 +366,81 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 	))
 }
 
-// steerReviver is satisfied by *agent.AgentLoop (t.steering's concrete
-// production type, wired via SetSteeringSink) beyond DelegateSteeringSink's
-// own EnqueueSteeringMessage method. Declared here, not added to
+// steerExternalCLI is executeSteer's external-CLI (3P) branch: deliver a live
+// instruction by interrupt + native-conversation resume, or refuse visibly.
+// Extracted from executeSteer unchanged in behaviour.
+func (t *DelegateTool) steerExternalCLI(ctx context.Context, args map[string]any, sessionID, text string, rec *session.LifecycleRecord) *ToolResult {
+	if deliverer, ok := t.steering.(steerExternalCLIDeliverer); ok {
+		if cerr := t.checkSteerCaps(sessionID, text); cerr != nil {
+			return ErrorResult(fmt.Sprintf("delegate: steer: %v", cerr)).WithError(cerr)
+		}
+		requestedCorrelationID, _ := stringArg(args, "correlation_id")
+		resolved, derr := deliverer.DeliverExternalCLIInstruction(
+			ctx, sessionID, rec.AgentID,
+			providers.Message{Role: "user", Content: text}, requestedCorrelationID)
+		if derr != nil {
+			// Truthful visible refusal: no live conversation, or the
+			// interrupt/enqueue failed. Never a silent success. Authored
+			// refusals and plain context errors are shown; a store fault is
+			// a fixed sentence with its cause kept for logs and errors.Is.
+			if text, ok := displayableCause(derr); ok {
+				return ErrorResult("delegate: steer: not_steerable: " + text).WithError(derr)
+			}
+			return controlFailure("steer", fmt.Sprintf("not_steerable: the live instruction for session %s could not be delivered right now; retry shortly", sessionID), derr)
+		}
+		return NewToolResult(fmt.Sprintf(
+			"Steering message delivered to external CLI session %s by interrupt + native-conversation resume (correlation_id=%s); it will reach the same conversation.",
+			sessionID, resolved,
+		))
+	}
+	return ErrorResult(fmt.Sprintf(
+		"delegate: steer: not_steerable: external command-line session %s runs on an external CLI "+
+			"(claude-code/codex/opencode) and this steering sink cannot deliver a live instruction to it; "+
+			"action=\"resume\" continues a stopped or finished one whose CLI conversation this gateway still "+
+			"retains, or runs one that never started its CLI for the first time (otherwise start a new delegation)",
+		sessionID,
+	))
+}
+
+// steerReviveStopped is the shared mechanics of executeSteer's two
+// landed-stopped revive shapes — the plain-Load branch that observed
+// Terminal() or LifecycleStopped, and the stoppedInRace shape the Mutate
+// closure signals out — which were line-for-line identical apart from the
+// final message. It runs the steer caps check first (a rejected steer must
+// be visible to the parent, never silently dropped), then revives the
+// session through ReviveStoppedSession with the steering message as the new
+// instruction, and reports the outcome. nextRound is true only for a record
+// that was already terminal (the message starts its next round); the
+// stoppedInRace shape is always a stopped resume. Behaviour and result
+// texts are exactly the two branches' own.
+func (t *DelegateTool) steerReviveStopped(ctx context.Context, sessionID string, by steer.Principal, text string, nextRound bool) *ToolResult {
+	if cerr := t.checkSteerCaps(sessionID, text); cerr != nil {
+		return ErrorResult(fmt.Sprintf("delegate: steer: %v", cerr)).WithError(cerr)
+	}
+	reviver, ok := t.steering.(steerReviver)
+	if !ok {
+		return ErrorResult(fmt.Sprintf("delegate: steer: session %s is stopped and cannot be revived: no reviver configured", sessionID))
+	}
+	revived, rerr := reviver.ReviveStoppedSession(ctx, sessionID, by, text)
+	if rerr != nil {
+		return reviveFailure("steer", sessionID, rerr)
+	}
+	if !revived {
+		return ErrorResult(fmt.Sprintf("delegate: steer: session %s could not be revived", sessionID))
+	}
+	if nextRound {
+		return NewToolResult(fmt.Sprintf(
+			"Session %s had finished; the steering message started its next round.", sessionID,
+		))
+	}
+	return NewToolResult(fmt.Sprintf(
+		"Session %s was stopped; the steering message resumed it on the same conversation.", sessionID,
+	))
+}
+
+// steerReviver is satisfied by the production delegate steering sink through
+// its embedded *agent.AgentLoop beyond DelegateSteeringSink's own
+// EnqueueSteeringMessage method. Declared here, not added to
 // DelegateSteeringSink itself, so a narrower test fake standing in for the
 // steering sink is not forced to also implement revival — mirrors
 // appendFollowUpInstruction's own optional-capability type assertion on
@@ -262,7 +449,81 @@ type steerReviver interface {
 	ReviveStoppedSession(ctx context.Context, sessionID string, by steer.Principal, instruction string) (bool, error)
 }
 
-func (t *DelegateTool) executeFollowUp(ctx context.Context, args map[string]any, cb AsyncCallback) *ToolResult {
+// steerExternalCLIDeliverer is the optional capability that lets a steering
+// sink deliver an instruction to a LIVE external-CLI (3P) child by interrupt +
+// native-conversation resume (FR-043) — the production *agent.AgentLoop
+// implements it; a test fake that cannot deliver simply does not, and keeps
+// executeSteer's named not_steerable refusal. Declared here (not added to
+// DelegateSteeringSink) for the same reason steerReviver stays narrow: only the
+// 3P steer path needs it, and forcing every sink implementer to know about
+// external-CLI resume would couple the interface to a notion that does not
+// exist for the native path.
+type steerExternalCLIDeliverer interface {
+	DeliverExternalCLIInstruction(ctx context.Context, sessionID, agentID string, msg providers.Message, correlationID string) (string, error)
+}
+
+// steerSinkWithEnqueueStatus is satisfied by agent's delegateSteeringSink
+// adapter beyond DelegateSteeringSink's EnqueueSteeringMessage. Declared here
+// (not added to DelegateSteeringSink) for the same reason steerReviver
+// stays narrow: the round-4 status (issue #1020 round-4 correction) is
+// only meaningful to executeSteer's caller-facing text, and forcing
+// every DelegateSteeringSink implementer to know about it would couple
+// the interface to a notion that does not exist for non-steering
+// callers (a session_worker enqueue, for example, never lands in a
+// finishing-window buffer — every session_worker enqueue is for an
+// idle session). The status field is an int so pkg/tools does not
+// import pkg/agent, which already imports pkg/tools. The production adapter
+// explicitly converts the named EnqueueStatus to int; 1 means PostFinish
+// and any other value means Normal. Sinks without this capability fall back to
+// EnqueueSteeringMessage and never report the post-finish outcome.
+type steerSinkWithEnqueueStatus interface {
+	EnqueueSteeringMessageWithStatus(scope, agentID string, msg providers.Message, correlationID string) (string, int, error)
+}
+
+// enqueueSteeringWithStatus is executeSteer's adapter: it forwards to the
+// rich return shape when the steering sink exposes it (the production
+// delegateSteeringSink does), and falls back to the plain DelegateSteeringSink
+// contract for narrower test fakes that do not. postFinish is true when
+// the rich sink reports the item landed in a terminal-transition
+// finishingItems buffer rather than the main queue.
+func enqueueSteeringWithStatus(
+	sink any,
+	scope, agentID string,
+	msg providers.Message,
+	correlationID string,
+) (resolvedID string, err error, postFinish bool) {
+	if rich, ok := sink.(steerSinkWithEnqueueStatus); ok {
+		resolvedID, status, err := rich.EnqueueSteeringMessageWithStatus(scope, agentID, msg, correlationID)
+		if err != nil {
+			return "", err, false
+		}
+		return resolvedID, nil, status == 1 // EnqueueStatusPostFinish
+	}
+	if basic, ok := sink.(interface {
+		EnqueueSteeringMessage(scope, agentID string, msg providers.Message, correlationID string) (string, error)
+	}); ok {
+		resolvedID, err := basic.EnqueueSteeringMessage(scope, agentID, msg, correlationID)
+		if err != nil {
+			return "", err, false
+		}
+		return resolvedID, nil, false
+	}
+	return "", fmt.Errorf("delegate: steer: no steering sink configured"), false
+}
+
+// executeResume implements action="resume" (ADR-20261004, locked decision
+// 4; renamed from follow_up with no alias path). Continues a stopped helper
+// on the same conversation and the same generation, or starts the next
+// round when the helper is done or failed — one primitive for both, which
+// is exactly what ReviveStoppedSession admits. A working helper has nothing
+// to resume: a non-error "already running" result (the same reasoning as
+// executeStopAll's non-error "already terminal" — an error here drives
+// agents into retry loops). A 3P (external-CLI) child resumes through the
+// same ReviveStoppedSession primitive, which either continues its retained
+// native CLI conversation or refuses visibly; it is NEVER re-dispatched as a
+// new corrective session (that bypassed the creation-edge authorization,
+// DEL-31 / FR-043).
+func (t *DelegateTool) executeResume(ctx context.Context, args map[string]any, cb AsyncCallback) *ToolResult {
 	if t.launcher == nil {
 		return ErrorResult("delegate: no session launcher configured")
 	}
@@ -274,286 +535,73 @@ func (t *DelegateTool) executeFollowUp(ctx context.Context, args map[string]any,
 		return ErrorResult(err.Error())
 	}
 
-	// follow_up's own schema documents "text" as the instruction field
-	// (grouped with steer/respond everywhere the schema/description mentions
-	// them together — e.g. session_id's own description lists "steer/
-	// respond/cancel/follow_up/peek" as one family), but this action used to
-	// read ONLY args["task"], silently falling back to a generic "Continue
-	// the previous task." placeholder whenever a caller passed "text" per
-	// the documented sibling-action convention — dropping the caller's real
-	// instruction with no error at all. "task" survives as a deprecated
-	// back-compat alias (text wins when both are present); an instruction
-	// that is blank after trimming both is now a validation error, never a
-	// silent placeholder substitution.
-	instruction, ierr := followUpInstructionArg(args)
+	// text is optional: a bare resume continues the stopped helper with no
+	// new instruction; when present it is the additional instruction for the
+	// continued/next round.
+	instruction, ierr := resumeInstructionArg(args)
 	if ierr != nil {
 		return ErrorResult(ierr.Error())
 	}
 
 	rec, lerr := t.lifecycle.Load(sessionID)
 	if lerr != nil {
-		return ErrorResult(fmt.Sprintf("delegate: follow_up: %v", lerr))
+		// A mistyped id is named; a store fault is a fixed sentence.
+		return lifecycleLoadFailure("resume", sessionID, lerr)
 	}
-	if verr := t.verifyCallerOwnsSession(ctx, rec); verr != nil {
-		return ErrorResult(fmt.Sprintf("delegate: follow_up: %v", verr))
+	by, verr := t.verifyCallerPrincipal(ctx, rec)
+	if verr != nil {
+		return ErrorResult(fmt.Sprintf("delegate: resume: %v", verr))
 	}
-	// NOTE: this is a naked Load+Terminal check, NOT the LifecycleStore.Mutate
-	// RMW that executeSteer/executeRespond use to close their check-then-act
-	// TOCTOU window. The polarity is inverted here: follow_up RESUMES a
-	// terminal session (spawnCorrectiveFollowUp re-queues it as a new generation), so
-	// the gate is `!rec.Terminal() -> reject`, and the immutable-terminal
-	// invariant (L-3) means a session that is terminal at this Load STAYS
-	// terminal — there is no concurrent transition that can flip it back to
-	// non-terminal under us and race the branch. spawnCorrectiveFollowUp
-	// below performs its OWN Persist under the lifecycle store's per-session
-	// striped lock to mint the new generation; this read only decides whether
-	// to enter that path. Do not "fix" this toward Mutate to match steer —
-	// it would be a no-op lock acquisition on an immutable predicate.
-	if !rec.Terminal() {
-		return ErrorResult(fmt.Sprintf(
-			"delegate: follow_up: session %s is not terminal (state=%s) — follow_up only resumes a finished session",
+
+	// A working helper has nothing to resume — non-error, nothing started
+	// (locked decision 4 names only stopped and done/failed recipients).
+	if !rec.Terminal() && !rec.Stopped() {
+		return NewToolResult(fmt.Sprintf(
+			"Session %s is already running (state=%s) — nothing to resume. Use action=\"steer\" to inject an instruction into the current turn.",
 			sessionID, rec.State,
 		))
 	}
 
-	return t.spawnCorrectiveFollowUp(ctx, sessionID, rec, instruction, cb)
-}
-
-// followUpInstructionArg resolves the new instruction for action="follow_up":
-// "text" is the documented field, "task" is a deprecated back-compat alias
-// consulted only when "text" is absent/blank. Returns an error naming the
-// missing field when neither yields a non-blank string — no silent
-// placeholder substitution.
-func followUpInstructionArg(args map[string]any) (string, error) {
-	if rawText, present := args["text"]; present && rawText != nil {
-		s, ok := rawText.(string)
-		if !ok {
-			return "", fmt.Errorf("text must be a string")
-		}
-		if trimmed := strings.TrimSpace(s); trimmed != "" {
-			return trimmed, nil
-		}
-	}
-	if rawTask, present := args["task"]; present && rawTask != nil {
-		s, ok := rawTask.(string)
-		if !ok {
-			return "", fmt.Errorf("task must be a string")
-		}
-		if trimmed := strings.TrimSpace(s); trimmed != "" {
-			return trimmed, nil
-		}
-	}
-	return "", fmt.Errorf(
-		`text is required and must be a non-empty string for action="follow_up" (the new instruction to resume the session with; "task" is accepted as a deprecated alias)`,
-	)
-}
-
-// spawnCorrectiveFollowUp is the shared mechanics behind `follow_up` (native
-// and 3P) and a 3P `respond` (D5 — a 3P child never warm-resumes; every
-// continuation is a NEW corrective session carrying the prior context).
-// Native follow_up reuses sessionID verbatim (warm resume, same session, new
-// generation — the terminal follow-up bumps the record's Generation); 3P mints
-// a NEW session_id (cold respawn), linked back via ResumedFrom.
-func (t *DelegateTool) spawnCorrectiveFollowUp(
-	ctx context.Context,
-	sessionID string,
-	rec *session.LifecycleRecord,
-	instructions string,
-	_ AsyncCallback,
-) *ToolResult {
-	newSessionID := sessionID
-	if rec.Is3P {
-		newSessionID = uuid.NewString()
-	}
-
-	// The whole-struct copy is load-bearing for FR-034: ParentAgentID (and
-	// SteeringSessionID/OriginChannel/OriginChatID with it) MUST be carried
-	// forward onto every generation mint. It is deliberately CARRIED FORWARD
-	// from the prior generation rather than re-sourced from ToolAgentID(ctx)
-	// — the follow_up caller is not necessarily the agent that originally
-	// spawned the session, and re-sourcing would silently re-parent it. Do
-	// not replace this copy with field-by-field construction.
-	// Origin.CallID stays the original run's call id on every generation.
-	// The follow-up's own span is not a new call id: pkg/agent.SubagentSpanID
-	// appends _g<N> for generation N >= 2, and replay rebuilds that same
-	// string. Minting a new CallID here would break parent_call_id.
-	newRec := *rec
-	newRec.SessionID = newSessionID
-	newRec.Generation = rec.Generation + 1
-	newRec.ResumedFrom = sessionID
-	newRec.State = session.LifecycleQueued
-	newRec.FailedReason = ""
-	newRec.NeedsInput = nil
-	if rec.Is3P {
-		if err := t.cloneCorrectiveSessionIdentity(sessionID, newSessionID, rec); err != nil {
-			return ErrorResult(fmt.Sprintf("delegate: follow_up: failed to create corrective session: %v", err)).WithError(err)
-		}
-	}
-	if err := t.lifecycle.Persist(&newRec); err != nil {
-		return ErrorResult(fmt.Sprintf("delegate: follow_up: failed to persist new generation: %v", err)).WithError(err)
-	}
-	// [Defect 4, ADR-091 fix lane RX-DELIVERY] REFUSE to dispatch when the
-	// new instruction did not land. reconstructSteeredTurn would otherwise
-	// rebuild the turn from the last `user` transcript entry — the PREVIOUS
-	// instruction — and the session would confidently answer the old
-	// question and report it upward as a real result. The record is landed
-	// failed for the same reason the dispatch-failure path just below does
-	// it: a new generation was already persisted, so leaving it `queued`
-	// would strand it and block its parent for ever.
-	if err := t.appendFollowUpInstruction(newSessionID, instructions); err != nil {
-		t.transitionLifecycle(newSessionID, session.LifecycleFailed, err.Error())
-		slog.Error("delegate: follow-up instruction did not land; dispatch refused",
-			"session_id", newSessionID,
-			"generation", newRec.Generation,
-			"agent_id", rec.AgentID,
-			"error", err)
-		return ErrorResult(fmt.Sprintf("delegate: follow_up: %v", err)).WithError(err)
-	}
-
-	dispatch, err := t.launcher.Dispatch(ctx, newSessionID, newRec.Generation)
-	if err != nil {
-		t.transitionLifecycle(newSessionID, session.LifecycleFailed, err.Error())
-		slog.Error("delegate: follow-up dispatch failed",
-			"session_id", newSessionID,
-			"generation", newRec.Generation,
-			"agent_id", rec.AgentID,
-			"error", err)
-		return ErrorResult(fmt.Sprintf("delegate: follow_up: dispatch failed: %v", err)).WithError(err)
-	}
-
-	message := fmt.Sprintf("Follow-up dispatched for session %s at generation %d (state: %s)",
-		newSessionID, dispatch.Generation, dispatch.State)
-	if dispatch.State == steer.DispatchQueued {
-		message += fmt.Sprintf(", queue position %d", dispatch.QueuePosition)
-	}
-	// rec.Title is the durable launch-time label (session.LifecycleRecord's
-	// own doc comment) — the session_id-addressed replacement for the
-	// pre-ADR-091 in-memory task-state label lookup this used to read
-	// (t.tasks/t.sessionIndex, deleted with the last writer that populated
-	// them; see delegate.go's package doc comment).
-	if rec.Title != "" {
-		message = fmt.Sprintf("Follow-up for %q dispatched for session %s at generation %d (state: %s)",
-			rec.Title, newSessionID, dispatch.Generation, dispatch.State)
-	}
-	return NewToolResult(message)
-}
-
-// followUpInstructionWriter is the write capability
-// appendFollowUpInstruction needs from the session store. AddMessage extends
-// the model's history (context.jsonl); AppendTranscriptStrict writes the
-// transcript entry the rebuilt turn actually READS BACK, and is the only one
-// of the two that can report a failure. The concrete production
-// *session.UnifiedStore satisfies both; a read-only status fake does not, and
-// is refused rather than silently skipped.
-type followUpInstructionWriter interface {
-	AddMessage(sessionKey, role, content string)
-	AppendTranscriptStrict(sessionID string, entry session.TranscriptEntry) error
-}
-
-// appendFollowUpInstruction adds the new user instruction to the session's
-// durable history AND to its transcript, before Dispatch reconstructs the
-// turn, and reports whether it actually landed.
-//
-// [Defect 4, ADR-091 fix lane RX-DELIVERY, HIGH] It used to be
-// fire-and-forget in two independent ways, either of which alone makes a
-// followed-up session re-run its PREVIOUS instruction and report that answer
-// upward as a real result:
-//
-//   - It wrote only AddMessage, which has NO return value (UnifiedStore logs
-//     internally and tells the caller nothing), and a nil store or a failed
-//     type assertion was a silent no-op. Callers dispatched regardless.
-//   - AddMessage writes context.jsonl only. The turn Dispatch reconstructs
-//     takes its UserMessage from the TRANSCRIPT —
-//     agent/steer_reconstruct.go::reconstructSteeredTurn scans
-//     transcript.jsonl backwards for the last non-blank `user` entry when
-//     wake == nil — which only agent/steer_launcher.go's launch path ever
-//     wrote. So the new instruction never reached the place that turn reads.
-//
-// Both halves are fixed here by mirroring the launch path's own write pair
-// (AddMessage AND AppendTranscriptStrict) and returning the strict append's
-// error. The entry id is fresh per call: a follow-up is a new instruction,
-// never a duplicate of the last one.
-//
-// The signature deliberately keeps its original two parameters: the OTHER
-// call site (delegate_park.go::resumeNative) belongs to a different fix lane,
-// and adding a parameter would break its compilation rather than let it adopt
-// the new error return on its own schedule. The transcript entry's agent id
-// is therefore looked up here, best-effort — it is display metadata, never a
-// reason to refuse an instruction that is otherwise durable.
-func (t *DelegateTool) appendFollowUpInstruction(sessionID, instruction string) error {
-	instruction = strings.TrimSpace(instruction)
-	if instruction == "" {
-		return nil
-	}
-	if t.sessionStore == nil {
-		// Degraded boot: loop_wire.go skips SetSessionStore entirely when
-		// al.GetSessionStore() is nil, the same state
-		// cloneCorrectiveSessionIdentity above already treats as "nothing to
-		// write". Refusing here would add nothing: with no session store,
-		// agent/steer_reconstruct.go::reconstructSteeredTurn fails outright
-		// ("session store is not wired") long before it could re-run a stale
-		// instruction, so the dispatch cannot succeed with the wrong
-		// instruction either way. Loud, not silent.
-		slog.Warn("delegate: follow-up instruction not recorded: no session store is wired (degraded boot)",
-			"session_id", sessionID)
-		return nil
-	}
-	writer, ok := t.sessionStore.(followUpInstructionWriter)
+	// Stopped → same-generation resume; done/failed → next round. An external-CLI
+	// (3P) child takes this SAME path: the steering sink either resumes its
+	// retained native CLI conversation or refuses visibly — never a new session
+	// (FR-043, DEL-31).
+	// Both shapes go through ReviveStoppedSession (SteerCanceller.Revive's
+	// own branch), which appends the instruction BEFORE the generation moves
+	// and refuses visibly when the append fails.
+	reviver, ok := t.steering.(steerReviver)
 	if !ok {
-		return fmt.Errorf("session store cannot record the new instruction for %q "+
-			"(no write capability); the session would re-run its previous instruction", sessionID)
+		return ErrorResult(fmt.Sprintf("delegate: resume: session %s cannot be resumed: no reviver configured", sessionID))
 	}
-	writer.AddMessage(sessionID, "user", instruction)
-	agentID := ""
-	if t.lifecycle != nil {
-		if rec, lerr := t.lifecycle.Load(sessionID); lerr == nil && rec != nil {
-			agentID = rec.AgentID
-		}
+	wasTerminal := rec.Terminal()
+	revived, rerr := reviver.ReviveStoppedSession(ctx, sessionID, by, instruction)
+	if rerr != nil {
+		return reviveFailure("resume", sessionID, rerr)
 	}
-	if err := writer.AppendTranscriptStrict(sessionID, session.TranscriptEntry{
-		ID:      sessionID + "-instruction-" + uuid.NewString(),
-		Role:    "user",
-		AgentID: agentID,
-		Content: instruction,
-	}); err != nil {
-		return fmt.Errorf("record the new instruction for %q in the transcript the rebuilt turn reads: %w", sessionID, err)
+	if !revived {
+		return ErrorResult(fmt.Sprintf("delegate: resume: session %s could not be resumed", sessionID))
 	}
-	return nil
+	if wasTerminal {
+		return NewToolResult(fmt.Sprintf(
+			"Session %s was finished; a next round has been started on the same conversation.", sessionID,
+		))
+	}
+	return NewToolResult(fmt.Sprintf(
+		"Session %s was stopped; it has been resumed on the same conversation and generation.", sessionID,
+	))
 }
 
-// correctiveSessionStore is the write-capable production UnifiedStore shape
-// needed when an external worker gets a fresh corrective session identity.
-// DelegateSessionStore remains read-only for status-only fakes.
-type correctiveSessionStore interface {
-	DelegateSessionStore
-	AddMessage(sessionKey, role, content string)
-	GetMeta(sessionID string) (*session.UnifiedMeta, error)
-	CreateSessionWithID(childID, parentID string, sessionType session.UnifiedSessionType, channel, creatingAgentID string) (*session.UnifiedMeta, error)
-	SetMeta(sessionID string, patch session.MetaPatch) error
-}
-
-func (t *DelegateTool) cloneCorrectiveSessionIdentity(sourceID, newID string, rec *session.LifecycleRecord) error {
-	if t.sessionStore == nil {
-		return nil
+// resumeInstructionArg resolves the optional additional instruction for
+// action="resume": "text" is the documented field. Absent or blank means a
+// bare continuation — no error, no placeholder substitution.
+func resumeInstructionArg(args map[string]any) (string, error) {
+	rawText, present := args["text"]
+	if !present || rawText == nil {
+		return "", nil
 	}
-	store, ok := t.sessionStore.(correctiveSessionStore)
+	s, ok := rawText.(string)
 	if !ok {
-		return fmt.Errorf("session store cannot create corrective identities")
+		return "", fmt.Errorf("text must be a string")
 	}
-	source, err := store.GetMeta(sourceID)
-	if err != nil {
-		return err
-	}
-	parentID := source.ParentSessionID
-	if rec != nil && rec.SteeredBy != nil && rec.SteeredBy.SteeringSessionID != "" {
-		parentID = rec.SteeredBy.SteeringSessionID
-	}
-	if _, err := store.CreateSessionWithID(newID, parentID, source.Type, source.Channel, source.ActiveAgentID); err != nil {
-		return err
-	}
-	title, owner, workspace, instanceID, taskID := source.Title, source.Owner, source.WorkspaceID, source.InstanceID, source.TaskID
-	return store.SetMeta(newID, session.MetaPatch{
-		Title: &title, Owner: &owner, WorkspaceID: &workspace, InstanceID: &instanceID, TaskID: &taskID,
-		ParentSessionID: &parentID,
-	})
+	return strings.TrimSpace(s), nil
 }

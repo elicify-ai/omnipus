@@ -6,6 +6,7 @@ package gateway
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -20,12 +21,15 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/elicify-ai/omnipus/pkg/addressing"
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/askuser"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/email"
 	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
+	"github.com/elicify-ai/omnipus/pkg/notifications"
 	"github.com/elicify-ai/omnipus/pkg/pairing"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -177,10 +181,20 @@ type WSHandler struct {
 	agentLoop     *agent.AgentLoop
 	allowedOrigin string
 
+	// mailPresence is W1's ONE Mail panel presence registry
+	// (pkg/email/pool.go::PanelPresence), bound by boot via SetMailPresence
+	// (mail_presence.go). The adapter — never a second store: observers bind
+	// to this connection's chat ID and revoke through teardown's UnbindAll.
+	mailPresence atomic.Pointer[email.PanelPresence]
+
 	// activeConns tracks in-flight ServeHTTP goroutines so Wait() can block
 	// until all connections have fully torn down (used by tests to avoid
 	// tempdir cleanup races).
 	activeConns sync.WaitGroup
+
+	// rooms is the group-chat hub (rooms_runtime.go): attach_room frames and
+	// live room frames. Nil until boot wires it.
+	rooms *roomsHub
 
 	mu          sync.Mutex
 	sessions    map[string]*wsConn // chatID → connection
@@ -196,10 +210,28 @@ type WSHandler struct {
 	// already accepted, so a retried send is answered instead of starting a
 	// second turn (ws_client_message_dedupe.go). Guarded by mu.
 	acceptedClientMsgs map[string]*acceptedClientMessages
+	// heldTickMu orders a request's "held" tick against its "working" tick: the
+	// recipient can resume and take the request before the sender's handler has
+	// sent "held", and the row must never go back from working to waiting.
+	heldTickMu sync.Mutex
+
+	// firstMessageMu serializes ID-bearing, session-less ordinary sends through
+	// persistence/cache population, never bus admission. It is not a keyed claim store.
+	firstMessageMu sync.Mutex
+	// acceptedFirstClientMsgs extends the retry cache across connections before
+	// the client knows its session ID. Guarded by mu; lost on gateway restart.
+	acceptedFirstClientMsgs map[firstClientMessageKey]acceptedFirstClientMessage
+	// firstMessageAcceptanceOrder gives the bounded cache FIFO eviction order.
+	// Guarded by mu; retries do not advance it.
+	firstMessageAcceptanceOrder uint64
 
 	// approvalRegV2 is the Central Tool Registry approval registry (FR-016, FR-070).
 	// Injected at boot by the gateway after construction.  Nil until then.
 	approvalRegV2 *approvalRegistryV2
+
+	// notifStore is the same per-user store used by the header notification
+	// REST endpoint. Injected at boot; Stop notices persist before live push.
+	notifStore *notifications.Store
 
 	// askUserReg is the AskUserQuestion pending registry (askuserquestion-
 	// tool-spec v3; pkg/askuser). Injected at boot alongside approvalRegV2.
@@ -238,6 +270,10 @@ type WSHandler struct {
 	// have to wait up to ~60 s before seeing any code.  The cache delivers the
 	// last-seen code immediately on subscribe via subscribePairingInterest.
 	lastPairingState sync.Map
+	// Cache metadata is protected inside the manager-owned channel order.
+	// Never hold this mutex while entering that order.
+	pairingCacheMu    sync.Mutex
+	pairingCacheStamp map[string]pairingDeliveryStamp
 
 	// streamOwners tracks, per sessionID, which turn currently "owns" live
 	// TokenFrame delivery to that session's bound connections. Keys are
@@ -320,12 +356,15 @@ type WSHandler struct {
 }
 
 type wsConn struct {
-	conn           *websocket.Conn
-	sendCh         chan []byte // writePump's hot window; see ws_conn_queue.go
-	doneCh         chan struct{}
-	closeOnce      sync.Once
-	inboundDropped atomic.Int32 // inbound items dropped: schema validation failures + invalid/oversized media refs
-	userID         string       // username resolved at auth time; used for session_state scoping (FR-073)
+	conn                *websocket.Conn
+	sendCh              chan []byte // writePump's hot window; see ws_conn_queue.go
+	doneCh              chan struct{}
+	closeOnce           sync.Once
+	inboundDropped      atomic.Int32 // inbound items dropped: schema validation failures + invalid/oversized media refs
+	userID              string       // username resolved at auth time; used for session_state scoping (FR-073)
+	historyStateMu      sync.Mutex
+	historyStateSession string
+	historyReadiness    *generated.SessionHistoryState
 
 	// Per-connection ordered outbound queue (#823 BE-DESIGN.md §2.1,
 	// ws_conn_queue.go). Guarded by qmu. q holds frames that did not fit in
@@ -370,6 +409,11 @@ type wsConn struct {
 	// CLI caller apart from a human account.
 	isCLIToken bool
 
+	// retryPrincipal identifies successful legacy-token and dev-bypass auth,
+	// whose userID is empty. Unauthenticated bare connections have no principal.
+	// Named accounts and CLI callers use their resolved userID and isCLIToken.
+	retryPrincipal clientMessagePrincipal
+
 	// pairingSubs tracks which channels this connection wants whatsapp_pairing
 	// (QR/status) frames for, so the QR secret is delivered only to the operator
 	// viewing that channel's pairing UI rather than every connected tab (#283,
@@ -406,22 +450,7 @@ func (c *wsConn) setPairingInterest(channelID string, active bool) {
 // between rotations would otherwise wait up to ~60 s before seeing a code.
 // The cache lets us deliver the last-seen code immediately on subscribe.
 func (h *WSHandler) subscribePairingInterest(wc *wsConn, channelID string, active bool) {
-	wc.setPairingInterest(channelID, active)
-	if !active {
-		return
-	}
-	// Re-emit the last-seen QR frame for this channel, if one is cached and the
-	// QR is still "live" (terminal states are deleted from the map by the
-	// eventForwarder). Delivered through the connection's own ordered queue
-	// like every other frame (#823 ws_conn_queue.go).
-	if cached, ok := h.lastPairingState.Load(channelID); ok {
-		frameBytes, ok := cached.([]byte)
-		if ok && len(frameBytes) > 0 {
-			sendRawFrameBytes(wc, string(generated.WsFrameTypeWhatsappPairing), frameBytes)
-		} else if !ok {
-			slog.Error("ws: lastPairingState held non-[]byte value, skipping re-emit", "channel_id", channelID)
-		}
-	}
+	h.replayPairing(wc, channelID, active)
 }
 
 // wantsPairing reports whether this connection has subscribed to channelID's
@@ -525,6 +554,11 @@ func newWSHandler(
 	// constructs a *WSHandler with no agent loop wired at all.
 	if agentLoop != nil {
 		agentLoop.SetEventSyncTap(h.hubSyncTap)
+		agentLoop.SetClearNotPerformedHook(h.announceClearNotPerformed)
+		agentLoop.SetClearHeldHook(h.announceClearHeld)
+		agentLoop.SetClearReleasedHook(h.releaseClearHeld)
+		agentLoop.SetRequestDeliveredHook(h.announceHeldRequestDelivered)
+		h.wireSecretRequests()
 	}
 	// Per-session state kept outside the hub is released with the hub
 	// (final-review N7).
@@ -653,6 +687,14 @@ func (h *WSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		delete(h.sessionIDs, chatID)
 		h.unbindConnHubLocked(wc)
 		h.mu.Unlock()
+		h.rooms.unsubscribeAll(wc) // the closed connection leaves every group chat
+		// w5-integration (US-2.3/MC-4): revoke this connection's Mail panel
+		// observers BEFORE the socket closes. This deferred block is the one
+		// choke point every disconnected socket passes through — explicit
+		// close frame, read error, ping-deadline expiry, abnormal closure;
+		// logout and browser quit converge here because they all end the
+		// socket — so no separate presence sweeper or heartbeat exists.
+		h.revokeMailPanelObservers(chatID)
 		wc.close()
 
 		// Emit observability counters at connection teardown so operators can
@@ -1067,6 +1109,7 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn, r *http.Req
 			// bypass to the browser surface, which is the opposite of the
 			// decision taken. Removal of the branch entirely is the operator's
 			// call, not this code's.
+			wc.retryPrincipal = clientMessagePrincipal{kind: "dev_bypass"}
 			conn.SetReadDeadline(time.Now().Add(wsPongWait))
 			return true
 		}
@@ -1086,6 +1129,10 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn, r *http.Req
 		writeCloseAuthFailedWithReason(conn, "authentication failed")
 		return false
 	}
+	// Remember only a digest of the successfully authenticated legacy token.
+	// An empty userID must never merge unrelated authentication principals.
+	digest := sha256.Sum256([]byte(rawToken))
+	wc.retryPrincipal = clientMessagePrincipal{kind: "legacy_token", identity: string(digest[:])}
 	conn.SetReadDeadline(time.Now().Add(wsPongWait))
 	return true
 }
@@ -1180,7 +1227,7 @@ wsHandlerReadLoopLoop1:
 		// Per-frame JSON Schema validation (mirrors REST decodeAndValidate).
 		// Gated by gateway.validate_inbound; when false the check is a no-op.
 		validateEnabled := wh.h.agentLoop.GetConfig().Gateway.ValidateInbound
-		if validateEnabled {
+		if validateEnabled && peek.Type != string(generated.WsFrameTypeAttachSession) {
 			schemaName := wsFrameSchemaName(peek.Type)
 			if schemaName != "" {
 				if errMsg, serverErr := ValidateInboundFrameJSON(schemaName, data); errMsg != "" {
@@ -1212,10 +1259,10 @@ wsHandlerReadLoopLoop1:
 }
 
 // stringPtrOrEmpty dereferences an optional wire-format string field,
-// returning "" for a nil pointer. Kept out of dispatchFrame's own body so
-// the #823 client_message_id field doesn't grow dispatchFrame's grandfathered
-// gocyclo budget (scripts/budgets/gocyclo.txt) — mirrors the existing
-// agentID/sessionID deref pattern inline below.
+// returning "" for a nil pointer. Kept out of handleMessageFrame's own body
+// so the #823 client_message_id field doesn't grow its gocyclo footprint
+// (scripts/budgets/gocyclo.txt ratchets dispatchFrame's family) — mirrors
+// the existing agentID/sessionID deref pattern inline below.
 func stringPtrOrEmpty(p *string) string {
 	if p != nil {
 		return *p
@@ -1223,108 +1270,112 @@ func stringPtrOrEmpty(p *string) string {
 	return ""
 }
 
+// handleMessageFrame decodes and routes one message frame — the chat-message
+// pipeline's entry on the WebSocket read path. Extracted from dispatchFrame
+// (its case carries the metadata parsing no other frame type needs) so the
+// type switch stays within its pinned gocyclo budget
+// (scripts/budgets/gocyclo.txt).
+func (wh *wsHandlerReadLoop) handleMessageFrame(data []byte) wsHandlerReadLoopFlow {
+	var f generated.MessageFrame
+	if err := json.Unmarshal(data, &f); err != nil {
+		slog.Warn("ws: malformed message frame", "error", err)
+		sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:    string(generated.WsFrameTypeError),
+			Message: "malformed message frame",
+		})
+		return wsHandlerReadLoopContinue
+	}
+	if f.Content == "" && len(f.Media) == 0 {
+		return wsHandlerReadLoopContinue
+	}
+	var agentID string
+	if f.AgentId != nil {
+		agentID = *f.AgentId
+	}
+	var sessionID string
+	if f.SessionId != nil {
+		sessionID = *f.SessionId
+	}
+	clientMessageID := stringPtrOrEmpty(f.ClientMessageId)
+	var modelName string
+	if v, ok := f.Metadata["model_name"].(string); ok {
+		if strings.TrimSpace(v) != "" {
+			modelName = v
+		}
+	}
+	// The per-turn provider and effort are checked in both validation
+	// modes; a refused frame publishes nothing (spec D5 rows 6-7).
+	choice, choiceRefusal := parseFrameEffortChoice(f.Metadata)
+	if choiceRefusal != "" {
+		sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:    string(generated.WsFrameTypeError),
+			Message: choiceRefusal,
+		})
+		return wsHandlerReadLoopContinue
+	}
+	// M4: workspace→turn binding. When the message originates from a
+	// workspace chat the SPA sets metadata.workspace_id; we stamp it on
+	// the session meta so task_create/delegation lands on this workspace.
+	var workspaceID string
+	if v, ok := f.Metadata["workspace_id"].(string); ok {
+		workspaceID = strings.TrimSpace(v)
+	}
+	// Workspace-setup kickoff: the server is the only producer of the setup
+	// offer (omnipus-system-agent FR-047, K9 — workspace_setup_offer.go posts
+	// it into Omnipus's main when a workspace is created). A client frame
+	// whose metadata.workspace_setup_kickoff is true is refused here, before
+	// any session work, and a non-boolean value is refused as malformed;
+	// false or absent is an ordinary message. The marker is read by KEY
+	// PRESENCE, not a loose type assertion — see parseSetupKickoffMetadata.
+	setupKickoff, malformedKickoff := parseSetupKickoffMetadata(f.Metadata)
+	if malformedKickoff {
+		slog.Warn("ws: malformed workspace_setup_kickoff metadata — rejecting",
+			"chat_id", wh.chatID, "value", f.Metadata["workspace_setup_kickoff"])
+		sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:    string(generated.WsFrameTypeError),
+			Message: "malformed workspace_setup_kickoff metadata",
+		})
+		return wsHandlerReadLoopContinue
+	}
+	if setupKickoff {
+		slog.Warn("ws: client workspace setup kickoff refused — the server posts the setup offer",
+			"chat_id", wh.chatID, "session_id", sessionID)
+		var sidPtr *string
+		if sessionID != "" {
+			sidCopy := sessionID
+			sidPtr = &sidCopy
+		}
+		sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:      string(generated.WsFrameTypeError),
+			Message:   clientKickoffRefusal,
+			SessionId: sidPtr,
+		})
+		return wsHandlerReadLoopContinue
+	}
+	var recipient *addressing.Pair
+	if f.Recipient != nil {
+		recipient = &addressing.Pair{WorkspaceID: f.Recipient.WorkspaceId, AgentID: f.Recipient.AgentId}
+	}
+	wh.h.handleChatMessageWithChoice(
+		wh.ctx, wh.chatID, sessionID, f.Content, agentID, f.Media,
+		modelName, choice, workspaceID, clientMessageID, f.AutoApprove, recipient, wh.wc,
+	)
+	return wsHandlerReadLoopNext
+}
+
 // dispatchFrame dispatches one validated WebSocket frame to its type-specific handler.
 func (wh *wsHandlerReadLoop) dispatchFrame(data []byte, peek wsTypeOnly) wsHandlerReadLoopFlow {
 	switch peek.Type {
 	case string(generated.WsFrameTypeMessage):
-		var f generated.MessageFrame
-		if err := json.Unmarshal(data, &f); err != nil {
-			slog.Warn("ws: malformed message frame", "error", err)
-			sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-				Type:    string(generated.WsFrameTypeError),
-				Message: "malformed message frame",
-			})
-			return wsHandlerReadLoopContinue
-		}
-		if f.Content == "" && len(f.Media) == 0 {
-			return wsHandlerReadLoopContinue
-		}
-		var agentID string
-		if f.AgentId != nil {
-			agentID = *f.AgentId
-		}
-		var sessionID string
-		if f.SessionId != nil {
-			sessionID = *f.SessionId
-		}
-		clientMessageID := stringPtrOrEmpty(f.ClientMessageId)
-		var modelName string
-		if v, ok := f.Metadata["model_name"].(string); ok {
-			if strings.TrimSpace(v) != "" {
-				modelName = v
-			}
-		}
-		// M4: workspace→turn binding. When the message originates from a
-		// workspace chat the SPA sets metadata.workspace_id; we stamp it on
-		// the session meta so task_create/delegation lands on this workspace.
-		var workspaceID string
-		if v, ok := f.Metadata["workspace_id"].(string); ok {
-			workspaceID = strings.TrimSpace(v)
-		}
-		// Workspace-setup kickoff: the SPA sends this flag on a
-		// workspace's first open so the server records the trigger as a
-		// system-role transcript entry (not a user bubble), clears
-		// SetupPending exactly once, and gives the session a clean title —
-		// see contracts/asyncapi.yaml metadata.workspace_setup_kickoff.
-		//
-		// Kickoff intent is signaled by KEY PRESENCE, not a loose
-		// type assertion — see parseSetupKickoffMetadata's doc comment. A
-		// key that IS present but not exactly boolean true is rejected
-		// outright instead of ever reaching handleChatMessage as a normal
-		// message.
-		setupKickoff, malformedKickoff := parseSetupKickoffMetadata(f.Metadata)
-		if malformedKickoff {
-			slog.Warn("ws: malformed workspace_setup_kickoff metadata — rejecting",
-				"chat_id", wh.chatID, "value", f.Metadata["workspace_setup_kickoff"])
-			sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-				Type:    string(generated.WsFrameTypeError),
-				Message: "malformed workspace_setup_kickoff metadata",
-			})
-			return wsHandlerReadLoopContinue
-		}
-		wh.h.handleChatMessageWithClientID(
-			wh.ctx, wh.chatID, sessionID, f.Content, agentID, f.Media,
-			modelName, workspaceID, setupKickoff, clientMessageID, f.AutoApprove, wh.wc,
-		)
-	case string(generated.WsFrameTypeCancel):
-		var f generated.CancelFrame
-		if err := json.Unmarshal(data, &f); err != nil {
-			slog.Warn("ws: malformed cancel frame", "error", err)
-			return wsHandlerReadLoopContinue
-		}
-		if f.SessionId == "" {
-			wh.wc.inboundDropped.Add(1)
-			slog.Warn("ws: cancel frame missing required session_id — dropping",
-				"chat_id", wh.chatID)
-			sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-				Type:    string(generated.WsFrameTypeError),
-				Message: "cancel requires session_id",
-			})
-			return wsHandlerReadLoopContinue
-		}
-		wh.h.handleCancel(wh.wc, f.SessionId)
+		return wh.handleMessageFrame(data)
+	case string(generated.WsFrameTypeCancel), string(generated.WsFrameTypeRedirect):
+		return wh.handleTurnControlFrame(data, peek.Type)
 	case string(generated.WsFrameTypeAttachSession):
-		var f generated.AttachSessionFrame
-		if err := json.Unmarshal(data, &f); err != nil {
-			slog.Warn("ws: malformed attach_session frame", "error", err)
-			return wsHandlerReadLoopContinue
-		}
-		slog.Info("ws: attach_session frame received",
-			"chat_id", wh.chatID,
-			"requested_session_id", f.SessionId,
-		)
-		if f.SessionId != "" {
-			// #823: the client's cursor for this session ({since_seq, boot_id})
-			// decides incremental catch-up vs snapshot (BE-DESIGN.md §3.3/§4).
-			wh.h.handleAttachSession(wh.ctx, wh.chatID, f.SessionId,
-				&attachCursor{SinceSeq: f.SinceSeq, BootID: f.BootId}, wh.wc)
-		} else {
-			slog.Warn("ws: attach_session with empty session_id", "chat_id", wh.chatID)
-		}
-	case string(generated.WsFrameTypeSessionClose):
-		return wh.handleSessionCloseFrame(data)
+		return wh.handleHistoryAttachFrame(data)
 	case string(generated.WsFrameTypeSessionModeUpdate):
 		return wh.handleSessionModeUpdateFrame(data)
+	case string(generated.WsFrameTypeAttachRoom):
+		wh.h.handleAttachRoom(wh.wc, data)
 	case string(generated.WsFrameTypePing):
 		// Application-layer pong: the SPA's 60s "any frame received" liveness
 		// check needs a server-originated frame during idle. Gorilla WS-protocol
@@ -1367,7 +1418,23 @@ func (wh *wsHandlerReadLoop) dispatchFrame(data []byte, peek wsTypeOnly) wsHandl
 			})
 			return wsHandlerReadLoopContinue
 		}
+		// Subscribing only observes pairing frames; it never restores chat
+		// ownership (Train 2 gate r2 T2-R2-S1 / R2-A02). A chat Retry claims
+		// ownership through PUT /channels/{id}/enable with pairing_retry.
 		wh.h.subscribePairingInterest(wh.wc, f.ChannelId, f.Active)
+	case string(generated.WsFrameTypeMailPanelObserver):
+		// w5-integration (US-2/MC-4): Mail panel presence open/close. No
+		// inbound JSON Schema was generated for this frame, so validation is
+		// the handler's own (mail_presence.go) — the owned ack/safe-error
+		// shape; the generic unknown-frame fallback below is never relied on.
+		var f generated.MailPanelObserverFrame
+		if err := json.Unmarshal(data, &f); err != nil {
+			wh.wc.inboundDropped.Add(1)
+			slog.Warn("ws: malformed mail_panel_observer frame", "chat_id", wh.chatID)
+			wh.h.sendMailPanelObserverError(wh.wc, f, "malformed_frame", "malformed mail panel observer frame")
+			return wsHandlerReadLoopContinue
+		}
+		wh.h.handleMailPanelObserverFrame(wh.wc, wh.chatID, f)
 	case string(generated.WsFrameTypeAskUserAnswer):
 		// AskUserQuestion card submission/cancel (askuserquestion-tool-
 		// spec v3 §3): bridge to askuser.Registry.Submit / CancelByUser.
@@ -1406,18 +1473,22 @@ func wsFrameSchemaName(frameType string) string {
 		return "MessageFrame"
 	case string(generated.WsFrameTypeCancel):
 		return "CancelFrame"
+	case string(generated.WsFrameTypeRedirect):
+		return "RedirectFrame"
 	case string(generated.WsFrameTypeAttachSession):
 		return "AttachSessionFrame"
 	case string(generated.WsFrameTypeDevicePairingResponse):
 		return "DevicePairingResponseFrame"
-	case string(generated.WsFrameTypeSessionClose):
-		return "SessionCloseFrame"
 	case string(generated.WsFrameTypeSessionModeUpdate):
 		return "SessionModeUpdateFrame"
 	case string(generated.WsFrameTypeWhatsappPairingSubscribe):
 		return "WhatsAppPairingSubscribeFrame"
 	case string(generated.WsFrameTypeAskUserAnswer):
 		return "AskUserAnswerFrame"
+	// Spec omnipus-system-agent K45: the room attach frame
+	// (handleAttachRoom, ws_rooms.go).
+	case string(generated.WsFrameTypeAttachRoom):
+		return "AttachRoomFrame"
 	case string(generated.WsFrameTypePing):
 		return "PingFrame"
 	// ADR-038 finding #3: the 4 browser-live client→server frame types.
@@ -1527,6 +1598,14 @@ type wsStreamer struct {
 	// live TokenFrame/DoneFrame's message_id always equals the persisted
 	// entry's id for the same round. Guarded by statsMu like turnID.
 	messageID string
+	// goalID is the goal the producing turn was dispatched under (session-core
+	// FR-039 / C-GOAL), captured at turn start and stamped by the agent loop via
+	// SetGoalID, mirroring SetTurnID's pattern exactly. It rides the live
+	// TokenFrame/DoneFrame (so a bubble joins to its own exact keyed goal
+	// criteria) and the assistant entry Finalize persists, so replay/REST carry
+	// the SAME association. Empty means the turn ran under no proven goal
+	// (UNKNOWN association → neutral indicator). Guarded by statsMu like turnID.
+	goalID string
 	// parentSpawnCallID identifies the spawning "delegate"/"spawn" ToolCall.ID
 	// in the PARENT turn when this streamer belongs to a CHILD delegation
 	// sub-turn (empty for a root/non-delegated turn). Stamped by the agent
@@ -1557,6 +1636,14 @@ type wsStreamer struct {
 	// feeds a catch-up snapshot — the session hub's active-turn projection
 	// does, from the published tokens themselves.)
 	accumulated strings.Builder
+	// stopCut is set once by CutoffAtStop when the user's Stop is claimed
+	// (#1534): from then on Update still publishes frames but no longer
+	// appends to accumulated, so the saved answer ends where the screen
+	// stopped. publishedAfterCut counts the bytes published past the cut so
+	// StreamedContentLen keeps reporting everything sent live. Both guarded
+	// by statsMu.
+	stopCut           bool
+	publishedAfterCut int
 
 	// producedModel is the model string that produced this streamed response.
 	// Set by the agent loop via SetProducedModel before Finalize so the
@@ -1616,10 +1703,16 @@ type wsStreamer struct {
 	statsCompletionTokens int
 	statsCacheRead        int
 	statsCacheWrite       int
-	statsTokens           int64
-	statsCostUSD          float64
-	statsDuration         time.Duration
-	statsTurnFailed       bool // set by SetTurnFailed when the engine used a synthetic fallback
+	callAccounting        []session.TranscriptEntry
+	callAccountingSet     bool
+	// turnReasoning is the agent's own turn sum over every call of the turn
+	// (agent.TurnReasoningStreamer); turnReasoningSet says it was handed over.
+	turnReasoning    *int
+	turnReasoningSet bool
+	statsTokens      int64
+	statsCostUSD     float64
+	statsDuration    time.Duration
+	statsTurnFailed  bool // set by SetTurnFailed when the engine used a synthetic fallback
 
 	// transcriptPersisted records that the agent loop already wrote this
 	// streamer's narration to the transcript via
@@ -1630,6 +1723,9 @@ type wsStreamer struct {
 	// the lastStreamer that gets finalized). Guarded by statsMu, which Finalize
 	// already holds while reading stats.
 	transcriptPersisted bool
+	// systemNotice is an already-persisted harness outcome, never model text.
+	// Guarded by statsMu, like the other finalization inputs.
+	systemNotice *generated.ReplayMessageFrame
 
 	// shadowResolved/isShadowStream implement the concurrent-stream
 	// interleaving fix — see WSHandler.streamOwners' doc comment for the
@@ -1644,4 +1740,16 @@ type wsStreamer struct {
 	// token (see `accumulated` above) but withholds the live TokenFrame send.
 	shadowResolved bool
 	isShadowStream bool
+
+	// finalizedMessageID is the id of the transcript entry Finalize's
+	// persistTranscript actually wrote for this streamer — set there (see
+	// its own comment). It may differ from messageID: persistTranscript
+	// mints a FRESH id for a distinct terminal notice that follows
+	// already-persisted narration (the notice is a separate entry, not a
+	// continuation of the narration's own message). publishDone hands this
+	// to the channel's turnIdentity record (webchat_channel.go) so a later
+	// Send() fallback delivery can stamp a frame with this SAME durable
+	// identity instead of leaving it nil. Guarded by statsMu like every
+	// other Finalize-written field.
+	finalizedMessageID string
 }

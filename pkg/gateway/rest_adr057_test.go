@@ -459,16 +459,14 @@ func TestU18GetSession_DrillDownReachesRealDelegatedChildUnfiltered(t *testing.T
 	api.HandleSessions(w, r)
 	require.Equal(t, http.StatusOK, w.Code, "GET /sessions/{childID} must resolve a real delegated child; body=%s", w.Body.String())
 
-	var detail struct {
-		Session  map[string]any            `json:"session"`
-		Messages []session.TranscriptEntry `json:"messages"`
-	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &detail))
-	require.Len(t, detail.Messages, 1, "the child's own transcript must be returned in full, unfiltered")
-	assert.Equal(t, "delegated work result", detail.Messages[0].Content)
-	assert.Equal(t, child.ID, detail.Session["id"])
-	if psid, ok := detail.Session["parent_session_id"]; ok {
-		assert.Equal(t, parent.ID, psid, "the child's own session detail should surface its parent_session_id")
+	detail := historyMigrationDetail(t, child.ID, w.Body.Bytes(), false)
+	entries := *detail.Messages
+	require.Len(t, entries, 1, "the child's own transcript must be returned in full, unfiltered")
+	require.NotNil(t, entries[0].Content)
+	assert.Equal(t, "delegated work result", *entries[0].Content)
+	assert.Equal(t, child.ID, detail.Session.Id)
+	if detail.Session.ParentSessionId != nil {
+		assert.Equal(t, parent.ID, *detail.Session.ParentSessionId, "the child's own session detail should surface its parent_session_id")
 	}
 }
 
@@ -621,6 +619,12 @@ func TestU18DeleteSession_NoLifecycleStore_DegradesToOwnUploadsOnly(t *testing.T
 	defer cleanup()
 	store := api.agentLoop.GetSessionStore()
 	require.NotNil(t, store)
+	// The shared harness now installs a REAL lifecycle store, because the
+	// task start path it wires needs one (S1 M9 + qa shared-harness launcher,
+	// 2982c3b38). This test is about the NIL-store path, so it unwires the
+	// store explicitly instead of relying on a harness default that no longer
+	// exists.
+	api.agentLoop.SetSessionMessagingStores(nil, nil)
 	require.Nil(t, api.agentLoop.GetSessionLifecycleStore(), "fixture: no lifecycle store wired in this test")
 
 	solo, err := store.NewSession(session.SessionTypeChat, "webchat", "u18-agent")

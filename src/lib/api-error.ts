@@ -119,7 +119,7 @@ function defaultUserMessage(status: number, retryAfterMs?: number): string {
  * component-tree code, and the extraction itself is a few lines: not
  * sharing it is cheaper than the layering violation importing it would be.
  */
-function parseServerErrorField(body: string | undefined): string | undefined {
+export function parseServerErrorField(body: string | undefined): string | undefined {
   if (!body) return undefined
   try {
     const parsed = JSON.parse(body) as { error?: unknown; message?: unknown }

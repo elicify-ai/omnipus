@@ -13,15 +13,20 @@ allowed-tools: Read, Grep, Glob, Bash, Write, Edit
 
 # Plan & Spec (plan-spec)
 
-Last reviewed: 2026-09-25
+Last reviewed: 2026-10-29 — Epic, riders and agent tool field table in the spec header
+Process version: 2026-10-29.1
 Design source: `docs/internal/design/dev-team-setup-design-2026-09-25.md` (§7.1, the
 feature-size flow); founder decisions:
-`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/uat/spec-process/DECISIONS.md`.
+`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/uat/spec-process/DECISIONS.md`
+(founder's Mac only; on a pod ask the chief). Every spec header carries its Epic, its
+riders and, for an agent-managed object, the agent tool field table
+(`knowledge/spec-template.md`; root `CLAUDE.md`, "Definition of Done").
 
 ## When this runs, and on what input
 
 Feature-size work only. Small and standard changes never reach this skill — they build
-directly, with tests, then go to their own reviewer set (§7.1 of the design doc above).
+directly, with tests, then join their size's combined train review (root `CLAUDE.md`,
+"Change sizes and the review gate").
 `/taskify` does not exist; task decomposition belongs to team-lead's planning
 (`omnipus-planning-orchestration`), not to this skill.
 
@@ -60,8 +65,9 @@ seen and accepted, not for an unanswered question.
   facts; code wins over docs.
 - every `ADR-*.md` file under `docs/internal/architecture/` — existing decisions, cited
   by title, not number alone (numbers have review-round siblings).
-- `docs/internal/_archive/preview-doc-v03-concept/` — the pre-ADR workspaces-redesign
-  concept (version labels retired), for anything that touches it.
+- For workspaces-redesign questions, use the relevant ADRs and current code above;
+  the pre-ADR concept was removed from the live tree on 2026-09-30 and remains in Git
+  history for historical context only (version labels retired).
 - `contracts/openapi.yaml`, `contracts/asyncapi.yaml`, `contracts/components/schemas/` —
   contract-first wire types (Hard Constraint #8). Every new data exchange starts here;
   the generated types in `pkg/api/generated/` and `src/lib/api/generated/` are the only
@@ -76,6 +82,9 @@ seen and accepted, not for an unanswered question.
   RED/GREEN/CHECK gate this spec feeds.
 - User promises: `docs/security.md` and `docs/tools.md`, whenever the feature touches
   tool access, approval, or the shell-rule/Auto-approve surface.
+- For a UI or behaviour change, read the relevant user-facing pages under `docs/`
+  (outside `docs/internal/`) before planning their matching updates (root
+  `CLAUDE.md`, "Definition of Done").
 - Codebase understanding: GitNexus MCP tools — `query`, `context`, `impact`, `trace`,
   `explain`, `detect_changes` (exact names; there is no `gitnexus_query` or similar
   prefixed form). Fall back to Grep/Read when the graph does not cover a file or the
@@ -210,15 +219,26 @@ how a real user or agent will invoke this feature once built:
 - Test plan execution: name where in the flow (RED/GREEN/CHECK, §7.1) this gets executed,
   not merely written.
 
+**User-facing documentation** (mandatory; root `CLAUDE.md`, "Definition of Done") — for each UI or behaviour change, identify the existing or new user-facing page under `docs/` (outside `docs/internal/`) and a specific `DOC-xxx` TODO describing the matching update. Check the existing pages before naming a destination. The implementing lead drafts the update; `docs-verifier` audits it before landing. For a change with no user-visible effect, state why no update applies rather than leaving this section blank.
+
 **Functional Requirements** — `FR-001: System MUST/SHOULD/MAY [requirement].` Testable;
 if you cannot write a test for it, rewrite it.
 
 **Success Criteria** — `SC-001: [measurable, no subjective language].`
 
 **Traceability Matrix** — one row per FR-xxx, linking to its user story, its BDD
-scenario(s), and its test name(s) (test names are placeholders here — qa-lead names the
-real tests in RED). Every FR-xxx appears; every BDD scenario appears at least once. A gap
-here is an incomplete spec — fill it before finishing.
+scenario(s), its test name(s) (test names are placeholders here — qa-lead names the
+real tests in RED), and any matching DOC-xxx TODO. Every FR-xxx appears; every BDD
+scenario and UI/behaviour documentation TODO appears at least once. For a requirement
+with no user-visible effect, give the reason instead of leaving the docs cell blank.
+A gap here is an incomplete spec — fill it before finishing.
+
+**Hands-on rows** (root `CLAUDE.md`, "Hands-on pipeline") — write them now, not at the
+campaign window. Ask the feature's existing qa-lead test author for campaign detail;
+keep that same author through its test phases. Each row names its acceptance criterion, steps, expected result, affected
+area and critical path for independent validation; use those links to select later
+diff-scoped re-runs. Setup/version binding and paired start are operational procedure,
+not extra product acceptance criteria. Name stable rows suitable for later automation.
 
 ## Phase 7 — Assemble and hand off
 
@@ -229,16 +249,19 @@ here is an incomplete spec — fill it before finishing.
    `Approved`, `Implemented`, `Superseded`. A new spec starts `Draft`; plan-spec sets it
    to `In review` once the file is written and ready for grill-spec (the field moves to
    `Approved`/`Implemented`/`Superseded` later, by spec-sync).
-3. If an ADR exists for this feature, the second line links it by title:
-   `ADR: [ADR-NNN — Title](../architecture/ADR-NNN-title.md)`. If no design decision was
-   open, state that plainly instead of a placeholder: `ADR: none — no open design
-   decision`.
+3. If an ADR exists for this feature, the second line links it: the ADR's own
+   filename and title, cited by title, not number alone (root `CLAUDE.md`).
+   architect's file (`.claude/agents/architect.md`, the "ADR naming" bullet)
+   states the current naming rule — cite whatever the ADR is actually named,
+   old-numbered or new-date-based, never invent a placeholder pattern here.
+   If no design decision was open, state that plainly instead of a
+   placeholder: `ADR: none — no open design decision`.
 4. Write the file to `docs/internal/specs/<name>-spec.md`, `<name>` in kebab-case from
    the feature name.
 5. Report to whoever dispatched this skill: the spec path, section counts (user stories,
    BDD scenarios by category, FR-xxx count, dataset row count), any Ambiguity Warnings
    still open, and the explicit hand-off: **this spec is ready for grill-spec, round 1.**
-   Do not invoke grill-spec yourself — that dispatch belongs to team-lead/squad-lead.
+   Do not invoke grill-spec yourself — that dispatch belongs to team-lead.
 
 ## Quality checks before reporting done
 
@@ -253,6 +276,11 @@ here is an incomplete spec — fill it before finishing.
       all represented, not just happy path.
 - [ ] Reachability section names the actual tool-policy file(s) and the actual screen —
       not "TBD".
+- [ ] User-facing documentation section names specific pages and DOC-xxx TODOs for
+      each UI or behaviour change (or says why none applies); the Traceability
+      Matrix links the matching requirements to those TODOs.
+- [ ] Spec-time hands-on rows trace to acceptance criteria, affected areas and critical
+      paths; a diff can select its touched-row re-run without inventing new oracles.
 - [ ] Traceability Matrix has no gaps.
 - [ ] No implementation detail leaked into Phase 2/3 sections (phrasing table above).
 - [ ] Output path is exactly `docs/internal/specs/<name>-spec.md` — nowhere else.

@@ -122,7 +122,6 @@ func TestSeed_PlanSupervisorSystemAgent(t *testing.T) {
 
 	assert.Equal(t, config.AgentTypeSystem, ps.Type, "Type=system")
 	assert.True(t, ps.Locked, "Locked=true")
-	assert.False(t, ps.Default, "Default=false — a System Agent can never be the routing default")
 	require.NotNil(t, ps.MemoryEnabled, "MemoryEnabled must be explicitly set, not left nil")
 	assert.False(t, *ps.MemoryEnabled, "MemoryEnabled=false")
 	assert.False(t, ps.MemoryEnabledEffective(), "MemoryEnabledEffective() must resolve false")
@@ -152,7 +151,6 @@ func TestSeed_PlanSupervisorReEnforced_Tamper(t *testing.T) {
 			continue
 		}
 		cfg.Agents.List[i].Locked = false
-		cfg.Agents.List[i].Default = true
 		cfg.Agents.List[i].Type = config.AgentTypeCustom
 		cfg.Agents.List[i].Name = "Renamed"
 		cfg.Agents.List[i].Tools.Builtin.Policies["bash"] = config.ToolPolicyAllow
@@ -164,7 +162,6 @@ func TestSeed_PlanSupervisorReEnforced_Tamper(t *testing.T) {
 
 	ps := findSeeded(t, cfg, string(coreagent.IDPlanSupervisor))
 	assert.True(t, ps.Locked, "Locked re-enforced")
-	assert.False(t, ps.Default, "stray Default cleared")
 	assert.Equal(t, config.AgentTypeSystem, ps.Type, "Type re-enforced to system")
 	assert.Equal(t, coreagent.PlanSupervisor().Name, ps.Name, "Name re-enforced")
 	assert.Equal(t, config.ToolPolicyDeny, ps.Tools.Builtin.Policies["bash"],
@@ -356,7 +353,8 @@ func TestSeedSystemAgents_ReEnforcesJudgeSkillAllowlist(t *testing.T) {
 // test's own comment used to say would require amending it on purpose; see
 // coreAgentSeed's IDPlanSupervisor case for the full rationale, including
 // why this does not reopen the read_file/list_directory withholding just
-// below). Every other name in the static catalog stays deny. Stated as a
+// below). Skills r15 §10 deliberately adds get_skill Allow everywhere,
+// including hidden engine agents. Every other name stays deny. Stated as a
 // COMPLEMENT rather than a list, so a tool added to the catalog later can
 // never silently land in PlanSupervisor's allow set.
 func TestPlanSupervisorSeed_ExactlyPlanCorrect(t *testing.T) {
@@ -370,7 +368,7 @@ func TestPlanSupervisorSeed_ExactlyPlanCorrect(t *testing.T) {
 	require.Len(t, pol, len(catalog),
 		"policy must enumerate the whole static catalog, one literal entry each (Constraint #6)")
 
-	allowedNames := map[string]bool{"plan_correct": true, "ToolSearch": true, "Skill": true, "grep": true}
+	allowedNames := map[string]bool{"plan_correct": true, "ToolSearch": true, "Skill": true, "grep": true, "get_agent": true, "get_skill": true} // get_agent: r17 FR-143, every agent; get_skill: r15 §10
 	for _, name := range catalog {
 		p, ok := pol[name]
 		require.Truef(t, ok, "policy must enumerate tool %q (no default fallback)", name)
@@ -380,7 +378,7 @@ func TestPlanSupervisorSeed_ExactlyPlanCorrect(t *testing.T) {
 		}
 		assert.Equalf(t, config.ToolPolicyDeny, p,
 			"%q must be deny — PlanSupervisor's grant is exactly plan_correct plus the ToolSearch, "+
-				"Skill and (ADR-081 D11) grep grants; if you are widening it further, amend this "+
+				"Skill, (ADR-081 D11) grep, and (skills r15 §10) get_skill grants; amend this "+
 				"test deliberately (the complement failing IS the guard working)", name)
 	}
 
@@ -423,13 +421,19 @@ func TestPlanSupervisorResolved_ExactlyPlanCorrect(t *testing.T) {
 		"(PlanSupervisor, grep) must RESOLVE allow — ADR-081 D11's founder ruling (FR-009) "+
 			"grants grep to every agent tier including the most locked-down system agent")
 
+	assert.Equal(t, "allow", resolveFor(t, cfg, id, "get_agent", nil),
+		"(PlanSupervisor, get_agent) must RESOLVE allow — r17 FR-143 grants get_agent to every agent, "+
+			"Judge and Plan Supervisor included")
+	assert.Equal(t, "allow", resolveFor(t, cfg, id, "get_skill", nil),
+		"r15 §10 grants get_skill Allow to every tier, including PlanSupervisor")
+
 	for _, name := range coreagent.AllStaticToolNames() {
-		if name == "plan_correct" || name == "ToolSearch" || name == "Skill" || name == "grep" {
+		if name == "plan_correct" || name == "ToolSearch" || name == "Skill" || name == "grep" || name == "get_agent" || name == "get_skill" {
 			continue
 		}
 		assert.Equalf(t, "deny", resolveFor(t, cfg, id, name, nil),
 			"(PlanSupervisor, %s) must resolve deny — its grant is exactly plan_correct plus "+
-				"the ToolSearch/Skill structural floors and (ADR-081 D11) grep", name)
+				"the ToolSearch/Skill structural floors, (ADR-081 D11) grep and (r15 §10) get_skill", name)
 	}
 }
 
@@ -515,8 +519,8 @@ func TestPlanContainmentParity_ResolvedPolicy(t *testing.T) {
 				"same literal value; a sparse map that omits execute_plan needs an explicit stop_plan deny",
 			a.ID, exec, stop)
 	}
-	require.GreaterOrEqual(t, checked, 4,
-		"sanity: the sweep must have covered the four chat-target base agents, not silently skipped everything")
+	require.GreaterOrEqual(t, checked, 3,
+		"sanity: the sweep must have covered the three chat-target base agents (Mia, Jim, Omnipus — FR-008 retired Ava and Admin), not silently skipped everything")
 }
 
 // TestPlanContainmentParity_NonOwnersCannotStartAPlan pins the premise the
@@ -619,10 +623,11 @@ func TestPlanContainmentParity_NewCustomAgent(t *testing.T) {
 	for _, name := range []string{"execute_plan", "stop_plan", "plan_correct"} {
 		p, ok := pol[name]
 		require.Truef(t, ok, "a new custom agent's policy must enumerate %q", name)
-		assert.Equalf(t, config.ToolPolicyDeny, p,
-			"a new custom agent must start denied for %q — it opts in explicitly. If you ever grant "+
-				"execute_plan here, FR-006b requires stop_plan beside it at the same value", name)
+		// SPEC.md Table: a new Main gets execute_plan, stop_plan and plan_correct Allow.
+		assert.Equalf(t, config.ToolPolicyAllow, p, "a new Main starts Allow for %q", name)
 	}
+	// SPEC.md Table / containment invariant: the execution and stop defaults must match.
+	assert.Equal(t, pol["execute_plan"], pol["stop_plan"], "a plan owner must also be able to stop its plan")
 }
 
 // --- FR-006: the catalog surfaces --------------------------------------

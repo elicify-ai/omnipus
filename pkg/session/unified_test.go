@@ -16,7 +16,6 @@
 package session
 
 import (
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -47,17 +46,3 @@ func newTestStore(t *testing.T) *UnifiedStore {
 // ClearAll's Given/When/Then explicitly; scenarios below are inferred from
 // the ClearAll doc comment and code at pkg/session/unified.go:833-869, plus
 // the DeleteSession cascade-delete precedent it mirrors. [INFERRED]
-
-// newTestStoreWithHome creates a UnifiedStore rooted at <home>/sessions with
-// an explicit home directory, so cascade-deleted uploads (ClearAll, like
-// DeleteSession) land at a path the test controls: <home>/uploads/<sessionID>.
-func newTestStoreWithHome(t *testing.T) (store *UnifiedStore, home string) {
-	t.Helper()
-	home = t.TempDir()
-	sessionsDir := filepath.Join(home, "sessions")
-	store, err := NewUnifiedStoreWithHome(sessionsDir, home)
-	require.NoError(t, err, "NewUnifiedStoreWithHome must succeed")
-	// See newTestStore's doc comment / issue #634.
-	t.Cleanup(func() { _ = store.Close() })
-	return store, home
-}

@@ -69,9 +69,10 @@ func (sr *streamReplayState) spanReplayTerminal(callID string, generation int) s
 // bracket a child span. A poll does not. A launch that was refused or failed
 // before any child existed does not. spawn and create_task are launch tools.
 // On delegate, only action "run" launches; an omitted action is run, which is
-// the tool's own default. follow_up is not one of these: the tool names that
-// action "follow_up", and its chat line is the persisted later generation on
-// the original run's call, not a second span built from the follow_up call.
+// the tool's own default. resume (formerly named follow_up) is not one of
+// these: the tool names that action "resume", and its chat line is the
+// persisted later generation on the original run's call, not a second span
+// built from the resume call.
 func (sr *streamReplayState) delegateCallOpensSpawnSpan(tc session.ToolCall) bool {
 	switch tc.Tool {
 	case "spawn", "create_task":
@@ -134,6 +135,10 @@ func (sr *streamReplayState) launchRefusedWithoutChild(tc session.ToolCall) bool
 // Production puts it in the result text as JSON; a top-level session_id key
 // is accepted too.
 func toolCallNamesChildSession(tc session.ToolCall) bool {
+	// A history page's shortened result keeps both facts from its full value.
+	if d, ok := tc.HistoryDisplayPreview(); ok {
+		return strings.TrimSpace(d.ChildSessionID) != "" || d.TextNamesSessionID
+	}
 	if tc.Result == nil {
 		return false
 	}

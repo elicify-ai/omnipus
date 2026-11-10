@@ -23,80 +23,49 @@ if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
 
 import { OmnipusComposer } from './ChatScreen'
 
-vi.mock('@assistant-ui/react', () => {
-  return {
-    useThreadViewportStore: () => ({ getState: () => ({ isAtBottom: true }) }),
-    ThreadPrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Viewport: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Messages: () => null,
-    },
-    MessagePrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Parts: () => null,
-    },
-    ComposerPrimitive: {
-      Root: ({ children, className, onSubmit }: { children: React.ReactNode; className?: string; onSubmit?: (e: React.FormEvent) => void }) =>
-        React.createElement('form', { className, onSubmit, 'data-testid': 'composer-form' }, children),
-      Input: ({ disabled, placeholder, className, onChange, onKeyDown, onBlur }: {
-        disabled?: boolean; placeholder?: string; className?: string;
-        onChange?: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
-        onKeyDown?: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
-        onBlur?: () => void;
-      }) =>
-        React.createElement('textarea', {
-          disabled, placeholder, className,
-          onChange, onKeyDown, onBlur,
-          'data-testid': 'composer-input',
+import { MockButton } from '@/test/assistantUiMock'
+vi.mock('@assistant-ui/react', async () => (await import('@/test/assistantUiMock')).createAssistantUiMock({
+  ThreadPrimitive: {
+    Viewport: ({ children, className }: { children: React.ReactNode; className?: string }) =>
+              React.createElement('div', { className }, children),
+  },
+  ComposerPrimitive: {
+    Root: ({ children, className, onSubmit }: { children: React.ReactNode; className?: string; onSubmit?: (e: React.FormEvent) => void }) =>
+              React.createElement('form', { className, onSubmit, 'data-testid': 'composer-form' }, children),
+    Send: ({ disabled, children, className, 'data-testid': testId, 'aria-label': ariaLabel }: {
+              disabled?: boolean; children?: React.ReactNode; className?: string;
+              'data-testid'?: string; 'aria-label'?: string;
+            }) =>
+              React.createElement(MockButton, {
+                type: 'button', disabled, className,
+                'data-testid': testId ?? 'chat-send',
+                'aria-label': ariaLabel, children: children}),
+    AddAttachment: ({ disabled, children, className, 'aria-label': ariaLabel }: {
+              disabled?: boolean; children?: React.ReactNode; className?: string; 'aria-label'?: string
+            }) =>
+              React.createElement(MockButton, { type: 'button', disabled, className, 'aria-label': ariaLabel, 'data-testid': 'add-attachment', children: children}),
+  },
+  AttachmentPrimitive: {
+    Remove: ({ children, className, 'aria-label': ariaLabel }: { children?: React.ReactNode; className?: string; 'aria-label'?: string }) =>
+              React.createElement(MockButton, { type: 'button', className, 'aria-label': ariaLabel, children: children}),
+  },
+  ActionBarPrimitive: {
+    Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
+              React.createElement('div', { className }, children),
+  },
+  useComposerRuntime: vi.fn(() => ({
+          getState: () => ({ text: '' }),
+          setText: vi.fn(),
+          addAttachment: vi.fn(),
+          subscribe: vi.fn(() => vi.fn()),
+        })),
+  useMessage: () => ({
+          id: 'msg_1',
+          role: 'assistant',
+          status: { type: 'complete' },
+          content: [],
         }),
-      Send: ({ disabled, children, className, 'data-testid': testId, 'aria-label': ariaLabel }: {
-        disabled?: boolean; children?: React.ReactNode; className?: string;
-        'data-testid'?: string; 'aria-label'?: string;
-      }) =>
-        React.createElement('button', {
-          type: 'button', disabled, className,
-          'data-testid': testId ?? 'chat-send',
-          'aria-label': ariaLabel,
-        }, children),
-      AddAttachment: ({ disabled, children, className, 'aria-label': ariaLabel }: {
-        disabled?: boolean; children?: React.ReactNode; className?: string; 'aria-label'?: string
-      }) =>
-        React.createElement('button', { type: 'button', disabled, className, 'aria-label': ariaLabel, 'data-testid': 'add-attachment' }, children),
-      Attachments: () => null,
-    },
-    AttachmentPrimitive: {
-      Root: ({ children, className }: { children?: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Name: () => null,
-      Remove: ({ children, className, 'aria-label': ariaLabel }: { children?: React.ReactNode; className?: string; 'aria-label'?: string }) =>
-        React.createElement('button', { type: 'button', className, 'aria-label': ariaLabel }, children),
-      Thumb: () => null,
-    },
-    MessagePartPrimitive: { InProgress: () => null },
-    ActionBarPrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Copy: ({ children }: { children: React.ReactNode }) => React.createElement('span', {}, children),
-    },
-    AuiIf: () => null,
-    useComposerRuntime: vi.fn(() => ({
-      getState: () => ({ text: '' }),
-      setText: vi.fn(),
-      addAttachment: vi.fn(),
-      subscribe: vi.fn(() => vi.fn()),
-    })),
-    useMessage: () => ({
-      id: 'msg_1',
-      role: 'assistant',
-      status: { type: 'complete' },
-      content: [],
-    }),
-    makeAssistantToolUI: () => () => null,
-  }
-})
+}))
 
 // 10 skills, zero-padded numeric suffixes ("Skill 04" not "Skill 4") — used
 // by the "capped at 8" test to actually exercise the slice(0, SECTION_CAP)
@@ -106,16 +75,16 @@ vi.mock('@assistant-ui/react', () => {
 // this fixture's alphabetical order matching its numeric intent, same as
 // the analogous fixture in useSlashMenu.test.ts's cap describe block.
 const ALL_MOCK_SKILLS = [
-  { id: 'web-research',  name: 'Web Research',  version: '1.0', description: 'Web search and extraction', verified: true,  status: 'active' },
-  { id: 'code-review',   name: 'Code Review',   version: '1.0', description: 'Reviews code quality',      verified: true,  status: 'active' },
-  { id: 'data-analysis', name: 'Data Analysis', version: '1.0', description: 'Analyses datasets',         verified: false, status: 'active' },
-  { id: 'skill-04',      name: 'Skill 04',      version: '1.0', description: 'Description 4',             verified: true,  status: 'active' },
-  { id: 'skill-05',      name: 'Skill 05',      version: '1.0', description: 'Description 5',             verified: true,  status: 'active' },
-  { id: 'skill-06',      name: 'Skill 06',      version: '1.0', description: 'Description 6',             verified: true,  status: 'active' },
-  { id: 'skill-07',      name: 'Skill 07',      version: '1.0', description: 'Description 7',             verified: true,  status: 'active' },
-  { id: 'skill-08',      name: 'Skill 08',      version: '1.0', description: 'Description 8',             verified: true,  status: 'active' },
-  { id: 'skill-09',      name: 'Skill 09',      version: '1.0', description: 'Description 9',             verified: true,  status: 'active' },
-  { id: 'skill-10',      name: 'Skill 10',      version: '1.0', description: 'Description 10',            verified: true,  status: 'active' },
+  { has_local_changes: false, id: 'web-research',  name: 'Web Research',  version: '1.0', description: 'Web search and extraction', verified: true,  status: 'active' },
+  { has_local_changes: false, id: 'code-review',   name: 'Code Review',   version: '1.0', description: 'Reviews code quality',      verified: true,  status: 'active' },
+  { has_local_changes: false, id: 'data-analysis', name: 'Data Analysis', version: '1.0', description: 'Analyses datasets',         verified: false, status: 'active' },
+  { has_local_changes: false, id: 'skill-04',      name: 'Skill 04',      version: '1.0', description: 'Description 4',             verified: true,  status: 'active' },
+  { has_local_changes: false, id: 'skill-05',      name: 'Skill 05',      version: '1.0', description: 'Description 5',             verified: true,  status: 'active' },
+  { has_local_changes: false, id: 'skill-06',      name: 'Skill 06',      version: '1.0', description: 'Description 6',             verified: true,  status: 'active' },
+  { has_local_changes: false, id: 'skill-07',      name: 'Skill 07',      version: '1.0', description: 'Description 7',             verified: true,  status: 'active' },
+  { has_local_changes: false, id: 'skill-08',      name: 'Skill 08',      version: '1.0', description: 'Description 8',             verified: true,  status: 'active' },
+  { has_local_changes: false, id: 'skill-09',      name: 'Skill 09',      version: '1.0', description: 'Description 9',             verified: true,  status: 'active' },
+  { has_local_changes: false, id: 'skill-10',      name: 'Skill 10',      version: '1.0', description: 'Description 10',            verified: true,  status: 'active' },
 ]
 // Deferred item 3: even zero-padded, "Web Research" sorts LAST alphabetically
 // among ALL_MOCK_SKILLS' 10 names (W > S > D > C) and never survives an
@@ -125,9 +94,9 @@ const ALL_MOCK_SKILLS = [
 // visible skills use this smaller fixture instead, so they aren't
 // incidentally coupled to the specific 10-item cap fixture's sort order.
 const SMALL_MOCK_SKILLS = [
-  { id: 'web-research',  name: 'Web Research',  version: '1.0', description: 'Web search and extraction', verified: true,  status: 'active' },
-  { id: 'code-review',   name: 'Code Review',   version: '1.0', description: 'Reviews code quality',      verified: true,  status: 'active' },
-  { id: 'data-analysis', name: 'Data Analysis', version: '1.0', description: 'Analyses datasets',         verified: false, status: 'active' },
+  { has_local_changes: false, id: 'web-research',  name: 'Web Research',  version: '1.0', description: 'Web search and extraction', verified: true,  status: 'active' },
+  { has_local_changes: false, id: 'code-review',   name: 'Code Review',   version: '1.0', description: 'Reviews code quality',      verified: true,  status: 'active' },
+  { has_local_changes: false, id: 'data-analysis', name: 'Data Analysis', version: '1.0', description: 'Analyses datasets',         verified: false, status: 'active' },
 ]
 // Mutable per-test override — defaults to the small fixture; the "capped at
 // 8" test below swaps in ALL_MOCK_SKILLS for its own run only.
@@ -152,7 +121,7 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
       if (Array.isArray(key) && key[0] === 'skills') {
         return { data: skillsFixture, isError: false, refetch: vi.fn() }
       }
-      return { data: [], isError: false, refetch: vi.fn() }
+      return { data: queryDataWithEmptyHistory(key), isError: false, refetch: vi.fn() }
     },
     useMutation: () => ({ mutate: vi.fn(), isPending: false }),
     useQueryClient: () => ({ invalidateQueries: vi.fn(), removeQueries: vi.fn() }),
@@ -171,12 +140,14 @@ vi.mock('@tanstack/react-router', () => ({
 // doesn't exercise mentions. The workspaces query stays disabled (no
 // activeWorkspaceId set here), so `fetchWorkspaces` is never actually
 // invoked — this just needs to exist so the module loads.
+import { emptyHistoryPage, queryDataWithEmptyHistory, type HistoryReadPort } from '../../../tests/chat-history-paging/legacy-fixtures'
+
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([]),
-    fetchSessionMessages: vi.fn().mockResolvedValue([]),
+    fetchSessionMessages: vi.fn<HistoryReadPort>(async (sessionId) => emptyHistoryPage(sessionId)),
     fetchCommands: vi.fn().mockResolvedValue([]),
     fetchSkills: vi.fn().mockResolvedValue([]),
     fetchProviders: vi.fn().mockResolvedValue([]),
@@ -188,11 +159,9 @@ vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avata
 vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
 vi.mock('./markdown-text', () => ({ MarkdownText: () => null }))
 vi.mock('./tools/GenericToolCall', () => ({ GenericToolCall: () => null }))
-vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
 // Composer Redesign (variant A1): the skills-filter slash menu is independent
 // of the picker/model/token sub-components — stub them to null so their
 // workspaces/providers query plumbing doesn't need mocking here.
-vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
 vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 
@@ -244,8 +213,14 @@ describe('Skills filter mode (D9)', () => {
     act(() => { fireEvent.change(input, { target: { value: '/' } }) })
     act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) })
 
-    // Commands present
+    // Founder X3: the server fixture includes /clear, so the full menu lists
+    // it. Preserve exact commands-then-skills order and reject extra rows.
     expect(screen.getByText('/clear')).toBeInTheDocument()
+    expect(screen.getAllByRole('option').map((option) => option.textContent?.match(/^\/[a-z0-9-]+/)?.[0])).toEqual([
+      '/sessions', '/workspace', '/clear', '/help', '/model', '/agents', '/cancel',
+      '/code-review', '/data-analysis', '/web-research',
+    ])
+    expect(screen.getByText('/help')).toBeInTheDocument()
     expect(screen.getByText('/cancel')).toBeInTheDocument()
     // Skills present
     expect(screen.getByText('/web-research')).toBeInTheDocument()

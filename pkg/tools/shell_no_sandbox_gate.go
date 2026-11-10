@@ -21,8 +21,11 @@ package tools
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 )
 
 // noSandboxExtraReadOnlyCommands extends shell_path_guard.go's own
@@ -102,6 +105,9 @@ func isNoSandboxReadOnlySegment(seg string) bool {
 		// refuse.
 		return false
 	}
+	if head == "rg" && rgRunsCommands(seg) {
+		return false // SEC2-01: rg's preprocessor flags run another program
+	}
 	if readOnlyShellCommands[head] || noSandboxExtraReadOnlyCommands[head] {
 		return true
 	}
@@ -118,17 +124,86 @@ func isNoSandboxReadOnlySegment(seg string) bool {
 // anything (should not happen — even an empty string segments to one empty
 // segment, which isNoSandboxReadOnlySegment refuses via its empty-head
 // check) is conservatively NOT read-only.
+//
+// #1284 (amendment §2 D6): a segment is also not read-only when it names a
+// protected internal-file operand — a read-only allowlist command that names
+// any home path outside the allow-list is removed from the unprompted list,
+// so it asks. The check is the turn-free conservative form
+// (fspolicy.IsProtectedHomePath): no session-scoped upload knowledge, so an
+// upload operand asks rather than auto-runs — the ask is the protection's
+// visible face on Windows and other no-kernel hosts.
 func commandIsNoSandboxReadOnly(command string) bool {
+	return commandIsNoSandboxReadOnlyFor(command, nil)
+}
+
+// commandIsNoSandboxReadOnlyFor is commandIsNoSandboxReadOnly with the turn's
+// loadable skill folders (HomeGuard.SkillFolders): an allowlisted read of a
+// file inside one of them is a read like any other and does not ask (UAT-1
+// F-8, the path guard's rule in shell_skill_operands.go). Every segment here
+// is already a simple allowlisted read with no redirection, so each of its
+// operands is a read. nil folders is the turn-free form.
+func commandIsNoSandboxReadOnlyFor(command string, skillFolders []string) bool {
 	segments := splitShellSegments(command)
 	if len(segments) == 0 {
 		return false
 	}
+	home := config.OmnipusHomeDir()
 	for _, seg := range segments {
 		if !isNoSandboxReadOnlySegment(seg) {
 			return false
 		}
+		if home != "" && segmentNamesProtectedHomeOperand(seg, home, skillFolders) {
+			return false
+		}
 	}
 	return true
+}
+
+// noSandboxSkillFolders returns the acting turn's loadable skill folders for
+// the no-sandbox gate, or nil when the turn policy cannot be resolved (fail
+// closed: such a read asks).
+func (t *ExecTool) noSandboxSkillFolders(ctx context.Context) []string {
+	policy, err := ResolveTurnFSPolicy(ctx, t.workingDir, t.restrictToWorkspace)
+	if err != nil {
+		return nil
+	}
+	return policy.HomeGuard.SkillFolders
+}
+
+// segmentNamesProtectedHomeOperand reports whether one command segment's
+// absolute-path candidates reach the protected home set. Same extraction and
+// expansion resolution as guardCommand's scan: `~`, `$HOME` and
+// `$OMNIPUS_HOME` prefixes are resolved, any other variable makes the
+// candidate unclassifiable and therefore NOT read-only (fail closed — an
+// operand the gate cannot see is not one it can vouch for).
+func segmentNamesProtectedHomeOperand(seg string, home string, skillFolders []string) bool {
+	for _, loc := range absolutePathPattern.FindAllStringSubmatchIndex(seg, -1) {
+		start, end := loc[2], loc[3]
+		if start < 0 || end < 0 {
+			continue
+		}
+		raw := seg[start:end]
+		if loc[0] >= 0 && loc[0] < start {
+			prefix, resolved, isExpansion := expandCandidatePrefix(seg[loc[0]:start])
+			if isExpansion {
+				if !resolved {
+					return true // unclassifiable dynamic operand — not auto-runnable
+				}
+				raw = filepath.Join(prefix, raw)
+			}
+		}
+		p, err := filepath.Abs(raw)
+		if err != nil {
+			continue
+		}
+		if !operandHasGlob(seg, start) && loadableSkillFolder(p, skillFolders) != "" {
+			continue // a read of a loadable skill's file (UAT-1 F-8)
+		}
+		if fspolicy.IsProtectedHomePath(p, home) || fspolicy.CoversChildOnlySecretPath(p, home) {
+			return true
+		}
+	}
+	return false
 }
 
 // commandTriggersExistingPreflight is a non-prompting DRY RUN of D7
@@ -208,8 +283,9 @@ func (t *ExecTool) requestNoSandboxApproval(ctx context.Context, sessionID, agen
 		// dialog, so it is auto-denied rather than stalled — the same
 		// headless posture every other ADR-092 approval call site in this
 		// package already applies.
-		t.emitApprovalDecision(ctx, sessionID, agentID, command, "no_sandbox_ask", false, headlessShellDenyReason, false)
-		return false, headlessShellDenyReason
+		denyReason := unattendedShellDenyReason(ctx)
+		t.emitApprovalDecision(ctx, sessionID, agentID, command, "no_sandbox_ask", false, denyReason, false)
+		return false, denyReason
 	}
 	if t.approvalRequester == nil {
 		t.emitApprovalDecision(ctx, sessionID, agentID, command, "no_sandbox_ask", false, "no_approver_configured", false)

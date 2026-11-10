@@ -79,7 +79,8 @@
       "applicable": true,
       "file": "tests/design-system/browser.spec.ts",
       "test": "AlertDialog [check:alert-dialog-browser] browser",
-      "story": "ConfirmationContract"
+      "story": "ConfirmationContract",
+      "requiredTargets": [{ "selector": "[role=alertdialog]", "attribute": "role", "value": "alertdialog" }]
     },
     {
       "id": "alert-dialog-pointer",

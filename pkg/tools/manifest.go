@@ -63,8 +63,8 @@ var fullManifestToolNames = map[string]struct{}{
 	"list_agents": {}, "list_directory": {}, "list_jobs": {}, "list_mounts": {},
 	"list_tasks": {}, "message_parent": {}, "plan_correct": {}, "read_file": {},
 	"recall_conversation": {}, "recall_memory": {}, "remember": {}, "search_web": {},
-	"send_file": {}, "send_message": {}, "set_goal": {}, "set_todos": {},
-	"stop_plan": {}, "switch_agent": {}, "update_task": {}, "write_file": {},
+	"answer_request": {}, "send_file": {}, "send_message": {}, "set_goal": {}, "set_todos": {},
+	"stop_plan": {}, "update_task": {}, "write_file": {},
 }
 
 // infraManifestToolNames is the set of infrastructure tools that are always
@@ -166,20 +166,28 @@ var administrativeToolNames = map[string]struct{}{
 	// state. Classifying it here narrows only ToolSearch's speculative
 	// cross-category promotion; it is NOT a policy mechanism (the tool's
 	// policy is the ordinary two-level ask) and does not make it Admin-only.
-	"environment_setup":        {},
-	"delete_agent":             {},
-	"delete_task":              {},
-	"delete_task_in_workspace": {},
-	"delete_workspace":         {},
-	"remove_mcp_server":        {},
-	"remove_skill":             {},
-	"disable_channel":          {},
-	"enable_channel":           {},
-	"add_mcp_server":           {},
-	"configure_channel":        {},
-	"configure_provider":       {},
-	"set_config":               {},
-	"stop_plan":                {},
+	"environment_setup": {},
+	"delete_agent":      {},
+	"delete_task":       {},
+	"delete_workspace":  {},
+	"remove_mcp_server": {},
+	// remove_secret (omnipus-system-agent FR-077, WU-6): deletes a stored
+	// credential version install-wide; Omnipus only, ships ask.
+	"remove_secret":     {},
+	"disable_channel":   {},
+	"enable_channel":    {},
+	"add_mcp_server":    {},
+	"configure_channel": {},
+	// connect_channel (omnipus-system-agent FR-080, WU-7): saves, binds,
+	// enables and live-starts a channel install-wide; Omnipus only, ships ask.
+	"connect_channel": {},
+	// set_channel_outbound (channels FR-032): changes which people and groups
+	// a connection may start messages to; every chat-capable agent may use it
+	// (founder Q4, 2026-11-03), and it always asks.
+	"set_channel_outbound": {},
+	"configure_provider":   {},
+	"set_config":           {},
+	"stop_plan":            {},
 }
 
 // administrativeExemptNames carries a one-line reason for every static tool
@@ -188,8 +196,7 @@ var administrativeToolNames = map[string]struct{}{
 // reset_*/destroy_* name, or the literal "set_config") but is deliberately
 // NOT in administrativeToolNames — so a future tool matching the pattern
 // fails the build until a human records why it's exempt, rather than
-// silently passing it through. Empty today: every current catalog name
-// matching the pattern is already in administrativeToolNames.
+// silently passing it through.
 var administrativeExemptNames = map[string]string{}
 
 // isAdministrativeToolName reports whether name is in the drift-tested

@@ -1,0 +1,9 @@
+--- FAIL: TestSessionCoreU3_CompetingIntakeDeclarationsAreGone (0.10s)
+    sessioncore_u3_deletions_test.go:58: 
+        	Error Trace:	/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/session-core-red-b-20261009/pkg/agent/sessioncore_u3_deletions_test.go:58
+        	Error:      	Should be false
+        	Test:       	TestSessionCoreU3_CompetingIntakeDeclarationsAreGone
+        	Messages:   	parseSteeringMode must be deleted — FR-009 keeps ONE steering FIFO/runner and removes the competing worker inbox/manual queue/steer modes (DEL-03/04)
+FAIL
+FAIL	github.com/elicify-ai/omnipus/pkg/agent	2.201s
+FAIL

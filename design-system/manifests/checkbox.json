@@ -88,6 +88,7 @@
       "file": "tests/design-system/browser.spec.ts",
       "test": "Checkbox [check:checkbox-browser] browser",
       "story": "Default",
+      "requiredTargets": [{ "selector": "[role=\"checkbox\"]", "attribute": "role", "value": "checkbox" }],
       "applicable": true
     },
     {

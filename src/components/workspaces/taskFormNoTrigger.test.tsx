@@ -139,10 +139,10 @@ describe('Neither form renders a Trigger control (GOAL-FR-060)', () => {
     // removal.
     renderPanel(makeTask({
       status: 'next',
-      trigger: { type: 'every', config: { every_ms: 86_400_000 } },
+      trigger: { type: 'recurring', config: { rrule: 'FREQ=DAILY', dtstart_ms: 1_800_000_000_000, tz: 'UTC' } },
     }))
     expect(await screen.findByText(/^trigger$/i)).toBeInTheDocument()
     // A plain-English summary renders — never a raw cron/rule string.
-    expect(screen.queryByText(/every_ms|cron_expr/i)).toBeNull()
+    expect(screen.queryByText(/rrule|cron_expr/i)).toBeNull()
   })
 })

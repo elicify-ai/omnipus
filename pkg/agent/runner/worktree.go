@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 // runDirPrefix is the fixed prefix of every runner run directory. The reaper
@@ -242,7 +243,10 @@ func runGit(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(cctx, "git", args...)
 	cmd.Dir = dir
 	// Keep git non-interactive: never prompt for credentials or editor.
-	cmd.Env = append(os.Environ(),
+	// FR-239: the child starts from the closed child allowlist — the git
+	// plumbing here is local (rev-parse / worktree add / worktree remove), so
+	// the allowlisted PATH/HOME plus these two pins are all it needs.
+	cmd.Env = append(sandbox.ScrubGatewayEnv(),
 		"GIT_TERMINAL_PROMPT=0",
 		"GIT_OPTIONAL_LOCKS=0",
 	)

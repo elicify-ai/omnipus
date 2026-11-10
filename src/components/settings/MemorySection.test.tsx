@@ -4,7 +4,7 @@ import { act } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemorySection } from './MemorySection'
 import { fetchMemorySettings, updateMemorySettings, fetchProviders } from '@/lib/api'
-import type { Provider } from '@/lib/api'
+import type { MemorySettings, Provider } from '@/lib/api'
 
 // ResizeObserver is required by cmdk (used inside ModelSelector popovers);
 // jsdom does not implement it. Polyfill with a noop so popover-open tests work.
@@ -387,5 +387,118 @@ describe('MemorySection', () => {
     // memory_retros_days
     const retrosInput = screen.getByLabelText('Memory retrospective retention')
     expect(retrosInput).toHaveValue(180)
+  })
+})
+
+// ── H6 R2 (review round 1) — duplicate-provider fixtures ──────────────────────
+//
+// The same slug served by TWO usable providers (the founder-instance shape:
+// a local proxy row plus a subscription row). Fixture order puts grok-local
+// FIRST, so first-wins resolution would name grok-local for any pick made
+// under openai-chatgpt.
+
+const DUAL_PROVIDERS: Provider[] = [
+  {
+    id: 'grok-local',
+    name: 'grok-local',
+    display_name: 'grok-local',
+    status: 'connected',
+    models: ['gpt-6.1-sol', 'grok-4'],
+  } as Provider,
+  {
+    id: 'openai-chatgpt',
+    name: 'openai-chatgpt',
+    display_name: 'ChatGPT (subscription)',
+    status: 'signed_in',
+    models: ['gpt-6.1-sol', 'gpt-5.6'],
+  } as Provider,
+]
+
+/** The two grouped rows for one slug, in fixture (render) order. */
+const optionRowsFor = (model: string) =>
+  screen.getAllByRole('option').filter((el) => (el.textContent ?? '').includes(model))
+
+describe('MemorySection — H6 R2 duplicate-provider picks', () => {
+  beforeEach(() => {
+    vi.mocked(fetchMemorySettings).mockResolvedValue({ ...DEFAULT_SETTINGS })
+    vi.mocked(updateMemorySettings).mockResolvedValue({ ...DEFAULT_SETTINGS })
+  })
+
+  it('picking the recap PRIMARY model under the SECOND provider keeps THAT provider\'s row chosen on reopen', async () => {
+    vi.mocked(fetchProviders).mockResolvedValue(DUAL_PROVIDERS)
+    vi.mocked(updateMemorySettings).mockClear()
+    let acknowledge!: (settings: MemorySettings) => void
+    vi.mocked(updateMemorySettings).mockImplementation(() => new Promise<MemorySettings>((resolve) => {
+      acknowledge = resolve
+    }))
+    renderSection()
+    await screen.findByText('Memory & Recap')
+
+    // Pick gpt-6.1-sol under openai-chatgpt (the second row).
+    fireEvent.click(screen.getByTestId('recap-model-trigger'))
+    const rows = await vi.waitFor(() => optionRowsFor('gpt-6.1-sol'))
+    expect(rows).toHaveLength(2)
+    fireEvent.click(rows[1])
+    await waitFor(() => expect(vi.mocked(updateMemorySettings)).toHaveBeenCalledTimes(1))
+    const body = vi.mocked(updateMemorySettings).mock.calls[0][0]
+    expect(body).toMatchObject({ recap_model: 'gpt-6.1-sol', recap_provider: 'openai-chatgpt' })
+
+    // FR-054: reopening during the slot autosave is forbidden. This guard
+    // now covers provider identity across ACKNOWLEDGED autosave, not a draft.
+    const primaryPicker = screen.getByTestId('recap-model-trigger')
+    expect(primaryPicker).toBeDisabled()
+    expect(screen.getByRole('button', { name: /save memory settings/i })).toBeDisabled()
+    fireEvent.click(primaryPicker)
+    expect(screen.queryAllByRole('option')).toHaveLength(0)
+    expect(vi.mocked(updateMemorySettings)).toHaveBeenCalledTimes(1)
+    await act(async () => { acknowledge({ ...DEFAULT_SETTINGS, ...body }) })
+    await waitFor(() => expect(primaryPicker).toBeEnabled())
+
+    // The acknowledged pair must choose openai-chatgpt's row, NOT the first
+    // provider that happens to serve the same slug (the original H6 intent).
+    fireEvent.click(primaryPicker)
+    await vi.waitFor(() => optionRowsFor('gpt-6.1-sol'))
+    const reopened = optionRowsFor('gpt-6.1-sol')
+    expect(reopened).toHaveLength(2)
+    expect(reopened[0]).not.toHaveAttribute('data-chosen')
+    expect(reopened[1]).toHaveAttribute('data-chosen')
+  })
+
+  it('a recap fallback added via the SECOND provider\'s row is SAVED with that provider', async () => {
+    vi.mocked(fetchProviders).mockResolvedValue(DUAL_PROVIDERS)
+    const saved: Record<string, unknown> = {}
+    vi.mocked(updateMemorySettings).mockImplementation(async (body) => {
+      Object.assign(saved, body)
+      return body
+    })
+
+    // One pre-existing fallback — must survive the add untouched.
+    vi.mocked(fetchMemorySettings).mockResolvedValue({
+      ...DEFAULT_SETTINGS,
+      recap_fallback_models: [{ model: 'grok-4', provider: 'grok-local' }],
+    })
+
+    renderSection()
+    await screen.findByText('Memory & Recap')
+
+    fireEvent.click(screen.getByTestId('recap-fallback-add-trigger'))
+    const rows = await vi.waitFor(() => optionRowsFor('gpt-6.1-sol'))
+    expect(rows).toHaveLength(2)
+    fireEvent.click(rows[1]) // openai-chatgpt's row — NOT the first listing
+
+    await waitFor(() => {
+      expect(screen.getByTestId('recap-fallback-row-gpt-6.1-sol')).toBeInTheDocument()
+    })
+
+    const saveBtn = screen.getByRole('button', { name: /save memory settings/i })
+    await act(async () => { fireEvent.click(saveBtn) })
+    await waitFor(() => expect(vi.mocked(updateMemorySettings)).toHaveBeenCalled())
+
+    const fallbacks = saved['recap_fallback_models'] as Array<{ model: string; provider?: string }>
+    expect(fallbacks).toHaveLength(2)
+    // Pre-existing entry preserved verbatim...
+    expect(fallbacks[0]).toEqual({ model: 'grok-4', provider: 'grok-local' })
+    // ...and the new entry carries the CLICKED provider, not the first listing.
+    expect(fallbacks[1]).toEqual({ model: 'gpt-6.1-sol', provider: 'openai-chatgpt' })
   })
 })

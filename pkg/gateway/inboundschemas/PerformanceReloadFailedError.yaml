@@ -1,0 +1,25 @@
+title: PerformanceReloadFailedError
+description: >
+  500 body of PUT /performance with code performance_reload_failed (issue
+  #904): the settings are saved but not applied yet. Envelope-compatible with
+  ErrorResponse (error + code + details); details is typed as
+  PerformanceReloadFailedDetails.
+type: object
+additionalProperties: false
+required:
+  - error
+  - code
+  - details
+properties:
+  error:
+    type: string
+    description: >
+      Human-readable message naming only the settings this request changed.
+    example: "performance settings saved but the reload failed; the new tool-iteration limit applies after the next reload or restart"
+  code:
+    type: string
+    description: Machine-readable error code; always "performance_reload_failed".
+    example: "performance_reload_failed"
+  details:
+    $ref: './PerformanceReloadFailedDetails.yaml'
+    x-go-type: PerformanceReloadFailedDetails

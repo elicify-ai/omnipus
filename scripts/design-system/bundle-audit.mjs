@@ -5,7 +5,42 @@ import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 export const INITIAL_GZIP_BUDGET_BYTES = 25 * 1024
-export const TOTAL_RAW_BUDGET_BYTES = 250 * 1024
+// Founder decision D50 (2026-09-29): raised from 250 KiB to 320 KiB to cover the
+// Mail composer's Tiptap/ProseMirror engine (~432 kB raw), which is lazy-loaded
+// and only fetched when the user opens Mail — first-load gzip budget is
+// therefore unchanged. The first-load gzip ceiling remains 25 KiB.
+// Founder decision (2026-10-01): raised again, 320 KiB to 383 KiB, to absorb
+// +60,083 bytes of release/v0.1.1 drift unrelated to Mail that accumulated
+// against the frozen baseline (commit 92aeb4d5d, 2026-09-17) since D50 —
+// investigation tracked in #1135 rather than blocking Mail's ship on it.
+// Founder-authorised raise (2026-10-03, goal: land the Mail live-access feature):
+// raised again, 383 KiB to 422 KiB, to cover the Mail live-access feature's
+// measured +39,764 raw bytes (attachment handoff/viewer, cache-first view,
+// presence, paging, reply context), measured with bundle-measure.mjs as
+// fork-point ee936a385 26,520,425 -> head 26,560,189. The fork point was already
+// at +389,120 of the +392,192 budget (99.2%), leaving 3,072 bytes of headroom —
+// release drift, not this feature, had consumed the budget. 422 KiB leaves
+// ~3.2 KiB (8%) margin over the feature's addition, matching the 383-raise's
+// ~7.4% margin. ROOT CAUSE — the budget is sized against the frozen baseline
+// 92aeb4d5d (2026-09-17) instead of the current release tip — tracked in #1183.
+// Founder decision AB1 (2026-10-05, Q4=A): raised 422 KiB to 430 KiB to cover
+// the observed Lane A (+436,023 bytes) and sidebar-with-Lane-A (+437,825 bytes)
+// growth. The frozen baseline, provenance checks, and initial-gzip ceiling stay
+// unchanged; the unfinished panel still requires its own build and measurement.
+// founder-approved repo-wide allowance 2026-10-08/09 (482 KiB): covers Tasks panel + release-train drift + Wave-1
+// Founder-authorised raise (2026-10-15): raised 482 KiB to 586 KiB to cover L1 stage 1: Omnipus/WU-10 screens + generated contract code, measured +549,263. see #1183.
+// Founder decision Q4=A (2026-10-22): accept Mermaid 12 including its lazy
+// ELK engine (+1,462,909 raw bytes); release growth measured +1,955,396.
+// Raise the raw-growth allowance to 2 MiB; keep the frozen baseline and
+// the initial-gzip allowance unchanged.
+// Founder decision B1 = A (2026-11-03), #1183: re-baselined on 2026-11-03 to
+// the 3e2dc1ace release (release/v0.1.1 tip) instead of the frozen 92aeb4d5d
+// (2026-09-17). Growth is now measured against the current release, which is
+// the root cause #1183 names above; the 2 MiB raw-growth allowance and the
+// 25 KiB initial-gzip ceiling are unchanged. The CI baseline revision lives in
+// .github/workflows/pr.yml; the local verified baseline is
+// docs/internal/design/evidence/design-system-production-baseline-verified.json.
+export const TOTAL_RAW_BUDGET_BYTES = 2097152
 
 export function compareProductionBundles(baseline, candidate, provenance = null) {
   const initialGzipDelta = candidate.initial.gzipBytes - baseline.initial.gzipBytes

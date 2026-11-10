@@ -1,0 +1,40 @@
+[
+  {
+    "id": "Conformance_t0_ChatGoalE2E",
+    "kind": "playwright",
+    "check": "E2E — llm-conformance-chat",
+    "spec": "conformance-design-chat-e2e.spec.ts",
+    "project": "default",
+    "issue": 1431,
+    "added": "2026-10-23",
+    "reason": "Known claim-loop conformance failure; confirmed in integration run 39832315507. The test still runs and its unexpected/flaky result is reported, not passed."
+  },
+  {
+    "id": "Conformance_t1_StandaloneTaskE2E",
+    "kind": "playwright",
+    "check": "E2E — llm-conformance-exec",
+    "spec": "conformance-design-exec-e2e.spec.ts",
+    "project": "default",
+    "issue": 1431,
+    "added": "2026-10-23",
+    "reason": "Known claim-loop conformance failure; confirmed in integration run 39832315507. Other tests and setup failures in this shard remain blocking."
+  },
+  {
+    "id": "design-system-browser-install",
+    "kind": "infrastructure",
+    "checks": [
+      {
+        "check": "Design system contracts and browser evidence",
+        "step": "Run npx playwright install --with-deps chromium firefox webkit"
+      },
+      {
+        "check": "Design system browser checks — webkit",
+        "step": "Run npx playwright install --with-deps webkit",
+        "missing_evidence_step": "Upload browser evidence for webkit"
+      }
+    ],
+    "issue": 1426,
+    "added": "2026-10-23",
+    "reason": "Ubuntu apt mirror install hang; confirmed in integration run 39779260869 attempts 1 and 2. Requires the exact cancelled install step, apt-mirror log signature and job-timeout annotation. Dependent audit non-execution is explicitly reported, never claimed as coverage."
+  }
+]

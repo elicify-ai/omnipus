@@ -40,7 +40,6 @@ var founderRunsNames = []string{
 	"search_email",
 	"read_message",
 	"delegate",
-	"switch_agent",
 	"message_parent",
 	"list_agents",
 	"create_plan",
@@ -94,15 +93,11 @@ var founderRunsNames = []string{
 	"list_channels",
 	"list_mcp_servers",
 	"get_agent",
-	"get_agent_tools",
-	"read_agent_metadata",
 	"list_workspaces",
 	"get_workspace",
 	"create_workspace",
-	"list_tasks_in_workspace",
-	"create_task_in_workspace",
-	"update_task_in_workspace",
 	"list_skills",
+	"get_skill", // r15 §10: explicitly AutoRuns, not unknown-name fallback.
 }
 
 var founderAsksNames = []string{
@@ -130,22 +125,23 @@ var founderAsksNames = []string{
 	"delete_agent",
 	"update_workspace",
 	"delete_workspace",
-	"delete_task_in_workspace",
-	"create_skill",
 	"edit_skill",
-	"remove_skill",
 }
 
 // founderRunsIfArgsNames are the §3 "runs" entries that carry the J2
 // workspace path condition on their file argument (§3.8). browser_screenshot
 // is in the table as runs-if; its classifier is lane L2's.
+//
+// #920 (read-boundary-consistency-spec.md D3, FR-017, MV-5; ADR-092 D9
+// amendment of 2026-09-26): read_file and list_directory moved from RUNS-IF
+// to RUNS, so they are no longer on this list.
 var founderRunsIfArgsNames = []string{
-	"read_file", "list_directory", "write_file", "edit_file", "append_file", "send_file", "browser_screenshot",
+	"write_file", "edit_file", "append_file", "send_file", "browser_screenshot",
 }
 
 func TestAutoApprove_ClassTableMatchesFounderFile(t *testing.T) {
-	if len(founderRunsNames) != 81 || len(founderAsksNames) != 28 {
-		t.Fatalf("founder lists: %d runs, %d asks; spec §3.8 says 81 and 28", len(founderRunsNames), len(founderAsksNames))
+	if len(founderRunsNames) != 76 || len(founderAsksNames) != 25 {
+		t.Fatalf("founder lists: %d runs, %d asks; spec §3.8 says 81 and 28 minus the four retired *_in_workspace tools (DEL-23) and switch_agent (U8 DEL-07/DEL-21) = 77 and 27, minus get_agent_tools and read_agent_metadata (retired by r17 7.12) = 75 and 27, plus r15 §10 get_skill read and minus create_skill/remove_skill = 76 and 25", len(founderRunsNames), len(founderAsksNames))
 	}
 	runsIf := map[string]bool{}
 	for _, n := range founderRunsIfArgsNames {
@@ -166,12 +162,46 @@ func TestAutoApprove_ClassTableMatchesFounderFile(t *testing.T) {
 		}
 	}
 	table := AutoApproveClassTable()
-	// 109 catalog tools plus bash (§3.8 catalog total 110).
-	if len(table) != 110 {
-		t.Errorf("table has %d entries, want 110 (109 founder-file tools plus bash)", len(table))
+	// 109 founder-file tools plus bash (§3.8) plus create_email_draft
+	// (D45, 2026-09-26 -- catalog grew after the founder file was saved)
+	// plus the three mail attachment tools (ADR-20261001 F3, w4 spec US-3;
+	// founder Q4=A, 2026-10-02 -- catalog grew again; total 114). The
+	// attachment tools ride the ORDINARY classes, exactly as Q4=A rules:
+	// list_email_attachments and read_email_attachment are AutoRuns (like
+	// their read peers read_inbox/read_message), download_email_attachment
+	// is AutoRunsIfArgs -- the EXISTING workspace-path conditional class it
+	// shares with write_file/send_file, since its destination is always the
+	// authorized workspace's mail hierarchy. No attachment-specific
+	// mechanism; auto_approve_mail_test.go pins the peer-class equality.
+	// plus answer_request (founder gap 5, 2026-10-11): a thin front for
+	// send_message's reply_to form, so it rides send_message's class (AutoRuns)
+	// -- total 110. Plus the nine omnipus-system-agent §6.5 tools (WU-2,
+	// 2026-10-13; FR-021 puts five on the ask-list, the four reads run) --
+	// total 119.
+	// r17 (T8 area 9): get_agent_tools and read_agent_metadata are retired
+	// (-2) and the three reads get_task, get_plan and get_goal join as AutoRuns
+	// (+3, spec F-5). The founder-file lists above cover 101 of the table's
+	// entries; the other 19 are tools added after that file (bash, mail and
+	// secret tools, answer_request, update_plan, read_conversation and the
+	// three new reads). Skills r15 §10 then removes create_skill and
+	// remove_skill and adds get_skill (121 - 2 + 1 = 120). Channels FR-032
+	// adds set_channel_outbound (+1, AutoAsks): 120 + 1 = 121.
+	if len(table) != 121 {
+		t.Errorf("table has %d entries, want 121 (104 founder-file tools after DEL-23 removed the four *_in_workspace task tools and U8 removed switch_agent, plus bash plus create_email_draft -- D45, 2026-09-26 -- plus the three mail attachment tools, ADR-20261001 F3 / w4 US-3, founder Q4=A, 2026-10-02 -- plus answer_request, founder gap 5, 2026-10-11 -- plus the nine omnipus-system-agent §6.5 tools, 2026-10-13; r17 and r15 §10 changes as above; +1 set_channel_outbound, channels FR-032)", len(table))
 	}
 	if got := table["bash"]; got != AutoShellMode {
 		t.Errorf("bash class = %s, want shell_mode (bash keeps its own mechanism, §3.7)", got)
+	}
+	// answer_request (founder gap 5, 2026-10-11) rides send_message's class
+	// because it is a thin front for send_message's reply_to form. The COUNT
+	// above cannot catch a wrong class: any other class on this entry keeps the
+	// table at 110 while changing whether the tool auto-runs, so the class is
+	// pinned by VALUE and against its peer.
+	if got := table["answer_request"]; got != AutoRuns {
+		t.Errorf("answer_request class = %s, want runs — it is a thin front for send_message's reply_to form (founder gap 5)", got)
+	}
+	if got, peer := table["answer_request"], table["send_message"]; got != peer {
+		t.Errorf("answer_request class = %s but send_message class = %s — the ruling is that answer_request RIDES send_message's class", got, peer)
 	}
 	for name := range table {
 		if strings.HasPrefix(name, "mcp_") {
@@ -373,38 +403,47 @@ func TestAutoApprove_T1_WriteFile(t *testing.T) {
 	}
 }
 
-// T2 (§9): read_file inside the work folder or a mount runs; /etc/hosts and
-// any other path outside both asks (J2); a secret-set path asks, and the
-// tool then refuses it even once a human approves.
+// T2, rewritten for #920 (read-boundary-consistency-spec.md D3, FR-017,
+// FR-018; ADR-092 D9 amendment): read_file is class "runs" — it runs under
+// Auto inside the work folder, in a mount, outside both and on /etc/hosts
+// alike, with no pinned paths. A secret-set path is still refused by the
+// tool itself (DS-2 row 8). The old J2 "outside asks" rows are superseded.
 func TestAutoApprove_T2_ReadFile(t *testing.T) {
 	f := newAutoFixture(t)
 	tool := NewReadFileTool(f.work, true, 0)
-	r := fspolicy.PathGrantAccessRead
 	mustWrite(t, filepath.Join(f.work, "in.txt"), "inside")
 	mustWrite(t, filepath.Join(f.mount, "m.csv"), "a,b")
 	mustWrite(t, filepath.Join(f.outside, "o.txt"), "outside")
 	secret := filepath.Join(f.home, "credentials.json")
 	mustWrite(t, secret, "SECRET-CREDENTIALS")
 
-	requireRuns(t, ClassifyAutoApprove(f.ctx, "read_file", tool, map[string]any{"path": "in.txt"}),
-		filepath.Join(realDir(t, f.work), "in.txt"), r)
-	requireRuns(t, ClassifyAutoApprove(f.ctx, "read_file", tool, map[string]any{"path": "extra/m.csv"}),
-		filepath.Join(realDir(t, f.mount), "m.csv"), r)
-	requireAsks(t, ClassifyAutoApprove(f.ctx, "read_file", tool, map[string]any{"path": filepath.Join(f.outside, "o.txt")}))
+	paths := []string{"in.txt", "extra/m.csv", filepath.Join(f.outside, "o.txt"), secret}
 	if _, err := os.Stat("/etc/hosts"); err == nil {
-		requireAsks(t, ClassifyAutoApprove(f.ctx, "read_file", tool, map[string]any{"path": "/etc/hosts"}))
+		paths = append(paths, "/etc/hosts")
 	}
-	requireAsks(t, ClassifyAutoApprove(f.ctx, "read_file", tool, map[string]any{"path": secret}))
+	for _, p := range paths {
+		v := ClassifyAutoApprove(f.ctx, "read_file", tool, map[string]any{"path": p})
+		if !v.Run || v.Class != AutoVerdictClassRuns || len(v.Paths) != 0 {
+			t.Errorf("read_file %q: verdict %+v, want Run=true Class=%q and no pinned paths (D3)", p, v, AutoVerdictClassRuns)
+		}
+	}
 
-	// Human-approved (no pin): the secret is refused by the tool itself.
-	res := tool.Execute(f.ctx, map[string]any{"path": secret})
-	if !res.IsError || strings.Contains(res.ForLLM, "SECRET-CREDENTIALS") {
-		t.Fatalf("secret read must be refused, got IsError=%v: %s", res.IsError, res.ForLLM)
+	// Auto-run (pinned) and human-approved alike, the secret is refused by the tool.
+	pinned := WithAutoApproved(f.ctx, AutoPinForVerdict("read_file",
+		ClassifyAutoApprove(f.ctx, "read_file", tool, map[string]any{"path": secret})))
+	for _, ctx := range []context.Context{f.ctx, pinned} {
+		res := tool.Execute(ctx, map[string]any{"path": secret})
+		if !res.IsError || strings.Contains(res.ForLLM, "SECRET-CREDENTIALS") {
+			t.Fatalf("secret read must be refused, got IsError=%v: %s", res.IsError, res.ForLLM)
+		}
 	}
-	// Human-approved outside read still works: J2 narrows Auto, not the tool.
-	if res := tool.Execute(f.ctx, map[string]any{"path": filepath.Join(f.outside, "o.txt")}); res.IsError ||
+	// An Auto-run read outside the workspace returns the content (D8: the
+	// runs-class pin is not re-checked against the workspace rule).
+	outsidePinned := WithAutoApproved(f.ctx, AutoPinForVerdict("read_file",
+		ClassifyAutoApprove(f.ctx, "read_file", tool, map[string]any{"path": filepath.Join(f.outside, "o.txt")})))
+	if res := tool.Execute(outsidePinned, map[string]any{"path": filepath.Join(f.outside, "o.txt")}); res.IsError ||
 		!strings.Contains(res.ForLLM, "outside") {
-		t.Fatalf("an approved read outside the workspace must still succeed: %s", res.ForLLM)
+		t.Fatalf("an Auto-run read outside the workspace must succeed (D3, D8): %s", res.ForLLM)
 	}
 }
 
@@ -424,27 +463,12 @@ func swapToSymlink(t *testing.T, path, target string) {
 // a symlink to a file outside the workspace; the pinned tool refuses and
 // nothing is read or written.
 func TestAutoApprove_T6_PinRecheckRefusesSwappedPath(t *testing.T) {
-	t.Run("read_file", func(t *testing.T) {
-		f := newAutoFixture(t)
-		tool := NewReadFileTool(f.work, true, 0)
-		a := filepath.Join(f.work, "a.md")
-		mustWrite(t, a, "inside")
-		secret := filepath.Join(f.outside, "secret.txt")
-		mustWrite(t, secret, "OUTSIDE-SECRET")
-
-		v := ClassifyAutoApprove(f.ctx, "read_file", tool, map[string]any{"path": "a.md"})
-		requireRuns(t, v, filepath.Join(realDir(t, f.work), "a.md"), fspolicy.PathGrantAccessRead)
-		swapToSymlink(t, a, secret)
-
-		pinned := WithAutoApproved(f.ctx, AutoPinForVerdict("read_file", v))
-		res := tool.Execute(pinned, map[string]any{"path": "a.md"})
-		if !res.IsError || strings.Contains(res.ForLLM, "OUTSIDE-SECRET") {
-			t.Fatalf("pinned read of a swapped symlink must be refused, got IsError=%v: %s", res.IsError, res.ForLLM)
-		}
-		if !errors.Is(res.Err, ErrAutoPinMoved) {
-			t.Errorf("refusal must come from the pin re-check, got err %v", res.Err)
-		}
-	})
+	// #920 (read-boundary-consistency-spec.md D3, FR-018): the read_file
+	// subtest is gone. read_file is class "runs" now, so its Auto decision
+	// carries no path and is not re-checked (D8); a read that follows a
+	// symlink outside the workspace is an ordinary permitted read (D1). The
+	// pin re-check still protects the write tools below and send_file /
+	// browser_screenshot.
 	t.Run("write_file", func(t *testing.T) {
 		f := newAutoFixture(t)
 		// Writes have two layers: ResolvePath's own write confinement already
@@ -548,11 +572,16 @@ func TestAutoApprove_OtherFileToolClassifiers(t *testing.T) {
 	workReal := realDir(t, f.work)
 	outsideFile := filepath.Join(f.outside, "e.md")
 
+	// #920 (D3, FR-017): list_directory is class "runs" — it runs under
+	// Auto for the work folder, a mount and a folder outside both, with no
+	// pinned paths.
 	list := NewListDirTool(f.work, true)
-	requireRuns(t, ClassifyAutoApprove(f.ctx, "list_directory", list, map[string]any{}), workReal, fspolicy.PathGrantAccessRead)
-	requireRuns(t, ClassifyAutoApprove(f.ctx, "list_directory", list, map[string]any{"path": "extra"}),
-		realDir(t, f.mount), fspolicy.PathGrantAccessRead)
-	requireAsks(t, ClassifyAutoApprove(f.ctx, "list_directory", list, map[string]any{"path": f.outside}))
+	for _, args := range []map[string]any{{}, {"path": "extra"}, {"path": f.outside}} {
+		v := ClassifyAutoApprove(f.ctx, "list_directory", list, args)
+		if !v.Run || v.Class != AutoVerdictClassRuns || len(v.Paths) != 0 {
+			t.Errorf("list_directory %v: verdict %+v, want Run=true Class=%q and no pinned paths", args, v, AutoVerdictClassRuns)
+		}
+	}
 
 	edit := NewEditFileTool(f.work, true)
 	requireRuns(t, ClassifyAutoApprove(f.ctx, "edit_file", edit, map[string]any{"path": "e.md"}), filepath.Join(workReal, "e.md"), rw)

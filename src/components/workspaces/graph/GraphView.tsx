@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   MiniMap,
-  Panel,
+  useNodesInitialized,
   ReactFlow,
   ReactFlowProvider,
   reconnectEdge,
@@ -17,12 +17,12 @@ import {
   type OnReconnect,
 } from '@xyflow/react'
 import { GraphIcon, Info } from '@phosphor-icons/react'
-import { useLibraryTabIndex } from '@/hooks/useLibraryTabIndex'
-import type { Task } from '@/lib/api'
+import type { Task, Plan } from '@/lib/api'
+import { logError } from '@/lib/telemetry'
 import { ZoomPill, useZoomableViewKeyboard } from '@/components/ui/zoomable-view'
+import { ErrorState } from '@/components/ui/error-state'
 import {
   contentExceedsFrame,
-  useZoomableCanvasOpeningFit,
   useZoomableCanvasPill,
   zoomableCanvasFlowProps,
 } from '@/lib/zoomable-view-canvas'
@@ -30,6 +30,7 @@ import { TaskNode } from './TaskNode'
 import { DependencyEdge } from './DependencyEdge'
 import {
   buildTaskGraph,
+  NODE_HEIGHT,
   statusVisual,
   type AgentLike,
   type TaskGraphNode,
@@ -41,6 +42,7 @@ import '../reactflow-theme.css'
 // nodeTypes/edgeTypes object every render.
 const NODE_TYPES: NodeTypes = { task: TaskNode }
 const EDGE_TYPES: EdgeTypes = { dependency: DependencyEdge }
+const EMPTY_PLANS: Plan[] = []
 
 // Minimap node colour = the task's status colour, so the overview map reads
 // like the canvas at a glance.
@@ -77,6 +79,7 @@ const GRAPH_FIT_VIEW_OPTIONS = { padding: 0.25, maxZoom: 1.1, minZoom: 0.8 }
 interface GraphViewProps {
   tasks: Task[]
   agents: AgentLike[]
+  plans?: Plan[]
   /** Opens the task detail (slide-over) — mirrors the Board's onTaskClick. */
   onTaskClick: (task: Task) => void
   /** Id of the currently-open task, so its node renders selected. */
@@ -138,6 +141,7 @@ interface GraphViewProps {
 function GraphViewInner({
   tasks,
   agents,
+  plans = EMPTY_PLANS,
   onTaskClick,
   selectedTaskId,
   planId = null,
@@ -146,9 +150,10 @@ function GraphViewInner({
   onRemoveDependency,
   onReconnectDependency,
 }: GraphViewProps) {
+  const [nodeHeights, setNodeHeights] = useState<ReadonlyMap<string, number>>(() => new Map())
   const layout = useMemo(
-    () => buildTaskGraph(tasks, agents, planId != null ? { planId } : { collapseOrphans }),
-    [tasks, agents, planId, collapseOrphans],
+    () => buildTaskGraph(tasks, agents, planId != null ? { planId } : { collapseOrphans }, nodeHeights),
+    [tasks, agents, planId, collapseOrphans, nodeHeights],
   )
 
   // `onTaskClick` is commonly passed as a fresh inline arrow function by the
@@ -201,9 +206,9 @@ function GraphViewInner({
         // key would also drop a selected node from the canvas (local-only, then
         // restored on re-seed — a confusing flicker).
         deletable: false,
-        data: { ...n.data, onOpen: stableOnOpen },
+        data: { ...n.data, onOpen: stableOnOpen, plans, agents },
       })),
-    [layout.nodes, stableOnOpen],
+    [layout.nodes, stableOnOpen, plans, agents],
   )
 
   // Inject the (stable) remove callback into each edge's data and switch them
@@ -224,7 +229,46 @@ function GraphViewInner({
 
   const [nodes, setNodes, onNodesChange] = useNodesState<TaskGraphNode>(nodesWithOpen)
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(edgesWithData)
-  const { fitView, getNodesBounds } = useReactFlow<TaskGraphNode>()
+  const { fitView, getNodesBounds, getNodes, getViewport, setViewport } = useReactFlow<TaskGraphNode>()
+  const nodesInitialized = useNodesInitialized()
+  const framingGeneration = useRef(0)
+  const [framingFailed, setFramingFailed] = useState(false)
+  const frameAtTop = useCallback(() => {
+    const generation = ++framingGeneration.current
+    setFramingFailed(false)
+    const alignAtTop = () => {
+      const bounds = getNodesBounds(getNodes())
+      const { zoom } = getViewport()
+      // --space-3 = 16px: opening at the top/left keeps the first card whole,
+      // even when the legibility floor makes the DAG larger than the frame.
+      return setViewport({ zoom, x: 16 - bounds.x * zoom, y: 16 - bounds.y * zoom })
+    }
+    const frame = async () => {
+      let framed = false
+      try {
+        const fitted = await fitView(GRAPH_FIT_VIEW_OPTIONS)
+        if (generation !== framingGeneration.current) return
+        if (fitted) framed = await alignAtTop()
+      } catch (err) {
+        logError({ event: 'graphFrameFailed', phase: 'fit', message: String(err) })
+        framed = false
+      }
+      if (generation !== framingGeneration.current) return
+      if (!framed) {
+        // One independent fallback bypasses fitView and keeps the usable zoom.
+        // Never loop or reset the canvas after failure; expose Retry instead.
+        try {
+          framed = await alignAtTop()
+        } catch (err) {
+          logError({ event: 'graphFrameFailed', phase: 'fallback', message: String(err) })
+          framed = false
+        }
+      }
+      if (generation === framingGeneration.current) setFramingFailed(!framed)
+    }
+    void frame()
+  }, [fitView, getNodesBounds, getNodes, getViewport, setViewport])
+  useEffect(() => () => { framingGeneration.current++ }, [])
 
   // Re-seed React Flow state whenever the computed layout changes (task added /
   // status changed / agent resolved / dependency edited). React Flow owns
@@ -265,8 +309,8 @@ function GraphViewInner({
     const prevKey = prevNodeIdsKeyRef.current
     prevNodeIdsKeyRef.current = nodeIdsKey
     if (prevKey === undefined || prevKey === nodeIdsKey) return
-    void fitView(GRAPH_FIT_VIEW_OPTIONS)
-  }, [nodeIdsKey, fitView])
+    frameAtTop()
+  }, [nodeIdsKey, frameAtTop])
 
   // Reflect external selection (the open slide-over) onto the nodes.
   useEffect(() => {
@@ -346,13 +390,36 @@ function GraphViewInner({
     [onReconnectDependency, setEdges],
   )
 
-  // The zoom pill's own buttons (ZoomPill, catalogued Button/IconButton) stamp
-  // an explicit tabIndex in their own JSX — useLibraryTabIndex is no longer
-  // needed for them. It stays wired for the one remaining library-rendered
-  // interactive element inside this canvas: React Flow's own attribution
-  // `<a href>` link (WebKit Tab reachability; see useLibraryTabIndex).
   const canvasRef = useRef<HTMLDivElement>(null)
-  useLibraryTabIndex(canvasRef)
+  // Fully wrapped titles change node heights. Feed real border-box geometry
+  // back to dagre; never guess line counts or let long cards cover siblings.
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const elements = [...canvas.querySelectorAll<HTMLElement>('.react-flow__node[data-id]')]
+    const measure = () => {
+      const zoom = getViewport().zoom
+      if (!(zoom > 0)) return
+      setNodeHeights((previous) => {
+        let next: Map<string, number> | undefined
+        for (const element of elements) {
+          const id = element.dataset.id
+          const height = Math.ceil(element.getBoundingClientRect().height / zoom)
+          if (!id || !Number.isFinite(height) || height <= 0) continue
+          const bounded = Math.max(NODE_HEIGHT, height)
+          if (Math.abs((previous.get(id) ?? NODE_HEIGHT) - bounded) < 1) continue
+          next ??= new Map(previous)
+          next.set(id, bounded)
+        }
+        return next ?? previous
+      })
+    }
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(measure)
+    for (const element of elements) observer.observe(element)
+    return () => observer.disconnect()
+  }, [nodeIdsKey, nodesInitialized, getViewport])
 
   // ZoomableView canvas preset (D18, docs/internal/design/components/zoomable-view.md):
   // wires the shared ZoomPill to this live React Flow instance — zoom in/out,
@@ -364,15 +431,15 @@ function GraphViewInner({
   // not just the pill's own "Fit" action.
   const pill = useZoomableCanvasPill({ fitViewOptions: GRAPH_FIT_VIEW_OPTIONS })
 
-  // Drives the OPENING fit imperatively instead of the declarative `fitView`
-  // boolean prop (removed below), which read React Flow's STATIC minZoom
-  // before any per-graph measurement was possible. Uses GraphView's own
-  // tuned options UNMODIFIED — including the 0.8 legibility floor (S3 UAT
-  // fix #26) — so a huge graph opens at the smallest scale that keeps
-  // labels readable, anchored at the start of the content, per D18's
-  // "Opening size" rule; it is the explicit "Fit" action (`pill.onFit`)
-  // that reaches the TRUE fit below that floor, not the opening frame.
-  useZoomableCanvasOpeningFit(GRAPH_FIT_VIEW_OPTIONS)
+  // Wait for real node dimensions before the one opening frame. Unlike a
+  // centered fit at the legibility floor, top anchoring cannot crop the first
+  // row off the screen. Manual Fit/zoom still use the shared canvas contract.
+  const openingFramed = useRef(false)
+  useEffect(() => {
+    if (!nodesInitialized || openingFramed.current) return
+    openingFramed.current = true
+    frameAtTop()
+  }, [nodesInitialized, frameAtTop])
 
   // D18 keyboard shortcuts ("+ − 0 1 while the view is focused"). Guarded
   // against an editable target so a shortcut key typed into some future
@@ -446,7 +513,10 @@ function GraphViewInner({
   }
 
   return (
-    <div ref={canvasRef} className="absolute inset-0" onKeyDown={handleCanvasKeyDown}>
+    <div className="absolute inset-0 flex flex-col" onKeyDown={handleCanvasKeyDown}>
+      {layout.unlinked.length > 0 && <GraphUnlinkedNotice count={layout.unlinked.length} />}
+      {framingFailed && <ErrorState message="Couldn't open at the top" onRetry={frameAtTop} className="shrink-0 flex-row flex-wrap gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-1)]" />}
+      <div ref={canvasRef} className="relative min-h-0 min-w-0 flex-1" data-testid="task-graph-viewport">
       <ReactFlow
         className="sovereign-flow"
         nodes={nodes}
@@ -463,16 +533,13 @@ function GraphViewInner({
         isValidConnection={isValidConnection}
         {...zoomableCanvasFlowProps}
         minZoom={pill.min}
-        proOptions={{ hideAttribution: false }}
+        proOptions={{ hideAttribution: true }}
         nodesConnectable={!!onConnectDependency}
         nodesDraggable
         deleteKeyCode={onRemoveDependency ? ['Backspace', 'Delete'] : null}
         elementsSelectable
         defaultEdgeOptions={{ type: 'smoothstep' }}
       >
-        <Panel position="bottom-left">
-          <ZoomPill {...pill} aria-label="Zoom graph" />
-        </Panel>
         {showMinimap && (
           <MiniMap
             pannable
@@ -483,7 +550,10 @@ function GraphViewInner({
           />
         )}
       </ReactFlow>
-      {layout.unlinked.length > 0 && <GraphUnlinkedNotice count={layout.unlinked.length} />}
+      </div>
+      <div className="flex shrink-0 items-center border-t border-[var(--color-border)]/25 bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-1)]">
+        <ZoomPill {...pill} aria-label="Zoom graph" />
+      </div>
     </div>
   )
 }
@@ -501,7 +571,7 @@ function GraphUnlinkedNotice({ count }: { count: number }) {
   return (
     <div
       data-testid="graph-unlinked-notice"
-      className="pointer-events-none absolute left-1/2 top-3 z-10 -translate-x-1/2"
+      className="shrink-0 px-[var(--space-2-5)] py-[var(--space-1)]"
     >
       <div className="pointer-events-auto flex items-center gap-[var(--space-1)] rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)]/95 px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] shadow-[0_2px_8px_color-mix(in_srgb,var(--color-primary)_35%,transparent)] backdrop-blur">
         <Info size={12} weight="fill" className="shrink-0 text-[var(--color-accent)]" />

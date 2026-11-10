@@ -19,6 +19,7 @@ import { render, screen, fireEvent } from '@testing-library/react'
 import { act } from 'react'
 import type { BrowserLiveWsCallbacks } from '@/lib/browserLiveWs'
 import { useChatStore, type SessionChatState } from '@/store/chat'
+import { emptyHistoryFixture } from '../../../tests/chat-history-paging/empty-history'
 
 const { mockSendInput, callbacksRef } = vi.hoisted(() => ({
   mockSendInput: vi.fn<(input: unknown) => boolean>(() => true),
@@ -101,6 +102,7 @@ afterEach(() => {
  * mirrors BrowserLiveView.takeTheWheel.test.tsx's identical helper. */
 function setAgentWorking(sessionId: string, isStreaming: boolean) {
   const bucket: SessionChatState = {
+    ...emptyHistoryFixture(),
     messagesById: {},
     messageOrder: [],
     trimmedCount: 0,

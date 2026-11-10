@@ -187,7 +187,7 @@ func TestBashRunInBackground_CompletionTriggersNewTurn(t *testing.T) {
 	// AND because "cli" is an internal channel that processSystemMessage
 	// silently skips (pkg/constants/channels.go) — using it here would make
 	// the follow-up-turn assertion below vacuously true.
-	firstTurnResp, err := al.ProcessDirectWithChannel(
+	firstTurnResp, err := al.processDirectWithChannelPrimaryForTest(
 		ctx,
 		"please run a background command",
 		sessionKey,
@@ -262,7 +262,7 @@ func TestBashRunInBackground_KillReportsTermination(t *testing.T) {
 
 	const sessionKey = "test-session-bash-async-kill"
 	ctx := context.Background()
-	firstTurnResp, err := al.ProcessDirectWithChannel(
+	firstTurnResp, err := al.processDirectWithChannelPrimaryForTest(
 		ctx,
 		"please start a long background job",
 		sessionKey,
@@ -363,7 +363,7 @@ func TestBashRunInBackground_KillOwnershipGate_EndToEnd(t *testing.T) {
 	al, _, wrapper := newBashAsyncTestLoop(t, provider)
 
 	ctx := context.Background()
-	firstTurnResp, err := al.ProcessDirectWithChannel(
+	firstTurnResp, err := al.processDirectWithChannelPrimaryForTest(
 		ctx,
 		"please start a long background job",
 		"test-session-bash-ownership-gate",

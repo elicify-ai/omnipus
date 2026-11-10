@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor, act, within } from '@testing-librar
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AgentProfile } from './AgentProfile'
 import type { Agent, Skill } from '@/lib/api'
+import { expectEditableIdentityChoices, expectLockedFigureAndRole, expectLockedIdentityColours } from '@/test/agentIdentityAssertions'
 
 // ResizeObserver is required by cmdk (used inside the ModelSelector popover);
 // jsdom does not implement it. Polyfill with a noop for the tests that open
@@ -70,38 +71,10 @@ import type { Workspace } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { ApiError } from '@/lib/api-error'
 
-const editable = (...names: string[]) => names.map((name) => ({ name, editable: true }))
-const COMMON_EDITABLE_FIELDS = editable(
-  'name', 'description', 'color', 'icon', 'default', 'model', 'provider',
-  'fallback_models', 'model_params', 'soul', 'memory_enabled', 'voice',
-  'max_tool_iterations', 'context_window_override', 'skills',
-  'tool_policy_changes', 'executor', 'auto_approve_disabled',
-)
-const BUILTIN_EDITABLE_FIELDS = COMMON_EDITABLE_FIELDS.map((field) =>
-  ['name', 'description', 'color', 'icon', 'soul', 'executor'].includes(field.name)
-    ? { ...field, editable: false, reason: 'Built-in identity and runtime are fixed.' }
-    : field,
-)
-
-const mockCoreAgent: Agent = {
-  revision: '0'.repeat(64),
-  id: 'general-assistant',
-  name: 'General Assistant',
-  type: 'core',
-  locked: false,
-  needs_model: false,
-  status: 'active',
-  model: 'claude-sonnet-4-6',
-  description: 'General purpose assistant',
-  soul: '',
-  timeout_seconds: 60,
-  max_tool_iterations: 20,
-  rate_limits: { use_global_defaults: true },
-  stats: { total_sessions: 5, total_tokens: 12000, total_cost: 0.05 },
-  // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
-  memory_enabled: true,
-  editable_fields: COMMON_EDITABLE_FIELDS,
-}
+// H6 R2 (file-budget split 2026-10-14): the shared fixtures moved to
+// agentProfileTestFixtures.ts so AgentProfile.providerPair.test.tsx can
+// reuse them without duplicating them.
+import { COMMON_EDITABLE_FIELDS, BUILTIN_EDITABLE_FIELDS, mockCoreAgent } from './agentProfileTestFixtures'
 
 const mockLockedCoreAgent: Agent = {
   revision: '0'.repeat(64),
@@ -114,10 +87,13 @@ const mockLockedCoreAgent: Agent = {
   model: 'claude-opus-4-6',
   description: 'Core agent with compiled prompt — identity is read-only',
   soul: '',
-  timeout_seconds: 60,
   max_tool_iterations: 20,
+  max_tool_iterations_source: 'global',
+  max_tool_iterations_override_ignored: false,
   // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
   memory_enabled: true,
+  figure: 'Omnipus',
+  role: 'general',
   editable_fields: BUILTIN_EDITABLE_FIELDS,
 }
 
@@ -176,9 +152,12 @@ const mockJudgeAgent: Agent = {
   model: 'claude-opus-4-6',
   description: 'Impartial acceptance-criteria verifier',
   soul: 'You are the Judge — an impartial acceptance-criteria evaluator.',
-  timeout_seconds: 60,
   max_tool_iterations: 20,
+  max_tool_iterations_source: 'global',
+  max_tool_iterations_override_ignored: false,
   memory_enabled: false,
+  figure: 'Omnipus',
+  role: 'general',
   editable_fields: COMMON_EDITABLE_FIELDS.map((field) => ({
     ...field,
     editable: field.name === 'soul' || ['model', 'provider', 'fallback_models', 'model_params', 'max_tool_iterations', 'context_window_override'].includes(field.name),
@@ -639,7 +618,7 @@ describe('AgentProfile — Skills picker (US-E6)', () => {
 
 describe('AgentProfile — ordinary built-in skill assignments', () => {
   const mockSkills: Skill[] = [
-    { revision: '0'.repeat(64), id: 'web-research', name: 'Web Research', version: '1.0.0', verified: true, status: 'active' },
+    { has_local_changes: false, revision: '0'.repeat(64), id: 'web-research', name: 'Web Research', version: '1.0.0', verified: true, status: 'active' },
   ]
 
   beforeEach(() => {
@@ -862,9 +841,8 @@ describe('AgentProfile — tier-branched form (worker vs base)', () => {
     // No heartbeat affordances for workers
     expect(screen.queryByText(/Enable heartbeat/i)).toBeNull()
     expect(screen.queryByText(/HEARTBEAT\.md/i)).toBeNull()
-    // No "Set as default" / default-★ control in the profile for workers
-    // (the default-★ lives on AgentCard; the profile must never surface it
-    // for workers — they are never the default per the locked concept).
+    // No "Set as default" / default-★ control anywhere — the default-agent
+    // feature is removed (omnipus-system-agent K11/K12, bundle B1).
     expect(screen.queryByRole('button', { name: /set as default/i })).toBeNull()
   })
 
@@ -1179,9 +1157,9 @@ describe('AgentProfile — provider-aware fallback editor', () => {
     // Connected providers are populated as options.
     expect(screen.getAllByTestId('fallback-provider-option-openrouter-z-ai/glm-5-turbo').length).toBeGreaterThanOrEqual(1)
     expect(screen.getAllByTestId('fallback-provider-option-anthropic-z-ai/glm-5-turbo').length).toBeGreaterThanOrEqual(1)
-    // An "empty" option exists so the user can clear the provider
-    // (which surfaces the persistent warning — I11).
-    expect(screen.getAllByTestId('fallback-provider-option-empty-z-ai/glm-5-turbo').length).toBeGreaterThanOrEqual(1)
+    // #1340 (founder: provider and model always come in pairs): there is
+    // NO empty option — a fallback's provider cannot be cleared.
+    expect(screen.queryAllByTestId('fallback-provider-option-empty-z-ai/glm-5-turbo')).toHaveLength(0)
   })
 
   it('changing the provider combobox persists the provider ID (not display name) on save (I9)', async () => {
@@ -1278,7 +1256,7 @@ describe('AgentProfile — provider-aware fallback editor', () => {
   // W6-C2 / I11: persistent indicator when the chip's provider field
   // is empty. The model is not in any connected provider, so the
   // fallback would silently fail at runtime.
-  it('shows the persistent warning indicator + aria-label when provider is missing (I11)', async () => {
+  it('shows the persistent incomplete warning when provider is missing (I11, #1340 wording)', async () => {
     // Hydrate with an entry whose provider was empty on the wire (e.g.
     // a free-text model that was never connected). After hydration the
     // chip's `provider` field stays empty because `modelToProvider`
@@ -1290,22 +1268,19 @@ describe('AgentProfile — provider-aware fallback editor', () => {
         { model: 'some-unconnected-slug', provider: '' },
       ],
     })
-    // The unconnected chip has the persistent warning indicator.
+    // The provider-less chip has the persistent warning, now as visible
+    // text naming the way out (#1340: a fallback is always a pair).
     const warning = screen.getAllByTestId('fallback-chip-warning-some-unconnected-slug')[0]
     expect(warning).toBeInTheDocument()
-    expect(warning.getAttribute('aria-label')).toBe(
-      'Provider not connected — fallback will not be used at runtime',
-    )
-    expect(warning.getAttribute('title')).toBe(
-      'Provider not connected — fallback will not be used at runtime',
-    )
+    expect(warning).toHaveTextContent('Incomplete — choose a provider or remove it')
     // The connected chip does NOT show the indicator (regression guard).
     expect(screen.queryByTestId('fallback-chip-warning-z-ai/glm-5-turbo')).toBeNull()
   })
 
-  it('clearing the provider combobox flips the chip into the warning state (I11)', async () => {
-    // Sanity: an explicit user action — picking "—" on the provider
-    // select — must trigger the warning indicator on that chip.
+  it('a fallback provider cannot be cleared: an empty pick keeps the pair and shows no warning (#1340)', async () => {
+    // #1340 (founder: provider and model always come in pairs): the "—"
+    // choice is gone, and an empty value is ignored, so a complete pair
+    // can never be turned into a model alone.
     await openFallbackEditor({
       ...mockCoreAgent,
       fallback_models: [
@@ -1316,9 +1291,8 @@ describe('AgentProfile — provider-aware fallback editor', () => {
     fireEvent.change(screen.getAllByTestId('fallback-provider-select-z-ai/glm-5-turbo')[0], {
       target: { value: '' },
     })
-    await waitFor(() => {
-      expect(screen.getAllByTestId('fallback-chip-warning-z-ai/glm-5-turbo').length).toBeGreaterThanOrEqual(1)
-    })
+    expect(screen.queryByTestId('fallback-chip-warning-z-ai/glm-5-turbo')).toBeNull()
+    expect((screen.getAllByTestId('fallback-provider-select-z-ai/glm-5-turbo')[0] as HTMLSelectElement).value).toBe('openrouter')
   })
 })
 
@@ -2748,64 +2722,73 @@ describe('AgentProfile — max tool calls per turn (zero-clobber P0 fix)', () =>
   // persisted it (live install ended up with five zeroed agents + a zeroed
   // global default). The draft pattern must never autosave an empty/invalid
   // value, and blur restores the last committed number.
-  it('clearing the field to type never persists 0; a valid value persists', async () => {
-    vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, max_tool_iterations: 200 })
-    renderProfile(mockCoreAgent.id)
-    await screen.findByText(mockCoreAgent.name)
-    if (!screen.queryByTestId('agent-max-tool-calls-input')) {
+  // #904 re-derivation: the input now holds the agent's OWN value
+  // (max_tool_iterations_override), not the effective value — spec "UI
+  // Screens and States" (profile row) + FR-003. The zero-clobber guard stays:
+  // no save may carry 0 (FR-006, range 1–1000). Fixtures use an own value of
+  // 50 under global 200 (Resolver dataset row 2) instead of the old "200".
+  const ownFifty = {
+    ...mockCoreAgent,
+    max_tool_iterations: 50,
+    max_tool_iterations_source: 'agent' as const,
+    max_tool_iterations_override: 50,
+    max_tool_iterations_override_ignored: false,
+  }
+  async function openLimitInput(agent: Agent) {
+    vi.mocked(fetchAgent).mockResolvedValue(agent)
+    renderProfile(agent.id)
+    await screen.findByText(agent.name)
+    if (!screen.queryByLabelText(/^Max tool calls per turn/)) {
       switchTab('tab-advanced')
     }
-    const input = (await screen.findByTestId('agent-max-tool-calls-input')) as HTMLInputElement
-    expect(input.value).toBe('200')
+    return (await screen.findByLabelText(/^Max tool calls per turn/)) as HTMLInputElement
+  }
+
+  it('clearing the field to type never persists 0; a valid value persists', async () => {
+    const input = await openLimitInput(ownFifty)
+    expect(input.value).toBe('50') // the own value (was: effective 200 — pre-#904)
 
     vi.mocked(updateAgent).mockClear()
-
-    // Clear the field (the first thing a user does before typing a new value).
     fireEvent.change(input, { target: { value: '' } })
     expect(input.value).toBe('')
+    fireEvent.change(input, { target: { value: '40' } })
 
-    // Type the new value.
-    fireEvent.change(input, { target: { value: '350' } })
-
-    await waitFor(
-      () => {
-        expect(updateAgent).toHaveBeenCalled()
-      },
-      { timeout: 6000 },
-    )
-    // NO call may ever carry 0 — and the final persisted value is 350.
+    await waitFor(() => expect(updateAgent).toHaveBeenCalled(), { timeout: 6000 })
     for (const call of vi.mocked(updateAgent).mock.calls) {
       expect(call[1].max_tool_iterations).not.toBe(0)
     }
-    const last = vi.mocked(updateAgent).mock.calls.at(-1)!
-    expect(last[1].max_tool_iterations).toBe(350)
+    expect(vi.mocked(updateAgent).mock.calls.at(-1)![1].max_tool_iterations).toBe(40)
   })
 
-  it('blur with an empty draft restores the last committed value', async () => {
-    vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, max_tool_iterations: 200 })
-    renderProfile(mockCoreAgent.id)
-    await screen.findByText(mockCoreAgent.name)
-    if (!screen.queryByTestId('agent-max-tool-calls-input')) {
-      switchTab('tab-advanced')
-    }
-    const input = (await screen.findByTestId('agent-max-tool-calls-input')) as HTMLInputElement
-
+  it('blur with an empty draft restores the own value and saves nothing (clearing is only "Use global limit")', async () => {
+    // #904 FR-008/FR-017: an own value is cleared ONLY by "Use global limit"
+    // (explicit null); an abandoned empty draft is not a reset, so it must
+    // neither persist 0 nor silently send null.
+    const input = await openLimitInput(ownFifty)
+    vi.mocked(updateAgent).mockClear()
     fireEvent.change(input, { target: { value: '' } })
     fireEvent.blur(input)
-    expect(input.value).toBe('200')
+    expect(input.value).toBe('50')
+    await new Promise((r) => setTimeout(r, 1500))
+    for (const call of vi.mocked(updateAgent).mock.calls) {
+      expect('max_tool_iterations' in call[1]).toBe(false)
+    }
   })
 
-  it('the help copy states the per-turn semantics and the 200 default', async () => {
-    vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, max_tool_iterations: 200 })
-    renderProfile(mockCoreAgent.id)
-    await screen.findByText(mockCoreAgent.name)
-    if (!screen.queryByTestId('agent-max-tool-calls-input')) {
-      switchTab('tab-advanced')
-    }
-    await screen.findByTestId('agent-max-tool-calls-input')
-    expect(screen.getByText(/Max tool calls per turn/i)).toBeInTheDocument()
+  it('the help copy names the SERVER global and carries no literal default (FR-004)', async () => {
+    // #904 FR-004 forbids the old "Default: 200" caption; the SPA renders
+    // the server's value. A 350 global (source "global", no own value)
+    // proves the number is not a literal.
+    await openLimitInput({
+      ...mockCoreAgent,
+      max_tool_iterations: 350,
+      max_tool_iterations_source: 'global',
+      max_tool_iterations_override_ignored: false,
+    })
+    expect(screen.getByText('Using the global limit (350)')).toBeInTheDocument()
+    // The per-turn semantics copy still ships (ToolIterationLimitField caption).
     expect(screen.getByText(/Per single turn/i)).toBeInTheDocument()
-    expect(screen.getByText(/Default: 200/i)).toBeInTheDocument()
+    expect(screen.queryByText(/Default:?\s*200/i)).toBeNull()
   })
 })
 
@@ -2900,18 +2883,17 @@ describe('AgentProfile — Fallback models visibility by agent kind (field matri
   })
 })
 
-// W2c — Max tool calls per turn visibility by agent kind (field matrix,
-// agent-types-field-matrix.md, Decisions #1 (resolved 2026-07-03): excluded
-// — subagent_3p EXCLUDES max_tool_iterations).
+// Max tool calls per turn visibility by agent kind. #904 D14 supersedes the
+// field matrix's "subagent_3p EXCLUDES max_tool_iterations" (Decisions #1,
+// 2026-07-03): external-CLI workers get the same control and reset.
 describe('AgentProfile — Max tool calls per turn visibility by agent kind (field matrix, W2c)', () => {
-  it('hides the Max tool calls input for a subagent_3p agent', async () => {
+  it('shows the Max tool calls input for a subagent_3p agent (D14)', async () => {
     vi.mocked(fetchAgent).mockResolvedValue(mockSubagent3pAgent)
     renderProfile('external-researcher')
     await screen.findByText('External Researcher')
     switchTab('tab-advanced')
-    await waitFor(() => {
-      expect(screen.queryByTestId('agent-max-tool-calls-input')).toBeNull()
-    })
+    expect(await screen.findByLabelText(/^Max tool calls per turn/)).toBeInTheDocument()
+    // Unchanged by #904: subagent_3p still has no timeout input here.
     expect(screen.queryByTestId('agent-timeout-input')).toBeNull()
   })
 
@@ -2935,7 +2917,6 @@ describe('AgentProfile — Max tool calls per turn visibility by agent kind (fie
     }, { timeout: 5000 })
     const payload = vi.mocked(updateAgent).mock.calls[0][1] as Record<string, unknown>
     expect(payload).not.toHaveProperty('max_tool_iterations')
-    // timeout_seconds stays allowed on the wire for subagent_3p.
     expect(payload).toHaveProperty('name', 'Renamed External')
   })
 })
@@ -2959,20 +2940,26 @@ describe('AgentProfile — locked core agent identity fields: visible read-only 
     expect(description.value).toBe(mockLockedCoreAgent.description)
   })
 
-  it('shows a static read-only avatar color swatch (not the interactive picker)', async () => {
-    vi.mocked(fetchAgent).mockResolvedValue({ ...mockLockedCoreAgent, color: '#D4AF37' })
+  it('shows all ten colour choices disabled, with Steel blue selected for the locked built-in (W1-6)', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue({ ...mockLockedCoreAgent, color: '#6E8BA8' })
     renderProfile('mia')
     await screen.findByText('Mia')
-    expect((await screen.findAllByTestId('avatar-color-readonly')).length).toBeGreaterThanOrEqual(1)
-    expect(screen.queryByTestId('avatar-color-Forge Gold')).toBeNull()
+    expectLockedIdentityColours(screen.getByRole('tabpanel', { name: 'Basics' }))
+    expect(screen.queryByTestId('avatar-color-readonly')).toBeNull()
   })
 
-  it('shows a static read-only avatar icon (not the interactive picker)', async () => {
+  it('shows the built-in identity editor locked per field: figure and role visible but unchangeable (W1-6)', async () => {
     vi.mocked(fetchAgent).mockResolvedValue(mockLockedCoreAgent)
     renderProfile('mia')
     await screen.findByText('Mia')
-    expect((await screen.findAllByTestId('avatar-icon-readonly')).length).toBeGreaterThanOrEqual(1)
-    expect(screen.queryByTestId('avatar-icon-trigger')).toBeNull()
+    // The locked-ness the old read-only avatar line guarded now lives in the
+    // per-field locks of the ONE editor (colour lock is the sibling test).
+    expectLockedFigureAndRole(screen.getByRole('tabpanel', { name: 'Basics' }))
+    // FOUNDER DECISION 2026-10-10 (avatar consistency): the static read-only
+    // "Avatar icon" line was deleted — the interactive per-field-locked
+    // AgentLookPicker is the only identity UI, and no legacy icon UI returns.
+    expect(screen.queryByTestId('avatar-icon-readonly')).toBeNull()
+    expect(document.querySelector('input[type="file"]')).toBeNull()
   })
 })
 
@@ -3091,37 +3078,24 @@ describe('AgentProfile — Model input kind by agent kind (external = free text)
 // on `!isWorkerAgent` only — NOT `!isLocked` (operator decision 2026-07-03:
 // locked core agents keep it editable/visible). No prior test asserted
 // either fact for a locked core agent, nor its absence for a worker.
-describe('AgentProfile — Default-agent toggle visibility (field matrix, W2c)', () => {
-  it('shows the Default-agent toggle row for a locked core agent', async () => {
-    vi.mocked(fetchAgent).mockResolvedValue(mockLockedCoreAgent)
-    renderProfile('mia')
-    await screen.findByText('Mia')
-    expect((await screen.findAllByTestId('default-toggle-row')).length).toBeGreaterThanOrEqual(1)
-  })
+// The "Default-agent toggle visibility (field matrix, W2c)" describe was
+// DELETED with the default-agent feature itself (omnipus-system-agent K11/K12,
+// bundle B1): Agent.default is off the wire, the Identity strip no longer
+// renders a default-toggle row for any agent, and PUT refuses a `default` key.
 
-  it('hides the Default-agent toggle row for a worker (Subagent)', async () => {
-    vi.mocked(fetchAgent).mockResolvedValue(mockWorkerAgent)
-    renderProfile('web-researcher')
-    await screen.findByText('Web Researcher')
-    await waitFor(() => {
-      expect(screen.queryAllByTestId('default-toggle-row').length).toBe(0)
-    })
-  })
-})
-
-// Test-coverage gap (test-analyzer): every existing isLocked test asserts
-// the LOCKED (read-only) side. Nothing asserted the unlocked side, so a
-// regression that made `isLocked` accidentally evaluate `true` for every
-// agent (not just locked core ones) would slip through undetected.
+// Unlocked-side guard: custom Main identity choices stay editable rather
+// than accidentally inheriting the built-in locks.
 describe('AgentProfile — unlocked Main agent: interactive identity fields render (isLocked regression guard, W2c)', () => {
-  it('renders the interactive avatar color and icon pickers (not the read-only swatch) for an editable Main agent', async () => {
-    vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, type: 'Main', locked: false, color: '#D4AF37' })
+  it('renders editable figure, role and colour choices instead of the legacy icon picker (W1-6)', async () => {
+    vi.mocked(fetchAgent).mockResolvedValue({ ...mockCoreAgent, type: 'Main', locked: false, color: '#6E8BA8' })
     renderProfile('general-assistant')
     await screen.findByText('General Assistant')
-    expect((await screen.findAllByTestId('avatar-color-Forge Gold')).length).toBeGreaterThanOrEqual(1)
-    expect((await screen.findAllByTestId('avatar-icon-trigger')).length).toBeGreaterThanOrEqual(1)
+    expectEditableIdentityChoices(screen.getByRole('tabpanel', { name: 'Basics' }))
+    expect(screen.queryByTestId('avatar-icon-trigger')).toBeNull()
     expect(screen.queryAllByTestId('avatar-color-readonly').length).toBe(0)
-    expect(screen.queryAllByTestId('avatar-icon-readonly').length).toBe(0)
+    // FOUNDER DECISION 2026-10-10 (avatar consistency): the stored legacy
+    // icon slug is no longer displayed anywhere — Agent.icon is not part of
+    // the identity UI, so the old "stored slug shown once" assertion is gone.
   })
 
   it('does NOT disable the description textarea for an editable Main agent', async () => {

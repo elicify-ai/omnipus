@@ -41,13 +41,16 @@ type OnboardingProviderApiKey = {
   id: string;
   api_key: string;
   model?: string | undefined;
+  reasoning_effort?: string | undefined;
   endpoint?: string | undefined;
+  protocol?: ("openai-compatible" | "anthropic") | undefined;
   region?: string | undefined;
 };
 type OnboardingProviderSignIn = {
   auth_method: "sign_in";
   id: string;
   model?: string | undefined;
+  reasoning_effort?: string | undefined;
   endpoint?: string | undefined;
 };
 type OnboardingPreferences = {
@@ -55,14 +58,7 @@ type OnboardingPreferences = {
   tone: "direct" | "warm" | "formal";
   detail: "brief" | "thorough";
 };
-type SignInStartResponse =
-  | SignInStartResponseCliLogin
-  | SignInStartResponseDeviceCode;
-type SignInStartResponseCliLogin = {
-  method: "cli_login";
-  command: string;
-  instructions: string;
-};
+type SignInStartResponse = SignInStartResponseDeviceCode;
 type SignInStartResponseDeviceCode = {
   method: "device_code";
   verification_url: string;
@@ -89,21 +85,40 @@ type ProviderValidation = {
 };
 type Session = {
   id: string;
-  type?:
-    | (
-        | "chat"
-        | "task"
-        | "channel"
-        | "scheduled"
-        | "heartbeat"
-        | "verifier"
-        | "delegate"
-      )
-    | undefined;
+  type:
+    | "chat"
+    | "task"
+    | "channel"
+    | "scheduled"
+    | "main"
+    | "verifier"
+    | "delegate";
   protected?: boolean | undefined;
+  needs_attention?: boolean | undefined;
   agent_id: string;
   title: string;
-  status: "active" | "archived" | "interrupted";
+  status: "active" | "archived" | "failed" | "interrupted";
+  lifecycle_state?:
+    | (
+        | "working"
+        | "waiting_for_answer"
+        | "done"
+        | "failed"
+        | "stopped"
+        | "interrupted"
+      )
+    | undefined;
+  stop_note?:
+    | {
+        at: string;
+        by: string;
+        seq: number;
+        cause: "stop" | "redirect_pause" | "cascade" | "restart" | "timeout";
+        boot_seq?: number | undefined;
+      }
+    | undefined;
+  execution?: ("queued" | "running") | undefined;
+  background_command_count?: number | undefined;
   created_at: string;
   updated_at: string;
   model?: string | undefined;
@@ -115,7 +130,6 @@ type Session = {
   partitions: Array<string>;
   last_compaction_summary?: string | undefined;
   agent_ids?: Array<string> | undefined;
-  active_agent_id?: string | undefined;
   compaction_summaries?: {} | undefined;
   parent_session_id?: string | undefined;
   child_count?: number | undefined;
@@ -130,22 +144,101 @@ type SessionStats = {
   tokens_cache_read?: number | undefined;
   tokens_cache_write?: number | undefined;
   by_model?: {} | undefined;
+  by_provider?: {} | undefined;
+  unpriced_tokens?: number | undefined;
+  subscription_tokens?: number | undefined;
 };
 type ModelTokens = {
   in?: number | undefined;
   out?: number | undefined;
   cache_read?: number | undefined;
   cache_write?: number | undefined;
+  cache_hit_ratio?: (number | null) | undefined;
+  reasoning?: number | undefined;
   total: number;
 };
 type SessionDetail = {
   session: Session;
-  messages: Array<Message>;
+  history_state: {
+    status: "available" | "unavailable";
+    reason?:
+      | (
+          | "index_missing"
+          | "index_inconsistent"
+          | "catchup_limit"
+          | "storage_error"
+          | "projection_error"
+        )
+      | undefined;
+    message?: string | undefined;
+  };
+  messages?: Array<Message> | undefined;
+  page_info?:
+    | {
+        mode: "latest" | "older" | "newer" | "window_refresh";
+        limit: number;
+        min_rows: number;
+        row_count: number;
+        source_group_count: number;
+        soft_byte_budget: number;
+        byte_ceiling: number;
+        projected_bytes: number;
+        byte_budget_exceeded: boolean;
+        stop_reason:
+          | "row_target"
+          | "source_cap"
+          | "clear"
+          | "end"
+          | "range_end"
+          | "byte_budget"
+          | "byte_ceiling";
+        budget_override?: ("height_floor" | "atomic_group") | undefined;
+        first_position?: string | undefined;
+        last_position?: string | undefined;
+        stopped_at_clear?: boolean | undefined;
+        latest_clear?:
+          | {
+              entry_id: string;
+              history_position: string;
+            }
+          | undefined;
+        retention_generation: string;
+        context: {
+          spans: Array<{
+            span_id: string;
+            start?: subagent_start | undefined;
+            state?: subagent_state | undefined;
+            message?: subagent_message | undefined;
+            end?: subagent_end | undefined;
+            has_run?: boolean | undefined;
+          }>;
+          duplicate_ids: Array<{
+            kind: "message" | "tool";
+            id: string;
+            canonical_position: string;
+            occurrence_count: number;
+          }>;
+        };
+      }
+    | undefined;
+  has_earlier?: boolean | undefined;
+  has_later?: boolean | undefined;
+  next_before?: string | undefined;
+  next_after?: string | undefined;
   agent_removed?: boolean | undefined;
 };
 type Message = {
   id: string;
+  history_position?: string | undefined;
   client_message_id?: string | undefined;
+  input_disposition?:
+    | {
+        message_id: string;
+        client_message_id?: string | undefined;
+        state: "discarded";
+        reason: "stopped_before_delivery";
+      }
+    | undefined;
   type?:
     | (
         | "message"
@@ -154,10 +247,14 @@ type Message = {
         | "tool_call"
         | "turn_canceled"
         | "judge_verdict"
+        | "context_window_notice"
+        | "provider_fallback"
       )
     | undefined;
+  view_membership?: ("chat" | "model" | "both") | undefined;
   role?: ("user" | "assistant" | "system") | undefined;
   content?: string | undefined;
+  content_original_size_bytes?: number | undefined;
   summary?: string | undefined;
   timestamp: string;
   tokens?: number | undefined;
@@ -166,20 +263,41 @@ type Message = {
   attachments?: Array<Attachment> | undefined;
   tool_calls?: Array<ToolCall> | undefined;
   agent_id: string;
+  participant?:
+    | {
+        kind: "human" | "agent";
+        display_name: string;
+        source?: string | undefined;
+        agent?:
+          | {
+              workspace_id: string;
+              agent_id: string;
+            }
+          | undefined;
+      }
+    | undefined;
+  reply_to_participant?: participant | undefined;
+  reply_to_message_id?: string | undefined;
   messages_compacted?: number | undefined;
   truncated?: boolean | undefined;
   truncation_reason?: ("cancelled" | "max_output_tokens") | undefined;
   turn_id?: string | undefined;
+  goal_id?: string | undefined;
   canceled_by_user?: string | undefined;
   canceled_by_channel?: string | undefined;
   cancel_method?: ("graceful" | "hard") | undefined;
   descendants_canceled?: Array<string> | undefined;
   model?: string | undefined;
+  unavailable_model?: string | undefined;
+  unavailable_code?: ("rate_limited" | "model_retired") | undefined;
   verdict?: JudgeVerdict | undefined;
+  context_window_notice?: ContextWindowNotice | undefined;
   system_subtype?:
     | (
         | "browser_handover_notice"
+        | "expiry_notice"
         | "goal_outcome"
+        | "helper_event"
         | "subagent_start"
         | "subagent_state"
         | "subagent_message"
@@ -187,8 +305,10 @@ type Message = {
       )
     | undefined;
   goal_outcome?: GoalOutcome | undefined;
+  helper_event?: HelperEvent | undefined;
   subagent_start?:
     | {
+        history_origin?: history_origin | undefined;
         type: "subagent_start";
         session_id: string;
         span_id: string;
@@ -201,6 +321,7 @@ type Message = {
     | undefined;
   subagent_state?:
     | {
+        history_origin?: history_origin | undefined;
         type: "subagent_state";
         session_id: string;
         child_session_id?: string | undefined;
@@ -209,15 +330,29 @@ type Message = {
           | "queued"
           | "running"
           | "needs_input"
-          | "paused"
+          | "stopped"
           | "completed"
-          | "failed"
-          | "cancelled"
-          | "timed_out";
-        steering_receipt?:
+          | "failed";
+        control_receipt?:
           | {
-              correlation_id: string;
-              applied_at: string;
+              seq: number;
+              control_id: string;
+              verb:
+                | "steer"
+                | "stop"
+                | "stop_all"
+                | "redirect"
+                | "resume"
+                | "respond"
+                | "clear_goal";
+              state: "queued" | "delivered" | "applied" | "superseded";
+              accepted_at: string;
+              delivered_at?: string | undefined;
+              applied_at?: string | undefined;
+              superseded_at?: string | undefined;
+              superseded_by_seq?: number | undefined;
+              reason?: string | undefined;
+              released_control_ids?: Array<string> | undefined;
             }
           | undefined;
         created_at: string;
@@ -226,6 +361,7 @@ type Message = {
     | undefined;
   subagent_message?:
     | {
+        history_origin?: history_origin | undefined;
         type: "subagent_message";
         session_id: string;
         child_session_id?: string | undefined;
@@ -237,12 +373,12 @@ type Message = {
           | "artifact"
           | "blocker"
           | "question"
-          | "decision_request"
           | "error"
           | "handback"
           | "steer"
           | "respond"
-          | "goal_status";
+          | "goal_status"
+          | "not_delivered";
         text?: string | undefined;
         pct?: number | undefined;
         correlation_id?: string | undefined;
@@ -254,6 +390,13 @@ type Message = {
     | undefined;
   subagent_end?:
     | {
+        history_origin?:
+          | {
+              position: string;
+              entry_id?: string | undefined;
+              turn_id?: string | undefined;
+            }
+          | undefined;
         type: "subagent_end";
         session_id: string;
         span_id: string;
@@ -280,6 +423,31 @@ type Message = {
         seq?: number | undefined;
       }
     | undefined;
+  terminal_outcome?: boolean | undefined;
+  room_ref?:
+    | {
+        room_id: string;
+        room_name: string;
+        request_id: string;
+        role: "request" | "answer";
+      }
+    | undefined;
+  effort?:
+    | Partial<{
+        chosen: string;
+        sent: string;
+        reason:
+          | "mapped"
+          | "not_supported"
+          | "continuation"
+          | "rejected"
+          | "rejected_earlier"
+          | "extra_body";
+        provider: string;
+        model: string;
+      }>
+    | undefined;
+  turn_reasoning_tokens?: number | undefined;
 };
 type Attachment = {
   type: "image" | "audio" | "video" | "file";
@@ -305,6 +473,17 @@ type ToolCall = {
   result?: {} | undefined;
   parent_tool_call_id?: string | undefined;
   content_state?: ("full" | "capped" | "emptied") | undefined;
+};
+type participant = {
+  kind: "human" | "agent";
+  display_name: string;
+  source?: string | undefined;
+  agent?:
+    | {
+        workspace_id: string;
+        agent_id: string;
+      }
+    | undefined;
 };
 type JudgeVerdict = {
   id: string;
@@ -346,6 +525,10 @@ type CriterionVerdict = {
       }>
     | undefined;
 };
+type ContextWindowNotice = {
+  kind: "provider_retry" | "mid_turn";
+  message: string;
+};
 type GoalOutcome = {
   goal_id: string;
   goal_text: string;
@@ -355,6 +538,189 @@ type GoalOutcome = {
   judge_reason?: string | undefined;
   criteria_total?: number | undefined;
   ended_at: string;
+};
+type HelperEvent = {
+  helper_session_id: string;
+  helper_title?: string | undefined;
+  kind:
+    | "verdict_unmet"
+    | "not_verified"
+    | "stopped"
+    | "restarted"
+    | "resume_refused"
+    | "timed_out"
+    | "finished"
+    | "question"
+    | "blocker"
+    | "failed";
+  text: string;
+  goal_id?: string | undefined;
+  created_at: string;
+};
+type history_origin = {
+  position: string;
+  entry_id?: string | undefined;
+  turn_id?: string | undefined;
+};
+type subagent_start = {
+  history_origin?: history_origin | undefined;
+  type: "subagent_start";
+  session_id: string;
+  span_id: string;
+  parent_call_id: string;
+  task_label: string;
+  agent_id?: string | undefined;
+  child_session_id?: string | undefined;
+  seq?: number | undefined;
+};
+type subagent_state = {
+  history_origin?: history_origin | undefined;
+  type: "subagent_state";
+  session_id: string;
+  child_session_id?: string | undefined;
+  span_id: string;
+  state:
+    | "queued"
+    | "running"
+    | "needs_input"
+    | "stopped"
+    | "completed"
+    | "failed";
+  control_receipt?:
+    | {
+        seq: number;
+        control_id: string;
+        verb:
+          | "steer"
+          | "stop"
+          | "stop_all"
+          | "redirect"
+          | "resume"
+          | "respond"
+          | "clear_goal";
+        state: "queued" | "delivered" | "applied" | "superseded";
+        accepted_at: string;
+        delivered_at?: string | undefined;
+        applied_at?: string | undefined;
+        superseded_at?: string | undefined;
+        superseded_by_seq?: number | undefined;
+        reason?: string | undefined;
+        released_control_ids?: Array<string> | undefined;
+      }
+    | undefined;
+  created_at: string;
+  seq?: number | undefined;
+};
+type subagent_message = {
+  history_origin?: history_origin | undefined;
+  type: "subagent_message";
+  session_id: string;
+  child_session_id?: string | undefined;
+  span_id: string;
+  message_id: string;
+  kind:
+    | "progress"
+    | "checkpoint"
+    | "artifact"
+    | "blocker"
+    | "question"
+    | "error"
+    | "handback"
+    | "steer"
+    | "respond"
+    | "goal_status"
+    | "not_delivered";
+  text?: string | undefined;
+  pct?: number | undefined;
+  correlation_id?: string | undefined;
+  sender_identity: string;
+  untrusted_origin: boolean;
+  created_at: string;
+  seq?: number | undefined;
+};
+type subagent_end = {
+  history_origin?:
+    | {
+        position: string;
+        entry_id?: string | undefined;
+        turn_id?: string | undefined;
+      }
+    | undefined;
+  type: "subagent_end";
+  session_id: string;
+  span_id: string;
+  status:
+    | "success"
+    | "error"
+    | "cancelled"
+    | "interrupted"
+    | "timeout"
+    | "parked";
+  duration_ms?: number | undefined;
+  final_result?: string | undefined;
+  reason?:
+    | ("parent_timeout" | "parent_cancelled" | "parent_done_early" | "unknown")
+    | undefined;
+  agent_id?: string | undefined;
+  parent_call_id?: string | undefined;
+  message?: string | undefined;
+  seq?: number | undefined;
+};
+type SessionHistoryResponse = {
+  session_id: string;
+  session_tokens_total?: number | undefined;
+  entries: Array<Message>;
+  has_earlier: boolean;
+  has_later: boolean;
+  next_before?: string | undefined;
+  next_after?: string | undefined;
+  page_info: page_info;
+};
+type page_info = {
+  mode: "latest" | "older" | "newer" | "window_refresh";
+  limit: number;
+  min_rows: number;
+  row_count: number;
+  source_group_count: number;
+  soft_byte_budget: number;
+  byte_ceiling: number;
+  projected_bytes: number;
+  byte_budget_exceeded: boolean;
+  stop_reason:
+    | "row_target"
+    | "source_cap"
+    | "clear"
+    | "end"
+    | "range_end"
+    | "byte_budget"
+    | "byte_ceiling";
+  budget_override?: ("height_floor" | "atomic_group") | undefined;
+  first_position?: string | undefined;
+  last_position?: string | undefined;
+  stopped_at_clear?: boolean | undefined;
+  latest_clear?:
+    | {
+        entry_id: string;
+        history_position: string;
+      }
+    | undefined;
+  retention_generation: string;
+  context: {
+    spans: Array<{
+      span_id: string;
+      start?: subagent_start | undefined;
+      state?: subagent_state | undefined;
+      message?: subagent_message | undefined;
+      end?: subagent_end | undefined;
+      has_run?: boolean | undefined;
+    }>;
+    duplicate_ids: Array<{
+      kind: "message" | "tool";
+      id: string;
+      canonical_position: string;
+      occurrence_count: number;
+    }>;
+  };
 };
 type SessionPage = {
   sessions: Array<Session>;
@@ -384,11 +750,23 @@ type LibraryEntry = {
   mount?: LibraryEntryMount | undefined;
   is_knowledge_base?: boolean | undefined;
   is_text_editable: boolean;
+  is_view?: boolean | undefined;
+  view?: LibraryEntryView | undefined;
+  preview_profile?: ("workspace" | "mail_restricted") | undefined;
+  chat_copy?: boolean | undefined;
+  preview_scripts_allowed?: boolean | undefined;
 };
 type LibraryEntryMount = {
   name: string;
   host_path: string;
   broad: boolean;
+};
+type LibraryEntryView = {
+  name: string;
+  label: string;
+  collection_id: string;
+  kind?: string | undefined;
+  source?: string | undefined;
 };
 type LibraryUploadResponse = {
   entries: Array<LibraryEntry>;
@@ -1193,24 +1571,27 @@ type Agent = {
   name: string;
   type: "core" | "system" | "Main" | "Subagent" | "subagent_3p";
   locked: boolean;
-  color?: string | undefined;
-  icon?: string | undefined;
+  figure: AgentFigure;
+  role: AgentRole;
+  color?: AgentColor | undefined;
   model?: string | undefined;
   provider?: string | undefined;
+  reasoning_effort?: string | undefined;
   description?: string | undefined;
   status: "active" | "idle" | "draft" | "error";
   soul: string;
   warning?: string | undefined;
-  timeout_seconds: number;
   max_tool_iterations: number;
+  max_tool_iterations_source: MaxToolIterationsSource;
+  max_tool_iterations_override?: number | undefined;
+  max_tool_iterations_override_ignored: boolean;
   tools_cfg?: AgentToolsCfg | undefined;
-  auto_approve_disabled?: boolean | undefined;
   fallback_models?: Array<FallbackModel> | undefined;
   model_params?: AgentModelParams | undefined;
-  rate_limits?: AgentRateLimits | undefined;
   stats?: AgentStats | undefined;
-  default?: boolean | undefined;
+  skill_grants?: {} | undefined;
   skills?: Array<string> | undefined;
+  stale_skill_grants?: Array<string> | undefined;
   updated_at?: string | undefined;
   voice?: (string | null) | undefined;
   executor?: ExecutorConfig | undefined;
@@ -1227,6 +1608,51 @@ type AgentFieldDescriptor = {
   editable: boolean;
   reason?: string | undefined;
 };
+type AgentFigure = "Robot" | "Man" | "Woman" | "Omnipus" | "Monogram";
+type AgentRole =
+  | "writer"
+  | "designer"
+  | "image"
+  | "video"
+  | "audio"
+  | "social"
+  | "developer"
+  | "data"
+  | "analyst"
+  | "itops"
+  | "automation"
+  | "security"
+  | "quality"
+  | "science"
+  | "orchestrator"
+  | "project"
+  | "product"
+  | "sales"
+  | "marketing"
+  | "finance"
+  | "legal"
+  | "support"
+  | "documents"
+  | "researcher"
+  | "people"
+  | "tutor"
+  | "knowledge"
+  | "translator"
+  | "general"
+  | "personal"
+  | "office";
+type AgentColor =
+  | "#6E8BA8"
+  | "#7A8C9E"
+  | "#4F8A80"
+  | "#5E6973"
+  | "#7B7290"
+  | "#B76E79"
+  | "#A97142"
+  | "#9C8A5B"
+  | "#CDBA96"
+  | "#8E9196";
+type MaxToolIterationsSource = "global" | "agent";
 type AgentToolsCfg = Partial<{
   builtin: {
     policies: {};
@@ -1242,16 +1668,11 @@ type AgentToolsMcpServerBinding = {
 type FallbackModel = {
   model: string;
   provider?: string | undefined;
+  reasoning_effort?: string | undefined;
 };
 type AgentModelParams = Partial<{
   temperature: number;
   max_tokens: number;
-}>;
-type AgentRateLimits = Partial<{
-  use_global_defaults: boolean;
-  max_llm_calls_per_hour: number;
-  max_tool_calls_per_minute: number;
-  max_cost_per_day: number;
 }>;
 type AgentStats = {
   total_sessions: number;
@@ -1262,7 +1683,9 @@ type AgentStats = {
 type ExecutorConfig = Partial<{
   kind: "native" | "external-cli" | "remote-a2a";
   cli: ExternalCliTool;
-  cli_path: string;
+  effective_cli_path: string;
+  effective_preset_args: string;
+  program_warning: string;
   env_overrides: {};
   cli_args: string;
 }>;
@@ -1297,10 +1720,11 @@ type AgentCreateRequestMain = {
   description?: string | undefined;
   model?: string | undefined;
   provider?: string | undefined;
-  color?: string | undefined;
-  icon?: string | undefined;
+  reasoning_effort?: string | undefined;
+  figure?: AgentFigure | undefined;
+  role?: AgentRole | undefined;
+  color?: AgentColor | undefined;
   tools_cfg?: AgentToolsCfg | undefined;
-  auto_approve_disabled?: boolean | undefined;
   fallback_models?: Array<FallbackModel> | undefined;
   model_params?:
     | Partial<{
@@ -1329,10 +1753,11 @@ type AgentCreateRequestSubagent = {
   description?: string | undefined;
   model?: string | undefined;
   provider?: string | undefined;
-  color?: string | undefined;
-  icon?: string | undefined;
+  reasoning_effort?: string | undefined;
+  figure?: AgentFigure | undefined;
+  role?: AgentRole | undefined;
+  color?: AgentColor | undefined;
   tools_cfg?: AgentToolsCfg | undefined;
-  auto_approve_disabled?: boolean | undefined;
   fallback_models?: Array<FallbackModel> | undefined;
   model_params?:
     | Partial<{
@@ -1350,19 +1775,16 @@ type AgentCreateRequestSubagent3p = {
   description?: string | undefined;
   model?: string | undefined;
   provider?: string | undefined;
-  color?: string | undefined;
-  icon?: string | undefined;
-  rate_limits?:
-    | Partial<{
-        use_global_defaults: boolean;
-        max_llm_calls_per_hour: number;
-        max_tool_calls_per_minute: number;
-        max_cost_per_day: number;
-      }>
-    | undefined;
-  soul: string;
-  executor: ExecutorConfig;
-  timeout_seconds?: number | undefined;
+  figure?: AgentFigure | undefined;
+  role?: AgentRole | undefined;
+  color?: AgentColor | undefined;
+  executor: ExecutorConfigCreate;
+  max_tool_iterations?: number | undefined;
+};
+type ExecutorConfigCreate = {
+  cli: ExternalCliTool;
+  env_overrides?: {} | undefined;
+  cli_args?: string | undefined;
 };
 type AgentUpdateRequest = {
   revision: ConfigurationRevision;
@@ -1372,12 +1794,14 @@ type AgentUpdateRequest = {
   description?: string | undefined;
   model?: string | undefined;
   provider?: string | undefined;
+  reasoning_effort?: string | undefined;
   context_window_override?: (number | null) | undefined;
   soul?: string | undefined;
-  max_tool_iterations?: number | undefined;
-  color?: string | undefined;
-  icon?: string | undefined;
-  fallback_models?: Array<FallbackModel> | undefined;
+  max_tool_iterations?: (number | null) | undefined;
+  figure?: AgentFigure | undefined;
+  role?: AgentRole | undefined;
+  color?: AgentColor | undefined;
+  fallback_models?: Array<FallbackModelPair> | undefined;
   model_params?:
     | Partial<{
         temperature: number;
@@ -1385,12 +1809,79 @@ type AgentUpdateRequest = {
       }>
     | undefined;
   tools_cfg?: AgentToolsCfg | undefined;
-  auto_approve_disabled?: boolean | undefined;
-  default?: boolean | undefined;
   skills?: Array<string> | undefined;
   voice?: (string | null) | undefined;
-  executor?: ExecutorConfig | undefined;
+  executor?: ExecutorConfigUpdate | undefined;
   memory_enabled?: boolean | undefined;
+};
+type FallbackModelPair = {
+  model: string;
+  provider: string;
+  reasoning_effort?: string | undefined;
+};
+type ExecutorConfigUpdate = Partial<{
+  env_overrides: {};
+  env_overrides_remove: Array<string>;
+  cli_args: string;
+}>;
+type AgentDetail = {
+  id: string;
+  name?: string | undefined;
+  description?: string | undefined;
+  type?: ("core" | "system" | "Main" | "Subagent" | "subagent_3p") | undefined;
+  locked?: boolean | undefined;
+  model?: string | undefined;
+  provider?: string | undefined;
+  reasoning_effort?: (string | null) | undefined;
+  fallback_models?: Array<FallbackModel> | undefined;
+  model_params?: AgentModelParams | undefined;
+  max_tool_iterations?: (number | null) | undefined;
+  context_window_override?: (number | null) | undefined;
+  memory_enabled?: boolean | undefined;
+  voice?: (string | null) | undefined;
+  figure?: AgentFigure | undefined;
+  role?: AgentRole | undefined;
+  color?: AgentColor | undefined;
+  skills?: Array<string> | undefined;
+  stale_skill_grants?: Array<string> | undefined;
+  tool_permissions?: Array<AgentToolPermission> | undefined;
+  stored_overrides?: {} | undefined;
+  connectors?: Array<AgentMCPBinding> | undefined;
+  soul?: string | undefined;
+  agent_md?: string | undefined;
+  revision: ConfigurationRevision;
+  activation_status?: ConfigurationActivationStatus | undefined;
+  editable_fields?: Array<AgentFieldDescriptor> | undefined;
+  executor?: ExecutorConfig | undefined;
+  runnable?: boolean | undefined;
+  program_warning?: string | undefined;
+  has_main_chat?: boolean | undefined;
+  truncated_fields?: Array<string> | undefined;
+  absent_fields?: Array<string> | undefined;
+  model_chain?: Array<AgentModelChainEntry> | undefined;
+};
+type AgentToolPermission = {
+  tool: string;
+  effective: "allow" | "ask" | "deny";
+  override: "allow" | "ask" | "deny" | null;
+  description?: string | undefined;
+};
+type AgentModelChainEntry = {
+  position: string;
+  model: string;
+  provider: string | null;
+  provider_configured: boolean;
+  model_offered: boolean | null;
+  accepts_images: boolean | null;
+  effort_options: Array<string> | null;
+  warning?: string | undefined;
+};
+type AgentPreview = {
+  preview_of: "Main" | "Subagent" | "subagent_3p";
+  tool_permissions?: Array<AgentToolPermission> | undefined;
+  connectors?: Array<AgentMCPBinding> | undefined;
+  absent_fields?: Array<string> | undefined;
+  truncated_fields?: Array<string> | undefined;
 };
 type ExecutorDefaults = {
   cli: ExternalCliTool;
@@ -1430,11 +1921,18 @@ type ChannelEntry = {
   native_available?: boolean | undefined;
   degraded?: boolean | undefined;
   degraded_reason?: string | undefined;
+  last_dropped_at?: string | undefined;
+  outbound_policy?: ("reply_only" | "agent_may_start") | undefined;
+  rejected_senders?: ChannelRejectedSenders | undefined;
 };
 type ChannelId = string;
 type ChannelIdentity = {
   kind: "agent" | "user";
   id?: string | undefined;
+};
+type ChannelRejectedSenders = {
+  count: number;
+  recent: Array<string>;
 };
 type AuditLogResponse = {
   entries: Array<AuditEntry>;
@@ -1458,6 +1956,81 @@ type AuditEntry = {
   old_value?: {} | undefined;
   new_value?: {} | undefined;
 };
+type PerformanceSettings = Partial<{
+  max_parallel_agents: number;
+  effective_max_parallel_agents: number;
+  max_parallel_agents_configured: boolean;
+  tools_on_demand: boolean;
+  goal_max_rounds: number;
+  goal_reminder_quiet_seconds: number;
+  goal_stalled_checkin_enabled: boolean;
+  goal_stalled_checkin_minutes: number;
+  max_tool_iterations: number;
+  max_tool_iterations_saved_state: MaxToolIterationsSavedState;
+  max_tool_iterations_saved_raw: number;
+  max_tool_iterations_lowered_agents: Array<MaxToolIterationAgentChange>;
+  pending_apply: PerformancePendingApply;
+}>;
+type MaxToolIterationsSavedState = "ok" | "missing" | "below_min" | "above_max";
+type MaxToolIterationAgentChange = {
+  agent_id: string;
+  agent_name: string;
+  old_value: number;
+  new_value: number;
+};
+type PerformancePendingApply = {
+  stage: "refresh" | "reload";
+  changed_fields: Array<
+    | "max_parallel_agents"
+    | "tools_on_demand"
+    | "goal_max_rounds"
+    | "goal_reminder_quiet_seconds"
+    | "goal_stalled_checkin_enabled"
+    | "goal_stalled_checkin_minutes"
+    | "max_tool_iterations"
+  >;
+};
+type PerformanceSettingsUpdate = Partial<{
+  max_parallel_agents: number;
+  tools_on_demand: boolean;
+  goal_max_rounds: number;
+  goal_reminder_quiet_seconds: number;
+  goal_stalled_checkin_enabled: boolean;
+  goal_stalled_checkin_minutes: number;
+  max_tool_iterations: number;
+  confirmed_lowering: Array<MaxToolIterationsConfirmedAgent>;
+}>;
+type MaxToolIterationsConfirmedAgent = {
+  agent_id: string;
+  old_value: number;
+};
+type MaxToolIterationsLoweringPreview = {
+  value: number;
+  agents: Array<MaxToolIterationAgentChange>;
+};
+type MaxToolIterationsLoweringConflict = {
+  error: string;
+  code: string;
+  preview: MaxToolIterationsLoweringPreview;
+};
+type PerformanceReloadFailedDetails = {
+  stage: "refresh" | "reload";
+  changed_fields: Array<
+    | "max_parallel_agents"
+    | "tools_on_demand"
+    | "goal_max_rounds"
+    | "goal_reminder_quiet_seconds"
+    | "goal_stalled_checkin_enabled"
+    | "goal_stalled_checkin_minutes"
+    | "max_tool_iterations"
+  >;
+  lowered_agents: Array<MaxToolIterationAgentChange>;
+};
+type PerformanceReloadFailedError = {
+  error: string;
+  code: string;
+  details: PerformanceReloadFailedDetails;
+};
 type Provider = {
   id: string;
   name: string;
@@ -1470,20 +2043,12 @@ type Provider = {
     | "signed_in"
     | "expired";
   protocol?:
-    | (
-        | "openai-compatible"
-        | "anthropic"
-        | "google"
-        | "ollama"
-        | "cli"
-        | "bedrock"
-      )
+    | ("openai-compatible" | "anthropic" | "google" | "ollama" | "bedrock")
     | undefined;
   custom?: boolean | undefined;
   company?: string | undefined;
   region?: string | undefined;
   locality?: ("local" | "cloud") | undefined;
-  cli_kind?: ("codex" | "copilot") | undefined;
   auth_method: "api_key" | "sign_in";
   account_label?: string | undefined;
   dependents: Array<ProviderDependent>;
@@ -1507,6 +2072,7 @@ type ProviderDeleteRequest = Partial<{
 type DefaultModelUpdateRequest = {
   provider: string;
   model: string;
+  reasoning_effort?: string | undefined;
 };
 type ProviderDeleteResponse = {
   deleted: boolean;
@@ -1517,6 +2083,7 @@ type ProviderDeleteResponse = {
 type DefaultModel = {
   provider: string;
   model: string;
+  reasoning_effort?: string | undefined;
   context_window?: number | undefined;
   window_source?: ContextWindowSource | undefined;
   window_unknown?: boolean | undefined;
@@ -1544,6 +2111,7 @@ type ProvidersCatalog = {
 type CatalogResizeLimits = {
   long_edge_px: number;
   max_bytes: number;
+  max_patches?: number | undefined;
 };
 type CatalogProvider = {
   id: string;
@@ -1551,14 +2119,7 @@ type CatalogProvider = {
   company: string;
   api: string;
   protocol?:
-    | (
-        | "openai-compatible"
-        | "anthropic"
-        | "google"
-        | "ollama"
-        | "cli"
-        | "bedrock"
-      )
+    | ("openai-compatible" | "anthropic" | "google" | "ollama" | "bedrock")
     | undefined;
   protocols?: Array<CatalogProtocol> | undefined;
   env?: Array<string> | undefined;
@@ -1572,19 +2133,11 @@ type CatalogProvider = {
   auth_methods: Array<"api_key" | "sign_in">;
   aliases: Array<string>;
   locality: "local" | "cloud";
-  cli_kind?: ("codex" | "copilot") | undefined;
-  token_source?: string | undefined;
   resize_limits?: CatalogResizeLimits | undefined;
   models: Array<CatalogModel>;
 };
 type CatalogProtocol = {
-  protocol:
-    | "openai-compatible"
-    | "anthropic"
-    | "google"
-    | "ollama"
-    | "cli"
-    | "bedrock";
+  protocol: "openai-compatible" | "anthropic" | "google" | "ollama" | "bedrock";
   api: string;
 };
 type CatalogProviderRegion = {
@@ -1606,12 +2159,17 @@ type CatalogModel = {
     | undefined;
   window_source?: ContextWindowSource | undefined;
   window_unknown?: boolean | undefined;
+  reasoning?: CatalogModelReasoning | undefined;
+};
+type CatalogModelReasoning = {
+  levels: Array<string>;
+  switch: boolean;
 };
 type ContextSettings = {
   mcp_result_cap: number;
   builtin_success_cap: number;
   builtin_failure_cap: number;
-  absolute_trigger_chars: number;
+  tool_result_share_fraction: number;
   ingest_bound_bytes: number;
   default_context_window?: (number | null) | undefined;
   model_overrides: Array<ContextModelOverride>;
@@ -1625,7 +2183,7 @@ type ContextSettingsUpdate = Partial<{
   mcp_result_cap: number;
   builtin_success_cap: number;
   builtin_failure_cap: number;
-  absolute_trigger_chars: number;
+  tool_result_share_fraction: number;
   ingest_bound_bytes: number;
   default_context_window: number | null;
   model_overrides: Array<ContextModelOverride>;
@@ -1635,16 +2193,35 @@ type IntegrationProvidersResponse = {
   voice: Array<IntegrationProvider>;
   active_search?: string | undefined;
   active_voice?: string | undefined;
+  default_search?: string | undefined;
+  fallback_search?: (string | null) | undefined;
+  fallback_ignored_reason?: string | undefined;
+  native_search_in_effect?: boolean | undefined;
 };
 type IntegrationProvider = {
-  id: string;
+  id:
+    | "brave"
+    | "tavily"
+    | "perplexity"
+    | "duckduckgo"
+    | "glm"
+    | "baidu"
+    | "exa"
+    | "elevenlabs"
+    | "groq"
+    | "audio-model";
   kind: "search" | "voice";
   display_name: string;
   configured: boolean;
   requires_key: boolean;
+  search_depth_cap?: string | undefined;
   active?: boolean | undefined;
+  usable?: boolean | undefined;
+  fallback?: boolean | undefined;
+  fallback_automatic?: boolean | undefined;
 };
 type Skill = {
+  has_local_changes: boolean;
   revision: ConfigurationRevision;
   persistence_status?: ConfigurationPersistenceStatus | undefined;
   activation_status?: ConfigurationActivationStatus | undefined;
@@ -1673,6 +2250,7 @@ type Task = {
   agent_id?: string | undefined;
   cancel_reason?: ("stopped_by_user" | null) | undefined;
   agent_name?: string | undefined;
+  run_isolated?: boolean | undefined;
   priority?: number | undefined;
   blocked_by?: Array<string> | undefined;
   todos?: Array<Todo> | undefined;
@@ -1727,6 +2305,7 @@ type Task = {
 };
 type Todo = {
   text: string;
+  active_form?: string | undefined;
   status: "pending" | "in_progress" | "completed";
 };
 type AcceptanceCriterion = {
@@ -1757,12 +2336,10 @@ type AcceptanceCriterion = {
   clause_count?: number | undefined;
 };
 type TaskTrigger = {
-  type: "manual" | "once" | "every" | "recurring";
+  type: "manual" | "once" | "recurring";
   config: Partial<
     {
       at_ms: number;
-      every_ms: number;
-      cron_expr: string;
       rrule: string;
       dtstart_ms: number;
       tz: string;
@@ -1861,6 +2438,25 @@ type ChannelEnabledResponse = {
   id: ChannelId;
   enabled: boolean;
 };
+type ChannelOutboundRead = {
+  outbound: ChannelOutbound;
+  revision: string;
+  availability: ChannelAvailability;
+  start_supported: boolean;
+};
+type ChannelOutbound = {
+  policy: "reply_only" | "agent_may_start";
+  targets: Array<string>;
+};
+type ChannelAvailability = {
+  state: "running" | "not_running" | "not_loaded";
+  reason?: string | undefined;
+};
+type ChannelOutboundWriteResponse = {
+  outbound: ChannelOutbound;
+  revision: string;
+  warning?: string | undefined;
+};
 type MailboxListResponse = {
   mailboxes: Array<Mailbox>;
 };
@@ -1874,6 +2470,160 @@ type Mailbox = {
   smtp_port?: number | undefined;
   username?: string | undefined;
   configured: boolean;
+  status?: ("ok" | "degraded") | undefined;
+  status_reason?: string | undefined;
+  signature_html?: string | undefined;
+  sent_folder_name?: string | undefined;
+  drafts_folder_name?: string | undefined;
+};
+type MailFolder = {
+  slug: "inbox" | "sent" | "drafts";
+  display_name: string;
+  total: number;
+  unread_count: number | null;
+  availability?: ("present" | "absent" | "unknown") | undefined;
+  uidvalidity?: (number | null) | undefined;
+  mapping_source?:
+    | ("override" | "special_use" | "fallback" | "saved" | "none")
+    | undefined;
+  mapping_metadata?: MailReadMetadata | undefined;
+  count_metadata?: MailReadMetadata | undefined;
+};
+type MailReadMetadata = {
+  source: "live" | "memory" | "encrypted_disk" | "none";
+  last_validated_at: string | null;
+  stale: boolean;
+  refresh_needed: boolean;
+  notice_code: "cache_unavailable" | null;
+  publication_revision: string | null;
+};
+type MailFolderList = {
+  folders: Array<MailFolder>;
+  metadata?: MailReadMetadata | undefined;
+};
+type MailMessagePage = {
+  messages: Array<MailMessageSummary>;
+  truncated: boolean;
+  next_before_uid: number | null;
+  next_cursor?: (string | null) | undefined;
+  has_more?: boolean | undefined;
+  view_limit_reached?: boolean | undefined;
+  metadata?: MailReadMetadata | undefined;
+};
+type MailMessageSummary = {
+  message_id: string | null;
+  uid: number;
+  uidvalidity: number;
+  folder: "inbox" | "sent" | "drafts";
+  subject: string;
+  from: string;
+  from_name: string | null;
+  to: Array<string>;
+  cc: Array<string>;
+  date: string | null;
+  seen: boolean;
+  is_draft: boolean;
+  is_omnipus_draft: boolean;
+  read_by_agent: boolean;
+  message_ref?: string | undefined;
+  has_attachments?: boolean | undefined;
+};
+type MailMessage = {
+  message_id: string | null;
+  uid: number;
+  uidvalidity: number;
+  folder: "inbox" | "sent" | "drafts";
+  subject: string;
+  from: string;
+  from_name: string | null;
+  to: Array<string>;
+  cc: Array<string>;
+  date: string | null;
+  seen: boolean;
+  is_draft: boolean;
+  is_omnipus_draft: boolean;
+  read_by_agent: boolean;
+  reply_to: string | null;
+  in_reply_to: string | null;
+  references: string | null;
+  body_text: string;
+  has_html: boolean;
+  bcc: Array<string> | null;
+  attachments: Array<MailAttachment>;
+  message_ref?: string | undefined;
+  has_attachments?: boolean | undefined;
+  body_markdown: string | null;
+  markdown_lossy: boolean;
+  draft_cleanup_warning?: (string | null) | undefined;
+};
+type MailAttachment = {
+  part_index: number;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  reported_size_bytes?: number | undefined;
+};
+type MailSummaryList = {
+  items: Array<MailboxNewMailSummary>;
+};
+type MailboxNewMailSummary = {
+  agent_id: string;
+  unseen_total: number;
+  watcher_state: "ok" | "error" | "backoff";
+  last_error_class: string | null;
+  last_success_at: string | null;
+  last_seen_uid: number | null;
+  next_attempt_at: string | null;
+};
+type MailSendRequest = {
+  to: Array<string>;
+  cc?: Array<string> | undefined;
+  bcc?: Array<string> | undefined;
+  subject: string;
+  body_markdown: string;
+  in_reply_to?: (string | null) | undefined;
+  attachments?: Array<MailAttachmentInput> | undefined;
+};
+type MailAttachmentInput = {
+  filename: string;
+  content_type: string;
+  data_base64: string;
+};
+type MailDraftUpdateRequest = {
+  to: Array<string>;
+  cc?: Array<string> | undefined;
+  bcc?: Array<string> | undefined;
+  subject: string;
+  body_markdown: string;
+  uidvalidity: number;
+  uid: number;
+  attachments?: Array<MailAttachmentInput> | undefined;
+  keep_attachment_parts: Array<number>;
+};
+type MailAttachmentPreviewResponse = {
+  kind: "mail_attachment";
+  preview_id: string;
+  subject: string;
+  attachment: MailAttachment;
+  text_readable: boolean;
+  content_source: MailAttachmentContentSource;
+  read_only: true;
+};
+type MailAttachmentContentSource = {
+  byte_url: string;
+  isolated_html_url: string | null;
+  token: string;
+  expires_in_seconds: number;
+};
+type MailAttachmentSaveResponse = {
+  saved: true;
+  workspace_id: string;
+  entry: LibraryEntry;
+  path: string;
+  absolute_path: string;
+  size_bytes: number;
+  audit_status: "recorded" | "disabled" | "failed";
+  warning_code: "audit_write_failed" | null;
 };
 type OperationResult = {
   success: boolean;
@@ -1919,6 +2669,7 @@ type TaskCreateRequest = {
   description?: string | undefined;
   action: "llm";
   agent_id?: string | undefined;
+  run_isolated?: boolean | undefined;
   priority?: number | undefined;
   trigger?: TaskTrigger | undefined;
   blocked_by?: Array<string> | undefined;
@@ -1967,6 +2718,7 @@ type AcceptanceCriterionInput = {
 };
 type TaskUpdateRequest = Partial<{
   title: string;
+  run_isolated: boolean;
   description: string;
   prompt: string;
   status: "inbox" | "next" | "in_progress" | "blocked" | "done" | "failed";
@@ -1998,7 +2750,7 @@ type TaskOccurrenceSet = {
   occurrence_runs?:
     | Array<{
         occurrence_ms: number;
-        status: "in_progress" | "done" | "failed" | "skipped";
+        status: "in_progress" | "done" | "failed" | "skipped" | "missed";
         run_id: string;
         session_id: string;
         has_result: boolean;
@@ -2037,6 +2789,7 @@ type ChannelConfigureRequest = Partial<
     smtp_port: number;
     username: string;
     password: string;
+    allow_from: Array<string>;
   } & {
     [key: string]: any;
   }
@@ -2049,7 +2802,31 @@ type CliDetect = {
 type CliDetectEntry = {
   installed: boolean;
   path?: (string | null) | undefined;
+  link_path?: (string | null) | undefined;
   source?: ("path" | "well-known" | null) | undefined;
+};
+type CliPresetView = {
+  path: string;
+  preset_args: string;
+  detected: CliDetectEntry;
+};
+type ThirdPartyAgentSettings = {
+  clis: Partial<{
+    "claude-code": CliPreset;
+    codex: CliPreset;
+    opencode: CliPreset;
+  }>;
+};
+type CliPreset = {
+  path: string;
+  preset_args: string;
+};
+type ThirdPartyAgentSettingsView = {
+  clis: {
+    "claude-code": CliPresetView;
+    codex: CliPresetView;
+    opencode: CliPresetView;
+  };
 };
 type CliValidateRequest = {
   cli: ExternalCliTool;
@@ -2063,8 +2840,7 @@ type Schedule = {
   created_by?: string | undefined;
   trigger: ScheduleTrigger;
   message: string;
-  session_mode: "isolated" | "continue" | "main";
-  timeout_seconds: number;
+  run_isolated?: boolean | undefined;
   session_id?: string | undefined;
   state: ScheduleState;
   runs?: Array<ScheduleRunRecord> | undefined;
@@ -2097,8 +2873,7 @@ type ScheduleCreate = {
   owner_agent_id: string;
   trigger: ScheduleTrigger;
   message: string;
-  session_mode?: ("isolated" | "continue" | "main") | undefined;
-  timeout_seconds?: number | undefined;
+  run_isolated?: boolean | undefined;
   enabled?: boolean | undefined;
 };
 type ScheduleUpdate = Partial<{
@@ -2106,8 +2881,7 @@ type ScheduleUpdate = Partial<{
   owner_agent_id: string;
   trigger: ScheduleTrigger;
   message: string;
-  session_mode: "isolated" | "continue" | "main";
-  timeout_seconds: number;
+  run_isolated: boolean;
   enabled: boolean;
 }>;
 type ScheduleList = {
@@ -2119,7 +2893,7 @@ type NotificationList = {
 };
 type Notification = {
   id: string;
-  type: "schedule_failed" | "knowledge_drift";
+  type: "schedule_failed" | "knowledge_drift" | "goal_paused" | "stop_notice";
   title: string;
   body?: string | undefined;
   severity: "info" | "warning" | "error";
@@ -2159,6 +2933,7 @@ type Workspace = {
   updated_at: string;
   owner?: string | undefined;
   member_configs?: {} | undefined;
+  admin_main_session_id?: string | undefined;
 };
 type WorkspaceDelegationEdge = {
   from_agent: string;
@@ -2167,13 +2942,15 @@ type WorkspaceDelegationEdge = {
   depth?: number | undefined;
 };
 type WorkspaceMemberConfig = Partial<{
+  main_session_id: string;
+  main_session_error: string;
   heartbeat: WorkspaceMemberHeartbeat;
+  hidden_from_sidebar: boolean;
 }>;
 type WorkspaceMemberHeartbeat = Partial<{
   enabled: boolean;
   interval_minutes: number;
   body: string;
-  session_id: string;
 }>;
 type MemorySettings = Partial<{
   auto_recap_enabled: boolean;
@@ -2182,6 +2959,18 @@ type MemorySettings = Partial<{
   bootstrap_recap_max_per_minute: number;
   recap_model: string;
   recap_fallback_models: Array<FallbackModel>;
+  recap_provider: string;
+  recap_reasoning_effort: string;
+  recap_max_output_tokens: number;
+  recap_input_tokens: number;
+  recap_summary_words: number;
+  recap_list_items: number;
+  recap_fallback_context_chars: number;
+  recap_timeout_seconds: number;
+  recap_stream_retries: number;
+  recap_retry_pause_ms: number;
+  recap_chars_per_token: number;
+  bootstrap_recap_min_spacing_seconds: number;
   session_days: number;
   memory_retros_days: number;
 }>;
@@ -2318,6 +3107,7 @@ type AgentTokenEntry = {
   tokens_total: number;
   tokens_cache_read?: number | undefined;
   tokens_cache_write?: number | undefined;
+  cache_hit_ratio?: (number | null) | undefined;
   by_model?: {} | undefined;
 };
 type TokenUsageSummary = {
@@ -2327,6 +3117,9 @@ type TokenUsageSummary = {
   tokens_cache_read?: number | undefined;
   tokens_cache_write?: number | undefined;
   by_model?: {} | undefined;
+  by_provider?: {} | undefined;
+  unpriced_tokens?: number | undefined;
+  subscription_tokens?: number | undefined;
   partial?: boolean | undefined;
   partial_error_count?: number | undefined;
 };
@@ -2336,7 +3129,6 @@ type SessionMessage =
   | SessionMessageArtifact
   | SessionMessageBlocker
   | SessionMessageQuestion
-  | SessionMessageDecisionRequest
   | SessionMessageError
   | SessionMessageHandback
   | SessionMessageRevisionEntry
@@ -2413,25 +3205,7 @@ type SessionMessageQuestion = {
   sender_identity: string;
   untrusted_origin: boolean;
   text: string;
-  wait: boolean;
   correlation_id: string;
-  authority?: ("self_ok" | "owner_required") | undefined;
-};
-type SessionMessageDecisionRequest = {
-  message_id: string;
-  session_id: string;
-  parent_session_id?: (string | null) | undefined;
-  generation?: number | undefined;
-  direction: "child_to_parent";
-  kind: "decision_request";
-  depth: number;
-  created_at: string;
-  sender_identity: string;
-  untrusted_origin: boolean;
-  text: string;
-  options: Array<string>;
-  correlation_id: string;
-  authority?: ("self_ok" | "owner_required") | undefined;
 };
 type SessionMessageError = {
   message_id: string;
@@ -2604,8 +3378,10 @@ type DelegateActionRequest =
   | DelegateInboxAckAction
   | DelegateSteerAction
   | DelegateRespondAction
-  | DelegateCancelAction
-  | DelegateFollowUpAction
+  | DelegateStopAllAction
+  | DelegateClearGoalAction
+  | DelegateResumeAction
+  | DelegateRedirectAction
   | DelegatePeekAction;
 type DelegateRunAction = {
   action: "run";
@@ -2613,7 +3389,6 @@ type DelegateRunAction = {
   task: string;
   label?: string | undefined;
   critical?: boolean | undefined;
-  timeout_seconds?: number | undefined;
   snapshot?:
     | Partial<{
         references: Array<string>;
@@ -2625,7 +3400,6 @@ type DelegateRunAction = {
 type DelegateStatusAction = {
   action: "status";
   session_id: string;
-  task_id?: string | undefined;
 };
 type DelegateInboxAction = {
   action: "inbox";
@@ -2650,15 +3424,23 @@ type DelegateRespondAction = {
   text: string;
   correlation_id: string;
 };
-type DelegateCancelAction = {
-  action: "cancel";
+type DelegateStopAllAction = {
+  action: "stop_all";
   session_id: string;
-  hard?: boolean | undefined;
 };
-type DelegateFollowUpAction = {
-  action: "follow_up";
+type DelegateClearGoalAction = {
+  action: "clear_goal";
   session_id: string;
-  task?: string | undefined;
+};
+type DelegateResumeAction = {
+  action: "resume";
+  session_id: string;
+  text?: string | undefined;
+};
+type DelegateRedirectAction = {
+  action: "redirect";
+  session_id: string;
+  text: string;
 };
 type DelegatePeekAction = {
   action: "peek";
@@ -2691,11 +3473,9 @@ type SessionLifecycleRecord = {
     | "queued"
     | "running"
     | "needs_input"
-    | "paused"
+    | "stopped"
     | "completed"
-    | "failed"
-    | "cancelled"
-    | "timed_out";
+    | "failed";
   terminal: boolean;
   owner_scope_kind: "parent_session" | "plan" | "human";
   owner_scope_id?: string | undefined;
@@ -2723,6 +3503,7 @@ type SessionLifecycleRecord = {
           | "task"
           | "chat"
           | "channel"
+          | "main"
           | "scheduled"
           | "heartbeat"
           | "verifier"
@@ -2747,11 +3528,6 @@ type SessionLifecycleRecord = {
           mode: "direct" | "task";
           remaining_depth: number;
         };
-        limits?:
-          | Partial<{
-              timeout_seconds: number;
-            }>
-          | undefined;
         tool_exclusions?: Array<string> | undefined;
       }
     | undefined;
@@ -2770,26 +3546,17 @@ type DelegateInboxResponse = {
   messages: Array<SessionMessage>;
   has_more: boolean;
   next_cursor?: string | undefined;
+  not_delivered?: DelegateNotDeliveredSummary | undefined;
 };
-type DelegateRespondResponse = {
-  acknowledged: boolean;
-  corrective_session?: DelegateSessionResponse | undefined;
-};
-type DelegateSessionResponse = {
-  session_id: string;
-  generation: number;
-  queue_position?: number | undefined;
-  resumed_from?: (string | null) | undefined;
-  is_3p: boolean;
-  state:
-    | "queued"
-    | "running"
-    | "needs_input"
-    | "paused"
-    | "completed"
-    | "failed"
-    | "cancelled"
-    | "timed_out";
+type DelegateNotDeliveredSummary = {
+  count: number;
+  last_reason:
+    | "rate_limited"
+    | "body_too_large"
+    | "question_blocker_ceiling"
+    | "unacked_cap";
+  last_kind: string;
+  last_at: string;
 };
 type MessageParentRequest =
   | MessageParentProgress
@@ -2827,8 +3594,6 @@ type MessageParentQuestion = {
   kind: "question";
   message_id?: string | undefined;
   text: string;
-  wait: boolean;
-  authority?: ("self_ok" | "owner_required") | undefined;
   correlation_id?: string | undefined;
 };
 type MessageParentHandback = {
@@ -2838,6 +3603,77 @@ type MessageParentHandback = {
   artifacts?: Array<string> | undefined;
   open_questions?: Array<string> | undefined;
   mode: "final" | "pause";
+};
+type SecretNameEntry = {
+  reference: string;
+  kind:
+    | "provider_key"
+    | "mcp_env"
+    | "channel_credential"
+    | "mailbox_password"
+    | "agent_private"
+    | "unbound";
+  version: number;
+  recipient: {
+    kind:
+      | "provider_key"
+      | "mcp_env"
+      | "channel_credential"
+      | "mailbox_password"
+      | "agent_private"
+      | "unbound";
+    lines: Array<string>;
+  };
+  owner?: agent | undefined;
+  consumers: Array<string>;
+  state: "stored" | "selected" | "superseded";
+  available_in_channel_turns?: boolean | undefined;
+};
+type agent = {
+  workspace_id: string;
+  agent_id: string;
+};
+type Room = {
+  id: string;
+  workspace_id: string;
+  kind: "team" | "squad" | "adhoc";
+  name: string;
+  members: Array<string>;
+  muted: Array<string>;
+  paused: boolean;
+  generation: number;
+  origin_session_id?: string | undefined;
+  read_only_reason?: string | undefined;
+  hidden: boolean;
+  allocated_cost_micro_usd: number;
+  allocated_cost_unpriced: boolean;
+  needs_attention: boolean;
+  invitation_context_status?: RoomInvitationStatus | undefined;
+  invitation_context?: RoomInvitationContext | undefined;
+};
+type RoomInvitationStatus = "generating" | "ready" | "unavailable";
+type RoomInvitationContext = {
+  status: RoomInvitationStatus;
+  text?: string | undefined;
+  author_agent_id: string;
+  generated_at?: string | undefined;
+  cost_micro_usd?: number | undefined;
+  cost_unpriced?: boolean | undefined;
+};
+type AgentDependencyList = {
+  agent_id: string;
+  dependencies: Array<AgentDependency>;
+};
+type AgentDependency = {
+  workspace_id: string;
+  kind:
+    | "channel_main_agent"
+    | "people_row"
+    | "mailbox"
+    | "private_secret"
+    | "room";
+  id: string;
+  label: string;
 };
 
 export const PlatformAuthStartRequest = z.object({
@@ -2870,7 +3706,7 @@ export const LoginResponse: z.ZodType<LoginResponse> = z.object({
   warning: z.string().optional(),
 });
 export const BrowserInspectRequest = z.object({
-  session_id: z.string().min(1).max(128),
+  session_id: z.string().min(1).max(255),
   agent_id: z.string().min(1).max(128),
   x: z.number().gte(0),
   y: z.number().gte(0),
@@ -2911,12 +3747,27 @@ export const ReAuthResponse = z.object({
   expires_in: z.number().int(),
 });
 export const IntegrationProvider: z.ZodType<IntegrationProvider> = z.object({
-  id: z.string(),
+  id: z.enum([
+    "brave",
+    "tavily",
+    "perplexity",
+    "duckduckgo",
+    "glm",
+    "baidu",
+    "exa",
+    "elevenlabs",
+    "groq",
+    "audio-model",
+  ]),
   kind: z.enum(["search", "voice"]),
   display_name: z.string(),
   configured: z.boolean(),
   requires_key: z.boolean(),
+  search_depth_cap: z.string().optional(),
   active: z.boolean().optional(),
+  usable: z.boolean().optional(),
+  fallback: z.boolean().optional(),
+  fallback_automatic: z.boolean().optional(),
 });
 export const IntegrationProvidersResponse: z.ZodType<IntegrationProvidersResponse> =
   z.object({
@@ -2924,12 +3775,33 @@ export const IntegrationProvidersResponse: z.ZodType<IntegrationProvidersRespons
     voice: z.array(IntegrationProvider),
     active_search: z.string().optional(),
     active_voice: z.string().optional(),
+    default_search: z.string().optional(),
+    fallback_search: z.string().nullish(),
+    fallback_ignored_reason: z.string().optional(),
+    native_search_in_effect: z.boolean().optional(),
   });
 export const IntegrationProviderUpdateRequest = z.object({
   kind: z.enum(["search", "voice"]),
   api_key: z.string().optional(),
+  clear_api_key: z.boolean().optional(),
   active: z.boolean().optional(),
-});
+  fallback: z.boolean().optional(),
+}).strict();
+export const SearchProviderCheckRequest = z.object({}).partial().strict();
+export const SearchProviderCheckResponse = z.object({
+  provider_id: z.enum(["brave", "tavily", "perplexity", "glm", "baidu", "exa"]),
+  status: z.enum([
+    "success",
+    "auth_error",
+    "rate_limited",
+    "timeout",
+    "network_error",
+    "provider_error",
+    "invalid_response",
+  ]),
+  checked_at: z.string().datetime({ offset: true }),
+  retry_after_seconds: z.number().int().gte(1).optional(),
+}).strict();
 export const TranscribeResponse = z.object({
   text: z.string(),
   language: z.string().optional(),
@@ -2948,7 +3820,9 @@ export const OnboardingProviderApiKey =
     id: z.string().min(1).max(64),
     api_key: z.string().min(1),
     model: z.string().min(1).max(256).optional(),
+    reasoning_effort: z.string().max(32).optional(),
     endpoint: z.string().optional(),
+    protocol: z.enum(["openai-compatible", "anthropic"]).optional(),
     region: z.string().max(128).optional(),
   }) satisfies z.ZodType<OnboardingProviderApiKey>;
 export const OnboardingProviderSignIn =
@@ -2956,6 +3830,7 @@ export const OnboardingProviderSignIn =
     auth_method: z.literal("sign_in"),
     id: z.string().min(1).max(64),
     model: z.string().min(1).max(256).optional(),
+    reasoning_effort: z.string().max(32).optional(),
     endpoint: z.string().optional(),
   }) satisfies z.ZodType<OnboardingProviderSignIn>;
 export const OnboardingPreferences: z.ZodType<OnboardingPreferences> = z.object(
@@ -3016,6 +3891,8 @@ export const ModelTokens: z.ZodType<ModelTokens> = z
     out: z.number().int().gte(0).optional(),
     cache_read: z.number().int().gte(0).optional(),
     cache_write: z.number().int().gte(0).optional(),
+    cache_hit_ratio: z.number().gte(0).lte(1).nullish(),
+    reasoning: z.number().int().gte(0).optional(),
     total: z.number().int().gte(0),
   })
   .passthrough();
@@ -3030,25 +3907,54 @@ export const SessionStats: z.ZodType<SessionStats> = z
     tokens_cache_read: z.number().int().gte(0).optional(),
     tokens_cache_write: z.number().int().gte(0).optional(),
     by_model: z.record(ModelTokens).optional(),
+    by_provider: z.record(ModelTokens).optional(),
+    unpriced_tokens: z.number().int().gte(0).optional(),
+    subscription_tokens: z.number().int().gte(0).optional(),
   })
   .passthrough();
 export const Session: z.ZodType<Session> = z.object({
   id: z.string(),
-  type: z
-    .enum([
-      "chat",
-      "task",
-      "channel",
-      "scheduled",
-      "heartbeat",
-      "verifier",
-      "delegate",
-    ])
-    .optional(),
+  type: z.enum([
+    "chat",
+    "task",
+    "channel",
+    "scheduled",
+    "main",
+    "verifier",
+    "delegate",
+  ]),
   protected: z.boolean().optional(),
+  needs_attention: z.boolean().optional(),
   agent_id: z.string(),
   title: z.string(),
-  status: z.enum(["active", "archived", "interrupted"]),
+  status: z.enum(["active", "archived", "failed", "interrupted"]),
+  lifecycle_state: z
+    .enum([
+      "working",
+      "waiting_for_answer",
+      "done",
+      "failed",
+      "stopped",
+      "interrupted",
+    ])
+    .optional(),
+  stop_note: z
+    .object({
+      at: z.string().datetime({ offset: true }),
+      by: z.string(),
+      seq: z.number().int().gte(0),
+      cause: z.enum([
+        "stop",
+        "redirect_pause",
+        "cascade",
+        "restart",
+        "timeout",
+      ]),
+      boot_seq: z.number().int().gte(1).optional(),
+    })
+    .optional(),
+  execution: z.enum(["queued", "running"]).optional(),
+  background_command_count: z.number().int().gte(0).optional(),
   created_at: z.string().datetime({ offset: true }),
   updated_at: z.string().datetime({ offset: true }),
   model: z.string().optional(),
@@ -3060,7 +3966,6 @@ export const Session: z.ZodType<Session> = z.object({
   partitions: z.array(z.string()).max(3650),
   last_compaction_summary: z.string().optional(),
   agent_ids: z.array(z.string()).optional(),
-  active_agent_id: z.string().optional(),
   compaction_summaries: z.record(z.string()).optional(),
   parent_session_id: z.string().optional(),
   child_count: z.number().int().gte(0).optional(),
@@ -3070,13 +3975,11 @@ export const SessionPage: z.ZodType<SessionPage> = z.object({
   next_cursor: z.string().optional(),
   partial_errors: z.array(z.string()).optional(),
 });
-export const SessionCreateRequest = z
-  .object({
-    agent_id: z.string(),
-    type: z.enum(["chat", "task", "channel"]),
-    workspace_id: z.string().max(128),
-  })
-  .partial();
+export const SessionCreateRequest = z.object({
+  agent_id: z.string().min(1),
+  type: z.enum(["chat", "task", "channel"]).optional(),
+  workspace_id: z.string().max(128).optional(),
+});
 export const Attachment: z.ZodType<Attachment> = z.object({
   type: z.enum(["image", "audio", "video", "file"]),
   path: z.string(),
@@ -3105,6 +4008,20 @@ export const ToolCall: z.ZodType<ToolCall> = z.object({
     .enum(["full", "capped", "emptied"])
     .optional()
     .default("full"),
+});
+export const participant: z.ZodType<participant> = z.object({
+  kind: z.enum(["human", "agent"]),
+  display_name: z.string().min(1).max(128),
+  source: z
+    .string()
+    .regex(/^[a-z][a-z0-9_-]{0,31}$/)
+    .optional(),
+  agent: z
+    .object({
+      workspace_id: z.string().min(1).max(128),
+      agent_id: z.string().min(1).max(128),
+    })
+    .optional(),
 });
 export const CriterionVerdict: z.ZodType<CriterionVerdict> = z.object({
   criterion_id: z.string().min(1),
@@ -3149,6 +4066,10 @@ export const JudgeVerdict: z.ZodType<JudgeVerdict> = z.object({
   judged_at: z.string().datetime({ offset: true }),
   judge_agent_id: z.string(),
 });
+export const ContextWindowNotice: z.ZodType<ContextWindowNotice> = z.object({
+  kind: z.enum(["provider_retry", "mid_turn"]),
+  message: z.string().min(1).max(2048),
+});
 export const GoalOutcome: z.ZodType<GoalOutcome> = z.object({
   goal_id: z.string().min(1),
   goal_text: z.string().min(1),
@@ -3159,9 +4080,51 @@ export const GoalOutcome: z.ZodType<GoalOutcome> = z.object({
   criteria_total: z.number().int().gte(1).optional(),
   ended_at: z.string().datetime({ offset: true }),
 });
+export const HelperEvent: z.ZodType<HelperEvent> = z.object({
+  helper_session_id: z.string().min(1),
+  helper_title: z.string().min(1).optional(),
+  kind: z.enum([
+    "verdict_unmet",
+    "not_verified",
+    "stopped",
+    "restarted",
+    "resume_refused",
+    "timed_out",
+    "finished",
+    "question",
+    "blocker",
+    "failed",
+  ]),
+  text: z.string().min(1),
+  goal_id: z.string().min(1).optional(),
+  created_at: z.string().datetime({ offset: true }),
+});
+export const history_origin: z.ZodType<history_origin> = z.object({
+  position: z
+    .string()
+    .min(47)
+    .max(47)
+    .regex(/^hp1_[A-Za-z0-9_-]{43}$/),
+  entry_id: z.string().min(1).optional(),
+  turn_id: z.string().min(1).optional(),
+});
 export const Message: z.ZodType<Message> = z.object({
   id: z.string(),
+  history_position: z
+    .string()
+    .min(47)
+    .max(47)
+    .regex(/^hp1_[A-Za-z0-9_-]{43}$/)
+    .optional(),
   client_message_id: z.string().min(1).max(128).optional(),
+  input_disposition: z
+    .object({
+      message_id: z.string().min(1).max(255),
+      client_message_id: z.string().min(1).max(128).optional(),
+      state: z.literal("discarded"),
+      reason: z.literal("stopped_before_delivery"),
+    })
+    .optional(),
   type: z
     .enum([
       "message",
@@ -3170,10 +4133,14 @@ export const Message: z.ZodType<Message> = z.object({
       "tool_call",
       "turn_canceled",
       "judge_verdict",
+      "context_window_notice",
+      "provider_fallback",
     ])
     .optional(),
+  view_membership: z.enum(["chat", "model", "both"]).optional(),
   role: z.enum(["user", "assistant", "system"]).optional(),
   content: z.string().optional(),
+  content_original_size_bytes: z.number().int().gte(65537).optional(),
   summary: z.string().optional(),
   timestamp: z.string().datetime({ offset: true }),
   tokens: z.number().int().gte(0).optional(),
@@ -3182,20 +4149,44 @@ export const Message: z.ZodType<Message> = z.object({
   attachments: z.array(Attachment).optional(),
   tool_calls: z.array(ToolCall).optional(),
   agent_id: z.string(),
+  participant: z
+    .object({
+      kind: z.enum(["human", "agent"]),
+      display_name: z.string().min(1).max(128),
+      source: z
+        .string()
+        .regex(/^[a-z][a-z0-9_-]{0,31}$/)
+        .optional(),
+      agent: z
+        .object({
+          workspace_id: z.string().min(1).max(128),
+          agent_id: z.string().min(1).max(128),
+        })
+        .optional(),
+    })
+    .optional(),
+  reply_to_participant: participant.optional(),
+  reply_to_message_id: z.string().min(1).optional(),
   messages_compacted: z.number().int().optional(),
   truncated: z.boolean().optional(),
   truncation_reason: z.enum(["cancelled", "max_output_tokens"]).optional(),
   turn_id: z.string().optional(),
+  goal_id: z.string().optional(),
   canceled_by_user: z.string().optional(),
   canceled_by_channel: z.string().optional(),
   cancel_method: z.enum(["graceful", "hard"]).optional(),
   descendants_canceled: z.array(z.string()).optional(),
   model: z.string().optional(),
+  unavailable_model: z.string().min(1).max(256).optional(),
+  unavailable_code: z.enum(["rate_limited", "model_retired"]).optional(),
   verdict: JudgeVerdict.optional(),
+  context_window_notice: ContextWindowNotice.optional(),
   system_subtype: z
     .enum([
       "browser_handover_notice",
+      "expiry_notice",
       "goal_outcome",
+      "helper_event",
       "subagent_start",
       "subagent_state",
       "subagent_message",
@@ -3203,8 +4194,10 @@ export const Message: z.ZodType<Message> = z.object({
     ])
     .optional(),
   goal_outcome: GoalOutcome.optional(),
+  helper_event: HelperEvent.optional(),
   subagent_start: z
     .object({
+      history_origin: history_origin.optional(),
       type: z.literal("subagent_start"),
       session_id: z.string().min(1),
       span_id: z.string().min(1),
@@ -3217,6 +4210,7 @@ export const Message: z.ZodType<Message> = z.object({
     .optional(),
   subagent_state: z
     .object({
+      history_origin: history_origin.optional(),
       type: z.literal("subagent_state"),
       session_id: z.string().min(1),
       child_session_id: z.string().min(1).optional(),
@@ -3225,16 +4219,31 @@ export const Message: z.ZodType<Message> = z.object({
         "queued",
         "running",
         "needs_input",
-        "paused",
+        "stopped",
         "completed",
         "failed",
-        "cancelled",
-        "timed_out",
       ]),
-      steering_receipt: z
+      control_receipt: z
         .object({
-          correlation_id: z.string(),
-          applied_at: z.string().datetime({ offset: true }),
+          seq: z.number().int().gte(0),
+          control_id: z.string().min(1),
+          verb: z.enum([
+            "steer",
+            "stop",
+            "stop_all",
+            "redirect",
+            "resume",
+            "respond",
+            "clear_goal",
+          ]),
+          state: z.enum(["queued", "delivered", "applied", "superseded"]),
+          accepted_at: z.string().datetime({ offset: true }),
+          delivered_at: z.string().datetime({ offset: true }).optional(),
+          applied_at: z.string().datetime({ offset: true }).optional(),
+          superseded_at: z.string().datetime({ offset: true }).optional(),
+          superseded_by_seq: z.number().int().gte(0).optional(),
+          reason: z.string().optional(),
+          released_control_ids: z.array(z.string()).optional(),
         })
         .optional(),
       created_at: z.string().datetime({ offset: true }),
@@ -3243,6 +4252,7 @@ export const Message: z.ZodType<Message> = z.object({
     .optional(),
   subagent_message: z
     .object({
+      history_origin: history_origin.optional(),
       type: z.literal("subagent_message"),
       session_id: z.string().min(1),
       child_session_id: z.string().min(1).optional(),
@@ -3254,12 +4264,12 @@ export const Message: z.ZodType<Message> = z.object({
         "artifact",
         "blocker",
         "question",
-        "decision_request",
         "error",
         "handback",
         "steer",
         "respond",
         "goal_status",
+        "not_delivered",
       ]),
       text: z.string().optional(),
       pct: z.number().int().gte(0).lte(100).optional(),
@@ -3272,6 +4282,17 @@ export const Message: z.ZodType<Message> = z.object({
     .optional(),
   subagent_end: z
     .object({
+      history_origin: z
+        .object({
+          position: z
+            .string()
+            .min(47)
+            .max(47)
+            .regex(/^hp1_[A-Za-z0-9_-]{43}$/),
+          entry_id: z.string().min(1).optional(),
+          turn_id: z.string().min(1).optional(),
+        })
+        .optional(),
       type: z.literal("subagent_end"),
       session_id: z.string().min(1),
       span_id: z.string().min(1),
@@ -3299,15 +4320,347 @@ export const Message: z.ZodType<Message> = z.object({
       seq: z.number().int().gte(1).optional(),
     })
     .optional(),
+  terminal_outcome: z.boolean().optional(),
+  room_ref: z
+    .object({
+      room_id: z.string().min(1).max(128),
+      room_name: z.string().min(1).max(80),
+      request_id: z.string().min(1).max(128),
+      role: z.enum(["request", "answer"]),
+    })
+    .optional(),
+  effort: z
+    .object({
+      chosen: z.string().max(32),
+      sent: z.string().max(32),
+      reason: z.enum([
+        "mapped",
+        "not_supported",
+        "continuation",
+        "rejected",
+        "rejected_earlier",
+        "extra_body",
+      ]),
+      provider: z.string(),
+      model: z.string(),
+    })
+    .partial()
+    .optional(),
+  turn_reasoning_tokens: z.number().int().gte(0).optional(),
+});
+export const subagent_start: z.ZodType<subagent_start> = z.object({
+  history_origin: history_origin.optional(),
+  type: z.literal("subagent_start"),
+  session_id: z.string().min(1),
+  span_id: z.string().min(1),
+  parent_call_id: z.string().min(1),
+  task_label: z.string().min(1).max(100),
+  agent_id: z.string().optional(),
+  child_session_id: z.string().min(1).optional(),
+  seq: z.number().int().gte(1).optional(),
+});
+export const subagent_state: z.ZodType<subagent_state> = z.object({
+  history_origin: history_origin.optional(),
+  type: z.literal("subagent_state"),
+  session_id: z.string().min(1),
+  child_session_id: z.string().min(1).optional(),
+  span_id: z.string().min(1),
+  state: z.enum([
+    "queued",
+    "running",
+    "needs_input",
+    "stopped",
+    "completed",
+    "failed",
+  ]),
+  control_receipt: z
+    .object({
+      seq: z.number().int().gte(0),
+      control_id: z.string().min(1),
+      verb: z.enum([
+        "steer",
+        "stop",
+        "stop_all",
+        "redirect",
+        "resume",
+        "respond",
+        "clear_goal",
+      ]),
+      state: z.enum(["queued", "delivered", "applied", "superseded"]),
+      accepted_at: z.string().datetime({ offset: true }),
+      delivered_at: z.string().datetime({ offset: true }).optional(),
+      applied_at: z.string().datetime({ offset: true }).optional(),
+      superseded_at: z.string().datetime({ offset: true }).optional(),
+      superseded_by_seq: z.number().int().gte(0).optional(),
+      reason: z.string().optional(),
+      released_control_ids: z.array(z.string()).optional(),
+    })
+    .optional(),
+  created_at: z.string().datetime({ offset: true }),
+  seq: z.number().int().gte(1).optional(),
+});
+export const subagent_message: z.ZodType<subagent_message> = z.object({
+  history_origin: history_origin.optional(),
+  type: z.literal("subagent_message"),
+  session_id: z.string().min(1),
+  child_session_id: z.string().min(1).optional(),
+  span_id: z.string().min(1),
+  message_id: z.string().min(1),
+  kind: z.enum([
+    "progress",
+    "checkpoint",
+    "artifact",
+    "blocker",
+    "question",
+    "error",
+    "handback",
+    "steer",
+    "respond",
+    "goal_status",
+    "not_delivered",
+  ]),
+  text: z.string().optional(),
+  pct: z.number().int().gte(0).lte(100).optional(),
+  correlation_id: z.string().optional(),
+  sender_identity: z.string().min(1),
+  untrusted_origin: z.boolean(),
+  created_at: z.string().datetime({ offset: true }),
+  seq: z.number().int().gte(1).optional(),
+});
+export const subagent_end: z.ZodType<subagent_end> = z.object({
+  history_origin: z
+    .object({
+      position: z
+        .string()
+        .min(47)
+        .max(47)
+        .regex(/^hp1_[A-Za-z0-9_-]{43}$/),
+      entry_id: z.string().min(1).optional(),
+      turn_id: z.string().min(1).optional(),
+    })
+    .optional(),
+  type: z.literal("subagent_end"),
+  session_id: z.string().min(1),
+  span_id: z.string().min(1),
+  status: z.enum([
+    "success",
+    "error",
+    "cancelled",
+    "interrupted",
+    "timeout",
+    "parked",
+  ]),
+  duration_ms: z.number().int().gte(0).optional(),
+  final_result: z.string().optional(),
+  reason: z
+    .enum([
+      "parent_timeout",
+      "parent_cancelled",
+      "parent_done_early",
+      "unknown",
+    ])
+    .optional(),
+  agent_id: z.string().optional(),
+  parent_call_id: z.string().optional(),
+  message: z.string().optional(),
+  seq: z.number().int().gte(1).optional(),
 });
 export const SessionDetail: z.ZodType<SessionDetail> = z.object({
   session: Session,
-  messages: z.array(Message).max(100000),
+  history_state: z.object({
+    status: z.enum(["available", "unavailable"]),
+    reason: z
+      .enum([
+        "index_missing",
+        "index_inconsistent",
+        "catchup_limit",
+        "storage_error",
+        "projection_error",
+      ])
+      .optional(),
+    message: z.string().min(1).optional(),
+  }),
+  messages: z.array(Message).max(100).optional(),
+  page_info: z
+    .object({
+      mode: z.enum(["latest", "older", "newer", "window_refresh"]),
+      limit: z.number().int().gte(20).lte(100),
+      min_rows: z.number().int().gte(1).lte(100),
+      row_count: z.number().int().gte(0),
+      source_group_count: z.number().int().gte(0).lte(100),
+      soft_byte_budget: z.number().int().gte(1),
+      byte_ceiling: z.number().int().gte(1),
+      projected_bytes: z.number().int().gte(0),
+      byte_budget_exceeded: z.boolean(),
+      stop_reason: z.enum([
+        "row_target",
+        "source_cap",
+        "clear",
+        "end",
+        "range_end",
+        "byte_budget",
+        "byte_ceiling",
+      ]),
+      budget_override: z.enum(["height_floor", "atomic_group"]).optional(),
+      first_position: z
+        .string()
+        .min(47)
+        .max(47)
+        .regex(/^hp1_[A-Za-z0-9_-]{43}$/)
+        .optional(),
+      last_position: z
+        .string()
+        .min(47)
+        .max(47)
+        .regex(/^hp1_[A-Za-z0-9_-]{43}$/)
+        .optional(),
+      stopped_at_clear: z.boolean().optional(),
+      latest_clear: z
+        .object({
+          entry_id: z.string().min(1),
+          history_position: z
+            .string()
+            .min(47)
+            .max(47)
+            .regex(/^hp1_[A-Za-z0-9_-]{43}$/),
+        })
+        .optional(),
+      retention_generation: z.string().min(1),
+      context: z.object({
+        spans: z.array(
+          z.object({
+            span_id: z.string().min(1),
+            start: subagent_start.optional(),
+            state: subagent_state.optional(),
+            message: subagent_message.optional(),
+            end: subagent_end.optional(),
+            has_run: z.boolean().optional(),
+          })
+        ),
+        duplicate_ids: z.array(
+          z.object({
+            kind: z.enum(["message", "tool"]),
+            id: z.string().min(1),
+            canonical_position: z
+              .string()
+              .min(47)
+              .max(47)
+              .regex(/^hp1_[A-Za-z0-9_-]{43}$/),
+            occurrence_count: z.number().int().gte(2),
+          })
+        ),
+      }),
+    })
+    .optional(),
+  has_earlier: z.boolean().optional(),
+  has_later: z.boolean().optional(),
+  next_before: z
+    .string()
+    .min(47)
+    .max(47)
+    .regex(/^hp1_[A-Za-z0-9_-]{43}$/)
+    .optional(),
+  next_after: z
+    .string()
+    .min(47)
+    .max(47)
+    .regex(/^hp1_[A-Za-z0-9_-]{43}$/)
+    .optional(),
   agent_removed: z.boolean().optional(),
 });
 export const SessionRenameRequest = z.object({
   title: z.string().min(1).max(256),
 });
+export const page_info: z.ZodType<page_info> = z.object({
+  mode: z.enum(["latest", "older", "newer", "window_refresh"]),
+  limit: z.number().int().gte(20).lte(100),
+  min_rows: z.number().int().gte(1).lte(100),
+  row_count: z.number().int().gte(0),
+  source_group_count: z.number().int().gte(0).lte(100),
+  soft_byte_budget: z.number().int().gte(1),
+  byte_ceiling: z.number().int().gte(1),
+  projected_bytes: z.number().int().gte(0),
+  byte_budget_exceeded: z.boolean(),
+  stop_reason: z.enum([
+    "row_target",
+    "source_cap",
+    "clear",
+    "end",
+    "range_end",
+    "byte_budget",
+    "byte_ceiling",
+  ]),
+  budget_override: z.enum(["height_floor", "atomic_group"]).optional(),
+  first_position: z
+    .string()
+    .min(47)
+    .max(47)
+    .regex(/^hp1_[A-Za-z0-9_-]{43}$/)
+    .optional(),
+  last_position: z
+    .string()
+    .min(47)
+    .max(47)
+    .regex(/^hp1_[A-Za-z0-9_-]{43}$/)
+    .optional(),
+  stopped_at_clear: z.boolean().optional(),
+  latest_clear: z
+    .object({
+      entry_id: z.string().min(1),
+      history_position: z
+        .string()
+        .min(47)
+        .max(47)
+        .regex(/^hp1_[A-Za-z0-9_-]{43}$/),
+    })
+    .optional(),
+  retention_generation: z.string().min(1),
+  context: z.object({
+    spans: z.array(
+      z.object({
+        span_id: z.string().min(1),
+        start: subagent_start.optional(),
+        state: subagent_state.optional(),
+        message: subagent_message.optional(),
+        end: subagent_end.optional(),
+        has_run: z.boolean().optional(),
+      })
+    ),
+    duplicate_ids: z.array(
+      z.object({
+        kind: z.enum(["message", "tool"]),
+        id: z.string().min(1),
+        canonical_position: z
+          .string()
+          .min(47)
+          .max(47)
+          .regex(/^hp1_[A-Za-z0-9_-]{43}$/),
+        occurrence_count: z.number().int().gte(2),
+      })
+    ),
+  }),
+});
+export const SessionHistoryResponse: z.ZodType<SessionHistoryResponse> =
+  z.object({
+    session_id: z.string().min(1).max(255),
+    session_tokens_total: z.number().int().gte(0).optional(),
+    entries: z.array(Message).max(100),
+    has_earlier: z.boolean(),
+    has_later: z.boolean(),
+    next_before: z
+      .string()
+      .min(47)
+      .max(47)
+      .regex(/^hp1_[A-Za-z0-9_-]{43}$/)
+      .optional(),
+    next_after: z
+      .string()
+      .min(47)
+      .max(47)
+      .regex(/^hp1_[A-Za-z0-9_-]{43}$/)
+      .optional(),
+    page_info: page_info,
+  });
 export const ConfigurationRevision = z.string();
 export const ConfigurationPersistenceStatus = z.enum([
   "complete",
@@ -3324,6 +4677,59 @@ export const AgentFieldDescriptor: z.ZodType<AgentFieldDescriptor> = z.object({
   editable: z.boolean(),
   reason: z.string().optional(),
 });
+export const AgentFigure = z.enum([
+  "Robot",
+  "Man",
+  "Woman",
+  "Omnipus",
+  "Monogram",
+]);
+export const AgentRole = z.enum([
+  "writer",
+  "designer",
+  "image",
+  "video",
+  "audio",
+  "social",
+  "developer",
+  "data",
+  "analyst",
+  "itops",
+  "automation",
+  "security",
+  "quality",
+  "science",
+  "orchestrator",
+  "project",
+  "product",
+  "sales",
+  "marketing",
+  "finance",
+  "legal",
+  "support",
+  "documents",
+  "researcher",
+  "people",
+  "tutor",
+  "knowledge",
+  "translator",
+  "general",
+  "personal",
+  "office",
+]);
+export const AgentColor = z.enum([
+  "#6E8BA8",
+  "#7A8C9E",
+  "#4F8A80",
+  "#5E6973",
+  "#7B7290",
+  "#B76E79",
+  "#A97142",
+  "#9C8A5B",
+  "#CDBA96",
+  "#8E9196",
+]);
+export const MaxToolIterationsSource = z.enum(["global", "agent"]);
 export const AgentToolsMcpServerBinding: z.ZodType<AgentToolsMcpServerBinding> =
   z
     .object({ id: z.string(), tools: z.array(z.string()).optional() })
@@ -3343,20 +4749,12 @@ export const AgentToolsCfg: z.ZodType<AgentToolsCfg> = z
 export const FallbackModel: z.ZodType<FallbackModel> = z.object({
   model: z.string().max(256),
   provider: z.string().max(64).optional(),
+  reasoning_effort: z.string().max(32).optional(),
 }).strict();
 export const AgentModelParams: z.ZodType<AgentModelParams> = z
   .object({
     temperature: z.number().gte(0).lte(2),
     max_tokens: z.number().int().gte(1),
-  })
-  .partial()
-  .passthrough();
-export const AgentRateLimits: z.ZodType<AgentRateLimits> = z
-  .object({
-    use_global_defaults: z.boolean(),
-    max_llm_calls_per_hour: z.number().int().gte(0),
-    max_tool_calls_per_minute: z.number().int().gte(0),
-    max_cost_per_day: z.number().gte(0),
   })
   .partial()
   .passthrough();
@@ -3373,7 +4771,9 @@ export const ExecutorConfig: z.ZodType<ExecutorConfig> = z
   .object({
     kind: z.enum(["native", "external-cli", "remote-a2a"]),
     cli: ExternalCliTool,
-    cli_path: z.string(),
+    effective_cli_path: z.string(),
+    effective_preset_args: z.string(),
+    program_warning: z.string(),
     env_overrides: z.record(z.string()),
     cli_args: z.string(),
   })
@@ -3397,27 +4797,27 @@ export const Agent: z.ZodType<Agent> = z
     name: z.string().min(1).max(100),
     type: z.enum(["core", "system", "Main", "Subagent", "subagent_3p"]),
     locked: z.boolean(),
-    color: z
-      .string()
-      .regex(/^#[0-9A-Fa-f]{6}$/)
-      .optional(),
-    icon: z.string().max(50).optional(),
+    figure: AgentFigure,
+    role: AgentRole,
+    color: AgentColor.optional(),
     model: z.string().max(256).optional(),
     provider: z.string().max(64).optional(),
+    reasoning_effort: z.string().max(32).optional(),
     description: z.string().optional(),
     status: z.enum(["active", "idle", "draft", "error"]),
     soul: z.string(),
     warning: z.string().optional(),
-    timeout_seconds: z.number().int().gte(0),
-    max_tool_iterations: z.number().int().gte(0),
+    max_tool_iterations: z.number().int().gte(1).lte(1000),
+    max_tool_iterations_source: MaxToolIterationsSource,
+    max_tool_iterations_override: z.number().int().gte(1).optional(),
+    max_tool_iterations_override_ignored: z.boolean(),
     tools_cfg: AgentToolsCfg.optional(),
-    auto_approve_disabled: z.boolean().optional(),
     fallback_models: z.array(FallbackModel).max(2).optional(),
     model_params: AgentModelParams.optional(),
-    rate_limits: AgentRateLimits.optional(),
     stats: AgentStats.optional(),
-    default: z.boolean().optional(),
+    skill_grants: z.record(z.string()).optional(),
     skills: z.array(z.string()).optional(),
+    stale_skill_grants: z.array(z.string()).optional(),
     updated_at: z.string().datetime({ offset: true }).optional(),
     voice: z.string().nullish(),
     executor: ExecutorConfig.optional(),
@@ -3445,17 +4845,15 @@ export const AgentCreateRequestMain =
     mcp_servers: z.array(AgentMCPBinding).optional(),
     tool_policy_changes: ToolPolicyChanges.optional(),
     type: z.literal("Main"),
-    name: z.string().min(1),
+    name: z.string().min(1).max(100),
     description: z.string().optional(),
     model: z.string().optional(),
     provider: z.string().max(64).optional(),
-    color: z
-      .string()
-      .regex(/^#[0-9A-Fa-f]{6}$/)
-      .optional(),
-    icon: z.string().max(50).optional(),
+    reasoning_effort: z.string().max(32).optional(),
+    figure: AgentFigure.optional(),
+    role: AgentRole.optional(),
+    color: AgentColor.optional(),
     tools_cfg: AgentToolsCfg.optional(),
-    auto_approve_disabled: z.boolean().optional(),
     fallback_models: z.array(FallbackModel).max(2).optional(),
     model_params: z
       .object({ temperature: z.number(), max_tokens: z.number().int() })
@@ -3465,24 +4863,22 @@ export const AgentCreateRequestMain =
     skills: z.array(z.string()).optional(),
     soul: z.string().min(1),
     voice: z.string().nullish(),
-    max_tool_iterations: z.number().int().gte(0).optional(),
+    max_tool_iterations: z.number().int().gte(1).lte(1000).optional(),
   }).strict() satisfies z.ZodType<AgentCreateRequestMain>;
 export const AgentCreateRequestSubagent =
   z.object({
     mcp_servers: z.array(AgentMCPBinding).optional(),
     tool_policy_changes: ToolPolicyChanges.optional(),
     type: z.literal("Subagent"),
-    name: z.string().min(1),
+    name: z.string().min(1).max(100),
     description: z.string().optional(),
     model: z.string().optional(),
     provider: z.string().max(64).optional(),
-    color: z
-      .string()
-      .regex(/^#[0-9A-Fa-f]{6}$/)
-      .optional(),
-    icon: z.string().max(50).optional(),
+    reasoning_effort: z.string().max(32).optional(),
+    figure: AgentFigure.optional(),
+    role: AgentRole.optional(),
+    color: AgentColor.optional(),
     tools_cfg: AgentToolsCfg.optional(),
-    auto_approve_disabled: z.boolean().optional(),
     fallback_models: z.array(FallbackModel).max(2).optional(),
     model_params: z
       .object({ temperature: z.number(), max_tokens: z.number().int() })
@@ -3491,33 +4887,25 @@ export const AgentCreateRequestSubagent =
       .optional(),
     skills: z.array(z.string()).optional(),
     soul: z.string().min(1),
-    max_tool_iterations: z.number().int().gte(0).optional(),
+    max_tool_iterations: z.number().int().gte(1).lte(1000).optional(),
   }).strict() satisfies z.ZodType<AgentCreateRequestSubagent>;
+export const ExecutorConfigCreate: z.ZodType<ExecutorConfigCreate> = z.object({
+  cli: ExternalCliTool,
+  env_overrides: z.record(z.string()).optional(),
+  cli_args: z.string().optional(),
+});
 export const AgentCreateRequestSubagent3p =
   z.object({
     type: z.literal("subagent_3p"),
-    name: z.string().min(1),
+    name: z.string().min(1).max(100),
     description: z.string().optional(),
     model: z.string().optional(),
     provider: z.string().max(64).optional(),
-    color: z
-      .string()
-      .regex(/^#[0-9A-Fa-f]{6}$/)
-      .optional(),
-    icon: z.string().max(50).optional(),
-    rate_limits: z
-      .object({
-        use_global_defaults: z.boolean(),
-        max_llm_calls_per_hour: z.number().int(),
-        max_tool_calls_per_minute: z.number().int(),
-        max_cost_per_day: z.number(),
-      })
-      .partial()
-      .passthrough()
-      .optional(),
-    soul: z.string().min(1),
-    executor: ExecutorConfig,
-    timeout_seconds: z.number().int().gte(0).optional(),
+    figure: AgentFigure.optional(),
+    role: AgentRole.optional(),
+    color: AgentColor.optional(),
+    executor: ExecutorConfigCreate,
+    max_tool_iterations: z.number().int().gte(1).lte(1000).optional(),
   }).strict() satisfies z.ZodType<AgentCreateRequestSubagent3p>;
 export const AgentCreateRequest =
   z.discriminatedUnion("type", [
@@ -3525,34 +4913,43 @@ export const AgentCreateRequest =
     AgentCreateRequestSubagent,
     AgentCreateRequestSubagent3p,
   ]) satisfies z.ZodType<AgentCreateRequest>;
+export const FallbackModelPair: z.ZodType<FallbackModelPair> = z.object({
+  model: z.string().min(1).max(256),
+  provider: z.string().min(1).max(64),
+  reasoning_effort: z.string().max(32).optional(),
+});
+export const ExecutorConfigUpdate: z.ZodType<ExecutorConfigUpdate> = z
+  .object({
+    env_overrides: z.record(z.string()),
+    env_overrides_remove: z.array(z.string()).max(64),
+    cli_args: z.string(),
+  })
+  .partial();
 export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z.object({
   revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
   mcp_servers: z.array(AgentMCPBinding).optional(),
   tool_policy_changes: ToolPolicyChanges.optional(),
-  name: z.string().min(1).optional(),
+  name: z.string().min(1).max(100).optional(),
   description: z.string().optional(),
   model: z.string().optional(),
   provider: z.string().max(64).optional(),
+  reasoning_effort: z.string().max(32).optional(),
   context_window_override: z.number().int().gte(1).nullish(),
   soul: z.string().min(1).optional(),
-  max_tool_iterations: z.number().int().optional(),
-  color: z
-    .string()
-    .regex(/^#[0-9A-Fa-f]{6}$/)
-    .optional(),
-  icon: z.string().max(50).optional(),
-  fallback_models: z.array(FallbackModel).max(2).optional(),
+  max_tool_iterations: z.number().int().gte(1).lte(1000).nullish(),
+  figure: AgentFigure.optional(),
+  role: AgentRole.optional(),
+  color: AgentColor.optional(),
+  fallback_models: z.array(FallbackModelPair).max(2).optional(),
   model_params: z
     .object({ temperature: z.number(), max_tokens: z.number().int() })
     .partial()
     .passthrough()
     .optional(),
   tools_cfg: AgentToolsCfg.optional(),
-  auto_approve_disabled: z.boolean().optional(),
-  default: z.boolean().optional(),
   skills: z.array(z.string()).optional(),
   voice: z.string().nullish(),
-  executor: ExecutorConfig.optional(),
+  executor: ExecutorConfigUpdate.optional(),
   memory_enabled: z.boolean().optional(),
 });
 export const ConfigurationMutationState: z.ZodType<ConfigurationMutationState> =
@@ -3564,6 +4961,34 @@ export const ConfigurationMutationState: z.ZodType<ConfigurationMutationState> =
     error_stage: z.string().optional(),
     message: z.string().optional(),
   });
+export const AgentDependency: z.ZodType<AgentDependency> = z.object({
+  workspace_id: z.string().min(1).max(128),
+  kind: z.enum([
+    "channel_main_agent",
+    "people_row",
+    "mailbox",
+    "private_secret",
+    "room",
+  ]),
+  id: z.string().min(1).max(256),
+  label: z.string().min(1).max(200),
+});
+export const AgentDependencyList: z.ZodType<AgentDependencyList> = z.object({
+  agent_id: z.string().min(1).max(128),
+  dependencies: z.array(AgentDependency).max(10000),
+});
+export const AgentActivityRun = z.object({
+  run_id: z.string().min(1),
+  task_id: z.string().min(1),
+  task_title: z.string(),
+  kind: z.enum(["task", "scheduled"]),
+  mode: z.enum(["main", "isolated"]),
+  state: z.enum(["running", "queued", "waiting"]),
+  role: z.enum(["assignee", "recipient"]),
+  agent_id: z.string().min(1),
+  session_id: z.string().optional(),
+  started_at: z.string().datetime({ offset: true }),
+});
 export const AgentToolEntry: z.ZodType<AgentToolEntry> = z
   .object({
     name: z.string(),
@@ -3630,7 +5055,7 @@ export const ExecutorCommandPreviewRequest: z.ZodType<ExecutorCommandPreviewRequ
     model: z.string().max(256).optional(),
     cli_path: z.string().max(4096).optional(),
     cli_args: z.string().max(4096).optional(),
-    max_tool_iterations: z.number().int().gte(0).optional(),
+    max_tool_iterations: z.number().int().gte(1).lte(1000).optional(),
   });
 export const ExecutorCommandPreviewResponse = z.object({
   binary: z.string(),
@@ -3911,30 +5336,96 @@ export const RetentionSweepResult = z
     skipped_reason: z.string().optional(),
   })
   .passthrough();
-export const PerformanceSettings = z
+export const MaxToolIterationsSavedState = z.enum([
+  "ok",
+  "missing",
+  "below_min",
+  "above_max",
+]);
+export const MaxToolIterationAgentChange: z.ZodType<MaxToolIterationAgentChange> =
+  z.object({
+    agent_id: z.string(),
+    agent_name: z.string(),
+    old_value: z.number().int(),
+    new_value: z.number().int().gte(1).lte(1000),
+  });
+export const PerformancePendingApply: z.ZodType<PerformancePendingApply> =
+  z.object({
+    stage: z.enum(["refresh", "reload"]),
+    changed_fields: z.array(
+      z.enum([
+        "max_parallel_agents",
+        "tools_on_demand",
+        "goal_max_rounds",
+        "goal_reminder_quiet_seconds",
+        "goal_stalled_checkin_enabled",
+        "goal_stalled_checkin_minutes",
+        "max_tool_iterations",
+      ])
+    ),
+  });
+export const PerformanceSettings: z.ZodType<PerformanceSettings> = z
   .object({
     max_parallel_agents: z.number().int().gte(1),
     effective_max_parallel_agents: z.number().int().gte(1),
     max_parallel_agents_configured: z.boolean(),
     tools_on_demand: z.boolean(),
     goal_max_rounds: z.number().int().gte(1),
+    goal_reminder_quiet_seconds: z.number().int().gte(30).lte(3600),
+    goal_stalled_checkin_enabled: z.boolean(),
+    goal_stalled_checkin_minutes: z.number().int().gte(5).lte(1440),
+    max_tool_iterations: z.number().int().gte(1).lte(1000),
+    max_tool_iterations_saved_state: MaxToolIterationsSavedState,
+    max_tool_iterations_saved_raw: z.number().int(),
+    max_tool_iterations_lowered_agents: z.array(MaxToolIterationAgentChange),
+    pending_apply: PerformancePendingApply,
   })
   .partial();
-export const PerformanceSettingsUpdate = z
+export const MaxToolIterationsConfirmedAgent: z.ZodType<MaxToolIterationsConfirmedAgent> =
+  z.object({ agent_id: z.string(), old_value: z.number().int() });
+export const PerformanceSettingsUpdate: z.ZodType<PerformanceSettingsUpdate> = z
   .object({
     max_parallel_agents: z.number().int().gte(0),
     tools_on_demand: z.boolean(),
     goal_max_rounds: z.number().int().gte(1),
+    goal_reminder_quiet_seconds: z.number().int().gte(30).lte(3600),
+    goal_stalled_checkin_enabled: z.boolean(),
+    goal_stalled_checkin_minutes: z.number().int().gte(5).lte(1440),
+    max_tool_iterations: z.number().int().gte(1).lte(1000),
+    confirmed_lowering: z.array(MaxToolIterationsConfirmedAgent),
   })
   .partial();
+export const MaxToolIterationsLoweringPreview: z.ZodType<MaxToolIterationsLoweringPreview> =
+  z.object({
+    value: z.number().int().gte(1).lte(1000),
+    agents: z.array(MaxToolIterationAgentChange),
+  });
+export const MaxToolIterationsLoweringConflict: z.ZodType<MaxToolIterationsLoweringConflict> =
+  z.object({
+    error: z.string(),
+    code: z.string(),
+    preview: MaxToolIterationsLoweringPreview,
+  });
 export const MemorySettings: z.ZodType<MemorySettings> = z
   .object({
     auto_recap_enabled: z.boolean(),
-    idle_timeout_minutes: z.number().int(),
+    idle_timeout_minutes: z.number().int().gte(1).lte(1440),
     bootstrap_recap_enabled: z.boolean(),
-    bootstrap_recap_max_per_minute: z.number().int(),
+    bootstrap_recap_max_per_minute: z.number().int().gte(1).lte(60),
     recap_model: z.string().max(256),
     recap_fallback_models: z.array(FallbackModel),
+    recap_provider: z.string().max(64),
+    recap_reasoning_effort: z.string().max(32),
+    recap_max_output_tokens: z.number().int().gte(512).lte(16384),
+    recap_input_tokens: z.number().int().gte(500).lte(32000),
+    recap_summary_words: z.number().int().gte(50).lte(500),
+    recap_list_items: z.number().int().gte(1).lte(10),
+    recap_fallback_context_chars: z.number().int().gte(200).lte(8000),
+    recap_timeout_seconds: z.number().int().gte(15).lte(300),
+    recap_stream_retries: z.number().int().gte(0).lte(5),
+    recap_retry_pause_ms: z.number().int().gte(100).lte(5000),
+    recap_chars_per_token: z.number().int().gte(2).lte(8),
+    bootstrap_recap_min_spacing_seconds: z.number().int().gte(1).lte(60),
     session_days: z.number().int(),
     memory_retros_days: z.number().int(),
   })
@@ -3948,7 +5439,7 @@ export const ContextSettings: z.ZodType<ContextSettings> = z.object({
   mcp_result_cap: z.number().int().gte(1).lte(150000),
   builtin_success_cap: z.number().int().gte(1).lte(150000),
   builtin_failure_cap: z.number().int().gte(1).lte(150000),
-  absolute_trigger_chars: z.number().int().gte(1),
+  tool_result_share_fraction: z.number().gt(0).lte(1),
   ingest_bound_bytes: z.number().int().gte(1).lte(8388607),
   default_context_window: z.number().int().gte(1).nullish(),
   model_overrides: z.array(ContextModelOverride),
@@ -3958,17 +5449,55 @@ export const ContextSettingsUpdate: z.ZodType<ContextSettingsUpdate> = z
     mcp_result_cap: z.number().int().gte(1).lte(150000),
     builtin_success_cap: z.number().int().gte(1).lte(150000),
     builtin_failure_cap: z.number().int().gte(1).lte(150000),
-    absolute_trigger_chars: z.number().int().gte(1),
+    tool_result_share_fraction: z.number().gt(0).lte(1),
     ingest_bound_bytes: z.number().int().gte(1).lte(8388607),
     default_context_window: z.number().int().gte(1).nullable(),
     model_overrides: z.array(ContextModelOverride),
   })
   .partial();
+export const CliDetectEntry: z.ZodType<CliDetectEntry> = z.object({
+  installed: z.boolean(),
+  path: z.string().nullish(),
+  link_path: z.string().nullish(),
+  source: z.enum(["path", "well-known"]).nullish(),
+});
+export const CliPresetView: z.ZodType<CliPresetView> = z.object({
+  path: z.string(),
+  preset_args: z.string(),
+  detected: CliDetectEntry,
+});
+export const ThirdPartyAgentSettingsView: z.ZodType<ThirdPartyAgentSettingsView> =
+  z.object({
+    clis: z.object({
+      "claude-code": CliPresetView,
+      codex: CliPresetView,
+      opencode: CliPresetView,
+    }),
+  });
+export const CliPreset: z.ZodType<CliPreset> = z.object({
+  path: z.string().max(4096),
+  preset_args: z.string().max(4096),
+});
+export const ThirdPartyAgentSettings: z.ZodType<ThirdPartyAgentSettings> =
+  z.object({
+    clis: z
+      .object({
+        "claude-code": CliPreset,
+        codex: CliPreset,
+        opencode: CliPreset,
+      })
+      .partial(),
+  });
 export const ChannelId = z.string();
 export const ChannelIdentity: z.ZodType<ChannelIdentity> = z.object({
   kind: z.enum(["agent", "user"]),
   id: z.string().optional(),
 });
+export const ChannelRejectedSenders: z.ZodType<ChannelRejectedSenders> =
+  z.object({
+    count: z.number().int().gte(1),
+    recent: z.array(z.string()).max(20),
+  });
 export const ChannelEntry: z.ZodType<ChannelEntry> = z.object({
   id: ChannelId.regex(/^[a-z0-9-]+(\.[a-z0-9-]+)?$/),
   instance_id: z.string().optional(),
@@ -3989,6 +5518,9 @@ export const ChannelEntry: z.ZodType<ChannelEntry> = z.object({
   native_available: z.boolean().optional(),
   degraded: z.boolean().optional(),
   degraded_reason: z.string().optional(),
+  last_dropped_at: z.string().datetime({ offset: true }).optional(),
+  outbound_policy: z.enum(["reply_only", "agent_may_start"]).optional(),
+  rejected_senders: ChannelRejectedSenders.optional(),
 });
 export const ChannelCreateRequest = z.object({
   type: z.string(),
@@ -3999,17 +5531,122 @@ export const ChannelCreateResponse = z.object({
   type: z.string(),
   enabled: z.boolean(),
 });
+export const ChannelEnableRequest = z
+  .object({
+    pairing_retry: z.object({
+      request_id: z.string().min(1).max(128).regex(/\S/),
+      session_id: z.string().min(1).max(255).regex(/\S/),
+    }),
+  })
+  .partial();
 export const ChannelEnabledResponse: z.ZodType<ChannelEnabledResponse> =
   z.object({
     id: ChannelId.regex(/^[a-z0-9-]+(\.[a-z0-9-]+)?$/),
     enabled: z.boolean(),
   });
+export const ChannelConfigureResponse = z
+  .object({
+    apply_outcome: z.enum([
+      "applied",
+      "applied_not_running",
+      "unconfirmed",
+      "failed",
+      "no_reload_needed",
+    ]),
+    apply_reason: z.string().optional(),
+    apply_note: z.string().optional(),
+  })
+  .passthrough();
+export const ChannelConfigureError = z.object({
+  error: z.string(),
+  code: z.enum([
+    "could_not_save",
+    "credential_saved_not_saved",
+    "saved_not_refreshed",
+  ]),
+  detail: z.string().max(500).optional(),
+});
+export const ChannelOutbound: z.ZodType<ChannelOutbound> = z.object({
+  policy: z.enum(["reply_only", "agent_may_start"]),
+  targets: z.array(z.string().min(1).max(64)).max(20),
+});
+export const ChannelAvailability: z.ZodType<ChannelAvailability> = z.object({
+  state: z.enum(["running", "not_running", "not_loaded"]),
+  reason: z.string().max(500).optional(),
+});
+export const ChannelOutboundRead: z.ZodType<ChannelOutboundRead> = z.object({
+  outbound: ChannelOutbound,
+  revision: z.string(),
+  availability: ChannelAvailability,
+  start_supported: z.boolean(),
+});
+export const ChannelOutboundUpdateRequest = z.object({
+  policy: z.enum(["reply_only", "agent_may_start"]),
+  targets: z.array(z.string().max(256)).max(64),
+  expected_revision: z.string().min(1),
+});
+export const ChannelOutboundWriteResponse: z.ZodType<ChannelOutboundWriteResponse> =
+  z.object({
+    outbound: ChannelOutbound,
+    revision: z.string(),
+    warning: z.string().max(500).optional(),
+  });
+export const ChannelOutboundRejection = z.object({
+  error: z
+    .string()
+    .max(500)
+    .regex(/^[\x20-\x21\x23-\x25\x27-\x3B\x3D\x3F-\x5B\x5D-\x7E]*$/),
+  code: z.enum([
+    "invalid_targets",
+    "too_many_targets",
+    "platform_cannot_start",
+    "platform_cannot_message_people",
+    "stale_revision",
+    "connect_first",
+    "lookup_unavailable",
+    "saved_live_mismatch",
+  ]),
+  target_errors: z
+    .array(
+      z.object({
+        index: z.number().int().gte(0),
+        target: z
+          .string()
+          .max(24)
+          .regex(/^[\x20-\x21\x23-\x25\x27-\x3B\x3D\x3F-\x5B\x5D-\x7E]*$/),
+        code: z.enum([
+          "invalid_id",
+          "wildcard_not_allowed",
+          "username_not_allowed",
+          "wrong_platform",
+          "not_found",
+          "unsupported_channel_kind",
+          "cannot_message_people",
+          "lookup_unavailable",
+        ]),
+        reason: z
+          .string()
+          .max(120)
+          .regex(/^[\x20-\x21\x23-\x25\x27-\x3B\x3D\x3F-\x5B\x5D-\x7E]*$/)
+          .optional(),
+      })
+    )
+    .max(10)
+    .optional(),
+  omitted_count: z.number().int().gte(1).optional(),
+});
 export const ChannelTestResponse = z
   .object({ success: z.boolean(), message: z.string() })
   .passthrough();
-export const ChannelRouting = z
-  .object({ default_agent_id: z.string(), workspace_id: z.string() })
-  .partial();
+export const ChannelRouting = z.object({
+  default_agent_id: z.string(),
+  workspace_id: z.string(),
+  bound: z.boolean(),
+});
+export const ChannelRoutingUpdateRequest = z.object({
+  workspace_id: z.string().min(1).max(128),
+  default_agent_id: z.string().min(1).max(128),
+});
 export const Mailbox: z.ZodType<Mailbox> = z.object({
   agent_id: z.string(),
   enabled: z.boolean(),
@@ -4020,6 +5657,11 @@ export const Mailbox: z.ZodType<Mailbox> = z.object({
   smtp_port: z.number().int().optional(),
   username: z.string().optional(),
   configured: z.boolean(),
+  status: z.enum(["ok", "degraded"]).optional(),
+  status_reason: z.string().min(1).max(1000).optional(),
+  signature_html: z.string().max(16384).optional(),
+  sent_folder_name: z.string().optional(),
+  drafts_folder_name: z.string().optional(),
 });
 export const MailboxConfigureRequest = z.object({
   enabled: z.boolean(),
@@ -4029,9 +5671,20 @@ export const MailboxConfigureRequest = z.object({
   smtp_port: z.number().int().optional(),
   username: z.string(),
   password: z.string().optional(),
+  signature_html: z.string().max(16384).optional(),
+  sent_folder_name: z.string().optional(),
+  drafts_folder_name: z.string().optional(),
+});
+export const MailboxRemovalResult = z.object({
+  outcome: z.enum(["removed", "removed_cleanup_pending"]),
+  cleanup_intent: z.string().nullable(),
+  cleanup_code: z.string().nullable(),
 });
 export const MailboxListResponse: z.ZodType<MailboxListResponse> = z.object({
   mailboxes: z.array(Mailbox),
+});
+export const MailboxCleanupRequest = z.object({
+  cleanup_intent: z.string().min(1),
 });
 export const RotateTokenResponse: z.ZodType<RotateTokenResponse> = z.object({
   token: BearerToken.min(72)
@@ -4127,20 +5780,12 @@ export const Provider: z.ZodType<Provider> = z.object({
     "expired",
   ]),
   protocol: z
-    .enum([
-      "openai-compatible",
-      "anthropic",
-      "google",
-      "ollama",
-      "cli",
-      "bedrock",
-    ])
+    .enum(["openai-compatible", "anthropic", "google", "ollama", "bedrock"])
     .optional(),
   custom: z.boolean().optional(),
   company: z.string().optional(),
   region: z.string().optional(),
   locality: z.enum(["local", "cloud"]).optional(),
-  cli_kind: z.enum(["codex", "copilot"]).optional(),
   auth_method: z.enum(["api_key", "sign_in"]),
   account_label: z.string().max(128).optional(),
   dependents: z.array(ProviderDependent),
@@ -4156,6 +5801,7 @@ export const Provider: z.ZodType<Provider> = z.object({
 export const CatalogResizeLimits: z.ZodType<CatalogResizeLimits> = z.object({
   long_edge_px: z.number().int().gte(1),
   max_bytes: z.number().int().gte(1),
+  max_patches: z.number().int().gte(1).optional(),
 });
 export const CatalogProtocol: z.ZodType<CatalogProtocol> = z.object({
   protocol: z.enum([
@@ -4163,7 +5809,6 @@ export const CatalogProtocol: z.ZodType<CatalogProtocol> = z.object({
     "anthropic",
     "google",
     "ollama",
-    "cli",
     "bedrock",
   ]),
   api: z.string(),
@@ -4173,6 +5818,9 @@ export const CatalogProviderRegion: z.ZodType<CatalogProviderRegion> = z.object(
     id: z.string().min(1),
     group: z.enum(["", "us", "eu", "apac", "jp", "au", "global"]),
   }
+);
+export const CatalogModelReasoning: z.ZodType<CatalogModelReasoning> = z.object(
+  { levels: z.array(z.string().min(1).max(32)), switch: z.boolean() }
 );
 export const CatalogModel: z.ZodType<CatalogModel> = z.object({
   id: z.string().min(1).max(256),
@@ -4191,6 +5839,7 @@ export const CatalogModel: z.ZodType<CatalogModel> = z.object({
     .optional(),
   window_source: ContextWindowSource.optional(),
   window_unknown: z.boolean().optional(),
+  reasoning: CatalogModelReasoning.optional(),
 });
 export const CatalogProvider: z.ZodType<CatalogProvider> = z.object({
   id: z.string().min(1).max(64),
@@ -4198,14 +5847,7 @@ export const CatalogProvider: z.ZodType<CatalogProvider> = z.object({
   company: z.string().min(1),
   api: z.string(),
   protocol: z
-    .enum([
-      "openai-compatible",
-      "anthropic",
-      "google",
-      "ollama",
-      "cli",
-      "bedrock",
-    ])
+    .enum(["openai-compatible", "anthropic", "google", "ollama", "bedrock"])
     .optional(),
   protocols: z.array(CatalogProtocol).optional(),
   env: z.array(z.string()).optional(),
@@ -4219,8 +5861,6 @@ export const CatalogProvider: z.ZodType<CatalogProvider> = z.object({
   auth_methods: z.array(z.enum(["api_key", "sign_in"])).min(1),
   aliases: z.array(z.string()),
   locality: z.enum(["local", "cloud"]),
-  cli_kind: z.enum(["codex", "copilot"]).optional(),
-  token_source: z.string().optional(),
   resize_limits: CatalogResizeLimits.optional(),
   models: z.array(CatalogModel),
 });
@@ -4237,6 +5877,7 @@ export const ProvidersCatalog: z.ZodType<ProvidersCatalog> = z.object({
 export const DefaultModel: z.ZodType<DefaultModel> = z.object({
   provider: z.string().max(64),
   model: z.string().max(256),
+  reasoning_effort: z.string().max(32).optional(),
   context_window: z.number().int().gte(0).optional(),
   window_source: ContextWindowSource.optional(),
   window_unknown: z.boolean().optional(),
@@ -4245,6 +5886,7 @@ export const DefaultModelUpdateRequest: z.ZodType<DefaultModelUpdateRequest> =
   z.object({
     provider: z.string().min(1).max(64),
     model: z.string().min(1).max(256),
+    reasoning_effort: z.string().max(32).optional(),
   });
 export const ProviderUpdateRequest = z
   .object({
@@ -4253,7 +5895,6 @@ export const ProviderUpdateRequest = z
       "anthropic",
       "google",
       "ollama",
-      "cli",
       "bedrock",
     ]),
     auth_method: z.enum(["api_key", "sign_in"]),
@@ -4274,12 +5915,6 @@ export const ProviderDeleteResponse: z.ZodType<ProviderDeleteResponse> =
     default_changed: z.boolean(),
     new_default: DefaultModelUpdateRequest.optional(),
   });
-export const SignInStartResponseCliLogin =
-  z.object({
-    method: z.literal("cli_login"),
-    command: z.string().min(1).max(256),
-    instructions: z.string().min(1).max(1024),
-  }) satisfies z.ZodType<SignInStartResponseCliLogin>;
 export const SignInStartResponseDeviceCode =
   z.object({
     method: z.literal("device_code"),
@@ -4290,10 +5925,7 @@ export const SignInStartResponseDeviceCode =
     interval_seconds: z.number().int().gte(1).lte(30),
   }) satisfies z.ZodType<SignInStartResponseDeviceCode>;
 export const SignInStartResponse =
-  z.discriminatedUnion("method", [
-    SignInStartResponseCliLogin,
-    SignInStartResponseDeviceCode,
-  ]) satisfies z.ZodType<SignInStartResponse>;
+  SignInStartResponseDeviceCode satisfies z.ZodType<SignInStartResponse>;
 export const SignInStatus = z.object({
   state: z.enum(["not_signed_in", "pending", "signed_in", "expired"]),
   account_label: z.string().max(128).optional(),
@@ -4328,6 +5960,7 @@ export const SlashCommand = z.object({
   delivery: z.enum(["client", "agent"]),
 });
 export const Skill: z.ZodType<Skill> = z.object({
+  has_local_changes: z.boolean(),
   revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
   persistence_status: ConfigurationPersistenceStatus.optional(),
   activation_status: ConfigurationActivationStatus.optional(),
@@ -4369,7 +6002,12 @@ export const SkillMarketplaceStatus = z.object({
   registries: z.array(z.object({ name: z.string(), enabled: z.boolean() })),
 });
 export const SkillInstallRequest = z.union([z.unknown(), z.unknown()]);
-export const SseChatRequest = z.object({ message: z.string() });
+export const SkillCopyRequest = z.object({
+  new_id: z
+    .string()
+    .max(64)
+    .regex(/^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$/),
+});
 export const ActivityEvent: z.ZodType<ActivityEvent> = z
   .object({
     id: z.string(),
@@ -4381,7 +6019,11 @@ export const ActivityEvent: z.ZodType<ActivityEvent> = z
   })
   .passthrough();
 export const uploadFiles_Body = z
-  .object({ session_id: z.string(), files: z.array(z.instanceof(File)) })
+  .object({
+    session_id: z.string(),
+    workspace_id: z.string(),
+    files: z.array(z.instanceof(File)),
+  })
   .partial()
   .passthrough();
 export const UploadedFile: z.ZodType<UploadedFile> = z.object({
@@ -4468,6 +6110,17 @@ export const DevicesResponse: z.ZodType<DevicesResponse> = z.object({
 });
 export const Todo: z.ZodType<Todo> = z.object({
   text: z.string().min(1).max(500),
+  active_form: z.string().superRefine((value, ctx) => {
+    if (Array.from(value).length > 500) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.too_big,
+        maximum: 500,
+        type: "string",
+        inclusive: true,
+        exact: false,
+      });
+    }
+  }).optional(),
   status: z.enum(["pending", "in_progress", "completed"]),
 });
 export const AcceptanceCriterion: z.ZodType<AcceptanceCriterion> = z.object({
@@ -4508,12 +6161,10 @@ export const AcceptanceCriterion: z.ZodType<AcceptanceCriterion> = z.object({
   clause_count: z.number().int().gte(1).optional(),
 });
 export const TaskTrigger: z.ZodType<TaskTrigger> = z.object({
-  type: z.enum(["manual", "once", "every", "recurring"]),
+  type: z.enum(["manual", "once", "recurring"]),
   config: z
     .object({
       at_ms: z.number().int(),
-      every_ms: z.number().int().gte(1000),
-      cron_expr: z.string(),
       rrule: z.string().max(512),
       dtstart_ms: z.number().int(),
       tz: z.string(),
@@ -4539,6 +6190,7 @@ export const Task: z.ZodType<Task> = z
     agent_id: z.string().optional(),
     cancel_reason: z.literal("stopped_by_user").nullish(),
     agent_name: z.string().optional(),
+    run_isolated: z.boolean().optional(),
     priority: z.number().int().gte(1).lte(5).optional().default(3),
     blocked_by: z.array(z.string()).optional(),
     todos: z.array(Todo).optional(),
@@ -4639,6 +6291,7 @@ export const TaskCreateRequest: z.ZodType<TaskCreateRequest> = z.object({
   description: z.string().max(2000).optional(),
   action: z.literal("llm"),
   agent_id: z.string().optional(),
+  run_isolated: z.boolean().optional().default(false),
   priority: z.number().int().gte(1).lte(5).optional().default(3),
   trigger: TaskTrigger.optional(),
   blocked_by: z.array(z.string()).optional(),
@@ -4682,7 +6335,7 @@ export const TaskOccurrenceSet: z.ZodType<TaskOccurrenceSet> = z.object({
     .array(
       z.object({
         occurrence_ms: z.number().int(),
-        status: z.enum(["in_progress", "done", "failed", "skipped"]),
+        status: z.enum(["in_progress", "done", "failed", "skipped", "missed"]),
         run_id: z.string(),
         session_id: z.string(),
         has_result: z.boolean(),
@@ -4694,6 +6347,7 @@ export const TaskOccurrenceSet: z.ZodType<TaskOccurrenceSet> = z.object({
 export const TaskUpdateRequest: z.ZodType<TaskUpdateRequest> = z
   .object({
     title: z.string().min(1).max(200),
+    run_isolated: z.boolean(),
     description: z.string().max(2000),
     prompt: z.string().max(10000),
     status: z.enum([
@@ -4743,10 +6397,11 @@ export const TaskRun = z.object({
   run_id: z.string(),
   task_id: z.string(),
   occurrence_ms: z.number().int().nullable(),
-  status: z.enum(["in_progress", "done", "failed", "skipped"]),
+  status: z.enum(["in_progress", "done", "failed", "skipped", "missed"]),
   result: z.string().max(50000).optional(),
   session_id: z.string(),
   kind: z.enum(["scheduled", "manual"]),
+  recipient_session_ids: z.array(z.string().min(1).max(255)).max(2).optional(),
   started_at: z.string().datetime({ offset: true }),
   ended_at: z.string().datetime({ offset: true }).nullable(),
 });
@@ -4759,6 +6414,7 @@ export const McpServer = z
     name: z.string(),
     transport: z.enum(["stdio", "sse", "http"]),
     status: z.enum(["connected", "disconnected", "error"]),
+    status_reason: z.string().min(1).max(1000).optional(),
     tool_count: z.number().int().gte(0),
     tools: z.array(z.string()).optional(),
     enabled: z.boolean().optional(),
@@ -4849,8 +6505,7 @@ export const Schedule: z.ZodType<Schedule> = z.object({
   created_by: z.string().optional(),
   trigger: ScheduleTrigger,
   message: z.string().min(1),
-  session_mode: z.enum(["isolated", "continue", "main"]),
-  timeout_seconds: z.number().int(),
+  run_isolated: z.boolean().optional(),
   session_id: z.string().optional(),
   state: ScheduleState,
   runs: z.array(ScheduleRunRecord).optional(),
@@ -4865,8 +6520,7 @@ export const ScheduleCreate: z.ZodType<ScheduleCreate> = z.object({
   owner_agent_id: z.string().min(1),
   trigger: ScheduleTrigger,
   message: z.string().min(1),
-  session_mode: z.enum(["isolated", "continue", "main"]).optional(),
-  timeout_seconds: z.number().int().gte(0).optional(),
+  run_isolated: z.boolean().optional().default(false),
   enabled: z.boolean().optional(),
 });
 export const ScheduleUpdate: z.ZodType<ScheduleUpdate> = z
@@ -4875,8 +6529,7 @@ export const ScheduleUpdate: z.ZodType<ScheduleUpdate> = z
     owner_agent_id: z.string().min(1),
     trigger: ScheduleTrigger,
     message: z.string().min(1),
-    session_mode: z.enum(["isolated", "continue", "main"]),
-    timeout_seconds: z.number().int().gte(0),
+    run_isolated: z.boolean().default(false),
     enabled: z.boolean(),
   })
   .partial();
@@ -4888,7 +6541,12 @@ export const ScheduleRunResult = z.object({
 });
 export const Notification: z.ZodType<Notification> = z.object({
   id: z.string(),
-  type: z.enum(["schedule_failed", "knowledge_drift"]),
+  type: z.enum([
+    "schedule_failed",
+    "knowledge_drift",
+    "goal_paused",
+    "stop_notice",
+  ]),
   title: z.string().min(1),
   body: z.string().optional(),
   severity: z.enum(["info", "warning", "error"]),
@@ -4915,11 +6573,15 @@ export const WorkspaceMemberHeartbeat: z.ZodType<WorkspaceMemberHeartbeat> = z
     enabled: z.boolean(),
     interval_minutes: z.number().int().gte(5),
     body: z.string().max(16384),
-    session_id: z.string(),
   })
   .partial();
 export const WorkspaceMemberConfig: z.ZodType<WorkspaceMemberConfig> = z
-  .object({ heartbeat: WorkspaceMemberHeartbeat })
+  .object({
+    main_session_id: z.string().max(255),
+    main_session_error: z.string().min(1),
+    heartbeat: WorkspaceMemberHeartbeat,
+    hidden_from_sidebar: z.boolean(),
+  })
   .partial();
 export const Workspace: z.ZodType<Workspace> = z
   .object({
@@ -4953,6 +6615,7 @@ export const Workspace: z.ZodType<Workspace> = z
     updated_at: z.string().datetime({ offset: true }),
     owner: z.string().optional(),
     member_configs: z.record(WorkspaceMemberConfig).optional(),
+    admin_main_session_id: z.string().max(255).optional(),
   })
   .passthrough();
 export const WorkspaceCreateRequest = z
@@ -4985,6 +6648,7 @@ export const MediaLibraryEntry = z.object({
   source: z.enum(["user_upload", "tool_output"]),
   refcount: z.number().int().gte(0).optional(),
   last_refcount_seen_at: z.string().datetime({ offset: true }).optional(),
+  library_path: z.string().min(1).optional(),
   status: z.enum(["available", "stranded"]),
 }).strict();
 export const MediaAttachmentRequest = z.object({
@@ -5006,6 +6670,13 @@ export const LibraryEntryMount: z.ZodType<LibraryEntryMount> = z.object({
   host_path: z.string().min(1),
   broad: z.boolean(),
 });
+export const LibraryEntryView: z.ZodType<LibraryEntryView> = z.object({
+  name: z.string().min(1),
+  label: z.string().min(1),
+  collection_id: z.string().min(1),
+  kind: z.string().min(1).optional(),
+  source: z.string().min(1).optional(),
+});
 export const LibraryEntry: z.ZodType<LibraryEntry> = z.object({
   name: z.string().min(1),
   path: z.string().min(1),
@@ -5017,6 +6688,11 @@ export const LibraryEntry: z.ZodType<LibraryEntry> = z.object({
   mount: LibraryEntryMount.optional(),
   is_knowledge_base: z.boolean().optional(),
   is_text_editable: z.boolean(),
+  is_view: z.boolean().optional(),
+  view: LibraryEntryView.optional(),
+  preview_profile: z.enum(["workspace", "mail_restricted"]).optional(),
+  chat_copy: z.boolean().optional(),
+  preview_scripts_allowed: z.boolean().optional(),
 });
 export const LibraryContentResponse = z.object({
   path: z.string(),
@@ -5718,6 +7394,241 @@ export const RelationWriteResponse: z.ZodType<RelationWriteResponse> = z.object(
     warnings: z.array(z.string().min(1)),
   }
 );
+export const MailReadMetadata: z.ZodType<MailReadMetadata> = z.object({
+  source: z.enum(["live", "memory", "encrypted_disk", "none"]),
+  last_validated_at: z.string().datetime({ offset: true }).nullable(),
+  stale: z.boolean(),
+  refresh_needed: z.boolean(),
+  notice_code: z.literal("cache_unavailable").nullable(),
+  publication_revision: z.string().nullable(),
+});
+export const MailFolder: z.ZodType<MailFolder> = z.object({
+  slug: z.enum(["inbox", "sent", "drafts"]),
+  display_name: z.string(),
+  total: z.number().int(),
+  unread_count: z.number().int().nullable(),
+  availability: z.enum(["present", "absent", "unknown"]).optional(),
+  uidvalidity: z.number().int().gte(0).lte(4294967295).nullish(),
+  mapping_source: z
+    .enum(["override", "special_use", "fallback", "saved", "none"])
+    .optional(),
+  mapping_metadata: MailReadMetadata.optional(),
+  count_metadata: MailReadMetadata.optional(),
+});
+export const MailFolderList: z.ZodType<MailFolderList> = z.object({
+  folders: z.array(MailFolder),
+  metadata: MailReadMetadata.optional(),
+});
+export const MailStaleReferenceError = z.object({
+  error: z.string(),
+  code: z.enum(["stale_cursor", "stale_reference"]),
+});
+export const MailUnavailableError = z.object({
+  error: z.string(),
+  code: z.enum(["busy", "backoff"]),
+  last_error_class: z
+    .enum([
+      "timeout",
+      "dns",
+      "connect_refused",
+      "auth_failed",
+      "tls",
+      "folder_missing",
+      "server_error",
+    ])
+    .optional(),
+  next_attempt_at: z.string().datetime({ offset: true }).optional(),
+  reason: z
+    .enum(["pool_busy", "account_busy", "server_connection_limit", "backoff"])
+    .optional(),
+});
+export const MailMessageSummary: z.ZodType<MailMessageSummary> = z.object({
+  message_id: z.string().nullable(),
+  uid: z.number().int().gte(0).lte(4294967295),
+  uidvalidity: z.number().int().gte(0).lte(4294967295),
+  folder: z.enum(["inbox", "sent", "drafts"]),
+  subject: z.string(),
+  from: z.string(),
+  from_name: z.string().nullable(),
+  to: z.array(z.string()),
+  cc: z.array(z.string()),
+  date: z.string().datetime({ offset: true }).nullable(),
+  seen: z.boolean(),
+  is_draft: z.boolean(),
+  is_omnipus_draft: z.boolean(),
+  read_by_agent: z.boolean(),
+  message_ref: z.string().min(5).optional(),
+  has_attachments: z.boolean().optional(),
+});
+export const MailMessagePage: z.ZodType<MailMessagePage> = z.object({
+  messages: z.array(MailMessageSummary),
+  truncated: z.boolean(),
+  next_before_uid: z.number().int().gte(0).lte(4294967295).nullable(),
+  next_cursor: z.string().nullish(),
+  has_more: z.boolean().optional(),
+  view_limit_reached: z.boolean().optional(),
+  metadata: MailReadMetadata.optional(),
+});
+export const MailAttachment: z.ZodType<MailAttachment> = z.object({
+  part_index: z.number().int(),
+  filename: z.string(),
+  content_type: z.string(),
+  size_bytes: z.number().int(),
+  reported_size_bytes: z.number().int().gte(0).optional(),
+});
+export const MailMessage: z.ZodType<MailMessage> = z.object({
+  message_id: z.string().nullable(),
+  uid: z.number().int().gte(0).lte(4294967295),
+  uidvalidity: z.number().int().gte(0).lte(4294967295),
+  folder: z.enum(["inbox", "sent", "drafts"]),
+  subject: z.string(),
+  from: z.string(),
+  from_name: z.string().nullable(),
+  to: z.array(z.string()),
+  cc: z.array(z.string()),
+  date: z.string().datetime({ offset: true }).nullable(),
+  seen: z.boolean(),
+  is_draft: z.boolean(),
+  is_omnipus_draft: z.boolean(),
+  read_by_agent: z.boolean(),
+  reply_to: z.string().nullable(),
+  in_reply_to: z.string().nullable(),
+  references: z.string().nullable(),
+  body_text: z.string(),
+  has_html: z.boolean(),
+  bcc: z.array(z.string()).nullable(),
+  attachments: z.array(MailAttachment),
+  message_ref: z.string().min(5).optional(),
+  has_attachments: z.boolean().optional(),
+  body_markdown: z.string().nullable(),
+  markdown_lossy: z.boolean(),
+  draft_cleanup_warning: z.string().nullish(),
+});
+export const MailAttachmentSaveRequest = z.object({
+  observer_id: z.string().optional(),
+  save_operation_token: z.string().min(1),
+});
+export const MailAttachmentSaveResponse: z.ZodType<MailAttachmentSaveResponse> =
+  z.object({
+    saved: z.literal(true),
+    workspace_id: z.string(),
+    entry: LibraryEntry,
+    path: z.string().min(1),
+    absolute_path: z.string().min(1),
+    size_bytes: z.number().int().gte(0),
+    audit_status: z.enum(["recorded", "disabled", "failed"]),
+    warning_code: z.literal("audit_write_failed").nullable(),
+  });
+export const MailReplyContextRequest = z.object({
+  mode: z.enum(["reply", "reply_all"]),
+});
+export const MailReplyContextResponse = z.object({
+  to: z.array(z.string()),
+  cc: z.array(z.string()),
+  bcc: z.array(z.string()),
+  subject: z.string(),
+  body_markdown: z.string(),
+  in_reply_to: z.string().nullable(),
+});
+export const MailboxNewMailSummary: z.ZodType<MailboxNewMailSummary> = z.object(
+  {
+    agent_id: z.string(),
+    unseen_total: z.number().int(),
+    watcher_state: z.enum(["ok", "error", "backoff"]),
+    last_error_class: z.string().nullable(),
+    last_success_at: z.string().datetime({ offset: true }).nullable(),
+    last_seen_uid: z.number().int().gte(0).lte(4294967295).nullable(),
+    next_attempt_at: z.string().datetime({ offset: true }).nullable(),
+  }
+);
+export const MailSummaryList: z.ZodType<MailSummaryList> = z.object({
+  items: z.array(MailboxNewMailSummary),
+});
+export const MailAttachmentInput: z.ZodType<MailAttachmentInput> = z.object({
+  filename: z.string(),
+  content_type: z.string(),
+  data_base64: z.string(),
+});
+export const MailSendRequest: z.ZodType<MailSendRequest> = z.object({
+  to: z.array(z.string()).min(1).max(50),
+  cc: z.array(z.string()).max(50).optional(),
+  bcc: z.array(z.string()).max(50).optional(),
+  subject: z.string(),
+  body_markdown: z.string(),
+  in_reply_to: z.string().nullish(),
+  attachments: z.array(MailAttachmentInput).max(10).optional(),
+});
+export const MailSendResponse = z.object({
+  message_id: z.string(),
+  sent_saved: z.boolean(),
+  save_warning: z.string().nullable(),
+  draft_cleanup_warning: z.string().nullable(),
+});
+export const MailDraftUpdateRequest: z.ZodType<MailDraftUpdateRequest> =
+  z.object({
+    to: z.array(z.string()).min(1).max(50),
+    cc: z.array(z.string()).max(50).optional(),
+    bcc: z.array(z.string()).max(50).optional(),
+    subject: z.string(),
+    body_markdown: z.string(),
+    uidvalidity: z.number().int().gte(0).lte(4294967295),
+    uid: z.number().int().gte(0).lte(4294967295),
+    attachments: z.array(MailAttachmentInput).max(10).optional(),
+    keep_attachment_parts: z.array(z.number().int()),
+  });
+export const MailDraftSendRequest = z.object({
+  to: z.array(z.string()).min(1).max(50),
+  cc: z.array(z.string()).max(50).optional(),
+  bcc: z.array(z.string()).max(50).optional(),
+  subject: z.string(),
+  body_markdown: z.string(),
+  uidvalidity: z.number().int().gte(0).lte(4294967295),
+  uid: z.number().int().gte(0).lte(4294967295),
+  keep_attachment_parts: z.array(z.number().int()).optional(),
+});
+export const MailHtmlPreviewTokenRequest = z.object({
+  workspace_id: z.string(),
+  agent_id: z.string(),
+  folder: z.enum(["inbox", "sent", "drafts"]),
+  message_ref: z.string().min(5),
+  load_remote: z.boolean().optional().default(false),
+});
+export const MailHtmlPreviewTokenResponse = z.object({
+  token: z.string().min(43).max(43),
+  expires_in_seconds: z.number().int().gte(1),
+});
+export const MailAttachmentPreviewRequest = z.object({
+  workspace_id: z.string(),
+  agent_id: z.string(),
+  folder: z.enum(["inbox", "sent", "drafts"]),
+  message_ref: z.string().min(5),
+  part_index: z.number().int(),
+  observer_id: z.string().optional(),
+});
+export const MailAttachmentContentSource: z.ZodType<MailAttachmentContentSource> =
+  z.object({
+    byte_url: z.string().min(1),
+    isolated_html_url: z.string().nullable(),
+    token: z.string().min(1),
+    expires_in_seconds: z.number().int().gte(1),
+  });
+export const MailAttachmentPreviewResponse: z.ZodType<MailAttachmentPreviewResponse> =
+  z.object({
+    kind: z.literal("mail_attachment"),
+    preview_id: z.string().min(1),
+    subject: z.string(),
+    attachment: MailAttachment,
+    text_readable: z.boolean(),
+    content_source: MailAttachmentContentSource,
+    read_only: z.literal(true),
+  });
+export const MailSignaturePreviewTokenRequest = z.object({
+  signature_html: z.string().min(1).max(16384),
+});
+export const MailSignaturePreviewTokenResponse = z.object({
+  token: z.string().min(43).max(43),
+  expires_in_seconds: z.number().int().gte(1),
+});
 export const WorkspaceDelegation: z.ZodType<WorkspaceDelegation> = z.object({
   revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
   persistence_status: ConfigurationPersistenceStatus.optional(),
@@ -5881,6 +7792,7 @@ export const AgentTokenEntry: z.ZodType<AgentTokenEntry> = z
     tokens_total: z.number().int(),
     tokens_cache_read: z.number().int().gte(0).optional(),
     tokens_cache_write: z.number().int().gte(0).optional(),
+    cache_hit_ratio: z.number().gte(0).lte(1).nullish(),
     by_model: z.record(ModelTokens).optional(),
   })
   .passthrough();
@@ -5892,6 +7804,9 @@ export const TokenUsageSummary: z.ZodType<TokenUsageSummary> = z
     tokens_cache_read: z.number().int().gte(0).optional(),
     tokens_cache_write: z.number().int().gte(0).optional(),
     by_model: z.record(ModelTokens).optional(),
+    by_provider: z.record(ModelTokens).optional(),
+    unpriced_tokens: z.number().int().gte(0).optional(),
+    subscription_tokens: z.number().int().gte(0).optional(),
     partial: z.boolean().optional(),
     partial_error_count: z.number().int().gte(0).optional(),
   })
@@ -5907,11 +7822,6 @@ export const HostFolderListing: z.ZodType<HostFolderListing> = z.object({
   path: z.string().min(1),
   parent: z.string().optional(),
   entries: z.array(HostFolderEntry),
-});
-export const CliDetectEntry: z.ZodType<CliDetectEntry> = z.object({
-  installed: z.boolean(),
-  path: z.string().nullish(),
-  source: z.enum(["path", "well-known"]).nullish(),
 });
 export const CliDetect: z.ZodType<CliDetect> = z.object({
   claude: CliDetectEntry,
@@ -5934,6 +7844,112 @@ export const CliValidateResponse = z.object({
   resolved_path: z.string().nullish(),
   version: z.string().nullish(),
   detail: z.string().optional(),
+});
+export const SecretRequestState = z.object({
+  request_id: z.string().min(1).max(128),
+  state: z.enum([
+    "pending",
+    "submitted",
+    "cancelled",
+    "stopped",
+    "interrupted",
+    "refused",
+  ]),
+  reference_names: z.array(z.string().min(1).max(256)).max(8).optional(),
+  updated_at: z.string().datetime({ offset: true }),
+});
+export const SecretSubmitRequest = z.union([z.unknown(), z.unknown()]);
+export const agent: z.ZodType<agent> = z.object({
+  workspace_id: z.string().min(1).max(128),
+  agent_id: z.string().min(1).max(128),
+});
+export const SecretNameEntry: z.ZodType<SecretNameEntry> = z.object({
+  reference: z.string().min(1).max(256),
+  kind: z.enum([
+    "provider_key",
+    "mcp_env",
+    "channel_credential",
+    "mailbox_password",
+    "agent_private",
+    "unbound",
+  ]),
+  version: z.number().int().gte(1),
+  recipient: z.object({
+    kind: z.enum([
+      "provider_key",
+      "mcp_env",
+      "channel_credential",
+      "mailbox_password",
+      "agent_private",
+      "unbound",
+    ]),
+    lines: z.array(z.string().min(1).max(500)).min(1).max(8),
+  }),
+  owner: agent.optional(),
+  consumers: z.array(z.string().min(1).max(200)).max(64),
+  state: z.enum(["stored", "selected", "superseded"]),
+  available_in_channel_turns: z.boolean().optional(),
+});
+export const SecretOptionsUpdateRequest = z.object({
+  available_in_channel_turns: z.boolean(),
+});
+export const RoomInvitationStatus = z.enum([
+  "generating",
+  "ready",
+  "unavailable",
+]);
+export const RoomInvitationContext: z.ZodType<RoomInvitationContext> = z.object(
+  {
+    status: RoomInvitationStatus,
+    text: z.string().min(1).max(4096).optional(),
+    author_agent_id: z.string().min(1).max(128),
+    generated_at: z.string().datetime({ offset: true }).optional(),
+    cost_micro_usd: z.number().int().gte(0).optional(),
+    cost_unpriced: z.boolean().optional(),
+  }
+);
+export const Room: z.ZodType<Room> = z.object({
+  id: z.string().min(1).max(128),
+  workspace_id: z.string().min(1).max(128),
+  kind: z.enum(["team", "squad", "adhoc"]),
+  name: z.string().min(1).max(80),
+  members: z.array(z.string().min(1).max(128)),
+  muted: z.array(z.string().min(1).max(128)),
+  paused: z.boolean(),
+  generation: z.number().int().gte(0),
+  origin_session_id: z.string().min(1).max(255).optional(),
+  read_only_reason: z.string().min(1).max(200).optional(),
+  hidden: z.boolean(),
+  allocated_cost_micro_usd: z.number().int().gte(0),
+  allocated_cost_unpriced: z.boolean(),
+  needs_attention: z.boolean(),
+  invitation_context_status: RoomInvitationStatus.optional(),
+  invitation_context: RoomInvitationContext.optional(),
+});
+export const RoomCreateRequest = z.object({
+  kind: z.enum(["squad", "adhoc"]),
+  name: z.string().min(1).max(80).optional(),
+  agent_ids: z.array(z.string().min(1).max(128)).min(2).max(256),
+  origin_session_id: z.string().min(1).max(255).optional(),
+});
+export const RoomMembersUpdateRequest = z.object({
+  action: z.enum(["add", "remove", "mute", "unmute"]),
+  agent_ids: z.array(z.string().min(1).max(128)).min(1).max(256),
+});
+export const RoomHistoryResponse = z.object({
+  entries: z
+    .array(
+      z.lazy(() => RoomEntry)
+    )
+    .max(1000),
+  has_older: z.boolean(),
+  next_before_seq: z.number().int().gte(1).optional(),
+}).strict();
+export const RoomMessageRequest = z.object({
+  client_message_id: z.string().min(1).max(128),
+  text: z.string().min(0).max(65536),
+  media: z.array(z.string()).max(16).optional(),
+  mentions: z.array(z.string().min(1).max(128)).max(256),
 });
 export const KnowledgeMountConflictError = z.object({
   error: z.string().min(1),
@@ -6226,6 +8242,85 @@ export const ValidationReport: z.ZodType<ValidationReport> = z.object({
   types_checked: z.number().int().gte(0),
   types: z.array(z.string().min(1)).optional(),
 });
+export const AgentToolPermission: z.ZodType<AgentToolPermission> = z.object({
+  tool: z.string(),
+  effective: z.enum(["allow", "ask", "deny"]),
+  override: z.enum(["allow", "ask", "deny"]).nullable(),
+  description: z.string().max(40).optional(),
+});
+export const AgentModelChainEntry: z.ZodType<AgentModelChainEntry> = z.object({
+  position: z.string().regex(/^(primary|fallback_[1-9][0-9]*)$/),
+  model: z.string(),
+  provider: z.string().nullable(),
+  provider_configured: z.boolean(),
+  model_offered: z.boolean().nullable(),
+  accepts_images: z.boolean().nullable(),
+  effort_options: z.array(z.string()).nullable(),
+  warning: z.string().optional(),
+});
+export const AgentDetail: z.ZodType<AgentDetail> = z.object({
+  id: z.string(),
+  name: z.string().optional(),
+  description: z.string().optional(),
+  type: z
+    .enum(["core", "system", "Main", "Subagent", "subagent_3p"])
+    .optional(),
+  locked: z.boolean().optional(),
+  model: z.string().optional(),
+  provider: z.string().optional(),
+  reasoning_effort: z.string().max(32).nullish(),
+  fallback_models: z.array(FallbackModel).optional(),
+  model_params: AgentModelParams.optional(),
+  max_tool_iterations: z.number().int().gte(1).nullish(),
+  context_window_override: z.number().int().gte(1).nullish(),
+  memory_enabled: z.boolean().optional(),
+  voice: z.string().nullish(),
+  figure: AgentFigure.optional(),
+  role: AgentRole.optional(),
+  color: AgentColor.optional(),
+  skills: z.array(z.string()).optional(),
+  stale_skill_grants: z.array(z.string()).optional(),
+  tool_permissions: z.array(AgentToolPermission).optional(),
+  stored_overrides: z.record(z.enum(["allow", "ask", "deny"])).optional(),
+  connectors: z.array(AgentMCPBinding).optional(),
+  soul: z.string().optional(),
+  agent_md: z.string().optional(),
+  revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
+  activation_status: ConfigurationActivationStatus.optional(),
+  editable_fields: z.array(AgentFieldDescriptor).optional(),
+  executor: ExecutorConfig.optional(),
+  runnable: z.boolean().optional(),
+  program_warning: z.string().optional(),
+  has_main_chat: z.boolean().optional(),
+  truncated_fields: z.array(z.string()).optional(),
+  absent_fields: z.array(z.string()).optional(),
+  model_chain: z.array(AgentModelChainEntry).optional(),
+});
+export const AgentPreview: z.ZodType<AgentPreview> = z.object({
+  preview_of: z.enum(["Main", "Subagent", "subagent_3p"]),
+  tool_permissions: z.array(AgentToolPermission).optional(),
+  connectors: z.array(AgentMCPBinding).optional(),
+  absent_fields: z.array(z.string()).optional(),
+  truncated_fields: z.array(z.string()).optional(),
+});
+export const AgentExecutorSettingsResult = z
+  .object({
+    env: z.object({
+      added: z.array(z.string()),
+      replaced: z.array(z.string()),
+      removed: z.array(z.string()),
+      absent_removed: z.array(z.string()),
+    }),
+    cli_args: z.object({
+      argv: z.array(z.string()),
+      dropped_at_run: z.array(
+        z.object({ flag: z.string(), reason: z.string() })
+      ),
+    }),
+    runnable: z.boolean(),
+    program_warning: z.string(),
+  })
+  .partial();
 export const AgentSession = z
   .object({
     id: z.string(),
@@ -6243,16 +8338,111 @@ export const RateLimitConfig = z
   })
   .partial()
   .passthrough();
+export const PerformanceReloadFailedDetails: z.ZodType<PerformanceReloadFailedDetails> =
+  z.object({
+    stage: z.enum(["refresh", "reload"]),
+    changed_fields: z.array(
+      z.enum([
+        "max_parallel_agents",
+        "tools_on_demand",
+        "goal_max_rounds",
+        "goal_reminder_quiet_seconds",
+        "goal_stalled_checkin_enabled",
+        "goal_stalled_checkin_minutes",
+        "max_tool_iterations",
+      ])
+    ),
+    lowered_agents: z.array(MaxToolIterationAgentChange),
+  });
+export const PerformanceReloadFailedError: z.ZodType<PerformanceReloadFailedError> =
+  z.object({
+    error: z.string(),
+    code: z.string(),
+    details: PerformanceReloadFailedDetails,
+  });
 export const BackupEntry = z.object({
   filename: z.string(),
   size_bytes: z.number().int().gte(0),
   created_at: z.string().datetime({ offset: true }),
+});
+export const CreateEmailDraftResult = z.object({
+  created: z.boolean(),
+  message_id: z.string(),
+  uid: z.number().int(),
+  uidvalidity: z.number().int(),
+  chat_link: z.string().nullable(),
+  chat_link_reason: z.string().nullable(),
 });
 export const OnboardingStatusResponse = z
   .object({ onboarding_complete: z.boolean() })
   .passthrough();
 export const ActivityEventsResponse: z.ZodType<ActivityEventsResponse> =
   z.object({ events: z.array(ActivityEvent), warning: z.string().optional() });
+export const SkillDetail = z.object({
+  id: z.string(),
+  revision: z.string().nullable(),
+  state: z.enum(["installed", "deleted"]).optional(),
+  name: z.string().optional(),
+  description: z.string().optional(),
+  shelf: z.enum(["builtin", "registry"]).optional(),
+  folder: z.string().optional(),
+  files: z
+    .object({
+      items: z.array(
+        z.object({
+          path: z.string(),
+          size: z.number().int(),
+          exec: z.boolean(),
+        })
+      ),
+      total: z.number().int(),
+    })
+    .optional(),
+  metadata: z.record(z.string()).optional(),
+  compatibility: z.string().nullish(),
+  allowed_tools: z.array(z.string()).optional(),
+  needs: z
+    .array(
+      z.object({
+        program: z.string(),
+        status: z.enum(["present", "missing"]),
+        path: z.string().optional(),
+      })
+    )
+    .optional(),
+  last_change: z
+    .object({
+      at: z.string(),
+      actor: z.string(),
+      tool: z.string(),
+      paths: z.array(z.string()),
+      shipped_with: z.string(),
+      unknown: z.boolean(),
+    })
+    .partial()
+    .optional(),
+  has_local_changes: z.boolean().optional(),
+  versions: z
+    .object({
+      items: z.array(
+        z.object({
+          id: z.string(),
+          kind: z.string(),
+          actor: z.string(),
+          tool: z.string().optional(),
+          at: z.string(),
+          paths: z.array(z.string()),
+          paths_total: z.number().int(),
+        })
+      ),
+      total: z.number().int(),
+      next_before: z.string().nullable(),
+    })
+    .optional(),
+  instructions: z.string().optional(),
+  absent_fields: z.array(z.string()).optional(),
+  truncated_fields: z.array(z.string()).optional(),
+});
 export const ChannelConfigureRequest: z.ZodType<ChannelConfigureRequest> = z
   .object({
     instance_id: z.string(),
@@ -6268,6 +8458,7 @@ export const ChannelConfigureRequest: z.ZodType<ChannelConfigureRequest> = z
     smtp_port: z.number().int(),
     username: z.string(),
     password: z.string(),
+    allow_from: z.array(z.string()),
   })
   .partial()
   .passthrough();
@@ -6350,27 +8541,8 @@ export const SessionMessageQuestion =
     sender_identity: z.string().min(1),
     untrusted_origin: z.boolean(),
     text: z.string().max(32768),
-    wait: z.boolean(),
     correlation_id: z.string().min(1),
-    authority: z.enum(["self_ok", "owner_required"]).optional(),
   }) satisfies z.ZodType<SessionMessageQuestion>;
-export const SessionMessageDecisionRequest =
-  z.object({
-    message_id: z.string().min(1),
-    session_id: z.string().min(1),
-    parent_session_id: z.string().nullish(),
-    generation: z.number().int().gte(0).optional(),
-    direction: z.literal("child_to_parent"),
-    kind: z.literal("decision_request"),
-    depth: z.number().int().gte(0).lte(5),
-    created_at: z.string().datetime({ offset: true }),
-    sender_identity: z.string().min(1),
-    untrusted_origin: z.boolean(),
-    text: z.string().max(32768),
-    options: z.array(z.string()).min(2),
-    correlation_id: z.string().min(1),
-    authority: z.enum(["self_ok", "owner_required"]).optional(),
-  }) satisfies z.ZodType<SessionMessageDecisionRequest>;
 export const SessionMessageError = z.object({
   message_id: z.string().min(1),
   session_id: z.string().min(1),
@@ -6466,7 +8638,7 @@ export const SessionMessageSteer = z.object({
   created_at: z.string().datetime({ offset: true }),
   sender_identity: z.string().min(1),
   untrusted_origin: z.boolean(),
-  text: z.string().max(16384),
+  text: z.string(),
   correlation_id: z.string().optional(),
 }) satisfies z.ZodType<SessionMessageSteer>;
 export const SessionMessageRespond = z.object(
@@ -6481,7 +8653,7 @@ export const SessionMessageRespond = z.object(
     created_at: z.string().datetime({ offset: true }),
     sender_identity: z.string().min(1),
     untrusted_origin: z.boolean(),
-    text: z.string().max(16384),
+    text: z.string(),
     correlation_id: z.string().min(1),
   }
 ) satisfies z.ZodType<SessionMessageRespond>;
@@ -6493,7 +8665,6 @@ export const SessionMessage = z.discriminatedUnion(
     SessionMessageArtifact,
     SessionMessageBlocker,
     SessionMessageQuestion,
-    SessionMessageDecisionRequest,
     SessionMessageError,
     SessionMessageHandback,
     SessionMessageRevisionEntry,
@@ -6511,11 +8682,9 @@ export const SessionLifecycleRecord: z.ZodType<SessionLifecycleRecord> =
       "queued",
       "running",
       "needs_input",
-      "paused",
+      "stopped",
       "completed",
       "failed",
-      "cancelled",
-      "timed_out",
     ]),
     terminal: z.boolean(),
     owner_scope_kind: z.enum(["parent_session", "plan", "human"]),
@@ -6544,6 +8713,7 @@ export const SessionLifecycleRecord: z.ZodType<SessionLifecycleRecord> =
           "task",
           "chat",
           "channel",
+          "main",
           "scheduled",
           "heartbeat",
           "verifier",
@@ -6570,10 +8740,6 @@ export const SessionLifecycleRecord: z.ZodType<SessionLifecycleRecord> =
           mode: z.enum(["direct", "task"]),
           remaining_depth: z.number().int().gte(0),
         }),
-        limits: z
-          .object({ timeout_seconds: z.number().int().gte(0) })
-          .partial()
-          .optional(),
         tool_exclusions: z.array(z.string()).optional(),
       })
       .optional(),
@@ -6659,7 +8825,6 @@ export const DelegateRunAction = z.object({
   task: z.string().min(1).max(10000),
   label: z.string().max(100).optional(),
   critical: z.boolean().optional(),
-  timeout_seconds: z.number().int().gte(0).optional(),
   snapshot: z
     .object({ references: z.array(z.string()), notes: z.string().max(8192) })
     .partial()
@@ -6669,7 +8834,6 @@ export const DelegateRunAction = z.object({
 export const DelegateStatusAction = z.object({
   action: z.literal("status"),
   session_id: z.string().min(1),
-  task_id: z.string().optional(),
 }) satisfies z.ZodType<DelegateStatusAction>;
 export const DelegateInboxAction = z.object({
   action: z.literal("inbox"),
@@ -6686,28 +8850,33 @@ export const DelegateInboxAckAction =
 export const DelegateSteerAction = z.object({
   action: z.literal("steer"),
   session_id: z.string().min(1),
-  text: z.string().min(1).max(16384),
+  text: z.string().min(1),
   correlation_id: z.string().optional(),
 }) satisfies z.ZodType<DelegateSteerAction>;
 export const DelegateRespondAction = z.object(
   {
     action: z.literal("respond"),
     session_id: z.string().min(1),
-    text: z.string().min(1).max(16384),
+    text: z.string().min(1),
     correlation_id: z.string().min(1),
   }
 ) satisfies z.ZodType<DelegateRespondAction>;
-export const DelegateCancelAction = z.object({
-  action: z.literal("cancel"),
+export const DelegateStopAllAction = z.object(
+  { action: z.literal("stop_all"), session_id: z.string().min(1) }
+) satisfies z.ZodType<DelegateStopAllAction>;
+export const DelegateClearGoalAction =
+  z.object({ action: z.literal("clear_goal"), session_id: z.string().min(1) }) satisfies z.ZodType<DelegateClearGoalAction>;
+export const DelegateResumeAction = z.object({
+  action: z.literal("resume"),
   session_id: z.string().min(1),
-  hard: z.boolean().optional(),
-}) satisfies z.ZodType<DelegateCancelAction>;
-export const DelegateFollowUpAction =
+  text: z.string().max(10000).optional(),
+}) satisfies z.ZodType<DelegateResumeAction>;
+export const DelegateRedirectAction =
   z.object({
-    action: z.literal("follow_up"),
+    action: z.literal("redirect"),
     session_id: z.string().min(1),
-    task: z.string().max(10000).optional(),
-  }) satisfies z.ZodType<DelegateFollowUpAction>;
+    text: z.string().min(1).max(10000),
+  }) satisfies z.ZodType<DelegateRedirectAction>;
 export const DelegatePeekAction = z.object({
   action: z.literal("peek"),
   session_id: z.string().min(1),
@@ -6720,28 +8889,27 @@ export const DelegateActionRequest =
     DelegateInboxAckAction,
     DelegateSteerAction,
     DelegateRespondAction,
-    DelegateCancelAction,
-    DelegateFollowUpAction,
+    DelegateStopAllAction,
+    DelegateClearGoalAction,
+    DelegateResumeAction,
+    DelegateRedirectAction,
     DelegatePeekAction,
   ]) satisfies z.ZodType<DelegateActionRequest>;
-export const DelegateSessionResponse: z.ZodType<DelegateSessionResponse> =
-  z.object({
-    session_id: z.string().min(1),
-    generation: z.number().int().gte(0),
-    queue_position: z.number().int().gte(0).optional(),
-    resumed_from: z.string().nullish(),
-    is_3p: z.boolean(),
-    state: z.enum([
-      "queued",
-      "running",
-      "needs_input",
-      "paused",
-      "completed",
-      "failed",
-      "cancelled",
-      "timed_out",
-    ]),
-  });
+export const DelegateSessionResponse = z.object({
+  session_id: z.string().min(1),
+  generation: z.number().int().gte(0),
+  queue_position: z.number().int().gte(0).optional(),
+  resumed_from: z.string().nullish(),
+  is_3p: z.boolean(),
+  state: z.enum([
+    "queued",
+    "running",
+    "needs_input",
+    "stopped",
+    "completed",
+    "failed",
+  ]),
+});
 export const DelegateStatusResponse: z.ZodType<DelegateStatusResponse> =
   z.object({
     session: SessionLifecycleRecord,
@@ -6764,29 +8932,37 @@ export const DelegateStatusResponse: z.ZodType<DelegateStatusResponse> =
       .optional(),
     unacked_count: z.number().int().gte(0),
   });
+export const DelegateNotDeliveredSummary: z.ZodType<DelegateNotDeliveredSummary> =
+  z.object({
+    count: z.number().int().gte(1),
+    last_reason: z.enum([
+      "rate_limited",
+      "body_too_large",
+      "question_blocker_ceiling",
+      "unacked_cap",
+    ]),
+    last_kind: z.string().min(1),
+    last_at: z.string().datetime({ offset: true }),
+  });
 export const DelegateInboxResponse: z.ZodType<DelegateInboxResponse> = z.object(
   {
     messages: z.array(SessionMessage),
     has_more: z.boolean(),
     next_cursor: z.string().optional(),
+    not_delivered: DelegateNotDeliveredSummary.optional(),
   }
 );
-export const DelegateRespondResponse: z.ZodType<DelegateRespondResponse> =
-  z.object({
-    acknowledged: z.boolean(),
-    corrective_session: DelegateSessionResponse.optional(),
-  });
+export const DelegateRespondResponse = z.object({ acknowledged: z.boolean() });
 export const DelegatePeekResponse = z.object({
   session_id: z.string().min(1),
   state: z.enum([
     "queued",
     "running",
     "needs_input",
-    "paused",
+    "stopped",
     "completed",
     "failed",
-    "cancelled",
-    "timed_out",
+    "interrupted",
   ]),
   latest_checkpoint_summary: z.string().optional(),
   latest_progress_text: z.string().optional(),
@@ -6827,8 +9003,6 @@ export const MessageParentQuestion = z.object(
     kind: z.literal("question"),
     message_id: z.string().optional(),
     text: z.string().min(1).max(32768),
-    wait: z.boolean(),
-    authority: z.enum(["self_ok", "owner_required"]).optional(),
     correlation_id: z.string().optional(),
   }
 ) satisfies z.ZodType<MessageParentQuestion>;
@@ -6858,7 +9032,11 @@ export const MessageParentResponse = z.object({
   error: z.string().optional(),
 });
 
-const endpoints = makeApi([
+// The SPA imports individual generated schemas for response validation; it does
+// not use the generated Zodios client. Mark both client-construction steps pure
+// so production bundlers can discard the complete endpoint catalogue (including
+// its descriptions) when neither `api` nor `createApiClient` is imported.
+const endpoints = /* @__PURE__ */ makeApi([
   {
     method: "get",
     path: "/about",
@@ -6960,7 +9138,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "get",
     path: "/agents/:id",
     alias: "getAgent",
-    description: `Returns the full agent configuration including soul and heartbeat. Core (locked) agents return empty soul (compiled-in prompt not exposed).
+    description: `Returns the full agent configuration including soul and heartbeat. Core (locked) agents return empty soul (compiled-in prompt not exposed). Update (PUT) and delete (DELETE) apply only to the bare /agents/{id} address, with no sub-path. Unknown sub-paths, including undeclared descendants of known ones (a malformed mailboxes address is the exception, below), return 404, never agent detail. Known sub-paths are sessions, activity-runs, runner/test, tools, mailboxes/{workspaceId} and dependencies; a method a sub-path does not serve (OPTIONS preflight aside) returns 405 with an Allow header listing the methods it serves, without updating or deleting the agent. A malformed mailboxes address returns 400 for every method (OPTIONS preflight aside).
 `,
     requestFormat: "json",
     parameters: [
@@ -6993,7 +9171,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "put",
     path: "/agents/:id",
     alias: "updateAgent",
-    description: `Applies changed editable fields with a required revision. Protected or invalid fields and stale revisions reject without writes. Successful saves report live activation separately; partial storage failures report actual state.
+    description: `Applies changed editable fields with a required revision. Protected or invalid fields and stale revisions reject without writes. Successful saves report live activation separately; partial storage failures report actual state. Update applies only to PUT /agents/{id}, with no sub-path. PUT on a known sub-path that does not serve PUT returns 405 with an Allow header; an unknown sub-path returns 404. Neither refusal updates or deletes the agent.
 `,
     requestFormat: "json",
     parameters: [
@@ -7012,7 +9190,8 @@ Includes session_start events from all agent stores and task lifecycle events.
     errors: [
       {
         status: 400,
-        description: `Bad request — missing or invalid field.`,
+        description: `Bad request — missing or invalid field. Also refused, nothing saved: a tool policy of allow for an always-ask tool — &quot;set_channel_outbound always asks for approval; it can be set to ask or deny, not allow&quot; (channels spec FR-037, T-10 rows 15-16).
+`,
         schema: ErrorResponse,
       },
       {
@@ -7036,6 +9215,12 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: z.void(),
       },
       {
+        status: 422,
+        description: `Spec omnipus-system-agent K12, §6.2 (FR-022; landing 1, WU-2): a per-agent tool policy of &#x60;ask&#x60; for Omnipus is refused — &quot;Omnipus takes no per-agent Ask; set Ask globally or use Deny&quot;. &#x60;deny&#x60; is accepted. No writes occurred. To return Omnipus to an always-ask tool such as set_channel_outbound, clear the per-agent entry: inheritance restores always-ask only while the global policy is not deny (with a global deny the tool stays off; channels spec FR-037, T-10 rows 8-9).
+`,
+        schema: ErrorResponse,
+      },
+      {
         status: 500,
         description: `Storage failed; reports actual saved state.`,
         schema: ConfigurationMutationState,
@@ -7046,7 +9231,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "delete",
     path: "/agents/:id",
     alias: "deleteAgent",
-    description: `Removes a custom (non-core, non-system) agent from config.json and reloads the live config. Built-in core/system agents (locked) and the &#x60;omnipus-system&#x60; agent CANNOT be deleted (403, code &#x60;agent_locked&#x60;). Deleting an agent removes its entity and applicable SOUL bytes but preserves unrelated files in the agent home. Audited (severity INFO, event &#x60;agent.delete&#x60;).
+    description: `Removes a custom (non-core, non-system) agent from config.json and reloads the live config. Built-in core/system agents (locked) and the &#x60;omnipus-system&#x60; agent CANNOT be deleted (403, code &#x60;agent_locked&#x60;). Deleting an agent removes its entity and applicable SOUL bytes but preserves unrelated files in the agent home. Audited (severity INFO, event &#x60;agent.delete&#x60;). Delete applies only to DELETE /agents/{id}, with no sub-path. DELETE on a known sub-path that does not serve DELETE returns 405 with an Allow header; an unknown sub-path returns 404. Neither refusal updates or deletes the agent.
 `,
     requestFormat: "json",
     parameters: [
@@ -7059,6 +9244,11 @@ Includes session_start events from all agent stores and task lifecycle events.
         name: "revision",
         type: "Query",
         schema: z.string().regex(/^[a-f0-9]{64}$/),
+      },
+      {
+        name: "delete_everything",
+        type: "Query",
+        schema: z.boolean().optional(),
       },
     ],
     response: ConfigurationMutationState,
@@ -7085,13 +9275,102 @@ Includes session_start events from all agent stores and task lifecycle events.
       },
       {
         status: 409,
-        description: `Revision or inherited global policy changed; no writes occurred.`,
-        schema: z.void(),
+        description: `Revision or inherited global policy changed; no writes occurred (no body). Or, spec omnipus-system-agent K50 (FR-243; landing 1, WU-20): the agent has dependencies and &#x60;delete_everything&#x60; was not true — nothing was deleted and the body is the full dependency list.
+`,
+        schema: AgentDependencyList,
       },
       {
         status: 500,
         description: `Storage failed; reports actual saved state.`,
         schema: ConfigurationMutationState,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/agents/:id/activity-runs",
+    alias: "listAgentActivityRuns",
+    description: `Returns the OPEN task/scheduler runs where the agent is the assignee or one of the run&#x27;s captured recipients (session-core FR-033), newest first. Each run carries its own session id for the Open control. An agent with no open run gets an empty array.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "workspace_id",
+        type: "Query",
+        schema: z.string().optional(),
+      },
+    ],
+    response: z.array(AgentActivityRun),
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 405,
+        description: `This sub-path accepts GET only. Any other method returns 405 with response header Allow: GET, except OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted.
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/agents/:id/dependencies",
+    alias: "getAgentDependencies",
+    description: `Spec K50, §6.19 (FR-243, FR-244). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-20. Connections it answers as main agent, mailboxes, private secrets and rooms per workspace (People rows from landing 2).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "workspace_id",
+        type: "Query",
+        schema: z.string().min(1).max(128).optional(),
+      },
+    ],
+    response: AgentDependencyList,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 405,
+        description: `This sub-path accepts GET only. Any other method returns 405 with response header Allow: GET, except OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted.
+`,
+        schema: ErrorResponse,
       },
     ],
   },
@@ -7124,6 +9403,12 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 404,
         description: `Agent not found, or no mailbox configured for the agent in this workspace.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 405,
+        description: `This address accepts GET, PUT and DELETE only. Any other method returns 405 with response header Allow: GET, PUT, DELETE. The exception is OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted.
+`,
         schema: ErrorResponse,
       },
       {
@@ -7175,6 +9460,12 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: ErrorResponse,
       },
       {
+        status: 405,
+        description: `This address accepts GET, PUT and DELETE only. Any other method returns 405 with response header Allow: GET, PUT, DELETE. The exception is OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted.
+`,
+        schema: ErrorResponse,
+      },
+      {
         status: 500,
         description: `Internal server error.`,
         schema: ErrorResponse,
@@ -7185,7 +9476,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "delete",
     path: "/agents/:id/mailboxes/:workspaceId",
     alias: "deleteAgentMailbox",
-    description: `Removes the mailbox the agent holds in the given workspace from config and deletes its stored password from the credential store. The agent&#x27;s email tools for this workspace are de-registered on the next reload; mailboxes the agent holds in OTHER workspaces are untouched.
+    description: `Removes the mailbox the agent holds in the given workspace from config and deletes its stored password from the credential store. The agent&#x27;s email tools for this workspace are de-registered on the next reload; mailboxes the agent holds in OTHER workspaces are untouched. The response is the truthful removal discrimination (MailboxRemovalResult: removed versus removed_cleanup_pending with an opaque cleanup intent and the separately authorized Retry-cleanup operation, ADR-20261001 &quot;Removal with incomplete cleanup&quot; row): the pair is always disabled and removed from config first — a removed_cleanup_pending outcome never serves residual files — and a failed cache/watcher-state cleanup step is NEVER reported as a completed purge.
 `,
     requestFormat: "json",
     parameters: [
@@ -7200,7 +9491,7 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: z.string(),
       },
     ],
-    response: OperationResult,
+    response: MailboxRemovalResult,
     errors: [
       {
         status: 401,
@@ -7210,6 +9501,12 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 404,
         description: `Agent not found, or no mailbox configured for the agent in this workspace.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 405,
+        description: `This address accepts GET, PUT and DELETE only. Any other method returns 405 with response header Allow: GET, PUT, DELETE. The exception is OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted.
+`,
         schema: ErrorResponse,
       },
       {
@@ -7251,6 +9548,12 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: ErrorResponse,
       },
       {
+        status: 405,
+        description: `This sub-path accepts POST only. Any other method returns 405 with response header Allow: POST, except OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted.
+`,
+        schema: ErrorResponse,
+      },
+      {
         status: 500,
         description: `Internal server error.`,
         schema: ErrorResponse,
@@ -7281,6 +9584,12 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 405,
+        description: `This sub-path accepts GET only. Any other method returns 405 with response header Allow: GET, except OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted.
+`,
         schema: ErrorResponse,
       },
       {
@@ -7322,6 +9631,12 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: ErrorResponse,
       },
       {
+        status: 405,
+        description: `This sub-path accepts GET and PUT only. Any other method returns 405 with response header Allow: GET, PUT. The exception is OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted.
+`,
+        schema: ErrorResponse,
+      },
+      {
         status: 500,
         description: `Internal server error.`,
         schema: ErrorResponse,
@@ -7351,7 +9666,8 @@ Includes session_start events from all agent stores and task lifecycle events.
     errors: [
       {
         status: 400,
-        description: `Bad request — missing or invalid field.`,
+        description: `Bad request — missing or invalid field. Also refused, nothing saved: a tool policy of allow for an always-ask tool — &quot;set_channel_outbound always asks for approval; it can be set to ask or deny, not allow&quot; (channels spec FR-037, T-10 rows 15-16).
+`,
         schema: ErrorResponse,
       },
       {
@@ -7370,9 +9686,21 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: ErrorResponse,
       },
       {
+        status: 405,
+        description: `This sub-path accepts GET and PUT only. Any other method returns 405 with response header Allow: GET, PUT. The exception is OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted.
+`,
+        schema: ErrorResponse,
+      },
+      {
         status: 409,
         description: `Revision or inherited global policy changed; no writes occurred.`,
         schema: z.void(),
+      },
+      {
+        status: 422,
+        description: `Spec omnipus-system-agent K13, §6.2 (FR-022; landing 1, WU-2): a per-agent tool policy of &#x60;ask&#x60; for Omnipus is refused — &quot;Omnipus takes no per-agent Ask; set Ask globally or use Deny&quot;. &#x60;deny&#x60; is accepted. No writes occurred. To return Omnipus to an always-ask tool such as set_channel_outbound, clear the per-agent entry: inheritance restores always-ask only while the global policy is not deny (with a global deny the tool stays off; channels spec FR-037, T-10 rows 8-9).
+`,
+        schema: ErrorResponse,
       },
       {
         status: 500,
@@ -7944,7 +10272,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "put",
     path: "/channels/:id/configure",
     alias: "configureChannel",
-    description: `Merges request body fields into the channel&#x27;s config section. Fields absent from the request body are not touched (merge, not replace). The &quot;enabled&quot; field is reserved and ignored if sent. Returns the updated config with credential fields redacted.
+    description: `Merges request body fields into the channel&#x27;s config section. Fields absent from the request body are not touched (merge, not replace). The &quot;enabled&quot; field is reserved and ignored if sent. &#x60;outbound&#x60;, &#x60;workspace_id&#x60; and &#x60;identity&#x60; cannot be set here, in any letter case: 400 (the outbound setting is changed only with PUT /api/v1/channels/{id}/outbound; the binding only with the routing route). &#x60;apply_outcome&#x60;, &#x60;apply_reason&#x60; and &#x60;apply_note&#x60; are stripped from the body. When the save changes an access field or stores a credential, or the connection is not current, the one connection is restarted and the response reports the outcome in &#x60;apply_outcome&#x60; (channels spec T-6, FR-050). Returns the updated config with credential fields redacted.
 `,
     requestFormat: "json",
     parameters: [
@@ -7961,11 +10289,24 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: z.string(),
       },
     ],
-    response: z.object({}).partial().passthrough(),
+    response: z
+      .object({
+        apply_outcome: z.enum([
+          "applied",
+          "applied_not_running",
+          "unconfirmed",
+          "failed",
+          "no_reload_needed",
+        ]),
+        apply_reason: z.string().optional(),
+        apply_note: z.string().optional(),
+      })
+      .passthrough(),
     errors: [
       {
         status: 400,
-        description: `Invalid JSON body.`,
+        description: `Invalid JSON body, or a field that cannot be set here. Texts: &quot;outbound cannot be set via configure; use PUT /api/v1/channels/{id}/outbound&quot;; the existing workspace_id and identity refusals (set the binding with PUT /api/v1/channels/{id}/routing). Matched in any spelling encoding/json would bind to those fields. Nothing was changed.
+`,
         schema: ErrorResponse,
       },
       {
@@ -7976,6 +10317,17 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 404,
         description: `Channel ID not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `The save did not complete; code says what durably changed: could_not_save (nothing), credential_saved_not_saved (a credential of this request was stored, the configuration was not), or saved_not_refreshed (the file was written, the running configuration was not refreshed and the connection was not restarted).
+`,
+        schema: ChannelConfigureError,
+      },
+      {
+        status: 503,
+        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
         schema: ErrorResponse,
       },
     ],
@@ -8011,9 +10363,15 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "put",
     path: "/channels/:id/enable",
     alias: "enableChannel",
-    description: `Sets the channel&#x27;s enabled flag to true in config.`,
+    description: `Sets the channel&#x27;s enabled flag to true in config. An absent body or {} is an ordinary enable that grants no chat ownership. A pairing_retry body is an explicit chat Retry of a WhatsApp QR pairing (spec omnipus-system-agent FR-081 / K10, BDD-8.8): the caller must own the session and the request/session pair must be the channel&#x27;s recorded pairing owner; the next pairing attempt is claimed for that chat before the channel is enabled. A refused Retry enables nothing and changes no ownership; a disable that already succeeded is not rolled back, so the channel stays disabled.
+`,
     requestFormat: "json",
     parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: ChannelEnableRequest.optional(),
+      },
       {
         name: "id",
         type: "Path",
@@ -8023,13 +10381,141 @@ Includes session_start events from all agent stores and task lifecycle events.
     response: ChannelEnabledResponse,
     errors: [
       {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Channel ID not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `code pairing_retry_conflict: this chat can no longer retry this pairing (missing, stale or mismatched ownership, or a competing attempt). Nothing was enabled and no ownership changed. code pairing_in_progress: an ordinary enable of a WhatsApp connector while another of its pairings is starting, running or stopping. Nothing was changed.
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `The enable could not be completed. The error text says which state is saved: the configuration could not be saved or reloaded; the connection is enabled but its restart could not be confirmed yet (a Retry&#x27;s pairing keeps its chat and can still start); or the connection is enabled but its reserved pairing was cancelled before it started (nothing else starts). Never a refusal before effects, which is 404 or 409.
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Service unavailable — e.g. credential store locked.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/channels/:id/outbound",
+    alias: "getChannelOutbound",
+    description: `Returns whether the agent bound to this connection may start messages and to whom, the live revision token, whether the connection is running and whether its platform can start messages (channels spec FR-021). Read from one live configuration snapshot.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string().regex(/^[a-z0-9-]+(\.[a-z0-9-]+)?$/),
+      },
+    ],
+    response: ChannelOutboundRead,
+    errors: [
+      {
+        status: 400,
+        description: `Malformed channel id.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 401,
         description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
       },
       {
         status: 404,
-        description: `Channel ID not found.`,
+        description: `Unknown channel type.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/channels/:id/outbound",
+    alias: "setChannelOutbound",
+    description: `Replaces the connection&#x27;s outbound policy and target list (channels spec FR-020, FR-022). Targets are canonicalized and de-duplicated; added Discord targets are looked up through the running connection outside the settings lock, each call bounded by a 5-second deadline that covers the rate-limit wait. The revision is re-checked under the settings lock before saving. A permission-extending write needs the saved and running configurations of the connection to correspond; switching to reply_only or removing targets always works, in any connection state. This is the only way to change the setting; every other save path keeps it as stored. Admin only.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: ChannelOutboundUpdateRequest,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string().regex(/^[a-z0-9-]+(\.[a-z0-9-]+)?$/),
+      },
+    ],
+    response: ChannelOutboundWriteResponse,
+    errors: [
+      {
+        status: 400,
+        description: `invalid_targets (per-target errors in target_errors) or too_many_targets (more than 20 after de-duplication). Nothing was saved.
+`,
+        schema: ChannelOutboundRejection,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Unknown channel.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `stale_revision (the setting changed since it was read; reload and retry), connect_first (adding a Discord target needs the connection running), or saved_live_mismatch (the saved and running configurations differ because an earlier change did not finish applying; a permission-extending write waits until they correspond again). Nothing was saved.
+`,
+        schema: ChannelOutboundRejection,
+      },
+      {
+        status: 422,
+        description: `platform_cannot_start (&quot;starting messages is not supported yet on &lt;Platform&gt;&quot;) or platform_cannot_message_people (&quot;this platform can only answer, not start a direct message&quot;). Nothing was saved.
+`,
+        schema: ChannelOutboundRejection,
+      },
+      {
+        status: 500,
+        description: `&quot;could not save the setting; nothing was changed&quot; — the failure happened before the file was written (no credential is involved on this route).
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `lookup_unavailable: Discord could not be reached or timed out while checking an added target, including a rate-limit wait past the deadline. Nothing was saved; try again.
+`,
+        schema: ChannelOutboundRejection,
+      },
+      {
+        status: 503,
+        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
         schema: ErrorResponse,
       },
     ],
@@ -8038,7 +10524,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "get",
     path: "/channels/:id/routing",
     alias: "getChannelRouting",
-    description: `Returns the routing configuration for the specified channel, including which agent handles its inbound messages.
+    description: `Returns the routing configuration for the specified channel: its workspace binding and main agent, or — for an instance that is not yet bound — &#x60;bound: false&#x60; with empty ids (FR-128). Never an invented or legacy destination.
 `,
     requestFormat: "json",
     parameters: [
@@ -8071,14 +10557,14 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "put",
     path: "/channels/:id/routing",
     alias: "setChannelRouting",
-    description: `Sets the routing configuration for the specified channel. The default_agent_id field controls which agent handles inbound messages arriving on this channel. Omit it or leave it empty to fall back to the global default agent.
+    description: `Binds the channel instance to a workspace and names its main agent. Both workspace_id and default_agent_id are required and nonblank (omnipus-system-agent FR-127, K14); there is no unbound mode and no global default agent. A missing or blank value is refused with 400 &quot;bind this channel to an agent in a workspace&quot; and changes nothing. Saving a valid binding clears the channel&#x27;s routing degradation (FR-129).
 `,
     requestFormat: "json",
     parameters: [
       {
         name: "body",
         type: "Body",
-        schema: ChannelRouting,
+        schema: ChannelRoutingUpdateRequest,
       },
       {
         name: "id",
@@ -8134,34 +10620,6 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 404,
         description: `Channel ID not found.`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "post",
-    path: "/chat",
-    alias: "postChat",
-    description: `Sends a user message to the agent and streams the response via Server-Sent Events. The connection stays open until the agent finishes responding or the client disconnects.
-`,
-    requestFormat: "json",
-    parameters: [
-      {
-        name: "body",
-        type: "Body",
-        schema: z.object({ message: z.string() }),
-      },
-    ],
-    response: z.void(),
-    errors: [
-      {
-        status: 400,
-        description: `Bad request — missing or invalid field.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
       },
     ],
@@ -8513,7 +10971,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "get",
     path: "/health",
     alias: "getHealth",
-    description: `Returns HTTP 200 with status &quot;ok&quot; when the gateway is serving, and HTTP 503 with status &quot;degraded&quot; plus a reason on a gateway-fatal condition (agent loop dead, config reload failed, default agent unloadable). The audit_* and catalog fields describe a degraded SUBSYSTEM while the gateway itself is still serving and never change the status code — a stale provider catalog (ADR-067 FR-037) makes the model picker less accurate, it does not take the process out of rotation. No authentication required.
+    description: `Returns HTTP 200 with status &quot;ok&quot; when the gateway is serving, and HTTP 503 with status &quot;degraded&quot; plus a reason on a gateway-fatal condition (agent loop dead, config reload failed). The audit_* and catalog fields describe a degraded SUBSYSTEM while the gateway itself is still serving and never change the status code — a stale provider catalog (ADR-067 FR-037) makes the model picker less accurate, it does not take the process out of rotation. No authentication required.
 `,
     requestFormat: "json",
     response: HealthResponse,
@@ -8534,7 +10992,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "get",
     path: "/integrations/providers",
     alias: "getIntegrationProviders",
-    description: `Returns every configurable non-LLM integration provider — web-search engines (SearchProvider) and voice-input transcribers (Transcriber) — plus which provider is active for each kind (FR-12.1). API keys are never returned; configured reflects whether a key is present. Requires authentication.
+    description: `Returns every configurable non-LLM integration provider — web-search engines (SearchProvider) and voice-input transcribers (Transcriber) — plus which provider is active for each kind (FR-12.1). API keys are never returned; configured reflects whether a key is present. ADR-096: the response also carries the resolved web-search roles (default_search, fallback_search) and each search row reports usable and its fallback flags, built from post-reload state. Requires authentication.
 `,
     requestFormat: "json",
     response: IntegrationProvidersResponse,
@@ -8555,7 +11013,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "put",
     path: "/integrations/providers/:id",
     alias: "updateIntegrationProvider",
-    description: `Sets the API key and/or selects a provider as active for its kind (FR-12.1). Keys are stored encrypted (AES-256-GCM) in credentials.json; only the credential reference is written to config.json. This is a sensitive settings change: in local mode the caller must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid, unexpired token are rejected 403; in platform mode there is no local password to re-type, so the authenticated session is the guard and the SPA confirms the change with the operator before sending (ADR-0008 ruling 6). Requires authentication.
+    description: `Stores an API key, removes a saved search key with clear_api_key:true, and/or assigns the provider its role (FR-12.1). Removal switches only that service off and preserves the raw default, fallback and migration marker. It rejects any api_key, active or fallback field, voice/keyless services, undecided roles and shared/custom credential references before writes; ownership conflicts return 409. Success requires deletion, runtime disabling, confirmed reload and audit recording. Partial failures return a non-success error describing what persisted. Removal does not revoke the upstream key. ADR-096: storing a key is separable from assigning a role — an api_key alone changes no role; on search providers active assigns the default (and switches the provider on), fallback true assigns the fallback, fallback false sets the fallback to none (&quot;No fallback&quot;), an explicit false on active is rejected 400, and active plus fallback naming the same provider is rejected 400. The write is made live in the same request — a config reload runs before the response, so the response is built from post-reload state (ADR-096 FR-033) — and a default whose key still does not resolve after that reload is rejected 400 (&quot;needs an API key&quot;). Keys are stored encrypted (AES-256-GCM) in credentials.json; only the credential reference is written to config.json. This is a sensitive settings change: in local mode the caller must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid, unexpired token are rejected 403; in platform mode there is no local password to re-type, so the authenticated session is the guard and the SPA confirms the change with the operator before sending (ADR-0008 ruling 6). Requires authentication.
 `,
     requestFormat: "json",
     parameters: [
@@ -8588,8 +11046,82 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: ErrorResponse,
       },
       {
+        status: 409,
+        description: `Conflict — e.g. resource already exists.`,
+        schema: ErrorResponse,
+      },
+      {
         status: 500,
         description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Service unavailable — e.g. credential store locked.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/integrations/providers/:id/check",
+    alias: "checkSearchProviderConnection",
+    description: `Runs one real, potentially chargeable search for &quot;Omnipus&quot; through the addressed keyed search client with its saved key, one result where supported, and the cheapest supported depth within the saved cap. Requires authenticated administrator access, but no password step-up: this neither reveals nor changes a secret. A saved key and runtime-usable service are required. No fallback, key rotation, retry, discovery, result fetch or cached success. A 15-second total context deadline cancels on disconnect and does not lengthen a shorter client deadline. Per instance and service, one check may be in flight and at most one check is admitted every 30 seconds, including failures. Local limiting returns 429 with Retry-After and performs no outbound call. Completed upstream outcomes, including valid empty results and upstream failures, return 200 with normalized categories and no upstream payload or key. Gateway/internal failures remain non-2xx. If the service&#x27;s key or configuration generation changes after admission and before completion, the server discards the upstream outcome and returns 409 with the fixed error &quot;The key changed while checking. Check again.&quot; No key identity, fingerprint or generation is returned. Configuration and roles are unchanged; clients refresh readiness separately.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z.object({}).partial().strict(),
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: SearchProviderCheckResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `The saved connection is not ready, or its key/configuration changed while checking. A changed generation discards the provider outcome and returns &quot;The key changed while checking. Check again.&quot;
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Service unavailable — e.g. credential store locked.`,
         schema: ErrorResponse,
       },
     ],
@@ -8821,6 +11353,11 @@ Includes session_start events from all agent stores and task lifecycle events.
         type: "Query",
         schema: z.boolean().optional().default(false),
       },
+      {
+        name: "include_views",
+        type: "Query",
+        schema: z.boolean().optional().default(false),
+      },
     ],
     response: z.array(LibraryEntry),
     errors: [
@@ -8856,6 +11393,8 @@ Includes session_start events from all agent stores and task lifecycle events.
     path: "/library/:workspace_id/entries",
     alias: "deleteLibraryEntry",
     description: `Deletes the file or directory at the given workspace-relative path. Deleting a directory removes it and everything under it. Returns 403 if path resolves outside the workspace&#x27;s work tree; 404 if nothing exists at path.
+
+Chat copies (#1449 D26, FR-086): deleting a file that has an associated chat copy (LibraryEntry.chat_copy; the media entry whose library_path names this file, in the same workspace) also deletes that chat copy, bytes and media entry. Deleting a directory does so for every associated file inside it. Retention owners (session reference counts, group retention) never block an explicit deletion, and nothing recreates a deleted copy. Order: chat copy first, Library file last, so a failure leaves the entry listed and a repeat completes the work; a chat copy that is already gone counts as removed. 204 when both are removed; 500 ErrorResponse &quot;could not delete &lt;name&gt; completely&quot; when either removal failed (the Library file is then still present). Every chat that showed the file then shows it as unavailable. Deleting a group never deletes files (D19).
 `,
     requestFormat: "json",
     parameters: [
@@ -9618,6 +12157,8 @@ A view that cannot be answered — unknown, stored disabled (FR-105), refused at
 Each entry carries the slug it is actually addressed by (pass it VERBATIM to GET .../knowledge/view), its display label, its kind, whether it can be served, and — for an imported view — the &#x60;.base&#x60; it came from. Base previews and dashboard embeds keep listing by source; this is the collection&#x27;s own list.
 
 A collection_id outside this workspace&#x27;s scope returns the same empty-but-complete shape as an unknown collection (FR-052/FR-053) — never a 403 or 404, which would confirm the collection exists. View files the loader rejected are counted in unloadable_count and named in unloadable, never silently dropped.
+
+The loader is the one the Library listing uses (include_views on GET .../entries): it reads only regular files inside the knowledge base (never a link), at most 256 KiB per file, 128 files per folder and 4 MiB per load. A view file it does not read is not listed, cannot be opened through GET .../knowledge/view, and is named in unloadable.
 `,
     requestFormat: "json",
     parameters: [
@@ -9723,7 +12264,7 @@ A collection_id outside this workspace&#x27;s scope returns the same empty-but-c
     method: "post",
     path: "/library/:workspace_id/rename",
     alias: "renameLibraryEntry",
-    description: `Renames or moves the entry at &quot;from&quot; to &quot;to&quot; within this single workspace&#x27;s work tree (library-spec.md D-2). &quot;to&quot; may name a different parent directory than &quot;from&quot;, so this operation doubles as an in-workspace move. This is same-workspace sugar over POST /library/move (equivalent to calling it with from_workspace_id &#x3D;&#x3D; to_workspace_id &#x3D;&#x3D; {workspace_id}) — kept as a dedicated operation, alongside /library/move, so a caller doing only in-workspace renames never needs to know its own workspace id twice. Returns 400 if &quot;to&quot; begins with a &quot;..&quot; segment anywhere in the path (rejected outright as a sanity check — such a name isn&#x27;t a traversal, but this package&#x27;s hidden-entry heuristic also matches it, so it would otherwise succeed and immediately vanish from the default listing); 403 if either path resolves outside the workspace&#x27;s work tree; 404 if nothing exists at &quot;from&quot; OR &quot;to&quot;&#x27;s parent directory does not exist yet (this operation deliberately does NOT auto-create missing destination directories — the message names the specific missing directory; create it first with POST /library/{workspace_id}/mkdir); 409 if an entry already exists at &quot;to&quot;.
+    description: `Renames or moves the entry at &quot;from&quot; to &quot;to&quot; within this single workspace&#x27;s work tree (library-spec.md D-2). &quot;to&quot; may name a different parent directory than &quot;from&quot;, so this operation doubles as an in-workspace move. This is same-workspace sugar over POST /library/move (equivalent to calling it with from_workspace_id &#x3D;&#x3D; to_workspace_id &#x3D;&#x3D; {workspace_id}) — kept as a dedicated operation, alongside /library/move, so a caller doing only in-workspace renames never needs to know its own workspace id twice. Returns 400 if &quot;to&quot; begins with a &quot;..&quot; segment anywhere in the path (rejected outright as a sanity check — such a name isn&#x27;t a traversal, but this package&#x27;s hidden-entry heuristic also matches it, so it would otherwise succeed and immediately vanish from the default listing); 403 if either path resolves outside the workspace&#x27;s work tree; 404 if nothing exists at &quot;from&quot; OR &quot;to&quot;&#x27;s parent directory does not exist yet (this operation deliberately does NOT auto-create missing destination directories — the message names the specific missing directory; create it first with POST /library/{workspace_id}/mkdir); 409 if an entry already exists at &quot;to&quot;. A rename keeps a file&#x27;s chat-copy association (#1449 D26): the media entry&#x27;s library_path follows the file.
 `,
     requestFormat: "json",
     parameters: [
@@ -9882,7 +12423,7 @@ A collection_id outside this workspace&#x27;s scope returns the same empty-but-c
     method: "post",
     path: "/library/copy",
     alias: "copyLibraryEntry",
-    description: `Copies the entry at from_path (inside from_workspace_id&#x27;s work tree) to to_path (inside to_workspace_id&#x27;s work tree), leaving the source in place. Directory copies are recursive. Not scoped under {workspace_id} for the same reason as /library/move — see LibraryTransferRequest. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace&#x27;s work tree (enforced server-side). Returns 403 if either path resolves outside its workspace&#x27;s work tree; 404 if from_workspace_id/to_workspace_id does not exist, nothing exists at from_path, OR to_path&#x27;s parent directory does not exist yet — this operation deliberately does NOT auto-create missing destination directories (matching &#x60;cp&#x60; semantics), but the 404 message names the specific missing directory rather than a bare &quot;not found&quot;; create it first with POST /library/{workspace_id}/mkdir. 409 if an entry already exists at to_path.
+    description: `Copies the entry at from_path (inside from_workspace_id&#x27;s work tree) to to_path (inside to_workspace_id&#x27;s work tree), leaving the source in place. Directory copies are recursive. Not scoped under {workspace_id} for the same reason as /library/move — see LibraryTransferRequest. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace&#x27;s work tree (enforced server-side). Returns 403 if either path resolves outside its workspace&#x27;s work tree; 404 if from_workspace_id/to_workspace_id does not exist, nothing exists at from_path, OR to_path&#x27;s parent directory does not exist yet — this operation deliberately does NOT auto-create missing destination directories (matching &#x60;cp&#x60; semantics), but the 404 message names the specific missing directory rather than a bare &quot;not found&quot;; create it first with POST /library/{workspace_id}/mkdir. 409 if an entry already exists at to_path. A copy is a new file with no chat-copy association (#1449 D26): deleting the copy removes only the copy.
 `,
     requestFormat: "json",
     parameters: [
@@ -9930,7 +12471,7 @@ A collection_id outside this workspace&#x27;s scope returns the same empty-but-c
     method: "post",
     path: "/library/move",
     alias: "moveLibraryEntry",
-    description: `Moves the entry at from_path (inside from_workspace_id&#x27;s work tree) to to_path (inside to_workspace_id&#x27;s work tree). Not scoped under {workspace_id} like the other Library operations because source and destination can be different workspaces — see LibraryTransferRequest. A same-workspace move (from_workspace_id &#x3D;&#x3D; to_workspace_id) is exactly what POST /library/{workspace_id}/rename does as same-workspace sugar over this operation. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace&#x27;s work tree (enforced server-side). Returns 403 if either path resolves outside its workspace&#x27;s work tree; 404 if from_workspace_id/to_workspace_id does not exist, nothing exists at from_path, OR to_path&#x27;s parent directory does not exist yet — this operation deliberately does NOT auto-create missing destination directories (matching &#x60;mv&#x60; semantics), but the 404 message names the specific missing directory rather than a bare &quot;not found&quot;; create it first with POST /library/{workspace_id}/mkdir. 409 if an entry already exists at to_path.
+    description: `Moves the entry at from_path (inside from_workspace_id&#x27;s work tree) to to_path (inside to_workspace_id&#x27;s work tree). Not scoped under {workspace_id} like the other Library operations because source and destination can be different workspaces — see LibraryTransferRequest. A same-workspace move (from_workspace_id &#x3D;&#x3D; to_workspace_id) is exactly what POST /library/{workspace_id}/rename does as same-workspace sugar over this operation. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace&#x27;s work tree (enforced server-side). Returns 403 if either path resolves outside its workspace&#x27;s work tree; 404 if from_workspace_id/to_workspace_id does not exist, nothing exists at from_path, OR to_path&#x27;s parent directory does not exist yet — this operation deliberately does NOT auto-create missing destination directories (matching &#x60;mv&#x60; semantics), but the 404 message names the specific missing directory rather than a bare &quot;not found&quot;; create it first with POST /library/{workspace_id}/mkdir. 409 if an entry already exists at to_path. Chat copies (#1449 D26): a move inside one workspace keeps a file&#x27;s chat-copy association (the media entry&#x27;s library_path follows the file). A move to another workspace drops it: the moved file becomes an ordinary file there and its chat copy stays in the original workspace.
 `,
     requestFormat: "json",
     parameters: [
@@ -10087,6 +12628,187 @@ Idempotent and deliberately uninformative: 204 whether the token was live, alrea
     ],
   },
   {
+    method: "post",
+    path: "/mail/attachment-preview-token",
+    alias: "mintMailAttachmentPreview",
+    description: `Mints the temporary attachment-preview credential (ADR-20261001 &quot;Temporary preview mint (F1)&quot; row; mail-live-access-landing-order register rows 5/8 — the preview-versus-download wire split, correction I-05). Session-authenticated and STAYS in the API namespace, like the HTML preview mint; the byte serving route is the token-only non-API preview-purpose endpoint named by the response&#x27;s content_source.byte_url (the serving-prefix family is deliberately not enumerated as operations in this document — §2.3a, Library serving-prefix precedent). Minting is metadata-only: it creates no file, retains no bytes and writes nothing to disk — the grant holds authorization/reference metadata only, and every byte read is a fresh request-scoped fetch through the preview-purpose endpoint (inline disposition, Cache-Control: no-store, the 25 MiB actual-decoded-byte cap enforced BEFORE any success state is committed; a mid-transfer size or decode failure aborts with a visible typed error, so a truncated stream can never render as a completed preview). This is the ONE live-IMAP fetch of the Open flow: only the selected part is fetched (part-specific PEEK — flags unchanged), never the whole message or an unrelated part. The grant dies on view exit, expiry, revoke and panel close. This mint is NEVER the browser-Download path — that remains getMailAttachment&#x27;s exclusive role.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: MailAttachmentPreviewRequest,
+      },
+    ],
+    response: MailAttachmentPreviewResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Validation failure — unknown folder slug, malformed message_ref or part index.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Workspace, agent, mailbox pair, message, or attachment part not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Stale reference — the typed MailStaleReferenceError body (code&#x3D;stale_reference): the message_ref failed its epoch/pair/generation validation on the lease that would serve the preview fetch (correction I-03).
+`,
+        schema: MailStaleReferenceError,
+      },
+      {
+        status: 413,
+        description: `The part exceeds the 25 MiB actual-decoded-byte preview cap — the larger-file path is the browser Download (getMailAttachment), never a truncated preview.
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `Upstream mail failure during the mint&#x27;s one part fetch — sanitized error class in the body&#x27;s code field (MC-8).
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Not dialed: code&#x3D;backoff or code&#x3D;busy (same semantics as the read paths), with the optional typed reason field.
+`,
+        schema: MailUnavailableError,
+      },
+    ],
+  },
+  {
+    method: "delete",
+    path: "/mail/attachment-preview-token/:previewId",
+    alias: "revokeMailAttachmentPreview",
+    description: `Revokes one metadata-only preview grant (ADR-20261001 F1 lifecycle table: &quot;Back, Close, another attachment/message, workspace navigation, Mail/Library panel close or logout — revoke its source token&quot;). After a successful revoke the preview-purpose byte endpoint answers 404 only — expired/unknown/revoked are deliberately indistinguishable (MC-43/MC-45 convention). Revoking an unknown or already-expired grant is 404, not an error the client must distinguish; bounded token expiry remains the backstop when a close could not be delivered. The SPA calls this on every temporary-view exit path; a late mint&#x27;s grant is discarded and revoked, never rendered.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "previewId",
+        type: "Path",
+        schema: z.string().min(1),
+      },
+    ],
+    response: OperationResult,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Unknown or expired grant identifier.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/mail/html-preview-token",
+    alias: "mintMailHtmlPreviewToken",
+    description: `Mints the mail HTML-preview credential (email-mail-view-spec §2.3, security sign-off C1) — session-authenticated and STAYS in the API namespace; the serve routes moved to the token-only non-API /mail-preview/ prefix (§2.3a) and are deliberately NOT in this document (Library serving-prefix precedent): /mail-preview/html/{token} serves the sanitized sandboxed HTML body with the MC-10 normative header set; /mail-preview/part/{token}/{index} serves one inline cid: image part within the same token scope; /mail-preview/img/{token}/{index} is the &quot;Load images&quot; proxy (D17/MC-10(6)) — https-only, private/ loopback refused at dial time, zero redirects, ≤ 5 MiB, image/* only, store-recorded URLs only (MC-41). Serve routes answer 404 only — expired/unknown/revoked deliberately indistinguishable, no frame-ancestors, no X-Frame-Options (MC-43/MC-45); the no-redirect tripwire covers the whole prefix (MC-10(1), T62).
+
+This mint is the ONE live-IMAP fetch of the preview flow: the message is fetched once (BODY.PEEK), sanitized, and its body plus inline parts and the load_remote remote-image URL list are held in the in-memory token store for the TTL — the serve routes never dial IMAP (round-2 MAJ-008.3). Sanitize → store → serve ordering (MC-10(5)). 256 KB served-body cap (MC-10(7)). Rate-limited by a dedicated per-IP limiter (MC-44) — 10 req/min, 429 with Retry-After, zero IMAP dials for the refused call.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: MailHtmlPreviewTokenRequest,
+      },
+    ],
+    response: MailHtmlPreviewTokenResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Validation failure — unknown folder slug or malformed message_ref.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Workspace, agent, mailbox pair, or message not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `Upstream mail failure during the mint&#x27;s one IMAP fetch — sanitized error class in the body&#x27;s code field (MC-8).
+`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/mail/signature-preview-token",
+    alias: "mintMailSignaturePreviewToken",
+    description: `Mints the signature live-preview credential (email-mail-view-spec §16 Signature editor row, security sign-off MC-10 posture) — session-authenticated and STAYS in the API namespace; the SPA frames the served result through the existing token-only non-API /mail-preview/ prefix: /mail-preview/html/{token} serves the sanitized sandboxed signature HTML with the MC-10 normative header set (zero new serve surface; /mail-preview/img/{token}/{index} proxies the signature&#x27;s https images under the same MC-41 rules).
+Unlike the message HTML-preview mint, this mint NEVER dials IMAP — the request carries no workspace/agent/folder/ref, only the signature HTML itself. The HTML is sanitized AT MINT (MC-10(5) named-sanitizer discipline: strip meta/base/forms/scripts/event handlers, harden anchors; the signature policy keeps inline style, tables and https+data images per FR-003). The mint NEVER PERSISTS: the sanitized HTML lives only in the in-memory token store for the TTL and dies with the token (logout revocation or expiry). Storage sanitization stays the draft PUT&#x27;s job. Token hygiene: 2-minute named MailSignaturePreviewTokenTTL, REPLACE-ON-MINT — a session holds at most one live signature token (a new mint revokes the session&#x27;s previous signature token; message-preview tokens keep their separate cap-8-refuses hygiene). Rate-limited by a dedicated per-IP limiter (MC-44) — 60 req/min, 429 with Retry-After.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z.object({ signature_html: z.string().min(1).max(16384) }),
+      },
+    ],
+    response: MailSignaturePreviewTokenResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Validation failure — the signature HTML is outside its MC-1 bound (empty, or over the 16384-character maximum).
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
     method: "get",
     path: "/mailboxes",
     alias: "listMailboxes",
@@ -10098,6 +12820,44 @@ Idempotent and deliberately uninformative: 204 whether the token was live, alrea
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/mailboxes/cleanup",
+    alias: "retryMailboxCleanup",
+    description: `Separately authorized Retry-cleanup operation for a mailbox removal that ended removed_cleanup_pending (ADR-20261001 &quot;Removal with incomplete cleanup&quot; row; mail-live-access-landing-order register rows 5/22 — W0 is the single publisher). Keyed ONLY by the opaque cleanup_intent — it keeps working after the mailbox&#x27;s config row is gone, because the intent is the sole address of the pending cleanup. Never reports success for a logged unlink failure: the truthful outcome discrimination (removed versus removed_cleanup_pending) returns again. An unknown, expired or already-completed intent is 404. The pair stays disabled and acquires nothing until this returns removed.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z.object({ cleanup_intent: z.string().min(1) }),
+      },
+    ],
+    response: MailboxRemovalResult,
+    errors: [
+      {
+        status: 400,
+        description: `Malformed body.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Unknown, expired or already-completed cleanup intent.`,
         schema: ErrorResponse,
       },
       {
@@ -10428,7 +13188,7 @@ Idempotent and deliberately uninformative: 204 whether the token was live, alrea
     method: "post",
     path: "/onboarding/complete",
     alias: "completeOnboarding",
-    description: `AUTHENTICATED. Onboarding runs AFTER sign-in (ADR-0008 rulings 1 and 2): the caller already holds the session the platform issued, so this endpoint requires it and returns 401 without it. It mints no credential of any kind — no account is created, no password is hashed, no bearer token and no cookie is issued, and the request body carries no &#x60;admin&#x60; block (a body that still carries one is rejected 400 by the strict decode). Two-phase commit: probes the submitted provider API key against the real provider (a billable upstream call, same validator as PUT /providers/{id}), then writes the LLM provider config and the default model to config.json atomically, then marks onboarding complete in state.json. Returns 400 when the provider confirms the key is wrong (invalid_key) — nothing is persisted and the request may be retried with a corrected key. A key the provider could not verify for any other reason (unreachable, no credit, regionally restricted, or no endpoint to probe) does NOT block: onboarding still completes and the response&#x27;s &#x60;warning&#x60; field explains what could not be checked, because a flaky network must not make the product unusable on first run. Returns 409 when onboarding is already complete — the instance is set up and providers are managed through PUT /providers/{id} from then on. The owner recorded in the audit record (onboarding.admin_created) is the authenticated account, never a value from the body. Rate-limited: 3 requests per IP per minute — a probe can take up to ~25s (model-catalog fetch + completion probe), so a mistyped key costs real wall-clock time before the caller can retry.
+    description: `AUTHENTICATED. Onboarding runs AFTER sign-in (ADR-0008 rulings 1 and 2): the caller already holds the session the platform issued, so this endpoint requires it and returns 401 without it. It mints no credential of any kind — no account is created, no password is hashed, no bearer token and no cookie is issued, and the request body carries no &#x60;admin&#x60; block (a body that still carries one is rejected 400 by the strict decode). Two-phase commit: probes the submitted provider API key against the real provider (a billable upstream call, same validator as PUT /providers/{id}), then writes the LLM provider config and the default model to config.json atomically, then marks onboarding complete in state.json. Returns 400 when the provider confirms the key is wrong (invalid_key) — nothing is persisted and the request may be retried with a corrected key. A key the provider could not verify for any other reason (unreachable, no credit, regionally restricted, or no endpoint to probe) does NOT block: onboarding still completes and the response&#x27;s &#x60;warning&#x60; field explains what could not be checked, because a flaky network must not make the product unusable on first run. Returns 409 when onboarding is already complete — the instance is set up and providers are managed through PUT /providers/{id} from then on. The owner recorded in the audit record (onboarding.admin_created) is the authenticated account, never a value from the body. Rate-limited: 3 requests per IP per minute — a probe can take up to ~25s (model-catalog fetch + completion probe), so a mistyped key costs real wall-clock time before the caller can retry. Returns 422 when a custom endpoint&#x27;s base URL is refused by the address (SSRF) guard.
 `,
     requestFormat: "json",
     parameters: [
@@ -10453,6 +13213,11 @@ Idempotent and deliberately uninformative: 204 whether the token was live, alrea
       {
         status: 409,
         description: `Conflict — e.g. resource already exists.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 422,
+        description: `Validation failed — semantically invalid input.`,
         schema: ErrorResponse,
       },
       {
@@ -10509,7 +13274,7 @@ Idempotent and deliberately uninformative: 204 whether the token was live, alrea
     method: "get",
     path: "/performance",
     alias: "getPerformanceSettings",
-    description: `Returns the max-parallel-agents cap and the effective (resolved, auto-detected or explicit) value currently in use.
+    description: `Returns the max-parallel-agents cap and the effective (resolved, auto-detected or explicit) value currently in use. pending_apply is present while saved settings are not in force yet (see PerformancePendingApply).
 `,
     requestFormat: "json",
     response: PerformanceSettings,
@@ -10531,6 +13296,7 @@ Idempotent and deliberately uninformative: 204 whether the token was live, alrea
     path: "/performance",
     alias: "updatePerformanceSettings",
     description: `Updates max_parallel_agents. An explicit value is honored exactly as given — there is no ceiling, only a floor of 1; a value is never silently lowered. Set to 0 to restore the auto-detected default (available memory / ~3.5 MB per agent, floored at 2, physically bounded around 2000). Requires a gateway restart to take effect (requires_restart: false — the semaphore is resized in-memory on PUT).
+Also updates max_tool_iterations, the global tool-iteration limit (issue #904, 1–1000; out of range → 400). Only a LOWERING — a new value below the global currently in force — can rewrite agents (D20): a raise, or the current value, rewrites no agent and needs no confirmation; agents whose stored value is above the global keep it (capped and flagged). A lowering below some agents&#x27; own values lowers those agents too, but only with consent (D11): confirmed_lowering must equal — as a set keyed by agent_id, order-independent — the agents whose own value is above the new global at write time. Any difference (extra, missing or changed agent, confirmed_lowering absent while agents would be lowered, or a NON-EMPTY list on a raise — an empty or absent one on a raise is fine) is drift (D16): nothing is written and the response is 409 MaxToolIterationsLoweringConflict carrying the fresh preview. The same 409 is returned when an agent record changes (revision conflict) between the deciding check and its lowering write — the agents already lowered are rolled back first. A failure part-way through the writes rolls back the agents already lowered and leaves the global unchanged (500 ErrorResponse, code max_tool_iterations_lowering_failed, or max_tool_iterations_rollback_incomplete if a rollback also failed, with the original failure in details.cause). A failure to read the agent store while computing or checking the affected set is 500 code max_tool_iterations_agents_read_failed, nothing written. Setting the global also ends the retired environment-variable import for good (D6). A successful change reloads the agent registry so every agent&#x27;s next turn uses the new limit; the response lists the lowered agents in max_tool_iterations_lowered_agents. If the save is committed but the in-memory refresh or that reload fails, the response is 500 code performance_reload_failed with a PerformanceReloadFailedError body: the settings ARE saved on disk and nothing is rolled back, but they are not in force yet. details.stage tells how far the apply got — refresh: the in-memory configuration was NOT swapped, so GET /performance still shows the OLD values until the next configuration reload or restart; reload: the in-memory configuration was updated (GET /performance shows the NEW values) but the agent registry reload failed, so agents&#x27; next turns keep the old limits until the next reload or restart. details.changed_fields lists the settings this request changed and details.lowered_agents the agents it lowered (GET /performance does not carry them). A registry reload whose rebuild itself fails (not only one that cannot start or times out) is the reload stage too. After any performance_reload_failed answer, GET /performance (and every later PUT response) carries pending_apply until a later refresh AND registry reload both succeed; while it is set, a later PUT always reloads the agent registry, whatever fields it changes.
 `,
     requestFormat: "json",
     parameters: [
@@ -10550,6 +13316,57 @@ Idempotent and deliberately uninformative: 204 whether the token was live, alrea
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Lowering drift (issue #904, D16) — the agents the new global limit would lower differ from confirmed_lowering, or an agent record changed mid-write (revision conflict; agents already lowered were rolled back). Nothing was written; the body carries the fresh preview.
+`,
+        schema: MaxToolIterationsLoweringConflict,
+      },
+      {
+        status: 500,
+        description: `Server-side failure. code tells them apart: max_tool_iterations_agents_read_failed (the agent store could not be read; nothing written), max_tool_iterations_lowering_failed (a write failed; everything rolled back, nothing changed), max_tool_iterations_rollback_incomplete (a write failed and some agents could not be restored — the error names them; details.cause carries the original failure; the global is unchanged), performance_reload_failed (the settings ARE saved — config.json and any lowered agents are written, nothing is rolled back — but not in force yet; the body is a PerformanceReloadFailedError whose details carry stage (refresh: in-memory config not swapped, GET still shows the old values; reload: in-memory config updated, registry reload failed), changed_fields and lowered_agents). Any other failure to write config.json carries no code.
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/performance/max-tool-iterations/preview",
+    alias: "previewMaxToolIterationsLowering",
+    description: `Read-only (issue #904, tool-iteration-limit spec D11). Lists the agents whose own tool-iteration limit is strictly above &#x60;value&#x60; and would therefore be lowered to it if the global limit were set to &#x60;value&#x60;. A &#x60;value&#x60; at or above the global limit currently in force is a raise, which never rewrites an agent (D20): the list is empty. Nothing is written and no step-up token is needed (the PUT /performance that applies the change consumes it). Same access gate as GET /performance.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "value",
+        type: "Query",
+        schema: z.number().int().gte(1).lte(1000),
+      },
+    ],
+    response: MaxToolIterationsLoweringPreview,
+    errors: [
+      {
+        status: 400,
+        description: `Missing, non-integer or out-of-range value.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Missing or invalid bearer token.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `The agent store could not be read (code max_tool_iterations_agents_read_failed).
+`,
         schema: ErrorResponse,
       },
       {
@@ -10985,7 +13802,7 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
     method: "post",
     path: "/providers/:id/sign-in",
     alias: "startProviderSignIn",
-    description: `For &#x60;codex-cli&#x60; / &#x60;github-copilot&#x60;: Omnipus never performs or stores the vendor login itself — returns the one instruction the operator needs, the vendor CLI&#x27;s own login command, so the SPA can show it beside a *Check sign-in* button (&#x60;method: cli_login&#x60;). For &#x60;openai-chatgpt&#x60; (and &#x60;xai&#x60; once its catalog row carries &#x60;sign_in&#x60;): Omnipus requests a device code from the vendor itself and returns the verification link, user code, and an opaque &#x60;device_auth_id&#x60; to poll (&#x60;method: device_code&#x60;, FR-044) — the vendor&#x27;s device code and any PKCE verifier never leave the gateway. Returns 400 &#x60;{&quot;error&quot;:&quot;provider does not support sign-in&quot;}&#x60; when the provider&#x27;s catalog row does not list &#x60;sign_in&#x60; in &#x60;auth_methods&#x60;, and for &#x60;xai&#x60; specifically when no client id is configured. Rate-limited like the auth endpoints. Requires authentication — except inside ADR-068 FR-050&#x27;s pre-auth window: while onboarding is incomplete AND this instance has no authentication authority yet (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller is admitted past the authentication check too, because onboarding step 3 needs a working sign-in flow before any admin account exists to authenticate as. That window fails CLOSED — an unreadable or unparseable onboarding state counts as complete, not as a fresh install. Outside the window an unauthenticated caller gets 401 unconditionally. The route&#x27;s own authorization layer (requireAdminAuthz) enforces ONLY the dev-mode-bypass guard, not authentication, so any caller who reaches it — authenticated, or anonymous inside the pre-auth window — gets 503 under dev-mode bypass and otherwise proceeds: inside the window an anonymous caller can mint a real device code or trigger a vendor CLI login prompt exactly as an authenticated caller could.
+    description: `Omnipus requests a device code from the vendor itself and returns the verification link, user code, and an opaque &#x60;device_auth_id&#x60; to poll (&#x60;method: device_code&#x60;, FR-044) — the vendor&#x27;s device code and any PKCE verifier never leave the gateway. (The former vendor-CLI sign-in variant was deleted with the CLI-backed providers — WU-24, founder 2026-10-14.) Returns 400 &#x60;{&quot;error&quot;:&quot;provider does not support sign-in&quot;}&#x60; when the provider&#x27;s catalog row does not list &#x60;sign_in&#x60; in &#x60;auth_methods&#x60;, and for &#x60;xai&#x60; specifically when no client id is configured. Rate-limited like the auth endpoints. Requires authentication — except inside ADR-068 FR-050&#x27;s pre-auth window: while onboarding is incomplete AND this instance has no authentication authority yet (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller is admitted past the authentication check too, because onboarding step 3 needs a working sign-in flow before any admin account exists to authenticate as. That window fails CLOSED — an unreadable or unparseable onboarding state counts as complete, not as a fresh install. Outside the window an unauthenticated caller gets 401 unconditionally. The route&#x27;s own authorization layer (requireAdminAuthz) enforces ONLY the dev-mode-bypass guard, not authentication, so any caller who reaches it — authenticated, or anonymous inside the pre-auth window — gets 503 under dev-mode bypass and otherwise proceeds: inside the window an anonymous caller can mint a real device code exactly as an authenticated caller could.
 `,
     requestFormat: "json",
     parameters: [
@@ -10995,7 +13812,7 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
         schema: z.string(),
       },
     ],
-    response: SignInStartResponse,
+    response: SignInStartResponseDeviceCode,
     errors: [
       {
         status: 400,
@@ -11023,7 +13840,7 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
     method: "delete",
     path: "/providers/:id/sign-in",
     alias: "signOutProvider",
-    description: `Deletes the &#x60;&lt;id&gt;_OAUTH&#x60; encrypted credential entry (a missing entry is success), emits audit event &#x60;provider.signed_out&#x60;, and the row returns to &#x60;not_signed_in&#x60;. Only meaningful for &#x60;device_code&#x60; providers — &#x60;cli_login&#x60; providers hold no Omnipus-side credential to delete and this is a no-op success for them too. Requires authentication — except inside ADR-068 FR-050&#x27;s pre-auth window: while onboarding is incomplete AND this instance has no authentication authority yet (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller is admitted past the authentication check too, for the same reason its POST sibling is (onboarding step 3 needs a working sign-in flow before any admin account exists to authenticate as). That window fails CLOSED — an unreadable or unparseable onboarding state counts as complete, not as a fresh install. Outside the window an unauthenticated caller gets 401 unconditionally. The route&#x27;s own authorization layer (requireAdminAuthz) enforces ONLY the dev-mode-bypass guard, not authentication, so any caller who reaches it — authenticated, or anonymous inside the pre-auth window — gets 503 under dev-mode bypass and otherwise proceeds: inside the window an anonymous caller can revoke another account&#x27;s vendor sign-in before any admin account exists.
+    description: `Deletes the &#x60;&lt;id&gt;_OAUTH&#x60; encrypted credential entry (a missing entry is success), emits audit event &#x60;provider.signed_out&#x60;, and the row returns to &#x60;not_signed_in&#x60;. Only meaningful for &#x60;device_code&#x60; providers; any other id is a no-op success. Requires authentication — except inside ADR-068 FR-050&#x27;s pre-auth window: while onboarding is incomplete AND this instance has no authentication authority yet (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller is admitted past the authentication check too, for the same reason its POST sibling is (onboarding step 3 needs a working sign-in flow before any admin account exists to authenticate as). That window fails CLOSED — an unreadable or unparseable onboarding state counts as complete, not as a fresh install. Outside the window an unauthenticated caller gets 401 unconditionally. The route&#x27;s own authorization layer (requireAdminAuthz) enforces ONLY the dev-mode-bypass guard, not authentication, so any caller who reaches it — authenticated, or anonymous inside the pre-auth window — gets 503 under dev-mode bypass and otherwise proceeds: inside the window an anonymous caller can revoke another account&#x27;s vendor sign-in before any admin account exists.
 `,
     requestFormat: "json",
     parameters: [
@@ -11099,7 +13916,7 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
     method: "get",
     path: "/providers/:id/sign-in/status",
     alias: "getProviderSignInStatus",
-    description: `For &#x60;cli_login&#x60; providers (codex-cli, github-copilot): reads the vendor CLI&#x27;s saved login (codex &#x60;auth.json&#x60; — only &#x60;tokens.access_token&#x60; for the unverified &#x60;exp&#x60; claim and &#x60;tokens.account_id&#x60; for the label; the Copilot CLI&#x27;s own auth-status) — the file is never modified and no refresh request is ever made (FR-007). For &#x60;device_code&#x60; providers (openai-chatgpt, and xai once its catalog row carries &#x60;sign_in&#x60;): reads the stored &#x60;&lt;id&gt;_OAUTH&#x60; entry in Omnipus&#x27;s own encrypted credential store; &#x60;expired&#x60; means the access token is past &#x60;exp&#x60; AND a refresh attempt failed or no refresh token is available (FR-046). Maps to &#x60;not_signed_in | pending | signed_in | expired&#x60;; &#x60;pending&#x60; only while an open device-code session awaits approval. A missing CLI binary is reported on the Provider row as &#x60;disconnected&#x60;, not here. Returns 400 &#x60;{&quot;error&quot;:&quot;provider does not support sign-in&quot;}&#x60; for providers without &#x60;sign_in&#x60;. Requires authentication — except inside ADR-068 FR-050&#x27;s pre-auth window: while onboarding is incomplete AND this instance has no authentication authority yet (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller is admitted past the authentication check too, for the same reason its sibling sign-in routes are (onboarding step 3 needs a working sign-in flow before any admin account exists to authenticate as). That window fails CLOSED — an unreadable or unparseable onboarding state counts as complete, not as a fresh install. Outside the window an unauthenticated caller gets 401 unconditionally. The route&#x27;s own authorization layer (requireAdminAuthz) enforces ONLY the dev-mode-bypass guard, not authentication, so any caller who reaches it — authenticated, or anonymous inside the pre-auth window — gets 503 under dev-mode bypass and otherwise proceeds.
+    description: `Reads the stored &#x60;&lt;id&gt;_OAUTH&#x60; entry in Omnipus&#x27;s own encrypted credential store (device_code providers: openai-chatgpt, and xai once its catalog row carries &#x60;sign_in&#x60;); &#x60;expired&#x60; means the access token is past &#x60;exp&#x60; AND a refresh attempt failed or no refresh token is available (FR-046). Maps to &#x60;not_signed_in | pending | signed_in | expired&#x60;; &#x60;pending&#x60; only while an open device-code session awaits approval. (The former vendor-CLI-file status reads were deleted with the CLI-backed model providers — WU-24, founder 2026-10-14.) Returns 400 &#x60;{&quot;error&quot;:&quot;provider does not support sign-in&quot;}&#x60; for providers without a sign-in mechanism. Requires authentication — except inside ADR-068 FR-050&#x27;s pre-auth window: while onboarding is incomplete AND this instance has no authentication authority yet (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller is admitted past the authentication check too, for the same reason its sibling sign-in routes are (onboarding step 3 needs a working sign-in flow before any admin account exists to authenticate as). That window fails CLOSED — an unreadable or unparseable onboarding state counts as complete, not as a fresh install. Outside the window an unauthenticated caller gets 401 unconditionally. The route&#x27;s own authorization layer (requireAdminAuthz) enforces ONLY the dev-mode-bypass guard, not authentication, so any caller who reaches it — authenticated, or anonymous inside the pre-auth window — gets 503 under dev-mode bypass and otherwise proceeds.
 `,
     requestFormat: "json",
     parameters: [
@@ -11124,11 +13941,6 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
       {
         status: 429,
         description: `Rate limit exceeded.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 500,
-        description: `Internal server error.`,
         schema: ErrorResponse,
       },
       {
@@ -11265,32 +14077,6 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
   },
   {
     method: "post",
-    path: "/providers/openai-chatgpt/sign-in/import",
-    alias: "importCodexSignIn",
-    description: `Copies &#x60;tokens.access_token&#x60; + &#x60;tokens.account_id&#x60; from &#x60;~/.codex/auth.json&#x60; into the &#x60;openai_OAUTH&#x60; encrypted credential entry. No refresh token is imported — a session started this way ends at the copied token&#x27;s &#x60;exp&#x60; with no further refresh. The source file&#x27;s bytes and mtime are left unchanged (read-only, FR-007). Returns 404 &#x60;{&quot;error&quot;:&quot;no codex login found&quot;}&#x60; when the file is absent or unreadable. Requires authentication — except inside ADR-068 FR-050&#x27;s pre-auth window: while onboarding is incomplete AND this instance has no authentication authority yet (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller is admitted past the authentication check too, for the same reason its sibling sign-in routes are (onboarding step 3 needs a working sign-in flow before any admin account exists to authenticate as). That window fails CLOSED — an unreadable or unparseable onboarding state counts as complete, not as a fresh install. Outside the window an unauthenticated caller gets 401 unconditionally. The route&#x27;s own authorization layer (requireAdminAuthz) enforces ONLY the dev-mode-bypass guard, not authentication, so any caller who reaches it — authenticated, or anonymous inside the pre-auth window — gets 503 under dev-mode bypass and otherwise proceeds: inside the window an anonymous caller can write a live vendor credential into the encrypted store before any admin account exists.
-`,
-    requestFormat: "json",
-    response: SignInStatus,
-    errors: [
-      {
-        status: 401,
-        description: `Authentication required or credentials invalid.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 404,
-        description: `Resource not found.`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 503,
-        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
-        schema: ErrorResponse,
-      },
-    ],
-  },
-  {
-    method: "post",
     path: "/restore",
     alias: "restoreBackup",
     description: `Extracts a backup tar.gz over ~/.omnipus/, skipping config.json to preserve current settings. The filename must not contain path separators or traversal sequences.
@@ -11325,6 +14111,234 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
       {
         status: 422,
         description: `Filename field is required.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/rooms/:id",
+    alias: "getRoom",
+    description: `Spec K23. Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-15.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Room,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "delete",
+    path: "/rooms/:id",
+    alias: "deleteRoom",
+    description: `Spec K24 (FR-207). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-15. The team room is not deletable (422).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 422,
+        description: `Validation failed — semantically invalid input.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "patch",
+    path: "/rooms/:id/members",
+    alias: "updateRoomMembers",
+    description: `Spec K24 (FR-204, FR-207). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-15. The team room accepts only mute and unmute (other actions 422).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: RoomMembersUpdateRequest,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Room,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 422,
+        description: `Validation failed — semantically invalid input.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/rooms/:id/messages",
+    alias: "getRoomHistory",
+    description: `#1332. Read the complete retained transcript, including entries older than the newest 10,000 returned by attach. With before_seq omitted, select the newest page including the newest entry. Otherwise select only entries with seq strictly less than before_seq. Return the newest limit eligible entries in strictly ascending seq order. A cursor need not equal an entry sequence; gaps do not prove that older entries exist.
+The newest entry sequence is the greatest actual entry seq in the room at the locked read, or 0 for an empty room, not the room stream&#x27;s high-water sequence. A cursor greater than that entry sequence is a 400, never clamped. Select entries, continuation and delivery projections from the same room-locked view. Paging does not change entries, membership, the live stream cursor or the forward attach subscription.
+Uses exactly the existing authenticated room-read access and room-open path. Authenticate first, validate limit, validate before_seq syntax, open the room, then check the cursor&#x27;s room-dependent upper bound. Query rules apply with inbound validation enabled or disabled. Missing, invalid or deleted rooms and missing workspaces return the existing 404 ErrorResponse with error &quot;no such group chat&quot;. Paused, read-only and hidden-but-not-deleted rooms remain readable while the room and workspace exist. Storage/recovery failures remain errors, normally 500, never successful empty pages. No new reader-membership model or 403.
+Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 400 {&quot;error&quot;:&quot;limit must be an integer from 1 to 1000&quot;}. Invalid, empty, duplicated, overflowing or non-positive before_seq returns exactly 400 {&quot;error&quot;:&quot;before_seq must be a positive int64 integer&quot;}. A valid positive cursor beyond the newest entry sequence returns exactly 400 {&quot;error&quot;:&quot;before_seq must not be greater than the newest entry seq&quot;}. These use the existing ErrorResponse with no additional error fields.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "before_seq",
+        type: "Query",
+        schema: z.number().int().gte(1).optional(),
+      },
+      {
+        name: "limit",
+        type: "Query",
+        schema: z.number().int().gte(1).lte(1000).optional().default(100),
+      },
+    ],
+    response: RoomHistoryResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/rooms/:id/messages",
+    alias: "postRoomMessage",
+    description: `Spec K26 (FR-166). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-15. Accepted for recording; the recorded entry arrives over the WebSocket as room_entry with the same client_message_id.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: RoomMessageRequest,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 422,
+        description: `Validation failed — semantically invalid input.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
         schema: ErrorResponse,
       },
     ],
@@ -11532,6 +14546,173 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
       {
         status: 404,
         description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/secret-requests/:id",
+    alias: "getSecretRequest",
+    description: `Spec K5 (FR-079). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-4. Value-free: returns the state and, when submitted, the reference names. A request that is unknown or not accessible to the caller&#x27;s account is 404.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: SecretRequestState,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Saved request state is unavailable (the service is not ready, or saved state could not be read or reconciled). This is not absence and not success; retrying this read is safe.
+`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/secret-requests/:id/submit",
+    alias: "submitSecretRequest",
+    description: `Spec K5, §6.2, §6.7 (FR-062, FR-063). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-4. Authenticated web user only. Body is exactly one of &#x60;values&#x60; or &#x60;cancel: true&#x60;. All trust and payload checks run before the atomic store publication; a refusal or failed save writes no values. After publication, a metadata or continuation-dispatch failure returns 503 with state submitted and the committed references. The submission IS saved; boot or chat attach retries an undelivered continuation. If the request service or its saved state is unavailable before this attempt reaches publication, 503 instead carries an ErrorResponse: this attempt stored no values and returns no authoritative state. It does not prove that no request or earlier submission exists; read the state, or retry the same request id once available, and never resend values automatically. A repeated submit is idempotent and returns 409 with the same committed state, without storing another version. Malformed bodies (both values and cancel, missing or extra field, null, value outside limits, NUL) are 400 with a value-free message; a body over 65,536 bytes is 413; a request not pending is 409 with its current state.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z.union([z.unknown(), z.unknown()]),
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: SecretRequestState,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `The request is not pending (including a duplicate submit); body is its current state.`,
+        schema: SecretRequestState,
+      },
+      {
+        status: 413,
+        description: `Body larger than 65,536 bytes.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `The save failed before publication. No submitted values were stored; the request remains pending. The error is value-free.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `One of two bodies. A SecretRequestState body means the submission IS committed, but post-commit metadata or continuation dispatch is not confirmed: it has state submitted and the committed reference_names. Boot or chat attach retries an undelivered continuation; re-submitting returns 409 with the same state and never stores another version. An ErrorResponse body means the service or saved request state was unavailable before this attempt reached publication: this attempt committed no values and no authoritative state is returned. A pending or earlier submitted request may still exist; retry the same request id once available and never resend values automatically.
+`,
+        schema: z.union([SecretRequestState, ErrorResponse]),
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/secrets",
+    alias: "listSecrets",
+    description: `Spec K6 (FR-073, FR-086, FR-241). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-6. Names and metadata only, never a value.
+`,
+    requestFormat: "json",
+    response: z.array(SecretNameEntry),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Service unavailable — e.g. credential store locked.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "patch",
+    path: "/secrets/:reference/options",
+    alias: "updateSecretOptions",
+    description: `Spec K49 (FR-241). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-5. Private kind only (another kind is 422); authenticated web user only; audited.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z.object({ available_in_channel_turns: z.boolean() }),
+      },
+      {
+        name: "reference",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: SecretNameEntry,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 422,
+        description: `Validation failed — semantically invalid input.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Service unavailable — e.g. credential store locked.`,
         schema: ErrorResponse,
       },
     ],
@@ -11982,7 +15163,7 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
     method: "put",
     path: "/security/tool-policies",
     alias: "updateGlobalToolPolicies",
-    description: `Persists new global tool policies to config.json under the sandbox key. Changes are audit-logged (SEC-15).
+    description: `Persists new global tool policies to config.json under the sandbox key and waits until the running-agent reload has finished. Changes are audit-logged (SEC-15). HTTP 200 means the policies were saved and the reload completed and was confirmed, so running agents are enforcing the saved policies. A reload that fails, or that does not confirm, does not roll the save back and is not HTTP 200: the response is 503 with ErrorResponse. This operation is not the dev_mode_bypass guard.
 `,
     requestFormat: "json",
     parameters: [
@@ -11996,7 +15177,8 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
     errors: [
       {
         status: 400,
-        description: `Invalid policy values.`,
+        description: `Invalid policy values. Also refused, nothing saved: storing allow for an always-ask tool — &quot;set_channel_outbound always asks for approval; it can be set to ask or deny, not allow&quot; (channels spec FR-037, T-10 row 15).
+`,
         schema: ErrorResponse,
       },
       {
@@ -12006,7 +15188,8 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
       },
       {
         status: 503,
-        description: `dev_mode_bypass is active (RequireNotBypass guard).`,
+        description: `The policies were saved and were not rolled back, but they could not be applied to running agents because the reload failed or did not confirm. Retrying the same update, or restarting Omnipus, is the recovery. This 503 is not 503BypassActive and does not mean dev_mode_bypass refused the write. The error field is exactly &quot;The settings were saved, but could not be applied to running agents. Retry applying the change, or restart Omnipus.&quot; No other field is required. The response must not say the write was undone.
+`,
         schema: ErrorResponse,
       },
     ],
@@ -12015,7 +15198,7 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
     method: "get",
     path: "/sessions",
     alias: "listSessions",
-    description: `Returns root sessions (parent_session_id &#x3D;&#x3D; &quot;&quot;) visible to the authenticated user, paged, each carrying a child_count (ADR-057 US-19/FR-091). Subordinate (&quot;delegate&quot;) sessions are reached a page at a time via the parent_session_id filter, or all at once (roots and subordinates together) via flat&#x3D;true (FR-104). Supports optional filtering by agent_id and type. When some agents fail to list their sessions (e.g. filesystem error), the page still returns its healthy rows plus a populated partial_errors and a valid next_cursor (FR-098). Verifier-role sessions (type &quot;verifier&quot;, ADR-052 FR-036) are excluded by default regardless of the type filter unless include_verifier&#x3D;true is passed, and are never counted in child_count unless it is passed.
+    description: `Returns root sessions (parent_session_id &#x3D;&#x3D; &quot;&quot;) visible to the authenticated user, paged, each carrying a child_count (ADR-057 US-19/FR-091). Subordinate (&quot;delegate&quot;) sessions are reached a page at a time via the parent_session_id filter, or all at once (roots and subordinates together) via flat&#x3D;true (FR-104). Supports optional filtering by agent_id and type. When an agent store fails to enumerate sessions, or a session lifecycle journal unexpectedly fails to load, the page still returns its available rows plus distinguishable sanitized partial_errors and a valid next_cursor (FR-098; NAV-WAVE1 SF-2). An unreadable journal keeps its row with lifecycle_state, stop_note, and execution omitted, never null. A missing lifecycle record is normal and adds no token. Verifier-role sessions (type &quot;verifier&quot;, ADR-052 FR-036) are excluded by default regardless of the type filter unless include_verifier&#x3D;true is passed, and are never counted in child_count unless it is passed.
 `,
     requestFormat: "json",
     parameters: [
@@ -12033,6 +15216,7 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
             "task",
             "channel",
             "scheduled",
+            "main",
             "verifier",
             "delegate",
           ])
@@ -12120,7 +15304,7 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
     method: "get",
     path: "/sessions/:id",
     alias: "getSession",
-    description: `Returns the session metadata and complete ordered transcript. Used by the SPA to render the chat history.
+    description: `Returns authorized session metadata and required history_state. When history is available, messages and canonical page_info/continuation describe the bounded latest page (limit 40, min_rows 20), never the complete lifetime. This endpoint accepts no paging selectors. When history is unavailable after the bounded known-prefix recovery attempt, return metadata-only SessionDetail with history_state.status&#x3D;unavailable, omitting messages, page_info and every continuation field. This is not successful empty history or a missing session; routing and authorized live attach remain usable. Authentication, session-ID syntax and addressed-session eligibility/existence precede history access. No lifetime rebuild, preparation state or 503 path. Session detail, rename (PUT) and delete (DELETE) apply only to the bare /sessions/{id} address, with no sub-path. Unknown sub-paths return 404, never session detail. Known sub-paths are messages and tool-results, including their descendants; non-GET methods (OPTIONS preflight aside) return 405 with Allow: GET without renaming or deleting the session. GET messages/{history_position} is getSessionHistoryEntry, which validates the position itself.
 `,
     requestFormat: "json",
     parameters: [
@@ -12158,7 +15342,8 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
     method: "put",
     path: "/sessions/:id",
     alias: "renameSession",
-    description: `Updates the session title. Returns the updated session metadata.`,
+    description: `Updates the session title. Returns the updated session metadata. Rename applies only to PUT /sessions/{id}, with no sub-path. PUT on a known sub-path (messages or tool-results, including descendants) returns 405 with Allow: GET; an unknown sub-path returns 404. Neither refusal renames or deletes the session.
+`,
     requestFormat: "json",
     parameters: [
       {
@@ -12200,7 +15385,7 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
     method: "delete",
     path: "/sessions/:id",
     alias: "deleteSession",
-    description: `Permanently removes the session directory including transcript and context. Returns {&quot;success&quot;: true} on success.
+    description: `Permanently removes the session directory including transcript and context. Returns {&quot;success&quot;: true} on success. Delete applies only to DELETE /sessions/{id}, with no sub-path. DELETE on a known sub-path (messages or tool-results, including descendants) returns 405 with Allow: GET; an unknown sub-path returns 404. Neither refusal renames or deletes the session.
 `,
     requestFormat: "json",
     parameters: [
@@ -12247,7 +15432,7 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
     method: "get",
     path: "/sessions/:id/messages",
     alias: "getSessionMessages",
-    description: `Returns the ordered transcript entries for a session without the metadata wrapper. Lighter than GET /sessions/{id} when only the message list is needed.
+    description: `Returns SessionHistoryResponse, not a bare array. Select nearest whole source groups and emit ascending acceptance order. With no selectors, read the latest segment since the newest exact /clear marker. before/after are exclusive same-session history positions, not message IDs or live sequence cursors. Older reads stop at the first clear marker; before that marker explicitly crosses into one preceding segment without changing model context. Paired window_start/window_end delimit a closed already-displayed interval for window_refresh; optional before continues backward inside it, never from the current live tail. No message-neighborhood or ID-based lookup is provided. Authenticate, validate session-ID syntax and resolve addressed-session eligibility/existence/access first; then validate limit, min_rows, selector syntax/combinations; then resolve positions/range in that same session; then read the index/page. Unknown/foreign well-formed positions return 404 before range order checks. Known expired positions remain valid order boundaries. Parse raw query encoding and multiplicity: malformed percent escapes, repeated values, blanks and null-like values are errors, never silently dropped or trimmed. Numeric inputs are one digits-only decimal integer (leading zeroes permitted), never clamped; signs, whitespace, fractions, exponents and overflow reject. Unknown keys enable no additional mode. has_earlier/has_later and next_before/next_after reflect actual eligible retained lookahead in the read domain (only the closed interval for window_refresh). Cursors exist iff the respective flag is true and equal the first/last selected position. Empty and exactly-full terminal pages have no phantom continuation. Page metadata replaces X-Has-Earlier-Messages as the paging authority. The shared projector meters the larger prepared REST/history-WS encoding under a server-owned 4194304-byte soft budget; whole groups and advisory min_rows take precedence. At least one whole eligible group remains. True end, clear, range or 100-source-group cap can underfill; the soft budget alone cannot underfill the floor. An individual group&#x27;s drawn weight may exceed the row target or 100. A hard 8388608-byte page selection ceiling (page_info.byte_ceiling, stop_reason byte_ceiling) may stop below min_rows; the first group is always whole. Tool results over 51,200 encoded bytes are shown as a HistoryResultPreview and ordinary message text over 65,536 UTF-8 bytes as a preview with content_original_size_bytes; getSessionHistoryEntry returns the full occurrence (chat-history paging spec, &quot;Amendment 2026-10-27 (founder, #1452 D2)&quot;). No lifetime read/rebuild, 503/preparing state or full-history fallback. This sub-path accepts GET only. Other methods (OPTIONS preflight aside) return 405 with Allow: GET without renaming or deleting the session; those operations require the bare /sessions/{id} address. Nested messages/... paths are the getSessionHistoryEntry address: GET there validates the position, and other methods (OPTIONS preflight aside) return 405 with Allow: GET.
 `,
     requestFormat: "json",
     parameters: [
@@ -12256,12 +15441,63 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
         type: "Path",
         schema: z.string(),
       },
+      {
+        name: "limit",
+        type: "Query",
+        schema: z.number().int().gte(20).lte(100).optional().default(40),
+      },
+      {
+        name: "min_rows",
+        type: "Query",
+        schema: z.number().int().gte(1).lte(100).optional().default(20),
+      },
+      {
+        name: "before",
+        type: "Query",
+        schema: z
+          .string()
+          .min(47)
+          .max(47)
+          .regex(/^hp1_[A-Za-z0-9_-]{43}$/)
+          .optional(),
+      },
+      {
+        name: "after",
+        type: "Query",
+        schema: z
+          .string()
+          .min(47)
+          .max(47)
+          .regex(/^hp1_[A-Za-z0-9_-]{43}$/)
+          .optional(),
+      },
+      {
+        name: "window_start",
+        type: "Query",
+        schema: z
+          .string()
+          .min(47)
+          .max(47)
+          .regex(/^hp1_[A-Za-z0-9_-]{43}$/)
+          .optional(),
+      },
+      {
+        name: "window_end",
+        type: "Query",
+        schema: z
+          .string()
+          .min(47)
+          .max(47)
+          .regex(/^hp1_[A-Za-z0-9_-]{43}$/)
+          .optional(),
+      },
     ],
-    response: z.array(Message),
+    response: SessionHistoryResponse,
     errors: [
       {
         status: 400,
-        description: `Bad request — missing or invalid field.`,
+        description: `Invalid paging input after session access. ErrorResponse.error is exactly &quot;limit must be an integer from 20 to 100&quot;, &quot;min_rows must be an integer from 1 to limit&quot;, &quot;invalid history position&quot; (malformed, duplicate, blank, badly encoded, wrong-version or non-47-character selector), or &quot;invalid history page range&quot; (before+after, unpaired/reversed endpoints, after with a range, or before outside it). Unknown/foreign well-formed positions resolve to 404 before range order checks. No latest-page substitution.
+`,
         schema: ErrorResponse,
       },
       {
@@ -12271,12 +15507,82 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
       },
       {
         status: 404,
-        description: `Resource not found.`,
+        description: `Existing access/missing-session refusal &quot;session not found&quot; precedes paging. Otherwise an unknown/foreign well-formed position gives exactly &quot;history position not found&quot;; no foreign lookup, parent fallback or reset.
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 405,
+        description: `This sub-path accepts GET only. Any other method returns 405 with response header Allow: GET, except OPTIONS, the browser preflight request, which the gateway answers before the sessions handler runs. The session is not renamed or deleted.
+`,
         schema: ErrorResponse,
       },
       {
         status: 500,
-        description: `Internal server error.`,
+        description: `Required index unavailable after the bounded reconciliation check: ErrorResponse.error is exactly &quot;This conversation&#x27;s history could not be loaded.&quot; A valid known prefix with at most 64 combined pending archive/disposition/confirmed rolled-expiry mutations can reconcile once; a missing/incompatible baseline, inconsistency or 65+ gap cannot seed a partial index or batch-walk history. Other required storage/projection failures retain the fixed redacted session-storage error. Prior view and authorized live controls remain usable; no success/empty partial history, 503 or preparing progress.
+`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/sessions/:id/messages/:history_position",
+    alias: "getSessionHistoryEntry",
+    description: `Returns the full public projection of exactly one saved history occurrence, addressed by the same opaque same-session history_position a history page carries (chat-history paging spec, &quot;Amendment 2026-10-27 (founder, #1452 D2)&quot;, A2.1/A2.2). It is the same reduction as the page reader after tool-call effects, cancellation and disposition, with display shortening off, at the server&#x27;s current read cut: the response never carries a HistoryResultPreview marker and never carries content_original_size_bytes. It never returns the private archive envelope or a pre-correction value, and the read writes nothing (archive, positions, index, tool_results/ and model context are unchanged). It is a position-addressed read, not a UI navigation destination, an around selector or a message-ID resolver. Authorization is identical to getSessionMessages and is applied in the same order before any position work: the registered auth wrapper (valid cookie, configured user bearer or CLI bearer; invalid or revoked credentials refused), session-ID syntax, main-session eligibility, then session existence/metadata. No new per-user ownership rule is introduced. Refusal checks run in this precedence order: 401, 400 invalid session ID, 404 &quot;session not found&quot;, 400 &quot;invalid history position&quot;, 404 &quot;history position not found&quot;, 410 &quot;history entry expired&quot;. This order does not override the storage-primary rule shared with getSessionMessages: a cleanup storage failure combined with cancellation, an unknown position or any selector error is the sanitized storage 500, never 404 or 410. This sub-path accepts GET only. Other methods (OPTIONS preflight aside) return 405 with Allow: GET without renaming or deleting the session; those operations require the bare /sessions/{id} address.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "history_position",
+        type: "Path",
+        schema: z
+          .string()
+          .min(47)
+          .max(47)
+          .regex(/^hp1_[A-Za-z0-9_-]{43}$/),
+      },
+    ],
+    response: Message,
+    errors: [
+      {
+        status: 400,
+        description: `ErrorResponse.error is exactly &quot;invalid session ID&quot; for a malformed session ID (checked before any session lookup), or exactly &quot;invalid history position&quot; for a malformed, blank, badly encoded, wrong-version or non-47-character position (checked only after the session refusals below).
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `ErrorResponse.error is exactly &quot;session not found&quot; for a missing session store, session metadata that does not exist, or a main session the caller is not eligible to read, checked before any position work (also when the position is malformed). Otherwise exactly &quot;history position not found&quot; for an unknown or foreign well-formed position; there is no foreign lookup, and a foreign session&#x27;s expired position is also unknown here.
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 405,
+        description: `This sub-path accepts GET only. Any other method returns 405 with response header Allow: GET, except OPTIONS, the browser preflight request, which the gateway answers before the sessions handler runs. The session is not renamed or deleted.
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 410,
+        description: `ErrorResponse.error is exactly &quot;history entry expired&quot;: a same-session position proven expired by its retention tombstone, including a sweep during the read. No content and no other metadata. A corrupt or missing index is never reported as expiry; it is the 500 below.
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `The existing sanitized errors, all recoverable by retry: session metadata that exists but cannot be read (corruption, permission or I/O) and an unreadable workspace record during the main-session eligibility check use the fixed redacted session-storage error; a required index that is unavailable after the bounded reconciliation check uses exactly &quot;Session history is unavailable. Retry after the operator restores its index.&quot;; other required storage/projection failures, including a cleanup storage failure combined with cancellation, an unknown position or a selector error, use the fixed redacted session-storage error.
+`,
         schema: ErrorResponse,
       },
     ],
@@ -12285,14 +15591,14 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
     method: "get",
     path: "/sessions/:session_id/tool-results/:ref",
     alias: "getToolResult",
-    description: `Returns the full JSON body of a tool result that was emitted as a ToolResultRef sentinel on the WebSocket. The result is scoped to the session that produced it — a ref from session A cannot be fetched under session B&#x27;s path. The SPA fetches this lazily when the user expands a clamped tool call, keeping main-thread memory bounded during high-volume agent activity.
+    description: `Returns the full JSON body of a tool result that was emitted as a ToolResultRef sentinel on the WebSocket. The result is scoped to the session that produced it — a ref from session A cannot be fetched under session B&#x27;s path. The SPA fetches this lazily when the user expands a clamped tool call, keeping main-thread memory bounded during high-volume agent activity. This sub-path accepts GET only. Other methods (OPTIONS preflight aside) return 405 with Allow: GET without renaming or deleting the session; those operations require the bare /sessions/{id} address. The tool-results prefix and its descendants are known sub-paths; the read handler still validates the path and ref and answers 400 for a malformed one (for example a missing ref), so a known prefix alone does not guarantee a successful GET.
 `,
     requestFormat: "json",
     parameters: [
       {
         name: "session_id",
         type: "Path",
-        schema: z.string().min(1).max(128),
+        schema: z.string().min(1).max(255),
       },
       {
         name: "ref",
@@ -12313,6 +15619,12 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
         schema: ErrorResponse,
       },
       {
+        status: 405,
+        description: `This sub-path accepts GET only. Any other method returns 405 with response header Allow: GET, except OPTIONS, the browser preflight request, which the gateway answers before the sessions handler runs. The session is not renamed or deleted.
+`,
+        schema: ErrorResponse,
+      },
+      {
         status: 500,
         description: `Internal server error.`,
         schema: ErrorResponse,
@@ -12323,7 +15635,7 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
     method: "delete",
     path: "/sessions/all",
     alias: "clearAllSessions",
-    description: `Removes all session directories across all agent stores. Returns the count of removed sessions and any per-agent warnings.
+    description: `Deletes every ordinary chat. Main chats are never deleted (a main chat is deleted only together with its agent), and neither are the helper sessions that belong to a main chat. Each chat is stopped before it is deleted; a chat that will not stop, or whose data cannot be read or removed, is kept. Returns the count of deleted chats and fixed-text warnings that count the chats that were kept and the main chats that were left alone.
 `,
     requestFormat: "json",
     response: ClearAllSessionsResponse,
@@ -12344,7 +15656,7 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
     method: "get",
     path: "/settings/context",
     alias: "getContextSettings",
-    description: `Returns the per-surface tool-result caps, the absolute trigger, the ingest bound, the global default context window and the per-(provider, model) window overrides. User-facing location: Settings → Models. Readable by any authenticated user (withAuth, the /settings/memory precedent — not RequireNotBypass).
+    description: `Returns the per-surface tool-result caps, tool_result_share_fraction (finite fraction of the resolved model window W, 0 &lt; f ≤ 1, default 0.5), the ingest bound, the global default context window and the per-(provider, model) window overrides. User-facing location: Settings → Models; Tool-result share limit displays a percentage. Readable by any authenticated user (withAuth, the /settings/memory precedent — not RequireNotBypass).
 `,
     requestFormat: "json",
     response: ContextSettings,
@@ -12360,7 +15672,7 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
     method: "put",
     path: "/settings/context",
     alias: "updateContextSettings",
-    description: `Partial update — an omitted field is unchanged; model_overrides, when present, replaces the whole list; default_context_window null clears it. 400 naming the field and the limit on: any cap &gt; 150,000 or &lt; 1; absolute_trigger_chars &lt; 1; ingest_bound_bytes ≥ 8,388,608 or &lt; 1; model_overrides[].context_window &lt; 1. Every 200 write triggers a registry reload so the next turn uses the new values without a restart; overrides whose provider no longer exists are pruned on write. Writable by any authenticated user (withAuth).
+    description: `Partial update — an omitted field is unchanged; model_overrides, when present, replaces the whole list; default_context_window null clears it. 400 ErrorResponse naming the field and valid interval on: any cap &gt; 150,000 or &lt; 1; tool_result_share_fraction must be a finite JSON number with 0 &lt; f ≤ 1 (numeric 1 is allowed; null, strings, booleans, zero, negatives and values &gt; 1 are invalid); ingest_bound_bytes ≥ 8,388,608 or &lt; 1; model_overrides[].context_window &lt; 1. Malformed/nonfinite JSON and unknown fields are rejected with 400. The wire carries a fraction, not a percentage; 12.5% is 0.125. Every 200 write triggers a registry reload so the next turn uses the new values without a restart; overrides whose provider no longer exists are pruned on write. Writable by any authenticated user (withAuth).
 `,
     requestFormat: "json",
     parameters: [
@@ -12430,6 +15742,60 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
   },
   {
     method: "get",
+    path: "/settings/third-party-agents",
+    alias: "getThirdPartyAgentSettings",
+    description: `Returns the saved program path and standard parameters for each external CLI (claude-code, codex, opencode); all three rows are always present (&quot;&quot; when nothing is saved), each with a live detection result that is never stored. Signed-in person only (RequirePersonSession): no session 401, an agent or tool token 403; no password step.
+`,
+    requestFormat: "json",
+    response: ThirdPartyAgentSettingsView,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/settings/third-party-agents",
+    alias: "updateThirdPartyAgentSettings",
+    description: `Replaces the whole section in one call (a CLI key absent from &#x60;clis&#x60; is saved as {path: &quot;&quot;, preset_args: &quot;&quot;}). Every row is validated before anything is written, in the order claude-code, codex, opencode, path before preset_args; the first failing row and field is returned as 400 (code cli_path_invalid or cli_preset_invalid, field clis.&lt;cli&gt;.path or clis.&lt;cli&gt;.preset_args, details.cli, details.check, details.at for paths) and nothing is written, valid rows included. An unknown CLI key or field gets the request-schema 400. No revision and no 409: the last save wins. Signed-in person only (RequirePersonSession): no session 401, an agent or tool token 403; no password step.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: ThirdPartyAgentSettings,
+      },
+    ],
+    response: ThirdPartyAgentSettingsView,
+    errors: [
+      {
+        status: 400,
+        description: `A row failed validation, or the body does not match the schema. Nothing was written.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
     path: "/skills",
     alias: "listSkills",
     description: `Returns all skills installed in ~/.omnipus/skills/. Returns an empty array when no skills are installed.
@@ -12453,7 +15819,7 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
     method: "delete",
     path: "/skills/:name",
     alias: "deleteSkill",
-    description: `Removes an installed skill from the local skills directory. The skill must not be the default skill, in use by any agent, or required by a seeded dependency. On success the gateway removes the skill directory and returns 204 No Content.
+    description: `Deletes an installed user-owned skill through the change pipeline (a delete_skill version is recorded; history is kept until retention). revision is the caller&#x27;s expected revision; a mismatch is 409 SKILL_CHANGED. Built-in skills are refused with 403.
 `,
     requestFormat: "json",
     parameters: [
@@ -12468,7 +15834,65 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
         schema: z.string().regex(/^[a-f0-9]{64}$/),
       },
     ],
-    response: z.void(),
+    response: ConfigurationMutationState,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `The skill is a built-in skill and is read-only (BUILTIN_READ_ONLY).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Conflict — e.g. resource already exists.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Storage failure, before publication or after publication (partial deletion).`,
+        schema: ConfigurationMutationFailureState,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/skills/:name/copy",
+    alias: "copySkill",
+    description: `Creates a new user-owned skill from the named skill; the copy&#x27;s frontmatter name is rewritten to new_id. The copy starts ungranted.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z.object({
+          new_id: z
+            .string()
+            .max(64)
+            .regex(/^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$/),
+        }),
+      },
+      {
+        name: "name",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Skill,
     errors: [
       {
         status: 400,
@@ -12487,8 +15911,13 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
       },
       {
         status: 409,
-        description: `Conflict — e.g. resource already exists.`,
+        description: `Conflict (SKILL_EXISTS, BUILTIN_NAME_RESERVED). A copy refused by the save check (SAVE_CHECK_FAILED) answers 400.`,
         schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Storage failure, before publication or after publication (partial save).`,
+        schema: ConfigurationMutationFailureState,
       },
     ],
   },
@@ -12525,8 +15954,15 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
       },
       {
         status: 409,
-        description: `Conflict — e.g. resource already exists.`,
+        description: `Conflict. Codes: BUILTIN_NAME_RESERVED (the target name is a built-in skill), LOCAL_CHANGES_CONFIRMATION_REQUIRED (the installed skill has local changes; resend with replace_local_changes: true), SKILL_CHANGED (revision is the caller&#x27;s expected revision and the skill changed since it was read).
+`,
         schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Storage failure, before publication (error_stage names the failed stage) or after publication (a partial save; message names the undo).
+`,
+        schema: ConfigurationMutationFailureState,
       },
       {
         status: 502,
@@ -13314,7 +16750,7 @@ It exposes nothing new: post-ADR-062 reading is open, so an agent can already re
     method: "get",
     path: "/tasks/occurrences",
     alias: "listTaskOccurrences",
-    description: `Server-side occurrence expansion for the workspace calendar (Calendar Recurrence Redesign). Expands every recurring-capable trigger the scheduler would actually arm — non-terminal AND not &#x60;surface: heartbeat&#x60;, the same predicate &#x60;OnTaskUpserted&#x60; applies before registering a job — covering &#x60;rrule&#x60; (rrule-go, normalized per the Timezone Semantics DST policy), legacy &#x60;cron_expr&#x60; (gronx, expanded in the server&#x27;s local zone, display-only per D8), and &#x60;every_ms&#x60; (a forward-only projection off the live job&#x27;s next-run instant, FR-008a). &#x60;tz&#x60; is the viewer&#x27;s IANA zone and is the day-boundary authority for bucketing — the &gt;3-occurrences-per-day threshold and &#x60;day_start_ms&#x60; are evaluated on days in this zone for every trigger flavor, regardless of each rule&#x27;s own &#x60;tz&#x60;. Range is half-open &#x60;[from_ms, to_ms)&#x60;. Responses are bucketed: spans ≤ 8×24h return raw instants for every day (Week/Day views); spans &gt; 8×24h return one &#x60;DayBucket&#x60; per query-tz day with more than 3 occurrences, raw instants for days with 3 or fewer (Month/overview views, D6). Capped at 500 instants per task per request plus a 10,000-computed- occurrence total iteration budget per task per request (arithmetic derivation, not iteration, for provably regular triggers); &#x60;truncated&#x60; signals either cap was hit. Tasks with zero occurrences in range are omitted; the result is &#x60;[]&#x60;, never null. Read-only; no state change. Rate-limited by a dedicated &#x60;taskReadLimiter&#x60; (240 requests/min), distinct from &#x60;configLimiter&#x60; and from the unthrottled task CRUD routes.
+    description: `Server-side occurrence expansion for the workspace calendar (Calendar Recurrence Redesign). Expands every recurring-capable trigger the scheduler would actually arm — non-terminal AND not &#x60;surface: heartbeat&#x60;, the same predicate &#x60;OnTaskUpserted&#x60; applies before registering a job — covering &#x60;rrule&#x60; (rrule-go, normalized per the Timezone Semantics DST policy). &#x60;tz&#x60; is the viewer&#x27;s IANA zone and is the day-boundary authority for bucketing — the &gt;3-occurrences-per-day threshold and &#x60;day_start_ms&#x60; are evaluated on days in this zone for every trigger flavor, regardless of each rule&#x27;s own &#x60;tz&#x60;. Range is half-open &#x60;[from_ms, to_ms)&#x60;. Responses are bucketed: spans ≤ 8×24h return raw instants for every day (Week/Day views); spans &gt; 8×24h return one &#x60;DayBucket&#x60; per query-tz day with more than 3 occurrences, raw instants for days with 3 or fewer (Month/overview views, D6). Capped at 500 instants per task per request plus a 10,000-computed- occurrence total iteration budget per task per request (arithmetic derivation, not iteration, for provably regular triggers); &#x60;truncated&#x60; signals either cap was hit. Tasks with zero occurrences in range are omitted; the result is &#x60;[]&#x60;, never null. Read-only; no state change. Rate-limited by a dedicated &#x60;taskReadLimiter&#x60; (240 requests/min), distinct from &#x60;configLimiter&#x60; and from the unthrottled task CRUD routes.
 `,
     requestFormat: "json",
     parameters: [
@@ -13362,7 +16798,7 @@ It exposes nothing new: post-ADR-062 reading is open, so an agent can already re
     method: "post",
     path: "/tool-approvals/:approval_id",
     alias: "postToolApproval",
-    description: `Approve, deny, or cancel a pending tool call approval.
+    description: `Approve, deny, or cancel a pending tool call approval. For an always-ask tool (today exactly set_channel_outbound; channels spec FR-038, T-10 row 15) the action allow (approve and record a grant) is refused with 400 &quot;set_channel_outbound always asks for approval; it can be set to ask or deny, not allow&quot; and nothing is recorded; only allow_once, deny and cancel are accepted, and no approval of such a tool is ever remembered. Every other tool is unchanged.
 `,
     requestFormat: "json",
     parameters: [
@@ -13381,7 +16817,8 @@ It exposes nothing new: post-ADR-062 reading is open, so an agent can already re
     errors: [
       {
         status: 400,
-        description: `Malformed body or unknown action.`,
+        description: `Malformed body or unknown action, or action allow for an always-ask tool (&quot;set_channel_outbound always asks for approval; it can be set to ask or deny, not allow&quot;; nothing recorded).
+`,
         schema: ErrorResponse,
       },
       {
@@ -13517,10 +16954,9 @@ It exposes nothing new: post-ADR-062 reading is open, so an agent can already re
     method: "post",
     path: "/upload",
     alias: "uploadFiles",
-    description: `Streams multipart file uploads to disk under ~/.omnipus/uploads/{session_id}/.
-Max file size per part: 100 MB. Data is streamed directly to disk; the full file is never buffered in memory.
-session_id may be supplied as a query parameter or as a form field before the file parts.
-Returns HTTP 201 on success.
+    description: `Streams multipart file uploads. Max file size per part: 100 MB. Data is streamed directly to disk; the full file is never buffered in memory. Returns HTTP 201 on success.
+
+Two destinations. With workspace_id (query parameter, or a form field before the file parts) each file is stored in that workspace&#x27;s media library exactly like a normal chat upload (ADR-051 Rev 4, #1449 D25, FR-016): the chat copy in workspaces/&lt;id&gt;/media/ (returned as a media://workspace/&lt;id&gt;/&lt;uuid&gt; ref) and the Library file under the workspace&#x27;s .library folder; no session is used or created. When both workspace_id and session_id are given, workspace_id routes to the library and session_id is ignored. When the workspace library is unavailable the request fails with 503 and never falls back to the session path. Without workspace_id, session_id (query parameter or form field) is required and files go to ~/.omnipus/uploads/{session_id}/ (legacy path).
 `,
     requestFormat: "form-data",
     parameters: [
@@ -13533,6 +16969,11 @@ Returns HTTP 201 on success.
         name: "session_id",
         type: "Query",
         schema: z.string().optional(),
+      },
+      {
+        name: "workspace_id",
+        type: "Query",
+        schema: z.string().min(1).max(128).optional(),
       },
     ],
     response: UploadFilesResponse,
@@ -13550,6 +16991,12 @@ Returns HTTP 201 on success.
       {
         status: 405,
         description: `Method not allowed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `The workspace media library is unavailable (workspace_id given). Nothing was stored and no session path was used instead.
+`,
         schema: ErrorResponse,
       },
     ],
@@ -13842,6 +17289,8 @@ Returns HTTP 201 on success.
     method: "get",
     path: "/workspaces/:id",
     alias: "getWorkspace",
+    description: `Reads the workspace and makes one idempotent main-chat preparation attempt for each currently eligible member. A preparation failure does not undo saved membership or fail the workspace read: that member has main_session_error instead of main_session_id. Repeating this read retries preparation after storage is repaired; unreadable or mismatched saved identities are never replaced.
+`,
     requestFormat: "json",
     parameters: [
       {
@@ -13905,7 +17354,8 @@ Returns HTTP 201 on success.
       },
       {
         status: 409,
-        description: `Workspace membership or graph revision changed; no writes occurred.`,
+        description: `Workspace membership or graph revision changed; or a built-in roster member was removed from the default workspace (the next boot would re-add it) — that refusal carries the machine-readable code builtin_roster_default with the message &quot;Built-in agents can&#x27;t be removed from this workspace&quot; and no writes occurred (workspace record, delegation and plan pause state all unchanged). A stale-revision conflict is the same status with NO code, so the two are distinguishable.
+`,
         schema: z.void(),
       },
       {
@@ -14000,7 +17450,7 @@ Returns HTTP 201 on success.
     method: "put",
     path: "/workspaces/:id/delegation",
     alias: "updateWorkspaceDelegation",
-    description: `Replaces the workspace&#x27;s delegation edge set wholesale (full replace). Validates that every from_agent / to_agent resolves to a known agent, rejects self-edges, and rejects depths above the global subturn ceiling. Returns the updated graph.
+    description: `Replaces the workspace&#x27;s delegation edge set wholesale (full replace). Validates that every from_agent / to_agent resolves to a known agent, rejects multi-hop cycles (a self-edge is an ordinary edge and is permitted), and rejects depths above the global subturn ceiling. Returns the updated graph.
 `,
     requestFormat: "json",
     parameters: [
@@ -14132,6 +17582,858 @@ Returns HTTP 201 on success.
         status: 500,
         description: `Storage failed; reports actual saved state.`,
         schema: ConfigurationMutationFailureState,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/workspaces/:id/mail/:agentId/folders",
+    alias: "listMailFolders",
+    description: `Returns Inbox, Sent and Drafts (D5) for the (agent, workspace) mailbox with live IMAP counts (email-mail-view-spec §2.3). One IMAP session per request (round-1 MAJ-012); automatic panel refreshes never dial while the watcher is backing off — they return the saved error class plus next_attempt_at immediately (D29/R2-9). Identical concurrent refreshes coalesce so N tabs cost one IMAP login per tick. 502 carries a sanitized error class from the closed enum timeout|dns|connect_refused|auth_failed|tls|folder_missing|server_error in the body&#x27;s code field (MC-8); raw upstream text is logged server-side only.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "agentId",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "retry",
+        type: "Query",
+        schema: z.boolean().optional().default(false),
+      },
+      {
+        name: "mode",
+        type: "Query",
+        schema: z.enum(["cache_first", "live"]).optional(),
+      },
+      {
+        name: "refresh_mapping",
+        type: "Query",
+        schema: z.boolean().optional().default(false),
+      },
+      {
+        name: "observer_id",
+        type: "Query",
+        schema: z.string().min(1).optional(),
+      },
+    ],
+    response: MailFolderList,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Workspace, agent, or mailbox pair not found (getAgentMailbox precedent).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Stale reference/cursor — the typed MailStaleReferenceError body (code&#x3D;stale_reference); the client refreshes the list view once.
+`,
+        schema: MailStaleReferenceError,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `Mail server unreachable — the body&#x27;s code field carries a sanitized error class from the closed enum (MC-8).
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Not dialed: code&#x3D;backoff (automatic poll during backoff — body carries last_error_class + next_attempt_at, D29/R2-9) or code&#x3D;busy (cap-overflow queue timeout, MIN-003). The upstream enum in the 502 description is unchanged; busy/backoff are gateway-availability codes, not mail-server failure classes.
+`,
+        schema: MailUnavailableError,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/workspaces/:id/mail/:agentId/folders/:folder/messages",
+    alias: "listMailMessages",
+    description: `Envelope page for the folder (email-mail-view-spec §2.3). Messages are addressed folder-scoped (round-1 MAJ-005, D21); listings exclude \Deleted messages (round-2 MIN-005). Fetches never change flags (BODY.PEEK / EXAMINE — round-2 MAJ-003): nothing in the list path marks anything read. The round-1 unseen_only query parameter was dropped (round-2 OBS-001) — the watcher&#x27;s unseen_total is the only unread surface.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "agentId",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "folder",
+        type: "Path",
+        schema: z.enum(["inbox", "sent", "drafts"]),
+      },
+      {
+        name: "limit",
+        type: "Query",
+        schema: z.number().int().optional().default(20),
+      },
+      {
+        name: "before_uid",
+        type: "Query",
+        schema: z.number().int().optional(),
+      },
+      {
+        name: "retry",
+        type: "Query",
+        schema: z.boolean().optional().default(false),
+      },
+      {
+        name: "mode",
+        type: "Query",
+        schema: z.enum(["cache_first", "live"]).optional(),
+      },
+      {
+        name: "refresh_mapping",
+        type: "Query",
+        schema: z.boolean().optional().default(false),
+      },
+      {
+        name: "observer_id",
+        type: "Query",
+        schema: z.string().min(1).optional(),
+      },
+      {
+        name: "search",
+        type: "Query",
+        schema: z.string().min(1).optional(),
+      },
+      {
+        name: "cursor",
+        type: "Query",
+        schema: z.string().min(1).optional(),
+      },
+    ],
+    response: MailMessagePage,
+    errors: [
+      {
+        status: 400,
+        description: `Unknown folder slug, malformed limit, or search+cursor together.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Workspace, agent, or mailbox pair not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Stale cursor/reference — the typed MailStaleReferenceError body; code&#x3D;stale_cursor restarts the list view once.
+`,
+        schema: MailStaleReferenceError,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `Mail server failure — sanitized error class in the body&#x27;s code field (MC-8).
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Not dialed: code&#x3D;backoff (automatic poll during backoff — body carries last_error_class + next_attempt_at, D29/R2-9) or code&#x3D;busy (cap-overflow queue timeout, MIN-003). The upstream enum in the 502 description is unchanged; busy/backoff are gateway-availability codes, not mail-server failure classes.
+`,
+        schema: MailUnavailableError,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/workspaces/:id/mail/:agentId/folders/:folder/messages/:ref",
+    alias: "getMailMessage",
+    description: `Full message for the Mail panel read path (email-mail-view-spec §2.3). Never writes flags — the fetch is BODY.PEEK (round-2 MAJ-003). The ref is folder-scoped (round-1 MAJ-005, D21): uid form is always resolvable from a list row; mid form searches only the addressed folder, among non-\Deleted messages only (round-2 MIN-005 — a no-UIDPLUS server keeps the old copy of an edited draft in the folder with \Deleted and the same Message-ID), resolving multiple hits to the highest UID — never by INTERNALDATE (round-2 MIN-005). Draft actions resolve only inside drafts (MC-13).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "agentId",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "folder",
+        type: "Path",
+        schema: z.enum(["inbox", "sent", "drafts"]),
+      },
+      {
+        name: "ref",
+        type: "Path",
+        schema: z.string().min(5),
+      },
+      {
+        name: "retry",
+        type: "Query",
+        schema: z.boolean().optional().default(false),
+      },
+    ],
+    response: MailMessage,
+    errors: [
+      {
+        status: 400,
+        description: `Malformed ref or failed Message-ID validation.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Message not found in the addressed folder (includes a pair with no mailbox; MC-13 — no body or folder leakage).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Stale reference — the typed MailStaleReferenceError body (code&#x3D;stale_reference): the ref&#x27;s embedded folder epoch, pair or configuration generation no longer matches the live folder, refused on the same lease that would have served the fetch (correction I-03). The client refreshes the list once; the response never serves whatever the folder now holds under the old identity.
+`,
+        schema: MailStaleReferenceError,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `Mail server failure — sanitized error class in the body&#x27;s code field (MC-8).
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Not dialed: code&#x3D;backoff (automatic poll during backoff — body carries last_error_class + next_attempt_at, D29/R2-9) or code&#x3D;busy (cap-overflow queue timeout, MIN-003). The upstream enum in the 502 description is unchanged; busy/backoff are gateway-availability codes, not mail-server failure classes.
+`,
+        schema: MailUnavailableError,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/workspaces/:id/mail/:agentId/folders/:folder/messages/:ref/attachments/:partIndex",
+    alias: "getMailAttachment",
+    description: `Streams one MIME attachment part (D28, email-mail-view-spec §2.3). Served with Content-Disposition: attachment always — an .html attachment is never inline (MC-42) — plus X-Content-Type-Options: nosniff, an extension-derived content type (extension decides, never the bytes nor the MIME part&#x27;s self-declared type), and the RFC 6266 dual-encoded filename from the sanitized MailAttachment.filename. No CSP on attachment responses (Library MV-13 second half). The download never changes flags.
+This operation is the BROWSER-DOWNLOAD byte path only (mail-live-access-landing-order register rows 5/8; ADR correction I-05): attachment disposition, its existing filename/destination behaviour, and a streaming role that serves larger-than-preview files to the browser without ever becoming a preview source. The temporary viewer&#x27;s bytes come from the SEPARATE preview-purpose resource carried by MailAttachmentPreviewResponse.content_source.byte_url — token-bound to the minted grant, inline-disposition, no-store, capped at 25 MiB actual decoded bytes. One unlimited path shared by both purposes is forbidden: this endpoint must never serve as the preview source, and the preview endpoint must never serve as a browser download.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "agentId",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "folder",
+        type: "Path",
+        schema: z.enum(["inbox", "sent", "drafts"]),
+      },
+      {
+        name: "ref",
+        type: "Path",
+        schema: z.string().min(5),
+      },
+      {
+        name: "partIndex",
+        type: "Path",
+        schema: z.number().int(),
+      },
+      {
+        name: "retry",
+        type: "Query",
+        schema: z.boolean().optional().default(false),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 400,
+        description: `Malformed ref or part index.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Message or attachment part absent.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Stale reference — the typed MailStaleReferenceError body (code&#x3D;stale_reference): the ref failed its epoch/pair/generation validation on the same lease that would have streamed the part (correction I-03). No bytes are served against a recreated folder under an old identity.
+`,
+        schema: MailStaleReferenceError,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `Mail server failure — sanitized error class in the body&#x27;s code field (MC-8).
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Not dialed: code&#x3D;backoff (automatic poll during backoff — body carries last_error_class + next_attempt_at, D29/R2-9) or code&#x3D;busy (cap-overflow queue timeout, MIN-003). The upstream enum in the 502 description is unchanged; busy/backoff are gateway-availability codes, not mail-server failure classes.
+`,
+        schema: MailUnavailableError,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/workspaces/:id/mail/:agentId/folders/:folder/messages/:ref/attachments/:partIndex/save-to-library",
+    alias: "saveMailAttachmentToLibrary",
+    description: `Explicit user-directed export of one attachment part into the workspace Library hierarchy mail → &lt;mailbox&gt; → &lt;year-month&gt; (ADR-20261001 &quot;Save-to-workspace request/response (F2)&quot; row; register rows 8/22 — W0 is the single publisher; correction M-02 reconciliation). The mailbox component, sanitized unique leaf name and save-time UTC month are SERVER-selected — no arbitrary save path and no overwrite switch; an existing name gets a numbered suffix, never an overwrite. This is NOT an attachment cache exception: the save is a normal Library write audited as mail.attachment_saved. The same save path serves the agent&#x27;s download_email_attachment result (F3) under its normal tool permission. The save mutation is never coalesced or replayed; a lost response resolves ONLY via the explicit same-token retry, which returns the prior receipt for an already-committed save — exactly one file (correction M-02). Refusals are typed errors with a safe reason and no invented path: missing mailbox/workspace authority, permission refusal (effective deny or declined ask), stale/deleted message or part (typed 409), over-cap bytes (413), filesystem policy, unsafe path, missing/broken root, parent-file conflict, exhausted names, disk full or failed transfer. Browser Download is a separate action and never a synonym for Save.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: MailAttachmentSaveRequest,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "agentId",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "folder",
+        type: "Path",
+        schema: z.enum(["inbox", "sent", "drafts"]),
+      },
+      {
+        name: "ref",
+        type: "Path",
+        schema: z.string().min(5),
+      },
+      {
+        name: "partIndex",
+        type: "Path",
+        schema: z.number().int(),
+      },
+    ],
+    response: MailAttachmentSaveResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Malformed ref, part index or body.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `Permission refusal — effective tool deny, declined/unattended ask, or missing workspace authority.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Message or attachment part absent, or workspace root missing/broken.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Stale reference — the typed MailStaleReferenceError body (code&#x3D;stale_reference): the ref failed its epoch/pair/generation validation on the lease that would perform the save. Nothing is written against a recreated folder under an old identity.
+`,
+        schema: MailStaleReferenceError,
+      },
+      {
+        status: 413,
+        description: `The part exceeds the 25 MiB decoded-byte cap — larger files are browser Download only.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Write/cleanup failure on the destination — no partial file is reported as saved; a cleanup failure after a refused write is surfaced, never logged away.
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `Mail server failure while refetching the part — sanitized error class in the body&#x27;s code field (MC-8). A failed transfer leaves no partial file.
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Not dialed: code&#x3D;backoff or code&#x3D;busy (same semantics as the read paths), with the optional typed reason field.
+`,
+        schema: MailUnavailableError,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/workspaces/:id/mail/:agentId/folders/:folder/messages/:ref/reply-context",
+    alias: "getMailReplyContext",
+    description: `Session-authenticated message subresource assembling reply/recipients and the quoted original (ADR-20261001 &quot;Reply / Reply all context (F5)&quot; row; register row 8 — W0 is the single publisher). Gateway and agent adapter call the ONE shared recipient rule (BuildReplyRecipients); the SPA consumes the result and implements no second recipient algorithm. reply &#x3D; sender/Reply-To only; reply_all &#x3D; To plus Cc (original To + Cc minus own address and primary, deduplicated, never the original Bcc). Produces current-compose state ONLY — never a server draft, never a body cache, never a send; the existing generated send payload remains the final human-reviewed recipient/body source. A stale response for a different message/mailbox is discarded by the consumer.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: MailReplyContextRequest,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "agentId",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "folder",
+        type: "Path",
+        schema: z.enum(["inbox", "sent", "drafts"]),
+      },
+      {
+        name: "ref",
+        type: "Path",
+        schema: z.string().min(5),
+      },
+    ],
+    response: MailReplyContextResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Malformed ref, unknown mode, or failed Message-ID validation.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Message not found in the addressed folder (no body or folder leakage).`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Stale reference — the typed MailStaleReferenceError body (code&#x3D;stale_reference): the ref failed its epoch/pair/generation validation on the lease that would assemble the context.
+`,
+        schema: MailStaleReferenceError,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `Mail server failure while reading the message — sanitized error class in the body&#x27;s code field (MC-8).
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Not dialed: code&#x3D;backoff or code&#x3D;busy (same semantics as the read paths), with the optional typed reason field.
+`,
+        schema: MailUnavailableError,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/workspaces/:id/mail/:agentId/folders/:folder/messages/:ref/seen",
+    alias: "markMailMessageSeen",
+    description: `Marks exactly the addressed message \Seen (FR-020, email-mail-view-spec §2.3). A GET of folders/messages never writes flags, so the flag write is its own endpoint (round-2 MAJ-003). Idempotent: an already-seen message is a no-op 204. This endpoint and agent read_message (D38) are the ONLY \Seen writers in the product; the watcher never writes flags (FR-023).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "agentId",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "folder",
+        type: "Path",
+        schema: z.enum(["inbox", "sent", "drafts"]),
+      },
+      {
+        name: "ref",
+        type: "Path",
+        schema: z.string().min(5),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 400,
+        description: `Malformed ref.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Message not found in the addressed folder.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Stale reference — the typed MailStaleReferenceError body (code&#x3D;stale_reference): the ref failed its epoch/pair/generation validation on the same lease that would have performed the flag write (correction I-03 — the flag write never lands against a recreated folder under an old identity).
+`,
+        schema: MailStaleReferenceError,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `Mail server failure — sanitized error class in the body&#x27;s code field (MC-8).
+`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "put",
+    path: "/workspaces/:id/mail/:agentId/folders/drafts/messages/:ref",
+    alias: "updateMailDraft",
+    description: `Panel edit (email-mail-view-spec §2.3): APPENDs the updated draft with the same Message-ID (round-1 MIN-004) and \Deleted-flags the old copy (FR-032). The body carries the viewed draft&#x27;s uidvalidity/uid; when the path ref is a uid: ref, body and path must agree — mismatch is 400, never silently accepted (round-2 MAJ-008.1/.6). Stale precondition (draft moved/renumbered) is 409 with body code stale_draft (MC-16). Attachment carry-over is by part reference (FR-035); keep_attachment_parts is required full-replace (D28). Audit event + rate limit (MC-20).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: MailDraftUpdateRequest,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "agentId",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "ref",
+        type: "Path",
+        schema: z.string().min(5),
+      },
+    ],
+    response: MailMessage,
+    errors: [
+      {
+        status: 400,
+        description: `Validation failure, or body uidvalidity/uid disagree with a uid-form path ref (round-2 MAJ-008.1/.6).
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Draft gone (deleted elsewhere) or pair has no mailbox.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Stale precondition — the viewed draft no longer matches uidvalidity:uid; body code stale_draft; nothing mutated (MC-16).
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `Mail server failure — sanitized error class in the body&#x27;s code field (MC-8).`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "delete",
+    path: "/workspaces/:id/mail/:agentId/folders/drafts/messages/:ref",
+    alias: "discardMailDraft",
+    description: `Panel discard: \Deleted-flags the draft; with UIDPLUS a UID EXPUNGE removes exactly the target UID, without UIDPLUS only \Deleted is stored (deferred expunge — FR-032, MC-17). A non-UID EXPUNGE is never issued by Omnipus. Audit event + rate limit (MC-20). Idempotency is not promised: an already-discarded draft is 404.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "agentId",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "ref",
+        type: "Path",
+        schema: z.string().min(5),
+      },
+    ],
+    response: z.void(),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Draft gone or pair has no mailbox.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `Mail server failure — sanitized error class in the body&#x27;s code field (MC-8).`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/workspaces/:id/mail/:agentId/folders/drafts/messages/:ref/send",
+    alias: "sendMailDraft",
+    description: `Panel send IS the approval (email-mail-view-spec §2.3): transmits the request&#x27;s content (never re-reads the draft as truth — round-1 MAJ-002), APPENDs to Sent (D18) and \Deleted-flags the draft (FR-032). Idempotent per draft Message-ID (round-2 MAJ-009, FR-021, MC-28): a repeat submit after a completed send returns the recorded first outcome — never a second transmission. Stale precondition is 409 stale_draft; an already-sent repeat whose recorded outcome is unavailable is also 409. Audit event + rate limit (MC-20).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: MailDraftSendRequest,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "agentId",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "ref",
+        type: "Path",
+        schema: z.string().min(5),
+      },
+    ],
+    response: MailSendResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Validation failure — recipients, body bound, attachment caps, header injection, precondition disagreement.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Draft gone or pair has no mailbox.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Stale precondition (stale_draft, MC-16), or an already-sent repeat whose recorded outcome is unavailable (round-2 MAJ-009).
+`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `Mail server failure — sanitized error class in the body&#x27;s code field (MC-8).`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/workspaces/:id/mail/:agentId/messages",
+    alias: "sendMailMessage",
+    description: `Human manual send (email-mail-view-spec §2.3): renders Markdown to sanitized multipart/alternative, appends the mailbox signature, sends via SMTP and APPENDs the Sent copy (D7/D18). Audit event + dedicated mailMutationLimiter rate limit (MC-20). Recipient cap 50 across To/Cc/Bcc after de-dup (MC-27); body bound 1 MiB (MC-22); attachments ≤ 10 files / ≤ 25 MiB total, checked pre-dial (MC-32). 429 with Retry-After when rate-limited.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: MailSendRequest,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+      {
+        name: "agentId",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: MailSendResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Validation failure — recipients, body bound, attachment caps, header injection.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Workspace, agent, or mailbox pair not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 502,
+        description: `SMTP/IMAP upstream failure — sanitized error class in the body&#x27;s code field (MC-8); nothing transmitted on IMAP-side failure without a send.
+`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/workspaces/:id/mail/summary",
+    alias: "getWorkspaceMailSummary",
+    description: `Per-mailbox watcher badge state (MailSummaryList) served from the watcher&#x27;s saved state files — this endpoint never dials IMAP (D29/R2-5, FR-033). Refreshed by the SPA every 60 s from this saved state (round-2 R2-5). A mailbox in error/backoff reports its class and next_attempt_at so the badge can say &quot;retrying at hh:mm&quot; (D29/R2-8); watcher_state ok never lies (round-2 MAJ-019).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: MailSummaryList,
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Workspace not found.`,
+        schema: ErrorResponse,
       },
     ],
   },
@@ -14420,9 +18722,95 @@ Returns HTTP 201 on success.
       },
     ],
   },
+  {
+    method: "get",
+    path: "/workspaces/:id/rooms",
+    alias: "listWorkspaceRooms",
+    description: `Spec K23 (FR-199). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md). A storage or read failure is an explicit 500 with the error body, never 200 with an empty list (#1314).
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: z.array(Room),
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/workspaces/:id/rooms",
+    alias: "createRoom",
+    description: `Spec K24 (FR-161, FR-172). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-15. The team room is never created through this route.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: RoomCreateRequest,
+      },
+      {
+        name: "id",
+        type: "Path",
+        schema: z.string(),
+      },
+    ],
+    response: Room,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 422,
+        description: `Validation failed — semantically invalid input.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
 ]);
 
-export const api = new Zodios(endpoints);
+export const api = /* @__PURE__ */ new Zodios(endpoints);
 
 export function createApiClient(baseUrl: string, options?: ZodiosOptions) {
   return new Zodios(baseUrl, endpoints, options);
@@ -14433,7 +18821,237 @@ export function createApiClient(baseUrl: string, options?: ZodiosOptions) {
 // Do not edit directly — re-run: node scripts/_gen-asyncapi-types.mjs
 // These extend the REST schemas above with all WS frame types.
 
-export const WsFrameType = z.enum(["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "session_started", "message_status", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "rate_limit", "media", "agent_switched", "tool_approval_required", "tool_approval_resolved", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_close_ack", "session_mode_update", "session_mode_updated", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "browser_input_offer", "browser_input_answer", "browser_input_state", "browser_input_control_ack", "browser_handover_notice", "goal_outcome", "library_changed", "session_snapshot", "catch_up_complete", "user_message"]);
+export const WsFrameType = z.enum(["auth", "message", "cancel", "redirect", "ping", "attach_session", "device_pairing_response", "session_started", "message_status", "token", "done", "error", "tool_call_start", "tool_call_result", "tool_result_projection", "subagent_start", "subagent_message", "subagent_state", "subagent_end", "task_status_changed", "task_run_status", "replay_message", "replay_error", "replay_provider_fallback", "rate_limit", "provider_retry", "provider_status", "context_window_notice", "provider_fallback", "media", "tool_approval_required", "tool_approval_resolved", "session_state", "system_overload", "replay_warning", "cancel_stage", "pong", "session_mode_update", "session_mode_updated", "device_pairing_request", "whatsapp_pairing", "whatsapp_pairing_subscribe", "notification", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_status", "browser_tab_action", "browser_tabs", "browser_viewport", "browser_webrtc_offer", "browser_webrtc_answer", "browser_webrtc_state", "browser_capture_hello", "browser_capture_offer", "browser_capture_answer", "browser_capture_control", "browser_video_health", "goal_status", "loop_status", "plan_status", "judge_verdict", "ask_user_question", "ask_user_answer", "browser_input_offer", "browser_input_answer", "browser_input_state", "browser_input_control_ack", "browser_handover_notice", "goal_outcome", "helper_event", "library_changed", "session_snapshot", "catch_up_complete", "user_message", "agent_created", "mail_panel_observer", "mail_panel_observer_ack", "mail_panel_observer_error", "secret_request", "secret_request_resolved", "attach_room", "room_snapshot", "room_entry", "room_member_state", "room_meta"]);
+
+export const HistoryEntryOrigin = z
+  .object({
+    position: z.string().min(47).max(47).regex(/^hp1_[A-Za-z0-9_-]{43}$/),
+    entry_id: z.string().min(1).optional(),
+    turn_id: z.string().min(1).optional(),
+  })
+  .strict();
+
+export const SessionHistoryState = z
+  .object({
+    status: z.enum(["available", "unavailable"]),
+    reason: z.enum(["index_missing", "index_inconsistent", "catchup_limit", "storage_error", "projection_error"]).optional(),
+    message: z.string().min(1).optional(),
+  })
+  .strict();
+
+export const EffortRecord = z
+  .object({
+    chosen: z.string().max(32).optional(),
+    sent: z.string().max(32).optional(),
+    reason: z.enum(["mapped", "not_supported", "continuation", "rejected", "rejected_earlier", "extra_body"]).optional(),
+    provider: z.string().optional(),
+    model: z.string().optional(),
+  })
+  .strict();
+
+export const RoomRef = z
+  .object({
+    room_id: z.string().min(1).max(128),
+    room_name: z.string().min(1).max(80),
+    request_id: z.string().min(1).max(128),
+    role: z.enum(["request", "answer"]),
+  })
+  .strict();
+
+export const WorkflowStart = z
+  .object({
+    workflow: z.enum(["W1", "W18"]),
+    target_workspace_id: z.string().min(1).max(128),
+  })
+  .strict();
+
+export const SecretRecipientDisplay = z
+  .object({
+    kind: z.enum(["provider_key", "mcp_env", "channel_credential", "mailbox_password", "agent_private", "unbound"]),
+    lines: z.array(z.string().min(1).max(500)).min(1).max(8),
+  })
+  .strict();
+
+export const SecretRequestField = z
+  .object({
+    key: z.string().regex(/^[a-z][a-z0-9_]{0,31}$/),
+    label: z.string().min(1).max(80),
+  })
+  .strict();
+
+export const SecretRequestFrame = z
+  .object({
+    type: z.literal("secret_request"),
+    request_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
+    root_session_id: z.string().min(1).max(255).optional(),
+    acting_agent_id: z.string().min(1).max(128),
+    acting_agent_name: z.string().min(1).max(128),
+    origin_label: z.string().min(1).max(200).optional(),
+    workspace_id: z.string().min(1).max(128).optional(),
+    owner: z
+    .object({
+      workspace_id: z.string().min(1).max(128),
+      agent_id: z.string().min(1).max(128),
+    })
+    .strict().optional(),
+    purpose: z.string().min(1).max(500),
+    recipient: SecretRecipientDisplay,
+    fields: z.array(SecretRequestField).min(1).max(8),
+  })
+  .strict();
+
+export const SecretRequestResolvedFrame = z
+  .object({
+    type: z.literal("secret_request_resolved"),
+    request_id: z.string().min(1).max(128),
+    state: z.enum(["submitted", "cancelled", "stopped", "interrupted", "refused"]),
+    session_id: z.string().min(1).max(255).optional(),
+    root_session_id: z.string().min(1).max(255).optional(),
+  })
+  .strict();
+
+export const SessionStateSecretRequest = z
+  .object({
+    request_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
+    root_session_id: z.string().min(1).max(255).optional(),
+    state: z.enum(["pending", "submitted", "cancelled", "stopped", "interrupted", "refused"]),
+    continuation_unconfirmed: z.boolean().optional(),
+    acting_agent_id: z.string().min(1).max(128),
+    acting_agent_name: z.string().min(1).max(128),
+    origin_label: z.string().min(1).max(200).optional(),
+    workspace_id: z.string().min(1).max(128).optional(),
+    owner: z
+    .object({
+      workspace_id: z.string().min(1).max(128),
+      agent_id: z.string().min(1).max(128),
+    })
+    .strict().optional(),
+    purpose: z.string().min(1).max(500),
+    recipient: SecretRecipientDisplay,
+    fields: z.array(SecretRequestField).min(1).max(8),
+    reference_names: z.array(z.string().min(1).max(256)).max(8).optional(),
+    updated_at: z.string(),
+  })
+  .strict();
+
+export const RoomEntryAuthor = z
+  .object({
+    kind: z.enum(["user", "agent"]),
+    agent_id: z.string().min(1).max(128).optional(),
+  })
+  .strict();
+
+export const RoomDeliveryState = z
+  .object({
+    agent_id: z.string().min(1).max(128),
+    request_id: z.string().min(1).max(128),
+    state: z.enum(["recorded", "awaiting_approval", "admitted", "held", "working", "waiting_on_user", "answered", "refused", "failed", "interrupted", "unavailable", "cancelled", "unknown"]),
+    reason: z.string().min(1).max(200).optional(),
+  })
+  .strict();
+
+export const MediaPart = z
+  .object({
+    type: z.enum(["image", "audio", "video", "file"]),
+    url: z.string().min(1),
+    filename: z.string().min(1),
+    content_type: z.string().min(1),
+    caption: z.string().optional(),
+  })
+  .strict();
+
+export const RoomEntry = z
+  .object({
+    id: z.string().min(1).max(128),
+    room_id: z.string().min(1).max(128),
+    seq: z.number().int().min(1),
+    client_message_id: z.string().min(1).max(128).optional(),
+    author: RoomEntryAuthor,
+    text: z.string().max(5242880),
+    attachments: z.array(MediaPart).max(16).optional(),
+    addressees: z.array(z.string().min(1).max(128)),
+    after_pause: z.boolean(),
+    deliveries: z.array(RoomDeliveryState),
+    timestamp: z.string(),
+  })
+  .strict();
+
+export const RoomEntryFrame = z
+  .object({
+    type: z.literal("room_entry"),
+    room_id: z.string().min(1).max(128),
+    seq: z.number().int().min(1),
+    entry: RoomEntry,
+  })
+  .strict();
+
+export const RoomMemberStateFrame = z
+  .object({
+    type: z.literal("room_member_state"),
+    room_id: z.string().min(1).max(128),
+    seq: z.number().int().min(1),
+    delivery: RoomDeliveryState,
+  })
+  .strict();
+
+export const AttachRoomFrame = z
+  .object({
+    type: z.literal("attach_room"),
+    room_id: z.string().min(1).max(128),
+    after_seq: z.number().int().min(0),
+  })
+  .strict();
+
+export const RoomSnapshotFrame = z
+  .object({
+    type: z.literal("room_snapshot"),
+    room_id: z.string().min(1).max(128),
+    seq: z.number().int().min(0),
+    entries: z.array(RoomEntry).max(10000),
+    members: z.array(z.string().min(1).max(128)),
+    muted: z.array(z.string().min(1).max(128)),
+    member_states: z.array(RoomDeliveryState),
+    paused: z.boolean(),
+    generation: z.number().int().min(0),
+    read_only_reason: z.string().min(1).max(200).optional(),
+    allocated_cost_micro_usd: z.number().int().min(0),
+    allocated_cost_unpriced: z.boolean(),
+    complete: z.boolean(),
+    has_older: z.boolean().optional(),
+  })
+  .strict();
+
+export const RoomMetaFrame = z
+  .object({
+    type: z.literal("room_meta"),
+    room_id: z.string().min(1).max(128),
+    seq: z.number().int().min(1),
+    members: z.array(z.string().min(1).max(128)),
+    muted: z.array(z.string().min(1).max(128)),
+    paused: z.boolean(),
+    generation: z.number().int().min(0),
+    read_only_reason: z.string().min(1).max(200).optional(),
+    allocated_cost_micro_usd: z.number().int().min(0),
+    allocated_cost_unpriced: z.boolean(),
+    invitation_context_status: z.enum(["generating", "ready", "unavailable"]).optional(),
+  })
+  .strict();
+
+export const ChatParticipant = z
+  .object({
+    kind: z.enum(["human", "agent"]),
+    display_name: z.string().min(1).max(128),
+    source: z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/).optional(),
+    agent: z
+    .object({
+      workspace_id: z.string().min(1).max(128),
+      agent_id: z.string().min(1).max(128),
+    })
+    .strict().optional(),
+  })
+  .strict();
 
 export const AuthFrame = z
   .object({
@@ -14444,16 +19062,25 @@ export const AuthFrame = z
 
 export const MessageFrameBase = z
   .object({
+    workflow_start: WorkflowStart.optional(),
     type: z.literal("message"),
     client_message_id: z.string().min(1).max(128).optional(),
     content: z.string().max(5242880),
-    session_id: z.string().min(1).max(128).optional(),
+    session_id: z.string().min(1).max(255).optional(),
+    recipient: z
+    .object({
+      workspace_id: z.string().min(1).max(128),
+      agent_id: z.string().min(1).max(128),
+    })
+    .strict().optional(),
     agent_id: z.string().min(1).max(128).optional(),
     media: z.array(z.string().min(1).max(256)).max(16).optional(),
     auto_approve: z.boolean().nullable().optional(),
     metadata: z
     .object({
       model_name: z.string().min(1).max(256).optional(),
+      provider: z.string().min(1).max(64).optional(),
+      reasoning_effort: z.string().min(1).max(32).optional(),
       workspace_id: z.string().min(1).max(128).optional(),
       workspace_setup_kickoff: z.boolean().optional(),
     })
@@ -14481,7 +19108,16 @@ export const MessageFrame = MessageFrameBase.refine((v) => ((typeof v["content"]
 export const CancelFrame = z
   .object({
     type: z.literal("cancel"),
-    session_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
+    scope: z.enum(["session", "tree"]).optional(),
+  })
+  .strict();
+
+export const RedirectFrame = z
+  .object({
+    type: z.literal("redirect"),
+    session_id: z.string().min(1).max(255),
+    instruction: z.string().min(1).max(16384).regex(/\S/),
   })
   .strict();
 
@@ -14500,9 +19136,13 @@ export const PongFrame = z
 export const AttachSessionFrame = z
   .object({
     type: z.literal("attach_session"),
-    session_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
+    history_limit: z.number().int().min(20).max(100).optional(),
+    history_min_rows: z.number().int().min(1).max(100).optional(),
     since_seq: z.number().int().min(1).optional(),
     boot_id: z.string().optional(),
+    ack_attention: z.boolean().optional(),
+    attention_bound: z.number().int().min(0).optional(),
   })
   .strict();
 
@@ -14519,6 +19159,8 @@ export const SessionStartedFrame = z
     type: z.literal("session_started"),
     session_id: z.string().min(1),
     agent_id: z.string().optional(),
+    client_message_id: z.string().min(1).max(128).optional(),
+    recovered: z.boolean().optional(),
     seq: z.number().int().min(1).optional(),
     boot_id: z.string().optional(),
   })
@@ -14527,21 +19169,26 @@ export const SessionStartedFrame = z
 export const MessageStatusFrame = z
   .object({
     type: z.literal("message_status"),
-    session_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
     client_message_id: z.string().min(1).max(128),
-    state: z.enum(["received", "working", "failed"]),
+    state: z.enum(["received", "working", "failed", "discarded", "held"]),
+    reason: z.literal("stopped_before_delivery").optional(),
     seq: z.number().int().min(1).optional(),
   })
   .strict();
 
 export const TokenFrame = z
   .object({
+    room_ref: RoomRef.optional(),
     type: z.literal("token"),
-    session_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
     content: z.string().max(65536),
     agent_id: z.string().optional(),
+    reply_to_message_id: z.string().min(1).optional(),
+    reply_to_participant: ChatParticipant.optional(),
     turn_id: z.string().optional(),
     message_id: z.string().optional(),
+    goal_id: z.string().optional(),
     replace: z.boolean().optional(),
     seq: z.number().int().min(1).optional(),
   })
@@ -14550,9 +19197,9 @@ export const TokenFrame = z
 export const DoneStats = z
   .object({
     tokens: z.number().min(0).optional(),
+    session_tokens_total: z.number().int().min(0).optional(),
     cost: z.number().min(0).optional(),
     duration_ms: z.number().min(0).optional(),
-    tokens_dropped: z.number().min(0).optional(),
     frames_emitted: z.number().min(0).optional(),
     orphan_count: z.number().min(0).optional(),
     duplicate_tool_call_id_count: z.number().min(0).optional(),
@@ -14561,42 +19208,57 @@ export const DoneStats = z
     turn_failed: z.boolean().optional(),
     truncated: z.boolean().optional(),
     truncation_reason: z.enum(["cancelled", "max_output_tokens"]).optional(),
+    effort: EffortRecord.optional(),
+    reasoning_tokens: z.number().int().min(0).optional(),
   })
   .passthrough();
 
 export const DoneFrame = z
   .object({
+    room_ref: RoomRef.optional(),
     type: z.literal("done"),
     session_id: z.string().min(1),
     stats: DoneStats.optional(),
     turn_id: z.string().optional(),
     message_id: z.string().optional(),
+    goal_id: z.string().optional(),
     seq: z.number().int().min(1).optional(),
   })
   .strict();
 
 export const LLMError = z
   .object({
-    code: z.enum(["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "network", "provider_stalled", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "delegated_task_limit", "context_unrecoverable", "context_window_unknown", "unknown"]),
+    code: z.enum(["media_unsupported", "media_too_large", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "judge_time_limit", "judge_conclusion_failed", "delegated_task_limit", "context_window_unknown", "bad_model", "provider_request_rejected", "model_route_unavailable", "unknown"]),
     message: z.string().min(1).max(4096),
     retryable: z.boolean(),
     detail: z.string().max(2048).optional(),
+    facts: z
+    .object({
+      provider: z.string().max(256).optional(),
+      model: z.string().max(256).optional(),
+      request_id: z.string().max(256).optional(),
+    })
+    .strict().optional(),
+    provider_message: z.boolean().optional(),
   })
   .strict();
 
 export const LLMErrorReplay = z
   .object({
-    code: z.enum(["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "network", "provider_stalled", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "delegated_task_limit", "context_unrecoverable", "context_window_unknown", "unknown"]),
+    code: z.enum(["media_unsupported", "media_too_large", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "judge_time_limit", "judge_conclusion_failed", "delegated_task_limit", "context_window_unknown", "bad_model", "provider_request_rejected", "model_route_unavailable", "unknown"]),
     message: z.string().min(1).max(4096),
     retryable: z.boolean(),
+    provider_message: z.boolean().optional(),
   })
   .strict();
 
 export const ErrorFrame = z
   .object({
     type: z.literal("error"),
-    session_id: z.string().max(128).optional(),
+    session_id: z.string().max(255).optional(),
     message: z.string().min(1).max(4096),
+    client_message_id: z.string().min(1).max(128).optional(),
+    first_message_error: z.enum(["not_saved", "delivery_unknown", "answer_not_started"]).optional(),
     payload: z
     .object({
       llm_error: LLMError,
@@ -14608,8 +19270,9 @@ export const ErrorFrame = z
 
 export const ToolCallStartFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("tool_call_start"),
-    session_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
     tool: z.string().min(1).max(128),
     call_id: z.string().min(1),
     params: z.record(z.unknown()),
@@ -14642,6 +19305,14 @@ export const ToolResultRef = z
   })
   .strict();
 
+export const HistoryResultPreview = z
+  .object({
+    _history_preview: z.literal(true),
+    original_size_bytes: z.number().int().min(51201),
+    preview: z.string().max(4096),
+  })
+  .strict();
+
 export const DelegationFailure = z
   .object({
     error: z.literal("delegation_denied"),
@@ -14668,6 +19339,7 @@ export const PermissionDenied = z
     tool: z.string().min(1),
     reason: z.string().min(1),
     permanent: z.boolean(),
+    code: z.literal("protected_internal_file").optional(),
   })
   .strict();
 
@@ -14703,12 +19375,13 @@ export const ToolResultRecallMark = z
 
 export const ToolCallResultFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("tool_call_result"),
-    session_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
     tool: z.string().min(1).max(128),
     call_id: z.string().min(1),
     result: z.unknown(),
-    status: z.enum(["success", "error"]),
+    status: z.enum(["success", "error", "cancelled"]),
     duration_ms: z.number().int().optional(),
     error: z.string().optional(),
     parent_call_id: z.string().optional(),
@@ -14719,6 +19392,7 @@ export const ToolCallResultFrame = z
 
 export const SubagentStartFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("subagent_start"),
     session_id: z.string().min(1),
     span_id: z.string().min(1),
@@ -14732,6 +19406,7 @@ export const SubagentStartFrame = z
 
 export const SubagentEndFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("subagent_end"),
     session_id: z.string().min(1),
     span_id: z.string().min(1),
@@ -14748,12 +19423,13 @@ export const SubagentEndFrame = z
 
 export const SubagentMessageFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("subagent_message"),
     session_id: z.string().min(1),
     child_session_id: z.string().optional(),
     span_id: z.string().min(1),
     message_id: z.string().min(1),
-    kind: z.enum(["progress", "checkpoint", "artifact", "blocker", "question", "decision_request", "error", "handback", "steer", "respond", "goal_status"]),
+    kind: z.enum(["progress", "checkpoint", "artifact", "blocker", "question", "error", "handback", "steer", "respond", "goal_status", "not_delivered"]),
     text: z.string().optional(),
     pct: z.number().int().min(0).max(100).optional(),
     correlation_id: z.string().optional(),
@@ -14766,15 +19442,25 @@ export const SubagentMessageFrame = z
 
 export const SubagentStateFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("subagent_state"),
     session_id: z.string().min(1),
     child_session_id: z.string().optional(),
     span_id: z.string().min(1),
-    state: z.enum(["queued", "running", "needs_input", "paused", "completed", "failed", "cancelled", "timed_out"]),
-    steering_receipt: z
+    state: z.enum(["queued", "running", "needs_input", "stopped", "completed", "failed"]),
+    control_receipt: z
     .object({
-      correlation_id: z.string(),
-      applied_at: z.string(),
+      seq: z.number().int().min(0),
+      control_id: z.string().min(1),
+      verb: z.enum(["steer", "stop", "stop_all", "redirect", "resume", "respond", "clear_goal"]),
+      state: z.enum(["queued", "delivered", "applied", "superseded"]),
+      accepted_at: z.string(),
+      delivered_at: z.string().optional(),
+      applied_at: z.string().optional(),
+      superseded_at: z.string().optional(),
+      superseded_by_seq: z.number().int().min(0).optional(),
+      reason: z.string().optional(),
+      released_control_ids: z.array(z.string()).optional(),
     })
     .strict().optional(),
     created_at: z.string(),
@@ -14804,23 +19490,43 @@ export const TaskRunStatusFrame = z
 
 export const ReplayMessageFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
+    room_ref: RoomRef.optional(),
     type: z.literal("replay_message"),
     session_id: z.string().min(1),
     content: z.string(),
+    content_original_size_bytes: z.number().int().min(65537).optional(),
     role: z.enum(["user", "assistant", "system", "turn_canceled"]),
     id: z.string().optional(),
+    reply_to_message_id: z.string().min(1).optional(),
+    participant: ChatParticipant.optional(),
+    reply_to_participant: ChatParticipant.optional(),
     timestamp: z.string().optional(),
     agent_id: z.string().optional(),
     model: z.string().max(256).optional(),
     turn_id: z.string().optional(),
+    goal_id: z.string().optional(),
     truncated: z.boolean().optional(),
     truncation_reason: z.enum(["cancelled", "max_output_tokens"]).optional(),
     client_message_id: z.string().optional(),
+    input_disposition: z
+    .object({
+      message_id: z.string().min(1).max(255),
+      client_message_id: z.string().min(1).max(128).optional(),
+      state: z.literal("discarded"),
+      reason: z.literal("stopped_before_delivery"),
+    })
+    .strict().optional(),
+    seq: z.number().int().min(1).optional(),
+    terminal_outcome: z.boolean().optional(),
+    effort: EffortRecord.optional(),
+    turn_reasoning_tokens: z.number().int().min(0).optional(),
   })
   .strict();
 
 export const ReplayErrorFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("replay_error"),
     session_id: z.string().min(1),
     entry_id: z.string(),
@@ -14839,7 +19545,7 @@ export const ReplayErrorFrame = z
 export const ToolResultProjectionFrame = z
   .object({
     type: z.literal("tool_result_projection"),
-    session_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
     tool_call_id: z.string().min(1),
     archive_line: z.number().int().min(0),
     content_state: z.enum(["capped", "emptied"]),
@@ -14862,6 +19568,84 @@ export const RateLimitFrame = z
   })
   .strict();
 
+export const ProviderRetryFrame = z
+  .object({
+    type: z.literal("provider_retry"),
+    session_id: z.string().min(1).max(255),
+    turn_id: z.string().min(1).max(128),
+    provider: z.string().min(1).max(256),
+    model: z.string().min(1).max(256),
+    retry_at: z.string(),
+    retry_after_seconds: z.number().int().min(1),
+    sent_at: z.string(),
+    attempt: z.number().int().min(2),
+    max_attempts: z.number().int().min(1),
+    error_code: z.string().max(64),
+    seq: z.number().int().min(1).optional(),
+  })
+  .strict();
+
+export const ProviderStatusFrame = z
+  .object({
+    type: z.literal("provider_status"),
+    session_id: z.string().min(1).max(255),
+    turn_id: z.string().min(1).max(128),
+    state: z.enum(["waiting", "responding", "recovered"]),
+    sent_at: z.string(),
+    silent_since: z.string().optional(),
+    stall_at: z.string().optional(),
+    retries: z.number().int().min(1).optional(),
+    seq: z.number().int().min(1).optional(),
+  })
+  .strict();
+
+export const ContextWindowNoticeFrameNotice = z
+  .object({
+    kind: z.enum(["provider_retry", "mid_turn"]),
+    message: z.string().min(1).max(2048),
+  })
+  .strict();
+
+export const ContextWindowNoticeFrame = z
+  .object({
+    history_origin: HistoryEntryOrigin.optional(),
+    type: z.literal("context_window_notice"),
+    session_id: z.string().min(1).max(255),
+    turn_id: z.string().min(1).max(128),
+    agent_id: z.string().min(1).max(128),
+    entry_id: z.string().min(1).max(128),
+    timestamp: z.string(),
+    notice: ContextWindowNoticeFrameNotice,
+    seq: z.number().int().min(1).optional(),
+  })
+  .strict();
+
+export const ProviderFallbackFrame = z
+  .object({
+    type: z.literal("provider_fallback"),
+    session_id: z.string().min(1).max(255),
+    turn_id: z.string().min(1).max(128),
+    answered_model: z.string().min(1).max(256),
+    unavailable_model: z.string().min(1).max(256),
+    unavailable_code: z.enum(["rate_limited", "model_retired", "model_not_found"]),
+    seq: z.number().int().min(1).optional(),
+  })
+  .strict();
+
+export const ProviderFallbackNote = z
+  .object({
+    history_origin: HistoryEntryOrigin.optional(),
+    type: z.literal("replay_provider_fallback"),
+    session_id: z.string().min(1).max(255),
+    entry_id: z.string().min(1).max(128),
+    timestamp: z.string(),
+    answered_model: z.string().min(1).max(256).optional(),
+    unavailable_model: z.string().min(1).max(256).optional(),
+    unavailable_code: z.enum(["rate_limited", "model_retired", "model_not_found"]).optional(),
+    message: z.string().min(1).max(4096),
+  })
+  .strict();
+
 export const LibraryChangedFrame = z
   .object({
     type: z.literal("library_changed"),
@@ -14871,32 +19655,12 @@ export const LibraryChangedFrame = z
   })
   .strict();
 
-export const MediaPart = z
-  .object({
-    type: z.enum(["image", "audio", "video", "file"]),
-    url: z.string().min(1),
-    filename: z.string().min(1),
-    content_type: z.string().min(1),
-    caption: z.string().optional(),
-  })
-  .strict();
-
 export const MediaFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("media"),
     session_id: z.string().min(1),
     parts: z.array(MediaPart).min(1).max(32),
-    seq: z.number().int().min(1).optional(),
-  })
-  .strict();
-
-export const AgentSwitchedFrame = z
-  .object({
-    type: z.literal("agent_switched"),
-    session_id: z.string().min(1),
-    agent_id: z.string().optional(),
-    message: z.string().optional(),
-    producing_session_id: z.string().min(1).optional(),
     seq: z.number().int().min(1).optional(),
   })
   .strict();
@@ -14917,6 +19681,10 @@ export const CommandSegmentInfo = z
 
 export const ToolApprovalRequiredFrame = z
   .object({
+    root_session_id: z.string().min(1).max(255).optional(),
+    acting_agent_name: z.string().min(1).max(128).optional(),
+    origin_label: z.string().min(1).max(200).optional(),
+    room_ref: RoomRef.optional(),
     type: z.literal("tool_approval_required"),
     approval_id: z.string().min(1),
     tool_call_id: z.string().min(1),
@@ -14933,6 +19701,7 @@ export const ToolApprovalRequiredFrame = z
 
 export const ToolApprovalResolvedFrame = z
   .object({
+    root_session_id: z.string().min(1).max(255).optional(),
     type: z.literal("tool_approval_resolved"),
     approval_id: z.string().min(1),
     state: z.enum(["approved", "denied_user", "denied_timeout", "denied_cancel", "denied_restart", "denied_batch_short_circuit"]),
@@ -14945,6 +19714,8 @@ export const AskUserQuestionCard = z
     card_id: z.string().min(1),
     session_id: z.string().min(1),
     agent_id: z.string(),
+    room_ref: RoomRef.optional(),
+    origin_label: z.string().min(1).max(200).optional(),
     status: z.enum(["pending", "answered", "cancelled"]),
     created_at: z.string(),
     default_safe_at: z.string().optional(),
@@ -14979,6 +19750,7 @@ export const AskUserQuestionCard = z
 
 export const AskUserQuestionFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("ask_user_question"),
     card: AskUserQuestionCard,
   })
@@ -15003,6 +19775,14 @@ export const AskUserAnswerFrame = z
 
 export const SessionStatePendingApproval = z
   .object({
+    tool_call_id: z.string().min(1),
+    turn_id: z.string().min(1),
+    args: z.record(z.unknown()),
+    segments: z.array(CommandSegmentInfo).optional(),
+    root_session_id: z.string().min(1).max(255).optional(),
+    acting_agent_name: z.string().min(1).max(128).optional(),
+    origin_label: z.string().min(1).max(200).optional(),
+    room_ref: RoomRef.optional(),
     approval_id: z.string().min(1),
     session_id: z.string().min(1),
     tool_name: z.string().min(1).max(128),
@@ -15022,11 +19802,15 @@ export const SessionStateActiveTurn = z
 
 export const SessionStateFrame = z
   .object({
+    history_state: SessionHistoryState.optional(),
+    secret_requests: z.array(SessionStateSecretRequest).max(1000).optional(),
     type: z.literal("session_state"),
     user_id: z.string(),
     pending_approvals: z.array(SessionStatePendingApproval).max(1000),
     pending_asks: z.array(AskUserQuestionCard).max(64).optional(),
     session_id: z.string().optional(),
+    session_tokens_total: z.number().int().min(0).optional(),
+    attention_bound: z.number().int().min(0).optional(),
     auto_approve_modifier: z.boolean().nullable().optional(),
     active_turn: SessionStateActiveTurn.optional(),
     boot_id: z.string().optional(),
@@ -15076,15 +19860,6 @@ export const CancelStageFrame = z
   })
   .strict();
 
-export const SessionCloseAckFrame = z
-  .object({
-    type: z.literal("session_close_ack"),
-    session_id: z.string().min(1),
-    id: z.string().optional(),
-    producing_session_id: z.string().min(1).optional(),
-  })
-  .strict();
-
 export const SessionModeUpdateFrame = z
   .object({
     type: z.literal("session_mode_update"),
@@ -15114,23 +19889,20 @@ export const DevicePairingRequestFrame = z
 
 export const WhatsAppPairingFrame = z
   .object({
+    request_id: z.string().min(1).max(128).optional(),
+    session_id: z.string().min(1).max(255).optional(),
     type: z.literal("whatsapp_pairing"),
     channel_id: z.string().min(1),
-    status: z.enum(["waiting", "code", "linked", "timeout", "error"]),
+    status: z.enum(["waiting", "code", "linked", "timeout", "error", "stopped"]),
     qr: z.string().optional(),
     message: z.string().optional(),
   })
   .strict();
 
-export const SessionCloseFrame = z
-  .object({
-    type: z.literal("session_close"),
-    session_id: z.string().min(1),
-  })
-  .strict();
-
 export const WhatsAppPairingSubscribeFrame = z
   .object({
+    request_id: z.string().min(1).max(128).optional(),
+    session_id: z.string().min(1).max(255).optional(),
     type: z.literal("whatsapp_pairing_subscribe"),
     channel_id: z.string().min(1),
     active: z.boolean(),
@@ -15141,7 +19913,7 @@ export const NotificationFrame = z
   .object({
     type: z.literal("notification"),
     id: z.string().min(1),
-    notification_type: z.enum(["schedule_failed", "knowledge_drift"]),
+    notification_type: z.enum(["schedule_failed", "knowledge_drift", "goal_paused", "stop_notice"]),
     title: z.string().min(1),
     body: z.string().optional(),
     severity: z.enum(["info", "warning", "error"]),
@@ -15156,7 +19928,7 @@ export const NotificationFrame = z
 export const BrowserAttachFrame = z
   .object({
     type: z.literal("browser_attach"),
-    session_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
     agent_id: z.string().min(1).max(128),
     input_mode: z.enum(["websocket", "dedicated"]).optional(),
   })
@@ -15201,7 +19973,7 @@ export const BrowserControlFrame = z
 export const BrowserDetachFrame = z
   .object({
     type: z.literal("browser_detach"),
-    session_id: z.string().max(128).optional(),
+    session_id: z.string().max(255).optional(),
   })
   .strict();
 
@@ -15234,7 +20006,7 @@ export const BrowserViewportFrame = z
 export const BrowserTabActionFrame = z
   .object({
     type: z.literal("browser_tab_action"),
-    session_id: z.string().max(128).optional(),
+    session_id: z.string().max(255).optional(),
     agent_id: z.string().max(128).optional(),
     action: z.enum(["switch", "close", "open"]),
     index: z.number().int().min(0).optional(),
@@ -15246,7 +20018,7 @@ export const BrowserTabActionFrame = z
 export const BrowserTabsFrame = z
   .object({
     type: z.literal("browser_tabs"),
-    session_id: z.string().max(128).optional(),
+    session_id: z.string().max(255).optional(),
     active_index: z.number().int().min(0),
     tabs: z.array(z
     .object({
@@ -15263,7 +20035,7 @@ export const BrowserWebRTCOfferFrame = z
   .object({
     type: z.literal("browser_webrtc_offer"),
     agent_id: z.string().min(1).max(128),
-    session_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
     sdp: z.string().min(1).max(131072),
     capture_generation: z.number().int().min(1).max(9007199254740991).optional(),
     capture_id: z.string().min(1).max(128).optional(),
@@ -15274,7 +20046,7 @@ export const BrowserWebRTCOfferFrame = z
 export const BrowserWebRTCAnswerFrame = z
   .object({
     type: z.literal("browser_webrtc_answer"),
-    session_id: z.string().max(128).optional(),
+    session_id: z.string().max(255).optional(),
     sdp: z.string().min(1).max(131072),
     capture_generation: z.number().int().min(1).max(9007199254740991).optional(),
     capture_id: z.string().min(1).max(128).optional(),
@@ -15285,7 +20057,7 @@ export const BrowserWebRTCAnswerFrame = z
 export const BrowserWebRTCStateFrame = z
   .object({
     type: z.literal("browser_webrtc_state"),
-    session_id: z.string().max(128).optional(),
+    session_id: z.string().max(255).optional(),
     available: z.boolean(),
     reason: z.enum(["disabled", "not_capable", "lite_build", "error", "multi_agent_capture_denied", "ingest_timeout"]).optional(),
     reason_detail: z.string().max(512).optional(),
@@ -15304,7 +20076,7 @@ export const BrowserWebRTCStateFrame = z
 export const BrowserVideoHealthFrame = z
   .object({
     type: z.literal("browser_video_health"),
-    session_id: z.string().max(128).optional(),
+    session_id: z.string().max(255).optional(),
     state: z.enum(["transitioning", "lost", "recovering", "recovered", "unrecoverable"]),
     attempt: z.number().int().min(0).max(16).optional(),
     max_attempts: z.number().int().min(0).max(16).optional(),
@@ -15384,7 +20156,7 @@ export const GoalStatusFrame = z
     latest_reason: z.string(),
     active_loops: z.number().int().min(0),
     cap: z.number().int().min(1),
-    state: z.enum(["queued", "active", "waiting_on_user", "judge_unavailable", "re-planning", "judging", "done", "failed", "cleared", "judge_cas_loss", "blocked", "claim_overturned", "expired"]),
+    state: z.enum(["active", "waiting_on_user", "judge_unavailable", "re-planning", "judging", "done", "failed", "cleared", "judge_cas_loss", "blocked", "claim_overturned", "expired"]),
     criteria: z.array(z
     .object({
       id: z.string().optional(),
@@ -15477,6 +20249,7 @@ export const PlanStatusFrame = z
 
 export const JudgeVerdictFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("judge_verdict"),
     id: z.string(),
     scope: z.enum(["task", "plan", "goal"]),
@@ -15513,10 +20286,33 @@ export const JudgeVerdictFrame = z
 
 export const BrowserHandoverNoticeFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("browser_handover_notice"),
     session_id: z.string().min(1),
     message_id: z.string().min(1),
     text: z.string().max(2000),
+  })
+  .strict();
+
+export const HelperEventFrameEvent = z
+  .object({
+    helper_session_id: z.string().min(1),
+    helper_title: z.string().min(1).optional(),
+    kind: z.enum(["verdict_unmet", "not_verified", "stopped", "restarted", "resume_refused", "timed_out", "finished", "question", "blocker", "failed"]),
+    text: z.string().min(1),
+    goal_id: z.string().min(1).optional(),
+    created_at: z.string(),
+  })
+  .strict();
+
+export const HelperEventFrame = z
+  .object({
+    history_origin: HistoryEntryOrigin.optional(),
+    type: z.literal("helper_event"),
+    session_id: z.string().min(1),
+    message_id: z.string().min(1),
+    helper_event: HelperEventFrameEvent,
+    seq: z.number().int().min(1).optional(),
   })
   .strict();
 
@@ -15535,6 +20331,7 @@ export const GoalOutcomeFrameOutcome = z
 
 export const GoalOutcomeFrame = z
   .object({
+    history_origin: HistoryEntryOrigin.optional(),
     type: z.literal("goal_outcome"),
     session_id: z.string().min(1),
     message_id: z.string().min(1),
@@ -15573,7 +20370,7 @@ export const ReplayErrorPayload = z
 export const BrowserInputOfferFrame = z
   .object({
     type: z.literal("browser_input_offer"),
-    session_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
     input_epoch: z.number().int().min(1).max(9007199254740991),
     control_epoch: z.number().int().min(0).max(9007199254740991),
     offer_id: z.number().int().min(1).max(9007199254740991),
@@ -15585,7 +20382,7 @@ export const BrowserInputOfferFrame = z
 export const BrowserInputAnswerFrame = z
   .object({
     type: z.literal("browser_input_answer"),
-    session_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
     input_epoch: z.number().int().min(1).max(9007199254740991),
     control_epoch: z.number().int().min(0).max(9007199254740991),
     offer_id: z.number().int().min(1).max(9007199254740991),
@@ -15596,7 +20393,7 @@ export const BrowserInputAnswerFrame = z
 export const BrowserInputStateFrame = z
   .object({
     type: z.literal("browser_input_state"),
-    session_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
     input_epoch: z.number().int().min(1).max(9007199254740991),
     control_epoch: z.number().int().min(0).max(9007199254740991),
     offer_id: z.number().int().min(1).max(9007199254740991),
@@ -15608,7 +20405,7 @@ export const BrowserInputStateFrame = z
 export const BrowserInputControlAckFrame = z
   .object({
     type: z.literal("browser_input_control_ack"),
-    session_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
     input_epoch: z.number().int().min(0).max(9007199254740991),
     control_epoch: z.number().int().min(0).max(9007199254740991),
     ok: z.boolean(),
@@ -15618,30 +20415,87 @@ export const BrowserInputControlAckFrame = z
   })
   .strict();
 
+export const SessionHistoryContext = z
+  .object({
+    spans: z.array(z
+    .object({
+      span_id: z.string().min(1),
+      start: SubagentStartFrame.optional(),
+      state: SubagentStateFrame.optional(),
+      message: SubagentMessageFrame.optional(),
+      end: SubagentEndFrame.optional(),
+      has_run: z.boolean().optional(),
+    })
+    .strict()),
+    duplicate_ids: z.array(z
+    .object({
+      kind: z.enum(["message", "tool"]),
+      id: z.string().min(1),
+      canonical_position: z.string().min(47).max(47).regex(/^hp1_[A-Za-z0-9_-]{43}$/),
+      occurrence_count: z.number().int().min(2),
+    })
+    .strict()),
+  })
+  .strict();
+
+export const SessionHistoryPageInfo = z
+  .object({
+    mode: z.enum(["latest", "older", "newer", "window_refresh"]),
+    limit: z.number().int().min(20).max(100),
+    min_rows: z.number().int().min(1).max(100),
+    row_count: z.number().int().min(0),
+    source_group_count: z.number().int().min(0).max(100),
+    soft_byte_budget: z.number().int().min(1),
+    byte_ceiling: z.number().int().min(1),
+    projected_bytes: z.number().int().min(0),
+    byte_budget_exceeded: z.boolean(),
+    stop_reason: z.enum(["row_target", "source_cap", "clear", "end", "range_end", "byte_budget", "byte_ceiling"]),
+    budget_override: z.enum(["height_floor", "atomic_group"]).optional(),
+    first_position: z.string().min(47).max(47).regex(/^hp1_[A-Za-z0-9_-]{43}$/).optional(),
+    last_position: z.string().min(47).max(47).regex(/^hp1_[A-Za-z0-9_-]{43}$/).optional(),
+    stopped_at_clear: z.boolean().optional(),
+    latest_clear: z
+    .object({
+      entry_id: z.string().min(1),
+      history_position: z.string().min(47).max(47).regex(/^hp1_[A-Za-z0-9_-]{43}$/),
+    })
+    .strict().optional(),
+    retention_generation: z.string().min(1),
+    context: SessionHistoryContext,
+  })
+  .strict();
+
 export const SessionSnapshotFrame = z
   .object({
     type: z.literal("session_snapshot"),
-    session_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
     seq: z.number().int().min(1),
     boot_id: z.string().optional(),
+    has_earlier: z.boolean(),
+    has_later: z.boolean(),
+    next_before: z.string().min(47).max(47).regex(/^hp1_[A-Za-z0-9_-]{43}$/).optional(),
+    next_after: z.string().min(47).max(47).regex(/^hp1_[A-Za-z0-9_-]{43}$/).optional(),
+    page_info: SessionHistoryPageInfo,
     reason: z.enum(["cursor_ahead", "retention_exceeded", "unknown_position", "boot_mismatch"]).optional(),
+    secret_requests: z.array(SessionStateSecretRequest).max(1000).optional(),
   })
   .strict();
 
 export const CatchUpCompleteFrame = z
   .object({
     type: z.literal("catch_up_complete"),
-    session_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
     seq: z.number().int().min(1),
     boot_id: z.string().optional(),
-    mode: z.enum(["incremental", "snapshot"]),
+    mode: z.enum(["incremental", "snapshot", "live_only"]),
   })
   .strict();
 
 export const UserMessageFrame = z
   .object({
+    room_ref: RoomRef.optional(),
     type: z.literal("user_message"),
-    session_id: z.string().min(1).max(128),
+    session_id: z.string().min(1).max(255),
     id: z.string().min(1),
     client_message_id: z.string().min(1).max(128).optional(),
     content: z.string().max(5242880),
@@ -15655,16 +20509,60 @@ export const UserMessageFrame = z
     .strict()).optional(),
     timestamp: z.string(),
     agent_id: z.string().optional(),
+    participant: ChatParticipant.optional(),
     seq: z.number().int().min(1).optional(),
+  })
+  .strict();
+
+export const AgentCreatedFrame = z
+  .object({
+    type: z.literal("agent_created"),
+    agent_id: z.string().min(1).max(128),
+  })
+  .strict();
+
+export const MailPanelObserverFrame = z
+  .object({
+    type: z.literal("mail_panel_observer"),
+    action: z.enum(["open", "close"]),
+    observer_id: z.string().min(1),
+    workspace_id: z.string().min(1),
+  })
+  .strict();
+
+export const MailPanelObserverAckFrame = z
+  .object({
+    type: z.literal("mail_panel_observer_ack"),
+    action: z.enum(["open", "close"]),
+    observer_id: z.string().min(1),
+    workspace_id: z.string().min(1),
+  })
+  .strict();
+
+export const MailPanelObserverErrorFrame = z
+  .object({
+    type: z.literal("mail_panel_observer_error"),
+    observer_id: z.string().min(1).optional(),
+    workspace_id: z.string().min(1).optional(),
+    code: z.enum(["unauthorized_workspace", "malformed_frame"]),
+    error: z.string(),
   })
   .strict();
 
 // ── WS frame discriminated union ─────────────────────────────────────────────
 
 export const WsFrame = z.discriminatedUnion("type", [
+  SecretRequestFrame,
+  SecretRequestResolvedFrame,
+  RoomEntryFrame,
+  RoomMemberStateFrame,
+  AttachRoomFrame,
+  RoomSnapshotFrame,
+  RoomMetaFrame,
   AuthFrame,
   MessageFrameBase,
   CancelFrame,
+  RedirectFrame,
   PingFrame,
   PongFrame,
   AttachSessionFrame,
@@ -15686,9 +20584,13 @@ export const WsFrame = z.discriminatedUnion("type", [
   ReplayErrorFrame,
   ToolResultProjectionFrame,
   RateLimitFrame,
+  ProviderRetryFrame,
+  ProviderStatusFrame,
+  ContextWindowNoticeFrame,
+  ProviderFallbackFrame,
+  ProviderFallbackNote,
   LibraryChangedFrame,
   MediaFrame,
-  AgentSwitchedFrame,
   ToolApprovalRequiredFrame,
   ToolApprovalResolvedFrame,
   AskUserQuestionFrame,
@@ -15697,12 +20599,10 @@ export const WsFrame = z.discriminatedUnion("type", [
   SystemOverloadFrame,
   ReplayWarningFrame,
   CancelStageFrame,
-  SessionCloseAckFrame,
   SessionModeUpdateFrame,
   SessionModeUpdatedFrame,
   DevicePairingRequestFrame,
   WhatsAppPairingFrame,
-  SessionCloseFrame,
   WhatsAppPairingSubscribeFrame,
   NotificationFrame,
   BrowserAttachFrame,
@@ -15726,6 +20626,7 @@ export const WsFrame = z.discriminatedUnion("type", [
   PlanStatusFrame,
   JudgeVerdictFrame,
   BrowserHandoverNoticeFrame,
+  HelperEventFrame,
   GoalOutcomeFrame,
   KnowledgeIndexProgressFrame,
   BrowserInputOfferFrame,
@@ -15735,6 +20636,10 @@ export const WsFrame = z.discriminatedUnion("type", [
   SessionSnapshotFrame,
   CatchUpCompleteFrame,
   UserMessageFrame,
+  AgentCreatedFrame,
+  MailPanelObserverFrame,
+  MailPanelObserverAckFrame,
+  MailPanelObserverErrorFrame,
 ]);
 
 export type WsFrameType = z.infer<typeof WsFrameType>;

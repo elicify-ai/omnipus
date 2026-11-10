@@ -321,6 +321,11 @@ properties:
           the PlanSupervisor waits on an armed supervision wake before that
           attempt counts as spent (global default
           `planning.supervision_turn_timeout_seconds`, 600 s).
+          It is a minimum observation interval counted from the wake
+          (wake_at), and it is never evaluated while that supervision turn
+          is still in flight — so it never stops a running review. A review
+          that runs longer than the interval is judged as soon as it ends;
+          there is no extra grace after it settles.
         example: 600
       supervision_max_attempts:
         type: integer

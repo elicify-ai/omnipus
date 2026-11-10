@@ -1,3 +1,7 @@
+// L1 amendment §1.2 R6 / §1.5: root chat replaces modal workspace scope.
+// All resolution memory, deduplication and workspace metadata assertions retained.
+// SUPERSESSION (Train 3, amendment section 1 / bundle B3): snapshot restores
+// are FULL entries (the pre-B3 Deny-only stub is retired).
 // Store-level tests for server-confirmed approval resolution and workspace
 // scope (UAT 2026-09-14: a resolved approval's dialog stayed stuck and showed
 // in other workspaces). See src/store/toolApproval.ts's header for the design.
@@ -6,15 +10,15 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { act } from 'react'
 import {
   useToolApprovalStore,
-  isApprovalInScope,
   RESOLVED_APPROVAL_MEMORY,
 } from './toolApproval'
-import type { WsSessionStateFrame, WsToolApprovalRequiredFrame } from '@/lib/ws'
+import type { SessionStateFrame, ToolApprovalRequiredFrame } from '@/lib/ws'
+import * as approvalModule from './toolApproval'
 
 function requiredFrame(
   id: string,
-  extra: Partial<WsToolApprovalRequiredFrame> = {},
-): WsToolApprovalRequiredFrame {
+  extra: Partial<ToolApprovalRequiredFrame> = {},
+): ToolApprovalRequiredFrame {
   return {
     type: 'tool_approval_required',
     approval_id: id,
@@ -31,13 +35,18 @@ function requiredFrame(
 
 function snapshot(
   entries: Array<{ id: string; workspace_id?: string }>,
-): WsSessionStateFrame {
+): SessionStateFrame {
   return {
     type: 'session_state',
     user_id: 'user-1',
     emitted_at: new Date().toISOString(),
     pending_approvals: entries.map((e) => ({
       approval_id: e.id,
+      // Bundle B3: the snapshot requires the full request identity; derive
+      // deterministic fields from the id so every call site keeps its shape.
+      tool_call_id: `call-${e.id}`,
+      turn_id: `turn-${e.id}`,
+      args: {},
       session_id: 'sess-x',
       tool_name: 'write_file',
       agent_id: 'agent-x',
@@ -99,9 +108,11 @@ describe('markResolved — a server-confirmed resolution removes the approval fo
     act(() => {
       useToolApprovalStore.getState().reconcileWithSessionState(snapshot([{ id: 'appr-closed' }]))
     })
-    // The agent is still waiting server-side, so it must come back (as a stub).
+    // The agent is still waiting server-side, so it must come back — and
+    // bundle B3 restores the FULL approvable identity, not a Deny-only stub.
     expect(ids()).toEqual(['appr-closed'])
-    expect(useToolApprovalStore.getState().queue[0].toolCallId).toBe('')
+    expect(useToolApprovalStore.getState().queue[0].toolCallId).toBe('call-appr-closed')
+    expect(useToolApprovalStore.getState().queue[0].turnId).toBe('turn-appr-closed')
   })
 
   it('marking the same id twice records it once', () => {
@@ -144,13 +155,18 @@ describe('workspace scope', () => {
     expect(useToolApprovalStore.getState().queue[0].workspaceId).toBe('ws-b')
   })
 
+  // Amendment §1.2 R6: "chat whose session id equals root_session_id
+  // (or session_id when root_session_id is omitted)". Workspace metadata is
+  // still preserved above, but no longer grants visibility by itself.
   it.each([
-    { approvalWs: 'ws-a', active: 'ws-a', shown: true, why: 'same workspace' },
-    { approvalWs: 'ws-a', active: 'ws-b', shown: false, why: 'another workspace' },
-    { approvalWs: undefined, active: 'ws-b', shown: true, why: 'approval belongs to no workspace' },
-    { approvalWs: 'ws-a', active: null, shown: true, why: 'no active workspace (all workspaces)' },
-    { approvalWs: undefined, active: null, shown: true, why: 'neither side scoped' },
-  ])('isApprovalInScope: $why → $shown', ({ approvalWs, active, shown }) => {
-    expect(isApprovalInScope({ workspaceId: approvalWs }, active)).toBe(shown)
+    { sessionId: 'acting', rootSessionId: 'main-a', active: 'main-a', shown: true, why: 'owning root, even across workspaces' },
+    { sessionId: 'acting', rootSessionId: 'main-a', active: 'main-b', shown: false, why: 'another chat in the same workspace' },
+    { sessionId: 'acting', rootSessionId: undefined, active: 'acting', shown: true, why: 'omitted root uses acting session' },
+    { sessionId: 'acting', rootSessionId: 'main-a', active: null, shown: false, why: 'no viewed chat never grants global scope' },
+    { sessionId: 'acting', rootSessionId: undefined, active: null, shown: false, why: 'neither side workspace-scoped still needs a chat' },
+  ])('L1 §1.2 R6: owning-chat scope: $why → $shown', ({ sessionId, rootSessionId, active, shown }) => {
+    const api = approvalModule as unknown as { approvalChatId?: (entry: { sessionId: string; rootSessionId?: string }) => string }
+    expect(typeof api.approvalChatId, 'BLOCKED: approvalChatId not implemented — required by amendment R6 / K7').toBe('function')
+    expect(api.approvalChatId!({ sessionId, rootSessionId }) === active).toBe(shown)
   })
 })

@@ -30,6 +30,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // --- helpers ---
@@ -74,6 +76,12 @@ func postToolApproval(
 // Traces to: tool-registry-redesign-spec.md FR-027
 func TestREST_GetTools_FullSnapshot(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
+	// FR-125: the listing reads the central builtin registry, populated at
+	// boot from the builtin metadata catalogue.
+	api.builtinRegistry = tools.NewBuiltinRegistry()
+	for _, tl := range tools.GeneralBuiltinMetadata() {
+		require.NoError(t, api.builtinRegistry.RegisterBuiltin(tl))
+	}
 
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/tools", nil)
 	r = withAdminRole(r)
@@ -242,31 +250,6 @@ func TestREST_GetAgentTools_ManifestTierValues(t *testing.T) {
 	for name, tier := range tierByName {
 		assert.True(t, validTiers[tier], "tool %q has invalid manifest_tier %q", name, tier)
 	}
-}
-
-// --- REST: GET /api/v1/tools/builtin → 404 ---
-
-// TestREST_GetBuiltinTools_Returns404 verifies that the deprecated builtin catalog
-// endpoint returns HTTP 404 and an error body.
-// BDD: Given any caller,
-// When GET /api/v1/tools/builtin is called,
-// Then 404 with a JSON error body.
-// Traces to: tool-registry-redesign-spec.md FR-029
-func TestREST_GetBuiltinTools_Returns404(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-
-	r := httptest.NewRequest(http.MethodGet, "/api/v1/tools/builtin", nil)
-	r = withAdminRole(r)
-	w := httptest.NewRecorder()
-	api.HandleBuiltinToolsDeprecated(w, r)
-
-	assert.Equal(t, http.StatusNotFound, w.Code, "GET /api/v1/tools/builtin must return 404")
-
-	var resp map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Contains(t, resp, "error", "response must have an 'error' field")
-	errMsg, _ := resp["error"].(string)
-	assert.Contains(t, strings.ToLower(errMsg), "use", "error must mention the replacement endpoint")
 }
 
 // --- REST: POST /api/v1/tool-approvals auth checks ---

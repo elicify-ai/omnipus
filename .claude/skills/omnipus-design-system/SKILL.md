@@ -271,7 +271,7 @@ any new control with adjacent narrow targets.
 
 ## 13. Running the gates, in order
 
-Full inventory, `scripts/design-system-locks/` (9 scripts):
+Full inventory, `scripts/design-system-locks/` (12 scripts):
 
 | Script | Proves |
 |---|---|
@@ -284,6 +284,14 @@ Full inventory, `scripts/design-system-locks/` (9 scripts):
 | `status.mjs` | Status-token literals are registered, not invented. |
 | `coverage.mjs` | The export → catalog → manifest → story → executed-check chain (rule 9) is unbroken. |
 | `audit.mjs` | Orchestrates all of the above; hard-blocking, no `continue-on-error`. |
+| `current-checkpoint.mjs` | Prints the enforced checkpoint from `design-system/enforcement/contract.json` (`currentCheckpoint`) — the one place it is read, never a hard-coded literal. |
+| `lint.mjs` | `npm run lint:design-system-locks`: runs `policy.mjs` + `audit.mjs` without the coverage half; any failed step exits non-zero. |
+| `print-audit-errors.mjs` | Prints only `report.errors` plus one count line from an audit report; exit 1 on errors, 2 on a missing/malformed report. |
+
+**Local, before hand-back:** `npm run lint:design-system-locks` — the scanner half of the
+audit, no Storybook/browser evidence needed; on failure it prints only the errors plus one
+count line. Run it first, before the CI job (below) runs the same scanners with the
+Storybook/Playwright evidence on top.
 
 CI job `design-system` (`.github/workflows/pr.yml`) runs, in this order — later steps
 depend on files earlier steps produce:
@@ -359,6 +367,33 @@ for them yourself — and nothing catches a job with no catalogued component at 
 ever being named or exported, a copy-to-clipboard handler re-typed in each file. Nothing
 currently scans for cross-file markup duplication; that gap is closed by the grep step
 above, done by whoever is about to add the Nth instance of a job, not by CI.
+
+## 15. Tests and stories are scanned — a new one with raw controls needs its own boundary entry
+
+The audit scans test and story files like any other source. A new `.test.tsx`/`.spec.tsx`
+or `.stories.tsx` file that renders a raw control (`<button>`,
+`React.createElement('button')`, …) fails the audit until that exact file is registered as
+a reviewed boundary in `design-system/enforcement/ledger.json` (`path` + `kind: "test" |
+"story"` + `reason`) — or until the mock comes from the shared AssistantUI test stand-in
+`src/test/assistantUiMock.tsx` (`createAssistantUiMock`) instead of being hand-rolled. Registrations are per-file: the audit refuses
+blanket registrations — a folder path or a `*`/`?` wildcard fires `blanket-directory`
+("reviewed boundary path is not an exact file") — and a `kind` that doesn't match the
+path's suffix fires `invalid-reviewed-boundary`. When the audit goes red, read
+`report.errors` in `test-results/design-system-audit.json` — the `debt`,
+`appliedExceptions`, and `appliedBoundaries` lists are accepted entries, not failures — and
+run `npm run lint:design-system-locks` before hand-back: the local lock half of the audit
+(the scanners, no Storybook/browser evidence needed), which on failure prints only the
+errors plus one count line.
+
+**Enforced by** `scripts/design-system-locks/audit.mjs`: a new test/story file with raw
+controls and no matching boundary fires `new-debt` (CI's "Design system lock audit" job red —
+before that job existed, PR #912 was exactly this); a folder/wildcard boundary path fires `blanket-directory`;
+`npm run lint:design-system-locks` runs the scanner half locally.
+
+## 16. Avoid inline styles
+
+Avoid inline styles (`style={...}` in JSX, `style="..."` in markup) in Omnipus's own app
+code. Use design-system classes and tokens instead.
 
 ## Escape hatches, all of them
 

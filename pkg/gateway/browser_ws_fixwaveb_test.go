@@ -178,7 +178,7 @@ func TestBrowserWS_ReadLoop_StaysResponsiveWhileViewportHandlerRuns(t *testing.T
 	conn := dialBrowserTestWS(t, srv)
 	t.Cleanup(func() { _ = conn.Close() })
 	sendWSAuthFrameDevMode(t, conn)
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := primaryChatAgent(al.GetRegistry())
 	require.NotNil(t, agent)
 	require.NoError(t, conn.WriteJSON(generated.BrowserAttachFrame{
 		Type:      string(generated.WsFrameTypeBrowserAttach),
@@ -330,11 +330,17 @@ func TestBrowserWS_WorkQueue_SerializesOrdersAndCoalesces(t *testing.T) {
 
 // TestBrowserWS_WorkQueue_SupersedesAJobNotYetStarted pins the coalescing
 // window explicitly: a job is supersedable from the moment it is queued until
-// the worker actually picks it up, NOT only once something else is running.
-// That is what makes a burst of browser_viewport frames arriving faster than
-// the worker drains them cost one resize rather than one per frame — and it
-// is safe for browser_attach too, because the newest attach is the only one
-// whose commit the attachEpoch would accept anyway.
+// the worker actually picks it up. That is what makes a burst of
+// browser_viewport frames arriving faster than the worker drains them cost one
+// resize rather than one per frame — and it is safe for browser_attach too,
+// because the newest attach is the only one whose commit the attachEpoch would
+// accept anyway.
+//
+// "Not yet started" is made deterministic by keeping the single worker busy
+// inside a gated job: submit spawns its worker goroutine immediately, so
+// without that barrier the worker may legitimately dequeue the first viewport
+// before the second is submitted, and that job is then no longer supersedable
+// (it has started). Racing the worker proves nothing about coalescing.
 func TestBrowserWS_WorkQueue_SupersedesAJobNotYetStarted(t *testing.T) {
 	var (
 		q   browserConnWorkQueue
@@ -342,18 +348,22 @@ func TestBrowserWS_WorkQueue_SupersedesAJobNotYetStarted(t *testing.T) {
 		rec workQueueRecorder
 	)
 
-	// Submitted back to back with no started-signal in between, so the second
-	// submit races (and must win against) a first job the worker may not have
-	// dequeued yet.
+	started := make(chan struct{})
+	gate := make(chan struct{})
+	q.submit(&wg, workKindAttach, rec.job("barrier", started, gate))
+	<-started // the worker is busy; everything submitted next is queued, not started
+
 	q.submit(&wg, workKindViewport, rec.job("viewport-first", nil, nil))
 	q.submit(&wg, workKindViewport, rec.job("viewport-second", nil, nil))
+
+	close(gate)
 	wg.Wait()
 
 	order, _ := rec.snapshot()
 	require.NotContains(t, order, "viewport-first",
 		"a viewport frame the worker had not started yet must be superseded by the newer one, "+
 			"never run in addition to it")
-	require.Equal(t, []string{"viewport-second"}, order)
+	require.Equal(t, []string{"barrier", "viewport-second"}, order)
 }
 
 // TestBrowserWS_WorkQueue_CloseDropsQueuedJobs pins the close() contract
@@ -609,23 +619,34 @@ func TestSharedMediaConn_ConfiguredPortTaken_FallsBackToNextFreePort(t *testing.
 // direction: the explicitly configured port stays the FIRST choice, because it
 // is the only port the operator has declared to their provider/firewall.
 func TestSharedMediaConn_ConfiguredPortFree_BindsExactlyThatPort(t *testing.T) {
-	// Take a port, then release it — a cheap way to name a port that is
-	// almost certainly free right now.
-	probe, err := net.ListenPacket("udp", ":0")
-	require.NoError(t, err)
-	free := mediaConnPort(t, probe)
-	require.NoError(t, probe.Close())
+	// Draw/close/rebind race: the window between the probe's close and the
+	// production bind can hand the port to another test binary. Redraw —
+	// bounded — until the bind lands exactly on a freshly drawn port; the
+	// oracle (an available configured port is bound exactly) is unchanged.
+	for attempt := 1; attempt <= 5; attempt++ {
+		free := drawFreeUDPPort(t, 5)
 
-	cfg := &config.Config{}
-	cfg.Tools.Browser.WebRTCMediaUDPPort = free
+		cfg := &config.Config{}
+		cfg.Tools.Browser.WebRTCMediaUDPPort = free
 
-	h := &BrowserWSHandler{}
-	conn := h.sharedMediaConn(cfg)
-	require.NotNil(t, conn)
-	t.Cleanup(func() { _ = conn.Close() })
+		h := &BrowserWSHandler{}
+		conn := h.sharedMediaConn(cfg)
+		if conn == nil {
+			t.Logf("attempt %d: the production bind failed on the freshly drawn port %d — redrawing", attempt, free)
+			continue
+		}
+		if mediaConnPort(t, conn) != free {
+			t.Logf("attempt %d: port %d was taken before the bind — redrawing", attempt, free)
+			_ = conn.Close()
+			continue
+		}
+		t.Cleanup(func() { _ = conn.Close() })
 
-	assert.Equal(t, free, mediaConnPort(t, conn),
-		"an available configured port must be bound exactly — never quietly moved")
+		assert.Equal(t, free, mediaConnPort(t, conn),
+			"an available configured port must be bound exactly — never quietly moved")
+		return
+	}
+	t.Fatal("TestSharedMediaConn_ConfiguredPortFree_BindsExactlyThatPort: no freshly drawn port stayed free through the production bind in 5 attempts")
 }
 
 // TestSharedMediaConn_Unconfigured_ReturnsNil pins the pre-ADR-062 default:

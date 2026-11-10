@@ -1,0 +1,348 @@
+//go:build (linux || darwin || windows) && !mipsle
+
+// Omnipus - Ultra-lightweight personal AI agent
+// License: MIT
+// Copyright (c) 2026 Omnipus contributors
+
+package whatsapp
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"sync/atomic"
+
+	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/store/sqlstore"
+
+	"github.com/elicify-ai/omnipus/pkg/channels"
+	"github.com/elicify-ai/omnipus/pkg/logger"
+)
+
+// nativeLifecycle is one captured resource, not an authority or lookup by name.
+// Client/container/attemptID are written under c.mu, then frozen by the work join.
+// err is read only after done closes, including by retained attempt handles.
+type nativeLifecycle struct {
+	ctx       context.Context
+	cancel    context.CancelFunc
+	client    *whatsmeow.Client
+	container *sqlstore.Container
+	attemptID string
+	once      sync.Once
+	done      chan struct{}
+	err       error
+	// liveClient mirrors client for the stop path that must not take c.mu
+	// before Disconnect (a reconnect may hold it waiting on the channel order).
+	liveClient atomic.Pointer[whatsmeow.Client]
+}
+
+// nativeStopMark records the run context a stop has begun for (#1675).
+type nativeStopMark struct{ ctx context.Context }
+
+func (c *WhatsAppNativeChannel) beginNativeStart(ctx context.Context) (*nativeLifecycle, error) {
+	c.reconnectMu.Lock()
+	defer c.reconnectMu.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if previous := c.lifecycle; previous != nil {
+		select {
+		case <-previous.done:
+			if previous.err != nil {
+				return nil, previous.err
+			}
+		default:
+			return nil, fmt.Errorf("the previous WhatsApp client is still running or stopping")
+		}
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	resource := &nativeLifecycle{ctx: runCtx, cancel: cancel, done: make(chan struct{})}
+	c.lifecycle, c.runCtx, c.runCancel = resource, runCtx, cancel
+	c.stopping.Store(false)
+	c.reconnecting = false
+	c.loggingOut = false
+	c.logoutWake = nil
+	c.wg.Add(1) // Start, including initialization and its first connect, joins before final disposal
+	return resource, nil
+}
+
+// stopNative initiates cancellation once; the caller's deadline only bounds its
+// wait. Disconnect can itself wait behind ConnectContext's library socket lock,
+// so both disconnects and the join run in the retained finalizer, not the caller.
+//
+// Order (#1675): the library's read pump runs on the run context. Cancelling it
+// first makes the read pump close the frame socket on its own goroutine while
+// our Disconnect's NoiseSocket.Stop writes the socket's disconnect callback
+// without the library's frame lock - a data race inside whatsmeow. With no
+// connect in progress, Disconnect therefore runs first: Stop clears the
+// callback and closes the frame socket under that lock, so the read pump's own
+// close comes after it and finds the socket already closed. Only a connect in
+// progress keeps cancel-first, because there Disconnect would wait behind
+// ConnectContext's socket lock until the dial ends.
+func (c *WhatsAppNativeChannel) stopNative(ctx context.Context, resource *nativeLifecycle, interrupt bool) error {
+	resource.once.Do(func() {
+		// This captured context is immutable and needs no native/order lock.
+		// A reconnect may hold those locks while waiting for a config writer,
+		// so even one-time bookkeeping belongs off the caller's deadline path.
+		c.nativeStopMark.Store(&nativeStopMark{ctx: resource.ctx})
+		if c.connectsInFlight.Load() > 0 {
+			if resource.cancel != nil {
+				resource.cancel()
+			}
+			go c.beginNativeStop(resource, interrupt)
+			return
+		}
+		go func() {
+			if client := resource.liveClient.Load(); client != nil {
+				client.Disconnect()
+			}
+			if resource.cancel != nil {
+				resource.cancel()
+			}
+			c.beginNativeStop(resource, interrupt)
+		}()
+	})
+	select {
+	case <-resource.done:
+		return resource.err
+	case <-ctx.Done():
+		return fmt.Errorf("the WhatsApp client did not finish stopping: %w", ctx.Err())
+	}
+}
+
+// beginNativeStop retains the existing Add/Wait synchronization: stopping is
+// set under reconnectMu before disposeNative joins work. Only this once-owned
+// goroutine may wait for native locks or the channel order during setup.
+func (c *WhatsAppNativeChannel) beginNativeStop(resource *nativeLifecycle, interrupt bool) {
+	c.reconnectMu.Lock()
+	c.mu.Lock()
+	attemptID, store, instance := resource.attemptID, c.attempts, c.instance
+	if c.lifecycle == resource {
+		c.stopping.Store(true)
+		if attemptID == "" {
+			attemptID = c.attemptID
+			resource.attemptID = attemptID
+		}
+		if attemptID != "" {
+			if c.unfinishedTeardowns == nil {
+				c.unfinishedTeardowns = make(map[string]*nativeLifecycle)
+			}
+			c.unfinishedTeardowns[attemptID] = resource
+		}
+		if c.attemptID == attemptID {
+			c.attemptID = ""
+		}
+	}
+	c.mu.Unlock()
+	c.reconnectMu.Unlock()
+	c.disposeNative(resource, store, instance, attemptID, interrupt)
+}
+
+func (c *WhatsAppNativeChannel) disposeNative(resource *nativeLifecycle, store *channels.PairingAttempts, instance, attemptID string, interrupt bool) {
+	var replacement channels.PairingAttempt
+	if store != nil && attemptID != "" {
+		rec, _ := store.Attempt(instance, attemptID)
+		if interrupt || rec.Phase == channels.PairingPhaseStopping && rec.Outcome == channels.PairingOutcomeInterrupted {
+			if captured, applied := store.BeginResourceTeardown(instance, attemptID); applied {
+				replacement = captured
+				c.emitAttempt(attemptID, channels.PairingStatusError, "", channels.PairingStopPendingMessage)
+			}
+		}
+	}
+	c.mu.Lock()
+	client := resource.client
+	c.mu.Unlock()
+	if client != nil {
+		client.Disconnect()
+	}
+	c.wg.Wait()
+	// Initialization and every connect have now returned. Retain this exact
+	// client through a FINAL disconnect: a late success can follow the first.
+	c.mu.Lock()
+	client, container := resource.client, resource.container
+	c.mu.Unlock()
+	if client != nil {
+		client.Disconnect()
+	}
+	if container != nil {
+		if err := container.Close(); err != nil {
+			resource.err = fmt.Errorf("WhatsApp session-store disposal failed: %w", err)
+			logger.ErrorCF("whatsapp", "Client cleanup unfinished; resolve the session-store error before restarting pairing",
+				map[string]any{"error": err.Error(), "channel_id": instance})
+		}
+	}
+	c.mu.Lock()
+	if c.lifecycle == resource {
+		if resource.err == nil && c.client == client {
+			c.client, c.container = nil, nil
+		}
+		c.reconnectFailing.Store(false) // a stopped channel is not reconnecting
+		c.SetRunning(false)
+		// gate r4 R4-T2: an attempt-scoped teardown that completed cleanly
+		// leaves the connector idle but alive — its successor attempt must be
+		// able to activate, and a later disable/reload stop must still capture
+		// and tear down the CURRENT attempt, so the consumed lifecycle is
+		// cleared and the stopping latch released. A teardown that failed, or
+		// a channel-level stop (interrupt), keeps the latch and the captured
+		// resource; the next Start owns recovery.
+		if !interrupt && resource.err == nil {
+			c.stopping.Store(false)
+			c.lifecycle = nil
+		}
+	}
+	c.mu.Unlock()
+	var completed channels.PairingAttempt
+	var finished bool
+	if replacement.AttemptID != "" {
+		completed, finished = store.FinishReplacement(instance, replacement.AttemptID, replacement.StopGeneration, resource.err)
+	}
+	// The interrupted notice is published BEFORE done releases the Stop caller:
+	// a caller that moves on (Retry, restart) must never overtake it and leave
+	// the chat on the stopping notice. The stopping notice above already runs
+	// on this goroutine before done, so this adds no new lock dependency.
+	if finished {
+		c.emitAttempt(completed.AttemptID, channels.PairingStatusError, "", channels.PairingInterruptedMessage)
+	}
+	close(resource.done) // cancellation + known work + final disposal, never just a timeout
+}
+
+// connectNative is shared by initial pairing, linked starts, reconnect and
+// repair. The library receives the lifecycle context, never BackgroundEventCtx.
+func (c *WhatsAppNativeChannel) connectNative(client *whatsmeow.Client) error {
+	return c.connectNativeUnlessLoggedOut(client, nil)
+}
+
+// errLoggedOutDuringReconnect refuses a reconnect dial once a logout has
+// reached the channel (#1687 A2).
+var errLoggedOutDuringReconnect = errors.New("the WhatsApp device was logged out during a reconnect")
+
+// connectNativeUnlessLoggedOut is connectNative for the reconnect loop: it
+// refuses to dial once loggedOut is closed. The check runs under reconnectMu,
+// where eventHandler closes loggedOut, so a logout either precedes this dial
+// (refused) or arrives while the dial is already in flight.
+func (c *WhatsAppNativeChannel) connectNativeUnlessLoggedOut(client *whatsmeow.Client, loggedOut <-chan struct{}) error {
+	c.reconnectMu.Lock()
+	select {
+	case <-loggedOut: // a nil channel never fires
+		c.reconnectMu.Unlock()
+		return errLoggedOutDuringReconnect
+	default:
+	}
+	c.mu.Lock()
+	if !c.nativeClientCurrentLocked(client) {
+		c.mu.Unlock()
+		c.reconnectMu.Unlock()
+		return channels.ErrPairingConflict
+	}
+	ctx := c.runCtx
+	c.wg.Add(1)
+	c.mu.Unlock()
+	c.reconnectMu.Unlock()
+	defer c.wg.Done()
+	// Increment, THEN read the stop mark (stopNative does the reverse): one of
+	// the two always sees the other (#1675, see stopNative).
+	c.connectsInFlight.Add(1)
+	defer c.connectsInFlight.Add(-1)
+	if mark := c.nativeStopMark.Load(); mark != nil && mark.ctx == ctx {
+		return channels.ErrPairingConflict
+	}
+	err := client.ConnectContext(ctx)
+	c.mu.Lock()
+	current := c.nativeClientCurrentLocked(client)
+	c.mu.Unlock()
+	if !current {
+		client.Disconnect() // the captured late success, never a channel-name lookup
+		if err == nil {
+			return channels.ErrPairingConflict
+		}
+	}
+	return err
+}
+
+// Caller holds the native mutex. Native -> channel order is the permitted lock
+// direction; no guard holder calls native code. A post-connect check is not a
+// publication permit: Start validates again at its actual running-state effect.
+func (c *WhatsAppNativeChannel) nativeClientCurrentLocked(client *whatsmeow.Client) bool {
+	if c.client != client || c.stopping.Load() || c.runCtx == nil || c.runCtx.Err() != nil {
+		return false
+	}
+	if c.attempts == nil {
+		return true
+	}
+	order := c.attempts.LockChannel(c.instance)
+	defer order.Unlock()
+	if c.originConfig != nil && !order.MatchesConfig(c.originConfig) {
+		return false
+	}
+	return order.AcceptsResource(c.resourceGeneration, c.attemptID)
+}
+
+func (c *WhatsAppNativeChannel) publishNativeRunning(client *whatsmeow.Client) bool {
+	c.reconnectMu.Lock()
+	defer c.reconnectMu.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.client != client || c.stopping.Load() || c.runCtx.Err() != nil {
+		return false
+	}
+	if c.attempts != nil {
+		order := c.attempts.LockChannel(c.instance)
+		defer order.Unlock()
+		if !order.AcceptsResource(c.resourceGeneration, c.attemptID) || c.originConfig != nil && !order.MatchesConfig(c.originConfig) {
+			return false
+		}
+	}
+	// Running first, then the window clears: a lock-free Send never sees
+	// not-running with the window already closed.
+	c.SetRunning(true)
+	c.reconnectFailing.Store(false)
+	return true
+}
+
+// reconnectingReason is the availability reason while our managed reconnect is
+// failing (#1687 founder Q3 B). People read it inside "Saved, but the
+// connection is not running: …." and the agent's Channels block "(…)", so it
+// is a lower-case fragment with no final full stop (omnipus-voice: neutral
+// voice outside a chat, what happened plus what Omnipus is doing, no jargon).
+const reconnectingReason = "the connection to WhatsApp was lost and is being re-established automatically"
+
+// NotRunningReason implements channels.NotRunningReasoner: the WhatsApp
+// reconnect reason while our managed reconnect is failing, else empty (the
+// manager then uses its shared reasons).
+func (c *WhatsAppNativeChannel) NotRunningReason() string {
+	if c.reconnectFailing.Load() && !c.stopping.Load() && !c.IsRunning() {
+		return reconnectingReason
+	}
+	return ""
+}
+
+// markReconnectFailed shows an unexpected failure of our managed reconnect
+// (#1687 F1) through the channel's existing status surface: the running flag
+// that publishNativeRunning sets and manager.GetStatus/Availability report.
+// While a reconnect keeps failing the channel reports not running; the loop
+// keeps retrying and its next success re-publishes running. Nothing restarts
+// the channel on this flag: reconnectWithBackoff stays the only reconnect
+// owner. In this window (reconnectFailing) Send keeps the temporary class the
+// manager retries (founder Q1 B) and Availability carries reconnectingReason
+// (founder Q3 B).
+//
+// A conflict (superseded client, or Stop's nativeStopMark) or a cancelled run
+// is intentional, not a failure. The flag is written under the same lock order
+// and currency checks as publishNativeRunning, so it never races Stop's own
+// disposal: once beginNativeStop has set stopping, this writes nothing.
+func (c *WhatsAppNativeChannel) markReconnectFailed(client *whatsmeow.Client, err error) {
+	if errors.Is(err, channels.ErrPairingConflict) || errors.Is(err, context.Canceled) {
+		return
+	}
+	c.reconnectMu.Lock()
+	defer c.reconnectMu.Unlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.client != client || c.stopping.Load() || c.runCtx == nil || c.runCtx.Err() != nil {
+		return
+	}
+	// The window opens before running drops: a lock-free Send never sees
+	// not-running without it.
+	c.reconnectFailing.Store(true)
+	c.SetRunning(false)
+}

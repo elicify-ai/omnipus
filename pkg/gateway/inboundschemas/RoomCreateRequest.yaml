@@ -1,0 +1,36 @@
+title: RoomCreateRequest
+description: >
+  Body of POST /api/v1/workspaces/{id}/rooms (spec omnipus-system-agent
+  K24; FR-161, FR-172). Creates a squad or an ad-hoc room; the team room is
+  never created through this route. Semantic rules enforced by the handler
+  with inbound validation on and off: a squad needs a name; at least two
+  distinct agents, all members of the workspace.
+type: object
+required:
+  - kind
+  - agent_ids
+additionalProperties: false
+properties:
+  kind:
+    type: string
+    enum:
+      - squad
+      - adhoc
+  name:
+    type: string
+    minLength: 1
+    maxLength: 80
+    description: Required for a squad.
+  agent_ids:
+    type: array
+    minItems: 2
+    maxItems: 256
+    items:
+      type: string
+      minLength: 1
+      maxLength: 128
+  origin_session_id:
+    type: string
+    minLength: 1
+    maxLength: 255
+    description: The main chat the room is started from, when any.

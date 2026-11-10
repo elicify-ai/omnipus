@@ -1,0 +1,27 @@
+title: WorkflowStart
+description: >
+  Optional target data on a MessageFrame that starts an Omnipus workflow
+  from a screen (spec omnipus-system-agent K8; FR-012). Target data only —
+  it names which workflow and which workspace the user picked; it is never
+  an instruction and grants nothing. The server treats it as data for the
+  Omnipus turn (landing 1, WU-10). Mirrored inline in
+  contracts/asyncapi.yaml (components.schemas.WorkflowStart) — keep both
+  copies in sync by hand.
+type: object
+required:
+  - workflow
+  - target_workspace_id
+additionalProperties: false
+properties:
+  workflow:
+    type: string
+    enum:
+      - W1
+      - W18
+    description: >
+      W1 — create an agent in a workspace; W18 — set up a whole team.
+  target_workspace_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: The workspace the workflow targets.

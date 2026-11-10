@@ -80,7 +80,7 @@ func TestRunTurn_CoreTeamMember_WritesToWorkspaceSharedDir(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	defer al.Close()
-	defaultAgent := al.registry.GetDefaultAgent()
+	defaultAgent := al.registry.primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
@@ -93,7 +93,7 @@ func TestRunTurn_CoreTeamMember_WritesToWorkspaceSharedDir(t *testing.T) {
 
 	const sessionKey = "test-session-coreteam-reroot"
 	ctx := context.Background()
-	finalContent, err := al.ProcessDirect(ctx, "please write proof.txt for me", sessionKey)
+	finalContent, err := al.processDirectPrimaryForTest(ctx, "please write proof.txt for me", sessionKey)
 	require.NoError(t, err, "ProcessDirect must succeed")
 	assert.Equal(t, "done", finalContent)
 
@@ -162,7 +162,7 @@ func TestRunTurn_WorkspacelessAgentRefused(t *testing.T) {
 	al, err := NewAgentLoop(cfg, msgBus, provider)
 	require.NoError(t, err, "NewAgentLoop must succeed")
 	defer al.Close()
-	defaultAgent := al.registry.GetDefaultAgent()
+	defaultAgent := al.registry.primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
@@ -172,7 +172,7 @@ func TestRunTurn_WorkspacelessAgentRefused(t *testing.T) {
 
 	const sessionKey = "test-session-workspaceless-refused"
 	ctx := context.Background()
-	_, procErr := al.ProcessDirect(ctx, "please write proof.txt for me", sessionKey)
+	_, procErr := al.processDirectPrimaryForTest(ctx, "please write proof.txt for me", sessionKey)
 	require.Error(t, procErr, "a turn for an agent that is a member of no workspace must be refused")
 	assert.True(t, errors.Is(procErr, ErrAgentNotWorkspaceMember),
 		"refusal error must wrap ErrAgentNotWorkspaceMember, got: %v", procErr)
@@ -233,7 +233,7 @@ func TestRunTurn_WorkspacelessAgentRefused_ViaProcessMessage(t *testing.T) {
 	al, err := NewAgentLoop(cfg, msgBus, provider)
 	require.NoError(t, err, "NewAgentLoop must succeed")
 	defer al.Close()
-	defaultAgent := al.registry.GetDefaultAgent()
+	defaultAgent := al.registry.primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
@@ -247,7 +247,7 @@ func TestRunTurn_WorkspacelessAgentRefused_ViaProcessMessage(t *testing.T) {
 	// metadata workspace_id either, so the refusal isn't merely "explicit id
 	// not found" but the identity-only FindForAgentPreferring path (mirrors
 	// a plain channel message with no workspace binding).
-	_, _, procErr := al.processMessage(ctx, bus.InboundMessage{
+	_, _, procErr := al.processMessageAsPrimaryForTest(ctx, bus.InboundMessage{
 		Channel:    "cli",
 		ChatID:     "direct",
 		Content:    "please write proof.txt for me",
@@ -312,7 +312,7 @@ func TestRunTurn_WorkspacelessAgentRefused_EmitsTypedError(t *testing.T) {
 	sub := al.SubscribeEvents(32)
 	t.Cleanup(func() { al.UnsubscribeEvents(sub.ID) })
 
-	_, procErr := al.ProcessDirect(context.Background(), "hello", "test-session-workspaceless-visible")
+	_, procErr := al.processDirectPrimaryForTest(context.Background(), "hello", "test-session-workspaceless-visible")
 	require.Error(t, procErr, "a turn for an agent that is a member of no workspace must be refused")
 	assert.True(t, errors.Is(procErr, ErrAgentNotWorkspaceMember),
 		"refusal error must wrap ErrAgentNotWorkspaceMember, got: %v", procErr)
@@ -427,7 +427,7 @@ func TestRunTurn_MemberWorkDirUnavailable_EmitsAndPersistsWorkspaceUnavailable(t
 	sub := al.SubscribeEvents(32)
 	t.Cleanup(func() { al.UnsubscribeEvents(sub.ID) })
 
-	_, procErr := al.ProcessDirect(context.Background(), "hello", "test-session-workdir-blocked")
+	_, procErr := al.processDirectPrimaryForTest(context.Background(), "hello", "test-session-workdir-blocked")
 	require.Error(t, procErr, "a member whose work dir cannot be opened must be refused")
 	assert.True(t, errors.Is(procErr, ErrWorkspaceWorkDirUnavailable),
 		"refusal must wrap ErrWorkspaceWorkDirUnavailable, not membership; got: %v", procErr)
@@ -510,7 +510,7 @@ func TestRunTurn_MemberGetsWorkspaceWorkDir(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	defer al.Close()
-	defaultAgent := al.registry.GetDefaultAgent()
+	defaultAgent := al.registry.primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
@@ -519,7 +519,7 @@ func TestRunTurn_MemberGetsWorkspaceWorkDir(t *testing.T) {
 	})
 
 	ctx := context.Background()
-	finalContent, _, procErr := al.processMessage(ctx, bus.InboundMessage{
+	finalContent, _, procErr := al.processMessageAsPrimaryForTest(ctx, bus.InboundMessage{
 		Channel:    "cli",
 		ChatID:     "direct",
 		Content:    "please write explicit.txt for me",
@@ -586,7 +586,7 @@ func TestRunTurn_CoreTeamMember_CannotEscapeWorkToWorkspaceRoot(t *testing.T) {
 
 	const sessionKey = "test-session-coreteam-escape-attempt"
 	ctx := context.Background()
-	finalContent, err := al.ProcessDirect(ctx, "please write ../AGENT.md for me", sessionKey)
+	finalContent, err := al.processDirectPrimaryForTest(ctx, "please write ../AGENT.md for me", sessionKey)
 	require.NoError(
 		t,
 		err,

@@ -1,5 +1,12 @@
 # ADR-055: PlanSupervisor — a System Agent that adjudicates and corrects running plans
 
+## Amended 2026-10-07 — session-core founder decisions
+
+**Dated correction of D14 owner equation.** Task creator, actual starter, captured completion recipients and steering parent are distinct. The MAIN starter's main and MAIN assignee's main receive each completed run, deduplicated and captured at start. Existing plan ownership/supervision gates remain.
+
+Authority and complete clause/reuse map: **Session core with an agent address book: reuse one standing session, one archive and the existing execution paths**, `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/docs/internal/architecture/ADR-20261006-session-core-with-an-agent-address-book.md`::Decision / Earlier ADR clauses amended; founder ledger `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/CONTINUATION-20261005.md` plus the binding October 7 answers through 15:55. This is a design amendment, not a claim that production implements it. Conflicting older prescriptions below are historical within this scope; unrelated decisions and historical evidence remain unchanged.
+
+
 > **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
 
 - **Status:** Proposed (v3 — revised after a second `/grill-spec` BLOCK, 41 findings)
@@ -483,6 +490,8 @@ This corrects a heuristic v1 applied too broadly: *"put invariants in the store,
 handler"* holds when **all** writers should obey the invariant. Here the engine must be
 exempt, so the **external mutation boundary (REST) is the correct place** — and it is
 already guarded.
+
+> **Correction 2026-10-14 — gated idle expiry ([PR #1311](https://github.com/elicify-ai/omnipus/pull/1311)::Decisions recorded, team-lead 2026-10-14, “Idle expiry is gated, not removed”; [issue #1306](https://github.com/elicify-ai/omnipus/issues/1306)).** The earlier retirement of the **idle-expiry Bounds rationale** is superseded. Retain `planning.idle_expiry_days`, existing per-plan overrides, expiry outcomes and the existing operator ownership/mutability rule below. Expiry applies only to genuinely wedged/abandoned plans when the addressed session, its own turn, descendants, queued work and any pending cron-lane dispatch are no longer in flight; active member tasks, plan-owner/supervisor turns and Judge rounds must not be expired underneath. A registered wedged turn remains busy; use explicit Stop. Once all work settles, the existing activity clock may already permit expiry on the next eligible sweep; do not reset it merely because the gate held. A supervisor's work has no lifetime deadline, and the retained supervision observation interval stays wake-based and unevaluated while its turn is in flight, with no new post-settlement clock. Judge timers/result-bearing conclusions and count/round bounds remain unchanged. Original sources are pinned to `7c148ca00`: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/pkg/agent/plan_engine.go`::dispatchPlanTurn / idleExpireOneLocked and `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/pkg/agent/plan_engine_supervise.go`::evaluateSupervisionDeadlineLocked / supervisionTurnInFlight. This is the corrected requirement, not certification of the integrated gates.
 
 **Do not touch `Bounds`.** The same code comment records a deliberate exemption: *"an
 operator may legitimately want to extend a running plan's idle-expiry/judge-round

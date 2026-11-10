@@ -2,6 +2,8 @@
 
 **Created**: 2026-07-17
 **Status**: Draft — revised after Round-2 `/grill-spec` (6-lens adversarial grill, 2026-07-17)
+
+Status: Draft
 **Input**: [ADR-046](../architecture/ADR-046-unified-filesystem-workspace-model.md) (Proposed — grilled 2026-07-16). Design session + `/grill-spec` (×2) + `/plan-spec` produced the decisions under Clarifications. The Round-2 grill findings and their dispositions are recorded in the **Grill Review (Round 2)** appendix; all confirmed findings are folded into the body below.
 
 > Scope note: this spec covers **all three phases** (P1 foundation, P2 policy/app-layer, P3 kernel sandbox). Phase tags on each user story are for **implementation sequencing**, not scope reduction. **P3 is gated behind a mandatory de-risking spike** (see US-7 and Ambiguity #1) — the two Round-2 BLOCK findings on the kernel path (latched-singleton sandbox; Landlock has no deny primitive) must be resolved in that spike before P3 task breakdown. P1/P2 are unaffected and may proceed.

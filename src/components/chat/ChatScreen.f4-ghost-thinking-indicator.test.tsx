@@ -33,101 +33,34 @@
  * ChatScreen.issue-617-replay-outcome.test.tsx (ResizeObserver forced
  * undefined, GenericToolCall left unmocked so the real "Failed" label
  * renders).
+ *
+ * Regression-proof dispatch (2026-10-09): seed ONLY an empty streaming reply.
+ * ToolSearch state must arrive through useChatStore.handleFrame, not through a
+ * fixture's tool_calls field. The real store, foreground projection, fallback
+ * row, visibility gate and phase indicator are all left unmocked. A missing
+ * live-call projection must therefore fail these tests instead of being hidden
+ * by a pre-populated message. The fallback phase case also drives start/result
+ * after mounting and checks Thinking -> Working -> Thinking.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, act, screen } from '@testing-library/react'
+import { describe, it, expect, assert, vi, beforeEach, afterEach } from 'vitest'
+import { render, act, screen, within } from '@testing-library/react'
 import * as React from 'react'
 import { useChatStore, makeBucketMessages } from '@/store/chat'
-import type { ChatMessage, PositionedToolCall } from '@/store/chat'
+import type { ChatMessage } from '@/store/chat'
+import type { ToolCallStartFrame, ToolCallResultFrame } from '@/lib/api/generated/asyncapi-types'
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
+import { useChatPreferencesStore } from '@/store/chatPreferences'
+import { useToolApprovalStore } from '@/store/toolApproval'
 
-vi.mock('@assistant-ui/react', () => {
-  return {
-    useThreadViewportStore: () => ({ getState: () => ({ isAtBottom: true }) }),
-    ThreadPrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Viewport: React.forwardRef(
-        (
-          { children, className, style, 'data-testid': testId }: {
-            children?: React.ReactNode; className?: string; style?: React.CSSProperties; 'data-testid'?: string
-          },
-          ref: React.Ref<HTMLDivElement>,
-        ) => React.createElement('div', { ref, className, style, 'data-testid': testId }, children),
-      ),
-      Messages: () => null,
-    },
-    MessagePrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Parts: () => null,
-    },
-    ComposerPrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Input: ({ disabled, placeholder, className, onChange, onKeyDown, onBlur }: {
-        disabled?: boolean; placeholder?: string; className?: string;
-        onChange?: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
-        onKeyDown?: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
-        onBlur?: () => void;
-      }) =>
-        React.createElement('textarea', {
-          disabled, placeholder, className, onChange, onKeyDown, onBlur,
-          'data-testid': 'composer-input',
-        }),
-      Send: ({ disabled, children, className, 'data-testid': testId }: {
-        disabled?: boolean; children?: React.ReactNode; className?: string; 'data-testid'?: string
-      }) =>
-        React.createElement('button', { type: 'button', disabled, className, 'data-testid': testId ?? 'chat-send' }, children),
-      AddAttachment: ({ disabled, children, className }: { disabled?: boolean; children?: React.ReactNode; className?: string }) =>
-        React.createElement('button', { type: 'button', disabled, className, 'data-testid': 'add-attachment' }, children),
-      Attachments: () => null,
-    },
-    AttachmentPrimitive: {
-      Root: ({ children, className }: { children?: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Name: () => null,
-      Remove: ({ children, className }: { children?: React.ReactNode; className?: string }) =>
-        React.createElement('button', { type: 'button', className }, children),
-      Thumb: () => null,
-    },
-    MessagePartPrimitive: { InProgress: () => null },
-    ActionBarPrimitive: {
-      Root: ({ children }: { children: React.ReactNode }) => React.createElement('div', {}, children),
-      Copy: ({ children }: { children: React.ReactNode }) => React.createElement('span', {}, children),
-    },
-    AuiIf: () => null,
-    useComposerRuntime: () => ({
-      getState: () => ({ text: '' }),
-      setText: vi.fn(),
-      addAttachment: vi.fn(),
-      subscribe: vi.fn(() => vi.fn()),
-    }),
-    useMessage: () => ({
-      id: 'msg_streaming',
-      role: 'assistant',
-      status: { type: 'running' },
-      content: [],
-    }),
-    useAttachment: vi.fn(() => ({
-      id: 'att-default',
-      name: 'file.txt',
-      contentType: 'text/plain',
-      file: undefined,
-      status: { type: 'complete' },
-      content: [],
-    })),
-    makeAssistantToolUI: () => () => null,
-  }
-})
+vi.mock('@assistant-ui/react', async () => (await import('@/test/assistantUiMock')).createAssistantUiMock())
 
 vi.mock('@tanstack/react-query', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-query')>()
   return {
     ...actual,
-    useQuery: () => ({ data: [], isError: false, refetch: vi.fn() }),
+    useQuery: (opts: { queryKey?: readonly unknown[] }) => ({ data: queryDataWithEmptyHistory(opts?.queryKey), isError: false, refetch: vi.fn() }),
     useMutation: () => ({ mutate: vi.fn(), isPending: false }),
     useQueryClient: () => ({ invalidateQueries: vi.fn(), removeQueries: vi.fn() }),
   }
@@ -139,12 +72,14 @@ vi.mock('@tanstack/react-router', () => ({
   Link: ({ children }: { children: React.ReactNode }) => children,
 }))
 
+import { emptyHistoryPage, queryDataWithEmptyHistory, type HistoryReadPort } from '../../../tests/chat-history-paging/legacy-fixtures'
+
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([]),
-    fetchSessionMessages: vi.fn().mockResolvedValue([]),
+    fetchSessionMessages: vi.fn<HistoryReadPort>(async (sessionId) => emptyHistoryPage(sessionId)),
     fetchAboutInfo: vi.fn().mockResolvedValue({ preview_port: 5001 }),
     createSession: vi.fn(),
     uploadFiles: vi.fn(),
@@ -171,8 +106,6 @@ vi.mock('./IframePreview', () => ({ IframePreview: () => null }))
 vi.mock('./markdown-text', () => ({
   MarkdownText: () => React.createElement('div', {}),
 }))
-vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
-vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
 vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 vi.mock('@/lib/memory-observer', () => ({
@@ -202,6 +135,7 @@ function seedBucket(messages: ChatMessage[]): void {
         toolCalls: {},
         toolCallOrder: [],
         textAtToolCallStart: {},
+        toolCallOwnerMessageId: {},
         sessionTokens: 0,
         sessionCost: 0,
         rateLimitEvent: null,
@@ -218,6 +152,73 @@ function seedBucket(messages: ChatMessage[]): void {
   }))
 }
 
+function seedEmptyStreamingReply(messageId: string): void {
+  seedBucket([{
+    id: messageId,
+    role: 'assistant',
+    content: '',
+    timestamp: new Date().toISOString(),
+    status: 'streaming',
+    isStreaming: true,
+    agentId: 'agent-1',
+  }])
+}
+
+function startToolSearch(callId: string, messageId: string): void {
+  // These are the generated wire fields. Tool frames carry no message_id:
+  // the production reducer correlates call_id to the existing assistant reply.
+  const frame: ToolCallStartFrame = {
+    type: 'tool_call_start',
+    session_id: SID,
+    call_id: callId,
+    tool: 'ToolSearch',
+    params: { name: 'foo' },
+    agent_id: 'agent-1',
+  }
+  act(() => useChatStore.getState().handleFrame(frame))
+
+  const bucket = useChatStore.getState().sessionsById[SID]
+  expect(bucket.toolCalls[callId], 'real start frame must register a running ToolSearch').toEqual({
+    id: callId,
+    call_id: callId,
+    tool: 'ToolSearch',
+    params: { name: 'foo' },
+    status: 'running',
+  })
+  expect(bucket.toolCallOrder, 'start frame must register this call exactly once').toEqual([callId])
+  assert.isDefined(bucket.toolCallOwnerMessageId, 'real start frame must register tool call ownership')
+  expect(bucket.toolCallOwnerMessageId[callId], 'running call must belong to the seeded reply').toBe(messageId)
+  expect(bucket.messageOrder, 'start frame must not create a different reply').toEqual([messageId])
+  expect(bucket.messagesById[messageId].content).toBe('')
+  expect(bucket.messagesById[messageId].isStreaming).toBe(true)
+}
+
+function resolveToolSearch(callId: string, status: ToolCallResultFrame['status'], result: unknown): void {
+  const frame: ToolCallResultFrame = {
+    type: 'tool_call_result',
+    session_id: SID,
+    call_id: callId,
+    tool: 'ToolSearch',
+    status,
+    result,
+    // Deliberately no error string: status:error alone must make F4 visible.
+  }
+  act(() => useChatStore.getState().handleFrame(frame))
+
+  const call = useChatStore.getState().sessionsById[SID].toolCalls[callId]
+  expect(call.status, 'real result frame must settle the same call').toBe(status)
+  expect(call.result, 'real result frame must retain its payload').toEqual(result)
+  expect(call.error, 'F4 must not depend on an error string').toBeUndefined()
+}
+
+function plainReply(messageId: string): HTMLElement {
+  expect(globalThis.ResizeObserver, 'force the real PlainMessageList fallback').toBeUndefined()
+  const reply = screen.getByTestId('assistant-message')
+  expect(reply).toHaveAttribute('data-message-id', messageId)
+  expect(reply.closest('[data-index]'), 'plain reply must not be a virtualized row').toBeNull()
+  return reply
+}
+
 beforeEach(() => {
   useConnectionStore.setState({
     isConnected: true,
@@ -231,8 +232,9 @@ beforeEach(() => {
   // Forces PlainMessageList (ResizeObserver-unavailable fallback), which
   // renders every message — including an in-flight one — through
   // VirtualAssistantMessageRow. See file header.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ;(globalThis as any).ResizeObserver = undefined
+  vi.stubGlobal('ResizeObserver', undefined)
+  useChatPreferencesStore.getState().setVerboseChatEnabled(false)
+  useToolApprovalStore.setState({ queue: [], resolvedIds: [] })
 
   useSessionStore.setState({ activeSessionId: SID, activeAgentId: 'agent-1' })
   act(() => {
@@ -245,60 +247,83 @@ afterEach(() => {
 })
 
 describe('F4 — ghost ThinkingIndicator over a visible failed ToolSearch row', () => {
-  it('a streaming message whose only content is a failed ToolSearch (status:error, no error string) shows the "Failed" row and does NOT also show the ghost thinking indicator', async () => {
-    const now = new Date().toISOString()
-    const assistantMsg: ChatMessage = {
-      id: 'msg_ghost',
-      role: 'assistant',
-      content: '',
-      timestamp: now,
-      status: 'streaming',
-      isStreaming: true,
-      tool_calls: [
-        { id: 'tc_ghost', tool: 'ToolSearch', params: { name: 'foo' }, status: 'error' } as PositionedToolCall,
-      ],
-    }
-    seedBucket([assistantMsg])
+  it('a streaming message whose only content is a failed ToolSearch (status:error, no error string) shows the "Failed" row and keeps the working indicator while the turn is still streaming', async () => {
+    const messageId = 'msg_ghost'
+    seedEmptyStreamingReply(messageId)
 
     await act(async () => {
       render(<ChatScreen />)
     })
+    plainReply(messageId)
+    startToolSearch('tc_ghost', messageId)
+    // Error results may be null per ToolCallResultFrame; the status alone is
+    // the F4 error oracle. No populated tool_calls fixture or explicit bake.
+    resolveToolSearch('tc_ghost', 'error', null)
 
-    // The real failed-row render — ToolSearch's shouldRenderToolCall case
-    // forces visibility on error, so this must be visible either way.
+    // The real failed row must render. Founder UI feedback 2026-10-11
+    // (point 1b) supersedes the old "ghost indicator" oracle here: the
+    // indicator never disappears while the reply is working, and this
+    // message is STILL streaming (isStreaming stays true through the failed
+    // call) — the working indicator stays pinned below the Failed card. The
+    // old rule described the retired separate ThinkingIndicator, whose empty
+    // placeholder could sit above a legitimately visible row; a settled
+    // reply still paints no indicator and no status word (covered in
+    // ChatScreen.reply-label.test.tsx and the wave1 pack).
     expect(screen.getByText('Failed')).toBeInTheDocument()
-
-    // The bug: hasVisibleToolCalls computed false (via the stale `!!tc.error`
-    // proxy) even though the row above is visible, so showEmptyPlaceholder
-    // was also true and rendered a ghost "Thinking…" alongside it.
-    expect(screen.queryByText(THINKING_TEXT_RE)).toBeNull()
+    expect(screen.getByTestId('reply-status-indicator')).toBeInTheDocument()
+    expect(screen.getByText(THINKING_TEXT_RE)).toBeInTheDocument()
   })
 
   it('control: a streaming message whose only content is a SUCCESSFUL ToolSearch call correctly shows the ghost thinking indicator (ToolSearch stays hidden by default, so the message legitimately has no visible content yet)', async () => {
-    const now = new Date().toISOString()
-    const assistantMsg: ChatMessage = {
-      id: 'msg_ghost_ok',
-      role: 'assistant',
-      content: '',
-      timestamp: now,
-      status: 'streaming',
-      isStreaming: true,
-      tool_calls: [
-        { id: 'tc_ghost_ok', tool: 'ToolSearch', params: { name: 'foo' }, status: 'success', result: { ok: true } } as PositionedToolCall,
-      ],
-    }
-    seedBucket([assistantMsg])
+    const messageId = 'msg_ghost_ok'
+    seedEmptyStreamingReply(messageId)
 
     await act(async () => {
       render(<ChatScreen />)
     })
+    plainReply(messageId)
+    startToolSearch('tc_ghost_ok', messageId)
+    resolveToolSearch('tc_ghost_ok', 'success', { ok: true })
 
-    // ToolSearch with no error is hidden by default (toolVisibility.ts) —
-    // there is genuinely no visible content yet, so the thinking indicator
-    // is the CORRECT render here, not a ghost. This pins the boundary: the
-    // F4 fix must not force ToolSearch visible unconditionally.
+    // Successful ToolSearch remains hidden. Keep the original boundary
+    // assertions and also check the stable accessible Thinking phase label.
     expect(screen.queryByText('Failed')).toBeNull()
     expect(screen.queryByText('Done')).toBeNull()
     expect(screen.getByText(THINKING_TEXT_RE)).toBeInTheDocument()
+    expect(screen.getByText('Thinking', { exact: true })).toBeInTheDocument()
+  })
+})
+
+describe('plain-list fallback — real tool frame phase transition', () => {
+  it('shows Working while the correlated tool executes, then Thinking after tool_call_result', async () => {
+    const messageId = 'msg_fallback_phase'
+    const callId = 'tc_fallback_phase'
+    seedEmptyStreamingReply(messageId)
+
+    await act(async () => {
+      render(<ChatScreen />)
+    })
+    const reply = within(plainReply(messageId))
+    const fallback = reply.getByTestId('reply-status-fallback').textContent
+    expect(fallback, 'capture a real fallback phrase before tool execution').toMatch(THINKING_TEXT_RE)
+    expect(reply.getByText('Thinking', { exact: true })).toHaveClass('sr-only')
+    expect(reply.getByTestId('reply-status-indicator')).toHaveAttribute('data-agent-status-motion', 'thinking')
+
+    startToolSearch(callId, messageId)
+    // Founder replacement contract: motion changes; the chosen visual fallback
+    // and accessible label do not. Assert phase independently of random copy.
+    // Soft failures still fail CI but let the real result transition run too.
+    expect.soft(
+      reply.getByTestId('reply-status-indicator'),
+      'real tool_call_start must select Working motion on the same plain reply',
+    ).toHaveAttribute('data-agent-status-motion', 'working')
+    expect.soft(reply.getByTestId('reply-status-fallback').textContent, 'tool start must preserve the chosen fallback').toBe(fallback)
+    expect.soft(reply.getByText('Thinking', { exact: true }), 'accessible copy stays stable during execution').toHaveClass('sr-only')
+
+    resolveToolSearch(callId, 'success', { ok: true })
+    expect(reply.getByTestId('reply-status-indicator'), 'real tool_call_result must restore Thinking motion').toHaveAttribute('data-agent-status-motion', 'thinking')
+    expect(reply.getByTestId('reply-status-fallback').textContent, 'tool result must preserve the original fallback').toBe(fallback)
+    expect(reply.getByText('Thinking', { exact: true })).toHaveClass('sr-only')
+    expect(useChatStore.getState().sessionsById[SID].messagesById[messageId].isStreaming).toBe(true)
   })
 })

@@ -44,18 +44,18 @@ import (
 // existence answers the first question and its own criteria list answers
 // the second, so the two can no longer disagree even in principle, and the
 // predicate covers a task-owned goal as well as a chat-owned one.
-func goalTurnRecordState(al *AgentLoop, ts *turnState) (holds bool, rec *goal.Goal) {
+func goalTurnRecordState(al *AgentLoop, ts *turnState) (holds bool, rec *goal.Goal, err error) {
 	if al == nil || ts == nil || ts.opts.TranscriptStore == nil || ts.opts.TranscriptSessionID == "" {
-		return false, nil
+		return false, nil, nil
 	}
-	g := activeGoalForSession(ts.opts.TranscriptSessionID)
-	if g == nil {
-		return false, nil
+	g, err := activeGoalForSession(ts.opts.TranscriptSessionID)
+	if err != nil {
+		return false, nil, err
 	}
-	if len(g.Criteria) > 0 {
-		return false, nil
+	if g == nil || len(g.Criteria) > 0 {
+		return false, nil, nil
 	}
-	return true, g
+	return true, g, nil
 }
 
 // goalForcingNarrowTools returns the ADR-088 D3 Layer 1 narrowed tool pair:
@@ -105,6 +105,8 @@ const goalForcingWebChannel = "webchat"
 // provider exclusion (isCLIBridgedProvider/ToolChoiceForcingCapable) is
 // gone too — narrowing applies identically on every provider now.
 type goalForcingDecision struct {
+	// readErr refuses request assembly when the goal predicate is unknown.
+	readErr error
 	// layer1 is true when the request's tool surface was narrowed to
 	// {set_goal[, AskUserQuestion]}: the base predicate holds and set_goal
 	// itself is not policy-denied. No tool-choice is ever forced (D3
@@ -189,7 +191,11 @@ func (al *AgentLoop) evaluateGoalForcing(
 	ts *turnState, iteration int, policyFiltered []tools.Tool,
 ) goalForcingDecision {
 	var d goalForcingDecision
-	holds, rec := goalTurnRecordState(al, ts)
+	holds, rec, err := goalTurnRecordState(al, ts)
+	if err != nil {
+		d.readErr = err
+		return d
+	}
 	if !holds {
 		// Covers both "not a goal turn at all" and "a PRIOR request's
 		// set_goal already wrote the record" — goalTurnRecordState reads
@@ -335,7 +341,14 @@ func (al *AgentLoop) bumpGoalQuestionRoundsUsed(d goalForcingDecision) {
 // OTHER ephemeral note in that enumeration is measured), and remains safe
 // either way: it can only ever match or over-estimate, never under-count.
 func (al *AgentLoop) goalRubricNoteForBudget(ts *turnState) string {
-	holds, _ := goalTurnRecordState(al, ts)
+	holds, _, err := goalTurnRecordState(al, ts)
+	if err != nil {
+		al.reportGoalReadError(ts.opts.TranscriptSessionID, "rubric budget lookup", err)
+		// This is only a token estimate, not permission to send a request.
+		// Count the note conservatively; prepareToolSurface independently
+		// refuses a request whose goal state cannot be read.
+		holds = true
+	}
 	isWebchat := ts != nil && ts.channel == goalForcingWebChannel
 	return buildGoalRubricInjectionNote(holds, isWebchat)
 }

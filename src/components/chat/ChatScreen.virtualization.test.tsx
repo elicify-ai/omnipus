@@ -16,6 +16,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, act } from '@testing-library/react'
 import * as React from 'react'
 import { useChatStore, makeBucketMessages } from '@/store/chat'
+import { emptySessionState } from '@/store/chat/session'
 import type { ChatMessage } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
@@ -23,6 +24,13 @@ import { useConnectionStore } from '@/store/connection'
 // ── Mock AssistantUI ───────────────────────────────────────────────────────────
 // Captured here so tests can assert autoScroll delegation without re-implementing scroll math.
 let lastViewportAutoScroll: boolean | undefined
+let lastViewportScrollTriggers: {
+  runStart: boolean | undefined
+  initialize: boolean | undefined
+  threadSwitch: boolean | undefined
+} | undefined
+let viewportAtBottom = true
+const viewportStore = { getState: () => ({ isAtBottom: viewportAtBottom }) }
 
 // Reference the module-level `React` import (not an in-factory `require('react')`)
 // — the latter was corrupting the shared React module binding across test files
@@ -31,104 +39,49 @@ let lastViewportAutoScroll: boolean | undefined
 // files (e.g. useRunningActivity.test.ts / ActivityBar.test.tsx) run in the same
 // batch. vi.mock factories may reference top-level `import` bindings safely —
 // only same-file local `const`/`let` declarations have the hoisting restriction.
-vi.mock('@assistant-ui/react', () => {
-  return {
-    useThreadViewportStore: () => ({ getState: () => ({ isAtBottom: true }) }),
-    ThreadPrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Viewport: React.forwardRef(
-        (
-          {
-            children,
-            className,
-            style,
-            autoScroll,
-            'data-testid': testId,
-          }: {
-            children?: React.ReactNode
-            className?: string
-            style?: React.CSSProperties
-            autoScroll?: boolean
-            'data-testid'?: string
-          },
-          ref: React.Ref<HTMLDivElement>
-        ) => {
-          lastViewportAutoScroll = autoScroll
-          return React.createElement('div', { ref, className, style, 'data-testid': testId }, children)
-        }
-      ),
-      Messages: () => null,
-    },
-    MessagePrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Parts: () => null,
-    },
-    ComposerPrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Input: ({ disabled, placeholder, className, onChange, onKeyDown, onBlur }: {
-        disabled?: boolean; placeholder?: string; className?: string;
-        onChange?: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
-        onKeyDown?: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
-        onBlur?: () => void;
-      }) =>
-        React.createElement('textarea', {
-          disabled, placeholder, className, onChange, onKeyDown, onBlur,
-          'data-testid': 'composer-input',
-        }),
-      Send: ({ disabled, children, className, 'data-testid': testId }: {
-        disabled?: boolean; children?: React.ReactNode; className?: string; 'data-testid'?: string
-      }) =>
-        React.createElement('button', { type: 'button', disabled, className, 'data-testid': testId ?? 'chat-send' }, children),
-      AddAttachment: ({ disabled, children, className }: { disabled?: boolean; children?: React.ReactNode; className?: string }) =>
-        React.createElement('button', { type: 'button', disabled, className, 'data-testid': 'add-attachment' }, children),
-      Attachments: () => null,
-    },
-    AttachmentPrimitive: {
-      Root: ({ children, className }: { children?: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Name: () => null,
-      Remove: ({ children, className }: { children?: React.ReactNode; className?: string }) =>
-        React.createElement('button', { type: 'button', className }, children),
-      Thumb: () => null,
-    },
-    MessagePartPrimitive: { InProgress: () => null },
-    ActionBarPrimitive: {
-      Root: ({ children }: { children: React.ReactNode }) => React.createElement('div', {}, children),
-      Copy: ({ children }: { children: React.ReactNode }) => React.createElement('span', {}, children),
-    },
-    AuiIf: () => null,
-    useComposerRuntime: () => ({
-      getState: () => ({ text: '' }),
-      setText: vi.fn(),
-      addAttachment: vi.fn(),
-      subscribe: vi.fn(() => vi.fn()),
-    }),
-    useMessage: () => ({
-      id: 'msg_streaming',
-      role: 'assistant',
-      status: { type: 'running' },
-      content: [],
-    }),
-    useAttachment: vi.fn(() => ({
-      id: 'att-default',
-      name: 'file.txt',
-      contentType: 'text/plain',
-      file: undefined,
-      status: { type: 'complete' },
-      content: [],
-    })),
-    makeAssistantToolUI: () => () => null,
-  }
-})
+vi.mock('@assistant-ui/react', async () => (await import('@/test/assistantUiMock')).createAssistantUiMock({
+  useThreadViewportStore: () => viewportStore,
+  ThreadPrimitive: {
+    Viewport: React.forwardRef(
+              (
+                {
+                  children,
+                  className,
+                  style,
+                  autoScroll,
+                  scrollToBottomOnRunStart,
+                  scrollToBottomOnInitialize,
+                  scrollToBottomOnThreadSwitch,
+                  'data-testid': testId,
+                }: {
+                  children?: React.ReactNode
+                  className?: string
+                  style?: React.CSSProperties
+                  autoScroll?: boolean
+                  scrollToBottomOnRunStart?: boolean
+                  scrollToBottomOnInitialize?: boolean
+                  scrollToBottomOnThreadSwitch?: boolean
+                  'data-testid'?: string
+                },
+                ref: React.Ref<HTMLDivElement>
+              ) => {
+                lastViewportAutoScroll = autoScroll
+                lastViewportScrollTriggers = {
+                  runStart: scrollToBottomOnRunStart,
+                  initialize: scrollToBottomOnInitialize,
+                  threadSwitch: scrollToBottomOnThreadSwitch,
+                }
+                return React.createElement('div', { ref, className, style, 'data-testid': testId }, children)
+              }
+            ),
+  },
+}))
 
 vi.mock('@tanstack/react-query', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-query')>()
   return {
     ...actual,
-    useQuery: () => ({ data: [], isError: false, refetch: vi.fn() }),
+    useQuery: (opts: { queryKey?: readonly unknown[] }) => ({ data: queryDataWithEmptyHistory(opts?.queryKey), isError: false, refetch: vi.fn() }),
     useMutation: () => ({ mutate: vi.fn(), isPending: false }),
     useQueryClient: () => ({ invalidateQueries: vi.fn(), removeQueries: vi.fn() }),
   }
@@ -146,12 +99,14 @@ vi.mock('@tanstack/react-router', () => ({
 // doesn't exercise mentions. The workspaces query stays disabled (no
 // activeWorkspaceId set here), so `fetchWorkspaces` is never actually
 // invoked — this just needs to exist so the module loads.
+import { emptyHistoryPage, queryDataWithEmptyHistory, type HistoryReadPort } from '../../../tests/chat-history-paging/legacy-fixtures'
+
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([]),
-    fetchSessionMessages: vi.fn().mockResolvedValue([]),
+    fetchSessionMessages: vi.fn<HistoryReadPort>(async (sessionId) => emptyHistoryPage(sessionId)),
     fetchAboutInfo: vi.fn().mockResolvedValue({}),
     createSession: vi.fn(),
     uploadFiles: vi.fn(),
@@ -191,12 +146,10 @@ vi.mock('./shiki-highlighter', () => ({
   CopyCodeHeader: () => null,
 }))
 vi.mock('./image-lightbox', () => ({ ImageLightbox: () => null }))
-vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
 // Composer Redesign (variant A1): virtualizer integration tests target the
 // message list, not the composer's picker/model/token sub-components — stub
 // them to null so their workspaces/providers query plumbing doesn't need
 // mocking here.
-vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
 vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 vi.mock('@/lib/memory-observer', () => ({
@@ -220,12 +173,11 @@ function makeMessages(count: number): ChatMessage[] {
 }
 
 function seedStore(messages: ChatMessage[]): void {
-  const bucket = makeBucketMessages(messages)
+  const bucket = { ...emptySessionState(), ...makeBucketMessages(messages) }
   useChatStore.setState((s) => ({
     ...s,
     sessionsById: {
       [SID]: {
-        ...((s.sessionsById ?? {})[SID] ?? {}),
         ...bucket,
         isStreaming: false,
         isReplaying: false,
@@ -243,6 +195,7 @@ function seedStore(messages: ChatMessage[]): void {
       },
     },
     messages: messages,
+    history: bucket.history,
     isStreaming: false,
     isReplaying: false,
     replayCompletedForSession: SID,
@@ -258,8 +211,12 @@ function seedStore(messages: ChatMessage[]): void {
 // assistant-ui's Viewport (useThreadViewportAutoScroll / use-stick-to-bottom)
 // and verified via live browser; the unit test asserts delegation + structure,
 // not scroll math.
+let contentResized: (() => void) | undefined
 class StubResizeObserver {
-  observe() {}
+  constructor(private callback: () => void) {}
+  observe(target: Element) {
+    if (target.parentElement?.getAttribute('data-testid') === 'virtualized-message-list') contentResized = this.callback
+  }
   unobserve() {}
   disconnect() {}
 }
@@ -270,25 +227,126 @@ import { ChatScreen } from './ChatScreen'
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-describe('VirtualizedMessageList', () => {
-  beforeEach(() => {
-    // Reset stores to initial state.
-    useConnectionStore.setState({
-      isConnected: true,
-      liteMode: false,
-      reconnectPhase: null,
-      reconnectAttempt: 0,
-      connectionError: null,
-      connection: null,
+function resetVirtualizedFixture() {
+  // Reset stores to initial state.
+  viewportAtBottom = true
+  contentResized = undefined
+  useConnectionStore.setState({
+    isConnected: true,
+    liteMode: false,
+    reconnectPhase: null,
+    reconnectAttempt: 0,
+    connectionError: null,
+    connection: null,
+  })
+  // Stub ResizeObserver so the component takes the virtualized path rather than
+  // the PlainMessageList fallback (VirtualizedMessageList feature-detects it).
+  vi.stubGlobal('ResizeObserver', StubResizeObserver)
+}
+
+describe('Replay completion scrolling', () => {
+  beforeEach(resetVirtualizedFixture)
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  // R3 oracle: a completed attach lands on the physical bottom, but a person
+  // who scrolled up during loading keeps their position. jsdom has no layout;
+  // provide only the platform's scroll geometry, not our scroll implementation.
+  it.each([true, false])('R3 completion follows the bottom only with existing follow intent (%s)', async (following) => {
+    seedStore(makeMessages(12))
+    viewportAtBottom = following
+    act(() => useChatStore.setState({ isReplaying: true }))
+    const result = render(<ChatScreen />)
+    const el = result.getByTestId('virtualized-message-list')
+    let top = 100
+    Object.defineProperties(el, {
+      scrollHeight: { configurable: true, get: () => 3000 },
+      clientHeight: { configurable: true, get: () => 600 },
+      scrollTop: { configurable: true, get: () => top, set: (value: number) => { top = Math.max(0, Math.min(2400, value)) } },
     })
-    // Stub ResizeObserver so the component takes the virtualized path rather than
-    // the PlainMessageList fallback (VirtualizedMessageList feature-detects it).
-    vi.stubGlobal('ResizeObserver', StubResizeObserver)
+    await act(async () => { useChatStore.setState({ isReplaying: false }); await new Promise(resolve => requestAnimationFrame(resolve)) })
+    expect(el.scrollHeight - el.clientHeight - el.scrollTop).toBe(following ? 0 : 2300)
+    result.unmount()
+    viewportAtBottom = true
   })
 
-  afterEach(() => {
-    vi.unstubAllGlobals()
+  it('R3 keeps following a content-only resize but yields to a real upward scroll', async () => {
+    seedStore(makeMessages(12))
+    const result = render(<ChatScreen />)
+    const el = result.getByTestId('virtualized-message-list')
+    let height = 3000
+    let top = 100
+    Object.defineProperties(el, {
+      scrollHeight: { configurable: true, get: () => height },
+      clientHeight: { configurable: true, get: () => 600 },
+      scrollTop: { configurable: true, get: () => top, set: (value: number) => { top = Math.max(0, Math.min(height - 600, value)) } },
+    })
+    expect(typeof contentResized).toBe('function')
+    await act(async () => { contentResized?.(); await new Promise(resolve => requestAnimationFrame(resolve)) })
+    expect(top).toBe(2400)
+    // A measured content-only shift, with no user scroll, must not lose the
+    // follow preference merely because the viewport now has eight more pixels.
+    height = 3008
+    viewportAtBottom = false
+    await act(async () => { contentResized?.(); await new Promise(resolve => requestAnimationFrame(resolve)) })
+    expect(el.scrollHeight - el.clientHeight - el.scrollTop).toBe(0)
+    top -= 600 // Actual upward movement, unlike the content-only shift above.
+    height += 8
+    await act(async () => { contentResized?.(); await new Promise(resolve => requestAnimationFrame(resolve)) })
+    expect(el.scrollHeight - el.clientHeight - el.scrollTop).toBe(608)
+    result.unmount()
   })
+
+  it('R3 a user scroll between scheduling and painting cancels the queued bottom pin', async () => {
+    seedStore(makeMessages(12))
+    const result = render(<ChatScreen />)
+    const el = result.getByTestId('virtualized-message-list')
+    await act(async () => { await new Promise(resolve => requestAnimationFrame(resolve)) })
+    let top = 2400
+    Object.defineProperties(el, {
+      scrollHeight: { configurable: true, get: () => 3000 },
+      clientHeight: { configurable: true, get: () => 600 },
+      scrollTop: { configurable: true, get: () => top, set: (value: number) => { top = Math.min(2400, value) } },
+    })
+    const queued: FrameRequestCallback[] = []
+    const raf = vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation(callback => { queued.push(callback); return queued.length })
+    try {
+      act(() => contentResized?.())
+      expect(queued).toHaveLength(1)
+      top = 1800
+      viewportAtBottom = false
+      act(() => queued[0](0))
+      expect(el.scrollTop).toBe(1800)
+    } finally {
+      raf.mockRestore()
+      result.unmount()
+    }
+  })
+
+  it('R3 completion preserves real upward movement even before the engine follow flag catches up', async () => {
+    seedStore(makeMessages(12))
+    act(() => useChatStore.setState({ isReplaying: true }))
+    const result = render(<ChatScreen />)
+    const el = result.getByTestId('virtualized-message-list')
+    let top = 100
+    Object.defineProperties(el, {
+      scrollHeight: { configurable: true, get: () => 3000 },
+      clientHeight: { configurable: true, get: () => 600 },
+      scrollTop: { configurable: true, get: () => top, set: (value: number) => { top = Math.min(2400, value) } },
+    })
+    await act(async () => { contentResized?.(); await new Promise(resolve => requestAnimationFrame(resolve)) })
+    expect(top).toBe(2400)
+    el.dispatchEvent(new WheelEvent('wheel', { deltaY: -600, bubbles: true }))
+    top = 1800 // A real upward scroll during loading; the engine flag is still true.
+    await act(async () => { useChatStore.setState({ isReplaying: false }); await new Promise(resolve => requestAnimationFrame(resolve)) })
+    expect(el.scrollTop).toBe(1800)
+    result.unmount()
+  })
+
+})
+
+describe('VirtualizedMessageList', () => {
+  beforeEach(resetVirtualizedFixture)
+  afterEach(() => { vi.unstubAllGlobals() })
 
   it('mounts ≤ 50 DOM nodes for a 1000-message session', async () => {
     const messages = makeMessages(1000)
@@ -414,12 +472,11 @@ describe('VirtualizedMessageList', () => {
       isStreaming: true,
     }
     const allMessages = [...completed, streamingMsg]
-    const bucket = makeBucketMessages(allMessages)
+    const bucket = { ...emptySessionState(), ...makeBucketMessages(allMessages) }
     useChatStore.setState((s) => ({
       ...s,
       sessionsById: {
         [SID]: {
-          ...((s.sessionsById ?? {})[SID] ?? {}),
           ...bucket,
           isStreaming: true,
           isReplaying: false,
@@ -437,6 +494,7 @@ describe('VirtualizedMessageList', () => {
         },
       },
       messages: allMessages,
+      history: bucket.history,
       isStreaming: true,
       isReplaying: false,
       replayCompletedForSession: SID,
@@ -465,6 +523,25 @@ describe('VirtualizedMessageList', () => {
     const scrollEl = container.querySelector('[data-testid="virtualized-message-list"]')
     expect(scrollEl).not.toBeNull()
     expect(lastViewportAutoScroll).toBe(true)
+  })
+
+  it('keeps history placement with its coordinator instead of queuing competing bottom scrolls (#1751)', async () => {
+    // D8 requires one scroll coordinator, including after a reload. The real
+    // AssistantUI engine is exercised by effort.spec.ts S-95; this boundary
+    // guard rejects each duplicate placement trigger without disabling normal
+    // at-bottom content following. Omitted props default to true upstream.
+    seedStore(makeMessages(5))
+    lastViewportAutoScroll = undefined
+    lastViewportScrollTriggers = undefined
+    const result = render(<ChatScreen />)
+    expect(result.getByTestId('virtualized-message-list')).toBeInTheDocument()
+    expect(lastViewportAutoScroll).toBe(true)
+    expect(lastViewportScrollTriggers).toEqual({
+      runStart: false,
+      initialize: false,
+      threadSwitch: false,
+    })
+    result.unmount()
   })
 
   it('renders the live streaming message anchor during streaming', async () => {
@@ -514,12 +591,11 @@ describe('VirtualizedMessageList', () => {
       timestamp: new Date().toISOString(), status: 'streaming', isStreaming: true,
     }
     const allMessages = [userMsg, closedBySteerMsg, steerMsg, postSteerStreamingMsg]
-    const bucket = makeBucketMessages(allMessages)
+    const bucket = { ...emptySessionState(), ...makeBucketMessages(allMessages) }
     useChatStore.setState((s) => ({
       ...s,
       sessionsById: {
         [SID]: {
-          ...((s.sessionsById ?? {})[SID] ?? {}),
           ...bucket,
           isStreaming: true,
           isReplaying: false,
@@ -537,6 +613,7 @@ describe('VirtualizedMessageList', () => {
         },
       },
       messages: allMessages,
+      history: bucket.history,
       isStreaming: true,
       isReplaying: false,
       replayCompletedForSession: SID,

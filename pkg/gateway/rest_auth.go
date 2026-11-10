@@ -239,9 +239,9 @@ var (
 	taskReadLimiter = newReadSizedAPIRateLimiter(240, 1*time.Minute)
 	// /api/v1/providers/{id}/sign-in — 10 requests/minute per IP. ADR-068
 	// FR-008: "rate-limited like the auth endpoints" — matches
-	// reauthLimiter's ceiling. Starting a NEW device-code (or reading a
-	// cli_login instruction) is rare in legitimate use; unlike polling it
-	// has no ongoing-cadence requirement.
+	// reauthLimiter's ceiling. Starting a NEW device-code session is rare
+	// in legitimate use; unlike polling it has no ongoing-cadence
+	// requirement.
 	signInStartLimiter = newAPIRateLimiter(10, 1*time.Minute)
 	// /api/v1/providers/{id}/sign-in/poll — 60 requests/minute per IP. A
 	// DEDICATED, more generous limiter (FR-044 sets no explicit rate but a
@@ -255,24 +255,14 @@ var (
 	// This route looked read-only enough to leave unlimited and is not:
 	// for a device_code provider it reaches the stored-OAuth token source,
 	// which REFRESHES against the vendor when the stored token is within 5
-	// minutes of expiry (ADR-068 FR-046), and for github-copilot it spawns
-	// a bounded Copilot CLI invocation (T068-15) — so an unauthenticated
-	// caller (FR-050 makes it pre-auth reachable while onboarding is
-	// incomplete) could drive outbound vendor traffic or process spawns at
-	// will. Shares signInPollLimiter's ceiling rather than the tighter
-	// start/auth one because the sign-in dialog legitimately re-reads
-	// status alongside every poll. Read-sized: both status routes are GET,
-	// and the ceiling bounds vendor refreshes and CLI spawns, so an
-	// authenticated caller must not get 5x of it.
+	// minutes of expiry (ADR-068 FR-046) — so an unauthenticated caller
+	// (FR-050 makes it pre-auth reachable while onboarding is incomplete)
+	// could drive outbound vendor traffic at will. Shares signInPollLimiter's
+	// ceiling rather than the tighter start/auth one because the sign-in
+	// dialog legitimately re-reads status alongside every poll. Read-sized:
+	// the status routes are GET, and the ceiling bounds vendor refreshes, so
+	// an authenticated caller must not get 5x of it.
 	signInStatusLimiter = newReadSizedAPIRateLimiter(60, 1*time.Minute)
-	// /api/v1/providers/openai-chatgpt/sign-in/import — 10 requests/minute
-	// per IP (M2). This route was called BARE while its four FR-050 siblings
-	// were all wrapped. It is the most write-heavy of the five: every call
-	// re-reads the Codex CLI credential, rewrites the whole encrypted
-	// credentials.json, and re-registers every OAuth value with the
-	// sensitive-value replacer. Matches signInStartLimiter's ceiling — an
-	// import is a one-off operator action with no polling cadence at all.
-	signInImportLimiter = newAPIRateLimiter(10, 1*time.Minute)
 	// DELETE /api/v1/providers/{id}/sign-in — 10 requests/minute per IP
 	// (M2). Also previously bare. Each sign-out nils the process-wide
 	// sensitive-data replacer cache, so the next scrub pays a full
@@ -452,7 +442,16 @@ func (a *restAPI) clientIPWithLiveFallback(r *http.Request) string {
 //
 // A nil onboardingMgr (test constructions only — gateway.go always sets one)
 // is treated as signal 2 satisfied, leaving signals 1 and 3 to decide.
+//
+// The window exists in LOCAL mode only. In platform mode (hosted, desktop)
+// onboarding runs after the platform sign-in (authMode.onboardingWrap), so
+// nothing needs an anonymous caller here, and an open window let anyone who
+// reached a not-yet-signed-in hosted tenant plant a provider endpoint the
+// owner's key would later be sent to. An unknown edition fails closed too.
 func (a *restAPI) preAuthOnboardingWindowOpen(r *http.Request) bool {
+	if config.EditionAuthMode() != config.AuthModeLocal {
+		return false
+	}
 	if a.onboardingStateUnknown {
 		return false
 	}
@@ -931,6 +930,22 @@ func (a *restAPI) HandleLogout(w http.ResponseWriter, r *http.Request) {
 	// (session cookie, else bearer token), so the key matches by construction —
 	// the logout request still has both at this point.
 	a.revokePreviewTokensForSession(r)
+	// Mail preview tokens (MC-43) die with the session for the same reason:
+	// an unauthenticated bearer credential in a URL path must not outlive the
+	// session that minted it. Same key construction, same fail-closed
+	// placement before the config write.
+	if store := a.mailPreviewTokenStoreOf(); store != nil {
+		if key, ok := PreviewSessionKey(r); ok {
+			store.invalidateSession(key)
+		}
+	}
+	// Attachment preview grants (w4, F1) are the same unauthenticated bearer
+	// credential in a URL path — they die with the session too.
+	if grants := a.mailAttachmentTokens.Load(); grants != nil {
+		if key, ok := PreviewSessionKey(r); ok {
+			grants.revokeSession(key)
+		}
+	}
 
 	// A CLI-token-authenticated caller's synthetic "cli" identity is not
 	// backed by any Gateway.Users row (see CLITokenContextKey's doc) — the
@@ -1257,52 +1272,17 @@ func revokeUserToken(userMap map[string]any, presentedToken, presentedID string)
 // 90-second test. Never reassign it outside tests.
 var reloadWaitTimeout = serviceShutdownTimeout + providerReloadTimeout + 30*time.Second
 
-// triggerReloadAndWaitOutcome is triggerReloadAndWait's richer sibling: same
-// trigger-and-poll sequence, but the return additionally distinguishes a
-// CONFIRMED reload (IsReloadPending cleared before the deadline) from one
-// that merely timed out still pending.
-//
-// FIX 4 (HIGH, live re-review): triggerReloadAndWait's plain `error` return
-// made these two outcomes indistinguishable — both returned nil — and all
-// 16 existing call sites across this package treat err == nil as "the
-// change is live," returning 200 accordingly. executeReload (tool-policy
-// validation, credential re-injection, channel restarts) can plausibly
-// exceed the poll window on a busy gateway, so god-mode, global tool
-// policies, rate limits, prompt guard, mailbox, agent CRUD, etc. could all
-// report "applied" while the OLD config was still in force.
-//
-// triggerReloadAndWait itself keeps its EXACT original signature and
-// behavior (confirmed is discarded below; err == nil on both a confirmed
-// reload and an unconfirmed timeout) rather than being changed in place:
-// 15 of its 16 call sites live in files outside this fix's scope (rest.go,
-// rest_god_mode.go, rest_mailbox.go, rest_rate_limits.go,
-// rest_session_scope.go, rest_onboarding.go, rest_prompt_guard.go,
-// rest_tool_policies.go), so changing the shared signature would force a
-// mechanical edit to every one of them just to keep the package compiling.
-// Worse, most respond with a wire type that has no field to carry the
-// distinction at all — HandleChangePassword's own gen.OperationResult
-// (Success/Error/Validation only) is one example; only
-// rest_prompt_guard.go's response type happens to already have a
-// RequiresRestart/Warning slot, and giving the others one would need a
-// contracts/openapi.yaml change (Constraint #8), disproportionate to this
-// fix. triggerReloadAndWaitOutcome exists so a caller that CAN act on the
-// distinction has a real signal to read instead of only nil — today that is
-// HandleChangePassword's own log line (see its call site); a future pass
-// touching one of the other 15 callers can adopt it for that caller's
-// response too.
+// triggerReloadAndWaitOutcome distinguishes an applied reload from a failed
+// rebuild or an unconfirmed timeout. runReloadCycle records the rebuild outcome
+// before clearing pending; clearing pending alone only proves completion.
 func (a *restAPI) triggerReloadAndWaitOutcome() (confirmed bool, err error) {
-	return waitForReloadOutcome(a.agentLoop)
+	return waitForReloadOutcome(a.agentLoop, a.reloadOutcome)
 }
 
-// waitForReloadOutcome is the free-function core of triggerReloadAndWaitOutcome,
-// taking an explicit *agent.AgentLoop instead of a *restAPI receiver so it can
-// also be wired into pkg/sysagent/tools.Deps.WaitForReloadFunc (AgentDeleteTool
-// — see that field's doc comment for why delete_agent needs this synchronous
-// variant rather than the bare async ReloadFunc every other sysagent CRUD tool
-// uses). Behavior is unchanged from before this extraction; restAPI's method
-// above is now a one-line wrapper so all 16 existing REST call sites keep their
-// exact original behavior.
-func waitForReloadOutcome(agentLoop *agent.AgentLoop) (confirmed bool, err error) {
+// waitForReloadOutcome is shared by REST and the sysagent's synchronous reload
+// wait. A failed rebuild returns a fixed error, never the potentially sensitive
+// execution error retained by the tracker. A nil tracker has no recorded outcome.
+func waitForReloadOutcome(agentLoop *agent.AgentLoop, outcome *reloadOutcomeTracker) (confirmed bool, err error) {
 	if err := agentLoop.TriggerReload(); err != nil {
 		if errors.Is(err, agent.ErrReloadNotConfigured) {
 			// Unit-test environment — no reload pipeline wired; nothing is
@@ -1319,12 +1299,11 @@ func waitForReloadOutcome(agentLoop *agent.AgentLoop) (confirmed bool, err error
 			return false, err
 		}
 	}
-	deadline := time.Now().Add(reloadWaitTimeout)
-	for time.Now().Before(deadline) {
-		if !agentLoop.IsReloadPending() {
-			return true, nil
+	if pollReloadPendingClear(agentLoop) {
+		if outcome.lastFailed() {
+			return false, errRegistryRebuildFailed
 		}
-		time.Sleep(50 * time.Millisecond)
+		return true, nil
 	}
 	// Reload may still be running — the exact ambiguity FIX 4 closes.
 	// confirmed=false with a nil error: callers that only check err keep
@@ -1335,11 +1314,61 @@ func waitForReloadOutcome(agentLoop *agent.AgentLoop) (confirmed bool, err error
 	return false, nil
 }
 
-// triggerReloadAndWait triggers a config reload and polls until
-// IsReloadPending() clears (indicating the in-memory config has been updated),
-// up to reloadWaitTimeout.
+// pollReloadPendingClear returns true when IsReloadPending() has cleared
+// (or was already clear), or false when reloadWaitTimeout elapses with the
+// flag still set. Shared between waitForReloadOutcome (trigger-and-wait) and
+// waitForPendingReload (wait-only) so both use the same polling interval and
+// deadline — the agent-picker-freshness fix (#1009) needs both shapes to be
+// deadlined identically because the slow-reload case (issue #571: ~60s under
+// load) hits them in the same way.
+func pollReloadPendingClear(agentLoop *agent.AgentLoop) bool {
+	deadline := time.Now().Add(reloadWaitTimeout)
+	for time.Now().Before(deadline) {
+		if !agentLoop.IsReloadPending() {
+			return true
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return false
+}
+
+// waitForPendingReload blocks until IsReloadPending() clears, or returns an
+// error after reloadWaitTimeout elapses. Unlike waitForReload it does NOT
+// call TriggerReload — it only polls the pending flag. Safe to call from the
+// sysagent create/update publish path (publishAgentActivation) when a reload
+// may already be queued by the closure that fell back to the async
+// reloadTrigger: by the time publishAgentActivation reaches this call, any
+// actually-queued reload is already visible as pending because
+// pkg/gateway/gateway_reload.go::beginReload marks the pending flag (under
+// its own mutex) BEFORE returning on either the "owns the cycle" or the
+// "request recorded, served by the owning cycle" branch.
 //
-// Returns an error when the reload fails to start AND when the wait times out.
+// On the fast path (UpsertAgentFastFunc's closure succeeded inline, nothing
+// queued) the flag is already clear, so this returns IMMEDIATELY — a genuine
+// no-op, not just claimed to be one. waitForReload would NOT be safe here:
+// its first action is TriggerReload, so on the fast path it would
+// unconditionally kick off a fresh, full reload cycle (channels/cron/plan-
+// engine/scheduler restart cascade, the exact ~60s-under-load mechanism
+// issue #571 exists to avoid), just to then wait for it. AgentDeleteTool is
+// the only sysagent tool that genuinely needs that trigger-and-wait shape
+// (see its own doc comment for why delete has no fast path).
+func waitForPendingReload(agentLoop *agent.AgentLoop) error {
+	if pollReloadPendingClear(agentLoop) {
+		return nil
+	}
+	slog.Error("config reload pending flag did not clear within the wait deadline; "+
+		"the change is persisted on disk but is not yet live in memory",
+		"timeout", reloadWaitTimeout)
+	return fmt.Errorf(
+		"config reload did not complete within %s; the change is saved but not yet active",
+		reloadWaitTimeout,
+	)
+}
+
+// triggerReloadAndWait triggers a config reload and waits up to
+// reloadWaitTimeout for completion and a successful recorded rebuild.
+//
+// Returns an error when the reload fails to start, its rebuild fails, or the wait times out.
 // The timeout MUST NOT be swallowed: it used to `return nil`, which told the
 // caller the rebuild had landed when it had not — callers turn that nil into a
 // 201 with no warning (createAgent) or a plain 200 (rotateGatewayToken,
@@ -1353,14 +1382,18 @@ func waitForReloadOutcome(agentLoop *agent.AgentLoop) (confirmed bool, err error
 // full gateway reload pipeline is not wired. Production always configures the
 // reload function during startup.
 func (a *restAPI) triggerReloadAndWait() error {
-	return waitForReload(a.agentLoop)
+	return waitForReload(a.agentLoop, a.reloadOutcome)
 }
 
-// waitForReload is the free-function core of triggerReloadAndWait — see
-// waitForReloadOutcome's doc comment for why this is extracted as a plain
-// function rather than kept as a *restAPI-only method.
-func waitForReload(agentLoop *agent.AgentLoop) error {
-	confirmed, err := waitForReloadOutcome(agentLoop)
+// waitForReload accepts an optional outcome tracker for reload pipelines that
+// record execution results. Both production callers supply the shared tracker;
+// callers without an outcome source retain completion-only observation.
+func waitForReload(agentLoop *agent.AgentLoop, outcomes ...*reloadOutcomeTracker) error {
+	var outcome *reloadOutcomeTracker
+	if len(outcomes) != 0 {
+		outcome = outcomes[0]
+	}
+	confirmed, err := waitForReloadOutcome(agentLoop, outcome)
 	if err != nil {
 		return err
 	}

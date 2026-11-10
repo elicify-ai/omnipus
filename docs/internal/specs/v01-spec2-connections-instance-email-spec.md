@@ -4,6 +4,8 @@
 - **Spec:** 2 of 6 (v0.1.0 Foundation)
 - **Source ADR:** [ADR-019](../architecture/ADR-019-v01-workspaces-foundation.md) — FR-2 (+ scope corrections + email-dep decision); risk R2 (the one deliberate breaking change)
 - **Status:** Rev 2 (addresses `…-review.md` BLOCK — 5 CRITICAL / 7 MAJOR) → pending re-`/grill-spec`
+
+Status: Draft
 - **Cross-spec (Phase 3.5):** Connection binds to a Spec-1 `Workspace`; `identity{agent|user}` aligns with the agent-reference shape (Spec-3/4).
 - **Constraints:** greenfield; single-user; contract-first; secrets credential-ref'd (SEC-23); cap = 1/type (lifts later — the v0.3 label was retired 2026-09-25).
 

@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"fmt"
-	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -70,6 +69,8 @@ type turnResult struct {
 	// whether the turn ended via the engine's error/limit fallback without holding
 	// a reference to the turnState.  Populated by runTurn before it returns.
 	turnFailed bool
+	// stopped prevents a graceful Stop from advancing or adjudicating a goal.
+	stopped bool
 	// goalDeferredAdjudication is JUDGE-FR-098's deferred-dispatch payload
 	// (ADR-084 revision 9 D13, wave E13): checkGoalLoopAfterTurn
 	// (goal_loop.go) populates this instead of calling runGoalAdjudication
@@ -79,18 +80,53 @@ type turnResult struct {
 	// this turn's own finalContent — see goalDeferredAdjudicationWork's own
 	// doc comment (goal_loop.go) for the full contract.
 	goalDeferredAdjudication *goalDeferredAdjudicationWork
+	// turnID is the producing turn's ID (its transcript entries carry it as
+	// TurnID). Lets a goal claim gather everything the claiming turn wrote
+	// for the parent (goal_upward_answer.go). Empty when not set.
+	turnID string
+	// goalID preserves the producing turn's immutable goal association.
+	goalID string
 }
 
 type turnState struct {
+	// approvalOrigin is the origin approvals raised by this turn carry: the
+	// starter input's, raised by inputs consumed later (spec §6.18; guarded
+	// by approvalOriginMu — a joined input is noted from the steering poll).
+	approvalOriginMu sync.Mutex
+	approvalOrigin   approvalOrigin
+
 	mu sync.RWMutex
+	// startedTool is installed only at actual dispatch; guarded by mu.
+	startedTool *startedToolOutcome
+
+	// userInputInWindow is set by assembleMessages when this turn's re-read
+	// instruction is already the newest line of the model window.
+	userInputInWindow bool
+	// skillsMenuGeneration is skills.Generation() read just before this
+	// turn's system prompt was assembled (assembleMessages). The session menu
+	// freeze refreezes when it differs from the frozen generation (skills spec
+	// r15 FR-053: the next turn's menu reflects a committed change).
+	skillsMenuGeneration uint64
 
 	agent *AgentInstance
 	opts  processOptions
 	scope turnEventScope
 
+	// origin is the set of inputs this turn has consumed (§6.18, FR-240);
+	// steering inputs consumed mid-turn are added to it. Never nil for a
+	// turn built by newTurnState.
+	origin *tools.TurnOrigin
+
 	turnID     string
 	agentID    string
 	sessionKey string
+	// goalID is the goal this turn was dispatched under (session-core FR-039 /
+	// C-GOAL), captured ONCE at turn start from the session's active goal
+	// record (newTurnState) and thereafter immutable — so every message/frame
+	// this turn produces carries the SAME association, and a goal activated
+	// later can never rebind an earlier turn's output. Empty means the turn ran
+	// under no proven goal (UNKNOWN association → neutral indicator).
+	goalID string
 	// generation is the session's LifecycleRecord.Generation at the moment
 	// this turn was registered (ADR-091 I-3 reconstruction /
 	// I-6 revival). Zero for a turnState built outside reconstruction (a
@@ -99,6 +135,19 @@ type turnState struct {
 	// that never sets this field (today's non-steered turns) keeps working
 	// exactly as before: nothing compares against a real generation.
 	generation int
+
+	// executionRunID/executionBootSeq are the turn's immutable execution
+	// handle (D2 round-4 R4-MAJ-001): the (run_id, boot_seq) half of the
+	// admission identity this turn runs under, set ONCE by its admission
+	// path (dispatch, wake) after reconstructSteeredTurn and before
+	// registration — never rewritten afterwards, so a completion carrying
+	// this handle provably names the admission that started it, and a
+	// provider-cancel slot fired through this turnState can only ever
+	// belong to THIS admission (a new admission builds a new turnState with
+	// its own cancel funcs). Zero-valued for non-steered turnStates;
+	// a steered final requires a real immutable admission handle.
+	executionRunID   string
+	executionBootSeq uint64
 
 	channel     string
 	chatID      string
@@ -144,10 +193,12 @@ type turnState struct {
 
 	// Cancel dedup / callback fields (FR-10, FR-11, FR-15).
 	// cancelMu guards cancelFired to make the first-cancel-wins check atomic.
-	cancelMu       sync.Mutex
-	cancelFired    atomic.Bool               // true once handleCancel has claimed this turn
-	abandoned      atomic.Bool               // true once a controller detaches a stuck turn goroutine
-	onCancelFinish func(cancelMethod string) // called exactly once by Finish when cancelFired
+	cancelMu        sync.Mutex
+	cancelFired     atomic.Bool               // true once handleCancel has claimed this turn
+	stopRequested   atomic.Bool               // non-terminal Stop: preserve session and goal on disposal
+	abandoned       atomic.Bool               // true once a controller detaches a stuck turn goroutine
+	onCancelFinish  func(cancelMethod string) // called exactly once by Finish when cancelFired
+	onCancelPersist *cancelDisplayOutcome     // durable display metadata, before abandonment or Finish
 
 	// cancelling was the GATE half of the chain-reaction cancellation fix
 	// (ADR-057 FR-024, superseded 2026-08-04): set true by markTurnsCancelling
@@ -192,19 +243,26 @@ type turnState struct {
 	cancelling atomic.Bool
 
 	// initialEmptiedSet is the session's WHOLE projection set
-	// ((tool_call_id, archive_line) → capped | emptied) as of turn start —
-	// the third member of the turn-start restore triple beside
-	// initialArchiveLen and initialHistoryLength (ADR-066 FR-020). Captured
-	// once in newTurnState and never moved during the turn; restoreSession
-	// and HardAbort hand it to RollbackAppended so an aborted turn's
-	// emptying is undone together with its archive tail and its Skip
-	// advance. nil when the store had nothing projected (or no store).
+	// ((tool_call_id, archive_line) → capped | emptied) as of turn start.
+	// Captured once in newTurnState and never moved during the turn. nil when
+	// the store had nothing projected (or no store).
 	initialEmptiedSet memory.ProjectionSet
-	// emptiedTranscriptPrev holds, for every transcript tool_call record the
-	// D5 pass rewrote during this turn (content_state emptied + projected
-	// result), the record's PREVIOUS state — so an abort can put the
-	// transcript back in step with the rolled-back window. Guarded by mu.
-	emptiedTranscriptPrev []session.ToolCallProjectionUpdate
+	// Captured once from the atomic store, including the actual cursor/anchor.
+	initialWindow  *memory.WindowState
+	windowError    error
+	windowControls []providers.Message
+	windowNotice   contextReliefNotice
+	// callIssuers maps each tool call id this turn issued to the exact archive
+	// address of the assistant record that declared it, as returned by that
+	// record's own checked append (session-core U2 Decision B: identity is the
+	// call occurrence, not tool_call_id alone). A tool result names its issuer
+	// from here — never from a lookup by id. Guarded by mu.
+	callIssuers map[string]session.ArchiveAddress
+	// projectionEffects holds the address of every projection effect the D5 pass
+	// appended during this turn (content_state emptied + projected result), so an
+	// abort can retract them and put the transcript back in step with the
+	// rolled-back window. Guarded by mu.
+	projectionEffects []session.ArchiveAddress
 
 	// SubTurn support
 	depth          int                    // SubTurn depth (0 for root turn)
@@ -219,7 +277,6 @@ type turnState struct {
 	finishedByHardAbort  atomic.Bool
 	session              session.SessionStore // Session store reference
 	initialHistoryLength int                  // Snapshot of window (GetHistory) length at turn start
-	initialArchiveLen    int                  // Snapshot of archive (ReadArchive) line count at turn start — for Skip-preserving rollback
 
 	// injectedRecallSpan is the recall span whose messages are currently
 	// present in this turn's in-memory message slice (ADR-066 D5.4,
@@ -254,14 +311,17 @@ type turnState struct {
 	// injected and never consumed in production.
 	parentSpawnCallID string
 
+	// causeCtx is the turn's own run context, kept only so a typed exit can
+	// read WHY it ended (context.Cause) — e.g. the Judge's own check time
+	// limit (ErrJudgeTimeLimit, issue #1306) versus a provider timeout. Set
+	// once in createTurnContext; read-only afterwards.
+	causeCtx context.Context
+
 	// Additional SubTurn fields
-	ctx             context.Context    // Context for this turn
-	cancelFunc      context.CancelFunc // Cancel function for this turn's context
-	critical        bool               // Whether this SubTurn should continue after parent ends
-	parentTurnState *turnState         // Reference to parent turnState
-	parentEnded     atomic.Bool        // Whether parent has ended
-	closeOnce       sync.Once          // Ensures pendingResults channel is closed once
-	finishedChan    chan struct{}      // Closed when turn finishes
+	ctx          context.Context    // Context for this turn
+	cancelFunc   context.CancelFunc // Cancel function for this turn's context
+	closeOnce    sync.Once          // Ensures pendingResults channel is closed once
+	finishedChan chan struct{}      // Closed when turn finishes
 
 	lastUsage *providers.UsageInfo // Last LLM usage info
 
@@ -337,8 +397,9 @@ type turnState struct {
 
 	// Accumulated turn-level stats across all LLM iterations in this turn.
 	// Used to populate the "done" WS frame for the session UI (issue #12).
-	turnTokens  int64
-	turnCostUSD float64
+	turnTokens     int64
+	turnCostUSD    float64
+	callAccounting turnCallAccounting
 	// Cache token split accumulated across all LLM iterations in this turn.
 	// Populated from UsageInfo.CacheReadTokens / CacheWriteTokens so the
 	// transcript entry can carry the full breakdown for SessionStats.ByModel.
@@ -398,25 +459,39 @@ type turnState struct {
 	// budget instead. Never cleared once set.
 	goalNarrowEscaped bool
 
-	// Back-reference to the owning AgentLoop, used by Finish's hard-abort
-	// cascade over childTurnIDs. Set on exactly ONE path today — the task
-	// executor's external-CLI turn
-	// (task_executor_run.go::processTaskDirectExternalCLI); the
-	// sub-turn path that used to set it is deleted (ADR-091), and a steered
-	// session's turn (steer_reconstruct.go::reconstructSteeredTurn) is a
-	// standalone turn with no child turns and leaves it nil. Nothing may
-	// depend on this field being set: it is nil for every steered turn, which
-	// is why the admission slot is released at the dispatch site rather than
-	// through here (see turn_exit.go::Finish).
+	// Back-reference to the owning AgentLoop, supplied by the loop's event
+	// scope in newTurnState before any production turn is registered or run.
+	// Used by fallback-note event publication and Finish's hard-abort cascade
+	// over childTurnIDs. Admission slots are still released at the dispatch
+	// site, not through Finish.
 	al *AgentLoop
 
 	// Last streamer used during this turn. Finalized once at turn end
 	// to send the "done" frame, preventing premature done signals mid-turn.
 	lastStreamer bus.Streamer
+	// stopShown is the text the last provider attempt streamed before a
+	// user Stop claim that the answer does not hold yet (#1534, see
+	// stop_turn_end.go). Guarded by mu.
+	stopShown string
 
 	// Transcript recording fields (nil transcriptStore disables recording)
 	transcriptSessionID string
 	transcriptStore     *session.UnifiedStore
+
+	// pendingFallbackNotes holds this turn's queued fallback-note transcript
+	// entries (provider-messages §7.4): queued by
+	// queueProviderFallbackNote (once per (session, pair)), written at turn
+	// end AFTER the assistant answer entry (MIN-103/FB-2) by
+	// writePendingFallbackNotes, whose defer registration in runTurn sits
+	// before finalizeStreamer's so LIFO runs it after the streamer's write.
+	pendingFallbackNotes []session.TranscriptEntry
+
+	// turnWaitBudget is the D14 per-turn wait budget (10 min total), shared
+	// by every fallback-chain call of this turn — a per-iteration budget
+	// would multiply the cap by the iteration count. Lazily created by
+	// turnWaitBudgetOnce under ts.mu; read by the chain through the ctx
+	// carrier (providers.WithWaitBudget).
+	turnWaitBudget *providers.WaitBudget
 
 	// routingSessionID is ADR-057's D2 identity split (FR-011): the id that
 	// answers "which open chat does this turn belong to", inherited VERBATIM
@@ -484,14 +559,10 @@ type turnState struct {
 	// the async tool callback goroutine as well as the synchronous loop.
 	askPendingToolCalls sync.Map // session.ToolCallID -> struct{}
 
-	// activeAgentResolver, when non-nil, returns the runtime-current active
-	// agent for this session's transcript. It is set at turn construction for
-	// webchat turns (where sessionActiveAgent tracks post-handoff overrides).
-	// appendToolCallTranscript calls it to tag each entry with the agent that
-	// is currently active rather than the one that started the turn — so
-	// tool_call entries produced after a handoff (same turn, new active agent)
-	// carry the correct agent_id in the transcript.
-	activeAgentResolver func() string
+	// callRecords maps each tool call id this turn wrote a chat tool_call record
+	// for to that record's address and post-image (approval_transcript.go
+	// callRecord). A settle or a projection names the address; nothing searches.
+	callRecords sync.Map // session.ToolCallID -> callRecord
 
 	// denialLedger is ADR-058's per-turn tool-denial state (FR-058-09): an
 	// aggregate count of every denial response handed to the model in this
@@ -534,11 +605,15 @@ type turnState struct {
 	// downgrade-retry". Initialized to false (zero value of atomic.Bool).
 	mediaRetryDone atomic.Bool
 
-	// imageRetryDone is the per-turn guard for IMAGE-only downgrades. The
-	// pass-2 media-downgrade fix split the per-turn guard into image-class
-	// and pdf-class, so a PDF rejection in a turn with both media types
-	// cannot consume the image-retry budget (and vice versa). Each LLM
-	// call may consume at most one downgrade per media class.
+	// imageRetryDone is the guard for IMAGE-only downgrades. The pass-2
+	// media-downgrade fix split the guard into image-class and pdf-class,
+	// so a PDF rejection in a turn with both media types cannot consume the
+	// image-retry budget (and vice versa). Within one LLM-call sequence at
+	// most one image downgrade fires (FR-019 unchanged). Issue #1435: the
+	// guard resets at each sequence entry (callLLMWithRetries) — one stored
+	// oversized image replayed from history on the next iteration must be
+	// strippable again instead of failing every remaining iteration once
+	// the single per-turn strip was spent.
 	imageRetryDone atomic.Bool
 
 	// outcomeRelabel is the FR-017a relabel-on-success contract. When the
@@ -563,6 +638,12 @@ type turnState struct {
 	// streaming path, setLastProducedModel is called by the streamer wrapper
 	// after each chat completes.
 	lastProducedModel string
+	// lastProducedProvider is the provider that produced the most recent
+	// LLM response, stamped beside lastProducedModel by the same call sites
+	// (provider hotfix H5). The model id alone cannot name it: the same
+	// model can be a candidate on two providers. Same goroutine as
+	// lastProducedModel; no synchronization needed.
+	lastProducedProvider string
 
 	// toolCallProgress is G1's turn-scoped liveness signal for an in-flight
 	// tool-call argument stream (see protocoltypes.ToolCallProgress's doc
@@ -623,6 +704,22 @@ type turnState struct {
 	toolRepeatSig        string
 	toolRepeatRun        int
 	toolRepeatStopNotice string
+	// toolBreakerRefusedRound records, per signature the identical-failure
+	// breaker has marked broken, the round (iteration) of its first refusal.
+	// A refusal of the same signature in a LATER round means the model saw
+	// the refusal and asked again anyway: toolFailureStopNotice is then set
+	// and consumed at the end of that round, ending the turn like
+	// toolRepeatStopNotice does. Guarded by mu; per-turn, never persisted.
+	toolBreakerRefusedRound map[string]int
+	toolFailureStopNotice   string
+	// toolRoundProgressed is set when a dispatched call succeeds in the
+	// current tool round and cleared at the end of every round; a round
+	// that made progress never ends the turn on the breaker stop.
+	toolRoundProgressed bool
+	// delegatePolls tracks, per polled child session, what each delegate
+	// polling action last returned and how many times new information was
+	// seen (delegate_poll_guard.go). Guarded by mu; per-turn, never persisted.
+	delegatePolls map[string]*delegatePollState
 }
 
 // atomicToolCallProgress is the atomics-based store for turnState's live
@@ -753,6 +850,16 @@ func (ts *turnState) setLastProducedModel(model string) {
 	ts.lastProducedModel = model
 }
 
+// setLastProducedProvider stamps the provider that produced the most recent
+// LLM response (provider hotfix H5) — the answering candidate's own
+// provider, never reconstructed from the model id.
+func (ts *turnState) setLastProducedProvider(provider string) {
+	if ts == nil {
+		return
+	}
+	ts.lastProducedProvider = provider
+}
+
 // auditUser returns the authenticated gateway principal for this turn, used to
 // stamp audit.Entry.User (FR-017). Returns "" for a nil turnState or a turn
 // with no authenticated principal (channel-originated, env-token, dev-bypass) —
@@ -801,19 +908,22 @@ func (ts *turnState) setOutcomeRelabel(code LLMErrorCode) {
 
 func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScope) *turnState {
 	ts := &turnState{
-		agent:        agent,
-		opts:         opts,
-		scope:        scope,
-		turnID:       scope.turnID,
-		sessionKey:   opts.SessionKey,
-		channel:      opts.Channel,
-		chatID:       opts.ChatID,
-		userMessage:  opts.UserMessage,
-		userID:       opts.UserID,
-		media:        append([]string(nil), opts.Media...),
-		phase:        TurnPhaseSetup,
-		startedAt:    time.Now(),
-		finishedChan: make(chan struct{}),
+		approvalOrigin: opts.approvalOrigin,
+		al:             scope.loop,
+		agent:          agent,
+		opts:           opts,
+		scope:          scope,
+		origin:         tools.NewTurnOrigin(),
+		turnID:         scope.turnID,
+		sessionKey:     opts.SessionKey,
+		channel:        opts.Channel,
+		chatID:         opts.ChatID,
+		userMessage:    opts.UserMessage,
+		userID:         opts.UserID,
+		media:          append([]string(nil), opts.Media...),
+		phase:          TurnPhaseSetup,
+		startedAt:      time.Now(),
+		finishedChan:   make(chan struct{}),
 	}
 	// Bug fix (staticcheck SA5011): agentID used to be set from agent.ID
 	// directly in the struct literal above, unconditionally dereferencing
@@ -827,38 +937,48 @@ func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScop
 		ts.agentID = agent.ID
 	}
 
-	// Bind session store and capture the turn-start restore triple (ADR-066
-	// FR-020): initialHistoryLength, initialArchiveLen and initialEmptiedSet.
-	// initialArchiveLen is the number of physical lines in the archive at turn
-	// start; used by restoreSession and HardAbort to roll back only the messages
-	// appended during this turn (Skip-preserving rollback via RollbackAppended).
-	// initialEmptiedSet is the projection state at turn start, restored in
-	// the same write. All three are captured ONCE, here, and never moved.
+	// Capture the actual transaction state once, before any turn append/slide.
 	if agent != nil && agent.Sessions != nil {
 		ts.session = agent.Sessions
-		ts.initialHistoryLength = len(agent.Sessions.GetHistory(opts.SessionKey))
-		if entries := agent.Sessions.Projection(opts.SessionKey).Entries; len(entries) > 0 {
-			ts.initialEmptiedSet = entries.Clone()
-		}
-		if archived, err := agent.Sessions.ReadArchive(context.Background(), opts.SessionKey); err == nil {
-			ts.initialArchiveLen = len(archived)
-		} else {
-			// ReadArchive failed (new session, missing file, transient I/O error).
-			// Use math.MaxInt so that any subsequent RollbackAppended call is a
-			// guaranteed no-op (RollbackAppended treats target >= Count as no-op).
-			// Falling back to initialHistoryLength (the post-Skip window length,
-			// which is SMALLER than the true archive) would cause a rollback to
-			// truncate the archive to fewer lines than it already has — silently
-			// destroying evicted turns (SC-001 violation).
-			logger.WarnCF("agent", "newTurnState: ReadArchive failed; rollback will be no-op for this turn",
-				map[string]any{"session_key": opts.SessionKey, "error": err.Error()})
-			ts.initialArchiveLen = math.MaxInt
+		if !opts.NoHistory {
+			store, ok := agent.Sessions.(session.ContextWindowStore)
+			if !ok {
+				ts.windowError = fmt.Errorf("context checkpoint: session store does not support atomic context checkpoints")
+			} else {
+				snap, err := store.WindowView(context.Background(), opts.SessionKey)
+				ts.windowError = err
+				if err == nil {
+					start := snap.State.Clone()
+					ts.initialWindow = &start
+					history, _ := snap.History()
+					ts.initialHistoryLength = len(history)
+					ts.initialEmptiedSet = start.Projection.Entries.Clone()
+				}
+			}
 		}
 	}
 
 	// Bind transcript store for persisting tool calls
 	ts.transcriptSessionID = opts.TranscriptSessionID
 	ts.transcriptStore = opts.TranscriptStore
+
+	// Capture the goal this turn is dispatched under (session-core FR-039 /
+	// C-GOAL), ONCE, before any message/frame of the turn is produced. Keyed by
+	// the transcript session id — the same lookup every goal reader in this
+	// package shares (activeGoalForSession). A read failure leaves goalID empty
+	// (UNKNOWN, neutral), never a guessed value: an unreadable goal store must
+	// not silently attach a wrong goal, and the indicator degrades to its
+	// generic state rather than mislabeling the bubble. Guarded exactly like
+	// goalTurnRecordState (goal_loop_forcing.go) so a turn that already declines
+	// the goal-store read (no transcript store wired) pays nothing here.
+	if opts.TranscriptStore != nil && ts.transcriptSessionID != "" {
+		if g, gerr := activeGoalForSession(ts.transcriptSessionID); gerr != nil {
+			logger.DebugCF("agent", "goal: could not resolve the active goal to stamp onto this turn; leaving it unknown",
+				map[string]any{"component": "goal", "session_id": ts.transcriptSessionID, "error": gerr.Error()})
+		} else if g != nil {
+			ts.goalID = g.GoalID
+		}
+	}
 
 	// ADR-057 FR-011: default routingSessionID to this turn's own session
 	// id. Correct as-is for every root turn (byte-identical to today's
@@ -1020,41 +1140,32 @@ func (al *AgentLoop) getActiveTurnState(sessionKey string) *turnState {
 	return nil
 }
 
-// getAnyActiveTurnState returns any active turn state (for backward compatibility)
-func (al *AgentLoop) getAnyActiveTurnState() *turnState {
-	var firstTS *turnState
-	al.activeTurnStates.Range(func(key, value any) bool {
-		ts, ok := value.(*turnState)
-		if !ok {
-			logger.ErrorCF("agent", "activeTurnStates: invariant violated — unexpected value type, skipping entry",
-				map[string]any{"key": key, "got_type": fmt.Sprintf("%T", value)})
-			return true // keep scanning for a valid entry
-		}
-		firstTS = ts
-		return false // stop after first
-	})
-	return firstTS
+// setExecutionIdentity stamps the turn's immutable execution handle
+// (execution_identity.go): the admission's (run_id, boot_seq), written
+// exactly once by the admission path after reconstructSteeredTurn and
+// before registration. A second call is a wiring bug — the handle must not
+// move under a live turn — so the setter refuses it visibly instead of
+// overwriting.
+func (ts *turnState) setExecutionIdentity(runID string, bootSeq uint64) error {
+	if runID == "" || bootSeq == 0 {
+		return fmt.Errorf("turn: execution identity requires run_id and a minted boot epoch")
+	}
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if ts.executionRunID != "" {
+		return fmt.Errorf("turn: execution identity already set to %q, refusing re-stamp as %q", ts.executionRunID, runID)
+	}
+	ts.executionRunID = runID
+	ts.executionBootSeq = bootSeq
+	return nil
 }
 
-func (al *AgentLoop) GetActiveTurn() *ActiveTurnInfo {
-	// For backward compatibility, return the first active turn found
-	// In the new architecture, there can be multiple concurrent turns
-	var firstTS *turnState
-	al.activeTurnStates.Range(func(key, value any) bool {
-		ts, ok := value.(*turnState)
-		if !ok {
-			logger.ErrorCF("agent", "activeTurnStates: invariant violated — unexpected value type, skipping entry",
-				map[string]any{"key": key, "got_type": fmt.Sprintf("%T", value)})
-			return true // keep scanning for a valid entry
-		}
-		firstTS = ts
-		return false // stop after first
-	})
-	if firstTS == nil {
-		return nil
-	}
-	info := firstTS.snapshot()
-	return &info
+// executionIdentity reads the turn's immutable execution handle under the
+// state lock. ("", 0) means the turn never carried a steered admission.
+func (ts *turnState) executionIdentity() (runID string, bootSeq uint64) {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.executionRunID, ts.executionBootSeq
 }
 
 // GetActiveAgentIDs returns the IDs of all agents that currently have an active turn.
@@ -1100,7 +1211,8 @@ type TurnCancelHook interface {
 	// and has now been set to true). Returns false if already canceled.
 	ClaimCancel() bool
 	// MarkAbandoned suppresses later writes after a controller detaches a
-	// stuck turn goroutine (gateway cancel or delegation timeout).
+	// stuck turn goroutine (gateway cancel; there is no delegation timeout
+	// since issue #1306).
 	MarkAbandoned()
 }
 
@@ -1419,16 +1531,44 @@ func (ts *turnState) finalContentLen() int {
 	return len(ts.finalContent)
 }
 
+// setTurnCancel registers the cancel func the HARD-abort cascade
+// (requestHardAbort / InterruptSessionHard) fires to tear down the whole turn.
+//
+// F2 replay: requestHardAbort latches ts.hardAbort and fires whatever cancel
+// funcs ALREADY exist, and never re-fires once hardAbort is set. A turn that is
+// hard-stopped AFTER admission but BEFORE this slot is registered therefore
+// spent its only abort with nothing to fire, and the abort would be silently
+// lost — a real case: an external-CLI run registers its runCtx cancel func here
+// (external_dispatch.go::runExternalCLISubTurn) well after the steered turn was
+// admitted, so a Stop in that window let the CLI start anyway. Replay the latch
+// so a cancel func registered while the turn is already hard-aborted fires at
+// once. This is atomic with requestHardAbort under ts.mu: either requestHardAbort
+// saw this slot and fired it, or this sees hardAbort and fires it — never
+// neither.
 func (ts *turnState) setTurnCancel(cancel context.CancelFunc) {
 	ts.mu.Lock()
-	defer ts.mu.Unlock()
 	ts.turnCancel = cancel
+	replay := ts.hardAbort
+	ts.mu.Unlock()
+	if replay && cancel != nil {
+		cancel()
+	}
 }
 
+// setProviderCancel registers the cancel func the GRACEFUL cascade
+// (Interrupt → providerCancel) fires to abort the in-flight provider call
+// immediately; the hard cascade re-fires the same slot defensively. It carries
+// the same F2 replay as setTurnCancel (see that method): both slots are set to
+// the SAME func for an external-CLI sub-turn, so either one being registered
+// late must consume an already-latched hard abort.
 func (ts *turnState) setProviderCancel(cancel context.CancelFunc) {
 	ts.mu.Lock()
-	defer ts.mu.Unlock()
 	ts.providerCancel = cancel
+	replay := ts.hardAbort
+	ts.mu.Unlock()
+	if replay && cancel != nil {
+		cancel()
+	}
 }
 
 // appendToAccumulator extends ADR-087 D6.1's turn-scoped accumulator with
@@ -1490,6 +1630,19 @@ func (ts *turnState) resolveContinuation() {
 	// consumed by nextRoundMessageID (e.g. a later round completed WITHOUT
 	// going through the truncation branch at all) must not leave a stale
 	// "reuse the old id" flag armed for some unrelated future round.
+	ts.continueSameMessageID = false
+}
+
+// retireContinuationAccumulator empties the D6 accumulator and settles the
+// chain once the accumulated answer has been saved as a whole answer of its
+// own (keepAnswerBeforeSteering). Without it a later round's answer is
+// prefixed with the already-saved text (finishTextResponse appends to the
+// accumulator for the rest of the turn once hadContinuation is true).
+func (ts *turnState) retireContinuationAccumulator() {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.continuationAccum = ""
+	ts.continuationPending = false
 	ts.continueSameMessageID = false
 }
 
@@ -1586,19 +1739,10 @@ func (ts *turnState) eventMeta(source, tracePath string) EventMeta {
 	}
 }
 
-// resolveActiveAgentID returns the runtime-current active agent ID for this
-// turn's session. When activeAgentResolver is set (webchat sessions), it
-// reflects post-handoff switches that may have occurred during the turn.
-// Falls back to the turn's starting agent ID for all other sessions.
-//
-// Use this — not ts.agentID — in any event payload or log field that should
-// attribute work to the agent that is currently active in the session.
+// resolveActiveAgentID returns the agent ID to attribute this turn's work to:
+// the turn's own agent (a session has one immutable owner; there is no
+// mid-turn agent switch).
 func (ts *turnState) resolveActiveAgentID() string {
-	if ts.activeAgentResolver != nil {
-		if id := ts.activeAgentResolver(); id != "" {
-			return id
-		}
-	}
 	return ts.agentID
 }
 
@@ -1732,4 +1876,28 @@ func withSpawnToolCallID(ctx context.Context, toolCallID string) context.Context
 func spawnToolCallIDFromContext(ctx context.Context) string {
 	id, _ := ctx.Value(spawnToolCallIDKey).(string)
 	return id
+}
+
+// currentApprovalOrigin is the origin an approval raised NOW carries: the
+// starter's origin, raised by inputs the turn has consumed since (spec §6.18,
+// chief ruling 2026-10-18; see participant.go::mergeApprovalOrigin).
+func (ts *turnState) currentApprovalOrigin() approvalOrigin {
+	if ts == nil {
+		return approvalOrigin{}
+	}
+	ts.approvalOriginMu.Lock()
+	defer ts.approvalOriginMu.Unlock()
+	return ts.approvalOrigin
+}
+
+// noteConsumedOrigin records that the turn consumed an input of origin o
+// (a joined steering message or a held group request). Approvals already
+// raised keep their label; later ones carry the merged origin.
+func (ts *turnState) noteConsumedOrigin(o approvalOrigin) {
+	if ts == nil || o.none {
+		return
+	}
+	ts.approvalOriginMu.Lock()
+	ts.approvalOrigin = mergeApprovalOrigin(ts.approvalOrigin, o)
+	ts.approvalOriginMu.Unlock()
 }

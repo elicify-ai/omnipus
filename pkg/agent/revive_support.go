@@ -14,11 +14,13 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"runtime/debug"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
 // revivedTurnHandoffBudget bounds how long a revived ordinary-root turn
@@ -67,6 +69,13 @@ type revivalFailure struct {
 // must not tell the user to send another message).
 func (al *AgentLoop) markRevivalFailure(sessionID string, cause error) {
 	if al == nil || sessionID == "" || cause == nil {
+		return
+	}
+	if errors.Is(cause, steer.ErrStaleGeneration) {
+		// Another execution won the selection race; no revival/store write
+		// failed. Drop older diagnostic memory rather than poison a later
+		// stopped-parent refusal with the revival-failed sentinel.
+		al.clearRevivalFailure(sessionID)
 		return
 	}
 	al.revivalFailures.Store(sessionID, revivalFailure{at: time.Now(), cause: cause})
@@ -118,11 +127,23 @@ func (al *AgentLoop) clearRevivalFailure(sessionID string) {
 // would crash the process), and an inner C8 recover that synthesizes a
 // terminal error frame and force-publishes it before re-panicking so the
 // outer recover still records the original panic.
-func (al *AgentLoop) runRevivedOrdinaryTurn(msg bus.InboundMessage, sessionKey string) {
+//
+// It reports whether the turn was admitted. A false return means shutdown had
+// closed intake and NOTHING ran; a caller that owns an instruction the user
+// typed (the /stop-redirect continuation) must tell the user, since the log
+// line alone reaches nobody.
+func (al *AgentLoop) runRevivedOrdinaryTurn(msg bus.InboundMessage, sessionKey string) bool {
 	// Tracked in activeRequests so shutdown drains it (#265), like the
 	// unroutable path.
 	if !al.beginActiveRequest() {
-		return
+		logger.WarnCF("agent", "active request admission refused after intake closed", map[string]any{
+			"site":        "runRevivedOrdinaryTurn",
+			"channel":     msg.Channel,
+			"chat_id":     msg.ChatID,
+			"session_id":  msg.SessionID,
+			"session_key": sessionKey,
+		})
+		return false
 	}
 	go func() {
 		defer al.endActiveRequest()
@@ -178,7 +199,7 @@ func (al *AgentLoop) runRevivedOrdinaryTurn(msg bus.InboundMessage, sessionKey s
 						}()
 						termCtx, termCancel := context.WithTimeout(context.Background(), 5*time.Second)
 						defer termCancel()
-						al.publishResponseIfNeeded(termCtx, ag, msg.Channel, msg.ChatID, response)
+						al.publishResponseIfNeeded(termCtx, ag, msg.Channel, msg.ChatID, response, msg.SessionID)
 					}()
 					published = true
 				}
@@ -220,12 +241,13 @@ func (al *AgentLoop) runRevivedOrdinaryTurn(msg bus.InboundMessage, sessionKey s
 				// ADR-051 §RD5: never surface raw err text in the reply —
 				// TranslateTurnError keeps known-refusal copy and replaces
 				// provider-originated text with typed copy.
-				response = TranslateTurnError(err).Message
+				response = userVisibleTurnError(err)
 			}
 		}
 		if response != "" {
-			al.publishResponseIfNeeded(turnCtx, ag, msg.Channel, msg.ChatID, response)
+			al.publishResponseIfNeeded(turnCtx, ag, msg.Channel, msg.ChatID, response, msg.SessionID)
 			published = true
 		}
 	}()
+	return true
 }

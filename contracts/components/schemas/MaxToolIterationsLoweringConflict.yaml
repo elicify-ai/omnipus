@@ -1,0 +1,26 @@
+title: MaxToolIterationsLoweringConflict
+description: >
+  409 body of PUT /performance when the set of agents that the new global
+  tool-iteration limit would lower differs from confirmed_lowering (issue
+  #904, tool-iteration-limit spec D16 drift). Nothing was written.
+  Envelope-compatible with ErrorResponse (error + code) and additionally
+  carries the fresh preview computed at refusal time, so the client can
+  re-open the confirm dialog without a second preview call.
+type: object
+additionalProperties: false
+required:
+  - error
+  - code
+  - preview
+properties:
+  error:
+    type: string
+    description: Human-readable error message.
+    example: "the agents affected by lowering the limit to 200 changed since the preview; review the updated list and confirm again"
+  code:
+    type: string
+    description: Machine-readable error code; always "max_tool_iterations_lowering_drift".
+    example: "max_tool_iterations_lowering_drift"
+  preview:
+    $ref: './MaxToolIterationsLoweringPreview.yaml'
+    x-go-type: MaxToolIterationsLoweringPreview

@@ -25,6 +25,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -37,6 +38,8 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	providers_pkg "github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
+	providercommon "github.com/elicify-ai/omnipus/pkg/providers/common"
+	"github.com/elicify-ai/omnipus/pkg/security"
 )
 
 const (
@@ -187,6 +190,9 @@ func (a *restAPI) resolveProviderRow(id string, cfgRow *config.ModelConfig) prov
 		src.row, src.known = a.providerCatalog.Provider(id)
 	}
 	if src.known {
+		// Hosted: a planted override on a catalog id is not the row's base
+		// (usableStoredAPIBase; resolveRow ignores it at run time too).
+		src.apiBase = usableStoredAPIBase(id, src.apiBase, src.custom)
 		if src.protocol == "" {
 			src.protocol = src.row.Protocol
 		}
@@ -225,11 +231,17 @@ func (a *restAPI) providerModelList(
 ) (models []string, warning string) {
 	switch {
 	case src.locality == catalog.LocalityLocal && src.apiBase != "":
-		live, err := fetchLocalModels(ctx, src.protocol, src.apiBase, apiKey)
+		// Only the hosted guard checks a local row: in core a local row is
+		// loopback by definition and sandbox.ssrf must not break its listing.
+		var guard *security.SSRFChecker
+		if providercommon.EndpointGuardActive() {
+			guard = a.endpointChecker()
+		}
+		live, err := fetchLocalModels(ctx, src.protocol, src.apiBase, apiKey, guard)
 		if err != nil {
 			slog.Warn("rest: could not list models from local provider endpoint",
 				"provider", id, "api_base", src.apiBase, "error", err)
-			warning = fmt.Sprintf("could not fetch upstream model list: %v", err)
+			warning = upstreamListFailureText("could not fetch upstream model list", "the local endpoint could not be reached", err)
 			break
 		}
 		models = live
@@ -251,6 +263,17 @@ func (a *restAPI) providerModelList(
 	return models, warning
 }
 
+// upstreamListFailureText is the fixed text for a failed model listing. A typed
+// upstream status is a classified fact worth keeping; anything else (a dial
+// error with an address, a TLS or OS error) is not sent to the client.
+func upstreamListFailureText(prefix, fallback string, err error) string {
+	var statusErr *providers_pkg.UpstreamStatusError
+	if errors.As(err, &statusErr) {
+		return fmt.Sprintf("%s: status %d", prefix, statusErr.Status)
+	}
+	return prefix + ": " + fallback + ". Details are in the server log."
+}
+
 // catalogModelIDs returns the row's model ids in document order.
 func catalogModelIDs(row catalog.Provider) []string {
 	out := make([]string, 0, len(row.Models))
@@ -270,16 +293,25 @@ const localModelListTimeout = 5 * time.Second
 // (providers.ListModels, T067-11): `/api/tags` for the ollama protocol,
 // `/v1/models` for the anthropic protocol, `{base}/models` otherwise.
 //
-// No SSRF checker is passed, deliberately and by definition: `locality =
-// local` MEANS loopback/private (catalog.DeriveLocality), so the guard
-// would reject every single one of these calls and FR-020's local half
-// would be dead code. The URL is not request-controlled — it is the
-// catalog row's own `api`, or a persisted api_base that was already
-// classified local — so there is no caller-supplied target to pivot with.
-func fetchLocalModels(ctx context.Context, protocol catalog.Protocol, apiBase, apiKey string) ([]string, error) {
+// checker is the hosted edition's endpoint checker: nil in core (even with
+// sandbox.ssrf on), and then the listing runs unchecked, because `locality = local` MEANS loopback/private
+// (catalog.DeriveLocality) and FR-020's local half would otherwise be dead
+// code. When a checker IS configured it is honoured here like everywhere
+// else: the persisted api_base is caller-influenced (any PUT, or a planted
+// row), so with the guard on a private target is refused (unless the
+// operator's allow list names it) rather than listed with the stored key.
+func fetchLocalModels(
+	ctx context.Context, protocol catalog.Protocol, apiBase, apiKey string, checker *security.SSRFChecker,
+) ([]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, localModelListTimeout)
 	defer cancel()
-	return providers_pkg.ListModels(ctx, protocol, apiBase, apiKey, providers_pkg.NoopChecker{})
+	if checker == nil {
+		return providers_pkg.ListModels(ctx, protocol, apiBase, apiKey, providers_pkg.NoopChecker{})
+	}
+	if err := checker.CheckURL(ctx, apiBase); err != nil {
+		return nil, fmt.Errorf("local provider endpoint refused by the SSRF guard: %w", err)
+	}
+	return providers_pkg.ListModels(ctx, protocol, apiBase, apiKey, checker)
 }
 
 // ── PUT admission (FR-019, FR-035) ──────────────────────────────────────────
@@ -368,15 +400,6 @@ func providerWireProtocol(p catalog.Protocol) *gen.ProviderProtocol {
 // providerWireLocality maps the derived locality onto the wire enum.
 func providerWireLocality(l catalog.Locality) *gen.ProviderLocality {
 	v := gen.ProviderLocality(l)
-	if !v.Valid() {
-		return nil
-	}
-	return &v
-}
-
-// providerWireCLIKind maps a catalog row's cli_kind onto the wire enum.
-func providerWireCLIKind(kind string) *gen.ProviderCliKind {
-	v := gen.ProviderCliKind(strings.TrimSpace(kind))
 	if !v.Valid() {
 		return nil
 	}

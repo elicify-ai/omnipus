@@ -20,6 +20,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -73,13 +74,12 @@ type RecallSpanSetter interface {
 	dropRecallSpan(sessionKey, reason string)
 }
 
-// RecallConversationTool implements the recall_conversation tool (FR-008).
-// It reads the session archive via ReadArchive (never GetHistory — FR-016),
-// groups messages into whole Turns via parseTurnBoundaries, selects Turns by
-// mode (query/BM25, turn_range, time), bounds the result (FR-009), rewrites
-// tool_call_ids to collision-free recall_* namespaced ids (FR-019 / MAJ-04),
-// builds a RecallSpan, and stores it via the span setter for the next context
-// assembly turn. It is session-scoped (FR-013).
+// RecallConversationTool implements the session-scoped recall_conversation tool
+// (FR-008, FR-013). Query/turn_range/time use ReadArchive (never GetHistory),
+// select bounded whole turns, and store a RecallSpan with collision-free IDs.
+// tool_call_id returns a bounded addressed result; archive_range streams literal
+// JSONL through memory.ArchiveRangeScanner. The latter returns DATA only in the
+// current tool result, without mutating a RecallSpan.
 //
 // The routing session key is derived from the tool context at Execute time
 // (via tools.ToolSessionKey(ctx)) so the same registered instance serves all
@@ -118,7 +118,12 @@ func (t *RecallConversationTool) Description() string {
 		"The matching earlier exchanges are brought back so you can read and reference them. " +
 		"To retrieve one capped or emptied TOOL RESULT verbatim, pass the tool_call_id a " +
 		"[capped]/[emptied] mark cites; large results come back one page at a time (offset/length). " +
-		"Provide exactly one of query, turn_range, time, or tool_call_id. " +
+		"To pull back the archive's own raw line range directly instead of turn numbers, pass " +
+		"archive_range ({\"from\": N, \"to\": M}, zero-based archive line numbers, inclusive); " +
+		"this returns the literal underlying log text for those lines verbatim, paged the same way " +
+		"(offset/length) as tool_call_id. Use turn_range for ordinary numbered turns; reach for " +
+		"archive_range only when you already have specific archive line numbers to address directly. " +
+		"Provide exactly one of query, turn_range, time, tool_call_id, or archive_range. " +
 		"Note: to find facts saved across DIFFERENT conversations, use recall_memory instead."
 }
 
@@ -154,6 +159,25 @@ func (t *RecallConversationTool) Parameters() map[string]any {
 					"[capped]/[emptied] mark cites. Returns one page of the result; the page " +
 					"framing states the total size and the next offset when more remains.",
 			},
+			"archive_range": map[string]any{
+				"type": "object",
+				"description": "A zero-based, inclusive range of ARCHIVE LINE numbers (not turn numbers) to " +
+					"bring back verbatim, e.g. {\"from\": 10, \"to\": 12}. Returns the literal underlying log " +
+					"text for those lines, paged like tool_call_id (offset/length).",
+				"properties": map[string]any{
+					"from": map[string]any{
+						"type":        "integer",
+						"minimum":     0,
+						"description": "Start archive line (zero-based, inclusive).",
+					},
+					"to": map[string]any{
+						"type":        "integer",
+						"minimum":     0,
+						"description": "End archive line (zero-based, inclusive); must be >= from.",
+					},
+				},
+				"required": []string{"from", "to"},
+			},
 			"max_results": map[string]any{
 				"type": "integer",
 				"description": "Only with query, turn_range or time: the maximum number of turns to " +
@@ -165,17 +189,19 @@ func (t *RecallConversationTool) Parameters() map[string]any {
 					"to disambiguate duplicate ids. When omitted, the most recent line wins.",
 			},
 			"offset": map[string]any{
-				"type": "integer",
-				"description": "Only with tool_call_id: page start in characters into the full " +
+				"type":    "integer",
+				"minimum": 0,
+				"description": "Only with tool_call_id or archive_range: page start in characters into the full " +
 					"result (default 0). Use the next offset the previous page's framing stated.",
 			},
 			"length": map[string]any{
-				"type": "integer",
-				"description": "Only with tool_call_id: page size in characters (min 1); values " +
+				"type":    "integer",
+				"minimum": 1,
+				"description": "Only with tool_call_id or archive_range: page size in characters (min 1); values " +
 					"above the page maximum are clamped to it.",
 			},
 		},
-		// Exactly one of query/turn_range/time/tool_call_id is required;
+		// Exactly one of query/turn_range/time/tool_call_id/archive_range is required;
 		// enforced at Execute time.
 	}
 }
@@ -201,12 +227,11 @@ type recallConversationToolExecute struct {
 	overflow     int
 }
 
-// Execute selects turns by the given mode, bounds them, rewrites IDs, builds
-// and stores the RecallSpan, then returns a short confirmation string to the
-// model (FR-008). The recalled messages reach the model through the span:
-// the agent loop splices it into the very next request at the tool-result
-// site (ADR-066 D5.4, recall_injection.go) and every from-scratch assembly
-// includes it via BuildMessages.
+// Execute routes archive_range to a literal DATA page and tool_call_id to an
+// addressed result. Query/turn_range/time select bounded turns and store a
+// RecallSpan, returning a short confirmation (FR-008). That span reaches the
+// next request at the tool-result site (ADR-066 D5.4, recall_injection.go) and
+// from-scratch assembly through BuildMessages.
 func (t *RecallConversationTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	rct := &recallConversationToolExecute{t: t, ctx: ctx, args: args}
 
@@ -239,6 +264,12 @@ func (rct *recallConversationToolExecute) validateRequest() (*tools.ToolResult, 
 	if rct.sessionKey == "" {
 		incRecallCounter("error")
 		return tools.ErrorResult("recall_conversation: no session context — cannot determine which session to recall"), true
+	}
+
+	// Literal archive paging bypasses decoded whole-turn reads and span mutation.
+	// Presence, including null/empty alternate modes, is validated by this path.
+	if _, present := rct.args["archive_range"]; present {
+		return rct.t.executeArchiveRange(rct.ctx, rct.sessionKey, rct.args), true
 	}
 
 	// --- mode detection (exactly one of query/turn_range/time/tool_call_id) ---
@@ -658,7 +689,7 @@ func buildRecallSpanMessages(
 				// — so the model can page the full content.
 				archiveLine := trn.startIdx + j
 				toolName, _ := owningToolCall(out, len(out), m.ToolCallID)
-				turnNum := turnNumberForArchiveLine(archive, archiveLine)
+				turnNum := turnNumberForArchiveLine(denseArchive(archive), archiveLine)
 				m.Content, _ = projectToolResult(m.Content, policy.effectiveCap(surfaceBuiltinSuccess, 1),
 					func(full string) string {
 						return capMarkOrEmpty(toolName, originalID, archiveLine, full, turnNum)
@@ -804,15 +835,9 @@ type ConversationArchiveScanner interface {
 	ScanArchive(ctx context.Context, sessionKey string, fn func(idx int, msg memory.ArchivedMessage) bool) error
 }
 
-// recallProjectionReader is the optional projection-meta side (FR-046 /
-// B-53b): a hydrated session's archive was rebuilt from the UI transcript,
-// so the original tool-result bytes are not available by id.
-type recallProjectionReader interface {
-	Projection(key string) memory.ProjectionMeta
-}
-
-// recallHydratedAnswer is the FR-046 answer for recall by id on a hydrated
-// session. The exact phrase is specified (B-53b).
+// recallHydratedAnswer is the FR-046 answer for recall by id on a record
+// converted from a hydrated source (model_origin == conv_rebuilt). The exact
+// phrase is specified (B-53b).
 const recallHydratedAnswer = "recall_conversation: not available — session was rebuilt from the transcript"
 
 // recallPageFraming is the framing header a tool_call_id page carries in
@@ -918,15 +943,6 @@ func (t *RecallConversationTool) executeToolCallID(
 		length = v
 	}
 
-	// --- FR-046: a hydrated archive has no original result bytes ------
-	if pr, ok := t.archive.(recallProjectionReader); ok {
-		if pr.Projection(sessionKey).Hydrated {
-			incRecallCounter("error")
-			return tools.ErrorResult(fmt.Sprintf(
-				"%s (the original bytes of tool result %s are gone)", recallHydratedAnswer, id))
-		}
-	}
-
 	// --- streaming scan (FR-024, FR-025, B-31b) -----------------------
 	hit, scanErr := t.scanForToolResult(ctx, sessionKey, id, wantLine)
 	if scanErr != nil {
@@ -946,6 +962,12 @@ func (t *RecallConversationTool) executeToolCallID(
 		return tools.ErrorResult(fmt.Sprintf(
 			"recall_conversation: no archived tool result with tool_call_id %q — "+
 				"the id is unknown, or its turn was aborted and rolled back (FR-027)", id))
+	}
+
+	if hit.Rebuilt {
+		incRecallCounter("error")
+		return tools.ErrorResult(fmt.Sprintf(
+			"%s (the original bytes of tool result %s are gone)", recallHydratedAnswer, id))
 	}
 
 	// --- page the content (FR-024; rune-addressed) --------------------
@@ -1063,6 +1085,54 @@ type toolResultHit struct {
 	ToolName string
 	TurnNum  int
 	Found    bool
+	// Rebuilt is true when the located record was converted from a hydrated
+	// source (CONV-P A, model_origin == conv_rebuilt): its original tool-result
+	// bytes are not provable and recall refuses them (FR-046).
+	Rebuilt bool
+}
+
+// toolResultLocator is the indexed side of the tool_call_id lookup: it finds the
+// result from index rows alone, and the one located slot (and its issuer) is
+// then read by ordinal. session.UnifiedStore implements it; a store without an
+// ordinal index falls back to the streaming scan.
+type toolResultLocator interface {
+	LocateToolResult(ctx context.Context, key, id string, wantLine int) (session.ToolResultLocation, error)
+	ReadModelSlots(ctx context.Context, key string, from, to int, fn func(session.ModelSlot, []byte) error) error
+}
+
+// locatedToolResult resolves id through the ordinal index: no archive walk from
+// line zero, only the result slot and its issuing assistant are read.
+func locatedToolResult(ctx context.Context, loc toolResultLocator, sessionKey, id string, wantLine int) (toolResultHit, error) {
+	hit := toolResultHit{Line: -1}
+	l, err := loc.LocateToolResult(ctx, sessionKey, id, wantLine)
+	if err != nil || !l.Found {
+		return hit, err
+	}
+	var slot session.ModelSlot
+	if err := loc.ReadModelSlots(ctx, sessionKey, l.Ordinal, l.Ordinal, func(s session.ModelSlot, _ []byte) error {
+		slot = s
+		return nil
+	}); err != nil {
+		return hit, err
+	}
+	name := ""
+	if l.Issuer >= 0 {
+		if err := loc.ReadModelSlots(ctx, sessionKey, l.Issuer, l.Issuer, func(s session.ModelSlot, _ []byte) error {
+			for _, tc := range s.Message.ToolCalls {
+				if tc.ID == id && tc.Function != nil {
+					name = tc.Function.Name
+				}
+			}
+			return nil
+		}); err != nil {
+			return hit, err
+		}
+	}
+	return toolResultHit{
+		Msg:  memory.ArchivedMessage{Message: slot.Message, TS: slot.TS},
+		Line: l.Ordinal, ToolName: name, TurnNum: l.TurnNum, Found: true,
+		Rebuilt: slot.Origin == session.ModelOriginConvRebuilt,
+	}, nil
 }
 
 // scanForToolResult streams the archive for the tool result addressed by id
@@ -1075,6 +1145,9 @@ type toolResultHit struct {
 func (t *RecallConversationTool) scanForToolResult(
 	ctx context.Context, sessionKey, id string, wantLine int,
 ) (toolResultHit, error) {
+	if loc, ok := t.archive.(toolResultLocator); ok {
+		return locatedToolResult(ctx, loc, sessionKey, id, wantLine)
+	}
 	hit := toolResultHit{Line: -1}
 	userCount := 0
 	pendingName := ""

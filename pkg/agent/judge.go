@@ -272,6 +272,20 @@ type JudgeCriteriaResult struct {
 	// holds the unit. See verifier_adjudication.go's "Judge-unavailable
 	// classification" section (UAT E-7).
 	Unavailable bool
+	// ConcurrencyBackoff, when true alongside Unavailable, marks the verdict
+	// as the verifier registry's "concurrent adjudication in flight" BACK-OFF
+	// (corr-MAJOR-3/G-1, reason VerifierConcurrencyBackoffReason) rather than
+	// a judge outage: another adjudication for the same unit already holds
+	// the registry entry and WILL resolve the unit, so callers must NOT retry
+	// it, must not surface judge-unavailability to the user, and must not
+	// fail the work item (#984's release red: the goal re-drive treated this
+	// back-off as an outage, re-invoked the Judge a second time and then
+	// false-failed the child). Neutral for every availability streak.
+	ConcurrencyBackoff bool
+	// NeedsOperator distinguishes a permanent settings refusal from a transient
+	// outage. It must survive every outer retry boundary; Reason is safe copy
+	// assembled by judgeDispatchNeedsOperator for this case.
+	NeedsOperator bool
 	// Reason is a short, human-readable cause (unavailability cause, or a
 	// summary of the produced verdict).
 	Reason string
@@ -528,15 +542,20 @@ func (jc *agentLoopJudgeCriteria) runProseRungAndFinalize() JudgeCriteriaResult 
 			jc.ctx, jc.in, jc.proseCriteria, jc.evidence, diffText,
 		)
 		if unavailable {
-			// The verifier turn MECHANISM could not run (provider/SEC-26/ctx).
-			// Round not consumed, re-run next turn (unchanged D7 contract; the
+			// The verifier turn MECHANISM could not run (provider/SEC-26/ctx),
+			// OR this is the registry's concurrency back-off
+			// (VerifierConcurrencyBackoffReason — a back-off, not an outage;
+			// surfaced distinctly in ConcurrencyBackoff so callers can stop
+			// instead of retrying, #984). Round not consumed, re-run next turn
+			// (unchanged D7 contract for genuine outages; the
 			// persistent-Judge-down case is escalated by the separate
-			// verifierUnavailabilityStreak, sign-off finding 1). Deliberately
+			// verifierUnavailabilityStreak, sign-off finding 1 — which the
+			// back-off itself never feeds, verifier_adjudication.go). Deliberately
 			// do NOT advance the diff boundary here — see
 			// resolveVerifierDiffText's own doc comment for why a retried
 			// call must still see the same cumulative diff, not a
 			// spuriously-empty one.
-			return JudgeCriteriaResult{Unavailable: true, Reason: reason}
+			return JudgeCriteriaResult{Unavailable: true, Reason: reason, ConcurrencyBackoff: reason == VerifierConcurrencyBackoffReason, NeedsOperator: strings.HasPrefix(reason, JudgeMisconfiguredReasonPrefix)}
 		}
 		// ADR-084 D9 prerequisite 3 / FR-054 (this wave): a post-progress
 		// failure comes back unavailable=FALSE with every prose criterion
@@ -704,7 +723,7 @@ func summarizeVerdict(v *task.JudgeVerdict, couldNotVerifyIDs []string) string {
 //
 // "ask" now also runs, but ONLY when it would run exactly the way the D1
 // Auto submode already lets an ordinary interactive bash call run
-// unprompted: God Mode active, or Auto-approve active for this agent
+// unprompted: God Mode active, or Auto-approve on
 // (mirrors ShellPermissionGate.liveMode's own decision, loop_policy.go) —
 // never a live approval card, preserving D2 rule 2's actual invariant ("no
 // interactive approver mid-loop"), just extended to the mechanism ADR-092
@@ -716,9 +735,9 @@ func summarizeVerdict(v *task.JudgeVerdict, couldNotVerifyIDs []string) string {
 // Shared by runMachineCheck (below) and TaskAssigneeCannotFinish's own
 // pre-run check-runner gate (task_assignee_readiness.go) — the two must
 // never disagree (TestTaskReadiness_CheckRunnerPolicyMatchesTheJudge).
-func (al *AgentLoop) machineCheckAskPolicyAcceptable(agentID, policy string) bool {
+func (al *AgentLoop) machineCheckAskPolicyAcceptable(policy string) bool {
 	return policy == string(config.ToolPolicyAsk) &&
-		(GodModeActive(al.GetConfig()) || al.autoApproveActive(agentID, "", false))
+		(GodModeActive(al.GetConfig()) || al.autoApproveActive(""))
 }
 
 // runMachineCheck dispatches ONE kind:check criterion through the assignee
@@ -758,12 +777,12 @@ func (al *AgentLoop) runMachineCheck(
 			assigneeAgentID,
 		)
 		verdict.Reason = reason
-		return verdict, al.persistEvidence(taskID, c.ID, attempt, c.Check.Command, reason, -1, false, false),
+		return verdict, al.machineCheckEvidence(taskID, c.ID, attempt, c.Check.Command, reason, -1, false, false),
 			NonVerdictUnableToVerify
 	}
 
 	policy := tools.EffectiveToolPolicy(agentInst.LoadToolPolicy(), tools.ScopeCore, agentInst.AgentType, "bash")
-	if policy != string(config.ToolPolicyAllow) && !al.machineCheckAskPolicyAcceptable(assigneeAgentID, policy) {
+	if policy != string(config.ToolPolicyAllow) && !al.machineCheckAskPolicyAcceptable(policy) {
 		// G-3/FR-116/MAJ-13: bash is policy-denied for this agent → the
 		// mechanism could not run under the agent's OWN policy (never a
 		// privileged bypass, Constraint #6) → unable_to_verify, re-run, never
@@ -774,7 +793,7 @@ func (al *AgentLoop) runMachineCheck(
 			policy, assigneeAgentID,
 		)
 		verdict.Reason = reason
-		return verdict, al.persistEvidence(taskID, c.ID, attempt, c.Check.Command, reason, -1, false, true),
+		return verdict, al.machineCheckEvidence(taskID, c.ID, attempt, c.Check.Command, reason, -1, false, true),
 			NonVerdictUnableToVerify
 	}
 
@@ -849,7 +868,7 @@ func (al *AgentLoop) runMachineCheck(
 				workspaceID, assigneeAgentID, wsErr.Error(),
 			)
 			verdict.Reason = reason
-			return verdict, al.persistEvidence(taskID, c.ID, attempt, c.Check.Command, reason, -1, false, false),
+			return verdict, al.machineCheckEvidence(taskID, c.ID, attempt, c.Check.Command, reason, -1, false, false),
 				NonVerdictUnableToVerify
 		}
 		callCtx = tools.WithTurnWorkspaceDir(callCtx, wsDir)
@@ -868,10 +887,14 @@ func (al *AgentLoop) runMachineCheck(
 	result := agentInst.Tools.ExecuteWithContext(callCtx, "bash", args, "system", "", nil)
 
 	timedOut, exitCode, output := interpretBashResult(result)
+	// Issue #721: redact BEFORE this defensive cap, not only inside the
+	// EvidenceStore — a credential straddling the cut would otherwise reach
+	// the store half-scrubbed and match no pattern there.
+	output = al.judgeEvidenceRedactor()(output)
 	if len(output) > machineCheckOutputCap {
 		output = output[:machineCheckOutputCap]
 	}
-	ev := al.persistEvidence(taskID, c.ID, attempt, c.Check.Command, output, exitCode, timedOut, false)
+	ev := al.machineCheckEvidence(taskID, c.ID, attempt, c.Check.Command, output, exitCode, timedOut, false)
 
 	// G-3/FR-116/FR-137 (blocked-check honesty, the M1 predicate): the
 	// verification MECHANISM ran to completion only when bash returned a
@@ -986,26 +1009,53 @@ func interpretBashResult(result *tools.ToolResult) (timedOut bool, exitCode int,
 	return false, -1, output
 }
 
-// persistEvidence writes an EvidenceRecord via the redacting EvidenceStore.
-// Returns nil (no on-disk record) when taskID is empty — a plan-scope round
-// (Wave 2-B) has no task to correlate evidence under in this wave; the
-// verdict itself is still computed correctly in-memory regardless.
-func (al *AgentLoop) persistEvidence(
+// machineCheckEvidence produces the EvidenceRecord for ONE machine-check
+// attempt, redacted and size-capped by the EvidenceStore's own rules, and
+// persists it when there is a task to file it under.
+//
+// The record is returned in BOTH cases (issue #722). The on-disk evidence
+// layout is partitioned by task id; the prose Judge's evidence bundle is not.
+// A chat goal adjudication carries no TaskID (JudgeCriteriaInput.validate
+// allows goal scope without one), and a plan-scope round has none either.
+// This used to return nil whenever taskID was empty, so such a Judge was told
+// "(no machine-check results on this attempt)" even when its check had just
+// passed, and every prose criterion that leaned on that output — including
+// the built-in floor items — was fail-closed. The verdict maths never
+// depended on this record (runMachineCheck computes the criterion verdict
+// itself); only the Judge's VIEW of the evidence did.
+//
+// A persistence failure is logged and degrades to the unpersisted record
+// rather than to nil: the audit trail is missing this attempt, but the Judge
+// still sees what actually ran. EvidenceStore.Record hands back the built
+// record alongside a write error (nil only on a validation error), so the
+// Judge sees the SAME record whose write failed.
+func (al *AgentLoop) machineCheckEvidence(
 	taskID, criterionID string,
 	attempt int,
 	command, output string,
 	exitCode int,
 	timedOut, policyDenied bool,
 ) *task.EvidenceRecord {
-	if taskID == "" {
-		return nil
-	}
 	es := al.evidenceStore()
+	if taskID == "" {
+		rec, err := es.Build("", criterionID, attempt, command, output, exitCode, timedOut, policyDenied)
+		if err != nil {
+			logger.WarnCF("agent", "judge: could not build machine-check evidence for a task-less adjudication; "+
+				"the Judge sees no record for this check",
+				map[string]any{"criterion_id": criterionID, "attempt": attempt, "error": err.Error()})
+			return nil
+		}
+		return rec
+	}
 	rec, err := es.Record(taskID, criterionID, attempt, command, output, exitCode, timedOut, policyDenied)
 	if err != nil {
-		logger.WarnCF("agent", "judge: failed to persist machine-check evidence",
-			map[string]any{"task_id": taskID, "criterion_id": criterionID, "attempt": attempt, "error": err.Error()})
-		return nil
+		logger.WarnCF("agent", "judge: failed to persist machine-check evidence; "+
+			"the Judge is fed the unpersisted record, the audit trail is missing this attempt",
+			map[string]any{
+				"task_id": taskID, "criterion_id": criterionID, "attempt": attempt,
+				"error": err.Error(), "record_recovered": rec != nil,
+			})
+		return rec
 	}
 	return rec
 }
@@ -1013,16 +1063,18 @@ func (al *AgentLoop) persistEvidence(
 // evidenceStore builds the redacting EvidenceStore on demand. Constructing
 // one is cheap (no I/O — only Record/List/DeleteTaskEvidence touch disk), so
 // there is no need to cache it on AgentLoop; this keeps loop.go's
-// constructor/struct untouched. redact is resolved lazily per call so a
-// config reload's newly-registered sensitive values are always honored.
+// constructor/struct untouched. The redactor resolves the config on every
+// call, so a reload's newly registered sensitive values are always honored.
+//
+// Issue #721: the redactor is the UNCONDITIONAL Judge-evidence scrubber
+// (judgeEvidenceRedactor: registered credential values plus the secret-shape
+// patterns), the same one the transcript window uses. It used to be
+// cfg.FilterSensitiveData, which is skipped when tools.filter_sensitive_data
+// is off or the text is short, and has no pattern layer — so an unregistered
+// credential the check printed went verbatim into the persisted evidence and
+// the Judge's prompt.
 func (al *AgentLoop) evidenceStore() *task.EvidenceStore {
-	redact := func(s string) string {
-		if cfg := al.GetConfig(); cfg != nil {
-			return cfg.FilterSensitiveData(s)
-		}
-		return s
-	}
-	return task.NewEvidenceStore(config.OmnipusHomeDir(), redact)
+	return task.NewEvidenceStore(config.OmnipusHomeDir(), al.judgeEvidenceRedactor())
 }
 
 // --- Prose judge (real verifier-role agent turn, own session) --------------

@@ -138,10 +138,8 @@ properties:
       check where a kernel boundary would have caught it; this is the
       accepted, founder-approved risk, not an oversight.
 
-      This is the GLOBAL default only. Two narrower scopes layer on top,
-      neither stored here: a per-agent setting
-      (Agent.auto_approve_disabled) that may only turn Auto OFF for that
-      agent, and a per-chat session modifier
+      This is the GLOBAL default only. One narrower scope layers on top,
+      not stored here: a per-chat session modifier
       (SessionModeUpdateFrame, asyncapi.yaml) that may turn Auto ON OR OFF
       for that one chat — deliberately allowed to loosen, since a human is
       present in that session; every other scope in this contract is

@@ -1,0 +1,180 @@
+Warning: Route file "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/wu11-spa/src/routes/authValidation.ts" does not export a Route. This file will not be included in the route tree.
+
+If this file is not intended to be a route, you can exclude it using one of these options:
+  1. Rename the file to "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/wu11-spa/src/routes/-authValidation.ts" (prefix with "-")
+  2. Use 'routeFileIgnorePattern' in your config to match this file
+
+Current configuration:
+  routeFileIgnorePrefix: "-"
+  routeFileIgnorePattern: undefined
+Warning: Route file "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/wu11-spa/src/routes/authValidation.test.ts" does not export a Route. This file will not be included in the route tree.
+
+If this file is not intended to be a route, you can exclude it using one of these options:
+  1. Rename the file to "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/wu11-spa/src/routes/-authValidation.test.ts" (prefix with "-")
+  2. Use 'routeFileIgnorePattern' in your config to match this file
+
+Current configuration:
+  routeFileIgnorePrefix: "-"
+  routeFileIgnorePattern: undefined
+
+ RUN  v4.1.11 /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/wu11-spa
+
+ ❯ src/routes/_app/-wu11-no-manual-create.test.ts (5 tests | 5 failed) 642ms
+     × the Agents screen, create modal, create wizard and wizard directory are deleted 17ms
+     × no SPA source imports the retired screen, wizard, modal or WorkerCard 407ms
+     × no SPA source carries the create-modal store wiring (createAgentModalOpen / openCreateAgentModal) 100ms
+     × no component outside src/lib/api calls the create-agent REST client (REST remains a non-UI API) 110ms
+     × the sidebar carries no "/agents" asset entry (Sidebar.tsx::ASSET_ITEMS) 3ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 5 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/routes/_app/-wu11-no-manual-create.test.ts > WU-11 RED — no manual create action exists (FR-108, BDD-12.8) > the Agents screen, create modal, create wizard and wizard directory are deleted
+AssertionError: FR-108 removes the Agents screen, the create wizard/modal and their helpers; still present: src/components/screens/AgentListScreen.tsx, src/components/agents/CreateAgentModal.tsx, src/components/agents/CreateAgentWizard.tsx, src/components/agents/wizard, src/components/agents/WorkerCard.tsx: expected [ …(5) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "src/components/screens/AgentListScreen.tsx",
++   "src/components/agents/CreateAgentModal.tsx",
++   "src/components/agents/CreateAgentWizard.tsx",
++   "src/components/agents/wizard",
++   "src/components/agents/WorkerCard.tsx",
++ ]
+
+ ❯ src/routes/_app/-wu11-no-manual-create.test.ts:70:7
+     68|       `FR-108 removes the Agents screen, the create wizard/modal and t…
+     69|         `still present: ${stillPresent.join(', ')}`,
+     70|     ).toEqual([])
+       |       ^
+     71|   })
+     72|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/5]⎯
+
+ FAIL  src/routes/_app/-wu11-no-manual-create.test.ts > WU-11 RED — no manual create action exists (FR-108, BDD-12.8) > no SPA source imports the retired screen, wizard, modal or WorkerCard
+AssertionError: FR-108: the retired components must have no importers left: expected [ …(31) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "src/components/agents/AgentProfile.tsx references CreateAgentModal",
++   "src/components/agents/CreateAgentModal.tsx references AgentListScreen",
++   "src/components/agents/CreateAgentModal.tsx references CreateAgentModal",
++   "src/components/agents/CreateAgentModal.tsx references CreateAgentWizard",
++   "src/components/agents/CreateAgentWizard.tsx references CreateAgentModal",
++   "src/components/agents/CreateAgentWizard.tsx references CreateAgentWizard",
++   "src/components/agents/WorkerCard.tsx references AgentListScreen",
++   "src/components/agents/WorkerCard.tsx references WorkerCard",
++   "src/components/agents/identityEditor.stories.tsx references CreateAgentWizard",
++   "src/components/agents/voice-provider-sub.tsx references WorkerCard",
++   "src/components/agents/wizard/Advanced.tsx references CreateAgentModal",
++   "src/components/agents/wizard/Step1Identity.tsx references AgentListScreen",
++   "src/components/agents/wizard/Step1Identity.tsx references CreateAgentModal",
++   "src/components/agents/wizard/Step1Identity.tsx references CreateAgentWizard",
++   "src/components/agents/wizard/Step3Tools.tsx references CreateAgentModal",
++   "src/components/agents/wizard/types.ts references CreateAgentModal",
++   "src/components/agents/wizard/types.ts references CreateAgentWizard",
++   "src/components/library/LibraryErrorBanner.tsx references CreateAgentWizard",
++   "src/components/screens/AgentListScreen.tsx references AgentListScreen",
++   "src/components/screens/AgentListScreen.tsx references CreateAgentModal",
++   "src/components/screens/AgentListScreen.tsx references WorkerCard",
++   "src/components/shared/AdvancedDisclosure.tsx references CreateAgentModal",
++   "src/components/ui/FormError.tsx references CreateAgentModal",
++   "src/components/ui/sheet.tsx references CreateAgentModal",
++   "src/hooks/useCliDetect.ts references AgentListScreen",
++   "src/hooks/useCliPathValidation.ts references CreateAgentWizard",
++   "src/hooks/useFocusRestore.ts references CreateAgentModal",
++   "src/lib/api/agents.ts references CreateAgentModal",
++   "src/lib/toolPolicyPresets.ts references CreateAgentModal",
++   "src/routes/_app/agents.index.tsx references AgentListScreen",
++   "src/routes/_app/agents.tsx references AgentListScreen",
++ ]
+
+ ❯ src/routes/_app/-wu11-no-manual-create.test.ts:82:86
+     80|       }
+     81|     }
+     82|     expect(violations, `FR-108: the retired components must have no im…
+       |                                                                                      ^
+     83|   })
+     84|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/5]⎯
+
+ FAIL  src/routes/_app/-wu11-no-manual-create.test.ts > WU-11 RED — no manual create action exists (FR-108, BDD-12.8) > no SPA source carries the create-modal store wiring (createAgentModalOpen / openCreateAgentModal)
+AssertionError: FR-108/BDD-12.8: the manual-create modal's store keys must be gone: expected [ …(4) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "src/components/agents/CreateAgentModal.tsx",
++   "src/components/agents/CreateAgentWizard.tsx",
++   "src/components/screens/AgentListScreen.tsx",
++   "src/store/ui.ts",
++ ]
+
+ ❯ src/routes/_app/-wu11-no-manual-create.test.ts:93:94
+     91|       }
+     92|     }
+     93|     expect(violations, `FR-108/BDD-12.8: the manual-create modal's sto…
+       |                                                                                              ^
+     94|   })
+     95|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/5]⎯
+
+ FAIL  src/routes/_app/-wu11-no-manual-create.test.ts > WU-11 RED — no manual create action exists (FR-108, BDD-12.8) > no component outside src/lib/api calls the create-agent REST client (REST remains a non-UI API)
+AssertionError: FR-108: REST create-agent REMAINS (non-UI API) — no UI path may call src/lib/api/agents.ts::createAgent: expected [ Array(1) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "src/components/agents/CreateAgentModal.tsx",
++ ]
+
+ ❯ src/routes/_app/-wu11-no-manual-create.test.ts:107:7
+    105|       violations,
+    106|       `FR-108: REST create-agent REMAINS (non-UI API) — no UI path may…
+    107|     ).toEqual([])
+       |       ^
+    108|   })
+    109|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/5]⎯
+
+ FAIL  src/routes/_app/-wu11-no-manual-create.test.ts > WU-11 RED — no manual create action exists (FR-108, BDD-12.8) > the sidebar carries no "/agents" asset entry (Sidebar.tsx::ASSET_ITEMS)
+AssertionError: BDD-12.8: the sidebar must not link the removed Agents screen: expected '\n  { to: \'/agents\', label: \'Agent…' not to match /['"]\/agents['"]/agents['"]
+
+- Expected:
+/['"]\/agents['"]/
+
++ Received:
+"
+  { to: '/agents', label: 'Agents', Icon: Robot },
+  { to: '/skills', label: 'Skills & Tools', Icon: PuzzlePiece },
+  { to: '/connectors', label: 'Connectors', Icon: PlugsConnected },
+"
+
+ ❯ src/routes/_app/-wu11-no-manual-create.test.ts:115:90
+    113|     expect(match, 'Sidebar.tsx::ASSET_ITEMS not found — the fixed nav …
+    114|     const entries = match![1]
+    115|     expect(entries, 'BDD-12.8: the sidebar must not link the removed A…
+       |                                                                                          ^
+    116|   })
+    117| })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/5]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  5 failed (5)
+   Start at  13:38:24
+   Duration  2.91s (transform 104ms, setup 393ms, import 17ms, tests 642ms, environment 1.54s)
+

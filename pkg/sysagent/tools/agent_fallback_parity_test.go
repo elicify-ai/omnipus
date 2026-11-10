@@ -14,9 +14,9 @@ import (
 // The expected object chain comes from AgentUpdateRequest/FallbackModel, not
 // the retired model_fallbacks string-array implementation.
 func TestAgentToolsFallbackModelsPersistAndClear(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	chain := []any{map[string]any{"model": "first", "provider": "provider-a"}, map[string]any{"model": "second", "provider": "provider-b"}}
-	args := map[string]any{"name": "Fallback Bot", "description": "Fallback parity", "soul": "Test instructions", "model": "primary", "color": "#22C55E", "icon": "Robot", "fallback_models": chain}
+	args := map[string]any{"name": "Fallback Bot", "description": "Fallback parity", "soul": "Test instructions", "model": "primary", "color": "#6E8BA8", "fallback_models": chain}
 	created := systools.NewAgentCreateTool(deps).Execute(context.Background(), args)
 	if created.IsError {
 		t.Fatalf("create: %s", created.ForLLM)
@@ -69,7 +69,7 @@ func TestAgentUpdateFallbackModelsRejectsInvalidWithoutWrites(t *testing.T) {
 		{"long provider", []any{map[string]any{"model": "a", "provider": strings.Repeat("b", 65)}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			deps, _ := newTestDeps()
+			deps, _ := newTestDeps(t)
 			store := agentstore.New(deps.Home)
 			_, err := store.CreateState("fallback-test", &config.AgentConfig{Name: "Fallback", Model: &config.AgentModelConfig{Primary: "primary"}, FallbackModels: config.FallbackModelSlice{{Model: "original", Provider: "original-provider"}}}, "original soul")
 			if err != nil {
@@ -95,7 +95,7 @@ func TestAgentUpdateFallbackModelsRejectsInvalidWithoutWrites(t *testing.T) {
 }
 
 func TestAgentUpdateFallbackModelsBoundariesAndOmission(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	store := agentstore.New(deps.Home)
 	_, err := store.CreateState("fallback-bounds", &config.AgentConfig{Name: "Bounds", Model: &config.AgentModelConfig{Primary: "primary"}}, "instructions")
 	if err != nil {
@@ -109,6 +109,14 @@ func TestAgentUpdateFallbackModelsBoundariesAndOmission(t *testing.T) {
 		model := strings.Repeat("界", length)
 		provider := strings.Repeat("p", 64)
 		result := systools.NewAgentUpdateTool(deps).Execute(context.Background(), map[string]any{"id": "fallback-bounds", "revision": state.Revision, "fallback_models": []any{map[string]any{"model": model, "provider": provider}}})
+		if length == 0 {
+			// Issue #1340 (founder rule, approved expectation change): a
+			// fallback with an empty model is not a provider/model pair.
+			if !result.IsError || !strings.Contains(result.ForLLM, "INVALID_INPUT") {
+				t.Fatalf("length 0: want INVALID_INPUT for an empty model, got %s", result.ForLLM)
+			}
+			continue
+		}
 		if result.IsError {
 			t.Fatalf("length %d: %s", length, result.ForLLM)
 		}
@@ -135,7 +143,7 @@ func TestAgentUpdateFallbackModelsBoundariesAndOmission(t *testing.T) {
 }
 
 func TestAgentUpdateFallbackModelsExternalWorkerRefusesWithoutWrites(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	store := agentstore.New(deps.Home)
 	_, err := store.CreateState("fallback-external", &config.AgentConfig{Name: "CLI", Type: config.AgentTypeWorker, Subagents: &config.SubagentsConfig{Executor: &config.ExecutorConfig{Kind: config.ExecutorKindExternalCLI, CLI: "codex"}}}, "")
 	if err != nil {

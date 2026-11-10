@@ -1,5 +1,15 @@
 # ADR-091 WP-H — Interruption recovery
 
+**Amended 2026-10-06 (founder):** Stop click 1 / Esc 1 / `/stop` stops **this chat's current turn only** and opens a **3 s window**. A second Stop / Esc / `/stop` within that window stops **this chat and its whole helper tree**; `/cancel` does that immediately. **No separate button or offer.** `/stop-redirect <instruction>` stops this chat's turn and continues **this chat** with the instruction, in **any root or helper chat**. Same semantics on web, CLI and channels. Plain Stop leaves background shells running; a second Stop / Esc within 3 s, or `/cancel`, kills them. Agent delegate `stop` / `stop_all` is unchanged (one helper's turn / its tree). Authority: founder decision, 2026-10-06.
+
+**Qualification, 2026-10-10 (external-CLI helpers):** the native steering and continuation rules in this document do not describe a helper on an external command-line tool. A live external delegation takes an instruction by interrupting its subprocess and resuming the same retained CLI conversation (a live task run too); with no CLI run in flight the request is refused as `not_steerable`. Its chat's `/stop-redirect` returns `not_steerable` while it is running or stopped, and a finished helper has no turn to replace (Resume guidance is shown). Resume, Respond and a typed message continue the same CLI conversation when it started and the gateway still retains it, run it for the first time if it never started, and otherwise refuse visibly; none of them creates a new worker session. External workers have no `message_parent`, and `delegate redirect` and `clear_goal` are refused. See [Agents guide](../../agents.md)::Workers and delegation.
+
+## Amended 2026-10-06 — founder decision
+
+FR-H-006's parent-cancel wording means **`/cancel` or a second Stop / Esc within 3 s**, not plain Stop.  Genuine parent failure initiates descendant stops and reports landed/pending/incomplete results, but live retry is **deferred to #1198 (founder 2026-10-06)**. All people/agent session stops share StopSession with 3 s to force and a further 3 s to detach; no public hard/cancel_grace. Boot never dispatches an interrupted helper from old messages; it stops it with its goal/history kept. Saved final reaches its parent once, poll OR wake; stopped parent holds it unconsumed. Authority: [The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](../architecture/ADR-20260928-sub-agent-control-plane.md)::D-A/B/E/G. Current feature gate: five reviewers — code-reviewer, silent-failure-hunter, pr-test-analyzer, architect, security-lead; the dated seven-reviewer outcome below remains history.
+
+Status: Draft
+
 **Decision:** ADR-091 §3 D12 · **Criterion:** AC-14 · **Defect:** issue #857 ·
 **UAT:** `docs/internal/testing/adr-091-uat-plan.md` lane I (issue #856)
 
@@ -17,7 +27,6 @@ turn:
 
 | `file::symbol` | Reads it to decide |
 |---|---|
-| `pkg/agent/loop_provider_retry.go::shouldRetryDelegatedRateLimit` | whether to retry a provider rate limit |
 | `pkg/agent/turn_exit.go::IsParentEnded` | whether to exit because the parent turn finished |
 
 That field's only production writer was `pkg/agent/subturn.go:2057`
@@ -43,8 +52,7 @@ durable edge in the first place.
 
 | `file::symbol` | Role after this change |
 |---|---|
-| `pkg/agent/loop_provider_retry.go::shouldRetryDelegatedRateLimit` | **re-gate** on the durable edge |
-| `pkg/agent/loop_provider_retry.go` retry loop (~L39) | unchanged in shape; becomes reachable |
+| the delegated-only provider retry loop | **deleted (#857)** — superseded by the fallback chain's in-place rate-limit retry (`pkg/providers/fallback.go::FallbackChain.Execute`, which every turn, steered children included, already runs) |
 | `pkg/agent/turn_exit.go::IsParentEnded` | **delete** |
 | `pkg/agent/loop_run_turn.go` (~L1182) parent-ended branch | **delete** |
 | `pkg/agent/turn.go::turnState.parentTurnState` | **delete** once both readers are gone |
@@ -85,7 +93,7 @@ path terminates a steered session on transport close.
 | FR-H-003 | A transient provider failure (`ClassifyError` → `FailoverRateLimit`) inside a steered turn MUST be retried, bounded by the existing max-retry constant, with the existing backoff. |
 | FR-H-004 | A permanent provider failure MUST terminalise the record and report upward through D3's single operation. The record MUST NOT be left `running`. |
 | FR-H-005 | Exhausting the retry budget is a permanent failure and MUST follow FR-H-004. |
-| FR-H-006 | `IsParentEnded`, its call site and the `parentTurnState` field MUST be deleted. A steered session's life is bounded by its own record, its `Stop` marker and D9's timeout — D8's cascade already handles a cancelled parent. |
+| FR-H-006 | `IsParentEnded`, its call site and the `parentTurnState` field MUST be deleted. A steered session's life is bounded by its own record, its `Stop` marker and D9's timeout — `/cancel` or a second Stop / Esc within 3 s handles the downward cascade; plain Stop is self-only (**amended 2026-10-06**). |
 | FR-H-007 | No code path may terminate, cancel or fail a steered session because a client transport closed. |
 | FR-H-008 | A test MUST assert that a production path **assigns** `SteeredBy` on a launched steered session, so that deleting the writer fails the suite rather than silently disabling FR-H-001. |
 

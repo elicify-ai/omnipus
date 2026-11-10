@@ -19,9 +19,18 @@
  * provided by global-setup.ts unless stated otherwise.
  */
 
-import { expect } from '@playwright/test'
+import { errors, expect, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
-import { chatInput, assistantMessages, newChatButton, waitForConnected } from './fixtures/selectors'
+import { test as canonicalTest } from './fixtures/canonical-history'
+import { seedCanonicalLegacyTranscript } from './fixtures/chat-history'
+import {
+  chatInput,
+  assistantMessages,
+  waitForConnected,
+} from './fixtures/selectors'
+import { freshChat } from './fixtures/session-setup'
+import { assistantReplyChallenge, assertHansReplyPersisted } from './fixtures/assistant-reply-acceptance'
+import { assertHansSessionUnfiled, provisionHansWorkspaceTeam } from './fixtures/hans-workspace'
 
 // ─── Bug-1: Skip onboarding button must be gone ───────────────────────────────
 
@@ -176,7 +185,7 @@ test.describe('Bug-3: Concurrent sessions both respond', () => {
   test(
     '(Bug-3-a) two chats opened in parallel both receive replies',
     async ({ page, context }) => {
-      // Real LLM turns in two tabs; deepseek-v4.1-flash (the standard e2e model) is reliable
+      // Real LLM turns in two tabs; the central e2e model (tests/e2e/e2e-model.json) is reliable
       // but slower than the old gemini pick, so budget the full slow ceiling.
       test.slow()
       // BDD: Given two browser tabs open to different chat sessions
@@ -196,25 +205,31 @@ test.describe('Bug-3: Concurrent sessions both respond', () => {
       const input2 = chatInput(page2)
       await expect(input2).toBeVisible({ timeout: 15_000 })
 
-      // Click New Chat on both to get fresh sessions.
-      const newChat1 = newChatButton(page)
-      const newChat2 = newChatButton(page2)
-      if (await newChat1.isVisible({ timeout: 3_000 }).catch(() => false)) {
-        await newChat1.click()
-        await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
-      }
-      if (await newChat2.isVisible({ timeout: 3_000 }).catch(() => false)) {
-        await newChat2.click()
-        await expect(assistantMessages(page2)).toHaveCount(0, { timeout: 10_000 })
-      }
+      // Fresh chats on both tabs. The agent row's "New chat with <Agent>"
+      // action this used to click is REMOVED (founder decision D7 — capability
+      // stays, UI access point gone; FR-029/FR-031 still govern). freshChat
+      // (fixtures/session-setup.ts) creates each tab's session via the public
+      // REST API and deep-links it, restoring the intended fresh-session
+      // setup: two tabs on two genuinely distinct, empty sessions.
+      await freshChat(page)
+      await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
+      await freshChat(page2)
+      await expect(assistantMessages(page2)).toHaveCount(0, { timeout: 10_000 })
 
-      // Send messages on both tabs nearly simultaneously.
+      // Send messages on both tabs nearly simultaneously. Dismiss first
+      // (BOTH tabs): a retry attempt's fresh page rehydrates any approval the
+      // failed attempt left pending (session_state frame on every WS connect),
+      // and that Radix dialog's focus trap hijacks the composer's Enter press
+      // (activates the focused Deny button), so the message is never sent at
+      // all. Same guard as Bug-5-a/5-b's turns.
+      await dismissAndAnnotate(page)
+      await dismissAndAnnotate(page2)
       await input1.fill('Bug-3 concurrent test hello tab1')
       await input2.fill('Bug-3 concurrent test hello tab2')
       await input1.press('Enter')
       await input2.press('Enter')
 
-      // Both must get a settled reply. deepseek-v4.1-flash (the standard e2e model) is
+      // Both must get a settled reply. The central e2e model (tests/e2e/e2e-model.json) is
       // reliable but slower than the old gemini pick, and concurrent turns share
       // the model, so allow generous headroom.
       const replyTimeout = 90_000
@@ -225,37 +240,104 @@ test.describe('Bug-3: Concurrent sessions both respond', () => {
       // on send (ChatScreen.tsx ~860 emits data-message-id + data-status="running"
       // before any token arrives). Without the `:not([data-status="running"])`
       // exclusion the test would go green the instant Enter is pressed — even under
-      // total session starvation, the exact bug it guards. So we reuse the
-      // `assistantMessages` helper (selectors.ts), which excludes running
+      // total session starvation, the exact bug it guards. So the drain waits reuse
+      // the `assistantMessages` helper (selectors.ts), which excludes running
       // placeholders. This STILL tolerates a provider-interrupted reply: an
       // interrupted/incomplete message has data-status "incomplete"/"interrupted",
       // NOT "running", so it is still admitted as a serviced reply.
-      const anyAssistantReply = (p: typeof page) => assistantMessages(p)
-
-      // Wait for at least one settled assistant reply in tab 1.
-      await expect(anyAssistantReply(page).first()).toBeVisible({ timeout: replyTimeout })
-        .catch((e) => {
-          throw new Error(
-            `BUG-3: Tab 1 did not receive a reply within ${replyTimeout / 1000}s. ` +
-            `This indicates session starvation — while tab 2 was processing, ` +
-            `tab 1 was blocked. Original error: ${e.message}`,
-          )
-        })
+      await expectAnyAssistantMessageWithApprovalDrain(page, replyTimeout).catch((e) => {
+        throw new Error(
+          `BUG-3: Tab 1 did not receive a reply within ${replyTimeout / 1000}s. ` +
+          `This indicates session starvation — while tab 2 was processing, ` +
+          `tab 1 was blocked. Original error: ${e.message}`,
+        )
+      })
 
       // Wait for at least one assistant reply in tab 2.
-      await expect(anyAssistantReply(page2).first()).toBeVisible({ timeout: replyTimeout })
-        .catch((e) => {
-          throw new Error(
-            `BUG-3: Tab 2 did not receive a reply within ${replyTimeout / 1000}s. ` +
-            `This indicates session starvation — while tab 1 was processing, ` +
-            `tab 2 was blocked. Original error: ${e.message}`,
-          )
-        })
+      await expectAnyAssistantMessageWithApprovalDrain(page2, replyTimeout).catch((e) => {
+        throw new Error(
+          `BUG-3: Tab 2 did not receive a reply within ${replyTimeout / 1000}s. ` +
+          `This indicates session starvation — while tab 1 was processing, ` +
+          `tab 2 was blocked. Original error: ${e.message}`,
+        )
+      })
 
       await page2.close()
     },
   )
 })
+
+/** Deny unexpected inline tool requests; annotate only after that ID resolves. */
+async function dismissAndAnnotate(page: Page): Promise<void> {
+  const pending = page.getByTestId('tool-approval-panel')
+  if (!(await pending.isVisible())) return
+  const identity = await pending.getAttribute('aria-labelledby')
+  if (!identity) throw new Error('approval drain: inline request has no identity')
+  // A queue replacement must not receive a decision made for the prior card.
+  const request = page.locator(
+    `[data-testid="tool-approval-panel"][aria-labelledby=${JSON.stringify(identity)}]`,
+  )
+  await request.getByRole('button', { name: 'Deny', exact: true }).click({ timeout: 5_000 })
+  await expect(request).toHaveCount(0, { timeout: 5_000 })
+  test.info().annotations.push({
+    type: 'approval-drained',
+    description: `Deny selected for inline approval ${identity}; the request is no longer pending`,
+  })
+}
+
+/** One poll tick: deny the inline request, then count; action errors propagate. */
+async function drainApprovalDialogsAndCount(page: Page): Promise<number> {
+  await dismissAndAnnotate(page)
+  return assistantMessages(page).count()
+}
+
+/**
+ * Keep the existing exact reply-count predicate while denying unexpected tools.
+ * CI39656158622 reached a network-preflight card on turn 2 (and turn 1 on
+ * retry), then waited until teardown: the former helper queried only the old
+ * modal. WU-8/#1263 cards are inline, keep the composer unlocked, and do not
+ * resolve on Escape. Click Deny on the inspected card instead. The existing
+ * count, replay-content/order checks and budgets remain unchanged; every
+ * completed denial is annotated and failed decisions fail the test loudly.
+ */
+async function expectAssistantMessagesWithApprovalDrain(
+  page: Page,
+  count: number,
+  timeoutMs: number,
+): Promise<void> {
+  await expect
+    .poll(async () => drainApprovalDialogsAndCount(page), {
+      timeout: timeoutMs,
+      intervals: [500, 1_000, 2_000, 4_000],
+    })
+    .toBe(count)
+}
+
+/**
+ * Bug-3 variant: waits for AT LEAST ONE settled assistant message to be
+ * visible — the exact predicate of the plain wait it replaces
+ * (expect(assistantMessages(p).first()).toBeVisible()), poll-shaped so the
+ * approval drain fits inside, with the SAME budget the plain waits used. No
+ * weakening: the settled-reply requirement is unchanged (assistantMessages
+ * excludes the data-status="running" placeholder ChatScreen.tsx ~860 renders
+ * synchronously on send, so the test cannot go green the instant Enter is
+ * pressed — the session-starvation signal it guards); only the drain ticks
+ * are added.
+ */
+async function expectAnyAssistantMessageWithApprovalDrain(
+  page: Page,
+  timeoutMs: number,
+): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        await drainApprovalDialogsAndCount(page)
+        return assistantMessages(page).first().isVisible()
+      },
+      { timeout: timeoutMs, intervals: [500, 1_000, 2_000, 4_000] },
+    )
+    .toBe(true)
+}
 
 // ─── Bug-5: Replay frame ordering preserved on reconnect ─────────────────────
 
@@ -263,7 +345,7 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
   test(
     '(Bug-5-a) navigating away and back to a session preserves message order',
     async ({ page }) => {
-      // Real LLM turn + replay; deepseek-v4.1-flash (the standard e2e model) is reliable but
+      // Real LLM turn + replay; the central e2e model (tests/e2e/e2e-model.json) is reliable but
       // slower than the old gemini pick, so budget the full slow ceiling.
       test.slow()
       // BDD: Given a chat session with at least 1 assistant message
@@ -276,17 +358,20 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
       const input = chatInput(page)
       await expect(input).toBeVisible({ timeout: 15_000 })
 
-      // Get a fresh session.
-      const newChat = newChatButton(page)
-      if (await newChat.isVisible({ timeout: 3_000 }).catch(() => false)) {
-        await newChat.click()
-        await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
-      }
+      // Get a fresh session (freshChat — public REST + deep-link; the
+      // agent-row "New chat" button is removed by D7).
+      await freshChat(page)
+      await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
 
-      // Send a message and wait for reply.
+      // Send a message and wait for reply. Dismiss first: a retry attempt's
+      // fresh page rehydrates any approval the failed attempt left pending
+      // (session_state frame on every WS connect), and that dialog's focus
+      // trap hijacks the composer's Enter press (activates the focused Deny
+      // button), so the message is never sent. Same guard as Bug-5-b's turns.
+      await dismissAndAnnotate(page)
       await input.fill('Bug-5 replay order test message one')
       await input.press('Enter')
-      await expect(assistantMessages(page)).toHaveCount(1, { timeout: 90_000 })
+      await expectAssistantMessagesWithApprovalDrain(page, 1, 90_000)
 
       // Capture the text of the first assistant message.
       const firstMessageText = await assistantMessages(page).first().textContent()
@@ -294,8 +379,9 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
       // Capture the URL of the current session to return to it.
       const sessionURL = page.url()
 
-      // Navigate away.
-      await page.goto('/#/agents')
+      // Navigate away. (WU-11 FR-108: away-surface is a surviving library
+      // route — the retired /#/agents no longer navigates.)
+      await page.goto('/#/skills')
       await page.waitForLoadState('networkidle')
 
       // Navigate back to the session.
@@ -314,7 +400,7 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
 
       // The replayed message must have the same content as before navigation.
       const replayedText = await assistantMessages(page).first().textContent()
-      if (firstMessageText && replayedText && firstMessageText !== replayedText) {
+      if (firstMessageText !== replayedText) {
         throw new Error(
           `BUG-5: Replayed message content differs from original. ` +
           `Before: "${firstMessageText}" | After replay: "${replayedText}". ` +
@@ -328,7 +414,7 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
   test(
     '(Bug-5-b) two-turn session: turns appear in chronological order after replay',
     async ({ page }) => {
-      // Two real LLM turns + replay; deepseek-v4.1-flash (the standard e2e model) is reliable
+      // Two real LLM turns + replay; the central e2e model (tests/e2e/e2e-model.json) is reliable
       // but slower than the old gemini pick, so budget the full slow ceiling.
       test.slow()
       // BDD: Given a session with 2 turns (user→assistant, user→assistant)
@@ -341,28 +427,33 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
       const input = chatInput(page)
       await expect(input).toBeVisible({ timeout: 15_000 })
 
-      const newChat = newChatButton(page)
-      if (await newChat.isVisible({ timeout: 3_000 }).catch(() => false)) {
-        await newChat.click()
-        await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
-      }
+      // Fresh session (freshChat — public REST + deep-link; the agent-row
+      // "New chat" button is removed by D7).
+      await freshChat(page)
+      await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
 
-      // Turn 1.
+      // Turn 1. Dismiss first: a retry attempt's fresh page rehydrates any
+      // approval the failed attempt left pending (session_state frame on
+      // every WS connect), and that dialog's focus trap hijacks the
+      // composer's Enter press (activates the focused Deny button), so the
+      // message is never sent.
+      await dismissAndAnnotate(page)
       await input.fill('Bug-5 turn 1 — first message')
       await input.press('Enter')
-      await expect(assistantMessages(page)).toHaveCount(1, { timeout: 90_000 })
+      await expectAssistantMessagesWithApprovalDrain(page, 1, 90_000)
 
       // Turn 2.
+      await dismissAndAnnotate(page)
       await input.fill('Bug-5 turn 2 — second message')
       await input.press('Enter')
-      await expect(assistantMessages(page)).toHaveCount(2, { timeout: 90_000 })
+      await expectAssistantMessagesWithApprovalDrain(page, 2, 90_000)
 
       // Capture original ordering.
       const originalTexts = await assistantMessages(page).allTextContents()
       const sessionURL = page.url()
 
-      // Navigate away and back.
-      await page.goto('/#/agents')
+      // Navigate away and back. (WU-11 FR-108: surviving away-surface.)
+      await page.goto('/#/skills')
       await page.waitForLoadState('networkidle')
       await page.goto(sessionURL)
       await page.waitForLoadState('networkidle')
@@ -392,6 +483,126 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
   )
 })
 
+// Deterministic controls for Bug-5's test-operator helper. Synthetic card DOM,
+// real locators; these supplement, never replace, the live replay assertions.
+async function showBug5Approval(page: Page, keepPending = false): Promise<void> {
+  await page.setContent('<body data-approval-decisions="[]"></body>')
+  await page.evaluate(({ keepPending }) => {
+    const card = document.createElement('section')
+    card.dataset.testid = 'tool-approval-panel'
+    card.setAttribute('aria-labelledby', 'bug5-approval-a')
+    const title = document.createElement('h3')
+    title.id = 'bug5-approval-a'
+    title.textContent = 'Tool Approval Required'
+    const command = document.createElement('pre')
+    command.textContent = 'git status --short'
+    card.append(title, command)
+    for (const [label, action] of [['Approve Once', 'allow_once'], ['Deny', 'deny']]) {
+      const button = document.createElement('button')
+      button.textContent = label
+      button.onclick = () => {
+        const decisions = JSON.parse(document.body.dataset.approvalDecisions ?? '[]') as string[]
+        decisions.push(action)
+        document.body.dataset.approvalDecisions = JSON.stringify(decisions)
+        if (!keepPending) card.remove()
+      }
+      card.append(button)
+    }
+    document.body.append(card)
+  }, { keepPending })
+}
+
+test.describe('Bug-5 inline approval helper controls', () => {
+  test('denies the inline request once and annotates its resolved identity', async ({ page }) => {
+    await showBug5Approval(page)
+    const before = test.info().annotations.length
+    await dismissAndAnnotate(page)
+    expect(await page.locator('body').getAttribute('data-approval-decisions')).toBe('["deny"]')
+    const added = test.info().annotations.slice(before)
+    expect(added).toHaveLength(1)
+    expect(added[0]).toEqual({
+      type: 'approval-drained',
+      description: 'Deny selected for inline approval bug5-approval-a; the request is no longer pending',
+    })
+  })
+
+  test('does nothing without an inline request', async ({ page }) => {
+    await page.setContent('<body data-approval-decisions="[]"></body>')
+    const before = test.info().annotations.length
+    await dismissAndAnnotate(page)
+    expect(await page.locator('body').getAttribute('data-approval-decisions')).toBe('[]')
+    expect(test.info().annotations).toHaveLength(before)
+  })
+
+  test('fails rather than recording a denial when the request stays pending', async ({ page }) => {
+    await showBug5Approval(page, true)
+    const before = test.info().annotations.length
+    await expect(dismissAndAnnotate(page)).rejects.toThrow(/toHaveCount/)
+    expect(await page.locator('body').getAttribute('data-approval-decisions')).toBe('["deny"]')
+    expect(test.info().annotations).toHaveLength(before)
+  })
+
+  test('never transfers a stale request decision to its queued replacement', async ({ page }) => {
+    await showBug5Approval(page)
+    const before = test.info().annotations.length
+    await page.addLocatorHandler(page.locator('[aria-labelledby="bug5-approval-a"]'), async () => {
+      await page.locator('[aria-labelledby="bug5-approval-a"]').evaluate(original => {
+        const replacement = original.cloneNode(true) as HTMLElement
+        replacement.setAttribute('aria-labelledby', 'bug5-approval-b')
+        const title = replacement.querySelector('h3')
+        if (!title) throw new Error('replacement control has no title')
+        title.id = 'bug5-approval-b'
+        for (const button of replacement.querySelectorAll('button')) {
+          button.onclick = () => {
+            document.body.dataset.approvalDecisions = JSON.stringify([button.textContent])
+            replacement.remove()
+          }
+        }
+        original.replaceWith(replacement)
+        document.body.dataset.controlReplacement = '1'
+      })
+    }, { times: 1 })
+    const decision = dismissAndAnnotate(page)
+    await expect(decision).rejects.toThrow(errors.TimeoutError)
+    await expect(decision).rejects.toThrow(/locator\.click: Timeout 5000ms exceeded/)
+    expect(await page.locator('body').getAttribute('data-control-replacement')).toBe('1')
+    expect(await page.locator('body').getAttribute('data-approval-decisions')).toBe('[]')
+    await expect(page.locator('[aria-labelledby="bug5-approval-b"]')).toHaveCount(1)
+    expect(test.info().annotations).toHaveLength(before)
+  })
+
+  test('propagates a stale-request error through the exact-count polling wrapper', async ({ page }) => {
+    await showBug5Approval(page)
+    const before = test.info().annotations.length
+    await page.addLocatorHandler(page.locator('[aria-labelledby="bug5-approval-a"]'), async () => {
+      await page.locator('[aria-labelledby="bug5-approval-a"]').evaluate(original => {
+        const replacement = original.cloneNode(true) as HTMLElement
+        replacement.setAttribute('aria-labelledby', 'bug5-approval-b')
+        const title = replacement.querySelector('h3')
+        if (!title) throw new Error('replacement control has no title')
+        title.id = 'bug5-approval-b'
+        for (const button of replacement.querySelectorAll('button')) {
+          button.onclick = () => {
+            document.body.dataset.approvalDecisions = JSON.stringify([button.textContent])
+            replacement.remove()
+          }
+        }
+        original.replaceWith(replacement)
+        document.body.dataset.controlReplacement = '1'
+      })
+    }, { times: 1 })
+    // No assistant rows exist: count zero would pass if a stale-click timeout
+    // were swallowed. Require the action error, not a later count mismatch.
+    const decision = expectAssistantMessagesWithApprovalDrain(page, 0, 90_000)
+    await expect(decision).rejects.toThrow(errors.TimeoutError)
+    await expect(decision).rejects.toThrow(/locator\.click: Timeout 5000ms exceeded/)
+    expect(await page.locator('body').getAttribute('data-control-replacement')).toBe('1')
+    expect(await page.locator('body').getAttribute('data-approval-decisions')).toBe('[]')
+    await expect(page.locator('[aria-labelledby="bug5-approval-b"]')).toHaveCount(1)
+    expect(test.info().annotations).toHaveLength(before)
+  })
+})
+
 // ─── Bug-Hans: Per-agent session resume returns "session not found" ───────────
 
 // Reproduce the bug a user reported (2026-05-30): Ava created a custom agent
@@ -412,14 +623,19 @@ test.describe('Bug-5: Replay frame ordering preserved after navigation', () => {
 // existing sessions and only falls back to GetSessionStore when minting a
 // new session. See pkg/gateway/websocket.go (handleChatMessage).
 //
+// NOTE (2026-10-12): the per-agent stores were deleted (DEL-10; one shared
+// session store, pkg/agent/shared_session_store.go), so the store-split root
+// cause above can no longer occur. The test keeps its user-facing outcome and
+// seeds the session the way the shared store holds it (see step 3).
+//
 // This E2E asserts the user-facing outcome: a per-agent session can be
 // resumed and a follow-up message lands without the "session not found"
 // error toast, with the message appearing in the chat.
 import * as fs from 'fs'
 import * as path from 'path'
 import { randomUUID } from 'crypto'
-const BUG_BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
-const BUG_OMNIPUS_HOME =
+let BUG_BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
+let BUG_OMNIPUS_HOME =
   process.env.OMNIPUS_HOME ||
   (process.env.HOME ? path.join(process.env.HOME, '.omnipus') : '')
 
@@ -441,38 +657,43 @@ function requireBugHarnessHome(): void {
   }
 }
 
-test.describe('Bug-Hans: per-agent session resume must not produce "session not found"', () => {
-  // NOTE (fixed 2026-08-24, was `.fixme` since 2026-05-30): the test sets
-  // up a per-agent session by writing meta.json + transcript.jsonl into
-  //   OMNIPUS_HOME/agents/<id>/sessions/<sid>/
-  // then drives a real browser to it and sends a follow-up message.
-  //
-  // The original note guessed the resulting transcript stayed empty
-  // because an empty SEEDED transcript reads to SPA hydration as "fresh
-  // chat". Live reproduction (instrumenting the real WS traffic) disproved
-  // that: the actual cause was a RACE between the composer becoming
-  // enabled/"connected" (which only proves the WS socket is open) and the
-  // SessionRoute mount effect's `attach_session` call actually completing
-  // (which is what points the chat store's `activeSessionId` at this
-  // seeded session). The test used to send its follow-up as soon as the
-  // composer looked usable — often before that effect had run — so the
-  // outbound `message` frame carried no `session_id`, and the gateway
-  // minted a brand-new session in the shared store (attributed to the
-  // default agent) instead of resuming the seeded one. Fixed by waiting
-  // for the WS `done` frame that closes out `attach_session`'s replay
-  // before sending anything — see the `expect.poll` below, right before
-  // the follow-up is sent. Two harness-only bugs (unrelated to the
-  // product) had to be fixed to even reach that race: the agent-creation
-  // POST needed the CSRF header this suite's double-submit pattern
-  // requires, and it needed `type`/`soul`, both required by the
-  // ADR-034 discriminated-union create contract added since this test
-  // was written.
-  //
-  // The underlying PRODUCT bug (not this test harness) already has a
-  // rock-solid Go regression test — TestWS_Message_FindsSession_InPerAgentStore
-  // in pkg/gateway/websocket_session_test.go — verified to fail without
-  // the fix and pass with it.
-  test('(Bug-Hans-a) follow-up message on a per-agent session succeeds', async ({ page }) => {
+// NOTE (fixed 2026-08-24, was `.fixme` since 2026-05-30): the test sets
+// up a per-agent session by writing meta.json + transcript.jsonl into
+//   OMNIPUS_HOME/agents/<id>/sessions/<sid>/
+// then drives a real browser to it and sends a follow-up message.
+//
+// The original note guessed the resulting transcript stayed empty
+// because an empty SEEDED transcript reads to SPA hydration as "fresh
+// chat". Live reproduction (instrumenting the real WS traffic) disproved
+// that: the actual cause was a RACE between the composer becoming
+// enabled/"connected" (which only proves the WS socket is open) and the
+// SessionRoute mount effect's `attach_session` call actually completing
+// (which is what points the chat store's `activeSessionId` at this
+// seeded session). The test used to send its follow-up as soon as the
+// composer looked usable — often before that effect had run — so the
+// outbound `message` frame carried no `session_id`, and the gateway
+// minted a brand-new session in the shared store (attributed to the
+// default agent) instead of resuming the seeded one. Fixed by waiting
+// for the WS `catch_up_complete` frame that closes out `attach_session`'s catch-up
+// before sending anything — see the `expect.poll` below, right before
+// the follow-up is sent. Two harness-only bugs (unrelated to the
+// product) had to be fixed to even reach that race: the agent-creation
+// POST needed the CSRF header this suite's double-submit pattern
+// requires, and it needed `type`/`soul`, both required by the
+// ADR-034 discriminated-union create contract added since this test
+// was written.
+//
+// The underlying PRODUCT bug (not this test harness) already has a
+// rock-solid Go regression test — TestWS_Message_FindsSession_InPerAgentStore
+// in pkg/gateway/websocket_session_test.go — verified to fail without
+// the fix and pass with it.
+canonicalTest.describe('Bug-Hans: per-agent session resume must not produce "session not found"', () => {
+  canonicalTest.beforeEach(async ({ canonicalGateway }) => {
+    BUG_BASE_URL = canonicalGateway.baseURL
+    BUG_OMNIPUS_HOME = canonicalGateway.homeDir
+  })
+
+  canonicalTest('(Bug-Hans-a) follow-up message on a per-agent session succeeds', async ({ page }) => {
     test.slow() // real LLM call once the message lands; budget accordingly
     requireBugHarnessHome() // unresolvable home is a fail-fast preflight, not a skip (helper above)
     // Collect every WS frame the SPA receives for the life of the test. The
@@ -529,56 +750,28 @@ test.describe('Bug-Hans: per-agent session resume must not produce "session not 
     })
     expect(agentResp.ok(), `POST /agents failed: ${agentResp.status()} ${await agentResp.text()}`).toBe(true)
     const agent = (await agentResp.json()) as { id: string; name: string }
+    await provisionHansWorkspaceTeam(page, BUG_BASE_URL, agent.id, authHeaders)
 
-    // 3. Seed a session directly under the agent's per-agent store —
-    //    mimicking what the task scheduler does when scheduling work to a
-    //    custom agent. The session_id ULID is from the gateway's normal
-    //    minting alphabet so validation.EntityID accepts it.
-    const sessionID = `session_${Date.now().toString(36).toUpperCase().padStart(26, 'A')}`
-    const sessionDir = path.join(
-      BUG_OMNIPUS_HOME,
-      'agents',
-      agent.id,
-      'sessions',
-      sessionID,
-    )
-    fs.mkdirSync(sessionDir, { recursive: true })
+    // 3. Create a session owned by that custom agent and seed its transcript -
+    //    what the task scheduler leaves behind when it schedules work to a
+    //    custom agent: a session with a prior user entry. There is ONE session
+    //    store now: the per-agent stores this test used to seed
+    //    (OMNIPUS_HOME/agents/<id>/sessions/) were deleted by DEL-10
+    //    (pkg/agent/shared_session_store.go: "There are no per-agent stores"),
+    //    so a session written there is invisible to REST ("404 session not
+    //    found") and the route can never attach it - every run failed at the
+    //    attach wait for that reason. Create it through the public REST API
+    //    (it lands in OMNIPUS_HOME/sessions/<id>) and seed the transcript there.
+    const sessionResp = await page.request.post(`${BUG_BASE_URL}/api/v1/sessions`, {
+      headers: authHeaders,
+      data: { agent_id: agent.id, type: 'chat' },
+    })
+    expect(sessionResp.ok(), `POST /sessions failed: ${sessionResp.status()} ${await sessionResp.text()}`).toBe(true)
+    const sessionID = ((await sessionResp.json()) as { id: string }).id
+    await assertHansSessionUnfiled(page, BUG_BASE_URL, sessionID)
+    const sessionDir = path.join(BUG_OMNIPUS_HOME, 'sessions', sessionID)
+    expect(fs.existsSync(sessionDir), `session dir ${sessionDir} must exist after POST /sessions`).toBe(true)
     const nowISO = new Date().toISOString()
-    const meta = {
-      id: sessionID,
-      agent_id: agent.id,
-      title: `task done — open me to resume`,
-      status: 'active',
-      created_at: nowISO,
-      updated_at: nowISO,
-      stats: {
-        tokens_in: 0, tokens_out: 0, tokens_total: 0,
-        cost: 0, tool_calls: 0, message_count: 1,
-      },
-      channel: 'webchat',
-      partitions: null,
-      agent_ids: [agent.id],
-      active_agent_id: agent.id,
-      type: 'chat',
-    }
-    fs.writeFileSync(path.join(sessionDir, 'meta.json'), JSON.stringify(meta, null, 2))
-    // Seed a real one-line transcript entry, not an empty file — this is
-    // what a session the task scheduler actually created looks like (it
-    // always has at least the kickoff message). Shape matches
-    // session.TranscriptEntry (pkg/session/daypartition.go) exactly as
-    // production writes it for a real user message on the interactive WS
-    // path (uuid id, role, agent_id, content, RFC3339 timestamp —
-    // pkg/gateway/websocket.go's handleChatMessage, `entry :=
-    // session.TranscriptEntry{...}`).
-    //
-    // NOTE ON THE ORIGINAL 2026-05-30 DIAGNOSIS: this test was `.fixme`'d on
-    // the theory that an EMPTY seeded transcript reads to SPA hydration as
-    // "fresh chat", causing the follow-up to go out with no session_id.
-    // Reproducing this test live (instrumenting the real WS traffic) proved
-    // that theory wrong: an empty transcript.jsonl round-trips through
-    // attach_session/replay/done exactly as well as a seeded one. The real
-    // cause was a RACE, unrelated to transcript content — see the comment
-    // on the `expect.poll` wait below, right before the follow-up is sent.
     const priorEntry = {
       id: randomUUID(),
       role: 'user',
@@ -586,11 +779,19 @@ test.describe('Bug-Hans: per-agent session resume must not produce "session not 
       content: 'task done — open me to resume',
       timestamp: nowISO,
     }
-    fs.writeFileSync(path.join(sessionDir, 'transcript.jsonl'), JSON.stringify(priorEntry) + '\n')
+    await seedCanonicalLegacyTranscript(sessionID, [priorEntry])
 
     // 4. Navigate directly to the seeded session (TanStack Router hash form).
     await page.goto(`/#/sessions/${sessionID}`)
-    await expect(page.getByRole('banner')).toBeVisible({ timeout: 15_000 })
+    // Wait for the chat surface to be bound to THIS session - not for the
+    // "banner" landmark. The only banner (WorkspaceTabContainer's <header>)
+    // belongs to the workspace route; a session with no workspace_id (this one:
+    // created for a custom agent with no workspace) renders the inline
+    // ChatScreen, which has none. A banner wait here is therefore a race with
+    // the route swap: it passed only if the first poll beat the swap (the old
+    // route's header still on screen) and failed 15 s later otherwise - failed
+    // the first attempt, passed on retry, in 3 of 4 runs.
+    await expect(page.locator(`[data-active-session-id="${sessionID}"]`)).toBeVisible({ timeout: 15_000 })
 
     const input = chatInput(page)
     await expect(input).toBeEnabled({ timeout: 15_000 })
@@ -610,27 +811,56 @@ test.describe('Bug-Hans: per-agent session resume must not produce "session not 
     // to the default agent) instead of resuming this one, and
     // `attach_session` for the real seeded session only goes out afterward.
     // That race, not an empty seeded transcript, is the actual, confirmed
-    // cause of this test's original failure. The server's `done` frame
-    // closing out `attach_session`'s replay (of the seeded transcript entry
-    // above) is the one genuine "session attached" signal in the WS
-    // vocabulary — there is no separate ack frame type for it.
-    await expect
+    // cause of this test's original failure. Since the #823 catch-up redesign
+    // the terminal frame of an attach_session response (incremental AND
+    // snapshot path) is `catch_up_complete` (contracts/asyncapi.yaml,
+    // receiveCatchUpComplete) - NOT `done`, which now only ends a TURN. This
+    // wait used to key on `done` and timed out on every run once the
+    // redesign landed: the same "attach finished" signal, renamed.
+    const frameDigest = () =>
+      receivedFrames
+        .map((raw) => {
+          try {
+            const f = JSON.parse(raw) as { type?: string; session_id?: string }
+            return `${f.type ?? '?'}:${f.session_id ?? '-'}`
+          } catch {
+            return 'unparseable'
+          }
+        })
+        .filter((d) => !d.startsWith('ping') && !d.startsWith('pong'))
+        .slice(-40)
+        .join(' ')
+    try {
+      await expect
       .poll(
         () =>
           receivedFrames.some((raw) => {
             try {
               const frame = JSON.parse(raw) as { type?: string; session_id?: string }
-              return frame.type === 'done' && frame.session_id === sessionID
+              return frame.type === 'catch_up_complete' && frame.session_id === sessionID
             } catch {
               return false
             }
           }),
         {
           timeout: 15_000,
-          message: `expected a WS 'done' frame for session ${sessionID} confirming attach_session's replay completed before sending a follow-up`,
+          message: `expected a WS 'catch_up_complete' frame for session ${sessionID} confirming attach_session's catch-up completed before sending a follow-up`,
         },
       )
       .toBe(true)
+    } catch (err) {
+      // Name what DID arrive: a missing terminal frame and a terminal frame
+      // carrying a different session id are different defects.
+      const detail = await page.request
+        .get(`${BUG_BASE_URL}/api/v1/sessions/${sessionID}`, { headers: authHeaders, failOnStatusCode: false })
+        .then(async (r) => `${r.status()} ${(await r.text()).slice(0, 300)}`)
+        .catch((e: unknown) => `request failed: ${String(e)}`)
+      throw new Error(
+        `${(err as Error).message}\nlast WS frames received (type:session_id): ${frameDigest()}\n` +
+          `GET /api/v1/sessions/${sessionID} -> ${detail}\npage url: ${page.url()}`,
+        { cause: err },
+      )
+    }
 
     // 5. Listen for the "session not found" error frame. If it arrives,
     //    the bug is back. We watch the page's connection store for a
@@ -639,7 +869,10 @@ test.describe('Bug-Hans: per-agent session resume must not produce "session not 
 
     // 6. Send a follow-up message. With the fix this lands normally; without
     //    it the SPA would surface the WS error.
-    await input.fill('Hello from the regression test.')
+    const challenge = assistantReplyChallenge('hans-follow-up')
+    const followup = `Hello from the regression test.\nReply only with the requested token. ${challenge.instruction}`
+    expect(followup, 'only the assistant can supply the concatenated reply nonce').not.toContain(challenge.nonce)
+    await input.fill(followup)
     await input.press('Enter')
 
     // 7. The user message bubble must appear (echoed by the WS). `.last()`,
@@ -688,5 +921,8 @@ test.describe('Bug-Hans: per-agent session resume must not produce "session not 
         },
       )
       .toContain('Hello from the regression test.')
+    // Addendum 5: the case's "follow-up succeeds" intent requires a completed saved answer, not only accepted input.
+    await assertHansReplyPersisted(page, receivedFrames, sessionID, agent.id, challenge.nonce, transcriptPath)
+    await assertHansSessionUnfiled(page, BUG_BASE_URL, sessionID)
   })
 })

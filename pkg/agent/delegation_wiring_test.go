@@ -67,7 +67,7 @@ func TestDelegationWiring_GraphSource(t *testing.T) {
 	_ = al
 
 	// workspaceID="" → injector resolves the default workspace (wsID flagged is_default).
-	got := cb.buildDynamicContext("", "", "", "", "")
+	got := cb.buildDynamicContext(0, "", "", "", "", "")
 	if !strings.Contains(got, "## Delegation") {
 		t.Fatalf("Delegation block missing.\ngot: %s", got)
 	}
@@ -95,7 +95,7 @@ func TestDelegationWiring_RuntimeGraphRefresh(t *testing.T) {
 	_ = al
 
 	// Phase A: worker must appear.
-	got1 := cb.buildDynamicContext("", "", "", "", "")
+	got1 := cb.buildDynamicContext(0, "", "", "", "", "")
 	if !strings.Contains(got1, "worker") {
 		t.Fatalf("Phase A: expected 'worker' in Delegation block.\ngot: %s", got1)
 	}
@@ -104,9 +104,9 @@ func TestDelegationWiring_RuntimeGraphRefresh(t *testing.T) {
 	rewriteWorkspaceGraph(t, home, wsID, true, nil)
 
 	// The SAME ContextBuilder — no rebuild — now reads the updated graph.
-	got2 := cb.buildDynamicContext("", "", "", "", "")
-	if strings.Contains(got2, "ray") {
-		t.Fatalf("Phase B: 'ray' must be gone after graph edit.\ngot: %s", got2)
+	got2 := cb.buildDynamicContext(0, "", "", "", "", "")
+	if strings.Contains(got2, "worker") {
+		t.Fatalf("Phase B: 'worker' must be gone after graph edit.\ngot: %s", got2)
 	}
 	if !strings.Contains(got2, "cannot delegate") {
 		t.Fatalf("Phase B: empty graph must render 'cannot delegate'.\ngot: %s", got2)
@@ -129,10 +129,10 @@ func TestDelegationWiring_RuntimeGraphRefresh_AddEdge(t *testing.T) {
 	al, cb := wireTestLoopWithGraph(t, agentID)
 	_ = al
 
-	got1 := cb.buildDynamicContext("", "", "", "", "")
+	got1 := cb.buildDynamicContext(0, "", "", "", "", "")
 	// Without edges, the injector renders cannot-delegate.
 	if !strings.Contains(got1, "cannot delegate") {
-		t.Logf("Phase A: got: %s", got1)
+		t.Fatalf("Phase A: empty graph must render 'cannot delegate'.\ngot: %s", got1)
 	}
 
 	// Phase B: add jim→worker edge without rebuilding the loop.
@@ -140,7 +140,7 @@ func TestDelegationWiring_RuntimeGraphRefresh_AddEdge(t *testing.T) {
 		edge("jim", "worker", nil, nil),
 	})
 
-	got2 := cb.buildDynamicContext("", "", "", "", "")
+	got2 := cb.buildDynamicContext(0, "", "", "", "", "")
 	if !strings.Contains(got2, "## Delegation") {
 		t.Fatalf("Phase B: Delegation block missing after adding edge.\ngot: %s", got2)
 	}
@@ -160,7 +160,7 @@ func TestDelegationWiring_RuntimeGraphRefresh_AddEdge(t *testing.T) {
 func TestDelegationWiring_BootPath(t *testing.T) {
 	const wsID = "01JWWIRINGBOOT00000000001"
 	seedWorkspaceGraph(t, wsID, true, []graphEdge{
-		edge("jim", "ava", nil, nil),
+		edge("jim", "researcher", nil, nil),
 		edge("jim", "planner", nil, nil),
 	})
 
@@ -173,12 +173,12 @@ func TestDelegationWiring_BootPath(t *testing.T) {
 		t.Fatalf("agent %q not in registry at boot", agentID)
 	}
 
-	got := inst.ContextBuilder.buildDynamicContext("", "", "", "", "")
+	got := inst.ContextBuilder.buildDynamicContext(0, "", "", "", "", "")
 	if !strings.Contains(got, "## Delegation") {
 		t.Fatalf("boot path: Delegation block missing for %q.\ngot: %s", agentID, got)
 	}
-	if !strings.Contains(got, "ava") {
-		t.Fatalf("boot path: 'ava' must appear (graph edge jim→ava).\ngot: %s", got)
+	if !strings.Contains(got, "researcher") {
+		t.Fatalf("boot path: 'researcher' must appear (graph edge jim→researcher).\ngot: %s", got)
 	}
 }
 
@@ -195,7 +195,7 @@ func TestDelegationWiring_AgentAddedOnReload(t *testing.T) {
 		edge("custom-helper", "worker", nil, nil),
 	})
 
-	al, _ := wireTestLoopWithGraph(t, "ava")
+	al, _ := wireTestLoopWithGraph(t, "mia")
 
 	const newAgentID = "custom-helper"
 	liveCfg := al.GetConfig()
@@ -216,7 +216,7 @@ func TestDelegationWiring_AgentAddedOnReload(t *testing.T) {
 		t.Fatalf("new agent %q not in registry after reload", newAgentID)
 	}
 
-	got := inst.ContextBuilder.buildDynamicContext("", "", "", "", "")
+	got := inst.ContextBuilder.buildDynamicContext(0, "", "", "", "", "")
 	if !strings.Contains(got, "## Delegation") {
 		t.Fatalf("new agent added on reload: Delegation block missing.\ngot: %s", got)
 	}
@@ -258,7 +258,7 @@ func TestDelegationWiring_Race_ConcurrentRenderAndSwap(t *testing.T) {
 			case <-stop:
 				return
 			default:
-				_ = cb.buildDynamicContext("", "", "", "", "")
+				_ = cb.buildDynamicContext(0, "", "", "", "", "")
 			}
 		}
 	}()
@@ -303,7 +303,7 @@ func TestDelegationWiring_NilInjectorNoBlock(t *testing.T) {
 
 	cb := NewContextBuilder(dir) // no WithDelegationInjector call
 
-	got := cb.buildDynamicContext("", "", "", "", "")
+	got := cb.buildDynamicContext(0, "", "", "", "", "")
 
 	if strings.Contains(got, "## Delegation") {
 		t.Errorf("with no injector set, Delegation block must not appear.\ngot: %s", got)
@@ -324,7 +324,7 @@ func TestDelegationWiring_BlockInDynamicNotCachedSection(t *testing.T) {
 	delegationBlock := "## Delegation\nSentinel delegation text"
 
 	cb := NewContextBuilder(dir)
-	cb.WithDelegationInjector(func(_ string) string { return delegationBlock })
+	cb.WithDelegationInjector(func(_ string, _ int) string { return delegationBlock })
 
 	// The static cached prompt must NOT contain the delegation block.
 	staticPrompt := cb.BuildSystemPromptWithCache()
@@ -333,7 +333,7 @@ func TestDelegationWiring_BlockInDynamicNotCachedSection(t *testing.T) {
 	}
 
 	// The dynamic context MUST contain the delegation block.
-	dynamic := cb.buildDynamicContext("", "", "", "", "")
+	dynamic := cb.buildDynamicContext(0, "", "", "", "", "")
 	if !strings.Contains(dynamic, "Sentinel delegation text") {
 		t.Errorf("delegation block must appear in buildDynamicContext output; got:\n%s", dynamic)
 	}
@@ -351,11 +351,11 @@ func TestDelegationWiring_FailClosedWhenNoDefaultWorkspace(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
 
-	const agentID = "ava"
+	const agentID = "mia"
 	al, cb := wireTestLoopWithGraph(t, agentID)
 	_ = al
 
-	got := cb.buildDynamicContext("", "", "", "", "")
+	got := cb.buildDynamicContext(0, "", "", "", "", "")
 	// Must fail-closed: no workspace ⇒ "cannot delegate".
 	if !strings.Contains(got, "cannot delegate") {
 		t.Fatalf("expected fail-closed 'cannot delegate' when no default workspace, got:\n%s", got)
@@ -372,13 +372,13 @@ func TestDelegationWiring_FailClosedWhenWorkspaceUnreadable(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
 
-	const agentID = "ava"
+	const agentID = "mia"
 	al, cb := wireTestLoopWithGraph(t, agentID)
 	_ = al
 
 	// Pass a workspace ID that does not exist on disk.
 	const missingWS = "01JWWIRINGMISS00000000001"
-	got := cb.buildDynamicContext(missingWS, "", "", "", "")
+	got := cb.buildDynamicContext(0, missingWS, "", "", "", "")
 	if !strings.Contains(got, "cannot delegate") {
 		t.Fatalf("expected fail-closed 'cannot delegate' for unreadable workspace, got:\n%s", got)
 	}
@@ -400,9 +400,9 @@ func TestDelegationWiring_WorkspaceIDThreaded(t *testing.T) {
 	home := seedWorkspaceGraph(t, wsDefault, true, []graphEdge{
 		edge("jim", "worker", nil, nil),
 	})
-	// Bound workspace: jim→ava only (NOT worker).
+	// Bound workspace: jim→researcher only (NOT worker).
 	writeWorkspaceFileForTest(t, home, wsBound, false, []graphEdge{
-		edge("jim", "ava", nil, nil),
+		edge("jim", "researcher", nil, nil),
 	})
 
 	const agentID = "jim"
@@ -410,15 +410,15 @@ func TestDelegationWiring_WorkspaceIDThreaded(t *testing.T) {
 	_ = al
 
 	// Without workspaceID (resolves to default): worker must appear.
-	gotDefault := cb.buildDynamicContext("", "", "", "", "")
+	gotDefault := cb.buildDynamicContext(0, "", "", "", "", "")
 	if !strings.Contains(gotDefault, "worker") {
 		t.Fatalf("default workspace: expected 'worker'; got:\n%s", gotDefault)
 	}
 
-	// With bound workspaceID (wsBound): ava must appear, worker must NOT.
-	gotBound := cb.buildDynamicContext(wsBound, "", "", "", "")
-	if !strings.Contains(gotBound, "ava") {
-		t.Fatalf("bound workspace: expected 'ava'; got:\n%s", gotBound)
+	// With bound workspaceID (wsBound): researcher must appear, worker must NOT.
+	gotBound := cb.buildDynamicContext(0, wsBound, "", "", "", "")
+	if !strings.Contains(gotBound, "researcher") {
+		t.Fatalf("bound workspace: expected 'researcher'; got:\n%s", gotBound)
 	}
 	if strings.Contains(gotBound, "worker") {
 		t.Fatalf("bound workspace: 'worker' must NOT appear (not in wsBound graph); got:\n%s", gotBound)
@@ -430,13 +430,13 @@ func TestDelegationWiring_WorkspaceIDThreaded(t *testing.T) {
 //
 // This is the parity test: seeds a graph (mia→jim "direct" only — the
 // edge vocabulary's entry for the asynchronous delegate-tool call pattern,
-// ADR-090 §3: Mia → Jim for heavy work — NO mia→ava), renders the delegation
+// ADR-090 §3: Mia → Jim for heavy work — NO mia→researcher), renders the delegation
 // block for mia, and asserts:
 //   (a) 'jim' appears with delegate, but not create_task.
-//   (b) 'ava' does NOT appear.
+//   (b) 'researcher' does NOT appear.
 //   (c) buildDelegationDenyChecker for mia→jim allows background and denies
 //       task — matching (a) exactly.
-//   (d) buildDelegationDenyChecker for mia→ava denies — matching (b) exactly.
+//   (d) buildDelegationDenyChecker for mia→researcher denies — matching (b) exactly.
 //
 // This proves advertisement == enforcement by construction.
 // ---------------------------------------------------------------------------
@@ -446,7 +446,8 @@ func TestDelegationWiring_Parity_AdvertisedMatchesEnforced(t *testing.T) {
 	seedWorkspaceGraph(t, wsID, true, []graphEdge{
 		// mia→jim: direct/background only, no task.
 		edge("mia", "jim", []string{"direct"}, nil),
-		// No mia→ava edge.
+		// No mia→researcher edge (researcher is a seeded agent, so (d) is a
+		// real no-edge denial, not an unknown-agent one).
 	})
 
 	const agentID = "mia"
@@ -454,7 +455,7 @@ func TestDelegationWiring_Parity_AdvertisedMatchesEnforced(t *testing.T) {
 	_ = al
 
 	// (a) render the delegation block.
-	got := cb.buildDynamicContext(wsID, "", "", "", "")
+	got := cb.buildDynamicContext(0, wsID, "", "", "", "")
 
 	// jim must appear.
 	if !strings.Contains(got, "jim") {
@@ -462,17 +463,17 @@ func TestDelegationWiring_Parity_AdvertisedMatchesEnforced(t *testing.T) {
 	}
 	// The launcher-backed delegate call is asynchronous and has no inline-wait
 	// form.
-	if !strings.Contains(got, `delegate(agent_id="jim", task="…")`) {
+	if !compactHasMode(t, got, "jim", "direct") {
 		t.Errorf("parity: delegate for jim must appear; got:\n%s", got)
 	}
 	// task must NOT appear for jim.
-	if strings.Contains(got, `create_task(agent_id="jim"`) {
+	if compactHasMode(t, got, "jim", "task") {
 		t.Errorf("parity: create_task for jim must NOT appear (task mode not in edge); got:\n%s", got)
 	}
 
-	// (b) ava must NOT appear.
-	if strings.Contains(got, "ava") {
-		t.Errorf("parity: 'ava' must NOT appear (no mia→ava edge); got:\n%s", got)
+	// (b) researcher must NOT appear.
+	if strings.Contains(got, "researcher") {
+		t.Errorf("parity: 'researcher' must NOT appear (no mia→researcher edge); got:\n%s", got)
 	}
 
 	// (c) gate: mia→jim background allowed.
@@ -486,9 +487,9 @@ func TestDelegationWiring_Parity_AdvertisedMatchesEnforced(t *testing.T) {
 		t.Errorf("parity: gate must DENY mia→jim task (not in edge Modes); got allow")
 	}
 
-	// (d) gate: mia→ava denied (no edge).
-	if denial := checkBG(ctxWS(wsID, 0), "ava"); denial == nil {
-		t.Errorf("parity: gate must DENY mia→ava (no edge); got allow")
+	// (d) gate: mia→researcher denied (no edge).
+	if denial := checkBG(ctxWS(wsID, 0), "researcher"); denial == nil {
+		t.Errorf("parity: gate must DENY mia→researcher (no edge); got allow")
 	}
 }
 
@@ -497,7 +498,7 @@ func TestDelegationWiring_Parity_AdvertisedMatchesEnforced(t *testing.T) {
 //
 // resolveDelegationLabel must return a label that includes the agent name for
 // recognized core-agent IDs, without duplicating the Subtitle when the Name
-// already contains it (e.g. "Ava — Builder" must not become "Ava — Builder (Builder)").
+// already contains it (e.g. "Omnipus — System agent" must not gain a second "(System agent)").
 // ---------------------------------------------------------------------------
 
 func TestResolveDelegationLabel_CoreAgent(t *testing.T) {
@@ -512,7 +513,7 @@ func TestResolveDelegationLabel_CoreAgent(t *testing.T) {
 		wantNotDuplicate string // Subtitle must not appear twice in the label
 		wantOk           bool
 	}{
-		{"ava", "Ava", "Builder (Builder)", true},
+		{"omnipus", "Omnipus", "System agent (System agent)", true},
 		{"jim", "Jim", "Orchestrator (Orchestrator)", true},
 		{"mia", "Mia", "Assistant (Assistant)", true},
 		{"worker", "General Purpose", "General Purpose (General Purpose)", true},
@@ -559,12 +560,12 @@ func TestResolveDelegationLabel_CoreAgent(t *testing.T) {
 }
 
 // minimalTestConfig returns a *config.Config seeded with the ADR-090 core
-// agent roster (Mia, Jim, Ava, Admin, Planner, Researcher, General Purpose +
+// agent roster (Mia, Jim, Omnipus, Planner, Researcher, General Purpose +
 // hidden engine agents) so NewAgentRegistry can find them. Ray is not seeded.
 func minimalTestConfig(t *testing.T) *config.Config {
 	t.Helper()
 	cfg := config.DefaultConfig()
-	// Seed core agents so the registry contains ava/jim/mia/ray.
+	// Seed core agents so the registry contains mia/jim/omnipus (ray is not seeded).
 	coreagent.SeedConfig(cfg)
 	return cfg
 }

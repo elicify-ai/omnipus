@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -34,7 +35,7 @@ type RunKind string
 
 const (
 	// RunKindScheduled marks a run opened by an automatic trigger fire
-	// (once/every/recurring dispatch).
+	// (once/recurring dispatch).
 	RunKindScheduled RunKind = "scheduled"
 	// RunKindManual marks a run opened by a user-initiated Run-now — either a
 	// specific recurring occurrence, or a fresh attempt on a normal task.
@@ -55,22 +56,33 @@ func IsValidRunKind(k RunKind) bool {
 // lifecycle (task.go) or to IsTerminal — see RecordSkippedOccurrence.
 const StatusSkipped Status = "skipped"
 
-// IsValidRunStatus reports whether s is one of the four statuses a TaskRun
-// may carry (in_progress, done, failed, skipped) — a narrower subset of the
-// 7-state Task Status vocabulary (StatusSkipped is not even a member of that
-// vocabulary at all — it exists only here). ADR-050 RD10 deliberately
-// excludes `canceled`/`queued` from v1: no cancel producer exists anywhere in
-// the codebase today. Consumed by CloseRun as a belt-and-suspenders guard
-// alongside IsTerminal (H4): IsTerminal is the broader Task-status terminal
-// set (done/failed today), while IsValidRunStatus is the TaskRun-specific
-// vocabulary — should Task ever grow a new terminal status IsTerminal would
-// accept but v1 TaskRun does not (e.g. a future `canceled`), CloseRun must
-// still reject it here rather than silently widening what a run can close
-// to. skipped is accepted here (a run CAN carry it) but is never produced by
-// CloseRun/OpenRun — only RecordSkippedOccurrence writes it, as a
-// fully-closed record in one shot.
+// StatusMissed records a scheduled fire that came due while the process was
+// down and could therefore never run (founder decision 2026-10-29, Q1 A: a
+// missed Calendar run stays skipped, never replayed — this record exists so
+// the Calendar can show the miss). Written in one shot by
+// RecordMissedOccurrence at boot, exactly like StatusSkipped is written by
+// RecordSkippedOccurrence: no session ever started, nothing is replayed, and
+// OpenRun/CloseRun never produce it.
+const StatusMissed Status = "missed"
+
+// IsValidRunStatus reports whether s is one of the five statuses a TaskRun
+// may carry (in_progress, done, failed, skipped, missed) — a narrower subset
+// of the Task Status vocabulary (StatusSkipped/StatusMissed are not even
+// members of that vocabulary — they exist only here). ADR-050 RD10
+// deliberately excludes `canceled`/`queued` from v1: no cancel producer
+// exists anywhere in the codebase today. Consumed by CloseRun as a
+// belt-and-suspenders guard alongside IsTerminal (H4): IsTerminal is the
+// broader Task-status terminal set (done/failed today), while
+// IsValidRunStatus is the TaskRun-specific vocabulary — should Task ever
+// grow a new terminal status IsTerminal would accept but v1 TaskRun does not
+// (e.g. a future `canceled`), CloseRun must still reject it here rather than
+// silently widening what a run can close to. skipped and missed are accepted
+// here (a run CAN carry either) but are never produced by CloseRun/OpenRun —
+// RecordSkippedOccurrence (overlap guard) and RecordMissedOccurrence (boot
+// sweep) write each, as fully-closed records in one shot.
 func IsValidRunStatus(s Status) bool {
-	return s == StatusInProgress || s == StatusDone || s == StatusFailed || s == StatusSkipped
+	return s == StatusInProgress || s == StatusDone || s == StatusFailed ||
+		s == StatusSkipped || s == StatusMissed
 }
 
 // maxRunResultChars is the TaskRun.result contract cap (TaskRun.yaml,
@@ -155,6 +167,11 @@ type TaskRun struct { //nolint:revive // exported name matches package purpose
 	StartedAt string `json:"started_at"`
 	// EndedAt is the close time, RFC 3339 UTC; nil while in_progress.
 	EndedAt *string `json:"ended_at"`
+	// RecipientSessionIDs are the sessions captured when the run actually
+	// started (FR-019): the starting agent's main and the assignee's main,
+	// deduplicated, never the creator. Fixed by the FIRST open of the run and
+	// carried unchanged by its close record; empty/absent when there is none.
+	RecipientSessionIDs []string `json:"recipient_session_ids,omitempty"`
 }
 
 // IsOpen reports whether r has not yet been closed (EndedAt is nil).
@@ -183,14 +200,24 @@ func (s *Store) runsDayFilePath(taskID string, at time.Time) string {
 	return filepath.Join(s.runsDir(taskID), at.UTC().Format("2006-01-02")+".jsonl")
 }
 
-// newRunID mints a ULID-based run identifier (lexically sortable,
-// time-ordered) using a fresh crypto-random entropy source per call —
-// mirrors pkg/session.NewSessionID rather than the package-level monotonic
-// ulid.Make() source used elsewhere in the codebase (e.g.
-// pkg/sysagent/tools/task.go), so concurrent run creation across goroutines
-// never contends on a shared monotonic reader.
+// runIDEntropy is the monotonic ULID entropy source for newRunID. ListRuns
+// breaks a StartedAt tie (RFC 3339 has second resolution) on RunID, so run IDs
+// must sort in mint order even when two are minted in the same millisecond: a
+// fresh random suffix per call only orders IDs across milliseconds. The
+// monotonic reader increments the suffix inside one millisecond; the mutex
+// is held for a single small read, so concurrent run creation does not queue
+// behind anything slow.
+var (
+	runIDMu      sync.Mutex
+	runIDEntropy = ulid.Monotonic(crand.Reader, 0)
+)
+
+// newRunID mints a ULID-based run identifier (lexically sortable, time-ordered,
+// and strictly increasing in mint order within this process).
 func newRunID() (string, error) {
-	id, err := ulid.New(ulid.Timestamp(time.Now()), crand.Reader)
+	runIDMu.Lock()
+	defer runIDMu.Unlock()
+	id, err := ulid.New(ulid.Timestamp(time.Now()), runIDEntropy)
 	if err != nil {
 		return "", fmt.Errorf("task: generate run id: %w", err)
 	}
@@ -417,7 +444,11 @@ func (s *Store) appendRunRecord(taskID string, rec TaskRun, at time.Time) error 
 // records a run with a best-effort blank session_id rather than losing run
 // history entirely; a distinct Warn log makes that anomaly visible instead
 // of silently persisting.
-func (s *Store) OpenRun(taskID string, occurrenceMs *int64, kind RunKind, sessionID string) (*TaskRun, bool, error) {
+//
+// recipients are the run's captured recipient sessions (FR-019). The FIRST open
+// fixes them; a later idempotent re-open returns the stored run unchanged, so a
+// recipient reassigned or removed after the run started cannot alter them.
+func (s *Store) OpenRun(taskID string, occurrenceMs *int64, kind RunKind, sessionID string, recipients []string) (*TaskRun, bool, error) {
 	if err := validateID(taskID); err != nil {
 		return nil, false, err
 	}
@@ -472,10 +503,46 @@ func (s *Store) OpenRun(taskID string, occurrenceMs *int64, kind RunKind, sessio
 		StartedAt:    now.Format(time.RFC3339),
 		EndedAt:      nil,
 	}
+	if len(recipients) > 0 {
+		run.RecipientSessionIDs = append([]string(nil), recipients...)
+	}
 	if err := s.appendRunRecord(taskID, run, now); err != nil {
 		return nil, false, err
 	}
 	return &run, true, nil
+}
+
+// OpenRunForSession returns the currently-open run of taskID bound to
+// sessionID, so a run-loop entry can pick up the run its dispatcher already
+// opened (with its captured recipients) instead of opening a second one. It
+// returns an error when there is none.
+func (s *Store) OpenRunForSession(taskID, sessionID string) (*TaskRun, error) {
+	if err := validateID(taskID); err != nil {
+		return nil, err
+	}
+	if sessionID == "" {
+		return nil, fmt.Errorf("task: session id must not be empty")
+	}
+	mu := s.lock.Get(taskID)
+	mu.Lock()
+	defer mu.Unlock()
+	folded, err := s.foldRunsLocked(taskID)
+	if err != nil {
+		return nil, err
+	}
+	var found *TaskRun
+	for _, r := range folded {
+		if r.SessionID != sessionID || !r.IsOpen() {
+			continue
+		}
+		if found == nil || r.StartedAt > found.StartedAt {
+			found = &r
+		}
+	}
+	if found == nil {
+		return nil, fmt.Errorf("%w: no open run of task %q is bound to session %q", ErrRunNotFound, taskID, sessionID)
+	}
+	return found, nil
 }
 
 // CloseRun appends the terminal record for runID: the SAME RunID with status
@@ -588,7 +655,7 @@ func (s *Store) occurrenceAlreadyHasRunLocked(taskID string, occurrenceMs *int64
 // got to run).
 //
 // occurrenceMs is the calendar join key — nil for a skip on a non-rrule
-// trigger (every/cron_expr), mirroring TaskRun.OccurrenceMs's own "nil for an
+// trigger (once), mirroring TaskRun.OccurrenceMs's own "nil for an
 // ad-hoc/once/manual run" contract; the caller (RunScheduled) only ever has
 // a non-nil occurrenceMs on the RRULE branch.
 //
@@ -655,6 +722,97 @@ func (s *Store) RecordSkippedOccurrence(taskID string, occurrenceMs *int64) (run
 		TaskID:       taskID,
 		OccurrenceMs: occCopy,
 		Status:       StatusSkipped,
+		SessionID:    "",
+		Kind:         RunKindScheduled,
+		StartedAt:    ts,
+		EndedAt:      &ts,
+	}
+	if err := s.appendRunRecord(taskID, newRun, now); err != nil {
+		return nil, false, err
+	}
+	return &newRun, true, nil
+}
+
+// RecordMissedOccurrence records a run-history entry for a scheduled fire
+// that came due while the process was DOWN and could therefore never run
+// (founder decision 2026-10-29, Q1 A: a missed Calendar run stays skipped,
+// never replayed — the record exists so the Calendar can show the miss).
+// Written by the task-trigger scheduler's boot sweep (pkg/agent
+// task_trigger.go, markMissedFires) BEFORE the engine recompute nils the
+// past-due pending instant; the run itself is never replayed.
+//
+// The record shape mirrors RecordSkippedOccurrence: a single ALREADY-CLOSED
+// TaskRun in one shot — StartedAt == EndedAt == now (now is when the miss
+// was OBSERVED, i.e. the boot after the downtime), SessionID == "" (no
+// session ever ran), Status == StatusMissed, Kind == RunKindScheduled.
+//
+// occurrenceMs is the calendar join key and decides the suppression rule:
+//
+//   - non-nil (a recurring/rrule occurrence): suppressed when ANY run —
+//     open or closed — already exists for that exact instant
+//     (occurrenceAlreadyHasRunLocked). That both dedupes re-boots (the
+//     recorded miss must stay exactly one record per missed instant) and
+//     never out-ranks a real run for the same occurrence: the runs resolver
+//     (latest-StartedAt-wins per occurrence, ADR-050 RD7) would otherwise
+//     let this boot-time record shadow a run that actually happened.
+//   - nil (a once trigger, whose runs carry no occurrence key per the
+//     TaskRun contract): suppressed when the task already has ANY missed
+//     record — a once job persists at most one pending at-time, so the
+//     never-due job would otherwise be re-detected (and re-recorded) on
+//     every later boot. Consequence, accepted for simplicity: a once
+//     trigger edited to a new at-time while a previous miss is already on
+//     record shares the one record. Returns recorded=false, not an error,
+//     when suppressed — "correctly declining to duplicate" is success.
+//
+// Uses the same per-task StripedLock domain and appendRunRecord write path
+// as every other run write, so the record is crash-safe and
+// cross-process-safe, and the suppression check runs inside the SAME locked
+// section as the write.
+func (s *Store) RecordMissedOccurrence(taskID string, occurrenceMs *int64) (run *TaskRun, recorded bool, err error) {
+	if idErr := validateID(taskID); idErr != nil {
+		return nil, false, idErr
+	}
+
+	mu := s.lock.Get(taskID)
+	mu.Lock()
+	defer mu.Unlock()
+
+	if occurrenceMs != nil {
+		alreadyRecorded, supErr := s.occurrenceAlreadyHasRunLocked(taskID, occurrenceMs)
+		if supErr != nil {
+			return nil, false, supErr
+		}
+		if alreadyRecorded {
+			return nil, false, nil
+		}
+	} else {
+		folded, foldErr := s.foldRunsLocked(taskID)
+		if foldErr != nil {
+			return nil, false, foldErr
+		}
+		for _, r := range folded {
+			if r.Status == StatusMissed {
+				return nil, false, nil
+			}
+		}
+	}
+
+	runID, err := newRunID()
+	if err != nil {
+		return nil, false, err
+	}
+	var occCopy *int64
+	if occurrenceMs != nil {
+		v := *occurrenceMs
+		occCopy = &v
+	}
+	now := time.Now().UTC()
+	ts := now.Format(time.RFC3339)
+	newRun := TaskRun{
+		RunID:        runID,
+		TaskID:       taskID,
+		OccurrenceMs: occCopy,
+		Status:       StatusMissed,
 		SessionID:    "",
 		Kind:         RunKindScheduled,
 		StartedAt:    ts,

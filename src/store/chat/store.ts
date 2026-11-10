@@ -4,19 +4,52 @@ import { create } from 'zustand'
 import { produce } from 'immer'
 import { generateId } from '@/lib/constants'
 import { useSessionStore } from '@/store/session'
+import { useWorkspacesStore } from '@/store/workspacesStore'
+import { blockSendForWorkspaceEntry } from '@/store/session/workspaceSendGate'
+import { recipientAddressHoldsQueue, setRosterReleaseDrain } from './recipientSend'
+import { registerWorkspaceEntryQueueResume } from '@/store/session/workspaceEntryFlow'
 import type { Message } from '@/lib/api'
 import { logDiagnostic } from '@/lib/telemetry'
-import { findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from './messages'
+import { endTurnState, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from './messages'
 import { EMPTY_BUCKET, RATE_LIMIT_CLEAR_MS, rateLimitClearTimers, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from './runtime-state'
 import { applyMessageArray, emptySessionState, omitKeys } from './session'
+import { flushHeldClearProjection, retryClearTranscriptRead } from './clear-refetch'
 import type { ChatMessage, ChatStore, OutboundQueueItem, RateLimitEventData, SessionChatState } from './types'
+import type { SessionModelChoice } from './model-choice'
 import { createOutboundResponseSlice } from './slices/outbound-responses'
 import { createOutboundLifecycleSlice } from './slices/outbound-lifecycle'
+import { createFirstSendActions, firstSendBlocksQueue, getPendingFirstSend } from './first-send'
 import { createFrameSlice } from './slices/frames'
+import { createHistorySlice, emptyHistoryState } from './history'
+import { createHistoryFrameOwner } from './history-replay'
+import { applyHistoryPageToBucket } from './history-merge'
+import { advanceHistoryEntryGenerations } from '@/lib/historyEntryReads'
+import { mergeRecordedSessionTokens } from './session-usage'
+import { currentHistoryState, liveProjectionBucket, withLiveHistoryBucket } from './history-live'
 
 // HIGH-2: consecutive unknown frame counter. Reset on any known-good frame.
 // On threshold (5), promotes to a user-visible warning toast.
 const chatRuntime = { unknownFrameCount: 0, agentIdAtLastMintSend: null as string | null }
+
+/** Update only the foreground pending message's preference, never its request.
+ *  A choice made in another chat/workspace must not affect this message. */
+function pendingModelChoicePatch(
+  state: ChatStore,
+  model: string | null,
+  provider: string | null | undefined,
+  effort?: Pick<SessionModelChoice, 'effort' | 'effortByCommand'>,
+): Partial<Pick<ChatStore, 'pendingFirstSend'>> {
+  const pending = getPendingFirstSend(state)
+  if (!pending || pending.sessionId !== null
+    || useSessionStore.getState().activeSessionId !== '__pending'
+    || (useWorkspacesStore.getState().activeWorkspaceId || null) !== pending.workspaceId) return {}
+  return {
+    pendingFirstSend: {
+      ...pending,
+      modelChoice: model ? { model, provider: provider ?? null, ...(effort?.effort ? { effort: effort.effort, ...(effort.effortByCommand ? { effortByCommand: true } : {}) } : {}) } : undefined,
+    },
+  }
+}
 
 /** Sends one drained queue item, forwarding its #823 correlation id/timestamp
  * for a QueuedOutboundMessage (a legacy plain-string entry has neither).
@@ -133,8 +166,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
    * scan with early-exit, strictly dominated by the getMessages() O(N)
    * build already happening here.
    */
-  function bucketToForeground(bucket: SessionChatState): Omit<SessionChatState, 'messageOrder' | 'trimmedCount' | 'spanBySpanId' | 'pendingSpanUpdatesBySpanId' | 'toolCallOwnerMessageId'> & { messages: ChatMessage[]; lastAssistantMessageId: string | null } {
-    const rest = omitKeys(bucket, ['messageOrder', 'trimmedCount', 'spanBySpanId', 'pendingSpanUpdatesBySpanId', 'toolCallOwnerMessageId'] as const)
+  function bucketToForeground(bucket: SessionChatState): Omit<SessionChatState, 'messageOrder' | 'trimmedCount' | 'spanBySpanId' | 'pendingSpanUpdatesBySpanId' | 'toolCallOwnerMessageId' | 'providerFallbackPairsSeen'> & { messages: ChatMessage[]; lastAssistantMessageId: string | null } {
+    const rest = omitKeys(bucket, ['messageOrder', 'trimmedCount', 'spanBySpanId', 'pendingSpanUpdatesBySpanId', 'toolCallOwnerMessageId', 'providerFallbackPairsSeen'] as const)
     return {
       ...rest,
       messages: getMessages(bucket),
@@ -161,61 +194,6 @@ export const useChatStore = create<ChatStore>((set, get) => {
       const activeBucket = (activeSid ? sessionsById[activeSid] : null) ?? EMPTY_BUCKET
       return { sessionsById, ...bucketToForeground(activeBucket) }
     })
-  }
-
-  /**
-   * Remove a bucket entirely (unlike `withBucket`, which can only
-   * patch/create). Used for FULL teardown of the `'__pending'` bucket —
-   * kickoff rollback, kickoff rejection cleanup, and the
-   * "kickoff acked while the user navigated to a different workspace"
-   * branch — none of which want a lingering empty/errored bucket
-   * left under the shared `'__pending'` key. No-op if the bucket doesn't
-   * exist. Resyncs foreground fields the same way `withBucket` does, so a
-   * delete of the CURRENTLY-foreground bucket correctly collapses to
-   * `EMPTY_BUCKET` rather than leaving stale foreground fields behind.
-   */
-  function deleteBucket(sid: string): void {
-    set((state) => {
-      if (!(sid in state.sessionsById)) return {}
-      const sessionsById = { ...state.sessionsById }
-      delete sessionsById[sid]
-      const activeSid = getActiveSid()
-      const activeBucket = (activeSid ? sessionsById[activeSid] : null) ?? EMPTY_BUCKET
-      return { sessionsById, ...bucketToForeground(activeBucket) }
-    })
-  }
-
-  /**
-   * Resolve a workspace's `kickoffAttemptStatus` slot. `'done'`
-   * deletes the entry entirely (success needs no further tracking — the
-   * server's own `setup_pending:false` already blocks a refire via the
-   * hook's ordinary guard); `'failed'` marks it so the hook's
-   * invalidate-on-failure effect can react.
-   */
-  function resolveKickoffAttempt(workspaceId: string, outcome: 'done' | 'failed'): void {
-    set((state) => {
-      const kickoffAttemptStatus = { ...state.kickoffAttemptStatus }
-      if (outcome === 'done') {
-        delete kickoffAttemptStatus[workspaceId]
-      } else {
-        kickoffAttemptStatus[workspaceId] = 'failed'
-      }
-      return { kickoffAttemptStatus }
-    })
-  }
-
-  /**
-   * Full, quiet teardown of an outstanding workspace-setup
-   * kickoff — see the public `abandonPendingKickoff` action's doc comment
-   * on the ChatStore interface for the exact contract. No-op when
-   * `pendingKickoff` is already null.
-   */
-  function abandonPendingKickoffInternal(): void {
-    const kickoff = get().pendingKickoff
-    if (kickoff === null) return
-    deleteBucket('__pending')
-    set({ pendingKickoff: null })
-    resolveKickoffAttempt(kickoff.workspaceId, 'failed')
   }
 
   /** Re-sync foreground fields from sessionsById after an external session switch. */
@@ -275,33 +253,43 @@ export const useChatStore = create<ChatStore>((set, get) => {
    */
   function maybeDrainNext(): void {
     const { pendingDrainQueue, isStreaming } = get()
-    if (pendingDrainQueue.length === 0 || isStreaming) return
+    if (pendingDrainQueue.length === 0 || isStreaming || firstSendBlocksQueue(get())) return
+    // Gate BEFORE the pop: sendMessage may refuse an unresolved destination.
+    if (blockSendForWorkspaceEntry('drain')) return
+    // @-recipient hold (founder 2026-10-11 Q1 B) — also BEFORE the pop: a
+    // queued @-addressed message must not drain into an unaddressed first
+    // send (recipient is valid only together with session_id, and dropping
+    // the addressing silently is forbidden). The hold releases as soon as a
+    // session exists, and the message then drains WITH its recipient.
+    if (recipientAddressHoldsQueue(typeof pendingDrainQueue[0] === 'string' ? pendingDrainQueue[0] : pendingDrainQueue[0]?.content)) return
     const [next, ...rest] = pendingDrainQueue
     set({ pendingDrainQueue: rest })
     drainQueuedMessage(get, next)
   }
 
+  const historyFrames = createHistoryFrameOwner({ set, get, withBucket })
+  const frameSlice = createFrameSlice({ set, get: historyFrames.get, getActiveSid, bucketToForeground, withBucket: historyFrames.withBucket, syncForeground, armRateLimitClear, maybeDrainNext, runtime: chatRuntime })
   return {
     sessionsById: {},
 
     // ── Outbound queue initial state ─────────────────────────────────────────
     outboundQueue: [],
     pendingDrainQueue: [],
-
-    // No kickoff outstanding at store init.
-    pendingKickoff: null,
-    // No per-workspace kickoff attempts tracked at store init.
-    kickoffAttemptStatus: {},
-    markKickoffInFlight: (workspaceId) => {
-      set((state) => ({
-        kickoffAttemptStatus: { ...state.kickoffAttemptStatus, [workspaceId]: 'in-flight' },
-      }))
-    },
-    resolveKickoffAttempt: (workspaceId, outcome) => {
-      resolveKickoffAttempt(workspaceId, outcome)
-    },
-    abandonPendingKickoff: () => {
-      abandonPendingKickoffInternal()
+    pendingFirstSend: null,
+    abandonedFirstSendIds: [],
+    firstSendGeneration: 0,
+    ...createFirstSendActions({ set, get, withBucket }),
+    ...createHistorySlice({ set, get, withBucket }),
+    history: emptyHistoryState(),
+    acceptHistoryFallback: (sid, page, generation, baseline) => {
+      let committed = false
+      withBucket(sid, b => {
+        if (b.history.viewGeneration !== generation || b.isReplaying || b.history.liveControlsReady || b.history.historyLoaded) return {}
+        committed = true
+        return applyHistoryPageToBucket(b, page, 'latest', baseline)
+      })
+      // #1452 D2 A2.4: an authoritative commit voids older full-content reads.
+      if (committed) advanceHistoryEntryGenerations(sid, page.entries.map(entry => entry.historyPosition))
     },
 
     // Foreground selectors — derived from sessionsById[activeSessionId].
@@ -318,7 +306,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
     toolCalls: {},
     toolCallOrder: [],
     textAtToolCallStart: {},
-    sessionTokens: 0,
+    sessionTokens: undefined,
     sessionCost: 0,
     rateLimitEvent: null,
     goalStatus: null,
@@ -333,12 +321,31 @@ export const useChatStore = create<ChatStore>((set, get) => {
     // init. See ChatStore.pendingAutoApproveChoice's doc comment.
     pendingAutoApproveChoice: null,
     setPendingAutoApproveChoice: (choice) => set({ pendingAutoApproveChoice: choice }),
-    // Phase 1 / FR-008/009/010: per-thread model override for the next
-    // outgoing message. null means "no override" — the server uses the
-    // agent's `model` config. The composer writes here on picker
-    // change; the runtime reads here in onNew and clears it.
+    // Explicit picks update the same pending chat's latest preference;
+    // restored/derived seeds never change that message-owned preference.
     nextModel: null,
-    setNextModel: (model) => set({ nextModel: model }),
+    nextModelProvider: null,
+    explicitNextModelChoice: null,
+    setNextModel: (model, provider, source) => set((state) => ({
+      nextModel: model, nextModelProvider: provider ?? null,
+      explicitNextModelChoice: source === 'user' && model
+        ? { model, provider: provider ?? null, ...(state.nextEffort ? { effort: state.nextEffort, ...(state.nextEffortByCommand ? { effortByCommand: true } : {}) } : {}) }
+        : null,
+      ...(source === 'user' ? pendingModelChoicePatch(state, model, provider, { effort: state.nextEffort, effortByCommand: state.nextEffortByCommand }) : {}),
+    })),
+    nextEffort: '',
+    nextEffortByCommand: false,
+    setNextEffort: (effort, byCommand, source) => set((state) => {
+      // Not set stores nothing extra: a choice without effort keeps its pre-effort shape.
+      const effortFields = effort ? { effort, ...(byCommand ? { effortByCommand: true } : {}) } : {}
+      if (source !== 'user' || !state.nextModel) return { nextEffort: effort, nextEffortByCommand: byCommand }
+      return {
+        nextEffort: effort,
+        nextEffortByCommand: byCommand,
+        explicitNextModelChoice: { model: state.nextModel, provider: state.nextModelProvider, ...effortFields },
+        ...pendingModelChoicePatch(state, state.nextModel, state.nextModelProvider, effortFields),
+      }
+    }),
 
     setReplaying: (value) => {
       const sid = getActiveSid()
@@ -358,7 +365,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
           clearTimeout(replayingClearTimers[sid])
           delete replayingClearTimers[sid]
         }
-        withBucket(sid, () => ({ isReplaying: true }))
+        // Recovery metadata is immediate even while transcript frames are buffered.
+        withBucket(sid, () => ({ isReplaying: true, awaitingCatchUp: true }))
         return
       }
       // No-op if already false.
@@ -381,6 +389,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
       const MIN_REPLAY_DISPLAY_MS = 750
       if (elapsed >= MIN_REPLAY_DISPLAY_MS) {
         withBucket(sid, () => ({ isReplaying: false }))
+        // D1: replay→idle — apply any transcript projection the /clear
+        // re-read held back during replay (no new network read).
+        flushHeldClearProjection(sid, withBucket)
       } else {
         // Cancel any previous pending timer before scheduling a new one so a
         // burst of `done` frames doesn't queue multiple stale clears.
@@ -390,6 +401,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
         replayingClearTimers[sid] = setTimeout(() => {
           delete replayingClearTimers[sid]
           withBucket(sid, () => ({ isReplaying: false }))
+          // D1: the deferred display window just made the bucket idle.
+          flushHeldClearProjection(sid, withBucket)
         }, MIN_REPLAY_DISPLAY_MS - elapsed)
       }
     },
@@ -407,6 +420,14 @@ export const useChatStore = create<ChatStore>((set, get) => {
         messagesById: msgById,
         messageOrder: msgOrder,
       }))
+    },
+
+    // D5 (FR-030/031 clear refresh): the history-Retry recovery control.
+    // Repeats the rejecting read AND the merge application for the retained
+    // /clear operation — never a /clear resend. No-op when no clear
+    // operation owes a refresh.
+    retryClearTranscript: (sessionId) => {
+      retryClearTranscriptRead(sessionId, withBucket)
     },
 
     // ADR-049 D2/D4/SD-C10 (verdict-card fix): originally, the WS
@@ -504,7 +525,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
     markLastMessageInterrupted: (sessionId) => {
       const sid = sessionId ?? getActiveSid()
-      withBucket(sid, (b) => {
+      withLiveHistoryBucket(withBucket, sid, (b) => {
         // ADR-070 §2.7 (grill-spec round 2, NEW-001): a bare
         // findLastAssistantMessageId scan would resolve to an already-closed
         // closedBySteer bubble if Stop/Escape/`/cancel` fires in the window
@@ -516,7 +537,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
         // already exists for the analogous pre-existing case (cancel fired
         // before the first token frame) — the trigger condition just got
         // broader, not the branch itself.
-        const lastMsgId = findOpenAssistantMessageId(b.messageOrder, b.messagesById)
+        const candidate = findOpenAssistantMessageId(b.messageOrder, b.messagesById)
+        const lastMsgId = b.history.viewMode === 'historical' && candidate && !b.messagesById[candidate]?.isStreaming ? null : candidate
         if (!lastMsgId) {
           // FR-21 / T21–T23: No assistant message exists yet (cancel fired between
           // session_started and the first token frame). The server may still send
@@ -547,8 +569,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           return {
             ...applyMessageArray(msgs, b),
             isStreaming: false,
-            activeTurnId: null,
-            activeTurnAgentId: null,
+            activeTurnId: null, activeTurnAgentId: null, idleArmedToolCalls: undefined,
           }
         }
         // FR-21 / T21–T26: set isStreaming:false AND status:'interrupted' on the message.
@@ -585,8 +606,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
           // this is one of them. Leaving activeTurnId set here would let a
           // later, unrelated done for this session misread it as "replay
           // still awaiting catch-up" and open a stray empty placeholder.
-          draft.activeTurnId = null
-          draft.activeTurnAgentId = null
+          endTurnState(draft)
         }) as Partial<SessionChatState>
       })
       // An explicit `sessionId` (e.g. the browser panel's pinned session)
@@ -605,7 +625,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
       // different bucket before the active session was set (e.g. in test scaffolding).
       const state = get()
       const activeBucket = sid ? state.sessionsById[sid] : undefined
-      const hasInterruptedInActive = activeBucket && getMessages(activeBucket).some(
+      const hasInterruptedInActive = activeBucket && getMessages(liveProjectionBucket(activeBucket)).some(
         (m: ChatMessage) => m.role === 'assistant' && m.status === 'interrupted'
       )
       if (!hasInterruptedInActive) {
@@ -697,19 +717,15 @@ export const useChatStore = create<ChatStore>((set, get) => {
       const sid = getActiveSid()
       if (!sid) return
       withBucket(sid, (b) => ({
-        sessionTokens: b.sessionTokens + tokens,
+        sessionTokens: b.sessionTokens === undefined ? undefined : b.sessionTokens + tokens,
         sessionCost: b.sessionCost + cost,
       }))
     },
 
-    seedSessionTokens: (total) => {
-      const sid = getActiveSid()
-      if (!sid) return
-      withBucket(sid, (b) => {
-        // Only seed when bucket is fresh — don't overwrite live-accumulated totals.
-        if (b.sessionTokens !== 0) return {}
-        return { sessionTokens: total }
-      })
+    seedSessionTokens: (total, sessionId) => {
+      const sid = sessionId ?? getActiveSid()
+      if (!sid || total === undefined) return
+      withBucket(sid, b => ({ sessionTokens: mergeRecordedSessionTokens(b.sessionTokens, total) }))
     },
 
     setRateLimitEvent: (event) => {
@@ -747,9 +763,9 @@ export const useChatStore = create<ChatStore>((set, get) => {
     },
 
     resetSessionForReplay: (sessionId) => {
-      // Clear all transient state so the upcoming replay rebuilds from
-      // scratch. This is the targeted reset for WS reconnect: without it,
-      // replay frames append duplicate bubbles to the existing bucket.
+      // Rebuild transient replay state; restart boot/list-version and
+      // dismissal survive withBucket's shallow merge, so reconnect cannot
+      // revive a notice the user dismissed on this boot.
       sawReplayMessageThisTurn[sessionId] = false
       replayingStartedAt[sessionId] = Date.now()
       // Re-attach refreshes the replay window — cancel any stale
@@ -767,12 +783,18 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
     // ── Outbound queue actions ────────────────────────────────────────────────
 
-    ...createOutboundLifecycleSlice({ set, get, getActiveSid, withBucket, bucketToForeground, abandonPendingKickoffInternal, maybeDrainNext, runtime: chatRuntime }),
+    ...createOutboundLifecycleSlice({ set, get: () => currentHistoryState(get(), getActiveSid()), getActiveSid, withBucket: (sid, update) => withLiveHistoryBucket(withBucket, sid, update), bucketToForeground, maybeDrainNext, runtime: chatRuntime }),
     ...createOutboundResponseSlice(),
 
-    ...createFrameSlice({ set, get, getActiveSid, bucketToForeground, withBucket, deleteBucket, resolveKickoffAttempt, abandonPendingKickoffInternal, syncForeground, armRateLimitClear, maybeDrainNext, runtime: chatRuntime }),
+    handleFrame: frame => historyFrames.handle(frame, frameSlice.handleFrame),
   }
 })
+
+// Same cycle-break registration as session/chat foreground callbacks. Entry
+// and New chat resume only AFTER their coherent destination is committed.
+registerWorkspaceEntryQueueResume(() => useChatStore.getState().drainOutboundQueue())
+// R2-S3-02: the team list loading releases an @-message held on it.
+setRosterReleaseDrain(() => useChatStore.getState().drainOutboundQueue())
 
 // Expose syncForeground so setActiveSession can call it after switching sessions.
 // Avoiding a direct import of the session store here to keep the cycle-break intact.
@@ -783,7 +805,7 @@ export function syncChatForeground(): void {
     const fg = (activeSid ? state.sessionsById[activeSid] : null) ?? EMPTY_BUCKET
     // Project messageOrder+messagesById → messages for foreground consumers
     // (messagesById itself passes through as-is — see bucketToForeground).
-    const rest = omitKeys(fg, ['messageOrder', 'trimmedCount', 'spanBySpanId', 'pendingSpanUpdatesBySpanId', 'toolCallOwnerMessageId'] as const)
+    const rest = omitKeys(fg, ['messageOrder', 'trimmedCount', 'spanBySpanId', 'pendingSpanUpdatesBySpanId', 'toolCallOwnerMessageId', 'providerFallbackPairsSeen'] as const)
     return { ...rest, messages: getMessages(fg) }
   })
 }

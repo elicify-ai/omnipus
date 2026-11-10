@@ -12,6 +12,7 @@ import { act } from 'react'
 import { useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
+import { useComposerRuntime } from '@assistant-ui/react'
 
 // ResizeObserver is required by cmdk (used inside the ModelSelector popover);
 // jsdom does not implement it. Polyfill with a noop for the tests that open
@@ -36,95 +37,53 @@ import { OmnipusComposer, ChatScreen } from './ChatScreen'
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
-vi.mock('@assistant-ui/react', () => {
-  return {
-    useThreadViewportStore: () => ({ getState: () => ({ isAtBottom: true }) }),
-    ThreadPrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Viewport: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Messages: () => null,
-    },
-    MessagePrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Parts: () => null,
-    },
-    ComposerPrimitive: {
-      Root: ({ children, className, onSubmit }: { children: React.ReactNode; className?: string; onSubmit?: (e: React.FormEvent) => void }) =>
-        React.createElement('form', { className, onSubmit, 'data-testid': 'composer-form' }, children),
-      Input: ({ disabled, placeholder, className, onChange, onKeyDown, onBlur }: {
-        disabled?: boolean; placeholder?: string; className?: string;
-        onChange?: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
-        onKeyDown?: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
-        onBlur?: () => void;
-      }) =>
-        React.createElement('textarea', {
-          disabled, placeholder, className,
-          onChange, onKeyDown, onBlur,
-          'data-testid': 'composer-input',
+const mockComposerSend = vi.fn()
+
+import { MockButton } from '@/test/assistantUiMock'
+vi.mock('@assistant-ui/react', async () => (await import('@/test/assistantUiMock')).createAssistantUiMock({
+  ThreadPrimitive: {
+    Viewport: ({ children, className }: { children: React.ReactNode; className?: string }) =>
+              React.createElement('div', { className }, children),
+  },
+  ComposerPrimitive: {
+    Root: ({ children, className, onSubmit }: { children: React.ReactNode; className?: string; onSubmit?: (e: React.FormEvent) => void }) =>
+              React.createElement('form', { className, onSubmit, 'data-testid': 'composer-form' }, children),
+    Send: ({ disabled, children, className, 'data-testid': testId, 'aria-label': ariaLabel, onClick }: {
+              disabled?: boolean; children?: React.ReactNode; className?: string;
+              'data-testid'?: string; 'aria-label'?: string; onClick?: () => void
+            }) =>
+              React.createElement(MockButton, {
+                type: 'button', disabled, className,
+                onClick,
+                'data-testid': testId ?? 'chat-send',
+                'aria-label': ariaLabel, children: children}),
+    AddAttachment: ({ disabled, children, className, 'aria-label': ariaLabel }: {
+              disabled?: boolean; children?: React.ReactNode; className?: string; 'aria-label'?: string
+            }) =>
+              React.createElement(MockButton, { type: 'button', disabled, className, 'aria-label': ariaLabel, 'data-testid': 'add-attachment', children: children}),
+  },
+  AttachmentPrimitive: {
+    Remove: ({ children, className, 'aria-label': ariaLabel }: { children?: React.ReactNode; className?: string; 'aria-label'?: string }) =>
+              React.createElement(MockButton, { type: 'button', className, 'aria-label': ariaLabel, children: children}),
+  },
+  ActionBarPrimitive: {
+    Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
+              React.createElement('div', { className }, children),
+  },
+  useComposerRuntime: vi.fn(() => ({
+          getState: () => ({ text: '' }),
+          setText: vi.fn(),
+          addAttachment: vi.fn(),
+          subscribe: vi.fn(() => vi.fn()),
+          send: mockComposerSend,
+        })),
+  useMessage: () => ({
+          id: 'msg_1',
+          role: 'assistant',
+          status: { type: 'complete' },
+          content: [],
         }),
-      // The mock Send button accepts an onClick so test code can wire
-      // up the assistant-ui onNew path. bugfixes3 deferred item 1: in
-      // production ComposerPrimitive.Send now receives a REAL onClick from
-      // ChatScreen.tsx (the send-path client-command interception — mirrors
-      // onSubmit's interceptClientCommand() check) — it is composed with the
-      // internal composer.send() callback via assistant-ui's
-      // composeEventHandlers (checkForDefaultPrevented=true), NOT a noop. This
-      // file doesn't click chat-send in any of its own tests, so the simpler
-      // passthrough here (no defaultPrevented-aware gating of a "send"
-      // callback) is sufficient — see ChatScreen.send-button-intercept.test.tsx
-      // for the dedicated coverage of that composeEventHandlers behavior.
-      Send: ({ disabled, children, className, 'data-testid': testId, 'aria-label': ariaLabel, onClick }: {
-        disabled?: boolean; children?: React.ReactNode; className?: string;
-        'data-testid'?: string; 'aria-label'?: string; onClick?: () => void
-      }) =>
-        React.createElement('button', {
-          type: 'button', disabled, className,
-          onClick,
-          'data-testid': testId ?? 'chat-send',
-          'aria-label': ariaLabel,
-        }, children),
-      AddAttachment: ({ disabled, children, className, 'aria-label': ariaLabel }: {
-        disabled?: boolean; children?: React.ReactNode; className?: string; 'aria-label'?: string
-      }) =>
-        React.createElement('button', { type: 'button', disabled, className, 'aria-label': ariaLabel, 'data-testid': 'add-attachment' }, children),
-      Attachments: () => null,
-    },
-    AttachmentPrimitive: {
-      Root: ({ children, className }: { children?: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Name: () => null,
-      Remove: ({ children, className, 'aria-label': ariaLabel }: { children?: React.ReactNode; className?: string; 'aria-label'?: string }) =>
-        React.createElement('button', { type: 'button', className, 'aria-label': ariaLabel }, children),
-      Thumb: () => null,
-    },
-    MessagePartPrimitive: { InProgress: () => null },
-    ActionBarPrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Copy: ({ children }: { children: React.ReactNode }) => React.createElement('span', {}, children),
-    },
-    AuiIf: () => null,
-    // useComposerRuntime is vi.fn() so tests that need text can override the
-    // return value with mockImplementation/mockReturnValue per test.
-    // The default returns empty text — matching the original behavior.
-    useComposerRuntime: vi.fn(() => ({
-      getState: () => ({ text: '' }),
-      setText: vi.fn(),
-      addAttachment: vi.fn(),
-      subscribe: vi.fn(() => vi.fn()),
-    })),
-    useMessage: () => ({
-      id: 'msg_1',
-      role: 'assistant',
-      status: { type: 'complete' },
-      content: [],
-    }),
-    makeAssistantToolUI: () => () => null,
-  }
-})
+}))
 
 vi.mock('@tanstack/react-query', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-query')>()
@@ -140,9 +99,9 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
   ]
   // Installed skills returned by GET /api/v1/skills — used by the skill-arg autocomplete.
   const mockSkills = [
-    { id: 'web-research',  name: 'Web Research',  version: '1.0', description: 'Web search and extraction', verified: true,  status: 'active' },
-    { id: 'code-review',   name: 'Code Review',   version: '1.0', description: 'Reviews code quality',      verified: true,  status: 'active' },
-    { id: 'data-analysis', name: 'Data Analysis', version: '1.0', description: 'Analyses datasets',         verified: false, status: 'active' },
+    { has_local_changes: false, id: 'web-research',  name: 'Web Research',  version: '1.0', description: 'Web search and extraction', verified: true,  status: 'active' },
+    { has_local_changes: false, id: 'code-review',   name: 'Code Review',   version: '1.0', description: 'Reviews code quality',      verified: true,  status: 'active' },
+    { has_local_changes: false, id: 'data-analysis', name: 'Data Analysis', version: '1.0', description: 'Analyses datasets',         verified: false, status: 'active' },
   ]
   return {
     ...actual,
@@ -156,7 +115,7 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
       if (Array.isArray(key) && key[0] === 'skills') {
         return { data: mockSkills, isError: false, refetch: vi.fn() }
       }
-      return { data: [], isError: false, refetch: vi.fn() }
+      return { data: queryDataWithEmptyHistory(key), isError: false, refetch: vi.fn() }
     },
     useMutation: () => ({ mutate: vi.fn(), isPending: false }),
     useQueryClient: () => ({ invalidateQueries: vi.fn(), removeQueries: vi.fn() }),
@@ -176,12 +135,14 @@ vi.mock('@tanstack/react-router', () => ({
 // workspaces query stays disabled (no activeWorkspaceId set here), so
 // `fetchWorkspaces` is never actually invoked — this just needs to exist so
 // the module loads.
+import { emptyHistoryPage, queryDataWithEmptyHistory, type HistoryReadPort } from '../../../tests/chat-history-paging/legacy-fixtures'
+
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([]),
-    fetchSessionMessages: vi.fn().mockResolvedValue([]),
+    fetchSessionMessages: vi.fn<HistoryReadPort>(async (sessionId) => emptyHistoryPage(sessionId)),
     fetchCommands: vi.fn().mockResolvedValue([
       { name: 'clear',   label: '/clear',   description: 'Start a new conversation',   delivery: 'client', available_while_streaming: false },
       { name: 'help',    label: '/help',    description: 'Show available commands',     delivery: 'client', available_while_streaming: false },
@@ -190,9 +151,9 @@ vi.mock('@/lib/api', async (importOriginal) => {
       { name: 'cancel',  label: '/cancel',  description: 'Cancel the current turn',     delivery: 'client', available_while_streaming: true  },
     ]),
     fetchSkills: vi.fn().mockResolvedValue([
-      { id: 'web-research',  name: 'Web Research',  version: '1.0', description: 'Web search and extraction', verified: true,  status: 'active' },
-      { id: 'code-review',   name: 'Code Review',   version: '1.0', description: 'Reviews code quality',      verified: true,  status: 'active' },
-      { id: 'data-analysis', name: 'Data Analysis', version: '1.0', description: 'Analyses datasets',         verified: false, status: 'active' },
+      { has_local_changes: false, id: 'web-research',  name: 'Web Research',  version: '1.0', description: 'Web search and extraction', verified: true,  status: 'active' },
+      { has_local_changes: false, id: 'code-review',   name: 'Code Review',   version: '1.0', description: 'Reviews code quality',      verified: true,  status: 'active' },
+      { has_local_changes: false, id: 'data-analysis', name: 'Data Analysis', version: '1.0', description: 'Analyses datasets',         verified: false, status: 'active' },
     ]),
     uploadFiles: vi.fn(),
     fetchProviders: vi.fn().mockResolvedValue([]),
@@ -203,7 +164,6 @@ vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avata
 vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
 vi.mock('./markdown-text', () => ({ MarkdownText: () => null }))
 vi.mock('./tools/GenericToolCall', () => ({ GenericToolCall: () => null }))
-vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
 // Composer Redesign (variant A1): AgentPicker/ModelPicker/TokenCounter are
 // self-contained sub-components rendered inside OmnipusComposer's context row
 // (src/components/chat/composer/*). None of the tests in this file assert on
@@ -211,7 +171,6 @@ vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null })
 // to mock the workspaces/providers query plumbing (fetchWorkspaces,
 // workspacesQueryKeys, isWorker) those sub-components own. Their own behavior
 // is covered by composer/AgentPicker.test.tsx (+ .agent-selector-open.test.tsx).
-vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
 vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 
@@ -240,7 +199,18 @@ function resetStores() {
   })
 }
 
-beforeEach(resetStores)
+beforeEach(() => {
+  resetStores()
+  mockComposerSend.mockReset()
+  // Per-case runtime overrides must not leak into later menu/skill cases.
+  vi.mocked(useComposerRuntime).mockImplementation(() => ({
+    getState: () => ({ text: '' }),
+    setText: vi.fn(),
+    addAttachment: vi.fn(),
+    subscribe: vi.fn(() => vi.fn()),
+    send: mockComposerSend,
+  }) as unknown as ReturnType<typeof useComposerRuntime>)
+})
 
 // ── T15 / US-4: slash menu driven by fetchCommands ────────────────────────────
 
@@ -291,7 +261,7 @@ describe('T15 / US-4: slash menu — API-driven palette, delivery dispatch, stre
     expect(screen.queryByText('/agents')).not.toBeInTheDocument()
   })
 
-  it('US-4/AC-1: non-streaming shows all 5 API commands including /cancel', async () => {
+  it('non-streaming lists every server command, including /clear, without inventing /new', async () => {
     act(() => {
       useChatStore.setState({ isStreaming: false })
     })
@@ -307,43 +277,56 @@ describe('T15 / US-4: slash menu — API-driven palette, delivery dispatch, stre
       fireEvent.keyDown(input, { key: 'ArrowDown' })
     })
 
-    // All 5 API commands must appear (in the Commands section)
+    // Founder X3: /clear is in this server fixture; /new is omitted. Neither
+    // client-side hiding nor invented alias rows may change that table.
+    expect(screen.getAllByRole('option').map((option) => option.textContent?.match(/^\/[a-z0-9-]+/)?.[0])).toEqual([
+      '/sessions', '/workspace', '/clear', '/help', '/model', '/agents', '/cancel',
+      '/code-review', '/data-analysis', '/web-research',
+    ])
     expect(screen.getByText('/cancel')).toBeInTheDocument()
     expect(screen.getByText('/clear')).toBeInTheDocument()
+    expect(screen.queryByText('/new')).not.toBeInTheDocument()
     expect(screen.getByText('/help')).toBeInTheDocument()
     expect(screen.getByText('/model')).toBeInTheDocument()
     expect(screen.getByText('/agents')).toBeInTheDocument()
   })
 
-  it('US-4/AC-2: delivery:client /clear runs its client handler and does NOT send a message', async () => {
-    // /clear must clear messages locally and NOT send "/clear" to the backend.
+  it('selecting the listed server /clear sends it unchanged and does not clear the chat', async () => {
     act(() => {
       useChatStore.setState({ isStreaming: false, messages: [{ id: 'msg1', role: 'user', content: 'hi', timestamp: '', status: 'done' }] })
       useSessionStore.setState({ activeAgentId: 'general-assistant', activeSessionId: 'sess_1' })
     })
+    let composerText = '/clear'
+    const sentTexts: string[] = []
+    mockComposerSend.mockImplementation(() => { sentTexts.push(composerText) })
+    vi.mocked(useComposerRuntime).mockReturnValue({
+      getState: () => ({ text: composerText }),
+      setText: vi.fn((text: string) => { composerText = text }),
+      addAttachment: vi.fn(),
+      subscribe: vi.fn(() => vi.fn()),
+      send: mockComposerSend,
+    } as unknown as ReturnType<typeof useComposerRuntime>)
 
     render(<OmnipusComposer />)
 
     const input = screen.getByTestId('composer-input')
 
-    // Type "/clear" to filter the menu to /clear.
     act(() => {
       fireEvent.change(input, { target: { value: '/clear' } })
     })
-    act(() => {
-      fireEvent.keyDown(input, { key: 'ArrowDown' })
-    })
-
-    // "/clear" must appear in the menu.
     expect(screen.getByText('/clear')).toBeInTheDocument()
-
-    // Press Enter to execute the command.
+    expect(screen.getAllByRole('option').map((option) => option.textContent?.match(/^\/[a-z0-9-]+/)?.[0])).toEqual(['/clear'])
     act(() => {
       fireEvent.keyDown(input, { key: 'Enter' })
     })
 
-    // After executing /clear, messages should be cleared.
-    expect(useChatStore.getState().messages).toHaveLength(0)
+    // The selected palette closes, but the existing conversation is intact.
+    expect(screen.queryByText('/clear')).not.toBeInTheDocument()
+    expect(mockComposerSend).toHaveBeenCalledTimes(1)
+    expect(sentTexts).toEqual(['/clear'])
+    expect(useSessionStore.getState().activeSessionId).toBe('sess_1')
+    expect(useChatStore.getState().messages).toHaveLength(1)
+    expect(useChatStore.getState().messages[0]).toEqual({ id: 'msg1', role: 'user', content: 'hi', timestamp: '', status: 'done' })
   })
 
   it('US-4/AC-3: delivery:client /agents opens the agent selector (client command dispatch)', async () => {
@@ -358,6 +341,7 @@ describe('T15 / US-4: slash menu — API-driven palette, delivery dispatch, stre
       setText: mockSetText,
       addAttachment: vi.fn(),
       subscribe: vi.fn(() => vi.fn()),
+      send: mockComposerSend,
     })
 
     render(<OmnipusComposer />)
@@ -621,6 +605,7 @@ describe('Partitioned slash menu — Skills section', () => {
       setText: mockSetText,
       addAttachment: vi.fn(),
       subscribe: vi.fn(() => vi.fn()),
+      send: mockComposerSend,
     })
 
     render(<OmnipusComposer />)
@@ -657,6 +642,7 @@ describe('Partitioned slash menu — Skills section', () => {
       setText: mockSetText,
       addAttachment: vi.fn(),
       subscribe: vi.fn(() => vi.fn()),
+      send: mockComposerSend,
     })
 
     render(<OmnipusComposer />)
@@ -679,7 +665,7 @@ describe('Partitioned slash menu — Skills section', () => {
     expect(mockSetText).toHaveBeenCalledWith('/code-review ')
   })
 
-  it('typing "/cl" shows /clear command but NOT unrelated skills', async () => {
+  it('typing "/cl" lists the server /clear row only, without unrelated skills', async () => {
     act(() => {
       useChatStore.setState({ isStreaming: false })
     })
@@ -694,8 +680,9 @@ describe('Partitioned slash menu — Skills section', () => {
       fireEvent.keyDown(input, { key: 'ArrowDown' })
     })
 
-    // /clear must appear in Commands section
+    // X3: this fixture returns a canonical /clear row (not just an alias).
     expect(screen.getByText('/clear')).toBeInTheDocument()
+    expect(screen.getAllByRole('option').map((option) => option.textContent?.match(/^\/[a-z0-9-]+/)?.[0])).toEqual(['/clear'])
     // Skills that don't start with "cl" must NOT appear
     expect(screen.queryByText('/web-research')).not.toBeInTheDocument()
     expect(screen.queryByText('/data-analysis')).not.toBeInTheDocument()

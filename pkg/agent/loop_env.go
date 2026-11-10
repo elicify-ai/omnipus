@@ -8,6 +8,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/routing"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
@@ -53,10 +54,20 @@ func (al *AgentLoop) wireEnvProviders(cfg *config.Config, registry *AgentRegistr
 	// Wire the per-turn working-directory injector for every agent in this registry.
 	wireWorkingDirInjectors(al, registry)
 
+	// Wire the per-turn mode note (FR-015) for every agent in this registry.
+	wireModeNoteInjectors(al, registry)
+	wireChannelsInjectors(al, registry)
+
 	// Wire the per-turn, per-workspace project-shelf resolver for every agent
 	// in this registry (ADR-072 R1 fix — see wireProjectShelfResolvers).
 	wireProjectShelfResolvers(al, registry)
 }
+
+// delegationFailClosedBlock is the "## Delegation" text rendered whenever the
+// injector cannot establish what the gate would allow (unreadable graph or
+// limit, unresolvable workspace, registry invariant break): the agent is told
+// plainly it cannot delegate rather than receiving no block at all.
+const delegationFailClosedBlock = "## Delegation\nYou cannot delegate to other agents — complete the task yourself."
 
 // wireDelegationInjectors installs a delegation-context callback on every
 // agent's ContextBuilder in registry. The callback is invoked on each turn from
@@ -87,23 +98,23 @@ func wireDelegationInjectors(al *AgentLoop, registry *AgentRegistry) {
 
 		// Capture by value so the closure refers to this specific agentID string.
 		id := agentID
-		agentInst.ContextBuilder.WithDelegationInjector(func(workspaceID string) string {
+		agentInst.ContextBuilder.WithDelegationInjector(func(workspaceID string, currentDepth int) string {
 			// DW-001: read the CURRENT live registry — not the one captured at wire time.
 			// After a hot-reload, al.registry is the new value.
 			liveRegistry := al.GetRegistry()
 			if liveRegistry == nil {
-				logger.WarnCF("agent.env",
+				logger.ErrorCF("agent.env",
 					"wireDelegationInjectors: registry is nil in delegation injector — invariant break",
 					map[string]any{"error_id": "DW-001", "agent_id": id})
-				return ""
+				return delegationFailClosedBlock
 			}
 			// DW-002: the agent must still be present in the live registry.
 			_, exists := liveRegistry.GetAgent(id)
 			if !exists {
-				logger.WarnCF("agent.env",
+				logger.ErrorCF("agent.env",
 					"wireDelegationInjectors: agent not found in live registry — invariant break",
 					map[string]any{"error_id": "DW-002", "agent_id": id})
-				return ""
+				return delegationFailClosedBlock
 			}
 
 			// Resolve the effective workspace, mirroring resolveEffectiveWorkspaceID
@@ -120,7 +131,7 @@ func wireDelegationInjectors(al *AgentLoop, registry *AgentRegistry) {
 						"wireDelegationInjectors: cannot resolve default workspace — rendering fail-closed delegation block",
 						map[string]any{"agent_id": id, "error": errString(err)},
 					)
-					return "## Delegation\nYou cannot delegate to other agents — complete the task yourself."
+					return delegationFailClosedBlock
 				}
 				wsID = def
 			}
@@ -134,7 +145,7 @@ func wireDelegationInjectors(al *AgentLoop, registry *AgentRegistry) {
 					"wireDelegationInjectors: workspace delegation graph unreadable — rendering fail-closed delegation block",
 					map[string]any{"agent_id": id, "workspace_id": wsID, "error": err.Error()},
 				)
-				return "## Delegation\nYou cannot delegate to other agents — complete the task yourself."
+				return delegationFailClosedBlock
 			}
 
 			// Filter to outgoing edges from this agent.
@@ -148,11 +159,20 @@ func wireDelegationInjectors(al *AgentLoop, registry *AgentRegistry) {
 			// one exists for a specific target) is enforced separately when the
 			// target session is launched and does not change
 			// this general-roster footer.
-			configuredDepthCap, depthErr := liveCfg.Performance.EffectiveMaxDelegationDepth()
-			if depthErr != nil {
-				configuredDepthCap = 0
+			// An invalid limit cannot be advertised truthfully: fail closed (the
+			// gate denies on the same error — buildDelegationDenyChecker).
+			configuredDepthCap, depthOK := configuredDelegationDepth(liveCfg.Performance, "delegation block (agent "+id+")")
+			if !depthOK {
+				return delegationFailClosedBlock
 			}
 			globalDepthCap := resolveEffectiveDelegationDepth(nil, configuredDepthCap)
+
+			// Descriptions are display metadata, not delegation authority. Read
+			// the live config each turn, matching registry ID normalization.
+			descriptions := make(map[string]string, len(liveCfg.Agents.List))
+			for _, agentCfg := range liveCfg.Agents.List {
+				descriptions[routing.NormalizeAgentID(agentCfg.ID)] = agentCfg.Description
+			}
 
 			var targets []delegationTarget
 			for _, e := range edges {
@@ -186,14 +206,50 @@ func wireDelegationInjectors(al *AgentLoop, registry *AgentRegistry) {
 					}
 				}
 				targets = append(targets, delegationTarget{
-					ID:    e.ToAgent,
-					Label: label,
-					Modes: modes,
-					Depth: e.Depth,
+					ID:          e.ToAgent,
+					Label:       label,
+					Description: descriptions[routing.NormalizeAgentID(e.ToAgent)],
+					Modes:       modes,
+					Depth:       e.Depth,
+					// The gate's cap for this edge, from the RAW configured
+					// ceiling (see delegationTarget.DepthCap).
+					DepthCap: resolveEffectiveDelegationDepth(e.Depth, configuredDepthCap),
 				})
 			}
 
-			return buildDelegationContext(targets, globalDepthCap)
+			return buildDelegationContext(targets, globalDepthCap, currentDepth)
+		})
+	}
+}
+
+// omnipusGodModeNote is the one-line God Mode note Omnipus's per-turn context
+// carries while God Mode is active (omnipus-system-agent FR-015). Wording per
+// the founder's 2026-10-14 ruling: the note discloses what God Mode does —
+// approvals skipped, writes and network open, internal files still protected
+// (L1 amendment §2.2 D7 floor), and started programs see the gateway
+// environment including API keys (accepted risk).
+// channels-spec-r8 FR-036 adds the one always-ask exception clause.
+const omnipusGodModeNote = "God Mode is active: approvals are skipped — post the plan summary as an ordinary message and proceed without the Go question and without tool approvals — except set_channel_outbound, which always asks for approval —, including changes another agent asked for. Clarification questions for genuinely missing information still appear. You can write anywhere on this machine and use the network, and programs you start see the gateway environment, including API keys. Omnipus's internal files stay protected."
+
+// wireModeNoteInjectors installs the per-turn mode-note callback: Omnipus gets
+// the God Mode note while GodModeActive reads true for the live config, and no
+// note otherwise; every other agent gets no mode note (the spec puts the note
+// in Omnipus's context only).
+func wireModeNoteInjectors(al *AgentLoop, registry *AgentRegistry) {
+	for _, agentID := range registry.ListAgentIDs() {
+		agentInst, ok := registry.GetAgent(agentID)
+		if !ok || agentInst == nil || agentInst.ContextBuilder == nil {
+			continue
+		}
+		if coreagent.CoreAgentID(agentID) != coreagent.IDOmnipus {
+			agentInst.ContextBuilder.WithModeNoteInjector(nil)
+			continue
+		}
+		agentInst.ContextBuilder.WithModeNoteInjector(func() string {
+			if GodModeActive(al.GetConfig()) {
+				return omnipusGodModeNote
+			}
+			return ""
 		})
 	}
 }
@@ -229,9 +285,10 @@ func wireWorkingDirInjectors(al *AgentLoop, registry *AgentRegistry) {
 
 		id := agentID
 		agentInst.ContextBuilder.WithWorkingDirInjector(func(workspaceID string) string {
-			// Admin operates from its agent home, even if a workspace record
-			// claims membership. Keep context consistent with turn admission.
-			if coreagent.CoreAgentID(id) == coreagent.IDAdmin {
+			// Omnipus operates from its agent home although it is a member of
+			// the default workspace (L1 amendment §2.2 D4). Keep context
+			// consistent with turn admission.
+			if coreagent.CoreAgentID(id) == coreagent.IDOmnipus {
 				return ""
 			}
 			home := omnipusHome()

@@ -3,6 +3,7 @@
 import type { ZodType } from 'zod'
 import { z } from 'zod'
 import {
+  ErrorResponse as ErrorResponseSchema,
   GlobalToolPolicies as GlobalToolPoliciesSchema,
   ToolRegistryEntry as ToolRegistryEntrySchema,
   ToolApprovalResponse as ToolApprovalResponseSchema,
@@ -25,6 +26,7 @@ import type {
   ToolApprovalActionRequest,
   ToolApprovalResponse,
 } from '@/lib/api/generated/openapi-types'
+import { ApiError, isApiError } from '@/lib/api-error'
 import { REAUTH_HEADER } from './auth'
 import { request } from './http'
 import { requestConfiguration } from './configuration'
@@ -148,6 +150,16 @@ export function submitToolApproval(
 // ── Global Tool Policies ──────────────────────────────────────────────────────
 // GlobalToolPolicies — re-exported from generated openapi-types (no local body needed).
 
+const persistedPolicyActivationMessage =
+  'The settings were saved, but could not be applied to running agents. ' +
+  'Retry applying the change, or restart Omnipus.'
+// Client-only provenance: status 503 alone never proves that a write committed.
+const persistedPolicyActivationErrors = new WeakSet<ApiError>()
+
+export function isPersistedPolicyActivationError(error: unknown): error is ApiError {
+  return isApiError(error) && persistedPolicyActivationErrors.has(error)
+}
+
 export function fetchGlobalToolPolicies(): Promise<GlobalToolPolicies> {
   return request<GlobalToolPolicies>('/security/tool-policies', undefined, GlobalToolPoliciesSchema)
 }
@@ -156,15 +168,40 @@ export function fetchGlobalToolPolicies(): Promise<GlobalToolPolicies> {
 // gated (Spec-3 FR-3.3 / Spec-6 FR-12.2): the server rejects the PUT with 403
 // unless a single-use consent token (from reAuth) is replayed in the
 // X-Reauth-Token header.
-export function updateGlobalToolPolicies(
+export async function updateGlobalToolPolicies(
   cfg: GlobalToolPolicies,
   reAuthToken?: string,
 ): Promise<GlobalToolPolicies> {
-  return request<GlobalToolPolicies>('/security/tool-policies', {
-    method: 'PUT',
-    headers: reAuthToken ? { [REAUTH_HEADER]: reAuthToken } : undefined,
-    body: JSON.stringify(cfg),
-  }, GlobalToolPoliciesSchema)
+  try {
+    return await request<GlobalToolPolicies>('/security/tool-policies', {
+      method: 'PUT',
+      headers: reAuthToken ? { [REAUTH_HEADER]: reAuthToken } : undefined,
+      body: JSON.stringify(cfg),
+    }, GlobalToolPoliciesSchema)
+  } catch (error) {
+    if (!isApiError(error) || error.status !== 503 || !error.body) throw error
+    // Only this save's 503 means persisted but activation failed/unconfirmed.
+    // Validate the bounded error envelope; do not expose arbitrary 5xx bodies.
+    let body: unknown
+    try {
+      body = JSON.parse(error.body)
+    } catch {
+      throw error
+    }
+    const parsed = ErrorResponseSchema.safeParse(body)
+    if (!parsed.success || !parsed.data.error.trim()) throw error
+    const saveError = new ApiError(error.status, parsed.data.error, {
+      code: error.code,
+      field: error.field,
+      body: error.body,
+      retryAfterMs: error.retryAfterMs,
+      cause: error,
+    })
+    if (parsed.data.error === persistedPolicyActivationMessage) {
+      persistedPolicyActivationErrors.add(saveError)
+    }
+    throw saveError
+  }
 }
 
 // ── Tool Results (lazy fetch for ToolResultRef sentinels) ─────────────────────

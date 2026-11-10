@@ -4,7 +4,7 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// ADR-057 U14 (Wave F), W9a — delegate action="cancel" kills that child's
+// ADR-057 U14 (Wave F), W9a — delegate action="stop_all" kills that child's
 // OWN background shells (FR-028/BDD-29). Build-tagged !windows because it
 // asserts real PID liveness via syscall, mirroring
 // pkg/tools/session_adr057_unix_test.go's own precedent (U16, BDD-28) —
@@ -30,9 +30,9 @@ import (
 )
 
 // TestDelegateCancel_KillsThatChildsShells is test #44 (BDD-29, FR-028):
-// `delegate action="cancel"` targeting a child with a real, running
+// `delegate action="stop_all"` targeting a child with a real, running
 // background shell must actually terminate that shell's real OS process —
-// before this fix, no such call existed on the delegate-tool cancel path
+// before this fix, no such call existed on the delegate-tool stop path
 // at all (only U15's RequestCancel/Stop-button cascade reached background
 // shells, and only via a chat-wide Stop).
 func TestDelegateCancel_KillsThatChildsShells(t *testing.T) {
@@ -68,24 +68,19 @@ func TestDelegateCancel_KillsThatChildsShells(t *testing.T) {
 	// Cancel hooks stubbed to simulate a successful turn-level cancel — this
 	// test's focus is the SHELL-KILL side effect FR-028 adds, not the
 	// turn-cancel/steering mechanism itself (covered elsewhere).
-	delegateTool.SetCancelHooks(
-		func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
-			return []string{sessionID}, nil
-		},
-		func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
-			return []string{sessionID}, nil
-		},
-	)
+	delegateTool.SetStopHook(func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
+		return []string{sessionID}, nil
+	})
 
 	callerCtx := WithTranscriptSessionID(context.Background(), "u14-w9a-parent")
 	result := delegateTool.Execute(callerCtx, map[string]any{
-		"action": "cancel", "session_id": childID, "hard": true,
+		"action": "stop_all", "session_id": childID,
 	})
 	if result.IsError {
-		t.Fatalf("delegate cancel failed: %s", result.ForLLM)
+		t.Fatalf("delegate stop_all failed: %s", result.ForLLM)
 	}
 
 	require.Eventually(t, func() bool { return !pidAlive(childPID) }, 3*time.Second, 50*time.Millisecond,
 		"BDD-29: the child's real background shell PID must actually be terminated by "+
-			"delegate action=cancel, or it is orphaned as a detached process")
+			"delegate action=stop_all, or it is orphaned as a detached process")
 }

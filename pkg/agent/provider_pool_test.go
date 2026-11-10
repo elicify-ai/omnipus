@@ -11,6 +11,7 @@
 package agent
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -195,14 +196,10 @@ func TestFindModelConfigForProvider_ExactMatchOnly(t *testing.T) {
 	}
 }
 
-// TestBuildProviderPool_FallsBackToPassthrough is the defensive-layer
-// safety net behind the resolver fix: when a candidate's Provider is a
-// vendor namespace that doesn't match any configured provider entry, the
-// pool builder scans cfg.Providers for a passthrough entry (openrouter /
-// vivgrid) whose Model equals the candidate's Model and uses its
-// credentials. The original candidate's name is preserved as the pool key
-// so the agent's GetProviderForCandidate lookup still works.
-func TestBuildProviderPool_FallsBackToPassthrough(t *testing.T) {
+// A known but unconfigured named provider must not be relabelled onto a
+// passthrough account. Round1 SFH F1 supersedes the old silent-substitution
+// oracle: retain the missing route, refuse it, and send no default request.
+func TestBuildProviderPool_RefusesUnconfiguredNamedProvider(t *testing.T) {
 	cfg := &config.Config{
 		Providers: []*config.ModelConfig{
 			{
@@ -220,17 +217,21 @@ func TestBuildProviderPool_FallsBackToPassthrough(t *testing.T) {
 	candidates := []providers.FallbackCandidate{
 		{Provider: "zai", Model: "z-ai/glm-5.2"},
 	}
-	pool := buildProviderPool(cfg, candidates, "mia").pool
-	if len(pool) == 0 {
-		t.Fatal("buildProviderPool returned empty pool — defensive fallback failed to route through openrouter")
+	build := buildProviderPool(cfg, candidates, "mia")
+	if len(build.pool) != 0 {
+		t.Fatalf("unconfigured named provider received a borrowed client: %v", poolKeys(build.pool))
 	}
-	// The candidate's name ("zai") is the pool key — that's what
-	// GetProviderForCandidate looks up against.
-	if _, ok := pool["zai"]; !ok {
-		t.Errorf(
-			"pool missing key 'zai' — defensive fallback should preserve the candidate's name as the pool key; got keys: %v",
-			poolKeys(pool),
-		)
+	key := providers.FallbackCandidate{Provider: "zai", Model: "z-ai/glm-5.2"}
+	if build.routes[key] != nil || build.failures[key] == nil {
+		t.Fatalf("missing pair must retain a failure, never a substituted transport: routes=%v failures=%v", build.routes, build.failures)
+	}
+	global := &routing1340DefaultClient{}
+	agent := &AgentInstance{ID: "mia", Provider: global}
+	agent.storeProviderPoolBuild(build)
+	client, err := agent.providerForTurnCandidate(candidates[0], false)
+	var refusal *providers.ModelRouteUnavailableError
+	if client != nil || !errors.As(err, &refusal) || refusal.Provider != "zai" || refusal.Model != "z-ai/glm-5.2" || global.calls != 0 {
+		t.Fatalf("unconfigured named route was not refused: client=%T error=%v global=%d", client, err, global.calls)
 	}
 }
 

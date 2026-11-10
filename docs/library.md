@@ -11,7 +11,7 @@ Ordinary files belong to the workspace. Mounted folders are your real files, sho
 Files arrive three ways:
 
 - You upload them with the **Upload files** action.
-- You attach them in chat: each attachment also becomes a real file, filed in a hidden `.library` folder and kept for reuse.
+- You attach them in chat: each attachment also becomes a real file, filed in a hidden `.library` folder and kept for reuse. This holds for files you send in a [group chat](group-chats.md#images-and-files) and for files agents return in a group too. A file in a chat exists twice: the copy chats show, and this Library file. Deleting a group never deletes either.
 - Agents create them as they work; everything an agent writes shows up here.
 
 ## When you would use it
@@ -25,8 +25,8 @@ Files arrive three ways:
 ## How to open the Library
 
 1. Click **Library** in the sidebar. The panel opens with every workspace listed as a top-level folder.
-2. From a workspace or one of its chats, click the workspace's **Library** tab or the library button in the chat header. The panel opens already inside that workspace's files.
-3. Click **Open in new tab** at the top of the panel for a fullscreen Library. The side panel closes, the tab starts where you were, and its address names the selected file, so you can bookmark it. Closing the tab re-opens the panel.
+2. From a workspace, select its **Library** panel toggle in the workspace bar (or the panels menu on a narrow bar). The panel opens already inside that workspace's files. The sidebar **Library** entry is different: it lists every workspace. There is no Library button in the chat header.
+3. Select **Expand Library panel** in the panel heading for a full-screen Library. In a normal browser tab, this opens a new tab or switches to a tab Omnipus recognises as already showing it. In an installed app or standalone Chrome window, it uses the same window instead; **Back to chat** returns there with Library re-docked. A newly opened tab carries the current workspace and the selected file, if any, in its address. With no file selected, the browsed subfolder is not carried over. The docked panel closes after the handoff. Use **Back to chat** to leave the full-screen view; [panels beside chat](using-omnipus-ui.md#panels-beside-chat) explains how the panel is restored and the same-tab fallback.
 
 ## How to add files
 
@@ -83,19 +83,27 @@ The preview pane picks its surface by file type.
 | Notes, records, views | The knowledge surface | See the knowledge base page |
 | Everything else | A details card | Download |
 
+## Mail attachments: temporary previews
+
+Opening an attachment from [Mail](mail.md#attachments) previews it here **temporarily**: no file is created, it has no path, and it vanishes when you go back, close the panel, or reload. A bar reading **From mail: \<subject\>** stays above the preview with **Back to mail** and **Save to Library**; stored-file actions (edit, rename, move, download) are disabled with **Save to Library first.** until you actually save. Saving puts a real copy in the workspace (mail → mailbox → month) and enables **Open in Library**.
+
 ## Limits and things to watch
 
 - **No Office preview.** Word, Excel, and PowerPoint files, and other binaries such as ZIP archives, show the download card; they open in the applications you already use.
 - **Chat attachments are capped** at 100 MB per file.
+- **Mail attachment previews are capped** at 25 MB per file; larger attachments download from Mail instead.
+- **Saved mail HTML keeps its guard.** An HTML file saved from mail keeps its original bytes and renders with scripts off, with a notice saying so; **Allow scripts** turns scripts on for that one file only. An ordinary workspace HTML file is unaffected.
 - **Mounts are real disk.** Edits inside a mounted folder change your actual files, the same ones your other apps open. Deleting one in the Library deletes the real file.
 - **A mount's location is recorded once.** If you move or rename the folder on your Mac, its contents disappear from the workspace. Unmount and add the folder again at its new location.
 - **Broad grants are wide.** Mounting your home folder gives every agent on the workspace write access to everything under it. The warning and the second click exist to catch exactly this mistake.
 - **Ordinary deletes are permanent.** Removing a file from the workspace has no trash to recover from. A note inside a knowledge base moves to that knowledge base's trash instead.
+- **Deleting a chat file deletes it everywhere.** A file that was sent or returned in a chat — a normal chat or a group — is marked **used in chats** in the list. Deleting it in the Library also deletes the copy chats show; the confirmation says so before anything is removed. If a chat still shows the file's card, trying to download it after deletion shows an error with **Retry**. A sent-file card that is absent after a normal-chat reload stays absent. This cannot be undone. Deleting a folder does the same for every chat file inside it. If the deletion fails part-way, the Library shows an error naming the file, the file stays listed, and choosing Delete again completes it.
+- **What keeps the link.** Renaming the file or moving it inside the same workspace keeps the link to its chat copy. A copy of the file is a new file with no link. A file moved to another workspace loses the link and leaves its chat copy behind in the original workspace. Files uploaded before this version are linked only when Omnipus can match them to exactly one chat copy (same content and file name); otherwise deleting them removes only the Library file.
 - **HTML previews run scripts in a sandbox** that cannot read your Omnipus session or call the API as you.
 
 ## Related pages
 
 - [knowledge base](knowledge.md) — notes, records, and views: the text side of the Library.
-- [workspaces](workspaces.md) — what a workspace is, and the tabs around the Library tab.
+- [workspaces](workspaces.md) — what a workspace is, and the panels around the Library panel.
 - [previews](previews.md) — agent-built sites for review; unrelated to this preview pane.
 - [agents](agents.md) — the agents who read and write these files.

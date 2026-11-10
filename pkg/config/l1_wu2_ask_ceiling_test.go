@@ -1,0 +1,44 @@
+package config_test
+
+import (
+	"testing"
+
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/stretchr/testify/assert"
+)
+
+// Oracle: omnipus-system-agent-spec FR-020/021, BDD-3.3 and dataset D5.
+func TestL1WU2DefaultCeiling_OmnipusAskListAndPrivateSecretAllows(t *testing.T) {
+	cfg := config.DefaultConfig()
+	for _, retired := range []string{"create_skill", "remove_skill"} {
+		assert.NotContains(t, cfg.Sandbox.ToolPolicies, retired, "r15 §10: retired tools have no ceiling entry")
+	}
+	t.Run("lookup_positive_control", func(t *testing.T) {
+		assert.Equal(t, "allow", cfg.Sandbox.ToolPolicies["read_file"])
+		assert.Equal(t, "allow", cfg.Sandbox.ToolPolicies["get_agent"])
+	})
+	for _, name := range []string{
+		"delete_agent", "edit_skill", "add_mcp_server", "configure_provider", "enable_channel", "configure_channel",
+		"remove_mcp_server", "connect_channel", "set_channel_outbound", "connect_mailbox", "set_agent_permissions", "remove_secret",
+		"select_secret_version", "environment_setup", "bash", "install_skill",
+	} {
+		t.Run(name, func(t *testing.T) {
+			value, present := cfg.Sandbox.ToolPolicies[name]
+			assert.True(t, present, "FR-021: missing new tools must not vanish from ceiling coverage")
+			assert.Equal(t, "ask", value, "FR-020/021: shipped ceiling for %s", name)
+		})
+	}
+	for _, name := range []string{"request_secret", "list_secrets", "read_conversation", "list_mailboxes"} {
+		t.Run(name, func(t *testing.T) {
+			value, present := cfg.Sandbox.ToolPolicies[name]
+			assert.True(t, present, "§6.5: %s must have an explicit shipped ceiling", name)
+			assert.Equal(t, "allow", value)
+		})
+	}
+	// Skills r15 §10 supersedes Q22: edit_skill asks globally; get_skill is a read.
+	for _, name := range []string{"create_agent", "update_agent", "update_workspace", "get_skill", "disable_channel"} {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, "allow", cfg.Sandbox.ToolPolicies[name], "OSA-3: summary-gated changes retain allow")
+		})
+	}
+}

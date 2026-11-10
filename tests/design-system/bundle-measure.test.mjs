@@ -7,7 +7,11 @@ import { promisify } from 'node:util'
 import { gzipSync } from 'node:zlib'
 
 import { measureProductionBundle } from '../../scripts/design-system/bundle-measure.mjs'
-import { compareProductionBundles } from '../../scripts/design-system/bundle-audit.mjs'
+import {
+  compareProductionBundles,
+  INITIAL_GZIP_BUDGET_BYTES,
+  TOTAL_RAW_BUDGET_BYTES,
+} from '../../scripts/design-system/bundle-audit.mjs'
 import { designSystemProductionProvenance } from '../../scripts/design-system/bundle-provenance.mjs'
 
 const runMeasureCli = promisify(execFile)
@@ -80,7 +84,12 @@ test('reports Storybook-like output evidence without treating ordinary prose as 
 
 test('enforces inclusive initial gzip and total raw byte budgets', () => {
   const baseline = { initial: { gzipBytes: 100 }, total: { rawBytes: 1_000 }, storybook: { clean: true }, assets: [] }
-  const atLimit = { initial: { gzipBytes: 25_700 }, total: { rawBytes: 257_000 }, storybook: { clean: true }, assets: [{ path: 'assets/app.js', sha256: 'candidate-hash' }] }
+  const atLimit = {
+    initial: { gzipBytes: baseline.initial.gzipBytes + INITIAL_GZIP_BUDGET_BYTES },
+    total: { rawBytes: baseline.total.rawBytes + TOTAL_RAW_BUDGET_BYTES },
+    storybook: { clean: true },
+    assets: [{ path: 'assets/app.js', sha256: 'candidate-hash' }],
+  }
   const provenance = { clean: true, chunks: [{ file: 'assets/app.js', sha256: 'candidate-hash', modules: ['/repo/src/main.tsx'] }], javascriptAssets: [] }
   assert.equal(compareProductionBundles(baseline, atLimit, provenance).pass, true)
 
@@ -134,4 +143,63 @@ test('CLI writes reports exclusively, creates parent directories and requires --
 
   await invokeMeasureCli(['--dist', dist, '--output', output, '--revision', 'forced', '--force'])
   assert.equal(JSON.parse(await readFile(output, 'utf8')).revision, 'forced')
+})
+
+// Oracle: founder decision Q4=A (2026-10-22). The raw-growth allowance is 2 MiB:
+// 2 * 1024 * 1024 = 2097152. That accepts full Mermaid 12, including the
+// 1,462,909-byte lazy ELK engine. One byte over that allowance is 2097153.
+// Frozen baseline, the 25600-byte initial-gzip allowance (25 * 1024), provenance
+// validation and emitted assets stay unchanged. Supersedes the 2026-10-15
+// allowance of 600064 bytes. These boundary inputs are literals from that
+// decision, never read from TOTAL_RAW_BUDGET_BYTES: deriving them from the
+// production constant would let an unauthorized cap change move both the
+// implementation and its oracle. Synthetic report fixtures use arbitrary
+// 100-byte gzip / 1000-byte raw baselines; they exercise the real comparator,
+// not a claimed production build or measurement.
+test('Q4=A accepts the founder-approved literal 2097152-byte total raw delta', () => {
+  const baseline = { initial: { gzipBytes: 100 }, total: { rawBytes: 1_000 } }
+  const candidate = {
+    initial: { gzipBytes: 100 },
+    total: { rawBytes: 1_000 + 2097152 },
+    storybook: { clean: true },
+    assets: [{ path: 'assets/app.js', sha256: 'ab1-fixture-hash' }],
+  }
+  const provenance = { clean: true, chunks: [{ file: 'assets/app.js', sha256: 'ab1-fixture-hash', modules: [] }], javascriptAssets: [] }
+
+  const report = compareProductionBundles(baseline, candidate, provenance)
+
+  assert.equal(report.pass, true, 'Q4=A permits exactly 2097152 bytes of cumulative raw growth')
+  assert.equal(report.deltas.totalRawBytes, 2097152, 'raw growth is measured against the supplied baseline')
+  assert.equal(report.budgets.totalRawBytes, 2097152, 'the raw allowance is the founder-approved literal, not an implementation-derived oracle')
+  assert.deepEqual(report.checks, {
+    storybookOutputScanClean: true,
+    storybookModuleProvenanceClean: true,
+    provenanceMatchesCandidateAssets: true,
+    initialGzipWithinBudget: true,
+    totalRawWithinBudget: true,
+  }, 'the approved raw boundary does not bypass any other production check')
+})
+
+test('Q4=A rejects the literal 2097153-byte total raw delta', () => {
+  const baseline = { initial: { gzipBytes: 100 }, total: { rawBytes: 1_000 } }
+  const candidate = {
+    initial: { gzipBytes: 100 },
+    total: { rawBytes: 1_000 + 2097153 },
+    storybook: { clean: true },
+    assets: [{ path: 'assets/app.js', sha256: 'ab1-fixture-hash' }],
+  }
+  const provenance = { clean: true, chunks: [{ file: 'assets/app.js', sha256: 'ab1-fixture-hash', modules: [] }], javascriptAssets: [] }
+
+  const report = compareProductionBundles(baseline, candidate, provenance)
+
+  assert.equal(report.pass, false, 'Q4=A rejects 2097153 bytes: one byte above the approved cumulative raw allowance')
+  assert.equal(report.deltas.totalRawBytes, 2097153, 'the failing delta remains the literal one-byte-over boundary')
+  assert.equal(report.budgets.totalRawBytes, 2097152, 'rejection uses the founder-approved raw allowance')
+  assert.deepEqual(report.checks, {
+    storybookOutputScanClean: true,
+    storybookModuleProvenanceClean: true,
+    provenanceMatchesCandidateAssets: true,
+    initialGzipWithinBudget: true,
+    totalRawWithinBudget: false,
+  }, 'the one-byte-over candidate fails specifically the raw check, not provenance or gzip')
 })

@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
+	"github.com/elicify-ai/omnipus/pkg/agent/runner/runnertest"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -93,11 +94,15 @@ func newExternalTestLoop(t *testing.T, cli, workspace string) (*AgentLoop, *turn
 	return al, ts
 }
 
+// extTestEffectiveLimit is an in-range (1–1000) effective limit the external
+// dispatch must pass through unchanged as RunOptions.MaxTurns (#904 D4).
+const extTestEffectiveLimit = 30
+
 // withFakeDriver swaps the external driver factory for the test, returning a
 // restore func and the FakeRunner instance the factory will hand out.
-func withFakeDriver(t *testing.T) (*runner.FakeRunner, func()) {
+func withFakeDriver(t *testing.T) (*runnertest.FakeRunner, func()) {
 	t.Helper()
-	fr := runner.NewFakeRunner()
+	fr := runnertest.NewFakeRunner()
 	prev := newExternalDriver
 	newExternalDriver = func(_ string, _ runner.ConsentHandler) (runner.ExternalAgentRunner, error) {
 		return fr, nil
@@ -116,6 +121,7 @@ func TestExternalDispatch_StreamsOutput_RunsInWorkspaceDir(t *testing.T) {
 	t.Setenv(config.EnvHome, home)
 
 	al, ts := newExternalTestLoop(t, "claude-code", "")
+	ts.agent.MaxIterations = extTestEffectiveLimit
 	fr, restore := withFakeDriver(t)
 	defer restore()
 
@@ -130,13 +136,13 @@ func TestExternalDispatch_StreamsOutput_RunsInWorkspaceDir(t *testing.T) {
 
 	// Inject the run's events asynchronously, then signal end.
 	go func() {
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "hello "}})
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "world"}})
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "hello "}}))
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "world"}}))
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd}))
 		fr.Cancel() // closes the event channel so the dispatcher/drain loop ends
 	}()
 
-	res, err := runExternalCLISubTurn(context.Background(), al, ts, "do the task", 30*time.Second)
+	res, err := runExternalCLISubTurn(context.Background(), al, ts, "do the task")
 	if err != nil {
 		t.Fatalf("runExternalCLISubTurn error: %v", err)
 	}
@@ -144,8 +150,8 @@ func TestExternalDispatch_StreamsOutput_RunsInWorkspaceDir(t *testing.T) {
 		t.Fatalf("aggregated output = %q, want %q", res.ForLLM, "hello world")
 	}
 
-	// The run options passed to the driver carry the workspace dir, input,
-	// timeout and turn cap (FR-5.4 bound).
+	// The run options passed to the driver carry the workspace dir, input and
+	// turn cap (FR-5.4 bound) — and NO wall-clock timeout (issue #1306).
 	opts := fr.RecordedRunOpts()
 	if len(opts) != 1 {
 		t.Fatalf("driver Run called %d times, want 1", len(opts))
@@ -158,11 +164,17 @@ func TestExternalDispatch_StreamsOutput_RunsInWorkspaceDir(t *testing.T) {
 	if opts[0].WorkDir != wantWorkDir {
 		t.Errorf("driver WorkDir = %q, want the workspace's work/ dir %q (ADR-046 P1)", opts[0].WorkDir, wantWorkDir)
 	}
-	if opts[0].TimeoutSeconds != 30 {
-		t.Errorf("driver TimeoutSeconds = %d, want 30", opts[0].TimeoutSeconds)
+	if opts[0].TimeoutSeconds != 0 {
+		t.Errorf("driver TimeoutSeconds = %d, want 0: an external CLI worker must not be armed with a kill timer (issue #1306)", opts[0].TimeoutSeconds)
 	}
-	if opts[0].MaxTurns != DefaultExternalMaxTurns {
-		t.Errorf("driver MaxTurns = %d, want %d", opts[0].MaxTurns, DefaultExternalMaxTurns)
+	if dl := fr.RecordedRunDeadlines(); len(dl) != 1 || dl[0] {
+		t.Errorf("driver run context deadlines = %v, want [false]: the CLI run must have no deadline (issue #1306)", dl)
+	}
+	// #904 (FR-004, D4): the turn cap is the agent's EFFECTIVE limit — the
+	// instance's MaxIterations, set below from the resolver's output — with
+	// no hidden 50 fallback (DefaultExternalMaxTurns is removed).
+	if opts[0].MaxTurns != extTestEffectiveLimit {
+		t.Errorf("driver MaxTurns = %d, want %d (the agent's effective limit)", opts[0].MaxTurns, extTestEffectiveLimit)
 	}
 
 	// ADR-032: the workspace dir is a PERSISTENT tree — it must NOT be torn
@@ -218,7 +230,7 @@ func TestExternalDispatch_WorkspacelessAgentRefused(t *testing.T) {
 	fr, restore := withFakeDriver(t)
 	defer restore()
 
-	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second)
+	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task")
 	if err == nil {
 		t.Fatal("expected an error for a workspace-less agent, got nil")
 	}
@@ -301,7 +313,7 @@ func TestExternalDispatch_MemberWithUnsafeWorkspaceID_Refused(t *testing.T) {
 	fr, restore := withFakeDriver(t)
 	defer restore()
 
-	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second)
+	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task")
 	if err == nil {
 		t.Fatal("expected an error for a member with an unsafe workspace id, got nil")
 	}
@@ -335,12 +347,12 @@ func TestExternalDispatch_ModelAutoSet(t *testing.T) {
 	defer restore()
 
 	go func() {
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "ok"}})
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "ok"}}))
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd}))
 		fr.Cancel()
 	}()
 
-	_, err := runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second)
+	_, err := runExternalCLISubTurn(context.Background(), al, ts, "task")
 	if err != nil {
 		t.Fatalf("runExternalCLISubTurn error: %v", err)
 	}
@@ -371,7 +383,7 @@ func TestExternalDispatch_PermissionRequestAutoApproved(t *testing.T) {
 	defer restore()
 
 	go func() {
-		fr.InjectEvent(runner.RunEvent{
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{
 			Kind: runner.EventKindPermissionRequest,
 			PermissionRequest: &runner.PermissionRequestEvent{
 				RequestID:   "perm-1",
@@ -379,15 +391,15 @@ func TestExternalDispatch_PermissionRequestAutoApproved(t *testing.T) {
 				Description: "wants to run rm -rf",
 				RawInput:    []byte(`{"cmd":"rm -rf /"}`),
 			},
-		})
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "ok"}})
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+		}))
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "ok"}}))
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd}))
 		fr.Cancel()
 	}()
 
 	runCtx, cancelRun := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelRun()
-	res, err := runExternalCLISubTurn(runCtx, al, ts, "task", 30*time.Second)
+	res, err := runExternalCLISubTurn(runCtx, al, ts, "task")
 	if err != nil {
 		t.Fatalf("expected the run to complete despite the permission request, got error: %v (res=%+v)", err, res)
 	}
@@ -442,21 +454,21 @@ func TestExternalDispatch_NoApproverWired_StillAutoApproves(t *testing.T) {
 	defer restore()
 
 	go func() {
-		fr.InjectEvent(runner.RunEvent{
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{
 			Kind: runner.EventKindPermissionRequest,
 			PermissionRequest: &runner.PermissionRequestEvent{
 				RequestID: "perm-x",
 				ToolName:  "write",
 			},
-		})
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "ok"}})
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+		}))
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "ok"}}))
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd}))
 		fr.Cancel()
 	}()
 
 	runCtx, cancelRun := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelRun()
-	res, err := runExternalCLISubTurn(runCtx, al, ts, "task", 30*time.Second)
+	res, err := runExternalCLISubTurn(runCtx, al, ts, "task")
 	if err != nil {
 		t.Fatalf("expected the run to complete with no approver wired, got error: %v (res=%+v)", err, res)
 	}
@@ -486,14 +498,14 @@ func TestExternalDispatch_ErrorEvent_FailsRun(t *testing.T) {
 	defer restore()
 
 	go func() {
-		fr.InjectEvent(runner.RunEvent{
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{
 			Kind: runner.EventKindError,
 			Err:  &runner.ErrorEvent{Message: "boom", Fatal: true},
-		})
+		}))
 		fr.Cancel()
 	}()
 
-	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second)
+	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task")
 	if err == nil {
 		t.Fatal("expected error from fatal error event, got nil")
 	}
@@ -518,7 +530,7 @@ func TestExternalDispatch_UnknownCLI_FailsCleanly(t *testing.T) {
 
 	// Use the REAL factory (restore default) so NewDriver rejects the unknown CLI.
 	al, ts := newExternalTestLoop(t, "", "")
-	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second)
+	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task")
 	if err == nil {
 		t.Fatal("expected error for empty CLI, got nil")
 	}
@@ -563,12 +575,12 @@ func TestExternalDispatch_GitRepoWorkspace_RunsInRepoDirDirectly(t *testing.T) {
 	defer restore()
 
 	go func() {
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "done"}})
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "done"}}))
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd}))
 		fr.Cancel()
 	}()
 
-	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second)
+	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task")
 	if err != nil {
 		t.Fatalf("runExternalCLISubTurn error: %v", err)
 	}
@@ -653,12 +665,12 @@ func TestExternalDispatch_CoreTeamMember_RunsInWorkspaceSharedDir(t *testing.T) 
 	defer restore()
 
 	go func() {
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "done"}})
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "done"}}))
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd}))
 		fr.Cancel()
 	}()
 
-	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second)
+	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task")
 	if err != nil {
 		t.Fatalf("runExternalCLISubTurn error: %v", err)
 	}
@@ -730,6 +742,11 @@ func newRecordResultTurnState(t *testing.T) (*turnState, *session.UnifiedStore, 
 	baseDir := filepath.Join(t.TempDir(), "sessions")
 	store, err := session.NewUnifiedStore(baseDir)
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		if closeErr := store.Close(); closeErr != nil {
+			t.Errorf("UnifiedStore.Close: %v", closeErr)
+		}
+	})
 	// ADR-057 US-1/W3 fixture repair: AppendTranscript is now STRICT — it
 	// reads meta FIRST and fails loudly ("session ... does not exist")
 	// instead of silently creating an orphan directory (the old behavior
@@ -872,14 +889,14 @@ func TestExternalDispatch_G2_NeverAttributesTokens(t *testing.T) {
 	// Emit a normal run (output + end). Even a token-bearing external run must not
 	// flow into the turn's stats — the dispatch path reads no usage counters.
 	go func() {
-		fr.InjectEvent(
+		require.NoError(t, fr.InjectEvent(
 			runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "external work done"}},
-		)
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+		))
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd}))
 		fr.Cancel()
 	}()
 
-	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second)
+	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task")
 	require.NoError(t, err)
 	require.NotNil(t, res)
 
@@ -917,6 +934,11 @@ func TestExternalDispatch_SanitizesRunnerError(t *testing.T) {
 	// a real session must be minted first.
 	store, err := session.NewUnifiedStore(t.TempDir() + "/sessions")
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		if closeErr := store.Close(); closeErr != nil {
+			t.Errorf("UnifiedStore.Close: %v", closeErr)
+		}
+	})
 	meta, err := store.NewSession(session.SessionTypeChat, "test", ts.agentID)
 	require.NoError(t, err)
 	sessionID := meta.ID
@@ -932,17 +954,17 @@ func TestExternalDispatch_SanitizesRunnerError(t *testing.T) {
 
 	rawStderr := "fatal: failed to write to /home/user/.config/claude/secrets.json: permission denied"
 	go func() {
-		fr.InjectEvent(runner.RunEvent{
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{
 			Kind: runner.EventKindError,
 			Err: &runner.ErrorEvent{
 				Message: rawStderr,
 				Fatal:   true,
 			},
-		})
+		}))
 		fr.Cancel()
 	}()
 
-	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second)
+	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task")
 	require.Error(t, err, "fatal error event must surface as a run failure")
 	require.NotNil(t, res)
 	require.NotNil(t, res.Err)
@@ -1020,6 +1042,11 @@ func TestExternalDispatch_ForLLM_NoProviderShapedLeak(t *testing.T) {
 
 	store, err := session.NewUnifiedStore(t.TempDir() + "/sessions")
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		if closeErr := store.Close(); closeErr != nil {
+			t.Errorf("UnifiedStore.Close: %v", closeErr)
+		}
+	})
 	ts.transcriptStore = store
 	ts.transcriptSessionID = "session_ext_provider_leak"
 
@@ -1030,17 +1057,17 @@ func TestExternalDispatch_ForLLM_NoProviderShapedLeak(t *testing.T) {
 	// upstream provider returns a non-JSON body or a malformed image.
 	rawStderr := "Downloaded response does not contain a valid JPG"
 	go func() {
-		fr.InjectEvent(runner.RunEvent{
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{
 			Kind: runner.EventKindError,
 			Err: &runner.ErrorEvent{
 				Message: rawStderr,
 				Fatal:   true,
 			},
-		})
+		}))
 		fr.Cancel()
 	}()
 
-	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second)
+	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task")
 	require.Error(t, err, "fatal error must surface as a run failure")
 	require.NotNil(t, res)
 

@@ -2,7 +2,6 @@ package systools_test
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -51,8 +50,7 @@ func createNativeArgs(name string) map[string]any {
 		"description": "native custom agent",
 		"soul":        "You help.",
 		"model":       "test/model",
-		"color":       "#22C55E",
-		"icon":        "robot",
+		"color":       "#6E8BA8",
 	}
 }
 
@@ -96,7 +94,9 @@ func containsField(fields []string, want string) bool {
 // the patch on top of custom-agent defaults in the same persist, before
 // publication.
 func TestCreateAgent_AppliesInitialSkillsMCPAndPolicyPatchAtomically(t *testing.T) {
-	deps, _ := newTestDeps()
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
+	deps, _ := newTestDeps(t)
 	_, _, mailHook := mailLiveInventory()
 	draftAndMail := testInventory([]string{"draft"}, nil)
 	base := draftAndMail()
@@ -149,7 +149,7 @@ func TestCreateAgent_AppliesInitialSkillsMCPAndPolicyPatchAtomically(t *testing.
 // TestCreateAgent_RejectsCapabilityFieldsOnExternalCLI is FR-005: capability
 // fields on unsupported external runtimes must not write.
 func TestCreateAgent_RejectsCapabilityFieldsOnExternalCLI(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	deps.AgentConfigInventory = testInventory([]string{"draft"}, nil)
 	tool := systools.NewAgentCreateTool(deps)
 
@@ -158,6 +158,7 @@ func TestCreateAgent_RejectsCapabilityFieldsOnExternalCLI(t *testing.T) {
 	args["cli"] = "opencode"
 	args["skills"] = []any{"draft"}
 
+	before := wu3DurableInventory(t, deps.Home)
 	result := tool.Execute(context.Background(), args)
 	if !result.IsError {
 		t.Fatalf("expected INVALID_INPUT, got success: %s", result.ForLLM)
@@ -169,18 +170,17 @@ func TestCreateAgent_RejectsCapabilityFieldsOnExternalCLI(t *testing.T) {
 	if msg == "" {
 		t.Error("error message must name the rejected field")
 	}
-	if _, err := agentstore.New(deps.Home).Get("external-bot"); err == nil {
-		t.Error("external create with skills must not write an entity")
-	}
+	requireNoDurableChange(t, deps.Home, before, "external create with skills must not write an entity")
 }
 
 func TestCreateAgent_RejectsUnknownSkillIDWithoutWrite(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	deps.AgentConfigInventory = testInventory([]string{"draft"}, nil)
 	tool := systools.NewAgentCreateTool(deps)
 
 	args := createNativeArgs("Unknown Skill Create")
 	args["skills"] = []any{"does-not-exist"}
+	before := wu3DurableInventory(t, deps.Home)
 	result := tool.Execute(context.Background(), args)
 	if !result.IsError {
 		t.Fatalf("expected error, got success: %s", result.ForLLM)
@@ -192,13 +192,11 @@ func TestCreateAgent_RejectsUnknownSkillIDWithoutWrite(t *testing.T) {
 	if !strings.Contains(msg, "does-not-exist") {
 		t.Errorf("message=%q, want it to name the unknown skill", msg)
 	}
-	if _, err := agentstore.New(deps.Home).Get("unknown-skill-create"); err == nil {
-		t.Error("unknown skill must not create the agent")
-	}
+	requireNoDurableChange(t, deps.Home, before, "unknown skill must not create the agent")
 }
 
 func TestUpdateAgent_RejectsUnknownSkillIDWithoutWrite(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	deps.AgentConfigInventory = testInventory([]string{"draft"}, nil)
 	store := agentstore.New(deps.Home)
 	if err := store.Create("writer", &config.AgentConfig{ID: "writer", Name: "Writer", Skills: []string{"draft"}}); err != nil {
@@ -226,15 +224,17 @@ func TestUpdateAgent_RejectsUnknownSkillIDWithoutWrite(t *testing.T) {
 	}
 }
 
-func TestUpdateAgent_RejectsUnconfiguredMCPServerWithoutWrite(t *testing.T) {
-	deps, _ := newTestDeps()
+// FR-024: connector assignments of an existing agent change only through
+// set_agent_permissions, with update_agent's former validation.
+func TestSetAgentPermissions_RejectsUnconfiguredMCPServerWithoutWrite(t *testing.T) {
+	deps, _ := newTestDeps(t)
 	deps.AgentConfigInventory = testInventory(nil, map[string][]string{"mail": {"inbox_read"}})
 	store := agentstore.New(deps.Home)
 	if err := store.Create("writer", &config.AgentConfig{ID: "writer", Name: "Writer"}); err != nil {
 		t.Fatal(err)
 	}
 
-	result := systools.NewAgentUpdateTool(deps).Execute(context.Background(), map[string]any{
+	result := systools.NewAgentPermissionsTool(deps).Execute(context.Background(), map[string]any{
 		"id":          "writer",
 		"revision":    currentAgentRevision(t, deps, "writer"),
 		"mcp_servers": []any{map[string]any{"id": "ghost"}},
@@ -258,8 +258,10 @@ func TestUpdateAgent_RejectsUnconfiguredMCPServerWithoutWrite(t *testing.T) {
 	}
 }
 
-func TestUpdateAgent_RejectsNonLiveConnectorToolNameWithoutWrite(t *testing.T) {
-	deps, _ := newTestDeps()
+// FR-024: connector assignments of an existing agent change only through
+// set_agent_permissions, with update_agent's former validation.
+func TestSetAgentPermissions_RejectsNonLiveConnectorToolNameWithoutWrite(t *testing.T) {
+	deps, _ := newTestDeps(t)
 	_, _, mailHook := mailLiveInventory()
 	deps.AgentConfigInventory = mailHook
 	store := agentstore.New(deps.Home)
@@ -267,7 +269,7 @@ func TestUpdateAgent_RejectsNonLiveConnectorToolNameWithoutWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result := systools.NewAgentUpdateTool(deps).Execute(context.Background(), map[string]any{
+	result := systools.NewAgentPermissionsTool(deps).Execute(context.Background(), map[string]any{
 		"id":       "writer",
 		"revision": currentAgentRevision(t, deps, "writer"),
 		"mcp_servers": []any{map[string]any{
@@ -295,7 +297,7 @@ func TestUpdateAgent_RejectsNonLiveConnectorToolNameWithoutWrite(t *testing.T) {
 }
 
 func TestUpdateAgent_EmptySkillsAndMCPServersClear(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	deps.AgentConfigInventory = testInventory([]string{"draft"}, map[string][]string{"mail": {"inbox_read"}})
 	store := agentstore.New(deps.Home)
 	empty := []string{}
@@ -307,13 +309,21 @@ func TestUpdateAgent_EmptySkillsAndMCPServersClear(t *testing.T) {
 	}
 
 	result := systools.NewAgentUpdateTool(deps).Execute(context.Background(), map[string]any{
+		"id":       "writer",
+		"revision": currentAgentRevision(t, deps, "writer"),
+		"skills":   []any{},
+	})
+	if result.IsError {
+		t.Fatalf("empty skills clear must succeed, got: %s", result.ForLLM)
+	}
+	// FR-024: the connector clear goes through set_agent_permissions.
+	result = systools.NewAgentPermissionsTool(deps).Execute(context.Background(), map[string]any{
 		"id":          "writer",
 		"revision":    currentAgentRevision(t, deps, "writer"),
-		"skills":      []any{},
 		"mcp_servers": []any{},
 	})
 	if result.IsError {
-		t.Fatalf("empty clears must succeed, got: %s", result.ForLLM)
+		t.Fatalf("empty mcp_servers clear must succeed, got: %s", result.ForLLM)
 	}
 	ag, err := store.Get("writer")
 	if err != nil {
@@ -328,7 +338,7 @@ func TestUpdateAgent_EmptySkillsAndMCPServersClear(t *testing.T) {
 }
 
 func TestUpdateAgent_RejectsNullAndWrongTypeScalars(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	store := agentstore.New(deps.Home)
 	if err := store.Create("writer", &config.AgentConfig{ID: "writer", Name: "Writer"}); err != nil {
 		t.Fatal(err)
@@ -376,7 +386,7 @@ func TestUpdateAgent_RejectsNullAndWrongTypeScalars(t *testing.T) {
 }
 
 func TestUpdateAgent_NullContextWindowOverrideClears(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	store := agentstore.New(deps.Home)
 	window := 4096
 	if err := store.Create("writer", &config.AgentConfig{
@@ -403,7 +413,7 @@ func TestUpdateAgent_NullContextWindowOverrideClears(t *testing.T) {
 }
 
 func TestUpdateAgent_AppliesSharedEditableConfiguration(t *testing.T) {
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDeps(t)
 	store := agentstore.New(deps.Home)
 	if err := store.Create("writer", &config.AgentConfig{ID: "writer", Name: "Writer"}); err != nil {
 		t.Fatal(err)
@@ -452,35 +462,8 @@ func TestUpdateAgent_AppliesSharedEditableConfiguration(t *testing.T) {
 	_ = cfg
 }
 
-func TestUpdateAgent_DefaultWritesSingleton(t *testing.T) {
-	deps, cfg := newTestDeps()
-	store := agentstore.New(deps.Home)
-	if err := store.Create("writer", &config.AgentConfig{ID: "writer", Name: "Writer"}); err != nil {
-		t.Fatal(err)
-	}
-
-	result := systools.NewAgentUpdateTool(deps).Execute(context.Background(), map[string]any{
-		"id":       "writer",
-		"revision": currentAgentRevision(t, deps, "writer"),
-		"default":  true,
-	})
-	if result.IsError {
-		t.Fatalf("expected success, got: %s", result.ForLLM)
-	}
-	if cfg.Agents.Defaults.DefaultAgentID != "writer" {
-		t.Errorf("DefaultAgentID=%q, want writer", cfg.Agents.Defaults.DefaultAgentID)
-	}
-	ag, err := store.Get("writer")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ag.Default {
-		t.Error("entity Default bool must be true")
-	}
-}
-
-func TestUpdateAgent_RejectsDefaultAndVoiceOnWorker(t *testing.T) {
-	deps, cfg := newTestDeps()
+func TestUpdateAgent_RejectsVoiceOnWorker(t *testing.T) {
+	deps, _ := newTestDeps(t)
 	store := agentstore.New(deps.Home)
 	if err := store.Create("helper", &config.AgentConfig{
 		ID: "helper", Name: "Helper", Type: config.AgentTypeWorker,
@@ -488,22 +471,6 @@ func TestUpdateAgent_RejectsDefaultAndVoiceOnWorker(t *testing.T) {
 		t.Fatal(err)
 	}
 	tool := systools.NewAgentUpdateTool(deps)
-
-	defaultResult := tool.Execute(context.Background(), map[string]any{
-		"id":       "helper",
-		"revision": currentAgentRevision(t, deps, "helper"),
-		"default":  true,
-	})
-	if !defaultResult.IsError {
-		t.Fatalf("worker default=true must reject, got: %s", defaultResult.ForLLM)
-	}
-	code, _ := toolErrorCode(t, defaultResult.ForLLM)
-	if code != "INVALID_INPUT" {
-		t.Errorf("default code=%s, want INVALID_INPUT", code)
-	}
-	if cfg.Agents.Defaults.DefaultAgentID == "helper" {
-		t.Error("singleton must not point at the worker")
-	}
 
 	voiceResult := tool.Execute(context.Background(), map[string]any{
 		"id":       "helper",
@@ -523,7 +490,7 @@ func TestUpdateAgent_RejectsDefaultAndVoiceOnWorker(t *testing.T) {
 }
 
 func TestUpdateAgent_RejectsUnknownArgumentAndTopP(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	store := agentstore.New(deps.Home)
 	if err := store.Create("writer", &config.AgentConfig{ID: "writer", Name: "Writer"}); err != nil {
 		t.Fatal(err)
@@ -564,7 +531,7 @@ func TestUpdateAgent_RejectsUnknownArgumentAndTopP(t *testing.T) {
 }
 
 func TestUpdateAgent_UnwiredPublishersReportNotAttempted(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	if err := agentstore.New(deps.Home).Create("writer", &config.AgentConfig{ID: "writer", Name: "Writer"}); err != nil {
 		t.Fatal(err)
 	}
@@ -587,7 +554,7 @@ func TestUpdateAgent_UnwiredPublishersReportNotAttempted(t *testing.T) {
 }
 
 func TestUpdateAgent_PublisherErrorReportsActivationFailed(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	deps.UpsertAgentFastFunc = func(string) error { return errors.New("registry busy") }
 	if err := agentstore.New(deps.Home).Create("writer", &config.AgentConfig{ID: "writer", Name: "Writer"}); err != nil {
 		t.Fatal(err)
@@ -608,12 +575,12 @@ func TestUpdateAgent_PublisherErrorReportsActivationFailed(t *testing.T) {
 }
 
 func TestGetAgent_RegistryMembershipAloneDoesNotProveActivation(t *testing.T) {
-	homeDeps, _ := newTestDeps()
+	homeDeps, _ := newTestDeps(t)
 	if err := agentstore.New(homeDeps.Home).Create("writer", &config.AgentConfig{ID: "writer", Name: "Writer"}); err != nil {
 		t.Fatal(err)
 	}
 
-	unwired := systools.NewAgentGetTool(homeDeps).Execute(context.Background(), map[string]any{"id": "writer"})
+	unwired := systools.NewAgentGetTool(homeDeps).Execute(context.Background(), map[string]any{"id": "writer", "fields": []any{"activation_status"}})
 	if unwired.IsError {
 		t.Fatalf("get_agent failed: %s", unwired.ForLLM)
 	}
@@ -623,7 +590,7 @@ func TestGetAgent_RegistryMembershipAloneDoesNotProveActivation(t *testing.T) {
 	}
 
 	homeDeps.AgentIsLive = func(id string) bool { return id == "writer" }
-	live := systools.NewAgentGetTool(homeDeps).Execute(context.Background(), map[string]any{"id": "writer"})
+	live := systools.NewAgentGetTool(homeDeps).Execute(context.Background(), map[string]any{"id": "writer", "fields": []any{"activation_status"}})
 	if live.IsError {
 		t.Fatalf("get_agent failed: %s", live.ForLLM)
 	}
@@ -633,7 +600,7 @@ func TestGetAgent_RegistryMembershipAloneDoesNotProveActivation(t *testing.T) {
 	}
 
 	homeDeps.AgentIsLive = func(string) bool { return false }
-	stored := systools.NewAgentGetTool(homeDeps).Execute(context.Background(), map[string]any{"id": "writer"})
+	stored := systools.NewAgentGetTool(homeDeps).Execute(context.Background(), map[string]any{"id": "writer", "fields": []any{"activation_status"}})
 	storedBody := parseSuccess(t, stored.ForLLM)
 	if storedBody["activation_status"] != string(agentstore.ActivationNotAttempted) {
 		t.Errorf("stored-but-unpublished must report %s, got %v", agentstore.ActivationNotAttempted, storedBody["activation_status"])
@@ -641,10 +608,11 @@ func TestGetAgent_RegistryMembershipAloneDoesNotProveActivation(t *testing.T) {
 }
 
 func TestCreateAgent_KnownEmptySkillInventoryRejectsExplicitIDs(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	deps.AgentConfigInventory = testInventory(nil, nil)
 	args := createNativeArgs("Fresh Skills")
 	args["skills"] = []any{"not-yet-indexed"}
+	before := wu3DurableInventory(t, deps.Home)
 	result := systools.NewAgentCreateTool(deps).Execute(context.Background(), args)
 	if !result.IsError {
 		t.Fatalf("known-empty inventory must reject unknown skill IDs, got: %s", result.ForLLM)
@@ -656,15 +624,14 @@ func TestCreateAgent_KnownEmptySkillInventoryRejectsExplicitIDs(t *testing.T) {
 	if !strings.Contains(msg, "not-yet-indexed") {
 		t.Errorf("message=%q, want the unknown skill id", msg)
 	}
-	if _, err := agentstore.New(deps.Home).Get("fresh-skills"); err == nil {
-		t.Error("unknown skill must not create the agent")
-	}
+	requireNoDurableChange(t, deps.Home, before, "unknown skill must not create the agent")
 }
 
 func TestCreateAgent_UnavailableSkillInventoryRejectsExplicitIDs(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	args := createNativeArgs("No Inventory")
 	args["skills"] = []any{"draft"}
+	before := wu3DurableInventory(t, deps.Home)
 	result := systools.NewAgentCreateTool(deps).Execute(context.Background(), args)
 	if !result.IsError {
 		t.Fatalf("unavailable inventory must reject explicit skill IDs, got: %s", result.ForLLM)
@@ -676,9 +643,7 @@ func TestCreateAgent_UnavailableSkillInventoryRejectsExplicitIDs(t *testing.T) {
 	if !strings.Contains(msg, "unavailable") {
 		t.Errorf("message=%q, want unavailable inventory", msg)
 	}
-	if _, err := agentstore.New(deps.Home).Get("no-inventory"); err == nil {
-		t.Error("unavailable inventory must not create the agent")
-	}
+	requireNoDurableChange(t, deps.Home, before, "unavailable inventory must not create the agent")
 }
 
 func TestCollectLiveMCPNames_IncludesPublicAndRemote(t *testing.T) {
@@ -702,17 +667,19 @@ func TestCollectLiveMCPNames_IncludesPublicAndRemote(t *testing.T) {
 	}
 }
 
-func TestUpdateAgent_AcceptsRemoteAndPublicMCPToolNames(t *testing.T) {
+// FR-024: connector assignments of an existing agent change only through
+// set_agent_permissions, with update_agent's former validation.
+func TestSetAgentPermissions_AcceptsRemoteAndPublicMCPToolNames(t *testing.T) {
 	public, _, hook := mailLiveInventory()
 	for _, toolName := range []string{"inbox_read", public} {
 		t.Run(toolName, func(t *testing.T) {
-			deps, _ := newTestDeps()
+			deps, _ := newTestDeps(t)
 			deps.AgentConfigInventory = hook
 			store := agentstore.New(deps.Home)
 			if err := store.Create("writer", &config.AgentConfig{ID: "writer", Name: "Writer"}); err != nil {
 				t.Fatal(err)
 			}
-			result := systools.NewAgentUpdateTool(deps).Execute(context.Background(), map[string]any{
+			result := systools.NewAgentPermissionsTool(deps).Execute(context.Background(), map[string]any{
 				"id":       "writer",
 				"revision": currentAgentRevision(t, deps, "writer"),
 				"mcp_servers": []any{map[string]any{
@@ -731,82 +698,5 @@ func TestUpdateAgent_AcceptsRemoteAndPublicMCPToolNames(t *testing.T) {
 				t.Errorf("stored tools=%v, want [%s]", ag.Tools, toolName)
 			}
 		})
-	}
-}
-
-func TestUpdateAgent_DefaultSingletonSaveFailureReportsPartial(t *testing.T) {
-	deps, cfg := newTestDeps()
-	deps.SaveConfigLocked = func(*config.Config) error { return errors.New("disk full") }
-	store := agentstore.New(deps.Home)
-	if err := store.Create("writer", &config.AgentConfig{ID: "writer", Name: "Writer"}); err != nil {
-		t.Fatal(err)
-	}
-	result := systools.NewAgentUpdateTool(deps).Execute(context.Background(), map[string]any{
-		"id":       "writer",
-		"revision": currentAgentRevision(t, deps, "writer"),
-		"default":  true,
-	})
-	if !result.IsError {
-		t.Fatalf("singleton save failure must be an error, got: %s", result.ForLLM)
-	}
-	var body map[string]any
-	if err := json.Unmarshal([]byte(result.ForLLM), &body); err != nil {
-		t.Fatal(err)
-	}
-	if body["persistence_status"] != string(agentstore.PersistencePartial) {
-		t.Errorf("persistence_status=%v, want %s", body["persistence_status"], agentstore.PersistencePartial)
-	}
-	if body["error_stage"] != "defaults_singleton" {
-		t.Errorf("error_stage=%v, want defaults_singleton", body["error_stage"])
-	}
-	if body["revision"] == nil || body["revision"] == "" {
-		t.Errorf("revision missing on partial envelope: %#v", body["revision"])
-	}
-	fields, _ := body["changed_fields"].([]any)
-	foundDefault := false
-	for _, f := range fields {
-		if f == "default" {
-			foundDefault = true
-		}
-	}
-	if !foundDefault {
-		t.Errorf("changed_fields=%v must include default", fields)
-	}
-	ag, err := store.Get("writer")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ag.Default {
-		t.Error("entity Default must already be true after the first write")
-	}
-	if cfg.Agents.Defaults.DefaultAgentID == "writer" {
-		t.Error("rolled-back singleton must not name writer")
-	}
-}
-
-func TestUpdateAgent_DefaultWithoutWriterDoesNotWrite(t *testing.T) {
-	deps, cfg := newTestDeps()
-	deps.MutateConfig = nil
-	store := agentstore.New(deps.Home)
-	if err := store.Create("writer", &config.AgentConfig{ID: "writer", Name: "Writer"}); err != nil {
-		t.Fatal(err)
-	}
-	result := systools.NewAgentUpdateTool(deps).Execute(context.Background(), map[string]any{
-		"id":       "writer",
-		"revision": currentAgentRevision(t, deps, "writer"),
-		"default":  true,
-	})
-	if !result.IsError {
-		t.Fatalf("nil writer must not claim default changed, got: %s", result.ForLLM)
-	}
-	ag, err := store.Get("writer")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ag.Default {
-		t.Error("entity must not be written when the singleton writer is missing")
-	}
-	if cfg.Agents.Defaults.DefaultAgentID == "writer" {
-		t.Error("singleton must not name writer")
 	}
 }

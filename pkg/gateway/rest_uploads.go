@@ -13,12 +13,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/media/library"
-	wkspace "github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // --- File upload ---
@@ -189,8 +187,9 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 						// pkg/logger instead.
 						logger.ErrorCF("rest", "upload: workspace library load failed",
 							map[string]any{"workspace_id": ru.workspaceID, "error": libErr})
-						jsonErr(ru.w, http.StatusInternalServerError,
-							fmt.Sprintf("workspace media library unavailable: %v", libErr))
+						// #1449 C-I1, FR-017: an explicit 503, never a
+						// fallback to the session path.
+						jsonServerFailure(ru.w, http.StatusServiceUnavailable, "workspace media library unavailable", libErr)
 						return
 					}
 					ru.workspaceLib = lib
@@ -207,10 +206,12 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 				continue
 			}
-			// workspace_id set but library unavailable → fall through to the
-			// legacy session-scoped path (graceful degradation).
-			slog.Warn("rest: upload: workspace library unavailable, falling back to session-scoped path",
-				"workspace_id", ru.workspaceID)
+			// #1449 C-I1, FR-017: workspace_id set but no library → an
+			// explicit 503. A workspace upload never falls back to the
+			// session-scoped path (it would need a session and create none).
+			part.Close()
+			jsonErr(ru.w, http.StatusServiceUnavailable, "workspace media library unavailable")
+			return
 		}
 
 		// --- Legacy session-scoped path ---
@@ -245,7 +246,7 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		if mkErr := os.MkdirAll(uploadDir, 0o700); mkErr != nil {
 			part.Close()
 			slog.Error("rest: upload: mkdir failed", "dir", uploadDir, "error", mkErr)
-			jsonErr(ru.w, http.StatusInternalServerError, fmt.Sprintf("could not create upload directory: %v", mkErr))
+			jsonServerFailure(ru.w, http.StatusInternalServerError, "could not create upload directory", mkErr)
 			return
 		}
 
@@ -280,7 +281,7 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 			part.Close()
 			slog.Error("rest: upload: create file failed", "path", destPath, "error", createErr)
 			cleanupUploaded()
-			jsonErr(ru.w, http.StatusInternalServerError, fmt.Sprintf("could not create file: %v", createErr))
+			jsonServerFailure(ru.w, http.StatusInternalServerError, "could not create file", createErr)
 			return
 		}
 
@@ -321,8 +322,7 @@ func (ru *restAPIHandleUpload) finishWorkspaceUpload(fileName string, ref string
 			jsonErr(ru.w, http.StatusBadRequest,
 				fmt.Sprintf("invalid filename: %q", fileName))
 		default:
-			jsonErr(ru.w, http.StatusInternalServerError,
-				fmt.Sprintf("workspace media store failed: %v", uploadErr))
+			jsonServerFailure(ru.w, http.StatusInternalServerError, "workspace media store failed", uploadErr)
 		}
 		return restAPIHandleUploadReturn
 	}
@@ -360,19 +360,33 @@ func (ru *restAPIHandleUpload) finishWorkspaceUpload(fileName string, ref string
 	if stageErr != nil {
 		logger.ErrorCF("rest", "upload: could not stage workspace library copy for agent access",
 			map[string]any{
-				"workspace_id": ru.workspaceID, "media_id": mediaID,
-				"filename": fileName, "error": stageErr.Error(),
+				"workspace_id": safeLogValue(ru.workspaceID), "media_id": safeLogValue(mediaID),
+				"filename": safeLogValue(fileName), "error": safeLogValue(stageErr.Error()),
 			})
 		if _, delErr := ru.workspaceLib.Delete(mediaID); delErr != nil {
 			slog.Warn("rest: upload: rollback of media-library entry failed after stage failure",
-				"media_id", mediaID, "error", delErr)
+				"media_id", safeLogValue(mediaID), "error", safeLogValue(delErr.Error()))
 		}
 		ru.a.cleanupWorkspaceUploads(&ru.resp, ru.workspaceLib)
-		jsonErr(ru.w, http.StatusInternalServerError,
-			fmt.Sprintf("could not stage uploaded file for agent access: %v", stageErr))
+		jsonServerFailure(ru.w, http.StatusInternalServerError, "could not stage uploaded file for agent access", stageErr)
 		return restAPIHandleUploadReturn
 	}
-	agent.RecordUploadWorkPath(ref, workRelPath)
+	// #1449 D26, FR-077: the durable association between the two copies.
+	if assocErr := associateLibraryFile(ru.workspaceLib, ref, mediaID, workRelPath); assocErr != nil {
+		logger.ErrorCF("rest", "upload: could not record the library file of the upload",
+			map[string]any{
+				"workspace_id": safeLogValue(ru.workspaceID), "media_id": safeLogValue(mediaID),
+				"error": safeLogValue(assocErr.Error()),
+			})
+		if _, delErr := ru.workspaceLib.Delete(mediaID); delErr != nil {
+			slog.Warn("rest: upload: rollback of media-library entry failed after association failure",
+				"media_id", safeLogValue(mediaID), "error", safeLogValue(delErr.Error()))
+		}
+		removeLibraryFile(ru.a.homePath, ru.workspaceID, workRelPath)
+		ru.a.cleanupWorkspaceUploads(&ru.resp, ru.workspaceLib)
+		jsonServerFailure(ru.w, http.StatusInternalServerError, "could not record the uploaded file", assocErr)
+		return restAPIHandleUploadReturn
+	}
 
 	var refPtr *string
 	if ref != "" {
@@ -407,7 +421,7 @@ func (ru *restAPIHandleUpload) finishLegacyUpload(sanitized string, destPath str
 			slog.Warn("rest: upload: remove partial file failed", "path", destPath, "error", rmErr)
 		}
 		cleanupUploaded()
-		jsonErr(ru.w, http.StatusInternalServerError, fmt.Sprintf("file write failed: %v", copyErr))
+		jsonServerFailure(ru.w, http.StatusInternalServerError, "file write failed", copyErr)
 		return restAPIHandleUploadReturn
 	}
 
@@ -504,19 +518,6 @@ func (a *restAPI) stageWorkspaceUploadCopy(
 	workspaceID, mediaID, filename string,
 	lib *library.Library,
 ) (string, error) {
-	sanitized, err := agent.SanitizeUploadFilename(filename)
-	if err != nil {
-		return "", fmt.Errorf("sanitize filename: %w", err)
-	}
-	workDir, err := wkspace.SafeWorkDir(a.homePath, workspaceID)
-	if err != nil {
-		return "", fmt.Errorf("resolve workspace work dir: %w", err)
-	}
-	libraryDir := filepath.Join(workDir, agent.LibraryDirName())
-	if mkErr := os.MkdirAll(libraryDir, 0o700); mkErr != nil {
-		return "", fmt.Errorf("create workspace library dir: %w", mkErr)
-	}
-
 	// Read back the FULL, sha256-verified bytes rather than tee-ing the
 	// original multipart reader — the multipart part is already fully
 	// consumed by lib.Upload above by the time this is called, and
@@ -528,54 +529,8 @@ func (a *restAPI) stageWorkspaceUploadCopy(
 	if err != nil {
 		return "", fmt.Errorf("read back uploaded bytes: %w", err)
 	}
-
-	ext := filepath.Ext(sanitized)
-	base := strings.TrimSuffix(sanitized, ext)
-	const maxDedupAttempts = 1000
-
-	destName := sanitized
-	var destFile *os.File
-	var destPath string
-	for attempt := 1; ; attempt++ {
-		destPath = filepath.Join(libraryDir, destName)
-		f, openErr := os.OpenFile(destPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if openErr == nil {
-			destFile = f
-			break
-		}
-		if !errors.Is(openErr, os.ErrExist) {
-			return "", fmt.Errorf("create workspace library file: %w", openErr)
-		}
-		if attempt > maxDedupAttempts {
-			return "", fmt.Errorf("too many filename collisions for %q in workspace library", sanitized)
-		}
-		destName = fmt.Sprintf("%s (%d)%s", base, attempt, ext)
-	}
-
-	// keepFile flips to true only once the write AND close both succeed —
-	// any earlier return leaves it false, so the deferred cleanup below
-	// removes the just-created (possibly empty or partially-written) file
-	// rather than stranding it.
-	keepFile := false
-	defer func() {
-		if !keepFile {
-			if rmErr := os.Remove(destPath); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
-				logger.WarnCF("rest", "upload: cleanup partial workspace library file failed",
-					map[string]any{"path": destPath, "error": rmErr.Error()})
-			}
-		}
-	}()
-
-	if _, writeErr := destFile.Write(data); writeErr != nil {
-		destFile.Close()
-		return "", fmt.Errorf("write workspace library file: %w", writeErr)
-	}
-	if closeErr := destFile.Close(); closeErr != nil {
-		return "", fmt.Errorf("close workspace library file: %w", closeErr)
-	}
-	keepFile = true
-
-	return agent.LibraryDirName() + "/" + destName, nil
+	// #1449 FR-077: the one shared publication path (library_publication.go).
+	return writeLibraryFile(a.homePath, workspaceID, filename, data, true)
 }
 
 func (a *restAPI) cleanupWorkspaceUploads(resp *gen.UploadFilesResponse, lib *library.Library) {
@@ -592,7 +547,7 @@ func (a *restAPI) cleanupWorkspaceUploads(resp *gen.UploadFilesResponse, lib *li
 		}
 		if _, err := lib.Delete(mediaID); err != nil {
 			slog.Warn("rest: upload: cleanup workspace file failed",
-				"media_id", mediaID, "error", err)
+				"media_id", safeLogValue(mediaID), "error", safeLogValue(err.Error()))
 		}
 	}
 }
@@ -661,7 +616,8 @@ func (a *restAPI) HandleServeUpload(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, http.StatusNotFound, "file not found")
 			return
 		}
-		slog.Error("rest: uploads: serve failed", "session_id", sessionID, "error", err)
+		slog.Error("rest: uploads: serve failed",
+			"session_id", safeLogValue(sessionID), "error", safeLogValue(err.Error()))
 		jsonErr(w, http.StatusInternalServerError, "could not read file")
 		return
 	}
@@ -728,7 +684,7 @@ func (a *restAPI) serveMedia(
 	localPath, meta, err := store.ResolveWithMetaOpts(ref, opts)
 	if err != nil {
 		if errors.Is(err, media.ErrCrossWorkspaceRef) || errors.Is(err, library.ErrWorkspaceMismatch) {
-			slog.Warn("rest: media ref not found", "ref", logRef, "error", err.Error())
+			slog.Warn("rest: media ref not found", "ref", safeLogValue(logRef), "error", safeLogValue(err.Error()))
 			jsonErr(w, http.StatusForbidden, "media access denied")
 			return
 		}
@@ -753,7 +709,7 @@ func (a *restAPI) serveMedia(
 			// reach this catch in practice. Should the resolution path ever
 			// change to route through the integrity-checked reader, this
 			// error deserves the same non-404 treatment as ErrEntryStranded.
-			slog.Error("rest: media: entry stranded (manifest/disk diverged)", "ref", logRef, "error", err.Error())
+			slog.Error("rest: media: entry stranded (manifest/disk diverged)", "ref", safeLogValue(logRef), "error", safeLogValue(err.Error()))
 			jsonErr(w, http.StatusInternalServerError, "media entry is in an inconsistent state")
 			return
 		}
@@ -768,7 +724,7 @@ func (a *restAPI) serveMedia(
 			// correct and matches the workspace-media handlers' own mapping
 			// for the same library.ErrNotFound sentinel
 			// (rest_workspace_media.go's handleWorkspaceMediaGet/Delete).
-			slog.Warn("rest: media ref not found", "ref", logRef, "error", err.Error())
+			slog.Warn("rest: media ref not found", "ref", safeLogValue(logRef), "error", safeLogValue(err.Error()))
 			jsonErr(w, http.StatusNotFound, "media not found")
 			return
 		}
@@ -781,7 +737,7 @@ func (a *restAPI) serveMedia(
 		// media.ErrNotFound is deliberately NEVER used to wrap that error —
 		// see its doc comment — so this catch-all is unreachable for a
 		// routine absent ref and only fires on a real backend fault.
-		slog.Error("rest: media: resolve failed", "ref", logRef, "error", err.Error())
+		slog.Error("rest: media: resolve failed", "ref", safeLogValue(logRef), "error", safeLogValue(err.Error()))
 		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
@@ -807,11 +763,11 @@ func (a *restAPI) serveMedia(
 	}
 	if err := serveLibraryPath(w, r, localPath, displayName); err != nil {
 		if errors.Is(err, os.ErrNotExist) || errors.Is(err, errLibraryBytesNotAFile) {
-			slog.Warn("rest: media: resolved path is not a readable file", "ref", logRef, "error", err.Error())
+			slog.Warn("rest: media: resolved path is not a readable file", "ref", safeLogValue(logRef), "error", safeLogValue(err.Error()))
 			jsonErr(w, http.StatusNotFound, "media not found")
 			return
 		}
-		slog.Error("rest: media: serve failed", "ref", logRef, "error", err.Error())
+		slog.Error("rest: media: serve failed", "ref", safeLogValue(logRef), "error", safeLogValue(err.Error()))
 		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return
 	}

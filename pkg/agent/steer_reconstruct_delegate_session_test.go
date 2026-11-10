@@ -398,8 +398,8 @@ func TestRevivedSteeredChildTurnCtxCarriesSameDelegateSessionID(t *testing.T) {
 	term := *preRec
 	term.State = session.LifecycleFailed
 	term.FailedReason = failedReasonInterrupted
-	if persistErr := al.GetSessionLifecycleStore().Persist(&term); persistErr != nil {
-		t.Fatalf("persist terminalised child: %v", persistErr)
+	if err = al.GetSessionLifecycleStore().Persist(&term); err != nil {
+		t.Fatalf("persist terminalised child: %v", err)
 	}
 
 	// Park the provider so the redispatched (revived) turn waits mid-flight

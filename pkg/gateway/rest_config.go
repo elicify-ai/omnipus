@@ -84,9 +84,15 @@ func (a *restAPI) getConfig(w http.ResponseWriter) {
 //     agent's stored tool policy have run on THIS install (e.g. the Worker
 //     goal_claim update, coreagent.ToolPolicyUpdateWorkerGoalClaimAllow) —
 //     the same kind of boot-seed bookkeeping.
+//   - workspace_seed_defaults: the config-file-only workspace delegation seed
+//     block (session-core C-DELEGATE, FR-014/015). No gateway/UI exposure is
+//     commissioned for it; it stays on disk and is edited by hand, so it must
+//     never cross the wire. The matching generic-write refusal lives in
+//     blockedPaths (config.WorkspaceSeedDefaults).
 var wireExcludedConfigFields = []string{
 	"seeded_skill_grants",
 	"seeded_tool_policy_updates",
+	"workspace_seed_defaults",
 }
 
 // sanitizeConfigForWire strips every wireExcludedConfigFields key from a
@@ -96,6 +102,17 @@ var wireExcludedConfigFields = []string{
 func sanitizeConfigForWire(m map[string]any) {
 	for _, k := range wireExcludedConfigFields {
 		delete(m, k)
+	}
+	// #904 D6: the one-time env-import marker is nested under
+	// agents.defaults — config-file-only bookkeeping, never on the wire.
+	if agents, ok := m["agents"].(map[string]any); ok {
+		if defaults, ok := agents["defaults"].(map[string]any); ok {
+			delete(defaults, "max_tool_iterations_env_imported")
+			// omnipus-system-agent FR-120 / K17: the retired default-agent
+			// setting is ignored (the loader warns on every load) and never
+			// served as if it still meant something.
+			delete(defaults, "default_agent_id")
+		}
 	}
 }
 
@@ -566,12 +583,20 @@ func (a *restAPI) credentialRefResolves(refName string) (bool, error) {
 // refresh fails the error is returned to the caller so the HTTP handler can surface
 // a 500 rather than silently serving stale state.
 func (a *restAPI) safeUpdateConfigJSON(mutate func(m map[string]any) error) error {
+	return a.safeUpdateConfigWithDeletedChannels(mutate)
+}
+
+// safeUpdateConfigWithDeletedChannels also pins explicit DELETE's exclusion
+// through its later credential/state cleanup. The ordinary updater keeps its
+// fixed callback type for the existing authenticated session-cookie writers.
+func (a *restAPI) safeUpdateConfigWithDeletedChannels(mutate func(m map[string]any) error, exclusiveDeletes ...string) error {
 	// configMu serializes concurrent REST config writes (read-modify-write cycles).
 	// Sysagent mutations go through MutateConfig (al.mu) with SaveConfigLocked,
 	// which does not acquire configMu — so there is no lock ordering conflict.
+	store := a.pairingOrderStore()
 	a.configMu.Lock()
 	defer a.configMu.Unlock()
-	return a.updateConfigJSONLocked(mutate)
+	return a.orderedConfigJSONLocked(store, nil, nil, mutate, exclusiveDeletes...)
 }
 
 // updateConfigJSONLocked is safeUpdateConfigJSON's body with the configMu
@@ -586,16 +611,28 @@ func (a *restAPI) safeUpdateConfigJSON(mutate func(m map[string]any) error) erro
 // non-reentrant sync.Mutex. See createAgent, updateAgent, updateAgentTools
 // (this file) and putToolPolicies (rest_tool_policies.go) for the pattern.
 func (a *restAPI) updateConfigJSONLocked(mutate func(m map[string]any) error) error {
+	return a.orderedConfigJSONLocked(a.pairingOrderStore(), nil, nil, mutate)
+}
+
+// writeConfigJSONLocked is updateConfigJSONLocked's write phase: read
+// config.json, apply mutate, stamp the version, write it atomically and
+// return the bytes written. Its errors are the mutate function's own or a
+// read / parse / serialize / write failure of config.json — never a
+// refresh or credential-resolution failure, which only
+// applyWrittenConfigLocked can return. PUT /performance (#904) relies on
+// that split to log a write failure's real cause without ever logging
+// credential-derived text. Called while a.configMu is held.
+func (a *restAPI) writeConfigJSONLocked(mutate func(m map[string]any) error) ([]byte, error) {
 	raw, err := os.ReadFile(a.configPath())
 	if err != nil {
-		return fmt.Errorf("read config: %w", err)
+		return nil, fmt.Errorf("read config: %w", err)
 	}
 	var m map[string]any
 	if unmarshalErr := json.Unmarshal(raw, &m); unmarshalErr != nil {
-		return fmt.Errorf("parse config: %w", unmarshalErr)
+		return nil, fmt.Errorf("parse config: %w", unmarshalErr)
 	}
-	if mutateErr := mutate(m); mutateErr != nil {
-		return mutateErr
+	if mutateErr := guardedConfigMutate(mutate, a.outboundDedicatedWrite)(m); mutateErr != nil {
+		return nil, mutateErr
 	}
 	// Ensure "version" is always stamped before writing back, mirroring
 	// config.SaveConfig's own version-stamping for the struct-based save path.
@@ -609,11 +646,20 @@ func (a *restAPI) updateConfigJSONLocked(mutate func(m map[string]any) error) er
 	}
 	out, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
-		return fmt.Errorf("serialize config: %w", err)
+		return nil, fmt.Errorf("serialize config: %w", err)
 	}
 	if writeErr := fileutil.WriteFileAtomic(a.configPath(), out, 0o600); writeErr != nil {
-		return writeErr
+		return nil, writeErr
 	}
+	return out, nil
+}
+
+// applyWrittenConfigLocked is updateConfigJSONLocked's apply phase, run
+// after config.json was durably written with out: register the write with
+// the file watcher, refresh the in-memory config (a failure is returned as
+// *configRefreshError — the write stands on disk) and invalidate the cached
+// system-prompt preambles. Called while a.configMu is held.
+func (a *restAPI) applyWrittenConfigLocked(out []byte, snapshots ...*config.Config) error {
 	// Register the content hash of what we just wrote so the config file
 	// watcher knows this is an app-initiated write and does not trigger a
 	// full service reload (channels disconnect/reconnect, cron lanes canceled).
@@ -625,8 +671,8 @@ func (a *restAPI) updateConfigJSONLocked(mutate func(m map[string]any) error) er
 	// Refresh the in-memory config AND rewire sensitive-data scrubbing.
 	// Propagate the error so callers fail the HTTP request rather than silently
 	// serving stale in-memory state (prevents A1 regression on REST-initiated writes).
-	if refreshErr := a.refreshConfigAndRewireServices(a.configPath()); refreshErr != nil {
-		return fmt.Errorf("config written but in-memory refresh failed: %w", refreshErr)
+	if refreshErr := a.refreshConfigAndRewireServices(a.configPath(), snapshots...); refreshErr != nil {
+		return &configRefreshError{err: refreshErr}
 	}
 	// refreshConfigAndRewireServices loads the config, and config.LoadConfig may
 	// normalize + re-save the file (config.go SaveConfig-on-load), producing
@@ -652,6 +698,18 @@ func (a *restAPI) updateConfigJSONLocked(mutate func(m map[string]any) error) er
 	}
 	return nil
 }
+
+// configRefreshError is updateConfigJSONLocked's failure AFTER config.json
+// was durably written: the in-memory refresh failed, so the write stands on
+// disk but the running config was not swapped. Callers that must not treat
+// the write as undone (PUT /performance, #904) detect it with errors.As.
+type configRefreshError struct{ err error }
+
+func (e *configRefreshError) Error() string {
+	return "config written but in-memory refresh failed: " + e.err.Error()
+}
+
+func (e *configRefreshError) Unwrap() error { return e.err }
 
 // ensureMap walks m through the given keys, creating intermediate map[string]any
 // nodes as needed, and returns the deepest map. Panics only on a non-map value
@@ -742,13 +800,21 @@ func (a *restAPI) populateAgentsListFromStore(cfg *config.Config) error {
 	return populateAgentsListFromEntityStoreStrict(cfg, a.homePath)
 }
 
-func (a *restAPI) refreshConfigAndRewireServices(configPath string) error {
+func (a *restAPI) refreshConfigAndRewireServices(configPath string, snapshots ...*config.Config) error {
+	snapshot := a.agentLoop.GetConfig()
+	if len(snapshots) > 0 {
+		snapshot = snapshots[0]
+	}
 	if a.credStore == nil {
 		// No credential store wired — use the plain loader (no v0 migration, no
 		// credential resolution). Safe because without a store there are no
 		// secrets to re-arm in the replacer.
 		newCfg, err := config.LoadConfig(configPath)
 		if err != nil {
+			// The loader never resolves credentials (loadConfigInternal does
+			// not use the store), so its error carries no credential text.
+			logsafeError("refreshConfigAndRewireServices: rejecting in-memory refresh — "+
+				"config load failed (no credential store variant)", "error", err)
 			return fmt.Errorf("load config (no store): %w", err)
 		}
 		if rosterErr := a.populateAgentsListFromStore(newCfg); rosterErr != nil {
@@ -756,7 +822,9 @@ func (a *restAPI) refreshConfigAndRewireServices(configPath string) error {
 				"agent roster population failed (no credential store variant)", "error", rosterErr)
 			return fmt.Errorf("agent roster population failed: %w", rosterErr)
 		}
-		a.agentLoop.SwapConfig(newCfg)
+		if err := a.publishWrittenConfig(newCfg, snapshot, len(snapshots) > 0); err != nil {
+			return err
+		}
 		// Hot-apply the log level: gateway.log_level is a hot-reload key (not
 		// restart-gated), so a Settings save must take effect immediately
 		// rather than waiting for a manual restart.
@@ -765,6 +833,11 @@ func (a *restAPI) refreshConfigAndRewireServices(configPath string) error {
 	}
 	newCfg, err := config.LoadConfigWithStore(configPath, a.credStore)
 	if err != nil {
+		// Runs before credential resolution, and the loader never resolves
+		// credentials itself (loadConfigInternal does not use the store), so
+		// the error carries no credential text.
+		logsafeError("refreshConfigAndRewireServices: rejecting in-memory refresh — "+
+			"config load failed", "error", err)
 		return fmt.Errorf("load config: %w", err)
 	}
 	if rosterErr := a.populateAgentsListFromStore(newCfg); rosterErr != nil {
@@ -773,42 +846,49 @@ func (a *restAPI) refreshConfigAndRewireServices(configPath string) error {
 		return fmt.Errorf("agent roster population failed: %w", rosterErr)
 	}
 	// Build a ref→in-use map so a resolution failure on something actually
-	// enabled/in-use (fatal — surfaced as a failed request) can be
-	// distinguished from one on a disabled channel or unused feature
-	// (Warn + continue), matching bootCredentials/executeReload.
+	// enabled/in-use can be distinguished from one on a disabled channel or
+	// unused feature, matching bootCredentials/executeReload.
+	//
+	// #1277 (founder decision 2026-10-12; round-3 chief ruling 2026-10-14):
+	// a missing or single-entry-unreadable secret on an enabled integration
+	// no longer rejects the in-memory refresh — only that integration degrades
+	// (the channel manager records its ref-naming failure; Settings shows it),
+	// while the operator's actual edit applies. ONE store-level health
+	// decision, made from the store itself and independent of which reference
+	// kinds the config holds (CHECK F1/F2), still rejects and keeps the old
+	// config: a wrong master key, a corrupt/undecodable file, or a locked
+	// vault — including on MCP-only and reference-free configurations.
 	enabledRefs := buildEnabledRefMap(newCfg)
 	bundle, bundleErrs := credentials.ResolveBundle(newCfg, a.credStore)
-	for _, e := range bundleErrs {
+	bundleAuth, bundleRest := splitEntryAuthFailures(bundleErrs)
+	if healthErr := storeHealthFailure("refresh", a.credStore.HealthCheck()); healthErr != nil {
+		refreshErr := fmt.Errorf("refresh rejected: %w",
+			fatalStoreWideAuthFailure(healthErr, bundleAuth))
+		slog.Error("refreshConfigAndRewireServices: rejecting in-memory refresh — "+
+			"store-level credential failure", "error", refreshErr)
+		return refreshErr
+	}
+	for _, e := range bundleAuth {
+		slog.Error("refreshConfigAndRewireServices: credential unusable — "+
+			"the referencing entry will not work until it is fixed, the rest of the system continues",
+			"error", e)
+	}
+	for _, e := range bundleRest {
 		var notFound *credentials.NotFoundError
 		if errors.As(e, &notFound) {
 			if enabledRefs[notFound.Name] {
-				refreshErr := fmt.Errorf(
-					"enabled credential %q not found in store: %w", notFound.Name, e,
-				)
-				slog.Error("refreshConfigAndRewireServices: rejecting in-memory refresh — "+
-					"enabled credential not found", "ref", notFound.Name, "error", e)
-				return refreshErr
+				slog.Error("refreshConfigAndRewireServices: credential unusable — "+
+					"the referencing entry will not work until it is fixed, the rest of the system continues",
+					"credential_ref", notFound.Name, "error", e)
+				continue
 			}
 			slog.Info("refreshConfigAndRewireServices: credential not found (not currently enabled/in use)",
 				"ref", notFound.Name)
 			continue
 		}
-		// Any error other than "not found" on an enabled/in-use ref is worse
-		// than a simple missing ref (the credential exists but can't be
-		// read) — escalate exactly like the NotFoundError-on-enabled case
-		// above instead of a log-only Warn.
-		if ref, ok := enabledRefFromBundleError(e, enabledRefs); ok {
-			refreshErr := fmt.Errorf(
-				"enabled credential %q failed to resolve (not simply missing — check "+
-					"OMNIPUS_MASTER_KEY / credentials.json integrity): %w", ref, e,
-			)
-			slog.Error("refreshConfigAndRewireServices: rejecting in-memory refresh — "+
-				"enabled credential failed to resolve", "ref", ref, "error", e)
-			return refreshErr
-		}
-		// Non-fatal: a disabled channel / unused feature missing its cred is
-		// acceptable here.
-		slog.Warn("refreshConfigAndRewireServices: bundle resolution error", "error", e)
+		// Resolution may observe a file/lock failure between the two reads.
+		// Preserve it rather than accepting a partial refresh with only a log.
+		return fmt.Errorf("refresh rejected: %w", fatalStoreWideAuthFailure(e, nil))
 	}
 	// Replace (not append) the entire sensitive-values set so rotated secrets
 	// are evicted and the scrubber reflects the current config refs plus every
@@ -823,7 +903,9 @@ func (a *restAPI) refreshConfigAndRewireServices(configPath string) error {
 	newCfg.RegisterSensitiveValues(values)
 	// Atomically swap the config pointer so all subsequent requests see the
 	// new config with scrubbing fully re-armed.
-	a.agentLoop.SwapConfig(newCfg)
+	if err := a.publishWrittenConfig(newCfg, snapshot, len(snapshots) > 0); err != nil {
+		return err
+	}
 	// Hot-apply the log level: gateway.log_level is a hot-reload key (not
 	// restart-gated), so a Settings save must take effect immediately
 	// rather than waiting for a manual restart.
@@ -847,11 +929,13 @@ func (a *restAPI) updateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Block credential fields and providers (credentials must use /providers endpoint)
+	// Block credential fields and providers (credentials must use /providers
+	// endpoint). Keys are folded like encoding/json binds them (jsonFoldKey),
+	// so "providerſ" (U+017F ≡ 's') cannot slip past as a non-match.
 	for k := range updates {
-		kl := strings.ToLower(k)
-		if kl == "providers" || strings.Contains(kl, "api_key") || strings.Contains(kl, "secret") ||
-			strings.Contains(kl, "password") {
+		kf := jsonFoldKey(k)
+		if kf == jsonFoldKey("providers") || strings.Contains(kf, jsonFoldKey("api_key")) ||
+			strings.Contains(kf, jsonFoldKey("secret")) || strings.Contains(kf, jsonFoldKey("password")) {
 			jsonErr(w, http.StatusForbidden, fmt.Sprintf("credential field %q cannot be set via config endpoint", k))
 			return
 		}
@@ -873,6 +957,11 @@ func (a *restAPI) updateConfig(w http.ResponseWriter, r *http.Request) {
 			http.StatusForbidden,
 			fmt.Sprintf("%s is a blocked path — use the dedicated endpoint", path),
 		)
+		return
+	}
+	if key, refused := nonASCIIKeyNearBlockedPath(typedBody, blockedPaths); refused {
+		jsonErr(w, http.StatusForbidden, fmt.Sprintf(
+			"%q: a non-ASCII key is not allowed in a section that holds protected settings", key))
 		return
 	}
 
@@ -911,6 +1000,18 @@ func (a *restAPI) updateConfig(w http.ResponseWriter, r *http.Request) {
 	// Deep merge nested objects so partial updates don't wipe sibling keys
 	// (e.g., updating gateway.port must not delete gateway.users).
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
+		// #904: the merge below is ONE level deep, so a body carrying
+		// {"agents":{"defaults":{…}}} replaces the whole agents.defaults
+		// map. The global tool-iteration limit and its env-import marker
+		// cannot be written here (blockedPaths), so they must survive such a
+		// write unchanged — see preserveProtectedAgentDefaults.
+		protected := snapshotProtectedAgentDefaults(m)
+		fingerprint, fpErr := protectedAgentDefaultsFingerprint(m)
+		if fpErr != nil {
+			// The on-disk config no longer decodes into config.Config;
+			// no baseline to compare against — refuse rather than guess.
+			return fmt.Errorf("stored agents section does not decode: %w", fpErr)
+		}
 		for k, v := range updates {
 			var parsed any
 			if err := json.Unmarshal(v, &parsed); err != nil {
@@ -934,10 +1035,25 @@ func (a *restAPI) updateConfig(w http.ResponseWriter, r *http.Request) {
 			}
 			m[k] = parsed
 		}
-		return nil
+		if err := preserveProtectedAgentDefaults(m, protected); err != nil {
+			return err
+		}
+		// Defence in depth behind blockedPaths (#904 gate round 2, N1):
+		// decode the merged result the way config.json is loaded and refuse
+		// if either protected value would change, whatever key spelling
+		// carried it.
+		return checkProtectedAgentDefaultsUnchanged(fingerprint, m)
 	}); err != nil {
+		var refusal *requestRefusalError
+		if errors.As(err, &refusal) {
+			jsonErr(w, http.StatusBadRequest, refusal.Error())
+			return
+		}
+		if writeOutboundProtected(w, err) {
+			return
+		}
 		slog.Error("rest: save config", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
 		return
 	}
 
@@ -971,7 +1087,7 @@ func (a *restAPI) rotateGatewayToken(w http.ResponseWriter, r *http.Request) {
 		return nil
 	}); err != nil {
 		slog.Error("rest: save config for token rotation", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not save config", err)
 		return
 	}
 	// Persistence succeeded. Reload so the in-memory config picks up the new token.
@@ -985,7 +1101,7 @@ func (a *restAPI) rotateGatewayToken(w http.ResponseWriter, r *http.Request) {
 	// until some unrelated reload happened to run.
 	if err := a.triggerReloadAndWait(); err != nil {
 		slog.Error("config reload after token rotation failed", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("token saved but reload failed: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "token saved but reload failed", err)
 		return
 	}
 	jsonOK(w, gen.RotateTokenResponse{Token: newToken})

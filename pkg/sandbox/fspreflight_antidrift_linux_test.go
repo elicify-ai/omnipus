@@ -191,11 +191,16 @@ func TestAntiDrift_Linux_PathGrantEnforcedByKernel(t *testing.T) {
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
 		t.Fatalf("mkdir workDir: %v", err)
 	}
-	grantDir := filepath.Join(home, "granted")
+	// L1-AMENDMENTS-20261013.md §2 D1 / §2.4: unlisted home
+	// locations are never widenable. Keep this ordinary PathGrant external.
+	grantDir := filepath.Join(t.TempDir(), "granted")
 	if err := os.MkdirAll(grantDir, 0o755); err != nil {
 		t.Fatalf("mkdir grantDir: %v", err)
 	}
 	grantFile := filepath.Join(grantDir, "widened.txt")
+	if err := os.WriteFile(grantFile, []byte("before-grant"), 0o600); err != nil {
+		t.Fatalf("seed exact PathGrant target: %v", err)
+	}
 
 	// Another agent's home, pre-created as an EXISTING sibling directory —
 	// KernelDeniedPathsFor enumerates disk to find siblings (its own doc

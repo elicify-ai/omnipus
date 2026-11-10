@@ -6,10 +6,12 @@ package systools_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
@@ -108,13 +110,63 @@ func newSysagentFastUpsertDeps(
 		return al.ReloadProviderAndConfig(context.Background(), provider, &newCfg)
 	}
 	return &systools.Deps{
-		Home:   home,
+		Home: home,
+		// The production wiring: the loop's one live session store.
+		DeleteSessionStore: func() systools.AgentSessionStore {
+			if s := al.GetSessionStore(); s != nil {
+				return s
+			}
+			return nil
+		},
 		GetCfg: al.GetConfig,
 		MutateConfig: func(fn func(*config.Config) error) error {
 			return fn(al.GetConfig())
 		},
 		SaveConfigLocked: func(*config.Config) error { return nil },
 		ReloadFunc:       reloadFunc,
+		// WaitForReloadFunc (round-4 re-review finding, code-reviewer,
+		// confidence 85): wired here — routed through the SAME reloadFunc
+		// that increments reloadCalls — specifically so this fixture is a
+		// real regression guard, not just a demonstration of round 4's own
+		// wiring. Without this field, publishAgentActivation's nil-check on
+		// WaitForReloadFunc would silently skip the call if a future edit
+		// reverted the caller back to it (e.g. a bad merge reintroducing a
+		// pre-round-4 hunk) — reloadCalls would stay 0, and
+		// DoesNotTriggerFullReload would pass even though production's real
+		// WaitForReloadFunc (pkg/gateway/gateway.go's wiring) would have
+		// fired a full reload on every fast-path success, exactly the
+		// round-3 bug. With this field present, that same revert now shows
+		// up as reloadCalls==1, and the assertion below catches it.
+		// AgentDeleteTool prefers WaitForReloadFunc over the bare ReloadFunc
+		// (see agent.go::agentDeleteToolExecute.reload) and calls only ONE
+		// of the two, so TestAgentDelete_StillUsesFullReload_Deliberately's
+		// expectation of exactly 1 reloadFunc call is unaffected by adding
+		// this field — delete's call still increments the counter exactly
+		// once, via whichever field it reads.
+		WaitForReloadFunc: func() error { return reloadFunc() },
+		// agent-picker-freshness fix (#1009, round 4): exercises the SAME
+		// publish-wait publishAgentActivation uses in production. NOT the
+		// trigger-and-wait WaitForReloadFunc above (whose production wiring
+		// calls TriggerReload as its first action and would unconditionally
+		// fire a full reload on every fast-path success — the bug the
+		// round-3 fix shipped). The wait-only shape mirrors the new
+		// pkg/gateway/rest_auth.go::waitForPendingReload exactly: poll the
+		// pending flag until it clears, return immediately if it is already
+		// clear (the fast-path-success branch — the property the
+		// DoesNotTriggerFullReload test guards). See
+		// agent_created_notify_test.go::
+		// TestAgentCreate_NotifyFiresOnlyAfterAsyncReloadLands for the
+		// async-reload half of the same proof.
+		WaitForPendingReloadFunc: func() error {
+			deadline := time.Now().Add(2 * time.Second)
+			for time.Now().Before(deadline) {
+				if !al.IsReloadPending() {
+					return nil
+				}
+				time.Sleep(time.Millisecond)
+			}
+			return errors.New("test double: IsReloadPending did not clear within 2s")
+		},
 		UpsertAgentFastFunc: func(agentID string) error {
 			if al.IsReloadPending() {
 				return reloadFunc()
@@ -145,6 +197,8 @@ func newSysagentFastUpsertDeps(
 // ResolveRoute against a channel binding configured BEFORE the agent existed
 // (an operator can bind a channel to an agent ID that gets created later).
 func TestAgentCreate_DoesNotTriggerFullReload(t *testing.T) {
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
 	home := t.TempDir()
 	provider := &reloadTestProvider{}
 	const agentID = "fast-path-create-agent"
@@ -160,8 +214,7 @@ func TestAgentCreate_DoesNotTriggerFullReload(t *testing.T) {
 		"description": "proves create_agent publishes via the fast path, not a full reload",
 		"soul":        "You are a test agent.",
 		"model":       "test-model",
-		"color":       "#22C55E",
-		"icon":        "robot",
+		"color":       "#6E8BA8",
 	})
 	if result.IsError {
 		t.Fatalf("create_agent failed: %s", result.ForLLM)
@@ -186,7 +239,7 @@ func TestAgentCreate_DoesNotTriggerFullReload(t *testing.T) {
 	}
 
 	// Usable, not merely present: ResolveRoute against a pre-existing binding.
-	route := al.GetRegistry().ResolveRoute(routing.RouteInput{Channel: "telegram", AccountID: "acct-1"})
+	route := al.GetRegistry().ResolveRoute(boundTelegramRouteInput(agentID))
 	if route.Drop {
 		t.Fatalf("route must not drop for %q", agentID)
 	}
@@ -203,6 +256,8 @@ func TestAgentCreate_DoesNotTriggerFullReload(t *testing.T) {
 // genuinely visible afterward (a NEW instance carrying the updated model),
 // not merely a config-file change nobody re-read.
 func TestAgentUpdate_DoesNotTriggerFullReload(t *testing.T) {
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
 	home := t.TempDir()
 	provider := &reloadTestProvider{}
 	const agentID = "fast-path-update-agent"
@@ -216,8 +271,7 @@ func TestAgentUpdate_DoesNotTriggerFullReload(t *testing.T) {
 		"description": "created so update_agent has a target",
 		"soul":        "original soul",
 		"model":       "test-model",
-		"color":       "#22C55E",
-		"icon":        "robot",
+		"color":       "#6E8BA8",
 	})
 	if createResult.IsError {
 		t.Fatalf("create_agent (setup) failed: %s", createResult.ForLLM)
@@ -277,6 +331,8 @@ func TestAgentUpdate_DoesNotTriggerFullReload(t *testing.T) {
 // TestAgentDelete_ImmediatelyUnroutableAndUnlisted_NoRestart's existing
 // coverage from the reload-mechanism side.
 func TestAgentDelete_StillUsesFullReload_Deliberately(t *testing.T) {
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
 	home := t.TempDir()
 	provider := &reloadTestProvider{}
 	const agentID = "fast-path-delete-agent"
@@ -292,8 +348,7 @@ func TestAgentDelete_StillUsesFullReload_Deliberately(t *testing.T) {
 		"description": "created so delete_agent has a target",
 		"soul":        "You are a test agent.",
 		"model":       "test-model",
-		"color":       "#22C55E",
-		"icon":        "robot",
+		"color":       "#6E8BA8",
 	})
 	if createResult.IsError {
 		t.Fatalf("create_agent (setup) failed: %s", createResult.ForLLM)
@@ -308,8 +363,7 @@ func TestAgentDelete_StillUsesFullReload_Deliberately(t *testing.T) {
 		"description": "stays in the roster after the other agent is deleted",
 		"soul":        "You persist.",
 		"model":       "test-model",
-		"color":       "#3366FF",
-		"icon":        "robot",
+		"color":       "#6E8BA8",
 	})
 	if keeperResult.IsError {
 		t.Fatalf("create_agent (keeper) failed: %s", keeperResult.ForLLM)
@@ -337,9 +391,23 @@ func TestAgentDelete_StillUsesFullReload_Deliberately(t *testing.T) {
 	if _, ok := al.GetRegistry().GetAgent(agentID); ok {
 		t.Fatalf("deleted agent %q must no longer be resolvable via GetAgent after the reload", agentID)
 	}
-	route := al.GetRegistry().ResolveRoute(routing.RouteInput{Channel: "telegram", AccountID: "acct-1"})
+	route := al.GetRegistry().ResolveRoute(boundTelegramRouteInput(agentID))
 	if route.AgentID == agentID && !route.Drop {
 		t.Fatalf("ResolveRoute must no longer resolve the telegram binding to the deleted agent %q, got "+
 			"agent_id=%q drop=%v", agentID, route.AgentID, route.Drop)
+	}
+}
+
+// boundTelegramRouteInput is the route input of a "telegram" instance bound
+// to a workspace with agentID as its main agent (omnipus-system-agent FR-121:
+// channels route only through a binding; the resolver checks the named agent
+// against its own config snapshot, so a stale resolver cannot see a new agent).
+func boundTelegramRouteInput(agentID string) routing.RouteInput {
+	return routing.RouteInput{
+		Channel:       "telegram",
+		InstanceID:    "telegram",
+		AccountID:     "acct-1",
+		Identity:      &config.ChannelIdentity{Kind: "agent", ID: agentID},
+		BoundInstance: true,
 	}
 }

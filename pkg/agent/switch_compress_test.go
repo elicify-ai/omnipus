@@ -74,7 +74,7 @@ func newSwitchTestAgentLoop(t *testing.T, models ...string) (al *AgentLoop, cfg 
 	}
 	mp := &mockProvider{}
 	al = mustNewAgentLoop(t, cfg, bus.NewMessageBus(), mp)
-	return al, cfg, func() {}
+	return al, cfg, al.Close
 }
 
 // --- decideSwitchCompressAction purity tests (unchanged logic) ---
@@ -146,7 +146,7 @@ func TestSwitchTime_EndToEnd_HappyPath(t *testing.T) {
 	al, _, cleanup := newSwitchTestAgentLoop(t, "test-model", newModel)
 	defer cleanup()
 
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent)
 
 	// --- Fixture calibration (derived, NOT hardcoded) -----------------------
@@ -216,7 +216,7 @@ func TestSwitchTime_EndToEnd_HappyPath(t *testing.T) {
 		seedMsgs = append(seedMsgs, providers.Message{Role: "user", Content: turnText})
 		seedMsgs = append(seedMsgs, providers.Message{Role: "assistant", Content: turnText})
 	}
-	agent.Sessions.SetHistory(sessionKey, seedMsgs)
+	seedWindowHistory(agent.Sessions, sessionKey, seedMsgs)
 	require.NoError(t, agent.Sessions.Save(sessionKey))
 
 	historyBefore := agent.Sessions.GetHistory(sessionKey)
@@ -295,7 +295,7 @@ func TestSwitchTime_EmptySession_NoSyntheticMessage(t *testing.T) {
 	al, _, cleanup := newSwitchTestAgentLoop(t, "test-model", newModel)
 	defer cleanup()
 
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent)
 
 	agent.ContextWindow = 8000
@@ -305,7 +305,7 @@ func TestSwitchTime_EmptySession_NoSyntheticMessage(t *testing.T) {
 	require.NotEqual(t, oldModel, newModel)
 
 	const sessionKey = "empty-session"
-	agent.Sessions.SetHistory(sessionKey, nil)
+	seedWindowHistory(agent.Sessions, sessionKey, nil)
 	require.NoError(t, agent.Sessions.Save(sessionKey))
 
 	updatedAgent, err := al.handleModelSwitch(
@@ -335,7 +335,7 @@ func TestSwitchTime_LLMHistoryHasNoSystemMessage(t *testing.T) {
 	al, _, cleanup := newSwitchTestAgentLoop(t, "test-model", newModel)
 	defer cleanup()
 
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent)
 
 	agent.ContextWindow = 8000
@@ -346,7 +346,7 @@ func TestSwitchTime_LLMHistoryHasNoSystemMessage(t *testing.T) {
 
 	const sessionKey = "llm-no-system-msg"
 	bigText := strings.Repeat("b", 50000)
-	agent.Sessions.SetHistory(sessionKey, []providers.Message{
+	seedWindowHistory(agent.Sessions, sessionKey, []providers.Message{
 		{Role: "user", Content: "I need help with: " + bigText},
 		{Role: "assistant", Content: "Sure: " + bigText},
 	})
@@ -397,7 +397,7 @@ func TestSwitchTime_UnknownModel_LogsWarn(t *testing.T) {
 	al, _, cleanup := newSwitchTestAgentLoop(t, "test-model")
 	defer cleanup()
 
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent)
 	agent.ContextWindow = 8000
 
@@ -407,7 +407,7 @@ func TestSwitchTime_UnknownModel_LogsWarn(t *testing.T) {
 
 	const sessionKey = "unknown-model-test"
 	const typoModel = "not-a-real-model-typo"
-	agent.Sessions.SetHistory(sessionKey, nil)
+	seedWindowHistory(agent.Sessions, sessionKey, nil)
 	require.NoError(t, agent.Sessions.Save(sessionKey))
 
 	// Drive the switch with the typo'd model name.
@@ -473,8 +473,11 @@ func TestSwitchTime_UnknownModel_SurfacesToUserNotJustLog(t *testing.T) {
 	al, _, cleanup := newSwitchTestAgentLoop(t, "test-model")
 	defer cleanup()
 
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, agent)
+	// The failed-switch oracle still runs the old model, through its explicitly
+	// bound mock client rather than the fixture row's non-routable URL.
+	agent.StoreProviderPool(map[string]providers.LLMProvider{"openai": agent.Provider})
 	oldModel := agent.Model
 	require.NotEmpty(t, oldModel, "test setup: default agent must have a model")
 
@@ -607,7 +610,7 @@ func TestApplyAgentModel_MaxTokensDoesNotRatchetDown(t *testing.T) {
 	al, cfg, cleanup := newSwitchTestAgentLoop(t, bigModel, smallModel)
 	defer cleanup()
 
-	inst := al.GetRegistry().GetDefaultAgent()
+	inst := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, inst)
 	configured := inst.MaxTokens
 	require.Positive(t, configured)

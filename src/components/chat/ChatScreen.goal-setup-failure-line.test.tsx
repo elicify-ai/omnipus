@@ -34,127 +34,74 @@ import { useConnectionStore } from '@/store/connection'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import type { GoalStatusFrame } from '@/lib/api/generated/asyncapi-types'
 
-vi.mock('@assistant-ui/react', () => {
-  return {
-    useThreadViewportStore: () => ({ getState: () => ({ isAtBottom: true }) }),
-    ThreadPrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Viewport: React.forwardRef(
-        (
-          {
-            children,
-            className,
-            style,
-            'data-testid': testId,
-          }: { children?: React.ReactNode; className?: string; style?: React.CSSProperties; 'data-testid'?: string },
-          ref: React.Ref<HTMLDivElement>,
-        ) => React.createElement('div', { ref, className, style, 'data-testid': testId }, children),
-      ),
-      Messages: () => null,
-    },
-    MessagePrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Parts: () => null,
-    },
-    ComposerPrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Input: ({
-        disabled,
-        placeholder,
-        className,
-        onChange,
-        onKeyDown,
-        onBlur,
-      }: {
-        disabled?: boolean
-        placeholder?: string
-        className?: string
-        onChange?: (e: React.ChangeEvent<HTMLTextAreaElement>) => void
-        onKeyDown?: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void
-        onBlur?: () => void
-      }) =>
-        React.createElement('textarea', {
-          disabled,
-          placeholder,
-          className,
-          onChange,
-          onKeyDown,
-          onBlur,
-          'data-testid': 'composer-input',
-        }),
-      Send: ({
-        disabled,
-        children,
-        className,
-        'data-testid': testId,
-      }: {
-        disabled?: boolean
-        children?: React.ReactNode
-        className?: string
-        'data-testid'?: string
-      }) =>
-        React.createElement(
-          'button',
-          { type: 'button', disabled, className, 'data-testid': testId ?? 'chat-send' },
-          children,
-        ),
-      AddAttachment: ({
-        disabled,
-        children,
-        className,
-      }: {
-        disabled?: boolean
-        children?: React.ReactNode
-        className?: string
-      }) => React.createElement('button', { type: 'button', disabled, className, 'data-testid': 'add-attachment' }, children),
-      Attachments: () => null,
-    },
-    AttachmentPrimitive: {
-      Root: ({ children, className }: { children?: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Name: () => null,
-      Remove: ({ children, className }: { children?: React.ReactNode; className?: string }) =>
-        React.createElement('button', { type: 'button', className }, children),
-      Thumb: () => null,
-    },
-    MessagePartPrimitive: { InProgress: () => null },
-    ActionBarPrimitive: {
-      Root: ({ children }: { children: React.ReactNode }) => React.createElement('div', {}, children),
-      Copy: ({ children }: { children: React.ReactNode }) => React.createElement('span', {}, children),
-    },
-    AuiIf: () => null,
-    useComposerRuntime: () => ({
-      getState: () => ({ text: '' }),
-      setText: vi.fn(),
-      addAttachment: vi.fn(),
-      subscribe: vi.fn(() => vi.fn()),
-    }),
-    useMessage: () => ({
-      id: 'msg_streaming',
-      role: 'assistant',
-      status: { type: 'running' },
-      content: [],
-    }),
-    useAttachment: vi.fn(() => ({
-      id: 'att-default',
-      name: 'file.txt',
-      contentType: 'text/plain',
-      file: undefined,
-      status: { type: 'complete' },
-      content: [],
-    })),
-    makeAssistantToolUI: () => () => null,
-  }
-})
+import { MockButton, MockTextarea } from '@/test/assistantUiMock'
+vi.mock('@assistant-ui/react', async () => (await import('@/test/assistantUiMock')).createAssistantUiMock({
+  ThreadPrimitive: {
+    Viewport: React.forwardRef(
+              (
+                {
+                  children,
+                  className,
+                  style,
+                  'data-testid': testId,
+                }: { children?: React.ReactNode; className?: string; style?: React.CSSProperties; 'data-testid'?: string },
+                ref: React.Ref<HTMLDivElement>,
+              ) => React.createElement('div', { ref, className, style, 'data-testid': testId }, children),
+            ),
+  },
+  ComposerPrimitive: {
+    Input: ({
+              disabled,
+              placeholder,
+              className,
+              onChange,
+              onKeyDown,
+              onBlur,
+            }: {
+              disabled?: boolean
+              placeholder?: string
+              className?: string
+              onChange?: (e: React.ChangeEvent<HTMLTextAreaElement>) => void
+              onKeyDown?: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void
+              onBlur?: () => void
+            }) =>
+              React.createElement(MockTextarea, {
+                disabled,
+                placeholder,
+                className,
+                onChange,
+                onKeyDown,
+                onBlur,
+                'data-testid': 'composer-input',}),
+    Send: ({
+              disabled,
+              children,
+              className,
+              'data-testid': testId,
+            }: {
+              disabled?: boolean
+              children?: React.ReactNode
+              className?: string
+              'data-testid'?: string
+            }) =>
+              React.createElement(MockButton, { type: 'button', disabled, className, 'data-testid': testId ?? 'chat-send', children: children}),
+    AddAttachment: ({
+              disabled,
+              children,
+              className,
+            }: {
+              disabled?: boolean
+              children?: React.ReactNode
+              className?: string
+            }) => React.createElement(MockButton, { type: 'button', disabled, className, 'data-testid': 'add-attachment', children: children}),
+  },
+}))
 
 vi.mock('@tanstack/react-query', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-query')>()
   return {
     ...actual,
-    useQuery: () => ({ data: [], isError: false, refetch: vi.fn() }),
+    useQuery: (opts: { queryKey?: readonly unknown[] }) => ({ data: queryDataWithEmptyHistory(opts?.queryKey), isError: false, refetch: vi.fn() }),
     useMutation: () => ({ mutate: vi.fn(), isPending: false }),
     useQueryClient: () => ({ invalidateQueries: vi.fn(), removeQueries: vi.fn() }),
   }
@@ -166,12 +113,14 @@ vi.mock('@tanstack/react-router', () => ({
   Link: ({ children }: { children: React.ReactNode }) => children,
 }))
 
+import { emptyHistoryPage, queryDataWithEmptyHistory, type HistoryReadPort } from '../../../tests/chat-history-paging/legacy-fixtures'
+
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([]),
-    fetchSessionMessages: vi.fn().mockResolvedValue([]),
+    fetchSessionMessages: vi.fn<HistoryReadPort>(async (sessionId) => emptyHistoryPage(sessionId)),
     fetchAboutInfo: vi.fn().mockResolvedValue({ preview_port: 5001 }),
     createSession: vi.fn(),
     uploadFiles: vi.fn(),
@@ -208,8 +157,6 @@ vi.mock('./tools/WebServeUI', () => ({
 vi.mock('./markdown-text', () => ({
   MarkdownText: () => React.createElement('div', {}),
 }))
-vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
-vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
 vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 vi.mock('@/lib/memory-observer', () => ({
@@ -239,9 +186,14 @@ function makeGoalFrame(overrides: Partial<GoalStatusFrame> = {}): GoalStatusFram
 }
 
 /** Seeds a FINISHED (non-streaming) assistant message carrying one FAILED
- * baked tool call, plus an optional goalStatus frame on both the session
- * bucket and the foreground selector. */
-function seedFailedToolCallAssistant(goalFrame: GoalStatusFrame | null): void {
+ * baked tool call, a keyed `goalPills` map on both the session bucket and the
+ * foreground selector, and — when `goalId` is given — that goal association
+ * on the producing message itself (FR-039: the failure line joins THIS id to
+ * the exact keyed criteria). */
+function seedFailedToolCallAssistant(
+  goalId: string | null,
+  goalPills: Record<string, GoalStatusFrame>,
+): void {
   const userMsg: ChatMessage = {
     id: 'u1',
     role: 'user',
@@ -255,6 +207,7 @@ function seedFailedToolCallAssistant(goalFrame: GoalStatusFrame | null): void {
     content: '',
     timestamp: new Date().toISOString(),
     status: 'done',
+    ...(goalId ? { goalId } : {}),
     tool_calls: [
       {
         id: 'tc_ask_user_question_1',
@@ -268,6 +221,9 @@ function seedFailedToolCallAssistant(goalFrame: GoalStatusFrame | null): void {
   }
   const messages = [userMsg, assistantMsg]
   const bucket = makeBucketMessages(messages)
+  const pills = Object.fromEntries(
+    Object.entries(goalPills).map(([id, f]) => [id, { ...f, session_id: SID }]),
+  )
 
   useChatStore.setState((s) => ({
     ...s,
@@ -288,14 +244,14 @@ function seedFailedToolCallAssistant(goalFrame: GoalStatusFrame | null): void {
         cancelStage: null,
         lastReceivedEventTime: null,
         trimmedCount: 0,
-        goalStatus: goalFrame,
+        goalPills: pills,
       },
     },
     messages,
     isStreaming: false,
     isReplaying: false,
     replayCompletedForSession: SID,
-    goalStatus: goalFrame,
+    goalPills: pills,
   }))
 }
 
@@ -325,7 +281,9 @@ afterEach(() => {
 
 describe('ChatScreen goal-setup failure line (operator UX fix, 2026-09-08)', () => {
   it('renders the quiet failure line, with the error available on expand, while a goal is active and its record is empty', () => {
-    seedFailedToolCallAssistant(makeGoalFrame())
+    seedFailedToolCallAssistant('goal_failure_line_test', {
+      goal_failure_line_test: makeGoalFrame(),
+    })
 
     const { container } = render(<ChatScreen />)
 
@@ -337,7 +295,7 @@ describe('ChatScreen goal-setup failure line (operator UX fix, 2026-09-08)', () 
   })
 
   it('does not change general tool-error rendering when there is no active goal', () => {
-    seedFailedToolCallAssistant(null)
+    seedFailedToolCallAssistant(null, {})
 
     const { container } = render(<ChatScreen />)
 
@@ -348,11 +306,11 @@ describe('ChatScreen goal-setup failure line (operator UX fix, 2026-09-08)', () 
   })
 
   it('does not change general tool-error rendering once the goal record is populated', () => {
-    seedFailedToolCallAssistant(
-      makeGoalFrame({
+    seedFailedToolCallAssistant('goal_failure_line_test', {
+      goal_failure_line_test: makeGoalFrame({
         criteria: [{ id: 'c1', kind: 'prose', text: 'release notes are published', judgment: 'boolean', status: 'pending', author: { kind: 'agent', id: 'tester' } }],
       }),
-    )
+    })
 
     const { container } = render(<ChatScreen />)
 
@@ -362,7 +320,9 @@ describe('ChatScreen goal-setup failure line (operator UX fix, 2026-09-08)', () 
 
   it('falls through to the raw call when verbose chat is on, even during goal setup', () => {
     useChatPreferencesStore.setState({ verboseChatEnabled: true })
-    seedFailedToolCallAssistant(makeGoalFrame())
+    seedFailedToolCallAssistant('goal_failure_line_test', {
+      goal_failure_line_test: makeGoalFrame(),
+    })
 
     const { container } = render(<ChatScreen />)
 

@@ -33,80 +33,49 @@ if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
 
 import { OmnipusComposer } from './ChatScreen'
 
-vi.mock('@assistant-ui/react', () => {
-  return {
-    useThreadViewportStore: () => ({ getState: () => ({ isAtBottom: true }) }),
-    ThreadPrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Viewport: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Messages: () => null,
-    },
-    MessagePrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Parts: () => null,
-    },
-    ComposerPrimitive: {
-      Root: ({ children, className, onSubmit }: { children: React.ReactNode; className?: string; onSubmit?: (e: React.FormEvent) => void }) =>
-        React.createElement('form', { className, onSubmit, 'data-testid': 'composer-form' }, children),
-      Input: ({ disabled, placeholder, className, onChange, onKeyDown, onBlur }: {
-        disabled?: boolean; placeholder?: string; className?: string;
-        onChange?: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
-        onKeyDown?: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
-        onBlur?: () => void;
-      }) =>
-        React.createElement('textarea', {
-          disabled, placeholder, className,
-          onChange, onKeyDown, onBlur,
-          'data-testid': 'composer-input',
+import { MockButton } from '@/test/assistantUiMock'
+vi.mock('@assistant-ui/react', async () => (await import('@/test/assistantUiMock')).createAssistantUiMock({
+  ThreadPrimitive: {
+    Viewport: ({ children, className }: { children: React.ReactNode; className?: string }) =>
+              React.createElement('div', { className }, children),
+  },
+  ComposerPrimitive: {
+    Root: ({ children, className, onSubmit }: { children: React.ReactNode; className?: string; onSubmit?: (e: React.FormEvent) => void }) =>
+              React.createElement('form', { className, onSubmit, 'data-testid': 'composer-form' }, children),
+    Send: ({ disabled, children, className, 'data-testid': testId, 'aria-label': ariaLabel }: {
+              disabled?: boolean; children?: React.ReactNode; className?: string;
+              'data-testid'?: string; 'aria-label'?: string;
+            }) =>
+              React.createElement(MockButton, {
+                type: 'button', disabled, className,
+                'data-testid': testId ?? 'chat-send',
+                'aria-label': ariaLabel, children: children}),
+    AddAttachment: ({ disabled, children, className, 'aria-label': ariaLabel }: {
+              disabled?: boolean; children?: React.ReactNode; className?: string; 'aria-label'?: string
+            }) =>
+              React.createElement(MockButton, { type: 'button', disabled, className, 'aria-label': ariaLabel, 'data-testid': 'add-attachment', children: children}),
+  },
+  AttachmentPrimitive: {
+    Remove: ({ children, className, 'aria-label': ariaLabel }: { children?: React.ReactNode; className?: string; 'aria-label'?: string }) =>
+              React.createElement(MockButton, { type: 'button', className, 'aria-label': ariaLabel, children: children}),
+  },
+  ActionBarPrimitive: {
+    Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
+              React.createElement('div', { className }, children),
+  },
+  useComposerRuntime: vi.fn(() => ({
+          getState: () => ({ text: '' }),
+          setText: vi.fn(),
+          addAttachment: vi.fn(),
+          subscribe: vi.fn(() => vi.fn()),
+        })),
+  useMessage: () => ({
+          id: 'msg_1',
+          role: 'assistant',
+          status: { type: 'complete' },
+          content: [],
         }),
-      Send: ({ disabled, children, className, 'data-testid': testId, 'aria-label': ariaLabel }: {
-        disabled?: boolean; children?: React.ReactNode; className?: string;
-        'data-testid'?: string; 'aria-label'?: string;
-      }) =>
-        React.createElement('button', {
-          type: 'button', disabled, className,
-          'data-testid': testId ?? 'chat-send',
-          'aria-label': ariaLabel,
-        }, children),
-      AddAttachment: ({ disabled, children, className, 'aria-label': ariaLabel }: {
-        disabled?: boolean; children?: React.ReactNode; className?: string; 'aria-label'?: string
-      }) =>
-        React.createElement('button', { type: 'button', disabled, className, 'aria-label': ariaLabel, 'data-testid': 'add-attachment' }, children),
-      Attachments: () => null,
-    },
-    AttachmentPrimitive: {
-      Root: ({ children, className }: { children?: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Name: () => null,
-      Remove: ({ children, className, 'aria-label': ariaLabel }: { children?: React.ReactNode; className?: string; 'aria-label'?: string }) =>
-        React.createElement('button', { type: 'button', className, 'aria-label': ariaLabel }, children),
-      Thumb: () => null,
-    },
-    MessagePartPrimitive: { InProgress: () => null },
-    ActionBarPrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Copy: ({ children }: { children: React.ReactNode }) => React.createElement('span', {}, children),
-    },
-    AuiIf: () => null,
-    useComposerRuntime: vi.fn(() => ({
-      getState: () => ({ text: '' }),
-      setText: vi.fn(),
-      addAttachment: vi.fn(),
-      subscribe: vi.fn(() => vi.fn()),
-    })),
-    useMessage: () => ({
-      id: 'msg_1',
-      role: 'assistant',
-      status: { type: 'complete' },
-      content: [],
-    }),
-    makeAssistantToolUI: () => () => null,
-  }
-})
+}))
 
 // Commands query errors (same as ChatScreen.slash-commands-error.test.tsx)
 // but the skills query returns ZERO skills — the one combination that
@@ -125,7 +94,7 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
       if (Array.isArray(key) && key[0] === 'skills') {
         return { data: [], isError: false, refetch: vi.fn() }
       }
-      return { data: [], isError: false, refetch: vi.fn() }
+      return { data: queryDataWithEmptyHistory(key), isError: false, refetch: vi.fn() }
     },
     useMutation: () => ({ mutate: vi.fn(), isPending: false }),
     useQueryClient: () => ({ invalidateQueries: vi.fn(), removeQueries: vi.fn() }),
@@ -144,12 +113,14 @@ vi.mock('@tanstack/react-router', () => ({
 // doesn't exercise mentions. The workspaces query stays disabled (no
 // activeWorkspaceId set here), so `fetchWorkspaces` is never actually
 // invoked — this just needs to exist so the module loads.
+import { emptyHistoryPage, queryDataWithEmptyHistory, type HistoryReadPort } from '../../../tests/chat-history-paging/legacy-fixtures'
+
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([]),
-    fetchSessionMessages: vi.fn().mockResolvedValue([]),
+    fetchSessionMessages: vi.fn<HistoryReadPort>(async (sessionId) => emptyHistoryPage(sessionId)),
     fetchCommands: vi.fn().mockRejectedValue(new Error('network down')),
     fetchSkills: vi.fn().mockResolvedValue([]),
     fetchProviders: vi.fn().mockResolvedValue([]),
@@ -161,8 +132,6 @@ vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avata
 vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
 vi.mock('./markdown-text', () => ({ MarkdownText: () => null }))
 vi.mock('./tools/GenericToolCall', () => ({ GenericToolCall: () => null }))
-vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
-vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
 vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 
@@ -207,7 +176,7 @@ describe('Empty menu shell (Fix E, bugfixes3 sign-off)', () => {
     expect(screen.queryByText('Commands unavailable')).not.toBeInTheDocument()
   })
 
-  it('regression guard: a bare "/" under the SAME commands error still renders the container (error row + synthetic /resume)', async () => {
+  it('regression guard: a bare "/" under the SAME commands error still renders the container (error row + synthetic /sessions)', async () => {
     render(<OmnipusComposer />)
     const input = screen.getByTestId('composer-input')
 
@@ -216,11 +185,12 @@ describe('Empty menu shell (Fix E, bugfixes3 sign-off)', () => {
 
     // Outside the "/skills" filter, the error row's own condition
     // (`!isSkillsFilter`) is satisfied, so the container has real content
-    // (the error row, plus the synthetic client-only /resume command) and
+    // (the error row, plus the synthetic client-only /sessions command) and
     // must still render — proving Fix E's extra gate did not accidentally
     // hide a menu that legitimately has something to show.
     expect(screen.getByTestId('slash-menu')).toBeInTheDocument()
     expect(screen.getByTestId('slash-commands-error')).toBeInTheDocument()
-    expect(screen.getByText('/resume')).toBeInTheDocument()
+    expect(screen.getByText('/sessions')).toBeInTheDocument()
+    expect(screen.queryByText('/resume')).not.toBeInTheDocument()
   })
 })

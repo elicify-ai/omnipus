@@ -90,7 +90,8 @@ vi.mock('@/store/workspacesStore', () => ({
   },
 }))
 
-vi.mock('@/store/session', () => ({
+vi.mock('@/store/session', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/store/session')>(),
   useSessionStore: (selector?: (s: unknown) => unknown) => {
     const state = { activeSessionId: null, startNewSession: vi.fn() }
     return selector ? selector(state) : state
@@ -164,7 +165,7 @@ import { Sidebar } from './Sidebar'
 // restore-on-close effect looks it up by id="sidebar-hamburger" regardless
 // of which component renders it.
 function Hamburger() {
-  return <button id="sidebar-hamburger" type="button" aria-label="Toggle navigation sidebar" />
+  return <button id="sidebar-hamburger" type="button" aria-label="Show sidebar" />
 }
 
 function renderOpenOverlay() {
@@ -253,7 +254,9 @@ describe('Sidebar overlay — Tab is trapped inside the drawer while open', () =
     })
     renderOpenOverlay()
 
-    // The pin toggle is neither the first nor last focusable control.
+    // Pin sidebar (the brand row's keep-open control, rendered on this
+    // file's wide-viewport stub) is neither the first nor last focusable
+    // control.
     const pinButton = screen.getByRole('button', { name: 'Pin sidebar' })
     act(() => {
       pinButton.focus()

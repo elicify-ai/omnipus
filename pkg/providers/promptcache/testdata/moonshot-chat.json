@@ -1,0 +1,8 @@
+{
+  "prompt_tokens": 1000,
+  "completion_tokens": 10,
+  "prompt_tokens_details": {
+    "cached_tokens": 800,
+    "cache_write_tokens": 100
+  }
+}

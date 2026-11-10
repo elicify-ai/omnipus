@@ -161,6 +161,16 @@ fi
 : > "$WORK/failed.txt"
 RUNNER_FAIL=0
 
+begin_timing() {
+  local label="$1"
+  if ! started="$(date -u +%Y-%m-%dT%H:%M:%SZ)" || [ -z "$started" ]; then
+    started=unavailable
+    RUNNER_FAIL=1
+    printf 'GUARD RUNNER TIMING FAILURE: UTC start unavailable for %s\n' "$label" >&2
+  fi
+  tick=$SECONDS
+}
+
 while IFS= read -r g; do
   [ -z "$g" ] && continue
   guard_failed=0
@@ -169,18 +179,20 @@ while IFS= read -r g; do
   test_file="${g%.sh}.test.sh"
   if in_file "$test_file" "$WORK/active.txt"; then
     echo ">> companion for $g: $test_file"
+    begin_timing "$test_file"
     bash "$GUARDS_DIR/$test_file"
     tc=$?
-    echo ">> companion($test_file) exit=$tc"
+    echo ">> companion($test_file) exit=$tc start=$started dur=$((SECONDS - tick))s"
     [ "$tc" -ne 0 ] && guard_failed=1
     companions_run=1
   fi
 
   if grep -q -- '--self-test' "$GUARDS_DIR/$g" 2>/dev/null; then
     echo ">> companion for $g: $g --self-test"
+    begin_timing "$g --self-test"
     bash "$GUARDS_DIR/$g" --self-test
     fc=$?
-    echo ">> companion($g --self-test) exit=$fc"
+    echo ">> companion($g --self-test) exit=$fc start=$started dur=$((SECONDS - tick))s"
     [ "$fc" -ne 0 ] && guard_failed=1
     companions_run=1
   fi
@@ -188,9 +200,10 @@ while IFS= read -r g; do
   selfcheck_file="${g%.sh}-selfcheck.sh"
   if in_file "$selfcheck_file" "$WORK/active.txt"; then
     echo ">> companion for $g: $selfcheck_file"
+    begin_timing "$selfcheck_file"
     bash "$GUARDS_DIR/$selfcheck_file"
     sc=$?
-    echo ">> companion($selfcheck_file) exit=$sc"
+    echo ">> companion($selfcheck_file) exit=$sc start=$started dur=$((SECONDS - tick))s"
     [ "$sc" -ne 0 ] && guard_failed=1
     companions_run=1
   fi
@@ -204,9 +217,10 @@ while IFS= read -r g; do
     fi
   fi
 
+  begin_timing "$g"
   bash "$GUARDS_DIR/$g"
   gc=$?
-  echo "$g exit=$gc"
+  echo "$g exit=$gc start=$started dur=$((SECONDS - tick))s"
   [ "$gc" -ne 0 ] && guard_failed=1
 
   if [ "$guard_failed" -ne 0 ]; then

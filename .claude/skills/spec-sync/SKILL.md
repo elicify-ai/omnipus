@@ -8,13 +8,14 @@ description: >
   (GitNexus first, Read/Grep fallback), treats the code as fact and fixes the spec
   with a dated correction line, updates the Status field (Draft | In review |
   Approved | Implemented | Superseded), and flags anything that is really an open
-  founder decision rather than a plain sync. Loaded on demand by team-lead or
-  squad-lead — not preloaded, not run automatically on every commit.
+  founder decision rather than a plain sync. Loaded on demand by team-lead —
+  not preloaded, not run automatically on every commit.
 ---
 
 # Spec sync
 
-Last reviewed: 2026-09-25
+Last reviewed: 2026-10-29 — release branch wording
+Process version: 2026-10-29.1
 
 Companion to plan-spec (writes a spec) and grill-spec (reviews a spec). spec-sync
 runs after the fact: it makes sure a spec still describes what the code does, once
@@ -26,7 +27,7 @@ this skill is the procedure for using them to keep a spec honest.
 - Specs: `docs/internal/specs/<name>-spec.md`.
 - Reviews: `docs/internal/specs/<name>-spec-review.md`,
   `docs/internal/specs/<name>-spec-review-round2.md`.
-- ADRs: `docs/internal/architecture/ADR-NNN-<title>.md`. # agent-guard: allow
+- ADRs: `docs/internal/architecture/ADR-*.md` — an existing ADR keeps whatever filename it already has; a NEW ADR is named per architect's current rule (`ADR-<YYYYMMDD>-<slug>.md`; `.claude/agents/architect.md`, the "ADR naming" bullet, states the full rule). # agent-guard: allow
 - **Never** `docs/plan/`, `docs/specs/`, or `docs/internal/plan/` — those are not # agent-guard: allow
   real locations in this repo; a search that lands there is searching the wrong
   place, not finding an empty result.
@@ -50,7 +51,7 @@ recognise the variants actually on disk (`-spec-review-2.md`, `-review-pass2.md`
 1. Start from the spec's own traceability table and file-scope section — the
    files it says the feature touches.
 2. Confirm against what really changed: `git diff <merge-base>..HEAD --name-status`
-   against the integration branch the feature landed on (never against a stale
+   against the release branch the feature landed on (never against a stale
    local guess).
 3. For each requirement or scenario, check current behaviour with GitNexus —
    `context({name: "<symbol>"})` for what a cited symbol does today, `impact` if a
@@ -59,7 +60,9 @@ recognise the variants actually on disk (`-spec-review-2.md`, `-review-pass2.md`
    fall back to `Read`/`Grep` — that is the correct fallback, not a compliance gap.
    Never guess a GitNexus tool name that isn't one of `query`, `context`, `impact`,
    `trace`, `explain` — describe the step in words instead and fall back to grep.
-4. At most one narrowly-scoped, tagged local test if a claim genuinely needs one
+4. Follow `omnipus-shared-rules` ("Build and test") for permitted check scope and
+   slot-runner use; this post-landing sync never authorizes full lane CI or an
+   unapproved Fly window. At most one narrowly-scoped, tagged local test if a claim genuinely needs one
    (`CGO_ENABLED=0 go test -tags goolm,stdjson -run '^TestName$' -p 1 ./pkg/<one>/`);
    CI is still the authority for a suite result. `npm run typecheck`, never bare
    `tsc`. Never a whole-repo build or test, never `go test ./...`. # agent-guard: allow

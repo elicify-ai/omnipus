@@ -77,7 +77,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/plan"
-	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -141,7 +140,12 @@ func (te *TaskExecutor) executeTaskRun(
 	run *activeRun,
 	turn func(prompt string) (string, error),
 ) (redispatchTaskID string) {
-	if reason := te.preRunCannotFinishReason(t, taskSessionID); reason != "" {
+	reason, readErr := te.preRunCannotFinishReason(t, taskSessionID)
+	if readErr != nil {
+		te.pauseRunForGoalError(t, taskSessionID, readErr)
+		return ""
+	}
+	if reason != "" {
 		te.endTaskAssigneeCannotFinish(t, taskSessionID, reason, run)
 		return ""
 	}
@@ -188,7 +192,7 @@ const claimBareMarker = "bare_marker"
 // blocked claim.
 func (te *TaskExecutor) resolveRunClaim(t *task.Task, taskSessionID, resp string, state *taskRunState) (runClaim, error) {
 	if !te.dispatchesExternalCLI(t.AgentID) {
-		store := te.agentLoop.taskSessionStore(taskSessionID, t.AgentID)
+		store := te.agentLoop.GetSessionStore()
 		if store == nil || taskSessionID == "" {
 			return runClaim{}, nil
 		}
@@ -244,8 +248,12 @@ func (te *TaskExecutor) finishRunTurn(
 	run *activeRun,
 	state *taskRunState,
 ) (step runStep, nextPrompt, redispatchTaskID string) {
-	sessStore := te.agentLoop.taskSessionStore(taskSessionID, t.AgentID)
+	sessStore := te.agentLoop.GetSessionStore()
 
+	var goalReadErr *goalRecordReadError
+	if errors.As(turnErr, &goalReadErr) {
+		return te.pauseRunForGoalError(t, taskSessionID, turnErr)
+	}
 	if turnErr != nil {
 		// The one place a turn error's raw text is kept: the operator's log,
 		// where registered credentials are scrubbed (logger's
@@ -257,7 +265,7 @@ func (te *TaskExecutor) finishRunTurn(
 
 		if errors.Is(turnErr, ErrTaskRunNotDispatched) {
 			te.appendRunErrorTranscript(t, taskSessionID, sessStore, fmt.Sprintf("Task execution failed: %v", turnErr))
-			te.transitionTaskLifecycle(taskSessionID, session.LifecycleFailed, "not_dispatched")
+			te.transitionTaskLifecycle(taskSessionID, session.LifecycleFailed, "not_dispatched", nil)
 			te.endTaskWithoutAttempt(t, taskSessionID, fmt.Sprintf("The task could not be started: %v", turnErr), run)
 			return runStepEnded, "", ""
 		}
@@ -274,7 +282,7 @@ func (te *TaskExecutor) finishRunTurn(
 		// session's lifecycle cancelled. A timeout is not a stop: it still breaks
 		// the run and restarts it.
 		if TranslateTurnError(turnErr).Code == CodeTurnCanceled {
-			reason := "Stopped: " + turnErrorUserText(turnErr)
+			reason := te.stoppedTurnReason(t.ID, taskSessionID, turnErr)
 			logger.InfoCF("task_executor", "task run: the worker's turn was stopped — ending the task, no attempt used, no restart",
 				map[string]any{"task_id": t.ID, "agent_id": t.AgentID})
 			te.endTaskWithoutAttempt(t, taskSessionID, reason, run)
@@ -291,7 +299,7 @@ func (te *TaskExecutor) finishRunTurn(
 			logger.ErrorCF("task_executor", "task run: refused for a reason only an operator can fix — failing the task, no attempt used",
 				map[string]any{"task_id": t.ID, "agent_id": t.AgentID, "code": string(code)})
 			te.appendRunErrorTranscript(t, taskSessionID, sessStore, reason)
-			te.transitionTaskLifecycle(taskSessionID, session.LifecycleFailed, "operator_action_required")
+			te.transitionTaskLifecycle(taskSessionID, session.LifecycleFailed, "operator_action_required", nil)
 			te.endTaskWithoutAttempt(t, taskSessionID, reason, run)
 			return runStepEnded, "", ""
 		}
@@ -301,11 +309,7 @@ func (te *TaskExecutor) finishRunTurn(
 		// a try rather than failing the run.
 		if code, ok := attemptRecoverableTurnErrorCode(turnErr); ok && te.taskVerdictStillApplicable(t.ID) {
 			steer := malformedToolOutputSteering(code)
-			if exhausted, reason := te.spendInnerTry(t, taskSessionID, "a try that ended on malformed tool-call output", state); exhausted {
-				return te.failedRunStep(ctx, t, taskSessionID, reason, run)
-			}
-			te.appendRunSystemTranscript(t, taskSessionID, sessStore, steer)
-			return runStepContinue, steer, ""
+			return te.continueAfterInnerTry(ctx, t, taskSessionID, "a try that ended on malformed tool-call output", steer, sessStore, run, state)
 		}
 
 		// A temporary error breaks the run and restarts it. Everything built from
@@ -319,7 +323,7 @@ func (te *TaskExecutor) finishRunTurn(
 		// credentials are scrubbed.
 		plain := turnErrorUserText(turnErr)
 		te.appendRunErrorTranscript(t, taskSessionID, sessStore, "Task execution failed: "+plain)
-		te.transitionTaskLifecycle(taskSessionID, session.LifecycleFailed, "execution_error")
+		te.transitionTaskLifecycle(taskSessionID, session.LifecycleFailed, "execution_error", nil)
 		return te.failedRunStep(ctx, t, taskSessionID, "execution error: "+plain, run)
 	}
 
@@ -354,6 +358,7 @@ func (te *TaskExecutor) finishRunTurn(
 					map[string]any{"task_id": t.ID, "error": setErr.Error()})
 			}
 		}
+		te.deliverTaskCompletionUpward(context.Background(), current, run)
 		te.finalizeTaskLifecycle(taskSessionID, current.Status)
 		te.closeRun(t.ID, run, current.Status, current.Result)
 		te.notifySourceChannel(current)
@@ -389,13 +394,17 @@ func (te *TaskExecutor) finishRunTurn(
 
 	switch claim.status {
 	case tools.GoalClaimStatusBlocked:
-		te.recordRunClaim(current, taskSessionID, generated.GoalLatestClaimStatusBlocked, claim.evidence)
+		if err := te.recordRunClaim(current, taskSessionID, generated.GoalLatestClaimStatusBlocked, claim.evidence); err != nil {
+			return te.pauseRunForGoalError(current, taskSessionID, err)
+		}
 		reason := "Blocked" + reasonSuffix(claim.evidence, "the worker reported it cannot proceed")
 		te.endTaskWithoutAttempt(current, taskSessionID, reason, run)
 		return runStepEnded, "", ""
 
 	case tools.GoalClaimStatusWaitingOnUser:
-		te.recordRunClaim(current, taskSessionID, generated.GoalLatestClaimStatusWaitingOnUser, claim.evidence)
+		if err := te.recordRunClaim(current, taskSessionID, generated.GoalLatestClaimStatusWaitingOnUser, claim.evidence); err != nil {
+			return te.pauseRunForGoalError(current, taskSessionID, err)
+		}
 		reason := "Needs the operator" + reasonSuffix(claim.evidence, "the worker is waiting on an answer")
 		te.endTaskWithoutAttempt(current, taskSessionID, reason, run)
 		return runStepEnded, "", ""
@@ -404,11 +413,7 @@ func (te *TaskExecutor) finishRunTurn(
 		return te.adjudicateRunClaim(ctx, current, taskSessionID, claim.evidence, run, state)
 
 	case claimBareMarker:
-		if exhausted, reason := te.spendInnerTry(current, taskSessionID, "a completion marker with no evidence line", state); exhausted {
-			return te.failedRunStep(ctx, current, taskSessionID, reason, run)
-		}
-		te.appendRunSystemTranscript(current, taskSessionID, sessStore, claim.evidence)
-		return runStepContinue, claim.evidence, ""
+		return te.continueAfterInnerTry(ctx, current, taskSessionID, "a completion marker with no evidence line", claim.evidence, sessStore, run, state)
 	}
 
 	// No claim. A reasoning-only try is counted on its own streak.
@@ -420,20 +425,12 @@ func (te *TaskExecutor) finishRunTurn(
 		if state.reasoningOnlyStreak >= 2 {
 			return te.failedRunStep(ctx, current, taskSessionID, reasoningOnlyFailureReason, run)
 		}
-		if exhausted, reason := te.spendInnerTry(current, taskSessionID, "a try that produced no answer", state); exhausted {
-			return te.failedRunStep(ctx, current, taskSessionID, reason, run)
-		}
-		te.appendRunSystemTranscript(current, taskSessionID, sessStore, reasoningOnlySteering)
-		return runStepContinue, reasoningOnlySteering, ""
+		return te.continueAfterInnerTry(ctx, current, taskSessionID, "a try that produced no answer", reasoningOnlySteering, sessStore, run, state)
 	}
 	state.reasoningOnlyStreak = 0
 
 	steer := noClaimSteeringPrompt(te.dispatchesExternalCLI(current.AgentID))
-	if exhausted, reason := te.spendInnerTry(current, taskSessionID, "a turn that ended without a completion claim", state); exhausted {
-		return te.failedRunStep(ctx, current, taskSessionID, reason, run)
-	}
-	te.appendRunSystemTranscript(current, taskSessionID, sessStore, steer)
-	return runStepContinue, steer, ""
+	return te.continueAfterInnerTry(ctx, current, taskSessionID, "a turn that ended without a completion claim", steer, sessStore, run, state)
 }
 
 // reasoningOnlyFailureReason is the plain reason a run fails with after two
@@ -458,14 +455,10 @@ func (te *TaskExecutor) adjudicateRunClaim(
 	run *activeRun,
 	state *taskRunState,
 ) (runStep, string, string) {
-	sessStore := te.agentLoop.GetAgentStore(t.AgentID)
+	sessStore := te.agentLoop.GetSessionStore()
 	if strings.TrimSpace(evidence) == "" {
 		steer := "A completion claim needs your own one-line statement of what you verified. Verify the work, then claim again with that line."
-		if exhausted, reason := te.spendInnerTry(t, taskSessionID, "a completion claim with no evidence", state); exhausted {
-			return te.failedRunStep(ctx, t, taskSessionID, reason, run)
-		}
-		te.appendRunSystemTranscript(t, taskSessionID, sessStore, steer)
-		return runStepContinue, steer, ""
+		return te.continueAfterInnerTry(ctx, t, taskSessionID, "a completion claim with no evidence", steer, sessStore, run, state)
 	}
 
 	// The claim is judged against the criteria on the task's goal record — the
@@ -473,7 +466,10 @@ func (te *TaskExecutor) adjudicateRunClaim(
 	// (founder decision 2026-09-14, issue #710: one claim mechanism, one Judge
 	// pipeline). The task's own copy and the soft tier are fallbacks only for a
 	// record that carries none.
-	rec := activeGoalForSession(taskSessionID)
+	rec, readErr := activeGoalForSession(taskSessionID)
+	if readErr != nil {
+		return te.pauseRunForGoalError(t, taskSessionID, readErr)
+	}
 	var criteria []task.AcceptanceCriterion
 	if rec != nil {
 		criteria = rec.Criteria
@@ -509,8 +505,11 @@ func (te *TaskExecutor) adjudicateRunClaim(
 
 	if needsJudgeAgent(judged) {
 		if _, ok := te.agentLoop.GetRegistry().GetAgent(string(coreagent.IDJudge)); !ok {
+			// Issue #1306 (founder): the Judge must conclude WITH the work
+			// result — every terminal Judge failure keeps the worker's evidence.
 			te.endTaskWithoutAttempt(t, taskSessionID,
-				"The Judge could not run: the Judge agent is not registered, so this claim cannot be checked.", run)
+				"The Judge could not run: the Judge agent is not registered, so this claim cannot be checked."+
+					"\n\n"+notVerifiedConclusion("the Judge agent is not registered", "Register the Judge, then re-run the task.", evidence), run)
 			return runStepEnded, "", ""
 		}
 	}
@@ -519,11 +518,15 @@ func (te *TaskExecutor) adjudicateRunClaim(
 	if rec != nil && rec.Round+1 > tryNo {
 		tryNo = rec.Round + 1
 	}
-	te.recordRunClaim(t, taskSessionID, generated.GoalLatestClaimStatusMet, evidence)
+	if err := te.recordRunClaim(t, taskSessionID, generated.GoalLatestClaimStatusMet, evidence); err != nil {
+		return te.pauseRunForGoalError(t, taskSessionID, err)
+	}
 
 	var result JudgeCriteriaResult
 	for judgeTry := 1; ; judgeTry++ {
-		judgeCtx, cancel := context.WithTimeout(ctx, goalJudgeRoundTimeout)
+		// Issue #1306 R2-4: the outer round clock is the Judge's own check
+		// time limit, so its expiry is never reported as a provider timeout.
+		judgeCtx, cancel := context.WithTimeoutCause(ctx, goalJudgeRoundTimeout, ErrJudgeTimeLimit)
 		result = te.agentLoop.JudgeCriteria(judgeCtx, JudgeCriteriaInput{
 			Scope:           task.VerdictScopeTask,
 			TaskID:          t.ID,
@@ -537,21 +540,39 @@ func (te *TaskExecutor) adjudicateRunClaim(
 		if !result.Unavailable {
 			break
 		}
+		if result.ConcurrencyBackoff {
+			// #989 task-scope follow-up: a back-off is contention, not an
+			// outage. Another adjudication for this unit is in flight and will
+			// resolve the task, so stand down at the FIRST back-off: no retry
+			// (G-1 exactly-once — a second Judge invocation for the same claim
+			// is a second pipeline), no judgeUnavailableRetryBound counting,
+			// no try consumed, and the task stays in_progress with a visible
+			// reason — never the false "could not check after N tries" failure.
+			logger.InfoCF("task_executor", "goal: verifier contention — the claim stands down, the in-flight adjudication resolves the task",
+				map[string]any{"task_id": t.ID, "judge_try": judgeTry})
+			te.writeTaskReason(t, "Another adjudication for this work is in flight (verifier contention). "+
+				"This claim stands down without consuming a try; the in-flight adjudication resolves the task.")
+			return runStepEnded, "", ""
+		}
 		if !te.taskVerdictStillApplicable(t.ID) {
 			return runStepEnded, "", "" // a Stop ended the task while the Judge was out
 		}
 		if judgeUnavailableNeedsOperator(result.Reason) {
 			logger.ErrorCF("task_executor", "goal: the Judge cannot run until an operator fixes it — failing the task, no attempt used",
 				map[string]any{"task_id": t.ID, "reason": result.Reason})
-			te.endTaskWithoutAttempt(t, taskSessionID, "The Judge could not run: "+judgeOperatorFix(result.Reason), run)
+			te.endTaskWithoutAttempt(t, taskSessionID, "The Judge could not run: "+judgeOperatorFix(result.Reason)+
+				"\n\n"+notVerifiedConclusion("the Judge cannot run until its settings are fixed", "Fix the Judge settings named above, then re-run the task.", evidence), run)
 			return runStepEnded, "", ""
 		}
 		logger.WarnCF("task_executor", "goal: the Judge is unavailable — retrying the same claim, no try used",
 			map[string]any{"task_id": t.ID, "judge_try": judgeTry, "reason": result.Reason})
 		if judgeTry >= judgeUnavailableRetryBound {
+			// Issue #1306 (founder): the Judge must conclude, and the worker's
+			// result must survive it — the task's Result carries the verdict
+			// AND the evidence the worker claimed completion with.
 			te.endTaskWithoutAttempt(t, taskSessionID, fmt.Sprintf(
 				"The Judge could not check this task's work after %d tries (%s). Re-run the task once the Judge is available.",
-				judgeTry, result.Reason), run)
+				judgeTry, result.Reason)+"\n\n"+notVerifiedConclusion("the Judge was unavailable", "", evidence), run)
 			return runStepEnded, "", ""
 		}
 		te.writeTaskReason(t, fmt.Sprintf(
@@ -591,8 +612,15 @@ func (te *TaskExecutor) adjudicateRunClaim(
 		return runStepEnded, "", ""
 	}
 
-	maxTries := te.runGoalMaxTries(taskSessionID)
-	if te.innerTriesUsed(taskSessionID, state) >= maxTries {
+	maxTries, budgetErr := te.runGoalMaxTries(taskSessionID)
+	if budgetErr != nil {
+		return te.pauseRunForGoalError(t, taskSessionID, budgetErr)
+	}
+	used, budgetErr := te.innerTriesUsed(taskSessionID, state)
+	if budgetErr != nil {
+		return te.pauseRunForGoalError(t, taskSessionID, budgetErr)
+	}
+	if used >= maxTries {
 		reason := fmt.Sprintf("The goal did not reach a met verdict within %d tries. Latest judge feedback:\n%s",
 			maxTries, goalVerdictReasonText(verdict))
 		return te.failedRunStep(ctx, t, taskSessionID, reason, run)
@@ -617,44 +645,62 @@ func needsJudgeAgent(set []task.AcceptanceCriterion) bool {
 // runGoalMaxTries resolves the INNER limit for the run bound to taskSessionID:
 // the goal try limit snapshotted onto its goal record at activation, else the
 // live Settings value.
-func (te *TaskExecutor) runGoalMaxTries(taskSessionID string) int {
-	if rec := activeGoalForSession(taskSessionID); rec != nil && rec.MaxRounds >= 1 {
-		return rec.MaxRounds
+func (te *TaskExecutor) runGoalMaxTries(taskSessionID string) (int, error) {
+	rec, err := activeGoalForSession(taskSessionID)
+	if err != nil {
+		return 0, fmt.Errorf("task goal try limit lookup: %w", err)
 	}
-	return goalTryLimit(te.agentLoop)
+	if rec != nil && rec.MaxRounds >= 1 {
+		return rec.MaxRounds, nil
+	}
+	return goalTryLimit(te.agentLoop), nil
 }
 
 // innerTriesUsed is the larger of the goal record's Round (authoritative) and
 // the run's in-memory mirror, so a failed counter write can never unbound it.
-func (te *TaskExecutor) innerTriesUsed(taskSessionID string, state *taskRunState) int {
+func (te *TaskExecutor) innerTriesUsed(taskSessionID string, state *taskRunState) (int, error) {
+	rec, err := activeGoalForSession(taskSessionID)
+	if err != nil {
+		return 0, fmt.Errorf("task goal try count lookup: %w", err)
+	}
 	used := state.innerTries
-	if rec := activeGoalForSession(taskSessionID); rec != nil && rec.Round > used {
+	if rec != nil && rec.Round > used {
 		used = rec.Round
 	}
-	return used
+	return used, nil
 }
 
 // spendInnerTry spends one goal try WITHOUT a verdict — the turn ended without
 // a judgeable claim. It advances the goal record's Round and reports whether
 // the try budget is now spent, with the reason when it is.
-func (te *TaskExecutor) spendInnerTry(t *task.Task, taskSessionID, why string, state *taskRunState) (exhausted bool, reason string) {
-	state.innerTries++
-	maxTries := te.runGoalMaxTries(taskSessionID)
-	if rec := activeGoalForSession(taskSessionID); rec != nil {
+func (te *TaskExecutor) spendInnerTry(t *task.Task, taskSessionID, why string, state *taskRunState) (exhausted bool, reason string, err error) {
+	rec, err := activeGoalForSession(taskSessionID)
+	if err != nil {
+		return false, "", fmt.Errorf("task %s: spending a goal try: %w", t.ID, err)
+	}
+	maxTries, err := te.runGoalMaxTries(taskSessionID)
+	if err != nil {
+		return false, "", err
+	}
+	used, err := te.innerTriesUsed(taskSessionID, state)
+	if err != nil {
+		return false, "", err
+	}
+	if rec != nil {
 		if _, uerr := resolveGoalRecordStore().Update(rec.GoalID, func(cur *goal.Goal) error {
 			cur.Round++
 			cur.LatestReason = why
 			cur.LastActivityAt = time.Now().UTC()
 			return nil
 		}); uerr != nil {
-			logger.WarnCF("task_executor", "goal: could not persist a spent try on the goal record; the run's own count still bounds it",
-				map[string]any{"task_id": t.ID, "goal_id": rec.GoalID, "error": uerr.Error()})
+			return false, "", fmt.Errorf("task %s: persist a spent goal try: %w", t.ID, uerr)
 		}
 	}
-	if te.innerTriesUsed(taskSessionID, state) >= maxTries {
-		return true, fmt.Sprintf("The goal did not reach a met verdict within %d tries; the last try was %s.", maxTries, why)
+	state.innerTries++
+	if used+1 >= maxTries {
+		return true, fmt.Sprintf("The goal did not reach a met verdict within %d tries; the last try was %s.", maxTries, why), nil
 	}
-	return false, ""
+	return false, "", nil
 }
 
 // failedRunStep is the single outer-failure entry point.
@@ -678,9 +724,27 @@ func (te *TaskExecutor) consumeTaskAttempt(
 	maxAttempts := te.resolveTaskMaxAttempts(t)
 	hardCeiling := taskAttemptHardCeiling(maxAttempts)
 
+	// The failed run's authority must outlive it: whichever route picks the
+	// retry up (the immediate redispatch, the queue after a capacity refusal,
+	// an intercepted path) resolves it from the task. If it cannot be read,
+	// the retry is refused visibly; an unknown authority is never a person's.
+	carried, authErr := te.retryAuthority(t, taskSessionID)
+	if authErr != nil {
+		logger.ErrorCF("task_executor", "goal: could not determine the failed run's authority; not retrying",
+			map[string]any{"task_id": t.ID, "session_id": taskSessionID, "error": authErr.Error()})
+		failReason := fmt.Sprintf("the task was not retried: the failed run's delegation authority could not be read: %v", authErr)
+		te.failTask(t.ID, failReason)
+		te.closeRun(t.ID, run, task.StatusFailed, failReason)
+		return ""
+	}
+
 	newAttempt := t.AttemptCount + 1
 	nextStatus := task.StatusNext
-	updated, uerr := te.store.UpdateIfStatus(t.ID, task.StatusInProgress, task.Patch{AttemptCount: &newAttempt, Status: &nextStatus})
+	patch := task.Patch{AttemptCount: &newAttempt, Status: &nextStatus}
+	if carried != nil {
+		patch.Initiator = &carried
+	}
+	updated, uerr := te.store.UpdateIfStatus(t.ID, task.StatusInProgress, patch)
 	if uerr != nil {
 		if errors.Is(uerr, task.ErrStatusConflict) {
 			logger.WarnCF("task_executor",
@@ -703,7 +767,7 @@ func (te *TaskExecutor) consumeTaskAttempt(
 			logger.WarnCF("task_executor", "goal: could not persist why the previous run failed",
 				map[string]any{"task_id": updated.ID, "error": serr.Error()})
 		}
-		te.appendRunSystemTranscript(updated, taskSessionID, te.agentLoop.taskSessionStore(taskSessionID, updated.AgentID), restartNote)
+		te.appendRunSystemTranscript(updated, taskSessionID, te.agentLoop.GetSessionStore(), restartNote)
 		te.supersedeTaskSession(updated.AgentID, taskSessionID)
 		logger.InfoCF("task_executor", "goal: run failed — restarting the task in a fresh run",
 			map[string]any{"task_id": updated.ID, "attempt": newAttempt, "max_attempts": maxAttempts, "reason": reason})
@@ -764,15 +828,18 @@ func buildTaskAttemptHandover(t *task.Task, reason string, maxAttempts int) stri
 // same text a chat claim records, never the task's composed result.
 func (te *TaskExecutor) recordRunClaim(
 	t *task.Task, taskSessionID string, status generated.GoalLatestClaimStatus, evidence string,
-) {
-	rec := activeGoalForSession(taskSessionID)
+) error {
+	rec, err := activeGoalForSession(taskSessionID)
+	if err != nil {
+		return fmt.Errorf("task %s: recording a goal claim: %w", t.ID, err)
+	}
 	if rec == nil {
-		return // a task with no active goal record has no claim to keep
+		return nil // a task with no active goal record has no claim to keep
 	}
 	if cerr := recordGoalClaim(rec.GoalID, status, evidence); cerr != nil {
-		logger.WarnCF("task_executor", "goal: could not record the worker's claim onto the goal record",
-			map[string]any{"task_id": t.ID, "goal_id": rec.GoalID, "status": string(status), "error": cerr.Error()})
+		return fmt.Errorf("task %s: persist the worker's goal claim: %w", t.ID, cerr)
 	}
+	return nil
 }
 
 // endTaskWithoutAttempt ends a running task Failed with reason, consuming no
@@ -845,7 +912,9 @@ func (te *TaskExecutor) appendRunErrorTranscript(t *task.Task, taskSessionID str
 		logger.WarnCF("task_executor", "Transcript write failed",
 			map[string]any{"task_id": t.ID, "session_id": taskSessionID, "error": appendErr.Error()})
 	}
-	status := session.StatusInterrupted
+	// A genuine run error (sub-agent control plane ADR D4/MAJ-009: maps to
+	// coarse metadata `failed`, not the retired `interrupted`).
+	status := session.StatusFailed
 	if setErr := sessStore.SetMeta(taskSessionID, session.MetaPatch{Status: &status}); setErr != nil {
 		logger.WarnCF("task_executor", "Meta update failed",
 			map[string]any{"task_id": t.ID, "error": setErr.Error()})
@@ -944,9 +1013,13 @@ func (te *TaskExecutor) taskOperatorFixReason(agentID string, turnErr error, cau
 			}
 		}
 	}
-	var fe *providers.FailoverError
-	if errors.As(turnErr, &fe) && strings.TrimSpace(fe.Provider) != "" {
-		provider = fe.Provider
+	if pe := errorToProviderError(turnErr); pe != nil {
+		if strings.TrimSpace(pe.Provider) != "" {
+			provider = pe.Provider
+		}
+		if strings.TrimSpace(pe.Model) != "" {
+			model = pe.Model
+		}
 	}
 	return taskOperatorFixText(cause, strings.TrimSpace(agentName), strings.TrimSpace(provider), strings.TrimSpace(model))
 }
@@ -991,6 +1064,18 @@ func taskOperatorFixText(cause operatorFixCause, agentName, provider, model stri
 	case operatorFixWorkDirUnavailable:
 		return lead + "the working folder for " + agent + " could not be opened. " +
 			"Check that the disk has space and the folder is writable" + rerun
+	case operatorFixQuotaBilling:
+		return lead + agent + "'s provider account is out of credit. Top up the account or assign the agent a provider with credit" + rerun
+	case operatorFixBadModel:
+		return lead + operatorModelPair(provider, model) + " is not offered. Pick an offered model/provider pair in the agent's settings" + rerun
+	case operatorFixModelRouteUnavailable:
+		return lead + "the connection for " + operatorModelPair(provider, model) + " could not be set up. Check the provider's API key and endpoint settings" + rerun
+	case operatorFixModelRetired:
+		subject := "the agent's model"
+		if model != "" {
+			subject = "the model " + model
+		}
+		return lead + subject + " has been withdrawn. Pick a new model in the agent's settings" + rerun
 	}
 	return lead + "a setting needs an operator's attention. Check the run transcript for which one" + rerun
 }
@@ -1007,4 +1092,37 @@ func (te *TaskExecutor) taskVerdictStillApplicable(taskID string) bool {
 		return false
 	}
 	return current.Status == task.StatusInProgress
+}
+
+// retryAuthority reads the failed run's lifecycle record and returns the
+// initiator its retry must run under: the agent that started the run, its chain
+// depth, and the run's EFFECTIVE onward budget (the minimum of every carrier it
+// had, OnwardBudget). It returns (nil, nil) only when the record was read and
+// no agent started the run, or when no lifecycle store is wired at all. ANY
+// read failure (including a missing record) is an error: the caller refuses the
+// retry rather than treating unknown authority as a person's start.
+func (te *TaskExecutor) retryAuthority(t *task.Task, sessionID string) (*task.Initiator, error) {
+	ls := te.getLifecycleStore()
+	if ls == nil {
+		return nil, nil //nolint:nilnil // No lifecycle store wired means no recorded initiator, not an error.
+	}
+	if sessionID == "" {
+		return nil, fmt.Errorf("the failed run has no session to read its authority from")
+	}
+	rec, err := ls.Load(sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("load lifecycle record %q: %w", sessionID, err)
+	}
+	if rec.InitiatedBy == nil {
+		return nil, nil //nolint:nilnil // The record was read and no agent started the run, not an error.
+	}
+	effective, _ := rec.OnwardBudget()
+	inherited := effective + 1 // authorizeInitiatedRun spends one hop of what it is given
+	return &task.Initiator{
+		AgentID:   rec.InitiatedBy.AgentID,
+		SessionID: rec.InitiatedBy.SessionID,
+		Depth:     rec.InitiatedBy.Depth - 1,
+		Inherited: &inherited,
+		Direct:    true,
+	}, nil
 }

@@ -14,23 +14,33 @@ import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { SmartSelect } from '@/components/ui/smart-select'
+import { ErrorState } from '@/components/ui/error-state'
 import {
   fetchChannelConfig,
   configureChannel,
   enableChannel,
+  fetchChannelOutbound,
   fetchChannelRouting,
   setChannelRouting,
   fetchAgents,
-  fetchWorkspaces,
   fetchWorkspace,
   isWorker,
   isApiError,
 } from '@/lib/api'
-import { getChannelFields, type ChannelField } from '@/lib/channel-fields'
+import { getChannelFields, splitIdListText, type ChannelField } from '@/lib/channel-fields'
 import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
 import { useUiStore } from '@/store/ui'
 import { WHATSAPP_CHANNEL_ID } from './whatsappChannelId'
 import { WhatsAppNativeNotice } from './WhatsAppNativeNotice'
+import { ChannelOutboundSection } from '@/components/connectors/ChannelOutboundSection'
+import { getWhatsAppEnableErrorMessage } from '@/lib/whatsappEnableError'
+import { activeWorkspacesQueryOptions } from '@/lib/workspaceQueries'
+import type { ChannelConfigureResponse, ChannelRejectedSenders } from '@/lib/api/generated/openapi-types'
+import {
+  availabilityText,
+  describeConfigureOutcome,
+  type ConfigureOutcomeView,
+} from './channelConfigureOutcome'
 
 // CONFIGURED_SENTINEL is the backend's redaction placeholder for stored secrets
 // (pkg/gateway/rest.go redactChannelConfig). GET responses carry it instead of
@@ -68,13 +78,16 @@ interface ChannelConfigPanelProps {
    * the QR renders by default ("the UI must only offer what the binary can do").
    */
   nativeAvailable?: boolean
-  /**
-   * Whether the channel is currently enabled. Used to gate the WhatsApp QR
-   * pairing UI: whatsmeow only starts the QR handshake after the channel is
-   * enabled, so we show an informational prompt when enabled is false/undefined
-   * rather than starting the 15-second QR timeout with no chance of a QR arriving.
-   */
+  /** Current ChannelEntry.enabled from the parent's live channels query. */
   enabled?: boolean
+  /** A failed channels readback is unknown, not a confirmed disabled state. */
+  enabledStateUnknown?: boolean
+  /**
+   * ChannelEntry.rejected_senders from the parent's live channels query
+   * (channels spec FR-061): present only when the running adapter ignored at
+   * least one message from a sender not on its allowed list.
+   */
+  rejectedSenders?: ChannelRejectedSenders
 }
 
 // #326: Map raw snake_case API field keys to human-readable labels using the
@@ -323,7 +336,7 @@ function ChannelFieldRow({
         <Input
           id={`field-${field.key}`}
           type={field.type === 'number' ? 'number' : 'text'}
-          value={String(getValue(field.key) ?? '')}
+          value={field.type === 'list' ? listFieldText(getValue(field.key)) : String(getValue(field.key) ?? '')}
           onChange={(e) =>
             setValue(
               field.key,
@@ -389,6 +402,13 @@ function validateRequired(
   return errors
 }
 
+// listFieldText shows a 'list' field's value in its text box: a saved list
+// reads "a, b"; text the user is typing (or an older saved string) shows as is.
+function listFieldText(value: unknown): string {
+  if (Array.isArray(value)) return value.map(String).join(', ')
+  return String(value ?? '')
+}
+
 // focusFirstInvalidField moves keyboard/AT focus to the first field with a
 // validation error after a blocked Save — otherwise the error is set but
 // nothing tells a keyboard or screen-reader user where to go. `errors` keys
@@ -409,6 +429,8 @@ export function ChannelConfigPanel({
   onOpenChange,
   nativeAvailable,
   enabled,
+  enabledStateUnknown = false,
+  rejectedSenders,
 }: ChannelConfigPanelProps) {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
@@ -416,6 +438,9 @@ export function ChannelConfigPanel({
 
   const isDirtyRef = useRef(false)
   const markDirty = () => { isDirtyRef.current = true }
+  // 'list' fields the user has typed into since the panel opened. Their text
+  // is split into ids on submit (U7); an untouched value travels as loaded.
+  const editedListKeysRef = useRef(new Set<string>())
 
   const [formValues, setFormValues] = useState<Record<string, unknown>>({})
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
@@ -425,11 +450,18 @@ export function ChannelConfigPanel({
   // enter a new value to replace)" placeholder/help note and satisfies
   // required-field validation without requiring a retype.
   const [hasStoredSecret, setHasStoredSecret] = useState<Record<string, boolean>>({})
-  // Tracks whether Save & Enable was just clicked in this panel session. Needed because
-  // the `enabled` prop comes from the parent's stale state after Save & Enable keeps the
-  // dialog open — without this, the panel would keep showing the enable-prompt even after
-  // the channel was just enabled in this session.
-  const [wasJustEnabled, setWasJustEnabled] = useState(false)
+  // Subscribe after Configure succeeds, before Enable settles. This is only
+  // observation interest, never evidence that the channel enabled or started.
+  const [configuredForEnable, setConfiguredForEnable] = useState<string | null>(null)
+  const panelSessionRef = useRef(0)
+  useEffect(() => {
+    panelSessionRef.current += 1
+    setConfiguredForEnable(null)
+    return () => {
+      // Closing, switching channel or unmounting makes old local callbacks inert.
+      panelSessionRef.current += 1
+    }
+  }, [channelId, open])
 
   // #324 — Google Chat auth method picker. Switching method clears the other
   // group's useState value so a stale secret cannot be resurrected on switch-back (F-G08).
@@ -472,14 +504,16 @@ export function ChannelConfigPanel({
 
   useEffect(() => {
     if (routing === undefined) return
-    setSelectedAgentId(routing.default_agent_id ?? '__none__')
-    setSelectedWorkspaceId(routing.workspace_id ?? '')
+    // FR-128: an unbound instance is reported truthfully — `bound` false with
+    // EMPTY ids. Hydrate the pickers as "nothing chosen"; never seed them with
+    // an invented destination.
+    setSelectedWorkspaceId(routing.bound ? routing.workspace_id : '')
+    setSelectedAgentId(routing.bound ? routing.default_agent_id : '__none__')
   }, [routing])
 
   // workspace list — always loaded when panel is open (non-webchat)
   const { data: workspaces = [] } = useQuery({
-    queryKey: ['workspaces', { status: 'active' }],
-    queryFn: () => fetchWorkspaces({ status: 'active' }),
+    ...activeWorkspacesQueryOptions,
     enabled: open && !isWebchat,
   })
 
@@ -494,25 +528,26 @@ export function ChannelConfigPanel({
     enabled: open && !isWebchat && selectedWorkspaceId !== '',
   })
 
-  // Bound flow: agent picker lists only the selected workspace's core_team (non-workers)
-  // Unbound flow (no workspace): all agents minus workers (legacy behaviour preserved)
+  // Agent picker lists only the selected workspace's core_team (non-workers).
+  // There is no unbound flow: a channel must name a workspace and an agent
+  // before it can route (omnipus-system-agent K14).
   const coreTeam = selectedWorkspace?.core_team ?? null
   const filteredAgents = (() => {
     const nonWorkers = agents.filter((a) => !isWorker(a))
-    if (!selectedWorkspaceId) return nonWorkers
+    if (!selectedWorkspaceId) return [] // nothing to pick from until a workspace is chosen
     if (workspaceDetailLoading || workspaceLoadError) return [] // workspace loading or errored
     if (!coreTeam) return [] // workspace loaded but core_team absent
     return nonWorkers.filter((a) => coreTeam.includes(a.id))
   })()
 
-  // Bound flow: a workspace is selected (FR-001). Agent is required but not yet chosen.
+  // A workspace is selected (FR-001). The agent is required but not yet chosen.
   const isBoundFlow = selectedWorkspaceId !== ''
 
   const { mutate: doSaveRouting } = useMutation({
-    mutationFn: (payload: { agentId: string | undefined; workspaceId: string | undefined }) =>
+    mutationFn: (payload: { agentId: string; workspaceId: string }) =>
       setChannelRouting(channelId, {
         default_agent_id: payload.agentId,
-        workspace_id: payload.workspaceId || undefined,
+        workspace_id: payload.workspaceId,
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['channel-routing', channelId] })
@@ -541,13 +576,13 @@ export function ChannelConfigPanel({
   // of re-showing the real stored config.
   useEffect(() => {
     if (!open) {
-      setWasJustEnabled(false)
       setSelectedWorkspaceId('')
       setSelectedAgentId('__none__')
       setFieldErrors({})
       setFormValues({})
       setHasStoredSecret({})
       isDirtyRef.current = false
+      editedListKeysRef.current.clear()
       setGChatAuthMethod('webhook')
     }
   }, [open])
@@ -557,7 +592,7 @@ export function ChannelConfigPanel({
   useEffect(() => () => {
     if (routingDebounceRef.current !== null) clearTimeout(routingDebounceRef.current)
   }, [])
-  const doSaveRoutingDebounced = (agentId: string | undefined, workspaceId: string | undefined) => {
+  const doSaveRoutingDebounced = (agentId: string, workspaceId: string) => {
     if (routingDebounceRef.current) clearTimeout(routingDebounceRef.current)
     routingDebounceRef.current = setTimeout(() => {
       routingDebounceRef.current = null
@@ -592,6 +627,15 @@ export function ChannelConfigPanel({
     const editable: Record<string, unknown> = { ...(currentConfig as Record<string, unknown>) }
     delete editable.identity
     delete editable.workspace_id
+    // Channels spec FR-023 / S-34: "Starting messages" is saved only through
+    // its own route (the section below), and Configure rejects `outbound` with
+    // 400. Echoing it back would also let a form opened before a revocation
+    // restore the old grant. The apply_* keys are a Configure response's
+    // outcome, never settings.
+    delete editable.outbound
+    delete editable.apply_outcome
+    delete editable.apply_reason
+    delete editable.apply_note
 
     // SECURITY / UX: redactable (password/textarea) fields never hydrate the
     // raw "[configured]" sentinel into the form (see CONFIGURED_SENTINEL) — a
@@ -636,12 +680,17 @@ export function ChannelConfigPanel({
       }
       return configureChannel(channelId, buildSubmitPayload())
     },
-    onSuccess: () => {
+    onSuccess: (response: ChannelConfigureResponse) => {
       isDirtyRef.current = false
       setFieldErrors({})
       queryClient.invalidateQueries({ queryKey: ['channels'] })
       queryClient.invalidateQueries({ queryKey: ['channel-config', channelId] })
-      addToast({ message: 'Configuration saved', variant: 'success' })
+      // The Connectors list classifies a disabled bare stub from this read.
+      // Save must refresh that one stub, or a newly stored credential stays a tile.
+      queryClient.invalidateQueries({ queryKey: ['channel-stub-credentials', channelId] })
+      // A first save creates the connection; Starting messages unlocks on re-read.
+      queryClient.invalidateQueries({ queryKey: ['channel-outbound', channelId] })
+      showConfigureOutcome(channelId, describeConfigureOutcome(response, 'save'))
     },
     onError: (err: unknown) => {
       if (err instanceof Error && err.message === 'Please fill in the required fields') return
@@ -651,51 +700,77 @@ export function ChannelConfigPanel({
   })
 
   const { mutate: doSaveAndEnable, isPending: savingAndEnabling } = useMutation({
-    mutationFn: async () => {
+    mutationFn: async ({ channelId: targetId, panelSession }: { channelId: string; panelSession: number }) => {
       const errors = validateRequired(fields, getValue, isGoogleChat, gChatAuthMethod, hasStoredSecret)
       if (Object.keys(errors).length > 0) {
         setFieldErrors(errors)
         focusFirstInvalidField(errors)
         throw new Error('Please fill in the required fields')
       }
-      await configureChannel(channelId, buildSubmitPayload())
-      await enableChannel(channelId)
+      const response = await configureChannel(targetId, buildSubmitPayload())
+      // T-6c: the save outcome is shown first; enable runs only after
+      // `applied` or `no_reload_needed`.
+      const outcome = describeConfigureOutcome(response, 'save-and-enable')
+      if (panelSessionRef.current === panelSession) showConfigureOutcome(targetId, outcome)
+      if (!outcome.mayEnable) return { enabled: false }
+      if (panelSessionRef.current === panelSession) setConfiguredForEnable(targetId)
+      await enableChannel(targetId)
+      return { enabled: true }
     },
-    onSuccess: () => {
+    onSuccess: ({ enabled: didEnable }, { channelId: targetId, panelSession }) => {
+      if (panelSessionRef.current !== panelSession) return
       isDirtyRef.current = false
       setFieldErrors({})
-      queryClient.invalidateQueries({ queryKey: ['channels'] })
-      queryClient.invalidateQueries({ queryKey: ['channel-config', channelId] })
-      // #358: channels with a live pairing flow (WhatsApp native) must keep the panel
-      // open after enable so the QR — pushed over the whatsapp_pairing WS frame once the
-      // backend starts the channel — can render in WhatsAppNativeNotice. Closing here
-      // unmounts the notice and drops its subscription before any QR frame arrives, which
-      // is why "Enable & Save" never showed a code. Other channels have no pairing step.
-      // Base-type match: namespaced instances ("whatsapp.sales") have the same
-      // pairing flow as the bare instance — an exact-id match here closed the
-      // panel on enable and the QR could never render.
-      const hasPairingFlow = baseType === WHATSAPP_CHANNEL_ID
+      // Saved but not enabled: the outcome toast already told the operator why.
+      if (!didEnable) return
+      // Keep WhatsApp's viewer open; enabled is not proof of a QR or linked phone.
+      const hasPairingFlow = targetId.split('.')[0] === WHATSAPP_CHANNEL_ID
       addToast({
         message: hasPairingFlow
-          ? 'Channel enabled — scan the QR code below to link your device'
+          ? 'Channel enabled — waiting for pairing status'
           : 'Channel configured and enabled',
         variant: 'success',
       })
-      if (hasPairingFlow) {
-        setWasJustEnabled(true)
-      } else {
-        onOpenChange(false)
-      }
+      if (!hasPairingFlow) onOpenChange(false)
     },
-    onError: (err: unknown) => {
+    onError: (err: unknown, { channelId: targetId, panelSession }) => {
+      if (panelSessionRef.current !== panelSession) return
       if (err instanceof Error && err.message === 'Please fill in the required fields') return
-      const rawMsg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to enable channel'
-      addToast({ message: mapErrorsToHumanLabels(fields, rawMsg), variant: 'error' })
+      // Do not remap the server's WhatsApp pairing instructions as form fields.
+      const rawMsg = targetId.split('.')[0] === WHATSAPP_CHANNEL_ID
+        ? getWhatsAppEnableErrorMessage(err, 'Failed to enable channel')
+        : mapErrorsToHumanLabels(fields, isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to enable channel')
+      addToast({ message: rawMsg, variant: 'error' })
+    },
+    onSettled: async (_, __, { channelId: targetId }) => {
+      // Even a 500 can follow a durable enable. Keep observing until readback
+      // finishes, then use current ChannelEntry state, never the error's wording.
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['channels'] }),
+        queryClient.invalidateQueries({ queryKey: ['channel-config', targetId] }),
+        queryClient.invalidateQueries({ queryKey: ['channel-outbound', targetId] }),
+      ])
     },
   })
 
+  // T-6c: show a Configure outcome. For `failed` the panel then re-reads the
+  // connection's availability and, only when that read succeeds, adds the
+  // observed state; it never claims the old settings are still running.
+  function showConfigureOutcome(targetId: string, outcome: ConfigureOutcomeView) {
+    for (const toast of outcome.toasts) addToast(toast)
+    if (!outcome.readAvailability) return
+    fetchChannelOutbound(targetId).then(
+      (read) => addToast({ message: availabilityText(read.availability), variant: 'default' }),
+      () => {
+        // T-6c appends the state only "when that read succeeds"; the failed
+        // outcome's error toast is already shown and stands on its own.
+      },
+    )
+  }
+
   function setValue(key: string, value: unknown) {
     markDirty()
+    if (fields.some((f) => f.key === key && f.type === 'list')) editedListKeysRef.current.add(key)
     // Support nested keys like "group_trigger.mention_only"
     setFormValues((prev) => setNested(prev, key, value))
     // Clear this field's validation error as soon as the user edits it.
@@ -763,6 +838,21 @@ export function ChannelConfigPanel({
     for (const [key, value] of Object.entries(formValues)) {
       if (redactableKeys.has(key) && (value === '' || value === undefined || value === null)) continue
       payload[key] = value
+    }
+    // U7: a 'list' field the user typed into is submitted as its ids
+    // (string[], the Configure contract's allow_from), never as the typed
+    // text; clearing it submits [] (allow all). A saved list the user did not
+    // touch is already an array and travels unchanged. An untouched legacy
+    // value that is not a list (an old saved string) is left out entirely,
+    // so Save never writes it back (CHECK F7); the server keeps it as stored.
+    for (const field of fields) {
+      if (field.type !== 'list') continue
+      const value = getNested(formValues, field.key)
+      if (editedListKeysRef.current.has(field.key)) {
+        if (typeof value === 'string') payload[field.key] = splitIdListText(channelId, value)
+      } else if (!Array.isArray(value)) {
+        delete payload[field.key]
+      }
     }
 
     if (!isGoogleChat) return payload
@@ -845,6 +935,21 @@ export function ChannelConfigPanel({
             ? 'Link your WhatsApp account by scanning the QR code with your phone.'
             : `Enter your ${channelName} credentials to connect the bot.`}
         </p>
+
+        {/* Channels spec FR-061 / S-53: one line from the roster entry's
+            rejected_senders (present only when count >= 1). Each canonical id
+            is its own text span so it can be selected and copied whole. */}
+        {rejectedSenders && (
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed px-[var(--space-4)] pt-[var(--space-2)]">
+            {`Ignored ${rejectedSenders.count} messages from senders not on the allowed list. Latest: `}
+            {rejectedSenders.recent.map((id, i) => (
+              <span key={`${i}-${id}`}>
+                {i > 0 && ', '}
+                <span className="select-all text-[var(--color-secondary)]">{id}</span>
+              </span>
+            ))}
+          </p>
+        )}
 
         {isLoading ? (
           <div className="px-[var(--space-4)] pt-[var(--space-4)] space-y-[var(--space-3)]">
@@ -952,9 +1057,9 @@ export function ChannelConfigPanel({
                 QR pairing UI (#283) — but only when the server build can run
                 native WhatsApp. On a lite/stub build (native_available:false) show
                 a hint instead of a QR that can never pair (#299).
-                When the channel is not yet enabled, show an informational prompt
-                instead of starting the 15-second QR timeout: whatsmeow only
-                generates a QR after the channel is enabled. */}
+                Observe as soon as Configure succeeds while enable is pending;
+                after readback, only a currently enabled entry keeps the viewer.
+                A failed readback is unknown, not a disabled or enabled claim. */}
             {isWhatsApp &&
               (whatsAppNativeUnavailable ? (
                 <p
@@ -964,8 +1069,13 @@ export function ChannelConfigPanel({
                   WhatsApp requires the native build (whatsmeow); this server build
                   doesn&apos;t include it, so linked-device pairing is unavailable.
                 </p>
-              ) : (enabled || wasJustEnabled) ? (
+              ) : open && (enabled === true || (savingAndEnabling && configuredForEnable === channelId)) ? (
                 <WhatsAppNativeNotice channelId={channelId} />
+              ) : enabledStateUnknown ? (
+                <ErrorState
+                  message="Could not confirm whether WhatsApp is enabled."
+                  onRetry={() => queryClient.invalidateQueries({ queryKey: ['channels'] })}
+                />
               ) : (
                 <p
                   data-testid="whatsapp-enable-prompt"
@@ -987,7 +1097,21 @@ export function ChannelConfigPanel({
                   </p>
                 ) : (
                   <div className="space-y-[var(--space-2-5)]">
-                    {/* Workspace selector (US-1 / FR-001) */}
+                    {/* FR-128: a not-yet-bound channel is stated truthfully —
+                        there is no unbound mode to fall back on, and until the
+                        pair below is chosen every inbound message is dropped. */}
+                    {routing !== undefined && !routing.bound && (
+                      <p
+                        data-testid="routing-unbound-hint"
+                        className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-relaxed"
+                      >
+                        Not bound — choose a workspace and an agent. Until bound, inbound messages on this channel are dropped.
+                      </p>
+                    )}
+
+                    {/* Workspace selector (US-1 / FR-001). No "no workspace"
+                        option: a channel is always bound to a workspace
+                        (omnipus-system-agent K14) — there is no unbind. */}
                     <div className="space-y-[var(--space-2)]">
                       <Label
                         htmlFor="routing-workspace-select"
@@ -999,38 +1123,30 @@ export function ChannelConfigPanel({
                           value={selectedWorkspaceId || '__none__'}
                           onValueChange={(v) => {
                             const next = v === '__none__' ? '' : v
-                            const wasbound = selectedWorkspaceId !== ''
                             setSelectedWorkspaceId(next)
                             // Changing workspace clears the agent selection (member set changed)
                             setSelectedAgentId('__none__')
-                            if (next === '') {
-                              // Unbind: user selected "No workspace" on a previously-bound
-                              // channel — persist immediately with no workspace_id or
-                              // default_agent_id so the backend clears the binding (FR-001).
-                              if (wasbound) {
-                                doSaveRoutingDebounced(undefined, undefined)
-                              }
-                              // If already unbound, nothing changed — no PUT needed.
-                            }
-                            // Bound flow: do not persist until agent is also chosen (FR-001).
+                            // Never persists here: the routing PUT requires the
+                            // nonblank (workspace, agent) pair (K14) — wait until
+                            // the agent is chosen too.
                           }}
-                          placeholder="No workspace (global default routing)"
+                          placeholder="Choose a workspace"
                           ariaLabel="Workspace"
-                          items={[
-                            { value: '__none__', label: 'No workspace (global default routing)' },
-                            ...workspaces.map((ws) => ({ value: ws.id, label: ws.name })),
-                          ]}
+                          items={workspaces.map((ws) => ({ value: ws.id, label: ws.name }))}
                         />
                       </div>
                       <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-relaxed">
-                        Bind this channel to a workspace. Once bound, only that workspace&apos;s member agents are eligible.
+                        Bind this channel to a workspace. Only that workspace&apos;s member agents are eligible.
                       </p>
                     </div>
 
                     {/* Agent selector (US-2 / FR-002) — disabled until workspace chosen */}
                     <div className="space-y-[var(--space-2)]">
+                      {/* "Main agent" (omnipus-system-agent FR-121, FR-140): the
+                          bound agent that answers this channel. Not a default
+                          — there is no default agent to fall back to. */}
                       <Label>
-                        Default agent
+                        Main agent
                       </Label>
                       {agentsError ? (
                         <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">
@@ -1068,32 +1184,18 @@ export function ChannelConfigPanel({
                           <SmartSelect
                             value={selectedAgentId}
                             disabled={!isBoundFlow}
-                            ariaLabel="Default agent"
+                            ariaLabel="Main agent"
                             onValueChange={(v) => {
-                              const next = v === '__none__' ? undefined : v
                               setSelectedAgentId(v)
-                              if (isBoundFlow) {
-                                if (next) {
-                                  // Both workspace and agent are chosen — persist (MAJ-001)
-                                  doSaveRoutingDebounced(next, selectedWorkspaceId)
-                                }
-                                // If bound but no agent yet, do not persist (FR-004)
-                              } else {
-                                // Unbound flow: persist on agent change (legacy auto-persist)
-                                doSaveRoutingDebounced(next, undefined)
+                              // Persist only when BOTH picks are named (MAJ-001):
+                              // the wire pair is required and nonblank (K14), so a
+                              // half-made choice never goes out.
+                              if (isBoundFlow && v !== '__none__' && v !== '') {
+                                doSaveRoutingDebounced(v, selectedWorkspaceId)
                               }
                             }}
-                            placeholder={isBoundFlow ? 'Select an agent from this workspace' : '(Global default)'}
-                            items={
-                              isBoundFlow
-                                ? // Bound flow: no "(Global default)" option (FR-003)
-                                  filteredAgents.map((a) => ({ value: a.id, label: a.name }))
-                                : [
-                                    // Unbound flow: "(Global default)" is valid (legacy path)
-                                    { value: '__none__', label: '(Global default)' },
-                                    ...filteredAgents.map((a) => ({ value: a.id, label: a.name })),
-                                  ]
-                            }
+                            placeholder="Select an agent from this workspace"
+                            items={filteredAgents.map((a) => ({ value: a.id, label: a.name }))}
                           />
                         </div>
                       )}
@@ -1108,13 +1210,9 @@ export function ChannelConfigPanel({
                           Select an agent from this workspace to enable routing.
                         </p>
                       )}
-
-                      {/* Unbound flow helper text */}
-                      {!isBoundFlow && (
-                        <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-relaxed">
-                          Which agent handles inbound messages on this channel. &quot;(Global default)&quot; falls back to the globally-configured default agent.
-                        </p>
-                      )}
+                      <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-relaxed">
+                        The agent that answers messages on this channel.
+                      </p>
                     </div>
 
                   </div>
@@ -1126,7 +1224,7 @@ export function ChannelConfigPanel({
             <div className="flex flex-col gap-[var(--space-2)] pt-[var(--space-2)] border-t border-[var(--color-border)]">
               <Button
                 className="w-full gap-[var(--space-1)]"
-                onClick={() => doSaveAndEnable()}
+                onClick={() => doSaveAndEnable({ channelId, panelSession: panelSessionRef.current })}
                 disabled={isBusy}
               >
                 <Lightning size={13} weight="fill" />
@@ -1142,6 +1240,11 @@ export function ChannelConfigPanel({
                 Save
               </Button>
             </div>
+
+            {/* Channels spec FR-026: "Starting messages" has its own Save and
+                route; the buttons above never save it. Webchat has no
+                outbound setting. */}
+            {!isWebchat && <ChannelOutboundSection channelId={channelId} channelName={channelName} />}
           </div>
         )}
       </SheetContent>

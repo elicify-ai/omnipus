@@ -1,0 +1,383 @@
+{
+  "qa_parent": "80225e097ec783d8a65d50e62666d2f8d5b81116",
+  "authority": "omnipus-system-agent FR-047/K9, chief BDD-5.8 amendment 2026-10-14; team-lead explicitly accepted preserving ordinary/mixed cases",
+  "retired_other_cases": [
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red/src/hooks/useWorkspaceSetupKickoff.test.ts",
+      "title": "fires exactly once when setup_pending && connected && agent ready",
+      "declaration_sha256": "ccbfa2890fb910a170320a3c3389401144b166ea65dd9468910627ddf3ce82a7",
+      "disposition": "retire",
+      "reason": "The hook/unit and every client-producer trigger/cache/guard/retry action it tested are explicitly deleted by FR-047/K9 and chief BDD-5.8 amendment; server-owned offer predicates replace reachable setup coverage."
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red/src/hooks/useWorkspaceSetupKickoff.test.ts",
+      "title": "does not fire when setup_pending is false",
+      "declaration_sha256": "9d9de8de1facd4ec7e4b86f7cc00428195088a2d068bb78ad82ef9fe8e82e374",
+      "disposition": "retire",
+      "reason": "The hook/unit and every client-producer trigger/cache/guard/retry action it tested are explicitly deleted by FR-047/K9 and chief BDD-5.8 amendment; server-owned offer predicates replace reachable setup coverage."
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red/src/hooks/useWorkspaceSetupKickoff.test.ts",
+      "title": "does not fire when setup_pending is absent (undefined)",
+      "declaration_sha256": "7fe37b5a4c571bac9c4a93896da4418762791e318b3c92705369bfba93a99a8b",
+      "disposition": "retire",
+      "reason": "The hook/unit and every client-producer trigger/cache/guard/retry action it tested are explicitly deleted by FR-047/K9 and chief BDD-5.8 amendment; server-owned offer predicates replace reachable setup coverage."
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red/src/hooks/useWorkspaceSetupKickoff.test.ts",
+      "title": "does not fire when a session is already active",
+      "declaration_sha256": "0d66ae0e4f2e9a2ab6cde5c7d294d0d30c48be982fd5b1354e2aabfe8f1a2e64",
+      "disposition": "retire",
+      "reason": "The hook/unit and every client-producer trigger/cache/guard/retry action it tested are explicitly deleted by FR-047/K9 and chief BDD-5.8 amendment; server-owned offer predicates replace reachable setup coverage."
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red/src/hooks/useWorkspaceSetupKickoff.test.ts",
+      "title": "does not fire when disconnected",
+      "declaration_sha256": "933474e263f0608512d037fc1b7e8a392fdf67bbbf3598e9957bd9f55afd8529",
+      "disposition": "retire",
+      "reason": "The hook/unit and every client-producer trigger/cache/guard/retry action it tested are explicitly deleted by FR-047/K9 and chief BDD-5.8 amendment; server-owned offer predicates replace reachable setup coverage."
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red/src/hooks/useWorkspaceSetupKickoff.test.ts",
+      "title": "does not fire when the target agent is not resolvable (not yet loaded / not ready)",
+      "declaration_sha256": "94ec8e595d2b66289a74d3be461f1b0ef3e39e3f97b127f6058d9ecb528f2a1c",
+      "disposition": "retire",
+      "reason": "The hook/unit and every client-producer trigger/cache/guard/retry action it tested are explicitly deleted by FR-047/K9 and chief BDD-5.8 amendment; server-owned offer predicates replace reachable setup coverage."
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red/src/hooks/useWorkspaceSetupKickoff.test.ts",
+      "title": "falls back to the \"ava\" agent id when the workspace has no core_team",
+      "declaration_sha256": "7b8c9134b508f2b1d40c13cbf424094f1106c695a12480c45582fe2c9bf83619",
+      "disposition": "retire",
+      "reason": "The hook/unit and every client-producer trigger/cache/guard/retry action it tested are explicitly deleted by FR-047/K9 and chief BDD-5.8 amendment; server-owned offer predicates replace reachable setup coverage."
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red/src/hooks/useWorkspaceSetupKickoff.test.ts",
+      "title": "clears setup_pending on the active-list, archived-list, and detail caches after a successful fire",
+      "declaration_sha256": "b48eb624b1d6eb38d3cdf0a56079edd2b6f5c04459610ff7a93d9189903fa77e",
+      "disposition": "retire",
+      "reason": "The hook/unit and every client-producer trigger/cache/guard/retry action it tested are explicitly deleted by FR-047/K9 and chief BDD-5.8 amendment; server-owned offer predicates replace reachable setup coverage."
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red/src/hooks/useWorkspaceSetupKickoff.test.ts",
+      "title": "does NOT clear the cache when the kickoff bails (send returns false)",
+      "declaration_sha256": "1d69d293283a15376ebb5e50d66fb4e4d5bea867c0ea892bb9df237e094ab9d5",
+      "disposition": "retire",
+      "reason": "The hook/unit and every client-producer trigger/cache/guard/retry action it tested are explicitly deleted by FR-047/K9 and chief BDD-5.8 amendment; server-owned offer predicates replace reachable setup coverage."
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red/src/hooks/useWorkspaceSetupKickoff.test.ts",
+      "title": "cancelQueries is called for the active-list, archived-list, and detail keys before the optimistic clear lands",
+      "declaration_sha256": "06d2d75092b748c18b0f4e19fe8d02a0370d6519d7a34a942eba716a395a6b83",
+      "disposition": "retire",
+      "reason": "The hook/unit and every client-producer trigger/cache/guard/retry action it tested are explicitly deleted by FR-047/K9 and chief BDD-5.8 amendment; server-owned offer predicates replace reachable setup coverage."
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red/src/hooks/useWorkspaceSetupKickoff.test.ts",
+      "title": "does not fire for an archived workspace even when setup_pending is true",
+      "declaration_sha256": "381959c10380234e11f52782bb435b95ba567f962d81b0259bdf5f9d035b87d1",
+      "disposition": "retire",
+      "reason": "The hook/unit and every client-producer trigger/cache/guard/retry action it tested are explicitly deleted by FR-047/K9 and chief BDD-5.8 amendment; server-owned offer predicates replace reachable setup coverage."
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red/src/hooks/useWorkspaceSetupKickoff.test.ts",
+      "title": "fires for a second, different workspace while the first is still outstanding, but never refires the first",
+      "declaration_sha256": "49ad607e20a2b65070cd1fac895a0493588611c46dec24cc0d25e51eb97f38ee",
+      "disposition": "retire",
+      "reason": "The hook/unit and every client-producer trigger/cache/guard/retry action it tested are explicitly deleted by FR-047/K9 and chief BDD-5.8 amendment; server-owned offer predicates replace reachable setup coverage."
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red/src/hooks/useWorkspaceSetupKickoff.test.ts",
+      "title": "prefers \"ava\" over core_team[0] when both are chat-eligible",
+      "declaration_sha256": "86556fc84373bd3823d348a433a2882ac74c33d2ba69f2db6df7d5440beadfa3",
+      "disposition": "retire",
+      "reason": "The hook/unit and every client-producer trigger/cache/guard/retry action it tested are explicitly deleted by FR-047/K9 and chief BDD-5.8 amendment; server-owned offer predicates replace reachable setup coverage."
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red/src/hooks/useWorkspaceSetupKickoff.test.ts",
+      "title": "falls back to the first chat-eligible core_team member when \"ava\" is not chat-eligible",
+      "declaration_sha256": "a694ca90f53980110f3994177c7ea1a95e9e9afe501ef1ca09a699e3dfd57c3b",
+      "disposition": "retire",
+      "reason": "The hook/unit and every client-producer trigger/cache/guard/retry action it tested are explicitly deleted by FR-047/K9 and chief BDD-5.8 amendment; server-owned offer predicates replace reachable setup coverage."
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red/src/hooks/useWorkspaceSetupKickoff.test.ts",
+      "title": "logs (debug) and bails — never silently forever — when no chat-eligible agent exists at all",
+      "declaration_sha256": "36c53dce57873989364d4e3cc778537ddddbea86cd28a08ca0b67ba635b6ca77",
+      "disposition": "retire",
+      "reason": "The hook/unit and every client-producer trigger/cache/guard/retry action it tested are explicitly deleted by FR-047/K9 and chief BDD-5.8 amendment; server-owned offer predicates replace reachable setup coverage."
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red/src/hooks/useWorkspaceSetupKickoff.test.ts",
+      "title": "releases the guard on !sent, proven by a second fire once conditions re-trigger the effect",
+      "declaration_sha256": "97596f808e3b55b93612c5e34c79f7b3a430330f09674fcefae053808ed51d13",
+      "disposition": "retire",
+      "reason": "The hook/unit and every client-producer trigger/cache/guard/retry action it tested are explicitly deleted by FR-047/K9 and chief BDD-5.8 amendment; server-owned offer predicates replace reachable setup coverage."
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red/src/hooks/useWorkspaceSetupKickoff.test.ts",
+      "title": "acceptance flow: invalidates on failure, then fires again once the refetched workspace still reports setup_pending:true",
+      "declaration_sha256": "33d39c866d3cd548381b5b5eb67e4baf103c4540b1a0c43d29d9047cf033e1d5",
+      "disposition": "retire",
+      "reason": "The hook/unit and every client-producer trigger/cache/guard/retry action it tested are explicitly deleted by FR-047/K9 and chief BDD-5.8 amendment; server-owned offer predicates replace reachable setup coverage."
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red/src/hooks/useWorkspaceSetupKickoff.test.ts",
+      "title": "duplicate case (server truth resolves setup_pending:false) does NOT retry-loop",
+      "declaration_sha256": "c2402d16faef6034726abcd7f754bf338a8c822b9f4400fb8f9319d87e57180e",
+      "disposition": "retire",
+      "reason": "The hook/unit and every client-producer trigger/cache/guard/retry action it tested are explicitly deleted by FR-047/K9 and chief BDD-5.8 amendment; server-owned offer predicates replace reachable setup coverage."
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red/src/components/workspaces/WorkspaceTabContainer.test.tsx",
+      "title": "calls useWorkspaceSetupKickoff with the RESOLVED workspace object once the workspace query has data",
+      "declaration_sha256": "adf638e925129f1fb2eb40eec9db1a75515d9d5c38ca24aa6615c08993083302",
+      "disposition": "retire",
+      "reason": "This exact case solely asserts deleted client-hook invocation or synthetic kickoff rejection/cleanup; unrelated container/error/cancel tests remain unchanged."
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red/src/components/workspaces/WorkspaceTabContainer.test.tsx",
+      "title": "re-calls useWorkspaceSetupKickoff with the newly-resolved workspace when the workspace id changes",
+      "declaration_sha256": "e6c6b27cfe1ddf718363dc3da0c5d3604136888a545a69ace25921c335fba70a",
+      "disposition": "retire",
+      "reason": "This exact case solely asserts deleted client-hook invocation or synthetic kickoff rejection/cleanup; unrelated container/error/cancel tests remain unchanged."
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red/src/store/chat.llm-error.test.ts",
+      "title": "a kickoff-reject (no session_id) still routes to abandonPendingKickoffInternal + toast, not the typed-payload branch",
+      "declaration_sha256": "fb8848fa9ad378a7c7d1ec2d98ceda566e90edc68c5f59775e65b2eeac24c549",
+      "disposition": "retire",
+      "reason": "This exact case solely asserts deleted client-hook invocation or synthetic kickoff rejection/cleanup; unrelated container/error/cancel tests remain unchanged."
+    }
+  ],
+  "store_cases": [
+    {
+      "number": 1,
+      "title": "produces the exact kickoff instruction text with the workspace name interpolated",
+      "original_case_sha256": "253b068b11a71b10deb2a40dc77a618ae6679b30ae817e9984d971a1f2632747",
+      "disposition": "retire-client-kickoff",
+      "reason": "Case exercises deleted client producer/content/slot/retry/collision machinery; FR-047 K9 and chief BDD-5.8 amendment make the server the only offer producer."
+    },
+    {
+      "number": 2,
+      "title": "interpolates a SECOND, different workspace name correctly (not a fixture-frozen constant)",
+      "original_case_sha256": "e246d91a6e2a41d51923ebe7aa44c21b453ccc81447409da1358c7b6ef646523",
+      "disposition": "retire-client-kickoff",
+      "reason": "Case exercises deleted client producer/content/slot/retry/collision machinery; FR-047 K9 and chief BDD-5.8 amendment make the server the only offer producer."
+    },
+    {
+      "number": 3,
+      "title": "sends the exact frame: metadata carries workspace_id + workspace_setup_kickoff:true, no session_id",
+      "original_case_sha256": "9bda04ceb3b7a6bb2712827f61967d3767b76528848e9ec087c314e1093db61c",
+      "disposition": "retire-client-kickoff",
+      "reason": "Case exercises deleted client producer/content/slot/retry/collision machinery; FR-047 K9 and chief BDD-5.8 amendment make the server the only offer producer."
+    },
+    {
+      "number": 4,
+      "title": "a DIFFERENT input tuple (workspace/agent) produces a correspondingly different payload — not a fixture-frozen shape",
+      "original_case_sha256": "636e92af8d9b987001a279121963ce5f56ca32f52d87d96282148215ac2c4ed2",
+      "disposition": "retire-client-kickoff",
+      "reason": "Case exercises deleted client producer/content/slot/retry/collision machinery; FR-047 K9 and chief BDD-5.8 amendment make the server the only offer producer."
+    },
+    {
+      "number": 5,
+      "title": "appends NO user message bubble — only the streaming assistant placeholder",
+      "original_case_sha256": "0c65fa98ce3fdd78cd5085333a861d98664fd8f0a46b7e5f6f543c6ddd7ffe12",
+      "disposition": "retire-client-kickoff",
+      "reason": "Case exercises deleted client producer/content/slot/retry/collision machinery; FR-047 K9 and chief BDD-5.8 amendment make the server the only offer producer."
+    },
+    {
+      "number": 6,
+      "title": "sets up isStreaming and activates the pending session, like a normal new turn",
+      "original_case_sha256": "504dbec8830851ba521106c74b41cfd340226f7c649b7579677e3bc95d18e8e6",
+      "disposition": "retire-client-kickoff",
+      "reason": "Case exercises deleted client producer/content/slot/retry/collision machinery; FR-047 K9 and chief BDD-5.8 amendment make the server the only offer producer."
+    },
+    {
+      "number": 7,
+      "title": "sets the active agent (id + type) so the composer/thread header show it",
+      "original_case_sha256": "88b6d73af3f6e73a3220de55fb5e6e9aecfd66b95d54883a015b2898bcaed829",
+      "disposition": "retire-client-kickoff",
+      "reason": "Case exercises deleted client producer/content/slot/retry/collision machinery; FR-047 K9 and chief BDD-5.8 amendment make the server the only offer producer."
+    },
+    {
+      "number": 8,
+      "title": "bails (returns false, no send) when disconnected",
+      "original_case_sha256": "951f4cdf91146ed8625b1aa545f77b74e6ab6719516d7c26eef332cdab754e9f",
+      "disposition": "retire-client-kickoff",
+      "reason": "Case exercises deleted client producer/content/slot/retry/collision machinery; FR-047 K9 and chief BDD-5.8 amendment make the server the only offer producer."
+    },
+    {
+      "number": 9,
+      "title": "bails (returns false, no send) when a turn is already streaming",
+      "original_case_sha256": "ddfd2b03290b38f13c5bbaeaaa413c393dc0cb62ecce27c0ae49d08a4aad0f1c",
+      "disposition": "retire-client-kickoff",
+      "reason": "Case exercises deleted client producer/content/slot/retry/collision machinery; FR-047 K9 and chief BDD-5.8 amendment make the server the only offer producer."
+    },
+    {
+      "number": 10,
+      "title": "bails (returns false, no send) when a conversation already exists (activeSessionId !== null)",
+      "original_case_sha256": "8f8c6d6d7f79021c17498e0cb9f85c1928e46756ea8652422170ee543aba88a9",
+      "disposition": "retire-client-kickoff",
+      "reason": "Case exercises deleted client producer/content/slot/retry/collision machinery; FR-047 K9 and chief BDD-5.8 amendment make the server the only offer producer."
+    },
+    {
+      "number": 11,
+      "title": "rolls back the placeholder and surfaces a connection error when send() fails",
+      "original_case_sha256": "5778cbb55a3bf7d1c155343efaa785792edece978c8edfef29e2cd4e6d6c67d1",
+      "disposition": "retire-client-kickoff",
+      "reason": "Case exercises deleted client producer/content/slot/retry/collision machinery; FR-047 K9 and chief BDD-5.8 amendment make the server the only offer producer."
+    },
+    {
+      "number": 12,
+      "title": "never records the \"__pending\" sentinel in sessionByWorkspace",
+      "original_case_sha256": "d28cde4cd4285fddc9a6b0b7f7645256a9fce17f110e7f42c2deb8aca621c1f8",
+      "disposition": "retire-client-kickoff",
+      "reason": "Case exercises deleted client producer/content/slot/retry/collision machinery; FR-047 K9 and chief BDD-5.8 amendment make the server the only offer producer."
+    },
+    {
+      "number": 13,
+      "title": "claims the single in-flight-kickoff slot on send (pendingKickoff)",
+      "original_case_sha256": "eeb6a01ec79ab3288f72d2305453fd7d29461967305127f455fc42def5fbb356",
+      "disposition": "retire-client-kickoff",
+      "reason": "Case exercises deleted client producer/content/slot/retry/collision machinery; FR-047 K9 and chief BDD-5.8 amendment make the server the only offer producer."
+    },
+    {
+      "number": 14,
+      "title": "bails (returns false, no send) when a DIFFERENT kickoff is already in flight",
+      "original_case_sha256": "f7a58259de753ad3823aa98b93c682d98c4fe3634404a4e27ca8f6ac79661d94",
+      "disposition": "retire-client-kickoff",
+      "reason": "Case exercises deleted client producer/content/slot/retry/collision machinery; FR-047 K9 and chief BDD-5.8 amendment make the server the only offer producer."
+    },
+    {
+      "number": 15,
+      "title": "does NOT write a sessionByWorkspace descriptor for the optimistic \"__pending\" no-session turn",
+      "original_case_sha256": "1706c62dfacdd2b7207b29b3eb9ff428155fa78c0c343bfb39804e517be8dce0",
+      "disposition": "preserve-ordinary",
+      "reason": "Ordinary first-send/sentinel/tagged-error/correlation behavior remains; only removed-field scaffolding is retired."
+    },
+    {
+      "number": 16,
+      "title": "resets activeSessionId to null and clears pendingKickoff on send failure, unblocking a retry",
+      "original_case_sha256": "4efe95a5308499a2dfd6d1090ff5f96d9b787c55fcf115b28ab38a961eea4240",
+      "disposition": "retire-client-kickoff",
+      "reason": "Case exercises deleted client producer/content/slot/retry/collision machinery; FR-047 K9 and chief BDD-5.8 amendment make the server the only offer producer."
+    },
+    {
+      "number": 17,
+      "title": "treats a stuck \"__pending\" + not-streaming session as no-active-session: fresh turn, no session_id on the wire",
+      "original_case_sha256": "8ea6258ed034cd6f9ce7e711f10b8ad8c622edc7dc7cdf67b00d5778f1515799",
+      "disposition": "preserve-ordinary",
+      "reason": "Ordinary first-send/sentinel/tagged-error/correlation behavior remains; only removed-field scaffolding is retired."
+    },
+    {
+      "number": 18,
+      "title": "does NOT apply the guard while the \"__pending\" session is still streaming (mid-turn steering unaffected)",
+      "original_case_sha256": "869635de458acfffb1b4243501e6a81876aa9767f47c8af3004063bc8bdc7a2b",
+      "disposition": "preserve-ordinary",
+      "reason": "Ordinary first-send/sentinel/tagged-error/correlation behavior remains; only removed-field scaffolding is retired."
+    },
+    {
+      "number": 19,
+      "title": "fully cleans up when the server rejects the kickoff as a DUPLICATE (already-ran, benign) — informational toast",
+      "original_case_sha256": "642f5b5409dc4fafa2a00f111b88cc716f7a5dbc34e261dd55a08d820e0d8b0a",
+      "disposition": "retarget-mixed",
+      "reason": "Retire impossible client-kickoff prelude and retired slot/attempt/toast/migration assertions; retain ordinary send/error/queue output predicates under a valid ordinary fixture."
+    },
+    {
+      "number": 20,
+      "title": "fully cleans up when the server rejects the kickoff for a GENUINE failure — warning toast, distinct from the duplicate wording",
+      "original_case_sha256": "c3e4da7bd72fe5a8dad4a5db76eb158fe1977a6ef9119552390df78c85ba96f7",
+      "disposition": "retire-client-kickoff",
+      "reason": "Case exercises deleted client producer/content/slot/retry/collision machinery; FR-047 K9 and chief BDD-5.8 amendment make the server the only offer producer."
+    },
+    {
+      "number": 21,
+      "title": "marks kickoffAttemptStatus \"failed\" for the rejected workspace",
+      "original_case_sha256": "81413f48d38cc397738a59c4a32c8d2fc6ee7e629f963d6351d8737f67d504b2",
+      "disposition": "retire-client-kickoff",
+      "reason": "Case exercises deleted client producer/content/slot/retry/collision machinery; FR-047 K9 and chief BDD-5.8 amendment make the server the only offer producer."
+    },
+    {
+      "number": 22,
+      "title": "does NOT trigger the kickoff-reject cleanup for an ordinary message-turn error (no kickoff pending)",
+      "original_case_sha256": "471d4475589438a94cf29a5e57643c79e8d642ea92967875dbc8ce88d226aa2f",
+      "disposition": "preserve-ordinary",
+      "reason": "Ordinary first-send/sentinel/tagged-error/correlation behavior remains; only removed-field scaffolding is retired."
+    },
+    {
+      "number": 23,
+      "title": "does NOT foreground the kickoff session when the user navigated to a different workspace before the ack",
+      "original_case_sha256": "90417b01fe71a2d4b6aea94485e13b4a5e7b37245717ff5715f3f5201891ca3c",
+      "disposition": "retire-client-kickoff",
+      "reason": "Case exercises deleted client producer/content/slot/retry/collision machinery; FR-047 K9 and chief BDD-5.8 amendment make the server the only offer producer."
+    },
+    {
+      "number": 24,
+      "title": "forgrounds normally when the ack arrives while the user is still on the originating workspace",
+      "original_case_sha256": "404b8d8b917659e0744a43a3c5808a0a15755f1184afacd94987a02f42026619",
+      "disposition": "retire-client-kickoff",
+      "reason": "Case exercises deleted client producer/content/slot/retry/collision machinery; FR-047 K9 and chief BDD-5.8 amendment make the server the only offer producer."
+    },
+    {
+      "number": 25,
+      "title": "plain sendMessage session_started ack is unaffected (no pendingKickoff involved)",
+      "original_case_sha256": "556d48b4e126daa6b3d3a0ff00d53c6e4fe0a251266d18b0dd2b29043cbcb316",
+      "disposition": "preserve-ordinary",
+      "reason": "Ordinary first-send/sentinel/tagged-error/correlation behavior remains; only removed-field scaffolding is retired."
+    },
+    {
+      "number": 26,
+      "title": "clearStreamingState (WS disconnect) clears pendingKickoff, drops the orphaned __pending bucket, and marks kickoffAttemptStatus failed",
+      "original_case_sha256": "727a5c0864a513396f25792a3e2f8db0ed17dff837ad54399c030530c2420e1e",
+      "disposition": "retire-client-kickoff",
+      "reason": "Case exercises deleted client producer/content/slot/retry/collision machinery; FR-047 K9 and chief BDD-5.8 amendment make the server the only offer producer."
+    },
+    {
+      "number": 27,
+      "title": "is a no-op when no kickoff is outstanding",
+      "original_case_sha256": "7e432bc1fd8281eac0fe0790edc997daec7ddab59ce0e1f5bcb36386d9fc259c",
+      "disposition": "retire-client-kickoff",
+      "reason": "Case exercises deleted client producer/content/slot/retry/collision machinery; FR-047 K9 and chief BDD-5.8 amendment make the server the only offer producer."
+    },
+    {
+      "number": 28,
+      "title": "clears the slot quietly and does NOT disturb an unrelated conversation that is now foreground",
+      "original_case_sha256": "f3475ea511ecf098c60b2003a00dca199b2c65abdcdd880e1ac97fe493e34e28",
+      "disposition": "retire-client-kickoff",
+      "reason": "Case exercises deleted client producer/content/slot/retry/collision machinery; FR-047 K9 and chief BDD-5.8 amendment make the server the only offer producer."
+    },
+    {
+      "number": 29,
+      "title": "a tagged error frame leaves pendingKickoff untouched and runs the generic C8 handling instead, even while a kickoff is pending",
+      "original_case_sha256": "663a77a08ee846a749bdfdf1224dc8b82806a051767bf909bdef6694d7a9739e",
+      "disposition": "retarget-mixed",
+      "reason": "Retire impossible client-kickoff prelude and retired slot/attempt/toast/migration assertions; retain ordinary send/error/queue output predicates under a valid ordinary fixture."
+    },
+    {
+      "number": 30,
+      "title": "sendMessage enqueues (does not send, does not create a second __pending bucket) while a kickoff is pending",
+      "original_case_sha256": "58c26bdbb62db8cfa4710a792f4fe5c6d0fc09a45228acd65ec1f04ac593417e",
+      "disposition": "retire-client-kickoff",
+      "reason": "Case exercises deleted client producer/content/slot/retry/collision machinery; FR-047 K9 and chief BDD-5.8 amendment make the server the only offer producer."
+    },
+    {
+      "number": 31,
+      "title": "end-to-end: the queued message survives and is sent separately once the kickoff resolves (via the wrong-workspace migration branch)",
+      "original_case_sha256": "f4d186d8fabc991dc47bc407ce24432a843771d2b0229a2c3eaeb6ffe58724f9",
+      "disposition": "retarget-mixed",
+      "reason": "Retire impossible client-kickoff prelude and retired slot/attempt/toast/migration assertions; retain ordinary send/error/queue output predicates under a valid ordinary fixture."
+    }
+  ],
+  "retired_count": 44,
+  "surviving_ordinary_store_cases": 5,
+  "retargeted_mixed_store_cases": 3,
+  "no_skips": true,
+  "target_only_cleanup": {
+    "branch": "work/omnipus-l1-ui-red-wu10-target",
+    "head": "a887c2190e2217031d144129a2883bd180564249",
+    "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-wu10-target/src/store/omnipusChat.test.ts",
+    "removal": ", pendingKickoff: null",
+    "assertions_changed": 0
+  }
+}

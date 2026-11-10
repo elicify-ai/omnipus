@@ -25,7 +25,6 @@ package agent
 import (
 	"fmt"
 
-	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -72,16 +71,11 @@ func buildRecallMark(state, tool, toolCallID string, archiveLine int, content st
 // turnNumberForArchiveLine returns 1 + the count of role:user archive lines
 // strictly preceding line (FR-018). A system line, an assistant line or a
 // tool line never starts a turn; the user line AT line is not "preceding".
-// A line past the end counts every user line; a negative line counts none.
-func turnNumberForArchiveLine(archive []memory.ArchivedMessage, line int) int {
-	n := 1
-	for i, m := range archive {
-		if i >= line {
-			break
-		}
-		if m.Role == "user" {
-			n++
-		}
+// A line past the end counts every user line; a negative line counts none. A
+// nil archive (no store) numbers every line turn 1.
+func turnNumberForArchiveLine(archive windowArchive, line int) int {
+	if archive == nil {
+		return 1
 	}
-	return n
+	return archive.turnBefore(line)
 }

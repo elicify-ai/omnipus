@@ -1,5 +1,7 @@
 # Agent Create & Edit Forms — Requirements
 
+> **Amendment 2026-10-14 — founder order ([PR #1311](https://github.com/elicify-ai/omnipus/pull/1311), [issue #1306](https://github.com/elicify-ai/omnipus/issues/1306)).** No wall-clock limit ends agent work. The Judge retains its timers but must always conclude visibly with the work result. Row 27 / §4.23, Advanced groups, edit wireframes and duration test/contract instructions are **superseded only for `timeout_seconds`**. Remove the field and its 300-second default from every create/edit variant and payload; do not rename it into an executor kill setting. Keep the separately ratified count-cap control. Strict external-create decoding rejects the retired property. Sources: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/contracts/components/schemas/AgentCreateRequestSubagent3p.yaml`::properties; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/pkg/gateway/rest_agents_create.go`::decodeAgentCreateVariant. Other old form decisions and dated wireframes are not silently modernized.
+
 **Status:** Approved (review pending)
 **Date:** 2026-06-18
 **Author:** Daniel Piatkowski `<10800669+daniel-piatkowski-ai@users.noreply.github.com>`
@@ -83,6 +85,8 @@ Convention:
 
 ### 3.1 The full matrix
 
+> **Amended 2026-10-14 — superseded (founder; PR #1311 / #1306):** **row 27** below is retained as historical allocation. All required/defaulted `timeout_seconds` cells are now **removed / not applicable**. The §4.23 amendment governs create/edit and locked-agent surfaces; count caps are separate.
+
 **Naming convention used in this matrix and throughout the doc:**
 - `type: Main` (monospace) refers to the **wire enum value**.
 - Bare "Main" in prose refers to the same type; for clarity at
@@ -101,7 +105,7 @@ Convention:
 | 6 | `model` | R (seeded) | R (seeded) | R (picker) | R (picker) | R (free text) |
 | 7 | `model_params.{temperature, max_tokens, top_p}` | ro | ro | O | O | **—** |
 | 8 | `soul` ⭐ (mandatory everywhere) | ro | ro | **R** ⭐ | **R** ⭐ | **R** ⭐ |
-| 9 | `instructions` | ro | ro | O | O | O |
+| 9 | `instructions` (not an automatic prompt source; §4.8) | — | — | — | — | — |
 | 10 | `heartbeat` | ro | **—** | O | **—** | **—** |
 | 11 | `heartbeat_enabled` | O | **—** | O | **—** | **—** |
 | 12 | `heartbeat_interval` | O | **—** | O | **—** | **—** |
@@ -140,7 +144,7 @@ Convention:
 |---|---|
 | `tool_feedback` (per-agent bool) | This is **channel behavior**, not an agent property. The web chat surface already renders tool calls inline (`SessionPanel.tsx`, `ToolCallBadge`, `SubagentBlock`); publishing them again as outbound messages is duplication. Per-channel routing at runtime: `webchat` → never, messaging → always. |
 | `executor.auth_method` | Each CLI handles its own auth (claude-code OAuth, etc.). Omnipus just spawns the CLI process. |
-| `executor.instructions_file` | Omnipus passes `soul` + `instructions` as prompt content at runtime, not via a file the CLI reads. |
+| `executor.instructions_file` | Omnipus passes the resolved soul (when present) and task content at runtime, not an agent-folder instruction body or a file path for the CLI to read. |
 | `executor.model_override` | `model` IS the model name passed to the CLI. |
 | `executor.workdir` | Set by the calling Main agent at runtime (invocation context), not by the Subagent itself. |
 
@@ -209,9 +213,14 @@ Subagent (External). For Main and Subagent, Omnipus injects it into every
 LLM call. For Subagent (External), Omnipus **passes it as part of the CLI
 prompt at runtime** — the CLI never reads a file from disk.
 
-### 4.8 `instructions` (row 9)
-AGENT.md body. Same scoping as `soul` (everywhere), but **optional**
-(empty is valid).
+### 4.8 `instructions` (row 9) — not an automatic prompt source
+The agent-folder instruction body is not a prompt or agent-form input. Since the
+2026-10-21 founder decision, the native prompt loader reads the agent's `SOUL.md`
+and the global `USER.md`; it does not load agent-folder `AGENT.md`, `AGENTS.md` or
+`IDENTITY.md`. The body must not be described as following `soul` into a request.
+Workspace Project Instructions and mounted-project root instructions remain
+separate supported sources. This is a prompt/form mapping correction, not a claim
+that a wire-format field was removed.
 
 ### 4.9 `heartbeat*` (rows 10–12)
 **Main only** — chat agents have a periodic poll. Workers don't poll
@@ -391,6 +400,9 @@ seed DTO. The struck text is kept only as a record of the removed surface.
 **Main only** — the G3 toggle. Workers never default.
 
 ### 4.23 `timeout_seconds` (row 27) and `max_tool_iterations` (row 28)
+
+> **Amended 2026-10-14 — superseded in part (founder; PR #1311 / #1306):** **row 27 and the required/default-300s/CLI-wait duration below are retired** for every type. Remove the create/edit duration control and payload property. The count-based row 28 is not a lifetime limit and retains its later separately ratified semantics.
+
 R at the wire layer with UI default pre-selected (300s / 50).
 
 For Subagent (External), `timeout_seconds` bounds the Omnipus wait for
@@ -502,28 +514,34 @@ The `type` (and `cli`, for External) is shown as a locked chip at the top.
 
 ### 5.3 Wizard — `Main` (3 steps + Advanced)
 
+> **Amended 2026-10-14 — superseded in part (founder; PR #1311 / #1306):** **`timeout_seconds` (default 300)** in this Advanced group is removed. Do not render or submit an agent-work duration; leave the separately specified count-cap control.
+
 | Step | Visible fields |
 |---|---|
 | **① Identity** | `color` (default: `Verdant`), `icon` (default: `Robot`), `name` *, `description`, `model` * (picker) |
-| **② Personality** | `soul` * ⭐, `instructions`, `heartbeat`, `heartbeat_enabled`, `heartbeat_interval`, `voice` (dynamic widget) |
+| **② Personality** | `soul` * ⭐, `heartbeat`, `heartbeat_enabled`, `heartbeat_interval`, `voice` (dynamic widget) |
 | **③ Tools** | `tools_cfg` (ToolPolicyEditor, default `deny`), `skills[]`, `fallback_models[]` (max 2) |
 | **Advanced** | `model_params`, `sandbox_profile`, `shell_policy`, `rate_limits`, ~~`delegation_policy` (link to `/agents/trust`)~~ **[removed — ADR-037]**, `timeout_seconds` (default 300), `max_tool_iterations` (default 50), `steering_mode` (default `one-at-a-time`) |
 
 ### 5.4 Wizard — `Subagent` (3 steps + Advanced)
 
+> **Amended 2026-10-14 — superseded in part (founder; PR #1311 / #1306):** remove **`timeout_seconds`** from this Advanced group and its submitted payload. Native worker work has no lifetime duration. Count caps remain separate.
+
 | Step | Visible fields |
 |---|---|
 | **① Identity** | `color`, `icon`, `name` *, **`description` * (required for routing)**, `model` * (picker) |
-| **② Personality** | `soul` * ⭐ (label: *"Soul / task prompt"*), `instructions` (no Heartbeat, no Voice) |
+| **② Personality** | `soul` * ⭐ (label: *"Soul / task prompt"*) (no Heartbeat, no Voice) |
 | **③ Tools** | `tools_cfg` (default `deny`), `skills[]`, `fallback_models[]` (max 2) |
 | **Advanced** | `model_params`, `sandbox_profile`, `shell_policy`, `rate_limits`, `timeout_seconds`, `max_tool_iterations` (no steering_mode, no delegation_policy [field removed entirely — ADR-037], no Heartbeat, no Voice) |
 
 ### 5.5 Wizard — `Subagent (External)` (3 steps + Advanced)
 
+> **Amended 2026-10-14 — superseded in part (founder; PR #1311 / #1306):** remove **`timeout_seconds`** from this Advanced group and every external-create payload. Retain valid CLI path/arguments/environment authoring and the separately specified turn-count cap; none is a lifetime kill timer.
+
 | Step | Visible fields |
 |---|---|
 | **① Identity** | `color`, `icon`, `name` *, `description` * (required for routing), `model` * (free-text slug input — NOT picker) |
-| **② Personality** | `soul` * ⭐, `instructions` (no Heartbeat, no Voice) |
+| **② Personality** | `soul` * ⭐ (no Heartbeat, no Voice) |
 | **③ Tools** | `skills[]` (no tools_cfg — CLI doesn't see Omnipus tools, no fallback_models — CLI handles retries) |
 | **Advanced** | `rate_limits`, `timeout_seconds`, `max_tool_iterations`, **`executor.cli_path` *, `executor.env_overrides`, `executor.cli_args`** (no `sandbox_profile` / `shell_policy` — CLI manages its own isolation, per matrix rows 17-18) |
 
@@ -683,6 +701,8 @@ Identical to Main, except:
 
 ### 6.5 Edit — `built-in Main` (Mia, Jim, Ava, Ray)
 
+> **Amended 2026-10-14 — superseded in part (founder; PR #1311 / #1306):** the wireframe's **Timeout_seconds** and the operator-tunable subset's **`timeout_seconds`** below are removed, not locked/read-only replacements. Built-in editability does not keep a retired lifetime setting. Other runtime controls retain their existing field rules.
+
 Same shape as Main, but every field that would be R/O is rendered `ro`
 with a tooltip: *"Locked agent — seeded at gateway boot."*
 
@@ -821,7 +841,7 @@ near-rewrite. Recommended file split (per F-11):
 
 - `src/components/agents/CreateAgentWizard.tsx` — top-level container, the `Dialog`/`Sheet` wrapper, the `type` + `cli` chip, the numbered stepper
 - `src/components/agents/CreateAgentStep1Identity.tsx` — step ① (color, icon, name, description, model)
-- `src/components/agents/CreateAgentStep2Personality.tsx` — step ② (soul ⭐, instructions, heartbeat, voice — fields conditional on `type`)
+- `src/components/agents/CreateAgentStep2Personality.tsx` — step ② (soul ⭐, heartbeat, voice — fields conditional on `type`)
 - `src/components/agents/CreateAgentStep3Tools.tsx` — step ③ (tools_cfg, skills, fallback_models — fields conditional on `type`)
 - `src/components/agents/CreateAgentAdvanced.tsx` — Advanced disclosure (sandbox, shell, rate_limits, executor CLI fields for External, etc.)
 - `src/components/agents/AgentFormFields.tsx` — keep for shared input primitives (AvatarColorPicker, IconPicker, etc.)
@@ -848,6 +868,8 @@ requirement.
 ---
 
 ## 9. Acceptance criteria
+
+> **Amended 2026-10-14 — duration acceptance superseded (founder; PR #1311 / #1306):** any **timeout required/defaulted/editable** contract, locked-agent or desktop/mobile assertion below is retired. Valid create/edit payloads omit the duration, strict external-create rejects an explicitly supplied retired property, and no variant renders the input. Count-cap, authoring, identity/read-only and layout assertions remain their separately amended requirements. The later “Defaults” tab suggestion's Timeouts member is historical, not a new control to implement. User-doc TODO for the implementing lead/docs-verifier in PR #1311: remove duration controls/defaults from the Using Omnipus UI and Settings guides, keeping explicit Stop and count-limit guidance.
 
 ### 9.1 Wire contract
 
@@ -937,7 +959,7 @@ Scenario: Step ② Subagent wizard has no Heartbeat field
   Given a Subagent wizard is open at step ②
   When the form renders
   Then [data-testid="wizard-heartbeat"] is NOT in the DOM
-  And the Personalities section contains only `soul` and `instructions`
+  And the Personalities section contains only `soul`
 
 Scenario: Step ② wizard of any worker type has no Voice field
   Given a Subagent or Subagent (External) wizard is open at step ②
@@ -1131,7 +1153,7 @@ The semver-major bump + DB migration is one-way. If the rollout fails:
 ### Open for follow-up
 4. **"Defaults" tab** — For built-in agents, the operator-tunable subset (Sandbox, Shell, Rate limits, Timeouts, Heartbeat) takes up most of the Advanced tab. Recommendation: keep it in Advanced for now; split into its own tab if usage data shows operators revisit these often.
 5. ✅ **`built-in Subagent` column rename** — Confirmed by the user: `Worker` → `Subagent` everywhere, including the built-in matrix column. No revert needed.
-6. **`soul` + `instructions` delivery to External CLIs** — Currently passed as prompt content (`<cli_path> --prompt <prompt> --model <model>`). Confirm the long-string-prompt path works against all three CLIs (claude-code, codex, opencode) — particularly Codex's input handling. If a CLI rejects long prompts, fall back to writing a tmp file and pointing at it (which would re-introduce `executor.instructions_file` — currently dropped).
+6. **Resolved soul and task delivery to External CLIs** — The resolved soul (when present) and task are passed as prompt content (`<cli_path> --prompt <prompt> --model <model>`), not an agent-folder instruction body. Confirm the long-string-prompt path works against all three CLIs (claude-code, codex, opencode) — particularly Codex's input handling. If a CLI rejects long prompts, fall back to writing a tmp file and pointing at it (which would re-introduce `executor.instructions_file` — currently dropped).
 7. **Voice widget edge case** — What if the user installs a voice provider that *partially* exposes a voices enum (returns some voices but errors on others)? Decision tree currently picks "free-text" — confirm with frontend-lead whether a partial-enum provider should render as dropdown (filtering known voices) or free-text.
 
 ---

@@ -183,15 +183,16 @@ func (s *Store) readStoreVersionFile() (sf *storeFile, present bool, err error) 
 // checked AGAIN under that lock before anything is written — two processes
 // unlocking the same legacy file serialize, and the second sees version 2.
 //
-// An unreadable or unparseable file is NOT this function's to report: it
-// returns nil and leaves the existing read path (loadFileInternal) to fail
-// every operation with its established error. Safety never depends on this
-// function running — loadFileInternal refuses every version but the current
-// one, so a store this function skipped is refused, never read the legacy way.
+// Probe errors are returned before installing a key: a caller may have no
+// credential refs and never call Get. A refused probe leaves the file unchanged
+// and a locked store locked.
 func (s *Store) migrateLegacyLocked(oldKey, newKey, newSalt []byte) (bool, error) {
 	sf, present, probeErr := s.readStoreVersionFile()
-	if probeErr != nil || !present {
-		return false, nil //nolint:nilerr // reported by loadFileInternal on first use; see doc comment
+	if probeErr != nil {
+		return false, probeErr
+	}
+	if !present {
+		return false, nil
 	}
 	switch sf.Version {
 	case storeVersion:
@@ -203,8 +204,11 @@ func (s *Store) migrateLegacyLocked(oldKey, newKey, newSalt []byte) (bool, error
 	migrated := false
 	lockErr := fileutil.WithFlock(fileutil.SidecarLockPath(s.path), func() error {
 		sf, present, readErr := s.readStoreVersionFile()
-		if readErr != nil || !present {
-			return nil //nolint:nilerr // as above: loadFileInternal reports it on first use
+		if readErr != nil {
+			return readErr
+		}
+		if !present {
+			return nil
 		}
 		switch sf.Version {
 		case storeVersion:

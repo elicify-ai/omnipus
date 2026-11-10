@@ -16,6 +16,27 @@
   deps), #2 (pure Go, no CGo, no external C libs, no shelling out for security-critical
   paths), #3 (minimal footprint), #4 (graceful degradation), kernel sandbox
   (Landlock/seccomp).
+- **Amendment 2026-09-26 (issue #920, read-boundary consistency — founder interview
+  [`read-boundary-consistency-interview.md`](../specs/read-boundary-consistency-interview.md),
+  D1–D7):** D4 is corrected in place, marked *[amended 2026-09-26 (#920)]* at each
+  superseded sentence, original text kept as history. The as-is gap this closes: `grep`
+  never called `ResolvePath` (ADR-063 D2) at all — it refused every absolute path and
+  every `..` segment outright (`pkg/tools/grep.go::validateGrepScope`) and applied none of
+  `read_file`/`list_directory`'s other gates. The founder ruled this a narrowing of the
+  single read decision that was never reconciled with ADR-062/ADR-063, and directed one
+  boundary for all three tools. Full corrected decision: the new "D4 amendment" subsection
+  immediately below D4.
+- **Correction round 2026-09-26 (#920, the one correction after the ADR-mode grill,
+  [`ADR-092-shell-permission-modes-review.md`](./ADR-092-shell-permission-modes-review.md);
+  founder decisions D8–D9 of the same interview):** corrections are inline, marked
+  *[corrected 2026-09-26, grill correction]*, original text kept. They cover MIN-001 (the
+  exact `resolveScopedRoot` call shape), MIN-002 (D11's "confined"), MIN-003 (which
+  skills-gate primitives the walk uses) and the grill's first unasked question (the handle
+  shape of the widened `ReadConfined` read branch). They also cover one defect the
+  correction round found in the D6 bullet itself: as first written, the D6 check would
+  have let the operator's allow-path regex axis reopen a read-confined turn. The CRIT-001
+  pin fix (D8), the required behavioural test (MIN-004) and the `send_file` answer live in
+  ADR-092's 2026-09-26 correction note.
 
 ---
 
@@ -78,13 +99,235 @@ arbitrary, volatile, possibly-mounted trees. The best everyday grep (ripgrep) is
 index-free; we copy that model.
 
 **D4 — File search covers workspace folders AND mounts, confined and hard-bounded.**
-It walks the same confined `Root` the rest of the Library uses (`library.OpenRoot` /
+*[The confinement clause below is amended 2026-09-26 (#920) for the AGENT `grep` tool
+only — see the "D4 amendment" subsection right after D5. It is UNCHANGED for the human
+Library search bar (`pkg/gateway/rest_library_files_search.go`), which still walks
+exactly this confined `Root` with no wider reach.]* It walks the same confined `Root` the
+rest of the Library uses (`library.OpenRoot` /
 `os.OpenRoot` — the sandbox's path boundary is preserved; this is why we do NOT shell out).
 Because a mount can point at a huge, volatile host folder, the walk is **bounded, always**:
 caps on files-visited, bytes-scanned, matches-returned, directory depth, a per-file size
 skip, and a `context` wall-clock deadline. On any cap it returns partial results **plus an
 explicit `truncated` + reason**, rendered with the same honest partial-results UX the vault
 search uses. An uncapped walk of a synced host folder is a forbidden state.
+
+**D4 amendment (2026-09-26, issue #920) — the agent `grep` tool joins the single read
+decision; the human Library search bar is unchanged.**
+
+Founder decisions (`read-boundary-consistency-interview.md`, cited by ID):
+
+- **interview D1.** `grep`'s `path` argument now resolves through
+  `pkg/tools/resolvepath.go::ResolvePath` — the same chokepoint `read_file`,
+  `list_directory` and `send_file` already use (ADR-063 D2) — including an absolute path
+  and a `..`-reentrant path. The secret set, other agents' homes and other workspaces stay
+  categorically unreachable (`fspolicy.IsCarveOut`, checked unconditionally by
+  `ResolvePath` regardless of the op). This retires
+  `pkg/tools/grep.go::validateGrepScope`'s outright rejection of an absolute `path` and any
+  `..` segment (its current `strings.HasPrefix(scope, "/")` check and its per-segment `".."`
+  refusal) for the read-open case — see "Windows absolute paths" below for why the
+  replacement must not reintroduce the same bug in a new shape. A bare NUL-byte pre-check
+  is kept (matches `ResolvePath`'s own step-1 rejection; a pre-flight message beats a raw
+  `*fs.PathError`).
+- **interview D5.** With no `path` argument, the search area is unchanged: the agent's own
+  workspace root plus every mount on it (`grepRoots`'s existing no-scope branch). This
+  branch does not call `ResolvePath` and does not change.
+- **interview D6 — read-confined agents (Judge, Plan Supervisor).** Both `grep` and
+  `read_file`/`list_directory` resolve to **workspace plus its mounted folders** for a
+  read-confined turn — closing the as-is inconsistency the interview recorded verbatim:
+  "grep includes mounts, read_file refuses them." This is not solely a `grep`-side fix:
+  `ResolvePath`'s own `ReadConfined` branch
+  (`resolveValidatedPath`'s `if rp.policy.ReadConfined { return nil, ...
+  (read-confined turn) }`, reached once `!isWithinWorkspace(realAbs, realWorkDir)` is
+  true) today refuses **every** path outside `WorkDir` for a read-confined turn, mounts
+  included — there is no mount exception in that branch, verified by reading it. The
+  branch must be widened to check `realAbs` against `policy.AllowedRoots` before refusing,
+  the same test `matchedAllowedRoot` already applies for `FSOpWrite`/`FSOpServe` a few
+  lines below it in the same function. This is a shared `ResolvePath` change: it fixes
+  `read_file`/`list_directory` for a read-confined turn at the same time it fixes `grep`,
+  which is why the interview flags it for `security-lead` review.
+  *[corrected 2026-09-26, grill correction — three conditions the sentence above left
+  unstated, each verified against the code:]*
+  1. **Mounts only, never the regex grant.** "Check against `policy.AllowedRoots`" is
+     only safe for the `AllowedRoots` that `resolvepath.go::ResolveTurnFSPolicy` sets.
+     That value is `workspace.AllowedMountRoots` for the turn's workspace, so it is
+     exactly the mounts. But `resolvepath.go::ResolvePathAllowingPatterns` makes a
+     call-scoped copy and appends one extra entry to it: the resolved path of any
+     `rawPath` that matches an operator's AllowRead/WritePaths regex (`read_file` passes
+     those patterns). Its own doc comment says this axis "does NOT reopen a read-confined
+     turn". That is true today only because the `ReadConfined` branch never looks at
+     `AllowedRoots`. Widened naively, an AllowReadPaths pattern covering
+     `$OMNIPUS_HOME/sessions/` would hand the Judge every transcript again, which reopens
+     the hole JUDGE-FR-060 closed. So `ResolvePathAllowingPatterns` must skip the
+     `AllowedRoots` injection when `policy.ReadConfined` is true, and leave the policy
+     otherwise unchanged. The injection exists only for `FSOpWrite`/`FSOpServe` (its own
+     comment), and the only read-confined turn has no write tool. With that change,
+     `AllowedRoots` inside the `ReadConfined` branch means the workspace's mounts and
+     nothing else.
+  2. **Handle shape (grill unasked question 1).** The widened branch returns the
+     mount-anchored `os.Root` handle the write/serve branch already builds:
+     `matchedAllowedRoot(realAbs, rp.policy.AllowedRoots)` → `newMountRootHandle(root,
+     rp.rawPath, realAbs, rp.policy)`. It never returns the host-filesystem
+     `&PathHandle{abs: realAbs}` that the unconfined read branch returns. The code supports
+     this as it stands. `newMountRootHandle` is op-agnostic (it computes `rel` and opens
+     `os.OpenRoot` at the mount or nearest existing ancestor). `PathHandle.ReadFile`/`ReadDir`/
+     `Open` already serve `root != nil` handles, which is how every `WorkDir` read works.
+     This is required, not a nicety. JUDGE-FR-060a's threat is a reviewed worker that
+     controls the files it wrote. A mount can be written by that same worker, and a
+     host-filesystem handle re-checks only the secret set at I/O time, never containment
+     in the mount. So an ancestor swapped between resolve and read would escape the mount.
+  3. **`FSOpSend` keeps its current confinement (grill unasked question 2).** The case
+     arm is shared (`case FSOpRead, FSOpList, FSOpSend`). The mount exception applies to
+     `FSOpRead` and `FSOpList` only. A read-confined `FSOpSend` outside `WorkDir` is
+     refused exactly as today. Interview D6 names `grep`/`read_file`/`list_directory`,
+     never `send_file`, and the only production read-confined turn
+     (`pkg/agent/verifier_adjudication.go` dispatchTurn, `tools.WithReadConfined(callCtx,
+     true)`) belongs to the Judge. Its seed denies `send_file`
+     (`pkg/coreagent/seed_system.go::systemAgentSeed`, `denyAllThenOverride`). Widening
+     the send arm would therefore change nothing reachable today while silently widening
+     an exfiltration path for any future read-confined role. `send_file` is unaffected by
+     every part of #920.
+- **interview D7.** Search capacity is unchanged: the existing 2-walk-slot semaphore
+  (`filegrep.TryAcquire`/`Release`, shared with the Library search bar) and the 10 s /
+  50,000-file bounds (D4 above) apply identically to a widened `grep` call.
+- **Human Library search unchanged.** `pkg/gateway/rest_library_files_search.go` keeps
+  its existing confinement (workspace + mounts, via `filegrep.GuardCarveOuts` over the same
+  confined roots) — D1–D7 above govern the AGENT `grep` tool only.
+
+**The gates a widened `grep` must carry (interview security notes), verified against the
+code rather than assumed:**
+
+1. **Secret set — already present, must extend to the new root.** `grep.go::guardCarveOuts`
+   already wraps every existing root (workspace, each mount) in `carveOutFS`, applying
+   `fspolicy.IsCarveOut`. The new root type this amendment introduces (below) must be
+   wrapped the same way — nothing new to build, an existing wrapper reused.
+2. **ADR-072 D10.3 skills-registry instruction-file gate — currently MISSING from `grep`
+   entirely, must be added.** `ResolvePath` (`resolvepath.go::classifySkillsGate` /
+   `isSkillInstructionFile`) refuses a `read_file`/`list_directory`/`send_file` of a
+   registry skill's `SKILL.md`/`AGENT.md`/`AGENTS.md` under `$OMNIPUS_HOME/skills`, but it
+   classifies only the ONE root path a caller names — it was never wired to judge every
+   file a recursive walk visits underneath a root, and `grep` never called it at all. A
+   widened `grep` must apply the equivalent per-visited-file check during the walk (both
+   the name-match and the content-match hit) — reusing `classifySkillsGate`/
+   `isSkillInstructionFile` against each candidate, not re-deriving the rule.
+   *[corrected 2026-09-26, grill correction (MIN-003) — the walk uses the SINGLE-spelling
+   primitives, not the two-spelling ones named above.]* Both exist in
+   `pkg/tools/resolvepath.go`: `isSkillInstructionFileLeaf(rawPath)` (a lookup of the leaf
+   in `skillInstructionFileLeaves`) and `classifySkillsGateCandidate(candidate, policy)`
+   (a `fspolicy.CoversForDeny` containment test against `registrySkillsRoot()`, plus the
+   project shelf under each mount). The per-visited-file rule is: build the candidate as
+   the carve-out wrapper's own realpath anchor (`carveOutFS.root`, set by
+   `guardCarveOuts` from `resolveRealpathUnderWorkDir`) joined with the walk-relative
+   name. Refuse it when `isSkillInstructionFileLeaf(candidate)` is true and
+   `classifySkillsGateCandidate` returns `skillShelfRegistry`. A project-shelf match is
+   never read-denied, which matches `ResolvePath`'s own D10.3 dispatch. Why single
+   spelling: `classifySkillsGate` checks a second spelling only to defend against a
+   caller-supplied path whose leaf or ancestor is a symlink. Inside the walk there is no
+   such spelling. The anchor is already symlink-resolved, and `filegrep` descends only
+   real directories. It content-scans only regular files: the `!e.Type().IsRegular()`
+   skip in `pkg/filegrep/filegrep.go`, whose comment reads "symlinks are entries the
+   confined FS refuses to traverse". So the as-written and resolved spellings coincide
+   for every file whose content is read. A symlink entry can still yield a NAME hit on its
+   own name; the leaf test covers a symlink named `SKILL.md`. A symlink with any other
+   name discloses only the name the agent itself gave it. The two-spelling form
+   would also cost a `resolveAncestorRealpath` syscall chain per visited file.
+   Order the leaf test first, so the containment test (which stats, via `CoversForDeny`)
+   runs only for files named `SKILL.md`/`AGENT.md`/`AGENTS.md`. The ROOT the caller names
+   (`path`) still goes through `ResolvePath`, which already applies the two-spelling
+   `classifySkillsGate` to it.
+3. **Metadata guard — currently MISSING from `grep` entirely (and not inside `ResolvePath`
+   either), must be added.** `pkg/tools/metadata_guard.go::metadataFileMatch` /
+   `filesystem.go::guardMetadataPath` run only inside `read_file`/`list_directory`'s own
+   `Execute`, AFTER `ResolvePath`, as a separate per-call check — never inside `ResolvePath`
+   itself, and never in `grep` today. Without an equivalent per-visited-file check, a
+   widened `grep` walking an agent's own workspace (which already contains
+   `agents/<id>/`) would let both the name and the content of `SOUL.md`/`HEARTBEAT.md`/
+   `AGENT.md` through — a hit `read_file` categorically refuses. A widened `grep` must
+   apply `metadataFileMatch` per visited file and refuse both the name-match and the
+   content-match the same way.
+4. **Symlink containment inside the walk — closed by construction, not a new check.**
+   `pkg/filegrep`'s engine already refuses to traverse a symlink met while walking an
+   `os.Root`-backed root (`filegrep.go`'s own comment: "symlinks are entries the confined
+   FS refuses to traverse"). The design below opens the new root via `os.OpenRoot` (never
+   a bare `os.DirFS`/unconfined host walk), so the identical syscall-level refusal applies
+   to it automatically — a symlink met during the walk cannot resolve to anywhere
+   `ResolvePath` would refuse the root path itself.
+5. **Audit rows for refusals and searched roots — currently MISSING from `grep`
+   entirely.** Verified: `grep.go` has no `auditLogger` field and never calls
+   `SetAuditLogger`, unlike every other file tool (`filesystem.go`, `shell.go`,
+   `web_serve.go`, …). Two rows are needed: (a) a refusal — `path_audit.go`'s existing
+   `emitPathAccessDenied` (event `path.access_denied`, `ReasonCarveOut`/`ReasonPathInvalid`/
+   `ReasonOutsideWorkspace`/`ReasonSymlinkEscape`), the same event and reason vocabulary
+   `read_file`/`list_directory` already emit, fired when `ResolvePath` refuses the `path`
+   argument; (b) a **new** row recording which root(s) a call actually searched — neither
+   existing emitter fits: `emitPathAccessDenied` is a denial-only shape, and
+   `filesystem.go::emitFileReadAudit` is one row per opened FILE, which would mean one row
+   per matched file for a `grep` call touching hundreds of them, an audit-volume shape
+   nothing else in this codebase does for a bulk read. This ADR decides the shape — one
+   row per `grep` call, `Details: {"roots": [...], "path_arg": <raw path or "">}` — and
+   leaves the exact event constant name (a sibling to `PathAccessDeniedEvent` in
+   `path_audit.go`, not a reuse of `audit.EventFileOp`) to backend-lead at GREEN, following
+   that file's existing naming convention.
+6. **Windows absolute paths.** `validateGrepScope`'s `strings.HasPrefix(scope, "/")` is not
+   Windows-safe (a Windows absolute path is `C:\...` or `\\host\share`, never `/`-prefixed).
+   Because item 1 above retires this check's role in the read-open case anyway (absolute
+   paths are no longer rejected, they are resolved), this bug is retired along with it
+   rather than patched in place — the replacement path resolves through `ResolvePath`,
+   which never hand-rolls its own absolute-path test (it resolves via
+   `resolveRealpathUnderWorkDir`/`filepath`, the same stdlib primitives every other
+   path-taking tool already relies on for platform-correct behaviour). Mount-name matching
+   (`splitGrepScopeMount`, a purely lexical, first-segment comparison with no I/O) is
+   unaffected and still runs first, unchanged.
+
+**Design decision — how an absolute (or otherwise outside-workspace-and-mounts) `path` is
+walked.** `ResolvePath`'s `*PathHandle` is shaped for a single file's I/O (`ReadFile`/
+`ReadDir`/`Open` against one `rel`/`abs`), not for handing off a subtree to a recursive
+walker — so `grep` does not treat the handle as the walk root directly. Instead, mirroring
+the exact pattern `pkg/tools/auto_approve.go::AutoWorkspacePath` already uses (resolve,
+read `RealPath()` — the one documented advisory-string exception in `resolvepath.go`,
+"never hand back a bare string" — then close the handle):
+
+1. Call `ResolvePath(ctx, policy, "grep", "", FSOpList, path)` (or `FSOpRead` —
+   `ResolvePath`'s dispatch treats `FSOpRead`/`FSOpList`/`FSOpSend` identically for this
+   branch, so either is correct; `FSOpList` is recommended since `path` here names a
+   directory to enumerate, matching `list_directory`'s own op choice).
+2. Take the handle's `RealPath()` and `Close()` it immediately — `grep` needs the resolved
+   absolute location, not the handle's own I/O methods.
+3. Open a **fresh, independent** `os.OpenRoot` anchored at that realpath — at the realpath
+   itself if it is a directory, at its PARENT if it names a regular file
+   (`grep.go::resolveScopedRoot` already implements exactly this directory-vs-file
+   dispatch for the mount case; reuse it, do not re-derive it).
+   *[corrected 2026-09-26, grill correction (MIN-001) — the exact call shape, verified
+   against `resolveScopedRoot`'s signature `(container *os.Root, containerHostPath,
+   subPath, namePrefix, label string, policy, opened *[]*os.Root)`.]* The function needs
+   an already-open container plus a `subPath` relative to it: it calls
+   `container.Stat(subPath)`, then either `container.OpenRoot(subPath)` for a directory
+   or the parent-plus-`singleEntryFS` path for a regular file. So:
+   `parent := filepath.Dir(realAbs)`, `container := os.OpenRoot(parent)` (appended to
+   `opened` so `grepRoots`' `closeAll` closes it), then
+   `resolveScopedRoot(container, parent, filepath.Base(realAbs), <namePrefix>, <label>,
+   policy, &opened)`. `filepath.Base` is one segment with no separator, which `os.Root`
+   accepts on every supported platform. `namePrefix` is `filepath.ToSlash(parent)`, so
+   every reported hit is an absolute path the agent can pass straight back to
+   `read_file`. The spec fixes the exact rendering. One edge case: when
+   `filepath.Dir(realAbs) == realAbs` (a volume root, `/` or `C:\`), there is no parent.
+   Open `os.OpenRoot(realAbs)` and wrap it in `guardCarveOuts` directly, the same shape
+   as `grepRoots`' mount branch with `rest == ""`. The D4 bounds keep that walk finite.
+   Two consequences to state rather than leave implied:
+   - Only the immediate parent's `.gitignore`/`.ignore` is preloaded as an ancestor
+     layer, because `LoadAncestorIgnore` walks within the container. A workspace-relative
+     scope preloads every layer up to the workspace root.
+   - The `realAbs` string is advisory (as it already is for `AutoWorkspacePath`), and
+     `carveOutFS` judges by string. So an ancestor of `realAbs` swapped for a symlink
+     between `ResolvePath` and `os.OpenRoot` is the same residual class existing mount
+     roots carry. security-lead confirms it within the gate's dedicated read-boundary
+     check (interview D9).
+4. Wrap the new root in `guardCarveOuts` (gate 1), the new skills-gate wrapper (gate 2) and
+   the new metadata-guard wrapper (gate 3) — the same three wrappers every existing `grep`
+   root already gets or must newly get, so the new root is never a second, more-permissive
+   code path.
+
+This reuses every containment primitive `ResolvePath` and `grep.go` already have; it adds
+no new resolution mechanism, only a new ROOT TYPE fed through the existing wrapper chain.
 
 **D5 — Engine composition (pure Go, no CGo). Ripgrep is the design to copy, not a dep.**
 - Parallel recursive walk: `charlievieth/fastwalk`.
@@ -151,7 +394,11 @@ satisfy all of it, none of which existed when this ADR was drafted:
   must not join the every-turn manifest. Add it to the tier pinning tests.
 - **ADR-077 two-layer policy:** add the tool to the static catalog
   (`pkg/coreagent/core.go::allStaticToolNames`), give it a shipped GLOBAL ceiling
-  default in `pkg/config/defaults.go` (recommended: `allow` — read-only, confined), and
+  default in `pkg/config/defaults.go` (recommended: `allow` — read-only, confined
+  *[amended 2026-09-26 (#920), grill correction (MIN-002): "confined" now describes only
+  the no-`path` default (workspace plus mounts, interview D5). With a `path`, the agent
+  `grep` reaches whatever `ResolvePath` admits for a read, the same reach as `read_file`
+  (see the D4 amendment). The `allow` recommendation itself is unchanged]*), and
   a posture in every core agent's seed. Update the load-bearing pin
   `pkg/coreagent/catalog_count_test.go::catalogSizeToday` (currently 101) following that
   test's own documented procedure, naming the tool in the commit message.
@@ -183,6 +430,10 @@ satisfy all of it, none of which existed when this ADR was drafted:
 - The unified bar renders in every Library folder, kind-switching by context.
 - No index, no background indexer, no staleness machinery — search always reflects the files
   as they are now.
+- *[Added 2026-09-26, #920]* The agent `grep` tool's reach widens to match `read_file`/
+  `list_directory` (D4 amendment above); the human Library search bar's reach does not
+  change. `grep` gains an audit logger, an ADR-072 D10.3 skills-gate check, and a metadata
+  guard it did not carry before — all three new for this tool, not merely widened.
 
 ## 5. Alternatives rejected
 

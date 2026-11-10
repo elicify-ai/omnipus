@@ -1,0 +1,6 @@
+#!/bin/sh
+# ci-machine-halt — the idle-watchdog's poweroff hook (IDLE_WATCHDOG_POWEROFF_CMD) on Fly.
+# It only asks ci-boot.sh (the main process) to stop the machine; ci-boot.sh decides,
+# under runci.sh's run lock, whether exiting is still safe. /tmp is wiped on every stop,
+# so a marker never outlives the machine life that wrote it.
+: > "${CI_BOOT_HALT_MARKER:-/tmp/ci-machine.halt}"

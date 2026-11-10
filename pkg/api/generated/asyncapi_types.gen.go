@@ -14,16 +14,11 @@ import "time"
 // Ensure time is used even if no date-time fields are present.
 var _ = time.Time{}
 
-// AgentSwitchedFrame — Server → client active agent changed. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class not yet assigned by the ADR-057 W5 audit (FR-089).
-type AgentSwitchedFrame struct {
-	AgentId *string `json:"agent_id,omitempty"`
-	Message *string `json:"message,omitempty"`
-	// ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit (FR-089) — see this frame's description.
-	ProducingSessionId *string `json:"producing_session_id,omitempty"`
-	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/AgentSwitchedFrame.yaml.
-	Seq       *int64 `json:"seq,omitempty"`
-	SessionId string `json:"session_id"`
-	Type      string `json:"type"`
+// AgentCreatedFrame — Server → client. Emitted after a new agent is durably persisted (REST POST /api/v1/agents, or the create_agent tool). Scope is deliberately coarse, mirroring LibraryChangedFrame: clients invalidate the whole ['agents'] query and let it refetch. `agent_id` is informational only, never a scoping instruction. Broadcast, not addressed — the originating tab receives it too, where a redundant invalidate is a no-op.
+type AgentCreatedFrame struct {
+	// The newly created agent's ID. Informational only — never a scoping instruction. Clients invalidate the entire ['agents'] listing query regardless of which agent id triggered the frame.
+	AgentId string `json:"agent_id"`
+	Type    string `json:"type"`
 }
 
 // AskUserAnswerFrame — Client → server (askuserquestion-tool-spec v3 §3). The card's submission: either a full answer set (every question answered exactly once — server-validated by askuser.Registry.Submit, first-valid-wins) or cancel:true (the Cancel affordance — selections discarded, submission-free cancelled resume). Canonical copy — keep in sync by hand with components/schemas/AskUserAnswerFrame.yaml.
@@ -59,7 +54,9 @@ type AskUserQuestionCard struct {
 	CreatedAt    string   `json:"created_at"`
 	// When the set carries at least one default_safe question: the instant those questions auto-resolve to their recommendation (created_at + the fixed 30 minutes). Drives the countdown line.
 	DefaultSafeAt *string `json:"default_safe_at,omitempty"`
-	Questions     []struct {
+	// Server-derived origin label captured when the question was created (#1449 C-I6, FR-050), e.g. "for group <name>". Immutable once the card exists. Present together with room_ref when the question was raised by work that answers exactly one group's request (D23, D28); the group then shows the card too. Absent for every other question.
+	OriginLabel *string `json:"origin_label,omitempty"`
+	Questions   []struct {
 		Context     *string `json:"context,omitempty"`
 		DefaultSafe *bool   `json:"default_safe,omitempty"`
 		Header      string  `json:"header"`
@@ -71,6 +68,7 @@ type AskUserQuestionCard struct {
 		Question    string  `json:"question"`
 		Recommended *string `json:"recommended,omitempty"`
 	} `json:"questions"`
+	RoomRef *RoomRef `json:"room_ref,omitempty"`
 	// Transcript session id the set is parked on (session-scoped).
 	SessionId string `json:"session_id"`
 	Status    string `json:"status"`
@@ -78,16 +76,34 @@ type AskUserQuestionCard struct {
 
 // AskUserQuestionFrame — Server → client (askuserquestion-tool-spec v3 §3). Live push of an AskUserQuestion card: emitted at park time (status pending), on a default-safe auto-resolution (auto_resolved grows), and on terminal transitions (answered/cancelled — the SPA collapses the card and unlocks the composer). Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES; card.session_id is the routing key). Canonical copy — keep in sync by hand with components/schemas/AskUserQuestionFrame.yaml.
 type AskUserQuestionFrame struct {
-	Card AskUserQuestionCard `json:"card"`
-	Type string              `json:"type"`
+	Card          AskUserQuestionCard `json:"card"`
+	HistoryOrigin *HistoryEntryOrigin `json:"history_origin,omitempty"`
+	Type          string              `json:"type"`
 }
 
-// AttachSessionFrame — Client → server request to attach to a session and catch it up to the present. #823 catch-up redesign: since_seq/boot_id replace the retired timestamp cursor (`since`, removed). Keep in sync by hand with contracts/components/schemas/AttachSessionFrame.yaml.
+// AttachRoomFrame — Client → server (spec omnipus-system-agent K45; FR-201, FR-213, FR-217). Attach this connection to a room and catch up from after_seq. Carried on the existing hub connection without an agent session. The server answers with room_snapshot (entries after the cursor, in order), then live room_entry / room_member_state / room_meta frames, each with seq. Landing 1, WU-15 handles it; until then the server has no handler for this frame type.
+type AttachRoomFrame struct {
+	// Highest room seq the client already has; 0 for a first load.
+	AfterSeq int64  `json:"after_seq"`
+	RoomId   string `json:"room_id"`
+	Type     string `json:"type"`
+}
+
+// AttachSessionFrame — Client → server. Requests the server to attach to a session and catch it up to the present. A snapshot replays a bounded latest page; an authorized history-only failure can instead deliver typed history_state=unavailable and live_only control catch-up, never a successful history snapshot. Authenticate and resolve session syntax/access/existence before validating history_limit, then history_min_rows, before bind/wipe. Keep inbound-validation on/off refusal parity. #823 catch-up redesign: since_seq/boot_id replace the retired timestamp cursor (`since`, removed). The server answers with the full servable incremental journal (session_state, journal entries after since_seq, catch_up_complete) or a bounded latest snapshot (session_snapshot, current session_state, selected historical frames, one replay done, uncovered active projection, catch_up_complete). Held live frames follow complete in order; replay done alone never completes attach. SessionSnapshotFrame explains why a snapshot is selected. A historical reader keeps/revalidates its own interval instead of passively jumping to the new tail.
 type AttachSessionFrame struct {
-	// #823 review finding 7. The gateway boot ID the SPA last saw for this session. A mismatch forces a snapshot (reason boot_mismatch) regardless of since_seq.
-	BootId    *string `json:"boot_id,omitempty"`
-	SessionId string  `json:"session_id"`
-	// #823 catch-up redesign. Highest per-session sequence number the SPA has already applied for this session. Omit for a first load or an unknown cursor — the server then answers with a snapshot.
+	// Optional. True means this attach is an acknowledgement of what was shown. It does not choose the bound. Defaults to false. A failed, background, or reconnect attach does not write the seen mark. Keep in sync by hand with contracts/asyncapi.yaml's inline AttachSessionFrame.
+	AckAttention *bool `json:"ack_attention,omitempty"`
+	// Optional integer on the acknowledging attach. The saved outcome/entry order, not a new counter. When an acknowledgement carries this number, the server advances the one shared seen mark to the lesser of this number and the current saved order (never lowering it). Absent means do not write the seen mark and do not substitute the current order. Keep in sync by hand with contracts/asyncapi.yaml's inline AttachSessionFrame.
+	AttentionBound *int64 `json:"attention_bound,omitempty"`
+	// #823 review finding 7 — the gateway boot ID the SPA last saw for this session (from a prior session_state frame's own boot_id), sent back so the server can tell a genuinely-servable since_seq apart from one that only LOOKS servable because a restarted gateway's counter has not yet caught back up past it. Omit when unknown (a first load, or an older SPA build that predates this field): the server then falls back to since_seq alone, same as before this field existed. When present and it does not match the server's current boot_id, the server answers with a session_snapshot (reason boot_mismatch) regardless of what since_seq says — a numeric position from a previous gateway process carries no meaning against the current one's counter. Keep in sync by hand with contracts/asyncapi.yaml's inline AttachSessionFrame.
+	BootId *string `json:"boot_id,omitempty"`
+	// Optional snapshot-only drawn-row target; never cuts a servable incremental journal. Validate after session access and before history_min_rows/bind/wipe. Null, wrong type, fraction, overflow or out-of-range values are refused by the session-scoped ErrorFrame message "history_limit must be an integer from 20 to 100", with no successful complete, in both inbound validation modes.
+	HistoryLimit *int `json:"history_limit,omitempty"`
+	// Optional snapshot-only advisory two-screen row floor, from 1 to effective history_limit; default 20. Whole groups/floor override soft page bytes. After a valid history_limit, invalid/null/fraction/overflow/wrong-type values get "history_min_rows must be an integer from 1 to history_limit" before bind/wipe, with no catch_up_complete in either inbound validation mode.
+	HistoryMinRows *int `json:"history_min_rows,omitempty"`
+	// Session ID to attach to and catch up.
+	SessionId string `json:"session_id"`
+	// #823 catch-up redesign. Highest per-session sequence number the SPA has already applied for this session. The server serves only frames with a strictly greater seq ("from since_seq + 1"), so re-attaching is idempotent and O(missed window) instead of O(full session history). Works for every session the client knows about, including ones that were not open in the UI during the outage — the client keeps one cursor per session. Omit for a first load or whenever the session's cursor is not known: the server then answers with a bounded latest snapshot (reason unknown_position). When the requested position can no longer be served from the retained journal, it likewise answers with session_snapshot (reason retention_exceeded or cursor_ahead). First open/follow-latest replaces its staged history page on complete; a historical reader preserves/revalidates its own bounded interval separately. Neither policy alters transport cursor semantics.
 	SinceSeq *int64 `json:"since_seq,omitempty"`
 	Type     string `json:"type"`
 }
@@ -190,6 +206,7 @@ type BrowserDetachFrame struct {
 
 // BrowserHandoverNoticeFrame — Server → client. ADR-085 BROWSER-FR-041/FR-042 visible waiting surface. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES). THIS is the GENERATING copy (C-69: a WebSocket frame's generating copy is the inline schema here, not components/schemas/BrowserHandoverNoticeFrame.yaml, which exists only for the Constraint #8 5-step process and the pkg/gateway/inboundschemas/ sync) — keep both in sync by hand.
 type BrowserHandoverNoticeFrame struct {
+	HistoryOrigin *HistoryEntryOrigin `json:"history_origin,omitempty"`
 	// BROWSER-FR-044 — deterministic id from (sessionID, holdStartedAtUnixNano), reused verbatim for every emission within one unbroken hold; the SAME id is stamped onto the persisted transcript entry.
 	MessageId string `json:"message_id"`
 	SessionId string `json:"session_id"`
@@ -413,8 +430,9 @@ type BrowserWebRTCStateFrame struct {
 
 // CancelFrame — Client → server cancel in-progress turn.
 type CancelFrame struct {
-	SessionId string `json:"session_id"`
-	Type      string `json:"type"`
+	Scope     *string `json:"scope,omitempty"`
+	SessionId string  `json:"session_id"`
+	Type      string  `json:"type"`
 }
 
 // CancelStageFrame — Server → client cancel progress notification (B3). stage MUST be one of three values — SPA validates via isValidFrame() and drops invalid stages. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class not yet assigned by the ADR-057 W5 audit (FR-089).
@@ -439,16 +457,30 @@ type CancelStageFrame struct {
 	} `json:"unreachable,omitempty"`
 }
 
-// CatchUpCompleteFrame — Server → client. #823 catch-up redesign. Terminal frame of an attach_session response, sent once, after every frame the catch-up needed (incremental journal tail, or full snapshot replay plus projection) has been enqueued. Frames published live during the attach are held and flushed only after this frame. Keep in sync by hand with contracts/components/schemas/CatchUpCompleteFrame.yaml.
+// CatchUpCompleteFrame — Server → client. #823 catch-up redesign. Terminal frame of an attach_session response, sent exactly once, after every frame the catch-up needed to send (the incremental journal tail, selected snapshot-page replay plus projection, or live-only controls) has already been enqueued to this connection. Frames published live while the attach was in progress are held (never dropped) and are flushed to the connection only after this frame, so they always arrive strictly after catch-up in seq order. The client uses this frame to: set its cursor for the session to seq; stop treating incoming frames as catch-up; and, when mode is snapshot, resolve whether the interrupted answer (if any) should show "couldn't be finished · Generate again" (see mode).
 type CatchUpCompleteFrame struct {
-	// The gateway process that answered this attach.
+	// The gateway process that answered this attach — same role as SessionStateFrame.boot_id / AttachSessionFrame.boot_id, stored alongside the seeded seq cursor above.
 	BootId *string `json:"boot_id,omitempty"`
-	// Which catch-up path produced this response.
+	// incremental delivers the complete servable journal tail, unaffected by history page limits. snapshot completes the selected bounded history page plus current projection, not lifetime history. live_only completes only authorized current controls/projection and the live cursor after an explicit history-only failure: keep cached history out-of-date, never wipe or claim history reconstruction, replayCompletedForSession, history-loaded/restart/unanswered sweep, successful first-send proof or attention seen acknowledgement. A later incremental catch-up while history_state remains unavailable still is not history-loaded proof. No mode completes if state/projection/socket delivery failed. Held live seq>W follows this frame in order. Replay done is not attach completion.
 	Mode string `json:"mode"`
-	// The session's high-water sequence number this attach was answered at.
-	Seq       int64  `json:"seq"`
+	// The session's high-water sequence number at the moment this attach was answered (the same value as the preceding session_snapshot frame's seq on the snapshot path, or the hub's head at bind time on the incremental path). The client's cursor for this session becomes exactly this value.
+	Seq int64 `json:"seq"`
+	// Session this catch-up response was for.
 	SessionId string `json:"session_id"`
 	Type      string `json:"type"`
+}
+
+// ChatParticipant — Server-made display record of a chat participant (F15). Display only: no ids, no route. Mirrors contracts/components/schemas/ChatParticipant.yaml. `source` is present iff kind=human and `agent` iff kind=agent; they are mutually exclusive. The server enforces this; readers ignore any other combination.
+type ChatParticipant struct {
+	// Present iff kind=agent; absent when kind=human.
+	Agent *struct {
+		AgentId     string `json:"agent_id"`
+		WorkspaceId string `json:"workspace_id"`
+	} `json:"agent,omitempty"`
+	DisplayName string `json:"display_name"`
+	Kind        string `json:"kind"`
+	// Present iff kind=human; absent when kind=agent.
+	Source *string `json:"source,omitempty"`
 }
 
 // CommandSegmentInfo — ADR-092 D3/D4. One segment of the bash command awaiting approval, split with the same splitter and program resolution the bash tool itself uses (splitShellSegments / shellCommandHeadDetailed, through the tool's own D3 evaluator), listed inside ToolApprovalRequiredFrame.segments. Every segment of the command is listed, in order, because one decision approves or denies the whole call; the server records no per-segment grant for a chained command. On Windows the whole command is one segment (FR-041).
@@ -471,6 +503,26 @@ type CommandSegmentInfo struct {
 	SegmentIndex int `json:"segment_index"`
 	// The command prefix a scope="prefix" grant would cover: the program as written plus the leading argument words the grant matches (FR-026). Example: "npm run test" covers "npm run test --watch" but not "npm run testfoo". The recorded grant matches the program by its resolved path (resolved_binary), not by this text. Present iff prefix_available is true.
 	SuggestedPrefix *string `json:"suggested_prefix,omitempty"`
+}
+
+// ContextWindowNoticeFrame — Server → client classified context-window diagnostic (ADR-066 MAJ-CW-009). Live and replay use the same frame with the original transcript entry_id and timestamp. Retained independently of the browser's Verbose chat preference; hidden notices still advance the session cursor.
+type ContextWindowNoticeFrame struct {
+	AgentId       string                         `json:"agent_id"`
+	EntryId       string                         `json:"entry_id"`
+	HistoryOrigin *HistoryEntryOrigin            `json:"history_origin,omitempty"`
+	Notice        ContextWindowNoticeFrameNotice `json:"notice"`
+	// Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+	Seq       *int64 `json:"seq,omitempty"`
+	SessionId string `json:"session_id"`
+	Timestamp string `json:"timestamp"`
+	TurnId    string `json:"turn_id"`
+	Type      string `json:"type"`
+}
+
+// ContextWindowNoticeFrameNotice — Classified context-window diagnostic (ADR-066 MAJ-CW-009). Shared by ContextWindowNoticeFrame.notice and Message.context_window_notice; rendered only when Verbose chat is enabled. Not a model-history message or the transient model-only context notice.
+type ContextWindowNoticeFrameNotice struct {
+	Kind    string `json:"kind"`
+	Message string `json:"message"`
 }
 
 // DelegationFailure — Structured tool-result payload emitted in the `result` field of a tool_call_result frame (status="error") when a delegation tool (spawn / subagent / task_create) is denied by the delegation policy (trust set / mode / depth). The SPA matches on the fixed error="delegation_denied" discriminator, but (policy 2026-07-16) only renders a distinct delegation-failure block in verbose chat or an ActivityPanel step context — the default thread presentation is the calling agent's own narration of the denial, not a dedicated SPA-rendered block. The frame's top-level `error` field carries the same `reason`.
@@ -506,8 +558,12 @@ type DevicePairingResponseFrame struct {
 
 // DoneFrame — Server → client turn complete. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (a) per the ADR-057 W5 audit (FR-089) — genuinely child-turn-produced.
 type DoneFrame struct {
+	// session-core FR-039 / C-GOAL. The goal this producing turn was dispatched under (captured at turn start), spread onto the done frame so a no-stream turn's bubble (created from this frame's message_id, not from tokens) still joins to the exact keyed goal criteria. Absent means UNKNOWN association.
+	GoalId *string `json:"goal_id,omitempty"`
 	// #823 catch-up redesign. The id of the turn's last assistant message.
 	MessageId *string `json:"message_id,omitempty"`
+	// Spec omnipus-system-agent K33 (FR-202, FR-215). Present when this main-session entry is a room request to this agent or this agent's answer into a room, so live, history and replay render the same collapsed entry.
+	RoomRef *RoomRef `json:"room_ref,omitempty"`
 	// Per-session sequence number of this frame (#823 catch-up redesign), published only after the turn's transcript entry is durably persisted. Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/DoneFrame.yaml.
 	Seq       *int64     `json:"seq,omitempty"`
 	SessionId string     `json:"session_id"`
@@ -517,17 +573,21 @@ type DoneFrame struct {
 	Type   string  `json:"type"`
 }
 
-// DoneStats — Per-turn statistics in a done frame. additionalProperties are allowed for replay extras (frames_emitted, orphan_count, etc.).
+// DoneStats — Per-turn statistics in a done frame, with an optional absolute session_tokens_total when authoritative usage is available. Omitted session_tokens_total means unknown, never zero. additionalProperties are allowed for replay extras (frames_emitted, orphan_count, etc.).
 type DoneStats struct {
 	Cost                     *float64 `json:"cost,omitempty"`
 	DuplicateToolCallIdCount *float64 `json:"duplicate_tool_call_id_count,omitempty"`
 	DurationMs               *float64 `json:"duration_ms,omitempty"`
-	FramesEmitted            *float64 `json:"frames_emitted,omitempty"`
-	OrphanCount              *float64 `json:"orphan_count,omitempty"`
-	ReplayError              *bool    `json:"replay_error,omitempty"`
-	Tokens                   *float64 `json:"tokens,omitempty"`
-	// Deprecated (#823 catch-up redesign, Q5): the gateway never drops frames under backpressure now (WS close 4008 + reconnect instead). Never set.
-	TokensDropped *float64 `json:"tokens_dropped,omitempty"`
+	// Effort levels spec (FR-058). The answering candidate's effort record. Absent when nothing was chosen and nothing was sent. Live-turn field: the replay-terminating done frame omits it.
+	Effort        *EffortRecord `json:"effort,omitempty"`
+	FramesEmitted *float64      `json:"frames_emitted,omitempty"`
+	OrphanCount   *float64      `json:"orphan_count,omitempty"`
+	// Effort levels spec (FR-024). Display-only turn sum of the reasoning-token counts reported by this turn's provider calls (a subset of output tokens, never booked into any statistic). Absent = no call reported a count; 0 = reported zero. Live-turn field: the replay-terminating done frame omits it.
+	ReasoningTokens *int  `json:"reasoning_tokens,omitempty"`
+	ReplayError     *bool `json:"replay_error,omitempty"`
+	// Authoritative absolute session-wide consumed-token total, with the same meaning as SessionStats.tokens_total. Present on live turn completion when authoritative usage is available; omitted on replay-terminating done frames. Omitted means unknown, never zero. Not a per-turn delta: tokens remains per-turn usage, and frames_emitted remains replay-only diagnostics.
+	SessionTokensTotal *int     `json:"session_tokens_total,omitempty"`
+	Tokens             *float64 `json:"tokens,omitempty"`
 	// ADR-087 D2 (finding #10). Mirrors Message.truncation_reason for the live done frame, so a turn cut off while the user is still watching renders the notice immediately instead of only after reload/reattach via replay. Only present when true. Absent on a normal turn.
 	Truncated            *bool    `json:"truncated,omitempty"`
 	TruncatedResultCount *float64 `json:"truncated_result_count,omitempty"`
@@ -536,14 +596,27 @@ type DoneStats struct {
 	TurnFailed       *bool   `json:"turn_failed,omitempty"`
 }
 
+// EffortRecord — Effort levels spec (FR-058). The per-turn effort record of the answering candidate. Keep in sync by hand with contracts/components/schemas/EffortRecord.yaml. Never carries reasoning text or signature material.
+type EffortRecord struct {
+	Chosen   *string `json:"chosen,omitempty"`
+	Model    *string `json:"model,omitempty"`
+	Provider *string `json:"provider,omitempty"`
+	Reason   *string `json:"reason,omitempty"`
+	Sent     *string `json:"sent,omitempty"`
+}
+
 // ErrorFrame — Server → client. Error notification. May be global (no session_id, e.g., auth failure) or session-scoped. The SPA displays the message as a toast or inline error. Does NOT terminate the WebSocket connection.
 type ErrorFrame struct {
+	// The client_message_id of the user message this error is about. With first_message_error it is the first-send outcome. Without first_message_error it marks a message-scoped refusal: the named message was refused (for example an @-recipient send) and the error ends no turn, so a client must not treat it as the end of the chat's running turn.
+	ClientMessageId *string `json:"client_message_id,omitempty"`
+	// Ordinary ID-bearing first-send outcome. Requires client_message_id. not_saved proves no user entry was written; delivery_unknown means bytes may have reached disk but durable delivery cannot be confirmed. answer_not_started means the entry is durably saved but turn admission failed, and requires its confirmed session_id. General errors and workspace-setup kickoffs omit these first-send fields.
+	FirstMessageError *string `json:"first_message_error,omitempty"`
 	// Human-readable error description.
 	Message string        `json:"message"`
 	Payload *ErrorPayload `json:"payload,omitempty"`
 	// Per-session sequence number of this frame (#823 catch-up redesign). Only meaningful when session_id is set — a global error has no session to sequence. Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/ErrorFrame.yaml.
 	Seq *int64 `json:"seq,omitempty"`
-	// Session this error relates to. Optional: global errors (auth, connection) are not tied to a specific session.
+	// Session this error relates to. Optional: global errors (auth, connection) are not tied to a specific session. A message-scoped refusal (client_message_id set, no first_message_error) of a message sent into an existing chat carries that chat. A send that names no chat (the first message of a new chat) has none to name, so its errors carry no session_id.
 	SessionId *string `json:"session_id,omitempty"`
 	Type      string  `json:"type"`
 }
@@ -567,6 +640,7 @@ type FileExistsRefusal struct {
 
 // GoalOutcomeFrame — Server → client. The goal outcome line (founder decision 2026-09-14): one push per goal ENDING (met / round limit reached / stopped by the user / other). Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES). Emitted live by the terminal transition right after it persists the SAME outcome as a `type: system, system_subtype: goal_outcome` transcript entry, and re-emitted as this same frame type by pkg/gateway/replay.go from that entry (discriminating on the stamped system_subtype, never on content). THIS is the GENERATING copy; components/schemas/GoalOutcomeFrame.yaml exists only for the Constraint #8 5-step process and the inboundschemas sync — keep both in sync by hand.
 type GoalOutcomeFrame struct {
+	HistoryOrigin *HistoryEntryOrigin `json:"history_origin,omitempty"`
 	// Stable id for THIS ending, minted once by the writer and stamped verbatim onto both the persisted transcript entry's `id` and every frame for it (live and replay), e.g. `goal-outcome-<goal_id>-<terminal unix nanos>` — goal_id alone is not unique per ending (a task-owned goal can be re-run and end again). The SPA inserts at most one line per id.
 	MessageId string                  `json:"message_id"`
 	Outcome   GoalOutcomeFrameOutcome `json:"outcome"`
@@ -576,16 +650,17 @@ type GoalOutcomeFrame struct {
 	Type      string `json:"type"`
 }
 
-// GoalOutcomeFrameOutcome — Hand-synced WS copy of contracts/components/schemas/GoalOutcome.yaml (the REST/transcript carrier — see it for every field's meaning). Named differently because pkg/api/generated holds the OpenAPI and AsyncAPI Go types in one package and cannot declare `GoalOutcome` twice. Any field edit MUST be mirrored in GoalOutcome.yaml.
+// GoalOutcomeFrameOutcome — Hand-synced WS copy of contracts/components/schemas/GoalOutcome.yaml (the REST/transcript carrier — see it for every field's meaning). Named differently because pkg/api/generated holds the OpenAPI and AsyncAPI Go types in one package and cannot declare `GoalOutcome` twice. Any field edit MUST be mirrored in GoalOutcome.yaml. An ending is stored once per transcript: helper and parent have different message ids but share the goal id, ending, rounds and Judge reason.
 type GoalOutcomeFrameOutcome struct {
-	CriteriaTotal *int    `json:"criteria_total,omitempty"`
-	EndedAt       string  `json:"ended_at"`
-	Ending        string  `json:"ending"`
-	GoalId        string  `json:"goal_id"`
-	GoalText      string  `json:"goal_text"`
-	JudgeReason   *string `json:"judge_reason,omitempty"`
-	MaxRounds     int     `json:"max_rounds"`
-	RoundsUsed    int     `json:"rounds_used"`
+	CriteriaTotal *int   `json:"criteria_total,omitempty"`
+	EndedAt       string `json:"ended_at"`
+	// WHY the goal ended (mirror of components/schemas/GoalOutcome.yaml `ending` — edit both together). `stopped_by_user` is an EXPLICIT user ending only: the owning session's `/goal clear` or an authorized parent's `delegate(action="clear_goal")`. NEVER written for a session lifecycle transition — a Stop, timeout, plan stop, restart or failure keeps the goal record active.
+	Ending      string  `json:"ending"`
+	GoalId      string  `json:"goal_id"`
+	GoalText    string  `json:"goal_text"`
+	JudgeReason *string `json:"judge_reason,omitempty"`
+	MaxRounds   int     `json:"max_rounds"`
+	RoundsUsed  int     `json:"rounds_used"`
 }
 
 // GoalStatusFrame — Server → client. Status push for a session's active /goal loop (ADR-049 D6/D7/US-8; state enum + goal_id extended by ADR-053 §Contract Surface — "Pill-state enum"/R§8.10). Emitted on round completion, state change, and clear/stop. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES). Canonical copy — keep in sync by hand with components/schemas/GoalStatusFrame.yaml. Class not yet assigned by the ADR-057 W5 audit (FR-089).
@@ -657,14 +732,52 @@ type GoalStatusFrame struct {
 	Type  string `json:"type"`
 }
 
+// HelperEventFrame — Server to client. Immutable helper-event row addressed to one transcript. Emitted live after save and replayed by the stamped helper_event subtype. Keep components/schemas/HelperEventFrame.yaml in sync.
+type HelperEventFrame struct {
+	HelperEvent   HelperEventFrameEvent `json:"helper_event"`
+	HistoryOrigin *HistoryEntryOrigin   `json:"history_origin,omitempty"`
+	MessageId     string                `json:"message_id"`
+	Seq           *int64                `json:"seq,omitempty"`
+	SessionId     string                `json:"session_id"`
+	Type          string                `json:"type"`
+}
+
+// HelperEventFrameEvent — Hand-synced WS copy of components/schemas/HelperEvent.yaml. Keep both shapes identical.
+type HelperEventFrameEvent struct {
+	CreatedAt       string  `json:"created_at"`
+	GoalId          *string `json:"goal_id,omitempty"`
+	HelperSessionId string  `json:"helper_session_id"`
+	HelperTitle     *string `json:"helper_title,omitempty"`
+	Kind            string  `json:"kind"`
+	Text            string  `json:"text"`
+}
+
+// HistoryEntryOrigin — Local ownership of an entry-derived historical replay frame (chat history paging D2/D4). Required by the producer for every frame derived from a selected persisted entry; optional on general frame schemas because live, unsequenced non-history and session-only rehydration copies can have no persisted source. Not a transport cursor, authorization grant or reversible archive address. No frame ordinals or manifest.
+type HistoryEntryOrigin struct {
+	// Original recorded entry ID when nonempty and valid; otherwise omitted.
+	EntryId *string `json:"entry_id,omitempty"`
+	// Same-session occurrence fingerprint; canonical unpadded base64url SHA-256.
+	Position string `json:"position"`
+	// Original recorded turn ID of the persisted source record (its own TranscriptEntry.TurnID) when nonempty; omitted when that record has no recorded turn, which means unknown. Never filled from the active turn, session state, a neighbouring record or any inference (chat-history paging spec, D1 S11d).
+	TurnId *string `json:"turn_id,omitempty"`
+}
+
+// HistoryResultPreview — Read-time display marker for a saved tool result whose JSON encoding exceeds 51,200 bytes, emitted only on a history-origin tool_call_result frame of a snapshot replay page (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)", A2.2). Distinct from ToolResultRef (`_ref`, live offload store) and TruncatedResult (`_truncated`, not retrievable). The full value is read through REST getSessionHistoryEntry by the frame's history_origin position plus call_id. The UTF-8 length of `preview` is at most 4,096 bytes; that byte rule is enforced at the real server and browser boundaries, maxLength is only the character-count bound. Keep in sync by hand with contracts/components/schemas/HistoryResultPreview.yaml.
+type HistoryResultPreview struct {
+	HistoryPreview    bool   `json:"_history_preview"`
+	OriginalSizeBytes int    `json:"original_size_bytes"`
+	Preview           string `json:"preview"`
+}
+
 // JudgeVerdictFrame — Server → client. Live push of a judge adjudication (ADR-049 D2/D4/NFR-5) — the WS carrier of a judge verdict. The other carrier is the persisted session-transcript entry (Message.type=judge_verdict / Message.verdict, contract C12); both carry the same shape so they cannot silently disagree.
 type JudgeVerdictFrame struct {
-	Id           string `json:"id"`
-	JudgeAgentId string `json:"judge_agent_id"`
-	JudgedAt     string `json:"judged_at"`
-	Met          bool   `json:"met"`
-	Model        string `json:"model"`
-	PerCriterion []struct {
+	HistoryOrigin *HistoryEntryOrigin `json:"history_origin,omitempty"`
+	Id            string              `json:"id"`
+	JudgeAgentId  string              `json:"judge_agent_id"`
+	JudgedAt      string              `json:"judged_at"`
+	Met           bool                `json:"met"`
+	Model         string              `json:"model"`
+	PerCriterion  []struct {
 		CriterionId string `json:"criterion_id"`
 		Evidence    []struct {
 			Part   string  `json:"part"`
@@ -715,18 +828,30 @@ type KnowledgeIndexProgressFrame struct {
 
 // LLMError — Translated provider/LLM error safe for the live WebSocket boundary.
 type LLMError struct {
+	// Error code. `judge_conclusion_failed` is an operational notice that the Judge's conclusion could not be fully saved or delivered; it ends no turn, so a client must not treat it as the end of the chat's running turn (issue #1306).
 	Code string `json:"code"`
 	// Live-only technical detail; never persisted or replayed.
-	Detail    *string `json:"detail,omitempty"`
-	Message   string  `json:"message"`
-	Retryable bool    `json:"retryable"`
+	Detail *string `json:"detail,omitempty"`
+	// Structured facts about the FAILING attempt, assembled server-side (provider-messages spec §7.1 item 1). All fields optional — facts absent means the catalogue sentence renders. Deliberately closed to provider/model/request_id ONLY — no retry_after_seconds, no retry_at, no attempts, no max_attempts (OBS-103 — the SPA has no consumer for retry facts on the error frame; retry timing lives on the provider_retry frame, whose consumer is the indicator), no billing_url (D6), no error_id (no fetch path — §5/D1).
+	Facts *struct {
+		Model     *string `json:"model,omitempty"`
+		Provider  *string `json:"provider,omitempty"`
+		RequestId *string `json:"request_id,omitempty"`
+	} `json:"facts,omitempty"`
+	Message string `json:"message"`
+	// Server-authored subtype/trust flag (MAJ-104, C-14) — when true, `message` carries the server-assembled provider-message sentence and the SPA renders it; when absent or false, the SPA keeps today's catalogue-copy rendering keyed on `code` (e.g. the own-limiter's internal rate_limited text — RG-2). Set at write time by the agent's assembly path; the replay shape carries the same flag so a reloaded session renders identically.
+	ProviderMessage *bool `json:"provider_message,omitempty"`
+	Retryable       bool  `json:"retryable"`
 }
 
 // LLMErrorReplay — Replay-safe translated provider/LLM error with live-only detail omitted.
 type LLMErrorReplay struct {
-	Code      string `json:"code"`
-	Message   string `json:"message"`
-	Retryable bool   `json:"retryable"`
+	// Error code. `judge_conclusion_failed` is an operational notice that the Judge's conclusion could not be fully saved or delivered; it ends no turn, so a client must not treat it as the end of the chat's running turn (issue #1306).
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	// Server-authored subtype/trust flag (MAJ-104, C-14), replay twin of the live LLMError flag — when true, `message` carries the persisted provider-message sentence and the SPA renders it after reload; when absent or false, catalogue copy keyed on `code`, byte-identical to today (RG-2). No `facts` object on the replay shape (§7.1 item 3 — the persisted message itself carries the provider naming, C-13).
+	ProviderMessage *bool `json:"provider_message,omitempty"`
+	Retryable       bool  `json:"retryable"`
 }
 
 // LibraryChangedFrame — Server → client (D-107, cross-tab listing invalidation). Emitted by the Library REST write handlers after a mutation has landed, so every OTHER connected tab can drop its stale folder listing and refetch. Scope is deliberately coarse: clients invalidate every cached listing query for the named workspace; `path` and `reason` are informational (debugging, future refinement), never a scoping instruction. Broadcast, not addressed — the originating tab receives it too, where its own local invalidation makes the redundant one a no-op.
@@ -755,6 +880,41 @@ type LoopStatusFrame struct {
 	Type  string `json:"type"`
 }
 
+// MailPanelObserverAckFrame — Server → client: the observer is bound to this authenticated socket/session and the authorized workspace (ADR-20261001 "Mail panel presence" row). Until this ack arrives the panel keeps conservative request-scoped behaviour. Connection-scoped; no session_id, no replay, no persistence — presence dies with the connection.
+type MailPanelObserverAckFrame struct {
+	// The accepted action this ack confirms.
+	Action string `json:"action"`
+	// The bound observer's opaque ID (echo).
+	ObserverId string `json:"observer_id"`
+	Type       string `json:"type"`
+	// The workspace the observer is now bound to (echo).
+	WorkspaceId string `json:"workspace_id"`
+}
+
+// MailPanelObserverErrorFrame — Server → client: the presence request was refused with a safe, closed-class reason (ADR-20261001 "Mail panel presence" row). The panel falls back to conservative request-scoped connections — it never retries the open in a loop and never treats the refusal as authorization. Connection-scoped; no session_id.
+type MailPanelObserverErrorFrame struct {
+	// Closed-class refusal reason. unauthorized_workspace = this authenticated connection is not authorized for that workspace — never a hint about what WOULD be authorized. malformed_frame = the frame failed validation.
+	Code string `json:"code"`
+	// Human-readable message, safe to display; no raw error text.
+	Error string `json:"error"`
+	// The refused observer's opaque ID (echo).
+	ObserverId *string `json:"observer_id,omitempty"`
+	Type       string  `json:"type"`
+	// The refused workspace (echo).
+	WorkspaceId *string `json:"workspace_id,omitempty"`
+}
+
+// MailPanelObserverFrame — Client → server Mail panel presence open/close (ADR-20261001 "Mail panel presence" row; mail-live-access-landing-order register row 5 — W0 is the single publisher, w5-integration implements the gateway handlers). Opaque per-panel observer IDs: multiple tabs carry distinct observers, and each panel instance mints a fresh one. Connection-scoped, not session-scoped — no session_id, like LibraryChangedFrame. The server binds the observer to THIS authenticated connection and the currently authorized workspace; REST requests can never claim ownership using another socket/user's ID. Explicit close, socket disconnect and logout revoke exactly that connection's observers — independent watcher/tool work is never interrupted. Until presence is acknowledged the panel conservatively assumes request-scoped connections. No new data-refresh heartbeat or cache-push frame exists and none may be added here: the watcher stays the only closed-panel notice surface (founder decision; ADR P1.1).
+type MailPanelObserverFrame struct {
+	// open = this panel instance is open (its observer may retain pooled panel sockets while it stays open). close = it closed — that observer's idle panel sockets close immediately and its in-flight work is cancelled; active sockets close when the last dependent request completes.
+	Action string `json:"action"`
+	// Opaque per-panel observer identifier — minted fresh per panel instance by the client, meaningless to anything but presence binding. Never reused across tabs, never an authorization credential.
+	ObserverId string `json:"observer_id"`
+	Type       string `json:"type"`
+	// Workspace whose Mail panel is open — must be one this authenticated connection is authorized for; the server refuses otherwise with mail_panel_observer_error.
+	WorkspaceId string `json:"workspace_id"`
+}
+
 // MarshalErrorResult — Sentinel for tool results that failed json.Marshal.
 type MarshalErrorResult struct {
 	MarshalError string `json:"_marshal_error"`
@@ -762,7 +922,8 @@ type MarshalErrorResult struct {
 
 // MediaFrame — Server → client media attachments. parts MUST be a non-empty array (never null) — nil-safety contract to prevent parts.map() crash. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (a) per the ADR-057 W5 audit (FR-089) — genuinely child-turn-produced.
 type MediaFrame struct {
-	Parts []MediaPart `json:"parts"`
+	HistoryOrigin *HistoryEntryOrigin `json:"history_origin,omitempty"`
+	Parts         []MediaPart         `json:"parts"`
 	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/MediaFrame.yaml.
 	Seq       *int64 `json:"seq,omitempty"`
 	SessionId string `json:"session_id"`
@@ -781,22 +942,31 @@ type MediaPart struct {
 // MessageFrame — Client → server user chat message. Omit session_id to start a new session; include to continue an existing one. content must always be present as a key, but MAY be an empty string when media is also present and non-empty — an attachment-only send legitimately has no caption (UAT Issue 5). The anyOf below enforces the actual invariant: content has at least 1 character, OR media has at least 1 entry — a message with neither is still rejected.
 type MessageFrame struct {
 	AgentId *string `json:"agent_id,omitempty"`
-	// ADR-092 per-chat Auto-approve choice for the chat this message mints — meaningful only when session_id is absent (this frame is minting a new session); ignored when session_id is present, since an existing session's mode is changed exclusively via session_mode_update. Same value space and null semantics as SessionModeUpdateFrame.auto_approve: true loosens Auto-approve on for this one new chat (may loosen past the resolved agent x global default, because a human is present), false tightens it off, null/absent leaves it unset (the chat follows whatever the agent x global default resolves to). Carrying the choice on the minting message itself — instead of a follow-up session_mode_update sent after the session_started ack — is what lets the choice gate the new chat's very first ask-policy tool call: a post-ack send can race the agent loop's own first LLM round trip.
+	// ADR-092 per-chat Auto-approve choice for the chat this message mints — meaningful only when session_id is absent (this frame is minting a new session); ignored when session_id is present, since an existing session's mode is changed exclusively via session_mode_update. Same value space and null semantics as SessionModeUpdateFrame.auto_approve: true loosens Auto-approve on for this one new chat (may loosen past the global default, because a human is present), false tightens it off, null/absent leaves it unset (the chat follows whatever the global default resolves to). Carrying the choice on the minting message itself — instead of a follow-up session_mode_update sent after the session_started ack — is what lets the choice gate the new chat's very first ask-policy tool call: a post-ack send can race the agent loop's own first LLM round trip.
 	AutoApprove *bool `json:"auto_approve,omitempty"`
 	// Client-generated correlation id echoed by MessageStatusFrame. Optional for compatibility with older clients.
 	ClientMessageId *string `json:"client_message_id,omitempty"`
 	Content         string  `json:"content"`
 	// Optional media:// refs for files the user attached to this message (e.g. images uploaded via POST /api/v1/upload). The server threads each ref into the LLM content array as a multimodal content block so the agent can see the attachment. Empty or omitted for text-only messages.
 	Media []string `json:"media,omitempty"`
-	// Optional per-message metadata. Typed keys today: `model_name` (Phase 1, FR-010) — when the user picks a model in the chat composer, the picker value is sent as `metadata.model_name` so the server routes this turn to the chosen model, falling back to the agent's `model` config when absent; `workspace_id` — the active workspace this chat belongs to; and `workspace_setup_kickoff` (boolean) — a one-time marker that this message is the workspace setup kickoff for `metadata.workspace_id`.
-	Metadata  map[string]any `json:"metadata,omitempty"`
-	SessionId *string        `json:"session_id,omitempty"`
-	Type      string         `json:"type"`
+	// Optional per-message metadata. Typed keys today: `model_name` (Phase 1, FR-010) — when the user picks a model in the chat composer, the picker value is sent as `metadata.model_name` so the server routes this turn to the chosen model, falling back to the agent's `model` config when absent; `workspace_id` — the active workspace this chat belongs to; and `workspace_setup_kickoff` (boolean) — a retired client kickoff marker that the server refuses (see the property below).
+	Metadata map[string]any `json:"metadata,omitempty"`
+	// Optional request to a peer agent: the {workspace_id, agent_id} pair the user @-addressed from the chat named by session_id. Valid only together with session_id; the server refuses it otherwise. Mirrors contracts/components/schemas/AgentAddress.yaml.
+	Recipient *struct {
+		AgentId     string `json:"agent_id"`
+		WorkspaceId string `json:"workspace_id"`
+	} `json:"recipient,omitempty"`
+	SessionId *string `json:"session_id,omitempty"`
+	Type      string  `json:"type"`
+	// Spec omnipus-system-agent K8 (FR-012). Optional target data naming the workflow (W1 / W18) and the target workspace the user picked on a screen. Data only, never an instruction.
+	WorkflowStart *WorkflowStart `json:"workflow_start,omitempty"`
 }
 
-// MessageStatusFrame — Server → client delivery status for one user message. Session-scoped. received follows durable transcript persistence; working follows successful turn admission; failed means processing stopped before admission. Emitted only when the client supplied client_message_id.
+// MessageStatusFrame — Server → client delivery status for one user message. Session-scoped. received follows durable transcript persistence; working follows successful turn admission; failed means processing stopped before admission; discarded (reason stopped_before_delivery) means Stop discarded the input before delivery (session-core FR-024); held means an @-recipient request was accepted but the recipient is stopped, so it waits until the recipient runs again (not a failure, not terminal). Emitted only when the client supplied client_message_id.
 type MessageStatusFrame struct {
 	ClientMessageId string `json:"client_message_id"`
+	// Present only with state=discarded: why the input never reached the agent (session-core FR-024).
+	Reason *string `json:"reason,omitempty"`
 	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/MessageStatusFrame.yaml.
 	Seq       *int64 `json:"seq,omitempty"`
 	SessionId string `json:"session_id"`
@@ -810,7 +980,7 @@ type NotificationFrame struct {
 	Body        *string `json:"body,omitempty"`
 	CreatedAtMs int64   `json:"created_at_ms"`
 	Id          string  `json:"id"`
-	// The event class. Mirrors Notification.type in openapi.yaml. "knowledge_drift" (ADR-067 FR-038a) means the drift check found a knowledge base's search index out of step with the folder on disk and the index is being rebuilt; it is never emitted for a healthy check.
+	// The event class. Mirrors Notification.type in openapi.yaml. "knowledge_drift" (ADR-067 FR-038a) means the drift check found a knowledge base's search index out of step with the folder on disk and the index is being rebuilt; it is never emitted for a healthy check. "stop_notice" is an operational Stop outcome (already-approved request, partial cleanup, or Stop did not complete). It is a non-terminal header notification and must not be sent as a chat ErrorFrame.
 	NotificationType string  `json:"notification_type"`
 	Read             bool    `json:"read"`
 	ScheduleId       *string `json:"schedule_id,omitempty"`
@@ -822,6 +992,8 @@ type NotificationFrame struct {
 
 // PermissionDenied — Structured tool-result payload emitted when a tool call is refused for permission reasons. TWO producers share this one shape and one discriminator (issue #618): pkg/agent's tool-policy denial path (approval outcomes — user/timeout/saturated/policy_denied/no_approver_configured/... — and the headless ask-policy auto-deny) and pkg/tools' filesystem-scope denial path (ResolvePath rejecting a path outside the effective scope, or on a protected carve-out). Before this schema existed, both producers hand-built this JSON with fmt.Sprintf's %q verb, which is Go-string quoting, not JSON quoting, and silently produced invalid JSON for a path or approval-tool name containing invalid UTF-8 or a C0/C1 control byte outside \n\t\r. The two producers do NOT reach the SPA the same way. pkg/tools' filesystem-scope producer (PermissionDeniedResult) writes this payload as the tool's ForLLM verbatim, which flows through the normal tool_call_result frame (live) and the persisted ToolCall.Error field (replay) — parseStructuredToolFailure lifts `reason` into the frame's top-level `error` field there, and the SPA can render it. pkg/agent's tool-policy producer (denialPayloadJSON) embeds the SAME JSON shape as plain message content (providers.Message{Role:"tool"/"system"}) on a EventKindToolExecSkipped event, never inside a tool_call_result frame's `result`; the persisted transcript entry for that denial (settleAskToolCallTranscript) records status "denied" with a boolean `Result["error"]=true`, not this typed payload, and leaves ToolCall.Error empty. parseStructuredToolFailure is therefore never invoked on the tool-policy producer's bytes — that path is LLM-facing only today; no SPA rendering claim should be made for it without a corresponding code change.
 type PermissionDenied struct {
+	// Optional machine-readable marker, added by #1284 fix round 1. Present with exactly this value when the refusal is Omnipus's protected-internal-file denial: the path is inside the Omnipus data directory's protected set (sessions, transcripts, tasks, memory, agent definitions, credentials, the master key, audit and gateway state) and is never grantable in any permission mode — God Mode included — so the consumer can distinguish it from an ordinary workspace-scope denial without parsing the reason text. Absent for every other permission denial. Set by the filesystem-scope producer (ResolvePath's carve-out refusal) and by bash's protected-operand command check.
+	Code *string `json:"code,omitempty"`
 	// Fixed discriminator the SPA matches on.
 	Error string `json:"error"`
 	// Model-facing guidance on how to proceed (e.g. "do not retry; stop and report the blocker").
@@ -854,6 +1026,62 @@ type PongFrame struct {
 	Type string `json:"type"`
 }
 
+// ProviderFallbackFrame — Server → client (provider-messages spec §7.1 item 3). Announces that a turn was answered by the fallback model because another candidate could not answer — the frame itself does NOT distinguish hard provider trouble from a cooldown skip (that distinction lives only in the once-per-pair note rate and the session transcript, C-18/MIN-103). No raw error text and no `reason` field (OBS-103) — unavailable_code is the one field that varies rendered text (D12 hint gate). Keep in sync by hand with contracts/components/schemas/ProviderFallbackFrame.yaml.
+type ProviderFallbackFrame struct {
+	AnsweredModel string `json:"answered_model"`
+	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/ProviderFallbackFrame.yaml.
+	Seq              *int64 `json:"seq,omitempty"`
+	SessionId        string `json:"session_id"`
+	TurnId           string `json:"turn_id"`
+	Type             string `json:"type"`
+	UnavailableCode  string `json:"unavailable_code"`
+	UnavailableModel string `json:"unavailable_model"`
+}
+
+// ProviderFallbackNote — Server → client. Replay carrier for a persisted fallback-model note (provider-messages spec §7.1 item 2, MAJ-010/C-17) — the note is persisted to the session transcript after the assistant answer (MIN-103/FB-2) and must not be a live-only orphan; on session reload the replay path emits this frame so the reloaded session renders the same note. The LIVE announcement is the separate provider_fallback frame. No seq (ReplayErrorFrame/ReplayMessageFrame pattern). Keep in sync by hand with contracts/components/schemas/ProviderFallbackNote.yaml.
+type ProviderFallbackNote struct {
+	AnsweredModel    *string             `json:"answered_model,omitempty"`
+	EntryId          string              `json:"entry_id"`
+	HistoryOrigin    *HistoryEntryOrigin `json:"history_origin,omitempty"`
+	Message          string              `json:"message"`
+	SessionId        string              `json:"session_id"`
+	Timestamp        string              `json:"timestamp"`
+	Type             string              `json:"type"`
+	UnavailableCode  *string             `json:"unavailable_code,omitempty"`
+	UnavailableModel *string             `json:"unavailable_model,omitempty"`
+}
+
+// ProviderRetryFrame — Server → client (provider-messages spec §7.1 item 3). Announces an automatic provider rate-limit retry inside the turn's fallback-chain execution — the candidate about to be re-called, when it will be called (retry_at), and which attempt of max_attempts this is (C-8). C-2 (the #711 closure constraint) — built from NAMED FIELDS ONLY, never an `error` field or raw provider text; the countdown is computed from retry_at and sent_at client-side (C-11). Keep in sync by hand with contracts/components/schemas/ProviderRetryFrame.yaml.
+type ProviderRetryFrame struct {
+	Attempt           int    `json:"attempt"`
+	ErrorCode         string `json:"error_code"`
+	MaxAttempts       int    `json:"max_attempts"`
+	Model             string `json:"model"`
+	Provider          string `json:"provider"`
+	RetryAfterSeconds int    `json:"retry_after_seconds"`
+	RetryAt           string `json:"retry_at"`
+	SentAt            string `json:"sent_at"`
+	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/ProviderRetryFrame.yaml.
+	Seq       *int64 `json:"seq,omitempty"`
+	SessionId string `json:"session_id"`
+	TurnId    string `json:"turn_id"`
+	Type      string `json:"type"`
+}
+
+// ProviderStatusFrame — Server → client (issues #1478 and #1280). The state of the model-provider call a running turn is waiting on: `waiting` (nothing has arrived since silent_since; the silence limit ends the call at stall_at when known), `responding` (data arrives again, or the call returned, after a `waiting` notice), `recovered` (the call succeeded after `retries` automatic retries). Named fields only, never provider text. Keep in sync by hand with contracts/components/schemas/ProviderStatusFrame.yaml.
+type ProviderStatusFrame struct {
+	Retries *int   `json:"retries,omitempty"`
+	SentAt  string `json:"sent_at"`
+	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/ProviderStatusFrame.yaml.
+	Seq         *int64  `json:"seq,omitempty"`
+	SessionId   string  `json:"session_id"`
+	SilentSince *string `json:"silent_since,omitempty"`
+	StallAt     *string `json:"stall_at,omitempty"`
+	State       string  `json:"state"`
+	TurnId      string  `json:"turn_id"`
+	Type        string  `json:"type"`
+}
+
 // RateLimitFrame — Server → client rate limit applied (SEC-26). Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (c) per the ADR-057 W5 audit (FR-089) — a DOCUMENTED PRE-EXISTING GAP, audited and recorded here rather than fixed (operator decision 11): the underlying RateLimitPayload (pkg/agent/events.go) carries no SessionID field at all; this frame's session_id is reconstructed downstream from the connection's chat→session map at serialization time.
 type RateLimitFrame struct {
 	AgentId           *string `json:"agent_id,omitempty"`
@@ -868,12 +1096,20 @@ type RateLimitFrame struct {
 	Type      string  `json:"type"`
 }
 
+// RedirectFrame — Client → server redirect one chat, root or helper: stop its own in-progress turn, then continue that same chat with the instruction as its next user message (D2/D9; founder rule 2026-10-06). The instruction ceiling is 16384 UTF-8 bytes (16 KiB) — JSON maxLength counts characters, not bytes, so the byte ceiling is runtime-enforced server-side.
+type RedirectFrame struct {
+	Instruction string `json:"instruction"`
+	SessionId   string `json:"session_id"`
+	Type        string `json:"type"`
+}
+
 // ReplayErrorFrame — Server → client. Replay of a system-error transcript entry (Phase 1B, FR-014). Emitted by the replay path when the server encounters a TranscriptEntry with Type=system AND Status="error" — produced by appendErrorTranscript for rate-limit denials (kind=rate_limit) and provider LLM call failures (kind=error). The SPA uses this frame's `kind` discriminant to render the rate-limit-denial component or the generic error component instead of falling back to the default "assistant" bubble render path. Without this typed frame, replay treats the entry as a normal assistant message (the previous bug — empty Role falls back to "assistant" via ReplayMessageFrame.Role, so the SPA renders rate-limit text as a regular assistant message).
 type ReplayErrorFrame struct {
 	// Agent that was active when the error fired.
 	AgentId *string `json:"agent_id,omitempty"`
 	// Server-assigned transcript entry ID. Matches TranscriptEntry.ID from the JSONL partition so the SPA can dedup against live entries on WS reconnect.
-	EntryId string `json:"entry_id"`
+	EntryId       string              `json:"entry_id"`
+	HistoryOrigin *HistoryEntryOrigin `json:"history_origin,omitempty"`
 	// Error category. The SPA renders a different component per kind: "rate_limit" → rate-limit-denial banner with retry-after countdown, "error" → generic error component. Add new kinds here as new error categories are introduced (the enum keeps the wire contract tight).
 	Kind string `json:"kind"`
 	// Human-readable error description (the same text previously written to TranscriptEntry.Content). Kept verbatim for backward compat with the existing replay_message rendering path.
@@ -891,25 +1127,51 @@ type ReplayErrorPayload struct {
 	LlmError LLMErrorReplay `json:"llm_error"`
 }
 
-// ReplayMessageFrame — Server → client replayed transcript entry. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — emitted by the gateway replay path.
+// ReplayMessageFrame — Server → client persisted chat entry, delivered live or during session replay. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); live publication uses the session hub, and transcript/snapshot projections remain unsequenced. A CHAT PROJECTION of the session's single append-only archive, not a provider-message or raw-storage type (session-core C-ARCHIVE / U2; FR-004/FR-005): the archive's private model payload (model_message), its body-free same-session consumption reference (type=model_ref / model_ref), its trusted source/return-route provenance and its disk/byte/view marks are disk-only and are never emitted on this frame, and entries that belong to the model view only are not replayed.
 type ReplayMessageFrame struct {
 	AgentId *string `json:"agent_id,omitempty"`
 	// #823 catch-up redesign §4.7. Present on a replayed user entry persisted with a client-supplied id. Keep in sync by hand with contracts/components/schemas/ReplayMessageFrame.yaml.
 	ClientMessageId *string `json:"client_message_id,omitempty"`
 	Content         string  `json:"content"`
-	Id              *string `json:"id,omitempty"`
+	// Present only when `content` is a read-time display preview of an ordinary user/assistant chat message (entry type `message` or omitted) on a history-origin replay page: `content` then holds the first at most 65,536 UTF-8 bytes on a character boundary and this is the exact UTF-8 length of the full saved text (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)", A2.2). Unrelated to truncated/truncation_reason. Keep in sync by hand with contracts/components/schemas/ReplayMessageFrame.yaml.
+	ContentOriginalSizeBytes *int `json:"content_original_size_bytes,omitempty"`
+	// Effort levels spec (FR-058). Copied from this entry's own stored effort record (answering assistant entries only). Absent when the entry has none. Keep in sync by hand with contracts/components/schemas/ReplayMessageFrame.yaml.
+	Effort *EffortRecord `json:"effort,omitempty"`
+	// session-core FR-039 / C-GOAL. The goal the replayed entry's producing turn was dispatched under (from TranscriptEntry.GoalID). Live, history, REST and replay must retain the SAME association so the SPA joins each bubble to its own exact keyed goal criteria. Absent means UNKNOWN association; a later goal's frame must never rebind an earlier replayed message.
+	GoalId        *string             `json:"goal_id,omitempty"`
+	HistoryOrigin *HistoryEntryOrigin `json:"history_origin,omitempty"`
+	Id            *string             `json:"id,omitempty"`
+	// Read-only record that this user input was DISCARDED by Stop before it was delivered into the agent's model input (session-core FR-024). Absent on every delivered message. There is no client action to release or discard it; the archived message bytes are unchanged and this only labels them.
+	InputDisposition *struct {
+		ClientMessageId *string `json:"client_message_id,omitempty"`
+		MessageId       string  `json:"message_id"`
+		Reason          string  `json:"reason"`
+		State           string  `json:"state"`
+	} `json:"input_disposition,omitempty"`
 	// Model identifier that produced this assistant message (Phase 1B, FR-013/FR-014). Omitted for legacy entries written before per-turn model recording landed.
-	Model     *string `json:"model,omitempty"`
-	Role      string  `json:"role"`
-	SessionId string  `json:"session_id"`
-	Timestamp *string `json:"timestamp,omitempty"`
+	Model       *string          `json:"model,omitempty"`
+	Participant *ChatParticipant `json:"participant,omitempty"`
+	// Present only on a guest reply: the message_id of the admitted request this entry answers.
+	ReplyToMessageId   *string          `json:"reply_to_message_id,omitempty"`
+	ReplyToParticipant *ChatParticipant `json:"reply_to_participant,omitempty"`
+	Role               string           `json:"role"`
+	// Spec omnipus-system-agent K33 (FR-202, FR-215). Present when this main-session entry is a room request to this agent or this agent's answer into a room, so live, history and replay render the same collapsed entry.
+	RoomRef *RoomRef `json:"room_ref,omitempty"`
+	// Hub-assigned per-session sequence number. Present on live publication and its incremental catch-up copies; absent on unsequenced transcript/snapshot projections. Only frames carrying seq advance the session cursor.
+	Seq       *int64 `json:"seq,omitempty"`
+	SessionId string `json:"session_id"`
+	// Present and true only on an assistant entry that is a turn's distinct terminal outcome sentence (for example the tool-iteration-limit notice) written after the turn's earlier narration was already persisted. Live, the gateway closes the narration bubble with done(<narration id>) before this entry arrives, so it is a separate message; the replay stream has no such boundary, so the SPA must start a new message for this frame instead of merging it into the preceding same-turn assistant entry. Absent on every other frame, including entries written before this field existed.
+	TerminalOutcome *bool   `json:"terminal_outcome,omitempty"`
+	Timestamp       *string `json:"timestamp,omitempty"`
 	// ADR-087 D2. Populated from TranscriptEntry.Truncated when replaying an incomplete assistant entry — see truncation_reason for why. Only present when true. Replay emits this even when content is empty (an entry with Truncated && Content == "" still passes through, so the SPA can render a suffix with no body).
 	Truncated *bool `json:"truncated,omitempty"`
-	// ADR-087 D2. Populated from TranscriptEntry.TruncationReason. Narrows why truncated is true: "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a truncated: true frame means "cancelled" — every entry written before this field existed predates it and was always a cancel.
+	// ADR-087 D2. Populated from TranscriptEntry.TruncationReason. Narrows why truncated is true: "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a truncated: true frame means the reason is not recorded: readers do not default it to "cancelled" or to anything else (session-core DEL-F36).
 	TruncationReason *string `json:"truncation_reason,omitempty"`
 	// Turn-correlation identifier (from TranscriptEntry.TurnID), stamped on assistant entries and turn-cancellation entries. Lets the client match a replayed turn_canceled entry to the specific preceding assistant message it cancels, without relying on stream adjacency (async delegation can interleave other agents'/turns' frames in between). Omitted for legacy entries written before turn-id stamping landed.
 	TurnId *string `json:"turn_id,omitempty"`
-	Type   string  `json:"type"`
+	// Effort levels spec (FR-024). The stored display-only snapshot of the turn's reported reasoning-token sum, copied from the answering entry; never summed at read time. Absent = no call of the turn reported a count; 0 = reported zero.
+	TurnReasoningTokens *int   `json:"turn_reasoning_tokens,omitempty"`
+	Type                string `json:"type"`
 }
 
 // ReplayWarningFrame — Server → client duplicate tool_call_ids detected.
@@ -925,30 +1187,249 @@ type ReplayWarningStats struct {
 	DuplicateToolCallIdCount *int `json:"duplicate_tool_call_id_count,omitempty"`
 }
 
-// SessionCloseAckFrame — Server → client session close acknowledged. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — a chat-lifecycle frame, not turn output.
-type SessionCloseAckFrame struct {
-	Id *string `json:"id,omitempty"`
-	// ADR-057 FR-012/FR-013. Present iff it differs from session_id. Class (b) (FR-089): absent for this frame type.
-	ProducingSessionId *string `json:"producing_session_id,omitempty"`
-	SessionId          string  `json:"session_id"`
-	Type               string  `json:"type"`
+// RoomDeliveryState — State of one (room message, member) delivery (spec omnipus-system-agent K27, §6.11; FR-169, FR-201, FR-213). request_id is the stable delivery id, which is also the receiver's request id. The values are exactly the §6.11 states; the UI labels are in the §6.11 table. Anything the server cannot prove after a restart is `unknown`, never `working`. Mirrored inline in contracts/asyncapi.yaml (components.schemas.RoomDeliveryState) — keep both copies in sync by hand.
+type RoomDeliveryState struct {
+	// The member agent.
+	AgentId string `json:"agent_id"`
+	// Optional reason, e.g. `rate_limit` or `removed`.
+	Reason    *string `json:"reason,omitempty"`
+	RequestId string  `json:"request_id"`
+	State     string  `json:"state"`
 }
 
-// SessionCloseFrame — Client → server explicit session close request.
-type SessionCloseFrame struct {
+// RoomEntry — One entry of a room transcript (spec omnipus-system-agent K26; FR-166). Group entries carry the authoring agent and the resolved addressees. Mirrored inline in contracts/asyncapi.yaml (components.schemas.RoomEntry) — keep both copies in sync by hand.
+type RoomEntry struct {
+	// Resolved addressee agent ids. Never null.
+	Addressees []string `json:"addressees"`
+	// True for an answer to work consumed before a /pause; such an answer never forwards its mentions (§6.11).
+	AfterPause bool `json:"after_pause"`
+	// Images and files of the entry (#1449 D3, FR-016, FR-020), in the order they were sent. Each part's url is the workspace media URL (/api/v1/media/workspace/<workspace id>/<id>). Absent means none. A file deleted later in the Library keeps its part here; fetching it then fails and the chat shows the file as unavailable (D26).
+	Attachments []MediaPart     `json:"attachments,omitempty"`
+	Author      RoomEntryAuthor `json:"author"`
+	// Echo of RoomMessageRequest.client_message_id for a person's entry.
+	ClientMessageId *string `json:"client_message_id,omitempty"`
+	// Per-member delivery states for this entry. Never null.
+	Deliveries []RoomDeliveryState `json:"deliveries"`
+	Id         string              `json:"id"`
+	RoomId     string              `json:"room_id"`
+	// Position in the room transcript; strictly increasing.
+	Seq int64 `json:"seq"`
+	// The message text. New messages and agent answers are refused above the group message limit (#1449 D24, D27: at most 65,536 UTF-8 bytes, lowered by session_messaging.steer_body), stated on RoomMessageRequest.text. A stored entry keeps this wider maximum (TD-8): an entry written under an earlier, larger operator setting still opens and shows in full (S-152). May be empty when the entry carries attachments.
+	Text      string `json:"text"`
+	Timestamp string `json:"timestamp"`
+}
+
+// RoomEntryAuthor — Author of a room entry (spec omnipus-system-agent K26): the person (kind `user`) or a member agent (kind `agent`, with agent_id). Mirrored inline in contracts/asyncapi.yaml (components.schemas.RoomEntryAuthor) — keep both copies in sync by hand.
+type RoomEntryAuthor struct {
+	// Present iff kind is `agent`.
+	AgentId *string `json:"agent_id,omitempty"`
+	Kind    string  `json:"kind"`
+}
+
+// RoomEntryFrame — Server → client (spec omnipus-system-agent K26, K45). A new room entry, live, after attach_room. THIS FILE EXISTS for the Constraint #8 5-step process and the pkg/gateway/inboundschemas/ sync — the GENERATING copy is the inline schema in contracts/asyncapi.yaml. Keep both copies in sync by hand. Landing 1, WU-15 produces it.
+type RoomEntryFrame struct {
+	Entry  RoomEntry `json:"entry"`
+	RoomId string    `json:"room_id"`
+	// Room stream position of this frame.
+	Seq  int64  `json:"seq"`
+	Type string `json:"type"`
+}
+
+// RoomMemberStateFrame — Server → client (spec omnipus-system-agent K27, K45; FR-201, FR-213). A member's delivery state changed. THIS FILE EXISTS for the Constraint #8 5-step process and the pkg/gateway/inboundschemas/ sync — the GENERATING copy is the inline schema in contracts/asyncapi.yaml. Keep both copies in sync by hand. Landing 1, WU-15 produces it.
+type RoomMemberStateFrame struct {
+	Delivery RoomDeliveryState `json:"delivery"`
+	RoomId   string            `json:"room_id"`
+	Seq      int64             `json:"seq"`
+	Type     string            `json:"type"`
+}
+
+// RoomMetaFrame — Server → client (spec omnipus-system-agent K45). The room's members, mutes, pause state, allocated cost or read-only state changed. THIS FILE EXISTS for the Constraint #8 5-step process and the pkg/gateway/inboundschemas/ sync — the GENERATING copy is the inline schema in contracts/asyncapi.yaml. Keep both copies in sync by hand. Landing 1, WU-15 produces it.
+type RoomMetaFrame struct {
+	AllocatedCostMicroUsd int64 `json:"allocated_cost_micro_usd"`
+	AllocatedCostUnpriced bool  `json:"allocated_cost_unpriced"`
+	Generation            int64 `json:"generation"`
+	// Invitation summary state (#1449 FR-045). The text itself never travels on a frame: on ready, an open Participants panel refetches getRoom.
+	InvitationContextStatus *string  `json:"invitation_context_status,omitempty"`
+	Members                 []string `json:"members"`
+	Muted                   []string `json:"muted"`
+	Paused                  bool     `json:"paused"`
+	ReadOnlyReason          *string  `json:"read_only_reason,omitempty"`
+	RoomId                  string   `json:"room_id"`
+	Seq                     int64    `json:"seq"`
+	Type                    string   `json:"type"`
+}
+
+// RoomRef — Reference from a main-session entry (or an approval) to the room (group chat) it belongs to (spec omnipus-system-agent K7, K33; FR-202, FR-215, FR-251). Display and navigation data only: it never grants access to the room. `role` says whether the entry is the room's request to this agent or this agent's answer into the room; a room pre-admission approval card (FR-251) carries role `request`. Mirrored inline in contracts/asyncapi.yaml (components.schemas.RoomRef) — keep both copies in sync by hand.
+type RoomRef struct {
+	// The room delivery id, which is also the receiver's request id (spec §6.11, FR-216).
+	RequestId string `json:"request_id"`
+	// `request` — the room's request delivered to this agent; `answer` — this agent's answer appended to the room.
+	Role string `json:"role"`
+	// Id of the room.
+	RoomId string `json:"room_id"`
+	// Display name of the room at the time the entry was written.
+	RoomName string `json:"room_name"`
+}
+
+// RoomSnapshotFrame — Server → client (spec omnipus-system-agent K45, K26, K27). The answer to attach_room: the room entries after the cursor in seq order (at most the newest 10,000; `has_older` is true when older entries after the cursor were left out), the members, mutes, member states, pause state, generation and allocated cost. THIS FILE EXISTS for the Constraint #8 5-step process and the pkg/gateway/inboundschemas/ sync — the GENERATING copy is the inline schema in contracts/asyncapi.yaml. Keep both copies in sync by hand. Landing 1, WU-15 produces it.
+type RoomSnapshotFrame struct {
+	AllocatedCostMicroUsd int64 `json:"allocated_cost_micro_usd"`
+	AllocatedCostUnpriced bool  `json:"allocated_cost_unpriced"`
+	// always true; reserved.
+	Complete bool `json:"complete"`
+	// Entries after the cursor, in seq order. Never null.
+	Entries    []RoomEntry `json:"entries"`
+	Generation int64       `json:"generation"`
+	// True when entries after the cursor older than the ones served were left out (a snapshot carries at most the newest 10,000 entries).
+	HasOlder *bool `json:"has_older,omitempty"`
+	// Every outstanding (non-terminal) delivery state plus the latest terminal state of each member. Never null. Live states are never dropped (ruling Q2), so this array has no fixed upper bound.
+	MemberStates   []RoomDeliveryState `json:"member_states"`
+	Members        []string            `json:"members"`
+	Muted          []string            `json:"muted"`
+	Paused         bool                `json:"paused"`
+	ReadOnlyReason *string             `json:"read_only_reason,omitempty"`
+	RoomId         string              `json:"room_id"`
+	// Room stream position this snapshot is current to.
+	Seq  int64  `json:"seq"`
+	Type string `json:"type"`
+}
+
+// SecretRecipientDisplay — Server-composed, value-free description of where a secret will be used (spec omnipus-system-agent K2; FR-065). Built by the server from the recorded recipient descriptor; a client never supplies it. `lines` are the display lines for the kind: endpoint (provider_key); transport + command or URL (mcp_env); channel instance + field (channel_credential); hosts + username + mailbox id (mailbox_password); workspace + agent + variable (agent_private); for unbound (a stored value with no recipient recorded) exactly the single fixed line "Stored in Settings; no recipient recorded". Mirrored inline in contracts/asyncapi.yaml (components.schemas.SecretRecipientDisplay) — keep both copies in sync by hand.
+type SecretRecipientDisplay struct {
+	// Recipient kind.
+	Kind string `json:"kind"`
+	// Display lines, in order. Never null, never empty.
+	Lines []string `json:"lines"`
+}
+
+// SecretRequestField — One field of a secret card (spec omnipus-system-agent K1; FR-061). The card holds 1–8 fields; the user types one value per field, sent only in the authenticated REST submit (SecretSubmitRequest.values, keyed by `key`). Mirrored inline in contracts/asyncapi.yaml (components.schemas.SecretRequestField) — keep both copies in sync by hand.
+type SecretRequestField struct {
+	// Field key; the submit's `values` map uses exactly these keys.
+	Key string `json:"key"`
+	// Field label shown on the card.
+	Label string `json:"label"`
+}
+
+// SecretRequestFrame — Server → client (spec omnipus-system-agent K1; FR-061, FR-078, FR-240). A secure secret card: an agent asks the person to type one or more secret values. The frame is value-free; values travel only in the authenticated REST submit (POST /api/v1/secret-requests/{id}/submit). Every field is server-derived from the request record — the request id is never authority by itself (§6.7). The card renders in the chat whose session id is `root_session_id` (or `session_id` when omitted), the same root-origin rule as approvals (L1-AMENDMENTS-20261013 §1.3, R7). THIS FILE EXISTS for the Constraint #8 5-step process and the pkg/gateway/inboundschemas/ sync — the GENERATING copy is the inline schema in contracts/asyncapi.yaml. Keep both copies in sync by hand. Landing 1, WU-4 produces it.
+type SecretRequestFrame struct {
+	// The agent that asked.
+	ActingAgentId string `json:"acting_agent_id"`
+	// Display name of the agent that asked.
+	ActingAgentName string `json:"acting_agent_name"`
+	// The fields to fill, in order. Never null, never empty.
+	Fields []SecretRequestField `json:"fields"`
+	// Server-derived turn origin label (§6.18), e.g. "for group <name>" when the work came from a room. Omitted for a plain web turn.
+	OriginLabel *string `json:"origin_label,omitempty"`
+	// The owning (workspace, agent) pair — present only for the agent_private kind.
+	Owner *struct {
+		AgentId     string `json:"agent_id"`
+		WorkspaceId string `json:"workspace_id"`
+	} `json:"owner,omitempty"`
+	// Why the agent needs the secret, in the agent's words.
+	Purpose   string                 `json:"purpose"`
+	Recipient SecretRecipientDisplay `json:"recipient"`
+	// Server-minted id of the secret request.
+	RequestId string `json:"request_id"`
+	// Server-derived root of the acting session's chain (the chat the card renders in). Omitted when equal to session_id.
+	RootSessionId *string `json:"root_session_id,omitempty"`
+	// The acting session that asked for the secret.
 	SessionId string `json:"session_id"`
 	Type      string `json:"type"`
+	// Workspace of the acting session, when it has one.
+	WorkspaceId *string `json:"workspace_id,omitempty"`
 }
 
-// SessionModeUpdateFrame — Client → server. Set or clear this session's ADR-092 per-chat Auto-approve modifier — new, session-keyed state (pkg/agent/sessionmode.go), structurally like ApprovalGrantStore, never written into config.json and never a chat_id key on any policy map (Hard Constraint #6). Auto is NOT a tool-policy value — it only has meaning for a tool currently resolved to "ask", and applies to every such tool, not only bash (see SandboxConfig.auto_approve for the full behavioural description). THE ONE EXCEPTION TO TIGHTEN-ONLY in this contract: unlike the global default (SandboxConfig.auto_approve) and the per-agent override (Agent.auto_approve_disabled, off-only), this frame may LOOSEN — turn Auto ON for this one chat even when the resolved agent x global default has it off — because a human is present in this session to accept that risk. It may also tighten (turn Auto off). Turning Auto on for a chat is deliberately a human-only action: the agent-facing `set_config` tool must never be able to send this frame or reach an equivalent effect (enforced server-side; this frame's shape — a session-scoped WS write, not a config.json path — structurally keeps it outside `set_config`'s reach in the first place). Inherits to a delegated subagent session exactly as approval grants do (ApprovalGrantStore.InheritFrom); clears with the session on restart.
+// SecretRequestResolvedFrame — Server → client (spec omnipus-system-agent K3; FR-074). Emitted once to every connected client when a secret request leaves the pending state. Value-free. THIS FILE EXISTS for the Constraint #8 5-step process and the pkg/gateway/inboundschemas/ sync — the GENERATING copy is the inline schema in contracts/asyncapi.yaml. Keep both copies in sync by hand. Landing 1, WU-4 produces it.
+type SecretRequestResolvedFrame struct {
+	// The request_id from the secret_request frame this resolves.
+	RequestId string `json:"request_id"`
+	// Root of the acting session's chain, so the root chat's card clears without a lookup. Omitted when equal to session_id.
+	RootSessionId *string `json:"root_session_id,omitempty"`
+	// The acting session the request belonged to.
+	SessionId *string `json:"session_id,omitempty"`
+	// The terminal state the request reached.
+	State string `json:"state"`
+	Type  string `json:"type"`
+}
+
+// SessionHistoryContext — Bounded public dependencies of selected history groups (chat history paging D4/D10). Resolve only selected/current relevant spans and duplicate identities, never all session spans. Each optional lifecycle payload is the actual recorded generated public frame, not a fabricated start, running state or success. No competing cancellation/disposition value, private archive mark or copied content store.
+type SessionHistoryContext struct {
+	// Non-null selected/current relevant duplicate-ID canonical ownership facts.
+	DuplicateIds []struct {
+		CanonicalPosition string `json:"canonical_position"`
+		Id                string `json:"id"`
+		Kind              string `json:"kind"`
+		OccurrenceCount   int    `json:"occurrence_count"`
+	} `json:"duplicate_ids"`
+	// Non-null array of relevant actual span facts; empty when none are needed.
+	Spans []struct {
+		End     *SubagentEndFrame     `json:"end,omitempty"`
+		HasRun  *bool                 `json:"has_run,omitempty"`
+		Message *SubagentMessageFrame `json:"message,omitempty"`
+		SpanId  string                `json:"span_id"`
+		Start   *SubagentStartFrame   `json:"start,omitempty"`
+		State   *SubagentStateFrame   `json:"state,omitempty"`
+	} `json:"spans"`
+}
+
+// SessionHistoryPageInfo — Shared metadata/context for REST messages, bounded latest session detail and the selected replay page of a snapshot (chat history paging D3/D4a/D10). Positions are opaque same-session occurrence selectors, never lexically ordered or live cursors. Cross-field invariants are checked by producers and consumers: min_rows <= limit; source_group_count matches selected groups and is at most 100; first/last positions exist iff nonempty; budget_override exists iff byte_budget_exceeded; a byte_budget stop cannot underfill min_rows, while a byte_ceiling stop can; projected_bytes <= byte_ceiling unless source_group_count is 1. No optional absence is serialized as null.
+type SessionHistoryPageInfo struct {
+	// Present iff the soft budget was exceeded to keep the floor or an atomic group.
+	BudgetOverride *string `json:"budget_override,omitempty"`
+	// True iff projected bytes exceed the soft budget; requires budget_override.
+	ByteBudgetExceeded bool `json:"byte_budget_exceeded"`
+	// Server-owned hard page selection ceiling, currently 8388608 bytes (8 MiB), on the same meter as projected_bytes (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)", A2.3). Before adding any further group, selection stops with stop_reason byte_ceiling if the page with that group would exceed it, even below min_rows. The first group is always returned whole, so projected_bytes <= byte_ceiling holds unless source_group_count is 1. A page selection limit, not a heap or absolute response-size guarantee; not an operator setting.
+	ByteCeiling int64                 `json:"byte_ceiling"`
+	Context     SessionHistoryContext `json:"context"`
+	// First selected occurrence in ascending acceptance order; absent iff empty.
+	FirstPosition *string `json:"first_position,omitempty"`
+	// Last selected occurrence in ascending acceptance order; absent iff empty.
+	LastPosition *string `json:"last_position,omitempty"`
+	// Actual latest clear identity, even when its marker lies outside this page.
+	LatestClear *struct {
+		EntryId         string `json:"entry_id"`
+		HistoryPosition string `json:"history_position"`
+	} `json:"latest_clear,omitempty"`
+	// Effective requested drawn-row target, not a frame count; default 40.
+	Limit int `json:"limit"`
+	// Effective advisory two-screen row floor, at most limit; default 20. Whole groups and this floor take precedence over the soft byte budget. Not proof of viewport geometry or a hard defense against large authenticated requests.
+	MinRows int `json:"min_rows"`
+	// window_refresh continuation describes only the requested closed interval.
+	Mode string `json:"mode"`
+	// Larger of prepared public REST and historical WS encodings at this cut/context. Excludes diagnostic accounting fields themselves, transport headers and separate live controls/projection. Required projection failure is an error, never an estimate.
+	ProjectedBytes int64 `json:"projected_bytes"`
+	// Opaque retained-set generation; changes on actual expiry, not a failed removal.
+	RetentionGeneration string `json:"retention_generation"`
+	// Drawn-row weight; a whole atomic group can exceed the row target or 100.
+	RowCount int `json:"row_count"`
+	// Server-owned soft projected-page budget, currently 4194304 bytes (4 MiB). Positive integer, deliberately not a one-value enum or a hard response cap.
+	SoftByteBudget int64 `json:"soft_byte_budget"`
+	// Number of selected whole source groups, not the number of replay frames.
+	SourceGroupCount int `json:"source_group_count"`
+	// Actual selection boundary. row_target/source_cap take precedence when their boundary coincides with bytes. True end, closed clear/range or source cap may underfill; the soft byte_budget may not cut below min_rows. byte_ceiling is the one byte stop allowed below min_rows, and it is reported when the next group would exceed both the soft budget and the ceiling. No byte stop splits a whole group.
+	StopReason string `json:"stop_reason"`
+	// Optional indication that selection reached a protected exact clear marker. Earlier retained groups remain reachable only through explicit clear crossing.
+	StoppedAtClear *bool `json:"stopped_at_clear,omitempty"`
+}
+
+// SessionHistoryState — Server history readiness, not proof that this client loaded a page (chat history paging D7a/D10). status=available omits reason and message. status=unavailable requires both reason and a fixed sanitized message. Producers and consumers must reject any other combination. No preparing state or successful empty-history fallback. Current authorized live controls and canonical sends remain independent.
+type SessionHistoryState struct {
+	// Required only when unavailable. Fixed sanitized copy, never an underlying cause, path, raw position or query. For index_missing/index_inconsistent/catchup_limit: "This conversation's history could not be loaded." Other required storage/projection failures retain the fixed redacted session-storage error behavior in D11. Not a turn-ending ErrorFrame.
+	Message *string `json:"message,omitempty"`
+	// Present only for unavailable history, after the bounded recovery attempt.
+	Reason *string `json:"reason,omitempty"`
+	Status string  `json:"status"`
+}
+
+// SessionModeUpdateFrame — Client → server. Set or clear this session's ADR-092 per-chat Auto-approve modifier — new, session-keyed state (pkg/agent/sessionmode.go), structurally like ApprovalGrantStore, never written into config.json and never a chat_id key on any policy map (Hard Constraint #6). Auto is NOT a tool-policy value — it only has meaning for a tool currently resolved to "ask", and applies to every such tool, not only bash (see SandboxConfig.auto_approve for the full behavioural description). THE ONE EXCEPTION TO TIGHTEN-ONLY in this contract: unlike the global default (SandboxConfig.auto_approve), this frame may LOOSEN — turn Auto ON for this one chat even when the global default has it off — because a human is present in this session to accept that risk. It may also tighten (turn Auto off). Turning Auto on for a chat is deliberately a human-only action: the agent-facing `set_config` tool must never be able to send this frame or reach an equivalent effect (enforced server-side; this frame's shape — a session-scoped WS write, not a config.json path — structurally keeps it outside `set_config`'s reach in the first place). Inherits to a delegated subagent session exactly as approval grants do (ApprovalGrantStore.InheritFrom); clears with the session on restart.
 type SessionModeUpdateFrame struct {
-	// true — turn Auto-approve ON for this chat (may loosen past the resolved agent x global default). false — turn Auto-approve OFF for this chat (tightens, same as every other scope). null — clear this session's modifier; the chat reverts to whatever the agent x global default currently resolves to, and will track future changes to that default rather than staying pinned.
+	// true — turn Auto-approve ON for this chat (may loosen past the global default). false — turn Auto-approve OFF for this chat (tightens, same as every other scope). null — clear this session's modifier; the chat reverts to whatever the global default currently resolves to, and will track future changes to that default rather than staying pinned.
 	AutoApprove bool   `json:"auto_approve"`
 	SessionId   string `json:"session_id"`
 	Type        string `json:"type"`
 }
 
-// SessionModeUpdatedFrame — Server → client. Acknowledges a session_mode_update request with the session's resulting resolved Auto-approve state. A request is always acknowledged here — this is the one frame allowed to loosen, so there is no "rejected for looseness" case the way there is for the global/per-agent scopes; a malformed request still gets the existing, session-scoped ErrorFrame instead. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — a chat-lifecycle/settings frame, not turn output, so producing_session_id is absent (FR-013), matching SessionCloseAckFrame's own precedent.
+// SessionModeUpdatedFrame — Server → client. Acknowledges a session_mode_update request with the session's resulting resolved Auto-approve state. A request is always acknowledged here — this is the one frame allowed to loosen, so there is no "rejected for looseness" case the way there is for the global/per-agent scopes; a malformed request still gets the existing, session-scoped ErrorFrame instead. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — a chat-lifecycle/settings frame, not turn output, so producing_session_id is absent (FR-013).
 type SessionModeUpdatedFrame struct {
 	// The resolved Auto-approve state for THIS session after applying (or clearing) the modifier — the true per-session resolution that SandboxStatus.auto_approve_effective cannot provide (that field is the gateway-wide default only, with no session or agent context). [2026-09-24, founder decision] true here means Auto is genuinely active for this session's "ask" tool calls, whether or not a kernel sandbox is enforcing — combine with SandboxStatus.kernel_sandbox_active only to decide the badge's "Auto" vs "Auto — no sandbox" (warning) rendering, not to predict whether calls still prompt: they do not.
 	AutoApproveEffective bool   `json:"auto_approve_effective"`
@@ -956,25 +1437,44 @@ type SessionModeUpdatedFrame struct {
 	Type                 string `json:"type"`
 }
 
-// SessionSnapshotFrame — Server → client. #823 catch-up redesign. Answers attach_session when since_seq can no longer be served incrementally. The client must replace its history for this session: followed by session_state, a full unsequenced replay, then exactly one catch_up_complete frame whose seq matches this frame's seq. Keep in sync by hand with contracts/components/schemas/SessionSnapshotFrame.yaml.
+// SessionSnapshotFrame — Server to client. Bounded latest-page metadata when attach_session cannot serve the requested live position (chat history paging D7/D10). Read the page before announcing replacement. Follow with current session_state, selected entry-derived history/tool/special/media frames carrying local history_origin, one replay done, uncovered active projection, then catch_up_complete(mode=snapshot) at this seq; held live frames follow in sequence order. No second entries array or manifest. First-open/follow-latest clients stage and commit this page once on completion. A historical reader instead keeps its rows, anchor, focus and measurements, stages the page into its separate bounded tail cache, refreshes authoritative controls, and revalidates only its already-held interval after complete. A reason does not authorize a passive jump to latest. A classified history-only failure sends no snapshot/wipe and may complete live_only controls instead. Partial failed control or socket delivery never acknowledges a successful catch-up.
 type SessionSnapshotFrame struct {
-	// The gateway process that produced this snapshot.
+	// Gateway process identity, stored with the successfully completed live cursor; same role as SessionStateFrame.boot_id / AttachSessionFrame.boot_id.
 	BootId *string `json:"boot_id,omitempty"`
-	// Why a snapshot was sent instead of an incremental catch-up. boot_mismatch is checked first and always wins over the other three reasons.
+	// Actual retained earlier groups; a reached closed clear needs explicit crossing.
+	HasEarlier bool `json:"has_earlier"`
+	// Actual eligible retained later groups at this same page cut.
+	HasLater bool `json:"has_later"`
+	// Present iff has_later, equal to page_info.last_position.
+	NextAfter *string `json:"next_after,omitempty"`
+	// Present iff has_earlier, equal to page_info.first_position.
+	NextBefore *string `json:"next_before,omitempty"`
+	// Same latest-mode metadata/context/range as the shared REST reader; no entries array.
+	PageInfo SessionHistoryPageInfo `json:"page_info"`
+	// Why snapshot replaces incremental catch-up: cursor_ahead is beyond the hub, retention_exceeded is an unservable retained journal range, unknown_position means no known cursor, boot_mismatch is a different gateway process and wins before ordinary servability checks. None forces a historical reader to latest.
 	Reason *string `json:"reason,omitempty"`
-	// The session's high-water sequence number at snapshot time. Mirrored on the terminal catch_up_complete frame.
-	Seq       int64  `json:"seq"`
+	// Spec omnipus-system-agent K4 (FR-079). Pending and recent terminal secret requests visible to this connection, so a reloaded secret card restores its true state. Always an array when present, never null; absence of a request is never read as success. Optional: an emit that carries no secret-request state omits it.
+	SecretRequests []SessionStateSecretRequest `json:"secret_requests,omitempty"`
+	// Live high-water W at bind/read cut, mirrored on catch_up_complete. Commit only after the full selected-page/current-control catch-up completes; not a history position. Subsequent held live frames continue at seq greater than W.
+	Seq int64 `json:"seq"`
+	// Session whose latest history page and current controls follow.
 	SessionId string `json:"session_id"`
 	Type      string `json:"type"`
 }
 
-// SessionStartedFrame — Server → client new session minted. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — a chat-lifecycle frame, not turn output.
+// SessionStartedFrame — Server → client. Acknowledges a session-less message. For an ordinary first user message, emitted only after its transcript entry is durably saved. The SPA stores session_id as activeSessionId. A recovered acknowledgement names an already-saved first message found in this gateway process's retry cache: no new entry or turn is created, and the client must attach without a cursor. Recovery is in-memory only and does not survive a gateway restart.
 type SessionStartedFrame struct {
+	// The agent that will handle this session.
 	AgentId *string `json:"agent_id,omitempty"`
-	// #823 review finding 7. The gateway process that minted this session.
+	// #823 review finding 7. The gateway process that minted this session, stored alongside the seeded cursor so a later attach_session can detect a restart the same way it would for any other session — see AttachSessionFrame.boot_id.
 	BootId *string `json:"boot_id,omitempty"`
-	// #823 catch-up redesign. The sequence number the newly minted session's hub starts from. Keep in sync by hand with contracts/components/schemas/SessionStartedFrame.yaml.
-	Seq       *int64 `json:"seq,omitempty"`
+	// The initiating ordinary first message's client-supplied ID.
+	ClientMessageId *string `json:"client_message_id,omitempty"`
+	// True only for an already-saved first message found in the process-local retry cache. No new entry or turn is admitted. The client must attach without a cursor; seq and boot_id are absent on this acknowledgement. Absent or false denotes a fresh acknowledgement.
+	Recovered *bool `json:"recovered,omitempty"`
+	// #823 catch-up redesign. The sequence number the newly minted session's per-session hub starts from (its first published frame). Lets the SPA seed the session's cursor at mint time instead of waiting for the first sequenced frame after it.
+	Seq *int64 `json:"seq,omitempty"`
+	// The newly minted or recovered session ID.
 	SessionId string `json:"session_id"`
 	Type      string `json:"type"`
 }
@@ -990,40 +1490,92 @@ type SessionStateActiveTurn struct {
 type SessionStateFrame struct {
 	// ADR-082 D4 — present only when the attached session has a foreground turn in flight at emit time. Absent when idle. Keep in sync by hand with components/schemas/SessionStateFrame.yaml.
 	ActiveTurn *SessionStateActiveTurn `json:"active_turn,omitempty"`
-	// ADR-092 — this session's own per-chat Auto-approve modifier (the value last set by session_mode_update and still held by the server), so a reloading or reconnecting SPA re-learns it instead of losing it. Only meaningful when session_id is present (the connection-open emit carries neither). true — Auto-approve forced ON for this chat; false — forced OFF for this chat; null or absent — no per-chat modifier is set, the chat follows the agent x global resolution (SandboxStatus.auto_approve_effective floored by the agent's auto_approve_disabled). Same value space as SessionModeUpdateFrame.auto_approve. The modifier lives in server memory only: after a gateway restart it is gone and this field reads null/absent, so the UI follows the server. Keep in sync by hand with components/schemas/SessionStateFrame.yaml.
+	// Optional. The saved outcome/entry order for this main, echoed so a later acknowledgement can name the same number. Not a new counter. This frame is part of both the incremental catch-up and the full snapshot. 0 when the main has no outcome yet; omitted when this emit is not an attach of a main or the saved order could not be read. An omitted value means unknown, never zero. Keep in sync by hand with components/schemas/SessionStateFrame.yaml.
+	AttentionBound *int64 `json:"attention_bound,omitempty"`
+	// ADR-092 — this session's own per-chat Auto-approve modifier (the value last set by session_mode_update and still held by the server), so a reloading or reconnecting SPA re-learns it instead of losing it. Only meaningful when session_id is present (the connection-open emit carries neither). true — Auto-approve forced ON for this chat; false — forced OFF for this chat; null or absent — no per-chat modifier is set, the chat follows the global default (SandboxStatus.auto_approve_effective). Same value space as SessionModeUpdateFrame.auto_approve. The modifier lives in server memory only: after a gateway restart it is gone and this field reads null/absent, so the UI follows the server. Keep in sync by hand with components/schemas/SessionStateFrame.yaml.
 	AutoApproveModifier *bool `json:"auto_approve_modifier,omitempty"`
 	// #823 review finding 7. Stable identifier for this gateway process, minted once at startup. Keep in sync by hand with contracts/components/schemas/SessionStateFrame.yaml.
 	BootId    *string `json:"boot_id,omitempty"`
 	EmittedAt string  `json:"emitted_at"`
+	// Required on attach's session-scoped emit; absent on the unscoped connection-open emit. Describes server readiness, never proof that the client loaded a page. Unavailable history leaves authorized current controls independent.
+	HistoryState *SessionHistoryState `json:"history_state,omitempty"`
 	// Always array, never null. Capped at 1000.
 	PendingApprovals []SessionStatePendingApproval `json:"pending_approvals"`
 	// askuserquestion-tool-spec v3 US-6 S1/FR-9 — snapshot of every PENDING AskUserQuestion card (global registry cap 64) so a reconnecting SPA re-hydrates its card + composer lock. Optional (older gateways omit it); absent/empty means no pending sets.
 	PendingAsks []AskUserQuestionCard `json:"pending_asks,omitempty"`
+	// Spec omnipus-system-agent K4 (FR-079). Pending and recent terminal secret requests visible to this connection, so a reloaded secret card restores its true state. Always an array when present, never null; absence of a request is never read as success. Optional: an emit that carries no secret-request state omits it.
+	SecretRequests []SessionStateSecretRequest `json:"secret_requests,omitempty"`
 	// ADR-082 (review CR3) — the transcript session this snapshot describes; absent on the connection-open emit. Keep in sync by hand with components/schemas/SessionStateFrame.yaml.
 	SessionId *string `json:"session_id,omitempty"`
-	Type      string  `json:"type"`
-	UserId    string  `json:"user_id"`
+	// Authoritative absolute session-wide consumed-token total, with the same meaning as SessionStats.tokens_total. Present when authoritative usage is available on an authorized session-scoped attach, including live_only; omitted on unscoped connection-open state. Omitted means unknown, never zero. Independent of history readiness; not a per-turn delta.
+	SessionTokensTotal *int   `json:"session_tokens_total,omitempty"`
+	Type               string `json:"type"`
+	UserId             string `json:"user_id"`
 }
 
 // SessionStatePendingApproval — One pending approval entry in a SessionStateFrame.
 type SessionStatePendingApproval struct {
-	AgentId     string `json:"agent_id"`
-	ApprovalId  string `json:"approval_id"`
-	ExpiresInMs int    `json:"expires_in_ms"`
-	SessionId   string `json:"session_id"`
-	ToolName    string `json:"tool_name"`
+	// L1-AMENDMENTS-20261013 §1.3 (#1263; spec K7). Display name of the agent that made the call, named in the card header.
+	ActingAgentName *string `json:"acting_agent_name,omitempty"`
+	AgentId         string  `json:"agent_id"`
+	ApprovalId      string  `json:"approval_id"`
+	// Same value as ToolApprovalRequiredFrame.args — an object, never null. The snapshot reaches exactly the connections the live frame reaches (same audience rule).
+	Args        map[string]any `json:"args"`
+	ExpiresInMs int            `json:"expires_in_ms"`
+	// Spec K7, §6.18. Server-derived turn origin, e.g. "while answering <person> on <connection>", "for group <name>", "asked by <Agent>". Omitted for a plain web turn.
+	OriginLabel *string `json:"origin_label,omitempty"`
+	// Spec K7, FR-251. Present on a room's pre-admission approval card (request id = delivery id).
+	RoomRef *RoomRef `json:"room_ref,omitempty"`
+	// L1-AMENDMENTS-20261013 §1.3 (#1263). Server-derived root of the acting session's chain (ParentSessionID walk, 16 hops, cycle guard): the chat whose session id equals this value renders the inline approval. Omitted when equal to session_id.
+	RootSessionId *string `json:"root_session_id,omitempty"`
+	// Same value and rules as ToolApprovalRequiredFrame.segments.
+	Segments  []CommandSegmentInfo `json:"segments,omitempty"`
+	SessionId string               `json:"session_id"`
+	// L1-AMENDMENTS-20261013 §1.3 (#1263). Same value as ToolApprovalRequiredFrame.tool_call_id, so a reloaded card is complete and approvable.
+	ToolCallId string `json:"tool_call_id"`
+	ToolName   string `json:"tool_name"`
+	// Same value as ToolApprovalRequiredFrame.turn_id.
+	TurnId string `json:"turn_id"`
 	// Same value and semantics as ToolApprovalRequiredFrame.workspace_id.
+	WorkspaceId *string `json:"workspace_id,omitempty"`
+}
+
+// SessionStateSecretRequest — One entry of the `secret_requests` list on SessionStateFrame and SessionSnapshotFrame (spec omnipus-system-agent K4; FR-074, FR-079): a pending request, or a recent terminal one (value-free; at most the last 32 terminal entries per session, §6.2), so a reloaded card restores its true state. Absence of an entry is never success. Same card fields as SecretRequestFrame plus `state`. Mirrored inline in contracts/asyncapi.yaml (components.schemas.SessionStateSecretRequest) — keep both copies in sync by hand.
+type SessionStateSecretRequest struct {
+	ActingAgentId   string `json:"acting_agent_id"`
+	ActingAgentName string `json:"acting_agent_name"`
+	// True only when state is `submitted` and the value-free continuation (the reference-only resume message) is not confirmed delivered: the latest ensure-delivery attempt failed or was revoked downstream. Absent once delivery is confirmed, the person stops the continuation, or the request reaches any non-submitted terminal state. Never carries or implies a secret value, cause, stage or reference name. (Train 2 M13, T2-SF-02; K4, FR-079.)
+	ContinuationUnconfirmed *bool                `json:"continuation_unconfirmed,omitempty"`
+	Fields                  []SecretRequestField `json:"fields"`
+	OriginLabel             *string              `json:"origin_label,omitempty"`
+	// Present only for the agent_private kind.
+	Owner *struct {
+		AgentId     string `json:"agent_id"`
+		WorkspaceId string `json:"workspace_id"`
+	} `json:"owner,omitempty"`
+	Purpose   string                 `json:"purpose"`
+	Recipient SecretRecipientDisplay `json:"recipient"`
+	// Reference names the submitted values were stored under. Present only when state is `submitted`.
+	ReferenceNames []string `json:"reference_names,omitempty"`
+	RequestId      string   `json:"request_id"`
+	// Same value and semantics as SecretRequestFrame.root_session_id.
+	RootSessionId *string `json:"root_session_id,omitempty"`
+	SessionId     string  `json:"session_id"`
+	State         string  `json:"state"`
+	// When the request last changed state.
+	UpdatedAt   string  `json:"updated_at"`
 	WorkspaceId *string `json:"workspace_id,omitempty"`
 }
 
 // SubagentEndFrame — Server → client subagent span closed (FR-H-004). status MUST be one of the six allowed values — the SPA drops frames with invalid status (W4-6). Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — emitted by the PARENT about the child (pkg/agent/steer_frames.go); FR-017 pins its SessionID to the routing key. Kept in sync by hand with components/schemas/SubagentEndFrame.yaml for the full shape — see that file for the per-value description (including "parked", ADR-057 UAT defect C2 fix).
 type SubagentEndFrame struct {
-	AgentId      *string `json:"agent_id,omitempty"`
-	DurationMs   *int    `json:"duration_ms,omitempty"`
-	FinalResult  *string `json:"final_result,omitempty"`
-	Message      *string `json:"message,omitempty"`
-	ParentCallId *string `json:"parent_call_id,omitempty"`
-	Reason       *string `json:"reason,omitempty"`
+	AgentId       *string             `json:"agent_id,omitempty"`
+	DurationMs    *int                `json:"duration_ms,omitempty"`
+	FinalResult   *string             `json:"final_result,omitempty"`
+	HistoryOrigin *HistoryEntryOrigin `json:"history_origin,omitempty"`
+	Message       *string             `json:"message,omitempty"`
+	ParentCallId  *string             `json:"parent_call_id,omitempty"`
+	Reason        *string             `json:"reason,omitempty"`
 	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/SubagentEndFrame.yaml.
 	Seq       *int64 `json:"seq,omitempty"`
 	SessionId string `json:"session_id"`
@@ -1035,13 +1587,14 @@ type SubagentEndFrame struct {
 // SubagentMessageFrame — Server → client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A flat, UI-facing PROJECTION of the underlying SessionMessage riding between subagent_start/subagent_end — see components/schemas/SubagentMessageFrame.yaml for the full shape- decision rationale (why this is not a full embedded SessionMessage oneOf). Canonical copy — keep in sync by hand.
 type SubagentMessageFrame struct {
 	// Optional session id of the delegated child session this mid-span update is reporting on — the same value the bracketing subagent_start frame's child_session_id carries (ADR-091 I-4).
-	ChildSessionId *string `json:"child_session_id,omitempty"`
-	CorrelationId  *string `json:"correlation_id,omitempty"`
-	CreatedAt      string  `json:"created_at"`
-	Kind           string  `json:"kind"`
-	MessageId      string  `json:"message_id"`
-	Pct            *int    `json:"pct,omitempty"`
-	SenderIdentity string  `json:"sender_identity"`
+	ChildSessionId *string             `json:"child_session_id,omitempty"`
+	CorrelationId  *string             `json:"correlation_id,omitempty"`
+	CreatedAt      string              `json:"created_at"`
+	HistoryOrigin  *HistoryEntryOrigin `json:"history_origin,omitempty"`
+	Kind           string              `json:"kind"`
+	MessageId      string              `json:"message_id"`
+	Pct            *int                `json:"pct,omitempty"`
+	SenderIdentity string              `json:"sender_identity"`
 	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/SubagentMessageFrame.yaml.
 	Seq             *int64  `json:"seq,omitempty"`
 	SessionId       string  `json:"session_id"`
@@ -1055,7 +1608,8 @@ type SubagentMessageFrame struct {
 type SubagentStartFrame struct {
 	AgentId *string `json:"agent_id,omitempty"`
 	// Optional session id of the opened child session. Present for steered sessions; absent for legacy/optional. Enables the open control on the side panel row (ADR-091 I-4).
-	ChildSessionId *string `json:"child_session_id,omitempty"`
+	ChildSessionId *string             `json:"child_session_id,omitempty"`
+	HistoryOrigin  *HistoryEntryOrigin `json:"history_origin,omitempty"`
 	// The originating delegate or create_task tool-call id. For delegate-origin children, this is the delegate tool-call id. For create_task-origin children (task sessions), this is the create_task tool-call id (the span key for I-4). This is the span identifier used for both fronts.
 	ParentCallId string `json:"parent_call_id"`
 	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/SubagentStartFrame.yaml.
@@ -1066,21 +1620,31 @@ type SubagentStartFrame struct {
 	Type      string `json:"type"`
 }
 
-// SubagentStateFrame — Server → client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A flat projection of SessionLifecycleRecord.state riding between subagent_start/subagent_end, plus an optional steering- receipt. Canonical copy — keep in sync by hand.
+// SubagentStateFrame — Server → client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A flat projection of SessionLifecycleRecord.state riding between subagent_start/subagent_end, plus an optional control- receipt (sub-agent control plane ADR D4/MIN-003; replaces the former steering_receipt — the field is gone, a dev install replaying an old persisted frame that still carries it drops the unknown field rather than failing validation, OBS-003). Canonical copy — keep in sync by hand with contracts/components/schemas/SubagentStateFrame.yaml and contracts/components/schemas/ControlReceipt.yaml.
 type SubagentStateFrame struct {
 	// Optional session id of the delegated child session this lifecycle ping is reporting on — the same value the bracketing subagent_start frame's child_session_id carries (ADR-091 I-4).
 	ChildSessionId *string `json:"child_session_id,omitempty"`
-	CreatedAt      string  `json:"created_at"`
+	ControlReceipt *struct {
+		AcceptedAt         string   `json:"accepted_at"`
+		AppliedAt          *string  `json:"applied_at,omitempty"`
+		ControlId          string   `json:"control_id"`
+		DeliveredAt        *string  `json:"delivered_at,omitempty"`
+		Reason             *string  `json:"reason,omitempty"`
+		ReleasedControlIds []string `json:"released_control_ids,omitempty"`
+		Seq                int64    `json:"seq"`
+		State              string   `json:"state"`
+		SupersededAt       *string  `json:"superseded_at,omitempty"`
+		SupersededBySeq    *int64   `json:"superseded_by_seq,omitempty"`
+		Verb               string   `json:"verb"`
+	} `json:"control_receipt,omitempty"`
+	CreatedAt     string              `json:"created_at"`
+	HistoryOrigin *HistoryEntryOrigin `json:"history_origin,omitempty"`
 	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/SubagentStateFrame.yaml.
-	Seq             *int64 `json:"seq,omitempty"`
-	SessionId       string `json:"session_id"`
-	SpanId          string `json:"span_id"`
-	State           string `json:"state"`
-	SteeringReceipt *struct {
-		AppliedAt     string `json:"applied_at"`
-		CorrelationId string `json:"correlation_id"`
-	} `json:"steering_receipt,omitempty"`
-	Type string `json:"type"`
+	Seq       *int64 `json:"seq,omitempty"`
+	SessionId string `json:"session_id"`
+	SpanId    string `json:"span_id"`
+	State     string `json:"state"`
+	Type      string `json:"type"`
 }
 
 // SystemOverloadFrame — Server → client system at capacity (FR-016, MAJ-009). Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class not yet assigned by the ADR-057 W5 audit (FR-089).
@@ -1113,10 +1677,17 @@ type TaskStatusChangedFrame struct {
 type TokenFrame struct {
 	AgentId *string `json:"agent_id,omitempty"`
 	Content string  `json:"content"`
+	// session-core FR-039 / C-GOAL. The goal this producing turn was dispatched under (captured at turn start from the session's active goal record) and stamped onto every token of the turn. Lets the SPA join the bubble to the EXACT keyed goal criteria (goalPills[goal_id]) instead of the latest-goal scalar. Absent means UNKNOWN association (the turn ran under no proven goal); a later goal's frame must never rebind this bubble.
+	GoalId *string `json:"goal_id,omitempty"`
 	// #823 catch-up redesign. Identifies the specific assistant message (bubble) this token belongs to, stable across reconnect/catch-up.
 	MessageId *string `json:"message_id,omitempty"`
 	// Set only on a catch-up token: REPLACES the open bubble's content for this session instead of appending, making catch-up idempotent.
 	Replace *bool `json:"replace,omitempty"`
+	// Present only on a guest reply: the message_id of the admitted request this answer addresses.
+	ReplyToMessageId   *string          `json:"reply_to_message_id,omitempty"`
+	ReplyToParticipant *ChatParticipant `json:"reply_to_participant,omitempty"`
+	// Spec omnipus-system-agent K33 (FR-202, FR-215). Present when this main-session entry is a room request to this agent or this agent's answer into a room, so live, history and replay render the same collapsed entry.
+	RoomRef *RoomRef `json:"room_ref,omitempty"`
 	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy (e.g. a projection token inside a snapshot). Keep in sync by hand with contracts/components/schemas/TokenFrame.yaml.
 	Seq       *int64 `json:"seq,omitempty"`
 	SessionId string `json:"session_id"`
@@ -1127,11 +1698,19 @@ type TokenFrame struct {
 
 // ToolApprovalRequiredFrame — Server → client tool approval needed (FR-011, FR-082). CRITICAL: args MUST be object (never null). Backend coerces nil → {}. SPA calls Object.keys(args) — null crashes at render time (Ava-chat bug). Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (a) per the ADR-057 W5 audit (FR-089) — genuinely child-turn-produced.
 type ToolApprovalRequiredFrame struct {
-	AgentId    string `json:"agent_id"`
-	ApprovalId string `json:"approval_id"`
+	// L1-AMENDMENTS-20261013 §1.3 (#1263; spec K7). Display name of the agent that made the call, named in the card header.
+	ActingAgentName *string `json:"acting_agent_name,omitempty"`
+	AgentId         string  `json:"agent_id"`
+	ApprovalId      string  `json:"approval_id"`
 	// Tool invocation arguments. Always object, never null. Required + object type so the Phase 4 contract test catches any nil regression.
 	Args        map[string]any `json:"args"`
 	ExpiresInMs int            `json:"expires_in_ms"`
+	// Spec K7, §6.18. Server-derived turn origin, e.g. "while answering <person> on <connection>", "for group <name>", "asked by <Agent>". Omitted for a plain web turn.
+	OriginLabel *string `json:"origin_label,omitempty"`
+	// Spec K7, FR-251. Present on a room's pre-admission approval card (request id = delivery id).
+	RoomRef *RoomRef `json:"room_ref,omitempty"`
+	// L1-AMENDMENTS-20261013 §1.3 (#1263). Server-derived root of the acting session's chain (ParentSessionID walk, 16 hops, cycle guard). Identifies the related root chat without prescribing the approval's UI placement. Omitted when equal to session_id.
+	RootSessionId *string `json:"root_session_id,omitempty"`
 	// ADR-092 D3/D4 per-segment breakdown of a bash approval. Present on every tool_approval_required whose tool_name is "bash" and whose args carry a non-empty command string, built with the bash tool's own segment splitter and program resolution. A single, unchained command still has exactly one entry so the SPA has one rendering path. Absent for every other tool. Offer the "prefix" scope only when a segment's prefix_available is true.
 	Segments   []CommandSegmentInfo `json:"segments,omitempty"`
 	SessionId  string               `json:"session_id"`
@@ -1139,16 +1718,18 @@ type ToolApprovalRequiredFrame struct {
 	ToolName   string               `json:"tool_name"`
 	TurnId     string               `json:"turn_id"`
 	Type       string               `json:"type"`
-	// Workspace the requesting session belongs to (resolved server-side from session meta, walking up to the delegating parent). The SPA shows the approval only while that workspace is active. Omitted when the session belongs to no workspace (shown everywhere).
+	// Workspace attribution for the requesting session, resolved server-side from session metadata or its delegating parent when a delegated child has none. Omitted when the session belongs to no workspace.
 	WorkspaceId *string `json:"workspace_id,omitempty"`
 }
 
 // ToolApprovalResolvedFrame — Server → client. Emitted once, to every connected client, when a pending tool approval leaves the pending state for ANY reason (a decision from any tab, timeout, Stop/cancel, agent deletion, batch short-circuit, shutdown). The SPA drops the matching queue entry and remembers the id so a late snapshot cannot resurrect it. THIS is the GENERATING copy; components/schemas/ToolApprovalResolvedFrame.yaml exists for the Constraint #8 process and the inboundschemas sync — keep both in sync by hand.
 type ToolApprovalResolvedFrame struct {
-	ApprovalId string  `json:"approval_id"`
-	SessionId  *string `json:"session_id,omitempty"`
-	State      string  `json:"state"`
-	Type       string  `json:"type"`
+	ApprovalId string `json:"approval_id"`
+	// L1-AMENDMENTS-20261013 §1.3 (#1263). Server-derived root of the acting session's chain (ParentSessionID walk, 16 hops, cycle guard): lets the root chat's card clear without a lookup. Omitted when equal to session_id.
+	RootSessionId *string `json:"root_session_id,omitempty"`
+	SessionId     *string `json:"session_id,omitempty"`
+	State         string  `json:"state"`
+	Type          string  `json:"type"`
 }
 
 // ToolArgumentRefusal — ADR-066 D4 / spec FR-016 (T066-01 schema, T066-04 producer): structured tool-result payload returned INSTEAD of executing a tool call whose serialised arguments exceed the builtin success cap (ContextSettings.builtin_success_cap, 64,000 chars by default). The tool does not run, the turn is not fatal, and the model sees the refusal — naming the tool, the size it sent and the cap — so it can retry smaller. ADR-060 family member: inline schema with a const `error` discriminator, one exported *Code constant in pkg/tools/result.go, a single producer routed through marshalWithinBudget, and an entry in scripts/check-no-handwritten-wire-types.sh's KNOWN_STRUCTURED_FAILURE_DISCRIMINATORS register. toolResult-channel (ADR-060 D2): the refusal IS the tool's result, so it passes the D4 choke point like any other result (US-5.AC3) and flows through ToolCallResultFrame.result live and ToolCall.Error on replay — hence its entry in ToolCallResultFrame.result's oneOf below and in pkg/gateway/tool_result_store.go's allow-list (derived from pkg/tools.AllStructuredFailureCodes()). The SPA detector is stream B5's.
@@ -1175,12 +1756,13 @@ type ToolAssemblyDuplicate struct {
 
 // ToolCallResultFrame — Server → client tool execution completed. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (a) per the ADR-057 W5 audit (FR-089) — genuinely child-turn-produced.
 type ToolCallResultFrame struct {
-	AgentId      *string `json:"agent_id,omitempty"`
-	CallId       string  `json:"call_id"`
-	DurationMs   *int    `json:"duration_ms,omitempty"`
-	Error        *string `json:"error,omitempty"`
-	ParentCallId *string `json:"parent_call_id,omitempty"`
-	// Tool return value. Any JSON type or null (null is the contract for error frames). Sentinels TruncatedResult, MarshalErrorResult, and ToolResultRef are alternative shapes. Real oneOf (round-2 hardening, ADR-060 finding F1). The previous revision switched this to `anyOf` reasoning that branch 1's permissive `type: [object, array, ...]` already matched every object, so a genuine oneOf would double-match every $ref sentinel/family member against its own union. That diagnosis was correct but `anyOf` was the wrong fix: under `anyOf` nothing is ever rejected, including a malformed PermissionDenied missing `permanent` — the seven $refs below became unreachable as constraints, which nullifies ADR-060 §7 item 2's own rationale for admitting new members ("when the union is ever made executable, a member missing from it would be the silent-drop failure ADR-058 §7 item 4 warned about" — an anyOf over a universal branch can never be made executable). Fixed here with a real `oneOf`: the single permissive branch is split into (a) an unconditional non-object catch-all (array/string/number/boolean/null — the JSON Schema `required` keyword is inapplicable to non-object instances, so no exclusion is needed there) and (b) an object catch-all that excludes every reserved discriminator key the nine $refs below use (seven at ADR-060 time; ADR-066 T066-01 added ToolArgumentRefusal and ToolResultRecallMark) — `_truncated`, `_marshal_error`, `_ref`, `error` — via `not: {anyOf: [{required: [...]}, ...]}`. With that split, exactly one branch matches a plain scalar/array/object and exactly one matches a valid named shape; a payload carrying a reserved key but failing its own $ref (e.g. PermissionDenied missing `permanent`) matches none and is correctly rejected, rather than silently passing through branch (b). ADR-034's external-file-$ref constraint does not block this — these are internal `#/components/schemas/...` refs (D4). Verified by compiling this exact file with santhosh-tekuri/jsonschema/v6: pkg/api/generated/contract_test.go wraps one fixture per family member in a real ToolCallResultFrame and validates it end-to-end; pkg/gateway/structured_failure_discriminator_coverage_test.go validates each producer's output standalone and asserts a malformed member is rejected. F13 follow-up hardening: the object catch-all's `error` exclusion below now keys on `error` being a STRING, not merely present — see that branch's own description for why (settleAskToolCallTranscript / buildSyncDelegateResult persist a boolean `error` flag on an ordinary object, which is not an attempt at any of the four `error`-keyed $refs and must still match the catch-all). Regression fixture: pkg/api/generated/tool_call_result_error_key_contract_test.go. Still documentary in the generated artifacts (ADR-060 D6): the asyncapi->Go converter (scripts/gen-asyncapi-go) and the TS/Zod generator both key off "is this schema a oneOf/anyOf with no top-level type", which is unchanged by this edit — TS still emits `result: z.unknown()`, Go still emits `Result any`. So this is a spec-correctness fix (the union now actually constrains what a conformant producer may emit) with no generated-code behavior change; the hand-written detectors (isPermissionDenied and friends) remain the real enforcement at the SPA read boundary.
+	AgentId       *string             `json:"agent_id,omitempty"`
+	CallId        string              `json:"call_id"`
+	DurationMs    *int                `json:"duration_ms,omitempty"`
+	Error         *string             `json:"error,omitempty"`
+	HistoryOrigin *HistoryEntryOrigin `json:"history_origin,omitempty"`
+	ParentCallId  *string             `json:"parent_call_id,omitempty"`
+	// Tool return value. Any JSON type or null (null is the contract for error frames and cancelled calls with no admitted result). Sentinels TruncatedResult, MarshalErrorResult, and ToolResultRef are alternative shapes. Real oneOf (round-2 hardening, ADR-060 finding F1). The previous revision switched this to `anyOf` reasoning that branch 1's permissive `type: [object, array, ...]` already matched every object, so a genuine oneOf would double-match every $ref sentinel/family member against its own union. That diagnosis was correct but `anyOf` was the wrong fix: under `anyOf` nothing is ever rejected, including a malformed PermissionDenied missing `permanent` — the seven $refs below became unreachable as constraints, which nullifies ADR-060 §7 item 2's own rationale for admitting new members ("when the union is ever made executable, a member missing from it would be the silent-drop failure ADR-058 §7 item 4 warned about" — an anyOf over a universal branch can never be made executable). Fixed here with a real `oneOf`: the single permissive branch is split into (a) an unconditional non-object catch-all (array/string/number/boolean/null — the JSON Schema `required` keyword is inapplicable to non-object instances, so no exclusion is needed there) and (b) an object catch-all that excludes every reserved discriminator key the ten $refs below use (seven at ADR-060 time; ADR-066 T066-01 added ToolArgumentRefusal and ToolResultRecallMark; #1452 D2 added HistoryResultPreview) — `_truncated`, `_marshal_error`, `_ref`, `_history_preview`, `error` — via `not: {anyOf: [{required: [...]}, ...]}`. With that split, exactly one branch matches a plain scalar/array/object and exactly one matches a valid named shape; a payload carrying a reserved key but failing its own $ref (e.g. PermissionDenied missing `permanent`) matches none and is correctly rejected, rather than silently passing through branch (b). ADR-034's external-file-$ref constraint does not block this — these are internal `#/components/schemas/...` refs (D4). Verified by compiling this exact file with santhosh-tekuri/jsonschema/v6: pkg/api/generated/contract_test.go wraps one fixture per family member in a real ToolCallResultFrame and validates it end-to-end; pkg/gateway/structured_failure_discriminator_coverage_test.go validates each producer's output standalone and asserts a malformed member is rejected. F13 follow-up hardening: the object catch-all's `error` exclusion below now keys on `error` being a STRING, not merely present — see that branch's own description for why (settleAskToolCallTranscript / buildSyncDelegateResult persist a boolean `error` flag on an ordinary object, which is not an attempt at any of the four `error`-keyed $refs and must still match the catch-all). Regression fixture: pkg/api/generated/tool_call_result_error_key_contract_test.go. Still documentary in the generated artifacts (ADR-060 D6): the asyncapi->Go converter (scripts/gen-asyncapi-go) and the TS/Zod generator both key off "is this schema a oneOf/anyOf with no top-level type", which is unchanged by this edit — TS still emits `result: z.unknown()`, Go still emits `Result any`. So this is a spec-correctness fix (the union now actually constrains what a conformant producer may emit) with no generated-code behavior change; the hand-written detectors (isPermissionDenied and friends) remain the real enforcement at the SPA read boundary.
 	Result any `json:"result"`
 	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/ToolCallResultFrame.yaml.
 	Seq       *int64 `json:"seq,omitempty"`
@@ -1192,8 +1774,9 @@ type ToolCallResultFrame struct {
 
 // ToolCallStartFrame — Server → client tool execution started. params MUST be object (never null) — nil-safety contract to prevent Object.keys(params) crash. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (a) per the ADR-057 W5 audit (FR-089) — genuinely child-turn-produced.
 type ToolCallStartFrame struct {
-	AgentId *string `json:"agent_id,omitempty"`
-	CallId  string  `json:"call_id"`
+	AgentId       *string             `json:"agent_id,omitempty"`
+	CallId        string              `json:"call_id"`
+	HistoryOrigin *HistoryEntryOrigin `json:"history_origin,omitempty"`
 	// Tool arguments. Always object, never null.
 	Params       map[string]any `json:"params"`
 	ParentCallId *string        `json:"parent_call_id,omitempty"`
@@ -1264,9 +1847,12 @@ type UserMessageFrame struct {
 		Size     int64  `json:"size"`
 		Type     string `json:"type"`
 	} `json:"attachments,omitempty"`
-	ClientMessageId *string `json:"client_message_id,omitempty"`
-	Content         string  `json:"content"`
-	Id              string  `json:"id"`
+	ClientMessageId *string          `json:"client_message_id,omitempty"`
+	Content         string           `json:"content"`
+	Id              string           `json:"id"`
+	Participant     *ChatParticipant `json:"participant,omitempty"`
+	// Spec omnipus-system-agent K33 (FR-202, FR-215). Present when this main-session entry is a room request to this agent or this agent's answer into a room, so live, history and replay render the same collapsed entry.
+	RoomRef *RoomRef `json:"room_ref,omitempty"`
 	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy.
 	Seq       *int64 `json:"seq,omitempty"`
 	SessionId string `json:"session_id"`
@@ -1279,15 +1865,31 @@ type WhatsAppPairingFrame struct {
 	ChannelId string  `json:"channel_id"`
 	Message   *string `json:"message,omitempty"`
 	Qr        *string `json:"qr,omitempty"`
+	// Spec omnipus-system-agent K10 (FR-081). Correlates the pairing with the chat request that started it (QR pairing in chat, WU-7).
+	RequestId *string `json:"request_id,omitempty"`
+	// Spec K10. The chat session the pairing belongs to, when it was started from a chat.
+	SessionId *string `json:"session_id,omitempty"`
 	Status    string  `json:"status"`
 	Type      string  `json:"type"`
 }
 
-// WhatsAppPairingSubscribeFrame — Client → server. Registers or clears this connection's interest in a channel's whatsapp_pairing frames so the QR is delivered only to the operator viewing that channel's pairing UI (#283).
+// WhatsAppPairingSubscribeFrame — Client → server. Registers or clears this connection's interest in a channel's whatsapp_pairing frames so the QR is delivered only to the operator viewing that channel's pairing UI (#283). Subscribing (including the automatic re-subscribe on reconnect) only observes pairing frames: it never restores chat ownership of a pairing and never restarts pairing. A chat Retry claims ownership through PUT /api/v1/channels/{id}/enable with pairing_retry.
 type WhatsAppPairingSubscribeFrame struct {
 	Active    bool   `json:"active"`
 	ChannelId string `json:"channel_id"`
-	Type      string `json:"type"`
+	// Spec omnipus-system-agent K10 (FR-081). Correlation hint naming the chat request that started the pairing (QR pairing in chat, WU-7). It is not authority: subscribing never restores ownership.
+	RequestId *string `json:"request_id,omitempty"`
+	// Spec K10. Correlation hint naming the chat session the pairing belongs to, when it was started from a chat. It is not authority: subscribing never restores ownership.
+	SessionId *string `json:"session_id,omitempty"`
+	Type      string  `json:"type"`
+}
+
+// WorkflowStart — Optional target data on a MessageFrame that starts an Omnipus workflow from a screen (spec omnipus-system-agent K8; FR-012). Target data only — it names which workflow and which workspace the user picked; it is never an instruction and grants nothing. The server treats it as data for the Omnipus turn (landing 1, WU-10). Mirrored inline in contracts/asyncapi.yaml (components.schemas.WorkflowStart) — keep both copies in sync by hand.
+type WorkflowStart struct {
+	// The workspace the workflow targets.
+	TargetWorkspaceId string `json:"target_workspace_id"`
+	// W1 — create an agent in a workspace; W18 — set up a whole team.
+	Workflow string `json:"workflow"`
 }
 
 // WsFrameType — Enum of all WebSocket frame type discriminator strings.
@@ -1298,10 +1900,10 @@ const (
 	WsFrameTypeAuth                     WsFrameType = "auth"
 	WsFrameTypeMessage                  WsFrameType = "message"
 	WsFrameTypeCancel                   WsFrameType = "cancel"
+	WsFrameTypeRedirect                 WsFrameType = "redirect"
 	WsFrameTypePing                     WsFrameType = "ping"
 	WsFrameTypeAttachSession            WsFrameType = "attach_session"
 	WsFrameTypeDevicePairingResponse    WsFrameType = "device_pairing_response"
-	WsFrameTypeSessionClose             WsFrameType = "session_close"
 	WsFrameTypeSessionStarted           WsFrameType = "session_started"
 	WsFrameTypeMessageStatus            WsFrameType = "message_status"
 	WsFrameTypeToken                    WsFrameType = "token"
@@ -1318,9 +1920,13 @@ const (
 	WsFrameTypeTaskRunStatus            WsFrameType = "task_run_status"
 	WsFrameTypeReplayMessage            WsFrameType = "replay_message"
 	WsFrameTypeReplayError              WsFrameType = "replay_error"
+	WsFrameTypeReplayProviderFallback   WsFrameType = "replay_provider_fallback"
 	WsFrameTypeRateLimit                WsFrameType = "rate_limit"
+	WsFrameTypeProviderRetry            WsFrameType = "provider_retry"
+	WsFrameTypeProviderStatus           WsFrameType = "provider_status"
+	WsFrameTypeContextWindowNotice      WsFrameType = "context_window_notice"
+	WsFrameTypeProviderFallback         WsFrameType = "provider_fallback"
 	WsFrameTypeMedia                    WsFrameType = "media"
-	WsFrameTypeAgentSwitched            WsFrameType = "agent_switched"
 	WsFrameTypeToolApprovalRequired     WsFrameType = "tool_approval_required"
 	WsFrameTypeToolApprovalResolved     WsFrameType = "tool_approval_resolved"
 	WsFrameTypeSessionState             WsFrameType = "session_state"
@@ -1328,7 +1934,6 @@ const (
 	WsFrameTypeReplayWarning            WsFrameType = "replay_warning"
 	WsFrameTypeCancelStage              WsFrameType = "cancel_stage"
 	WsFrameTypePong                     WsFrameType = "pong"
-	WsFrameTypeSessionCloseAck          WsFrameType = "session_close_ack"
 	WsFrameTypeSessionModeUpdate        WsFrameType = "session_mode_update"
 	WsFrameTypeSessionModeUpdated       WsFrameType = "session_mode_updated"
 	WsFrameTypeDevicePairingRequest     WsFrameType = "device_pairing_request"
@@ -1363,8 +1968,20 @@ const (
 	WsFrameTypeBrowserInputControlAck   WsFrameType = "browser_input_control_ack"
 	WsFrameTypeBrowserHandoverNotice    WsFrameType = "browser_handover_notice"
 	WsFrameTypeGoalOutcome              WsFrameType = "goal_outcome"
+	WsFrameTypeHelperEvent              WsFrameType = "helper_event"
 	WsFrameTypeLibraryChanged           WsFrameType = "library_changed"
 	WsFrameTypeSessionSnapshot          WsFrameType = "session_snapshot"
 	WsFrameTypeCatchUpComplete          WsFrameType = "catch_up_complete"
 	WsFrameTypeUserMessage              WsFrameType = "user_message"
+	WsFrameTypeAgentCreated             WsFrameType = "agent_created"
+	WsFrameTypeMailPanelObserver        WsFrameType = "mail_panel_observer"
+	WsFrameTypeMailPanelObserverAck     WsFrameType = "mail_panel_observer_ack"
+	WsFrameTypeMailPanelObserverError   WsFrameType = "mail_panel_observer_error"
+	WsFrameTypeSecretRequest            WsFrameType = "secret_request"
+	WsFrameTypeSecretRequestResolved    WsFrameType = "secret_request_resolved"
+	WsFrameTypeAttachRoom               WsFrameType = "attach_room"
+	WsFrameTypeRoomSnapshot             WsFrameType = "room_snapshot"
+	WsFrameTypeRoomEntry                WsFrameType = "room_entry"
+	WsFrameTypeRoomMemberState          WsFrameType = "room_member_state"
+	WsFrameTypeRoomMeta                 WsFrameType = "room_meta"
 )

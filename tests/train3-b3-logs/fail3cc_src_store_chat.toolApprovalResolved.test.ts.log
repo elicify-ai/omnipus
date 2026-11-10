@@ -1,0 +1,27 @@
+Warning: Route file "/private/tmp/b3-failproof/src/routes/authValidation.ts" does not export a Route. This file will not be included in the route tree.
+
+If this file is not intended to be a route, you can exclude it using one of these options:
+  1. Rename the file to "/private/tmp/b3-failproof/src/routes/-authValidation.ts" (prefix with "-")
+  2. Use 'routeFileIgnorePattern' in your config to match this file
+
+Current configuration:
+  routeFileIgnorePrefix: "-"
+  routeFileIgnorePattern: undefined
+Warning: Route file "/private/tmp/b3-failproof/src/routes/authValidation.test.ts" does not export a Route. This file will not be included in the route tree.
+
+If this file is not intended to be a route, you can exclude it using one of these options:
+  1. Rename the file to "/private/tmp/b3-failproof/src/routes/-authValidation.test.ts" (prefix with "-")
+  2. Use 'routeFileIgnorePattern' in your config to match this file
+
+Current configuration:
+  routeFileIgnorePrefix: "-"
+  routeFileIgnorePattern: undefined
+
+ RUN  v4.1.11 /private/tmp/b3-failproof
+
+
+ Test Files  1 passed (1)
+      Tests  1 passed (1)
+   Start at  18:55:53
+   Duration  3.61s (transform 1.49s, setup 299ms, import 1.90s, tests 25ms, environment 1.11s)
+

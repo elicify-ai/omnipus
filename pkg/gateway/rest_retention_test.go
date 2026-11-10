@@ -341,3 +341,36 @@ func TestHandleRetentionSweep_MethodNotAllowed(t *testing.T) {
 
 	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
 }
+
+// TestHandleRetentionSweep_OnDemand_ExpiresAnAgedArchivePartition is row 8:
+// the on-demand endpoint must drive the WIRED archive-expiry path, not only the
+// generic file walk.
+//
+// A rolled day partition (a "<YYYY-MM-DD>.jsonl" file inside a session
+// directory) is skipped by the generic walk by design — "a rolled day
+// partition: owned by expireArchiveSessions" — so it can only disappear when
+// the archive expiry pass ran. Its removal through this endpoint is therefore
+// proof that RetentionSweep reached pkg/session/archive_expiry.go.
+func TestHandleRetentionSweep_OnDemand_ExpiresAnAgedArchivePartition(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	w := retentionPUT(t, api, `{"session_days": 7, "disabled": false}`)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	store := api.agentLoop.GetSessionStore()
+	require.NotNil(t, store, "session store must be initialized")
+
+	rolled := createRetentionSessionFile(t, store.BaseDir(), "sess-arch", "2026-03-23.jsonl", 30*24*time.Hour)
+
+	w = retentionSweepPOST(t, api)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.EqualValues(t, 1, resp["removed"],
+		"the endpoint must report the archive partition the expiry pass removed")
+
+	if _, err := os.Stat(rolled); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the aged rolled archive partition must be expired by the wired path; stat err=%v", err)
+	}
+}

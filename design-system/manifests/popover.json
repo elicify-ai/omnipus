@@ -72,7 +72,8 @@
       "applicable": true,
       "file": "tests/design-system/browser.spec.ts",
       "test": "Popover [check:popover-browser] browser",
-      "story": "PopoverContract"
+      "story": "PopoverContract",
+      "requiredTargets": [{ "selector": "[data-ds-trigger]", "attribute": "data-ds-trigger", "value": "true" }]
     },
     {
       "id": "popover-pointer",

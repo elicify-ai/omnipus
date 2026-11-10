@@ -13,7 +13,7 @@
 // happily typecheck even if a genuinely-required field were missing.
 //
 // `makeAgent` fills every schema-required field (id, name, type, locked,
-// status, soul, timeout_seconds, max_tool_iterations, memory_enabled — the
+// status, soul, max_tool_iterations, memory_enabled — the
 // last added by ADR-052 FR-039) with a realistic default so a test only has
 // to specify what actually varies for its scenario — the rest can't
 // silently go missing from the fixture.
@@ -24,6 +24,7 @@
 // deterministic without adding hidden cross-test-order coupling.
 
 import type { Agent } from '@/lib/api'
+import type { SessionSnapshotFrame } from '@/lib/api/generated/asyncapi-types'
 
 export function makeAgent(overrides: Partial<Agent> = {}): Agent {
   return {
@@ -34,17 +35,49 @@ export function makeAgent(overrides: Partial<Agent> = {}): Agent {
     needs_model: false,
     status: 'active',
     soul: '',
-    timeout_seconds: 300,
     max_tool_iterations: 50,
+    max_tool_iterations_source: 'global',
+    max_tool_iterations_override_ignored: false,
     // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
     memory_enabled: true,
     ...overrides,
     revision: overrides.revision ?? '0'.repeat(64),
+    // Navigation contract: figure and role are required. After the spread so a
+    // Partial override cannot leave them undefined. Defaults are the contract
+    // examples (AgentFigure Omnipus, AgentRole general).
+    figure: overrides.figure ?? 'Omnipus',
+    role: overrides.role ?? 'general',
     editable_fields: overrides.editable_fields ?? [
       'name', 'description', 'model', 'provider', 'fallback_models', 'model_params',
       'soul', 'memory_enabled', 'voice', 'max_tool_iterations',
       'context_window_override', 'skills', 'tool_policy_changes', 'mcp_servers', 'executor', 'default',
-      'auto_approve_disabled',
     ].map((name) => ({ name, editable: true })),
+  }
+}
+
+// Terminal latest-page metadata for the small narration-only replay fixtures.
+export function makeSnapshotHistory(rowCount: 0 | 1 | 2): Pick<SessionSnapshotFrame, 'has_earlier' | 'has_later' | 'page_info'> {
+  const firstPosition = `hp1_${'A'.repeat(43)}`
+  return {
+    has_earlier: false,
+    has_later: false,
+    page_info: {
+      mode: 'latest',
+      limit: 40,
+      min_rows: 20,
+      row_count: rowCount,
+      source_group_count: rowCount,
+      soft_byte_budget: 4194304,
+      byte_ceiling: 8_388_608, // #1452 D2 A2.3: required server-owned 8 MiB ceiling.
+      projected_bytes: 1024,
+      byte_budget_exceeded: false,
+      stop_reason: 'end',
+      retention_generation: 'snapshot-fixture',
+      context: { spans: [], duplicate_ids: [] },
+      ...(rowCount > 0 ? {
+        first_position: firstPosition,
+        last_position: rowCount === 1 ? firstPosition : `hp1_${'A'.repeat(42)}E`,
+      } : {}),
+    },
   }
 }

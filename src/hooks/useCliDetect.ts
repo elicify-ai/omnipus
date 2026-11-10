@@ -19,7 +19,7 @@ import type { CliDetect } from '@/lib/api'
  * the cli_path field, never to gate anything. A network/auth error is
  * swallowed (fail-soft: no prefill, no crash — FR-019 spirit: detection is
  * never a blocker) but logged via `console.warn` so a real regression isn't
- * silent, matching the pattern already established in `AgentListScreen.tsx`.
+ * silent.
  */
 export function useCliDetect(enabled = true): CliDetect | null {
   const [cliDetect, setCliDetect] = useState<CliDetect | null>(null)

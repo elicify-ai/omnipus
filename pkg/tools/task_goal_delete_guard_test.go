@@ -77,7 +77,9 @@ var knownTaskDeleters = []taskDeleter{
 	// ---- the task-delete surfaces: each must remove the paired goal first --
 	{where: "pkg/gateway.restAPI.handleTaskDelete", mustClean: true},
 	{where: "pkg/tools.TaskDeleteTool.Execute", mustClean: true},
-	{where: "pkg/sysagent/tools.TaskDeleteTool.Execute", mustClean: true},
+	// create_task's rollback after a failed paired-goal write: removes any
+	// partially written goal record first, then the just-saved task.
+	{where: "pkg/tools.taskCreateToolExecute.persistAndRespond", mustClean: true},
 
 	// ---- not task deletes: each states what it actually deletes -----------
 	{
@@ -94,6 +96,21 @@ var knownTaskDeleters = []taskDeleter{
 	{
 		where: "pkg/gateway.restAPI.cleanupWorkspaceUploads",
 		why:   "removes media-library entries staged by a workspace upload. Media entries, not tasks.",
+	},
+	{
+		where: "pkg/gateway.restAPI.deleteChatCopies",
+		why: "removes the chat-copy media-library entries associated with a Library file " +
+			"being deleted (#1449 D26, library.Library.Delete). Media entries, not tasks.",
+	},
+	{
+		where: "pkg/gateway.gatewayRoomDeps.UnpublishAnswerFile",
+		why: "removes the media-library entry a group answer published when the answer is " +
+			"rejected and nothing else keeps it (#1449 FR-078 (4)). Media entries, not tasks.",
+	},
+	{
+		where: "pkg/media/library.Library.PublishWithID",
+		why: "removes the just-uploaded media-library entry whose SHA-256 does not match the " +
+			"staged file (create-or-adopt rollback, #1449 FR-078 (2)). Media entries, not tasks.",
 	},
 	{
 		where: "pkg/channels/feishu.FeishuChannel.ReactToMessage",

@@ -36,15 +36,19 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
@@ -179,45 +183,13 @@ var skillsGateProjectSubdirs = []string{
 }
 
 // Shelf discriminators for classifySkillsGatePath's return value and the
-// FR-071a write-audit record's "shelf" field. Both still classify for audit
-// purposes under D10.3 — only the registry shelf's classification still
-// feeds a read-deny; see isSkillInstructionFileLeaf and the op-dispatch
-// switch in ResolvePath.
+// FR-071a write-audit record's "shelf" field. A registry classification
+// routes writes to the skill change pipeline (skills spec r15 §5.5); see the
+// op-dispatch switch in ResolvePath.
 const (
 	skillShelfRegistry = "registry"
 	skillShelfProject  = "project"
 )
-
-// skillInstructionFileLeaves are the filenames D10.3's narrowed Part A gates
-// — a skill's INSTRUCTIONS, not its directory. Matched case-sensitively
-// against the final path component only (the existing custom-agent-format
-// precedent: structured AGENT.md singular, with legacy AGENTS.md plural
-// still loading as fallback — see CLAUDE.md's "Custom-agent format" note).
-var skillInstructionFileLeaves = map[string]bool{
-	"SKILL.md":  true,
-	"AGENT.md":  true,
-	"AGENTS.md": true,
-}
-
-// isSkillInstructionFileLeaf reports whether rawPath's final path component
-// is one of a skill's recognised instruction filenames (D10.3). Applied only
-// to the REGISTRY shelf's classification — project-shelf paths are never
-// read-denied at all under D10.3, regardless of leaf name.
-func isSkillInstructionFileLeaf(rawPath string) bool {
-	return skillInstructionFileLeaves[filepath.Base(rawPath)]
-}
-
-// isSkillInstructionFile applies isSkillInstructionFileLeaf to BOTH spellings
-// of the path under judgement: as the caller wrote it, and fully resolved.
-// See classifySkillsGate for why one spelling is not enough — an innocuously
-// named symlink in the work dir has a leaf of "notes.md" and a realpath leaf
-// of "SKILL.md".
-func isSkillInstructionFile(rawPath, realAbs string) bool {
-	if isSkillInstructionFileLeaf(rawPath) {
-		return true
-	}
-	return realAbs != "" && isSkillInstructionFileLeaf(realAbs)
-}
 
 // registrySkillsRoot returns the install-wide skills directory
 // ($OMNIPUS_HOME/skills), realpath-resolved when it already exists on disk.
@@ -350,40 +322,12 @@ func classifySkillsGate(rawPath, realAbs string, policy fspolicy.FSPolicy) (shel
 	return classifySkillsGateCandidate(filepath.Clean(realAbs), policy)
 }
 
-// skillsGateDenialError builds the typed refusal ResolvePath returns for a
-// read/list/send of a registry skill's instruction file (D10.3's narrowed
-// Part A). Only ever called with shelf == skillShelfRegistry — D10.3 removed
-// Part B's project-shelf read denial entirely (see the doc comment above
-// classifySkillsGatePath's declaration), and the caller below additionally
-// requires isSkillInstructionFileLeaf(rawPath) before reaching this
-// function, so a registry skill's bundled sibling files are never denied
-// here either.
-func skillsGateDenialError(rawPath string) error {
-	return fmt.Errorf("%w: %q is an installed registry skill's instruction file — load it with the Skill tool, not a file tool (ADR-072 D10.3 Part A)",
-		ErrCarveOut, rawPath)
-}
-
-// skillsRegistryNonReadDenialError refuses a WRITE, SERVE or EXEC whose path
-// lands in the installed registry ($OMNIPUS_HOME/skills).
-//
-// D10.3 narrows the registry gate on the READ side only. Every other op kept
-// the answer it already had: until D10.3 the whole registry was an
-// fspolicy.IsCarveOut root, so ResolvePath refused every op under it
-// unconditionally. Removing it from the app carve-out list (so bundled files
-// could be read) would otherwise have opened writes as a side effect —
-// narrowly but really, since a mount that CONTAINS $OMNIPUS_HOME is allowed
-// with a warning (pkg/workspace/mount.go's CheckMountTarget refuses only a
-// target inside it), and a write under a matched mount root is granted. An
-// agent could then clobber another skill's instructions through write_file.
-// Nothing in D10.3 asks for that, so it stays refused.
-//
-// This costs the sanctioned authoring path nothing: create_skill/edit_skill/
-// install_skill write the registry through pkg/skills' own confined, raw I/O
-// (see the lint allowlist entry for skills_install.go), never through
-// ResolvePath — which is also why this deny is exactly behaviour-preserving
-// rather than a new restriction.
+// skillsRegistryNonReadDenialError refuses a registry write that is not a
+// write to a file inside a skill folder (skills spec r15 §5.5: writes to the
+// skills root and its control entries are refused by the boundary, and a path
+// whose real target leaves the registry is never written through it).
 func skillsRegistryNonReadDenialError(rawPath string, op FSOp) error {
-	return fmt.Errorf("%w: %q is inside the installed skill registry ($OMNIPUS_HOME/skills), which no file tool may %s — use the skill authoring tools (ADR-072 D10/D10.3)",
+	return fmt.Errorf("%w: %q is inside the installed skill registry ($OMNIPUS_HOME/skills), where a file tool may only %s files inside a skill folder",
 		ErrCarveOut, rawPath, op)
 }
 
@@ -424,13 +368,16 @@ var (
 )
 
 // WithReadConfined marks a turn context as running under ADR-084
-// JUDGE-FR-060's read-confinement posture: FSOpRead, FSOpList and FSOpSend
-// are confined to the turn's effective working directory instead of being
-// open outside the secret set.
+// JUDGE-FR-060's read-confinement posture: FSOpRead and FSOpList are
+// confined to the turn's effective working directory plus the workspace's
+// mounts, and FSOpSend to the working directory alone, instead of being open
+// outside the secret set (#920, ADR-081 D6 corrections 1-3).
 //
-// The engine sets this when it dispatches a System-Agent turn (the Judge and
-// PlanSupervisor), at the same place it already sets
-// WithSystemAgentWorkspaceOverride. No tool calls it.
+// The engine sets this only when it dispatches the Judge's review turn
+// (pkg/agent/verifier_adjudication.go dispatchTurn), at the same place it
+// already sets WithSystemAgentWorkspaceOverride. No tool calls it. The Plan
+// Supervisor is NOT read-confined (#920 founder decision D10): its grep
+// follows the ordinary read rule.
 //
 // POLARITY: unset means NOT confined. Passing false is therefore identical
 // to never calling this at all, and every turn that does not opt in keeps
@@ -506,10 +453,14 @@ var (
 // SetSkillsWriteAuditLogger installs (or, with nil, clears) the process-wide
 // audit.Logger ResolvePath's write hook uses. Safe to call multiple times
 // (idempotent, mirrors SetProcessChainKey); the last caller wins.
+//
+// The same logger receives the change pipeline's skill.write events
+// (skills spec r15 §5.12), so one setter wires every skill write audit.
 func SetSkillsWriteAuditLogger(l *audit.Logger) {
 	skillsWriteAuditMu.Lock()
 	defer skillsWriteAuditMu.Unlock()
 	skillsWriteAuditLogger = l
+	skills.SetAuditLogger(l)
 }
 
 func getSkillsWriteAuditLogger() *audit.Logger {
@@ -570,7 +521,7 @@ func emitSkillPathWriteAudit(fields skillsWriteAuditFields, resolvedPath string)
 // (emitSkillPathWriteAudit, fired from PathHandle.WriteFile) covers every
 // write reaching a recognised skills location through a generic file tool
 // (write_file, edit_file, ...), but the ADR-072 D6.1 authoring path —
-// create_skill/edit_skill/remove_skill resolved against a workspace's
+// edit_skill resolved against a workspace's
 // project shelf via skills.ResolveProjectSkillWriter — writes through
 // pkg/skills' own confined, raw os.* I/O (mirroring how the registry-shelf
 // authoring path already worked before D6.1.1 moved the hook here), so
@@ -625,6 +576,21 @@ type PathHandle struct {
 	// classifySkillsGatePath. WriteFile below emits the D6.1.1/FR-071 audit
 	// record from it AFTER the write actually succeeds, never before.
 	skillsWriteAudit *skillsWriteAuditFields
+
+	// readOnly makes the "this handle only ever reads" invariant a type-level
+	// property instead of caller discipline (T2, type-design-analyzer finding
+	// on the 8-reviewer #920 gate). Set only by readConfinedMountHandle,
+	// below — the Judge's read-confined FSOpRead/FSOpList reach into a
+	// workspace mount. Every write-capable method (WriteFile, MkdirAll —
+	// PathHandle's only two) checks it first and returns ErrHandleReadOnly
+	// immediately, before doing any I/O.
+	readOnly bool
+
+	// skillWrite is non-nil exactly when ResolvePath classified an FSOpWrite
+	// target as a file inside an installed skill folder (skills spec r15
+	// §5.5). WriteFile then delegates to skills.ApplyChange instead of doing
+	// raw I/O, and MkdirAll refuses (the pipeline creates folders itself).
+	skillWrite *skillWriteTarget
 }
 
 // recheckUnrestrictedCarveOut re-resolves h.abs (following any symlink that
@@ -680,6 +646,12 @@ func (h *PathHandle) ReadFile() ([]byte, error) {
 // sandboxFs.WriteFile used for the confined (root-backed) case, and
 // fileutil.WriteFileAtomic's contract for the unrestricted (host) case.
 func (h *PathHandle) WriteFile(data []byte) error {
+	if h.readOnly {
+		return ErrHandleReadOnly
+	}
+	if h.skillWrite != nil {
+		return h.skillWrite.write(data)
+	}
 	if h.root == nil {
 		if err := h.recheckUnrestrictedCarveOut(); err != nil {
 			return err
@@ -721,7 +693,8 @@ func (h *PathHandle) ReadDir() ([]os.DirEntry, error) {
 		}
 		return entries, nil
 	}
-	entries, err := fs.ReadDir(h.root.FS(), h.rel)
+	// Root.FS uses io/fs names; h.rel stays OS-native for the os.Root methods.
+	entries, err := fs.ReadDir(h.root.FS(), filepath.ToSlash(h.rel))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read directory: %w", err)
 	}
@@ -746,6 +719,38 @@ func (h *PathHandle) Open() (fs.File, error) {
 	f, err := h.root.Open(h.rel)
 	if err != nil {
 		return nil, wrapOpenErr(err)
+	}
+	return f, nil
+}
+
+var errReadSourceNotRegular = errors.New("not a regular file")
+
+// OpenNonBlockingRead opens an ordinary read_file target once through the
+// already-authorized handle, then checks the kind on that same descriptor.
+// Directories remain openable so the existing directory-read error is kept;
+// a FIFO or device is refused without ever blocking the turn.
+func (h *PathHandle) OpenNonBlockingRead() (fs.File, error) {
+	var f *os.File
+	var err error
+	if h.root == nil {
+		if carveErr := h.recheckUnrestrictedCarveOut(); carveErr != nil {
+			return nil, carveErr
+		}
+		f, err = os.OpenFile(h.abs, regularReadOpenFlags(), 0)
+	} else {
+		f, err = h.root.OpenFile(h.rel, regularReadOpenFlags(), 0)
+	}
+	if err != nil {
+		return nil, wrapOpenErr(err)
+	}
+	info, statErr := f.Stat()
+	if statErr != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("failed to stat opened file: %w", statErr)
+	}
+	if !info.IsDir() && !info.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, errReadSourceNotRegular
 	}
 	return f, nil
 }
@@ -783,6 +788,12 @@ func (h *PathHandle) OpenRegularNonBlocking() (fs.File, error) {
 
 // MkdirAll creates the handle's target directory (and any missing parents).
 func (h *PathHandle) MkdirAll(perm os.FileMode) error {
+	if h.readOnly {
+		return ErrHandleReadOnly
+	}
+	if h.skillWrite != nil {
+		return fmt.Errorf("%w: folders inside a skill are created by writing files into them", ErrCarveOut)
+	}
 	if h.root == nil {
 		if err := h.recheckUnrestrictedCarveOut(); err != nil {
 			return err
@@ -919,9 +930,11 @@ type resolvePath struct {
 //     (root==nil) is returned, independent of policy.Scope. The ONE
 //     exception is policy.ReadConfined (ADR-084 JUDGE-FR-060): a
 //     read-confined turn is refused with ErrOutsideScope here instead,
-//     for all three of these operations. ReadConfined is false on every
-//     policy that did not explicitly ask for it, so this exception
-//     changes nothing for any non-System agent.
+//     except that FSOpRead/FSOpList inside a workspace mount
+//     (policy.AllowedRoots) are admitted through a mount-anchored os.Root
+//     handle (#920, ADR-081 D6 corrections 1-3); FSOpSend stays refused.
+//     ReadConfined is false on every policy that did not explicitly ask
+//     for it, so this exception changes nothing for any other turn.
 //     - FSOpWrite, FSOpServe: allowed only when the realpath also falls
 //     within one of policy.AllowedRoots (a workspace mount) — refused
 //     with ErrOutsideScope otherwise, independent of policy.Scope. This
@@ -1006,6 +1019,15 @@ func (rp *resolvePath) validateInputs() error {
 	return nil
 }
 
+// protectedPathDenial classifies an already resolved protected path. The
+// predicate remains the authority; this helper only preserves the Skill redirect.
+func (rp *resolvePath) protectedPathDenial(realAbs string) error {
+	if !fspolicy.IsCarveOut(realAbs, rp.policy) {
+		return nil
+	}
+	return ErrCarveOut
+}
+
 // resolveValidatedPath resolves and gates the validated path, then returns the appropriate host, mount, or workspace-rooted handle.
 func (rp *resolvePath) resolveValidatedPath() (*PathHandle, error) {
 	realWorkDir, err := resolveRealpathUnderWorkDir(rp.policy.WorkDir, "")
@@ -1018,59 +1040,15 @@ func (rp *resolvePath) resolveValidatedPath() (*PathHandle, error) {
 		return nil, fmt.Errorf("%w: %w", ErrPathInvalid, err)
 	}
 
-	if fspolicy.IsCarveOut(realAbs, rp.policy) {
-		return nil, ErrCarveOut
+	if denial := rp.protectedPathDenial(realAbs); denial != nil {
+		return nil, denial
 	}
 
-	// ADR-072 D10.3 (read gate, narrowed) / D6.1.1 (write audit): classify the
-	// path against the two recognised skills locations — the installed
-	// registry and any mount's project-skills subdirectory — BEFORE the
-	// ordinary in-workspace/outside-workspace dispatch below, so the gate
-	// applies uniformly regardless of which branch would otherwise handle
-	// this op and regardless of policy.Scope (matching the carve-out check
-	// just above, which is itself unconditional for the same reason).
-	//
-	// The carve-out check above does NOT cover the registry skills directory
-	// (ADR-072 D10.3 removed it from the app layer's carve-out roots so this
-	// finer gate could exist at all — see the block comment on
-	// skillsGateProjectSubdirs). This is the whole app-layer rule for skills;
-	// nothing underneath it will catch what it misses.
-	//
-	// D10.3: only a REGISTRY-shelf path whose leaf is a recognised
-	// instruction filename is refused for a read/list/send (FR-057/061a-c) —
-	// a bundled sibling file, and any project-shelf path at all (D4.1 already
-	// makes the mount the grant; Part B's directory-wide project deny is
-	// removed, it protected nothing), are left to the ordinary open-read rule
-	// below. A write is left to proceed exactly as it otherwise would (D6.1:
-	// writes are not gated by the read gate) but carries the classification
-	// forward onto the returned handle so WriteFile can audit it once the
-	// write actually succeeds (FR-071/071a/071c) — write auditing still
-	// applies to BOTH shelves and to every file in a classified directory,
-	// not just instruction files, since D6.1.1's audit trail is about who
-	// wrote into a recognised skills location, not what they wrote.
-	var skillsWriteAudit *skillsWriteAuditFields
-	if shelf, matched := classifySkillsGate(rp.rawPath, realAbs, rp.policy); matched {
-		switch rp.op {
-		case FSOpRead, FSOpList, FSOpSend:
-			if shelf == skillShelfRegistry && isSkillInstructionFile(rp.rawPath, realAbs) {
-				return nil, skillsGateDenialError(rp.rawPath)
-			}
-		case FSOpWrite, FSOpServe:
-			if shelf == skillShelfRegistry {
-				return nil, skillsRegistryNonReadDenialError(rp.rawPath, rp.op)
-			}
-			skillsWriteAudit = &skillsWriteAuditFields{
-				shelf:       shelf,
-				toolName:    rp.toolName,
-				agentID:     ToolAgentID(rp.ctx),
-				sessionID:   ToolTranscriptSessionID(rp.ctx),
-				workspaceID: ToolWorkspaceID(rp.ctx),
-			}
-		case FSOpExec:
-			if shelf == skillShelfRegistry {
-				return nil, skillsRegistryNonReadDenialError(rp.rawPath, rp.op)
-			}
-		}
+	// Skills locations (ADR-072 D10.3 / D6.1.1, skills spec r15 §5.5, §6.1):
+	// see skillsGate.
+	skillsHandle, skillsWriteAudit, decided, skillsErr := rp.skillsGate(realAbs)
+	if decided {
+		return skillsHandle, skillsErr
 	}
 
 	if !isWithinWorkspace(realAbs, realWorkDir) {
@@ -1079,10 +1057,12 @@ func (rp *resolvePath) resolveValidatedPath() (*PathHandle, error) {
 		// set unconditionally above (step 2), before op is ever consulted.
 		switch rp.op {
 		case FSOpRead, FSOpList, FSOpSend:
-			// ADR-084 JUDGE-FR-060: a read-confined turn (the Judge and
-			// PlanSupervisor — see fspolicy.FSPolicy.ReadConfined) loses the
+			// ADR-084 JUDGE-FR-060: a read-confined turn (only the Judge's
+			// review turn — see fspolicy.FSPolicy.ReadConfined; the Plan
+			// Supervisor is not read-confined, #920 decision D10) loses the
 			// open-read rule for ALL THREE of these operations and is held
-			// to policy.WorkDir instead.
+			// to policy.WorkDir — plus, for FSOpRead/FSOpList only, the
+			// workspace's mounts (readConfinedMountHandle, #920 D6).
 			//
 			// This is the ONLY behavioural change ADR-084 makes to this
 			// function. Every turn that did not opt in (ReadConfined is the
@@ -1103,6 +1083,9 @@ func (rp *resolvePath) resolveValidatedPath() (*PathHandle, error) {
 			// can plant the link between writing the artifact and the
 			// adjudication reading it.
 			if rp.policy.ReadConfined {
+				if handle, ok, mountErr := rp.readConfinedMountHandle(realAbs); ok {
+					return handle, mountErr
+				}
 				return nil, fmt.Errorf(
 					"%w: %q resolves to %q, outside the effective working directory %q (read-confined turn)",
 					ErrOutsideScope, rp.rawPath, realAbs, rp.policy.WorkDir)
@@ -1229,6 +1212,142 @@ func (rp *resolvePath) resolveValidatedPath() (*PathHandle, error) {
 	}
 
 	return &PathHandle{root: root, rel: rel, abs: realAbs, policy: rp.policy, skillsWriteAudit: skillsWriteAudit}, nil
+}
+
+// skillsGate is the skills-location step of resolveValidatedPath, run after
+// the protected-path check and before the in/outside-workspace dispatch.
+// decided is true when the gate itself answers (a skill-change handle, a
+// read-only exec handle, or a refusal); otherwise writeAudit carries the
+// D6.1.1 write-audit fields (nil when the path is not a skills location).
+func (rp *resolvePath) skillsGate(realAbs string) (handle *PathHandle, writeAudit *skillsWriteAuditFields, decided bool, err error) {
+	// ADR-072 D10.3 (read gate, narrowed) / D6.1.1 (write audit): classify the
+	// path against the two recognised skills locations — the installed
+	// registry and any mount's project-skills subdirectory — BEFORE the
+	// ordinary in-workspace/outside-workspace dispatch below, so the gate
+	// applies uniformly regardless of which branch would otherwise handle
+	// this op and regardless of policy.Scope (matching the carve-out check
+	// just above, which is itself unconditional for the same reason).
+	//
+	// The carve-out check above does NOT cover the registry skills directory
+	// (ADR-072 D10.3 removed it from the app layer's carve-out roots so this
+	// finer gate could exist at all — see the block comment on
+	// skillsGateProjectSubdirs). This is the whole app-layer rule for skills;
+	// nothing underneath it will catch what it misses.
+	//
+	// Skills spec r15 §6.1: reads of the registry are decided by the
+	// predicate above (the loadable set, or every skill for an edit_skill
+	// holder). A registry write becomes a skill change (§5.5) carried by the
+	// returned handle; serve and exec stay refused. Project-shelf writes are
+	// left to the ordinary rules below and carry the D6.1.1 write audit.
+	//
+	// The seen record a read_file / list_directory sets is observed before
+	// the tool reads, so the content the agent sees can only be newer than
+	// the recorded revision — a later write then fails SKILL_CHANGED rather
+	// than overwriting a change the agent never saw.
+	if shelf, matched := classifySkillsGate(rp.rawPath, realAbs, rp.policy); matched {
+		switch rp.op {
+		case FSOpRead, FSOpList, FSOpSend:
+			// Skills spec r15 §6.1: the home-guard predicate (checked just
+			// above) already decided whether this turn may read the skill
+			// path; reads and listings of a readable skill proceed. A
+			// read_file / list_directory inside a skill folder records the
+			// session's "seen" revision (§7.3).
+			if shelf == skillShelfRegistry && rp.op != FSOpSend &&
+				(rp.toolName == "read_file" || rp.toolName == "list_directory") {
+				recordSkillSeen(rp.ctx, realAbs)
+			}
+		case FSOpWrite:
+			if shelf == skillShelfRegistry {
+				// §5.5: a write into a skill folder is a skill change. The
+				// handle delegates to the change pipeline behind the loop's
+				// composition marker (§10.1 item 7); anything else under
+				// the registry (the root, control entries) was already
+				// refused by the predicate, and a path whose real target
+				// leaves the registry is refused here.
+				target, ok := newSkillWriteTarget(rp.ctx, rp.toolName, realAbs)
+				if !ok {
+					return nil, nil, true, skillsRegistryNonReadDenialError(rp.rawPath, rp.op)
+				}
+				return &PathHandle{abs: realAbs, policy: rp.policy, skillWrite: target}, nil, true, nil
+			}
+			writeAudit = &skillsWriteAuditFields{
+				shelf:       shelf,
+				toolName:    rp.toolName,
+				agentID:     ToolAgentID(rp.ctx),
+				sessionID:   ToolTranscriptSessionID(rp.ctx),
+				workspaceID: ToolWorkspaceID(rp.ctx),
+			}
+		case FSOpServe:
+			// The predicate is operation-blind (§6.1 item 4): serving a
+			// readable skill folder follows the ordinary serve rules below.
+			writeAudit = &skillsWriteAuditFields{
+				shelf:       shelf,
+				toolName:    rp.toolName,
+				agentID:     ToolAgentID(rp.ctx),
+				sessionID:   ToolTranscriptSessionID(rp.ctx),
+				workspaceID: ToolWorkspaceID(rp.ctx),
+			}
+		case FSOpExec:
+			if shelf == skillShelfRegistry {
+				// A skill folder the predicate lets this turn read may also
+				// be run from (§6.1 item 4 operation-blind predicate; §5.7
+				// "run scripts with bash"; §6.2 read+execute for children).
+				// The handle never writes: exec never needs it to.
+				return &PathHandle{abs: realAbs, policy: rp.policy, readOnly: true}, nil, true, nil
+			}
+		}
+	}
+	return nil, writeAudit, false, nil
+}
+
+// readConfinedMountHandle is the read-confined mount exception (#920,
+// ADR-081 D6 corrections 1-3; security-lead checks SL-1..SL-3). It reports
+// ok=false — refuse as read-confined — unless all of these hold:
+//
+//   - the op is FSOpRead or FSOpList. FSOpSend stays confined to the work
+//     dir (correction 3): widening it would change nothing reachable today
+//     (the Judge's seed denies send_file) while silently opening an
+//     exfiltration path for any future read-confined role;
+//   - realAbs lies on or under one of policy.AllowedRoots. For a read-
+//     confined policy that list is exactly the workspace's mounts:
+//     ResolveTurnFSPolicy sets it from workspace.AllowedMountRoots, and
+//     ResolvePathAllowingPatterns never appends an operator regex grant to a
+//     read-confined policy (correction 1), so an AllowReadPaths pattern
+//     cannot reopen $OMNIPUS_HOME transcripts here (JUDGE-FR-060).
+//
+// On a match it returns the mount-anchored os.Root handle newMountRootHandle
+// builds for writes (correction 2), never a host-filesystem handle: the
+// reviewed worker may control the mount's contents, and a host-fs handle
+// re-checks only the secret set at I/O time, not containment in the mount.
+//
+// The relative path is derived from realAbs (fully resolved, inside the
+// mount by the check above), not from the caller's spelling. A caller
+// spelling that reaches the mount through a symlink planted in the work dir
+// (`to-mount` -> <mount>/src, DS-3 row 9) has no lexical path under the
+// mount at all, so the write branch's leaf-preserving spelling would refuse
+// it. Anchoring the resolved location instead keeps the guarantee that
+// matters here: os.Root re-resolves every component, leaf included, fresh
+// and confined to the mount at each I/O call, so a component swapped for an
+// outward symlink after this returns fails the read (S-4.6) rather than
+// escaping the mount.
+func (rp *resolvePath) readConfinedMountHandle(realAbs string) (*PathHandle, bool, error) {
+	if rp.op != FSOpRead && rp.op != FSOpList {
+		return nil, false, nil
+	}
+	root, ok := matchedAllowedRoot(realAbs, rp.policy.AllowedRoots)
+	if !ok {
+		return nil, false, nil
+	}
+	handle, err := newMountRootHandle(root, realAbs, realAbs, rp.policy)
+	if handle != nil {
+		// T2: this is the ONLY call site that ever resolves FSOpRead/
+		// FSOpList for a mount handle (the guard at the top of this
+		// function) — mark it read-only at the type level rather than
+		// relying on that guard alone. newMountRootHandle's FSOpWrite/
+		// FSOpServe call site (resolveValidatedPath, above) never sets this.
+		handle.readOnly = true
+	}
+	return handle, true, err
 }
 
 // matchedAllowedRoot reports whether candidate falls on or under any of roots
@@ -1460,10 +1579,70 @@ func ResolveTurnFSPolicy(ctx context.Context, agentHome string, restrict bool, g
 	if mountWorkspaceID != "" {
 		policy.AllowedRoots = workspace.AllowedMountRoots(home, mountWorkspaceID)
 	}
+	if coreagent.HasCrossWorkspaceSetupAuthority(ToolAgentID(ctx)) {
+		var setupErr error
+		if policy, setupErr = withSetupAuthority(policy, home); setupErr != nil {
+			return fspolicy.FSPolicy{}, setupErr
+		}
+	}
+
+	// #1284 home guard (amendment §2 D3): the per-turn allowances ride the
+	// SAME policy object the app-layer predicate (IsCarveOut) evaluates, so
+	// every consumer — ResolvePath, grep, the bash command check, the D7
+	// pre-flight — sees the identical set. EffectiveFSPolicy already seeded
+	// the base entries (media, skills helper files); the turn adds its
+	// session-scoped upload dirs (A4) and its workspace mounts (A2). No
+	// entry can reopen a protected-inventory path: the inventory is
+	// evaluated first and always wins.
+	if policy.HomeGuard.Home != "" {
+		for _, mount := range policy.AllowedRoots {
+			if mount == "" {
+				continue
+			}
+			policy.HomeGuard.Allow = append(policy.HomeGuard.Allow, fspolicy.AllowRoot{Path: filepath.Clean(mount), Writable: true})
+		}
+		for _, sessionID := range []string{ToolTranscriptSessionID(ctx), ToolRootChatSessionID(ctx)} {
+			if dir, ok := media.SessionUploadsDir(sessionID); ok {
+				policy.HomeGuard.Allow = append(policy.HomeGuard.Allow, fspolicy.AllowRoot{Path: filepath.Clean(dir), Writable: false})
+			}
+		}
+		// Skills spec r15 §6.1 item 1: the loadable set and the editor read
+		// extension are filled here and nowhere else.
+		auth := resolveTurnSkillAuthority(policy.HomeGuard.Home, ToolAgentID(ctx))
+		policy.HomeGuard.SkillFolders = auth.folders
+		policy.HomeGuard.SkillsReadAll = auth.readAll
+	}
+
 	if len(grantOverlay) > 0 && len(grantOverlay[0]) > 0 {
 		policy.PathGrants = append(append([]fspolicy.PathGrant(nil), policy.PathGrants...), grantOverlay[0]...)
 	}
 	return policy, nil
+}
+
+// withSetupAuthority adds Omnipus's cross-workspace setup authority to policy
+// (omnipus-system-agent FR-006, L1 amendment §2.2 A8): every workspace's WORK
+// directory becomes a setup root (reachable despite the workspaces/ carve-out,
+// writable through the os.Root-anchored mount handle) and every workspace's
+// mounts become write grants. Workspace records, .omnipus rooms and every other
+// protected entry stay carve-outs. A listing or resolution failure fails the
+// turn's policy closed rather than dropping the authority silently.
+func withSetupAuthority(policy fspolicy.FSPolicy, home string) (fspolicy.FSPolicy, error) {
+	ids, err := workspace.ListWorkspaceIDs(home)
+	if err != nil {
+		return fspolicy.FSPolicy{}, fmt.Errorf("setup authority: list workspaces: %w", err)
+	}
+	roots := make([]string, 0, len(ids))
+	for _, id := range ids {
+		dir, dirErr := workspace.SafeWorkDir(home, id)
+		if dirErr != nil {
+			// A record whose id is not a safe workspace identifier names no
+			// work directory; it grants nothing (never a path probe).
+			continue
+		}
+		roots = append(roots, dir)
+		policy.AllowedRoots = append(policy.AllowedRoots, workspace.AllowedMountRoots(home, id)...)
+	}
+	return fspolicy.WithSetupRoots(policy, roots)
 }
 
 // ResolvePathAllowingPatterns bridges the operator-configured AllowRead/
@@ -1487,10 +1666,14 @@ func ResolveTurnFSPolicy(ctx context.Context, agentHome string, restrict bool, g
 // this axis does NOT reopen a read-confined turn. The call-scoped copy below
 // inherits policy.ReadConfined unchanged, and ResolvePath's outside-WorkDir
 // branch consults ReadConfined BEFORE it consults Scope — so forcing Scope
-// to Unrestricted here cannot lift the confinement. That is the fail-closed
-// direction on purpose: an operator's AllowReadPaths pattern is configured
-// for ordinary agents and may well cover $OMNIPUS_HOME, which is exactly the
-// reach JUDGE-FR-060 exists to take away from a verifier turn.
+// to Unrestricted here cannot lift the confinement. And since that branch
+// now admits reads inside policy.AllowedRoots (the #920 mount exception),
+// the resolved-grant injection into AllowedRoots is skipped for a
+// read-confined policy (ADR-081 D6 correction 1): otherwise the pattern's
+// own location would become a "mount" the Judge may read. That is the
+// fail-closed direction on purpose: an operator's AllowReadPaths pattern is
+// configured for ordinary agents and may well cover $OMNIPUS_HOME, which is
+// exactly the reach JUDGE-FR-060 exists to take away from a verifier turn.
 func ResolvePathAllowingPatterns(
 	ctx context.Context,
 	policy fspolicy.FSPolicy,
@@ -1524,11 +1707,32 @@ func ResolvePathAllowingPatterns(
 			// a wider Unrestricted-for-writes reopening, which would defeat
 			// FR-2.2/FR-2.5's headline change for every OTHER outside-WorkDir
 			// write.
+			//
+			// Never for a read-confined policy (#920, ADR-081 D6 correction
+			// 1): its AllowedRoots must stay exactly the workspace's mounts,
+			// because ResolvePath's read-confined branch admits reads inside
+			// them. The only read-confined turn (the Judge's review) has no
+			// write tool, so this skip removes no write grant in practice.
+			if policy.ReadConfined {
+				return ResolvePath(ctx, granted, toolName, callID, op, rawPath)
+			}
 			if resolvedGrant, resolveErr := resolveRealpathUnderWorkDir(rawPath, policy.WorkDir); resolveErr == nil {
-				grantedRoots := make([]string, 0, len(policy.AllowedRoots)+1)
-				grantedRoots = append(grantedRoots, policy.AllowedRoots...)
-				grantedRoots = append(grantedRoots, resolvedGrant)
-				granted.AllowedRoots = grantedRoots
+				// Copy then append: never alias policy.AllowedRoots' backing
+				// array, and no hand-computed capacity (CodeQL
+				// go/allocation-size-overflow on PR #1037).
+				granted.AllowedRoots = append(slices.Clone(policy.AllowedRoots), resolvedGrant)
+				// #1284 fix round 1 (F3): the same grant rides the home
+				// guard, which is what the default deny actually consults —
+				// an operator pattern for a NON-internal location inside
+				// $OMNIPUS_HOME keeps its permitted access instead of being
+				// refused by a guard the pattern axis never reached. The
+				// structural protected set is evaluated first and always
+				// wins, so this entry cannot reopen it (A2: operator grants
+				// never override the named inventory — uploads is
+				// D2-named-minus-A4, and the internal shapes stay guarded).
+				if granted.HomeGuard.Home != "" && !fspolicy.InventoryGuarded(granted, resolvedGrant) {
+					granted.HomeGuard.Allow = append(granted.HomeGuard.Allow, fspolicy.AllowRoot{Path: resolvedGrant, Writable: true})
+				}
 			}
 
 			return ResolvePath(ctx, granted, toolName, callID, op, rawPath)

@@ -38,6 +38,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { act } from 'react'
 import { useChatStore, getMessages, makeBucketMessages, type ChatMessage } from './chat'
 import { useSessionStore } from './session'
+import { emptyHistoryFixture } from '../../tests/chat-history-paging/empty-history'
 import { useConnectionStore } from './connection'
 import { useChatPreferencesStore } from './chatPreferences'
 import { codeToDisplay } from '@/lib/llm-error'
@@ -83,6 +84,7 @@ function seedBucket(seedMessages: ChatMessage[] = []): void {
     useChatStore.setState(() => ({
       sessionsById: {
         [SID]: {
+          ...emptyHistoryFixture(),
           ...makeBucketMessages(seedMessages),
           toolCalls: {},
           toolCallOrder: [],
@@ -405,5 +407,137 @@ describe('a live error on a second tab does not rewrite the last healthy reply',
     expect(msgs[0].id).toBe('replayed-error')
     expect(msgs[0].status).toBe('error')
     expect(msgs[0].errorCode).toBe('rate_limited')
+  })
+})
+
+// #1081 RC2: the terminal sentence must replace already-streamed narration.
+// Oracle: contracts/asyncapi.yaml, LLMError.x-user-messages.turn_timed_out,
+// read from the generated catalogue (codeToDisplay) instead of pasted by hand
+// — same pattern as RATE_LIMIT_COPY above. This test's load-bearing
+// assertions are about reducer behavior (bubble identity, narration
+// replacement, terminal status, the verbose-detail gate), not about whether
+// codeToMessage('turn_timed_out') itself returns the right sentence.
+// This is a real-store reproduction, NOT a live-browser/delivery capture.
+// GREEN and implementation mutation checks are deferred to independent CHECK.
+describe('#1081 RC2 — narration cannot hide a terminal error', () => {
+  const CONTEXT_ERROR_COPY = codeToDisplay.turn_timed_out
+  const NARRATION = 'Let me check the task list before continuing.'
+  const DETAIL = 'un-emptiable tool-result residue exceeds the absolute tool-result-share bound'
+
+  it.each([
+    { verbose: false, afterDone: false },
+    { verbose: true, afterDone: false },
+    { verbose: false, afterDone: true },
+    { verbose: true, afterDone: true },
+  ])('replaces same-bubble narration with the catalogued error (verbose=$verbose, afterDone=$afterDone)', ({ verbose, afterDone }) => {
+    const placeholder = streamingPlaceholder()
+    const turnId = `rc2-context-turn-${verbose}-${afterDone}`
+    seedBucket([placeholder])
+    useChatPreferencesStore.setState({ verboseChatEnabled: verbose })
+
+    // Narration must come through the production token reducer, not a seed.
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'token',
+        session_id: SID,
+        message_id: placeholder.id,
+        turn_id: turnId,
+        agent_id: 'mia',
+        content: NARRATION,
+      })
+    })
+    const narrated = bucketMessages()
+    expect(narrated, 'the narration token must populate exactly one bubble').toHaveLength(1)
+    expect(narrated[0].id).toBe(placeholder.id)
+    expect(narrated[0].turnId).toBe(turnId)
+    expect(narrated[0].content).toBe(NARRATION)
+    expect(narrated[0].status).toBe('streaming')
+    expect(narrated[0].isStreaming).toBe(true)
+    expect(useChatStore.getState().messages[0].content).toBe(NARRATION)
+
+    act(() => {
+      // ErrorFrame is session-scoped: its contract has no message_id/turn_id.
+      // The same-session terminal error must resolve this existing bubble.
+      useChatStore.getState().handleFrame({
+        type: 'error',
+        session_id: SID,
+        message: CONTEXT_ERROR_COPY,
+        payload: {
+          llm_error: {
+            code: 'turn_timed_out',
+            message: CONTEXT_ERROR_COPY,
+            retryable: false,
+            detail: DETAIL,
+          },
+        },
+      })
+    })
+    if (afterDone) {
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'done',
+          session_id: SID,
+          message_id: placeholder.id,
+          turn_id: turnId,
+          stats: { turn_failed: true },
+        })
+      })
+    }
+
+    const terminal = bucketMessages()
+    expect(terminal, 'the error must resolve the same bubble, not duplicate it').toHaveLength(1)
+    const bubble = terminal[0]
+    expect(bubble.id).toBe(placeholder.id)
+    expect(bubble.turnId).toBe(turnId)
+    expect(bubble.role).toBe('assistant')
+    expect(bubble.status).toBe('error')
+    expect(bubble.errorCode).toBe('turn_timed_out')
+    expect(bubble.isStreaming).toBe(false)
+    expect(useChatStore.getState().sessionsById[SID]?.isStreaming).toBe(false)
+    expect(useChatStore.getState().isStreaming).toBe(false)
+    expect(bubble.errorDetail).toBe(verbose ? DETAIL : undefined)
+    // Stamping status/errorCode alone is not enough: the default-visible text
+    // must say that the turn failed, even when Verbose chat is disabled.
+    expect(bubble.content, '#1081 RC2: terminal copy must replace stale narration').toBe(CONTEXT_ERROR_COPY)
+    expect(useChatStore.getState().messages).toHaveLength(1)
+    expect(useChatStore.getState().messages[0].content, 'the foreground must surface the terminal copy').toBe(CONTEXT_ERROR_COPY)
+  })
+})
+
+// Issue #1306: a Judge that reaches its own check time limit gets its own
+// honest code, judge_time_limit — never the provider-timeout copy and never
+// the generic "unknown" fallback. Oracle: the generated catalogue entry
+// (codeToDisplay.judge_time_limit, emitted from contracts/.../LLMError.yaml) —
+// read, never pasted (TestLLMErrorMessages_NoHandCopiesOutsideTheCatalogue) —
+// plus independent checks that it names the Judge's own time limit.
+describe('#1306 — judge_time_limit renders its own copy', () => {
+  const JUDGE_TIME_LIMIT_COPY = codeToDisplay.judge_time_limit
+
+  it('an error frame with judge_time_limit shows the Judge copy, not a generic or provider message', () => {
+    const placeholder = streamingPlaceholder()
+    seedBucket([placeholder])
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'error',
+        session_id: SID,
+        message: 'server-side text that must not be shown',
+        payload: {
+          llm_error: {
+            code: 'judge_time_limit',
+            message: 'server-side text that must not be shown',
+            retryable: false,
+          },
+        },
+      })
+    })
+    const [bubble] = bucketMessages()
+    expect(bubble.status).toBe('error')
+    expect(bubble.errorCode).toBe('judge_time_limit')
+    expect(JUDGE_TIME_LIMIT_COPY, 'the catalogue must carry judge_time_limit copy').toBeTypeOf('string')
+    expect(bubble.content).toBe(JUDGE_TIME_LIMIT_COPY)
+    expect(bubble.content).toContain('Judge')
+    expect(bubble.content).toContain('check time limit')
+    expect(bubble.content).not.toBe(codeToDisplay.unknown)
+    expect(bubble.content).not.toBe(codeToDisplay.turn_timed_out)
   })
 })

@@ -53,6 +53,17 @@ func (al *AgentLoop) handleCommand(
 	}
 
 	rt := al.buildCommandsRuntime(agent, opts)
+	if clearHistory := rt.ClearHistory; clearHistory != nil {
+		// A /clear that is refused (helper session) or fails is reported for the
+		// person's /clear row; a clear that happens is signalled by its marker.
+		rt.ClearHistory = func() error {
+			err := clearHistory()
+			if err != nil {
+				al.notifyClearNotPerformed(msg)
+			}
+			return err
+		}
+	}
 	executor := commands.NewExecutor(al.cmdRegistry, rt)
 
 	var commandReply string
@@ -89,12 +100,15 @@ func (al *AgentLoop) handleCommand(
 // per-agent grant list, agentCfg.Skills) with opts.ForcedSkills every single
 // message — the exact force-load mechanism the on-demand Skill tool
 // (pkg/tools/skill.go) replaces. A turn's active skills are now only what was
-// explicitly loaded this turn: via opts.ForcedSkills, which the Skill tool's
-// "load" outcome and the pre-existing /<slug> slash-command
-// (applyExplicitSkillCommand) and, pre-ADR-091, delegate's requested_skill
-// (D9, the deleted spawnSubTurn's ForcedSkills append) all populated
-// one-shot, per turn — never via the agent's static grant list, which only
-// gates WHICH skills may be loaded (skillAllowed/D5), not which ones are.
+// explicitly activated this turn: opts.ForcedSkills, whose ONLY writer today
+// is the pre-existing /<slug> slash-command (applyExplicitSkillCommand) —
+// the Skill tool's own "load" outcome does NOT populate it (its loaded
+// instructions come back as an ordinary tool message and stay in the
+// conversation until context trim evicts them). Pre-ADR-091, delegate's
+// requested_skill (D9, the deleted spawnSubTurn's ForcedSkills append) also
+// populated it one-shot, per turn — never via the agent's static grant list,
+// which only gates WHICH skills may be loaded (skillAllowed/D5), not which
+// ones are.
 // See pkg/agent/subturn_identity.go::resolveRequestedSkillForChild's own doc
 // comment for the ADR-091 fix lane RX-SUBTURN finding that requested_skill's
 // grant/deny/unresolvable enforcement has no confirmed production caller
@@ -313,32 +327,26 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 			// PUT /api/v1/agents/{id} model change.
 			return al.ApplyAgentModel(agent.ID, value)
 		}
+		al.wireEffortCommand(rt, agent, opts)
 
 		rt.ClearHistory = func() error {
 			if opts == nil {
 				return fmt.Errorf("process options not available")
 			}
-			if agent.Sessions == nil {
-				return fmt.Errorf("sessions not initialized for agent")
-			}
-
-			return clearSessionWindow(agent.Sessions, opts.SessionKey)
+			return al.clearConversation(context.Background(), agent, opts.SessionKey, opts.TranscriptSessionID)
 		}
 	}
 
-	// Inject the session ID accessor so /cancel can target the current session.
+	// Controls target the issuing conversation, never an agent-wide identity.
 	if opts != nil {
-		sessionKey := opts.SessionKey
-		rt.SessionID = func() string { return sessionKey }
+		sessionID := opts.TranscriptSessionID
+		if sessionID == "" {
+			sessionID = opts.SessionKey
+		}
+		rt.SessionID = func() string { return sessionID }
 	}
 
-	// Inject the agent loop so CancelActiveTurn can call
-	// RequestCancelForSession (ADR-057 FR-100/FR-041: InterruptSession, the
-	// symbol this comment used to name, was retired by U8's collapse of the
-	// four legacy interrupt entry points behind Interrupt/InterruptSessionHard
-	// plus a mandatory InterruptScope; CancelActiveTurn's own call has always
-	// gone through RequestCancelForSession, pkg/commands/runtime.go, never
-	// direct to an Interrupt* function).
+	// The loop supplies the distinct session Stop, tree Stop and redirect seams.
 	rt = rt.WithAgentLoop(al)
 
 	return rt

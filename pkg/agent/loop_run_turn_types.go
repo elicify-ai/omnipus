@@ -22,22 +22,37 @@ import (
 
 // agentLoopRunTurn carries the shared state of runTurn across its stages.
 type agentLoopRunTurn struct {
-	al                 *AgentLoop
-	ts                 *turnState
-	turnCtx            context.Context
-	activeCandidates   []providers.FallbackCandidate
-	activeProvider     providers.LLMProvider
-	iteration          int
-	llmOpts            map[string]any
-	llmModel           string
-	onToolCallProgress protocoltypes.OnToolCallProgress
-	inspectionImages   map[string][]tools.InspectionImage
+	al                       *AgentLoop
+	ts                       *turnState
+	turnCtx                  context.Context
+	activeCandidates         []providers.FallbackCandidate
+	activeProvider           providers.LLMProvider
+	providerSelectionErr     error
+	providerSelectionChecked bool
+	iteration                int
+	llmOpts                  map[string]any
+	llmModel                 string
+	// providerSilence is the current provider round's silence watch (issue
+	// #1478); nil between rounds. Owned by the turn goroutine.
+	providerSilence *providerSilenceWatch
+	// A streaming-capable provider already tried this channel. Do not retry
+	// a declined factory merely to finalize the plain fallback response.
+	streamerLookupDeclined bool
+	onToolCallProgress     protocoltypes.OnToolCallProgress
+	inspectionImages       map[string][]tools.InspectionImage
 	// providerCallStreamedBytes is reset before each single-candidate retry
 	// attempt and counts callback-emitted bytes before streamer.Update. The
 	// successful-response tail flush is outside the error/retry path. This
 	// prevents retrying a 429 after partial output without optional streamer
 	// methods.
 	providerCallStreamedBytes atomic.Int64
+	// providerCallAttachCache scopes ONE provider round (one callProviderOnce):
+	// candidate key → the messages with this candidate's inspection media
+	// attached. §7.4's in-place retries re-invoke the run closure for the SAME
+	// candidate — the retry must re-send the same request, so the attach (and
+	// its per-call Reauthorize) runs once per candidate, not once per call.
+	// Reset on every callProviderOnce entry: a new round attaches fresh.
+	providerCallAttachCache map[string][]providers.Message
 }
 
 // agentLoopRunTurnFallbacks carries the shared state of runTurn across its stages.
@@ -70,7 +85,11 @@ type agentLoopRunTurnIteration struct {
 	// block (loop_run_turn.go's "Inject pending steering messages") can
 	// stamp applied_at and emit one steering_receipt per genuinely injected
 	// steer, never for one still queued.
-	pendingSteeringReceipts      []string
+	pendingSteeringReceipts []string
+	// Live steering can already be in history when another tool response
+	// exhausts this turn. Its one post-ceiling continuation carries no text.
+	inTurnSteering               bool
+	inTurnSteeringOrigin         inputOrigin
 	toolCallTruncationRepairUsed bool
 	gracefulTerminal             bool
 	ret0                         turnResult
@@ -97,8 +116,13 @@ type agentLoopRunTurnResponse struct {
 	orphanMarkup        providers.OrphanToolMarkup
 	hasOrphanMarkup     bool
 	normalizedToolCalls []providers.ToolCall
-	ret0                turnResult
-	ret1                error
+	argumentRefusals    []*tools.ToolResult
+	// recordToolArgs[i] is the r17 SR-3 record copy of normalizedToolCalls[i]:
+	// what every record, log, event and frame carries. Execution alone uses
+	// normalizedToolCalls[i].Arguments.
+	recordToolArgs []map[string]any
+	ret0           turnResult
+	ret1           error
 }
 
 // agentLoopRunTurnTools carries the shared state of runTurn across its stages.
@@ -107,6 +131,11 @@ type agentLoopRunTurnTools struct {
 	rr                 *agentLoopRunTurnResponse
 	turnChannelManager *channels.Manager
 	finalContent       string
+	// finalIsModelAnswer reports that finalContent is the model's own
+	// completed answer (set by finishTextResponse), not a synthetic stop
+	// notice. A truncation outcome is kept separately with its mark when
+	// a late follow-up continues the turn (keepAnswerBeforeSteering).
+	finalIsModelAnswer bool
 	midTurnGuardErr    error
 	ret0               turnResult
 	ret1               error

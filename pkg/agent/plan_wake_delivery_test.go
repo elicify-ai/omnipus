@@ -81,10 +81,7 @@ func (p *recordingTurnProvider) Chat(
 ) (*providers.LLMResponse, error) {
 	p.mu.Lock()
 	p.calls++
-	var last string
-	if len(messages) > 0 {
-		last = messages[len(messages)-1].Content
-	}
+	last := lastConversationMessageForFixture(messages).Content
 	p.prompts = append(p.prompts, last)
 	gate := p.gate
 	if !p.closed {

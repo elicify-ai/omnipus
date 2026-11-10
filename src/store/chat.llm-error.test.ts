@@ -10,31 +10,32 @@
  *  - entry-id dedup: a live error then a replay_error with the same id
  *    produces ONE bubble (no duplication on reload).
  *  - legacy 'error' frames (no payload.llm_error) still render frame.message.
- *  - kickoff-reject and cancel-ack sub-paths are untouched.
+ *  - cancel-ack remains; the retired client kickoff-reject case is removed
+ *    under FR-047/K9, with its exact title/reason recorded in the ledger.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { act } from 'react'
 import { useChatStore, getMessages, makeBucketMessages, type ChatMessage } from './chat'
 import { useSessionStore } from './session'
+import { emptyHistoryFixture } from '../../tests/chat-history-paging/empty-history'
 import { useConnectionStore } from './connection'
 import { useChatPreferencesStore } from './chatPreferences'
-import { useUiStore } from './ui'
 import { codeToDisplay } from '@/lib/llm-error'
-import type { WsReceiveFrame } from '@/lib/ws'
+import type { ServerFrame } from '@/lib/ws'
 
 /**
  * Live ErrorFrame with an optional `entry_id` (read defensively by
  * readEntryIdFromFrame for live→replay dedup). The canonical AsyncAPI
  * ErrorFrame schema does not include entry_id today, so this helper
- * constructs the frame and casts it to WsReceiveFrame for handleFrame.
+ * constructs the frame and casts it to ServerFrame for handleFrame.
  */
 function liveErrorFrame(fields: {
   sessionId?: string
   message: string
   entryId?: string
   llmError?: { code: string; message: string; retryable: boolean; detail?: string }
-}): WsReceiveFrame {
+}): ServerFrame {
   return {
     type: 'error',
     ...(fields.sessionId === undefined ? {} : { session_id: fields.sessionId }),
@@ -43,7 +44,7 @@ function liveErrorFrame(fields: {
     ...(fields.llmError === undefined
       ? {}
       : { payload: { llm_error: fields.llmError } }),
-  } as unknown as WsReceiveFrame
+  } as unknown as ServerFrame
 }
 
 const SID = 'llm-error-test-session'
@@ -87,6 +88,7 @@ function seedEmptyBucket(opts: { isReplaying?: boolean; isStreaming?: boolean } 
     useChatStore.setState({
       sessionsById: {
         [SID]: {
+          ...emptyHistoryFixture(),
           ...makeBucketMessages([]),
           toolCalls: {},
           toolCallOrder: [],
@@ -273,16 +275,9 @@ describe("ADR-051 live 'error' — legacy frame (no typed payload) fallback", ()
     expect(m.errorEntryId).toBeUndefined()
   })
 
-  // D5 fix (UAT "Site 3"): a legacy ErrorFrame whose message LOOKS like
-  // Go-internal/protocol jargon (the `<component>: <verb>` convention) must
-  // NOT be shown verbatim — both the fresh error bubble's content AND the
-  // global connection-error banner (AppShell, "visible on every screen" per
-  // its own doc comment) are the two sinks this exact frame shape reaches
-  // when there's no prior assistant message in the bucket (seedEmptyBucket
-  // — streamingIds ends up empty, so the "push a fresh bubble" branch runs,
-  // which is also the ONLY branch that calls setConnectionError for a
-  // tagged frame).
-  it('D5: sanitizes a Go-internal-jargon-shaped frame.message on both the fresh bubble content and the connection-error banner', () => {
+  // D5 sanitization remains pinned exactly. U5 supersedes only the old
+  // banner sink: a tagged failure is local, even before a reply exists.
+  it('D5/U5: sanitizes internal jargon in a fresh bubble without a global connection banner', () => {
     seedEmptyBucket()
     act(() => {
       useChatStore.getState().handleFrame({
@@ -295,14 +290,14 @@ describe("ADR-051 live 'error' — legacy frame (no typed payload) fallback", ()
     const m = bucketMessages()[0]
     expect(m.content).toBe('Something went wrong — please try again.')
     expect(m.content).not.toContain('browser_control')
-    expect(useConnectionStore.getState().connectionError).toBe('Something went wrong — please try again.')
+    expect(useConnectionStore.getState().connectionError).toBeNull()
+    expect(bucketMessages().filter((message) => message.status === 'error').map((message) => message.content)).toStrictEqual(['Something went wrong — please try again.'])
   })
 
   // Negative control: a legacy message that is NOT jargon-shaped (no
-  // "<component>: " prefix) must still pass through unchanged on both sinks
-  // — this is what proves the D5 fix is a targeted filter, not a blanket
-  // "always show a generic message" regression.
-  it('D5: still passes a non-jargon legacy frame.message through unchanged on both sinks', () => {
+  // "<component>: " prefix) must still pass through unchanged in the chat.
+  // This proves the D5 filter is targeted, not a blanket generic error.
+  it('D5/U5: passes a non-jargon legacy error unchanged in its chat, never globally', () => {
     seedEmptyBucket()
     act(() => {
       useChatStore.getState().handleFrame({
@@ -314,7 +309,8 @@ describe("ADR-051 live 'error' — legacy frame (no typed payload) fallback", ()
 
     const m = bucketMessages()[0]
     expect(m.content).toBe('session not found')
-    expect(useConnectionStore.getState().connectionError).toBe('session not found')
+    expect(useConnectionStore.getState().connectionError).toBeNull()
+    expect(bucketMessages().filter((message) => message.status === 'error').map((message) => message.content)).toStrictEqual(['session not found'])
   })
 })
 
@@ -348,7 +344,7 @@ describe("ADR-051 'replay_error' — typed payload translation + coalesce", () =
             retryable: false,
           },
         },
-      } as unknown as WsReceiveFrame)
+      } as unknown as ServerFrame)
     })
 
     const bubble = bucketMessages()[0]
@@ -394,6 +390,7 @@ describe("ADR-051 'replay_error' — typed payload translation + coalesce", () =
     }
     act(() => {
       const bucket = {
+        ...emptyHistoryFixture(),
         ...makeBucketMessages([placeholder]),
         toolCalls: {},
         toolCallOrder: [],
@@ -519,37 +516,13 @@ describe('ADR-051 — live→replay entry_id dedup', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Regression guards — kickoff reject & cancel ack remain untouched
+// Regression guard — ordinary cancel ack remains; client kickoff is retired
 // ---------------------------------------------------------------------------
 
-describe("ADR-051 — kickoff-reject and cancel-ack sub-paths unchanged", () => {
-  it('a kickoff-reject (no session_id) still routes to abandonPendingKickoffInternal + toast, not the typed-payload branch', () => {
-    // Seed a pendingKickoff so the reject branch fires.
-    act(() => {
-      useChatStore.setState({ pendingKickoff: { workspaceId: 'ws-1', workspaceName: 'WS', kickoffContent: 'go' } as never })
-      useSessionStore.setState({ activeSessionId: '__pending' })
-    })
-    const toastSpy = vi.spyOn(useUiStore.getState(), 'addToast')
-
-    act(() => {
-      useChatStore.getState().handleFrame({
-        // NO session_id — this is what gates the kickoff-reject branch.
-        type: 'error',
-        message: 'kickoff blew up',
-        // Even if a (malformed) typed payload is present, the kickoff branch
-        // fires FIRST and never reaches the typed-payload render code.
-        payload: { llm_error: { code: 'unknown', message: 'kickoff blew up', retryable: false } },
-      })
-    })
-
-    // No bucket was created (no session to tag it to).
-    expect(useChatStore.getState().sessionsById['__pending']).toBeUndefined()
-    // The pendingKickoff was cleared by abandonPendingKickoffInternal.
-    expect(useChatStore.getState().pendingKickoff).toBeNull()
-    // A toast fired (kickoff-reject path).
-    expect(toastSpy).toHaveBeenCalled()
-    toastSpy.mockRestore()
-  })
+describe("ADR-051 — cancel-ack sub-path unchanged", () => {
+  // The legacy client kickoff-reject case is retired under FR-047/K9:
+  // that synthetic sender/slot/cleanup branch no longer exists. All ordinary
+  // typed, legacy, replay, dedup and cancel-ack cases/assertions remain.
 
   it('a cancel-ack error (message matches /turn.cancel/i) still resolves to interrupted status, not error', () => {
     seedEmptyBucket()

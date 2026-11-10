@@ -112,6 +112,31 @@ func readCancelStageFrames(conn *websocket.Conn, timeout time.Duration) []string
 	return stages
 }
 
+// readCancelStagesUntil reads cancel_stage frames from conn, blocking, and
+// returns every stage seen up to and including the first one equal to want. It
+// fails the test if want does not arrive within timeout: waiting for the event
+// itself, not sampling a fixed window that a loaded machine can miss.
+func readCancelStagesUntil(t *testing.T, conn *websocket.Conn, want string, timeout time.Duration) []string {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	var stages []string
+	for {
+		require.NoError(t, conn.SetReadDeadline(deadline))
+		_, raw, err := conn.ReadMessage()
+		require.NoError(t, err, "no %q cancel_stage frame within %v (saw %v)", want, timeout, stages)
+		var f struct {
+			Type  string `json:"type"`
+			Stage string `json:"stage"`
+		}
+		if json.Unmarshal(raw, &f) == nil && f.Type == "cancel_stage" {
+			stages = append(stages, f.Stage)
+			if f.Stage == want {
+				return stages
+			}
+		}
+	}
+}
+
 // TestCancel_TwoStageTimer_GracefulThenHard (T6) — verifies that after a
 // cancel on an ongoing turn, the state machine emits "graceful" immediately
 // and "hard" ~3 seconds later when the turn does not self-terminate.
@@ -133,7 +158,7 @@ func TestCancel_TwoStageTimer_GracefulThenHard(t *testing.T) {
 	workspaceDir := filepath.Join(tmpDir, "workspace")
 	require.NoError(t, os.MkdirAll(workspaceDir, 0o755))
 
-	// ironProvider blocks for 20 seconds, well past the 3+5=8s hard+detach window.
+	// ironProvider blocks for 20 seconds, well past the 3+3=6s hard+detach window (founder one-stop decision, 2026-10-05).
 	ip := newIronProvider(20 * time.Second)
 
 	cfg := &config.Config{
@@ -197,7 +222,7 @@ func TestCancel_TwoStageTimer_GracefulThenHard(t *testing.T) {
 	sendWSAuthFrameDevMode(t, conn)
 
 	// Start a real turn.
-	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "start iron turn"}
+	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "start iron turn", AgentID: "mia"}
 	data, err := json.Marshal(msgFrame)
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))

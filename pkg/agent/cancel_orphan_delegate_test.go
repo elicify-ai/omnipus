@@ -195,7 +195,6 @@ func TestRequestCancel_OrphanedBackgroundDelegate_HardAbortedAfterParentGraceful
 		routingSessionID: session.RoutingSessionID(sessionID),
 		depth:            1,
 		parentTurnID:     rootTS.turnID,
-		parentTurnState:  rootTS,
 		finishedChan:     make(chan struct{}),
 		// providerCancel intentionally left nil: an orphaned background
 		// delegate that ignores its own graceful nudge (e.g. mid multi-tool

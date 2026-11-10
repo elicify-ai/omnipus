@@ -1,8 +1,18 @@
 type: object
 description: >
-  A single transcript entry (session.TranscriptEntry on the Go side).
-  Maps to the Message interface in src/lib/api.ts. The SPA reads this
-  from GET /sessions/{id}/messages.
+  The public CHAT PROJECTION of one entry of a session's single
+  append-only archive, served by GET /sessions/{id}/messages and mapped
+  to the Message interface in src/lib/api.ts. This is a projection of the
+  canonical disk archive (session.TranscriptEntry on the Go side), never
+  the raw private persistence record: the archive's private model payload
+  (model_message), its body-free same-session consumption reference
+  (type=model_ref / model_ref), its trusted source/return-route
+  provenance, and its partition/encoded-byte/entry-id marks are disk-only
+  and MUST NOT appear here (session-core C-ARCHIVE / U2; FR-004/FR-005).
+  The one display-only exception (F15) is participant / reply_to_participant
+  (ChatParticipant): a name, a kind and a source label, never an id or a route.
+  Entries that belong to the model view only (view_membership="model")
+  are excluded from this projection entirely.
 required:
   - id
   - timestamp
@@ -13,6 +23,17 @@ properties:
     type: string
     description: Unique message identifier.
     example: "msg_01HXYZ"
+  history_position:
+    type: string
+    readOnly: true
+    minLength: 47
+    maxLength: 47
+    pattern: '^hp1_[A-Za-z0-9_-]{43}$'
+    description: >
+      Same-session occurrence fingerprint (chat history paging D2), present on every
+      paged entry. Preserves the original recorded id separately. Stable across
+      appends/restarts and reconstruction of unchanged final canonical bytes;
+      opaque, not a live sequence, model ordinal, authorization grant or disk address.
   client_message_id:
     type: string
     minLength: 1
@@ -25,6 +46,38 @@ properties:
       matching. Absent on entries written before this field existed and on non-user
       entries.
     example: "cmid_01HXYZ"
+  input_disposition:
+    type: object
+    readOnly: true
+    description: >
+      Read-only record that this user input was DISCARDED by Stop before it was
+      delivered into the agent's model input (session-core FR-024). Absent on
+      every delivered message. There is no client action to release or discard
+      it; the archived message bytes are unchanged and this only labels them.
+    required:
+      - message_id
+      - state
+      - reason
+    additionalProperties: false
+    properties:
+      message_id:
+        type: string
+        minLength: 1
+        maxLength: 255
+        description: The original input message id (this entry's id).
+      client_message_id:
+        type: string
+        minLength: 1
+        maxLength: 128
+        description: The sender's client_message_id, when the input carried one.
+      state:
+        type: string
+        enum:
+          - discarded
+      reason:
+        type: string
+        enum:
+          - stopped_before_delivery
   type:
     type: string
     enum:
@@ -34,6 +87,8 @@ properties:
       - tool_call
       - turn_canceled
       - judge_verdict
+      - context_window_notice
+      - provider_fallback
     description: >
       Entry classification. Absent or empty means "message" (backwards compatible).
       "compaction" entries summarize pruned context; "system" entries are internal
@@ -42,9 +97,40 @@ properties:
       (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt
       or plan round — written alongside the worker's ADR-043 completion marker
       so the two cannot silently disagree, and mirrored live by the
-      `JudgeVerdictFrame` WS push (same `verdict` shape). The Go-side EntryType
-      constant set is the source of truth (`pkg/session/daypartition.go`).
+      `JudgeVerdictFrame` WS push (same `verdict` shape).
+      "context_window_notice" entries retain a classified Verbose-only diagnostic
+      (ADR-066 MAJ-CW-009), not a model-history message. Runtime validation requires
+      their `context_window_notice` payload; live and replay carry the same
+      payload as ContextWindowNoticeFrame.notice with the original entry id,
+      timestamp, agent_id and turn_id.
+      "provider_fallback" entries (chat-history paging spec D10 PF=A) are a
+      persisted provider-fallback note written by the real fallback chain after
+      its assistant answer: system-role system information with `content` equal
+      to the saved note text verbatim and the optional `model` /
+      `unavailable_model` / `unavailable_code` facts recorded at the time. The
+      same note replays as a `replay_provider_fallback` ProviderFallbackNote and
+      was announced live by the separate provider_fallback frame; a valid note
+      must never be degraded to the malformed-item placeholder.
     example: "message"
+  view_membership:
+    type: string
+    readOnly: true
+    enum:
+      - chat
+      - model
+      - both
+    description: >
+      C-ARCHIVE (session-core FR-004): which view(s) of the single append-only
+      archive this entry belongs to — "chat" (rendered in the conversation),
+      "model" (part of the model context window), or "both". Server-owned
+      (readOnly): the server writes it and emits the entry's effective
+      chat/both membership for included entries; clients never send it. An
+      entry classified "model" is not part of the chat projection and is not
+      returned here. Optional and additive: entries written before this field
+      existed carry no value, and the server treats absent as unknown rather
+      than re-deriving a view. This is a per-entry classification on the one
+      archive, never by itself a second store.
+    example: "both"
   role:
     type: string
     enum:
@@ -55,8 +141,25 @@ properties:
     example: "assistant"
   content:
     type: string
-    description: Raw markdown/text content of the message.
+    description: >
+      Raw markdown/text content of the message. On a history page this may be
+      a display preview; see content_original_size_bytes.
     example: "I can help you with that!"
+  content_original_size_bytes:
+    type: integer
+    minimum: 65537
+    readOnly: true
+    description: >
+      Present only when `content` is a read-time display preview of an ordinary
+      user/assistant chat message (entry type `message` or omitted) whose saved
+      text exceeds 65,536 UTF-8 bytes: `content` then holds its first at most
+      65,536 bytes cut back to a character boundary, and this field is the exact
+      UTF-8 length of the full saved text (chat-history paging spec, "Amendment
+      2026-10-27 (founder, #1452 D2)", A2.1/A2.2). The full text is read through
+      getSessionHistoryEntry. Unrelated to `truncated`/`truncation_reason`,
+      which mean the turn itself was cut short.
+      Never present on a getSessionHistoryEntry response, which carries the
+      full content.
   summary:
     type: string
     description: Compaction summary text (present only on type=compaction entries).
@@ -99,6 +202,19 @@ properties:
     type: string
     description: ID of the agent that produced this entry (FR-002). Always present.
     example: "jim"
+  participant:
+    $ref: ./ChatParticipant.yaml
+  reply_to_participant:
+    $ref: ./ChatParticipant.yaml
+  reply_to_message_id:
+    type: string
+    minLength: 1
+    readOnly: true
+    description: >
+      Present only on a guest reply (session-core FR-027): the message_id of
+      the admitted request this entry answers. The guest author is the
+      existing agent_id. Same value live and on replay.
+    example: "msg_01HXYZ"
   messages_compacted:
     type: integer
     description: Number of messages compacted (present only on compaction entries).
@@ -118,16 +234,26 @@ properties:
       Narrows why `truncated` is true: "cancelled" (the user canceled the
       turn mid-stream) or "max_output_tokens" (the provider's output-token
       limit cut the answer off before it finished). Absent on a
-      `truncated: true` entry means "cancelled" — every entry written
-      before this field existed predates it and was always a cancel
-      (ADR-087 D2).
+      `truncated: true` entry means the reason is not recorded: readers do
+      not default it to "cancelled" or to anything else (ADR-087 D2;
+      session-core DEL-F36).
     example: "max_output_tokens"
   turn_id:
     type: string
     description: >
-      Turn identifier — present only on type="turn_canceled" entries (FR-15).
-      Identifies the turn that was canceled.
+      Turn identifier — present on type="turn_canceled" entries (FR-15) and
+      type="context_window_notice" diagnostics (ADR-066 MAJ-CW-009).
+      Retains the original turn identity in REST history, live delivery and replay.
     example: "turn-T3"
+  goal_id:
+    type: string
+    description: >
+      session-core FR-039 / C-GOAL. The goal the entry's producing turn was
+      dispatched under (from session.TranscriptEntry.GoalID). REST history, live
+      delivery and replay retain the SAME association so the SPA joins each
+      message to its own exact keyed goal criteria. Absent means UNKNOWN
+      association; a later goal's frame must never rebind an earlier message.
+    example: "goal_01J3ZQK8N2H8VXNRP5T7C9M4WU"
   canceled_by_user:
     type: string
     description: >
@@ -162,18 +288,37 @@ properties:
     type: string
     description: >
       Identifier of the model that produced this assistant turn (per-turn
-      record). Present on assistant entries only. Absent on legacy turns
-      recorded before the per-turn model field was added — those entries do
-      not display any model info in the UI (no placeholder). Empty string
-      is treated the same as absent for UI display.
+      record). Present on assistant entries, and on a provider_fallback note
+      it is the fallback model that actually answered (ProviderFallbackNote's
+      answered_model). Absent on legacy turns recorded before the per-turn
+      model field was added — those entries do not display any model info in
+      the UI (no placeholder). Empty string is treated the same as absent for
+      UI display.
     example: "z-ai/glm-5.2"
+  unavailable_model:
+    type: string
+    readOnly: true
+    minLength: 1
+    maxLength: 256
+    description: Recorded unavailable primary model on a provider_fallback note; omitted when unknown.
+  unavailable_code:
+    type: string
+    readOnly: true
+    enum:
+      - rate_limited
+      - model_retired
+    description: Recorded fallback condition; model_retired controls the existing model-settings hint.
   verdict:
     $ref: './JudgeVerdict.yaml'
+  context_window_notice:
+    $ref: './ContextWindowNotice.yaml'
   system_subtype:
     type: string
     enum:
       - browser_handover_notice
+      - expiry_notice
       - goal_outcome
+      - helper_event
       - subagent_start
       - subagent_state
       - subagent_message
@@ -211,6 +356,8 @@ properties:
     example: "browser_handover_notice"
   goal_outcome:
     $ref: './GoalOutcome.yaml'
+  helper_event:
+    $ref: './HelperEvent.yaml'
   # subagent_start/state/message/end below are present only on the
   # matching `system_subtype` entry (ADR-091 D7/I-4) — steer_frames.go's
   # persisted sub-agent lifecycle frames. Plain $ref, no sibling
@@ -225,3 +372,33 @@ properties:
     $ref: './SubagentMessageFrame.yaml'
   subagent_end:
     $ref: './SubagentEndFrame.yaml'
+  terminal_outcome:
+    type: boolean
+    description: >
+      Present and true only on an assistant entry that is a turn's distinct
+      terminal outcome sentence, separate from its preceding narration. Same
+      value as ReplayMessageFrame.terminal_outcome; historical hydration must not
+      merge this entry into the preceding same-turn assistant message. Absent on
+      other entries, including older entries without this recorded field.
+    example: true
+  room_ref:
+    $ref: './RoomRef.yaml'
+    description: >
+      Spec omnipus-system-agent K33 (FR-202, FR-215). Present when this
+      main-session entry is a room request to this agent or this agent's
+      answer into a room, so live, history and replay render the same
+      collapsed entry.
+  effort:
+    $ref: './EffortRecord.yaml'
+    description: >
+      Effort levels spec (FR-058). Copied from this entry's own stored effort
+      record (answering assistant entries only). Absent when the entry has none.
+  turn_reasoning_tokens:
+    type: integer
+    minimum: 0
+    description: >
+      Effort levels spec (FR-024). The stored display-only snapshot of the
+      turn's reported reasoning-token sum, copied from the answering entry; never
+      summed at read time. Absent = no call of the turn reported a count; 0 =
+      reported zero.
+    example: 120

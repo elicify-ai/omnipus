@@ -1,26 +1,31 @@
 import { useEffect } from 'react'
 import { Outlet } from '@tanstack/react-router'
 import { Sidebar } from './Sidebar'
+import { AgentProfile } from '@/components/agents/AgentProfile'
 import { NotificationPanel } from './NotificationPanel'
 import { ToastContainer } from '@/components/ui/toast-container'
 import { Button } from '@/components/ui/button'
 import { ToolApprovalModal } from '@/components/agents/ToolApprovalModal'
-import { CrossWorkspaceApprovalBanner } from '@/components/layout/CrossWorkspaceApprovalBanner'
+import { INLINE_TOOL_APPROVALS_ENABLED } from '@/lib/featureSwitches'
 import { MediaLightbox } from '@/components/chat/MediaLightbox'
-import { BrowserLivePanel } from '@/components/browser/BrowserLivePanel'
-import { LibraryPanel } from '@/components/library/LibraryPanel'
 import { SearchModal } from '@/components/search/SearchModal'
 import { OmnipusRuntimeProvider } from '@/components/chat/OmnipusRuntimeProvider'
-import { ErrorBoundary } from '@/components/ui/error-boundary'
+import { ErrorBoundary } from '@/components/shared/ErrorBoundary'
 import { GodModeCornerDot } from './GodModeIndicators'
 import { queryClient } from '@/lib/queryClient'
 import { fetchTasks, fetchAgents, fetchAppState, fetchNotifications } from '@/lib/api'
 import { useConnectionStore } from '@/store/connection'
 import { useNotificationsStore } from '@/store/notifications'
 import { useUiStore } from '@/store/ui'
+import { useAuthStore } from '@/store/auth'
 import { useQuery } from '@tanstack/react-query'
 import { useVersionCheck } from '@/hooks/useVersionCheck'
+import { useAgentsCrossTabRefresh } from '@/hooks/useAgentsCrossTabRefresh'
 import { useMediaQuery } from '@/hooks/useMediaQuery'
+import { PANEL_TAKEOVER_PX } from '@/components/panel-shell/panelWidth'
+import { SidePanelShell } from '@/components/panel-shell/SidePanelShell'
+import { PanelTabPresenceBridge } from '@/components/panel-shell/PanelTabPresenceBridge'
+import { panels } from '@/components/panel-shell/registry'
 import { computeAppMetrics } from './appShellViewport'
 
 // US-4: Application shell — sidebar + main content area
@@ -28,6 +33,7 @@ export function AppShell() {
   const connectionError = useConnectionStore((s) => s.connectionError)
   const reconnect = useConnectionStore((s) => s.reconnect)
   const hydrateNotifications = useNotificationsStore((s) => s.hydrate)
+  const username = useAuthStore((s) => s.username)
 
   const { data: appState, isError: appStateError } = useQuery({
     queryKey: ['app-state'],
@@ -40,15 +46,14 @@ export function AppShell() {
   // See the app-state-fetch-error-banner below for the fetch-failure case.
   const devModeBypass = appState?.dev_mode_bypass === true
 
-  // Live browser panel open state — used below to inert the chat region when
-  // it's collapsed to zero width by the panel's docked takeover on phones.
-  const browserPanel = useUiStore((s) => s.browserPanel)
-  // Library panel (library-spec.md D-4) — same docked-takeover-on-phone
-  // shape as browserPanel above, so it needs the same inert treatment.
-  const libraryPanel = useUiStore((s) => s.libraryPanel)
-  // Tailwind's `sm:` breakpoint (640px) can gate CSS, but not a non-CSS HTML
-  // attribute like `inert` — that needs an actual JS media-query signal.
-  const isPhoneViewport = useMediaQuery('(max-width: 639px)')
+  // Side-panel shell (side-panel-shell-spec.md §8.1): one panel at a time.
+  // Used below to inert the chat region when the phone takeover (<680px,
+  // SP-25) collapses it to full-screen over the chat.
+  const activePanel = useUiStore((s) => s.activePanel)
+  // Takeover threshold — SP-25 sets it at 680px, and the wave-0 shell ships
+  // the constant (panelWidth.ts::PANEL_TAKEOVER_PX). The old query was the
+  // Tailwind `sm:` breakpoint (639px); the spec's threshold replaces it.
+  const isPhoneViewport = useMediaQuery(`(max-width: ${PANEL_TAKEOVER_PX - 1}px)`)
 
   // #264: seed the notification center from REST on mount; the `notification`
   // WS frame keeps it live thereafter (see chatStore.handleFrame).
@@ -64,10 +69,23 @@ export function AppShell() {
   // Version-drift detection (#110): shows a toast when build_sha changes
   useVersionCheck()
 
+  // T-11 / FR-010: the shell, not the removed composer agent picker, refreshes
+  // the agent roster and workspace membership on focus and on becoming visible,
+  // even while those queries are still inside their stale time.
+  useAgentsCrossTabRefresh()
+
   // Prefetch command center data on app load so it's cached when the user navigates there
   useEffect(() => {
-    queryClient.prefetchQuery({ queryKey: ['tasks'], queryFn: () => fetchTasks(), staleTime: 30_000 })
-    queryClient.prefetchQuery({ queryKey: ['agents'], queryFn: fetchAgents, staleTime: 30_000 })
+    queryClient.prefetchQuery({
+      queryKey: ['tasks'],
+      queryFn: () => fetchTasks(),
+      staleTime: 30_000,
+    })
+    queryClient.prefetchQuery({
+      queryKey: ['agents'],
+      queryFn: fetchAgents,
+      staleTime: 30_000,
+    })
   }, [])
 
   // Pin the shell to the actual VISUAL viewport via window.visualViewport, not
@@ -147,12 +165,13 @@ export function AppShell() {
   }, [])
 
   return (
-    // Shell pinned to the VISUAL viewport (see the --app-vh / --app-top hook
-    // above): `fixed inset-x-0` for width, `top`/`height` from the vars so it
-    // tracks the visible area through toolbar collapse + keyboard. `overflow-
-    // hidden` (with the html/body locks) keeps the inner message list the sole
-    // scroller. NB: do NOT add a transform here — overlays (toasts/modals/
-    // lightbox) rely on descendant `position:fixed` staying viewport-relative.
+    <>
+    {/* Shell pinned to the VISUAL viewport (see the --app-vh / --app-top hook
+        above): `fixed inset-x-0` for width, `top`/`height` from the vars so it
+        tracks the visible area through toolbar collapse + keyboard. `overflow-
+        hidden` (with the html/body locks) keeps the inner message list the sole
+        scroller. NB: do NOT add a transform here — overlays (modals/lightbox)
+        rely on descendant `position:fixed` staying viewport-relative. */}
     <div
       data-app-shell
       className="fixed inset-x-0 flex overflow-hidden bg-[var(--color-primary)]"
@@ -161,11 +180,11 @@ export function AppShell() {
       {/* Skip-to-content link — first focusable element in the shell, visually
           hidden until it receives keyboard focus (WCAG 2.4.1 Bypass Blocks).
           tabIndex={1}: the composer's positive tab ring (see the map in
-          ChatControls.tsx) starts at 2, so this link is guaranteed to be the
-          FIRST stop document-wide regardless of DOM position — without an
-          explicit positive index here, the chat screen's positive-tabIndex
-          controls would win the first Tab and the skip link would never be
-          reachable (WCAG 2.4.1 functionally dead). */}
+          ChatControls.tsx) starts at 2. Slot 3, the old agent picker, is gone.
+          This link is still the first stop document-wide — without an explicit
+          positive index here, the chat screen's positive-tabIndex controls
+          would win the first Tab and the skip link would never be reachable
+          (WCAG 2.4.1 functionally dead). */}
       <a
         href="#main-content"
         tabIndex={1}
@@ -174,125 +193,113 @@ export function AppShell() {
         Skip to content
       </a>
 
+      {/* Keeps the cross-tab presence list live before any panel entry point
+          can open a duplicate docked surface (SP-18/SP-30). */}
+      <PanelTabPresenceBridge />
+
       {/* Sidebar renders in both pinned (flex child) and overlay (fixed) modes */}
       <Sidebar />
 
-      {/* Main content area — shrinks when sidebar is pinned; each screen owns its own top bar.
-          `inert` when the docked BrowserLivePanel takeover has collapsed this
-          region to zero width on a phone viewport (<640px): the flex layout
-          still keeps its controls in the DOM (and thus in the Tab order) even
-          though they're visually gone, so without this the invisible chat
-          controls would still catch focus/Tab stops. `sm:` can't gate a
-          non-CSS attribute, hence the matchMedia-backed useMediaQuery above. */}
-      <div
-        data-testid="app-main-content"
-        className="flex flex-1 flex-col min-w-0 overflow-hidden"
-        inert={(Boolean(browserPanel) || Boolean(libraryPanel)) && isPhoneViewport}
-      >
-        {/* OmnipusRuntimeProvider: AssistantUI context + WebSocket connection for entire app */}
-        <OmnipusRuntimeProvider>
-          {/* Global connection error banner — visible on every screen */}
-          {connectionError && (
-            <div
-              role="alert"
-              className="flex items-center justify-between gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-2)] bg-[var(--color-error)]/10 border-b border-[var(--color-error)]/20 text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] shrink-0"
-            >
-              <span>{connectionError}</span>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={reconnect}
-                className="h-auto px-[var(--space-2)] py-[var(--space-1)] rounded text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] hover:bg-[var(--color-error)]/20 hover:text-[var(--color-error)] transition-colors"
-              >
-                Retry
-              </Button>
-            </div>
-          )}
+      {/* The ONE store-driven agent editor (AgentProfile). It reads
+          editAgentId, so it must be hosted exactly once at the shell level:
+          the sidebar's row-menu Edit, the Team tab, and Settings → System
+          agents all open this same instance, and a second host anywhere would open a
+          second simultaneous sheet (CR F6). */}
+      <AgentProfile />
 
-          {/* Dev-mode bypass banner — persistent red warning when dev_mode_bypass=true */}
-          {devModeBypass && (
-            <div
-              data-testid="dev-mode-banner"
-              role="alert"
-              className="flex items-center gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-2)] bg-[var(--color-error)] text-[var(--color-primary)] text-[length:var(--type-utility-xs-size)] font-medium shrink-0"
-            >
-              <span>Development mode active — authentication bypass enabled</span>
-            </div>
-          )}
+      {/* The real application host for the shared panel shell. Its chat child
+          is the existing routed application column; Library and Browser are
+          selected from the production registry and occupy the one panel slot. */}
+      <SidePanelShell
+        panels={panels}
+        username={username ?? 'anonymous'}
+        chat={
+          <div
+            data-testid="app-main-content"
+            className="flex flex-1 flex-col min-w-0 overflow-hidden"
+            inert={Boolean(activePanel) && isPhoneViewport}
+          >
+            {/* OmnipusRuntimeProvider: AssistantUI context + WebSocket connection for entire app */}
+            <OmnipusRuntimeProvider>
+              {/* Global connection error banner — visible on every screen */}
+              {connectionError && (
+                <div
+                  role="alert"
+                  className="flex items-center justify-between gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-2)] bg-[var(--color-error)]/10 border-b border-[var(--color-error)]/20 text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] shrink-0"
+                >
+                  <span>{connectionError}</span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={reconnect}
+                    className="h-auto px-[var(--space-2)] py-[var(--space-1)] rounded text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] hover:bg-[var(--color-error)]/20 hover:text-[var(--color-error)] transition-colors"
+                  >
+                    Retry
+                  </Button>
+                </div>
+              )}
 
-          {/* App-state fetch failed — dev-mode-bypass status is unknown, not
+              {/* Dev-mode bypass banner — persistent red warning when dev_mode_bypass=true */}
+              {devModeBypass && (
+                <div
+                  data-testid="dev-mode-banner"
+                  role="alert"
+                  className="flex items-center gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-2)] bg-[var(--color-error)] text-[var(--color-primary)] text-[length:var(--type-utility-xs-size)] font-medium shrink-0"
+                >
+                  <span>Development mode active — authentication bypass enabled</span>
+                </div>
+              )}
+
+              {/* App-state fetch failed — dev-mode-bypass status is unknown, not
               confirmed off. Must not silently vanish on its own fetch
               failure: show an explicit "status unknown" indicator instead of
               nothing. (The God Mode indicators deliberately do NOT have such
               a variant — founder decision 2026-09-25: red when on, invisible
               otherwise; this banner is the failure surface for unknown
               gateway state.) */}
-          {appStateError && (
-            <div
-              data-testid="app-state-fetch-error-banner"
-              role="alert"
-              className="flex items-center gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-2)] bg-[color-mix(in_srgb,var(--color-warning)_10%,transparent)] border-b border-[color-mix(in_srgb,var(--color-warning)_30%,transparent)] text-[var(--color-warning)] text-[length:var(--type-utility-xs-size)] font-medium shrink-0"
-            >
-              <span>
-                Could not fetch gateway state — security status (e.g. development-mode bypass) is
-                unknown. Check your connection and reload.
-              </span>
-            </div>
-          )}
+              {appStateError && (
+                <div
+                  data-testid="app-state-fetch-error-banner"
+                  role="alert"
+                  className="flex items-center gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-2)] bg-[color-mix(in_srgb,var(--color-warning)_10%,transparent)] border-b border-[color-mix(in_srgb,var(--color-warning)_30%,transparent)] text-[var(--color-warning)] text-[length:var(--type-utility-xs-size)] font-medium shrink-0"
+                >
+                  <span>
+                    Could not fetch gateway state — security status (e.g. development-mode bypass) is unknown. Check
+                    your connection and reload.
+                  </span>
+                </div>
+              )}
 
-          {/* Cross-workspace tool-approval notice — founder decision
-              2026-09-14. Ambient, non-blocking: an approval waiting in a
-              workspace other than the one open right now is otherwise
-              invisible (ToolApprovalModal below only shows in-scope
-              approvals). See CrossWorkspaceApprovalBanner.tsx. */}
-          <CrossWorkspaceApprovalBanner />
+              {/* No "waiting in another chat" notice (founder ruling
+              2026-10-18): an approval shows as a card in its parent chat and
+              lights that main's sidebar attention cue; nothing else. */}
 
-          {/* Screen content — relative so children can use absolute inset-0 for bounded scrolling */}
-          <main id="main-content" tabIndex={-1} className="flex-1 relative min-h-0 overflow-hidden">
-            <ErrorBoundary>
-              <Outlet />
-            </ErrorBoundary>
-          </main>
-        </OmnipusRuntimeProvider>
-      </div>
+              {/* Screen content — relative so children can use absolute inset-0 for bounded scrolling */}
+              <main id="main-content" tabIndex={-1} className="flex-1 relative min-h-0 overflow-hidden">
+                <ErrorBoundary>
+                  <Outlet />
+                </ErrorBoundary>
+              </main>
+            </OmnipusRuntimeProvider>
+          </div>
+        }
+      />
 
       {/* Global enlarged-media overlay (images + diagrams) — single instance,
           decoupled from the virtualized chat list so it survives row remounts */}
       <MediaLightbox />
 
       {/* Cross-workspace session search — store-driven single instance opened
-          from the sidebar search icon and the /resume slash command (step 6). */}
+          from the sidebar search icon and the /sessions slash command (step 6). */}
       <SearchModal />
 
-      {/* Global toast notifications */}
-      <ToastContainer />
-
-      {/* Tool approval modal — FR-011, FR-082 */}
-      <ToolApprovalModal />
+      {/* Tool approval modal — FR-011, FR-082. L1 stage 1: the release modal
+          shows every pending approval while the inline card is hidden. */}
+      {!INLINE_TOOL_APPROVALS_ENABLED && <ToolApprovalModal />}
 
       {/* Notification center panel — #264 */}
       <NotificationPanel />
-
-      {/* Live interactive browser panel — ADR-038; always-docked since
-          2026-07-16 (operator direction, amends ADR-040 D4 — the unpinned
-          Sheet overlay + pin toggle are retired). Rendered here as a plain
-          (non-portaled) child of this `flex` row deliberately: when open,
-          BrowserLivePanel's root is a `flex-shrink-0` docked column (see its
-          file for the width/min/max), which makes the chat region's
-          `flex-1 min-w-0` above shrink automatically to share width with it
-          — a real side-by-side split, no extra layout code needed here.
-          Closed = renders null. Do NOT move this render call outside the
-          flex row, and do NOT wrap it in anything `fixed`/`absolute` —
-          either would break the docked layout's participation in this flex
-          row. */}
-      <BrowserLivePanel />
-
-      {/* Library panel (library-spec.md D-4) — same docked-<aside>-as-flex-
-          sibling pattern as BrowserLivePanel above; see LibraryPanel.tsx for
-          why popping THIS one out does not close the docked copy (no
-          exclusive control lock to hand over, unlike the live browser). */}
-      <LibraryPanel />
 
       {/* God Mode corner dot (founder decision 2026-09-25) — rendered ONCE
           here at the SHELL ROOT, outside the ErrorBoundary, and — review
@@ -308,5 +315,15 @@ export function AppShell() {
           GodModeIndicators.tsx for the full geometry. */}
       <GodModeCornerDot />
     </div>
+
+    {/* Global toast notifications — deliberately OUTSIDE the shell (#1639).
+        A `position: fixed` element always forms its own stacking context, so
+        inside the fixed shell the toast region's z-index only ranked among the
+        shell's children. Radix sheets and dialogs portal to <body> at z-50 and
+        painted over every toast — a refused save in an open editor sheet showed
+        no error. As a sibling of the shell, the toast region's z-index ranks
+        against those portals directly. */}
+    <ToastContainer />
+    </>
   )
 }

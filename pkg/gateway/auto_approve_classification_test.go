@@ -27,29 +27,29 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/tools/browser"
 )
 
-// goldenAskList28 is a literal, reviewable copy of the 28 catalog tool names
+// goldenAskList is a literal, reviewable copy of the 27 catalog tool names
 // the founder's ruled choices file
 // (/Users/danielpiatkowski/Desktop/auto-approve-choices.json, saved
 // 2026-09-23T14:20:18Z) marks "asks" — every non-MCP entry with
 // choice=="asks". Moving a tool off this list, or onto it, needs a
 // deliberate edit HERE as well as in pkg/tools/auto_approve.go's table
 // (§6 point 6): that is the point of the golden copy.
-var goldenAskList28 = []string{
+var goldenAskList = []string{
 	"add_mcp_server",
 	"browser_evaluate",
 	"browser_upload_file",
 	"configure_channel",
 	"configure_provider",
 	"create_agent",
-	"create_skill",
 	"delete_agent",
 	"delete_task",
-	"delete_task_in_workspace",
 	"delete_workspace",
 	"disable_channel",
 	"edit_skill",
@@ -57,7 +57,6 @@ var goldenAskList28 = []string{
 	"environment_setup",
 	"install_skill",
 	"remove_mcp_server",
-	"remove_skill",
 	"reply",
 	"request_mount",
 	"run_doctor",
@@ -68,6 +67,15 @@ var goldenAskList28 = []string{
 	"test_provider",
 	"update_agent",
 	"update_workspace",
+	// omnipus-system-agent FR-021 (2026-10-13): the connection, permission
+	// and secret-removal/selection tools join the ask-list — the deliberate
+	// two-place edit (this golden copy and pkg/tools/auto_approve.go).
+	"connect_channel",
+	"set_channel_outbound", // channels FR-032: explicit AutoAsks, never fallback-only.
+	"connect_mailbox",
+	"remove_secret",
+	"select_secret_version",
+	"set_agent_permissions",
 }
 
 // catalogToolNames returns every name buildCentralBuiltinRegistry(nil) —
@@ -140,8 +148,98 @@ func checkNoStaleEntries(catalogNames []string, table map[string]tools.AutoAppro
 	return errs
 }
 
+// pendingBuiltinClassificationNames is the explicit future-tool inventory in
+// omnipus-system-agent-spec §6.5 / §15: WU-4/5/6/7 and landing 2. These names
+// may be classified before implementation, but may NOT excuse a catalogue
+// entry with no implementation. In particular, the implemented FR-024 tool
+// set_agent_permissions is not an exception. Never union all static names.
+var pendingBuiltinClassificationNames = []string{
+	"request_secret", "list_secrets", "remove_secret", "select_secret_version",
+	"connect_channel", "connect_mailbox", "read_conversation", "list_mailboxes",
+}
+
+func classifiedNames(t *testing.T) []string {
+	t.Helper()
+	return append(catalogToolNames(t), pendingBuiltinClassificationNames...)
+}
+
+// implementedBuiltinToolNames deliberately reads the EXECUTABLE registries,
+// not buildCentralBuiltinRegistry, any metadata factory, the static-name list
+// or the Auto table. NewAgentInstance/registerSharedTools and WireSysagentDeps
+// populate these independently of the central catalogue (§6.5). Union every
+// native role so role-specific registration is covered without policy filtering.
+func implementedBuiltinToolNames(t *testing.T) []string {
+	t.Helper()
+	api := l1WU2WiredPermissionAPI(t)
+	// gateway_boot::setupAndStartServices supplies serve_web after loop
+	// construction. Run its real registration path, not a metadata substitute.
+	served := agent.NewServedSubdirs()
+	t.Cleanup(served.Stop)
+	api.agentLoop.WireTier13Deps(agent.Tier13Deps{ServedSubdirs: served})
+	api.agentLoop.WireSysagentDeps(&systools.Deps{})
+	registry := api.agentLoop.GetRegistry()
+	if _, ok := registry.GetAgent("omnipus"); !ok {
+		t.Fatal("implementation census has no Omnipus native agent")
+	}
+	implemented := make(map[string]bool)
+	for _, id := range registry.ListAgentIDs() {
+		instance, ok := registry.GetAgent(id)
+		if !ok || instance == nil || instance.Tools == nil {
+			t.Fatalf("implementation census has no executable registry for agent %q", id)
+		}
+		for _, name := range instance.Tools.List() {
+			implemented[name] = true
+		}
+	}
+	// FR-029: browser_upload_file has a concrete implementation but is held
+	// out of RegisterTools. Construct that type directly; do NOT read its name
+	// from BrowserBuiltinMetadata, which is part of the catalogue under test.
+	heldUpload := &browser.UploadFileTool{}
+	implemented[heldUpload.Name()] = true
+	// §6.5 names these independent family controls. An empty/partial census
+	// is a broken instrument, not evidence that the catalogue is complete.
+	for _, name := range []string{"create_agent", "set_agent_permissions", "write_file", "grep", "knowledge_read", "ToolSearch"} {
+		if !implemented[name] {
+			t.Fatalf("implementation census is missing required control %q", name)
+		}
+	}
+	names := make([]string, 0, len(implemented))
+	for name := range implemented {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func checkCatalogImplementations(catalogNames, implementedNames []string) []string {
+	catalog := make(map[string]bool, len(catalogNames))
+	for _, name := range catalogNames {
+		catalog[name] = true
+	}
+	implemented := make(map[string]bool, len(implementedNames))
+	var errs []string
+	for _, name := range implementedNames {
+		implemented[name] = true
+		if !catalog[name] {
+			errs = append(errs, "implemented tool \""+name+"\" is missing from the central builtin catalogue")
+		}
+	}
+	for _, name := range catalogNames {
+		if !implemented[name] {
+			errs = append(errs, "central builtin catalogue entry \""+name+"\" has no independent implementation")
+		}
+	}
+	sort.Strings(errs)
+	return errs
+}
+
 func TestAutoApproveClassification_NoStaleTableEntries(t *testing.T) {
-	names := catalogToolNames(t)
+	catalogNames := catalogToolNames(t)
+	implementedNames := implementedBuiltinToolNames(t)
+	if errs := checkCatalogImplementations(catalogNames, implementedNames); len(errs) > 0 {
+		t.Errorf("builtin catalogue/implementation mismatch:\n%s", strings.Join(errs, "\n"))
+	}
+	names := append(catalogNames, pendingBuiltinClassificationNames...)
 	table := tools.AutoApproveClassTable()
 	if errs := checkNoStaleEntries(names, table); len(errs) > 0 {
 		t.Errorf("stale classification table entries:\n%s", strings.Join(errs, "\n"))
@@ -149,7 +247,7 @@ func TestAutoApproveClassification_NoStaleTableEntries(t *testing.T) {
 }
 
 func TestAutoApproveClassification_MutationSelfCheck_NoStaleEntriesCatchesGhostEntry(t *testing.T) {
-	names := catalogToolNames(t)
+	names := classifiedNames(t)
 	table := tools.AutoApproveClassTable()
 	if errs := checkNoStaleEntries(names, table); len(errs) != 0 {
 		t.Fatalf("precondition failed: the real table already has stale entries: %v", errs)
@@ -265,9 +363,13 @@ func TestAutoApproveClassification_MutationSelfCheck_ClassifiersExistCatchesMiss
 	for k, v := range instances {
 		mutated[k] = v
 	}
-	mutated["read_file"] = stubNonClassifierTool{name: "read_file"}
+	// #920 (read-boundary-consistency-spec.md, Regression Test Requirements:
+	// "tally update; check 4 still passes after classifier deletion"):
+	// read_file is class runs now and carries no classifier, so the mutation
+	// targets write_file, which stays runs_if_args (MV-5).
+	mutated["write_file"] = stubNonClassifierTool{name: "write_file"}
 	if errs := checkClassifiersExist(mutated, table); len(errs) == 0 {
-		t.Fatal("mutation self-check failed: substituting a non-classifier stub for read_file did not make the classifiers-exist check fail")
+		t.Fatal("mutation self-check failed: substituting a non-classifier stub for write_file did not make the classifiers-exist check fail")
 	}
 }
 
@@ -305,7 +407,7 @@ func TestAutoApproveClassification_MutationSelfCheck_SafeDefaultCatchesWrongExpe
 	}
 }
 
-// --- Check 6: ask-list lock — the golden 28 names equal the table's AutoAsks set exactly ---
+// --- Check 6: ask-list lock — the golden 27 names equal the table's AutoAsks set exactly ---
 
 func checkAskListLock(table map[string]tools.AutoApproveClass, golden []string) []string {
 	goldenSet := make(map[string]bool, len(golden))
@@ -334,18 +436,18 @@ func checkAskListLock(table map[string]tools.AutoApproveClass, golden []string) 
 }
 
 func TestAutoApproveClassification_AskListMatchesGoldenCopy(t *testing.T) {
-	if len(goldenAskList28) != 28 {
-		t.Fatalf("goldenAskList28 has %d names, want 28 (founder file tally)", len(goldenAskList28))
+	if len(goldenAskList) != 31 {
+		t.Fatalf("goldenAskList has %d names, want 31 (+1 set_channel_outbound; 27 historical asks plus five FR-021, minus two r15 retired skill tools)", len(goldenAskList))
 	}
 	table := tools.AutoApproveClassTable()
-	if errs := checkAskListLock(table, goldenAskList28); len(errs) > 0 {
+	if errs := checkAskListLock(table, goldenAskList); len(errs) > 0 {
 		t.Errorf("ask-list drift against the founder-file golden copy:\n%s", strings.Join(errs, "\n"))
 	}
 }
 
 func TestAutoApproveClassification_MutationSelfCheck_AskListLockCatchesMovedTool(t *testing.T) {
 	table := tools.AutoApproveClassTable()
-	if errs := checkAskListLock(table, goldenAskList28); len(errs) != 0 {
+	if errs := checkAskListLock(table, goldenAskList); len(errs) != 0 {
 		t.Fatalf("precondition failed: the real table already drifts from the golden ask-list: %v", errs)
 	}
 	// Move "delete_task" off the ask-list without touching the golden copy —
@@ -358,7 +460,7 @@ func TestAutoApproveClassification_MutationSelfCheck_AskListLockCatchesMovedTool
 		t.Fatal("test fixture assumption broken: delete_task is not classified AutoAsks in the real table")
 	}
 	mutated["delete_task"] = tools.AutoRuns
-	if errs := checkAskListLock(mutated, goldenAskList28); len(errs) == 0 {
+	if errs := checkAskListLock(mutated, goldenAskList); len(errs) == 0 {
 		t.Fatal("mutation self-check failed: moving delete_task off ASKS did not make the ask-list-lock check fail")
 	}
 }
@@ -407,7 +509,7 @@ func TestAutoApproveClassification_CatalogSanity(t *testing.T) {
 		t.Fatalf("buildCentralBuiltinRegistry(nil) only produced %d tool names; the ADR-092 D9 founder file classifies 110 catalog tools plus bash — this suite would pass vacuously against a near-empty catalog", len(names))
 	}
 	// Sanity that the system family specifically is present (it carries most
-	// of the 28-name ask-list).
+	// of the 27-name ask-list).
 	sysNames := make(map[string]bool)
 	for _, tl := range systools.AllTools(nil) {
 		sysNames[tl.Name()] = true
@@ -502,6 +604,7 @@ func TestGetTools_MCPAutoApproveMapsFromAnnotations(t *testing.T) {
 		t.Fatalf("unexpected MCP registration collisions: %v", collisions)
 	}
 	api.mcpRegistry = mcpReg
+	api.builtinRegistry = builtins // FR-125: listings read the central registry
 
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/tools", nil)
 	r = withAdminRole(r)
@@ -536,5 +639,46 @@ func TestGetTools_MCPAutoApproveMapsFromAnnotations(t *testing.T) {
 	}
 	if got := unannotatedEntry["auto_approve"]; got != "asks" {
 		t.Errorf("unannotated MCP tool auto_approve = %v, want \"asks\"", got)
+	}
+}
+
+// TestGetTools_ReadToolsServeAutoRuns is the gateway half of #920's US-6
+// AS-3 / S-6.3 / FR-027 (read-boundary-consistency-spec.md): GET
+// /api/v1/tools — the payload the Tools & Permissions marker renders —
+// serves auto_approve "runs" for read_file, list_directory and grep, and
+// keeps "runs_if_args" for the write/send tools (MV-5). Same wiring as
+// TestGetTools_CarriesAutoApproveForEveryEntry.
+func TestGetTools_ReadToolsServeAutoRuns(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+	reg, _ := buildCentralBuiltinRegistry(nil)
+	api.builtinRegistry = reg
+
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/tools", nil)
+	r = withAdminRole(r)
+	w := httptest.NewRecorder()
+	api.HandleToolsRegistry(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /api/v1/tools = %d, want 200: %s", w.Code, w.Body)
+	}
+	var entries []map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &entries); err != nil {
+		t.Fatalf("response did not unmarshal as a JSON array: %v", err)
+	}
+	got := map[string]any{}
+	for _, e := range entries {
+		if e["source"] != "builtin" {
+			continue
+		}
+		name, _ := e["name"].(string)
+		got[name] = e["auto_approve"]
+	}
+	want := map[string]string{
+		"read_file": "runs", "list_directory": "runs", "grep": "runs",
+		"write_file": "runs_if_args", "edit_file": "runs_if_args", "append_file": "runs_if_args", "send_file": "runs_if_args",
+	}
+	for name, wantClass := range want {
+		if got[name] != wantClass {
+			t.Errorf("GET /api/v1/tools %s auto_approve = %v, want %q (MV-5, FR-027)", name, got[name], wantClass)
+		}
 	}
 }

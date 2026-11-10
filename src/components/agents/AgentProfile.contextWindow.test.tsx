@@ -76,10 +76,12 @@ const baseAgent: Agent = {
   model: 'claude-sonnet-4-6',
   description: 'General purpose assistant',
   soul: '',
-  timeout_seconds: 60,
   max_tool_iterations: 20,
-  rate_limits: { use_global_defaults: true },
+  max_tool_iterations_source: 'global',
+  max_tool_iterations_override_ignored: false,
   memory_enabled: true,
+  figure: 'Omnipus',
+  role: 'general',
 }
 
 function makeClient() {

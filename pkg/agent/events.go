@@ -145,6 +145,30 @@ const (
 	// exactly like EventKindSubagentMessage.
 	EventKindSubagentState
 
+	// EventKindProviderRetry (provider-messages spec §7.4, C-8/MAJ-102) is
+	// emitted by the fallback chain's per-candidate retry loop every time
+	// it is ABOUT to re-call the same candidate after a rate-limit class
+	// failure. The hub forwards it as a provider_retry frame built from
+	// the payload's named fields only (C-2/MAJ-015: never the raw error
+	// text — LLMRetryPayload.Error stays log-only).
+	EventKindProviderRetry
+
+	// EventKindProviderFallback (provider-messages spec §7.4, MIN-102/
+	// MIN-103/C-18) is emitted when a fallback candidate ANSWERED after
+	// the primary was unavailable — including the cooldown-skip path
+	// (C-18). The hub forwards it as a provider_fallback frame and the
+	// transcript note is persisted once per session per (unavailable,
+	// answered) pair (derived from the transcript, per-turn scoped).
+	EventKindProviderFallback
+	// EventKindHelperEvent follows a durable immutable helper-event chat row.
+	EventKindHelperEvent
+	// EventKindProviderStatus (issues #1478, #1280) reports the state of the
+	// provider call a running turn waits on: waiting (silent for a while),
+	// responding (data again, or the call returned, after waiting) and
+	// recovered (the call succeeded after automatic retries). Payload:
+	// ProviderStatusPayload. The hub forwards it as a provider_status frame.
+	EventKindProviderStatus
+
 	eventKindCount
 )
 
@@ -187,6 +211,10 @@ var eventKindNames = [...]string{
 	"judge_verdict",
 	"subagent_message",
 	"subagent_state",
+	"provider_retry",
+	"provider_fallback",
+	"helper_event",
+	"provider_status",
 }
 
 // String returns the stable string form of an EventKind.
@@ -279,6 +307,8 @@ const (
 
 // TurnStartPayload describes the start of a turn.
 type TurnStartPayload struct {
+	// ChatNotice is internal plumbing: only the generated frame reaches viewers.
+	ChatNotice  *generated.ReplayMessageFrame `json:"-"`
 	Channel     string
 	ChatID      string
 	UserMessage string
@@ -347,6 +377,22 @@ type LLMRetryPayload struct {
 	Reason     string
 	Error      string
 	Backoff    time.Duration
+
+	// Provider-messages spec §7.2/§7.4 (C-11/MAJ-108): the failing
+	// attempt's identity, the wall-clock times the retry frame renders,
+	// the per-turn attempt cap, and the session the frame is scoped to.
+	// Additive — existing producers keep zero values and the delegated
+	// path stays dark (§13: no provider_retry frame for it).
+	Provider    string
+	Model       string
+	RetryAt     time.Time
+	SentAt      time.Time
+	MaxAttempts int
+	SessionID   string
+
+	// ContextWindowNotice is the already-persisted context diagnostic. The hub
+	// publishes this generated frame once; no ordinary chat message is produced.
+	ContextWindowNotice *generated.ContextWindowNoticeFrame
 }
 
 // ContextCompressReason identifies why emergency compression ran.
@@ -407,7 +453,9 @@ type ToolExecEndPayload struct {
 	ForLLMLen  int
 	ForUserLen int
 	IsError    bool
-	Async      bool
+	// Cancelled is a confirmed terminal cancellation, distinct from an error.
+	Cancelled bool
+	Async     bool
 	// Result is the tool's ForLLM content, forwarded to the browser via WebSocket
 	// so rich tool UIs (e.g., browser screenshot preview) can render the result.
 	Result string
@@ -643,10 +691,17 @@ type SubTurnOrphanPayload struct {
 // Detail is computed live at the forwarder (NEVER persisted); only the
 // WS path surfaces it, behind Verbose Chat (operator Q2).
 type ErrorPayload struct {
+	// ChatNotice is internal; only this already-saved generated replay reaches viewers.
+	ChatNotice    *generated.ReplayMessageFrame `json:"-"`
 	Stage         string
 	Code          string
 	Message       string
 	ProviderError *ProviderError
+	// Detail is an optional controller-authored diagnostic for a curated
+	// Code whose Message is catalogue copy (e.g. judge_conclusion_failed):
+	// WireLLMError builds the Verbose-only wire detail from it (scrubbed,
+	// length-bounded) instead of from Message. Never shown as ordinary copy.
+	Detail string
 	// ChatID is needed so the WS event forwarder can route this event to the
 	// originating connection via matchesChatID.
 	ChatID string
@@ -658,11 +713,12 @@ type ErrorPayload struct {
 	SessionID string
 }
 
-// TurnTimeoutPayload describes a turn that exceeded its configured timeout.
+// TurnTimeoutPayload describes a provider request that timed out inside a
+// turn (classified FailoverTimeout or a transient stream reset) and is being
+// recovered. It is not a turn deadline — turns have none (issue #1306).
 type TurnTimeoutPayload struct {
-	TimeoutSeconds int
-	Compacted      bool
-	Retried        bool
+	Compacted bool
+	Retried   bool
 }
 
 // EmptyResponseRetryPayload describes a retry triggered by an empty LLM response.
@@ -738,6 +794,22 @@ type WhatsAppPairingPayload struct {
 	Status    channels.PairingStatus `json:"status"`
 	QR        string                 `json:"qr,omitempty"`
 	Message   string                 `json:"message,omitempty"`
+	// RequestID and SessionID correlate a chat-started pairing with the
+	// request and chat that started it (K10, FR-081). Empty for a pairing
+	// started elsewhere (e.g. the Channels screen).
+	RequestID string `json:"request_id,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+	// Generation/Seq are assigned at acceptance under the channel order,
+	// never on the wire. Cache and queue effects revalidate this pair and the
+	// fixed AttemptID; a delayed emit is not permission to deliver old progress.
+	Seq        uint64 `json:"-"`
+	Generation uint64 `json:"-"`
+	AttemptID  string `json:"-"`
+	// RestartInterrupted marks the unowned result a gateway start records
+	// for a pairing the restart cut off (never on the wire). The reconnect
+	// cache keeps it, because every page reconnects after the restart and
+	// must still see it (founder ruling 2026-10-21).
+	RestartInterrupted bool `json:"-"`
 }
 
 // TaskStatusChangedPayload carries a workflow task status transition for the
@@ -774,7 +846,9 @@ type PlanStatusChangedPayload struct {
 // goal_status frame (generated.GoalStatusFrame). Session-scoped — SessionID
 // is the transcript session the goal belongs to.
 type GoalStatusChangedPayload struct {
-	SessionID string `json:"session_id"`
+	// ChatNotice is internal; viewers receive only the existing generated frame.
+	ChatNotice *generated.ReplayMessageFrame `json:"-"`
+	SessionID  string                        `json:"session_id"`
 	// GoalID is the stable per-generation goal identifier (ADR-053 R§8.11,
 	// UAT S3 fix) — see session.SessionMeta.GoalID's doc comment. Empty for a
 	// legacy pre-upgrade goal that never had one minted; the WS forwarder
@@ -917,6 +991,20 @@ type SubagentMessagePayload struct {
 	MessageID string
 	// Frame is the wire shape itself, identical to the persisted entry's.
 	Frame generated.SubagentMessageFrame
+}
+
+// ProviderFallbackPayload is EventKindProviderFallback's payload
+// (provider-messages spec §7.4): the fallback candidate answered after the
+// primary candidate was unavailable. AnsweredModel/UnavailableModel are
+// model ids; UnavailableCode is "rate_limited" or "model_retired" (the two
+// unavailable-classes the frame's contract allows). SessionID is the
+// session the frame and the transcript note are scoped to.
+type ProviderFallbackPayload struct {
+	SessionID        string
+	TurnID           string
+	AnsweredModel    string
+	UnavailableModel string
+	UnavailableCode  string
 }
 
 // SubagentStatePayload is EventKindSubagentState's payload: one lifecycle

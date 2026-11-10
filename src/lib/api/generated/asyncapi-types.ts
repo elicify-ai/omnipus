@@ -10,10 +10,10 @@ export type WsFrameType =
   | "auth"
   | "message"
   | "cancel"
+  | "redirect"
   | "ping"
   | "attach_session"
   | "device_pairing_response"
-  | "session_close"
   | "session_started"
   | "message_status"
   | "token"
@@ -30,9 +30,13 @@ export type WsFrameType =
   | "task_run_status"
   | "replay_message"
   | "replay_error"
+  | "replay_provider_fallback"
   | "rate_limit"
+  | "provider_retry"
+  | "provider_status"
+  | "context_window_notice"
+  | "provider_fallback"
   | "media"
-  | "agent_switched"
   | "tool_approval_required"
   | "tool_approval_resolved"
   | "session_state"
@@ -40,7 +44,6 @@ export type WsFrameType =
   | "replay_warning"
   | "cancel_stage"
   | "pong"
-  | "session_close_ack"
   | "session_mode_update"
   | "session_mode_updated"
   | "device_pairing_request"
@@ -75,12 +78,208 @@ export type WsFrameType =
   | "browser_input_control_ack"
   | "browser_handover_notice"
   | "goal_outcome"
+  | "helper_event"
   | "library_changed"
   | "session_snapshot"
   | "catch_up_complete"
-  | "user_message";
+  | "user_message"
+  | "agent_created"
+  | "mail_panel_observer"
+  | "mail_panel_observer_ack"
+  | "mail_panel_observer_error"
+  | "secret_request"
+  | "secret_request_resolved"
+  | "attach_room"
+  | "room_snapshot"
+  | "room_entry"
+  | "room_member_state"
+  | "room_meta";
 
 // ── Frame payload types ─────────────────────────────────────────────────────
+
+export interface HistoryEntryOrigin {
+  position: string;
+  entry_id?: string;
+  turn_id?: string;
+}
+
+export interface SessionHistoryState {
+  status: "available" | "unavailable";
+  reason?: "index_missing" | "index_inconsistent" | "catchup_limit" | "storage_error" | "projection_error";
+  message?: string;
+}
+
+export interface EffortRecord {
+  chosen?: string;
+  sent?: string;
+  reason?: "mapped" | "not_supported" | "continuation" | "rejected" | "rejected_earlier" | "extra_body";
+  provider?: string;
+  model?: string;
+}
+
+export interface RoomRef {
+  room_id: string;
+  room_name: string;
+  request_id: string;
+  role: "request" | "answer";
+}
+
+export interface WorkflowStart {
+  workflow: "W1" | "W18";
+  target_workspace_id: string;
+}
+
+export interface SecretRecipientDisplay {
+  kind: "provider_key" | "mcp_env" | "channel_credential" | "mailbox_password" | "agent_private" | "unbound";
+  lines: Array<string>;
+}
+
+export interface SecretRequestField {
+  key: string;
+  label: string;
+}
+
+export interface SecretRequestFrame {
+  type: "secret_request";
+  request_id: string;
+  session_id: string;
+  root_session_id?: string;
+  acting_agent_id: string;
+  acting_agent_name: string;
+  origin_label?: string;
+  workspace_id?: string;
+  owner?: {
+    workspace_id: string;
+    agent_id: string;
+  };
+  purpose: string;
+  recipient: SecretRecipientDisplay;
+  fields: Array<SecretRequestField>;
+}
+
+export interface SecretRequestResolvedFrame {
+  type: "secret_request_resolved";
+  request_id: string;
+  state: "submitted" | "cancelled" | "stopped" | "interrupted" | "refused";
+  session_id?: string;
+  root_session_id?: string;
+}
+
+export interface SessionStateSecretRequest {
+  request_id: string;
+  session_id: string;
+  root_session_id?: string;
+  state: "pending" | "submitted" | "cancelled" | "stopped" | "interrupted" | "refused";
+  continuation_unconfirmed?: boolean;
+  acting_agent_id: string;
+  acting_agent_name: string;
+  origin_label?: string;
+  workspace_id?: string;
+  owner?: {
+    workspace_id: string;
+    agent_id: string;
+  };
+  purpose: string;
+  recipient: SecretRecipientDisplay;
+  fields: Array<SecretRequestField>;
+  reference_names?: Array<string>;
+  updated_at: string;
+}
+
+export interface RoomEntryAuthor {
+  kind: "user" | "agent";
+  agent_id?: string;
+}
+
+export interface RoomDeliveryState {
+  agent_id: string;
+  request_id: string;
+  state: "recorded" | "awaiting_approval" | "admitted" | "held" | "working" | "waiting_on_user" | "answered" | "refused" | "failed" | "interrupted" | "unavailable" | "cancelled" | "unknown";
+  reason?: string;
+}
+
+export interface MediaPart {
+  type: "image" | "audio" | "video" | "file";
+  url: string;
+  filename: string;
+  content_type: string;
+  caption?: string;
+}
+
+export interface RoomEntry {
+  id: string;
+  room_id: string;
+  seq: number;
+  client_message_id?: string;
+  author: RoomEntryAuthor;
+  text: string;
+  attachments?: Array<MediaPart>;
+  addressees: Array<string>;
+  after_pause: boolean;
+  deliveries: Array<RoomDeliveryState>;
+  timestamp: string;
+}
+
+export interface RoomEntryFrame {
+  type: "room_entry";
+  room_id: string;
+  seq: number;
+  entry: RoomEntry;
+}
+
+export interface RoomMemberStateFrame {
+  type: "room_member_state";
+  room_id: string;
+  seq: number;
+  delivery: RoomDeliveryState;
+}
+
+export interface AttachRoomFrame {
+  type: "attach_room";
+  room_id: string;
+  after_seq: number;
+}
+
+export interface RoomSnapshotFrame {
+  type: "room_snapshot";
+  room_id: string;
+  seq: number;
+  entries: Array<RoomEntry>;
+  members: Array<string>;
+  muted: Array<string>;
+  member_states: Array<RoomDeliveryState>;
+  paused: boolean;
+  generation: number;
+  read_only_reason?: string;
+  allocated_cost_micro_usd: number;
+  allocated_cost_unpriced: boolean;
+  complete: boolean;
+  has_older?: boolean;
+}
+
+export interface RoomMetaFrame {
+  type: "room_meta";
+  room_id: string;
+  seq: number;
+  members: Array<string>;
+  muted: Array<string>;
+  paused: boolean;
+  generation: number;
+  read_only_reason?: string;
+  allocated_cost_micro_usd: number;
+  allocated_cost_unpriced: boolean;
+  invitation_context_status?: "generating" | "ready" | "unavailable";
+}
+
+export interface ChatParticipant {
+  kind: "human" | "agent";
+  display_name: string;
+  source?: string;
+  agent?: {
+    workspace_id: string;
+    agent_id: string;
+  };
+}
 
 export interface AuthFrame {
   type: "auth";
@@ -88,15 +287,22 @@ export interface AuthFrame {
 }
 
 export interface MessageFrame {
+  workflow_start?: WorkflowStart;
   type: "message";
   client_message_id?: string;
   content: string;
   session_id?: string;
+  recipient?: {
+    workspace_id: string;
+    agent_id: string;
+  };
   agent_id?: string;
   media?: Array<string>;
   auto_approve?: boolean | null;
   metadata?: {
     model_name?: string;
+    provider?: string;
+    reasoning_effort?: string;
     workspace_id?: string;
     workspace_setup_kickoff?: boolean;
     [key: string]: unknown;
@@ -106,6 +312,13 @@ export interface MessageFrame {
 export interface CancelFrame {
   type: "cancel";
   session_id: string;
+  scope?: "session" | "tree";
+}
+
+export interface RedirectFrame {
+  type: "redirect";
+  session_id: string;
+  instruction: string;
 }
 
 export interface PingFrame {
@@ -119,8 +332,12 @@ export interface PongFrame {
 export interface AttachSessionFrame {
   type: "attach_session";
   session_id: string;
+  history_limit?: number;
+  history_min_rows?: number;
   since_seq?: number;
   boot_id?: string;
+  ack_attention?: boolean;
+  attention_bound?: number;
 }
 
 export interface DevicePairingResponseFrame {
@@ -133,6 +350,8 @@ export interface SessionStartedFrame {
   type: "session_started";
   session_id: string;
   agent_id?: string;
+  client_message_id?: string;
+  recovered?: boolean;
   seq?: number;
   boot_id?: string;
 }
@@ -141,26 +360,31 @@ export interface MessageStatusFrame {
   type: "message_status";
   session_id: string;
   client_message_id: string;
-  state: "received" | "working" | "failed";
+  state: "received" | "working" | "failed" | "discarded" | "held";
+  reason?: "stopped_before_delivery";
   seq?: number;
 }
 
 export interface TokenFrame {
+  room_ref?: RoomRef;
   type: "token";
   session_id: string;
   content: string;
   agent_id?: string;
+  reply_to_message_id?: string;
+  reply_to_participant?: ChatParticipant;
   turn_id?: string;
   message_id?: string;
+  goal_id?: string;
   replace?: boolean;
   seq?: number;
 }
 
 export interface DoneStats {
   tokens?: number;
+  session_tokens_total?: number;
   cost?: number;
   duration_ms?: number;
-  tokens_dropped?: number;
   frames_emitted?: number;
   orphan_count?: number;
   duplicate_tool_call_id_count?: number;
@@ -169,35 +393,48 @@ export interface DoneStats {
   turn_failed?: boolean;
   truncated?: boolean;
   truncation_reason?: "cancelled" | "max_output_tokens";
+  effort?: EffortRecord;
+  reasoning_tokens?: number;
   [key: string]: unknown;
 }
 
 export interface DoneFrame {
+  room_ref?: RoomRef;
   type: "done";
   session_id: string;
   stats?: DoneStats;
   turn_id?: string;
   message_id?: string;
+  goal_id?: string;
   seq?: number;
 }
 
 export interface LLMError {
-  code: "media_unsupported" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "network" | "provider_stalled" | "content_policy" | "context_too_long" | "tool_args" | "tool_call_truncated" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "needs_provider" | "model_unassigned" | "turn_canceled" | "turn_timed_out" | "delegated_task_limit" | "context_unrecoverable" | "context_window_unknown" | "unknown";
+  code: "media_unsupported" | "media_too_large" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "quota_billing" | "network" | "provider_stalled" | "content_policy" | "context_too_long" | "tool_args" | "tool_call_truncated" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "model_retired" | "needs_provider" | "model_unassigned" | "turn_canceled" | "turn_timed_out" | "judge_time_limit" | "judge_conclusion_failed" | "delegated_task_limit" | "context_window_unknown" | "bad_model" | "provider_request_rejected" | "model_route_unavailable" | "unknown";
   message: string;
   retryable: boolean;
   detail?: string;
+  facts?: {
+    provider?: string;
+    model?: string;
+    request_id?: string;
+  };
+  provider_message?: boolean;
 }
 
 export interface LLMErrorReplay {
-  code: "media_unsupported" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "network" | "provider_stalled" | "content_policy" | "context_too_long" | "tool_args" | "tool_call_truncated" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "needs_provider" | "model_unassigned" | "turn_canceled" | "turn_timed_out" | "delegated_task_limit" | "context_unrecoverable" | "context_window_unknown" | "unknown";
+  code: "media_unsupported" | "media_too_large" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "quota_billing" | "network" | "provider_stalled" | "content_policy" | "context_too_long" | "tool_args" | "tool_call_truncated" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "model_retired" | "needs_provider" | "model_unassigned" | "turn_canceled" | "turn_timed_out" | "judge_time_limit" | "judge_conclusion_failed" | "delegated_task_limit" | "context_window_unknown" | "bad_model" | "provider_request_rejected" | "model_route_unavailable" | "unknown";
   message: string;
   retryable: boolean;
+  provider_message?: boolean;
 }
 
 export interface ErrorFrame {
   type: "error";
   session_id?: string;
   message: string;
+  client_message_id?: string;
+  first_message_error?: "not_saved" | "delivery_unknown" | "answer_not_started";
   payload?: {
     llm_error: LLMError;
   };
@@ -205,6 +442,7 @@ export interface ErrorFrame {
 }
 
 export interface ToolCallStartFrame {
+  history_origin?: HistoryEntryOrigin;
   type: "tool_call_start";
   session_id: string;
   tool: string;
@@ -234,6 +472,12 @@ export interface ToolResultRef {
   preview: string;
 }
 
+export interface HistoryResultPreview {
+  _history_preview: true;
+  original_size_bytes: number;
+  preview: string;
+}
+
 export interface DelegationFailure {
   error: "delegation_denied";
   reason: string;
@@ -255,6 +499,7 @@ export interface PermissionDenied {
   tool: string;
   reason: string;
   permanent: boolean;
+  code?: "protected_internal_file";
 }
 
 export interface ToolAssemblyDuplicate {
@@ -282,12 +527,13 @@ export interface ToolResultRecallMark {
 }
 
 export interface ToolCallResultFrame {
+  history_origin?: HistoryEntryOrigin;
   type: "tool_call_result";
   session_id: string;
   tool: string;
   call_id: string;
   result: unknown;
-  status: "success" | "error";
+  status: "success" | "error" | "cancelled";
   duration_ms?: number;
   error?: string;
   parent_call_id?: string;
@@ -296,6 +542,7 @@ export interface ToolCallResultFrame {
 }
 
 export interface SubagentStartFrame {
+  history_origin?: HistoryEntryOrigin;
   type: "subagent_start";
   session_id: string;
   span_id: string;
@@ -307,6 +554,7 @@ export interface SubagentStartFrame {
 }
 
 export interface SubagentEndFrame {
+  history_origin?: HistoryEntryOrigin;
   type: "subagent_end";
   session_id: string;
   span_id: string;
@@ -321,12 +569,13 @@ export interface SubagentEndFrame {
 }
 
 export interface SubagentMessageFrame {
+  history_origin?: HistoryEntryOrigin;
   type: "subagent_message";
   session_id: string;
   child_session_id?: string;
   span_id: string;
   message_id: string;
-  kind: "progress" | "checkpoint" | "artifact" | "blocker" | "question" | "decision_request" | "error" | "handback" | "steer" | "respond" | "goal_status";
+  kind: "progress" | "checkpoint" | "artifact" | "blocker" | "question" | "error" | "handback" | "steer" | "respond" | "goal_status" | "not_delivered";
   text?: string;
   pct?: number;
   correlation_id?: string;
@@ -337,14 +586,24 @@ export interface SubagentMessageFrame {
 }
 
 export interface SubagentStateFrame {
+  history_origin?: HistoryEntryOrigin;
   type: "subagent_state";
   session_id: string;
   child_session_id?: string;
   span_id: string;
-  state: "queued" | "running" | "needs_input" | "paused" | "completed" | "failed" | "cancelled" | "timed_out";
-  steering_receipt?: {
-    correlation_id: string;
-    applied_at: string;
+  state: "queued" | "running" | "needs_input" | "stopped" | "completed" | "failed";
+  control_receipt?: {
+    seq: number;
+    control_id: string;
+    verb: "steer" | "stop" | "stop_all" | "redirect" | "resume" | "respond" | "clear_goal";
+    state: "queued" | "delivered" | "applied" | "superseded";
+    accepted_at: string;
+    delivered_at?: string;
+    applied_at?: string;
+    superseded_at?: string;
+    superseded_by_seq?: number;
+    reason?: string;
+    released_control_ids?: Array<string>;
   };
   created_at: string;
   seq?: number;
@@ -367,21 +626,39 @@ export interface TaskRunStatusFrame {
 }
 
 export interface ReplayMessageFrame {
+  history_origin?: HistoryEntryOrigin;
+  room_ref?: RoomRef;
   type: "replay_message";
   session_id: string;
   content: string;
+  content_original_size_bytes?: number;
   role: "user" | "assistant" | "system" | "turn_canceled";
   id?: string;
+  reply_to_message_id?: string;
+  participant?: ChatParticipant;
+  reply_to_participant?: ChatParticipant;
   timestamp?: string;
   agent_id?: string;
   model?: string;
   turn_id?: string;
+  goal_id?: string;
   truncated?: boolean;
   truncation_reason?: "cancelled" | "max_output_tokens";
   client_message_id?: string;
+  input_disposition?: {
+    message_id: string;
+    client_message_id?: string;
+    state: "discarded";
+    reason: "stopped_before_delivery";
+  };
+  seq?: number;
+  terminal_outcome?: boolean;
+  effort?: EffortRecord;
+  turn_reasoning_tokens?: number;
 }
 
 export interface ReplayErrorFrame {
+  history_origin?: HistoryEntryOrigin;
   type: "replay_error";
   session_id: string;
   entry_id: string;
@@ -416,6 +693,72 @@ export interface RateLimitFrame {
   seq?: number;
 }
 
+export interface ProviderRetryFrame {
+  type: "provider_retry";
+  session_id: string;
+  turn_id: string;
+  provider: string;
+  model: string;
+  retry_at: string;
+  retry_after_seconds: number;
+  sent_at: string;
+  attempt: number;
+  max_attempts: number;
+  error_code: string;
+  seq?: number;
+}
+
+export interface ProviderStatusFrame {
+  type: "provider_status";
+  session_id: string;
+  turn_id: string;
+  state: "waiting" | "responding" | "recovered";
+  sent_at: string;
+  silent_since?: string;
+  stall_at?: string;
+  retries?: number;
+  seq?: number;
+}
+
+export interface ContextWindowNoticeFrameNotice {
+  kind: "provider_retry" | "mid_turn";
+  message: string;
+}
+
+export interface ContextWindowNoticeFrame {
+  history_origin?: HistoryEntryOrigin;
+  type: "context_window_notice";
+  session_id: string;
+  turn_id: string;
+  agent_id: string;
+  entry_id: string;
+  timestamp: string;
+  notice: ContextWindowNoticeFrameNotice;
+  seq?: number;
+}
+
+export interface ProviderFallbackFrame {
+  type: "provider_fallback";
+  session_id: string;
+  turn_id: string;
+  answered_model: string;
+  unavailable_model: string;
+  unavailable_code: "rate_limited" | "model_retired" | "model_not_found";
+  seq?: number;
+}
+
+export interface ProviderFallbackNote {
+  history_origin?: HistoryEntryOrigin;
+  type: "replay_provider_fallback";
+  session_id: string;
+  entry_id: string;
+  timestamp: string;
+  answered_model?: string;
+  unavailable_model?: string;
+  unavailable_code?: "rate_limited" | "model_retired" | "model_not_found";
+  message: string;
+}
+
 export interface LibraryChangedFrame {
   type: "library_changed";
   workspace_id: string;
@@ -423,27 +766,11 @@ export interface LibraryChangedFrame {
   reason?: string;
 }
 
-export interface MediaPart {
-  type: "image" | "audio" | "video" | "file";
-  url: string;
-  filename: string;
-  content_type: string;
-  caption?: string;
-}
-
 export interface MediaFrame {
+  history_origin?: HistoryEntryOrigin;
   type: "media";
   session_id: string;
   parts: Array<MediaPart>;
-  seq?: number;
-}
-
-export interface AgentSwitchedFrame {
-  type: "agent_switched";
-  session_id: string;
-  agent_id?: string;
-  message?: string;
-  producing_session_id?: string;
   seq?: number;
 }
 
@@ -460,6 +787,10 @@ export interface CommandSegmentInfo {
 }
 
 export interface ToolApprovalRequiredFrame {
+  root_session_id?: string;
+  acting_agent_name?: string;
+  origin_label?: string;
+  room_ref?: RoomRef;
   type: "tool_approval_required";
   approval_id: string;
   tool_call_id: string;
@@ -476,6 +807,7 @@ export interface ToolApprovalRequiredFrame {
 }
 
 export interface ToolApprovalResolvedFrame {
+  root_session_id?: string;
   type: "tool_approval_resolved";
   approval_id: string;
   state: "approved" | "denied_user" | "denied_timeout" | "denied_cancel" | "denied_restart" | "denied_batch_short_circuit";
@@ -486,6 +818,8 @@ export interface AskUserQuestionCard {
   card_id: string;
   session_id: string;
   agent_id: string;
+  room_ref?: RoomRef;
+  origin_label?: string;
   status: "pending" | "answered" | "cancelled";
   created_at: string;
   default_safe_at?: string;
@@ -512,6 +846,7 @@ export interface AskUserQuestionCard {
 }
 
 export interface AskUserQuestionFrame {
+  history_origin?: HistoryEntryOrigin;
   type: "ask_user_question";
   card: AskUserQuestionCard;
 }
@@ -530,6 +865,16 @@ export interface AskUserAnswerFrame {
 }
 
 export interface SessionStatePendingApproval {
+  tool_call_id: string;
+  turn_id: string;
+  args: {
+    [key: string]: unknown;
+  };
+  segments?: Array<CommandSegmentInfo>;
+  root_session_id?: string;
+  acting_agent_name?: string;
+  origin_label?: string;
+  room_ref?: RoomRef;
   approval_id: string;
   session_id: string;
   tool_name: string;
@@ -545,11 +890,15 @@ export interface SessionStateActiveTurn {
 }
 
 export interface SessionStateFrame {
+  history_state?: SessionHistoryState;
+  secret_requests?: Array<SessionStateSecretRequest>;
   type: "session_state";
   user_id: string;
   pending_approvals: Array<SessionStatePendingApproval>;
   pending_asks?: Array<AskUserQuestionCard>;
   session_id?: string;
+  session_tokens_total?: number;
+  attention_bound?: number;
   auto_approve_modifier?: boolean | null;
   active_turn?: SessionStateActiveTurn;
   boot_id?: string;
@@ -589,13 +938,6 @@ export interface CancelStageFrame {
   seq?: number;
 }
 
-export interface SessionCloseAckFrame {
-  type: "session_close_ack";
-  session_id: string;
-  id?: string;
-  producing_session_id?: string;
-}
-
 export interface SessionModeUpdateFrame {
   type: "session_mode_update";
   session_id: string;
@@ -618,19 +960,18 @@ export interface DevicePairingRequestFrame {
 }
 
 export interface WhatsAppPairingFrame {
+  request_id?: string;
+  session_id?: string;
   type: "whatsapp_pairing";
   channel_id: string;
-  status: "waiting" | "code" | "linked" | "timeout" | "error";
+  status: "waiting" | "code" | "linked" | "timeout" | "error" | "stopped";
   qr?: string;
   message?: string;
 }
 
-export interface SessionCloseFrame {
-  type: "session_close";
-  session_id: string;
-}
-
 export interface WhatsAppPairingSubscribeFrame {
+  request_id?: string;
+  session_id?: string;
   type: "whatsapp_pairing_subscribe";
   channel_id: string;
   active: boolean;
@@ -639,7 +980,7 @@ export interface WhatsAppPairingSubscribeFrame {
 export interface NotificationFrame {
   type: "notification";
   id: string;
-  notification_type: "schedule_failed" | "knowledge_drift";
+  notification_type: "schedule_failed" | "knowledge_drift" | "goal_paused" | "stop_notice";
   title: string;
   body?: string;
   severity: "info" | "warning" | "error";
@@ -842,7 +1183,7 @@ export interface GoalStatusFrame {
   latest_reason: string;
   active_loops: number;
   cap: number;
-  state: "queued" | "active" | "waiting_on_user" | "judge_unavailable" | "re-planning" | "judging" | "done" | "failed" | "cleared" | "judge_cas_loss" | "blocked" | "claim_overturned" | "expired";
+  state: "active" | "waiting_on_user" | "judge_unavailable" | "re-planning" | "judging" | "done" | "failed" | "cleared" | "judge_cas_loss" | "blocked" | "claim_overturned" | "expired";
   criteria?: Array<{
     id?: string;
     kind: "check" | "prose" | "behavior";
@@ -913,6 +1254,7 @@ export interface PlanStatusFrame {
 }
 
 export interface JudgeVerdictFrame {
+  history_origin?: HistoryEntryOrigin;
   type: "judge_verdict";
   id: string;
   scope: "task" | "plan" | "goal";
@@ -943,10 +1285,29 @@ export interface JudgeVerdictFrame {
 }
 
 export interface BrowserHandoverNoticeFrame {
+  history_origin?: HistoryEntryOrigin;
   type: "browser_handover_notice";
   session_id: string;
   message_id: string;
   text: string;
+}
+
+export interface HelperEventFrameEvent {
+  helper_session_id: string;
+  helper_title?: string;
+  kind: "verdict_unmet" | "not_verified" | "stopped" | "restarted" | "resume_refused" | "timed_out" | "finished" | "question" | "blocker" | "failed";
+  text: string;
+  goal_id?: string;
+  created_at: string;
+}
+
+export interface HelperEventFrame {
+  history_origin?: HistoryEntryOrigin;
+  type: "helper_event";
+  session_id: string;
+  message_id: string;
+  helper_event: HelperEventFrameEvent;
+  seq?: number;
 }
 
 export interface GoalOutcomeFrameOutcome {
@@ -961,6 +1322,7 @@ export interface GoalOutcomeFrameOutcome {
 }
 
 export interface GoalOutcomeFrame {
+  history_origin?: HistoryEntryOrigin;
   type: "goal_outcome";
   session_id: string;
   message_id: string;
@@ -1029,12 +1391,58 @@ export interface BrowserInputControlAckFrame {
   capture_generation?: number;
 }
 
+export interface SessionHistoryContext {
+  spans: Array<{
+    span_id: string;
+    start?: SubagentStartFrame;
+    state?: SubagentStateFrame;
+    message?: SubagentMessageFrame;
+    end?: SubagentEndFrame;
+    has_run?: boolean;
+  }>;
+  duplicate_ids: Array<{
+    kind: "message" | "tool";
+    id: string;
+    canonical_position: string;
+    occurrence_count: number;
+  }>;
+}
+
+export interface SessionHistoryPageInfo {
+  mode: "latest" | "older" | "newer" | "window_refresh";
+  limit: number;
+  min_rows: number;
+  row_count: number;
+  source_group_count: number;
+  soft_byte_budget: number;
+  byte_ceiling: number;
+  projected_bytes: number;
+  byte_budget_exceeded: boolean;
+  stop_reason: "row_target" | "source_cap" | "clear" | "end" | "range_end" | "byte_budget" | "byte_ceiling";
+  budget_override?: "height_floor" | "atomic_group";
+  first_position?: string;
+  last_position?: string;
+  stopped_at_clear?: boolean;
+  latest_clear?: {
+    entry_id: string;
+    history_position: string;
+  };
+  retention_generation: string;
+  context: SessionHistoryContext;
+}
+
 export interface SessionSnapshotFrame {
   type: "session_snapshot";
   session_id: string;
   seq: number;
   boot_id?: string;
+  has_earlier: boolean;
+  has_later: boolean;
+  next_before?: string;
+  next_after?: string;
+  page_info: SessionHistoryPageInfo;
   reason?: "cursor_ahead" | "retention_exceeded" | "unknown_position" | "boot_mismatch";
+  secret_requests?: Array<SessionStateSecretRequest>;
 }
 
 export interface CatchUpCompleteFrame {
@@ -1042,10 +1450,11 @@ export interface CatchUpCompleteFrame {
   session_id: string;
   seq: number;
   boot_id?: string;
-  mode: "incremental" | "snapshot";
+  mode: "incremental" | "snapshot" | "live_only";
 }
 
 export interface UserMessageFrame {
+  room_ref?: RoomRef;
   type: "user_message";
   session_id: string;
   id: string;
@@ -1059,15 +1468,51 @@ export interface UserMessageFrame {
   }>;
   timestamp: string;
   agent_id?: string;
+  participant?: ChatParticipant;
   seq?: number;
+}
+
+export interface AgentCreatedFrame {
+  type: "agent_created";
+  agent_id: string;
+}
+
+export interface MailPanelObserverFrame {
+  type: "mail_panel_observer";
+  action: "open" | "close";
+  observer_id: string;
+  workspace_id: string;
+}
+
+export interface MailPanelObserverAckFrame {
+  type: "mail_panel_observer_ack";
+  action: "open" | "close";
+  observer_id: string;
+  workspace_id: string;
+}
+
+export interface MailPanelObserverErrorFrame {
+  type: "mail_panel_observer_error";
+  observer_id?: string;
+  workspace_id?: string;
+  code: "unauthorized_workspace" | "malformed_frame";
+  error: string;
 }
 
 // ── Union of all WS frames (discriminated by the `type` field) ──────────────
 
 export type WsFrame =
+  | SecretRequestFrame
+  | SecretRequestResolvedFrame
+  | RoomEntryFrame
+  | RoomMemberStateFrame
+  | AttachRoomFrame
+  | RoomSnapshotFrame
+  | RoomMetaFrame
   | AuthFrame
   | MessageFrame
   | CancelFrame
+  | RedirectFrame
   | PingFrame
   | PongFrame
   | AttachSessionFrame
@@ -1089,9 +1534,13 @@ export type WsFrame =
   | ReplayErrorFrame
   | ToolResultProjectionFrame
   | RateLimitFrame
+  | ProviderRetryFrame
+  | ProviderStatusFrame
+  | ContextWindowNoticeFrame
+  | ProviderFallbackFrame
+  | ProviderFallbackNote
   | LibraryChangedFrame
   | MediaFrame
-  | AgentSwitchedFrame
   | ToolApprovalRequiredFrame
   | ToolApprovalResolvedFrame
   | AskUserQuestionFrame
@@ -1100,12 +1549,10 @@ export type WsFrame =
   | SystemOverloadFrame
   | ReplayWarningFrame
   | CancelStageFrame
-  | SessionCloseAckFrame
   | SessionModeUpdateFrame
   | SessionModeUpdatedFrame
   | DevicePairingRequestFrame
   | WhatsAppPairingFrame
-  | SessionCloseFrame
   | WhatsAppPairingSubscribeFrame
   | NotificationFrame
   | BrowserAttachFrame
@@ -1129,6 +1576,7 @@ export type WsFrame =
   | PlanStatusFrame
   | JudgeVerdictFrame
   | BrowserHandoverNoticeFrame
+  | HelperEventFrame
   | GoalOutcomeFrame
   | KnowledgeIndexProgressFrame
   | BrowserInputOfferFrame
@@ -1137,20 +1585,25 @@ export type WsFrame =
   | BrowserInputControlAckFrame
   | SessionSnapshotFrame
   | CatchUpCompleteFrame
-  | UserMessageFrame;
+  | UserMessageFrame
+  | AgentCreatedFrame
+  | MailPanelObserverFrame
+  | MailPanelObserverAckFrame
+  | MailPanelObserverErrorFrame;
 
 // ── Client → server frames ──────────────────────────────────────────────────
 
 export type ClientFrame =
+  | AttachRoomFrame
   | AuthFrame
   | MessageFrame
   | CancelFrame
+  | RedirectFrame
   | PingFrame
   | AttachSessionFrame
   | DevicePairingResponseFrame
   | AskUserAnswerFrame
   | SessionModeUpdateFrame
-  | SessionCloseFrame
   | WhatsAppPairingSubscribeFrame
   | BrowserAttachFrame
   | BrowserInputFrame
@@ -1159,16 +1612,23 @@ export type ClientFrame =
   | BrowserViewportFrame
   | BrowserTabActionFrame
   | BrowserWebRTCOfferFrame
-  | BrowserInputOfferFrame;
+  | BrowserInputOfferFrame
+  | MailPanelObserverFrame;
 
 // ── ClientFrameTypes constant — generated from spec, not hand-written ─────────
 // Import this in ws.ts to build CLIENT_FRAME_TYPES set. Never edit directly.
 
-export const ClientFrameTypes = ["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "ask_user_answer", "session_mode_update", "session_close", "whatsapp_pairing_subscribe", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_viewport", "browser_tab_action", "browser_webrtc_offer", "browser_input_offer"] as const
+export const ClientFrameTypes = ["attach_room", "auth", "message", "cancel", "redirect", "ping", "attach_session", "device_pairing_response", "ask_user_answer", "session_mode_update", "whatsapp_pairing_subscribe", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_viewport", "browser_tab_action", "browser_webrtc_offer", "browser_input_offer", "mail_panel_observer"] as const
 
 // ── Server → client frames ──────────────────────────────────────────────────
 
 export type ServerFrame =
+  | SecretRequestFrame
+  | SecretRequestResolvedFrame
+  | RoomEntryFrame
+  | RoomMemberStateFrame
+  | RoomSnapshotFrame
+  | RoomMetaFrame
   | PongFrame
   | SessionStartedFrame
   | MessageStatusFrame
@@ -1187,9 +1647,13 @@ export type ServerFrame =
   | ReplayErrorFrame
   | ToolResultProjectionFrame
   | RateLimitFrame
+  | ProviderRetryFrame
+  | ProviderStatusFrame
+  | ContextWindowNoticeFrame
+  | ProviderFallbackFrame
+  | ProviderFallbackNote
   | LibraryChangedFrame
   | MediaFrame
-  | AgentSwitchedFrame
   | ToolApprovalRequiredFrame
   | ToolApprovalResolvedFrame
   | AskUserQuestionFrame
@@ -1197,7 +1661,6 @@ export type ServerFrame =
   | SystemOverloadFrame
   | ReplayWarningFrame
   | CancelStageFrame
-  | SessionCloseAckFrame
   | SessionModeUpdatedFrame
   | DevicePairingRequestFrame
   | WhatsAppPairingFrame
@@ -1216,6 +1679,7 @@ export type ServerFrame =
   | PlanStatusFrame
   | JudgeVerdictFrame
   | BrowserHandoverNoticeFrame
+  | HelperEventFrame
   | GoalOutcomeFrame
   | KnowledgeIndexProgressFrame
   | BrowserInputAnswerFrame
@@ -1223,4 +1687,7 @@ export type ServerFrame =
   | BrowserInputControlAckFrame
   | SessionSnapshotFrame
   | CatchUpCompleteFrame
-  | UserMessageFrame;
+  | UserMessageFrame
+  | AgentCreatedFrame
+  | MailPanelObserverAckFrame
+  | MailPanelObserverErrorFrame;

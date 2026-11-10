@@ -17,12 +17,15 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/skillname"
 )
 
-var namePattern = regexp.MustCompile(`^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$`)
+// namePattern and MaxNameLength are the shared skill name grammar
+// (pkg/skillname — the one source, CK14).
+var namePattern = regexp.MustCompile(skillname.Pattern)
 
 const (
-	MaxNameLength        = 64
+	MaxNameLength        = skillname.MaxLength
 	MaxDescriptionLength = 1024
 )
 
@@ -35,7 +38,7 @@ const (
 // before ever consulting the shelf-resolution model, without duplicating the
 // pattern (spec FR-021/Dataset B).
 func ValidSlug(s string) bool {
-	return s != "" && len(s) <= MaxNameLength && namePattern.MatchString(s)
+	return skillname.Valid(s)
 }
 
 // SkillMetadata holds parsed SKILL.md frontmatter fields.
@@ -181,7 +184,14 @@ func (sl *SkillsLoader) ListSkills() []SkillInfo {
 				continue
 			}
 			skillFile := filepath.Join(dir, d.Name(), "SKILL.md")
-			if _, err := os.Stat(skillFile); err != nil {
+			// §9.5: resolve the instruction file by Lstat/Readlink only and
+			// read it bounded; an oversized or unresolvable instruction file
+			// is omitted from the loadable set (logged once per scan).
+			metadata, metaErr := sl.getSkillMetadataChecked(skillFile)
+			if metaErr != nil {
+				if !errors.Is(metaErr, os.ErrNotExist) {
+					slog.Warn("skills: skill omitted from the menu", "skill", d.Name(), "source", source, "error", metaErr)
+				}
 				continue
 			}
 			info := SkillInfo{
@@ -192,7 +202,6 @@ func (sl *SkillsLoader) ListSkills() []SkillInfo {
 				Path:   skillFile,
 				Source: source,
 			}
-			metadata := sl.getSkillMetadata(skillFile)
 			if metadata != nil {
 				info.Description = metadata.Description
 				// Name is the human-readable display label. It is kept separate
@@ -274,13 +283,51 @@ func (sl *SkillsLoader) LoadSkill(name string) (string, bool) {
 // resolved path, for every shelf (project, registry, builtin) alike.
 // Exported for the ADR-072 D1 `Skill` tool's load resolver
 // (pkg/agent/loop.go, pkg/tools/skill.go).
+//
+// The read is bounded by MaxSkillMarkdownBytes and reported to the §9.5
+// open/consumption probes (op "instruction"); an oversized file is not
+// served (ok=false), never truncated.
 func LoadSkillFile(path string) (string, bool) {
-	content, err := os.ReadFile(path)
+	content, err := readBoundedInstruction("instruction", path, filepath.Base(path))
 	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			slog.Warn("skills: instruction file not served", "path", path, "error", err)
+		}
 		return "", false
 	}
 	_, body := splitFrontmatter(string(content))
 	return body, true
+}
+
+// instructionUnresolvedError marks an instruction symlink whose target is not a
+// regular file inside the skill (§9.5 captured-domain rule).
+type instructionUnresolvedError struct{ target string }
+
+func (e *instructionUnresolvedError) Error() string {
+	return fmt.Sprintf("the instruction file is a symlink to '%s', which is not a regular file of the skill", e.target)
+}
+
+// readInstructionForMetadata reads a skill's instruction file for the menu
+// scan (op "metadata"), bounded by MaxSkillMarkdownBytes. A SKILL.md symlink
+// is resolved by Lstat/Readlink inside its folder; a target outside the
+// skill, inside control metadata, dangling or non-regular is refused before
+// it is opened.
+func readInstructionForMetadata(skillPath string) ([]byte, error) {
+	if filepath.Base(skillPath) != "SKILL.md" {
+		return readBoundedInstruction("metadata", skillPath, filepath.Base(skillPath))
+	}
+	dir := filepath.Dir(skillPath)
+	ref, err := resolveInstructionOnDisk(dir)
+	if err != nil {
+		return nil, err
+	}
+	switch ref.state {
+	case instructionMissing:
+		return nil, fmt.Errorf("read %s: %w", skillPath, os.ErrNotExist)
+	case instructionUnresolved:
+		return nil, &instructionUnresolvedError{target: ref.target}
+	}
+	return readBoundedInstruction("metadata", filepath.Join(dir, filepath.FromSlash(ref.rel)), ref.rel)
 }
 
 func (sl *SkillsLoader) LoadSkillsForContext(skillNames []string) string {
@@ -427,17 +474,31 @@ func (sl *SkillsLoader) BuildSkillsSummaryFuncWithProject(allow func(name string
 	return strings.Join(lines, "\n")
 }
 
+// getSkillMetadata retains the best-effort reader used by runtime discovery.
+// Callers that must not act on an incomplete scan use getSkillMetadataChecked.
 func (sl *SkillsLoader) getSkillMetadata(skillPath string) *SkillMetadata {
-	content, err := os.ReadFile(skillPath)
+	metadata, _ := sl.getSkillMetadataChecked(skillPath)
+	return metadata
+}
+
+// getSkillMetadataChecked preserves content-read failures separately from
+// readable metadata that a caller may reject through validation.
+func (sl *SkillsLoader) getSkillMetadataChecked(skillPath string) (*SkillMetadata, error) {
+	content, err := readInstructionForMetadata(skillPath)
 	if err != nil {
 		logger.WarnCF("skills", "Failed to read skill metadata",
 			map[string]any{
 				"skill_path": skillPath,
 				"error":      err.Error(),
 			})
-		return nil
+		return nil, err
 	}
+	return sl.parseSkillMetadata(skillPath, content), nil
+}
 
+// parseSkillMetadata parses already-read instruction bytes; skillPath names
+// the skill folder (its base directory is the fallback name).
+func (sl *SkillsLoader) parseSkillMetadata(skillPath string, content []byte) *SkillMetadata {
 	frontmatter, bodyContent := splitFrontmatter(string(content))
 	dirName := filepath.Base(filepath.Dir(skillPath))
 	title, bodyDescription := extractMarkdownMetadata(bodyContent)
@@ -482,18 +543,17 @@ func (sl *SkillsLoader) getSkillMetadata(skillPath string) *SkillMetadata {
 	// from the loader's flat convenience map. `display_name` is an agreed key
 	// within that standard-supported extension map, not a non-standard
 	// top-level field.
-	var skillExtensions struct {
-		Metadata struct {
-			DisplayName string `yaml:"display_name" json:"display_name"`
-		} `yaml:"metadata" json:"metadata"`
+	fm, err := parseFrontmatter(frontmatter)
+	if err != nil {
+		slog.Warn("SKILL.md: failed to parse YAML frontmatter", "error", yamlErrorSummary(err))
 	}
-	if err := yaml.Unmarshal([]byte(frontmatter), &skillExtensions); err == nil &&
-		strings.TrimSpace(skillExtensions.Metadata.DisplayName) != "" {
-		metadata.DisplayName = strings.TrimSpace(skillExtensions.Metadata.DisplayName)
+	if nested, ok := fm["metadata"].(map[string]any); ok {
+		if dn, ok := nested["display_name"].(string); ok && strings.TrimSpace(dn) != "" {
+			metadata.DisplayName = strings.TrimSpace(dn)
+		}
 	}
 
-	// Fall back to simple YAML parsing
-	yamlMeta := sl.parseSimpleYAML(frontmatter)
+	yamlMeta := frontmatterFields(fm)
 	if name := yamlMeta["name"]; name != "" {
 		metadata.Name = name
 	}
@@ -516,7 +576,7 @@ func (sl *SkillsLoader) getSkillMetadata(skillPath string) *SkillMetadata {
 		metadata.ModelHint = mh
 	}
 	if tools := yamlMeta["allowed-tools"]; tools != "" {
-		metadata.AllowedTools = strings.Split(tools, ",")
+		metadata.AllowedTools = strings.Fields(strings.ReplaceAll(tools, ",", " "))
 	}
 	// Collect extra keys.
 	extra := make(map[string]string)
@@ -585,19 +645,33 @@ func nodeText(n ast.Node) string {
 	return strings.Join(strings.Fields(b.String()), " ")
 }
 
-// parseSimpleYAML parses YAML frontmatter into a key→value map.
-// Recognizes standard fields and ClawHub-extended fields (argument-hint,
-// context, allowed-tools, model-hint). Unrecognized keys are collected
-// under "extra:<key>" for forward compatibility.
-func (sl *SkillsLoader) parseSimpleYAML(content string) map[string]string {
-	result := make(map[string]string)
-
-	// Unmarshal into a raw map to capture all keys.
-	var raw map[string]any
-	if err := yaml.Unmarshal([]byte(content), &raw); err != nil {
-		slog.Warn("SKILL.md: failed to parse YAML frontmatter", "error", err)
-		return result
+// parseFrontmatter is the one yaml.v3 parser of SKILL.md frontmatter (skills
+// spec r15 FR-002), shared by the loader's metadata, the save check
+// (validateInstruction), the activation load and the observation. It never
+// returns a nil map: an empty block is an empty map, and a malformed block is
+// an empty map plus the parse error, which each caller handles in its own way
+// (the save check refuses, the reads serve the body without metadata).
+func parseFrontmatter(front string) (map[string]any, error) {
+	fm := map[string]any{}
+	if strings.TrimSpace(front) == "" {
+		return fm, nil
 	}
+	if err := yaml.Unmarshal([]byte(front), &fm); err != nil {
+		return map[string]any{}, err
+	}
+	if fm == nil {
+		fm = map[string]any{}
+	}
+	return fm, nil
+}
+
+// frontmatterFields flattens parsed frontmatter into the loader's key→value
+// map: the standard fields and the ClawHub-extended fields (argument-hint,
+// context, allowed-tools as a YAML sequence or a string, model-hint);
+// other string keys are collected under "extra:<key>". Empty and non-string
+// values are dropped.
+func frontmatterFields(raw map[string]any) map[string]string {
+	result := make(map[string]string)
 
 	knownKeys := map[string]bool{
 		"name": true, "description": true, "argument-hint": true,

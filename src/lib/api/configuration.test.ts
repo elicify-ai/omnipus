@@ -10,8 +10,12 @@ import { ConfigurationSaveError } from './configuration'
 const revision = 'a'.repeat(64)
 const agent = {
   revision, id: 'mia', name: 'Mia', type: 'core', locked: true,
+  // W1-5: required identity on the generated Agent response schema.
+  figure: 'Omnipus', role: 'general',
   needs_model: false, model: 'test-model', status: 'active', soul: 'fixed',
-  timeout_seconds: 60, max_tool_iterations: 20, memory_enabled: true,
+  max_tool_iterations: 20, memory_enabled: true,
+  // Issue #904: the effective limit's provenance is required on every Agent.
+  max_tool_iterations_source: 'global', max_tool_iterations_override_ignored: false,
 }
 const state = { revision, persistence_status: 'complete', activation_status: 'active', changed_fields: ['model'] }
 const fetchMock = vi.fn()
@@ -125,9 +129,9 @@ const mutationCases = [
   { name: 'agent creation', resource: agent, save: () => createAgent({ type: 'Main', name: 'New', soul: 'Instructions' }) },
   { name: 'workspace creation', resource: workspaceResource, save: () => createWorkspace({ name: 'Team' }) },
   { name: 'workspace update', resource: workspaceResource, save: () => updateWorkspace('ws', { revision, description: 'Updated' }) },
-  { name: 'graph update', resource: { revision, workspace_id: 'ws', edges: [], default_depth: 3 }, save: () => updateWorkspaceDelegation('ws', { revision, edges: [] }) },
+  { name: 'graph update', resource: { revision, workspace_id: 'ws', edges: [], default_depth: 10 }, save: () => updateWorkspaceDelegation('ws', { revision, edges: [] }) },
   { name: 'tool update', resource: { revision, override_names: [], config: { builtin: { policies: { bash: 'allow' } } }, tools: [] }, save: () => updateAgentTools('mia', { revision, override_names: [], config: { builtin: { policies: { bash: 'allow' } } } }) },
-  { name: 'skill installation', resource: { revision, id: 'skill', name: 'skill', description: 'Test skill', version: '1', author: 'Elicify', verified: false, status: 'active' }, save: () => installSkillBySlug('skill') },
+  { name: 'skill installation', resource: { has_local_changes: false, revision, id: 'skill', name: 'skill', description: 'Test skill', version: '1', author: 'Elicify', verified: false, status: 'active' }, save: () => installSkillBySlug('skill') },
 ]
 
 describe.each(mutationCases)('$name state handling', ({ resource, save }) => {

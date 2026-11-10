@@ -329,7 +329,8 @@ To state honestly in the ADR: non-bash tools run **inside the gateway process**.
 
 New event `tool.auto_approved`:
 - A typed constant in `pkg/audit`, added to the event set in `audit.go`.
-- Details: `{tool, agent_id, session_id, class, reason, paths, kernel_sandbox}`. `kernel_sandbox` *[added 2026-09-24, founder decision]* records `sandbox.TurnPolicyBaseInstalled()` at the moment of this call — since Auto no longer requires an enforcing kernel sandbox (§5.2), this is how an operator finds every auto-approval that ran unconfined by the kernel.
+- Agent and session are top-level `Entry.AgentID` / `Entry.SessionID` fields (`agent_id` / `session_id` on the wire), not members of `Details`.
+- Details always contains `{tool, class, kernel_sandbox}`; `reason` is included only when non-empty, and `paths` only when the resolved-path list is non-empty (`pkg/audit/tool_auto_approve_events.go::EmitToolAutoApproved`). `kernel_sandbox` *[added 2026-09-24, founder decision]* records `sandbox.TurnPolicyBaseInstalled()` at the moment of this call — since Auto no longer requires an enforcing kernel sandbox (§5.2), this is how an operator finds every auto-approval that ran unconfined by the kernel.
 - Emitted once for each call Auto ran without a prompt, through `audit.EmitEntry`, so a failed write shows up in the degraded count.
 - Calls that were prompted or denied keep their existing `tool.policy.ask.*` rows.
 
@@ -340,7 +341,7 @@ New event `tool.auto_approved`:
 - **Allow:** records today's exact-arguments grant (`approvalGrantRecorder`).
 - The prefix-scope choice stays `bash`-only, so the dialog hides the scope radio for other tools.
 - A grant never turns a later, different call into an Auto call.
-- Delegation inheritance is unchanged: grants and the per-chat Auto modifier pass to the delegate, except when the delegate's own `auto_approve_disabled` is set (fix-backend finding #6). The shared predicate now applies this to every tool.
+- Delegation inheritance is unchanged: grants and the per-chat Auto modifier pass to the delegate, except when the delegate's own `auto_approve_disabled` is set (fix-backend finding #6). The shared predicate now applies this to every tool. *[superseded 2026-10-07, issue #1221: the per-agent switch is deleted; a delegate inherits unconditionally and `autoApproveActive` has no delegate check]*.
 
 ### 5.7 Known interaction: two dialogs for one `bash` call (fixed in L3)
 
@@ -448,7 +449,7 @@ Expected values come from this document and the founder file, never from the imp
 | T12 | An auto-approved call records no grant (`IsAllowed` stays false) | L3 |
 | T13 | The drift guard's seven checks (§6), each with a mutation self-check: delete one entry, or move one tool off the golden ask-list, and the test must fail | L5 |
 | T14 | God Mode: an agent-level Ask on `write_file` still prompts (no sandbox, so Auto is inactive) | L3 |
-| T15 | A delegate whose own `auto_approve_disabled` is set: its `write_file` inside the workspace still prompts under a parent chat with Auto on | L3 |
+| T15 | A delegate whose own `auto_approve_disabled` is set: its `write_file` inside the workspace still prompts under a parent chat with Auto on *[superseded 2026-10-07, issue #1221: the per-agent switch is deleted; T15 now asserts the delegate runs unprompted, as its parent does]* | L3 |
 | T16 | `GET /api/v1/tools` carries `auto_approve` for every entry; `make verify-contracts` is clean | L5 |
 | T17 | Frontend: no scope radio for tools other than `bash`; new Security copy; markers only on rows set to Ask | L6 |
 | T18 | One dialog (§5.7): `bash` policy `ask`, mode Ask, a command matching an operator `{action: ask}` rule. A recording approver is called **exactly once**, and that request carries `adr092_kind: "rule_ask"`. Approving it runs the command; denying it runs nothing. A matching D3 `deny` rule still refuses with zero approver calls. Headless: auto-denied with zero approver calls | L3 |

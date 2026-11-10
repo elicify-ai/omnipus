@@ -1,5 +1,7 @@
 # Feature Specification: PlanSupervisor — closing the plan correction loop
 
+> **Correction 2026-10-14 — gated idle expiry ([PR #1311](https://github.com/elicify-ai/omnipus/pull/1311)::Decisions recorded, team-lead 2026-10-14, “Idle expiry is gated, not removed”; [issue #1306](https://github.com/elicify-ai/omnipus/issues/1306)).** Supersede only the earlier **idle-backstop retirement**: retain the seven-day idle policy, `planning.idle_expiry_days`, supported existing overrides and expired-plan handovers for genuinely wedged/abandoned work. Expiry never fires while the addressed session, its own turn, descendants, queued work or a pending cron-lane dispatch is in flight; a registered wedged turn remains busy and requires explicit Stop. Once all work settles, the existing activity clock may already permit expiry on the next eligible sweep; gate suppression does not reset it. Running supervisor work still has no lifetime deadline. **The supervision correction stays unchanged:** `planning.supervision_turn_timeout_seconds` is a minimum observation interval from the wake, never evaluated while its supervision turn is in flight, with no fresh post-settlement clock. Keep its bounded unavailable-attempt ladder and visible owner handover separately from idle expiry. Judge timers and work-result conclusions remain. Original sources at frozen `7c148ca00`: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/pkg/agent/plan_engine_supervise.go`::evaluateSupervisionDeadlineLocked / supervisionTurnInFlight; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/pkg/agent/plan_engine.go`::dispatchPlanTurn. This records the later gate requirement, not completed runtime acceptance.
+
 > **Update 2026-09-14:** the app-level token budget referenced here (and the per-delegation token budget) has been deleted from the product by founder decision. Token usage accounting is tracked in #707.
 
 **Created**: 2026-07-27
@@ -576,6 +578,8 @@ unresolvable for the FR-118 boot-sweep exemption. FR-009 and FR-024 both depend 
 FR-024 requires the failure to be surfaced.
 
 ### N8 — The wake is fire-and-forget, so the engine cannot observe the supervision turn at all
+
+> **Correction 2026-10-14 — N8 gated retention ([PR #1311](https://github.com/elicify-ai/omnipus/pull/1311)::Decisions recorded, team-lead 2026-10-14, “Idle expiry is gated, not removed”; [issue #1306](https://github.com/elicify-ai/omnipus/issues/1306)).** Supersede the earlier idle-backstop deletion, while retaining the corrected supervision observation contract: the registry claim is held until `dispatchPlanTurn` settles, and FR-021 checks its absence before the interval from `wake_at`. A live supervisor is never “produced nothing” because that interval passed. Keep the separate idle policy/configuration for genuinely wedged/abandoned plans, with no expiry while the addressed session, its own turn, descendants, queued work or pending cron-lane dispatch is in flight. A registered wedged turn is busy and requires Stop. Once all work settles, the unchanged activity clock may allow expiry on the next eligible sweep; skipping it does not reset activity. Do not reinstall a work-turn deadline or add a post-settlement grace clock; durable wake/attempt ownership remains.
 
 `wakeOwner` → `asyncNotifier.Notify` → `bus.PublishInbound`; `async_notifier.go:248-251` states
 *"no authorization happens here"* and the bus is a pure delivery primitive. `wakeOwner` returns
@@ -2195,6 +2199,8 @@ does not own and assert denial.
 
 #### Scenario: A supervision turn that emits nothing at all is detected by the deadline
 
+> **Amended 2026-10-14 — timeout-oracle supersession (founder; PR #1311 / #1306):** this and the adjacent **attempt-ceiling** scenario apply only **after no supervision turn remains in flight**. A silent-but-running review held past `wake_at + interval`, even at the final attempt, must neither be cancelled nor re-issued nor cause plan failure. Once it settles with no applicable correction/conclusion, evaluate the old wake-origin interval; if already elapsed the next tick may advance the ladder immediately. A successful correction/conclusion disarms it normally. Preserve the strict boundary and attempt-count/owner-handover controls; do not assert a post-settlement full grace period.
+
 **Traces to**: User Story 1, Acceptance Scenario 7
 **Category**: Error Path
 
@@ -2677,6 +2683,8 @@ does not own and assert denial.
 
 #### Scenario: A long-parked plan is still reaped by idle expiry
 
+> **Correction 2026-10-14 — long-parked-plan gated retention ([PR #1311](https://github.com/elicify-ai/omnipus/pull/1311)::Decisions recorded, team-lead 2026-10-14, “Idle expiry is gated, not removed”; [issue #1306](https://github.com/elicify-ai/omnipus/issues/1306)).** Supersede the earlier scenario/Bounds retirement. **US-8 AS-6 and this expiry-positive scenario remain**, but only for genuinely wedged/abandoned plans with no addressed session, own turn, descendants, queued work or pending cron-lane dispatch in flight. A running or registered-wedged supervisor is busy, never expired underneath; explicit Stop is its exit. Hold a real turn and queue past the idle bound as negative controls; once all work settles, the original activity clock may already permit `failed(idle_expired)` and its handover on the next eligible sweep. Gate suppression does not reset that clock. Keep `planning.idle_expiry_days`, existing Bounds overrides and their operator ownership; historical `idle_expired` records remain readable and new gated expiry outcomes may still be written. Test the separate wake-based settled-review attempt ladder without changing its clock origin.
+
 **Traces to**: User Story 8, Acceptance Scenario 6
 **Category**: Edge Case
 
@@ -2981,6 +2989,8 @@ before the seed; the seed before the gate; the gate before the loop.
 | D12 | `allow` | *(newly created custom agent — neither tool named in `NewCustomAgentToolsCfg`)* | `deny` | Fully enumerated helper | `deny` for **both** `execute_plan` and `stop_plan` — consistent with the rule (neither named ⟹ both deny) | `deny` | *No agent can start a plan it cannot stop* |
 
 #### Dataset E — supervision lifecycle (`Plan.supervision`)
+
+> **Correction 2026-10-14 — Dataset E gated retention ([PR #1311](https://github.com/elicify-ai/omnipus/pull/1311)::Decisions recorded, team-lead 2026-10-14, “Idle expiry is gated, not removed”; [issue #1306](https://github.com/elicify-ai/omnipus/issues/1306)).** Supersede only the earlier **idle-expiry terminal oracle retirement**. Keep multi-day expiry cases for genuinely wedged/abandoned plans, conditioned on no addressed session, own turn, descendants, queued work or pending cron-lane dispatch in flight. A registered wedged turn is busy and requires Stop. After all work settles, the original activity clock may already allow expiry on the next eligible sweep; gate suppression does not reset it. Keep the supervision tests exactly wake-based: every no-correction/timeout row requires no supervision turn in flight; a real held review past the interval/final attempt causes no retry, debit or failure. On settlement, evaluate the strict wake-origin boundary with no fresh grace period. Correction reset, round/attempt accounting, restart ownership and historical `idle_expired` decoding remain; gated new expiry outcomes are still permitted.
 
 > **Rev 2: this dataset replaces rev 1's migration inputs**, which are dead under the greenfield
 > ruling. "Tick" throughout means `defaultPlanEngineTickInterval` = **30 s**
@@ -3670,6 +3680,8 @@ This feature **modifies existing functionality**. The following behaviours MUST 
   or SPA control exists, not by a test that `targeted_retry` works. See §17.)*
 
 ### Group C — resilience
+
+> **Amended 2026-10-14 — FR-021/FR-022 supersession (founder; PR #1311 / #1306):** keep the wake-based strict comparison (`now > wake_at + interval`), eligible phase and applicable signature checks, **and require no supervision turn in flight before evaluating it**. The wake claim is held until the dispatched turn actually settles. No tick may re-wake, debit the unavailable ladder or fail the plan merely because a live review ran past the interval; `dispatchPlanTurn` has no context timeout. After settlement, the existing observation/retry state machine may run immediately if the interval from the wake has already passed—there is **no guaranteed full grace period after settlement**. Wake receipt, attempt cap, correction reset/count rules and distinct owner handover stay. FR-021's “no callback / record movement is a complete proxy” rationale is superseded: the current settlement-held claim supplies the liveness predicate. New regression oracles must hold a real review in flight past the interval/cap, then release it and assert the wake-origin boundary separately.
 
 - **FR-021 (the observation seam)**: On issuing a supervision wake the engine MUST stamp
   `supervision.wake_at` with the current time and increment `supervision.attempts`, both persisted on

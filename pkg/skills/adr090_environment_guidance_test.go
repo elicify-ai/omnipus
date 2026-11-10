@@ -39,18 +39,35 @@ func TestADR090_OrchestrateSkillHasNoAdminDependencyHandoff(t *testing.T) {
 	}
 }
 
+// WU-9 (omnipus-system-agent FR-010) split the retired Ava/Admin-era doctor
+// skill: doctor-usage (W16) is the read-only health/usage skill, and
+// dependency installation lives in the dependency-check workflow skill.
+// ADR-090's invariants survive the split on both halves: the doctor side
+// keeps no finalizer and no Admin-side install step and runs no change tool
+// itself, and the recovery route — environment_setup, the Ask-gated
+// self-service installer — is named where an install is actually decided
+// (dependency-check), which keeps the never-installs-itself and
+// readiness-proven disciplines ("exit 0 is never readiness").
 func TestADR090_DoctorSkillHasNoInstallOrFinalizeRoute(t *testing.T) {
-	body := embeddedSkillText(t, "doctor")
+	body := embeddedSkillText(t, "doctor-usage")
 	if strings.Contains(body, "finalize") {
-		t.Fatalf("doctor must drop finalizer language: %s", body)
+		t.Fatalf("doctor-usage must drop finalizer language: %s", body)
 	}
 	if strings.Contains(body, "Admin-side install") {
-		t.Fatalf("doctor must drop the Admin-side install step: %s", body)
+		t.Fatalf("doctor-usage must drop the Admin-side install step: %s", body)
 	}
-	if !strings.Contains(body, "environment_setup") {
-		t.Fatalf("doctor must point missing document dependencies at environment_setup: %s", body)
+	if strings.Contains(body, "environment_setup") {
+		t.Fatalf("doctor-usage is read-only; dependency installation is dependency-check's route, never the doctor's: %s", body)
 	}
-	if !strings.Contains(body, "re-probe") {
-		t.Fatalf("doctor must keep the requester re-probe discipline: %s", body)
+
+	deps := embeddedSkillText(t, "dependency-check")
+	if !strings.Contains(deps, "tool:environment_setup") {
+		t.Fatalf("dependency-check must point missing document dependencies at tool:environment_setup (the ADR-090 recovery route): %s", deps)
+	}
+	if !strings.Contains(deps, "never installs") {
+		t.Fatalf("dependency-check must keep the never-installs-itself discipline: %s", deps)
+	}
+	if !strings.Contains(deps, "exit 0 is never readiness") {
+		t.Fatalf("dependency-check must keep the readiness discipline (exit 0 is command success, never readiness): %s", deps)
 	}
 }

@@ -92,6 +92,7 @@
       "file": "tests/design-system/browser.spec.ts",
       "test": "DatePicker [check:date-picker-browser] browser",
       "story": "Default",
+      "requiredTargets": [{ "selector": "[aria-label=\"Due date\"]", "attribute": "type", "value": "button" }],
       "applicable": true
     },
     {

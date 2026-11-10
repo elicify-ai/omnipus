@@ -2,6 +2,108 @@
   "version": 1,
   "surfaces": [
     {
+      "id": "_app/omnipus",
+      "kind": "route",
+      "source": "src/routes/_app/omnipus.tsx",
+      "symbol": "Route",
+      "lane": 3,
+      "verification": [
+        {
+          "checkId": "surface:app-omnipus:unit",
+          "kind": "unit",
+          "file": "tests/design-system/surfaces/app-omnipus.test.tsx",
+          "test": "_app/omnipus surface contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:app-omnipus:browser",
+          "kind": "browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "_app/omnipus surface browser contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:app-omnipus:reflow",
+          "kind": "reflow",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "_app/omnipus surface reflow contract",
+          "status": "planned"
+        }
+      ],
+      "entry": {
+        "type": "route",
+        "path": "/omnipus"
+      }
+    },
+    {
+      "id": "src/components/chat/OmnipusChatScreen.tsx#OmnipusChatScreen",
+      "kind": "screen",
+      "source": "src/components/chat/OmnipusChatScreen.tsx",
+      "symbol": "OmnipusChatScreen",
+      "lane": 3,
+      "verification": [
+        {
+          "checkId": "surface:src-components-chat-omnipuschatscreen-tsx-omnipuschatscreen:unit",
+          "kind": "unit",
+          "file": "tests/design-system/surfaces/src-components-chat-omnipuschatscreen-tsx-omnipuschatscreen.test.tsx",
+          "test": "src/components/chat/OmnipusChatScreen.tsx#OmnipusChatScreen surface contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-chat-omnipuschatscreen-tsx-omnipuschatscreen:browser",
+          "kind": "browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/chat/OmnipusChatScreen.tsx#OmnipusChatScreen surface browser contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-chat-omnipuschatscreen-tsx-omnipuschatscreen:reflow",
+          "kind": "reflow",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/chat/OmnipusChatScreen.tsx#OmnipusChatScreen surface reflow contract",
+          "status": "planned"
+        }
+      ],
+      "entry": {
+        "type": "route",
+        "path": "/omnipus"
+      }
+    },
+    {
+      "id": "src/components/screens/SettingsScreen.tsx#tab:system-agents",
+      "kind": "tab",
+      "source": "src/components/screens/SettingsScreen.tsx",
+      "symbol": "tab:system-agents",
+      "lane": 6,
+      "verification": [
+        {
+          "checkId": "surface:src-components-screens-settingsscreen-tsx-tab-system-agents:unit",
+          "kind": "unit",
+          "file": "tests/design-system/surfaces/src-components-screens-settingsscreen-tsx-tab-system-agents.test.tsx",
+          "test": "src/components/screens/SettingsScreen.tsx#tab:system-agents surface contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-screens-settingsscreen-tsx-tab-system-agents:interaction",
+          "kind": "interaction",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/screens/SettingsScreen.tsx#tab:system-agents surface interaction contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-screens-settingsscreen-tsx-tab-system-agents:browser",
+          "kind": "browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/screens/SettingsScreen.tsx#tab:system-agents surface browser contract",
+          "status": "planned"
+        }
+      ],
+      "entry": {
+        "type": "route",
+        "path": "/settings?tab=system-agents"
+      }
+    },
+    {
       "id": "__root",
       "kind": "route",
       "source": "src/routes/__root.tsx",
@@ -67,142 +169,6 @@
       "entry": {
         "type": "route",
         "path": "/"
-      }
-    },
-    {
-      "id": "_app/admin.chat",
-      "kind": "route",
-      "source": "src/routes/_app/admin.chat.tsx",
-      "symbol": "Route",
-      "lane": 3,
-      "verification": [
-        {
-          "checkId": "surface:app-admin-chat:unit",
-          "file": "tests/design-system/surfaces/app-admin-chat.test.tsx",
-          "test": "_app/admin.chat surface contract",
-          "status": "planned",
-          "kind": "unit"
-        },
-        {
-          "checkId": "surface:app-admin-chat:browser",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "_app/admin.chat surface browser contract",
-          "status": "planned",
-          "kind": "browser"
-        },
-        {
-          "checkId": "surface:app-admin-chat:reflow",
-          "kind": "reflow",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "_app/admin.chat surface reflow contract",
-          "status": "planned"
-        }
-      ],
-      "entry": {
-        "type": "route",
-        "path": "/admin/chat"
-      }
-    },
-    {
-      "id": "_app/agents",
-      "kind": "route",
-      "source": "src/routes/_app/agents.tsx",
-      "symbol": "Route",
-      "lane": 5,
-      "verification": [
-        {
-          "checkId": "surface:app-agents:unit",
-          "file": "tests/design-system/surfaces/app-agents.test.tsx",
-          "test": "_app/agents surface contract",
-          "status": "planned",
-          "kind": "unit"
-        },
-        {
-          "checkId": "surface:app-agents:browser",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "_app/agents surface browser contract",
-          "status": "planned",
-          "kind": "browser"
-        },
-        {
-          "checkId": "surface:app-agents:reflow",
-          "kind": "reflow",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "_app/agents surface reflow contract",
-          "status": "planned"
-        }
-      ],
-      "entry": {
-        "type": "route",
-        "path": "/agents"
-      }
-    },
-    {
-      "id": "_app/agents.$agentId",
-      "kind": "route",
-      "source": "src/routes/_app/agents.$agentId.tsx",
-      "symbol": "Route",
-      "lane": 5,
-      "verification": [
-        {
-          "checkId": "surface:app-agents-agentid:unit",
-          "file": "tests/design-system/surfaces/app-agents-agentid.test.tsx",
-          "test": "_app/agents.$agentId surface contract",
-          "status": "planned",
-          "kind": "unit"
-        },
-        {
-          "checkId": "surface:app-agents-agentid:browser",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "_app/agents.$agentId surface browser contract",
-          "status": "planned",
-          "kind": "browser"
-        },
-        {
-          "checkId": "surface:app-agents-agentid:reflow",
-          "kind": "reflow",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "_app/agents.$agentId surface reflow contract",
-          "status": "planned"
-        }
-      ],
-      "entry": {
-        "type": "route",
-        "path": "/agents/:agentId"
-      }
-    },
-    {
-      "id": "_app/agents.index",
-      "kind": "redirect",
-      "source": "src/routes/_app/agents.index.tsx",
-      "symbol": "Route",
-      "lane": 5,
-      "verification": [
-        {
-          "checkId": "surface:app-agents-index:unit",
-          "file": "tests/design-system/surfaces/app-agents-index.test.tsx",
-          "test": "_app/agents.index surface contract",
-          "status": "planned",
-          "kind": "unit"
-        },
-        {
-          "checkId": "surface:app-agents-index:browser",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "_app/agents.index surface browser contract",
-          "status": "planned",
-          "kind": "browser"
-        },
-        {
-          "checkId": "surface:app-agents-index:reflow",
-          "kind": "reflow",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "_app/agents.index surface reflow contract",
-          "status": "planned"
-        }
-      ],
-      "entry": {
-        "type": "route",
-        "path": "/agents"
       }
     },
     {
@@ -852,6 +818,40 @@
       }
     },
     {
+      "id": "_app/workspaces.$workspaceId.mail",
+      "kind": "route",
+      "source": "src/routes/_app/workspaces.$workspaceId.mail.tsx",
+      "symbol": "Route",
+      "lane": 6,
+      "entry": {
+        "type": "route",
+        "path": "/workspaces/:workspaceId/mail"
+      },
+      "verification": [
+        {
+          "checkId": "surface:app-workspaces-workspaceid-mail:unit",
+          "kind": "unit",
+          "file": "tests/design-system/surfaces/app-workspaces-workspaceid-mail.test.tsx",
+          "test": "_app/workspaces.$workspaceId.mail surface unit contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:app-workspaces-workspaceid-mail:browser",
+          "kind": "browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "_app/workspaces.$workspaceId.mail surface browser contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:app-workspaces-workspaceid-mail:reflow",
+          "kind": "reflow",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "_app/workspaces.$workspaceId.mail surface reflow contract",
+          "status": "planned"
+        }
+      ]
+    },
+    {
       "id": "_app/workspaces.$workspaceId.media",
       "kind": "route",
       "source": "src/routes/_app/workspaces.$workspaceId.media.tsx",
@@ -985,6 +985,74 @@
       "entry": {
         "type": "route",
         "path": "/workspaces"
+      }
+    },
+    {
+      "id": "_fullscreen",
+      "kind": "route",
+      "source": "src/routes/_fullscreen.tsx",
+      "symbol": "Route",
+      "lane": 8,
+      "verification": [
+        {
+          "checkId": "surface:fullscreen:unit",
+          "file": "tests/design-system/surfaces/fullscreen.test.tsx",
+          "test": "_fullscreen surface contract",
+          "status": "planned",
+          "kind": "unit"
+        },
+        {
+          "checkId": "surface:fullscreen:browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "_fullscreen surface browser contract",
+          "status": "planned",
+          "kind": "browser"
+        },
+        {
+          "checkId": "surface:fullscreen:reflow",
+          "kind": "reflow",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "_fullscreen surface reflow contract",
+          "status": "planned"
+        }
+      ],
+      "entry": {
+        "type": "route",
+        "path": "/"
+      }
+    },
+    {
+      "id": "_fullscreen.panel.$panelId",
+      "kind": "route",
+      "source": "src/routes/_fullscreen.panel.$panelId.tsx",
+      "symbol": "Route",
+      "lane": 8,
+      "verification": [
+        {
+          "checkId": "surface:fullscreen-panel:unit",
+          "file": "src/components/panel-shell/panelExpandRoutes.test.tsx",
+          "test": "SP-38 shell-owned full-screen routes",
+          "status": "planned",
+          "kind": "unit"
+        },
+        {
+          "checkId": "surface:fullscreen-panel:browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "_fullscreen.panel.$panelId surface browser contract",
+          "status": "planned",
+          "kind": "browser"
+        },
+        {
+          "checkId": "surface:fullscreen-panel:reflow",
+          "kind": "reflow",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "_fullscreen.panel.$panelId surface reflow contract",
+          "status": "planned"
+        }
+      ],
+      "entry": {
+        "type": "route",
+        "path": "/panel/:panelId"
       }
     },
     {
@@ -1768,74 +1836,6 @@
         "type": "activation",
         "path": "src/components/agents/AgentProfile.tsx#tab:tools"
       }
-    },
-    {
-      "id": "src/components/agents/CreateAgentModal.tsx#CreateAgentModal",
-      "kind": "modal",
-      "source": "src/components/agents/CreateAgentModal.tsx",
-      "symbol": "CreateAgentModal",
-      "lane": 5,
-      "verification": [
-        {
-          "checkId": "surface:src-components-agents-createagentmodal-tsx-createagentmodal:unit",
-          "file": "tests/design-system/surfaces/src-components-agents-createagentmodal-tsx-createagentmodal.test.tsx",
-          "test": "src/components/agents/CreateAgentModal.tsx#CreateAgentModal surface contract",
-          "status": "planned",
-          "kind": "unit"
-        },
-        {
-          "checkId": "surface:src-components-agents-createagentmodal-tsx-createagentmodal:browser",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "src/components/agents/CreateAgentModal.tsx#CreateAgentModal surface browser contract",
-          "status": "planned",
-          "kind": "browser"
-        },
-        {
-          "checkId": "surface:src-components-agents-createagentmodal-tsx-createagentmodal:interaction",
-          "kind": "interaction",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "src/components/agents/CreateAgentModal.tsx#CreateAgentModal surface interaction contract",
-          "status": "planned"
-        }
-      ],
-      "entry": {
-        "type": "activation",
-        "path": "src/components/agents/CreateAgentModal.tsx#CreateAgentModal"
-      }
-    },
-    {
-      "id": "src/components/agents/CreateAgentWizard.tsx#overlay:1",
-      "kind": "modal",
-      "source": "src/components/agents/CreateAgentWizard.tsx",
-      "symbol": "overlay:1",
-      "lane": 5,
-      "entry": {
-        "type": "activation",
-        "path": "src/components/agents/CreateAgentWizard.tsx#overlay:1"
-      },
-      "verification": [
-        {
-          "checkId": "surface:src-components-agents-createagentwizard-tsx-overlay-1:unit",
-          "file": "tests/design-system/surfaces/src-components-agents-createagentwizard-tsx-overlay-1.test.tsx",
-          "test": "src/components/agents/CreateAgentWizard.tsx#overlay:1 surface contract",
-          "status": "planned",
-          "kind": "unit"
-        },
-        {
-          "checkId": "surface:src-components-agents-createagentwizard-tsx-overlay-1:browser",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "src/components/agents/CreateAgentWizard.tsx#overlay:1 surface browser contract",
-          "status": "planned",
-          "kind": "browser"
-        },
-        {
-          "checkId": "surface:src-components-agents-createagentwizard-tsx-overlay-1:interaction",
-          "kind": "interaction",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "src/components/agents/CreateAgentWizard.tsx#overlay:1 surface interaction contract",
-          "status": "planned"
-        }
-      ]
     },
     {
       "id": "src/components/agents/ToolApprovalModal.tsx#ToolApprovalModal",
@@ -3096,74 +3096,6 @@
       }
     },
     {
-      "id": "src/components/providers/ReSignInDialog.tsx#ReSignInDialog",
-      "kind": "modal",
-      "source": "src/components/providers/ReSignInDialog.tsx",
-      "symbol": "ReSignInDialog",
-      "lane": 6,
-      "verification": [
-        {
-          "checkId": "surface:src-components-providers-resignindialog-tsx-resignindialog:unit",
-          "file": "tests/design-system/surfaces/src-components-providers-resignindialog-tsx-resignindialog.test.tsx",
-          "test": "src/components/providers/ReSignInDialog.tsx#ReSignInDialog surface contract",
-          "status": "planned",
-          "kind": "unit"
-        },
-        {
-          "checkId": "surface:src-components-providers-resignindialog-tsx-resignindialog:browser",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "src/components/providers/ReSignInDialog.tsx#ReSignInDialog surface browser contract",
-          "status": "planned",
-          "kind": "browser"
-        },
-        {
-          "checkId": "surface:src-components-providers-resignindialog-tsx-resignindialog:interaction",
-          "kind": "interaction",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "src/components/providers/ReSignInDialog.tsx#ReSignInDialog surface interaction contract",
-          "status": "planned"
-        }
-      ],
-      "entry": {
-        "type": "activation",
-        "path": "src/components/providers/ReSignInDialog.tsx#ReSignInDialog"
-      }
-    },
-    {
-      "id": "src/components/providers/ReSignInDialog.tsx#overlay:1",
-      "kind": "modal",
-      "source": "src/components/providers/ReSignInDialog.tsx",
-      "symbol": "overlay:1",
-      "lane": 6,
-      "verification": [
-        {
-          "checkId": "surface:src-components-providers-resignindialog-tsx-dialog-1:unit",
-          "file": "tests/design-system/surfaces/src-components-providers-resignindialog-tsx-overlay-1.test.tsx",
-          "test": "src/components/providers/ReSignInDialog.tsx#dialog:1 surface contract",
-          "status": "planned",
-          "kind": "unit"
-        },
-        {
-          "checkId": "surface:src-components-providers-resignindialog-tsx-dialog-1:browser",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "src/components/providers/ReSignInDialog.tsx#dialog:1 surface browser contract",
-          "status": "planned",
-          "kind": "browser"
-        },
-        {
-          "checkId": "surface:src-components-providers-resignindialog-tsx-dialog-1:interaction",
-          "kind": "interaction",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "src/components/providers/ReSignInDialog.tsx#overlay:1 surface interaction contract",
-          "status": "planned"
-        }
-      ],
-      "entry": {
-        "type": "activation",
-        "path": "src/components/providers/ReSignInDialog.tsx#overlay:1"
-      }
-    },
-    {
       "id": "src/components/providers/SignInDialog.tsx#SignInDialog",
       "kind": "modal",
       "source": "src/components/providers/SignInDialog.tsx",
@@ -3229,108 +3161,6 @@
       "entry": {
         "type": "activation",
         "path": "src/components/providers/SignInDialog.tsx#overlay:1"
-      }
-    },
-    {
-      "id": "src/components/screens/AgentListScreen.tsx#AgentListScreen",
-      "kind": "screen",
-      "source": "src/components/screens/AgentListScreen.tsx",
-      "symbol": "AgentListScreen",
-      "lane": 5,
-      "verification": [
-        {
-          "checkId": "surface:src-components-screens-agentlistscreen-tsx-agentlistscreen:unit",
-          "file": "tests/design-system/surfaces/src-components-screens-agentlistscreen-tsx-agentlistscreen.test.tsx",
-          "test": "src/components/screens/AgentListScreen.tsx#AgentListScreen surface contract",
-          "status": "planned",
-          "kind": "unit"
-        },
-        {
-          "checkId": "surface:src-components-screens-agentlistscreen-tsx-agentlistscreen:browser",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "src/components/screens/AgentListScreen.tsx#AgentListScreen surface browser contract",
-          "status": "planned",
-          "kind": "browser"
-        },
-        {
-          "checkId": "surface:src-components-screens-agentlistscreen-tsx-agentlistscreen:reflow",
-          "kind": "reflow",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "src/components/screens/AgentListScreen.tsx#AgentListScreen surface reflow contract",
-          "status": "planned"
-        }
-      ],
-      "entry": {
-        "type": "activation",
-        "path": "src/components/screens/AgentListScreen.tsx#AgentListScreen"
-      }
-    },
-    {
-      "id": "src/components/screens/AgentListScreen.tsx#tab:library",
-      "kind": "tab",
-      "source": "src/components/screens/AgentListScreen.tsx",
-      "symbol": "tab:library",
-      "lane": 5,
-      "verification": [
-        {
-          "checkId": "surface:src-components-screens-agentlistscreen-tsx-tab-library:unit",
-          "file": "tests/design-system/surfaces/src-components-screens-agentlistscreen-tsx-tab-library.test.tsx",
-          "test": "src/components/screens/AgentListScreen.tsx#tab:library surface contract",
-          "status": "planned",
-          "kind": "unit"
-        },
-        {
-          "checkId": "surface:src-components-screens-agentlistscreen-tsx-tab-library:browser",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "src/components/screens/AgentListScreen.tsx#tab:library surface browser contract",
-          "status": "planned",
-          "kind": "browser"
-        },
-        {
-          "checkId": "surface:src-components-screens-agentlistscreen-tsx-tab-library:interaction",
-          "kind": "interaction",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "src/components/screens/AgentListScreen.tsx#tab:library surface interaction contract",
-          "status": "planned"
-        }
-      ],
-      "entry": {
-        "type": "activation",
-        "path": "src/components/screens/AgentListScreen.tsx#tab:library"
-      }
-    },
-    {
-      "id": "src/components/screens/AgentListScreen.tsx#tab:teams",
-      "kind": "tab",
-      "source": "src/components/screens/AgentListScreen.tsx",
-      "symbol": "tab:teams",
-      "lane": 5,
-      "verification": [
-        {
-          "checkId": "surface:src-components-screens-agentlistscreen-tsx-tab-teams:unit",
-          "file": "tests/design-system/surfaces/src-components-screens-agentlistscreen-tsx-tab-teams.test.tsx",
-          "test": "src/components/screens/AgentListScreen.tsx#tab:teams surface contract",
-          "status": "planned",
-          "kind": "unit"
-        },
-        {
-          "checkId": "surface:src-components-screens-agentlistscreen-tsx-tab-teams:browser",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "src/components/screens/AgentListScreen.tsx#tab:teams surface browser contract",
-          "status": "planned",
-          "kind": "browser"
-        },
-        {
-          "checkId": "surface:src-components-screens-agentlistscreen-tsx-tab-teams:interaction",
-          "kind": "interaction",
-          "file": "tests/design-system/surface-inventory.spec.ts",
-          "test": "src/components/screens/AgentListScreen.tsx#tab:teams surface interaction contract",
-          "status": "planned"
-        }
-      ],
-      "entry": {
-        "type": "activation",
-        "path": "src/components/screens/AgentListScreen.tsx#tab:teams"
       }
     },
     {
@@ -4252,6 +4082,40 @@
       }
     },
     {
+      "id": "src/components/screens/UsageScreen.tsx#tab:provider",
+      "kind": "tab",
+      "source": "src/components/screens/UsageScreen.tsx",
+      "symbol": "tab:provider",
+      "lane": 7,
+      "verification": [
+        {
+          "checkId": "surface:src-components-screens-usagescreen-tsx-tab-provider:unit",
+          "file": "src/components/screens/UsageScreen.cachehit.test.tsx",
+          "test": "TestUsageScreen_HitPercentAndProviderTab > adds the provider breakdown on the existing tabs control",
+          "status": "executed",
+          "kind": "unit"
+        },
+        {
+          "checkId": "surface:src-components-screens-usagescreen-tsx-tab-provider:browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/screens/UsageScreen.tsx#tab:provider surface browser contract",
+          "status": "planned",
+          "kind": "browser"
+        },
+        {
+          "checkId": "surface:src-components-screens-usagescreen-tsx-tab-provider:interaction",
+          "kind": "interaction",
+          "file": "src/components/screens/UsageScreen.cachehit.test.tsx",
+          "test": "TestUsageScreen_HitPercentAndProviderTab > keeps the selected tab focused when the period changes",
+          "status": "executed"
+        }
+      ],
+      "entry": {
+        "type": "activation",
+        "path": "src/components/screens/UsageScreen.tsx#tab:provider"
+      }
+    },
+    {
       "id": "src/components/screens/UsageScreen.tsx#tab:session",
       "kind": "tab",
       "source": "src/components/screens/UsageScreen.tsx",
@@ -4521,6 +4385,40 @@
       "entry": {
         "type": "activation",
         "path": "src/components/settings/GatewayRestartModal.tsx#overlay:1"
+      }
+    },
+    {
+      "id": "src/components/settings/MaxToolIterationsLoweringDialog.tsx#MaxToolIterationsLoweringDialog",
+      "kind": "modal",
+      "source": "src/components/settings/MaxToolIterationsLoweringDialog.tsx",
+      "symbol": "MaxToolIterationsLoweringDialog",
+      "lane": 6,
+      "verification": [
+        {
+          "checkId": "surface:src-components-settings-maxtooliterationsloweringdialog-tsx-maxtooliterationsloweringdialog:unit",
+          "file": "tests/design-system/surfaces/src-components-settings-maxtooliterationsloweringdialog-tsx-maxtooliterationsloweringdialog.test.tsx",
+          "test": "src/components/settings/MaxToolIterationsLoweringDialog.tsx#MaxToolIterationsLoweringDialog surface contract",
+          "status": "planned",
+          "kind": "unit"
+        },
+        {
+          "checkId": "surface:src-components-settings-maxtooliterationsloweringdialog-tsx-maxtooliterationsloweringdialog:browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/settings/MaxToolIterationsLoweringDialog.tsx#MaxToolIterationsLoweringDialog surface browser contract",
+          "status": "planned",
+          "kind": "browser"
+        },
+        {
+          "checkId": "surface:src-components-settings-maxtooliterationsloweringdialog-tsx-maxtooliterationsloweringdialog:interaction",
+          "kind": "interaction",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/settings/MaxToolIterationsLoweringDialog.tsx#MaxToolIterationsLoweringDialog surface interaction contract",
+          "status": "planned"
+        }
+      ],
+      "entry": {
+        "type": "activation",
+        "path": "src/components/settings/MaxToolIterationsLoweringDialog.tsx#MaxToolIterationsLoweringDialog"
       }
     },
     {
@@ -5204,6 +5102,74 @@
       }
     },
     {
+      "id": "src/components/skills/SkillCopyDialog.tsx#SkillCopyDialog",
+      "kind": "modal",
+      "source": "src/components/skills/SkillCopyDialog.tsx",
+      "symbol": "SkillCopyDialog",
+      "lane": 5,
+      "verification": [
+        {
+          "checkId": "surface:src-components-skills-skillcopydialog-tsx-skillcopydialog:unit",
+          "file": "tests/design-system/surfaces/src-components-skills-skillcopydialog-tsx-skillcopydialog.test.tsx",
+          "test": "src/components/skills/SkillCopyDialog.tsx#SkillCopyDialog surface contract",
+          "status": "planned",
+          "kind": "unit"
+        },
+        {
+          "checkId": "surface:src-components-skills-skillcopydialog-tsx-skillcopydialog:browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/skills/SkillCopyDialog.tsx#SkillCopyDialog surface browser contract",
+          "status": "planned",
+          "kind": "browser"
+        },
+        {
+          "checkId": "surface:src-components-skills-skillcopydialog-tsx-skillcopydialog:interaction",
+          "kind": "interaction",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/skills/SkillCopyDialog.tsx#SkillCopyDialog surface interaction contract",
+          "status": "planned"
+        }
+      ],
+      "entry": {
+        "type": "activation",
+        "path": "src/components/skills/SkillCopyDialog.tsx#SkillCopyDialog"
+      }
+    },
+    {
+      "id": "src/components/skills/SkillCopyDialog.tsx#overlay:1",
+      "kind": "modal",
+      "source": "src/components/skills/SkillCopyDialog.tsx",
+      "symbol": "overlay:1",
+      "lane": 5,
+      "verification": [
+        {
+          "checkId": "surface:src-components-skills-skillcopydialog-tsx-dialog-1:unit",
+          "file": "tests/design-system/surfaces/src-components-skills-skillcopydialog-tsx-overlay-1.test.tsx",
+          "test": "src/components/skills/SkillCopyDialog.tsx#dialog:1 surface contract",
+          "status": "planned",
+          "kind": "unit"
+        },
+        {
+          "checkId": "surface:src-components-skills-skillcopydialog-tsx-dialog-1:browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/skills/SkillCopyDialog.tsx#dialog:1 surface browser contract",
+          "status": "planned",
+          "kind": "browser"
+        },
+        {
+          "checkId": "surface:src-components-skills-skillcopydialog-tsx-dialog-1:interaction",
+          "kind": "interaction",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/skills/SkillCopyDialog.tsx#overlay:1 surface interaction contract",
+          "status": "planned"
+        }
+      ],
+      "entry": {
+        "type": "activation",
+        "path": "src/components/skills/SkillCopyDialog.tsx#overlay:1"
+      }
+    },
+    {
       "id": "src/components/workspaces/ConfirmActionModal.tsx#ConfirmActionModal",
       "kind": "modal",
       "source": "src/components/workspaces/ConfirmActionModal.tsx",
@@ -5816,6 +5782,142 @@
       }
     },
     {
+      "id": "src/components/workspaces/mail/MailComposeDialog.tsx#MailComposeDialog",
+      "kind": "modal",
+      "source": "src/components/workspaces/mail/MailComposeDialog.tsx",
+      "symbol": "MailComposeDialog",
+      "lane": 6,
+      "entry": {
+        "type": "activation",
+        "path": "src/components/workspaces/mail/MailComposeDialog.tsx#MailComposeDialog"
+      },
+      "verification": [
+        {
+          "checkId": "surface:src-components-workspaces-mail-mailcomposedialog-tsx-mailcomposedialog:unit",
+          "kind": "unit",
+          "file": "tests/design-system/surfaces/src-components-workspaces-mail-mailcomposedialog-tsx-mailcomposedialog.test.tsx",
+          "test": "src/components/workspaces/mail/MailComposeDialog.tsx#MailComposeDialog surface unit contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-workspaces-mail-mailcomposedialog-tsx-mailcomposedialog:interaction",
+          "kind": "interaction",
+          "file": "tests/design-system/surfaces/src-components-workspaces-mail-mailcomposedialog-tsx-mailcomposedialog.test.tsx",
+          "test": "src/components/workspaces/mail/MailComposeDialog.tsx#MailComposeDialog surface interaction contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-workspaces-mail-mailcomposedialog-tsx-mailcomposedialog:browser",
+          "kind": "browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/workspaces/mail/MailComposeDialog.tsx#MailComposeDialog surface browser contract",
+          "status": "planned"
+        }
+      ]
+    },
+    {
+      "id": "src/components/workspaces/mail/MailComposeDialog.tsx#overlay:1",
+      "kind": "modal",
+      "source": "src/components/workspaces/mail/MailComposeDialog.tsx",
+      "symbol": "overlay:1",
+      "lane": 6,
+      "entry": {
+        "type": "activation",
+        "path": "src/components/workspaces/mail/MailComposeDialog.tsx#overlay:1"
+      },
+      "verification": [
+        {
+          "checkId": "surface:src-components-workspaces-mail-mailcomposedialog-tsx-dialog-1:unit",
+          "kind": "unit",
+          "file": "tests/design-system/surfaces/src-components-workspaces-mail-mailcomposedialog-tsx-dialog-1.test.tsx",
+          "test": "src/components/workspaces/mail/MailComposeDialog.tsx#overlay:1 surface unit contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-workspaces-mail-mailcomposedialog-tsx-dialog-1:interaction",
+          "kind": "interaction",
+          "file": "tests/design-system/surfaces/src-components-workspaces-mail-mailcomposedialog-tsx-dialog-1.test.tsx",
+          "test": "src/components/workspaces/mail/MailComposeDialog.tsx#overlay:1 surface interaction contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-workspaces-mail-mailcomposedialog-tsx-dialog-1:browser",
+          "kind": "browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/workspaces/mail/MailComposeDialog.tsx#overlay:1 surface browser contract",
+          "status": "planned"
+        }
+      ]
+    },
+    {
+      "id": "src/components/workspaces/mail/MailFolderRail.tsx#dynamic-tabs",
+      "kind": "tab",
+      "source": "src/components/workspaces/mail/MailFolderRail.tsx",
+      "symbol": "dynamic-tabs",
+      "lane": 6,
+      "entry": {
+        "type": "activation",
+        "path": "src/components/workspaces/mail/MailFolderRail.tsx#dynamic-tabs"
+      },
+      "verification": [
+        {
+          "checkId": "surface:src-components-workspaces-mail-mailfolderrail-tsx-dynamic-tabs:unit",
+          "kind": "unit",
+          "file": "tests/design-system/surfaces/src-components-workspaces-mail-mailfolderrail-tsx-dynamic-tabs.test.tsx",
+          "test": "src/components/workspaces/mail/MailFolderRail.tsx#dynamic-tabs surface unit contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-workspaces-mail-mailfolderrail-tsx-dynamic-tabs:interaction",
+          "kind": "interaction",
+          "file": "tests/design-system/surfaces/src-components-workspaces-mail-mailfolderrail-tsx-dynamic-tabs.test.tsx",
+          "test": "src/components/workspaces/mail/MailFolderRail.tsx#dynamic-tabs surface interaction contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-workspaces-mail-mailfolderrail-tsx-dynamic-tabs:browser",
+          "kind": "browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/workspaces/mail/MailFolderRail.tsx#dynamic-tabs surface browser contract",
+          "status": "planned"
+        }
+      ]
+    },
+    {
+      "id": "src/components/workspaces/mail/MailMarkdownEditor.tsx#overlay:1",
+      "kind": "modal",
+      "source": "src/components/workspaces/mail/MailMarkdownEditor.tsx",
+      "symbol": "overlay:1",
+      "lane": 6,
+      "entry": {
+        "type": "activation",
+        "path": "src/components/workspaces/mail/MailMarkdownEditor.tsx#overlay:1"
+      },
+      "verification": [
+        {
+          "checkId": "surface:src-components-workspaces-mail-mailmarkdowneditor-tsx-dialog-1:unit",
+          "kind": "unit",
+          "file": "tests/design-system/surfaces/src-components-workspaces-mail-mailmarkdowneditor-tsx-dialog-1.test.tsx",
+          "test": "src/components/workspaces/mail/MailMarkdownEditor.tsx#overlay:1 surface unit contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-workspaces-mail-mailmarkdowneditor-tsx-dialog-1:interaction",
+          "kind": "interaction",
+          "file": "tests/design-system/surfaces/src-components-workspaces-mail-mailmarkdowneditor-tsx-dialog-1.test.tsx",
+          "test": "src/components/workspaces/mail/MailMarkdownEditor.tsx#overlay:1 surface interaction contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-workspaces-mail-mailmarkdowneditor-tsx-dialog-1:browser",
+          "kind": "browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/workspaces/mail/MailMarkdownEditor.tsx#overlay:1 surface browser contract",
+          "status": "planned"
+        }
+      ]
+    },
+    {
       "id": "workspace-tab:board",
       "kind": "tab",
       "source": "src/components/workspaces/WorkspaceTabBar.tsx",
@@ -6027,7 +6129,7 @@
       "lane": 1,
       "entry": {
         "type": "activation",
-        "path": "src/components/workspaces/WorkspaceTasksTab.tsx#ViewSwitcher:board"
+        "path": "src/components/workspaces/WorkspaceTasksTab.tsx#ViewSwitch:board"
       },
       "verification": [
         {
@@ -6061,7 +6163,7 @@
       "lane": 1,
       "entry": {
         "type": "activation",
-        "path": "src/components/workspaces/WorkspaceTasksTab.tsx#ViewSwitcher:list"
+        "path": "src/components/workspaces/WorkspaceTasksTab.tsx#ViewSwitch:list"
       },
       "verification": [
         {
@@ -6086,11 +6188,211 @@
           "status": "planned"
         }
       ]
+    },
+    {
+      "id": "_app/workspaces.$workspaceId.rooms.$roomId",
+      "kind": "route",
+      "source": "src/routes/_app/workspaces.$workspaceId.rooms.$roomId.tsx",
+      "symbol": "Route",
+      "lane": 3,
+      "verification": [
+        {
+          "checkId": "surface:app-workspaces-workspaceid-rooms-roomid:unit",
+          "kind": "unit",
+          "file": "tests/design-system/surfaces/app-workspaces-workspaceid-rooms-roomid.test.tsx",
+          "test": "_app/workspaces.$workspaceId.rooms.$roomId surface contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:app-workspaces-workspaceid-rooms-roomid:browser",
+          "kind": "browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "_app/workspaces.$workspaceId.rooms.$roomId surface browser contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:app-workspaces-workspaceid-rooms-roomid:reflow",
+          "kind": "reflow",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "_app/workspaces.$workspaceId.rooms.$roomId surface reflow contract",
+          "status": "planned"
+        }
+      ],
+      "entry": {
+        "type": "route",
+        "path": "/workspaces/$workspaceId/rooms/$roomId"
+      }
+    },
+    {
+      "id": "src/components/rooms/RoomScreen.tsx#RoomScreen",
+      "kind": "screen",
+      "source": "src/components/rooms/RoomScreen.tsx",
+      "symbol": "RoomScreen",
+      "lane": 3,
+      "verification": [
+        {
+          "checkId": "surface:src-components-rooms-roomscreen-tsx-roomscreen:unit",
+          "kind": "unit",
+          "file": "tests/design-system/surfaces/src-components-rooms-roomscreen-tsx-roomscreen.test.tsx",
+          "test": "src/components/rooms/RoomScreen.tsx#RoomScreen surface contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-rooms-roomscreen-tsx-roomscreen:browser",
+          "kind": "browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/rooms/RoomScreen.tsx#RoomScreen surface browser contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-rooms-roomscreen-tsx-roomscreen:reflow",
+          "kind": "reflow",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/rooms/RoomScreen.tsx#RoomScreen surface reflow contract",
+          "status": "planned"
+        }
+      ],
+      "entry": {
+        "type": "route",
+        "path": "/workspaces/$workspaceId/rooms/$roomId"
+      }
+    },
+    {
+      "id": "src/components/rooms/SquadDialog.tsx#SquadDialog",
+      "kind": "modal",
+      "source": "src/components/rooms/SquadDialog.tsx",
+      "symbol": "SquadDialog",
+      "lane": 3,
+      "verification": [
+        {
+          "checkId": "surface:src-components-rooms-squaddialog-tsx-squaddialog:unit",
+          "kind": "unit",
+          "file": "tests/design-system/surfaces/src-components-rooms-squaddialog-tsx-squaddialog.test.tsx",
+          "test": "src/components/rooms/SquadDialog.tsx#SquadDialog surface contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-rooms-squaddialog-tsx-squaddialog:interaction",
+          "kind": "interaction",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/rooms/SquadDialog.tsx#SquadDialog surface interaction contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-rooms-squaddialog-tsx-squaddialog:browser",
+          "kind": "browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/rooms/SquadDialog.tsx#SquadDialog surface browser contract",
+          "status": "planned"
+        }
+      ],
+      "entry": {
+        "type": "activation",
+        "path": "src/components/rooms/SquadDialog.tsx#SquadDialog"
+      }
+    },
+    {
+      "id": "src/components/rooms/SquadDialog.tsx#overlay:1",
+      "kind": "modal",
+      "source": "src/components/rooms/SquadDialog.tsx",
+      "symbol": "overlay:1",
+      "lane": 3,
+      "verification": [
+        {
+          "checkId": "surface:src-components-rooms-squaddialog-tsx-overlay-1:unit",
+          "kind": "unit",
+          "file": "tests/design-system/surfaces/src-components-rooms-squaddialog-tsx-overlay-1.test.tsx",
+          "test": "src/components/rooms/SquadDialog.tsx#overlay:1 surface contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-rooms-squaddialog-tsx-overlay-1:interaction",
+          "kind": "interaction",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/rooms/SquadDialog.tsx#overlay:1 surface interaction contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-rooms-squaddialog-tsx-overlay-1:browser",
+          "kind": "browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/rooms/SquadDialog.tsx#overlay:1 surface browser contract",
+          "status": "planned"
+        }
+      ],
+      "entry": {
+        "type": "activation",
+        "path": "src/components/rooms/SquadDialog.tsx#overlay:1"
+      }
+    },
+    {
+      "id": "src/components/chat/AddParticipant.tsx#overlay:1",
+      "kind": "modal",
+      "source": "src/components/chat/AddParticipant.tsx",
+      "symbol": "overlay:1",
+      "lane": 3,
+      "verification": [
+        {
+          "checkId": "surface:src-components-chat-addparticipant-tsx-overlay-1:unit",
+          "kind": "unit",
+          "file": "tests/design-system/surfaces/src-components-chat-addparticipant-tsx-overlay-1.test.tsx",
+          "test": "src/components/chat/AddParticipant.tsx#overlay:1 surface contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-chat-addparticipant-tsx-overlay-1:interaction",
+          "kind": "interaction",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/chat/AddParticipant.tsx#overlay:1 surface interaction contract",
+          "status": "planned"
+        },
+        {
+          "checkId": "surface:src-components-chat-addparticipant-tsx-overlay-1:browser",
+          "kind": "browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "src/components/chat/AddParticipant.tsx#overlay:1 surface browser contract",
+          "status": "planned"
+        }
+      ],
+      "entry": {
+        "type": "activation",
+        "path": "src/components/chat/AddParticipant.tsx#overlay:1"
+      }
     }
   ],
   "sourceOwners": [
+    { "source": "src/components/connectors/ChannelOutboundSection.tsx", "lane": 5 },
+    { "source": "src/components/skills/channelConfigureOutcome.ts", "lane": 5 },
+    {"source":"src/components/agents/AgentPrivateSecrets.tsx","lane":5},
+    {"source":"src/components/chat/SecretRequestCard.tsx","lane":3},
+    {"source":"src/components/chat/OmnipusChatScreen.tsx","lane":3},
+    {"source":"src/components/layout/sidebar/OmnipusEntry.tsx","lane":7},
+    {"source":"src/components/settings/SystemAgentsSection.tsx","lane":6},
+    {"source":"src/components/workspaces/team/TeamGraphView.tsx","lane":2},
+    {"source":"src/components/workspaces/team/TeamListView.tsx","lane":2},
+    {"source":"src/components/workspaces/team/useTeamMembership.ts","lane":2},
+    {"source":"src/routes/_app/omnipus.tsx","lane":3},
+    {"source":"src/components/workspaces/WorkItemDetails.tsx","lane":1},
+    {"source":"src/components/workspaces/useBoardCardHeights.ts","lane":1},
+    {"source":"src/components/workspaces/TaskElapsedTime.tsx","lane":1},
+    {"source":"src/components/workspaces/taskExecution.ts","lane":1},
+    { "source": "src/components/workspaces/tasksLayoutFixtures.tsx", "lane": 1 },
+    { "source": "src/components/workspaces/useTasksBoardLayout.ts", "lane": 1 },
+    { "source": "src/components/agents/agentProfileTestFixtures.ts", "lane": 5 },
     {
       "source": "src/components/agents/AgentCard.tsx",
+      "lane": 5
+    },
+    {
+      "source": "src/components/agents/AgentMark.tsx",
+      "lane": 5
+    },
+    {
+      "source": "src/components/agents/DeleteAgentControl.tsx",
+      "lane": 5
+    },
+    {
+      "source": "src/components/agents/RoleBadgeIcon.tsx",
       "lane": 5
     },
     {
@@ -6102,19 +6404,23 @@
       "lane": 5
     },
     {
+      "source": "src/components/agents/AgentFallbackModels.tsx",
+      "lane": 5
+    },
+    {
+      "source": "src/components/agents/ToolIterationLimitField.tsx",
+      "lane": 5
+    },
+    {
+      "source": "src/components/agents/useToolIterationLimitRefusal.ts",
+      "lane": 5
+    },
+    {
       "source": "src/components/agents/CliPathValidationHint.tsx",
       "lane": 5
     },
     {
       "source": "src/components/agents/CommandPreview.tsx",
-      "lane": 5
-    },
-    {
-      "source": "src/components/agents/CreateAgentModal.tsx",
-      "lane": 5
-    },
-    {
-      "source": "src/components/agents/CreateAgentWizard.tsx",
       "lane": 5
     },
     {
@@ -6130,16 +6436,20 @@
       "lane": 8
     },
     {
-      "source": "src/components/agents/ToolsAndPermissions.tsx",
-      "lane": 5
+      "source": "src/components/agents/ToolApprovalPanel.tsx",
+      "lane": 8
     },
     {
-      "source": "src/components/agents/WorkerCard.tsx",
+      "source": "src/components/agents/ToolsAndPermissions.tsx",
       "lane": 5
     },
     {
       "source": "src/components/agents/agentDraft.ts",
       "lane": 5
+    },
+    {
+      "source": "src/components/agents/approvalPreviews/AgentChangeApprovalPreview.tsx",
+      "lane": 8
     },
     {
       "source": "src/components/agents/approvalPreviews/BashApprovalPreview.tsx",
@@ -6164,30 +6474,6 @@
     {
       "source": "src/components/agents/voice-provider-sub.tsx",
       "lane": 6
-    },
-    {
-      "source": "src/components/agents/wizard/Advanced.tsx",
-      "lane": 5
-    },
-    {
-      "source": "src/components/agents/wizard/InheritToggle.tsx",
-      "lane": 5
-    },
-    {
-      "source": "src/components/agents/wizard/Step1Identity.tsx",
-      "lane": 5
-    },
-    {
-      "source": "src/components/agents/wizard/Step2Personality.tsx",
-      "lane": 5
-    },
-    {
-      "source": "src/components/agents/wizard/Step3Tools.tsx",
-      "lane": 5
-    },
-    {
-      "source": "src/components/agents/wizard/types.ts",
-      "lane": 5
     },
     {
       "source": "src/components/browser/BrowserLiveAnnotatePopover.tsx",
@@ -6238,6 +6524,10 @@
       "lane": 2
     },
     {
+      "source": "src/components/calendar/CalendarMonthGrid.tsx",
+      "lane": 2
+    },
+    {
       "source": "src/components/calendar/CalendarToolbar.tsx",
       "lane": 2
     },
@@ -6274,6 +6564,10 @@
       "lane": 3
     },
     {
+      "source": "src/components/chat/assistantRowAttributes.ts",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/AttachmentCard.tsx",
       "lane": 3
     },
@@ -6286,11 +6580,47 @@
       "lane": 3
     },
     {
+      "source": "src/components/chat/AgentStatusIndicator.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/useChatAgents.ts",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/useCurrentTodo.ts",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/ChatScreen.tsx",
       "lane": 3
     },
     {
+      "source": "src/components/chat/ChatMessageList.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/HistoryBoundary.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/useChatHistory.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/useHistoryViewport.ts",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/ChatThread.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/ChatHeaderSlot.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/ClearContextDivider.tsx",
       "lane": 3
     },
     {
@@ -6299,6 +6629,22 @@
     },
     {
       "source": "src/components/chat/ConnectionStatus.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/DelegationEventLine.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/ErrorDetailDisclosure.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/FeedKindLabel.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/ParentCrumbLink.tsx",
       "lane": 3
     },
     {
@@ -6319,6 +6665,10 @@
     },
     {
       "source": "src/components/chat/GoalPillTray.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/HelperEventRow.tsx",
       "lane": 3
     },
     {
@@ -6350,6 +6700,34 @@
       "lane": 6
     },
     {
+      "source": "src/components/chat/OutcomeDisclosure.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/RowDeliveryStatus.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/ParticipantLabels.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/participantLabel.ts",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/ProviderFallbackNoteLine.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/ProviderRetryIndicator.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/ProviderWaitingIndicator.tsx",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/RateLimitIndicator.tsx",
       "lane": 3
     },
@@ -6358,7 +6736,15 @@
       "lane": 5
     },
     {
+      "source": "src/components/chat/SystemMessageRows.tsx",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/ToolCallBadge.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/UnavailableChatNotice.tsx",
       "lane": 3
     },
     {
@@ -6366,11 +6752,19 @@
       "lane": 3
     },
     {
-      "source": "src/components/chat/composer/AgentPicker.tsx",
-      "lane": 5
+      "source": "src/components/chat/composer/AutoApprovePicker.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/composer/ComposerMenu.tsx",
+      "lane": 3
     },
     {
       "source": "src/components/chat/composer/ModelPicker.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/composer/ComposerEffortChip.tsx",
       "lane": 3
     },
     {
@@ -6379,6 +6773,14 @@
     },
     {
       "source": "src/components/chat/historical-markdown.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/historyEntryOutcome.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/historyTextOverlay.tsx",
       "lane": 3
     },
     {
@@ -6418,6 +6820,18 @@
       "lane": 3
     },
     {
+      "source": "src/components/chat/tools/ConnectChannelTool.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/tools/ConnectChannelToolUI.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/tools/DraftLink.tsx",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/tools/FileReadPreview.tsx",
       "lane": 4
     },
@@ -6435,6 +6849,14 @@
     },
     {
       "source": "src/components/chat/tools/GoalSetupFailureLine.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/tools/HistoricalToolCallBlock.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/tools/HistoryPreviewToolCall.tsx",
       "lane": 3
     },
     {
@@ -6474,6 +6896,18 @@
       "lane": 3
     },
     {
+      "source": "src/components/chat/useChatDelegationEvents.ts",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/useOpenReveal.ts",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/useRestartInterrupted.ts",
+      "lane": 3
+    },
+    {
       "source": "src/components/chat/useSelectSession.ts",
       "lane": 3
     },
@@ -6486,8 +6920,8 @@
       "lane": 7
     },
     {
-      "source": "src/components/layout/CrossWorkspaceApprovalBanner.tsx",
-      "lane": 8
+      "source": "src/components/layout/GodModeIndicators.tsx",
+      "lane": 7
     },
     {
       "source": "src/components/layout/NotificationPanel.tsx",
@@ -6502,7 +6936,39 @@
       "lane": 7
     },
     {
+      "source": "src/components/layout/SidebarShowButton.tsx",
+      "lane": 7
+    },
+    {
       "source": "src/components/layout/appShellViewport.ts",
+      "lane": 7
+    },
+    {
+      "source": "src/components/layout/sidebar/AgentRowMenu.tsx",
+      "lane": 7
+    },
+    {
+      "source": "src/components/layout/sidebar/SidebarAgentIcon.tsx",
+      "lane": 7
+    },
+    {
+      "source": "src/components/layout/sidebar/WorkspaceAgentList.tsx",
+      "lane": 7
+    },
+    {
+      "source": "src/components/layout/sidebar/agentRowActions.ts",
+      "lane": 7
+    },
+    {
+      "source": "src/components/layout/sidebar/attentionCue.ts",
+      "lane": 7
+    },
+    {
+      "source": "src/components/layout/sidebar/pairExtra.ts",
+      "lane": 7
+    },
+    {
+      "source": "src/components/layout/sidebar/workspaceRoster.ts",
       "lane": 7
     },
     {
@@ -6666,11 +7132,11 @@
       "lane": 4
     },
     {
-      "source": "src/components/library/preview/LibraryPdfPreview.tsx",
+      "source": "src/components/library/preview/LibraryPdfPreview.loadEffect.ts",
       "lane": 4
     },
     {
-      "source": "src/components/library/preview/LibraryPdfPreview.loadEffect.ts",
+      "source": "src/components/library/preview/LibraryPdfPreview.tsx",
       "lane": 4
     },
     {
@@ -6850,6 +7316,98 @@
       "lane": 4
     },
     {
+      "source": "src/components/panel-shell/ListPreviewLayout.tsx",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/PanelTabPresenceBridge.tsx",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/SidePanelShell.tsx",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/demo/BrowserPanelPlaceholder.tsx",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/demo/DemoWorkspace.tsx",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/demo/demoPanelRegistry.tsx",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/demo/fixtureApi.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/demo/fixtures.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/demo/standins.tsx",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/leaveGate.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/panelEscape.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/panelFocus.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/panelShellStore.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/panelTabSwitch.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/panelWidth.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/panelWidthMemory.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/registry.tsx",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/types.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/usePanelDeepLink.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/usePanelShell.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/usePanelUrlHistory.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/useSwipeToClose.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/panel-shell/workspaceSwitch.ts",
+      "lane": 8
+    },
+    {
       "source": "src/components/providers/AuthMethodControl.tsx",
       "lane": 6
     },
@@ -6874,10 +7432,6 @@
       "lane": 6
     },
     {
-      "source": "src/components/providers/ReSignInDialog.tsx",
-      "lane": 6
-    },
-    {
       "source": "src/components/providers/SignInDialog.tsx",
       "lane": 6
     },
@@ -6888,10 +7442,6 @@
     {
       "source": "src/components/providers/region-inference.ts",
       "lane": 6
-    },
-    {
-      "source": "src/components/screens/AgentListScreen.tsx",
-      "lane": 5
     },
     {
       "source": "src/components/screens/CalendarScreen.tsx",
@@ -6920,6 +7470,26 @@
     {
       "source": "src/components/search/SearchModal.tsx",
       "lane": 8
+    },
+    {
+      "source": "src/components/sessions/SessionGroupHeaders.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/sessions/SessionOverviewList.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/sessions/SessionRow.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/sessions/sessionLabels.ts",
+      "lane": 3
+    },
+    {
+      "source": "src/components/sessions/sessionOverview.ts",
+      "lane": 3
     },
     {
       "source": "src/components/sessions/SessionTree.tsx",
@@ -6990,7 +7560,27 @@
       "lane": 6
     },
     {
+      "source": "src/components/settings/RecapLimitsArea.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/settings/RecapModelSlot.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/settings/recapLimits.ts",
+      "lane": 6
+    },
+    {
       "source": "src/components/settings/PerformanceSection.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/settings/MaxToolIterationsCard.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/settings/MaxToolIterationsLoweringDialog.tsx",
       "lane": 6
     },
     {
@@ -7038,7 +7628,15 @@
       "lane": 6
     },
     {
+      "source": "src/components/settings/WebSearchGroup.tsx",
+      "lane": 6
+    },
+    {
       "source": "src/components/settings/useReAuthGate.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/settings/useSearchConnectionChecks.ts",
       "lane": 6
     },
     {
@@ -7054,7 +7652,7 @@
       "lane": 7
     },
     {
-      "source": "src/components/shared/IconRenderer.tsx",
+      "source": "src/components/shared/ErrorBoundary.tsx",
       "lane": 7
     },
     {
@@ -7102,11 +7700,19 @@
       "lane": 5
     },
     {
+      "source": "src/components/skills/SkillCopyDialog.tsx",
+      "lane": 5
+    },
+    {
       "source": "src/components/skills/WhatsAppNativeNotice.tsx",
       "lane": 5
     },
     {
       "source": "src/components/skills/WhatsAppPairingBody.tsx",
+      "lane": 5
+    },
+    {
+      "source": "src/components/skills/useWhatsAppPairingInterest.ts",
       "lane": 5
     },
     {
@@ -7290,6 +7896,94 @@
       "lane": 1
     },
     {
+      "source": "src/components/workspaces/mail/MailAttachmentViewer.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/MailAttachmentsEditor.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/MailAttachmentsPane.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/MailComposeDialog.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/MailFolderRail.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/MailHtmlFrame.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/MailMarkdownEditor.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/MailMessageList.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/MailPanel.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/MailPreviewPane.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/MailRecipientInput.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/MailRecipientRow.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/MailReplyContext.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/MailSignaturePreview.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/mail-format.ts",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/mailAttachmentHandoff.ts",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/mailCacheView.ts",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/mailDeepLink.ts",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/mailPanelDefinition.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/mailPanelIntent.ts",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/mailPanelPresence.ts",
+      "lane": 6
+    },
+    {
+      "source": "src/components/workspaces/mail/mailUnsavedGuard.ts",
+      "lane": 6
+    },
+    {
       "source": "src/components/workspaces/taskFormFields.ts",
       "lane": 1
     },
@@ -7314,6 +8008,10 @@
       "lane": 2
     },
     {
+      "source": "src/components/workspaces/team/TeamPanel.tsx",
+      "lane": 2
+    },
+    {
       "source": "src/components/workspaces/team/WorkspaceTeamGraph.tsx",
       "lane": 2
     },
@@ -7322,11 +8020,23 @@
       "lane": 2
     },
     {
+      "source": "src/components/workspaces/useWorkspaceHeaderMode.ts",
+      "lane": 1
+    },
+    {
       "source": "src/main.tsx",
       "lane": 7
     },
     {
+      "source": "src/routes/-authenticatedBeforeLoad.ts",
+      "lane": 7
+    },
+    {
       "source": "src/routes/-login-local.tsx",
+      "lane": 7
+    },
+    {
+      "source": "src/routes/-loginReturn.ts",
       "lane": 7
     },
     {
@@ -7338,20 +8048,12 @@
       "lane": 7
     },
     {
-      "source": "src/routes/_app/admin.chat.tsx",
-      "lane": 3
+      "source": "src/routes/_fullscreen.panel.$panelId.tsx",
+      "lane": 8
     },
     {
-      "source": "src/routes/_app/agents.$agentId.tsx",
-      "lane": 5
-    },
-    {
-      "source": "src/routes/_app/agents.index.tsx",
-      "lane": 5
-    },
-    {
-      "source": "src/routes/_app/agents.tsx",
-      "lane": 5
+      "source": "src/routes/_fullscreen.tsx",
+      "lane": 8
     },
     {
       "source": "src/routes/_app/automations.tsx",
@@ -7426,6 +8128,10 @@
       "lane": 1
     },
     {
+      "source": "src/routes/_app/workspaces.$workspaceId.mail.tsx",
+      "lane": 6
+    },
+    {
       "source": "src/routes/_app/workspaces.$workspaceId.media.tsx",
       "lane": 4
     },
@@ -7462,23 +8168,103 @@
       "lane": 1
     },
     {
-      "source": "src/components/chat/ChatModeBadge.tsx",
+      "source": "src/components/chat/AddParticipant.tsx",
       "lane": 3
     },
     {
-      "source": "src/components/chat/composer/AutoApprovePicker.tsx",
+      "source": "src/components/chat/RoomTrafficEntry.tsx",
       "lane": 3
     },
     {
-      "source": "src/components/layout/GodModeIndicators.tsx",
+      "source": "src/components/layout/sidebar/WorkspaceGroupChats.tsx",
       "lane": 7
     },
     {
-      "source": "src/components/chat/DelegationEventLine.tsx",
+      "source": "src/components/rooms/RoomComposer.tsx",
       "lane": 3
     },
     {
-      "source": "src/components/chat/useChatDelegationEvents.ts",
+      "source": "src/components/rooms/RoomHeader.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/RoomScreen.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/RoomTranscript.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/SquadDialog.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/roomModel.ts",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/useRoomSend.ts",
+      "lane": 3
+    },
+    {
+      "source": "src/routes/_app/workspaces.$workspaceId.rooms.$roomId.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/conversationSource.ts",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/ChatFileAttachment.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/agents/AttentionHalo.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/GroupHeaderControls.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/ParticipantsPanel.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/RoomMessageBox.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/RoomWorkingLines.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/roomAttachmentAdapter.ts",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/roomConversationSource.ts",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/roomMembership.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/useRoomComposerMenu.ts",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/useRoomRuntime.ts",
+      "lane": 3
+    },
+    {
+      "source": "src/components/rooms/useRoomView.ts",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/composer/OmnipusComposer.tsx",
       "lane": 3
     }
   ]

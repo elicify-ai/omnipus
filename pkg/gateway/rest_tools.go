@@ -19,19 +19,26 @@ import (
 
 // --- Tools ---
 
-// HandleTools handles GET /api/v1/tools — returns the list of tools available to the agent.
+// toolRegistryNotReady is the 503 body for a tool listing requested before
+// boot wires the central builtin registry (omnipus-system-agent FR-125).
+const toolRegistryNotReady = "tool registry not ready"
+
+// HandleTools handles GET /api/v1/tools — the install's tool catalogue, read
+// from the central builtin registry (plus connected MCP tools), never through
+// an agent (FR-125, §6.4). 503 before the registry is wired.
 func (a *restAPI) HandleTools(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	registry := a.agentLoop.GetRegistry()
-	agent := registry.GetDefaultAgent()
-	if agent == nil {
-		jsonOK(w, []map[string]any{})
+	if a.builtinRegistry == nil {
+		jsonErr(w, http.StatusServiceUnavailable, toolRegistryNotReady)
 		return
 	}
-	allTools := agent.Tools.GetAll()
+	allTools := a.builtinRegistry.All()
+	if a.mcpRegistry != nil {
+		allTools = append(allTools, a.mcpRegistry.All()...)
+	}
 	tools := make([]map[string]any, 0, len(allTools))
 	for _, t := range allTools {
 		name := t.Name()
@@ -268,9 +275,7 @@ func (rau *restAPIUpdateAgentTools) normalizeBuiltinPolicies() bool {
 	// This also gives the documented 400 for the legacy mode="explicit" +
 	// visible[] shape sent alone, exactly as
 	// contracts/components/schemas/AgentToolsUpdateRequest.yaml describes.
-	if defects := config.ValidateSubmittedToolPolicyMap(
-		rau.builtinPolicies, buildKnownBuiltinToolNames(),
-	); !defects.Empty() {
+	if defects := validateSubmittedBuiltinToolPolicyMap(rau.builtinPolicies); !defects.Empty() {
 		jsonErr(rau.w, http.StatusBadRequest, "builtin.policies "+defects.String())
 		return true
 	}
@@ -341,7 +346,7 @@ func (rau *restAPIUpdateAgentTools) persistPolicy() bool {
 	for name, policy := range rau.builtinPolicies {
 		complete[name] = config.ToolPolicy(policy)
 	}
-	known := buildKnownBuiltinToolNames()
+	known := submittedBuiltinToolPolicyNames(rau.builtinPolicies)
 	ceiling := make(map[string]config.ToolPolicy, len(known))
 	for name := range known {
 		policy := config.ToolPolicy(rau.cfg.Sandbox.ToolPolicies[name])
@@ -359,6 +364,16 @@ func (rau *restAPIUpdateAgentTools) persistPolicy() bool {
 		}
 		return true
 	}
+	// FR-022: the overrides are what this agent would store; Omnipus never
+	// stores a per-agent ask (inherited echoes of the ceiling are not
+	// overrides and never trip this).
+	// Channels FR-037: an always-ask tool never stores a per-agent allow.
+	if refuseAlwaysAskAllow(rau.w, overrides) {
+		return true
+	}
+	if refuseOmnipusPerAgentAsk(rau.w, rau.agentID, overrides) {
+		return true
+	}
 	mutation, updateErr := agentstore.New(rau.a.homePath).MutateState(rau.agentID, rau.req.Revision, func(agentRec *config.AgentConfig) error {
 		if err := agentmutation.ValidateFields(*agentRec, []string{"tools_cfg"}); err != nil {
 			return err
@@ -366,6 +381,7 @@ func (rau *restAPIUpdateAgentTools) persistPolicy() bool {
 		if agentRec.Tools == nil {
 			agentRec.Tools = &config.AgentToolsCfg{}
 		}
+		retainReservedBuiltinToolPolicies(overrides, agentRec.Tools.Builtin.Policies, rau.builtinPolicies)
 		agentRec.Tools.Builtin.Policies = overrides
 		if rau.mcpSpecified {
 			servers := make([]config.AgentMCPServerBinding, 0, len(rau.mcpServers))
@@ -418,7 +434,7 @@ func (rau *restAPIUpdateAgentTools) reloadAndRespond() {
 	// finding #4): before this fix, an unconfirmed-but-error-free reload
 	// (confirmed=false, err=nil) fell through to a 200 with only a
 	// server-side Warn log — a caller had no way to know the tool-policy
-	// tightening they just requested (e.g. create_skill allow/deny -> ask)
+	// tightening they just requested (e.g. edit_skill allow/deny -> ask)
 	// might not be enforced yet, and a tool call dispatched immediately
 	// after could still run under the STALE, more permissive snapshot. This
 	// mirrors waitForReload's OWN documented incident ("Persisted-but-not-

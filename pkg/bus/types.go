@@ -54,6 +54,14 @@ type InboundMessage struct {
 	// by routing, handoff override, and per-agent history keying so two
 	// concurrent sessions in the same browser remain isolated.
 	SessionID string `json:"session_id,omitempty"`
+	// TranscriptEntryID is the id of the transcript entry the inbound path
+	// durably wrote for THIS message before the turn starts. Set only after
+	// that write succeeded; empty when the message was not transcribed (write
+	// failed, "system" channel, setup kickoff). The agent loop uses it to
+	// recognise the current message in the transcript by identity, never by
+	// text. Internal plumbing between inbound producers and the agent loop
+	// (pkg/bus is not part of the gateway/SPA wire boundary).
+	TranscriptEntryID string `json:"transcript_entry_id,omitempty"`
 	// InstanceID is the channel-instance key this message arrived on
 	// (ADR-019 FR-4b / NFR-1). Channels that know their instance set this
 	// directly; inboundInstanceID prefers it over Metadata for the
@@ -79,9 +87,9 @@ type InboundMessage struct {
 	// async tool/delegate result (AsyncNotifyEvent.AgentID). A DEDICATED
 	// carrier, following the same pattern as GatewayUserID above: without it,
 	// the consumer (processSystemMessage) has no way to know which agent
-	// actually produced the work and must guess via GetDefaultAgent() —
-	// the confirmed, exact cause of a live "Worker vs Jim" speaker-attribution
-	// flip when an async result from a non-default agent lands. Channel/
+	// actually produced the work — guessing (formerly via a default agent)
+	// was the confirmed, exact cause of a live "Worker vs Jim"
+	// speaker-attribution flip. A message without it is discarded (FR-131). Channel/
 	// task/scheduled inbound messages never set this field, so it is empty
 	// there structurally — not by a runtime guard.
 	AsyncOriginAgentID string `json:"async_origin_agent_id,omitempty"`
@@ -153,6 +161,12 @@ type InboundMessage struct {
 	OperatorPrompt bool `json:"operator_prompt,omitempty"`
 }
 
+// OutboundMessage.Operation values (channels-spec-r8 FR-040).
+const (
+	OperationChecked = "checked"
+	OperationStart   = "start"
+)
+
 type OutboundMessage struct {
 	Channel string `json:"channel"`
 	ChatID  string `json:"chat_id"`
@@ -179,22 +193,54 @@ type OutboundMessage struct {
 	Content          string `json:"content"`
 	ReplyToMessageID string `json:"reply_to_message_id,omitempty"`
 
-	// OwnershipChecked records that the send tool already applied ADR-065's
-	// ownership rule to this message. In-process only — never on the wire.
+	// ProgressNotice marks a nonterminal status sentence, not a completed reply.
+	// Text channels may deliver Content; webchat must not turn it into token/done.
+	// In-process only: this is not a gateway/SPA wire field.
+	ProgressNotice bool `json:"-"`
+
+	// Operation is the send class of channels-spec-r8 FR-040/FR-043: "" for
+	// system producers, OperationChecked when the send tool already applied
+	// ADR-065's ownership rule to a non-start send, and OperationStart for a
+	// started message (a send to a listed target that is not the turn's own
+	// conversation). In-process only — never on the wire.
 	//
-	// It exists because the tool layer decides with MORE information than
-	// dispatch has. send_message knows the turn's own conversation and lets an
-	// agent reply into it even when the instance belongs to someone else —
-	// which is exactly what keeps hand-off and delegation working, since a
-	// delegate answers inside its parent's conversation under its own
-	// identity. Dispatch sees only (instance, agent, workspace), so re-deriving
-	// the same verdict there produces FALSE REFUSALS on ordinary delegation.
-	//
-	// So dispatch does not re-decide; it checks that a decision was made. A
-	// message carrying an AgentID but not this flag reached the bus without
-	// passing the tool's check, which is precisely the "someone adds a second
-	// route later" regression FR-7 exists to catch.
-	OwnershipChecked bool `json:"-"`
+	// OperationChecked exists because the tool layer decides with MORE
+	// information than dispatch has. send_message knows the turn's own
+	// conversation and lets an agent reply into it even when the instance
+	// belongs to someone else — which is exactly what keeps hand-off and
+	// delegation working, since a delegate answers inside its parent's
+	// conversation under its own identity. Dispatch sees only (instance,
+	// agent, workspace), so re-deriving the same verdict there produces FALSE
+	// REFUSALS on ordinary delegation. So dispatch does not re-decide a
+	// checked send; it checks that a decision was made. A message carrying an
+	// AgentID with Operation "" reached the bus without passing the tool's
+	// check, which is precisely the "someone adds a second route later"
+	// regression FR-7 exists to catch. OperationStart is never trusted: dispatch
+	// and dequeue re-run StartAllowed (FR-044). Adapters that can start
+	// messages (Discord, FR-046) resolve a start's target before sending.
+	Operation string `json:"-"`
+
+	// Return, when non-nil, marks this message as the answer to an admitted
+	// request, sent through the SOURCE OWNER's channel instance (session-core
+	// C-REPLY, FR-027/028). In-process only — never on the wire. The channel
+	// manager re-verifies the binding at the final send boundary (every
+	// attempt, and before a placeholder edit); Operation and the
+	// system-origin exemption do not satisfy it. AgentID/WorkspaceID on such a
+	// message name the AUTHOR (the guest), who gains no connector grant.
+	Return *ReturnRoute `json:"-"`
+}
+
+// ReturnRoute is the server-validated capture a reply is sent under.
+type ReturnRoute struct {
+	// RequestID is the admitted request message id being answered.
+	RequestID string
+	// SourceSessionID is the session the request came from.
+	SourceSessionID string
+	// OwnerWorkspaceID / OwnerAgentID are the (workspace, agent) pair that
+	// owned the source instance when the request was admitted. Both empty
+	// means the instance was unbound then.
+	OwnerWorkspaceID string
+	OwnerAgentID     string
 }
 
 // MediaPart describes a single media attachment to send.

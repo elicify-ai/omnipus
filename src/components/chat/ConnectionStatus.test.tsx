@@ -41,6 +41,48 @@ describe('UserMessageDeliveryStatus', () => {
     expect(screen.getByRole('tooltip')).toHaveTextContent(tooltip)
   })
 
+  it('renders the discarded state as a quiet "Not delivered" tooltip with no retry action (FR-024)', () => {
+    const { container } = render(
+      <UserMessageDeliveryStatus state="discarded" agentName="Mia" latest onRetry={vi.fn()} />,
+    )
+
+    // Same quiet icon-button shape as queued/received/working — an accessible
+    // label plus tooltip, never an error colour and never an action button:
+    // the input is archived and there is nothing to release or resend.
+    const icon = screen.getByRole('button', { name: 'Not delivered' })
+    fireEvent.focus(icon)
+    expect(screen.getByRole('tooltip')).toHaveTextContent(
+      'Not delivered. You stopped Mia before it read this message, so it was discarded.',
+    )
+    expect(screen.queryByRole('button', { name: "Couldn't be sent. Try again" })).toBeNull()
+    expect(container.innerHTML).not.toMatch(/color-(?:error|warning)|\bred-|\borange-|\bamber-/)
+  })
+
+  // Ruling S3-02 retired the /clear-only 'not-performed' and 'unconfirmed'
+  // states (and their chips): a refusal arrives as the wire's message_status
+  // failed — the standard failed chip below covers it — and a held clear
+  // stays queued with no deadline. No /clear-specific settle chips remain.
+
+  it('renders a discarded /clear as "Not applied" — not the never-read wording (delta C1)', () => {
+    render(<UserMessageDeliveryStatus state="discarded" agentName="Mia" latest isClearCommand />)
+
+    // A held-then-discarded command WAS read by the server (it held it and
+    // answered the stop); the generic "before it read this message" wording
+    // would be false for it.
+    const icon = screen.getByRole('button', { name: 'Not applied' })
+    fireEvent.focus(icon)
+    expect(screen.getByRole('tooltip')).toHaveTextContent(
+      'You stopped the turn, so this /clear was discarded — nothing was cleared. Send /clear again if you still want a fresh start.',
+    )
+  })
+
+  it('keeps the generic "Not delivered" wording for a discarded non-clear message (delta C1 guard)', () => {
+    render(<UserMessageDeliveryStatus state="discarded" agentName="Mia" latest />)
+
+    expect(screen.getByRole('button', { name: 'Not delivered' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Not applied' })).toBeNull()
+  })
+
   it('keeps failed text and exposes the exact retry action without error colours', () => {
     const onRetry = vi.fn()
     const { container } = render(

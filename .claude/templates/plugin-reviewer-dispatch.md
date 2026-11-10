@@ -1,6 +1,9 @@
 # Plugin-reviewer dispatch template
 
-Team-lead: paste the block between the two markers at the **head** of every dispatch to a `pr-review-toolkit` reviewer — `code-reviewer`, `code-simplifier`, `comment-analyzer`, `pr-test-analyzer`, `silent-failure-hunter`, `type-design-analyzer`. Fill the two placeholders with a tool that cannot misparse the text (e.g. Python `str.replace`), never `sed` with a delimiter that can occur in the text — a `#` in an issue reference has broken a `sed` fill and a reviewer ran without its rules — then append the task brief below the block, and verify the filled prompt contains the discipline block (the `agent-discipline:shared-traits:start` marker) before dispatching. Two errors this template exists to prevent: dispatching a plugin reviewer without it, and pasting the `omnipus-shared-rules` skill body into the dispatch — the reviewer loads the skill itself; only the discipline block and the load instruction travel with the dispatch.
+Last reviewed: 2026-10-29 — landing branch and cut commit scope; the dispatcher is always a team-lead session
+Process version: 2026-10-29.1
+
+Team-lead: paste the block between the two markers at the **head** of every dispatch to a gate plugin reviewer — `code-reviewer`, `silent-failure-hunter`, `pr-test-analyzer`. Use it for explicitly requested optional plugin reviewers too — `type-design-analyzer`, `comment-analyzer`, `code-simplifier` are optional, not part of the gate. Name the model explicitly in every reviewer dispatch; model selection stays outside repo assets. Fill the two placeholders with a tool that cannot misparse the text (e.g. Python `str.replace`), never `sed` with a delimiter that can occur in the text — a `#` in an issue reference has broken a `sed` fill and a reviewer ran without its rules — then append the task brief below the block, and verify the filled prompt contains the discipline block (the `agent-discipline:shared-traits:start` marker) before dispatching. Two errors this template exists to prevent: dispatching a plugin reviewer without it, and pasting the `omnipus-shared-rules` skill body into the dispatch — the reviewer loads the skill itself; only the discipline block and the load instruction travel with the dispatch.
 
 --- paste from here ---
 
@@ -20,7 +23,7 @@ A plugin reviewer's own agent file is not ours to edit, so this dispatch carries
 
 ### The evidence table (mandatory; ends every report)
 
-Every dispatch report ends with this table — including a stop-and-ask, blocked or question report: what you verified before stopping (for example the search that proved an element absent) goes in it. A report without it is a finding in your dispatcher's (team-lead or squad-lead) output review, not a formality gap.
+Every dispatch report ends with this table — including a stop-and-ask, blocked or question report: what you verified before stopping (for example the search that proved an element absent) goes in it. A report without it is a finding in your dispatcher's (team-lead) output review, not a formality gap.
 
 | Column | Content |
 |---|---|
@@ -29,7 +32,7 @@ Every dispatch report ends with this table — including a stop-and-ask, blocked
 | Certainty | **Verified** (the evidence is in this table) / **Inferred** (reasoned, not tested — say why) / **Unknown** |
 | **Self-check** (mandatory final row) | What the final self-check re-read and re-ran against the done-criteria, and its result — the self-check is evidence too, and a missing row fails the report |
 
-A claim without evidence is labelled **Unknown** — plausibility never promotes it to Inferred. **Tests are shown red before green**: a test's evidence row shows the failing run on the pre-change code — proven by **CI on a tests-only commit** or by the **one narrow local run** the local-suite rule permits — and then the passing run, so a green can never stand alone. **Small-size changes are exempt** from red-before-green evidence (they carry no RED step). The table stays terse — one row per claim, the key output line, not the whole log.
+A claim without evidence is labelled **Unknown** — plausibility never promotes it to Inferred. **Tests are shown red before green**: a test's evidence row shows the failing run on the pre-change code — proven by the **saved log of the one narrow local run** the local-suite rule permits (command, exit code, failing assertion; CI on a tests-only commit is not available before the cut and is not a proof route) — and then the passing run, so a green can never stand alone. **Small-size changes are exempt** from red-before-green evidence (they carry no RED step). The table stays terse — one row per claim, the key output line, not the whole log.
 
 ### The four anti-hallucination rules (all four, everyone)
 
@@ -38,7 +41,7 @@ A claim without evidence is labelled **Unknown** — plausibility never promotes
 | **Read before citing** | Never name a file, function, flag, config key or command without having read or run it **in this task**; otherwise say Unknown |
 | **Docs over memory** | Library and tool behaviour comes from current documentation or a quick test — never from recall alone |
 | **Test the instrument** | Before trusting a green or an empty search, show that the check could have seen the failure (rule 6's discipline as a personal duty, not only a team habit) |
-| **No fabricated gaps** | If input is missing or unclear, say so and stop and ask your dispatcher — team-lead or squad-lead (rule 15) — never fill the gap with plausible content |
+| **No fabricated gaps** | If input is missing or unclear, say so and stop and ask your dispatcher — team-lead (rule 15) — never fill the gap with plausible content |
 <!-- agent-discipline:shared-traits:end -->
 
 ## Reviewer discipline (binds this dispatch)
@@ -49,23 +52,23 @@ Canonical source: `.claude/templates/agent-discipline.md`.
 ### Reviewer discipline (every reviewer-side role)
 
 - **Every claim is untrue until you have verified it.** Re-check every claim your verdict depends on — read the code, read the CI run, inspect the evidence artifacts — first-hand, in this task.
-- **Local re-runs are not the reviewer's tool.** Reviewers verify by reading — code, CI results, artifacts. CI is the authority; the **single** local narrow re-run allowed at a time is performed by team-lead, on request, under the one-at-a-time machine-load rule. A reviewer who wants a re-run asks their dispatcher (team-lead or squad-lead) for it.
+- **Local re-runs are not the reviewer's tool.** Reviewers verify by reading — code, CI results, artifacts. CI is the authority; the **single** local narrow re-run allowed at a time is performed by team-lead, on request, under the one-at-a-time machine-load rule. A reviewer who wants a re-run asks their dispatcher (team-lead) for it.
 - **A claim you cannot verify is marked UNVERIFIED** in your report and produces a **WARNING, not a block**. Your dispatcher decides: verify it itself, dispatch a verification, or accept it with the gap stated to the founder. An UNVERIFIED claim never silently passes, and never blocks alone.
 - **Every finding carries four things**: a **failure scenario** (this input or this state leads to this wrong result), **evidence** (the `file::symbol` read, the command run), **severity**, and **certainty**. A style preference with no failure scenario is not a finding — it is a comment at most, and it does not gate.
 <!-- agent-discipline:reviewer-rules:end -->
 
 End the report with the evidence table — one row per claim: Claim | Evidence (the command plus its exit code plus the key output line, or the `file::symbol` read, or a commit SHA) | Certainty (Verified / Inferred / Unknown) — and a mandatory final **self-check** row: what you re-read and re-ran against this review's done-criteria, and its result.
 
-## Every reviewer except code-simplifier: read-only
+## User-facing documentation check (every reviewer)
 
-You review a still tree. Do not edit any file under review — a finding is reported, never fixed on the side. Only `code-simplifier` (below) is the exception.
+Apply root `CLAUDE.md` ("Definition of Done"): for a UI or behaviour change, compare the changed surface with the matching update to user-facing docs under `docs/` outside `docs/internal/`. Check the whole change before calling an update missing; if your scope cannot establish that, mark the claim UNVERIFIED rather than guessing. If the update is missing, report an **Important** finding with the changed behaviour, the missing or stale user instruction, and a concrete failure scenario. `docs-verifier` audits the accuracy of the implementing lead's draft; an internal design note alone is not a user-facing update. If the change has no user-visible effect, state why this check does not apply.
 
-## code-simplifier only
+## Every reviewer: read-only
 
-You are the one plugin reviewer allowed to edit the branch under review — every other reviewer in this gate is read-only. Commit your edits as **one separate commit** and report its SHA in your evidence table; do not fold them into an existing commit or leave them uncommitted. Your edits become part of the change under review: they are covered by the remaining reviewers, or — when you run after them — by a follow-up `code-reviewer` pass on that SHA alone, dispatched by team-lead. Keep every edit behaviour-preserving, and report each edit in the evidence table like any other claim.
+You review a still tree. Report findings rather than editing any file under review; fixes go to the implementing lead.
 
 ## Scope of this dispatch
 
-Review: `<files / diff / PR scope>`. Work branch: `<branch>`. Done when every claim in scope carries evidence and the report ends with the evidence table, its self-check row, and the skills acknowledgement.
+Review: `<files / diff / PR scope>`. Landing branch and cut commit: `<branch>@<sha>`. The dispatcher supplies the feature diff at the cut, or the combined train diff for the items assigned to this reviewer set, under root `CLAUDE.md` ("Change sizes and the review gate"). Review no separate per-author/finding gate. For a re-review, verify your fixed findings and affected paths only. Done when every claim in scope carries evidence and the report ends with the evidence table, its self-check row, and the skills acknowledgement.
 
 --- paste to here ---

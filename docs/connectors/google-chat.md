@@ -41,8 +41,7 @@ Omnipus supports Google Chat via two modes: **webhook** (outbound only, simple s
       "placeholder": {
         "enabled": false,
         "text": "Thinking..."
-      },
-      "reasoning_channel_id": ""
+      }
     }
   }
 }
@@ -61,7 +60,6 @@ Omnipus supports Google Chat via two modes: **webhook** (outbound only, simple s
 | `group_trigger` | object | No | Group-chat trigger rules — `mention_only` (bool) and/or `prefixes` ([]string). |
 | `typing` | object | No | Typing indicator configuration (bot mode only). |
 | `placeholder` | object | No | Placeholder message configuration — `enabled` (bool) and `text` (string or []string). |
-| `reasoning_channel_id` | string | No | Space name to route reasoning/thinking output to a separate conversation. |
 
 ## Setup
 
@@ -121,3 +119,7 @@ When neither is set, the bot responds to all messages in group spaces (permissiv
 
 - **Webhook-mode `webhook_url` is a bearer secret.** The URL contains a `?key=…` query parameter that grants posting rights to the space. Do not commit it to `config.json` in plain text — store the URL itself in the credential store and reference it via `_ref` patterns (the field name follows the convention used elsewhere; see your config for the exact key).
 - **Bot-mode signature verification runs inside the connector**, not in the shared gateway. It parses the `Google-Signature` header, fetches Google's public keys with caching, verifies the request body, and rejects mismatches. If you front the bot endpoint with a reverse proxy, **do not strip the `Google-Signature` header** — that breaks verification. The shared gateway does not verify this signature itself.
+
+## Starting messages
+
+Starting messages is not supported yet on this platform; the agent only answers. See [Starting messages](../connectors.md#starting-messages).

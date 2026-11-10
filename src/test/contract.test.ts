@@ -70,10 +70,13 @@ describe('API contract: agent and supporting resource shapes', () => {
       model: 'claude-opus-4-6',
       status: 'active' as const,
       soul: '',
-      timeout_seconds: 60,
       max_tool_iterations: 20,
+      max_tool_iterations_source: 'global',
+      max_tool_iterations_override_ignored: false,
       // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
       memory_enabled: true,
+      figure: 'Omnipus',
+      role: 'general',
     } satisfies Agent
 
     expect(mock.id).toBe('mia')
@@ -94,10 +97,13 @@ describe('API contract: agent and supporting resource shapes', () => {
       model: 'claude-sonnet-4-6',
       status: 'idle' as const,
       soul: '',
-      timeout_seconds: 60,
       max_tool_iterations: 20,
+      max_tool_iterations_source: 'global',
+      max_tool_iterations_override_ignored: false,
       // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
       memory_enabled: true,
+      figure: 'Omnipus',
+      role: 'general',
     } satisfies Agent
 
     expect(mock.type).toBe('Main')
@@ -183,6 +189,7 @@ describe('API contract: agent and supporting resource shapes', () => {
 
   it('Skill mock shape satisfies interface', () => {
     const mock = {
+      has_local_changes: false,
       revision: '0'.repeat(64),
       id: 'my-skill',
       name: 'My Skill',

@@ -154,6 +154,13 @@ type Root struct {
 	// learns that a workspace legitimately has more than one root, which is what
 	// the enforcement engine already models (fspolicy.FSPolicy.AllowedRoots).
 	mounts map[string]*mountRoot
+
+	// marker is the optional provenance seam (pathmarker.go): the workspace's
+	// mail-derived marker store, attached by the caller that knows both this
+	// root and the store, so Rename/Delete/CopyInto re-key a file's marker
+	// when they move the file (w4 spec §5.4's traced-and-proved obligation).
+	// Nil on every root nobody attached one to — every hook is then a no-op.
+	marker PathMarker
 }
 
 // mountRoot is one mounted folder's own containment plus the facts the API

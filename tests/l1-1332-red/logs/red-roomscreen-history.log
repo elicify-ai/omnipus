@@ -1,0 +1,653 @@
+Warning: Route file "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/l1-wu15-spa/src/routes/authValidation.ts" does not export a Route. This file will not be included in the route tree.
+
+If this file is not intended to be a route, you can exclude it using one of these options:
+  1. Rename the file to "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/l1-wu15-spa/src/routes/-authValidation.ts" (prefix with "-")
+  2. Use 'routeFileIgnorePattern' in your config to match this file
+
+Current configuration:
+  routeFileIgnorePrefix: "-"
+  routeFileIgnorePattern: undefined
+Warning: Route file "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/l1-wu15-spa/src/routes/authValidation.test.ts" does not export a Route. This file will not be included in the route tree.
+
+If this file is not intended to be a route, you can exclude it using one of these options:
+  1. Rename the file to "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/l1-wu15-spa/src/routes/-authValidation.test.ts" (prefix with "-")
+  2. Use 'routeFileIgnorePattern' in your config to match this file
+
+Current configuration:
+  routeFileIgnorePrefix: "-"
+  routeFileIgnorePattern: undefined
+
+ RUN  v4.1.11 /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/l1-wu15-spa
+
+Not implemented: Window's scrollTo() method
+Not implemented: Window's scrollTo() method
+Not implemented: Window's scrollTo() method
+Not implemented: Window's scrollTo() method
+Not implemented: Window's scrollTo() method
+ ❯ src/components/rooms/RoomScreen.history.test.tsx (5 tests | 4 failed) 33439ms
+     × reaching the top fires EXACTLY ONE request, using the oldest entry seq and the default limit — never the live high-water 6253ms
+     × at terminal false the earlier-history hint disappears and further scrolling issues no request 6067ms
+     × a failed GET keeps rows and the hint, shows an inline error with a keyboard-operable Retry, and Retry repeats the SAME boundary 6051ms
+     × the composer stays unblocked while an older page is in flight 6044ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 4 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/components/rooms/RoomScreen.history.test.tsx > T23 — the integrated scroll-up flow (design D6) > reaching the top fires EXACTLY ONE request, using the oldest entry seq and the default limit — never the live high-water
+AssertionError: expected "vi.fn()" to be called 1 times, but got 0 times
+
+Ignored nodes: comments, script, style
+[36m<html>[39m
+  [36m<head />[39m
+  [36m<body>[39m
+    [36m<div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"flex h-full min-h-0 flex-col"[39m
+      [36m>[39m
+        [36m<header[39m
+          [33mclass[39m=[32m"flex flex-col gap-[var(--space-2)] border-b border-[var(--color-border)] px-[var(--space-3)] py-[var(--space-2)]"[39m
+          [33mdata-testid[39m=[32m"room-header"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex flex-wrap items-center gap-[var(--space-2)]"[39m
+          [36m>[39m
+            [36m<button[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] h-8 rounded-md px-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mdata-testid[39m=[32m"add-participant"[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33maria-hidden[39m=[32m"true"[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"14"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"14"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M256,136a8,8,0,0,1-8,8H232v16a8,8,0,0,1-16,0V144H200a8,8,0,0,1,0-16h16V112a8,8,0,0,1,16,0v16h16A8,8,0,0,1,256,136Zm-57.87,58.85a8,8,0,0,1-12.26,10.3C165.75,181.19,138.09,168,108,168s-57.75,13.19-77.87,37.15a8,8,0,0,1-12.25-10.3c14.94-17.78,33.52-30.41,54.17-37.17a68,68,0,1,1,71.9,0C164.6,164.44,183.18,177.07,198.13,194.85ZM108,152a52,52,0,1,0-52-52A52.06,52.06,0,0,0,108,152Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+              [0mAdd participant[0m
+            [36m</button>[39m
+            [36m<h1[39m
+              [33mclass[39m=[32m"flex-1 truncate text-[length:var(--type-body-size)] font-semibold text-[var(--color-secondary)]"[39m
+            [36m>[39m
+              [0mLaunch[0m
+            [36m</h1>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"flex items-baseline gap-[var(--space-1)]"[39m
+            [36m>[39m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-[length:var(--type-caption-size)] text-[var(--color-muted)]"[39m
+              [36m>[39m
+                [0mallocated cost[0m
+              [36m</span>[39m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]"[39m
+              [36m>[39m
+                [0m$0.00[0m
+              [36m</span>[39m
+            [36m</span>[39m
+            [36m<button[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] h-8 rounded-md px-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [0mDelete group[0m
+            [36m</button>[39m
+          [36m</div>[39m
+          [36m<ul[39m
+            [33maria-label[39m=[32m"Members"[39m
+            [33mclass[39m=[32m"flex flex-wrap gap-x-[var(--space-4)] gap-y-[var(--space-1)]"[39m
+          [36m>[39m
+            [36m<li[39m
+              [33mclass[39m=[32m"flex flex-wrap items-center gap-[var(--space-1)]"[39m
+            [36m>[39m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]"[39m
+              [36m>[39m
+                [0mMia[0m
+              [36m</span>[39m
+              [36m<button[39m
+                [33maria-expanded[39m=[32m"false"[39m
+                [33maria-haspopup[39m=[32m"menu"[39m
+                [33maria-label[39m=[32m"Options for Mia"[39m
+                [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap rounded-md text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] h-8 w-8 p-0"[39m
+                [33mdata-action-state[39m=[32m"idle"[39m
+                [33mdata-ds-action[39m=[32m""[39m
+                [33mdata-state[39m=[32m"closed"[39m
+                [33mid[39m=[32m"radix-_r_c_"[39m
+                [33mtabindex[39m=[32m"0"[39m
+                [33mtype[39m=[32m"button"[39m
+              [36m>[39m
+                [36m<svg[39m
+                  [33maria-hidden[39m=[32m"true"[39m
+                  [33mfill[39m=[32m"currentColor"[39m
+                  [33mheight[39m=[32m"14"[39m
+                  [33mviewBox[39m=[32m"0 0 256 256"[39m
+                  [33mwidth[39m=[32m"14"[39m
+                  [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+                [36m>[39m
+                  [36m<path[39m
+                    [33md[39m=[32m"M140,128a12,12,0,1,1-12-12A12,12,0,0,1,140,128ZM128,72a12,12,0,1,0-12-12A12,12,0,0,0,128,72Zm0,112a12,12,0,1,0,12,12A12,12,0,0,0,128,184Z"[39m
+                  [36m/>[39m
+                [36m</svg>[39m
+              [36m</button>[39m
+            [36m</li>[39m
+            [36m<li[39m
+              [33mclass[39m=[32m"flex flex-wrap items-center gap-[var(--space-1)]"[39m
+     ...
+ ❯ src/components/rooms/RoomScreen.history.test.tsx:92:50
+     90|     scrollLogToTop()
+     91|
+     92|     await waitFor(() => expect(fetchRoomHistory).toHaveBeenCalledTimes…
+       |                                                  ^
+     93|     // Oldest DISPLAYED entry seq — never the live room high-water (5)…
+     94|     // seq - 1 (4): the design's D6 cursor rule.
+ ❯ runWithExpensiveErrorDiagnosticsDisabled node_modules/@testing-library/dom/dist/config.js:47:12
+ ❯ checkCallback node_modules/@testing-library/dom/dist/wait-for.js:124:77
+ ❯ Timeout.checkRealTimersCallback node_modules/@testing-library/dom/dist/wait-for.js:118:16
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/4]⎯
+
+ FAIL  src/components/rooms/RoomScreen.history.test.tsx > T23 — the integrated scroll-up flow (design D6) > at terminal false the earlier-history hint disappears and further scrolling issues no request
+Error: [2mexpect([22m[31melement[39m[2m).not.toBeInTheDocument()[22m
+
+[31mexpected document not to contain element, found <div
+  class="inline-flex items-center gap-[var(--space-1)] rounded-full border px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-utility-xs-size)] transition-colors motion-reduce:transition-none border-[var(--color-border)] bg-[var(--color-surface-1)] text-[var(--color-muted)] forced-colors:border-[CanvasText] forced-colors:bg-[Canvas] forced-colors:text-[CanvasText] self-center font-[var(--font-weight-regular)]"
+>
+  Earlier messages aren't shown
+</div> instead[39m
+
+Ignored nodes: comments, script, style
+[36m<html>[39m
+  [36m<head />[39m
+  [36m<body>[39m
+    [36m<div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"flex h-full min-h-0 flex-col"[39m
+      [36m>[39m
+        [36m<header[39m
+          [33mclass[39m=[32m"flex flex-col gap-[var(--space-2)] border-b border-[var(--color-border)] px-[var(--space-3)] py-[var(--space-2)]"[39m
+          [33mdata-testid[39m=[32m"room-header"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex flex-wrap items-center gap-[var(--space-2)]"[39m
+          [36m>[39m
+            [36m<button[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] h-8 rounded-md px-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mdata-testid[39m=[32m"add-participant"[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33maria-hidden[39m=[32m"true"[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"14"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"14"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M256,136a8,8,0,0,1-8,8H232v16a8,8,0,0,1-16,0V144H200a8,8,0,0,1,0-16h16V112a8,8,0,0,1,16,0v16h16A8,8,0,0,1,256,136Zm-57.87,58.85a8,8,0,0,1-12.26,10.3C165.75,181.19,138.09,168,108,168s-57.75,13.19-77.87,37.15a8,8,0,0,1-12.25-10.3c14.94-17.78,33.52-30.41,54.17-37.17a68,68,0,1,1,71.9,0C164.6,164.44,183.18,177.07,198.13,194.85ZM108,152a52,52,0,1,0-52-52A52.06,52.06,0,0,0,108,152Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+              [0mAdd participant[0m
+            [36m</button>[39m
+            [36m<h1[39m
+              [33mclass[39m=[32m"flex-1 truncate text-[length:var(--type-body-size)] font-semibold text-[var(--color-secondary)]"[39m
+            [36m>[39m
+              [0mLaunch[0m
+            [36m</h1>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"flex items-baseline gap-[var(--space-1)]"[39m
+            [36m>[39m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-[length:var(--type-caption-size)] text-[var(--color-muted)]"[39m
+              [36m>[39m
+                [0mallocated cost[0m
+              [36m</span>[39m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]"[39m
+              [36m>[39m
+                [0m$0.00[0m
+              [36m</span>[39m
+            [36m</span>[39m
+            [36m<button[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] h-8 rounded-md px-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [0mDelete group[0m
+            [36m</button>[39m
+          [36m</div>[39m
+          [36m<ul[39m
+            [33maria-label[39m=[32m"Members"[39m
+            [33mclass[39m=[32m"flex flex-wrap gap-x-[var(--space-4)] gap-y-[var(--space-1)]"[39m
+          [36m>[39m
+            [36m<li[39m
+              [33mclass[39m=[32m"flex flex-wrap items-center gap-[var(--space-1)]"[39m
+            [36m>[39m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]"[39m
+              [36m>[39m
+                [0mMia[0m
+              [36m</span>[39m
+              [36m<button[39m
+                [33maria-expanded[39m=[32m"false"[39m
+                [33maria-haspopup[39m=[32m"menu"[39m
+                [33maria-label[39m=[32m"Options for Mia"[39m
+                [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap rounded-md text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] h-8 w-8 p-0"[39m
+                [33mdata-action-state[39m=[32m"idle"[39m
+                [33mdata-ds-action[39m=[32m""[39m
+                [33mdata-state[39m=[32m"closed"[39m
+                [33mid[39m=[32m"radix-_r_l_"[39m
+                [33mtabindex[39m=[32m"0"[39m
+                [33mtype[39m=[32m"button"[39m
+              [36m>[39m
+                [36m<svg[39m
+                  [33maria-hidden[39m=[32m"true"[39m
+                  [33mfill[39m=[32m"currentColor"[39m
+                  [33mheight[39m=[32m"14"[39m
+                  [33mviewBox[39m=[32m"0 0 256 256"[39m
+                  [33mwidth[39m=[32m"14"[39m
+                  [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+                [36m>[39m
+                  [36m<path[39m
+                    [33md[39m=[32m"M140,128a12,12,0,1,1-12-12A12,12,0,0,1,140,128ZM128,72a12,12,0,1,0-12-12A12,12,0,0,0,128,72Zm0,112a12,12,0,1,0,12,12A12,12,0,0,0,128,184Z"[39m
+                  [36m/>[39m
+                [36m</svg>[39m
+              [36m</button>[39m
+            [36m</li>[39m
+            [36m<li[39m
+              [33mclass[39m=[32m"flex flex-wrap items-center gap-[var(--space-1)]"[39m
+     ...
+ ❯ src/components/rooms/RoomScreen.history.test.tsx:111:89
+    109|     scrollLogToTop()
+    110|
+    111|     await waitFor(() => expect(screen.queryByText(/Earlier messages ar…
+       |                                                                                         ^
+    112|     // The whole history is now visible, in order.
+    113|     for (const text of ['entry-1', 'entry-2', 'entry-3', 'entry-4', 'e…
+ ❯ runWithExpensiveErrorDiagnosticsDisabled node_modules/@testing-library/dom/dist/config.js:47:12
+ ❯ checkCallback node_modules/@testing-library/dom/dist/wait-for.js:124:77
+ ❯ Timeout.checkRealTimersCallback node_modules/@testing-library/dom/dist/wait-for.js:118:16
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/4]⎯
+
+ FAIL  src/components/rooms/RoomScreen.history.test.tsx > T24 — recoverable earlier-history error (design D6) > a failed GET keeps rows and the hint, shows an inline error with a keyboard-operable Retry, and Retry repeats the SAME boundary
+TestingLibraryElementError: Unable to find role="button" and name "Retry"
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"flex h-full min-h-0 flex-col"[39m
+    [36m>[39m
+      [36m<header[39m
+        [33mclass[39m=[32m"flex flex-col gap-[var(--space-2)] border-b border-[var(--color-border)] px-[var(--space-3)] py-[var(--space-2)]"[39m
+        [33mdata-testid[39m=[32m"room-header"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"flex flex-wrap items-center gap-[var(--space-2)]"[39m
+        [36m>[39m
+          [36m<button[39m
+            [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] h-8 rounded-md px-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)]"[39m
+            [33mdata-action-state[39m=[32m"idle"[39m
+            [33mdata-ds-action[39m=[32m""[39m
+            [33mdata-testid[39m=[32m"add-participant"[39m
+            [33mtabindex[39m=[32m"0"[39m
+            [33mtype[39m=[32m"button"[39m
+          [36m>[39m
+            [36m<svg[39m
+              [33maria-hidden[39m=[32m"true"[39m
+              [33mfill[39m=[32m"currentColor"[39m
+              [33mheight[39m=[32m"14"[39m
+              [33mviewBox[39m=[32m"0 0 256 256"[39m
+              [33mwidth[39m=[32m"14"[39m
+              [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+            [36m>[39m
+              [36m<path[39m
+                [33md[39m=[32m"M256,136a8,8,0,0,1-8,8H232v16a8,8,0,0,1-16,0V144H200a8,8,0,0,1,0-16h16V112a8,8,0,0,1,16,0v16h16A8,8,0,0,1,256,136Zm-57.87,58.85a8,8,0,0,1-12.26,10.3C165.75,181.19,138.09,168,108,168s-57.75,13.19-77.87,37.15a8,8,0,0,1-12.25-10.3c14.94-17.78,33.52-30.41,54.17-37.17a68,68,0,1,1,71.9,0C164.6,164.44,183.18,177.07,198.13,194.85ZM108,152a52,52,0,1,0-52-52A52.06,52.06,0,0,0,108,152Z"[39m
+              [36m/>[39m
+            [36m</svg>[39m
+            [0mAdd participant[0m
+          [36m</button>[39m
+          [36m<h1[39m
+            [33mclass[39m=[32m"flex-1 truncate text-[length:var(--type-body-size)] font-semibold text-[var(--color-secondary)]"[39m
+          [36m>[39m
+            [0mLaunch[0m
+          [36m</h1>[39m
+          [36m<span[39m
+            [33mclass[39m=[32m"flex items-baseline gap-[var(--space-1)]"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"text-[length:var(--type-caption-size)] text-[var(--color-muted)]"[39m
+            [36m>[39m
+              [0mallocated cost[0m
+            [36m</span>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]"[39m
+            [36m>[39m
+              [0m$0.00[0m
+            [36m</span>[39m
+          [36m</span>[39m
+          [36m<button[39m
+            [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] h-8 rounded-md px-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)]"[39m
+            [33mdata-action-state[39m=[32m"idle"[39m
+            [33mdata-ds-action[39m=[32m""[39m
+            [33mtabindex[39m=[32m"0"[39m
+            [33mtype[39m=[32m"button"[39m
+          [36m>[39m
+            [0mDelete group[0m
+          [36m</button>[39m
+        [36m</div>[39m
+        [36m<ul[39m
+          [33maria-label[39m=[32m"Members"[39m
+          [33mclass[39m=[32m"flex flex-wrap gap-x-[var(--space-4)] gap-y-[var(--space-1)]"[39m
+        [36m>[39m
+          [36m<li[39m
+            [33mclass[39m=[32m"flex flex-wrap items-center gap-[var(--space-1)]"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]"[39m
+            [36m>[39m
+              [0mMia[0m
+            [36m</span>[39m
+            [36m<button[39m
+              [33maria-expanded[39m=[32m"false"[39m
+              [33maria-haspopup[39m=[32m"menu"[39m
+              [33maria-label[39m=[32m"Options for Mia"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap rounded-md text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] h-8 w-8 p-0"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mdata-state[39m=[32m"closed"[39m
+              [33mid[39m=[32m"radix-_r_u_"[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33maria-hidden[39m=[32m"true"[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"14"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"14"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M140,128a12,12,0,1,1-12-12A12,12,0,0,1,140,128ZM128,72a12,12,0,1,0-12-12A12,12,0,0,0,128,72Zm0,112a12,12,0,1,0,12,12A12,12,0,0,0,128,184Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+          [36m</li>[39m
+          [36m<li[39m
+            [33mclass[39m=[32m"flex flex-wrap items-center gap-[var(--space-1)]"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]"[39m
+            [36m>[39m
+              [0mJim[0m
+            [36m</span>[39m
+   ...
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"flex h-full min-h-0 flex-col"[39m
+    [36m>[39m
+      [36m<header[39m
+        [33mclass[39m=[32m"flex flex-col gap-[var(--space-2)] border-b border-[var(--color-border)] px-[var(--space-3)] py-[var(--space-2)]"[39m
+        [33mdata-testid[39m=[32m"room-header"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"flex flex-wrap items-center gap-[var(--space-2)]"[39m
+        [36m>[39m
+          [36m<button[39m
+            [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] h-8 rounded-md px-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)]"[39m
+            [33mdata-action-state[39m=[32m"idle"[39m
+            [33mdata-ds-action[39m=[32m""[39m
+            [33mdata-testid[39m=[32m"add-participant"[39m
+            [33mtabindex[39m=[32m"0"[39m
+            [33mtype[39m=[32m"button"[39m
+          [36m>[39m
+            [36m<svg[39m
+              [33maria-hidden[39m=[32m"true"[39m
+              [33mfill[39m=[32m"currentColor"[39m
+              [33mheight[39m=[32m"14"[39m
+              [33mviewBox[39m=[32m"0 0 256 256"[39m
+              [33mwidth[39m=[32m"14"[39m
+              [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+            [36m>[39m
+              [36m<path[39m
+                [33md[39m=[32m"M256,136a8,8,0,0,1-8,8H232v16a8,8,0,0,1-16,0V144H200a8,8,0,0,1,0-16h16V112a8,8,0,0,1,16,0v16h16A8,8,0,0,1,256,136Zm-57.87,58.85a8,8,0,0,1-12.26,10.3C165.75,181.19,138.09,168,108,168s-57.75,13.19-77.87,37.15a8,8,0,0,1-12.25-10.3c14.94-17.78,33.52-30.41,54.17-37.17a68,68,0,1,1,71.9,0C164.6,164.44,183.18,177.07,198.13,194.85ZM108,152a52,52,0,1,0-52-52A52.06,52.06,0,0,0,108,152Z"[39m
+              [36m/>[39m
+            [36m</svg>[39m
+            [0mAdd participant[0m
+          [36m</button>[39m
+          [36m<h1[39m
+            [33mclass[39m=[32m"flex-1 truncate text-[length:var(--type-body-size)] font-semibold text-[var(--color-secondary)]"[39m
+          [36m>[39m
+            [0mLaunch[0m
+          [36m</h1>[39m
+          [36m<span[39m
+            [33mclass[39m=[32m"flex items-baseline gap-[var(--space-1)]"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"text-[length:var(--type-caption-size)] text-[var(--color-muted)]"[39m
+            [36m>[39m
+              [0mallocated cost[0m
+            [36m</span>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]"[39m
+            [36m>[39m
+              [0m$0.00[0m
+            [36m</span>[39m
+          [36m</span>[39m
+          [36m<button[39m
+            [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] h-8 rounded-md px-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)]"[39m
+            [33mdata-action-state[39m=[32m"idle"[39m
+            [33mdata-ds-action[39m=[32m""[39m
+            [33mtabindex[39m=[32m"0"[39m
+            [33mtype[39m=[32m"button"[39m
+          [36m>[39m
+            [0mDelete group[0m
+          [36m</button>[39m
+        [36m</div>[39m
+        [36m<ul[39m
+          [33maria-label[39m=[32m"Members"[39m
+          [33mclass[39m=[32m"flex flex-wrap gap-x-[var(--space-4)] gap-y-[var(--space-1)]"[39m
+        [36m>[39m
+          [36m<li[39m
+            [33mclass[39m=[32m"flex flex-wrap items-center gap-[var(--space-1)]"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]"[39m
+            [36m>[39m
+              [0mMia[0m
+            [36m</span>[39m
+            [36m<button[39m
+              [33maria-expanded[39m=[32m"false"[39m
+              [33maria-haspopup[39m=[32m"menu"[39m
+              [33maria-label[39m=[32m"Options for Mia"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap rounded-md text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] h-8 w-8 p-0"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mdata-state[39m=[32m"closed"[39m
+              [33mid[39m=[32m"radix-_r_u_"[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33maria-hidden[39m=[32m"true"[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"14"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"14"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M140,128a12,12,0,1,1-12-12A12,12,0,0,1,140,128ZM128,72a12,12,0,1,0-12-12A12,12,0,0,0,128,72Zm0,112a12,12,0,1,0,12,12A12,12,0,0,0,128,184Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+          [36m</li>[39m
+          [36m<li[39m
+            [33mclass[39m=[32m"flex flex-wrap items-center gap-[var(--space-1)]"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]"[39m
+            [36m>[39m
+              [0mJim[0m
+            [36m</span>[39m
+   ...
+ ❯ waitForWrapper node_modules/@testing-library/dom/dist/wait-for.js:163:27
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:86:33
+ ❯ src/components/rooms/RoomScreen.history.test.tsx:132:32
+    130|     expect(screen.getByText('entry-5')).toBeInTheDocument()
+    131|     expect(screen.getByText(/Earlier messages aren't shown/)).toBeInTh…
+    132|     const retry = await screen.findByRole('button', { name: 'Retry' })
+       |                                ^
+    133|     expect(retry).toBeVisible()
+    134|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/4]⎯
+
+ FAIL  src/components/rooms/RoomScreen.history.test.tsx > T22 (composer clause) — history loading never blocks sending > the composer stays unblocked while an older page is in flight
+AssertionError: expected "vi.fn()" to be called 1 times, but got 0 times
+
+Ignored nodes: comments, script, style
+[36m<html>[39m
+  [36m<head />[39m
+  [36m<body>[39m
+    [36m<div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"flex h-full min-h-0 flex-col"[39m
+      [36m>[39m
+        [36m<header[39m
+          [33mclass[39m=[32m"flex flex-col gap-[var(--space-2)] border-b border-[var(--color-border)] px-[var(--space-3)] py-[var(--space-2)]"[39m
+          [33mdata-testid[39m=[32m"room-header"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex flex-wrap items-center gap-[var(--space-2)]"[39m
+          [36m>[39m
+            [36m<button[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] h-8 rounded-md px-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mdata-testid[39m=[32m"add-participant"[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33maria-hidden[39m=[32m"true"[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"14"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"14"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M256,136a8,8,0,0,1-8,8H232v16a8,8,0,0,1-16,0V144H200a8,8,0,0,1,0-16h16V112a8,8,0,0,1,16,0v16h16A8,8,0,0,1,256,136Zm-57.87,58.85a8,8,0,0,1-12.26,10.3C165.75,181.19,138.09,168,108,168s-57.75,13.19-77.87,37.15a8,8,0,0,1-12.25-10.3c14.94-17.78,33.52-30.41,54.17-37.17a68,68,0,1,1,71.9,0C164.6,164.44,183.18,177.07,198.13,194.85ZM108,152a52,52,0,1,0-52-52A52.06,52.06,0,0,0,108,152Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+              [0mAdd participant[0m
+            [36m</button>[39m
+            [36m<h1[39m
+              [33mclass[39m=[32m"flex-1 truncate text-[length:var(--type-body-size)] font-semibold text-[var(--color-secondary)]"[39m
+            [36m>[39m
+              [0mLaunch[0m
+            [36m</h1>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"flex items-baseline gap-[var(--space-1)]"[39m
+            [36m>[39m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-[length:var(--type-caption-size)] text-[var(--color-muted)]"[39m
+              [36m>[39m
+                [0mallocated cost[0m
+              [36m</span>[39m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]"[39m
+              [36m>[39m
+                [0m$0.00[0m
+              [36m</span>[39m
+            [36m</span>[39m
+            [36m<button[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] h-8 rounded-md px-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [0mDelete group[0m
+            [36m</button>[39m
+          [36m</div>[39m
+          [36m<ul[39m
+            [33maria-label[39m=[32m"Members"[39m
+            [33mclass[39m=[32m"flex flex-wrap gap-x-[var(--space-4)] gap-y-[var(--space-1)]"[39m
+          [36m>[39m
+            [36m<li[39m
+              [33mclass[39m=[32m"flex flex-wrap items-center gap-[var(--space-1)]"[39m
+            [36m>[39m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]"[39m
+              [36m>[39m
+                [0mMia[0m
+              [36m</span>[39m
+              [36m<button[39m
+                [33maria-expanded[39m=[32m"false"[39m
+                [33maria-haspopup[39m=[32m"menu"[39m
+                [33maria-label[39m=[32m"Options for Mia"[39m
+                [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap rounded-md text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] h-8 w-8 p-0"[39m
+                [33mdata-action-state[39m=[32m"idle"[39m
+                [33mdata-ds-action[39m=[32m""[39m
+                [33mdata-state[39m=[32m"closed"[39m
+                [33mid[39m=[32m"radix-_r_17_"[39m
+                [33mtabindex[39m=[32m"0"[39m
+                [33mtype[39m=[32m"button"[39m
+              [36m>[39m
+                [36m<svg[39m
+                  [33maria-hidden[39m=[32m"true"[39m
+                  [33mfill[39m=[32m"currentColor"[39m
+                  [33mheight[39m=[32m"14"[39m
+                  [33mviewBox[39m=[32m"0 0 256 256"[39m
+                  [33mwidth[39m=[32m"14"[39m
+                  [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+                [36m>[39m
+                  [36m<path[39m
+                    [33md[39m=[32m"M140,128a12,12,0,1,1-12-12A12,12,0,0,1,140,128ZM128,72a12,12,0,1,0-12-12A12,12,0,0,0,128,72Zm0,112a12,12,0,1,0,12,12A12,12,0,0,0,128,184Z"[39m
+                  [36m/>[39m
+                [36m</svg>[39m
+              [36m</button>[39m
+            [36m</li>[39m
+            [36m<li[39m
+              [33mclass[39m=[32m"flex flex-wrap items-center gap-[var(--space-1)]"[39m
+    ...
+ ❯ src/components/rooms/RoomScreen.history.test.tsx:160:50
+    158|
+    159|     scrollLogToTop()
+    160|     await waitFor(() => expect(fetchRoomHistory).toHaveBeenCalledTimes…
+       |                                                  ^
+    161|
+    162|     // The first-snapshot gate opened at the snapshot; history in flig…
+ ❯ runWithExpensiveErrorDiagnosticsDisabled node_modules/@testing-library/dom/dist/config.js:47:12
+ ❯ checkCallback node_modules/@testing-library/dom/dist/wait-for.js:124:77
+ ❯ Timeout.checkRealTimersCallback node_modules/@testing-library/dom/dist/wait-for.js:118:16
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/4]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  4 failed | 1 passed (5)
+   Start at  19:24:33
+   Duration  40.15s (transform 4.07s, setup 364ms, import 4.79s, tests 33.44s, environment 1.29s)
+

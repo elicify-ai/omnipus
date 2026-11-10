@@ -8,7 +8,7 @@
 //                       confirmed 401 (D2 fix — this path used to redirect
 //                       WITHOUT clearing the auth store, leaving a stale
 //                       "logged in as X" in the Sidebar after the bounce)
-//   - components/agents/ToolApprovalModal.tsx — when a tool-approval POST
+//   - components/agents/ToolApprovalPanel.tsx — when a tool-approval POST
 //                       401s (D9 fix — this call bypasses React Query, so the
 //                       queryClient.ts subscriber never saw it before)
 //

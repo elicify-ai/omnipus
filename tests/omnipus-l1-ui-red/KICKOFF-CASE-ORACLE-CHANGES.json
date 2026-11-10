@@ -1,0 +1,149 @@
+{
+  "qa_parent": "80225e097ec783d8a65d50e62666d2f8d5b81116",
+  "area_ledgers": [
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red/tests/omnipus-l1-ui-red/KICKOFF-STORE-ORACLE-CHANGES.json",
+      "reviewed_files": 8
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red/tests/omnipus-l1-ui-red/KICKOFF-UI-ORACLE-CHANGES.json",
+      "reviewed_files": 7
+    }
+  ],
+  "minimal_cleanup_byte_reconstruction": [
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red/src/store/chat.first-message-gaps.test.ts",
+      "kind": "assertion",
+      "count": 1,
+      "old_sha256": "4024269ae2ca8dc59eb3452a879e367ab7c116c1513cdaea5675ffb335080ee9",
+      "new_sha256": "e8a4f8f622e33e286d1a68b5d59034ccf73e868a193507410336f111dec7e7a7",
+      "removed": [
+        {
+          "fragment": "expect(useChatStore.getState().pendingKickoff, 'fixture: ordinary first send, not a setup kickoff').toBeNull()",
+          "removed_bytes": "  expect(useChatStore.getState().pendingKickoff, 'fixture: ordinary first send, not a setup kickoff').toBeNull()\n"
+        }
+      ],
+      "no_other_byte_changes": true,
+      "reason": "The removed pendingKickoff field no longer exists after client-kickoff deletion; all other ordinary first-send oracles/seed data are preserved.",
+      "independent_reconstruction_matches": true
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red/src/store/chat.first-message-recovery.test.ts",
+      "kind": "assertion",
+      "count": 1,
+      "old_sha256": "34138c4018a8e6cd36148eff9f12a39ab7a409424d2dbc7235f5166964c4ee90",
+      "new_sha256": "1dfd7fb37d0893c740ee9472317c5e82a109ca811061f37cd1ca33a0c59324f9",
+      "removed": [
+        {
+          "fragment": "expect(useChatStore.getState().pendingKickoff, 'fixture: ordinary send is not a setup kickoff')\n    .toBeNull()",
+          "removed_bytes": "  expect(useChatStore.getState().pendingKickoff, 'fixture: ordinary send is not a setup kickoff')\n    .toBeNull()\n"
+        }
+      ],
+      "no_other_byte_changes": true,
+      "reason": "The removed pendingKickoff field no longer exists after client-kickoff deletion; all other ordinary first-send oracles/seed data are preserved.",
+      "independent_reconstruction_matches": true
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red/src/store/chat.first-message-crash.test.ts",
+      "kind": "assertion",
+      "count": 2,
+      "old_sha256": "bc736ef1c1897c6511a64766325d3d42f7e74a6ff00c93606c44bcb669c0653c",
+      "new_sha256": "1f32ba0a18c7ac01e98501671280dc9d8cbaa3e48491c8cb1277efcf398fe0d5",
+      "removed": [
+        {
+          "fragment": "expect(useChatStore.getState().pendingKickoff).toBeNull()",
+          "removed_bytes": "    expect(useChatStore.getState().pendingKickoff).toBeNull()\n"
+        },
+        {
+          "fragment": "expect(useChatStore.getState().pendingKickoff,\n      'T3 fixture is an ordinary first message, NOT a workspace-setup kickoff',\n    ).toBeNull()",
+          "removed_bytes": "    expect(useChatStore.getState().pendingKickoff,\n      'T3 fixture is an ordinary first message, NOT a workspace-setup kickoff',\n    ).toBeNull()\n"
+        }
+      ],
+      "no_other_byte_changes": true,
+      "reason": "The removed pendingKickoff field no longer exists after client-kickoff deletion; all other ordinary first-send oracles/seed data are preserved.",
+      "independent_reconstruction_matches": true
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red/src/store/chat.first-message-saved-label.test.ts",
+      "kind": "assertion",
+      "count": 1,
+      "old_sha256": "6d3f210aabe102a579c488ac781a3295351e31cba362b23851a3b5f7a2b45784",
+      "new_sha256": "a3ff23351f308c3156795db1bc4633b752c0c5d11d453485a21e99a3aeeb01b3",
+      "removed": [
+        {
+          "fragment": "expect(useChatStore.getState().pendingKickoff, 'fixture: ordinary first send, not setup kickoff').toBeNull()",
+          "removed_bytes": "  expect(useChatStore.getState().pendingKickoff, 'fixture: ordinary first send, not setup kickoff').toBeNull()\n"
+        }
+      ],
+      "no_other_byte_changes": true,
+      "reason": "The removed pendingKickoff field no longer exists after client-kickoff deletion; all other ordinary first-send oracles/seed data are preserved.",
+      "independent_reconstruction_matches": true
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red/src/store/chat.first-message-foreign-ids.test.ts",
+      "kind": "assertion",
+      "count": 1,
+      "old_sha256": "7bfcf518fe8c80e4ea00300765041fe6c35db38c6416989f0eef82bd720409bf",
+      "new_sha256": "e9bfca90fe575558d6b935a000ac3768b158290892e597380f8b5e214dc1ee40",
+      "removed": [
+        {
+          "fragment": "expect(useChatStore.getState().pendingKickoff, 'fixture: A is an ordinary message, not setup kickoff').toBeNull()",
+          "removed_bytes": "  expect(useChatStore.getState().pendingKickoff, 'fixture: A is an ordinary message, not setup kickoff').toBeNull()\n"
+        }
+      ],
+      "no_other_byte_changes": true,
+      "reason": "The removed pendingKickoff field no longer exists after client-kickoff deletion; all other ordinary first-send oracles/seed data are preserved.",
+      "independent_reconstruction_matches": true
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red/src/components/layout/sidebar/WorkspaceAgentList.newChat.test.tsx",
+      "kind": "seed",
+      "count": 3,
+      "old_sha256": "e652662c90bb1a01ca79452ac1f77fcdfbc202c83a1bde6c1b76548573504785",
+      "new_sha256": "7653d5d3cbd873c2ee1c60ec4813aa0cdccead5fe0ca3f7602df8b8391bc506c",
+      "removed": [
+        {
+          "fragment": "pendingKickoff: null",
+          "removed_bytes": "        pendingKickoff: null,\n"
+        },
+        {
+          "fragment": "pendingKickoff: null",
+          "removed_bytes": "        pendingKickoff: null,\n"
+        },
+        {
+          "fragment": "pendingKickoff: null",
+          "removed_bytes": "      pendingKickoff: null,\n"
+        }
+      ],
+      "no_other_byte_changes": true,
+      "reason": "The removed pendingKickoff field no longer exists after client-kickoff deletion; all other ordinary first-send oracles/seed data are preserved.",
+      "independent_reconstruction_matches": true
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red/src/store/session.agent-precedence.test.ts",
+      "kind": "seed",
+      "count": 1,
+      "old_sha256": "b2fb67fa2fbb33e769c36de541b27e8dc9159bc7e27ccf60294d11b0c51c8073",
+      "new_sha256": "d884ca3bf7d36df5dc5a729124479fd57e66376dcfb5aa7cf1374d43cfdc3d91",
+      "removed": [
+        {
+          "fragment": "pendingKickoff: null",
+          "removed_bytes": "      pendingKickoff: null,\n"
+        }
+      ],
+      "no_other_byte_changes": true,
+      "reason": "The removed pendingKickoff field no longer exists after client-kickoff deletion; all other ordinary first-send oracles/seed data are preserved.",
+      "independent_reconstruction_matches": true
+    }
+  ],
+  "instrument_controls": {
+    "real_required_expression_removal": true,
+    "real_negative_change": true,
+    "multiplicity": true
+  },
+  "budget_case_count": 14,
+  "budget_all_cases_byte_identical": true,
+  "expected_retired_cases": 44,
+  "full_machine_evidence": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/l1-ui-red-wu10/kickoff-budget-20261014/oracle-preservation.json",
+  "pass": true
+}

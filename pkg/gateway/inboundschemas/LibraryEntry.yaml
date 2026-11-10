@@ -96,3 +96,57 @@ properties:
       not a guarantee — GET .../content's is_text/too_large fields are the
       authoritative check at read time.
     example: true
+  is_view:
+    type: boolean
+    description: >
+      True when this entry is a saved view (#1017): a file the knowledge
+      base's view loader accepted from
+      `<knowledge base root>/.omnipus-vault/views/`. Set ONLY by
+      GET .../entries called with include_views=true; there it is true on a
+      view entry and absent on every other entry. On any other response that
+      returns a LibraryEntry (write, rename, move, copy, upload), and on a
+      listing made without include_views, it is absent and states nothing.
+      `view` is present exactly when this is true.
+    example: true
+  view:
+    $ref: "./LibraryEntryView.yaml"
+    x-go-type: LibraryEntryView
+  preview_profile:
+    type: string
+    enum:
+      - workspace
+      - mail_restricted
+    description: >
+      Preview isolation profile for this file (founder Q5=A, recorded
+      2026-10-02, final; ADR-20261001 "Saved mail-derived HTML profile"
+      row; mail-live-access-landing-order register row 8 — W0 is the
+      single publisher). workspace = the ordinary isolated script-permitting
+      workspace profile. mail_restricted = the file was written by an
+      explicit Save from Mail: original bytes preserved, rendered with
+      scripts OFF by default under the stricter mail-derived policy. The
+      mail-derived marker is written only by explicit Save (never by
+      Open), must survive move, copy, rename and restore-from-backup
+      (provenance survival is a traced, proved implementation obligation),
+      and a missing or corrupt expected marker fails safely rather than
+      silently upgrading a known mail-derived file. Absent on entries that
+      predate this field = ordinary workspace profile.
+    example: "mail_restricted"
+  chat_copy:
+    type: boolean
+    readOnly: true
+    description: >
+      True when this file has an associated chat copy (the copy chats show,
+      in the workspace media library) that deleting this entry also removes
+      (#1449 D26, FR-086, FR-087). Absent or false means no associated chat
+      copy: deleting the entry removes only this file.
+    example: true
+  preview_scripts_allowed:
+    type: boolean
+    description: >
+      The per-file scripts checkbox (founder Q5=A) — true only when the
+      user explicitly allowed scripts for THIS one file, switching only
+      its preview to the ordinary isolated script-permitting profile.
+      Visible, per file, never silent and never global. Meaningful only
+      with preview_profile=mail_restricted; on ordinary workspace files
+      the isolated profile is the default state and this field is absent.
+    example: false

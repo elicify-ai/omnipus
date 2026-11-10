@@ -125,3 +125,9 @@ func applyPostStartHardening(cmd *exec.Cmd, lim Limits) error {
 	// behaviour we want for parent-death cleanup.
 	return nil
 }
+
+// applyKernelPolicyOnly is a no-op on Windows: there is no kernel backend, so
+// the God Mode floor's only Windows layer is the command-text check (D6).
+func applyKernelPolicyOnly(_ *exec.Cmd, _ *SandboxPolicy) error {
+	return nil
+}

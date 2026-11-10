@@ -9,7 +9,7 @@
 // this fix, the choice was flushed as a session_mode_update sent only AFTER
 // the client received the session_started ack — a round trip that could
 // arrive behind the agent loop's own first LLM call, letting the new chat's
-// first tool call be decided under whatever the agent/global default
+// first tool call be decided under whatever the global default
 // happened to be instead of the user's explicit choice.
 //
 // The fix carries the choice ON the MessageFrame that mints the session
@@ -167,7 +167,7 @@ func TestFirstMessageAutoApprove_GlobalOnPerChatFalse_FirstToolCallPrompts(t *te
 
 	handler.handleChatMessageWithClientID(
 		context.Background(), "adr092-chat-false", "", "go browse", "mia", nil,
-		"", "", false, "client-msg-false", boolPtr(false), wc,
+		"", "", "client-msg-false", boolPtr(false), wc,
 	)
 
 	select {
@@ -203,7 +203,7 @@ func TestFirstMessageAutoApprove_GlobalOffPerChatTrue_FirstToolCallAutoApproved(
 
 	handler.handleChatMessageWithClientID(
 		context.Background(), "adr092-chat-true", "", "go browse", "mia", nil,
-		"", "", false, "client-msg-true", boolPtr(true), wc,
+		"", "", "client-msg-true", boolPtr(true), wc,
 	)
 
 	select {

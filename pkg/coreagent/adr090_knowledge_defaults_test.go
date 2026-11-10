@@ -18,11 +18,11 @@ func TestADR090KnowledgeDefaultsMatchRoleResponsibilities(t *testing.T) {
 	}{
 		{IDMia, config.ToolPolicyAllow, config.ToolPolicyAsk},
 		{IDJim, config.ToolPolicyAllow, config.ToolPolicyAsk},
-		{IDAva, config.ToolPolicyAllow, config.ToolPolicyDeny},
+
 		{IDPlanner, config.ToolPolicyAllow, config.ToolPolicyDeny},
 		{IDResearcher, config.ToolPolicyAllow, config.ToolPolicyDeny},
 		{IDWorker, config.ToolPolicyAllow, config.ToolPolicyAsk},
-		{IDAdmin, config.ToolPolicyAllow, config.ToolPolicyDeny},
+		{IDOmnipus, config.ToolPolicyAllow, config.ToolPolicyDeny},
 		{IDJudge, config.ToolPolicyDeny, config.ToolPolicyDeny},
 		{IDPlanSupervisor, config.ToolPolicyDeny, config.ToolPolicyDeny},
 	}

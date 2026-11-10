@@ -11,7 +11,7 @@ func TestDelegationContext_NoAwait_GoalGuidanceOnce(t *testing.T) {
 	got := buildDelegationContext([]delegationTarget{{
 		ID:    "worker",
 		Label: "General Purpose",
-	}}, 3)
+	}}, 3, 0)
 
 	for _, retired := range []string{"async=false", "synchronously", "await mode"} {
 		if strings.Contains(got, retired) {

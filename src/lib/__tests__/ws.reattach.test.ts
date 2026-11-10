@@ -76,7 +76,7 @@ function makeCallbacks(conn: { current: WsConnection | null }, setConnectionErro
   // Mirrors OmnipusRuntimeProvider.tsx's WsLifecycle: onConnected re-attaches
   // the active session on every open, first connect and every reconnect alike.
   return {
-    onFrame: vi.fn(),
+    onFrames: vi.fn(),
     onConnected: vi.fn(() => {
       if (conn.current) reattachActiveSession(conn.current, setConnectionError)
     }),
@@ -225,9 +225,9 @@ describe('WsConnection + reattachActiveSession — reconnect re-attach (ADR-082 
     conn.disconnect()
   })
 
-  it('does NOT send attach_session on reopen for the "__pending" kickoff sentinel — sending it would be a protocol violation (chat.ts ~L1281 guard)', () => {
+  it('does NOT send attach_session on reopen for an unowned "__pending" sentinel — sending it would be a protocol violation', () => {
     useSessionStore.setState({ activeSessionId: '__pending', activeAgentId: 'ava', activeAgentType: 'core' })
-    useChatStore.setState({ pendingKickoff: { workspaceId: 'ws-1' } } as never)
+    useChatStore.setState({ pendingFirstSend: null })
 
     const connRef: { current: WsConnection | null } = { current: null }
     const setConnectionError = vi.fn()
@@ -238,9 +238,45 @@ describe('WsConnection + reattachActiveSession — reconnect re-attach (ADR-082 
     lastWsInstance.onopen?.()
 
     expect(attachFrames(lastWsInstance)).toHaveLength(0)
-    // The dead kickoff is torn down instead — not left wedged.
-    expect(useChatStore.getState().pendingKickoff).toBeNull()
+    // FR-047/K9 retires the client kickoff slot. The generic protocol
+    // guarantee above stays; a local sentinel never reaches attach_session.
 
     conn.disconnect()
+  })
+
+  // S3-04: WsConnection._socketGeneration's increment had no test on the REAL
+  // class — the sibling single-attach test sets `socketGeneration` by hand, so
+  // deleting the increment in _createSocket left every test green while a
+  // reconnect would silently skip its re-attach generation. This drives a real
+  // drop + reopen and reads the counter off the real connection.
+  it('increments socketGeneration on the REAL class for every socket it creates (S3-04)', () => {
+    vi.useFakeTimers()
+    useSessionStore.setState({ activeSessionId: 'sess-3', activeAgentId: null, activeAgentType: null })
+
+    const connRef: { current: WsConnection | null } = { current: null }
+    const conn = new WsConnection(makeCallbacks(connRef, vi.fn()))
+    connRef.current = conn
+
+    expect(conn.socketGeneration, 'no socket has been created yet').toBe(0)
+
+    conn.connect()
+    expect(conn.socketGeneration, 'the first socket is generation 1').toBe(1)
+    const firstInstance = lastWsInstance
+    firstInstance.onopen?.()
+
+    // An abnormal drop (network blip) schedules the reconnect via the
+    // fast-retry backoff — the same cycle the re-attach test above drives.
+    firstInstance.onclose?.({ code: 1006, reason: 'network blip' })
+    vi.advanceTimersByTime(2_000)
+
+    expect(lastWsInstance, 'the drop must have reopened a NEW socket').not.toBe(firstInstance)
+    expect(
+      conn.socketGeneration,
+      'every socket _createSocket builds is a NEW generation — a reconnect that reused the old ' +
+        'generation would re-attach against a stale one',
+    ).toBe(2)
+
+    conn.disconnect()
+    vi.useRealTimers()
   })
 })

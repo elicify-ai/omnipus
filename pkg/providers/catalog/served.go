@@ -25,6 +25,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/providers/effortdialect"
 )
 
 // ServedFrom is the gateway envelope's origin marker (FR-017): which
@@ -142,6 +144,12 @@ type envelopeJSON struct {
 type resizeLimitsJSON struct {
 	LongEdgePx int   `json:"long_edge_px"`
 	MaxBytes   int64 `json:"max_bytes"`
+	// MaxPatches mirrors the contract's optional max_patches (issue #1435).
+	// omitempty is REQUIRED, not cosmetic: zero means the provider's patch
+	// accounting is unknown/unlimited, and the contract admits the field
+	// only as an integer >= 1 — serializing 0 would hand the SPA a response
+	// its own generated validator rejects (#1435 R4 / round-1 F1).
+	MaxPatches int `json:"max_patches,omitempty"`
 }
 
 type endpointJSON struct {
@@ -165,8 +173,6 @@ type providerJSON struct {
 	AuthMethods       []AuthMethod         `json:"auth_methods"`
 	Aliases           []string             `json:"aliases"`
 	Locality          Locality             `json:"locality"`
-	CLIKind           string               `json:"cli_kind,omitempty"`
-	TokenSource       string               `json:"token_source,omitempty"`
 	ResizeLimits      resizeLimitsJSON     `json:"resize_limits"`
 	Models            []modelJSON          `json:"models"`
 }
@@ -191,12 +197,46 @@ type modelJSON struct {
 	Status            Status     `json:"status"`
 	Disputed          bool       `json:"disputed,omitempty"`
 	InferenceProfiles []string   `json:"inference_profiles,omitempty"`
+	// Reasoning is the served reasoning capability (CatalogModelReasoning):
+	// the levels and switch the route can encode (FR-049). Absent when the
+	// model does not reason.
+	Reasoning *reasoningJSON `json:"reasoning,omitempty"`
+}
+
+// reasoningJSON is the served CatalogModelReasoning object; levels is never
+// null.
+type reasoningJSON struct {
+	Levels []string `json:"levels"`
+	Switch bool     `json:"switch"`
+}
+
+// servedReasoning filters a model's published reasoning controls through the
+// effort encoder table for the provider's route (FR-049).
+func servedReasoning(p *Provider, m *Model) *reasoningJSON {
+	if m.Reasoning == nil {
+		return nil
+	}
+	route := effortdialect.RouteFor(p.ID, string(p.Protocol), m.ID)
+	levels, sw := effortdialect.FilterServed(m.Reasoning.Levels, m.Reasoning.Switch, route)
+	return &reasoningJSON{Levels: levels, Switch: sw}
+}
+
+// ServedReasoning returns the served reasoning capability of a resolved
+// model: the levels and switch its route can encode (FR-049). ok is false
+// when the model has no catalog row or does not reason.
+func (h Handle) ServedReasoning() (levels []string, sw bool, ok bool) {
+	if h.m == nil || h.m.Reasoning == nil || h.p == nil {
+		return nil, false, false
+	}
+	r := servedReasoning(h.p, h.m)
+	return r.Levels, r.Switch, true
 }
 
 // buildServed serialises doc into the envelope with the given origin
 // marker, computing stale against now, and returns the body + quoted
-// strong ETag as one pair.
-func buildServed(doc *Document, from ServedFrom, now time.Time) (servedPair, error) {
+// strong ETag as one pair. A non-nil gate filters each row's served
+// auth_methods (WithSignInGate); the ETag covers the filtered body.
+func buildServed(doc *Document, from ServedFrom, now time.Time, gate SignInGate) (servedPair, error) {
 	env := envelopeJSON{
 		SchemaVersion:       doc.SchemaVersion,
 		Version:             doc.Version.String(),
@@ -208,11 +248,11 @@ func buildServed(doc *Document, from ServedFrom, now time.Time) (servedPair, err
 		Stale:               now.Sub(doc.UpdatedAt) > StaleAfter,
 	}
 	for i := range doc.Providers {
-		env.Providers = append(env.Providers, providerToJSON(&doc.Providers[i]))
+		env.Providers = append(env.Providers, providerToJSON(&doc.Providers[i], gate))
 	}
 	body, err := json.Marshal(env)
 	if err != nil {
-		return servedPair{}, fmt.Errorf("catalog: serialise served envelope: %w", err)
+		return servedPair{}, fmt.Errorf("%w: serialise served envelope: %w", ErrInvalid, err)
 	}
 	sum := sha256.Sum256(body)
 	return servedPair{
@@ -223,7 +263,7 @@ func buildServed(doc *Document, from ServedFrom, now time.Time) (servedPair, err
 	}, nil
 }
 
-func providerToJSON(p *Provider) providerJSON {
+func providerToJSON(p *Provider, gate SignInGate) providerJSON {
 	out := providerJSON{
 		ID:                p.ID,
 		Name:              p.Name,
@@ -236,11 +276,9 @@ func providerToJSON(p *Provider) providerJSON {
 		Regions:           providerRegionsToJSON(p.Regions),
 		Tier:              p.Tier,
 		UnsupportedReason: p.UnsupportedReason,
-		AuthMethods:       p.AuthMethods,
+		AuthMethods:       ServedAuthMethods(p, gate),
 		Aliases:           p.Aliases,
 		Locality:          p.Locality,
-		CLIKind:           p.CLIKind,
-		TokenSource:       p.TokenSource,
 		ResizeLimits:      resizeLimitsJSON(p.ResizeLimits),
 		Models:            make([]modelJSON, 0, len(p.Models)),
 	}
@@ -264,6 +302,7 @@ func providerToJSON(p *Provider) providerJSON {
 			Status:            m.Status,
 			Disputed:          m.Disputed,
 			InferenceProfiles: m.InferenceProfiles,
+			Reasoning:         servedReasoning(p, m),
 		})
 	}
 	if len(p.Protocols) > 0 {
@@ -288,4 +327,34 @@ func providerRegionsToJSON(regions []ProviderRegion) []providerRegionJSON {
 		out = append(out, providerRegionJSON(r))
 	}
 	return out
+}
+
+// ServedAuthMethods is the row's auth_methods as served (and as the
+// generated reference docs list them): `sign_in` is
+// dropped when gate rejects the row AND another method remains (the
+// contract's minItems: 1). The returned slice never aliases p.AuthMethods
+// when anything was dropped, so the Document stays untouched.
+func ServedAuthMethods(p *Provider, gate SignInGate) []AuthMethod {
+	if gate == nil || !declaresSignIn(p.AuthMethods) || gate(*p) {
+		return p.AuthMethods
+	}
+	kept := make([]AuthMethod, 0, len(p.AuthMethods))
+	for _, m := range p.AuthMethods {
+		if m != AuthSignIn {
+			kept = append(kept, m)
+		}
+	}
+	if len(kept) == 0 {
+		return p.AuthMethods
+	}
+	return kept
+}
+
+func declaresSignIn(methods []AuthMethod) bool {
+	for _, m := range methods {
+		if m == AuthSignIn {
+			return true
+		}
+	}
+	return false
 }

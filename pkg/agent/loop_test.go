@@ -1,14 +1,10 @@
 package agent
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"image"
-	"image/color"
-	"image/jpeg"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -24,25 +20,9 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/providers"
-	"github.com/elicify-ai/omnipus/pkg/routing"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/stretchr/testify/assert"
 )
-
-// real1x1JPEGBytes returns valid 1x1 JPEG bytes produced by Go's
-// image/jpeg encoder. Used by the resolveMediaRefs tests that need a
-// decodable image body (the normalizer rejects truncated headers as
-// "decode-config-failed" — only an actual decodable JPEG reaches the
-// "image/jpeg" prefix check).
-func real1x1JPEGBytes() []byte {
-	img := image.NewRGBA(image.Rect(0, 0, 1, 1))
-	img.Set(0, 0, color.RGBA{0x80, 0x80, 0x80, 0xff})
-	var buf bytes.Buffer
-	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 50}); err != nil {
-		panic("real1x1JPEGBytes: jpeg.Encode failed: " + err.Error())
-	}
-	return buf.Bytes()
-}
 
 type fakeChannel struct{ id string }
 
@@ -59,8 +39,6 @@ func (f *fakeChannel) IsRunning() bool { return true }
 func (f *fakeChannel) IsAllowed(string) bool { return true }
 
 func (f *fakeChannel) IsAllowedSender(sender bus.SenderInfo) bool { return true }
-
-func (f *fakeChannel) ReasoningChannelID() string { return f.id }
 
 type fakeMediaChannel struct {
 	fakeChannel
@@ -161,7 +139,15 @@ func newTestAgentLoop(
 	msgBus = bus.NewMessageBus()
 	provider = &mockProvider{}
 	al = mustNewAgentLoop(t, cfg, msgBus, provider)
-	return al, cfg, msgBus, provider, func() {}
+	// The returned cleanup used to be a no-op: every one of this package's
+	// ~80 newTestAgentLoop/newAL callers ran `defer cleanup()` believing it
+	// tore the loop down, but nothing ever called al.Close() — leaking each
+	// AgentLoop's HookManager dispatcher, shared UnifiedStore stats flusher,
+	// per-agent bleve/scorch goroutines and browser pool for the rest of the
+	// test binary's life. Across ~2700 sequential tests in this package that
+	// is the dominant source of the goroutine buildup that tipped the whole
+	// package past its 10-minute -short budget (PR #1074 macOS stall).
+	return al, cfg, msgBus, provider, al.Close
 }
 
 func TestProcessMessage_IncludesCurrentSenderInDynamicContext(t *testing.T) {
@@ -196,7 +182,7 @@ func TestProcessMessage_IncludesCurrentSenderInDynamicContext(t *testing.T) {
 	provider := &recordingProvider{}
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 
-	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
+	response, _, err := al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
 		Channel: "discord",
 		Sender: bus.SenderInfo{
 			CanonicalID: "discord:123",
@@ -221,9 +207,9 @@ func TestProcessMessage_IncludesCurrentSenderInDynamicContext(t *testing.T) {
 		t.Fatalf("system prompt missing sender context %q:\n%s", wantSender, systemPrompt)
 	}
 
-	lastMessage := provider.lastMessages[len(provider.lastMessages)-1]
+	lastMessage := requireConversationBeforeVolatileTail(t, provider.lastMessages)[len(provider.lastMessages)-2]
 	if lastMessage.Role != "user" || lastMessage.Content != "hello" {
-		t.Fatalf("last provider message = %+v, want unchanged user message", lastMessage)
+		t.Fatalf("last conversation message before volatile user-role tail = %+v, want unchanged user message", lastMessage)
 	}
 
 	// Channel-session routing: the non-webchat discord message must have caused a
@@ -298,7 +284,7 @@ func TestProcessMessage_WebRenderingNoteWiring(t *testing.T) {
 	t.Run("webchat turn injects web-rendering note into provider messages", func(t *testing.T) {
 		al, provider := setup(t)
 
-		_, _, err := al.processMessage(context.Background(), bus.InboundMessage{
+		_, _, err := al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
 			Channel: "webchat",
 			Sender:  bus.SenderInfo{CanonicalID: "user-web-1"},
 			ChatID:  "chat-web-1",
@@ -337,7 +323,7 @@ func TestProcessMessage_WebRenderingNoteWiring(t *testing.T) {
 			t.Run(channel, func(t *testing.T) {
 				al, provider := setup(t)
 
-				_, _, err := al.processMessage(context.Background(), bus.InboundMessage{
+				_, _, err := al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
 					Channel: channel,
 					Sender:  bus.SenderInfo{CanonicalID: "user-1"},
 					ChatID:  "chat-1",
@@ -389,10 +375,9 @@ func TestProcessMessage_SkillCommandLoadsRequestedSkill(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			// ADR-072 D5: absence of a grant list denies every skill now, so
-			// this test must explicitly grant "shell" — it used to resolve
-			// under the old "no allowlist = unrestricted" default.
-			List: []config.AgentConfig{{ID: "mia", Home: tmpDir, Skills: []string{"shell"}}},
+			// ADR-072 D5 + r15 SD-30: grant the installed generation through
+			// actual persistence before constructing the activation snapshot.
+			List: []config.AgentConfig{persistSkillGrantFixture(t, tmpDir, config.AgentConfig{ID: "mia", Home: tmpDir, Skills: []string{"shell"}})},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -400,7 +385,7 @@ func TestProcessMessage_SkillCommandLoadsRequestedSkill(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 
 	// /shell is the skill slug; the message follows directly. One-shot: no arm.
-	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
+	response, _, err := al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
 		Channel: "telegram",
 		Sender: bus.SenderInfo{
 			CanonicalID: "telegram:123",
@@ -426,9 +411,9 @@ func TestProcessMessage_SkillCommandLoadsRequestedSkill(t *testing.T) {
 		t.Fatalf("system prompt missing requested skill content:\n%s", systemPrompt)
 	}
 
-	lastMessage := provider.lastMessages[len(provider.lastMessages)-1]
+	lastMessage := requireConversationBeforeVolatileTail(t, provider.lastMessages)[len(provider.lastMessages)-2]
 	if lastMessage.Role != "user" || lastMessage.Content != "explain how to list files" {
-		t.Fatalf("last provider message = %+v, want rewritten user message", lastMessage)
+		t.Fatalf("last conversation message before FR-007 tail = %+v, want rewritten user message", lastMessage)
 	}
 }
 
@@ -457,9 +442,8 @@ func TestProcessMessage_SkillTokenAloneRunsSkill(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			// ADR-072 D5: absence of a grant list denies every skill now, so
-			// this test must explicitly grant "shell".
-			List: []config.AgentConfig{{ID: "mia", Home: tmpDir, Skills: []string{"shell"}}},
+			// ADR-072 D5 + r15 SD-30: persist a binding to the installed shell.
+			List: []config.AgentConfig{persistSkillGrantFixture(t, tmpDir, config.AgentConfig{ID: "mia", Home: tmpDir, Skills: []string{"shell"}})},
 		},
 	}
 	msgBus := bus.NewMessageBus()
@@ -467,7 +451,7 @@ func TestProcessMessage_SkillTokenAloneRunsSkill(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 
 	// "/shell" alone — one-shot skill run; turn proceeds with empty user message.
-	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
+	response, _, err := al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
 		Channel: "telegram",
 		Sender: bus.SenderInfo{
 			CanonicalID: "telegram:123",
@@ -697,7 +681,7 @@ func TestProcessMessage_MediaToolDeliveryEmitsMediaAndCallsFollowUp(t *testing.T
 		store: store,
 		path:  imagePath,
 	})
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := al.GetRegistry().primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
@@ -708,7 +692,7 @@ func TestProcessMessage_MediaToolDeliveryEmitsMediaAndCallsFollowUp(t *testing.T
 		Policies: map[string]config.ToolPolicy{"handled_media_tool": "allow"},
 	})
 
-	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
+	response, _, err := al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
 		Channel: "telegram",
 		ChatID:  "chat1",
 		Sender: bus.SenderInfo{
@@ -748,7 +732,7 @@ func TestProcessMessage_MediaToolDeliveryEmitsMediaAndCallsFollowUp(t *testing.T
 	default:
 	}
 
-	route, _, err := al.resolveMessageRoute(bus.InboundMessage{
+	route, _, err := al.resolveMessageRouteAsPrimaryForTest(bus.InboundMessage{
 		Channel: "telegram",
 		ChatID:  "chat1",
 		Sender: bus.SenderInfo{
@@ -803,7 +787,7 @@ func TestProcessMessage_HandledToolProcessesQueuedSteeringBeforeReturning(t *tes
 		path:  imagePath,
 		loop:  al,
 	})
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := al.GetRegistry().primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
@@ -815,7 +799,7 @@ func TestProcessMessage_HandledToolProcessesQueuedSteeringBeforeReturning(t *tes
 		Policies: map[string]config.ToolPolicy{"handled_media_with_steering_tool": "allow"},
 	})
 
-	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
+	response, _, err := al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
 		Channel: "telegram",
 		ChatID:  "chat1",
 		Sender: bus.SenderInfo{
@@ -883,7 +867,7 @@ func TestProcessMessage_MediaArtifactCanBeForwardedBySendFile(t *testing.T) {
 		store: store,
 		path:  imagePath,
 	})
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := al.GetRegistry().primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
@@ -898,7 +882,7 @@ func TestProcessMessage_MediaArtifactCanBeForwardedBySendFile(t *testing.T) {
 		},
 	})
 
-	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
+	response, _, err := al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
 		Channel: "telegram",
 		ChatID:  "chat1",
 		Sender: bus.SenderInfo{
@@ -1546,7 +1530,7 @@ func (h testHelper) executeAndGetResponse(tb testing.TB, ctx context.Context, ms
 	timeoutCtx, cancel := context.WithTimeout(ctx, responseTimeout)
 	defer cancel()
 
-	response, _, err := h.al.processMessage(timeoutCtx, msg)
+	response, _, err := h.al.processMessageAsPrimaryForTest(timeoutCtx, msg)
 	if err != nil {
 		tb.Fatalf("processMessage failed: %v", err)
 	}
@@ -1600,13 +1584,13 @@ func TestProcessMessage_UsesRouteSessionKey(t *testing.T) {
 		},
 	}
 
-	route := al.registry.ResolveRoute(routing.RouteInput{
-		Channel: msg.Channel,
-		Peer:    extractPeer(msg),
-	})
+	route, _, routeErr := al.resolveMessageRouteAsPrimaryForTest(msg)
+	if routeErr != nil {
+		t.Fatalf("resolve route: %v", routeErr)
+	}
 	sessionKey := route.SessionKey
 
-	defaultAgent := al.registry.GetDefaultAgent()
+	defaultAgent := al.registry.primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("No default agent found")
 	}
@@ -1671,17 +1655,17 @@ func TestProcessMessage_CommandOutcomes(t *testing.T) {
 		},
 	}
 
-	showResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
+	statusResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
 		Channel: baseMsg.Channel,
 		Sender: bus.SenderInfo{
 			CanonicalID: baseMsg.Sender.CanonicalID,
 		},
 		ChatID:  baseMsg.ChatID,
-		Content: "/show channel",
+		Content: "/status",
 		Peer:    baseMsg.Peer,
 	})
-	if showResp != "Current Channel: whatsapp" {
-		t.Fatalf("unexpected /show reply: %q", showResp)
+	if !strings.Contains(statusResp, "Channel: whatsapp") {
+		t.Fatalf("unexpected /status reply: %q", statusResp)
 	}
 	if provider.calls != 0 {
 		t.Fatalf("LLM should not be called for handled command, calls=%d", provider.calls)
@@ -1703,13 +1687,8 @@ func TestProcessMessage_CommandOutcomes(t *testing.T) {
 		t.Fatalf("LLM should be called exactly once after /foo passthrough, calls=%d", provider.calls)
 	}
 
-	// "/bar", not "/new": /new is a real builtin (pkg/commands/cmd_clear.go,
-	// "Start a new chat") available on SurfaceChannel — whatsapp here would
-	// hit its Handler and reply "Chat history cleared!" instead of passing
-	// through to the LLM. This assertion predates that command (it shipped
-	// in the original PicoClaw->Omnipus squash-merge, before /new existed as
-	// a slash command at all); /bar exercises the same "second unrecognized
-	// command still passes through" behavior /foo already covers above,
+	// "/bar" is an unrecognized name, so it exercises the same "second
+	// unrecognized command still passes through" behavior /foo covers above,
 	// without colliding with a real builtin name.
 	barResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
 		Channel: baseMsg.Channel,
@@ -1727,23 +1706,23 @@ func TestProcessMessage_CommandOutcomes(t *testing.T) {
 		t.Fatalf("LLM should be called for passthrough /bar command, calls=%d", provider.calls)
 	}
 
-	// /new carries a real handler on the channel surface since the command
-	// harmonization (cmd_clear.go: canonical name "new", alias "clear") —
-	// channel users get the "Chat history cleared!" reply and no LLM turn.
-	newResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
+	// A command with a handler on the channel surface is answered inline and
+	// never reaches the LLM. (/new, the previous example here, was retired by
+	// U10a 2026-10-09 — FR-031 — so /help stands in for it.)
+	helpResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
 		Channel: baseMsg.Channel,
 		Sender: bus.SenderInfo{
 			CanonicalID: baseMsg.Sender.CanonicalID,
 		},
 		ChatID:  baseMsg.ChatID,
-		Content: "/new",
+		Content: "/help",
 		Peer:    baseMsg.Peer,
 	})
-	if newResp != "Chat history cleared!" {
-		t.Fatalf("unexpected /new reply: %q", newResp)
+	if !strings.Contains(helpResp, "/status") {
+		t.Fatalf("unexpected /help reply: %q", helpResp)
 	}
 	if provider.calls != 2 {
-		t.Fatalf("LLM should NOT be called for the handled /new command, calls=%d", provider.calls)
+		t.Fatalf("LLM should NOT be called for the handled /help command, calls=%d", provider.calls)
 	}
 }
 
@@ -1802,14 +1781,14 @@ func TestProcessMessage_SwitchModelShowModelConsistency(t *testing.T) {
 			CanonicalID: "user1",
 		},
 		ChatID:  "chat1",
-		Content: "/switch model to deepseek/deepseek-v3.2",
+		Content: "/model deepseek/deepseek-v3.2",
 		Peer: bus.Peer{
 			Kind: bus.PeerDirect,
 			ID:   "user1",
 		},
 	})
 	if !strings.Contains(switchResp, "Switched model from gpt-4.1 to deepseek/deepseek-v3.2") {
-		t.Fatalf("unexpected /switch reply: %q", switchResp)
+		t.Fatalf("unexpected /model reply: %q", switchResp)
 	}
 
 	showResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
@@ -1818,18 +1797,18 @@ func TestProcessMessage_SwitchModelShowModelConsistency(t *testing.T) {
 			CanonicalID: "user1",
 		},
 		ChatID:  "chat1",
-		Content: "/show model",
+		Content: "/model",
 		Peer: bus.Peer{
 			Kind: bus.PeerDirect,
 			ID:   "user1",
 		},
 	})
 	if !strings.Contains(showResp, "Current Model: deepseek/deepseek-v3.2 (Provider: openrouter)") {
-		t.Fatalf("unexpected /show model reply after switch: %q", showResp)
+		t.Fatalf("unexpected /model reply after switch: %q", showResp)
 	}
 
 	if provider.calls != 0 {
-		t.Fatalf("LLM should not be called for /switch and /show, calls=%d", provider.calls)
+		t.Fatalf("LLM should not be called for /model, calls=%d", provider.calls)
 	}
 }
 
@@ -1880,14 +1859,14 @@ func TestProcessMessage_SwitchModelRejectsUnknownAlias(t *testing.T) {
 			CanonicalID: "user1",
 		},
 		ChatID:  "chat1",
-		Content: "/switch model to missing",
+		Content: "/model missing",
 		Peer: bus.Peer{
 			Kind: bus.PeerDirect,
 			ID:   "user1",
 		},
 	})
 	if switchResp != `model "missing" not found in model_list or providers` {
-		t.Fatalf("unexpected /switch error reply: %q", switchResp)
+		t.Fatalf("unexpected /model error reply: %q", switchResp)
 	}
 
 	showResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
@@ -1896,18 +1875,18 @@ func TestProcessMessage_SwitchModelRejectsUnknownAlias(t *testing.T) {
 			CanonicalID: "user1",
 		},
 		ChatID:  "chat1",
-		Content: "/show model",
+		Content: "/model",
 		Peer: bus.Peer{
 			Kind: bus.PeerDirect,
 			ID:   "user1",
 		},
 	})
 	if !strings.Contains(showResp, "Current Model: gpt-4.1 (Provider: openai)") {
-		t.Fatalf("unexpected /show model reply after rejected switch: %q", showResp)
+		t.Fatalf("unexpected /model reply after rejected switch: %q", showResp)
 	}
 
 	if provider.calls != 0 {
-		t.Fatalf("LLM should not be called for rejected /switch and /show, calls=%d", provider.calls)
+		t.Fatalf("LLM should not be called for rejected /model, calls=%d", provider.calls)
 	}
 }
 
@@ -2016,14 +1995,14 @@ func TestProcessMessage_SwitchModelRoutesSubsequentRequestsToSelectedProvider(t 
 			CanonicalID: "user1",
 		},
 		ChatID:  "chat1",
-		Content: "/switch model to deepseek/deepseek-v3.2",
+		Content: "/model deepseek/deepseek-v3.2",
 		Peer: bus.Peer{
 			Kind: bus.PeerDirect,
 			ID:   "user1",
 		},
 	})
 	if !strings.Contains(switchResp, "Switched model from gpt-4.1 to deepseek/deepseek-v3.2") {
-		t.Fatalf("unexpected /switch reply: %q", switchResp)
+		t.Fatalf("unexpected /model reply: %q", switchResp)
 	}
 
 	secondResp := helper.executeAndGetResponse(t, context.Background(), bus.InboundMessage{
@@ -2305,93 +2284,7 @@ func (m *failFirstMockProvider) GetDefaultModel() string {
 
 // TestAgentLoop_ContextExhaustionRetry verify that the agent retries on context errors
 func TestAgentLoop_ContextExhaustionRetry(t *testing.T) {
-	tmpDirOuter, err := os.MkdirTemp("", "agent-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDirOuter)
-	// Nested one level below the freshly-made outer container so
-	// filepath.Dir(tmpDir) (what NewAgentLoop roots the shared
-	// session/task store at) is THIS test's own private tmpDirOuter,
-	// never the shared OS temp root — see loop_test.go's
-	// newTestAgentLoop doc comment for the leak this closes.
-	tmpDir := filepath.Join(tmpDirOuter, "home")
-	if err = os.MkdirAll(tmpDir, 0o700); err != nil {
-		t.Fatalf("Failed to create nested home dir: %v", err)
-	}
-
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Home:              tmpDir,
-				DefaultModel:      config.DefaultModel{Model: "test-model"},
-				MaxTokens:         4096,
-				MaxToolIterations: 10,
-			},
-			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
-		},
-	}
-
-	msgBus := bus.NewMessageBus()
-
-	// Create a provider that fails once with a context error
-	contextErr := fmt.Errorf("InvalidParameter: Total tokens of image and text exceed max message tokens")
-	provider := &failFirstMockProvider{
-		failures:    1,
-		failError:   contextErr,
-		successResp: "Recovered from context error",
-	}
-
-	al := mustNewAgentLoop(t, cfg, msgBus, provider)
-
-	// Inject some history to simulate a full context.
-	// Session history only stores user/assistant/tool messages — the system
-	// prompt is built dynamically by BuildMessages and is NOT stored here.
-	sessionKey := "test-session-context"
-	history := []providers.Message{
-		{Role: "user", Content: "Old message 1"},
-		{Role: "assistant", Content: "Old response 1"},
-		{Role: "user", Content: "Old message 2"},
-		{Role: "assistant", Content: "Old response 2"},
-		{Role: "user", Content: "Trigger message"},
-	}
-	defaultAgent := al.registry.GetDefaultAgent()
-	if defaultAgent == nil {
-		t.Fatal("No default agent found")
-	}
-	defaultAgent.Sessions.SetHistory(sessionKey, history)
-
-	// Call ProcessDirectWithChannel
-	// Note: ProcessDirectWithChannel calls processMessage which will execute runLLMIteration
-	response, err := al.ProcessDirectWithChannel(
-		context.Background(),
-		"Trigger message",
-		sessionKey,
-		"test",
-		"test-chat",
-	)
-	if err != nil {
-		t.Fatalf("Expected success after retry, got error: %v", err)
-	}
-
-	if response != "Recovered from context error" {
-		t.Errorf("Expected 'Recovered from context error', got '%s'", response)
-	}
-
-	// We expect 2 calls: 1st failed, 2nd succeeded
-	if provider.currentCall != 2 {
-		t.Errorf("Expected 2 calls (1 fail + 1 success), got %d", provider.currentCall)
-	}
-
-	// Check final history length
-	finalHistory := defaultAgent.Sessions.GetHistory(sessionKey)
-	// We verify that the history has been modified (compressed)
-	// Original length: 5
-	// Expected behavior: compression drops ~50% of Turns
-	// Without compression: 5 + 1 (new user msg) + 1 (assistant msg) = 7
-	if len(finalHistory) >= 7 {
-		t.Errorf("Expected history to be compressed (len < 7), got %d", len(finalHistory))
-	}
+	runPlainHistoryEntryRecovery(t, true)
 }
 
 func TestAgentLoop_EmptyModelResponseUsesAccurateFallback(t *testing.T) {
@@ -2426,7 +2319,7 @@ func TestAgentLoop_EmptyModelResponseUsesAccurateFallback(t *testing.T) {
 	provider := &simpleMockProvider{response: ""}
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 
-	response, err := al.ProcessDirectWithChannel(context.Background(), "hello", "empty-response", "test", "chat1")
+	response, err := al.processDirectWithChannelPrimaryForTest(context.Background(), "hello", "empty-response", "test", "chat1")
 	if err != nil {
 		t.Fatalf("ProcessDirectWithChannel failed: %v", err)
 	}
@@ -2476,7 +2369,7 @@ func TestAgentLoop_ToolLimitUsesDedicatedFallback(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	al.RegisterTool(&toolLimitTestTool{})
 
-	response, err := al.ProcessDirectWithChannel(context.Background(), "hello", "tool-limit", "test", "chat1")
+	response, err := al.processDirectWithChannelPrimaryForTest(context.Background(), "hello", "tool-limit", "test", "chat1")
 	if err != nil {
 		t.Fatalf("ProcessDirectWithChannel failed: %v", err)
 	}
@@ -2484,24 +2377,17 @@ func TestAgentLoop_ToolLimitUsesDedicatedFallback(t *testing.T) {
 		t.Fatalf("response = %q, want %q", response, toolLimitResponse)
 	}
 
-	defaultAgent := al.registry.GetDefaultAgent()
+	defaultAgent := al.registry.primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("No default agent found")
 	}
-	route := al.registry.ResolveRoute(routing.RouteInput{
-		Channel: "test",
-		Peer: &routing.RoutePeer{
-			Kind: string(bus.PeerDirect),
-			ID:   "cron",
-		},
-	})
-	history := defaultAgent.Sessions.GetHistory(route.SessionKey)
-	if len(history) != 4 {
-		t.Fatalf("history len = %d, want 4", len(history))
+	history := defaultAgent.Sessions.GetHistory(directTurnHistoryKeyForTest(defaultAgent.ID, "test", "chat1"))
+	if len(history) != 3 {
+		t.Fatalf("history len = %d, want 3 (the system notice is chat-only)", len(history))
 	}
-	assertRoles(t, history, "user", "assistant", "tool", "assistant")
-	if history[3].Content != toolLimitResponse {
-		t.Fatalf("final assistant content = %q, want %q", history[3].Content, toolLimitResponse)
+	assertRoles(t, history, "user", "assistant", "tool")
+	for _, message := range history {
+		assert.NotEqual(t, toolLimitResponse, message.Content, "harness notice must not enter model history")
 	}
 	// Assert that the turn is marked failed — reaching the iteration ceiling
 	// without a final response is a genuine failure.
@@ -2549,7 +2435,7 @@ func TestAgentLoop_SuccessfulTurnDoesNotSetTurnFailed(t *testing.T) {
 	provider := &simpleMockProvider{response: "Hello from the model"}
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 
-	response, err := al.ProcessDirectWithChannel(context.Background(), "hi", "success-turn", "test", "chat1")
+	response, err := al.processDirectWithChannelPrimaryForTest(context.Background(), "hi", "success-turn", "test", "chat1")
 	if err != nil {
 		t.Fatalf("ProcessDirectWithChannel failed: %v", err)
 	}
@@ -2615,7 +2501,7 @@ func TestProcessDirectWithChannel_TriggersMCPInitialization(t *testing.T) {
 		t.Fatal("expected MCP manager to be nil before first direct processing")
 	}
 
-	_, err = al.ProcessDirectWithChannel(
+	_, err = al.processDirectWithChannelPrimaryForTest(
 		context.Background(),
 		"hello",
 		"session-1",
@@ -2630,265 +2516,6 @@ func TestProcessDirectWithChannel_TriggersMCPInitialization(t *testing.T) {
 	if al.mcp.hasManager() {
 		t.Fatal("expected MCP manager to be nil when no servers are configured")
 	}
-}
-
-func TestTargetReasoningChannelID_AllChannels(t *testing.T) {
-	tmpDirOuter, err := os.MkdirTemp("", "agent-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDirOuter)
-	// Nested one level below the freshly-made outer container so
-	// filepath.Dir(tmpDir) (what NewAgentLoop roots the shared
-	// session/task store at) is THIS test's own private tmpDirOuter,
-	// never the shared OS temp root — see loop_test.go's
-	// newTestAgentLoop doc comment for the leak this closes.
-	tmpDir := filepath.Join(tmpDirOuter, "home")
-	if err = os.MkdirAll(tmpDir, 0o700); err != nil {
-		t.Fatalf("Failed to create nested home dir: %v", err)
-	}
-
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Home:              tmpDir,
-				DefaultModel:      config.DefaultModel{Model: "test-model"},
-				MaxTokens:         4096,
-				MaxToolIterations: 10,
-			},
-			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
-		},
-	}
-
-	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
-	chManager, err := channels.NewManager(&config.Config{}, credentials.SecretBundle{}, bus.NewMessageBus(), nil)
-	if err != nil {
-		t.Fatalf("Failed to create channel manager: %v", err)
-	}
-	for name, id := range map[string]string{
-		"whatsapp": "rid-whatsapp",
-		"telegram": "rid-telegram",
-		"feishu":   "rid-feishu",
-		"discord":  "rid-discord",
-
-		"qq":          "rid-qq",
-		"dingtalk":    "rid-dingtalk",
-		"slack":       "rid-slack",
-		"line":        "rid-line",
-		"google-chat": "rid-google-chat",
-		"wecom":       "rid-wecom",
-	} {
-		chManager.RegisterChannel(name, &fakeChannel{id: id})
-	}
-	al.SetChannelManager(chManager)
-	tests := []struct {
-		channel string
-		wantID  string
-	}{
-		{channel: "whatsapp", wantID: "rid-whatsapp"},
-		{channel: "telegram", wantID: "rid-telegram"},
-		{channel: "feishu", wantID: "rid-feishu"},
-		{channel: "discord", wantID: "rid-discord"},
-
-		{channel: "qq", wantID: "rid-qq"},
-		{channel: "dingtalk", wantID: "rid-dingtalk"},
-		{channel: "slack", wantID: "rid-slack"},
-		{channel: "line", wantID: "rid-line"},
-		{channel: "google-chat", wantID: "rid-google-chat"},
-		{channel: "wecom", wantID: "rid-wecom"},
-		{channel: "unknown", wantID: ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.channel, func(t *testing.T) {
-			got := al.targetReasoningChannelID(tt.channel)
-			if got != tt.wantID {
-				t.Fatalf("targetReasoningChannelID(%q) = %q, want %q", tt.channel, got, tt.wantID)
-			}
-		})
-	}
-}
-
-func TestHandleReasoning(t *testing.T) {
-	newLoop := func(t *testing.T) (*AgentLoop, *bus.MessageBus) {
-		t.Helper()
-		tmpDirOuter, err := os.MkdirTemp("", "agent-test-*")
-		if err != nil {
-			t.Fatalf("Failed to create temp dir: %v", err)
-		}
-		t.Cleanup(func() { _ = os.RemoveAll(tmpDirOuter) })
-		// Nested one level below the freshly-made outer container so
-		// filepath.Dir(tmpDir) (what NewAgentLoop roots the shared
-		// session/task store at) is THIS test's own private tmpDirOuter,
-		// never the shared OS temp root — see loop_test.go's
-		// newTestAgentLoop doc comment for the leak this closes.
-		tmpDir := filepath.Join(tmpDirOuter, "home")
-		if err := os.MkdirAll(tmpDir, 0o700); err != nil {
-			t.Fatalf("Failed to create nested home dir: %v", err)
-		}
-		cfg := &config.Config{
-			Agents: config.AgentsConfig{
-				Defaults: config.AgentDefaults{
-					Home:              tmpDir,
-					DefaultModel:      config.DefaultModel{Model: "test-model"},
-					MaxTokens:         4096,
-					MaxToolIterations: 10,
-				},
-				List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
-			},
-		}
-		msgBus := bus.NewMessageBus()
-		return mustNewAgentLoop(t, cfg, msgBus, &mockProvider{}), msgBus
-	}
-
-	t.Run("skips when any required field is empty", func(t *testing.T) {
-		al, msgBus := newLoop(t)
-		al.handleReasoning(context.Background(), "reasoning", "telegram", "")
-
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		for {
-			select {
-			case msg, ok := <-msgBus.OutboundChan():
-				if !ok {
-					t.Fatalf("expected no outbound message, got %+v", msg)
-				}
-				if msg.Content == "reasoning" {
-					t.Fatalf("expected no message for empty chatID, got %+v", msg)
-				}
-				return
-			case <-ctx.Done():
-				t.Log("expected an outbound message, got none within timeout")
-				return
-			default:
-				// Continue to check for message
-				time.Sleep(5 * time.Millisecond) // Avoid busy loop
-			}
-		}
-	})
-
-	t.Run("publishes one message for non telegram", func(t *testing.T) {
-		al, msgBus := newLoop(t)
-		al.handleReasoning(context.Background(), "hello reasoning", "slack", "channel-1")
-
-		msg, ok := <-msgBus.OutboundChan()
-		if !ok {
-			t.Fatal("expected an outbound message")
-		}
-		if msg.Channel != "slack" || msg.ChatID != "channel-1" || msg.Content != "hello reasoning" {
-			t.Fatalf("unexpected outbound message: %+v", msg)
-		}
-	})
-
-	t.Run("publishes one message for telegram", func(t *testing.T) {
-		al, msgBus := newLoop(t)
-		reasoning := "hello telegram reasoning"
-		al.handleReasoning(context.Background(), reasoning, "telegram", "tg-chat")
-
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		for {
-			select {
-			case <-ctx.Done():
-				t.Fatal("expected an outbound message, got none within timeout")
-				return
-			case msg, ok := <-msgBus.OutboundChan():
-				if !ok {
-					t.Fatal("expected outbound message")
-				}
-
-				if msg.Channel != "telegram" {
-					t.Fatalf("expected telegram channel message, got %+v", msg)
-				}
-				if msg.ChatID != "tg-chat" {
-					t.Fatalf("expected chatID tg-chat, got %+v", msg)
-				}
-				if msg.Content != reasoning {
-					t.Fatalf("content mismatch: got %q want %q", msg.Content, reasoning)
-				}
-				return
-			}
-		}
-	})
-	t.Run("expired ctx", func(t *testing.T) {
-		al, msgBus := newLoop(t)
-		reasoning := "hello telegram reasoning"
-
-		al.handleReasoning(context.Background(), reasoning, "telegram", "tg-chat")
-
-		consumeCtx, consumeCancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer consumeCancel()
-
-		for {
-			select {
-			case msg, ok := <-msgBus.OutboundChan():
-				if !ok {
-					t.Fatalf("expected no outbound message, but received: %+v", msg)
-				}
-				t.Logf("Received unexpected outbound message: %+v", msg)
-				return
-			case <-consumeCtx.Done():
-				t.Fatalf("failed: no message received within timeout")
-				return
-			}
-		}
-	})
-
-	t.Run("returns promptly when bus is full", func(t *testing.T) {
-		al, msgBus := newLoop(t)
-
-		// Fill the outbound bus buffer until a publish would block.
-		// Use a short timeout to detect when the buffer is full,
-		// rather than hardcoding the buffer size.
-		for i := 0; ; i++ {
-			fillCtx, fillCancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-			err := msgBus.PublishOutbound(fillCtx, bus.OutboundMessage{
-				Channel: "filler",
-				ChatID:  "filler",
-				Content: fmt.Sprintf("filler-%d", i),
-			})
-			fillCancel()
-			if err != nil {
-				// Buffer is full (timed out trying to send).
-				break
-			}
-		}
-
-		// Use a short-deadline parent context to bound the test.
-		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-		defer cancel()
-
-		start := time.Now()
-		al.handleReasoning(ctx, "should timeout", "slack", "channel-full")
-		elapsed := time.Since(start)
-
-		// handleReasoning uses a 5s internal timeout, but the parent ctx
-		// expires in 500ms. It should return within ~500ms, not 5s.
-		if elapsed > 2*time.Second {
-			t.Fatalf("handleReasoning blocked too long (%v); expected prompt return", elapsed)
-		}
-
-		// Drain the bus and verify the reasoning message was NOT published
-		// (it should have been dropped due to timeout).
-		timeer := time.After(1 * time.Second)
-		for {
-			select {
-			case <-timeer:
-				t.Logf(
-					"no reasoning message received after draining bus for 1s, as expected,length=%d",
-					len(msgBus.OutboundChan()),
-				)
-				return
-			case msg, ok := <-msgBus.OutboundChan():
-				if !ok {
-					break
-				}
-				if msg.Content == "should timeout" {
-					t.Fatal("expected reasoning message to be dropped when bus is full, but it was published")
-				}
-			}
-		}
-	})
 }
 
 func TestProcessMessage_PublishesToolFeedbackWhenEnabled(t *testing.T) {
@@ -2922,7 +2549,7 @@ func TestProcessMessage_PublishesToolFeedbackWhenEnabled(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	provider := &toolFeedbackProvider{filePath: heartbeatFile}
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := al.GetRegistry().primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
@@ -2933,7 +2560,7 @@ func TestProcessMessage_PublishesToolFeedbackWhenEnabled(t *testing.T) {
 		Policies: map[string]config.ToolPolicy{"read_file": "allow"},
 	})
 
-	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
+	response, _, err := al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
 		Channel: "telegram",
 		Sender: bus.SenderInfo{
 			CanonicalID: "user-1",
@@ -2961,410 +2588,6 @@ func TestProcessMessage_PublishesToolFeedbackWhenEnabled(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("expected outbound tool feedback for regular messages")
-	}
-}
-
-func TestResolveMediaRefs_ResolvesToBase64(t *testing.T) {
-	store := media.NewFileMediaStore()
-	dir := t.TempDir()
-
-	// Real 1x1 RGB PNG bytes generated by Go's image/png encoder.
-	// The previous hand-rolled byte block was a malformed PNG that the
-	// normalizer (correctly) rejected as decode-failed; the real bytes
-	// below always decode to a 1x1 gray image.
-	pngPath := filepath.Join(dir, "test.png")
-	pngHeader := []byte{
-		0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-		0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
-		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-		0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
-		0xDE, 0x00, 0x00, 0x00, 0x10, 0x49, 0x44, 0x41,
-		0x54, 0x78, 0x9C, 0x62, 0x6A, 0x68, 0x68, 0x00,
-		0x04, 0x00, 0x00, 0xFF, 0xFF, 0x03, 0x0C, 0x01,
-		0x83, 0x71, 0x4B, 0xD2, 0x4E, 0x00, 0x00, 0x00,
-		0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60,
-		0x82,
-	}
-	if err := os.WriteFile(pngPath, pngHeader, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	ref, err := store.Store(pngPath, media.MediaMeta{}, "test")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	messages := []providers.Message{
-		{Role: "user", Content: "describe this", Media: []string{ref}},
-	}
-	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize, "")
-
-	if len(result[0].Media) != 1 {
-		t.Fatalf("expected 1 resolved media, got %d", len(result[0].Media))
-	}
-	if !strings.HasPrefix(result[0].Media[0], "data:image/png;base64,") {
-		t.Fatalf("expected data:image/png;base64, prefix, got %q", result[0].Media[0][:40])
-	}
-}
-
-func TestResolveMediaRefs_SkipsOversizedFile(t *testing.T) {
-	store := media.NewFileMediaStore()
-	dir := t.TempDir()
-
-	bigPath := filepath.Join(dir, "big.png")
-	// Write PNG header + padding to exceed limit
-	data := make([]byte, 1024+1) // 1KB + 1 byte
-	copy(data, []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A})
-	if err := os.WriteFile(bigPath, data, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	ref, _ := store.Store(bigPath, media.MediaMeta{}, "test")
-
-	messages := []providers.Message{
-		{Role: "user", Content: "hi", Media: []string{ref}},
-	}
-	// Use a tiny limit (1KB) so the file is oversized
-	result := resolveMediaRefs(messages, store, 1024, "")
-
-	if len(result[0].Media) != 0 {
-		t.Fatalf("expected 0 media (oversized), got %d", len(result[0].Media))
-	}
-}
-
-func TestResolveMediaRefs_TextFileInjectsContent(t *testing.T) {
-	store := media.NewFileMediaStore()
-	dir := t.TempDir()
-
-	txtPath := filepath.Join(dir, "readme.txt")
-	if err := os.WriteFile(txtPath, []byte("hello world"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	ref, _ := store.Store(txtPath, media.MediaMeta{Filename: "readme.txt", ContentType: "text/plain"}, "test")
-
-	messages := []providers.Message{
-		{Role: "user", Content: "hi", Media: []string{ref}},
-	}
-	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize, "")
-
-	if len(result[0].Media) != 0 {
-		t.Fatalf("expected 0 media entries, got %d", len(result[0].Media))
-	}
-	// Content should contain the extracted text wrapped in delimiters, not a path.
-	if strings.Contains(result[0].Content, txtPath) {
-		t.Fatalf("content must not contain local path, got %q", result[0].Content)
-	}
-	if !strings.Contains(result[0].Content, "hello world") {
-		t.Fatalf("expected extracted text in content, got %q", result[0].Content)
-	}
-	if !strings.Contains(result[0].Content, `[Attached file "readme.txt"]`) {
-		t.Fatalf("expected attachment delimiter in content, got %q", result[0].Content)
-	}
-}
-
-// TestResolveMediaRefs_PassesThroughNonMediaRefs_NilStore verifies that with a
-// nil store, messages are returned unchanged (including any non-media:// strings).
-// A nil store means the agent loop is not yet wired; in that case we cannot
-// resolve anything, so we return the message as-is rather than strip data.
-func TestResolveMediaRefs_PassesThroughNonMediaRefs_NilStore(t *testing.T) {
-	messages := []providers.Message{
-		{Role: "user", Content: "hi", Media: []string{"https://example.com/img.png"}},
-	}
-	result := resolveMediaRefs(messages, nil, config.DefaultMaxMediaSize, "")
-
-	// With nil store we return unchanged.
-	if len(result[0].Media) != 1 || result[0].Media[0] != "https://example.com/img.png" {
-		t.Fatalf("expected passthrough with nil store, got %v", result[0].Media)
-	}
-}
-
-// TestResolveMediaRefs_PassesThroughNonMediaRefs verifies that non-media:// strings
-// (pre-resolved data URLs, external URLs) are passed through unchanged. This allows
-// callers to pre-resolve URLs before calling resolveMediaRefs.
-func TestResolveMediaRefs_PassesThroughNonMediaRefs(t *testing.T) {
-	store := media.NewFileMediaStore()
-	messages := []providers.Message{
-		{Role: "user", Content: "hi", Media: []string{"https://example.com/img.png"}},
-	}
-	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize, "")
-
-	// Non-media:// strings are passed through when store is non-nil.
-	if len(result[0].Media) != 1 || result[0].Media[0] != "https://example.com/img.png" {
-		t.Fatalf("expected passthrough of non-media:// URL, got %v", result[0].Media)
-	}
-}
-
-func TestResolveMediaRefs_DoesNotMutateOriginal(t *testing.T) {
-	store := media.NewFileMediaStore()
-	dir := t.TempDir()
-	pngPath := filepath.Join(dir, "test.png")
-	// Real 1x1 RGB PNG bytes (Go image/png encoder output).
-	pngHeader := []byte{
-		0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-		0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
-		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-		0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
-		0xDE, 0x00, 0x00, 0x00, 0x10, 0x49, 0x44, 0x41,
-		0x54, 0x78, 0x9C, 0x62, 0x6A, 0x68, 0x68, 0x00,
-		0x04, 0x00, 0x00, 0xFF, 0xFF, 0x03, 0x0C, 0x01,
-		0x83, 0x71, 0x4B, 0xD2, 0x4E, 0x00, 0x00, 0x00,
-		0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60,
-		0x82,
-	}
-	os.WriteFile(pngPath, pngHeader, 0o644)
-	ref, _ := store.Store(pngPath, media.MediaMeta{}, "test")
-
-	original := []providers.Message{
-		{Role: "user", Content: "hi", Media: []string{ref}},
-	}
-	originalRef := original[0].Media[0]
-
-	resolveMediaRefs(original, store, config.DefaultMaxMediaSize, "")
-
-	if original[0].Media[0] != originalRef {
-		t.Fatal("resolveMediaRefs mutated original message slice")
-	}
-}
-
-func TestResolveMediaRefs_UsesMetaContentType(t *testing.T) {
-	store := media.NewFileMediaStore()
-	dir := t.TempDir()
-
-	// File with real 1x1 JPEG content stored with explicit content type.
-	// The previous 4-byte magic-only header was an invalid JPEG that the
-	// normalizer (correctly) rejected as decode-config-failed; the real
-	// bytes below come from Go's image/jpeg encoder.
-	jpegPath := filepath.Join(dir, "photo")
-	jpegHeader := real1x1JPEGBytes()
-	os.WriteFile(jpegPath, jpegHeader, 0o644)
-	ref, _ := store.Store(jpegPath, media.MediaMeta{ContentType: "image/jpeg"}, "test")
-
-	messages := []providers.Message{
-		{Role: "user", Content: "hi", Media: []string{ref}},
-	}
-	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize, "")
-
-	if len(result[0].Media) != 1 {
-		t.Fatalf("expected 1 media, got %d", len(result[0].Media))
-	}
-	// Note: per ADR-051 the normalizer ALWAYS emits PNG (the wire-stable
-	// shape across all providers) regardless of the meta content type
-	// or input format. The meta ContentType is used for the resolve-time
-	// capability check / extraction path, NOT for the wire prefix. The
-	// original assertion ("expected jpeg prefix") predates the
-	// normalizer and is now wrong by design — see
-	// TestEncodeImageToDataURL_NormalizesJPEGToPNG in
-	// loop_media_normalization_test.go for the canonical pipeline test.
-	if !strings.HasPrefix(result[0].Media[0], "data:image/png;base64,") {
-		t.Fatalf("expected png prefix (normalizer always emits PNG), got %q", result[0].Media[0][:30])
-	}
-}
-
-func TestResolveMediaRefs_PDFNonCapableModelInjectsContent(t *testing.T) {
-	store := media.NewFileMediaStore()
-	dir := t.TempDir()
-
-	pdfPath := filepath.Join(dir, "report.pdf")
-	// Invalid PDF — text extraction will fail gracefully.
-	os.WriteFile(pdfPath, []byte("%PDF-1.4 test content"), 0o644)
-	ref, _ := store.Store(pdfPath, media.MediaMeta{ContentType: "application/pdf", Filename: "report.pdf"}, "test")
-
-	messages := []providers.Message{
-		{Role: "user", Content: "check this", Media: []string{ref}},
-	}
-	// Use an empty model string — no model is PDF-capable.
-	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize, "")
-
-	if len(result[0].Media) != 0 {
-		t.Fatalf("expected 0 media (non-image), got %d", len(result[0].Media))
-	}
-	// Must NOT contain the local path.
-	if strings.Contains(result[0].Content, pdfPath) {
-		t.Fatalf("content must not contain local path, got %q", result[0].Content)
-	}
-	// Must contain the file name and either extracted text or a failure notice.
-	if !strings.Contains(result[0].Content, "report.pdf") {
-		t.Fatalf("expected filename in content, got %q", result[0].Content)
-	}
-}
-
-func TestResolveMediaRefs_PDFCapableModelGoesIntoMedia(t *testing.T) {
-	store := media.NewFileMediaStore()
-	dir := t.TempDir()
-
-	pdfPath := filepath.Join(dir, "report.pdf")
-	pdfData := []byte(
-		"%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n" +
-			"xref\n0 1\n0000000000 65535 f\n\ntrailer\n<< /Size 1 /Root 1 0 R >>\nstartxref\n9\n%%EOF",
-	)
-	os.WriteFile(pdfPath, pdfData, 0o644)
-	ref, _ := store.Store(pdfPath, media.MediaMeta{ContentType: "application/pdf", Filename: "report.pdf"}, "test")
-
-	messages := []providers.Message{
-		{Role: "user", Content: "check this", Media: []string{ref}},
-	}
-	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize, "claude-3.5-sonnet")
-
-	// PDF-capable model: PDF goes into Media as data URL, not Content.
-	if len(result[0].Media) != 1 {
-		t.Fatalf("expected 1 media entry for PDF-capable model, got %d", len(result[0].Media))
-	}
-	if !strings.HasPrefix(result[0].Media[0], "data:application/pdf;base64,") {
-		t.Fatalf("expected data:application/pdf;base64, prefix, got %q", result[0].Media[0][:40])
-	}
-	// Content should not have an attachment notice for the PDF.
-	if strings.Contains(result[0].Content, "report.pdf") {
-		t.Fatalf("expected no content injection for PDF on capable model, got %q", result[0].Content)
-	}
-}
-
-func TestResolveMediaRefs_AudioVideoInjectsFailureNotice(t *testing.T) {
-	tests := []struct {
-		name        string
-		filename    string
-		contentType string
-		content     []byte
-		userMsg     string
-	}{
-		{
-			name:        "audio/ogg",
-			filename:    "voice.ogg",
-			contentType: "audio/ogg",
-			content:     []byte("fake audio"),
-			userMsg:     "voice message",
-		},
-		{
-			name:        "video/mp4",
-			filename:    "clip.mp4",
-			contentType: "video/mp4",
-			content:     []byte("fake video"),
-			userMsg:     "watch this",
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			store := media.NewFileMediaStore()
-			dir := t.TempDir()
-			path := filepath.Join(dir, tc.filename)
-			os.WriteFile(path, tc.content, 0o644)
-			ref, _ := store.Store(path, media.MediaMeta{ContentType: tc.contentType, Filename: tc.filename}, "test")
-
-			msgs := []providers.Message{
-				{Role: "user", Content: tc.userMsg, Media: []string{ref}},
-			}
-			result := resolveMediaRefs(msgs, store, config.DefaultMaxMediaSize, "")
-
-			if len(result[0].Media) != 0 {
-				t.Fatalf("expected 0 media, got %d", len(result[0].Media))
-			}
-			// Must NOT contain the local file path.
-			if strings.Contains(result[0].Content, path) {
-				t.Fatalf("content must not contain local path, got %q", result[0].Content)
-			}
-			// Must contain the filename in the failure notice.
-			if !strings.Contains(result[0].Content, tc.filename) {
-				t.Fatalf("expected filename %q in notice, got %q", tc.filename, result[0].Content)
-			}
-			if !strings.Contains(result[0].Content, "could not be extracted") {
-				t.Fatalf("expected extraction failure notice, got %q", result[0].Content)
-			}
-		})
-	}
-}
-
-func TestResolveMediaRefs_CSVInjectsExtractedContent(t *testing.T) {
-	store := media.NewFileMediaStore()
-	dir := t.TempDir()
-
-	csvPath := filepath.Join(dir, "data.csv")
-	os.WriteFile(csvPath, []byte("a,b,c"), 0o644)
-	ref, _ := store.Store(csvPath, media.MediaMeta{ContentType: "text/csv", Filename: "data.csv"}, "test")
-
-	messages := []providers.Message{
-		{Role: "user", Content: "here is my data", Media: []string{ref}},
-	}
-	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize, "")
-
-	// Must NOT contain the local path.
-	if strings.Contains(result[0].Content, csvPath) {
-		t.Fatalf("content must not contain local path, got %q", result[0].Content)
-	}
-	// Must contain the extracted CSV content.
-	if !strings.Contains(result[0].Content, "a,b,c") {
-		t.Fatalf("expected extracted csv text in content, got %q", result[0].Content)
-	}
-	if !strings.Contains(result[0].Content, `[Attached file "data.csv"]`) {
-		t.Fatalf("expected attachment delimiter in content, got %q", result[0].Content)
-	}
-}
-
-func TestResolveMediaRefs_InvalidDocxInjectsFailureNotice(t *testing.T) {
-	store := media.NewFileMediaStore()
-	dir := t.TempDir()
-
-	docPath := filepath.Join(dir, "doc.docx")
-	os.WriteFile(docPath, []byte("fake docx"), 0o644)
-	docxMIME := "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-	ref, _ := store.Store(docPath, media.MediaMeta{ContentType: docxMIME, Filename: "doc.docx"}, "test")
-
-	messages := []providers.Message{
-		{Role: "user", Content: "", Media: []string{ref}},
-	}
-	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize, "")
-
-	// Must NOT contain the local path.
-	if strings.Contains(result[0].Content, docPath) {
-		t.Fatalf("content must not contain local path, got %q", result[0].Content)
-	}
-	// Must contain filename and failure notice since the file is not a valid zip/docx.
-	if !strings.Contains(result[0].Content, "doc.docx") {
-		t.Fatalf("expected filename in notice, got %q", result[0].Content)
-	}
-	if !strings.Contains(result[0].Content, "could not be extracted") {
-		t.Fatalf("expected extraction failure notice, got %q", result[0].Content)
-	}
-}
-
-func TestResolveMediaRefs_MixedImageAndFile(t *testing.T) {
-	store := media.NewFileMediaStore()
-	dir := t.TempDir()
-
-	pngPath := filepath.Join(dir, "photo.png")
-	// Real 1x1 RGB PNG bytes (Go image/png encoder output).
-	pngHeader := []byte{
-		0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-		0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
-		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-		0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
-		0xDE, 0x00, 0x00, 0x00, 0x10, 0x49, 0x44, 0x41,
-		0x54, 0x78, 0x9C, 0x62, 0x6A, 0x68, 0x68, 0x00,
-		0x04, 0x00, 0x00, 0xFF, 0xFF, 0x03, 0x0C, 0x01,
-		0x83, 0x71, 0x4B, 0xD2, 0x4E, 0x00, 0x00, 0x00,
-		0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60,
-		0x82,
-	}
-	os.WriteFile(pngPath, pngHeader, 0o644)
-	imgRef, _ := store.Store(pngPath, media.MediaMeta{}, "test")
-
-	pdfPath := filepath.Join(dir, "report.pdf")
-	os.WriteFile(pdfPath, []byte("%PDF-1.4 test"), 0o644)
-	fileRef, _ := store.Store(pdfPath, media.MediaMeta{ContentType: "application/pdf", Filename: "report.pdf"}, "test")
-
-	messages := []providers.Message{
-		{Role: "user", Content: "check these", Media: []string{imgRef, fileRef}},
-	}
-	result := resolveMediaRefs(messages, store, config.DefaultMaxMediaSize, "")
-
-	if len(result[0].Media) != 1 {
-		t.Fatalf("expected 1 media (image only), got %d", len(result[0].Media))
-	}
-	if !strings.HasPrefix(result[0].Media[0], "data:image/png;base64,") {
-		t.Fatal("expected image to be base64 encoded")
-	}
-	// PDF with invalid content → failure notice injected, no local path.
-	if strings.Contains(result[0].Content, pdfPath) {
-		t.Fatalf("content must not contain local path, got %q", result[0].Content)
-	}
-	if !strings.Contains(result[0].Content, "report.pdf") {
-		t.Fatalf("expected pdf filename in content, got %q", result[0].Content)
 	}
 }
 
@@ -3449,116 +2672,14 @@ func TestFilterClientWebSearch_EmptyInput(t *testing.T) {
 	}
 }
 
-type overflowProvider struct {
-	calls        int
-	lastMessages []providers.Message
-	chatFunc     func(ctx context.Context, messages []providers.Message, tools []providers.ToolDefinition, model string, opts map[string]any) (*providers.LLMResponse, error)
-}
-
-func (p *overflowProvider) Chat(
-	ctx context.Context,
-	messages []providers.Message,
-	tools []providers.ToolDefinition,
-	model string,
-	opts map[string]any,
-) (*providers.LLMResponse, error) {
-	p.calls++
-	p.lastMessages = append([]providers.Message(nil), messages...)
-
-	if p.chatFunc != nil {
-		return p.chatFunc(ctx, messages, tools, model, opts)
-	}
-
-	if p.calls == 1 {
-		return nil, errors.New("context_window_exceeded")
-	}
-
-	return &providers.LLMResponse{
-		Content: "Recovered from overflow",
-	}, nil
-}
-
-func (p *overflowProvider) GetDefaultModel() string {
-	return "test-model"
-}
-
 func TestProcessMessage_ContextOverflowRecovery(t *testing.T) {
-	al, cfg, _, _, cleanup := newTestAgentLoop(t)
-	defer cleanup()
-	_ = cfg
-
-	provider := &overflowProvider{}
-	al.registry = NewAgentRegistry(al.cfg, provider)
-
-	sessionKey := "agent:main:test-session"
-	agent := al.GetRegistry().GetDefaultAgent()
-
-	for i := 0; i < 5; i++ {
-		agent.Sessions.AddFullMessage(sessionKey, providers.Message{Role: "user", Content: "heavy message"})
-		agent.Sessions.AddFullMessage(sessionKey, providers.Message{Role: "assistant", Content: "response"})
-	}
-
-	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
-		Channel: "test",
-		ChatID:  "chat1",
-		Sender: bus.SenderInfo{
-			CanonicalID: "user1",
-		},
-		SessionKey: "test-session",
-		Content:    "trigger recovery",
-	})
-	if err != nil {
-		t.Fatalf("processMessage() error = %v", err)
-	}
-	if response != "Recovered from overflow" {
-		t.Fatalf("response = %q, want %q", response, "Recovered from overflow")
-	}
-
-	if provider.calls != 2 {
-		t.Fatalf("expected 2 calls, got %d", provider.calls)
-	}
+	runPlainHistoryEntryRecovery(t, false)
 }
 
 func TestProcessMessage_ContextOverflow_AnthropicStyle(t *testing.T) {
-	al, cfg, _, _, cleanup := newTestAgentLoop(t)
-	defer cleanup()
-	_ = cfg
-
-	provider := &overflowProvider{}
-	al.registry = NewAgentRegistry(al.cfg, provider)
-
-	recoveryMsg := "error: status 400: context_window_exceeded"
-
-	provider.chatFunc = func(
-		ctx context.Context,
-		messages []providers.Message,
-		tools []providers.ToolDefinition,
-		model string,
-		opts map[string]any,
-	) (*providers.LLMResponse, error) {
-		if provider.calls == 1 {
-			return nil, errors.New(recoveryMsg)
-		}
-		return &providers.LLMResponse{Content: "Anthropic recovery success"}, nil
-	}
-
-	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{
-		Channel: "test",
-		ChatID:  "chat1",
-		Sender: bus.SenderInfo{
-			CanonicalID: "user1",
-		},
-		Content: "hello",
-	})
-	if err != nil {
-		t.Fatalf("processMessage() error = %v", err)
-	}
-	if !strings.Contains(response, "Anthropic recovery success") {
-		t.Fatalf("response = %q, want success message", response)
-	}
-	if provider.calls != 2 {
-		t.Fatalf("expected 2 calls for retry, got %d", provider.calls)
-	}
+	// Ruling §3: fresh history has no legal relief; the error spelling
+	// must not grant an unchanged second attempt.
+	runPlainHistoryNoProgress(t, nil, errors.New("error: status 400: context_window_exceeded"))
 }
 
 // TestIsMessagingChannel verifies the unexported isMessagingChannel predicate

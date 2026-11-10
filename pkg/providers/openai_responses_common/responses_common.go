@@ -11,6 +11,7 @@ import (
 	"github.com/openai/openai-go/v3/responses"
 
 	"github.com/elicify-ai/omnipus/pkg/providers/common"
+	"github.com/elicify-ai/omnipus/pkg/providers/promptcache"
 	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 )
 
@@ -270,12 +271,29 @@ func parseResponse(apiResp *responses.Response) (*protocoltypes.LLMResponse, err
 	if apiResp.Status == "incomplete" && apiResp.IncompleteDetails.Reason == "max_output_tokens" {
 		truncationEvidenceReason = "length"
 	}
-	var usage *protocoltypes.UsageInfo
-	if apiResp.Usage.TotalTokens > 0 {
-		usage = &protocoltypes.UsageInfo{
-			PromptTokens:     int(apiResp.Usage.InputTokens),
-			CompletionTokens: int(apiResp.Usage.OutputTokens),
-			TotalTokens:      int(apiResp.Usage.TotalTokens),
+	// RawJSON retains Responses usage extensions such as cache_write_tokens.
+	// Constructed SDK structs in tests have no raw JSON; marshal their typed
+	// fields instead. Neither representation leaves the normalizer.
+	rawUsage := []byte(apiResp.Usage.RawJSON())
+	if len(rawUsage) == 0 && (apiResp.Usage.TotalTokens > 0 || apiResp.Usage.InputTokens > 0 || apiResp.Usage.OutputTokens > 0) {
+		var err error
+		rawUsage, err = json.Marshal(apiResp.Usage)
+		if err != nil {
+			return nil, err
+		}
+	}
+	usage, err := promptcache.ParseUsage("openai", rawUsage)
+	if err != nil {
+		return nil, err
+	}
+
+	// A response the API marked failed (the `response.failed` stream event) is
+	// not an answer, whatever partial output it carries (issue #1278 sweep).
+	if apiResp.Status == "failed" {
+		return nil, &common.StreamProviderError{
+			Code:    string(apiResp.Error.Code),
+			Message: apiResp.Error.Message,
+			Usage:   usage,
 		}
 	}
 
@@ -306,6 +324,24 @@ func parseResponse(apiResp *responses.Response) (*protocoltypes.LLMResponse, err
 			for _, s := range item.Summary {
 				reasoningContent.WriteString(s.Text)
 			}
+		}
+	}
+
+	// A response the provider cut off under its content policy is a
+	// refusal, not a token-cap cutoff (provider hotfix H5 review, silent-
+	// failure F3). Reported as "length" it would send any partial output it
+	// carries — including output recovered from streamed items — into the
+	// agent's truncation auto-continuation, asking the provider to keep
+	// writing what it just refused. It surfaces instead as the content-
+	// policy stream error every other provider refusal uses: non-retriable,
+	// never a fallback, and the curated content-policy message for the user.
+	// Checked after the output loop so a malformed tool call still reports
+	// as the tool-argument refusal it is (ADR-087).
+	if apiResp.Status == "incomplete" && apiResp.IncompleteDetails.Reason == "content_filter" {
+		return nil, &common.StreamProviderError{
+			Code:    "content_filter",
+			Message: "the provider stopped this response under its content policy",
+			Usage:   usage,
 		}
 	}
 

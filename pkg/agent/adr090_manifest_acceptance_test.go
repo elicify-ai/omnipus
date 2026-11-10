@@ -22,14 +22,16 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-// adr090RosterIDs is the current nine-role roster (ADR-090 spec table): four
-// core chat roles, three worker roles, two hidden System Agents. Ray, explorer
+// adr090RosterIDs is the current eight-role roster (ADR-090 spec table as
+// amended by omnipus-system-agent FR-001/FR-008): three core chat roles —
+// Omnipus replacing Ava and Admin — three worker roles, two hidden System
+// Agents. Ray, explorer
 // and max are retired and must not appear anywhere this file checks. Stated
 // from the spec, not read back from coreagent, so a roster regression fails
 // here rather than agreeing with itself.
 var adr090RosterIDs = []string{
-	string(coreagent.IDMia), string(coreagent.IDJim), string(coreagent.IDAva),
-	string(coreagent.IDAdmin), string(coreagent.IDPlanner), string(coreagent.IDResearcher),
+	string(coreagent.IDMia), string(coreagent.IDJim), string(coreagent.IDOmnipus),
+	string(coreagent.IDPlanner), string(coreagent.IDResearcher),
 	string(coreagent.IDWorker), string(coreagent.IDJudge), string(coreagent.IDPlanSupervisor),
 }
 
@@ -121,7 +123,7 @@ func adr090AssertContextsForRole(t *testing.T, al *AgentLoop, agentID string) {
 
 	normalNames := adr090DefNames(tools.ToolsToProviderDefs(stripInfraToolDefs(pf)))
 	ts := fakeTurnState(inst, "sess-adr090-ctx-"+agentID)
-	compressedNames := adr090DefNames(al.buildCompressedToolDefs(ts, pf))
+	compressedNames := adr090DefNames(mustBuildCompressedToolDefs(t, al, ts, pf))
 
 	for _, name := range upfront {
 		assert.Truef(t, normalNames[name],
@@ -257,7 +259,7 @@ func TestADR090_Acceptance_KnowledgeDeferredRequiresDiscovery(t *testing.T) {
 
 	sess := "sess-adr090-knowledge-deferred"
 	ts := fakeTurnState(jim, sess)
-	preNames := adr090DefNames(al.buildCompressedToolDefs(ts, pf))
+	preNames := adr090DefNames(mustBuildCompressedToolDefs(t, al, ts, pf))
 	note := al.buildToolManifestNote(ts, pf)
 	for _, name := range []string{"knowledge_read", "knowledge_edit"} {
 		assert.Falsef(t, preNames[name],
@@ -276,12 +278,12 @@ func TestADR090_Acceptance_KnowledgeDeferredRequiresDiscovery(t *testing.T) {
 	// Post-discovery, both appear in the SAME session's compressed defs —
 	// and a different session still sees neither (ADR-071 D3 §4.6: loaded
 	// tools are bucketed per (agent, session)).
-	postNames := adr090DefNames(al.buildCompressedToolDefs(ts, pf))
+	postNames := adr090DefNames(mustBuildCompressedToolDefs(t, al, ts, pf))
 	assert.True(t, postNames["knowledge_read"],
 		"knowledge_read must be callable in the compressed context after discovery")
 	assert.True(t, postNames["knowledge_edit"],
 		"knowledge_edit must be callable in the compressed context after discovery")
-	otherNames := adr090DefNames(al.buildCompressedToolDefs(fakeTurnState(jim, sess+"-other"), pf))
+	otherNames := adr090DefNames(mustBuildCompressedToolDefs(t, al, fakeTurnState(jim, sess+"-other"), pf))
 	assert.False(t, otherNames["knowledge_read"],
 		"a different session must not inherit the discovery")
 	assert.False(t, otherNames["knowledge_edit"],
@@ -323,23 +325,24 @@ func TestADR090_Acceptance_DeniedToolsUnreachableThroughDiscovery(t *testing.T) 
 	t.Run("judge denies a full-tier tool (bash)", func(t *testing.T) {
 		deniedThroughDiscovery(t, "judge", "bash")
 	})
-	t.Run("ava denies knowledge writes", func(t *testing.T) {
-		deniedThroughDiscovery(t, "ava", "knowledge_edit")
+	t.Run("omnipus denies knowledge writes", func(t *testing.T) {
+		deniedThroughDiscovery(t, "omnipus", "knowledge_edit")
 	})
 	t.Run("plansupervisor denies knowledge reads", func(t *testing.T) {
 		deniedThroughDiscovery(t, "plansupervisor", "knowledge_read")
 	})
 
-	// Founder delta (ADR-090 review, 2026-09-17): Admin knowledge reads Allow.
-	// The same door that rejects the denials above must accept this one.
-	t.Run("admin knowledge reads load cleanly", func(t *testing.T) {
-		admin, ok := al.registry.GetAgent("admin")
-		require.True(t, ok, "admin must be registered")
-		_, verdicts := tools.FilterToolsByPolicy(admin.Tools.GetAll(), admin.AgentType, admin.LoadToolPolicy())
+	// Spec §6.5: knowledge_read is in Omnipus's supporting set and rides the
+	// ceiling's allow. The same door that rejects the denials above must
+	// accept this one.
+	t.Run("omnipus knowledge reads load cleanly", func(t *testing.T) {
+		omnipus, ok := al.registry.GetAgent("omnipus")
+		require.True(t, ok, "omnipus must be registered")
+		_, verdicts := tools.FilterToolsByPolicy(omnipus.Tools.GetAll(), omnipus.AgentType, omnipus.LoadToolPolicy())
 		require.Equal(t, "allow", verdicts["knowledge_read"],
-			"precondition: admin knowledge reads must resolve allow (founder delta)")
-		res := adr090Load(t, al, "admin", "sess-adr090-admin-read", "knowledge_read")
+			"precondition: omnipus knowledge reads must resolve allow (§6.5 supporting set)")
+		res := adr090Load(t, al, "omnipus", "sess-adr090-omnipus-read", "knowledge_read")
 		assert.Falsef(t, res.IsError,
-			"loading admin's allowed knowledge_read must succeed: %s", res.ForLLM)
+			"loading omnipus's allowed knowledge_read must succeed: %s", res.ForLLM)
 	})
 }

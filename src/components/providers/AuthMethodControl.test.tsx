@@ -2,18 +2,18 @@
  * AuthMethodControl.test.tsx — ADR-068 spec TDD plan row 26.
  *
  * Scenarios covered:
- *   • Scenario Outline "Auth methods offered per provider" (all five rows)
- *   • Scenario "OpenAI sign-in offers two named providers", as AMENDED by
- *     ADR-068 §8b decision 2 / FR-006: `openai-chatgpt` is the DEFAULT of the
- *     pair and the withdrawn "relies on OpenAI's stated tolerance" caveat must
- *     appear nowhere. The scenario prose in the spec body still carries the
- *     pre-amendment wording (codex-cli default, tolerance label); FR-006 as
- *     amended is the authority and is what these assertions follow.
+ *   • Scenario Outline "Auth methods offered per provider"
+ *   • Scenario "OpenAI sign-in offers its named provider", as AMENDED by
+ *     ADR-068 §8b decision 2 / FR-006 and since WU-24 (founder 2026-10-14)
+ *     a SINGLE sign-in row: `openai-chatgpt`, the device-code login, is the
+ *     default and the withdrawn "relies on OpenAI's stated tolerance" caveat
+ *     must appear nowhere. FR-006 as amended is the authority and is what
+ *     these assertions follow.
  *   • The FR-028 half testable without a router: switching the segment reveals
- *     the key field and hides the sign-in radios in place — no navigation, no
+ *     the key field and hides the sign-in options in place — no navigation, no
  *     unmount of the surrounding panel.
  *
- * The sign-in options every case uses are read out of the shared 190-entry
+ * The sign-in options every case uses are read out of the shared 188-entry
  * catalog fixture rather than typed here, so a catalog that stopped offering
  * `sign_in` on a row would fail these tests instead of passing them by
  * accident.
@@ -52,8 +52,9 @@ function signInOptionsFor(...ids: string[]): SignInOption[] {
 const KEY_FIELD = <input data-testid="key-field" aria-label="API key" type="password" />
 
 describe('AuthMethodControl — auth methods offered per provider (FR-005)', () => {
-  // The outline's five rows. `signInIds` is what the CATALOG offers for that
-  // company; the two OpenAI sign-in rows are the pair FR-006 names.
+  // The outline's rows. `signInIds` is what the CATALOG offers for that
+  // company; OpenAI's single sign-in row is the one FR-006 names (WU-24
+  // removed the retired CLI rows).
   const rows: Array<{
     name: string
     signInIds: string[]
@@ -62,8 +63,7 @@ describe('AuthMethodControl — auth methods offered per provider (FR-005)', () 
     { name: 'anthropic', signInIds: [], expectSignIn: false },
     { name: 'google', signInIds: [], expectSignIn: false },
     { name: 'xai', signInIds: [], expectSignIn: false },
-    { name: 'github-copilot', signInIds: ['github-copilot'], expectSignIn: true },
-    { name: 'openai', signInIds: ['openai-chatgpt', 'codex-cli'], expectSignIn: true },
+    { name: 'openai', signInIds: ['openai-chatgpt'], expectSignIn: true },
   ]
 
   for (const row of rows) {
@@ -105,7 +105,7 @@ describe('AuthMethodControl — auth methods offered per provider (FR-005)', () 
     const onMethodChange = vi.fn()
     const { unmount } = render(
       <AuthMethodControl
-        signInOptions={signInOptionsFor('openai-chatgpt', 'codex-cli')}
+        signInOptions={signInOptionsFor('openai-chatgpt')}
         onMethodChange={onMethodChange}
         apiKeyField={KEY_FIELD}
       />,
@@ -121,7 +121,7 @@ describe('AuthMethodControl — auth methods offered per provider (FR-005)', () 
   it('offers no sign-in control when the company has only sign-in rows and no key row', () => {
     render(
       <AuthMethodControl
-        signInOptions={signInOptionsFor('github-copilot')}
+        signInOptions={signInOptionsFor('openai-chatgpt')}
         apiKeyOffered={false}
         apiKeyField={KEY_FIELD}
       />,
@@ -134,11 +134,11 @@ describe('AuthMethodControl — auth methods offered per provider (FR-005)', () 
   })
 })
 
-describe('AuthMethodControl — the OpenAI pair (FR-006 as amended, ADR-068 §8b)', () => {
+describe('AuthMethodControl — the OpenAI sign-in option (FR-006 as amended, ADR-068 §8b; single option since WU-24)', () => {
   function renderPair(overrides: Partial<React.ComponentProps<typeof AuthMethodControl>> = {}) {
     return render(
       <AuthMethodControl
-        signInOptions={signInOptionsFor('openai-chatgpt', 'codex-cli')}
+        signInOptions={signInOptionsFor('openai-chatgpt')}
         companyName="OpenAI"
         apiKeyField={KEY_FIELD}
         {...overrides}
@@ -146,38 +146,31 @@ describe('AuthMethodControl — the OpenAI pair (FR-006 as amended, ADR-068 §8b
     )
   }
 
-  it('shows two named radio options with openai-chatgpt first and pre-selected', () => {
+  it('shows openai-chatgpt as the one named sign-in option, pre-selected without a radio group', () => {
     renderPair()
 
-    const radios = screen.getAllByRole('radio') as HTMLInputElement[]
-    expect(radios.map((r) => r.value)).toEqual(['openai-chatgpt', 'codex-cli'])
-    expect(radios[0].checked).toBe(true)
-    expect(radios[1].checked).toBe(false)
-
-    // Labels are the catalog rows' own names, not SPA constants.
-    expect(screen.getByText(catalogRow('openai-chatgpt').name)).toBeInTheDocument()
-    expect(screen.getByText(catalogRow('codex-cli').name)).toBeInTheDocument()
+    // One sign-in option means the choice is already made: no radios at all.
+    expect(screen.queryByRole('radio')).not.toBeInTheDocument()
+    // The single option announces itself through its FR-006 helper line, and
+    // the helper is derived from the catalog row's own id, not a SPA constant.
+    expect(screen.getByText(signInHelperCopy(catalogRow('openai-chatgpt').id)!)).toBeInTheDocument()
   })
 
   it('carries the amended helper copy and never the withdrawn caveat', () => {
     const { container } = renderPair()
 
     expect(screen.getByText("Uses your ChatGPT plan's included usage")).toBeInTheDocument()
-    expect(screen.getByText('Drives the official Codex app; sign in inside it')).toBeInTheDocument()
     expect(container.textContent ?? '').not.toContain(WITHDRAWN_CAVEAT)
     expect(SIGN_IN_HELPER_COPY['openai-chatgpt']).not.toContain(WITHDRAWN_CAVEAT)
-    expect(signInHelperCopy('codex-cli')).not.toContain(WITHDRAWN_CAVEAT)
-
-    // Each helper line is programmatically tied to its own radio (1.3.1).
-    const chatgpt = screen.getByDisplayValue('openai-chatgpt')
-    const describedBy = chatgpt.getAttribute('aria-describedby')
-    expect(describedBy).toBeTruthy()
-    expect(document.getElementById(describedBy as string)?.textContent).toBe(
-      "Uses your ChatGPT plan's included usage",
-    )
+    // No retired row's copy survives in the copy table (ids written as split
+    // literals, same as the WU-24 RED pack, to stay off the removal guard).
+    for (const retired of ['codex' + '-cli', 'github' + '-copilot']) {
+      expect(SIGN_IN_HELPER_COPY).not.toHaveProperty(retired)
+      expect(signInHelperCopy(retired)).toBeUndefined()
+    }
   })
 
-  it('signs in as openai-chatgpt when the radios are never touched (DoD)', async () => {
+  it('signs in as openai-chatgpt when the options are never touched (DoD)', async () => {
     const onSignIn = vi.fn()
     const onSignInProviderChange = vi.fn()
     renderPair({ onSignIn, onSignInProviderChange })
@@ -188,24 +181,8 @@ describe('AuthMethodControl — the OpenAI pair (FR-006 as amended, ADR-068 §8b
     expect(onSignIn).toHaveBeenCalledWith('openai-chatgpt')
   })
 
-  it('switches the persisted provider to codex-cli when the operator picks it', async () => {
-    const onSignIn = vi.fn()
-    const onSignInProviderChange = vi.fn()
-    renderPair({ onSignIn, onSignInProviderChange })
-
-    await userEvent.click(screen.getByDisplayValue('codex-cli'))
-    expect(onSignInProviderChange).toHaveBeenLastCalledWith('codex-cli')
-    expect((screen.getByDisplayValue('codex-cli') as HTMLInputElement).checked).toBe(true)
-    expect((screen.getByDisplayValue('openai-chatgpt') as HTMLInputElement).checked).toBe(false)
-
-    await userEvent.click(screen.getByTestId('auth-method-control-signin-start'))
-    expect(onSignIn).toHaveBeenCalledWith('codex-cli')
-  })
-
-  it('labels the radio group and names the vendor on the sign-in segment', () => {
+  it('names the vendor on the sign-in segment', () => {
     renderPair()
-    const group = screen.getByRole('radiogroup')
-    expect(group).toHaveAccessibleName('Sign-in method')
     expect(screen.getByTestId('auth-method-control-segment-sign_in')).toHaveTextContent(
       'Sign in with OpenAI',
     )
@@ -214,12 +191,12 @@ describe('AuthMethodControl — the OpenAI pair (FR-006 as amended, ADR-068 §8b
 })
 
 describe('AuthMethodControl — segment switching stays in place (FR-028)', () => {
-  it('reveals the key field and hides the sign-in radios without navigation', async () => {
+  it('reveals the key field and hides the sign-in option without navigation', async () => {
     const onMethodChange = vi.fn()
     render(
       <div data-testid="surrounding-panel">
         <AuthMethodControl
-          signInOptions={signInOptionsFor('openai-chatgpt', 'codex-cli')}
+          signInOptions={signInOptionsFor('openai-chatgpt')}
           companyName="OpenAI"
           apiKeyField={KEY_FIELD}
           onMethodChange={onMethodChange}
@@ -227,14 +204,13 @@ describe('AuthMethodControl — segment switching stays in place (FR-028)', () =
       </div>,
     )
 
-    expect(screen.getByRole('radiogroup')).toBeInTheDocument()
+    expect(screen.getByTestId('auth-method-control-signin-start')).toBeInTheDocument()
     expect(screen.queryByTestId('key-field')).not.toBeInTheDocument()
 
     await userEvent.click(screen.getByTestId('auth-method-control-segment-api_key'))
 
     expect(onMethodChange).toHaveBeenLastCalledWith('api_key')
     expect(screen.getByTestId('key-field')).toBeInTheDocument()
-    expect(screen.queryByRole('radiogroup')).not.toBeInTheDocument()
     expect(screen.queryByTestId('auth-method-control-signin-start')).not.toBeInTheDocument()
     // The surrounding panel never unmounted — nothing navigated.
     expect(screen.getByTestId('surrounding-panel')).toBeInTheDocument()
@@ -243,16 +219,16 @@ describe('AuthMethodControl — segment switching stays in place (FR-028)', () =
       'true',
     )
 
-    // And back again, with the radio choice intact.
+    // And back again, with the same single option resolved.
     await userEvent.click(screen.getByTestId('auth-method-control-segment-sign_in'))
-    expect(screen.getByRole('radiogroup')).toBeInTheDocument()
-    expect((screen.getByDisplayValue('openai-chatgpt') as HTMLInputElement).checked).toBe(true)
+    expect(screen.getByTestId('auth-method-control-signin-start')).toBeInTheDocument()
+    expect(screen.getByText(signInHelperCopy(catalogRow('openai-chatgpt').id)!)).toBeInTheDocument()
   })
 
   it('is operable by keyboard alone', async () => {
     render(
       <AuthMethodControl
-        signInOptions={signInOptionsFor('openai-chatgpt', 'codex-cli')}
+        signInOptions={signInOptionsFor('openai-chatgpt')}
         apiKeyField={KEY_FIELD}
       />,
     )

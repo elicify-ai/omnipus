@@ -3,6 +3,8 @@
 package tools
 
 import (
+	"fmt"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -24,4 +26,20 @@ func installKernelTestBackend(t *testing.T, home string) {
 	}
 	require.NoError(t, backend.Apply(
 		sandbox.DefaultPolicyForModel(sandbox.FilesystemModelOpen, home, nil, nil, nil, nil)))
+}
+
+// hostKernelSandboxOracle answers "does this host really have a kernel
+// sandbox?" without touching pkg/sandbox: the Seatbelt backend wraps children
+// with /usr/bin/sandbox-exec, so an executable regular file there means the
+// host has one.
+func hostKernelSandboxOracle() (bool, string) {
+	const path = "/usr/bin/sandbox-exec"
+	fi, err := os.Stat(path)
+	if err != nil {
+		return false, fmt.Sprintf("%s: %v", path, err)
+	}
+	if !fi.Mode().IsRegular() || fi.Mode().Perm()&0o111 == 0 {
+		return false, fmt.Sprintf("%s is not an executable file (mode %v)", path, fi.Mode())
+	}
+	return true, path + " is present and executable"
 }

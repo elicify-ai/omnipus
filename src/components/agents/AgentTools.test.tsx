@@ -5,9 +5,10 @@
  *   - B-2 (#332 / US-D5): locked agent renders read-only editor, no write fires
  *   - B-1 (#331 / US-D4): system.* tools (category==='system') appear in the
  *     Advanced disclosure, NOT the primary category grid
- *   - D1 (#334): new agent in CreateAgentModal defaults to Balanced preset
  *
- * These tests use ToolsAndPermissions and CreateAgentModal with mocked API.
+ * These tests use ToolsAndPermissions with mocked API. (The D1 CreateAgentModal
+ * preset test was removed with the modal — omnipus-system-agent FR-108 retires
+ * the manual create form; WU-11.)
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -48,9 +49,10 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 })
 
 vi.mock('@/store/ui', () => ({
+  // WU-11 (omnipus-system-agent FR-108): the create-modal store keys are
+  // gone with the manual create form — the mock carries only the toast edge
+  // ToolsAndPermissions reads.
   useUiStore: () => ({
-    createAgentModalOpen: true,
-    closeCreateAgentModal: vi.fn(),
     addToast: vi.fn(),
   }),
 }))
@@ -135,8 +137,6 @@ describe('US-1: system.* tools appear in the flat category grid, not a separate 
         agentType="Main"
         tools={DEFAULT_TOOLS_CFG}
         onChange={() => {}}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />,
       { wrapper },
     )
@@ -164,8 +164,6 @@ describe('US-1: system.* tools appear in the flat category grid, not a separate 
         agentType="Main"
         tools={DEFAULT_TOOLS_CFG}
         onChange={() => {}}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />,
       { wrapper },
     )
@@ -198,8 +196,6 @@ describe('US-1: system.* tools appear in the flat category grid, not a separate 
         agentType="Main"
         tools={DEFAULT_TOOLS_CFG}
         onChange={() => {}}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />,
       { wrapper },
     )
@@ -224,8 +220,6 @@ describe('B-2: locked agent renders read-only, no write fires (#332)', () => {
         isLocked={true}
         tools={DEFAULT_TOOLS_CFG}
         onChange={() => {}}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />,
       { wrapper },
     )
@@ -243,8 +237,6 @@ describe('B-2: locked agent renders read-only, no write fires (#332)', () => {
         isLocked={false}
         tools={DEFAULT_TOOLS_CFG}
         onChange={() => {}}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />,
       { wrapper },
     )
@@ -266,8 +258,6 @@ describe('B-2: locked agent renders read-only, no write fires (#332)', () => {
         isLocked={true}
         tools={DEFAULT_TOOLS_CFG}
         onChange={() => {}}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />,
       { wrapper },
     )
@@ -288,8 +278,6 @@ describe('B-2: locked agent renders read-only, no write fires (#332)', () => {
         isLocked={true}
         tools={DEFAULT_TOOLS_CFG}
         onChange={() => {}}
-        autoApproveDisabled={false}
-        onAutoApproveDisabledChange={() => {}}
       />,
       { wrapper },
     )

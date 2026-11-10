@@ -1,6 +1,7 @@
 package whatsapp
 
 import (
+	"fmt"
 	"path/filepath"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
@@ -25,7 +26,15 @@ func init() {
 				// migration or upgrade path exists), so this is not a breaking change.
 				storePath = filepath.Join(cfg.AgentHomeBasePath(), "whatsapp", instanceID)
 			}
-			return NewWhatsAppNativeChannel(waCfg, b, storePath)
+			ch, err := NewWhatsAppNativeChannel(waCfg, b, storePath)
+			if err == nil {
+				native, ok := ch.(*WhatsAppNativeChannel)
+				if !ok {
+					return nil, fmt.Errorf("whatsapp native factory: expected *WhatsAppNativeChannel, got %T", ch)
+				}
+				native.originConfig = cfg
+			}
+			return ch, err
 		},
 	)
 }

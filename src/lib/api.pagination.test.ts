@@ -29,6 +29,7 @@ function restoreCookie() {
 function wireSession(id: string, overrides: Record<string, unknown> = {}) {
   return {
     id,
+    type: 'chat',
     agent_id: 'agent-1',
     title: `Session ${id}`,
     status: 'active',

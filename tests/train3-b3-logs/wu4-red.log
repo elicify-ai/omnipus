@@ -1,0 +1,977 @@
+Warning: Route file "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/t3-ci-f/src/routes/authValidation.ts" does not export a Route. This file will not be included in the route tree.
+
+If this file is not intended to be a route, you can exclude it using one of these options:
+  1. Rename the file to "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/t3-ci-f/src/routes/-authValidation.ts" (prefix with "-")
+  2. Use 'routeFileIgnorePattern' in your config to match this file
+
+Current configuration:
+  routeFileIgnorePrefix: "-"
+  routeFileIgnorePattern: undefined
+Warning: Route file "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/t3-ci-f/src/routes/authValidation.test.ts" does not export a Route. This file will not be included in the route tree.
+
+If this file is not intended to be a route, you can exclude it using one of these options:
+  1. Rename the file to "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/t3-ci-f/src/routes/-authValidation.test.ts" (prefix with "-")
+  2. Use 'routeFileIgnorePattern' in your config to match this file
+
+Current configuration:
+  routeFileIgnorePrefix: "-"
+  routeFileIgnorePattern: undefined
+
+ RUN  v4.1.11 /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/t3-ci-f
+
+stderr | src/components/layout/AppShell.wu4.test.tsx > WU-4 — release modal origin from live > K7 / FR-251: displays the exact server origin "for group Sales" without navigation or an implicit decision
+[ws] Web Worker construction failed — WS frame parsing will run inline on the main thread; this is a performance regression under burst input ReferenceError: Worker is not defined
+    at WsConnection._startWorker (/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/t3-ci-f/src/lib/ws.ts:532:26)
+    at WsConnection.connect (/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/t3-ci-f/src/lib/ws.ts:482:10)
+    at /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/t3-ci-f/src/components/chat/OmnipusRuntimeProvider.tsx:261:10
+    at Object.react_stack_bottom_frame (/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/t3-ci-f/node_modules/react-dom/cjs/react-dom-client.development.js:25989:20)
+    at runWithFiberInDEV (/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/t3-ci-f/node_modules/react-dom/cjs/react-dom-client.development.js:874:13)
+    at commitHookEffectListMount (/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/t3-ci-f/node_modules/react-dom/cjs/react-dom-client.development.js:13249:29)
+    at commitHookPassiveMountEffects (/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/t3-ci-f/node_modules/react-dom/cjs/react-dom-client.development.js:13336:11)
+    at reconnectPassiveEffects (/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/t3-ci-f/node_modules/react-dom/cjs/react-dom-client.development.js:15832:11)
+    at recursivelyTraverseReconnectPassiveEffects (/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/t3-ci-f/node_modules/react-dom/cjs/react-dom-client.development.js:15784:9)
+    at reconnectPassiveEffects (/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/t3-ci-f/node_modules/react-dom/cjs/react-dom-client.development.js:15885:11)
+
+stderr | src/components/layout/AppShell.wu4.test.tsx > WU-4 — release modal origin from live > K7 / FR-251: displays the exact server origin "for group Sales" without navigation or an implicit decision
+[api] GET /api/v1/skills: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+stderr | src/components/layout/AppShell.wu4.test.tsx > WU-4 — release modal origin from live > K7 / FR-251: displays the exact server origin "while answering Anna on Telegram" without navigation or an implicit decision
+[api] GET /api/v1/skills: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+stderr | src/components/layout/AppShell.wu4.test.tsx > WU-4 — release modal origin from live > K7 / FR-251: displays the exact server origin "asked by Jim" without navigation or an implicit decision
+[api] GET /api/v1/skills: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+stderr | src/components/layout/AppShell.wu4.test.tsx > WU-4 — release modal origin from live > K7: omitted origin renders no empty label or guessed origin
+[api] GET /api/v1/skills: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+stderr | src/components/layout/AppShell.wu4.test.tsx > WU-4 — release modal origin from session_state > K7 / FR-251: displays the exact server origin "for group Sales" without navigation or an implicit decision
+[api] GET /api/v1/skills: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+stderr | src/components/layout/AppShell.wu4.test.tsx > WU-4 — release modal origin from session_state > K7 / FR-251: displays the exact server origin "while answering Anna on Telegram" without navigation or an implicit decision
+[api] GET /api/v1/skills: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+stderr | src/components/layout/AppShell.wu4.test.tsx > WU-4 — release modal origin from session_state > K7 / FR-251: displays the exact server origin "asked by Jim" without navigation or an implicit decision
+[api] GET /api/v1/skills: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+stderr | src/components/layout/AppShell.wu4.test.tsx > WU-4 — release modal origin from session_state > K7: omitted origin renders no empty label or guessed origin
+[api] GET /api/v1/skills: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+stderr | src/components/layout/AppShell.wu4.test.tsx > K7: an incomplete reconnect approval keeps its supplied origin and still offers Deny only
+[api] GET /api/v1/skills: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+stderr | src/components/layout/AppShell.wu4.test.tsx > K7: origin text is literal text, never executable markup
+[api] GET /api/v1/skills: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+ ❯ src/components/layout/AppShell.wu4.test.tsx (25 tests | 10 failed) 106991ms
+     × K7 / FR-251: displays the exact server origin "for group Sales" without navigation or an implicit decision 18191ms
+     × K7 / FR-251: displays the exact server origin "while answering Anna on Telegram" without navigation or an implicit decision 9544ms
+     × K7 / FR-251: displays the exact server origin "asked by Jim" without navigation or an implicit decision 8008ms
+     × K7: omitted origin renders no empty label or guessed origin 7470ms
+     × K7 / FR-251: displays the exact server origin "for group Sales" without navigation or an implicit decision 6875ms
+     × K7 / FR-251: displays the exact server origin "while answering Anna on Telegram" without navigation or an implicit decision 7034ms
+     × K7 / FR-251: displays the exact server origin "asked by Jim" without navigation or an implicit decision 7113ms
+     × K7: omitted origin renders no empty label or guessed origin 8136ms
+   × K7: an incomplete reconnect approval keeps its supplied origin and still offers Deny only 2229ms
+   × K7: origin text is literal text, never executable markup 8572ms
+
+⎯⎯⎯⎯⎯⎯ Failed Tests 10 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/components/layout/AppShell.wu4.test.tsx > WU-4 — release modal origin from live > K7 / FR-251: displays the exact server origin "for group Sales" without navigation or an implicit decision
+TestingLibraryElementError: Unable to find role="dialog" and name "Tool Approval Required"
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"fixed inset-x-0 flex overflow-hidden bg-[var(--color-primary)]"[39m
+      [33mdata-app-shell[39m=[32m"true"[39m
+      [33mstyle[39m=[32m"top: var(--app-top, 0px); height: var(--app-vh, 100dvh);"[39m
+    [36m>[39m
+      [36m<a[39m
+        [33mclass[39m=[32m"sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:px-[var(--space-2-5)] focus:py-[var(--space-2)] focus:rounded-md focus:bg-[var(--color-surface-2)] focus:text-[var(--color-secondary)] focus:text-[length:var(--type-body-compact-size)]"[39m
+        [33mhref[39m=[32m"#main-content"[39m
+        [33mtabindex[39m=[32m"1"[39m
+      [36m>[39m
+        [0mSkip to content[0m
+      [36m</a>[39m
+      [36m<aside[39m
+        [33mclass[39m=[32m"flex flex-col h-full flex-shrink-0 bg-[var(--color-surface-0)] border-r border-[var(--color-border)]"[39m
+        [33mstyle[39m=[32m"width: var(--spacing-sidebar);"[39m
+      [36m>[39m
+        [36m<nav[39m
+          [33maria-label[39m=[32m"Main navigation"[39m
+          [33mclass[39m=[32m"flex h-full flex-col"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-center gap-[var(--space-2)] px-[var(--space-3)] h-chrome-header min-h-chrome-header shrink-0"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"font-headline font-bold lowercase text-[var(--color-secondary)] text-base"[39m
+            [36m>[39m
+              [0momnipus[0m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-[var(--color-accent)]"[39m
+              [36m>[39m
+                [0m.ai[0m
+              [36m</span>[39m
+            [36m</span>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Search sessions"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto ml-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Search sessions"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M229.66,218.34l-50.07-50.06a88.11,88.11,0,1,0-11.31,11.31l50.06,50.07a8,8,0,0,0,11.32-11.32ZM40,112a72,72,0,1,1,72,72A72.08,72.08,0,0,1,40,112Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Unpin sidebar"[39m
+              [33maria-pressed[39m=[32m"true"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Unpin sidebar"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M224,176a8,8,0,0,1-8,8H136v56a8,8,0,0,1-16,0V184H40a8,8,0,0,1,0-16h9.29L70.46,48H64a8,8,0,0,1,0-16H192a8,8,0,0,1,0,16h-6.46l21.17,120H216A8,8,0,0,1,224,176Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+          [36m</div>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex-1 overflow-y-auto overscroll-contain py-[var(--space-2-5)]"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33maria-label[39m=[32m"Omnipus"[39m
+              [33mclass[39m=[32m"px-[var(--space-2)] pb-[var(--space-1)]"[39m
+              [33mrole[39m=[32m"group"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"sidebar-agent-row flex items-center rounded-[var(--radius-medium)] hover:bg-[var(--color-surface-2)]"[39m
+                [33mdata-selected[39m=[32m"false"[39m
+              [36m>[39m
+                [36m<button[39m
+                  [33maria-label[39m=[32m"Omnipus"[39m
+                  [33mclass[39m=[32m"relative inline-flex items-center whitespace-nowrap rounded-md transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto min-w-0 flex-1 justify-start gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent hover:text-[var(--color-secondary)] pointer-coarse:min-h-[var(--target-touch-minimum)] font-[var(--font-weight-regular)]"[39m
+                  [33mdata-action-state[39m=[32m"idle"[39m
+                  [33mdata-ds-action[39m=[32m""[39m
+                  [33mdata-testid[39m=[32m"sidebar-omnipus-entry"[39m
+                  [33mtabindex[39m=[32m"0"[39m
+                  [33mtype[39m=[32m"b...
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"fixed inset-x-0 flex overflow-hidden bg-[var(--color-primary)]"[39m
+      [33mdata-app-shell[39m=[32m"true"[39m
+      [33mstyle[39m=[32m"top: var(--app-top, 0px); height: var(--app-vh, 100dvh);"[39m
+    [36m>[39m
+      [36m<a[39m
+        [33mclass[39m=[32m"sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:px-[var(--space-2-5)] focus:py-[var(--space-2)] focus:rounded-md focus:bg-[var(--color-surface-2)] focus:text-[var(--color-secondary)] focus:text-[length:var(--type-body-compact-size)]"[39m
+        [33mhref[39m=[32m"#main-content"[39m
+        [33mtabindex[39m=[32m"1"[39m
+      [36m>[39m
+        [0mSkip to content[0m
+      [36m</a>[39m
+      [36m<aside[39m
+        [33mclass[39m=[32m"flex flex-col h-full flex-shrink-0 bg-[var(--color-surface-0)] border-r border-[var(--color-border)]"[39m
+        [33mstyle[39m=[32m"width: var(--spacing-sidebar);"[39m
+      [36m>[39m
+        [36m<nav[39m
+          [33maria-label[39m=[32m"Main navigation"[39m
+          [33mclass[39m=[32m"flex h-full flex-col"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-center gap-[var(--space-2)] px-[var(--space-3)] h-chrome-header min-h-chrome-header shrink-0"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"font-headline font-bold lowercase text-[var(--color-secondary)] text-base"[39m
+            [36m>[39m
+              [0momnipus[0m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-[var(--color-accent)]"[39m
+              [36m>[39m
+                [0m.ai[0m
+              [36m</span>[39m
+            [36m</span>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Search sessions"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto ml-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Search sessions"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M229.66,218.34l-50.07-50.06a88.11,88.11,0,1,0-11.31,11.31l50.06,50.07a8,8,0,0,0,11.32-11.32ZM40,112a72,72,0,1,1,72,72A72.08,72.08,0,0,1,40,112Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Unpin sidebar"[39m
+              [33maria-pressed[39m=[32m"true"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Unpin sidebar"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M224,176a8,8,0,0,1-8,8H136v56a8,8,0,0,1-16,0V184H40a8,8,0,0,1,0-16h9.29L70.46,48H64a8,8,0,0,1,0-16H192a8,8,0,0,1,0,16h-6.46l21.17,120H216A8,8,0,0,1,224,176Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+          [36m</div>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex-1 overflow-y-auto overscroll-contain py-[var(--space-2-5)]"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33maria-label[39m=[32m"Omnipus"[39m
+              [33mclass[39m=[32m"px-[var(--space-2)] pb-[var(--space-1)]"[39m
+              [33mrole[39m=[32m"group"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"sidebar-agent-row flex items-center rounded-[var(--radius-medium)] hover:bg-[var(--color-surface-2)]"[39m
+                [33mdata-selected[39m=[32m"false"[39m
+              [36m>[39m
+                [36m<button[39m
+                  [33maria-label[39m=[32m"Omnipus"[39m
+                  [33mclass[39m=[32m"relative inline-flex items-center whitespace-nowrap rounded-md transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto min-w-0 flex-1 justify-start gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent hover:text-[var(--color-secondary)] pointer-coarse:min-h-[var(--target-touch-minimum)] font-[var(--font-weight-regular)]"[39m
+                  [33mdata-action-state[39m=[32m"idle"[39m
+                  [33mdata-ds-action[39m=[32m""[39m
+                  [33mdata-testid[39m=[32m"sidebar-omnipus-entry"[39m
+                  [33mtabindex[39m=[32m"0"[39m
+                  [33mtype[39m=[32m"b...
+ ❯ waitForWrapper node_modules/@testing-library/dom/dist/wait-for.js:163:27
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:86:33
+ ❯ emitApprovalOrigin src/components/layout/AppShell.wu4.test.tsx:99:23
+     97|   await emitFromGateway(socket, approvalOriginFrame(carrier, origin, s…
+     98|   await waitFor(() => expect(useToolApprovalStore.getState().queue.map…
+     99|   return await screen.findByRole('dialog', { name: stub ? 'Approval De…
+       |                       ^
+    100| }
+    101|
+ ❯ src/components/layout/AppShell.wu4.test.tsx:107:21
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/10]⎯
+
+ FAIL  src/components/layout/AppShell.wu4.test.tsx > WU-4 — release modal origin from live > K7 / FR-251: displays the exact server origin "while answering Anna on Telegram" without navigation or an implicit decision
+ FAIL  src/components/layout/AppShell.wu4.test.tsx > WU-4 — release modal origin from live > K7 / FR-251: displays the exact server origin "asked by Jim" without navigation or an implicit decision
+ FAIL  src/components/layout/AppShell.wu4.test.tsx > WU-4 — release modal origin from session_state > K7 / FR-251: displays the exact server origin "for group Sales" without navigation or an implicit decision
+ FAIL  src/components/layout/AppShell.wu4.test.tsx > WU-4 — release modal origin from session_state > K7 / FR-251: displays the exact server origin "while answering Anna on Telegram" without navigation or an implicit decision
+ FAIL  src/components/layout/AppShell.wu4.test.tsx > WU-4 — release modal origin from session_state > K7 / FR-251: displays the exact server origin "asked by Jim" without navigation or an implicit decision
+TestingLibraryElementError: Unable to find role="dialog" and name "Tool Approval Required"
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"fixed inset-x-0 flex overflow-hidden bg-[var(--color-primary)]"[39m
+      [33mdata-app-shell[39m=[32m"true"[39m
+      [33mstyle[39m=[32m"top: var(--app-top, 0px); height: var(--app-vh, 100dvh);"[39m
+    [36m>[39m
+      [36m<a[39m
+        [33mclass[39m=[32m"sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:px-[var(--space-2-5)] focus:py-[var(--space-2)] focus:rounded-md focus:bg-[var(--color-surface-2)] focus:text-[var(--color-secondary)] focus:text-[length:var(--type-body-compact-size)]"[39m
+        [33mhref[39m=[32m"#main-content"[39m
+        [33mtabindex[39m=[32m"1"[39m
+      [36m>[39m
+        [0mSkip to content[0m
+      [36m</a>[39m
+      [36m<aside[39m
+        [33mclass[39m=[32m"flex flex-col h-full flex-shrink-0 bg-[var(--color-surface-0)] border-r border-[var(--color-border)]"[39m
+        [33mstyle[39m=[32m"width: var(--spacing-sidebar);"[39m
+      [36m>[39m
+        [36m<nav[39m
+          [33maria-label[39m=[32m"Main navigation"[39m
+          [33mclass[39m=[32m"flex h-full flex-col"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-center gap-[var(--space-2)] px-[var(--space-3)] h-chrome-header min-h-chrome-header shrink-0"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"font-headline font-bold lowercase text-[var(--color-secondary)] text-base"[39m
+            [36m>[39m
+              [0momnipus[0m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-[var(--color-accent)]"[39m
+              [36m>[39m
+                [0m.ai[0m
+              [36m</span>[39m
+            [36m</span>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Search sessions"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto ml-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Search sessions"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M229.66,218.34l-50.07-50.06a88.11,88.11,0,1,0-11.31,11.31l50.06,50.07a8,8,0,0,0,11.32-11.32ZM40,112a72,72,0,1,1,72,72A72.08,72.08,0,0,1,40,112Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Unpin sidebar"[39m
+              [33maria-pressed[39m=[32m"true"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Unpin sidebar"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M224,176a8,8,0,0,1-8,8H136v56a8,8,0,0,1-16,0V184H40a8,8,0,0,1,0-16h9.29L70.46,48H64a8,8,0,0,1,0-16H192a8,8,0,0,1,0,16h-6.46l21.17,120H216A8,8,0,0,1,224,176Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+          [36m</div>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex-1 overflow-y-auto overscroll-contain py-[var(--space-2-5)]"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33maria-label[39m=[32m"Omnipus"[39m
+              [33mclass[39m=[32m"px-[var(--space-2)] pb-[var(--space-1)]"[39m
+              [33mrole[39m=[32m"group"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"sidebar-agent-row flex items-center rounded-[var(--radius-medium)] hover:bg-[var(--color-surface-2)]"[39m
+                [33mdata-selected[39m=[32m"false"[39m
+              [36m>[39m
+                [36m<button[39m
+                  [33maria-label[39m=[32m"Omnipus"[39m
+                  [33mclass[39m=[32m"relative inline-flex items-center whitespace-nowrap rounded-md transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto min-w-0 flex-1 justify-start gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent hover:text-[var(--color-secondary)] pointer-coarse:min-h-[var(--target-touch-minimum)] font-[var(--font-weight-regular)]"[39m
+                  [33mdata-action-state[39m=[32m"idle"[39m
+                  [33mdata-ds-action[39m=[32m""[39m
+                  [33mdata-testid[39m=[32m"sidebar-omnipus-entry"[39m
+                  [33mtabindex[39m=[32m"0"[39m
+                  [33mtype[39m=[32m"b...
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"fixed inset-x-0 flex overflow-hidden bg-[var(--color-primary)]"[39m
+      [33mdata-app-shell[39m=[32m"true"[39m
+      [33mstyle[39m=[32m"top: var(--app-top, 0px); height: var(--app-vh, 100dvh);"[39m
+    [36m>[39m
+      [36m<a[39m
+        [33mclass[39m=[32m"sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:px-[var(--space-2-5)] focus:py-[var(--space-2)] focus:rounded-md focus:bg-[var(--color-surface-2)] focus:text-[var(--color-secondary)] focus:text-[length:var(--type-body-compact-size)]"[39m
+        [33mhref[39m=[32m"#main-content"[39m
+        [33mtabindex[39m=[32m"1"[39m
+      [36m>[39m
+        [0mSkip to content[0m
+      [36m</a>[39m
+      [36m<aside[39m
+        [33mclass[39m=[32m"flex flex-col h-full flex-shrink-0 bg-[var(--color-surface-0)] border-r border-[var(--color-border)]"[39m
+        [33mstyle[39m=[32m"width: var(--spacing-sidebar);"[39m
+      [36m>[39m
+        [36m<nav[39m
+          [33maria-label[39m=[32m"Main navigation"[39m
+          [33mclass[39m=[32m"flex h-full flex-col"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-center gap-[var(--space-2)] px-[var(--space-3)] h-chrome-header min-h-chrome-header shrink-0"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"font-headline font-bold lowercase text-[var(--color-secondary)] text-base"[39m
+            [36m>[39m
+              [0momnipus[0m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-[var(--color-accent)]"[39m
+              [36m>[39m
+                [0m.ai[0m
+              [36m</span>[39m
+            [36m</span>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Search sessions"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto ml-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Search sessions"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M229.66,218.34l-50.07-50.06a88.11,88.11,0,1,0-11.31,11.31l50.06,50.07a8,8,0,0,0,11.32-11.32ZM40,112a72,72,0,1,1,72,72A72.08,72.08,0,0,1,40,112Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Unpin sidebar"[39m
+              [33maria-pressed[39m=[32m"true"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Unpin sidebar"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M224,176a8,8,0,0,1-8,8H136v56a8,8,0,0,1-16,0V184H40a8,8,0,0,1,0-16h9.29L70.46,48H64a8,8,0,0,1,0-16H192a8,8,0,0,1,0,16h-6.46l21.17,120H216A8,8,0,0,1,224,176Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+          [36m</div>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex-1 overflow-y-auto overscroll-contain py-[var(--space-2-5)]"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33maria-label[39m=[32m"Omnipus"[39m
+              [33mclass[39m=[32m"px-[var(--space-2)] pb-[var(--space-1)]"[39m
+              [33mrole[39m=[32m"group"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"sidebar-agent-row flex items-center rounded-[var(--radius-medium)] hover:bg-[var(--color-surface-2)]"[39m
+                [33mdata-selected[39m=[32m"false"[39m
+              [36m>[39m
+                [36m<button[39m
+                  [33maria-label[39m=[32m"Omnipus"[39m
+                  [33mclass[39m=[32m"relative inline-flex items-center whitespace-nowrap rounded-md transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto min-w-0 flex-1 justify-start gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent hover:text-[var(--color-secondary)] pointer-coarse:min-h-[var(--target-touch-minimum)] font-[var(--font-weight-regular)]"[39m
+                  [33mdata-action-state[39m=[32m"idle"[39m
+                  [33mdata-ds-action[39m=[32m""[39m
+                  [33mdata-testid[39m=[32m"sidebar-omnipus-entry"[39m
+                  [33mtabindex[39m=[32m"0"[39m
+                  [33mtype[39m=[32m"b...
+ ❯ waitForWrapper node_modules/@testing-library/dom/dist/wait-for.js:163:27
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:86:33
+ ❯ emitApprovalOrigin src/components/layout/AppShell.wu4.test.tsx:99:23
+     97|   await emitFromGateway(socket, approvalOriginFrame(carrier, origin, s…
+     98|   await waitFor(() => expect(useToolApprovalStore.getState().queue.map…
+     99|   return await screen.findByRole('dialog', { name: stub ? 'Approval De…
+       |                       ^
+    100| }
+    101|
+ ❯ src/components/layout/AppShell.wu4.test.tsx:107:21
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/10]⎯
+
+ FAIL  src/components/layout/AppShell.wu4.test.tsx > WU-4 — release modal origin from live > K7: omitted origin renders no empty label or guessed origin
+ FAIL  src/components/layout/AppShell.wu4.test.tsx > WU-4 — release modal origin from session_state > K7: omitted origin renders no empty label or guessed origin
+TestingLibraryElementError: Unable to find role="dialog" and name "Tool Approval Required"
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"fixed inset-x-0 flex overflow-hidden bg-[var(--color-primary)]"[39m
+      [33mdata-app-shell[39m=[32m"true"[39m
+      [33mstyle[39m=[32m"top: var(--app-top, 0px); height: var(--app-vh, 100dvh);"[39m
+    [36m>[39m
+      [36m<a[39m
+        [33mclass[39m=[32m"sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:px-[var(--space-2-5)] focus:py-[var(--space-2)] focus:rounded-md focus:bg-[var(--color-surface-2)] focus:text-[var(--color-secondary)] focus:text-[length:var(--type-body-compact-size)]"[39m
+        [33mhref[39m=[32m"#main-content"[39m
+        [33mtabindex[39m=[32m"1"[39m
+      [36m>[39m
+        [0mSkip to content[0m
+      [36m</a>[39m
+      [36m<aside[39m
+        [33mclass[39m=[32m"flex flex-col h-full flex-shrink-0 bg-[var(--color-surface-0)] border-r border-[var(--color-border)]"[39m
+        [33mstyle[39m=[32m"width: var(--spacing-sidebar);"[39m
+      [36m>[39m
+        [36m<nav[39m
+          [33maria-label[39m=[32m"Main navigation"[39m
+          [33mclass[39m=[32m"flex h-full flex-col"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-center gap-[var(--space-2)] px-[var(--space-3)] h-chrome-header min-h-chrome-header shrink-0"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"font-headline font-bold lowercase text-[var(--color-secondary)] text-base"[39m
+            [36m>[39m
+              [0momnipus[0m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-[var(--color-accent)]"[39m
+              [36m>[39m
+                [0m.ai[0m
+              [36m</span>[39m
+            [36m</span>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Search sessions"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto ml-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Search sessions"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M229.66,218.34l-50.07-50.06a88.11,88.11,0,1,0-11.31,11.31l50.06,50.07a8,8,0,0,0,11.32-11.32ZM40,112a72,72,0,1,1,72,72A72.08,72.08,0,0,1,40,112Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Unpin sidebar"[39m
+              [33maria-pressed[39m=[32m"true"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Unpin sidebar"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M224,176a8,8,0,0,1-8,8H136v56a8,8,0,0,1-16,0V184H40a8,8,0,0,1,0-16h9.29L70.46,48H64a8,8,0,0,1,0-16H192a8,8,0,0,1,0,16h-6.46l21.17,120H216A8,8,0,0,1,224,176Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+          [36m</div>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex-1 overflow-y-auto overscroll-contain py-[var(--space-2-5)]"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33maria-label[39m=[32m"Omnipus"[39m
+              [33mclass[39m=[32m"px-[var(--space-2)] pb-[var(--space-1)]"[39m
+              [33mrole[39m=[32m"group"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"sidebar-agent-row flex items-center rounded-[var(--radius-medium)] hover:bg-[var(--color-surface-2)]"[39m
+                [33mdata-selected[39m=[32m"false"[39m
+              [36m>[39m
+                [36m<button[39m
+                  [33maria-label[39m=[32m"Omnipus"[39m
+                  [33mclass[39m=[32m"relative inline-flex items-center whitespace-nowrap rounded-md transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto min-w-0 flex-1 justify-start gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent hover:text-[var(--color-secondary)] pointer-coarse:min-h-[var(--target-touch-minimum)] font-[var(--font-weight-regular)]"[39m
+                  [33mdata-action-state[39m=[32m"idle"[39m
+                  [33mdata-ds-action[39m=[32m""[39m
+                  [33mdata-testid[39m=[32m"sidebar-omnipus-entry"[39m
+                  [33mtabindex[39m=[32m"0"[39m
+                  [33mtype[39m=[32m"b...
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"fixed inset-x-0 flex overflow-hidden bg-[var(--color-primary)]"[39m
+      [33mdata-app-shell[39m=[32m"true"[39m
+      [33mstyle[39m=[32m"top: var(--app-top, 0px); height: var(--app-vh, 100dvh);"[39m
+    [36m>[39m
+      [36m<a[39m
+        [33mclass[39m=[32m"sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:px-[var(--space-2-5)] focus:py-[var(--space-2)] focus:rounded-md focus:bg-[var(--color-surface-2)] focus:text-[var(--color-secondary)] focus:text-[length:var(--type-body-compact-size)]"[39m
+        [33mhref[39m=[32m"#main-content"[39m
+        [33mtabindex[39m=[32m"1"[39m
+      [36m>[39m
+        [0mSkip to content[0m
+      [36m</a>[39m
+      [36m<aside[39m
+        [33mclass[39m=[32m"flex flex-col h-full flex-shrink-0 bg-[var(--color-surface-0)] border-r border-[var(--color-border)]"[39m
+        [33mstyle[39m=[32m"width: var(--spacing-sidebar);"[39m
+      [36m>[39m
+        [36m<nav[39m
+          [33maria-label[39m=[32m"Main navigation"[39m
+          [33mclass[39m=[32m"flex h-full flex-col"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-center gap-[var(--space-2)] px-[var(--space-3)] h-chrome-header min-h-chrome-header shrink-0"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"font-headline font-bold lowercase text-[var(--color-secondary)] text-base"[39m
+            [36m>[39m
+              [0momnipus[0m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-[var(--color-accent)]"[39m
+              [36m>[39m
+                [0m.ai[0m
+              [36m</span>[39m
+            [36m</span>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Search sessions"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto ml-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Search sessions"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M229.66,218.34l-50.07-50.06a88.11,88.11,0,1,0-11.31,11.31l50.06,50.07a8,8,0,0,0,11.32-11.32ZM40,112a72,72,0,1,1,72,72A72.08,72.08,0,0,1,40,112Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Unpin sidebar"[39m
+              [33maria-pressed[39m=[32m"true"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Unpin sidebar"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M224,176a8,8,0,0,1-8,8H136v56a8,8,0,0,1-16,0V184H40a8,8,0,0,1,0-16h9.29L70.46,48H64a8,8,0,0,1,0-16H192a8,8,0,0,1,0,16h-6.46l21.17,120H216A8,8,0,0,1,224,176Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+          [36m</div>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex-1 overflow-y-auto overscroll-contain py-[var(--space-2-5)]"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33maria-label[39m=[32m"Omnipus"[39m
+              [33mclass[39m=[32m"px-[var(--space-2)] pb-[var(--space-1)]"[39m
+              [33mrole[39m=[32m"group"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"sidebar-agent-row flex items-center rounded-[var(--radius-medium)] hover:bg-[var(--color-surface-2)]"[39m
+                [33mdata-selected[39m=[32m"false"[39m
+              [36m>[39m
+                [36m<button[39m
+                  [33maria-label[39m=[32m"Omnipus"[39m
+                  [33mclass[39m=[32m"relative inline-flex items-center whitespace-nowrap rounded-md transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto min-w-0 flex-1 justify-start gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent hover:text-[var(--color-secondary)] pointer-coarse:min-h-[var(--target-touch-minimum)] font-[var(--font-weight-regular)]"[39m
+                  [33mdata-action-state[39m=[32m"idle"[39m
+                  [33mdata-ds-action[39m=[32m""[39m
+                  [33mdata-testid[39m=[32m"sidebar-omnipus-entry"[39m
+                  [33mtabindex[39m=[32m"0"[39m
+                  [33mtype[39m=[32m"b...
+ ❯ waitForWrapper node_modules/@testing-library/dom/dist/wait-for.js:163:27
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:86:33
+ ❯ emitApprovalOrigin src/components/layout/AppShell.wu4.test.tsx:99:23
+     97|   await emitFromGateway(socket, approvalOriginFrame(carrier, origin, s…
+     98|   await waitFor(() => expect(useToolApprovalStore.getState().queue.map…
+     99|   return await screen.findByRole('dialog', { name: stub ? 'Approval De…
+       |                       ^
+    100| }
+    101|
+ ❯ src/components/layout/AppShell.wu4.test.tsx:121:19
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/10]⎯
+
+ FAIL  src/components/layout/AppShell.wu4.test.tsx > K7: an incomplete reconnect approval keeps its supplied origin and still offers Deny only
+Error: Invalid generated room fixture: {"type":"session_state","session_id":"main-mia-sales","user_id":"stage1-tester","emitted_at":"2026-10-14T10:00:00Z","pending_approvals":[{"approval_id":"stage1-approval","tool_name":"write_file","agent_id":"mia","session_id":"main-mia-sales","expires_in_ms":300000,"workspace_id":"sales","origin_label":"asked by Jim","root_session_id":"main-mia-sales"}]}
+ ❯ TestSocket.receive tests/l1-room-ui/harness.tsx:223:47
+    221|   receive(frame: ServerFrame): void {
+    222|     // Instrument control: a mistyped fixture cannot masquerade as a r…
+    223|     if (parseFrameSafe(frame) === null) throw new Error(`Invalid gener…
+       |                                               ^
+    224|     this.onmessage?.(new MessageEvent('message', { data: JSON.stringif…
+    225|   }
+ ❯ tests/l1-room-ui/stage1-harness.tsx:229:34
+ ❯ node_modules/@testing-library/react/dist/act-compat.js:47:24
+ ❯ process.env.NODE_ENV.exports.act node_modules/react/cjs/react.development.js:814:22
+ ❯ node_modules/@testing-library/react/dist/act-compat.js:46:25
+ ❯ emitFromGateway tests/l1-room-ui/stage1-harness.tsx:229:9
+ ❯ emitApprovalOrigin src/components/layout/AppShell.wu4.test.tsx:97:9
+ ❯ src/components/layout/AppShell.wu4.test.tsx:138:23
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/10]⎯
+
+ FAIL  src/components/layout/AppShell.wu4.test.tsx > K7: origin text is literal text, never executable markup
+TestingLibraryElementError: Unable to find role="dialog" and name "Tool Approval Required"
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"fixed inset-x-0 flex overflow-hidden bg-[var(--color-primary)]"[39m
+      [33mdata-app-shell[39m=[32m"true"[39m
+      [33mstyle[39m=[32m"top: var(--app-top, 0px); height: var(--app-vh, 100dvh);"[39m
+    [36m>[39m
+      [36m<a[39m
+        [33mclass[39m=[32m"sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:px-[var(--space-2-5)] focus:py-[var(--space-2)] focus:rounded-md focus:bg-[var(--color-surface-2)] focus:text-[var(--color-secondary)] focus:text-[length:var(--type-body-compact-size)]"[39m
+        [33mhref[39m=[32m"#main-content"[39m
+        [33mtabindex[39m=[32m"1"[39m
+      [36m>[39m
+        [0mSkip to content[0m
+      [36m</a>[39m
+      [36m<aside[39m
+        [33mclass[39m=[32m"flex flex-col h-full flex-shrink-0 bg-[var(--color-surface-0)] border-r border-[var(--color-border)]"[39m
+        [33mstyle[39m=[32m"width: var(--spacing-sidebar);"[39m
+      [36m>[39m
+        [36m<nav[39m
+          [33maria-label[39m=[32m"Main navigation"[39m
+          [33mclass[39m=[32m"flex h-full flex-col"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-center gap-[var(--space-2)] px-[var(--space-3)] h-chrome-header min-h-chrome-header shrink-0"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"font-headline font-bold lowercase text-[var(--color-secondary)] text-base"[39m
+            [36m>[39m
+              [0momnipus[0m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-[var(--color-accent)]"[39m
+              [36m>[39m
+                [0m.ai[0m
+              [36m</span>[39m
+            [36m</span>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Search sessions"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto ml-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Search sessions"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M229.66,218.34l-50.07-50.06a88.11,88.11,0,1,0-11.31,11.31l50.06,50.07a8,8,0,0,0,11.32-11.32ZM40,112a72,72,0,1,1,72,72A72.08,72.08,0,0,1,40,112Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Unpin sidebar"[39m
+              [33maria-pressed[39m=[32m"true"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Unpin sidebar"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M224,176a8,8,0,0,1-8,8H136v56a8,8,0,0,1-16,0V184H40a8,8,0,0,1,0-16h9.29L70.46,48H64a8,8,0,0,1,0-16H192a8,8,0,0,1,0,16h-6.46l21.17,120H216A8,8,0,0,1,224,176Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+          [36m</div>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex-1 overflow-y-auto overscroll-contain py-[var(--space-2-5)]"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33maria-label[39m=[32m"Omnipus"[39m
+              [33mclass[39m=[32m"px-[var(--space-2)] pb-[var(--space-1)]"[39m
+              [33mrole[39m=[32m"group"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"sidebar-agent-row flex items-center rounded-[var(--radius-medium)] hover:bg-[var(--color-surface-2)]"[39m
+                [33mdata-selected[39m=[32m"false"[39m
+              [36m>[39m
+                [36m<button[39m
+                  [33maria-label[39m=[32m"Omnipus"[39m
+                  [33mclass[39m=[32m"relative inline-flex items-center whitespace-nowrap rounded-md transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto min-w-0 flex-1 justify-start gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent hover:text-[var(--color-secondary)] pointer-coarse:min-h-[var(--target-touch-minimum)] font-[var(--font-weight-regular)]"[39m
+                  [33mdata-action-state[39m=[32m"idle"[39m
+                  [33mdata-ds-action[39m=[32m""[39m
+                  [33mdata-testid[39m=[32m"sidebar-omnipus-entry"[39m
+                  [33mtabindex[39m=[32m"0"[39m
+                  [33mtype[39m=[32m"b...
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"fixed inset-x-0 flex overflow-hidden bg-[var(--color-primary)]"[39m
+      [33mdata-app-shell[39m=[32m"true"[39m
+      [33mstyle[39m=[32m"top: var(--app-top, 0px); height: var(--app-vh, 100dvh);"[39m
+    [36m>[39m
+      [36m<a[39m
+        [33mclass[39m=[32m"sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:px-[var(--space-2-5)] focus:py-[var(--space-2)] focus:rounded-md focus:bg-[var(--color-surface-2)] focus:text-[var(--color-secondary)] focus:text-[length:var(--type-body-compact-size)]"[39m
+        [33mhref[39m=[32m"#main-content"[39m
+        [33mtabindex[39m=[32m"1"[39m
+      [36m>[39m
+        [0mSkip to content[0m
+      [36m</a>[39m
+      [36m<aside[39m
+        [33mclass[39m=[32m"flex flex-col h-full flex-shrink-0 bg-[var(--color-surface-0)] border-r border-[var(--color-border)]"[39m
+        [33mstyle[39m=[32m"width: var(--spacing-sidebar);"[39m
+      [36m>[39m
+        [36m<nav[39m
+          [33maria-label[39m=[32m"Main navigation"[39m
+          [33mclass[39m=[32m"flex h-full flex-col"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-center gap-[var(--space-2)] px-[var(--space-3)] h-chrome-header min-h-chrome-header shrink-0"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"font-headline font-bold lowercase text-[var(--color-secondary)] text-base"[39m
+            [36m>[39m
+              [0momnipus[0m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-[var(--color-accent)]"[39m
+              [36m>[39m
+                [0m.ai[0m
+              [36m</span>[39m
+            [36m</span>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Search sessions"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto ml-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Search sessions"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M229.66,218.34l-50.07-50.06a88.11,88.11,0,1,0-11.31,11.31l50.06,50.07a8,8,0,0,0,11.32-11.32ZM40,112a72,72,0,1,1,72,72A72.08,72.08,0,0,1,40,112Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Unpin sidebar"[39m
+              [33maria-pressed[39m=[32m"true"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Unpin sidebar"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M224,176a8,8,0,0,1-8,8H136v56a8,8,0,0,1-16,0V184H40a8,8,0,0,1,0-16h9.29L70.46,48H64a8,8,0,0,1,0-16H192a8,8,0,0,1,0,16h-6.46l21.17,120H216A8,8,0,0,1,224,176Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+          [36m</div>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex-1 overflow-y-auto overscroll-contain py-[var(--space-2-5)]"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33maria-label[39m=[32m"Omnipus"[39m
+              [33mclass[39m=[32m"px-[var(--space-2)] pb-[var(--space-1)]"[39m
+              [33mrole[39m=[32m"group"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"sidebar-agent-row flex items-center rounded-[var(--radius-medium)] hover:bg-[var(--color-surface-2)]"[39m
+                [33mdata-selected[39m=[32m"false"[39m
+              [36m>[39m
+                [36m<button[39m
+                  [33maria-label[39m=[32m"Omnipus"[39m
+                  [33mclass[39m=[32m"relative inline-flex items-center whitespace-nowrap rounded-md transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto min-w-0 flex-1 justify-start gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent hover:text-[var(--color-secondary)] pointer-coarse:min-h-[var(--target-touch-minimum)] font-[var(--font-weight-regular)]"[39m
+                  [33mdata-action-state[39m=[32m"idle"[39m
+                  [33mdata-ds-action[39m=[32m""[39m
+                  [33mdata-testid[39m=[32m"sidebar-omnipus-entry"[39m
+                  [33mtabindex[39m=[32m"0"[39m
+                  [33mtype[39m=[32m"b...
+ ❯ waitForWrapper node_modules/@testing-library/dom/dist/wait-for.js:163:27
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:86:33
+ ❯ emitApprovalOrigin src/components/layout/AppShell.wu4.test.tsx:99:23
+     97|   await emitFromGateway(socket, approvalOriginFrame(carrier, origin, s…
+     98|   await waitFor(() => expect(useToolApprovalStore.getState().queue.map…
+     99|   return await screen.findByRole('dialog', { name: stub ? 'Approval De…
+       |                       ^
+    100| }
+    101|
+ ❯ src/components/layout/AppShell.wu4.test.tsx:151:17
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/10]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  10 failed | 15 passed (25)
+   Start at  20:34:23
+   Duration  220.43s (transform 79.31s, setup 405ms, import 111.20s, tests 106.99s, environment 1.56s)
+
+exit=1

@@ -31,10 +31,31 @@ import (
 type LLMErrorCode string
 
 const (
+	// CodeBadModel is an operator-fixable model/provider mismatch, never an outage.
+	CodeBadModel LLMErrorCode = "bad_model"
+	// CodeProviderRequestRejected describes an otherwise unclassified terminal400.
+	// Recovery still sees CodeUnknown, allowing the existing media strip-retry.
+	CodeProviderRequestRejected LLMErrorCode = "provider_request_rejected"
+	// CodeModelRouteUnavailable is a pre-request named-client refusal.
+	CodeModelRouteUnavailable LLMErrorCode = "model_route_unavailable"
+)
+
+const (
 	// CodeMediaUnsupported: provider rejected a media block (image or PDF).
 	// Either capability-absence (model has no vision) or format-rejection
 	// (model has vision, but the supplied format is not acceptable).
 	CodeMediaUnsupported LLMErrorCode = "media_unsupported"
+
+	// CodeMediaTooLarge (issue #1435): the provider rejected an IMAGE for
+	// its SIZE — OpenAI's "requires 38560 patches … exceeding the limit of
+	// 30000" 400, or an image-specific HTTP 413. This is its own cause,
+	// never media_unsupported: the model accepts the format, the payload is
+	// just too big, and Omnipus resizes automatically before sending. The
+	// media strip-retry must NOT fire for this code (a size failure strips
+	// the image and then mislabels the cause as unsupported-format); both
+	// TryMediaDowngrade trigger paths only fire for CodeMediaUnsupported /
+	// CodeUnknown, which this code deliberately is not.
+	CodeMediaTooLarge LLMErrorCode = "media_too_large"
 
 	// CodeProviderRejected: a genuine model refusal — the model declined to
 	// answer for a reason that is neither media, policy, size, nor auth.
@@ -75,6 +96,28 @@ const (
 	// used to drop the latter on the false premise that the former covered
 	// it — it does not.
 	CodeRateLimited LLMErrorCode = "rate_limited"
+
+	// CodeQuotaBilling (C-5, provider-messages spec §7.3): the provider
+	// rejected the request because the account is out of credit — an
+	// explicit 402, the structured insufficient_quota error code, or a
+	// C-5 vocabulary phrase (billingPhrases). Billing takes precedence
+	// over rate_limited on a 429 (quota EXHAUSTION is not "too many
+	// requests") and never fires on a >=500 status. Not retryable: the
+	// same request fails identically until the operator tops up the
+	// account. Attribution `config` — the operator's fix in Settings.
+	CodeQuotaBilling LLMErrorCode = "quota_billing"
+
+	// CodeModelRetired (C-24, provider-messages spec §7.3): the provider
+	// answered 404 AND the body carries one of the three retirement
+	// phrases (modelRetiredPhrases) — the model has been withdrawn.
+	// User-side copy ONLY: the routing classifier (pkg/providers) never
+	// reads a retirement verdict (D12 — 404 routes FailoverUnknown, so
+	// the fallback chain still answers), and the media strip-retry
+	// fallback gate (outcomeFallbackEligible) is NOT re-pointed —
+	// near-misses stay CodeUnknown byte-identically. Not retryable under
+	// this code's copy; the operator picks a new model in the agent's
+	// settings.
+	CodeModelRetired LLMErrorCode = "model_retired"
 
 	// CodeNetwork: 408 / 5xx / timeout / connection drop. Retryable.
 	CodeNetwork LLMErrorCode = "network"
@@ -171,24 +214,36 @@ const (
 	// ErrTurnCanceled.
 	CodeTurnCanceled LLMErrorCode = "turn_canceled"
 
-	// CodeTurnTimedOut (ADR-066 D7, FR-034): the turn's deadline expired
-	// while waiting on the provider. Attribution `provider`; retryable.
+	// CodeTurnTimedOut (ADR-066 D7, FR-034): a provider request timed out —
+	// the per-network-call request timeout (model request_timeout / the HTTP
+	// client's Timeout), whose error satisfies errors.Is(err,
+	// context.DeadlineExceeded). Turns themselves have no deadline any more
+	// (issue #1306), so this never means "the turn ran too long".
+	// Attribution `provider`; retryable.
 	CodeTurnTimedOut LLMErrorCode = "turn_timed_out"
 
+	// CodeJudgeTimeLimit (issue #1306): the Judge's own verification turn
+	// reached its configured check time limit (judge.timeout_sec). Not a
+	// provider fault and not retryable as-is — the operator raises the limit.
+	// Distinct from CodeTurnTimedOut, which now means only a provider request
+	// timeout.
+	CodeJudgeTimeLimit LLMErrorCode = "judge_time_limit"
+
+	// CodeJudgeConclusionFailed (issue #1306, SFH R2-3): a controller-authored
+	// operational notice that the Judge's Not-verified conclusion could not be
+	// fully saved or delivered (transcript, goal record, unreadable audience,
+	// missing channel route, outbound publish). It ends no turn. Not
+	// retryable, never a trusted provider message: the SPA shows the
+	// catalogue copy, and the raw cause stays in the Verbose-only detail.
+	CodeJudgeConclusionFailed LLMErrorCode = "judge_conclusion_failed"
+
 	// CodeDelegatedTaskLimit identifies a controller-authored notice for a
-	// delegated task that reached timeout_seconds or max_tool_iterations.
+	// delegated task that reached max_tool_iterations (there is no
+	// timeout_seconds limit any more, issue #1306).
 	// Unlike CodeTurnTimedOut, this is not a provider error. Its only variable
 	// fields are normalized task correlation identifiers and the limit; its
 	// producers must never include child output or file contents.
 	CodeDelegatedTaskLimit LLMErrorCode = "delegated_task_limit"
-
-	// CodeContextUnrecoverable (ADR-066 D6/D7, FR-032, FR-034): the mid-turn
-	// window guard fired — after emptying every eligible tool result a
-	// trigger condition still held, so no further provider call is made.
-	// Attribution `product` (our bug, never the user's). Reachable only via
-	// an injected fault; the guard itself lands with T066-13, this constant
-	// and its attribution/copy land here so the contract round-trip closes.
-	CodeContextUnrecoverable LLMErrorCode = "context_unrecoverable"
 
 	// CodeModelUnassigned (ADR-068 FR-014/FR-015, MAJ-008): the agent has no
 	// model to send the request to — it pins no primary model and
@@ -265,6 +320,18 @@ type LLMError struct {
 	Message   string
 	Retryable bool
 	Detail    string
+
+	// Provider-messages spec §7.3 (MAJ-001/C-14): the failing attempt's
+	// identity and captured request id, plus the assembled-sentence flag.
+	// Provider/Model come from the per-candidate attempt (MAJ-110) via the
+	// *ProviderError; RequestID from the boundary's request-id candidates.
+	// ProviderMessage marks Message as the §6 assembled sentence (a §6
+	// template applied with real identity); the transcript persists the
+	// sentence when this is true, replay round-trips it.
+	Provider        string
+	Model           string
+	RequestID       string
+	ProviderMessage bool
 }
 
 // userMessages maps each code to its generic user-facing message. Generic
@@ -412,6 +479,33 @@ var imageRejectionSubstrings = []string{
 func isImageRejectionMessage(body string) bool {
 	lower := strings.ToLower(body)
 	for _, s := range imageRejectionSubstrings {
+		if strings.Contains(lower, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// imageTooLargeSubstrings are the body substrings that identify a
+// provider rejection as an IMAGE-SIZE failure — the image was received
+// and understood, but exceeds the provider/model's size budget (issue
+// #1435). Match is case-insensitive. The patch phrase is OpenAI's
+// verbatim shape ("requires 38560 patches after processing, exceeding
+// the limit of 30000"); the "image … too large" pair covers generic
+// image-size rejections including HTTP 413 bodies. Deliberately NOT
+// matched by isImageRejectionMessage: a size failure classifies as
+// CodeMediaTooLarge, never as the unsupported-format advice.
+var imageTooLargeSubstrings = []string{
+	"patches after processing", // OpenAI/ChatGPT patch-limit rejection (verbatim shape)
+	"image is too large",       // generic image-size rejection (HTTP 413 shape)
+	"image too large",          // variant without the copula
+}
+
+// isImageTooLargeMessage reports whether body carries any pinned
+// image-size substring.
+func isImageTooLargeMessage(body string) bool {
+	lower := strings.ToLower(body)
+	for _, s := range imageTooLargeSubstrings {
 		if strings.Contains(lower, s) {
 			return true
 		}
@@ -589,12 +683,30 @@ func classifyByHTTPStatus(pe *ProviderError) LLMErrorCode {
 
 	switch {
 	case status == 429:
+		// C-5 on the 429 path, BEFORE rate_limited: a structured
+		// insufficient_quota / C-5-phrase quota exhaustion is BILLING even
+		// on a 429 (dataset D2), while rate-limit quota prose stays
+		// rate_limited. Never on a >=500 status.
+		if isBillingEvidence(body, status) {
+			return CodeQuotaBilling
+		}
 		return CodeRateLimited
+	case status == 402:
+		// C-5: status-first — an explicit 402 is billing whatever the body
+		// says (dataset D2: "402 any body").
+		return CodeQuotaBilling
 	case status == 408:
 		return CodeNetwork
 	case status >= 500 && status <= 599:
 		return CodeNetwork
 	case status == 413:
+		// Issue #1435: a 413 whose body names an image is an image-size
+		// rejection, not a generic oversized request — the honest cause is
+		// the image, so classify it as CodeMediaTooLarge before the
+		// request-shape fallback can label it.
+		if isImageTooLargeMessage(body) {
+			return CodeMediaTooLarge
+		}
 		// 413 → request_too_large (NOT context_too_long). The model never
 		// weighed the conversation; the request payload itself is oversized,
 		// and WE assembled it — the copy for this code says so rather than
@@ -627,6 +739,20 @@ func classifyByHTTPStatus(pe *ProviderError) LLMErrorCode {
 		if body == "" {
 			return CodeUnknown
 		}
+		// C-5 (provider-messages spec §7.3): billing evidence precedes every
+		// other 4xx body detector — a 400 Anthropic "credit balance too low"
+		// is quota_billing (dataset D2), not a generic rejection. The >=500
+		// guard lives in isBillingEvidence.
+		if isBillingEvidence(body, status) {
+			return CodeQuotaBilling
+		}
+		// C-24: a 404 carrying a retirement phrase is model_retired. The
+		// 404-gate keeps every near-miss (a 410, or the phrase on another
+		// status) CodeUnknown byte-identically; the media strip-retry gate
+		// (outcomeFallbackEligible) is not re-pointed.
+		if isModelRetiredBody(body, status) {
+			return CodeModelRetired
+		}
 		// 4xx with body: check media / capability / policy substrings
 		// BEFORE falling through. This is the documented exception to
 		// "status wins over body" — the xAI incident is 400 with a body
@@ -634,6 +760,14 @@ func classifyByHTTPStatus(pe *ProviderError) LLMErrorCode {
 		// CodeMediaUnsupported, not CodeProviderRejected.
 		if isPDFRejectionMessage(body) {
 			return CodeMediaUnsupported
+		}
+		// Issue #1435: an image-SIZE rejection is its own cause, checked
+		// before the format-rejection shapes. It must NOT fall through to
+		// CodeUnknown here — CodeUnknown is exactly what armed the outcome
+		// fallback that stripped the image and relabelled the size failure
+		// as media_unsupported in the incident.
+		if isImageTooLargeMessage(body) {
+			return CodeMediaTooLarge
 		}
 		if isImageRejectionMessage(body) {
 			return CodeMediaUnsupported
@@ -681,6 +815,12 @@ func classifyByMessage(body string) LLMErrorCode {
 	if isPDFRejectionMessage(body) {
 		return CodeMediaUnsupported
 	}
+	// Issue #1435: image-size rejections keep their own cause even when no
+	// HTTP status is available (classifyByProviderError routes status-0
+	// provider errors here).
+	if isImageTooLargeMessage(body) {
+		return CodeMediaTooLarge
+	}
 	if isImageRejectionMessage(body) {
 		return CodeMediaUnsupported
 	}
@@ -699,7 +839,19 @@ func classifyByMessage(body string) LLMErrorCode {
 	if isRateLimitMessage(body) {
 		return CodeRateLimited
 	}
+	// Transport failures carry no HTTP status, so only their wording says what
+	// they are. Without this they fell to CodeUnknown ("we can't tell why")
+	// although the cause was a dropped connection or unreachable provider.
+	if isNetworkMessage(body) {
+		return CodeNetwork
+	}
 	return CodeUnknown
+}
+
+// isNetworkMessage reports a transport failure by the one shared vocabulary
+// (providers.IsTransportFailure).
+func isNetworkMessage(body string) bool {
+	return providers.IsTransportFailure(errors.New(body))
 }
 
 // classifyByProviderError is the top-level dispatch: prefer
@@ -735,6 +887,20 @@ func TranslateLLMError(pe *ProviderError, message string) LLMError {
 		Retryable: isRetryable(code),
 		Detail:    buildDetail(pe, message),
 	}
+	// provider-messages spec §7.3 (MAJ-001/C-16): assemble the §6 sentence
+	// when the failing attempt's identity is known and the classified code
+	// has a provider-message template. Identity rides the *ProviderError
+	// (per-candidate attempt, MAJ-110); without it the catalogue copy
+	// stands and the flag stays false (AU2).
+	if pe != nil {
+		llm.Provider = pe.Provider
+		llm.Model = pe.Model
+		llm.RequestID = pe.RequestID
+		if sentence := providerMessageFor(code, pe.Provider, pe.Model); sentence != "" {
+			llm.Message = sentence
+			llm.ProviderMessage = true
+		}
+	}
 	return llm
 }
 
@@ -759,8 +925,7 @@ func TranslateLLMError(pe *ProviderError, message string) LLMError {
 //     agent with a home) but the folder could not be opened.
 //
 //   - ErrTurnCanceled / context.Canceled → CodeTurnCanceled;
-//     ErrTurnTimedOut / context.DeadlineExceeded → CodeTurnTimedOut;
-//     ErrContextUnrecoverable → CodeContextUnrecoverable (ADR-066 D7). The
+//     ErrTurnTimedOut / context.DeadlineExceeded → CodeTurnTimedOut. The
 //     typed exits in runTurn wrap both the sentinel and the raw cause, so
 //     either match routes here.
 //
@@ -772,6 +937,10 @@ func TranslateTurnError(err error) LLMError {
 	}
 	if code, ok := typedExitCode(err); ok {
 		return typedExitError(code, err)
+	}
+	var route *providers.ModelRouteUnavailableError
+	if errors.As(err, &route) {
+		return translateModelRouteUnavailable(route)
 	}
 	// Founder decision 2026-09-14: a streaming call aborted for total
 	// silence (common.ErrStreamStalled) is its own typed code, before any
@@ -793,6 +962,62 @@ func TranslateTurnError(err error) LLMError {
 			}
 		}
 		return typedExitError(code, err)
+	}
+	// The provider ended its response with an error after the 200 (#1278): the
+	// partial text was discarded and nothing ran. Named for the person as a
+	// provider connection failure; the provider's own text stays in Detail.
+	var streamErr *common.StreamProviderError
+	if errors.As(err, &streamErr) {
+		code := CodeUnknown
+		switch streamErr.Kind() {
+		case common.StreamErrorTransient:
+			code = CodeNetwork
+		case common.StreamErrorRateLimit:
+			code = CodeRateLimited
+		case common.StreamErrorBilling:
+			code = CodeQuotaBilling
+		case common.StreamErrorAuth:
+			code = CodeProviderAuthFailed
+		case common.StreamErrorInvalidRequest:
+			code = CodeProviderRejected
+		case common.StreamErrorContentPolicy:
+			code = CodeContentPolicy
+		}
+		return LLMError{
+			Code:      code,
+			Message:   defaultUserMessage(code),
+			Retryable: isRetryable(code),
+			Detail:    buildDetail(nil, err.Error()),
+		}
+	}
+	// The sender's own message could not be saved (founder ruling 2026-10-11):
+	// the turn is refused and the sender sees only the fixed reply; the store's
+	// error stays in Detail and the log.
+	var notSaved *messageNotSavedError
+	if errors.As(err, &notSaved) {
+		return LLMError{
+			Code:      CodeUnknown,
+			Message:   messageNotSavedReply,
+			Retryable: true,
+			Detail:    buildDetail(nil, err.Error()),
+		}
+	}
+	// An ORDINARY admission refused because the same chat's previous reply is
+	// still finishing (ErrPreviousExecutionPending), or because a concurrent
+	// ordinary admission claimed the session first (ordinaryAdmissionRefusalError):
+	// neither is a provider fault, and the person's fix is to send the message
+	// again. A bare steer.ErrStaleGeneration is deliberately NOT mapped: its other
+	// producers (steered dispatch, reconstruction, cancel, queued wake) are not
+	// "send it again" cases and keep their own wording. CodeUnknown carries the
+	// curated text; no new wire code is minted for it.
+	var admissionRefusal *ordinaryAdmissionRefusalError
+	if errors.Is(err, ErrPreviousExecutionPending) || errors.As(err, &admissionRefusal) {
+		return LLMError{
+			Code:      CodeUnknown,
+			Message:   previousReplyStillFinishingMessage,
+			Retryable: true,
+			Detail:    buildDetail(nil, err.Error()),
+		}
 	}
 	if errors.Is(err, ErrAgentNotWorkspaceMember) {
 		return LLMError{
@@ -883,8 +1108,50 @@ func TranslateTurnError(err error) LLMError {
 		// before this fallback started threading pe through.
 		pe = nil
 	}
-	return TranslateLLMError(pe, err.Error())
+	llm := TranslateLLMError(pe, err.Error())
+	// 6b F1: the text classifier sees only err's message, and a dropped send
+	// reads just `Post "...": EOF`. Its typed cause (*url.Error wrapping
+	// io.EOF) is still on THIS chain, so ask the shared transport check on
+	// the original error rather than its re-wrapped text. Only an otherwise
+	// unknown verdict is named network; every more specific code stands.
+	if llm.Code == CodeUnknown && providers.IsTransportFailure(err) {
+		llm.Code = CodeNetwork
+		llm.Message = defaultUserMessage(CodeNetwork)
+		llm.Retryable = isRetryable(CodeNetwork)
+		if sentence := providerMessageFor(CodeNetwork, llm.Provider, llm.Model); sentence != "" {
+			llm.Message = sentence
+			llm.ProviderMessage = true
+		}
+	}
+	// This is a terminal presentation, AFTER the recovery classifier had its
+	// chance. Keep inconclusive400 unknown inside TranslateLLMError so media
+	// strip-retry remains reachable, but name the known rejection on failure.
+	code := llm.Code
+	var fe *providers.FailoverError
+	// Structured model_not_found is authoritative; prose-only evidence may
+	// promote an inconclusive verdict, never overwrite genuine billing/policy.
+	badModelEvidence := pe != nil && providers.IsBadModelError(pe.Status, pe.Body, pe.Model) &&
+		(code == CodeUnknown || common.StructuredErrorCode(pe.Body) == "model_not_found")
+	if (errors.As(err, &fe) && fe.Reason == providers.FailoverBadModel) || badModelEvidence {
+		code = CodeBadModel
+	} else if code == CodeUnknown && pe != nil && pe.Status == 400 {
+		code = CodeProviderRequestRejected
+	}
+	if code != llm.Code {
+		llm.Code = code
+		llm.Message = defaultUserMessage(llm.Code)
+		llm.Retryable = false
+		if sentence := providerMessageFor(llm.Code, llm.Provider, llm.Model); sentence != "" {
+			llm.Message = sentence
+			llm.ProviderMessage = true
+		}
+	}
+	return llm
 }
+
+// previousReplyStillFinishingMessage is the user text for an admission refused
+// while the same chat's previous execution is still settling.
+const previousReplyStillFinishingMessage = "Your previous reply is still finishing — send your message again in a moment."
 
 // curatedTurnError is a turn error whose text Omnipus wrote and which carries
 // no provider response: a turn a hook or the tool-denial budget aborted
@@ -897,6 +1164,19 @@ func TranslateTurnError(err error) LLMError {
 type curatedTurnError struct{ text string }
 
 func (e *curatedTurnError) Error() string { return e.text }
+
+// RefusalText is the Omnipus-authored sentence, readable as written by the
+// delegate tool's refusal to the calling agent (pkg/tools.refusalTexter).
+func (e *curatedTurnError) RefusalText() string { return e.text }
+
+// authoredRefusalError is a refusal whose sentence was written by Omnipus and is
+// path-free (a session id at most): the delegate tool may show it as written. It
+// is the only other type that carries RefusalText; a wrapped store error never
+// does.
+type authoredRefusalError struct{ text string }
+
+func (e *authoredRefusalError) Error() string       { return e.text }
+func (e *authoredRefusalError) RefusalText() string { return e.text }
 
 // turnErrorUserText is what a person or a model may read about a turn that
 // ended on err: the contract's plain message for err's typed code
@@ -914,7 +1194,29 @@ func turnErrorUserText(err error) string {
 	if errors.As(err, &curated) && llm.Code == CodeUnknown {
 		return curated.Error()
 	}
-	return llm.Message
+	// Task surfaces carry the PLAIN catalogue message for the typed code —
+	// this function's documented contract ("the contract's plain message").
+	// The provider-attributed templated sentence (§6's provider_message
+	// variant, set on LLMError.Message when TranslateLLMError has identity)
+	// is the chat-surface text delivered through WireLLMError, never this
+	// function's.
+	return defaultUserMessage(llm.Code)
+}
+
+// userVisibleTurnError is what the session worker publishes as a failed
+// turn's reply (session_worker.go::processTurn): a curatedTurnError's own
+// text when one is anywhere in err's chain — the in-flight stop-fence
+// refusals and the hook/budget aborts Omnipus wrote, actionable as written —
+// and TranslateTurnError's catalogue message for everything else, byte for
+// byte what processTurn published before this helper existed. It is NOT
+// turnErrorUserText applied broadly: that function returns the plain message
+// for the TYPED code, a different translation of the same error.
+func userVisibleTurnError(err error) string {
+	var curated *curatedTurnError
+	if errors.As(err, &curated) {
+		return curated.Error()
+	}
+	return TranslateTurnError(err).Message
 }
 
 // Typed turn-exit sentinels (ADR-066 D7, FR-034). runTurn's formerly silent
@@ -926,12 +1228,29 @@ var (
 	// ErrTurnCanceled: the turn context was cancelled before the provider
 	// finished (Stop button, interrupt, shutdown).
 	ErrTurnCanceled = errors.New("turn canceled")
-	// ErrTurnTimedOut: the turn deadline expired while waiting on the provider.
+	// ErrTurnTimedOut: a provider request timed out (its per-call request
+	// timeout). There is no turn deadline (issue #1306).
 	ErrTurnTimedOut = errors.New("turn timed out")
-	// ErrContextUnrecoverable: the mid-turn window guard fired (T066-13
-	// raises it); no further provider call is made.
-	ErrContextUnrecoverable = errors.New("context unrecoverable after emptying every eligible tool result")
+	// ErrJudgeTimeLimit: the cause attached to the Judge's verification turn
+	// deadline (judge.timeout_sec) via context.WithTimeoutCause, so the exit
+	// is reported as the Judge's own check time limit, never as a provider
+	// timeout (issue #1306).
+	ErrJudgeTimeLimit = errors.New("the Judge reached its own check time limit")
 )
+
+// withDeadlineCause attaches the Judge's own time-limit cause to a deadline
+// error when ctx ended because of it (issue #1306). A provider call reports
+// only context.DeadlineExceeded; context.Cause(ctx) tells which clock it was.
+// Any other error — or a deadline with no such cause — is returned unchanged.
+func withDeadlineCause(ctx context.Context, err error) error {
+	if ctx == nil || err == nil || !errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrJudgeTimeLimit) {
+		return err
+	}
+	if errors.Is(context.Cause(ctx), ErrJudgeTimeLimit) {
+		return fmt.Errorf("%w: %w", ErrJudgeTimeLimit, err)
+	}
+	return err
+}
 
 // typedExitCode reports the ADR-066 D7 exit code carried by err's chain, if
 // any. The sentinel and the raw context error are both accepted so callers
@@ -942,8 +1261,10 @@ func typedExitCode(err error) (LLMErrorCode, bool) {
 	switch {
 	case err == nil:
 		return "", false
-	case errors.Is(err, ErrContextUnrecoverable):
-		return CodeContextUnrecoverable, true
+	case errors.Is(err, ErrJudgeTimeLimit):
+		// Checked first: the Judge's own time limit also wraps
+		// context.DeadlineExceeded, but it is not a provider timeout.
+		return CodeJudgeTimeLimit, true
 	case errors.Is(err, ErrTurnCanceled), errors.Is(err, context.Canceled):
 		return CodeTurnCanceled, true
 	case errors.Is(err, ErrTurnTimedOut), errors.Is(err, context.DeadlineExceeded):
@@ -972,8 +1293,7 @@ func typedExitError(code LLMErrorCode, cause error) LLMError {
 // operator can safely retry without changing inputs. Everything else —
 // capability, content, size, auth, and setup failures — fails identically on
 // retry and is reported as not retryable. A timed-out turn is retryable (the
-// provider may answer next time); a cancelled one is not (the user stopped
-// it); an unrecoverable context is not (retrying re-runs the same overflow).
+// provider may answer next time); a cancelled one is not (the user stopped it).
 func isRetryable(code LLMErrorCode) bool {
 	switch code {
 	case CodeRateLimited, CodeNetwork, CodeProviderStalled, CodeTurnTimedOut:
@@ -1005,7 +1325,7 @@ func buildDetail(pe *ProviderError, message string) string {
 			parts = append(parts, "status="+itoa(pe.Status))
 		}
 		if len(pe.Body) > 0 {
-			preview := strings.TrimSpace(logger.ScrubSensitiveValues(pe.Body))
+			preview := strings.TrimSpace(scrubDetailText(pe.Body))
 			if len(preview) > 512 {
 				preview = preview[:512] + "..."
 			}
@@ -1013,7 +1333,7 @@ func buildDetail(pe *ProviderError, message string) string {
 		}
 	}
 	if len(parts) == 0 && message != "" {
-		parts = append(parts, logger.ScrubSensitiveValues(message))
+		parts = append(parts, scrubDetailText(message))
 	}
 	return strings.Join(parts, " ")
 }
@@ -1057,6 +1377,16 @@ type ProviderError struct {
 	Status int
 	Body   string
 	Err    error
+
+	// Provider-messages spec §7.2 (MAJ-110): the identity of the PER-CANDIDATE
+	// ATTEMPT that failed — which provider's SDK client made the call and
+	// which model it asked for. Filled by the emit sites that know the attempt
+	// (ProviderErrorFromFailover reads it off the FailoverError; the agent
+	// loop's provider-response handler from the attempt context). Never
+	// inferred from message text.
+	Provider  string
+	Model     string
+	RequestID string
 }
 
 // Error implements error so *ProviderError can participate in the
@@ -1120,8 +1450,13 @@ func ProviderErrorFromFailover(fe *providers.FailoverError) *ProviderError {
 			// Preserve the original error chain on Err for Verbose-Chat
 			// Detail — buildDetail joins Status + body-preview; not
 			// replacing with pp keeps the wrapping context visible.
+			pe.RequestID = pp.RequestID
 		}
 	}
+	// Provider-messages spec §7.2 (MAJ-110): the identity of the attempt
+	// that failed, carried by the FailoverError the chain stamped.
+	pe.Provider = fe.Provider
+	pe.Model = fe.Model
 	return pe
 }
 
@@ -1219,6 +1554,10 @@ func providerErrorFromChain(err error) *ProviderError {
 	if err == nil {
 		return nil
 	}
+	var route *providers.ModelRouteUnavailableError
+	if errors.As(err, &route) {
+		return &ProviderError{Provider: route.Provider, Model: route.Model, Err: route}
+	}
 	// Prefer the most-specific pe — it carries the Body bytes that the
 	// classifier substring-matches on. errors.As will walk the Unwrap
 	// chain (including Unwrap() []error) so a pe wrapped inside a
@@ -1228,12 +1567,21 @@ func providerErrorFromChain(err error) *ProviderError {
 		// Translate the provider-side ProviderError into the agent-side
 		// ProviderError. The two types share the Status field shape, but
 		// the field names differ — keep an explicit copy so the agent
-		// package owns the wire-shape seam.
-		return &ProviderError{
-			Status: pp.Status,
-			Body:   pp.Body,
-			Err:    pp,
+		// package owns the wire-shape seam. The captured request id rides
+		// the provider-side error (§7.2); identity of the attempt is read
+		// off the FailoverError when the same chain also carries one.
+		out := &ProviderError{
+			Status:    pp.Status,
+			Body:      pp.Body,
+			Err:       pp,
+			RequestID: pp.RequestID,
 		}
+		var fe *providers.FailoverError
+		if errors.As(err, &fe) {
+			out.Provider = fe.Provider
+			out.Model = fe.Model
+		}
+		return out
 	}
 	// Fallthrough: a FailoverError without an inner pe (timeout, context
 	// canceled). Body stays empty; classifier falls back to Err.

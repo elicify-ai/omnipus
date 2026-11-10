@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
@@ -59,6 +60,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/elicify-ai/omnipus/pkg/voice"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // sweepOrphanedProviderCredentials is T068-10's startup sweep (ADR-068
@@ -216,13 +218,23 @@ func installSlogBridge() {
 // fix (two independent reviewers plus a third verifying pass all flagged
 // the same bug: this function used to be called AFTER datamodel.Init).
 func bootLoggingAndDataModel(homePath string) error {
-	logsDir := filepath.Join(homePath, logPath)
+	logFilePath := filepath.Join(homePath, logPath, logFile)
+	// Select the operator's destination before the first subsystem logs. The
+	// logger's standalone ConfigureFromEnv is not called by gateway startup.
+	if override := os.Getenv("OMNIPUS_LOG_FILE"); override != "" {
+		logFilePath = override
+		if strings.HasPrefix(override, "~/") {
+			if home := os.Getenv("HOME"); home != "" {
+				logFilePath = filepath.Join(home, override[2:])
+			}
+		}
+	}
 
 	// Preserves the original inline call site's panic-on-failure behavior
 	// (predates this fix, not itself part of the FIX 1 ordering change) —
 	// EnableFileLogging failing this early means no durable log sink exists
 	// to report the failure into.
-	if err := logger.EnableFileLogging(filepath.Join(logsDir, logFile)); err != nil {
+	if err := logger.EnableFileLogging(logFilePath); err != nil {
 		panic(fmt.Errorf("error enabling file logging: %w", err))
 	}
 
@@ -238,14 +250,20 @@ func bootLoggingAndDataModel(homePath string) error {
 	return nil
 }
 
-// The production values for the ADR-067 FR-008 background refresh: one pull
-// every 24 h, each attempt bounded to 30 s, and a startup pull skipped
-// entirely when the persisted last-known-good was written less than an hour
-// ago.
+// The production values for the ADR-067 FR-008 background refresh. Daily
+// attempts retain the 30 s budget. Startup gets two fast 4 s attempts, then
+// one full-budget attempt, with 500 ms / 1 s backoff. A transient failure can
+// therefore recover inside the model picker's 15 s readiness window without
+// denying a slow valid pull the specification's full 30 s allowance. Startup
+// refresh is skipped when the persisted last-known-good was written less than
+// an hour ago.
 const (
-	catalogRefreshInterval   = 24 * time.Hour
-	catalogRefreshTimeout    = 30 * time.Second
-	catalogStartupSkipWindow = time.Hour
+	catalogRefreshInterval        = 24 * time.Hour
+	catalogRefreshTimeout         = 30 * time.Second
+	catalogStartupSkipWindow      = time.Hour
+	catalogStartupRefreshAttempts = 3
+	catalogStartupFastTimeout     = 4 * time.Second
+	catalogStartupRetryBackoff    = 500 * time.Millisecond
 )
 
 // setupAndStartServicesState carries the shared state of setupAndStartServices across its stages.
@@ -272,10 +290,17 @@ type setupAndStartServicesState struct {
 	tExecutor              *agent.TaskExecutor
 	planStore              *plan.Store
 	lifecycleStore         *session.LifecycleStore
-	intentLog              *plan.IntentLog
-	bootSweepCfg           config.PlanningConfig
-	providerCatalog        *catalog.Catalog
-	api                    *restAPI
+	// bootEpoch is minted once, before any other boot stage. Later recovery
+	// reads this instance; it must not mint a second time.
+	bootEpoch       *session.BootEpochStore
+	intentLog       *plan.IntentLog
+	bootSweepCfg    config.PlanningConfig
+	providerCatalog *catalog.Catalog
+	api             *restAPI
+	// taskTrigger is created and prepared (boot classification) before
+	// startSchedulers starts any task producer; startSchedulers then starts
+	// it. nil when the agent loop has no task store.
+	taskTrigger *agent.TaskTriggerScheduler
 }
 
 func setupAndStartServices(
@@ -293,8 +318,80 @@ func setupAndStartServices(
 ) (rs *services, retErr error) {
 	stg := &setupAndStartServicesState{ctx: ctx, cfg: cfg, bundle: bundle, agentLoop: agentLoop, msgBus: msgBus, homePath: homePath, credStore: credStore, sandboxResult: sandboxResult, builtinReg: builtinReg, mcpReg: mcpReg, allowGodMode: allowGodMode}
 
+	// If any boot step fails and this function returns an error, tear down
+	// whatever was already started — otherwise the caller aborts boot on the
+	// error and the started services leak: the cron and drain services, the
+	// plan engine's tick loop (which keeps sweeping goals for the life of the
+	// process), and, once StartAll ran, the channel workers and the accepting
+	// listener. Registered before the first service starts and gated on
+	// retErr, so the success path leaves the services running.
+	// stopAndCleanupServices nil-checks each subsystem, so it is safe on a
+	// partially-started state; runningServices itself is nil until
+	// startSchedulers creates it.
+	defer func() {
+		if retErr != nil && stg.runningServices != nil {
+			stopAndCleanupServices(stg.runningServices, 5*time.Second, false)
+		}
+	}()
+
+	// First act of boot recovery pass one (ADR D8.5): persist the monotonic
+	// boot epoch before schedulers, channels, or SteerBootRecovery.Run.
+	// Run does not mint. A failure here stops boot; nothing else writes
+	// boot_epoch.json.
+	if err := stg.mintBootEpoch(); err != nil {
+		return nil, err
+	}
+
+	// Founder decision 2026-11-08 (Q8 B): workspaces whose delegation store
+	// saved an explicit edge depth of 3 under the OLD shipped default (raised
+	// to 10 by the founder ruling of 2026-10-27) are migrated ONCE to 10. It
+	// runs HERE, before startSchedulers/startPlanEngine start any autonomous
+	// producer (a due scheduled turn reads workspace.ReadDelegation) and before
+	// the REST listener and the agent loop — so no reader sees a pre-migration
+	// 3 and no operator write can interleave (round-5 CHECK R3). The store
+	// cannot tell an old-default 3 from a deliberate 3 — the founder accepted
+	// rewriting both, once; a ledger inside the agent-unreachable store
+	// directory guarantees a 3 saved after a record's migration is never
+	// rewritten (pkg/workspace/delegation_depth_migration.go states the rules
+	// and risks). Best-effort: a failure is logged and boot continues; the next
+	// boot resumes only the unfinished records.
+	if _, mErr := workspace.MigrateDelegationDepthDefaultOnce(stg.homePath); mErr != nil {
+		slog.Error("gateway: delegation depth default migration failed", "error", mErr)
+	}
+
+	// Boot recovery of interrupted task work, all of it BEFORE any task
+	// producer of this process (drain, cron engines, trigger engine, plan
+	// engine, REST listener) starts, so every in_progress claim it sees is the
+	// dead process's and none of this process's runs can be failed by it
+	// (6b review I2, re-review N1):
+	//   1. hold the goal transitions it makes: the goal outcome recorder and
+	//      its session stores are wired later (wireInteractiveServices,
+	//      setupPlans); buildRESTAPI replays them once they are (re-review N2);
+	//   2. reconcile tasks the dead process left in_progress;
+	//   3. classify the trigger scheduler's interrupted fires. startSchedulers
+	//      starts its engine later, with the decisions made here.
+	tools.HoldTaskGoalEndedUntilReplay()
+	agent.ReconcileInterruptedTasks(agent.GetTaskStore(stg.agentLoop))
+	if err := stg.prepareTaskTrigger(); err != nil {
+		return nil, err
+	}
+
+	// The task executor's session plane (launcher, lifecycle store, main
+	// resolver) is wired only after the schedulers start (setupPlans,
+	// startPlanEngine, buildRESTAPI). Mark it expected so the queued-task drain
+	// and owed trigger fires wait for it instead of dispatching unwired.
+	agent.GetTaskExecutor(stg.agentLoop).ExpectSessionPlane()
+
+	if hook := beforeStartSchedulersHookForTest.Load(); hook != nil {
+		(*hook)(stg.agentLoop)
+	}
+
 	if runningServices, stop, err := stg.startSchedulers(); stop {
 		return runningServices, err
+	}
+
+	if hook := afterStartSchedulersHookForTest.Load(); hook != nil {
+		(*hook)(stg.agentLoop)
 	}
 
 	if runningServices, stop, err := stg.setupMediaAndChannels(); stop {
@@ -319,20 +416,6 @@ func setupAndStartServices(
 		return runningServices, err
 	}
 
-	// The HTTP listener is now accepting connections. If any later boot step
-	// fails and this function returns an error, tear the started services down
-	// first — otherwise the caller aborts boot on the error and the accepting
-	// listener goroutine (plus device service / drains) leaks. Registered only
-	// after StartAll so it never fires when the listener was not started, and
-	// gated on retErr so the success path leaves the services running.
-	// stopAndCleanupServices nil-checks each subsystem, so it is safe on a
-	// partially-started state.
-	defer func() {
-		if retErr != nil {
-			stopAndCleanupServices(stg.runningServices, 5*time.Second, false)
-		}
-	}()
-
 	if runningServices, stop, err := stg.registerProcess(); stop {
 		return runningServices, err
 	}
@@ -340,7 +423,62 @@ func setupAndStartServices(
 	return stg.startBackgroundServices()
 }
 
+// prepareTaskTrigger creates the task trigger scheduler and classifies the
+// dead process's interrupted fires (PrepareAfterPhysicalBoot). It MUST run
+// before startSchedulers, which starts the first task producers (cron engine,
+// queued-task drain) and only then starts this scheduler with the decisions
+// made here (re-review N1). No-op when the agent loop has no task store.
+func (stg *setupAndStartServicesState) prepareTaskTrigger() error {
+	tStore := agent.GetTaskStore(stg.agentLoop)
+	if tStore == nil {
+		return nil
+	}
+	stg.taskTrigger = agent.NewTaskTriggerScheduler(
+		filepath.Join(stg.homePath, "tasks_triggers", "jobs.json"),
+		tStore, agent.GetTaskExecutor(stg.agentLoop),
+	)
+	if err := stg.taskTrigger.PrepareAfterPhysicalBoot(); err != nil {
+		return fmt.Errorf("error preparing task trigger scheduler: %w", err)
+	}
+	return nil
+}
+
+// afterStartSchedulersHookForTest, when set, runs inside setupAndStartServices
+// right after startSchedulers returns and before setupMediaAndChannels: the
+// window in which the schedulers run and the task executor's session plane is
+// not yet wired. Nil in production; set only by tests through
+// SetAfterStartSchedulersHookForTest.
+var afterStartSchedulersHookForTest atomic.Pointer[func(*agent.AgentLoop)]
+
+// SetAfterStartSchedulersHookForTest installs fn as the hook run right after
+// startSchedulers returns (nil removes it). For tests only.
+func SetAfterStartSchedulersHookForTest(fn func(al *agent.AgentLoop)) {
+	if fn == nil {
+		afterStartSchedulersHookForTest.Store(nil)
+		return
+	}
+	afterStartSchedulersHookForTest.Store(&fn)
+}
+
+// beforeStartSchedulersHookForTest, when set, runs inside setupAndStartServices
+// immediately before startSchedulers starts the first autonomous producers
+// (cron engine, queued-task drain, trigger scheduler). Nil in production; set
+// only by tests through SetBeforeStartSchedulersHookForTest, e.g. to pin that
+// boot-time store migrations completed before any scheduled work can read.
+var beforeStartSchedulersHookForTest atomic.Pointer[func(*agent.AgentLoop)]
+
+// SetBeforeStartSchedulersHookForTest installs fn as the hook run right before
+// startSchedulers (nil removes it). For tests only.
+func SetBeforeStartSchedulersHookForTest(fn func(al *agent.AgentLoop)) {
+	if fn == nil {
+		beforeStartSchedulersHookForTest.Store(nil)
+		return
+	}
+	beforeStartSchedulersHookForTest.Store(&fn)
+}
+
 // startSchedulers constructs and starts the gateway's cron-backed scheduling and drain services in boot order.
+// The task trigger scheduler is not created here: prepareTaskTrigger must have run first.
 func (stg *setupAndStartServicesState) startSchedulers() (*services, bool, error) {
 	stg.runningServices = &services{credStore: stg.credStore, bundle: stg.bundle, sandboxResult: stg.sandboxResult, homePath: stg.homePath}
 
@@ -358,7 +496,7 @@ func (stg *setupAndStartServicesState) startSchedulers() (*services, bool, error
 	if stg.err != nil {
 		return nil, true, fmt.Errorf("error setting up cron service: %w", stg.err)
 	}
-	if stg.err = stg.runningServices.CronService.Start(); stg.err != nil {
+	if stg.err = stg.runningServices.CronService.StartAfterPhysicalBoot(); stg.err != nil {
 		return nil, true, fmt.Errorf("error starting cron service: %w", stg.err)
 	}
 	fmt.Println("✓ Cron service started")
@@ -398,19 +536,24 @@ func (stg *setupAndStartServicesState) startSchedulers() (*services, bool, error
 		logger.WarnCF("gateway", "queued-task drain disabled — no task executor available", nil)
 	}
 
-	// Mailbox drain (M11): unhandled inbound mail → Board tasks. The provider is
-	// rebuilt from live config + the credential store on every tick, so adding,
-	// changing, or removing a mailbox via the Connectors API is picked up without
-	// a restart. Started unconditionally; the scanner is a no-op when no mailbox
-	// is configured.
+	// New-mail watcher (D20/#631): replaces the deleted mailbox drainer. The
+	// watcher never mutates flags, never creates tasks, never starts a turn —
+	// it only refreshes the per-mailbox state the Mail panel badge reads. The
+	// provider is rebuilt from live config + the credential store on every
+	// cycle, so mailbox changes via the Connectors API need no restart.
 	if tStore := agent.GetTaskStore(stg.agentLoop); tStore != nil {
 		provider := email.MailboxProviderFunc(func() []email.Mailbox {
-			return buildMailboxes(stg.agentLoop.GetConfig(), stg.credStore)
+			rt := gatewayMailRuntimeFor(stg.homePath)
+			return buildMailboxes(stg.agentLoop.GetConfig(), stg.credStore,
+				gatewayMailSessionsFor(stg.homePath), rt.mailGenerationForPair)
 		})
-		drainer := email.NewDrainer(tStore, provider, 0)
-		stg.runningServices.MailboxDrain = heartbeat.NewMailboxDrainService(drainer, 0)
-		stg.runningServices.MailboxDrain.Start()
-		fmt.Println("✓ Mailbox drain owned by: MailboxDrainService (unhandled mail → Board)")
+		// A8 mail-operation budget: the watcher set gates its cycles through
+		// the SAME shared per-account gate the REST panel and the agent tools
+		// use — one instance per state dir (SharedMailBudget), installed for
+		// the tools by gateway.go::initializeAgentLoop before NewAgentLoop.
+		stg.runningServices.MailWatch = heartbeat.NewMailWatchService(email.NewMailboxWatcherSet(provider, stg.homePath, email.SharedMailBudget(stg.homePath)), 0)
+		stg.runningServices.MailWatch.Start()
+		fmt.Println("✓ New-mail watcher owned by: MailWatchService (badge state only)")
 	}
 
 	// Task time-trigger executor: fires once/every/recurring task triggers via a
@@ -418,12 +561,16 @@ func (stg *setupAndStartServicesState) startSchedulers() (*services, bool, error
 	// scheduler). Boot-reconciles existing tasks' triggers, then the create/
 	// update/delete REST + tool paths (re)register/remove jobs via
 	// AgentLoop.NotifyTaskUpserted / NotifyTaskDeleted.
-	if tStore := agent.GetTaskStore(stg.agentLoop); tStore != nil {
-		triggerStorePath := filepath.Join(stg.homePath, "tasks_triggers", "jobs.json")
-		stg.runningServices.TaskTrigger = agent.NewTaskTriggerScheduler(
-			triggerStorePath, tStore, agent.GetTaskExecutor(stg.agentLoop),
-		)
-		if startErr := stg.runningServices.TaskTrigger.Start(); startErr != nil {
+	if stg.taskTrigger != nil {
+		// Created and prepared by setupAndStartServices before any task
+		// producer started (re-review N1).
+		stg.runningServices.TaskTrigger = stg.taskTrigger
+		// Physical boot, not a same-process start: a one-time trigger whose
+		// run the dead prior process had started is owed that run here, once
+		// (founder decision 2026-10-29, Q1 A; the task-trigger half of
+		// #1484). Gateway reload restarts this scheduler with plain Start —
+		// reload must never replay.
+		if startErr := stg.runningServices.TaskTrigger.StartAfterPhysicalBoot(); startErr != nil {
 			return nil, true, fmt.Errorf("error starting task trigger scheduler: %w", startErr)
 		}
 		stg.agentLoop.SetTaskTriggerScheduler(stg.runningServices.TaskTrigger)
@@ -644,13 +791,17 @@ func (stg *setupAndStartServicesState) wireInteractiveServices() (*services, boo
 	}
 	stg.agentLoop.WireTier13Deps(tier13)
 
-	// SSE chat endpoint — kept for backward compatibility; streaming tokens now route through WebSocket.
-	sseHandler := newSSEHandler(stg.msgBus, nil, stg.allowedOrigin, func() *config.Config { return stg.cfg })
-	stg.runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/chat", sseHandler)
-
 	// WebSocket chat endpoint — primary transport for bi-directional chat streaming.
 	stg.wsHandler = newWSHandler(stg.msgBus, stg.agentLoop, stg.allowedOrigin)
 	stg.wsHandler.home = stg.homePath
+	stg.wsHandler.notifStore = stg.runningServices.notifStore
+	// w5-integration (US-2/MC-4): bind W1's ONE Mail panel presence registry
+	// to the WS lifecycle (frames dispatch, teardown revokes), and flip the
+	// pool's retention gate — the production activation the conservative
+	// request-scoped default has been waiting for. Retention still only ever
+	// extends an authorized read; presence never grants access.
+	stg.wsHandler.SetMailPresence(gatewayMailSessionsFor(stg.homePath).Presence())
+	gatewayMailSessionsFor(stg.homePath).EnableRetention()
 	toolStore := newToolResultStore(stg.homePath)
 	stg.wsHandler.toolStore = toolStore
 	stg.runningServices.toolStore = toolStore
@@ -661,6 +812,9 @@ func (stg *setupAndStartServicesState) wireInteractiveServices() (*services, boo
 	// The webchatChannel and wsHandler share a reference so streaming can suppress duplicate Send().
 	wch := newWebchatChannel(stg.wsHandler)
 	stg.wsHandler.webchatCh = wch
+	// Peer requests and guest replies (session-core U8): the gateway owns
+	// member eligibility and live delivery.
+	stg.wsHandler.agentLoop.SetAddressDeps(gatewayAddressDeps{h: stg.wsHandler})
 	stg.runningServices.ChannelManager.RegisterChannel("webchat", wch)
 
 	// Live interactive browser panel WebSocket (ADR-038 D1) — a dedicated
@@ -719,6 +873,11 @@ func (stg *setupAndStartServicesState) wireInteractiveServices() (*services, boo
 	// Wire the policy approver into the agent loop (FR-011, C3).
 	// The adapter bridges agent.PolicyApprover → approvalRegistryV2 + WSHandler.
 	stg.agentLoop.SetToolApprover(newPolicyApproverAdapter(stg.approvalReg, stg.wsHandler))
+
+	// Group chats (omnipus-system-agent US-17): the room service, its live
+	// frames on the chat WS, and its runtime in the agent loop (room
+	// admission, dequeue fence, reply branch, cost).
+	stg.wsHandler.rooms = newRoomsHub(stg.wsHandler, stg.homePath)
 
 	// AskUserQuestion pending registry (askuserquestion-tool-spec v3, ADR-074
 	// D4b; W9b wiring): durable state lives in each owner session's
@@ -982,6 +1141,7 @@ func (stg *setupAndStartServicesState) wireSteerDeps() {
 		Classifier:     classifier,
 		LifecycleStore: stg.lifecycleStore,
 		SessionStore:   sessionStore,
+		BootEpoch:      stg.bootEpoch,
 		BootHook: func(ctx context.Context) error {
 			deps := stg.runningServices.SteerDeps
 			recovery := &agent.SteerBootRecovery{
@@ -993,8 +1153,11 @@ func (stg *setupAndStartServicesState) wireSteerDeps() {
 				OperatorNotice: func(message string) {
 					slog.Warn("gateway: ADR-091 boot recovery notice", "message", message)
 				},
+				BootEpoch: deps.BootEpoch,
 			}
-			return recovery.Run(ctx)
+			// D4: interrupted runs are stopped first, then accepted stop
+			// intents whose fence never took hold are finished or superseded.
+			return errors.Join(recovery.Run(ctx), stg.agentLoop.FinishUnfinishedStopIntents(ctx))
 		},
 	}
 
@@ -1011,7 +1174,7 @@ func (stg *setupAndStartServicesState) wireSteerDeps() {
 		stg.tExecutor.SetSessionLauncher(launcher)
 	}
 	setGatewaySteerCanceller(stg.agentLoop, canceller)
-	// The agent's own Stop — delegate(action="cancel"), wired in
+	// The agent's own Stop all — delegate(action="stop_all"), wired in
 	// pkg/agent/session_messaging_wire.go — cascades through the SAME
 	// instance the human Stop above uses, so both take one cascade lock per
 	// session instead of two (agent.SteerCanceller::cascade).
@@ -1020,7 +1183,7 @@ func (stg *setupAndStartServicesState) wireSteerDeps() {
 
 // startPlanEngine configures and starts the plan engine when its task dependencies are available.
 func (stg *setupAndStartServicesState) startPlanEngine() (*services, bool, error) {
-	// Mirrors the TaskDrain/TaskTrigger/MailboxDrain degrade-not-abort
+	// Mirrors the TaskDrain/TaskTrigger/MailWatch degrade-not-abort
 	// convention immediately below/above for a missing task store/executor
 	// (e.g. a minimal test harness's AgentLoop) — the plan engine needs both.
 	if stg.tStore != nil && stg.tExecutor != nil {
@@ -1081,7 +1244,7 @@ func (stg *setupAndStartServicesState) startPlanEngine() (*services, bool, error
 			planEngine.SetSnapshotMaxBytes(smb)
 		}
 		// session.failed hook: best-effort recovery signal. The plan engine's
-		// own tick loop re-arms idle settlement after Start; this hook is where
+		// own tick loop re-arms idle recovery after Start; this hook is where
 		// a future event-bus emission of session.failed would plug in.
 		planEngine.SetSessionFailedHook(func(sessionID, reason string) {
 			slog.Info("gateway: boot sweep: session.failed", "session_id", sessionID, "reason", reason)
@@ -1182,6 +1345,12 @@ func (stg *setupAndStartServicesState) buildRESTAPI() {
 	// consumer below treats nil as "no catalog", never a 500.
 	stg.providerCatalog = stg.agentLoop.GetCapabilityCatalog()
 
+	// #904: one reload outcome record, shared by the reload cycle (writer)
+	// and restAPI (PUT /performance reads it; its pending-apply state is
+	// cleared by the success hook installed right after restAPI is built,
+	// before any reload can run).
+	stg.runningServices.reloadOutcome = &reloadOutcomeTracker{}
+
 	stg.api = &restAPI{
 		agentLoop:       stg.agentLoop,
 		providerCatalog: stg.providerCatalog, // ADR-067: the booted catalog (nil in non-boot tests)
@@ -1190,6 +1359,8 @@ func (stg *setupAndStartServicesState) buildRESTAPI() {
 		// M3: "unknown" is not "fresh install" — see the field's doc comment.
 		onboardingStateUnknown: stg.onboardingStateUnknown,
 		homePath:               stg.homePath,
+		mailBudget:             email.SharedMailBudget(stg.homePath), // A8: the shared per-account gate
+		mailSessions:           gatewayMailSessionsFor(stg.homePath), // w5 MC-1: the ONE shared pooled session manager
 		taskStore:              stg.tStore,
 		taskExecutor:           stg.tExecutor,
 		liveTaskActivity:       stg.tExecutor, // founder decision 2026-09-14: Task.last_activity_at
@@ -1198,6 +1369,7 @@ func (stg *setupAndStartServicesState) buildRESTAPI() {
 		mediaStore:             stg.runningServices.MediaStore,
 		ssrfChecker:            agent.GetSSRFChecker(stg.agentLoop), // SEC-24: nil when SSRF disabled
 		sandboxResult:          stg.sandboxResult,                   // immutable post-boot snapshot
+		reloadOutcome:          stg.runningServices.reloadOutcome,   // #904: shared reload outcome record
 		appliedConfig:          mustDeepCopyConfig(stg.cfg),         // boot-time snapshot for pending-restart diff
 		servedSubdirs:          stg.runningServices.servedSubdirs,   // web_serve static-mode token registry
 		devServers:             stg.runningServices.devServers,      // web_serve dev-mode process registry
@@ -1212,6 +1384,15 @@ func (stg *setupAndStartServicesState) buildRESTAPI() {
 		taskLock:               task.TaskFileLock,                   // shared striped lock for board task RMW
 	}
 	stg.api.cronService.Store(stg.runningServices.CronService) // #264: schedules CRUD (atomic.Pointer)
+	stg.api.rooms.Store(stg.wsHandler.rooms)                   // group chats (rest_rooms.go)
+	// w5-integration (US-5.9/B-33): boot reconciliation — orphan Mail cache
+	// subtrees, watcher state files and identity records (state whose pair
+	// is absent from the live config) are never servable, their deletion is
+	// attempted once here, and a failed deletion keeps a safe visible
+	// retryable cleanup intent instead of a log-only success.
+	stg.api.reconcileOrphanMailState()
+	// #904: a successful reload clears the Performance pending-apply state.
+	stg.runningServices.reloadOutcome.onSuccess = stg.api.pendingApply.clearAfterReload
 	// D-107: the Library REST write handlers broadcast a library_changed WS
 	// frame after every landed mutation, so a second tab's folder listing
 	// reconciles without a reload. wsHandler was built earlier in boot; store
@@ -1220,6 +1401,16 @@ func (stg *setupAndStartServicesState) buildRESTAPI() {
 	// tests that never wire it.
 	libraryChangeFn := func(f gen.LibraryChangedFrame) { stg.wsHandler.broadcastLibraryChange(f) }
 	stg.api.libraryChangeBroadcast.Store(&libraryChangeFn)
+	// agent-picker-freshness fix (#1009): the analogous cross-tab
+	// invalidation hook for the Agent Picker's ['agents'] query — see
+	// agent_created_broadcast.go's doc comment.
+	agentCreatedFn := func(f gen.AgentCreatedFrame) { stg.wsHandler.broadcastAgentCreated(f) }
+	stg.api.agentCreatedBroadcast.Store(&agentCreatedFn)
+	// #1329: the setup-offer line is a saved transcript entry, not a turn
+	// frame. The same hub that journals every other chat frame delivers it
+	// live and on incremental re-attach. wsHandler exists by here
+	// (wireInteractiveServices); a nil hubs is the poster's logged miss.
+	stg.api.sessionHubs = stg.wsHandler.hubs
 	// ADR-067 FR-037 (T067-11): a catalog refresh invalidates the
 	// entitlement cache — the intersection behind every cached answer was
 	// computed against a document that is no longer the served one.
@@ -1253,6 +1444,27 @@ func (stg *setupAndStartServicesState) buildRESTAPI() {
 	if wsErr := ensureDefaultWorkspace(stg.homePath, ownerUsername, stg.cfg); wsErr != nil {
 		slog.Error("gateway: default workspace auto-creation failed", "error", wsErr)
 	}
+	// FR-002/C-MAIN: mains exist eagerly - Admin's (default workspace only; he
+	// is not a team member, so no membership write could create it) and one per
+	// eligible member of every existing workspace team, so a fresh install's
+	// seeded team has its mains at first boot with no team change. Covers both
+	// branches of ensureDefaultWorkspace above; a no-op for Admin when no
+	// default workspace exists.
+	stg.api.ensureBootMains()
+	// Final-gate H2: the Admin create_agent tool joins agents to teams without a
+	// workspace save; it provisions their mains through this hook.
+	stg.runningServices.ensureWorkspaceMains = stg.api.ensureWorkspaceMains
+	// The delete_agent tool stops an agent's sessions through the same Stop as the
+	// REST delete (architect final-gate item 1).
+	stg.runningServices.stopSessionForDelete = func(sessionID string) string {
+		return stg.api.stopBeforeDeleteFor(stg.ctx, sessionID, "delete_agent")
+	}
+	// session-core U6 (FR-017/019): the task executor derives a run's mode and
+	// captures its recipients from which agents own a visible main. Without this
+	// resolver every task run stays ISOLATED.
+	if stg.tExecutor != nil {
+		stg.tExecutor.SetMainSessionResolver(taskMainResolver{api: stg.api})
+	}
 
 	// ADR-046 P1 (FR-007/008): execution is workspace-scoped, and the system
 	// deliberately never auto-adds a custom/pre-existing agent to any
@@ -1272,17 +1484,23 @@ func (stg *setupAndStartServicesState) buildRESTAPI() {
 	// listener accepts connections. Interval 0 means FR-038a's six-hour default:
 	// there is no config key for it yet, and KnowledgeLifecycleOptions.DriftInterval
 	// is where one would be passed in.
+	stg.agentLoop.SetGoalPausedHook(goalPausedNotifier(stg.runningServices.notifStore, stg.agentLoop, stg.agentLoop.GetConfig))
+
 	startKnowledgeLifecycle(stg.homePath, stg.wsHandler, 0,
 		knowledgeDriftNotifier(stg.runningServices.notifStore, stg.agentLoop, stg.agentLoop.GetConfig))
 
-	// Recover tasks left "in_progress" by a crashed/abandoned previous process.
-	// Runs before the HTTP listener accepts connections (StartAll, below), so no
-	// handler can race reconciliation.
-	stg.api.reconcileStuckTasks()
+	// Hand the goal transitions held since the boot reconcile to the goal
+	// outcome recorder, now that it and its session stores are wired, so each
+	// interrupted task's goal keeps its lasting goal_outcome line (re-review
+	// N2).
+	if err := tools.ReplayHeldTaskGoalEnded(); err != nil {
+		slog.Error("gateway: boot goal outcome lines not written", "error", err)
+	}
 
 	// Drop blocked_by edges pointing at task files that no longer exist, so the
 	// dependency graph self-heals on boot (a waiting task gated only on an orphan
-	// would otherwise never advance). Same pre-listener safety window as above.
+	// would otherwise never advance). Runs before the HTTP listener accepts
+	// connections (StartAll, below), so no handler can race it.
 	stg.api.reconcileOrphanBlockedByEdges()
 
 	// Register additional endpoints for frontend features.
@@ -1508,6 +1726,23 @@ func (stg *setupAndStartServicesState) registerProcess() (*services, bool, error
 	return nil, false, nil
 }
 
+// repairLibraryAssociationsOnce runs the #1449 association repair (A-14) for
+// every workspace whose library has not had it yet. Best-effort.
+func (stg *setupAndStartServicesState) repairLibraryAssociationsOnce() {
+	a := stg.agentLoop
+	if a == nil {
+		return
+	}
+	wsFiles, err := listWorkspaceFiles(stg.homePath)
+	if err != nil {
+		slog.Warn("library association repair: list workspaces failed", "error", err)
+		return
+	}
+	for _, ws := range wsFiles {
+		repairLibraryAssociations(stg.homePath, ws.ID, a.GetWorkspaceLibrary(ws.ID))
+	}
+}
+
 // startBackgroundServices starts the shutdown-aware orphan and browser cleanup loops and returns the running services.
 func (stg *setupAndStartServicesState) startBackgroundServices() (*services, error) {
 	// Start the orphan GC scheduler: runs Library.OrphanGC across every
@@ -1515,21 +1750,56 @@ func (stg *setupAndStartServicesState) startBackgroundServices() (*services, err
 	// (e.g. corrupted manifest) does not abort the loop — the error is
 	// logged and the next tick proceeds. Libraries with no orphan files
 	// are a fast no-op.
+	//
+	// The done channel lets teardown WAIT for the goroutine, not just cancel
+	// it: this goroutine's FIRST act is repairLibraryAssociationsOnce — a
+	// writer under workspaces/ — and an in-flight tick touches disk too
+	// (Library.OrphanGC). Context cancellation alone stops the NEXT tick but
+	// leaves the current one running; join-on-done is what keeps a shutdown
+	// (or a test's t.TempDir removal) from racing it
+	// (#1598 "workspaces: directory not empty"). Consumed by
+	// drainBootBackgroundWriters.
+	//
+	// The goroutine derives its context from stg.ctx but carries its OWN
+	// cancel (orphanGCCancel): both teardown drains call it BEFORE joining
+	// done. Deriving the exit signal from stg.ctx alone is not enough — the
+	// graceful shutdown cancels stg.ctx only late (after the turn drain), and
+	// a partial-boot abort or a test harness teardown leaves the parent
+	// context live forever, so a drain that could only join, never cancel,
+	// would sit on done until its budget expired while the goroutine kept
+	// running (CHECK 1 finding F2, 2026-11-08). Same cancel-and-join contract
+	// as the catalog refresh loop.
+	orphanCtx, orphanCancel := context.WithCancel(stg.ctx)
+	orphanDone := make(chan struct{})
+	if stg.runningServices == nil {
+		// Degenerate harness: no services object to carry the handles, so no
+		// drain can ever cancel this goroutine — stop it before it starts.
+		orphanCancel()
+	} else {
+		stg.runningServices.orphanGCDone = orphanDone
+		stg.runningServices.orphanGCCancel = orphanCancel
+	}
 	go func() {
+		defer close(orphanDone)
 		const orphanInterval = 1 * time.Hour
 		ticker := time.NewTicker(orphanInterval)
 		defer ticker.Stop()
-		// ctx.Done() must be observed here (not a bare `for range ticker.C`,
-		// which never exits) — this goroutine outlives the process
-		// otherwise. See runCatalogRefreshLoop's doc comment for the shared
-		// class of bug: any un-canceled background loop started here can
-		// still be mid-tick (Library.OrphanGC touches disk) when a caller
-		// that boots/tears down many gateways in one process — every test
-		// using testutil.StartTestGateway — has already moved on to
+		// #1449 A-14: the one-time association repair for uploads made
+		// before the durable library_path existed, once per workspace.
+		// Synchronous and uncancelable by design; the join below is what
+		// covers it — the cancel stops only the tick loop after it.
+		stg.repairLibraryAssociationsOnce()
+		// orphanCtx.Done() must be observed here (not a bare
+		// `for range ticker.C`, which never exits) — this goroutine outlives
+		// the process otherwise. See runCatalogRefreshLoop's doc comment for
+		// the shared class of bug: any un-canceled background loop started
+		// here can still be mid-tick (Library.OrphanGC touches disk) when a
+		// caller that boots/tears down many gateways in one process — every
+		// test using testutil.StartTestGateway — has already moved on to
 		// t.TempDir() cleanup of homePath.
 		for {
 			select {
-			case <-stg.ctx.Done():
+			case <-orphanCtx.Done():
 				return
 			case <-ticker.C:
 			}
@@ -1543,7 +1813,13 @@ func (stg *setupAndStartServicesState) startBackgroundServices() (*services, err
 				continue
 			}
 			for _, ws := range wsFiles {
-				lib, libErr := library.New(stg.homePath, ws.ID)
+				// The process's own library instance when there is one, so
+				// the collector and the chat paths share one manifest view.
+				lib := a.GetWorkspaceLibrary(ws.ID)
+				var libErr error
+				if lib == nil {
+					lib, libErr = library.New(stg.homePath, ws.ID)
+				}
 				if libErr != nil {
 					slog.Warn("orphan-gc: open library", "workspace_id", ws.ID, "error", libErr)
 					continue
@@ -1709,7 +1985,8 @@ func skipStartupPull(store persistedCatalogAger, window time.Duration) bool {
 }
 
 // runCatalogRefreshLoop performs the FR-008 startup pull (unless the
-// persisted document is younger than skipWindow), then one pull every
+// persisted document is younger than skipWindow), retrying a transient
+// startup failure with bounded exponential backoff, then one pull every
 // interval thereafter, until ctx is canceled. The sole caller
 // (setupAndStartServices) invokes it in its own goroutine, AFTER the
 // listener is bound, passing the gateway's own shutdown-aware context.
@@ -1763,6 +2040,69 @@ func startCatalogRefreshLoop(
 	return loopCancel, ch
 }
 
+type catalogRetryWait func(context.Context, time.Duration) bool
+
+func waitForCatalogRetry(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+// retryableCatalogRefreshError distinguishes a transient pull/timeout failure
+// from a downloaded document that deterministically failed acceptance. The
+// latter cannot recover until the publisher changes the artifact, so retrying
+// it immediately only repeats network traffic and warning noise.
+// ErrChecksumMismatch stays retryable because the puller also wraps temporary
+// checksum-sidecar fetch failures (timeout, 429, 5xx) with that sentinel.
+func retryableCatalogRefreshError(err error) bool {
+	return err != nil &&
+		!errors.Is(err, catalog.ErrTooLarge) &&
+		!errors.Is(err, catalog.ErrInvalid) &&
+		!errors.Is(err, catalog.ErrRegressed)
+}
+
+func catalogStartupAttemptTimeout(attempt int, fullTimeout time.Duration) time.Duration {
+	if attempt < catalogStartupRefreshAttempts {
+		return min(fullTimeout, catalogStartupFastTimeout)
+	}
+	return fullTimeout
+}
+
+// runCatalogStartupRefresh applies the bounded startup retry policy. wait is
+// injected so tests can prove attempts and cancellation without wall-clock
+// sleeps; production passes waitForCatalogRetry.
+func runCatalogStartupRefresh(
+	ctx context.Context,
+	refresh func(attempt int) error,
+	wait catalogRetryWait,
+) (attempts int, err error) {
+	for attempts < catalogStartupRefreshAttempts {
+		attempts++
+		err = refresh(attempts)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return attempts, ctxErr
+		}
+		if err == nil || !retryableCatalogRefreshError(err) || attempts == catalogStartupRefreshAttempts {
+			return attempts, err
+		}
+		delay := catalogStartupRetryBackoff << (attempts - 1)
+		logger.InfoCF("gateway", "catalog: retrying startup refresh",
+			map[string]any{"attempt": attempts + 1, "delay": delay.String()})
+		if !wait(ctx, delay) {
+			if ctx.Err() != nil {
+				return attempts, ctx.Err()
+			}
+			return attempts, err
+		}
+	}
+	return attempts, err
+}
+
 func runCatalogRefreshLoop(
 	ctx context.Context,
 	cat *catalog.Catalog,
@@ -1772,21 +2112,28 @@ func runCatalogRefreshLoop(
 	if cat == nil {
 		return
 	}
-	refresh := func(failureLogMsg string) {
-		attemptCtx, cancel := context.WithTimeout(ctx, refreshTimeout)
+	refresh := func(failureLogMsg string, attemptTimeout time.Duration, attempt int) error {
+		attemptCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
 		defer cancel()
-		if err := cat.Refresh(attemptCtx); err != nil {
-			// A cancellation reaching here mid-attempt (gateway shutting
-			// down) is expected, not a real refresh failure — log it at a
-			// lower level than a genuine pull/parse/apply error so shutdown
-			// under load does not spam WARN.
-			if ctx.Err() != nil {
-				logger.InfoCF("gateway", "catalog refresh: canceled by gateway shutdown",
-					map[string]any{"error": err})
-				return
-			}
-			logger.WarnCF("gateway", failureLogMsg, map[string]any{"error": err})
+		err := cat.Refresh(attemptCtx)
+		if err == nil {
+			return nil
 		}
+
+		// A cancellation reaching here mid-attempt (gateway shutting down)
+		// is expected, not a real refresh failure. Log it below WARN so
+		// shutdown under load does not produce warning noise.
+		if ctx.Err() != nil {
+			logger.InfoCF("gateway", "catalog refresh: canceled by gateway shutdown",
+				map[string]any{"error": err})
+		} else {
+			fields := map[string]any{"error": err}
+			if attempt > 0 {
+				fields["attempt"] = attempt
+			}
+			logger.WarnCF("gateway", failureLogMsg, fields)
+		}
+		return err
 	}
 
 	if ctx.Err() != nil {
@@ -1797,7 +2144,17 @@ func runCatalogRefreshLoop(
 		logger.InfoCF("gateway", "catalog: startup pull skipped; persisted document is recent",
 			map[string]any{"skip_window": skipWindow.String()})
 	} else {
-		refresh("gateway: catalog startup refresh failed; served document retained")
+		attempts, err := runCatalogStartupRefresh(ctx, func(attempt int) error {
+			attemptTimeout := catalogStartupAttemptTimeout(attempt, refreshTimeout)
+			return refresh("gateway: catalog startup refresh failed; served document retained", attemptTimeout, attempt)
+		}, waitForCatalogRetry)
+		if ctx.Err() != nil {
+			return
+		}
+		if err != nil && retryableCatalogRefreshError(err) && attempts == catalogStartupRefreshAttempts {
+			logger.WarnCF("gateway", "catalog: startup refresh retries exhausted; last-known-good retained",
+				map[string]any{"attempts": attempts, "next_refresh_in": interval.String(), "error": err})
+		}
 	}
 
 	ticker := time.NewTicker(interval)
@@ -1807,7 +2164,7 @@ func runCatalogRefreshLoop(
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			refresh("gateway: catalog refresh failed; last-known-good retained")
+			_ = refresh("gateway: catalog refresh failed; last-known-good retained", refreshTimeout, 0)
 		}
 	}
 }
@@ -1842,6 +2199,17 @@ func wireChannelManager(cm *channels.Manager, al *agent.AgentLoop) {
 			al.EmitWhatsAppPairing(channelID, status, qr, message)
 		},
 	)
+	// Gate r3 M8: channels that track pairing attempts report each event with
+	// its attempt id, so a late event of an older attempt never reaches a
+	// successor's frames.
+	cm.SetPairingAttemptObserver(al.EmitWhatsAppPairingAttempt)
+	// BDD-08.9 / N1: an answer the final egress check refused (instance rebound,
+	// unbound or deleted since the request arrived) must be visible to the
+	// responding side, not only counted and logged.
+	cm.SetReturnRefusalObserver(al.ReportReturnRefusal)
+	// channels-spec-r8 FR-044: the dispatch and dequeue start checks read
+	// the same live configuration send_message reads.
+	cm.SetPolicySource(al.GetConfig)
 }
 
 // agentCheckerFunc adapts a func to the agentChecker interface used by the
@@ -1877,13 +2245,6 @@ func setupCronTool(
 	runner.setProcessTracker(procReg.Track)
 	runner.setProcessCleanup(procReg.Cleanup)
 	cronService.SetRunner(runner)
-
-	// Default agent id used only to migrate owner-less legacy jobs on load (W-8).
-	defaultAgentID := ""
-	if def := agentLoop.GetRegistry().GetDefaultAgent(); def != nil {
-		defaultAgentID = def.ID
-	}
-	cronService.SetDefaultAgentID(defaultAgentID)
 
 	if cfg != nil {
 		cronService.SetMaxConcurrentRuns(cfg.Schedules.MaxConcurrentRuns)

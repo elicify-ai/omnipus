@@ -8,13 +8,13 @@ import { describe, it, expect } from 'vitest'
 import { agentKindFlags, isExternalType, isWorkerType, isSystemType } from './agentKind'
 
 describe('isWorkerType', () => {
-  it('is true for Subagent, subagent_3p, and the legacy worker constant', () => {
+  it('is true for Subagent and subagent_3p (the modern wire enum worker types)', () => {
     expect(isWorkerType('Subagent')).toBe(true)
     expect(isWorkerType('subagent_3p')).toBe(true)
-    expect(isWorkerType('worker')).toBe(true)
   })
 
-  it('is false for Main, core, other type strings, and missing/null', () => {
+  it('is false for the legacy worker constant, Main, core, other type strings, and missing/null', () => {
+    expect(isWorkerType('worker')).toBe(false)
     expect(isWorkerType('Main')).toBe(false)
     expect(isWorkerType('core')).toBe(false)
     expect(isWorkerType('system')).toBe(false)
@@ -128,32 +128,23 @@ describe('agentKindFlags', () => {
     })
   })
 
-  it('classifies a legacy worker with a native (or absent) executor as a native worker', () => {
+  it('does NOT classify the legacy worker constant as a worker, native, or external — type-based only (DEL-F04)', () => {
     expect(agentKindFlags({ type: 'worker', locked: false })).toEqual({
       isLocked: false,
-      isWorker: true,
+      isWorker: false,
       isExternal: false,
-      isNativeWorker: true,
+      isNativeWorker: false,
       isSystem: false,
     })
-    expect(
-      agentKindFlags({ type: 'worker', locked: false, executor: { kind: 'native' } }),
-    ).toEqual({
-      isLocked: false,
-      isWorker: true,
-      isExternal: false,
-      isNativeWorker: true,
-      isSystem: false,
-    })
-  })
-
-  it('classifies a legacy worker with an external-cli executor as external — the one case isExternalType alone would get wrong', () => {
+    // The removed executor branch: a legacy worker with an external-cli
+    // executor is no longer external — the type alone decides, and `worker`
+    // is not a recognised kind.
     expect(
       agentKindFlags({ type: 'worker', locked: false, executor: { kind: 'external-cli' } }),
     ).toEqual({
       isLocked: false,
-      isWorker: true,
-      isExternal: true,
+      isWorker: false,
+      isExternal: false,
       isNativeWorker: false,
       isSystem: false,
     })

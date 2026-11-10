@@ -1,15 +1,24 @@
 // types.ts: Chat, attachment, subagent-span, rate-limit, and per-session state contracts
 
-import type { Message, ToolCall, AgentKind } from '@/lib/api'
-import type { WsReceiveFrame } from '@/lib/ws'
+import type { Message, ToolCall } from '@/lib/api'
+import type { StoreApi } from 'zustand'
+import type { SessionHistoryQuery, SessionHistoryMetadata, SessionHistoryEntry, HistoryPosition } from '@/lib/api/history-types'
+import type { WsConnection } from '@/lib/ws'
 import type {
   GoalStatusFrame,
   LoopStatusFrame,
   AskUserQuestionCard,
   AskUserAnswerFrame,
   SubagentStateFrame,
+  MessageFrame,
+  CancelFrame,
+  ServerFrame,
+  LLMError as GeneratedLLMError,
+  WorkflowStart,
 } from '@/lib/api/generated/asyncapi-types'
 import { type LLMErrorCode } from '@/lib/llm-error'
+import type { UserDeliveryState } from '@/lib/userDeliveryState'
+import type { SessionModelChoice } from './model-choice'
 
 /**
  * #823 catch-up redesign (BE-DESIGN.md §6.1) — the SPA's per-session
@@ -103,6 +112,13 @@ interface SubagentSpanBase {
    */
   hasRun?: boolean
   /**
+   * FR-013 / U4: set when a `subagent_message` of kind `not_delivered` arrived
+   * for this span — the server refused the child's report at an inbox cap and
+   * did not save it. `text` is the server-authored line (never the refused
+   * body). Sticky; Activity shows it as its own "Not delivered" row.
+   */
+  notDelivered?: { text?: string; at: string }
+  /**
    * ADR-091 D7 table's own status-line example, "last update N s ago":
    * the ISO timestamp (`created_at`) of the last `subagent_message` OR
    * `subagent_state` frame reduced onto this span (also seeded at
@@ -149,11 +165,47 @@ export type SubagentSpan = SubagentSpanRunning | SubagentSpanTerminal
 // `normalizeTruncationReason` (src/lib/truncation.ts) legacy-default rule.
 // `getMessageStatusSuffix` (same module) is the single render-layer
 // consumer of both fields — see its D1 precedence doc comment.
+// Local delivery recovery, never persisted or sent as a wire format.
+export type FirstSendStatus = 'sending' | 'unconfirmed' | 'retrying' | 'checking_chat' | 'check_failed' | 'not_saved' | 'saved' | 'answer_not_started' | 'unfinished'
+
+export interface PendingFirstSend {
+  clientMessageId: string
+  payload: MessageFrame
+  workspaceId: string | null
+  attemptGeneration: number
+  sessionId: string | null
+  assistantPlaceholderId: string
+  status: FirstSendStatus
+  /** Latest explicit choice in this pending chat, separate from the immutable payload.
+   *  Only a correlated receipt for this message may save it under a real session ID. */
+  modelChoice?: SessionModelChoice
+}
+
 export type ChatMessage = Message & {
   isStreaming?: boolean
-  /** SPA-only acknowledgement state for a user-authored message. */
-  deliveryStatus?: 'queued' | 'sending' | 'received' | 'working' | 'failed'
+  /** SPA-only arrival cue; absent on cold history and false during replay. */
+  announceHelperEvent?: boolean
+  /** Original wire identity, independent of a replay-rekeyed display id. */
+  clientMessageId?: string
+  /** Ordinary first-send status only. */
+  firstSendStatus?: FirstSendStatus
+  /**
+   * SPA-only acknowledgement state for a user-authored message. Ruling
+   * S3-02 (2026-10-12): /clear outcomes are wire states — a refusal arrives
+   * as 'failed' (message_status for the /clear's client_message_id, any
+   * refusal path), a done clear applies the fresh marker projection, and a
+   * HELD clear simply stays 'queued' with no deadline. The former
+   * /clear-only 'not-performed' and 'unconfirmed' states (and the 90 s
+   * bounded wait that produced the latter) are deleted.
+   */
+  deliveryStatus?: UserDeliveryState
   media?: MediaAttachment[]
+  /**
+   * #1449 (ADR-20261028 A3.1): SPA-only marks of a group-chat entry shown in
+   * the shared rows. `afterPause`: the answer was posted after /pause and
+   * keeps its muted "after pause" mark (FR-170/FR-217). Never serialized.
+   */
+  roomMarks?: { afterPause: boolean }
   /**
    * Review finding 17 — the `media://` refs (opts.mediaRefs) this user
    * message was originally SENT with. `media` above is display-only
@@ -168,6 +220,15 @@ export type ChatMessage = Message & {
   spans?: SubagentSpan[]
   /** Agent that produced this message (assistant messages only). */
   agentId?: string
+  /**
+   * Goal association (FR-039): the `goal_id` of the goal this message's
+   * producing run/turn belongs to, stamped by the producer (the camelCase twin
+   * of the wire `goal_id`, matching the `turnId`/`agentId` convention above).
+   * The thinking/error indicators join on THIS exact id — `goalPills[goalId]`
+   * via `isGoalRecordEmpty` — never the session's "latest goal" scalar. Absent
+   * means an UNKNOWN association, which the indicators treat as neutral.
+   */
+  goalId?: string
   /**
    * Turn-correlation id (Fix 5c; wire field ReplayMessageFrame.turn_id, sourced
    * from TranscriptEntry.TurnID), stamped on assistant messages hydrated via WS
@@ -208,6 +269,20 @@ export type ChatMessage = Message & {
    * check); this field covers the entries folded in AFTER that one.
    */
   mergedReplayIds?: string[]
+  /**
+   * #1452 D1 (chat-history-paging-spec S1/S7): the body-free ordered part
+   * list of a row that combines several sources (every site that appends to
+   * `mergedReplayIds` records the part). Lets a later saved record bind to
+   * its own part instead of the whole row; see history-parts.ts. Client-local,
+   * released with the row, never persisted or sent.
+   */
+  historyParts?: HistoryDisplayPart[]
+  /**
+   * #1452 S11 reading position: the stable client-local render identity of a
+   * row whose display key or slot moved when a turn segment folded into it
+   * (the drawn row it grew from). Never persisted or sent.
+   */
+  historyRenderKey?: string
   /**
    * #823 catch-up redesign, Opus review round 3 item N1 (BE-DESIGN.md §6.5):
    * set ONCE, directly, by the `catch_up_complete` reducer's own sweep — NOT
@@ -254,6 +329,23 @@ export type ChatMessage = Message & {
    */
   errorEntryId?: string
   /**
+   * provider-messages spec (MAJ-103/DG-4) — the optional `facts` object from
+   * a live `ErrorFrame`'s `payload.llm_error.facts` (provider, model,
+   * request_id — nothing else). Display-only (never serialized): rendered as
+   * the verbose-only facts lines inside the "Technical details" disclosure
+   * (`MessageItem.tsx`); request_id is surfaced ONLY under Verbose chat.
+   * Replay frames carry no facts (the `LLMErrorReplay` wire type omits the
+   * field), so this is set only on live error bubbles.
+   */
+  errorFacts?: GeneratedLLMError['facts']
+  /**
+   * A non-terminal error notice: a message-scoped refusal (frames.ts, C2) or
+   * judge_conclusion_failed. Neither notice is the running turn's reply, so
+   * busyFlagIsUnbacked looks past it; a real turn-ending error bubble remains
+   * a reply and is not skipped. The legacy field name is retained.
+   */
+  refusalNotice?: boolean
+  /**
    * ADR-070 §2.4 — true when this assistant bubble was closed because a
    * mid-turn steer (a follow-up sent while it was still streaming) landed
    * after it, rather than because the reply/turn fully finished. Debugging/
@@ -299,6 +391,8 @@ export type ChatMessage = Message & {
    * the de-dup key, there is no separate domain id to carry.
    */
   browserHandoverNoticeId?: string
+  // providerFallbackNote is declared once on the API-normalized Message
+  // (src/lib/api/sessions.ts::ProviderFallbackNoteMarker); ChatMessage inherits it.
 }
 
 export interface QueuedOutboundMessage {
@@ -326,14 +420,94 @@ export interface RateLimitEventData {
   tool?: string
 }
 
+/**
+ * provider-messages spec §8 — the render state of one live `provider_retry`
+ * frame, stored per session in its OWN slot (`SessionChatState
+ * .providerRetryEvent`) — deliberately separate from the own-limiter's
+ * `rateLimitEvent` slot, which it never reads or writes. `receivedAt` is the
+ * client-clock time the frame was received, captured at reducer entry so the
+ * indicator can derive a skew-corrected countdown (C-11) without ever
+ * comparing clocks directly. `previousProvider`/`previousModel` carry the
+ * chain's PREVIOUS candidate when this frame's candidate moved within the
+ * SAME provider (MIN-104's model-switch qualifier); they are absent for the
+ * turn's first frame or a cross-provider move.
+ */
+export interface ProviderRetryEventData {
+  turnId: string
+  provider: string
+  model: string
+  retryAt: string
+  sentAt: string
+  receivedAt: string
+  attempt: number
+  maxAttempts: number
+  /**
+   * The retry cause the backend classified this failure under (the
+   * `provider_retry` frame's `error_code` — pkg/providers/retry_plan.go:
+   * network, rate_limited, overloaded, stream_interrupted). The indicator
+   * words the cause from this field in plain English; a missing or
+   * unrecognized code renders the generic clause, never the code text
+   * (issues #1280/#1478 wording round).
+   */
+  errorCode?: string
+  previousProvider?: string
+  previousModel?: string
+}
+
+/**
+ * Issues #1478/#1280 — the render state of a live `provider_status`
+ * `waiting` frame, stored per session in its OWN slot
+ * (`SessionChatState.providerStatusEvent`). Only `waiting` occupies the
+ * slot: `responding` and `recovered` clear it (the notice disappears), and
+ * `recovered` additionally appends the short recovered note and clears a
+ * stale `providerRetryEvent` (a recovered call means no retry can still be
+ * pending). `receivedAt` is the client-clock reading at reducer entry (the
+ * C-11 receipt anchor, same as ProviderRetryEventData).
+ */
+export interface ProviderStatusEventData {
+  state: 'waiting'
+  turnId: string
+  /** Server clock — the last provider activity (or the round's start). */
+  silentSince: string
+  /** Server clock — when the silence limit would end the call; absent when unknown. */
+  stallAt?: string
+  sentAt: string
+  receivedAt: string
+}
+
 /** All per-session chat state for one concurrent session. */
 export interface SessionChatState {
+  history: SessionHistoryState
+  historyNotice?: string
+  /** Release retains the live cursor, but the next visible attach needs a fresh page. */
+  historyNeedsSnapshot?: boolean
+  /** Body-free source/display aliases and hidden current-tail order, released on leave. */
+  historySourceAliases?: Record<string, string>
+  historyLiveOrder?: string[]
+  /**
+   * #1452 D2: saved text positions whose full text the user asked to see
+   * ("Show the rest"). Flags only — the full text lives in the query cache,
+   * never here. Released with the reader (D9).
+   */
+  historyExpandedText?: Record<string, true>
+  /** Private source hydration only: a synthetic tool owner is not yet narration coverage. */
+  historyPendingNarrationId?: string
   // Map-indexed ring buffer. Use getMessages(bucket) to get the ordered array.
   messagesById: Record<string, ChatMessage>
   messageOrder: string[]
   /** Number of messages trimmed from the front of messageOrder (evicted from the ring buffer). */
   trimmedCount: number
 
+  /**
+   * Tool calls whose `tool_call_start` found the busy flag DOWN, i.e. that
+   * re-armed it themselves. Only such a start can be a straggler from a turn
+   * that already ended (after Stop, done, a discarded send); a start that finds
+   * the flag already up belongs to a turn in flight. The result releases the
+   * flag only for an idle-armed call (see busyFlagIsUnbacked), so a mid-turn
+   * tool result never blinks Stop off. Overlapping stragglers form one burst:
+   * the marks are cleared together when no tool is running any more.
+   */
+  idleArmedToolCalls?: Record<string, true>
   toolCalls: Record<string, ToolCall & { call_id: string }>
   toolCallOrder: string[]
   textAtToolCallStart: Record<string, string>
@@ -397,9 +571,72 @@ export interface SessionChatState {
    * not accidentally inherit a stale true from an earlier restart.
    */
   snapshotWasBootMismatch?: boolean
-  sessionTokens: number
+  /**
+   * Compatibility display hint for the clear-divider UI, updated with the
+   * committed history projection. Paging authority, source boundaries and
+   * explicit clear-crossing controls belong to the existing history slice;
+   * this display field does not define selectors or request ordering.
+   */
+  hasEarlierMessages?: boolean
+  /**
+   * SPA-only: a completed boot-mismatch attach confirmed a cut-off answer in
+   * this tab. Keeps Interrupted independent of the optional REST lifecycle's
+   * arrival. Retains boot identity through rebuilds so the same boot cannot
+   * undo dismissal. Later confirmed progress clears it; a later cut can relatch it.
+   */
+  restartInterruptedBootId?: string
+  /** Session-list cache version at confirmation; older cached values cannot clear the notice. */
+  restartInterruptedListVersion?: number
+  /**
+   * I1: the user continued a chat whose saved lifecycle said `interrupted` (a
+   * turn started for it in this tab). The Interrupted notice and the
+   * suppression of the "couldn't be finished" statuses stay off until the saved
+   * lifecycle is seen at any other value — a stale list that still says
+   * `interrupted` after the user's own turn must never bring them back. See
+   * components/chat/useRestartInterrupted.ts.
+   */
+  restartNoticeDismissed?: boolean
+  /** Narrow recovery flag: unknown_position alone does not mean interrupted. */
+  recoveredFirstSend?: { clientMessageId: string; attemptGeneration: number; reconciled: boolean }
+  sessionTokens: number | undefined
   sessionCost: number
   rateLimitEvent: RateLimitEventData | null
+  /**
+   * provider-messages spec §8 — the session's latest `provider_retry` frame
+   * (failover chain), or null. Deliberately a SEPARATE slot from the
+   * own-limiter's `rateLimitEvent` — this slot is written only by the
+   * `provider_retry`/`provider_fallback` handler
+   * (slices/provider-frames.ts::handleProviderFrame) and cleared on the
+   * fallback note; the parent (ChatScreen) removes the indicator at the
+   * terminal line / on user stop by gating on the turn's streaming state.
+   * Optional — see the fixture-compat note on goalStatus.
+   */
+  providerRetryEvent?: ProviderRetryEventData | null
+  /**
+   * Issues #1478/#1280 — the session's live `provider_status` `waiting`
+   * notice facts, or null. Written only by the `provider_status` case of
+   * slices/provider-frames.ts::handleProviderFrame: `waiting` sets it,
+   * `responding` clears it, `recovered` clears it, appends the recovered
+   * note and clears a stale `providerRetryEvent`. The parent (ChatScreen)
+   * gates the notice on the turn's streaming state like the retry
+   * indicator. Optional — see the fixture-compat note on goalStatus.
+   */
+  providerStatusEvent?: ProviderStatusEventData | null
+  /**
+   * provider-messages §7.4/D17 — the (unavailable, answered) model pairs for
+   * which a fallback note is already visible in THIS chat (live-appended by
+   * the `provider_fallback` case, or seeded by a `replay_provider_fallback`
+   * carrier on load), keyed by fallbackPairKey(). The live view's half of the
+   * once-per-CHAT-per-pair rule: the backend emits the frame on every
+   * same-pair fallback (a later iteration re-frames), so without this guard a
+   * same-pair repeat renders duplicate notes live and then collapses to one
+   * on reload. Matches the backend's pair-ever-noted transcript scan
+   * (pkg/agent/fallback_note.go::queueProviderFallbackNote): the set only
+   * grows. Reset with the bucket (load/snapshot wipe); replay re-seeds it so
+   * a freshly-loaded chat starts consistent with what replay showed.
+   * Optional — see the fixture-compat note on goalStatus.
+   */
+  providerFallbackPairsSeen?: Set<string>
   /**
    * H1-FE: Unix timestamp (ms) when the most recent user message was sent for
    * this session. Used to guard against force-clearing isStreaming on the active
@@ -419,7 +656,7 @@ export interface SessionChatState {
   /**
    * ADR-092: this session's resolved per-chat Auto-approve state, or null
    * when no `session_mode_updated` ack has arrived yet for this session
-   * (the header badge falls back to the global x per-agent resolution in
+   * (the header badge falls back to the global default in
    * that case). Set by `session_mode_updated` frames; there is no
    * "rejected" case to handle — the server always acknowledges a
    * `session_mode_update` send. Distinct from the wire's own
@@ -476,7 +713,7 @@ export interface SessionChatState {
    * message-only update and a later state-only update for the SAME span_id
    * both survive to be applied together.
    */
-  pendingSpanUpdatesBySpanId?: Record<string, { statusLine?: string; lifecycleState?: SubagentStateFrame['state']; lastUpdateAt?: string; hasRun?: boolean }>
+  pendingSpanUpdatesBySpanId?: Record<string, { statusLine?: string; lifecycleState?: SubagentStateFrame['state']; lastUpdateAt?: string; hasRun?: boolean; notDelivered?: { text?: string; at: string } }>
   /**
    * Session-scoped record of every replay_message id that has EVER been
    * merged (via the `replay_message` same-turn/same-agent coalesce branch)
@@ -530,12 +767,14 @@ export interface SessionChatState {
   goalStatus?: GoalStatusFrame | null
   /**
    * ADR-053 FE-1 / US-14: per-goal-id pill-state map. Each active goal in the
-   * session gets its own entry (keyed by `GoalStatusFrame.goal_id`, falling
-   * back to `'_default'` when the frame omits one), so a session carrying 2
-   * goals renders 2 pills + 2 timers. The bottom-right `GoalPillTray` reads
+   * session gets its own entry, keyed by exactly `GoalStatusFrame.goal_id`
+   * (DEL-F41 — no `'_default'` fallback: a frame omitting `goal_id` is an
+   * unknown association and files nothing), so a session carrying 2 goals
+   * renders 2 pills + 2 timers. The bottom-right `GoalPillTray` reads
    * this map; the legacy single `goalStatus` (above) is still maintained as a
    * derived "latest frame" for back-compat with any reader that hasn't
-   * migrated yet. Optional for the same fixture-compat reason as
+   * migrated yet — Stop's `isGoalRunning` is the live such reader. Optional
+   * for the same fixture-compat reason as
    * `toolCallOwnerMessageId` above — pre-existing test fixtures construct a
    * `SessionChatState`-shaped bucket by hand; every read site falls back to
    * `{}` and every write site initializes it.
@@ -636,6 +875,31 @@ export interface SessionChatState {
 export type PositionedToolCall = ToolCall & { textOffset?: number }
 
 /**
+ * One source of a combined display row (#1452 D1, S1). `start` is the
+ * part's offset in UTF-16 code units in the row's stored text, `joiner` the
+ * exact text inserted before it (S2a), `position` its bound saved history
+ * position once known, `text` whether it currently shows live or saved text.
+ */
+export interface HistoryDisplayPart { // not-wire-format: client-local display bookkeeping
+  sourceId: string
+  start: number
+  joiner: string
+  position?: string
+  text: 'live' | 'saved'
+  /** S9 (#1452 D2): the full text's UTF-8 size when the part shows a saved display preview. */
+  originalSizeBytes?: number
+  /** S10: tool-call anchors relative to this part, in UTF-16 units (call id -> offset). Body-free. */
+  anchors?: Record<string, number>
+  /** Ids of the tool calls recorded on this part's saved source (fetching a call's full result addresses this position). */
+  callIds?: string[]
+  /**
+   * S11b: the joiner was derived while no text preceded this part, so it is
+   * not yet a recorded seam and is derived again when earlier text arrives.
+   */
+  joinerOpen?: true
+}
+
+/**
  * Filter the span-index map (typed shape `{ messageId: string }`), returning
  * a NEW map with all entries whose `messageId` is in `evictedMessageIds`
  * removed.
@@ -665,7 +929,50 @@ export function evictSpanIndexEntries<T extends { messageId: string }>(
   return next
 }
 
-export interface ChatStore {
+export type HistoryActionKind = 'older' | 'newer' | 'latest' | 'refresh'
+export type HistoryPageSizing = Required<Pick<SessionHistoryQuery, 'limit' | 'min_rows'>>
+export type SessionHistoryRange = Required<Pick<SessionHistoryQuery, 'window_start' | 'window_end'>>
+export type HistoryRequestState = { status: 'idle' | 'loading' | 'error'; error: string | null; attempt: number }
+export type SessionHistoryState = {
+  viewGeneration: number
+  viewMode: 'latest' | 'historical'
+  serverState: import('@/lib/api/generated/openapi-types').SessionDetail['history_state'] | null
+  historyLoaded: boolean
+  liveControlsReady: boolean
+  pageMetadata: SessionHistoryMetadata | null
+  readerRange: SessionHistoryRange | null
+  readerPositions: HistoryPosition[]
+  tailEntries: SessionHistoryEntry[]
+  openedClearPositions: HistoryPosition[]
+  hasEarlier: boolean | null
+  hasLater: boolean | null
+  olderBoundary: HistoryPosition | null
+  newerBoundary: HistoryPosition | null
+  requests: Record<HistoryActionKind, HistoryRequestState>
+}
+export interface HistorySlice {
+  loadLatestHistory(sessionId: string, sizing?: HistoryPageSizing): Promise<void>
+  loadOlderHistory(sessionId: string, sizing?: HistoryPageSizing): Promise<void>
+  loadNewerHistory(sessionId: string, sizing?: HistoryPageSizing): Promise<void>
+  showEarlierHistory(sessionId: string, clearPosition: HistoryPosition, sizing?: HistoryPageSizing): Promise<void>
+  returnToLatestHistory(sessionId: string, sizing?: HistoryPageSizing): Promise<void>
+  refreshLoadedHistory(sessionId: string): Promise<void>
+  retryHistory(sessionId: string, action: HistoryActionKind): Promise<void>
+  enterHistoryReading(sessionId: string): void
+  releaseSessionHistory(sessionId: string): void
+  /** #1452 D2: show the full text of one shortened saved message part. */
+  expandHistoryText(sessionId: string, position: string): void
+}
+export type HistorySliceContext = {
+  get: StoreApi<import('@/store/chat/types').ChatStore>['getState']
+  set: StoreApi<import('@/store/chat/types').ChatStore>['setState']
+  withBucket: (sessionId: string | null, updater: (bucket: import('@/store/chat/types').SessionChatState) => Partial<import('@/store/chat/types').SessionChatState>) => void
+}
+
+export interface ChatStore extends HistorySlice {
+  acceptHistoryFallback(sessionId: string, page: import('@/lib/api/sessions').SessionHistoryPage, generation: number, baseline?: Record<string, ChatMessage>): void
+  history: SessionHistoryState
+  historyNotice?: string
   /** Per-session state buckets keyed by session_id. */
   sessionsById: Record<string, SessionChatState>
 
@@ -730,9 +1037,13 @@ export interface ChatStore {
   toolCalls: Record<string, ToolCall & { call_id: string }>
   toolCallOrder: string[]
   textAtToolCallStart: Record<string, string>
-  sessionTokens: number
+  sessionTokens: number | undefined
   sessionCost: number
   rateLimitEvent: RateLimitEventData | null
+  /** provider-messages spec §8 — foreground projection of the session's `provider_retry` slot. Optional — see the SessionChatState field's doc comment. */
+  providerRetryEvent?: ProviderRetryEventData | null
+  /** Issues #1478/#1280 — foreground projection of the session's `provider_status` waiting slot. Optional — see the SessionChatState field's doc comment. */
+  providerStatusEvent?: ProviderStatusEventData | null
   /** ADR-049 D6/US-12: active session's latest `goal_status` frame, or null/undefined. Drives `GoalIndicator`. Optional — see SessionChatState.goalStatus's doc comment (fixture-compat). */
   goalStatus?: GoalStatusFrame | null
   /**
@@ -758,13 +1069,48 @@ export interface ChatStore {
    * outgoing message. The composer model selector writes the picker's
    * value here; the AssistantUI runtime reads it in `onNew` and threads
    * it into `sendMessage` as `model_name` (forwarded to the server as
-   * `metadata.model_name` in the WS frame). Cleared after each send
-   * so the next session reopen re-derives the default from transcript
-   * history or the agent's `model` config (per spec §18 Q3).
+   * `metadata.model_name` in the WS frame). Never cleared after a send —
+   * a pick stays sticky for the conversation's page life; on navigating
+   * away and back (or a reload), the picker restores the session's latest
+   * explicit choice (#1436, src/store/chat/model-choice.ts) or, when the
+   * session has none, re-derives the seed from transcript history or the
+   * agent's `model` config (per spec §18 Q3).
    */
   nextModel: string | null
-  /** Set the next-turn model override (called by the composer). */
-  setNextModel: (model: string | null) => void
+  /**
+   * H6 (provider hotfix 2026-10-13): the provider id `nextModel` was picked
+   * under — the ModelSelector's (provider, model) selection identity, so the
+   * picker shows the check on ONLY the picked provider's row when two
+   * providers serve the same model slug. null = the value was seeded from
+   * transcript/agent-default, not picked; the picker then derives the
+   * display provider via `resolveUniqueModelProvider` — a row only when
+   * exactly ONE usable provider serves the slug, no row when several do
+   * (H6 R2: the old first-provider lookup presented list order as if it
+   * were a recorded choice). Today this is consumed
+   * by the DISPLAY only — `MessageFrame.metadata` has no provider sibling
+   * for `model_name` on the wire; if the contract gains one
+   * (`metadata.provider`), this is the value to send with it.
+   */
+  nextModelProvider: string | null
+  /** The current user pick, not a restored/derived seed. Snapshotted into an ordinary first send. */
+  explicitNextModelChoice: SessionModelChoice | null
+  /**
+   * Set the next-turn pair. source='user' records an explicit selector action;
+   * restored choices and transcript/agent seeds omit it. Only the explicit
+   * choice is eligible to travel with a new chat's pending first message.
+   */
+  setNextModel: (model: string | null, provider?: string | null, source?: 'user') => void
+  /**
+   * Effort levels FR-055: the chat's effort for the next message, kept with
+   * the per-chat model choice (same lifetime, SessionModelChoice.effort).
+   * '' = Not set (the agent's setting applies). Sent as
+   * `metadata.reasoning_effort` when set.
+   */
+  nextEffort: string
+  /** The value was set by `/effort` in this conversation (gold dot, "set for this conversation", S-41). */
+  nextEffortByCommand: boolean
+  /** Set the chat's effort. source='user' records it with the explicit choice so a new chat's first send keeps it. */
+  setNextEffort: (effort: string, byCommand: boolean, source?: 'user') => void
 
   // ── Actions that operate on the foreground session ───────────────────────────
   setReplaying: (value: boolean) => void
@@ -805,12 +1151,10 @@ export interface ChatStore {
   cancelToolCall: (callId: string) => void
 
   updateSessionStats: (tokens: number, cost: number) => void
-  /**
-   * Seed sessionTokens from the persisted total_tokens on a historic session
-   * attach. Only sets the value when the bucket is fresh (sessionTokens === 0)
-   * so live deltas from the `done` frame are never double-counted.
+  /** Merge recorded absolute usage without lowering a newer observation.
+   * Explicit session IDs keep metadata hydration out of unrelated foregrounds.
    */
-  seedSessionTokens: (total: number) => void
+  seedSessionTokens: (total: number | undefined, sessionId?: string) => void
   setRateLimitEvent: (event: RateLimitEventData) => void
   clearRateLimitEvent: () => void
 
@@ -846,18 +1190,37 @@ export interface ChatStore {
    * it directly if needed.
    */
   pendingDrainQueue: OutboundQueueItem[]
+  /** The ordinary first message of a new chat. */
+  pendingFirstSend: PendingFirstSend | null
+  /** IDs abandoned in this tab, so late replies cannot affect a newer chat. */
+  abandonedFirstSendIds: string[]
+  firstSendGeneration: number
+  retryFirstSend: () => void
+  reattachFirstSend: (connection: Pick<WsConnection, 'send'>) => boolean
+  markFirstSendDisconnected: () => void
+  abandonPendingFirstSend: () => void
+  /** Deliberate fresh-ID turn, only for a confirmed unanswered first message. */
+  generateFirstSendAgain: (messageId: string) => void
 
   // ── Actions ───────────────────────────────────────────────────────────────────
   // opts.mediaRefs: optional media:// refs (e.g. uploaded images) threaded
   //   into the outbound message frame so the agent sees the attachment (#254).
   // opts.attachments: optional MediaAttachment[] rendered inline on the
   //   optimistic user bubble (display only — not sent on the wire).
+  // opts.provider / opts.reasoning_effort: effort levels FR-045/FR-055 — the
+  //   picked pair's provider and the chat's effort, sent with model_name as
+  //   metadata.provider / metadata.reasoning_effort.
   // opts.model_name: optional model slug for THIS turn only (Phase 1, FR-010).
   //   The composer model selector writes the picker's value here; sendMessage
   //   forwards it as `metadata.model_name` in the WS message frame. The
   //   server honors it when present and falls back to the agent's `model`
   //   config when absent.
-  sendMessage: (content: string, opts?: { mediaRefs?: string[]; attachments?: MediaAttachment[]; model_name?: string; clientMessageId?: string; queuedAt?: string }) => void
+  /**
+   * `workflowStart` (omnipus-system-agent K8, FR-012): target data a screen
+   * button attaches to its message into Omnipus's main (W1 create an agent,
+   * W18 set up a team, for a named workspace). Never an instruction.
+   */
+  sendMessage: (content: string, opts?: { mediaRefs?: string[]; attachments?: MediaAttachment[]; model_name?: string; provider?: string; reasoning_effort?: string; clientMessageId?: string; queuedAt?: string; workflowStart?: WorkflowStart }) => void
   /**
    * Review finding 17 — "Try again" on a failed user message used to call
    * `sendMessage(content)` with a brand-new id, which left the FAILED
@@ -871,141 +1234,37 @@ export interface ChatStore {
    * existing, resend-eligible (role:'user') message.
    */
   resendMessage: (messageId: string) => void
+  /**
+   * D5 (FR-030/031 clear refresh): repeats the post-/clear transcript read
+   * AND its merge application for the session's retained clear operation —
+   * the screen's history-Retry recovery control. Never resends /clear.
+   * No-op when no clear operation owes a refresh.
+   */
+  retryClearTranscript: (sessionId: string) => void
   /** Validate an outbound MessageFrame against the generated Zod schema. Logs and dev-toasts on failure but never blocks the send. `sessionId` (the sending session, or the pending-bucket key when no session exists yet) is threaded through into the production telemetry record for operator correlation. */
   _validateOutboundFrame: (payload: unknown, sessionId?: string | null) => void
-  /**
-   * Auto-triggers Ava's (or whichever agent leads the workspace's
-   * core_team) workspace-setup interview the first time a freshly-created
-   * workspace (server-seeded `setup_pending: true`) is opened with no
-   * conversation yet. Reuses `sendMessage`'s no-active-session ("new turn")
-   * wire mechanics — pending `'__pending'` placeholder bucket,
-   * `_validateOutboundFrame`, `isStreaming`, rollback-on-send-failure — MINUS
-   * any user-visible bubble: the backend records this turn's kickoff frame
-   * as a SYSTEM-role transcript entry (centered pill on replay), not a user
-   * message, so rendering an optimistic user bubble here would show text the
-   * user never typed. No `session_id` is sent — the server mints one and
-   * acks with `session_started`, same as any other first message.
-   *
-   * Sets the active agent (mirrors `AgentPicker`'s auto-select:
-   * `setActiveSession` with the resolved agent's id+type) so the
-   * composer/thread header show the agent immediately, without depending on
-   * `AgentPicker`'s own effect having already run.
-   *
-   * Bails silently (returns `false`, no toast) when offline, mid-stream, or
-   * a conversation already exists (`activeSessionId !== null`) — this must
-   * never fire over an existing chat. Returns `true` once the frame is
-   * handed to `connection.send` successfully. The caller (
-   * `useWorkspaceSetupKickoff`) uses the return value to decide whether to
-   * optimistically clear `setup_pending` in the workspaces query cache.
-   */
-  sendWorkspaceSetupKickoff: (opts: {
-    workspaceId: string
-    workspaceName: string
-    agentId: string
-    agentType: AgentKind | null
-  }) => boolean
-  /**
-   * Kickoff pending-session hardening: the workspace id of the
-   * ONE in-flight `sendWorkspaceSetupKickoff` call, or `null` when no
-   * kickoff is outstanding. Set the moment a kickoff frame is handed to
-   * `connection.send` successfully; cleared on whichever terminal outcome
-   * resolves it first:
-   *   - `session_started` — the kickoff succeeded (see that frame handler,
-   *     which also uses the recorded workspaceId to decide whether the ack
-   *     is still for the workspace the user is currently on, AND whether
-   *     the '__pending' placeholder is still the local foreground turn at
-   *     all — the plausibility gate).
-   *   - a rejecting, UNTAGGED `error` frame (a kickoff turn never
-   *     gets a real session_id, so any tagged error can never be a kickoff
-   *     reject) — regardless of whether `activeSessionId` is still
-   *     `'__pending'` at the time (the reject-after-navigation
-   *     fall-through covers the case where the user already moved on
-   *     locally).
-   *   - a hard WS disconnect — `clearStreamingState` tears this down
-   *     via `abandonPendingKickoff` the instant the connection drops, since
-   *     no ack can ever arrive on a dead connection.
-   *   - a failed `connection.send()` inside `sendWorkspaceSetupKickoff`
-   *     itself (the full-rollback branch).
-   *
-   * Also doubles as a single-slot in-flight guard: `sendWorkspaceSetupKickoff`
-   * bails while this is non-null, since a second kickoff would collide with
-   * the first on the shared `'__pending'` bucket key before either resolves.
-   * `sendMessage`'s own no-active-session branch respects the same guard
-   * — it enqueues instead of building a second
-   * `'__pending'` bucket while this is non-null.
-   */
-  pendingKickoff: { workspaceId: string } | null
-  /**
-   * Honest retry: per-workspace kickoff-attempt guard, keyed by
-   * workspace id. This is `useWorkspaceSetupKickoff`'s OWN send-time "have I
-   * already fired for this workspace" bookkeeping — moved out of a
-   * component-local `useRef` (which, once a kickoff terminally failed, had
-   * NO path back to "retry": failure just left the ref permanently claimed)
-   * and into the store so it can also be corrected by chat.ts's own async
-   * WS-frame handlers (`session_started` / `error` / a hard disconnect),
-   * which are the only code that ever learns of an ASYNC kickoff outcome —
-   * the hook itself only ever observes the synchronous accept/reject of the
-   * initial `connection.send()` call.
-   *   'in-flight' — a kickoff was sent for this workspace and hasn't
-   *                 resolved yet; blocks a second concurrent fire for the
-   *                 SAME workspace id.
-   *   'failed'    — the kickoff terminally failed (server reject, a hard
-   *                 disconnect, or a synchronous send failure). Does NOT
-   *                 block a future fire — the hook's own effect reacts to
-   *                 this transition by invalidating the workspaces query so
-   *                 server truth (which restores `setup_pending:true` on a
-   *                 genuine failure, per the kickoff contract — a DUPLICATE
-   *                 rejection is the exception: the flag is already
-   *                 correctly `false` from the earlier, actually-successful
-   *                 attempt) replaces the hook's own premature optimistic
-   *                 `false` write. The next natural re-render (once the
-   *                 invalidated query refetches a fresh `Workspace` object)
-   *                 decides honestly whether to retry via the ordinary
-   *                 `setup_pending` check — the DUPLICATE case naturally
-   *                 stops there since the refetch reports `false`.
-   * No entry means "never attempted, or already resolved 'done'" — free to
-   * fire.
-   */
-  kickoffAttemptStatus: Record<string, 'in-flight' | 'failed'>
-  /**
-   * Claim the per-workspace kickoff-attempt slot. Called by
-   * `useWorkspaceSetupKickoff` immediately BEFORE invoking
-   * `sendWorkspaceSetupKickoff`, mirroring the old ref's "claim before send"
-   * ordering — a synchronous re-render triggered by the send itself must
-   * not re-enter the hook's effect body and fire a second frame.
-   */
-  markKickoffInFlight: (workspaceId: string) => void
-  /**
-   * Resolve a workspace's kickoff-attempt slot. `'done'` deletes the
-   * entry (success, or any other case that no longer needs tracking);
-   * `'failed'` marks it so `useWorkspaceSetupKickoff`'s invalidate-on-failure
-   * effect fires.
-   */
-  resolveKickoffAttempt: (workspaceId: string, outcome: 'done' | 'failed') => void
-  /**
-   * Kickoff pending-session hardening: full, quiet teardown of an
-   * outstanding workspace-setup kickoff — clears `pendingKickoff`, drops the
-   * orphaned `'__pending'` bucket (if present), and marks the workspace's
-   * `kickoffAttemptStatus` as `'failed'`. No-op when no kickoff is
-   * outstanding. Used by `clearStreamingState` (a hard disconnect means no
-   * ack for any in-flight kickoff can ever arrive on the dead connection)
-   * and by `OmnipusRuntimeProvider.reattachActiveSession` (a reconnect
-   * mid-kickoff must not send a protocol-violating `attach_session
-   * {session_id: '__pending'}`). Deliberately does NOT touch
-   * `activeSessionId` or show a toast — those are the caller's own,
-   * context-specific responsibility (a disconnect vs. a reconnect want
-   * different visible behavior).
-   */
-  abandonPendingKickoff: () => void
   /**
    * Cancels the target session's in-flight turn (sends the `cancel` WS frame
    * and marks its last assistant message interrupted). `sessionId` optionally
    * scopes this to a specific session — e.g. the browser panel's "Take over"
    * pausing the RIGHT (pinned) session instead of whatever chat is
    * foreground. Omitted (the default) targets the active session, matching
-   * every pre-existing call site (Stop button, Escape, `/cancel`).
+   * every pre-existing call site (Stop button, Escape).
+   *
+   * `scope` (ADR-20260928 MAJ-002, generated `CancelFrame.scope`): omitted
+   * means the wire default — `session`, a single-session stop that never
+   * cascades (the frame goes out WITHOUT the key, byte-identical to the
+   * pre-stop-all path). `'tree'` is the confirmed Stop all: the server stops
+   * the session and every reachable descendant (ADR D7), never up or
+   * sideways. Only the confirmed second activation (a second Stop, Esc or
+   * `/stop` inside the 3 s window) and `/cancel` pass `'tree'`.
+   *
+   * Returns `false` only when the cancel could not be handed to the socket
+   * (no connection, or the send was rejected — a visible error toast has
+   * already been shown); `true` otherwise, including a completed turn with
+   * nothing to send. The Stop window is armed only on a non-`false` result.
    */
-  cancelStream: (sessionId?: string) => void
+  cancelStream: (sessionId?: string, scope?: CancelFrame['scope']) => boolean
   respondToPairing: (deviceId: string, decision: 'approve' | 'reject') => void
   /**
    * askuserquestion-tool-spec v3 §3: submit (or cancel) the pending
@@ -1018,10 +1277,10 @@ export interface ChatStore {
   /**
    * ADR-092: set or clear this session's per-chat Auto-approve modifier
    * (`session_mode_update`). A human-only action — nothing agent-facing
-   * calls this. `true` turns Auto ON for this chat even when the resolved
-   * agent x global default has it off (the one deliberate loosening
+   * calls this. `true` turns Auto ON for this chat even when the
+   * global default has it off (the one deliberate loosening
    * exception in this contract); `false` turns it off; `null` clears the
-   * modifier and reverts to the inherited agent/global resolution. Always
+   * modifier and reverts to the global default (chat modifier, else global default). Always
    * acknowledged by a `session_mode_updated` frame — no rejection case.
    */
   sendSessionModeUpdate: (sessionId: string, autoApprove: boolean | null) => void
@@ -1059,7 +1318,7 @@ export interface ChatStore {
   // assistant message as 'done' so AssistantUI stops rendering it as running.
   clearStreamingState: () => void
 
-  handleFrame: (frame: WsReceiveFrame) => void
+  handleFrame: (frame: ServerFrame) => void
 }
 
 export const finishedTurnIdsBySession: Record<string, string[]> = {}

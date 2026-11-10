@@ -2,7 +2,10 @@ title: SessionStateFrame
 description: >
   Server → client (FR-052, FR-073, FR-081). One-shot frame emitted to each
   WebSocket connection immediately after authentication. Contains every
-  pending tool approval (single-user model — no per-account scoping). The
+  pending tool approval (single-user model — no per-account scoping). Also
+  emitted as authoritative current control state during session attach. Attach's
+  session-scoped emit requires history_state; the unscoped connection-open emit
+  omits it. Readiness is not proof the client loaded history. The
   SPA reconciles its approval store against this frame on every WS reconnect.
 
   CRITICAL — nil-safety contract:
@@ -17,6 +20,12 @@ required:
   - emitted_at
 additionalProperties: false
 properties:
+  history_state:
+    $ref: './SessionHistoryState.yaml'
+    description: >
+      Required on attach's session-scoped emit, omitted on unscoped connection-open
+      state. Unavailable history never removes authorized current controls or claims
+      empty/successful history. Absence is not evidence that a page was loaded.
   type:
     type: string
     const: session_state
@@ -53,6 +62,29 @@ properties:
       the connection-open emit (no session yet). The SPA routes active_turn
       by this id instead of the globally active session. Keep in sync by
       hand with contracts/asyncapi.yaml's inline SessionStateFrame.
+  session_tokens_total:
+    type: integer
+    minimum: 0
+    readOnly: true
+    description: >
+      Authoritative absolute session-wide consumed-token total, with the same
+      meaning as SessionStats.tokens_total. Present when authoritative usage is
+      available on an authorized session-scoped attach, including live_only;
+      omitted on unscoped connection-open state. Omitted means unknown, never zero.
+      Independent of history readiness; not a per-turn delta.
+  attention_bound:
+    type: integer
+    format: int64
+    minimum: 0
+    description: >
+      Optional. The saved outcome/entry order for this main, echoed on the
+      attach response so a later acknowledgement can name the same number.
+      Not a new counter. This frame is part of both the incremental catch-up
+      and the full snapshot, so either attach answer can carry the bound.
+      0 when the main has no outcome yet. Omitted when this emit is not an
+      attach of a main, or when the saved order could not be read. An omitted
+      value means unknown, never zero: the client must not guess a number. Keep
+      in sync by hand with contracts/asyncapi.yaml's inline SessionStateFrame.
   auto_approve_modifier:
     type: boolean
     nullable: true
@@ -63,9 +95,8 @@ properties:
       meaningful when session_id is present (the connection-open emit
       carries neither). true — Auto-approve forced ON for this chat; false —
       forced OFF for this chat; null or absent — no per-chat modifier is
-      set, the chat follows the agent x global resolution
-      (SandboxStatus.auto_approve_effective floored by the agent's
-      auto_approve_disabled). Same value space as
+      set, the chat follows the global default
+      (SandboxStatus.auto_approve_effective). Same value space as
       SessionModeUpdateFrame.auto_approve. The modifier lives in server
       memory only: after a gateway restart it is gone and this field reads
       null/absent, so the UI follows the server. Keep in sync by hand with
@@ -93,3 +124,14 @@ properties:
     type: string
     format: date-time
     description: RFC 3339 timestamp of when the server computed this snapshot.
+  secret_requests:
+    type: array
+    maxItems: 1000
+    items:
+      $ref: './SessionStateSecretRequest.yaml'
+    description: >
+      Spec omnipus-system-agent K4 (FR-079). Pending and recent terminal
+      secret requests visible to this connection, so a reloaded secret card
+      restores its true state. Always an array when present, never null;
+      absence of a request is never read as success. Optional: an emit that
+      carries no secret-request state omits it.

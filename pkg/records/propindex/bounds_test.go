@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -208,5 +209,50 @@ func TestBound_ContextCancellationStopsTheStream(t *testing.T) {
 	}
 	if seen > 100 {
 		t.Errorf("the stream ran on for %d records after cancellation", seen)
+	}
+}
+
+// errOnlyContext is a context whose cancellation is visible ONLY through Err():
+// Done() is nil, so database/sql's own watcher goroutine (the asynchronous path
+// that closes a result set on cancellation) is never armed. It makes "the
+// stream must observe the cancellation itself, synchronously" deterministic,
+// where the real-context test above depends on goroutine scheduling.
+type errOnlyContext struct {
+	context.Context
+	cancelled atomic.Bool
+}
+
+func (c *errOnlyContext) Done() <-chan struct{} { return nil }
+
+func (c *errOnlyContext) Err() error {
+	if c.cancelled.Load() {
+		return context.Canceled
+	}
+	return nil
+}
+
+// TestBound_CancellationIsObservedByTheStreamItself.
+//
+// A cancelled query must stop at the next record and must not report success,
+// whatever the scheduler does. The cancellation is made visible via Err() only,
+// so nothing but the stream's own check can stop it.
+func TestBound_CancellationIsObservedByTheStreamItself(t *testing.T) {
+	store, _ := openIndex(t, Options{})
+	bulkCorpus(t, store, 200)
+
+	ctx := &errOnlyContext{Context: context.Background()}
+	seen := 0
+	err := store.Candidates(ctx, Selector{}, func(Candidate) (Verdict, error) {
+		seen++
+		if seen == 10 {
+			ctx.cancelled.Store(true)
+		}
+		return Rejected, nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("a cancelled query returned %v, want an error wrapping context.Canceled", err)
+	}
+	if seen > 10 {
+		t.Errorf("the stream visited %d records, want it to stop at 10 — the record after the cancellation", seen)
 	}
 }

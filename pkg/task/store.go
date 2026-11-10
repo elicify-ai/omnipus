@@ -11,13 +11,14 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
-	"github.com/adhocore/gronx"
 	"github.com/google/uuid"
 	rrule "github.com/teambition/rrule-go"
 
@@ -512,10 +513,10 @@ func (t *Task) normalize() error {
 	if !IsValidSurface(t.Surface) {
 		return verr("invalid surface %q", t.Surface)
 	}
-	if len(t.Description) > 2000 {
+	if utf8.RuneCountInString(t.Description) > maxDescriptionChars {
 		return verr("description must be 2000 characters or fewer")
 	}
-	if len(t.Prompt) > 10000 {
+	if utf8.RuneCountInString(t.Prompt) > maxPromptChars {
 		return verr("prompt must be 10000 characters or fewer")
 	}
 	if len(t.Result) > 50000 {
@@ -553,7 +554,7 @@ func (t *Task) normalize() error {
 // validateScheduledAgentAssignment rejects a task that would fire on its own
 // schedule with no agent to execute it. A trigger is AUTO-FIRING — the task
 // executor dispatches it with no human present to step in — for
-// once/every/recurring; `manual` (or no trigger at all) starts only when a
+// once/recurring; `manual` (or no trigger at all) starts only when a
 // human explicitly runs it, so an empty AgentID there is a legitimate
 // human-only task (the executor's own dispatch guard,
 // pkg/agent/task_executor.go, treats AgentID=="" as exactly that). Combined
@@ -568,7 +569,7 @@ func (t *Task) validateScheduledAgentAssignment() error {
 		return nil
 	}
 	switch t.Trigger.Type {
-	case TriggerOnce, TriggerEvery, TriggerRecurring:
+	case TriggerOnce, TriggerRecurring:
 	default:
 		return nil
 	}
@@ -577,12 +578,21 @@ func (t *Task) validateScheduledAgentAssignment() error {
 	}
 	if t.AgentID == "" {
 		return verr(
-			"a scheduled (once/every/recurring) task must be assigned to an agent (agent_id is required when trigger.type=%q)",
+			"a scheduled (once/recurring) task must be assigned to an agent (agent_id is required when trigger.type=%q)",
 			t.Trigger.Type,
 		)
 	}
 	return nil
 }
+
+// maxDescriptionChars and maxPromptChars bound Task.Description and
+// Task.Prompt in characters (runes), never bytes (tool-parity spec r17 D-1:
+// description up to 2000, prompt up to 10000 characters), so a valid
+// non-ASCII text is not refused for its encoded size.
+const (
+	maxDescriptionChars = 2000
+	maxPromptChars      = 10000
+)
 
 // maxTagRunes and maxTagsPerTask bound Task.Tags (spec Part A §B). Also used
 // by the milestone migration (migrate_milestones.go) when sizing the
@@ -630,17 +640,22 @@ func normalizeTags(tags []string) ([]string, error) {
 	return out, nil
 }
 
-// validateTodos checks each todo's text length (1..500) and that status is a
-// known tri-state value. The UnmarshalJSON default-to-pending is only for
-// legacy disk reads; tool/REST input must supply a valid status explicitly.
+// validateTodos normalizes active forms, checks text/form length, and validates
+// the tri-state status. The UnmarshalJSON default-to-pending is only for legacy
+// disk reads; tool/REST input must supply a valid status explicitly.
 func validateTodos(todos []Todo) error {
-	for i, td := range todos {
+	for i := range todos {
+		td := &todos[i]
+		td.ActiveForm = NormalizeTodoActiveForm(td.ActiveForm)
 		n := len([]rune(td.Text))
 		if n < 1 {
 			return verr("todo[%d]: text is required", i)
 		}
 		if n > 500 {
 			return verr("todo[%d]: text must be 500 characters or fewer", i)
+		}
+		if len([]rune(td.ActiveForm)) > 500 {
+			return verr("todo[%d]: active_form must be 500 characters or fewer", i)
 		}
 		if !IsValidTodoStatus(td.Status) {
 			return verr("todo[%d]: status %q is not valid (must be pending, in_progress, or completed)", i, td.Status)
@@ -649,22 +664,25 @@ func validateTodos(todos []Todo) error {
 	return nil
 }
 
-// minTriggerIntervalSeconds is the floor on a recurring/every trigger's
-// effective interval (LOW-1). A trigger that would fire more often than once per
-// minute is rejected to prevent a `* * * * * *` self-DoS, mirroring the
-// every_ms >= 1000 intent at the cron layer.
+// minTriggerIntervalSeconds is the floor on a recurring trigger's effective
+// interval (LOW-1): a rule that would fire more often than once per minute is
+// rejected to prevent a self-DoS.
 const minTriggerIntervalSeconds = 60
 
 // ValidateTrigger validates a trigger's type and the config required for that
-// type (Detail #3). Empty/unset config keys for the wrong type are ignored. For
-// a recurring trigger, config must carry exactly one of cron_expr (legacy,
-// validated with the same cron library the trigger executor uses — gronx —
-// enforcing a >= 60s effective interval per LOW-1) or rrule (RFC 5545, Calendar
+// type (Detail #3). Empty/unset config keys for the wrong type are ignored. A
+// recurring trigger's config must carry an rrule (RFC 5545, Calendar
 // Recurrence Redesign — see validateRRULE and the spec's normative
 // "Validation (ValidateTrigger, RRULE path)" section). The rrule/dtstart_ms/tz
 // keys are legal only on a recurring trigger — present on any other type they
-// are rejected outright (spec Validation §1).
+// are rejected outright (spec Validation §1). The `every` trigger type is
+// refused with its own message: it was removed (session-core DEL-19 /
+// C-TIMING), as were the every_ms and cron_expr keys.
 func ValidateTrigger(tr *Trigger) error {
+	if tr.Type == "every" {
+		return verr("trigger type %q is no longer supported; use a %q trigger with config.rrule",
+			tr.Type, TriggerRecurring)
+	}
 	if !IsValidTriggerType(tr.Type) {
 		return verr("invalid trigger type %q", tr.Type)
 	}
@@ -680,64 +698,15 @@ func ValidateTrigger(tr *Trigger) error {
 		if tr.Config.AtMs == nil {
 			return verr("trigger %q requires config.at_ms", tr.Type)
 		}
-	case TriggerEvery:
-		if tr.Config.EveryMs == nil {
-			return verr("trigger %q requires config.every_ms", tr.Type)
-		}
-		if *tr.Config.EveryMs < 1000 {
-			return verr("trigger %q config.every_ms must be at least 1000ms", tr.Type)
-		}
 	case TriggerRecurring:
-		hasCron := tr.Config.CronExpr != nil && *tr.Config.CronExpr != ""
-		hasRrule := tr.Config.Rrule != nil && *tr.Config.Rrule != ""
-		switch {
-		case hasCron && hasRrule:
-			return verr(
-				"trigger %q config must carry exactly one of config.cron_expr or config.rrule, not both",
-				tr.Type,
-			)
-		case hasRrule:
-			if err := validateRRULE(tr.Config); err != nil {
-				return err
-			}
-		case hasCron:
-			if err := validateCronExpr(*tr.Config.CronExpr); err != nil {
-				return err
-			}
-		default:
-			return verr("trigger %q requires config.cron_expr or config.rrule", tr.Type)
+		if tr.Config.Rrule == nil || *tr.Config.Rrule == "" {
+			return verr("trigger %q requires config.rrule (config.cron_expr is no longer supported)", tr.Type)
+		}
+		if err := validateRRULE(tr.Config); err != nil {
+			return err
 		}
 	case TriggerManual:
 		// no config required
-	}
-	return nil
-}
-
-// validateCronExpr rejects an unparseable cron expression and enforces the
-// minTriggerIntervalSeconds floor by computing the next two fire instants from a
-// fixed reference and rejecting when they are < 60s apart (LOW-1 self-DoS guard).
-func validateCronExpr(expr string) error {
-	if !gronx.IsValid(expr) {
-		return verr("trigger config.cron_expr %q is not a valid cron expression", expr)
-	}
-	// Use a fixed reference instant so the floor check is deterministic. The
-	// second field of a 6-field expr is the only way to fire sub-minute; a
-	// 5-field expr can never fire more than once per minute.
-	ref := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
-	first, err := gronx.NextTickAfter(expr, ref, false)
-	if err != nil {
-		return verr("trigger config.cron_expr %q could not be evaluated: %v", expr, err)
-	}
-	second, err := gronx.NextTickAfter(expr, first, false)
-	if err != nil {
-		return verr("trigger config.cron_expr %q could not be evaluated: %v", expr, err)
-	}
-	if second.Sub(first) < minTriggerIntervalSeconds*time.Second {
-		return verr(
-			"trigger config.cron_expr %q fires more often than once per %ds (self-DoS guard)",
-			expr,
-			minTriggerIntervalSeconds,
-		)
 	}
 	return nil
 }
@@ -760,8 +729,7 @@ const rruleMaxCount = 100000
 // validateRRULE validates the RRULE branch of a `recurring` trigger's config
 // per the normative "Validation (ValidateTrigger, RRULE path)" section of
 // docs/internal/specs/calendar-recurrence-redesign-spec.md (§1-6). Called
-// only when cfg.Rrule is a non-empty string; ValidateTrigger has already
-// established exactly-one-of cron_expr/rrule for the caller.
+// only when cfg.Rrule is a non-empty string.
 //
 // It reuses the unexported loadTZ/parseOption plumbing from rrule.go (same
 // package) so the validator's interpretation of the rule (FREQ, DTSTART,
@@ -951,13 +919,17 @@ type Patch struct {
 	// itself a legal target value, not a "no clear" sentinel).
 	CancelReason *CancelReason
 	AgentID      *string
-	Priority     *int
-	BlockedBy    *[]string
-	Todos        *[]Todo
-	Trigger      **Trigger // double pointer: outer nil = unchanged, *outer nil = clear
-	Due          *string
-	PlanID       *string
-	Tags         *[]string
+	// Initiator sets Task.Initiator (double pointer): outer nil = unchanged,
+	// *outer nil = clear, *outer non-nil = set.
+	Initiator   **Initiator
+	Priority    *int
+	RunIsolated *bool // session-core FR-017: nil = unchanged
+	BlockedBy   *[]string
+	Todos       *[]Todo
+	Trigger     **Trigger // double pointer: outer nil = unchanged, *outer nil = clear
+	Due         *string
+	PlanID      *string
+	Tags        *[]string
 	// Criteria replaces Task.Criteria atomically, same as every other Patch
 	// field. ADR-086 D5/GOAL-FR-029/FR-030 names this write path as a
 	// consumer to re-point onto the task's paired goal record (pkg/goal) —
@@ -1027,7 +999,7 @@ type Patch struct {
 //     re-running is normally done via a fresh trigger fire (SpawnReset), not a
 //     status edit. (`failed` is NOT frozen — a failed task may be re-queued
 //     for retry.) Narrow carve-out: when repeating is true (the task's
-//     trigger is recurring/every — see Trigger.IsRepeating), `done`→
+//     trigger is recurring — see Trigger.IsRepeating), `done`→
 //     `in_progress` IS permitted. A repeating task's series survives a
 //     per-run `done` status (task_trigger.go's OnTaskUpserted keeps its next
 //     occurrence armed), so the task is not really "final" the way a
@@ -1208,13 +1180,13 @@ func (su *storeUpdateLocked) applyLifecycleFields() (*Task, bool, error) {
 		su.t.Title = trimmedTitle
 	}
 	if su.patch.Description != nil {
-		if len(*su.patch.Description) > 2000 {
+		if utf8.RuneCountInString(*su.patch.Description) > maxDescriptionChars {
 			return nil, true, verr("description must be 2000 characters or fewer")
 		}
 		su.t.Description = *su.patch.Description
 	}
 	if su.patch.Prompt != nil {
-		if len(*su.patch.Prompt) > 10000 {
+		if utf8.RuneCountInString(*su.patch.Prompt) > maxPromptChars {
 			return nil, true, verr("prompt must be 10000 characters or fewer")
 		}
 		su.t.Prompt = *su.patch.Prompt
@@ -1314,8 +1286,66 @@ func (su *storeUpdateLocked) applyLifecycleFields() (*Task, bool, error) {
 	return nil, false, nil
 }
 
+// applyAttemptFields validates and applies the attempt-limit patch fields
+// (max_attempts, attempt_count).
+func (su *storeUpdateLocked) applyAttemptFields() error {
+	if su.patch.MaxAttempts != nil {
+		newMax := *su.patch.MaxAttempts
+		if newMax != nil && *newMax < 1 {
+			return verr("max_attempts must be at least 1")
+		}
+		su.t.MaxAttempts = newMax
+	}
+	if su.patch.AttemptCount != nil {
+		if *su.patch.AttemptCount < 0 {
+			return verr("attempt_count must not be negative")
+		}
+		su.t.AttemptCount = *su.patch.AttemptCount
+	}
+	return nil
+}
+
 // applyRemainingFields validates and applies the remaining independent patch fields.
+// applyTrigger validates and sets a new trigger (nil clears it). r17 TK-30:
+// the write that changes the trigger invalidates the delivery marker
+// atomically; an identical re-save keeps it.
+//
+// Scheduling state (3), the one shared rule for REST and update_task: a write
+// that adds or changes a trigger whose first occurrence is still in the future
+// stores `inbox` for a task that would otherwise end the write `next`, so the
+// ordinary drain cannot run it before the scheduler fires it. This holds
+// whatever status the caller supplies in the same patch: an explicit `next`
+// still ends `inbox` (the status patch is applied before this runs, so su.t
+// already carries the requested result). An explicit `inbox` stays inbox and
+// an explicit `blocked` is refused earlier (ErrBlockedNotSettable). Untouched:
+// an unchanged-trigger re-save, a manual trigger (no occurrence, state 4), an
+// already-due occurrence (state 5), and every task not ending `next`
+// (running, blocked, terminal, inbox).
+func (su *storeUpdateLocked) applyTrigger(newTrigger *Trigger) error {
+	if newTrigger != nil {
+		if err := ValidateTrigger(newTrigger); err != nil {
+			return err
+		}
+	}
+	changed := !reflect.DeepEqual(su.t.Trigger, newTrigger)
+	if changed {
+		su.t.LastDeliveredAtMs = nil
+	}
+	su.t.Trigger = newTrigger
+	if changed && su.t.Status == StatusNext &&
+		TriggerAwaitingOccurrence(su.t, time.Now()) {
+		if err := validateTransition(su.t.Status, StatusInbox, false, su.t.Trigger.IsRepeating()); err != nil {
+			return err
+		}
+		su.t.Status = StatusInbox
+	}
+	return nil
+}
+
 func (su *storeUpdateLocked) applyRemainingFields() (*Task, bool, error) {
+	if su.patch.Initiator != nil {
+		su.t.Initiator = *su.patch.Initiator
+	}
 	if su.patch.AgentID != nil {
 		su.t.AgentID = *su.patch.AgentID
 	}
@@ -1328,6 +1358,9 @@ func (su *storeUpdateLocked) applyRemainingFields() (*Task, bool, error) {
 			return nil, true, err
 		}
 		su.t.Priority = *su.patch.Priority
+	}
+	if su.patch.RunIsolated != nil {
+		su.t.RunIsolated = *su.patch.RunIsolated
 	}
 	if su.patch.BlockedBy != nil {
 		newDeps := *su.patch.BlockedBy
@@ -1355,13 +1388,9 @@ func (su *storeUpdateLocked) applyRemainingFields() (*Task, bool, error) {
 		}
 	}
 	if su.patch.Trigger != nil {
-		newTrigger := *su.patch.Trigger
-		if newTrigger != nil {
-			if err := ValidateTrigger(newTrigger); err != nil {
-				return nil, true, err
-			}
+		if err := su.applyTrigger(*su.patch.Trigger); err != nil {
+			return nil, true, err
 		}
-		su.t.Trigger = newTrigger
 	}
 	if su.patch.Due != nil {
 		su.t.Due = *su.patch.Due
@@ -1400,18 +1429,8 @@ func (su *storeUpdateLocked) applyRemainingFields() (*Task, bool, error) {
 	if su.patch.IsJoin != nil {
 		su.t.IsJoin = *su.patch.IsJoin
 	}
-	if su.patch.MaxAttempts != nil {
-		newMax := *su.patch.MaxAttempts
-		if newMax != nil && *newMax < 1 {
-			return nil, true, verr("max_attempts must be at least 1")
-		}
-		su.t.MaxAttempts = newMax
-	}
-	if su.patch.AttemptCount != nil {
-		if *su.patch.AttemptCount < 0 {
-			return nil, true, verr("attempt_count must not be negative")
-		}
-		su.t.AttemptCount = *su.patch.AttemptCount
+	if err := su.applyAttemptFields(); err != nil {
+		return nil, true, err
 	}
 	if su.patch.ResumeFromCommit != nil {
 		su.t.ResumeFromCommit = *su.patch.ResumeFromCommit
@@ -1561,9 +1580,20 @@ var ErrNotRestartable = errors.New("task: not restartable: task is not failed")
 // dependency is not yet `done` — the same dependency recompute Update applies
 // when BlockedBy is patched (DS-5: restart resets a member to "next/blocked").
 //
+// RestartReset is the explicit restart of a person (PlayPlan, the standalone
+// restart route): it lands on `next` even when the task's trigger still has a
+// future occurrence, because the person asked for the run now; the trigger is
+// kept. Automatic resets use AutoRestartReset (trigger_wait.go) instead.
+//
 // Returns ErrNotRestartable when the task is not currently `failed`. Takes
 // the per-task lock once internally.
 func (s *Store) RestartReset(id string) (*Task, error) {
+	return s.restartReset(id, false)
+}
+
+// restartReset is the shared body of RestartReset and AutoRestartReset;
+// automatic selects the TK-30 wait for a future trigger occurrence.
+func (s *Store) restartReset(id string, automatic bool) (*Task, error) {
 	if err := validateID(id); err != nil {
 		return nil, err
 	}
@@ -1592,6 +1622,11 @@ func (s *Store) RestartReset(id string) (*Task, error) {
 	t.ResumeFromCommit = ""
 	t.StartedAt = ""
 	t.CompletedAt = ""
+	if automatic && TriggerAwaitingOccurrence(t, time.Now()) {
+		// r17 TK-30: wait for the occurrence. recomputeBlockedStateLocked
+		// leaves an inbox task untouched.
+		t.Status = StatusInbox
+	}
 	s.recomputeBlockedStateLocked(t)
 	t.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if err := s.write(t); err != nil {
@@ -1804,7 +1839,9 @@ func (s *Store) recomputeBlockedStateLocked(t *Task) {
 	switch {
 	case anyUnmet && t.Status == StatusNext:
 		t.Status = StatusBlocked
-	case !anyUnmet && t.Status == StatusBlocked:
+	case !anyUnmet && t.Status == StatusBlocked && !TriggerHoldsPromotion(t, time.Now()):
+		// r17 TK-30: a task whose trigger has not released it stays waiting;
+		// only the scheduler's fire at the occurrence releases it.
 		t.Status = StatusNext
 	}
 }
@@ -1814,9 +1851,20 @@ func (s *Store) recomputeBlockedStateLocked(t *Task) {
 // moves the task to `next` so the executor can claim it. It returns
 // ErrAlreadyRunning when the task is already `in_progress` (a trigger fire must
 // not stomp an in-flight run — the overlap guard). Used by the trigger executor
-// to spawn a fresh run for once/every/recurring triggers. Takes the per-task
+// to spawn a fresh run for once/recurring triggers. Takes the per-task
 // lock once internally.
 func (s *Store) SpawnReset(id string) (*Task, error) {
+	return s.SpawnResetForOccurrence(id, nil)
+}
+
+// SpawnResetForOccurrence is SpawnReset for a scheduler delivery: when
+// occurrenceMs is non-nil, the same write records it as the task's
+// scheduler-delivery marker (r17 TK-30), so the reset and the delivery can
+// never be observed apart. The caller holds the task's coordination lock and
+// has validated the occurrence against the fresh persisted trigger. The marker
+// is written even when the task is already running (the overlap guard): the
+// occurrence was delivered, the run is simply not restarted.
+func (s *Store) SpawnResetForOccurrence(id string, occurrenceMs *int64) (*Task, error) {
 	if err := validateID(id); err != nil {
 		return nil, err
 	}
@@ -1828,7 +1876,17 @@ func (s *Store) SpawnReset(id string) (*Task, error) {
 	if err != nil {
 		return nil, err
 	}
+	if occurrenceMs != nil {
+		v := *occurrenceMs
+		t.LastDeliveredAtMs = &v
+	}
 	if t.Status == StatusInProgress {
+		if occurrenceMs != nil {
+			t.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+			if err := s.write(t); err != nil {
+				return nil, err
+			}
+		}
 		return nil, ErrAlreadyRunning
 	}
 	t.Status = StatusNext
@@ -1842,7 +1900,7 @@ func (s *Store) SpawnReset(id string) (*Task, error) {
 	// updateLocked, RestartReset, and AddDependency all derive the `blocked`
 	// side-state as their terminal step, but SpawnReset landed a task
 	// straight on `next` even when its blocked_by set has an unmet
-	// dependency. Reached from the trigger scheduler (a recurring/once/every
+	// dependency. Reached from the trigger scheduler (a recurring/once
 	// re-fire), this let a recurring-trigger task with a still-unmet
 	// dependency persist as a dispatchable `next` task indefinitely. A no-op
 	// for a task with no blocked_by (or every blocker already `done`).
@@ -1872,11 +1930,46 @@ func (s *Store) AdvanceUnblocked(id string) (*Task, error) {
 	if err != nil {
 		return nil, err
 	}
-	if t.Status != StatusBlocked {
+	if t.Status != StatusBlocked || TriggerHoldsPromotion(t, time.Now()) {
+		// r17 TK-30 (deletion-driven promotion): a task still awaiting its
+		// trigger stays waiting exactly as a completed predecessor leaves it.
 		return t, nil
 	}
 	next := StatusNext
 	return s.updateLocked(id, Patch{Status: &next, allowBlockedSet: true})
+}
+
+// PromoteInboxIfReleased moves an `inbox` task to `next` — the plan engine's
+// automatic member promotion — unless its trigger still holds it (r17 TK-30).
+// The status and the trigger are read under the task's lock in the same
+// critical section as the write, never from a caller-side snapshot, so a
+// trigger attached between a plan pass's list and this call keeps the task
+// waiting. promoted is false (and the task unchanged) when it was not inbox
+// or is held.
+func (s *Store) PromoteInboxIfReleased(id string) (t *Task, promoted bool, err error) {
+	if err = validateID(id); err != nil {
+		return nil, false, err
+	}
+	if hook := promoteInboxHook.Load(); hook != nil {
+		(*hook)(id)
+	}
+	mu := s.lock.Get(id)
+	mu.Lock()
+	defer mu.Unlock()
+
+	cur, err := s.load(id)
+	if err != nil {
+		return nil, false, err
+	}
+	if cur.Status != StatusInbox || TriggerHoldsPromotion(cur, time.Now()) {
+		return cur, false, nil
+	}
+	next := StatusNext
+	updated, err := s.updateLocked(id, Patch{Status: &next})
+	if err != nil {
+		return nil, false, err
+	}
+	return updated, true, nil
 }
 
 // Exists reports whether a task with id exists on disk.

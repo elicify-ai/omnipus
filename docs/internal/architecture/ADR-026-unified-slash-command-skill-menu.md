@@ -1,5 +1,12 @@
 # ADR-026: Unified Slash-Command + Skill Menu (skill-as-command, partitioned palette)
 
+## Amended 2026-10-07 — session-core founder decisions
+
+**Dated correction of D7–D9 and retired command actions.** Delete /new, /agents, /resume and deprecated names/aliases. /sessions retains session search; /switch-agent navigates to another MAIN session; /clear moves context/display at a safe point while retaining archive/recall. The final worker read-only/navigation capability table applies to menu and execution.
+
+Authority and complete clause/reuse map: **Session core with an agent address book: reuse one standing session, one archive and the existing execution paths**, `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/adr-session-core-20261006/docs/internal/architecture/ADR-20261006-session-core-with-an-agent-address-book.md`::Decision / Earlier ADR clauses amended; founder ledger `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/CONTINUATION-20261005.md` plus the binding October 7 answers through 15:55. This is a design amendment, not a claim that production implements it. Conflicting older prescriptions below are historical within this scope; unrelated decisions and historical evidence remain unchanged.
+
+
 > **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
 
 **Status:** Accepted (ratifying — decisions made in conversation 2026-06-29)

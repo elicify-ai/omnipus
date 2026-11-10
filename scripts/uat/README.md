@@ -17,6 +17,13 @@ are reproducible and citable from issues.
 - `retest-watch.sh` — watch lane reports for `LANE DONE`, and the UAT gateway
   for outages and panics.
 
+**Current-process note — Last reviewed: 2026-10-23.** These are historical
+campaign receipts, not current launch recipes. In particular, the retired worker
+name and full Fly run in `ci-watch.sh` are not permission to use either today. Apply
+root `CLAUDE.md` ("CI scope and remote pre-flight", "Hands-on pipeline") and the
+planning skill's `knowledge/landing-trains.md` for current candidate/paired-lane
+execution; verify the actual rebuild script from the campaign ledger.
+
 Plans: `docs/internal/uat/retest/` (RETEST-PLAN-2026-09-14.md — the plan and
 tester protocol; RETEST-FOLLOWUP-2026-09-14.md — every row left to re-run,
 with its fixture). Original campaign plan:

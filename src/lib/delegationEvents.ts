@@ -259,7 +259,7 @@ function callError(call: ToolCall): string | undefined {
 function refusalReason(call: ToolCall): string | undefined {
   const json = parseLeadingJson(call.result)
   const code = json?.error
-  if (code === 'delegation_denied' || code === 'skill_not_found') {
+  if (code === 'delegation_denied' || code === 'skill_not_found' || code === 'skill_not_granted') {
     // A denial payload with neither reason nor message still has the frame's
     // error string (pkg/gateway/websocket_forward_hub.go::hubToolExecEnd).
     return jsonString(json, 'reason') ?? jsonString(json, 'message') ?? callError(call)
@@ -394,11 +394,11 @@ function finiteExit(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
-/** Truncation sentinels keep sessionId and status at the front of `preview`. */
+/** Truncation sentinels and the #1452 D2 history preview marker keep sessionId and status at the front of `preview`. */
 function bashPreview(result: unknown): string | null {
   if (!result || typeof result !== 'object' || Array.isArray(result)) return null
   const record = result as Record<string, unknown>
-  const sentinel = record._truncated === true || record._truncated_client === true || record._ref === true
+  const sentinel = record._truncated === true || record._truncated_client === true || record._ref === true || record._history_preview === true
   return sentinel && typeof record.preview === 'string' ? record.preview : null
 }
 

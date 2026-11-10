@@ -7,7 +7,7 @@
 //     handleFrame's per-type switch (slices/frames.ts) — so every frame
 //     type that starts carrying a `seq` (§1.2's full list: token, done,
 //     tool_call_start/result, subagent_start/end, media, error,
-//     agent_switched, rate_limit, cancel_stage, message_status, goal_status,
+//     rate_limit, cancel_stage, message_status, goal_status,
 //     loop_status, goal_outcome, judge_verdict, user_message) is covered by
 //     ONE gate rather than one per case. A frame with no `seq` (every frame
 //     this store handled before Lane A's gateway hub lands, and every frame
@@ -87,6 +87,12 @@ export function gateFrameBySeq(cursor: SessionCursor | null, frame: SeqFrameLike
   if (cursor === null) {
     return { kind: 'apply', cursor: { bootId, seq: frame.seq } }
   }
+  // F2 / D7: a fenced cursor is a prior-boot position whose new-boot snapshot
+  // was rejected. Live frames carry no boot_id, so their numbers cannot be
+  // compared with it: the first sequenced frame re-attaches instead.
+  if (fencedCursors.has(cursor)) {
+    return { kind: 'gap', cursor }
+  }
   if (frame.seq <= cursor.seq) {
     return { kind: 'drop' }
   }
@@ -94,6 +100,24 @@ export function gateFrameBySeq(cursor: SessionCursor | null, frame: SeqFrameLike
     return { kind: 'apply', cursor: { bootId, seq: frame.seq } }
   }
   return { kind: 'gap', cursor }
+}
+
+/** Cursor objects fenced by a rejected cross-boot snapshot. Membership is by
+ * object identity: any cursor-minting frame stores a new cursor object, which
+ * lifts the fence, and a released bucket takes its fence with it. */
+const fencedCursors = new WeakSet<SessionCursor>()
+
+/**
+ * F2 / spec D7: keep the prior cursor after a rejected snapshot from ANOTHER
+ * boot, but fence it. Its seq belongs to the old boot, so the new boot's live
+ * frames (which carry no boot_id) would compare as already applied and be
+ * dropped. The fence makes the next sequenced frame a gap, so the existing
+ * guarded, backed-off re-attach recovers from the retained position.
+ */
+export function fenceCursorAcrossBoots(cursor: SessionCursor): SessionCursor {
+  const fenced = { ...cursor }
+  fencedCursors.add(fenced)
+  return fenced
 }
 
 /**
@@ -187,7 +211,9 @@ export function applySnapshotHistoryWipe(bucket: SessionChatState): SessionChatS
     .map((m) => m.turnId as string)
   const pendingTail = bucket.messageOrder
     .map((id) => bucket.messagesById[id])
-    .filter((m): m is ChatMessage => !!m && isPendingTailMessage(m))
+    .filter((m): m is ChatMessage => !!m && (isPendingTailMessage(m) ||
+      (m.role === 'user' && !!bucket.recoveredFirstSend &&
+        (m.clientMessageId ?? m.id) === bucket.recoveredFirstSend.clientMessageId)))
 
   const messagesById: Record<string, ChatMessage> = {}
   const messageOrder: string[] = []
@@ -221,6 +247,12 @@ export function applySnapshotHistoryWipe(bucket: SessionChatState): SessionChatS
     cursor: bucket.cursor,
     wipedOpenTurnIds: wipedOpenTurnIds.length > 0 ? wipedOpenTurnIds : bucket.wipedOpenTurnIds,
     awaitingCatchUp: true,
+    // An explicitly recovered first send stays visible while history is rebuilt.
+    // Its received status keeps it in history order, not in the unsent tail.
+    recoveredFirstSend: bucket.recoveredFirstSend ? { ...bucket.recoveredFirstSend, reconciled: false } : undefined,
+    restartInterruptedBootId: bucket.restartInterruptedBootId,
+    restartInterruptedListVersion: bucket.restartInterruptedListVersion,
+    restartNoticeDismissed: bucket.restartNoticeDismissed,
     // Item 3 follow-up (orchestrator, Lane A confirmed the gateway side is
     // correct): the client sets isReplaying:true BEFORE session_snapshot
     // ever arrives (attachToSession). Without preserving it here, this

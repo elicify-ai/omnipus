@@ -141,6 +141,11 @@ func filterMacSpellChecker(data []byte) ([]byte, bool, error) {
 	default:
 		return nil, false, fmt.Errorf("converter registry carries %d %s registrations", hits, macSpellCheckerImplementation)
 	}
+	return exciseMacSpellChecker(data, hitStart, hitStop, compStart, compStop, compImpls, impls, comps)
+}
+
+// exciseMacSpellChecker removes and verifies only the selected registry span.
+func exciseMacSpellChecker(data []byte, hitStart, hitStop, compStart, compStop int64, compImpls, impls, comps int) ([]byte, bool, error) {
 	victimStart, victimStop := hitStart, hitStop
 	compVictim := compImpls == 1
 	if compVictim {

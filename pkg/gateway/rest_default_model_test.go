@@ -133,9 +133,6 @@ func newDefaultModelAPI(
 				DefaultModel:      pair,
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
-				// The routing singleton (ADR-054 D6.4) so the turn-time
-				// oracle's ProcessDirectWithChannel resolves a default agent.
-				DefaultAgentID: "mia",
 			},
 			// A real chat-target agent so default-agent resolution (and the
 			// turn-time oracle's ProcessDirect) has something to resolve to.
@@ -200,9 +197,9 @@ func TestDefaultModel_PutResolvesAtTurnTime(t *testing.T) {
 	// `protocol` is REQUIRED for a custom row (ADR-067 FR-035, T067-09): with
 	// only half a definition the id is UNKNOWN, and an agent bound to it is
 	// degraded `needs_provider` and refuses the turn this test's oracle
-	// depends on. The pool entry the completed rows now produce is never
-	// consulted here — a single-candidate chain calls the agent's primary
-	// provider (the stub) directly.
+	// depends on. After the real reload below, bind each named fixture
+	// connection to the recording client explicitly; a single-candidate turn
+	// now uses its named pool and must never fall back to the injected client.
 	rows := []*config.ModelConfig{
 		{
 			Name: "before", Provider: "provider-a", Model: "model-before",
@@ -265,6 +262,9 @@ func TestDefaultModel_PutResolvesAtTurnTime(t *testing.T) {
 	// exact session id it is given).
 	ctx := context.Background()
 	require.NoError(t, api.agentLoop.ReloadProviderAndConfig(ctx, rec, api.agentLoop.GetConfig()))
+	mia, ok := api.agentLoop.GetRegistry().GetAgent("mia")
+	require.True(t, ok, "the real reload must retain the fixture agent")
+	mia.StoreProviderPool(map[string]providers.LLMProvider{"provider-a": rec, "provider-b": rec})
 	store := api.agentLoop.GetSessionStore()
 	require.NotNil(t, store, "the shared session store must be available")
 	meta, err := store.NewSession(session.SessionTypeChat, "web", "mia")

@@ -911,11 +911,11 @@ export async function createBrowserProbeAgent(
   return name;
 }
 
-export async function runBrowserInputProbe(
+async function beginBrowserInputProbe(
   page: Page,
   testInfo: TestInfo,
   mode: "soak" | "latency" | "latency-video-only",
-): Promise<void> {
+) {
   const targetTimingEnabled = process.env.BROWSER_PROBE_TARGET_TIMING === "1";
   const timingHoldMs = Number(
     process.env.BROWSER_PROBE_TARGET_TIMING_HOLD_MS ?? 0,
@@ -987,7 +987,7 @@ export async function runBrowserInputProbe(
     }));
     viewerClockBrackets.push({ label, ...clock });
   };
-  let baselineWire = 0;
+  const baselineWire = 0;
   page.on("pageerror", (error) => pageErrors.push(error.message));
   page.on("websocket", (socket) => {
     if (!new URL(socket.url()).pathname.endsWith("/browser/ws")) return;
@@ -1028,7 +1028,7 @@ export async function runBrowserInputProbe(
       wire.push({ at: Date.now(), direction: "closed", type: "socket_closed" }),
     );
   });
-  let state: PixelState = {
+  const state: PixelState = {
     count: 0,
     hash: 0,
     last: 0,
@@ -1037,7 +1037,52 @@ export async function runBrowserInputProbe(
     nonce,
   };
   if (diagnostic) await installLatencyDiagnostics(page, videoOnly);
-  try {
+  return {
+    page,
+    testInfo,
+    mode,
+    targetTimingEnabled,
+    timingHoldMs,
+    mixedDuration,
+    diagnostic,
+    videoOnly,
+    label,
+    origin,
+    runtimeHome,
+    nonce,
+    plans,
+    expectedEvents,
+    wire,
+    pageErrors,
+    latencies,
+    idleSamples,
+    clicks,
+    timing,
+    viewerClockBrackets,
+    bracketViewerClock,
+    baselineWire,
+    state,
+  };
+}
+
+type ProbeRun = Awaited<ReturnType<typeof beginBrowserInputProbe>>;
+
+async function openBrowserInputProbeSession(
+  ctx: ProbeRun,
+): Promise<() => Promise<void>> {
+  const {
+    page,
+    targetTimingEnabled,
+    diagnostic,
+    expectedEvents,
+    nonce,
+    label,
+    wire,
+    origin,
+    runtimeHome,
+    state,
+  } = ctx;
+  let { baselineWire } = ctx;
     if (targetTimingEnabled && !diagnostic)
       throw new Error("Target timing is a latency diagnostic only");
     await page.goto(origin.href);
@@ -1229,6 +1274,31 @@ export async function runBrowserInputProbe(
           expect(event.generation).toBe(baselineCapture.generation);
       }
     };
+  return assertContinuous;
+}
+
+async function runBrowserInputProbeClicks(
+  ctx: ProbeRun,
+  assertContinuous: () => Promise<void>,
+): Promise<void> {
+  const {
+    page,
+    testInfo,
+    mode,
+    timing,
+    idleSamples,
+    targetTimingEnabled,
+    bracketViewerClock,
+    mixedDuration,
+    label,
+    plans,
+    latencies,
+    clicks,
+    expectedEvents,
+    pageErrors,
+  } = ctx;
+  let { state } = ctx;
+  try {
     if (mode === "soak") {
       await persistScreenshot(page, testInfo, "before-idle.png");
       const idleStart = performance.now();
@@ -1340,6 +1410,124 @@ export async function runBrowserInputProbe(
       "100-click decoded-video p95, including trusted viewer input dispatch",
     ).toBeLessThanOrEqual(MAX_P95_MS);
   } finally {
+    ctx.state = state;
+  }
+}
+
+async function holdBrowserInputProbeTargetTiming(
+  ctx: ProbeRun,
+): Promise<void> {
+  const {
+    page,
+    testInfo,
+    targetTimingEnabled,
+    timingHoldMs,
+    latencies,
+    wire,
+    label,
+    nonce,
+  } = ctx;
+    if (
+      targetTimingEnabled &&
+      timingHoldMs > 0 &&
+      latencies.length === CLICK_COUNT
+    ) {
+      // browser_evaluate cooperatively defers while a viewer owns control.
+      // Escape releases it locally without forwarding a key into the target.
+      let controlReleaseError: string | null = null;
+      try {
+        const releaseStart = wire.length;
+        await browserLiveFrame(page).press("Escape", { timeout: 5000 });
+        await expect
+          .poll(
+            () =>
+              wire
+                .slice(releaseStart)
+                .some(
+                  (event) =>
+                    event.type === "browser_status" &&
+                    event.state === "released",
+                ),
+            { timeout: 5000 },
+          )
+          .toBe(true);
+      } catch {
+        controlReleaseError =
+          "Postmeasurement control release was not confirmed";
+      }
+      const releaseFile = testInfo.outputPath("target-timing-release");
+      const holdStarted = performance.now();
+      fs.writeFileSync(
+        testInfo.outputPath("target-timing-ready.json"),
+        JSON.stringify({
+          nonce,
+          releaseFile,
+          controlReleaseError,
+          maxHoldMs: timingHoldMs,
+          note: "Postmeasurement only; extract snapshot chunks0/100/200 before writing nonce to releaseFile",
+        }),
+        { flag: "wx" },
+      );
+      console.log(
+        `[${label}] target timing extraction ready: nonce=${nonce}, releaseFile=${releaseFile}`,
+      );
+      let released = false;
+      while (performance.now() - holdStarted < timingHoldMs) {
+        if (
+          fs.existsSync(releaseFile) &&
+          fs.readFileSync(releaseFile, "utf8").trim() === String(nonce)
+        ) {
+          released = true;
+          break;
+        }
+        await page.waitForTimeout(
+          Math.min(
+            500,
+            Math.max(0, timingHoldMs - (performance.now() - holdStarted)),
+          ),
+        );
+      }
+      fs.writeFileSync(
+        testInfo.outputPath("target-timing-hold.json"),
+        JSON.stringify({
+          nonce,
+          released,
+          elapsedMs: performance.now() - holdStarted,
+          measuredWindowUnaffected: true,
+        }),
+      );
+      // Extraction availability is recorded separately; never replace an
+      // already-thrown pixel/latency failure with a postmeasurement hold timeout.
+      if (!released)
+        console.log(
+          `[${label}] target timing hold expired; extraction remains unverified`,
+        );
+    }
+}
+
+async function persistBrowserInputProbeEvidence(
+  ctx: ProbeRun,
+): Promise<void> {
+  const {
+    page,
+    testInfo,
+    mode,
+    videoOnly,
+    diagnostic,
+    label,
+    nonce,
+    expectedEvents,
+    state,
+    timing,
+    clicks,
+    latencies,
+    wire,
+    pageErrors,
+    idleSamples,
+    viewerClockBrackets,
+    bracketViewerClock,
+    targetTimingEnabled,
+  } = ctx;
     const ordered = [...latencies].sort((a, b) => a - b);
     const p95Ms = ordered.length
       ? ordered[Math.ceil(0.95 * ordered.length) - 1]
@@ -1427,82 +1615,7 @@ export async function runBrowserInputProbe(
       path: file,
       contentType: "application/json",
     });
-    if (
-      targetTimingEnabled &&
-      timingHoldMs > 0 &&
-      latencies.length === CLICK_COUNT
-    ) {
-      // browser_evaluate cooperatively defers while a viewer owns control.
-      // Escape releases it locally without forwarding a key into the target.
-      let controlReleaseError: string | null = null;
-      try {
-        const releaseStart = wire.length;
-        await browserLiveFrame(page).press("Escape", { timeout: 5000 });
-        await expect
-          .poll(
-            () =>
-              wire
-                .slice(releaseStart)
-                .some(
-                  (event) =>
-                    event.type === "browser_status" &&
-                    event.state === "released",
-                ),
-            { timeout: 5000 },
-          )
-          .toBe(true);
-      } catch {
-        controlReleaseError =
-          "Postmeasurement control release was not confirmed";
-      }
-      const releaseFile = testInfo.outputPath("target-timing-release");
-      const holdStarted = performance.now();
-      fs.writeFileSync(
-        testInfo.outputPath("target-timing-ready.json"),
-        JSON.stringify({
-          nonce,
-          releaseFile,
-          controlReleaseError,
-          maxHoldMs: timingHoldMs,
-          note: "Postmeasurement only; extract snapshot chunks0/100/200 before writing nonce to releaseFile",
-        }),
-        { flag: "wx" },
-      );
-      console.log(
-        `[${label}] target timing extraction ready: nonce=${nonce}, releaseFile=${releaseFile}`,
-      );
-      let released = false;
-      while (performance.now() - holdStarted < timingHoldMs) {
-        if (
-          fs.existsSync(releaseFile) &&
-          fs.readFileSync(releaseFile, "utf8").trim() === String(nonce)
-        ) {
-          released = true;
-          break;
-        }
-        await page.waitForTimeout(
-          Math.min(
-            500,
-            Math.max(0, timingHoldMs - (performance.now() - holdStarted)),
-          ),
-        );
-      }
-      fs.writeFileSync(
-        testInfo.outputPath("target-timing-hold.json"),
-        JSON.stringify({
-          nonce,
-          released,
-          elapsedMs: performance.now() - holdStarted,
-          measuredWindowUnaffected: true,
-        }),
-      );
-      // Extraction availability is recorded separately; never replace an
-      // already-thrown pixel/latency failure with a postmeasurement hold timeout.
-      if (!released)
-        console.log(
-          `[${label}] target timing hold expired; extraction remains unverified`,
-        );
-    }
+  await holdBrowserInputProbeTargetTiming(ctx);
     if (diagnostic && latencies.length === CLICK_COUNT) {
       expect(
         diagnosticsError,
@@ -1575,5 +1688,18 @@ export async function runBrowserInputProbe(
         ).toBe(0);
       }
     }
+}
+
+export async function runBrowserInputProbe(
+  page: Page,
+  testInfo: TestInfo,
+  mode: "soak" | "latency" | "latency-video-only",
+): Promise<void> {
+  const ctx = await beginBrowserInputProbe(page, testInfo, mode);
+  try {
+    const assertContinuous = await openBrowserInputProbeSession(ctx);
+    await runBrowserInputProbeClicks(ctx, assertContinuous);
+  } finally {
+    await persistBrowserInputProbeEvidence(ctx);
   }
 }

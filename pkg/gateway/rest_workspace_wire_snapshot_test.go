@@ -29,12 +29,12 @@ func TestWorkspaceToWireFromUsesSnapshotWhenDiskGraphChanges(t *testing.T) {
 	}))
 	unlock()
 
-	wire := workspaceToWireFrom(api.homePath, snapshot.Workspace, 0, &snapshot)
+	wire := workspaceToWireFrom(api.homePath, snapshot.Workspace, 0, &snapshot, api.mainSessionAddress)
 	require.Equal(t, snapshot.Revision, wire.Revision)
 	require.NotNil(t, wire.Delegation)
 	require.Equal(t, "ava", (*wire.Delegation)[0].ToAgent)
 
-	reread := workspaceToWire(api.homePath, snapshot.Workspace, 0)
+	reread := workspaceToWire(api, snapshot.Workspace, 0)
 	require.NotEqual(t, wire.Revision, reread.Revision, "LoadDelegation fallback must see the later disk graph")
 	require.NotNil(t, reread.Delegation)
 	require.Equal(t, "planner", (*reread.Delegation)[0].ToAgent)

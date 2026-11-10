@@ -23,7 +23,8 @@ allowed-tools: Read, Glob, Grep, Bash
 
 # Spec / ADR Grill Skill
 
-Last reviewed: 2026-09-25
+Last reviewed: 2026-10-29 — agent tool parity and riders checks
+Process version: 2026-10-29.1
 
 You are an adversarial reviewer of Omnipus feature specs and ADRs. Your sole
 purpose is to find flaws, gaps and risks before a spec reaches implementation
@@ -41,7 +42,10 @@ any other file. You produce a structured findings report.
 ## Where this fits in the process
 
 This skill is one step in the feature-size flow (`docs/internal/design/dev-team-setup-design-2026-09-25.md`
-section 7.1; founder decisions in `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/uat/spec-process/DECISIONS.md`):
+section 7.1; founder decisions in `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/uat/spec-process/DECISIONS.md`, founder's Mac only; on a pod ask the chief):
+Read that design with its dated amendments; root `CLAUDE.md` ("Change sizes and
+the review gate", "Landing trains") defines the combined scope after CHECK. The
+founder interview/question sequence below is unchanged; proposal 8 was not adopted.
 
 ```
 founder interview (interview-me)
@@ -80,8 +84,8 @@ team-lead interviews the founder on "Questions for the founder"
 fix round 2  ->  any remaining BLOCKing finding is escalated to the founder
       |
       v
-team-lead plans  ->  RED / GREEN / CHECK  ->  8-reviewer gate  ->  founder's
-yes  ->  landing
+team-lead plans  ->  RED / GREEN / CHECK  ->  combined-feature gate
+      ->  candidate CI / hands-on evidence  ->  founder's yes  ->  landing
 ```
 
 This skill never recommends `/taskify` — it does not exist in this repo's
@@ -135,7 +139,9 @@ Do not ask the user questions in this phase — read.
    already exists), `docs/internal/design/design-system-definition.md`,
    `docs/internal/brand/brand-guidelines.md`, `src/components/ui/CLAUDE.md`.
 8. If the document touches security or user-visible promises: read
-   `docs/security.md`, `docs/tools.md`.
+   `docs/security.md`, `docs/tools.md`. For any UI or behaviour change,
+   also read the relevant existing user-facing pages under `docs/` outside
+   `docs/internal/` to assess the proposed documentation TODOs.
 9. Use GitNexus (`query`, `context`, `impact`, `explain`) to verify any claim
    the document makes about existing code behaviour — falling back to
    Grep/Read when the graph doesn't cover a file. Never take a code claim in
@@ -174,9 +180,15 @@ following. Check each; every gap is a finding (do not silently infer it as
       values taken **from the spec**, never read off an implementation that
       doesn't exist yet
 - [ ] A traceability table: requirement -> scenario -> test
+- [ ] Epic link and riders listed and owned (open issues on the same files,
+      confirmed with the architect)
 - [ ] A "Reachability" section: how a real user or agent actually invokes
       the feature — the tool registration and policy entries for an
       agent-facing capability, and the screen that renders a user-facing one
+- [ ] A "User-facing documentation" section with specific TODOs and named
+      user-facing pages for every UI or behaviour change; each change traces
+      to a documentation TODO (or states why no user-visible update applies).
+      Check the plan against root `CLAUDE.md` ("Definition of Done").
 
 ### ADR mode
 
@@ -193,6 +205,9 @@ following. Check each; every gap is a finding (do not silently infer it as
       trigger condition (decision #2): an ADR exists only when a design
       decision is still open; if the document doesn't name an open decision,
       that itself is a finding
+- [ ] If the decision changes UI or behaviour, records the user-facing docs
+      impact for the spec's documentation TODOs (root `CLAUDE.md`, "Definition
+      of Done")
 
 Record every gap found under either checklist as a structural finding with
 its own severity — a missing Reachability section or a missing UI-states
@@ -218,7 +233,13 @@ assumptions, "etc.", conditional logic with an unhandled branch.
 Missing error paths, edge cases (empty/null/concurrent/very large inputs),
 missing state transitions, missing non-Go actors (cron, event handlers),
 missing non-functional requirements, missing rollback for a mid-operation
-failure, missing data lifecycle (create/update/archive/delete).
+failure, missing data lifecycle (create/update/archive/delete). For a UI or
+behaviour change, check that each change has a concrete user-facing
+documentation TODO and destination page (root `CLAUDE.md`,
+"Definition of Done"). Agent tool parity: for every object the spec changes
+that agents manage through tools, the field table exists, the tool schema,
+description and tests change with it, and each deliberate difference has a
+reason and a clear error.
 
 ### Lens 3 — Inconsistency and contradiction with ADRs / AS-IS
 
@@ -418,7 +439,10 @@ triggers another grill round — the founder decides the disposition.
    `docs/plan/`, `docs/specs/`, or `docs/internal/plan/`: # agent-guard: allow
    - Spec mode round 1: `docs/internal/specs/<name>-spec-review.md`
    - Spec mode round 2: `docs/internal/specs/<name>-spec-review-round2.md`
-   - ADR mode: `docs/internal/architecture/ADR-NNN-<title>-review.md` # agent-guard: allow
+   - ADR mode: next to the ADR, as `<ADR-file>-review.md` — the ADR's own
+     filename, whatever its scheme (architect's file,
+     `.claude/agents/architect.md`, states the current naming rule; never
+     assume the old `ADR-NNN-` pattern) # agent-guard: allow
 2. Present the executive summary and verdict.
 3. List every CRITICAL and MAJOR finding with ID and one-line description.
 4. State the concrete next action, using real paths, never placeholders:
@@ -447,14 +471,14 @@ triggers another grill round — the founder decides the disposition.
    round-2 findings. Any CRITICAL finding still open after that fix is
    listed under "Escalation to the founder" above for the founder to
    decide — do not run a third grill round. Once resolved, team-lead plans
-   the implementation (RED / GREEN / CHECK, the 8-reviewer gate).
+   the implementation (RED / GREEN / CHECK, the 5-reviewer gate).
    ```
 
    **ADR mode (the one grill round):**
    ```
    Verdict: <BLOCK|REVISE|PASS>
 
-   Review written to: docs/internal/architecture/ADR-NNN-<title>-review.md # agent-guard: allow
+   Review written to: docs/internal/architecture/<ADR-file>-review.md # agent-guard: allow
 
    This is the ADR's one fixed grill round. Next: team-lead interviews the
    founder on "Questions for the founder", then architect makes the one

@@ -65,6 +65,10 @@ func newPlanToolWiringTestLoop(t *testing.T) (*AgentLoop, *AgentInstance, string
 	if !ok {
 		t.Fatal("planner-agent not registered")
 	}
+	// S1 M9: run_task dispatches through the session launcher the gateway
+	// installs at boot; without it StartTaskNow refuses and this wiring smoke
+	// test would only prove the refusal.
+	installTestSessionLauncher(t, al)
 	return al, agentInst, home
 }
 
@@ -118,9 +122,9 @@ func TestWirePlanTools_SetPlanStoreWiresRealStoreForRegisteredAgent(t *testing.T
 	ctx := tools.WithAgentID(context.Background(), "planner-agent")
 	result := agentInst.Tools.Execute(ctx, "create_plan", map[string]any{
 		"title": "Ship the thing", "owner_agent_id": "planner-agent",
-		"workspace": testHarnessWorkspaceMembershipID,
-		"dod":       []any{map[string]any{"kind": "prose", "text": "the thing ships"}},
-		"rationale": "ship the thing end to end",
+		"workspace_id": testHarnessWorkspaceMembershipID,
+		"dod":          []any{map[string]any{"kind": "prose", "text": "the thing ships"}},
+		"rationale":    "ship the thing end to end",
 	})
 	if result == nil || result.IsError {
 		t.Fatalf("create_plan after SetPlanStore must succeed against the real store, got %+v", result)
@@ -249,7 +253,7 @@ func TestPlanExecuteWired_CreatePlanAttachMemberExecutePlanEndToEnd(t *testing.T
 	createResult := agentInst.Tools.Execute(ctx, "create_plan", map[string]any{
 		"title":          "Ship the thing",
 		"owner_agent_id": "planner-agent",
-		"workspace":      testHarnessWorkspaceMembershipID,
+		"workspace_id":   testHarnessWorkspaceMembershipID,
 		"dod":            []any{map[string]any{"kind": "prose", "text": "the thing ships"}},
 		"rationale":      "ship the thing end to end",
 	})
@@ -390,7 +394,7 @@ func TestPlanExecuteWired_RejectsMemberWithNoAcceptanceCriteria(t *testing.T) {
 	createResult := agentInst.Tools.Execute(ctx, "create_plan", map[string]any{
 		"title":          "Ship the thing",
 		"owner_agent_id": "planner-agent",
-		"workspace":      testHarnessWorkspaceMembershipID,
+		"workspace_id":   testHarnessWorkspaceMembershipID,
 		"dod":            []any{map[string]any{"kind": "prose", "text": "the thing ships"}},
 		"rationale":      "ship the thing end to end",
 	})

@@ -130,6 +130,7 @@
       "file": "tests/design-system/browser.spec.ts",
       "test": "ZoomPill [check:zoomable-view-browser] browser",
       "story": "Default",
+      "requiredTargets": [{ "selector": "[data-testid=\"zoomable-view-zoom-out\"]", "attribute": "aria-label", "value": "Zoom out" }],
       "applicable": true
     },
     {

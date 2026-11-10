@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { DisclosureRow } from '@/components/ui/disclosure-row'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
+import { leaveGateThen } from '@/components/panel-shell/leaveGate'
 import type { MessagePartStatus } from '@assistant-ui/react'
 import { isClientTruncatedResult, isToolResultRef } from '@/store/chat'
 import { humanizeToolName } from '@/lib/humanizeToolName'
@@ -15,7 +16,8 @@ import {
   isCancelledStatus,
   type ToolBadgeStatusConfig,
 } from '@/lib/toolStatusConfig'
-import { detectToolResultSentinels } from './toolResultSentinels'
+import { detectToolResultSentinels, isHistoryResultPreview, isProtectedFileRefusal, isProtectedInternalFileDenial } from './toolResultSentinels'
+import { humanByteSize } from '@/lib/historyPreview'
 import {
   ClientTruncatedDisplay,
   DelegationFailureDisplay,
@@ -26,6 +28,7 @@ import {
   isMarshalErrorResult,
   isTruncatedResult,
   safeJson,
+  ProtectedFileRefusalDisplay,
 } from './toolResultDisplay'
 
 interface GenericToolCallProps {
@@ -160,7 +163,11 @@ export function GenericToolCall({
       useUiStore.getState().addToast({ message: 'No active session to watch.', variant: 'error' })
       return
     }
-    useUiStore.getState().openBrowserPanel(sid, activeAgentId)
+    // CRIT-001: "Watch live" REPLACES whatever panel is open (SP-7), so the
+    // outgoing panel's leave gate (Library unsaved edits) runs first.
+    leaveGateThen(useUiStore.getState().activePanel?.id ?? null, () => {
+      useUiStore.getState().openPanel('browser', { sessionId: sid, agentId: activeAgentId })
+    })
   }
 
   // F1: isRunning/isCancelled are checked BEFORE sentinels.statusConfig —
@@ -190,7 +197,12 @@ export function GenericToolCall({
   const truncated = isTruncatedResult(result) ? result : null
   const clientTruncated = isClientTruncatedResult(result) ? result : null
   const toolRef = isToolResultRef(result) ? result : null
+  // #1452 D2: a history preview marker is a sentinel, never a plain result.
+  // Saved rows route it to HistoryPreviewToolCall; anywhere else only its
+  // preview and true size can be shown.
+  const historyPreview = isHistoryResultPreview(result) ? result : null
   const plainResult =
+    !historyPreview &&
     !truncated &&
     !marshalErr &&
     !clientTruncated &&
@@ -239,6 +251,7 @@ export function GenericToolCall({
             variant="link"
             onClick={handleWatchLive}
             aria-label="Watch live"
+            data-panel-trigger="browser"
             title="Watch this agent's browser live"
             className="rounded-none shrink-0 flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)]"
           >
@@ -292,6 +305,12 @@ export function GenericToolCall({
 
               {clientTruncated && <ClientTruncatedDisplay sentinel={clientTruncated} />}
 
+              {historyPreview && (
+                <pre tabIndex={0} role="region" aria-label="Tool output preview" className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto">
+                  {`Preview of ${humanByteSize(historyPreview.original_size_bytes)}\n${historyPreview.preview}`}
+                </pre>
+              )}
+
               {/* G4: ToolResultRef sentinel — server stored full body, fetch on demand */}
               {toolRef && <ToolResultRefDisplay sentinel={toolRef} sessionId={sessionId} />}
 
@@ -302,10 +321,15 @@ export function GenericToolCall({
                 <FileExistsRefusalDisplay refusal={fileExistsRefusal} />
               )}
 
-              {permissionDenied && <PermissionDeniedDisplay failure={permissionDenied} />}
+              {permissionDenied && (isProtectedInternalFileDenial(permissionDenied)
+                ? <ProtectedFileRefusalDisplay message={permissionDenied.reason} />
+                : <PermissionDeniedDisplay failure={permissionDenied} />)}
+
+              {/* #1284: a protected-file refusal reads as its own block. */}
+              {isProtectedFileRefusal(plainResult) && <ProtectedFileRefusalDisplay message={plainResult} />}
 
               {/* Plain result: normal rendering */}
-              {plainResult !== undefined && (
+              {plainResult !== undefined && !isProtectedFileRefusal(plainResult) && (
                 <pre
                   tabIndex={0}
                   role="region"
@@ -318,9 +342,11 @@ export function GenericToolCall({
             </div>
           )}
 
-          {error && (
+          {error && (isProtectedFileRefusal(error) ? (
+            <ProtectedFileRefusalDisplay message={error} />
+          ) : (
             <div className="text-[var(--color-error)] text-[length:var(--type-caption-size)] font-body">{error}</div>
-          )}
+          ))}
         </div>
       )}
     </div>

@@ -1,0 +1,10 @@
+STEP1 OK signed in workspace=01M3KMG91N63ZQKWCJYHMEJ1J5
+STEP-A1 OK mail panel in shell, header="Mail"
+STEP-A2 OK resize width 641 -> 861
+STEP-A3 OK expand opened new tab on http://localhost:8891/#/workspaces/01M3KMG91N63ZQKWCJYHMEJ1J5/chat?panel=mail
+STEP-B OK hard-load ?panel=mail shows choose-a-mailbox
+STEP-C OK Library replaced Mail (one panel at a time)
+CONSOLE_ERRORS=1
+  ERR: [app] Failed to fetch app state: ApiError: Network unavailable. Check your connection.
+    at ep (http://localhost:8891/assets/api-quB2bf88.js:316:31265)
+    at

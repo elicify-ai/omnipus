@@ -110,8 +110,11 @@ echo "▸ Generating schemas.ts (Zod) from contracts/openapi.yaml …"
 # list is a deliberate manual mapping (W2-9 fix). The runtime result is the
 # same as if the YAML were `additionalProperties: false` AND we chained
 # `.strict()`: unknown fields are rejected.
-STRICT_SCHEMAS=${STRICT_SCHEMAS:-"FallbackModel AgentCreateRequestMain AgentCreateRequestSubagent AgentCreateRequestSubagent3p MediaLibraryEntry MediaAttachmentRequest"}
+STRICT_SCHEMAS=${STRICT_SCHEMAS:-"FallbackModel AgentCreateRequestMain AgentCreateRequestSubagent AgentCreateRequestSubagent3p MediaLibraryEntry MediaAttachmentRequest IntegrationProviderUpdateRequest SearchProviderCheckRequest SearchProviderCheckResponse RoomHistoryResponse"}
 STRICT_RAW="$GEN/_schemas.generated.tmp.ts"
+# JSON Schema and Go count Unicode code points; Zod's string.max counts UTF-16
+# units. Keep the new Todo.active_form limit aligned without changing old fields.
+node "$REPO_ROOT/scripts/_gen-todo-unicode.mjs" "$STRICT_RAW" "$CONTRACTS/components/schemas/Todo.yaml"
 for name in $STRICT_SCHEMAS; do
   # Match either a typed (export const Name: z.ZodType<Name> = …) or untyped
   # (export const Name = …) declaration. CR-01 (Wave 0 code-reviewer):
@@ -126,7 +129,10 @@ for name in $STRICT_SCHEMAS; do
     # Rewrite to:        ... .partial().passthrough().strict();
     #                  or: z.object({...}).strict();
     awk -v name="$name" '
-      /^export const '"$name"'(:| =)/ { in_block = 1; buf = $0; next }
+      /^export const '"$name"'(:| =)/ {
+        if (/;$/) { sub(/;$/, ".strict();"); print; next }
+        in_block = 1; buf = $0; next
+      }
       in_block && /;/ { buf = buf "\n" $0; gsub(/;$/, ".strict();", buf); print buf; in_block = 0; next }
       in_block { buf = buf "\n" $0; next }
       { print }
@@ -145,7 +151,7 @@ done
 # validation point, defeating CR-01's intent. The narrow fix below
 # rewrites such inline bodies to add `.strict()` when they correspond to
 # a strict schema (matched by operation alias).
-STRICT_BODY_ALIASES=${STRICT_BODY_ALIASES:-"createWorkspaceMediaAttachment"}
+STRICT_BODY_ALIASES=${STRICT_BODY_ALIASES:-"createWorkspaceMediaAttachment checkSearchProviderConnection"}
 node - "$STRICT_RAW" $STRICT_BODY_ALIASES <<'NODE_SCRIPT'
 const fs = require("fs");
 const [path, ...names] = process.argv.slice(2);
@@ -157,7 +163,7 @@ let src = fs.readFileSync(path, "utf8");
 // of emitting a `Name` reference.
 for (const alias of names) {
   const re = new RegExp(
-    `name:\\s*"body",\\s*\\n\\s*type:\\s*"Body",\\s*\\n\\s*schema:\\s*(z\\.object\\(\\{[^}]*\\}\\))\\s*(,)`,
+    `name:\\s*"body",\\s*\\n\\s*type:\\s*"Body",\\s*\\n\\s*schema:\\s*(z\\.object\\(\\{[^}]*\\}\\)(?:\\.partial\\(\\))?)\\s*(,)`,
     "g",
   );
   let replaced = false;
@@ -169,9 +175,9 @@ for (const alias of names) {
     const lastAlias = before.match(/alias:\s*"([^"]+)"/g);
     if (!lastAlias) return m;
     const lastAliasName = lastAlias[lastAlias.length - 1].match(/"([^"]+)"/)[1];
-    if (names.includes(lastAliasName)) {
+    if (lastAliasName === alias) {
       replaced = true;
-      return m.replace(/\}\)\s*,\s*$/, "}).strict(),");
+      return m.replace(/\s*,\s*$/, ".strict(),");
     }
     return m;
   });
@@ -322,7 +328,9 @@ NODE_SCRIPT
 # OnboardingCompleteRequest.provider oneOf — the union is NESTED in a
 # property there, so the wrapper object itself needs the satisfies form too;
 # extended again 2026-08-23 T068-34 for the ADR-068 §8b SignInStartResponse
-# oneOf (cli_login | device_code); extended 2026-09-11 for the
+# oneOf (whose vendor-CLI variant WU-24 later deleted with the CLI-backed
+# model providers, collapsing the union to the device-code shape);
+# extended 2026-09-11 for the
 # RecordWriteRequest create|update split — the ADR-034 pattern again, this
 # time discriminated on `mode` rather than `type`).
 # The template pins every schema to its emitted TS type via
@@ -332,7 +340,7 @@ NODE_SCRIPT
 # options collapse its inference). Rewrite the union and its option schemas
 # to the `satisfies` form — the identical compile-time drift pin against the
 # emitted TS type, without widening the declared type.
-UNION_SATISFIES_SCHEMAS=${UNION_SATISFIES_SCHEMAS:-"AgentCreateRequestMain AgentCreateRequestSubagent AgentCreateRequestSubagent3p AgentCreateRequest SessionMessageProgress SessionMessageCheckpoint SessionMessageArtifact SessionMessageBlocker SessionMessageQuestion SessionMessageDecisionRequest SessionMessageError SessionMessageHandback SessionMessageRevisionEntry SessionMessageGoalStatus SessionMessageSteer SessionMessageRespond SessionMessage DelegateRunAction DelegateStatusAction DelegateInboxAction DelegateInboxAckAction DelegateSteerAction DelegateRespondAction DelegateCancelAction DelegateFollowUpAction DelegatePeekAction DelegateActionRequest MessageParentProgress MessageParentCheckpoint MessageParentArtifact MessageParentBlocker MessageParentQuestion MessageParentHandback MessageParentRequest OnboardingProviderApiKey OnboardingProviderSignIn OnboardingCompleteRequest SignInStartResponseCliLogin SignInStartResponseDeviceCode SignInStartResponse RecordWriteRequestCreate RecordWriteRequestUpdate RecordWriteRequest"}
+UNION_SATISFIES_SCHEMAS=${UNION_SATISFIES_SCHEMAS:-"AgentCreateRequestMain AgentCreateRequestSubagent AgentCreateRequestSubagent3p AgentCreateRequest SessionMessageProgress SessionMessageCheckpoint SessionMessageArtifact SessionMessageBlocker SessionMessageQuestion SessionMessageError SessionMessageHandback SessionMessageRevisionEntry SessionMessageGoalStatus SessionMessageSteer SessionMessageRespond SessionMessage DelegateRunAction DelegateStatusAction DelegateInboxAction DelegateInboxAckAction DelegateSteerAction DelegateRespondAction DelegateStopAllAction DelegateClearGoalAction DelegateResumeAction DelegateRedirectAction DelegatePeekAction DelegateActionRequest MessageParentProgress MessageParentCheckpoint MessageParentArtifact MessageParentBlocker MessageParentQuestion MessageParentHandback MessageParentRequest OnboardingProviderApiKey OnboardingProviderSignIn OnboardingCompleteRequest SignInStartResponseDeviceCode SignInStartResponse RecordWriteRequestCreate RecordWriteRequestUpdate RecordWriteRequest"}
 node - "$STRICT_RAW" $UNION_SATISFIES_SCHEMAS <<'NODE_SCRIPT'
 const fs = require("fs");
 const [path, ...names] = process.argv.slice(2);
@@ -368,6 +376,10 @@ ASYNCAPI_FRAG_STRIPPED=$(grep -v '^// @ts-nocheck' "$ASYNCAPI_FRAG" | grep -v '^
   printf '%s\n' "$ASYNCAPI_FRAG_STRIPPED"
 } > "$GEN/schemas.ts"
 rm -f "$GEN/_schemas.generated.tmp.ts"
+
+# External x-go-type array items owned by AsyncAPI must use the same validator,
+# not a weaker OpenAPI inline copy. The helper also probes the generated result.
+node "$REPO_ROOT/scripts/_gen-ts-shared-refs.mjs" "$GEN/schemas.ts" "$CONTRACTS" "$NODE_MODULES"
 
 # ── Inject rationale comments for schemas with a non-default validation policy.
 # The codegen faithfully reflects the YAML, but the rationale for *why* a
@@ -440,4 +452,6 @@ echo "  openapi-types.ts ^export count : $OPENAPI_EXPORTS  (required ≥ 50)"
 echo "  schemas.ts ^export const count : $SCHEMAS_EXPORTS  (required ≥ 50)"
 [ "$OPENAPI_EXPORTS" -ge 50 ] || { echo "FAIL: openapi-types.ts export count < 50"; exit 1; }
 [ "$SCHEMAS_EXPORTS" -ge 50 ] || { echo "FAIL: schemas.ts export const count < 50"; exit 1; }
+echo "▸ Verifying Todo.active_form contract conformance …"
+node --experimental-strip-types --test "$REPO_ROOT/scripts/todo-active-form-contract.test.mjs"
 echo "  All quality gates PASSED"

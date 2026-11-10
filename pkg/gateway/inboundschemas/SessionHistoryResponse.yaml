@@ -1,0 +1,62 @@
+title: SessionHistoryResponse
+type: object
+description: >
+  Bounded public session-history page (chat history paging D3/D10), selected nearest
+  the requested boundary and returned in ascending acceptance order. has_earlier and
+  has_later mean actual eligible retained groups in the read domain: the closed
+  window for window_refresh, otherwise the retained archive. They are not inferred
+  from fullness, sequence gaps or a detached live tail. next_before/next_after exist
+  iff the respective flag is true and equal the first/last selected position. An
+  empty page has both flags false and no cursors; an exactly-full terminal page
+  also has no continuation. Producers/consumers validate these cross-field rules.
+  No manifest, header side channel or duplicate entry-reference list.
+required:
+  - session_id
+  - entries
+  - has_earlier
+  - has_later
+  - page_info
+additionalProperties: false
+properties:
+  session_id:
+    type: string
+    minLength: 1
+    maxLength: 255
+  session_tokens_total:
+    type: integer
+    minimum: 0
+    readOnly: true
+    description: >
+      Authoritative absolute session-wide consumed-token total, with the same
+      meaning as SessionStats.tokens_total, independent of the selected history
+      range. Present when authoritative usage is available; omitted means unknown,
+      never zero. Not a sum of this page's entries or a per-turn delta.
+  entries:
+    type: array
+    maxItems: 100
+    items:
+      $ref: './Message.yaml'
+      x-go-type: Message
+    description: >
+      Non-null public entries, one per whole selected source group. Every paged
+      occurrence has history_position and preserves its recorded id. An individual
+      group's drawn-row weight can exceed 100; its start/result are never split.
+  has_earlier:
+    type: boolean
+  has_later:
+    type: boolean
+  next_before:
+    type: string
+    minLength: 47
+    maxLength: 47
+    pattern: '^hp1_[A-Za-z0-9_-]{43}$'
+    description: Present iff has_earlier, equal to the first selected history_position.
+  next_after:
+    type: string
+    minLength: 47
+    maxLength: 47
+    pattern: '^hp1_[A-Za-z0-9_-]{43}$'
+    description: Present iff has_later, equal to the last selected history_position.
+  page_info:
+    $ref: './SessionHistoryPageInfo.yaml'
+    x-go-type: SessionHistoryPageInfo

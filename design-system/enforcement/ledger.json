@@ -146,6 +146,15 @@
       "expiryCheckpoint": "C6"
     },
     {
+      "fingerprint": "142f830a31c00e2f9e8e4df521136ed7374bf80745bf92da001f396a48a58cba",
+      "ruleId": "controls/shadcn-low-level-import",
+      "path": "src/components/agents/AgentFallbackModels.tsx",
+      "syntax": "import { ModelSelector } from \"src/components/ui/model-selector\"",
+      "owner": "C5 Lane 5: Agents and skills",
+      "replacement": "Relocate `import { ModelSelector } from \"src/components/ui/model-selector\"`: import the public primitive/composite from the library entry instead of the low-level shadcn/ui internal; if the required public part does not exist yet, propose it through the lead. (effort-levels WP-FE: the effort picker reads the served catalog, so it is a domain component like ModelSelector.)",
+      "expiryCheckpoint": "C5"
+    },
+    {
       "fingerprint": "1b2588b4325cfdfb49df08602ba563158b0fce52bd649d404efea3eb838425ed",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/chat/ComposerMediaLibrary.tsx",
@@ -269,6 +278,15 @@
       "syntax": "import { BrandDisclaimer } from \"src/components/ui/brand-disclaimer\"",
       "owner": "C5 Lane 1: Workspace board, list, graph and task/plan controls",
       "replacement": "Relocate `import { BrandDisclaimer } from \"src/components/ui/brand-disclaimer\"`: import the public primitive/composite from the library entry instead of the low-level shadcn/ui internal; if the required public part does not exist yet, propose it through the lead.",
+      "expiryCheckpoint": "C5"
+    },
+    {
+      "fingerprint": "352ebfa4d1b62711534ab141a09c1a7e1d6d615b991933322eaab9788c9d9a3e",
+      "ruleId": "controls/shadcn-low-level-import",
+      "path": "src/components/settings/RecapModelSlot.tsx",
+      "syntax": "import { EffortControl, type EffortValue } from \"src/components/ui/model-effort-picker\"",
+      "owner": "C5 Lane 6: Settings, providers, connectors and policy controls",
+      "replacement": "Relocate `import { EffortControl, type EffortValue } from \"src/components/ui/model-effort-picker\"`: import the public primitive/composite from the library entry instead of the low-level shadcn/ui internal; if the required public part does not exist yet, propose it through the lead. (effort-levels WP-FE: the effort picker reads the served catalog, so it is a domain component like ModelSelector.)",
       "expiryCheckpoint": "C5"
     },
     {
@@ -461,6 +479,15 @@
       "expiryCheckpoint": "C6"
     },
     {
+      "fingerprint": "51b0bcc6264fac4d2c0b97657fa0dd8a071e5916f4806a295fa4d874a0ebb600",
+      "ruleId": "controls/shadcn-low-level-import",
+      "path": "src/components/agents/AgentFallbackModels.tsx",
+      "syntax": "import { EffortControl } from \"src/components/ui/model-effort-picker\"",
+      "owner": "C5 Lane 5: Agents and skills",
+      "replacement": "Relocate `import { EffortControl } from \"src/components/ui/model-effort-picker\"`: import the public primitive/composite from the library entry instead of the low-level shadcn/ui internal; if the required public part does not exist yet, propose it through the lead. (effort-levels WP-FE: the effort picker reads the served catalog, so it is a domain component like ModelSelector.)",
+      "expiryCheckpoint": "C5"
+    },
+    {
       "fingerprint": "53707978b8cd2413f8c32dd7d0750043575b9bc5a6105117e6062379f12612cd",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/library/preview/LibraryPdfPreview.tsx",
@@ -569,15 +596,6 @@
       "expiryCheckpoint": "C6"
     },
     {
-      "fingerprint": "66c4a4250ac150a57a5a52a3ce828f029b3f0316d716d32c79f23659dd52d891",
-      "ruleId": "controls/raw-button",
-      "path": "src/components/chat/ChatScreen.tsx",
-      "syntax": "<button>",
-      "owner": "Frontend lead—reviewed hand-built-control retention (2026-09-22), was: C2 Lane 3: Chat, sessions and conversation surfaces",
-      "replacement": "No replacement planned: this <button> is a row in the slash/mention menu's ARIA listbox (role=\"option\"). The Button primitive always renders an adjacent role=\"status\" live-region sibling (ActionAnnouncement), which would sit between listbox rows and pollute the listbox's expected child structure. Reviewed and retained, not scheduled debt.",
-      "expiryCheckpoint": "C6"
-    },
-    {
       "fingerprint": "66d5721c856b7a3c39dfdcd53916f21f4aa9c287df8c4c072b5d6613bcb4ed02",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/settings/AuditLogViewer.tsx",
@@ -659,6 +677,15 @@
       "expiryCheckpoint": "C6"
     },
     {
+      "fingerprint": "79f602a013d9afc52c90704af2a16e41a0bfbff35202806b5a3536528a3d4a57",
+      "ruleId": "controls/shadcn-low-level-import",
+      "path": "src/components/settings/RecapLimitsArea.tsx",
+      "syntax": "import { FormError } from \"src/components/ui/FormError\"",
+      "owner": "C5 Lane 6: Settings, providers, connectors and policy controls",
+      "replacement": "Relocate `import { FormError } from \"src/components/ui/FormError\"`: import the public primitive/composite from the library entry instead of the low-level shadcn/ui internal; if the required public part does not exist yet, propose it through the lead. (effort-levels WP-FE: the effort picker reads the served catalog, so it is a domain component like ModelSelector.)",
+      "expiryCheckpoint": "C5"
+    },
+    {
       "fingerprint": "7e7f7e9aa5b7751dde3ac336606011613b0ed78cf90c6e1e74b80d51b1c79587",
       "ruleId": "controls/shadcn-low-level-import",
       "path": "src/components/calendar/CalendarEventSlideOver.tsx",
@@ -692,6 +719,15 @@
       "syntax": "import { AutoSaveIndicator } from \"src/components/ui/AutoSaveIndicator\"",
       "owner": "C5 Lane 6: Settings, providers, connectors and policy controls",
       "replacement": "Relocate `import { AutoSaveIndicator } from \"src/components/ui/AutoSaveIndicator\"`: import the public primitive/composite from the library entry instead of the low-level shadcn/ui internal; if the required public part does not exist yet, propose it through the lead.",
+      "expiryCheckpoint": "C5"
+    },
+    {
+      "fingerprint": "8b37c6b22ccd38d5f90d215f3327c7a8d2f383cbba04153b9b4da66cbd6ddf37",
+      "ruleId": "controls/shadcn-low-level-import",
+      "path": "src/components/agents/AgentProfile.tsx",
+      "syntax": "import { EffortControl } from \"src/components/ui/model-effort-picker\"",
+      "owner": "C5 Lane 5: Agents and skills",
+      "replacement": "Relocate `import { EffortControl } from \"src/components/ui/model-effort-picker\"`: import the public primitive/composite from the library entry instead of the low-level shadcn/ui internal; if the required public part does not exist yet, propose it through the lead. (effort-levels WP-FE: the effort picker reads the served catalog, so it is a domain component like ModelSelector.)",
       "expiryCheckpoint": "C5"
     },
     {
@@ -746,6 +782,15 @@
       "syntax": "import { BrandIcon } from \"src/components/ui/brand-icon\"",
       "owner": "C5 Lane 6: Settings, providers, connectors and policy controls",
       "replacement": "Relocate `import { BrandIcon } from \"src/components/ui/brand-icon\"`: import the public primitive/composite from the library entry instead of the low-level shadcn/ui internal; if the required public part does not exist yet, propose it through the lead.",
+      "expiryCheckpoint": "C5"
+    },
+    {
+      "fingerprint": "d23d8647f8f530e27474fadbaa03df6ed9b328c4eaf76a98b466ae05470615f8",
+      "ruleId": "controls/shadcn-low-level-import",
+      "path": "src/components/ui/model-effort-picker.tsx",
+      "syntax": "import { FormError } from \"src/components/ui/FormError\"",
+      "owner": "C5 Lane 6: Settings, providers, connectors and policy controls",
+      "replacement": "Relocate `import { FormError } from \"src/components/ui/FormError\"`: import the public primitive/composite from the library entry instead of the low-level shadcn/ui internal; if the required public part does not exist yet, propose it through the lead. (effort-levels WP-FE: the effort picker reads the served catalog, so it is a domain component like ModelSelector.)",
       "expiryCheckpoint": "C5"
     },
     {
@@ -1314,9 +1359,117 @@
       "owner": "C6 Lane 6: Settings, providers, connectors and policy controls",
       "replacement": "Audit-log event/decision taxonomy (EVENT_STYLES/DECISION_STYLES) — governed data, not design-system chrome (SKILL.md rule 6, confirmed example). No sound permanent exception mechanism exists for a resolved ts-colors/raw-color literal (contract.json isAllowedExceptionRuleId permits only */extension-boundary or exactly ts-colors/unverified-governed-value — neither applies to a fully statically-resolved literal). Kept as owned temporary debt at the latest checkpoint (C6) pending a structural fix (e.g. reading through a scanner-recognised governed accessor) that would require a src/ change; re-review at next audit.",
       "expiryCheckpoint": "C6"
+    },
+    {
+      "fingerprint": "380cea4bb8b4fd58abd0b5e6eedd2265828472e8bb3bb846785eefad8312ee08",
+      "ruleId": "controls/raw-button",
+      "path": "src/components/chat/composer/ComposerMenu.tsx",
+      "syntax": "<button>",
+      "owner": "Frontend lead—reviewed hand-built-control retention (2026-09-22), transplanted 2026-10-11",
+      "replacement": "No replacement planned: this <button> is a row in the composer menu's ARIA listbox (role=\"option\"). The Button primitive always renders an adjacent role=\"status\" live-region sibling (ActionAnnouncement), which would sit between listbox rows and pollute the listbox's expected child structure. Reviewed and retained 2026-09-22 while the rows lived in ChatScreen.tsx; moved verbatim into this file on 2026-10-11 (the @-mention restore + ChatScreen size shrink) with the ChatScreen.tsx entry retired — that file now has zero raw buttons. Not scheduled debt.",
+      "expiryCheckpoint": "C6"
+    },
+    {
+      "fingerprint": "80ddcbf7ba6ce8432b80b1d8e2d1ccd9eeaf80e0a5215db7bde029a6bad68551",
+      "ruleId": "controls/shadcn-low-level-import",
+      "path": "src/components/chat/composer/ComposerEffortChip.tsx",
+      "syntax": "import { EffortControl } from \"src/components/ui/model-effort-picker\"",
+      "owner": "C5 Lane 3: Chat, sessions and conversation surfaces",
+      "replacement": "Relocate `import { EffortControl } from \"src/components/ui/model-effort-picker\"`: import the public primitive/composite from the library entry instead of the low-level shadcn/ui internal; if the required public part does not exist yet, propose it through the lead. (effort-levels WP-FE: the effort picker reads the served catalog, so it is a domain component like ModelSelector.)",
+      "expiryCheckpoint": "C5"
+    },
+    {
+      "fingerprint": "cf53cacc8d4e60a8a57f9fd6d49617cf994bdb02b25757b041de503ae97a3553",
+      "ruleId": "controls/shadcn-low-level-import",
+      "path": "src/components/settings/DefaultModelCard.tsx",
+      "syntax": "import { EffortControl } from \"src/components/ui/model-effort-picker\"",
+      "owner": "C5 Lane 6: Settings, providers, connectors and policy controls",
+      "replacement": "Relocate `import { EffortControl } from \"src/components/ui/model-effort-picker\"`: import the public primitive/composite from the library entry instead of the low-level shadcn/ui internal; if the required public part does not exist yet, propose it through the lead. (effort-levels WP-FE: the effort picker reads the served catalog, so it is a domain component like ModelSelector.)",
+      "expiryCheckpoint": "C5"
+    },
+    {
+      "fingerprint": "68e34537c1f2226ece77b37925e9b6a9668d0055bcd5fd4c62e8bb158a8e0a93",
+      "ruleId": "controls/shadcn-low-level-import",
+      "path": "src/components/settings/RemoveProviderDialog.tsx",
+      "syntax": "import { QuietEffortLine } from \"src/components/ui/model-effort-picker\"",
+      "owner": "C5 Lane 6: Settings, providers, connectors and policy controls",
+      "replacement": "Relocate `import { QuietEffortLine } from \"src/components/ui/model-effort-picker\"`: import the public primitive/composite from the library entry instead of the low-level shadcn/ui internal; if the required public part does not exist yet, propose it through the lead. (effort-levels WP-FE: the effort picker reads the served catalog, so it is a domain component like ModelSelector.)",
+      "expiryCheckpoint": "C5"
+    },
+    {
+      "fingerprint": "fd1100fae3f63e56d728868d90a621afba10a3396ba0b54241eccd71d8aeef87",
+      "ruleId": "controls/shadcn-low-level-import",
+      "path": "src/routes/onboarding.tsx",
+      "syntax": "import { QuietEffortLine } from \"src/components/ui/model-effort-picker\"",
+      "owner": "C5 Lane 1: Workspace board, list, graph and task/plan controls",
+      "replacement": "Relocate `import { QuietEffortLine } from \"src/components/ui/model-effort-picker\"`: import the public primitive/composite from the library entry instead of the low-level shadcn/ui internal; if the required public part does not exist yet, propose it through the lead. (effort-levels WP-FE: the effort picker reads the served catalog, so it is a domain component like ModelSelector.)",
+      "expiryCheckpoint": "C5"
     }
   ],
   "exceptions": [
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/word-boundary-text.tsx",
+      "syntax": "WordBoundaryText#className",
+      "owner": "frontend-lead — Tasks T13",
+      "reason": "Caller pass-through: the published text atom forwards className unchanged through cn to its bounded text owner. Exact caller values remain scanned; no literals or transformed class data are exempted."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/word-boundary-text.tsx",
+      "syntax": "WordBoundaryText#className",
+      "owner": "frontend-lead — Tasks T13",
+      "reason": "Caller pass-through: the published text atom forwards className unchanged through cn to its bounded text owner. Exact caller values remain scanned; no literals or transformed class data are exempted."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/word-boundary-text.tsx",
+      "syntax": "WordBoundaryText#className",
+      "owner": "frontend-lead — Tasks T13",
+      "reason": "Caller pass-through: the published text atom forwards className unchanged through cn to its bounded text owner. Exact caller values remain scanned; no literals or transformed class data are exempted."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/filter-menu.tsx",
+      "syntax": "FilterMenu#className",
+      "owner": "frontend-lead — Tasks T7",
+      "reason": "Caller pass-through: the published composite forwards its own className unchanged through cn to the root div. The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/filter-menu.tsx",
+      "syntax": "FilterMenu#className",
+      "owner": "frontend-lead — Tasks T7",
+      "reason": "Caller pass-through: the published composite forwards its own className unchanged through cn to the root div. The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/filter-menu.tsx",
+      "syntax": "FilterMenu#className",
+      "owner": "frontend-lead — Tasks T7",
+      "reason": "Caller pass-through: the published composite forwards its own className unchanged through cn to the root div. The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/view-switch.tsx",
+      "syntax": "ViewSwitch#className",
+      "owner": "frontend-lead — Tasks T7",
+      "reason": "Caller pass-through: the published composite forwards its own className unchanged through cn to RadioGroup. The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/view-switch.tsx",
+      "syntax": "ViewSwitch#className",
+      "owner": "frontend-lead — Tasks T7",
+      "reason": "Caller pass-through: the published composite forwards its own className unchanged through cn to RadioGroup. The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/view-switch.tsx",
+      "syntax": "ViewSwitch#className",
+      "owner": "frontend-lead — Tasks T7",
+      "reason": "Caller pass-through: the published composite forwards its own className unchanged through cn to RadioGroup. The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
     {
       "ruleId": "spacing/extension-boundary",
       "path": "src/components/agents/AgentFormFields.tsx",
@@ -1519,13 +1672,6 @@
       "syntax": "LibrarySearchBar#className",
       "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: LibrarySearchBar's own destructured prop `className` is declared at src/components/library/search/LibrarySearchBar.tsx:629:3 and flows unmodified to 1 sink(s) — src/components/library/search/LibrarySearchBar.tsx:843:43 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
       "owner": "caller pass-through exception registry"
-    },
-    {
-      "ruleId": "spacing/extension-boundary",
-      "path": "src/components/screens/AgentListScreen.tsx",
-      "syntax": "pb-[env(safe-area-inset-bottom,var(--space-0))]",
-      "reason": "Lead read (undefined): line 639, line 658, line 675: the scanner emits this extension-boundary only AFTER validating the fallback term (spacing.mjs::analyzeEnvironmentSpacing runs analyzeSpacingTerm on it and reports a boundary only when that produced no finding), so var(--space-0) is a registered scale value. The inset itself is device-reported at runtime and cannot be on any closed scale, which is why the rule is a boundary rather than debt.",
-      "owner": "safe-area env() with validated closed-scale fallback exception registry"
     },
     {
       "ruleId": "spacing/extension-boundary",
@@ -2446,16 +2592,9 @@
     },
     {
       "ruleId": "ts-colors/extension-boundary",
-      "path": "src/components/agents/CreateAgentModal.tsx",
-      "syntax": "payloadToCreateRequest#dom-style.color<-payload.color",
-      "reason": "Category: user-authored colours — migration plan §5 permanent governed registry 1. Mechanically verified: `payloadToCreateRequest` writes `dom-style.color` directly from `payload.color`, whose root `payload` is a parameter declared at src/components/agents/CreateAgentModal.tsx:110:3, with the final property `color` read unchanged (no status/config lookup, no transformation).",
-      "owner": "user-authored colours exception registry"
-    },
-    {
-      "ruleId": "ts-colors/extension-boundary",
-      "path": "src/components/agents/WorkerCard.tsx",
-      "syntax": "WorkerCard#dom-style.backgroundColor<-agent.color",
-      "reason": "Category: user-authored colours — migration plan §5 permanent governed registry 1. Mechanically verified: `WorkerCard` writes `dom-style.backgroundColor` directly from `agent.color`, whose root `agent` is a parameter declared at src/components/agents/WorkerCard.tsx:45:30, with the final property `color` read unchanged (no status/config lookup, no transformation).",
+      "path": "src/components/agents/AgentProfile.tsx",
+      "syntax": "renderBasicsPanel#svg-attribute.color<-selectedColor",
+      "reason": "Category: user-authored colours — migration plan §5 permanent governed registry 1; founder decision 2026-09-19; commit d45146f13 (ts-colors.mjs colour lock) classification P2. Same `selectedColor` state as AgentProfile#dom-style.backgroundColor<-selectedColor above, also forwarded unchanged to an SVG `color` attribute in the same avatar preview markup. Governed at the colour picker, not this paint sink. This copy sits in renderBasicsPanel (the Basics panel is a function of the active layout so the effort chip renders once, effort-levels WP-FE).",
       "owner": "user-authored colours exception registry"
     },
     {
@@ -2471,6 +2610,13 @@
       "syntax": "BrowserLiveToolbar#dom-style.backgroundColor<-resolvedAgent?.color",
       "reason": "Lead read (2026-09-20): agent colour from the agents query cache as background, token fallback.",
       "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/calendar/CalendarMonthGrid.tsx",
+      "syntax": "CalendarMonthGrid#dom-style.backgroundColor<-event.backgroundColor",
+      "reason": "Lead read (2026-10-04): SP-39 month-grid status dot reads the same event.backgroundColor EventChip paints (set by makeEvent from scanned palette consts), token fallback when absent; repair would replace FullCalendar's own event colouring (not invisible)",
+      "owner": "third-party integration boundary exception registry"
     },
     {
       "ruleId": "ts-colors/extension-boundary",
@@ -2533,6 +2679,27 @@
       "path": "src/components/chat/ChatScreen.tsx",
       "syntax": "VirtualAssistantMessageRow#dom-style.backgroundColor<-agent?.color",
       "reason": "Category: user-authored colours (per-entity agent/task/plan colour field) — migration plan §5, permanent governed registry 1; founder decision 2026-09-19; triage P2. Receiving symbol VirtualAssistantMessageRow, receiver kind dom-style, paint property backgroundColor, sourced from the agent's own user-chosen `color` field. Same boundary as the AssistantMessageAvatar entry above, in the virtualized list row renderer.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/chat/AgentStatusIndicator.tsx",
+      "syntax": "AgentStatusIndicator#svg-attribute.color<-color",
+      "reason": "Identity ink. The chat indicator passes the responding agent's palette colour into AgentIcon, which paints it as currentColor on the figure. The hex is governed identity data (ADR-20261007, design-system rule 6), not chrome. The component does not choose a colour.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/chat/ChatScreen.tsx",
+      "syntax": "ResolvedAgentMark#svg-attribute.color<-agent?.color",
+      "reason": "Identity ink on the live reply mark. ResolvedAgentMark reads the responding agent's color and passes it to AgentIcon. Governed identity data, not a design-system chrome colour.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/chat/ChatScreen.tsx",
+      "syntax": "VirtualAssistantMessageRow#svg-attribute.color<-agent?.color",
+      "reason": "Identity ink on the plain and replay reply mark. The row passes the message's own agent color into AgentIcon. Governed identity data, not a design-system chrome colour.",
       "owner": "user-authored colours exception registry"
     },
     {
@@ -4671,11 +4838,46 @@
       "owner": "caller pass-through exception registry"
     },
     {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/text-toggle.tsx",
+      "syntax": "TextToggle#className",
+      "owner": "caller pass-through exception registry",
+      "reason": "Category: caller pass-through — migration plan §5. TextToggle's own destructured prop `className` is declared at src/components/ui/text-toggle.tsx:23:42 and is the final argument of cn() at src/components/ui/text-toggle.tsx:42:9, which is the Button className, with no conditional replacement or non-forwarding read."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/text-toggle.tsx",
+      "syntax": "TextToggle#className",
+      "owner": "caller pass-through exception registry",
+      "reason": "Category: caller pass-through — migration plan §5. TextToggle's own destructured prop `className` is declared at src/components/ui/text-toggle.tsx:23:42 and is the final argument of cn() at src/components/ui/text-toggle.tsx:42:9, which is the Button className, with no conditional replacement or non-forwarding read."
+    },
+    {
       "ruleId": "spacing/extension-boundary",
-      "path": "src/components/chat/ChatModeBadge.tsx",
-      "syntax": "ChatModeBadge#className",
-      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: ChatModeBadge's own destructured prop `className` is declared at src/components/chat/ChatModeBadge.tsx:22:33 and flows unmodified to 3 sink(s) — src/components/chat/ChatModeBadge.tsx:27:34 (JSX attribute `className`); src/components/chat/ChatModeBadge.tsx:35:34 (JSX attribute `className`); src/components/chat/ChatModeBadge.tsx:46:34 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
-      "owner": "caller pass-through exception registry"
+      "path": "src/components/ui/text-toggle.tsx",
+      "syntax": "TextToggle#className",
+      "owner": "caller pass-through exception registry",
+      "reason": "Category: caller pass-through — migration plan §5. TextToggle's own destructured prop `className` is declared at src/components/ui/text-toggle.tsx:23:42 and is the final argument of cn() at src/components/ui/text-toggle.tsx:42:9, which is the Button className, with no conditional replacement or non-forwarding read."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/layout/SidebarShowButton.tsx",
+      "syntax": "SidebarShowButton#className",
+      "owner": "caller pass-through exception registry",
+      "reason": "Category: caller pass-through — migration plan §5. SidebarShowButton's own destructured prop `className` is declared at src/components/layout/SidebarShowButton.tsx:13:3 and flows unmodified to 1 sink — src/components/layout/SidebarShowButton.tsx:39:7 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/layout/SidebarShowButton.tsx",
+      "syntax": "SidebarShowButton#className",
+      "owner": "caller pass-through exception registry",
+      "reason": "Category: caller pass-through — migration plan §5. SidebarShowButton's own destructured prop `className` is declared at src/components/layout/SidebarShowButton.tsx:13:3 and flows unmodified to 1 sink — src/components/layout/SidebarShowButton.tsx:39:7 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/layout/SidebarShowButton.tsx",
+      "syntax": "SidebarShowButton#className",
+      "owner": "caller pass-through exception registry",
+      "reason": "Category: caller pass-through — migration plan §5. SidebarShowButton's own destructured prop `className` is declared at src/components/layout/SidebarShowButton.tsx:13:3 and flows unmodified to 1 sink — src/components/layout/SidebarShowButton.tsx:39:7 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read."
     },
     {
       "ruleId": "spacing/extension-boundary",
@@ -4689,13 +4891,6 @@
       "path": "src/components/ui/tooltip.tsx",
       "syntax": "Tooltip#className",
       "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: Tooltip's own destructured prop `className` is declared at src/components/ui/tooltip.tsx:46:67 and flows unmodified to 1 sink(s) — src/components/ui/tooltip.tsx:107:11 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
-      "owner": "caller pass-through exception registry"
-    },
-    {
-      "ruleId": "ts-colors/extension-boundary",
-      "path": "src/components/chat/ChatModeBadge.tsx",
-      "syntax": "ChatModeBadge#className",
-      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: ChatModeBadge's own destructured prop `className` is declared at src/components/chat/ChatModeBadge.tsx:22:33 and flows unmodified to 3 sink(s) — src/components/chat/ChatModeBadge.tsx:27:34 (JSX attribute `className`); src/components/chat/ChatModeBadge.tsx:35:34 (JSX attribute `className`); src/components/chat/ChatModeBadge.tsx:46:34 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
       "owner": "caller pass-through exception registry"
     },
     {
@@ -4714,13 +4909,6 @@
     },
     {
       "ruleId": "typography/extension-boundary",
-      "path": "src/components/chat/ChatModeBadge.tsx",
-      "syntax": "ChatModeBadge#className",
-      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: ChatModeBadge's own destructured prop `className` is declared at src/components/chat/ChatModeBadge.tsx:22:33 and flows unmodified to 3 sink(s) — src/components/chat/ChatModeBadge.tsx:27:34 (JSX attribute `className`); src/components/chat/ChatModeBadge.tsx:35:34 (JSX attribute `className`); src/components/chat/ChatModeBadge.tsx:46:34 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
-      "owner": "caller pass-through exception registry"
-    },
-    {
-      "ruleId": "typography/extension-boundary",
       "path": "src/components/chat/composer/AutoApprovePicker.tsx",
       "syntax": "AutoApprovePicker#className",
       "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: AutoApprovePicker's own destructured prop `className` is declared at src/components/chat/composer/AutoApprovePicker.tsx:24:3 and flows unmodified to 1 sink(s) — src/components/chat/composer/AutoApprovePicker.tsx:44:7 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
@@ -4732,9 +4920,788 @@
       "syntax": "Tooltip#className",
       "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: Tooltip's own destructured prop `className` is declared at src/components/ui/tooltip.tsx:46:67 and flows unmodified to 1 sink(s) — src/components/ui/tooltip.tsx:107:11 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
       "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockThreadRoot#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockThreadViewport#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockThreadViewport#style",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockMessageRoot#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockComposerRoot#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockComposerInput#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockComposerSend#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockComposerAddAttachment#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockAttachmentRoot#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockAttachmentRemove#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockThreadRoot#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockThreadViewport#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockMessageRoot#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockComposerRoot#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockComposerInput#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockComposerSend#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockComposerAddAttachment#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockAttachmentRoot#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockAttachmentRemove#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockThreadRoot#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockThreadViewport#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockThreadViewport#style",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockMessageRoot#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockComposerRoot#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockComposerInput#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockComposerSend#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockComposerAddAttachment#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockAttachmentRoot#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/test/assistantUiMock.tsx",
+      "syntax": "MockAttachmentRemove#className",
+      "reason": "Shared AssistantUI test stand-in (ds-safety-net, 2026-09-27): the mock component forwards the caller's className/style unchanged to the catalog leaf (Button/Textarea) or a passthrough div; value provably unmodified. Test-only module, imported by vi.mock factories exclusively.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/RunningIndicator.tsx",
+      "syntax": "RunningIndicator#className",
+      "reason": "Category: caller pass-through — migration plan §5. RunningIndicator's own destructured prop `className` is forwarded unmodified to the root span's className via clsx('…', className) in src/components/ui/RunningIndicator.tsx — no transformation, conditional replacement, or non-forwarding read. Same registered category as AutoSaveIndicator#className; new-domain-component registration mirroring src/components/chat/composer/TokenCounter.tsx's className prop.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/RunningIndicator.tsx",
+      "syntax": "RunningIndicator#className",
+      "reason": "Category: caller pass-through — migration plan §5. RunningIndicator's own destructured prop `className` is forwarded unmodified to the root span's className via clsx('…', className) in src/components/ui/RunningIndicator.tsx — no transformation, conditional replacement, or non-forwarding read. Same registered category as AutoSaveIndicator#className; new-domain-component registration mirroring src/components/chat/composer/TokenCounter.tsx's className prop.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/RunningIndicator.tsx",
+      "syntax": "RunningIndicator#className",
+      "reason": "Category: caller pass-through — migration plan §5. RunningIndicator's own destructured prop `className` is forwarded unmodified to the root span's className via clsx('…', className) in src/components/ui/RunningIndicator.tsx — no transformation, conditional replacement, or non-forwarding read. Same registered category as AutoSaveIndicator#className; new-domain-component registration mirroring src/components/chat/composer/TokenCounter.tsx's className prop.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/agents/AgentProfile.tsx",
+      "syntax": "AgentProfile#svg-attribute.color<-AgentColor.options[9]",
+      "reason": "Category: user-authored colours — W1-6 edit-header identity preview forwards the draft colour unchanged to AgentIcon. If the optional response colour is absent, the preview alone uses generated AgentColor option 9 (Grey); it does not write that fallback into the draft or claim the edit is saved. Figure and role use the same selected draft as the visible pickers.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/agent-icon.tsx",
+      "syntax": "AgentIcon#dom-style.color<-color",
+      "reason": "Category: user-authored colours — identity palette ink. AgentIcon writes dom-style.color directly from its color prop, the pure kit's AgentIconColor palette union. lib/agentIdentity.ts checks exact bidirectional conformance to generated AgentColor without pulling application contracts into the package. The prop is read unchanged (no lookup, no mix). Ink stays currentColor and fully opaque. Mask cutouts are not paint attributes.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/agent-icon.stories.tsx",
+      "syntax": "renderAgentIcon#svg-attribute.color<-AgentColor.options[9]",
+      "reason": "Category: user-authored colours — story ink is the last generated AgentColor option (Grey), not a handwritten hex. The attribute is the AgentIcon color prop.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/agents/AgentFormFields.tsx",
+      "syntax": "Swatch#dom-style.backgroundColor<-hex",
+      "reason": "Category: user-authored colours — a palette swatch fills itself from its own hex argument, one of the ten generated AgentColor options. The argument is read unchanged.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/agents/AgentFormFields.tsx",
+      "syntax": "IdentityPreview#svg-attribute.color<-color",
+      "reason": "Category: user-authored colours — the live identity preview forwards its color argument unchanged to AgentIcon. The value is a palette hex chosen in the same form.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/agent-icon.test.tsx",
+      "syntax": "iconSteelBlue#svg-attribute.color<-AgentColor.options[0]",
+      "reason": "Category: user-authored colours — the AgentIcon test passes Steel blue, the first generated AgentColor option (founder 2026-10-11 palette decision, AVATAR-PALETTE-DECISION.md), from the named function iconSteelBlue. The index is a numeric literal. The attribute is the AgentIcon color prop.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/agent-icon.test.tsx",
+      "syntax": "iconVerdigris#svg-attribute.color<-AgentColor.options[2]",
+      "reason": "Category: user-authored colours — the AgentIcon test passes Verdigris, generated AgentColor option 2 (founder 2026-10-11 palette decision, AVATAR-PALETTE-DECISION.md), from the named function iconVerdigris. The index is a numeric literal. The attribute is the AgentIcon color prop.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/agent-icon.test.tsx",
+      "syntax": "iconGraphiteViolet#svg-attribute.color<-AgentColor.options[4]",
+      "reason": "Category: user-authored colours — the AgentIcon test passes Graphite violet, generated AgentColor option 4 (founder 2026-10-11 palette decision, AVATAR-PALETTE-DECISION.md), from the named function iconGraphiteViolet. The index is a numeric literal. The attribute is the AgentIcon color prop.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/agent-icon.test.tsx",
+      "syntax": "iconChampagne#svg-attribute.color<-AgentColor.options[8]",
+      "reason": "Category: user-authored colours — the AgentIcon test passes Champagne, generated AgentColor option 8 (founder 2026-10-11 palette decision, AVATAR-PALETTE-DECISION.md), from the named function iconChampagne. The index is a numeric literal. The attribute is the AgentIcon color prop.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/agent-icon.test.tsx",
+      "syntax": "iconPewter#svg-attribute.color<-AgentColor.options[9]",
+      "reason": "Category: user-authored colours — the AgentIcon test passes Pewter, the last generated AgentColor option (founder 2026-10-11 palette decision, AVATAR-PALETTE-DECISION.md), from the named function iconPewter. The index is a numeric literal. The attribute is the AgentIcon color prop.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/agents/AgentProfile.wave1.test.tsx",
+      "syntax": "lockedMia#dom-style.color<-AgentColor.options[0]",
+      "reason": "Category: user-authored colours — the locked built-in fixture sets Mia's colour to Azure, the first generated AgentColor option, inside the named function lockedMia. The index is a numeric literal. The field is the wire color.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/agents/AgentFormFields.tsx",
+      "syntax": "AgentLookPicker#svg-attribute.color<-color",
+      "reason": "Category: user-authored colours — migration plan §5 permanent governed registry 1. Lead read (2026-10-10, avatar consistency): AgentLookPicker draws the preview and the five Look thumbnails with `ink = color ?? AgentColor.options[9]`, where `color` is the component's own prop carrying the agent's chosen colour (a value of the generated AgentColor enum, the ten founder-approved agent colours) passed unchanged into AgentIcon's svg colour — governed agent data, not design-system chrome (SKILL.md rule 6).",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/agents/AgentFormFields.tsx",
+      "syntax": "AgentLookPicker#svg-attribute.color<-AgentColor.options[9]",
+      "reason": "Category: user-authored colours — migration plan §5 permanent governed registry 1. Lead read (2026-10-10, avatar consistency): the fallback when no colour is chosen yet is AgentColor.options[9] (#9CA3AF, the documented create-default agent colour, docs/agents.md), taken from the generated AgentColor enum and passed unchanged into AgentIcon's svg colour — governed agent data, not chrome.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/agents/AgentMark.tsx",
+      "syntax": "AgentMark#dom-style.color<-agent?.color",
+      "reason": "Category: user-authored colours — migration plan §5 permanent governed registry 1. Lead read (2026-10-10, avatar consistency): AgentMark passes `agent?.color` — the agent's user-chosen colour from the loaded Agent (generated AgentColor enum) — unchanged to AgentIcon, which paints the figure with it. The same governed flow AgentCard#dom-style.backgroundColor<-agent.color was registered for before the one-mark sweep.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/agents/AgentMark.tsx",
+      "syntax": "AgentMark#dom-style.color<-AgentColor.options[9]",
+      "reason": "Category: user-authored colours — migration plan §5 permanent governed registry 1. Lead read (2026-10-10, avatar consistency): the founder-chosen fallback for an agent that is not loaded is the Omnipus figure in AgentColor.options[9] (#9CA3AF, the documented create-default colour), from the generated AgentColor enum, passed unchanged to AgentIcon — governed agent data, not chrome.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/chat/MessageItem.tsx",
+      "syntax": "MessageItem#svg-attribute.color<-agent?.color",
+      "reason": "Identity ink on the standalone/embed reply mark (founder UI feedback 2026-10-11: MessageItem joins the shared AgentStatusIndicator). MessageItem reads the responding agent's own color field and passes it unmodified into AgentStatusIndicator, which validates it against its published palette before AgentIcon paints it as currentColor — the same boundary already registered for ChatScreen.tsx's ResolvedAgentMark#svg-attribute.color<-agent?.color and VirtualAssistantMessageRow#svg-attribute.color<-agent?.color. Governed identity data (ADR-20261007, design-system rule 6), not a design-system chrome colour; the component does not choose a colour.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/chat/AgentStatusIndicator.active-form.test.tsx",
+      "syntax": "Fixture#svg-attribute.color<-AgentColor.options[9]",
+      "reason": "Governed identity data, not chrome: the named Fixture passes the literal final generated AgentColor option unchanged to the real AgentStatusIndicator and AgentIcon. This exact palette source and sink exercise the published identity mark alongside status-copy and motion assertions; no raw colour or arbitrary fixture flow is allowed.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/chat/AgentStatusIndicator.stories.tsx",
+      "syntax": "StatusMotionFixture#svg-attribute.color<-AgentColor.options[9]",
+      "reason": "Governed identity data, not chrome: the named StatusMotionFixture passes the literal final generated AgentColor option unchanged to the real AgentStatusIndicator and AgentIcon. This exact app-story palette source and sink allow actual icon/text timing verification without introducing a second colour palette or a raw colour.",
+      "owner": "user-authored colours exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/callout.tsx",
+      "syntax": "Callout#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/callout.tsx",
+      "syntax": "CalloutTitle#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/callout.tsx",
+      "syntax": "CalloutDescription#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/callout.tsx",
+      "syntax": "CalloutActions#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/callout.tsx",
+      "syntax": "Callout#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/callout.tsx",
+      "syntax": "CalloutTitle#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/callout.tsx",
+      "syntax": "CalloutDescription#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/callout.tsx",
+      "syntax": "CalloutActions#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/callout.tsx",
+      "syntax": "Callout#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/callout.tsx",
+      "syntax": "CalloutTitle#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/callout.tsx",
+      "syntax": "CalloutDescription#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/callout.tsx",
+      "syntax": "CalloutActions#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/copy-button.tsx",
+      "syntax": "CopyButton#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/copy-button.tsx",
+      "syntax": "CopyButton#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/copy-button.tsx",
+      "syntax": "CopyButton#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/empty.tsx",
+      "syntax": "Empty#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/empty.tsx",
+      "syntax": "EmptyHeader#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/empty.tsx",
+      "syntax": "EmptyMedia#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/empty.tsx",
+      "syntax": "EmptyTitle#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/empty.tsx",
+      "syntax": "EmptyDescription#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/empty.tsx",
+      "syntax": "EmptyContent#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/empty.tsx",
+      "syntax": "Empty#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/empty.tsx",
+      "syntax": "EmptyHeader#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/empty.tsx",
+      "syntax": "EmptyMedia#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/empty.tsx",
+      "syntax": "EmptyTitle#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/empty.tsx",
+      "syntax": "EmptyDescription#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/empty.tsx",
+      "syntax": "EmptyContent#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/empty.tsx",
+      "syntax": "Empty#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/empty.tsx",
+      "syntax": "EmptyHeader#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/empty.tsx",
+      "syntax": "EmptyMedia#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/empty.tsx",
+      "syntax": "EmptyTitle#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/empty.tsx",
+      "syntax": "EmptyDescription#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/empty.tsx",
+      "syntax": "EmptyContent#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/list-group.tsx",
+      "syntax": "ListGroup#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/list-group.tsx",
+      "syntax": "ListGroup#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/list-group.tsx",
+      "syntax": "ListGroup#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/page-header.tsx",
+      "syntax": "PageHeader#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/page-header.tsx",
+      "syntax": "PageHeader#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/page-header.tsx",
+      "syntax": "PageHeader#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/search-field.tsx",
+      "syntax": "SearchField#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/search-field.tsx",
+      "syntax": "SearchToolbar#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/search-field.tsx",
+      "syntax": "SearchField#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/search-field.tsx",
+      "syntax": "SearchToolbar#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/search-field.tsx",
+      "syntax": "SearchField#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/search-field.tsx",
+      "syntax": "SearchToolbar#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/spinner.tsx",
+      "syntax": "Spinner#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/spinner.tsx",
+      "syntax": "Spinner#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/spinner.tsx",
+      "syntax": "Spinner#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/tooltip.tsx",
+      "syntax": "TooltipContent#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/tooltip.tsx",
+      "syntax": "TooltipContent#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/tooltip.tsx",
+      "syntax": "TooltipContent#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/search-field.tsx",
+      "syntax": "SearchFieldFrame#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/search-field.tsx",
+      "syntax": "SearchFieldFrame#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/search-field.tsx",
+      "syntax": "SearchFieldFrame#className",
+      "owner": "frontend-lead — W2-1 shared component kit",
+      "reason": "Caller pass-through: the published W2-1 kit component forwards its own className unchanged through cn (or directly) to the element it renders, for layout classes only (R41). The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/model-effort-picker.tsx",
+      "syntax": "EffortControl#props.className",
+      "reason": "Caller pass-through: the effort control forwards its own className unchanged through cn to its wrapper span. The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data.",
+      "owner": "frontend-lead — effort levels WP-FE"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/model-effort-picker.tsx",
+      "syntax": "EffortControl#className",
+      "reason": "Caller pass-through: the effort control forwards its own className unchanged through cn to its wrapper span. The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data.",
+      "owner": "frontend-lead — effort levels WP-FE"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/model-effort-picker.tsx",
+      "syntax": "EffortControl#className",
+      "reason": "Caller pass-through: the effort control forwards its own className unchanged through cn to its wrapper span. The exact caller classes are scanned at their source; this exception covers no literal values or transformed class data.",
+      "owner": "frontend-lead — effort levels WP-FE"
     }
   ],
   "reviewedBoundaries": [
+    {
+      "path": "src/components/chat/composer/ModelPicker.session-return.test.tsx",
+      "kind": "test",
+      "reason": "Exact test-only boundary for #1436: mounts the existing application-classified ToastContainer to assert real visible storage-failure warnings alongside the real picker and stores. This host depends on application state and has no public library export; no production import, scanner rule, or QA assertion is changed."
+    },
+    {
+      "path": "src/routes/_app/-sessions.$sessionId.reload-return.test.tsx",
+      "kind": "test",
+      "reason": "Exact test-only boundary for #1437: mounts the existing application-classified ToastContainer with the real router/runtime to exercise the user-visible Retry action. This is the application host, not a new primitive; no production import, public export, scanner rule, or QA assertion is changed."
+    },
+    {
+      "path": "src/components/skills/WhatsAppNativeNotice.serverStates.test.tsx",
+      "kind": "test",
+      "reason": "real chat/Connectors error alerts via catalogued ToastContainer; test-only, no public export"
+    },
+    {
+      "path": "src/components/chat/AgentStatusIndicator.monogram.wave1.test.tsx",
+      "kind": "test",
+      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
+    },
+    {
+      "path": "src/components/panel-shell/usePanelShell.standalone.test.tsx",
+      "kind": "test",
+      "reason": "Exact test-only boundary: W1/F3 render the existing application-classified ToastContainer to assert real visible error alerts, rather than asserting only queued toast data. The application-only import is confined to this test; no production consumer or public component export is added. All existing assertions and production catalog locks remain unchanged."
+    },
+    {
+      "path": "src/components/chat/ChatScreen.agent-mention.test.tsx",
+      "kind": "test",
+      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
+    },
     {
       "path": "src/assets/brand-logos/brand-logos-sanitized.test.ts",
       "kind": "test",
@@ -4781,16 +5748,6 @@
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
     {
-      "path": "src/components/agents/CreateAgentModal.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/agents/CreateAgentWizard.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
       "path": "src/components/agents/ExecutorSelector.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
@@ -4821,11 +5778,6 @@
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
     {
-      "path": "src/components/agents/WorkerCard.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
       "path": "src/components/agents/mcpPolicyOrphan.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
@@ -4842,31 +5794,6 @@
     },
     {
       "path": "src/components/agents/voice-provider-sub.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/agents/wizard/Step1Identity.commandPreview.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/agents/wizard/Step1Identity.envFocus.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/agents/wizard/Step1Identity.prefillValidate.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/agents/wizard/Step1Identity.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/agents/wizard/Step2Personality.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
@@ -5036,17 +5963,7 @@
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
     {
-      "path": "src/components/chat/ChatScreen.agent-mention.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
       "path": "src/components/chat/ChatScreen.agent-picker-scoping.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.agents-command.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
@@ -5056,72 +5973,7 @@
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
     {
-      "path": "src/components/chat/ChatScreen.browser-handover-notice.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.cap-footer.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.combobox-aria.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.composer-card.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.delegation-event-lines.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.delegation-events-wired.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.delegation-thread-visibility.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.empty-menu-shell.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.error-detail.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.f4-ghost-thinking-indicator.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.ghost-text.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
       "path": "src/components/chat/ChatScreen.goal-aware-thinking-indicator.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.goal-outcome.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.goal-setup-failure-line.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
@@ -5136,42 +5988,7 @@
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
     {
-      "path": "src/components/chat/ChatScreen.harmful-upload.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.issue-617-replay-outcome.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.judge-verdict-thread-card.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.mid-turn-send.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
       "path": "src/components/chat/ChatScreen.no-hardcoded-commands.test.ts",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.outbound-queue.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.partitioned-menu.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.plain-list-parity.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
@@ -5181,17 +5998,7 @@
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
     {
-      "path": "src/components/chat/ChatScreen.replay.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
       "path": "src/components/chat/ChatScreen.rest-guard.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.send-button-intercept.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
@@ -5201,62 +6008,7 @@
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
     {
-      "path": "src/components/chat/ChatScreen.skills-filter.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.slash-command-readiness.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.slash-commands-error.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.tab-ring.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
       "path": "src/components/chat/ChatScreen.thinking-indicator-context.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.tool-order.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.tool-replay-parity.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.truncation-notice-live.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.truncation-notice.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.unknown-slash.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/ChatScreen.virtualization.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
@@ -5372,11 +6124,6 @@
     },
     {
       "path": "src/components/chat/UntrustedChildText.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/chat/__tests__/goal-card-anchoring.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
@@ -5531,6 +6278,11 @@
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
     {
+      "path": "src/components/chat/useSelectSession.sidebarOverlay.test.tsx",
+      "kind": "test",
+      "reason": "Vitest test file (exact .test suffix) for founder Q81. Its framer-motion and router Link stand-ins forward the real Sidebar's className unchanged so the click-catcher keeps its production markup; the test renders no control or color of its own and is not imported by any non-test source."
+    },
+    {
       "path": "src/components/connectors/EmailMailboxPanel.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
@@ -5561,12 +6313,27 @@
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
     {
+      "path": "src/components/layout/Sidebar.agentRows.test.tsx",
+      "kind": "test",
+      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
+    },
+    {
       "path": "src/components/layout/Sidebar.focus-trap.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
     {
+      "path": "src/components/layout/Sidebar.workspace-lookup-abort.test.tsx",
+      "kind": "test",
+      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Its router, dropdown-menu and framer-motion stand-ins (raw button/aside, test-only class names) are copied from Sidebar.kb5.test.tsx to mount the real Sidebar; test-only, never imported by non-test source."
+    },
+    {
       "path": "src/components/layout/Sidebar.kb5.test.tsx",
+      "kind": "test",
+      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
+    },
+    {
+      "path": "src/components/layout/Sidebar.lifecycle-labels.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
@@ -5581,7 +6348,22 @@
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
     {
+      "path": "src/components/layout/Sidebar.overlayEscape.test.tsx",
+      "kind": "test",
+      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
+    },
+    {
       "path": "src/components/layout/Sidebar.test.tsx",
+      "kind": "test",
+      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
+    },
+    {
+      "path": "src/components/layout/Sidebar.shortcuts.editor.test.tsx",
+      "kind": "test",
+      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
+    },
+    {
+      "path": "src/components/workspaces/mail/MailPreviewPane.layout.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
@@ -6087,21 +6869,6 @@
     },
     {
       "path": "src/components/providers/region-inference.test.ts",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/screens/AgentListScreen.auth.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/screens/AgentListScreen.systemSection.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/components/screens/AgentListScreen.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
@@ -6657,6 +7424,16 @@
     },
     {
       "path": "src/components/ui/switch.test.tsx",
+      "kind": "test",
+      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
+    },
+    {
+      "path": "src/components/ui/text-toggle.stories.tsx",
+      "kind": "story",
+      "reason": "Storybook story file (exact .stories.js|jsx|ts|tsx suffix). Consumed only by the .storybook/main.ts glob, never by the production import graph (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
+    },
+    {
+      "path": "src/components/ui/text-toggle.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
@@ -8106,17 +8883,7 @@
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
     {
-      "path": "src/test/integration/agent-list.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
       "path": "src/test/integration/chat-streaming.test.tsx",
-      "kind": "test",
-      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
-    },
-    {
-      "path": "src/test/integration/create-agent.test.tsx",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     },
@@ -8164,6 +8931,51 @@
       "path": "src/components/ui/zoomable-view.stories.tsx",
       "kind": "story",
       "reason": "Storybook story file (exact .stories.js|jsx|ts|tsx suffix). Consumed only by the .storybook/main.ts glob, never by the production import graph (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
+    },
+    {
+      "path": "src/components/ui/RunningIndicator.test.tsx",
+      "kind": "test",
+      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). This exact-path boundary covers the spinner-only test's dynamic whole-module import of '@/components/ui/RunningIndicator' (controls/shadcn-low-level-import). RunningIndicator and its props type are public barrel exports; the scanner treats dynamic module reach as namespace-equivalent even for published components. The boundary is test-only and does not alter production import rules."
+    },
+    {
+      "path": "src/components/agents/AgentMark.test.tsx",
+      "kind": "test",
+      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
+    },
+    {
+      "path": "src/components/agents/avatarSurfaceSweep.test.tsx",
+      "kind": "test",
+      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
+    },
+    {
+      "path": "src/components/settings/PerformanceSection.goalTimers.c1.test.tsx",
+      "kind": "test",
+      "reason": "Exact test-only boundary: C1 QA-authored goal-timer test renders the existing application-classified ToastContainer to assert real visible error alerts (role=alert) for out-of-range timer input, not just queued toast data. The application-only import is confined to this test; no production consumer or public component export is added. Mirrors the reviewed usePanelShell.standalone.test.tsx ToastContainer boundary. All QA assertions and production catalog locks unchanged."
+    },
+    {
+      "path": "src/components/settings/PerformanceSection.goalTimerOwnership.gate1.test.tsx",
+      "kind": "test",
+      "reason": "Exact test-only native PerformanceSection ownership integration fixture: mounts the real existing application-classified ToastContainer beside the real PerformanceSection under QueryClient; the HTTP transport and the browser-cookie boundary are stubbed. This preserves the application toast host while driving real confirmation/cancellation and held-PUT/newer-draft flows. The cases assert consent, request and live-field ownership, not toast contents. No production consumer, raw product control, component export, catalog, scanner, manifest or debt-baseline change is authorized."
+    },
+    {
+      "path": "src/components/ui/model-effort-picker.test.tsx",
+      "kind": "test",
+      "reason": "Exact test-only boundary for the effort-levels RED pack (T-F1 to T-F3): the test imports the domain effort picker it verifies and mounts the real Memory screen. No production import, public export, scanner rule, or QA assertion is changed."
+    },
+    {
+      "path": "src/components/ui/model-effort-picker.layout.test.tsx",
+      "kind": "test",
+      "reason": "Exact test-only boundary for the effort picker layout and blocked-step nearest marker (FD-16 P-Q1 A, S-10): the test imports the domain effort picker it verifies. No production import, public export, scanner rule, or QA assertion is changed."
+    },
+    {
+      "path": "src/components/ui/model-effort-picker.wireframe.test.tsx",
+      "kind": "test",
+      "reason": "Exact test-only boundary for the effort chip, popover, blocked step and catalog states as the founder-approved wireframes draw them: the test imports the domain effort picker it verifies. No production import, public export, scanner rule, or QA assertion is changed."
+    },
+    {
+      "path": "src/components/settings/ProvidersSection.removalRefused.test.tsx",
+      "kind": "test",
+      "reason": "Exact test-only boundary for #1620 T8: mounts the existing application-classified ToastContainer beside the real ProvidersSection so the refused DELETE shows the real visible notice. The application-only import is confined to this test; no production consumer, public export, scanner rule, or assertion is changed."
     }
   ]
 }

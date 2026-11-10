@@ -1,0 +1,42 @@
+title: RoomRef
+description: >
+  Reference from a main-session entry (or an approval) to the room (group
+  chat) it belongs to (spec omnipus-system-agent K7, K33; FR-202, FR-215,
+  FR-251). Display and navigation data only: it never grants access to the
+  room. `role` says whether the entry is the room's request to this agent or
+  this agent's answer into the room; a room pre-admission approval card
+  (FR-251) carries role `request`. Mirrored inline in contracts/asyncapi.yaml
+  (components.schemas.RoomRef) — keep both copies in sync by hand.
+type: object
+required:
+  - room_id
+  - room_name
+  - request_id
+  - role
+additionalProperties: false
+properties:
+  room_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: Id of the room.
+  room_name:
+    type: string
+    minLength: 1
+    maxLength: 80
+    description: Display name of the room at the time the entry was written.
+  request_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: >
+      The room delivery id, which is also the receiver's request id
+      (spec §6.11, FR-216).
+  role:
+    type: string
+    enum:
+      - request
+      - answer
+    description: >
+      `request` — the room's request delivered to this agent;
+      `answer` — this agent's answer appended to the room.

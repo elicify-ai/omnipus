@@ -40,6 +40,28 @@ properties:
       Absent when no model data is available.
     additionalProperties:
       $ref: './ModelTokens.yaml'
+  by_provider:
+    type: object
+    description: >
+      Per-provider token breakdown for the period. Same cell shape as by_model.
+      Keys are catalog provider ids. Absent when no provider data is available.
+    additionalProperties:
+      $ref: './ModelTokens.yaml'
+  unpriced_tokens:
+    type: integer
+    minimum: 0
+    description: >
+      Sum of unpriced token portions in the period. Counts only the unpriced
+      portion of each call, not the whole call. A period with no priced cost and
+      unpriced_tokens greater than zero is unpriced, not free.
+    example: 0
+  subscription_tokens:
+    type: integer
+    minimum: 0
+    description: >
+      Sum of tokens from ChatGPT sign-in calls in the period. Those tokens
+      recorded no dollars and are excluded from any priced cost.
+    example: 0
   partial:
     type: boolean
     description: >

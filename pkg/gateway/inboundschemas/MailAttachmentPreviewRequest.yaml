@@ -1,0 +1,63 @@
+title: MailAttachmentPreviewRequest
+description: >
+  Mint request for one attachment's temporary, metadata-only preview grant
+  (ADR-20261001 "Temporary preview mint (F1)" row; w4 spec §2.3 — W0 is the
+  single publisher). Carries no host path, arbitrary URL, destination,
+  upload bytes or new approval: authorization binds to the current
+  session, the exact pair/config/folder generation, the message and the
+  selected part. Minting creates no file, retains no bytes and writes
+  nothing to disk (F1 "No storage" row) — it is the metadata grant the
+  temporary Library viewer consumes. Rate-limited by the existing
+  dedicated preview-token limiter family.
+type: object
+additionalProperties: false
+required:
+  - workspace_id
+  - agent_id
+  - folder
+  - message_ref
+  - part_index
+properties:
+  workspace_id:
+    type: string
+    description: Workspace of the mailbox pair.
+    example: "ws_my_workspace"
+  agent_id:
+    type: string
+    description: ID of the mailbox-owning agent.
+    example: "mia"
+  folder:
+    type: string
+    enum:
+      - inbox
+      - sent
+      - drafts
+    description: Folder slug — exactly inbox, sent or drafts (MC-5).
+    example: "inbox"
+  message_ref:
+    type: string
+    minLength: 5
+    description: >
+      The gateway-issued message reference from the list/read result that
+      named this attachment (correction I-03) — consumed unchanged, never a
+      model-synthesized identity and never dependent on the optional
+      Message-ID. Bound to the authorized pair, folder and configuration
+      generation; validated on the same lease that serves the preview.
+    example: "uid:456:123"
+  part_index:
+    type: integer
+    description: >
+      Stable leaf index of the attachment part (MailAttachment.part_index)
+      — resolved against MIME including nested parts, with the Omnipus
+      draft-body marker excluded. Only this part is ever fetched (PEEK —
+      flags unchanged).
+    example: 2
+  observer_id:
+    type: string
+    description: >
+      Opaque per-panel observer ID (mail_panel_observer frame) when the
+      mint belongs to an open Mail panel — binds the grant's ownership
+      lifecycle to that observer so panel close revokes it. Absent for
+      non-panel (agent-tool) mints; the grant then lives for its bounded
+      TTL only.
+    example: "obs_5f3a"

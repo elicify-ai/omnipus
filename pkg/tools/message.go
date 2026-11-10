@@ -21,10 +21,12 @@ var ErrSteeredSessionOwnChatOnly = errors.New("steered_session_own_chat_only")
 type SendOrigin struct {
 	AgentID     string
 	WorkspaceID string
-	// OwnershipChecked marks that ADR-065's rule was applied to this send.
-	// Dispatch checks for it rather than re-deriving the verdict — see
-	// bus.OutboundMessage.OwnershipChecked for why re-deriving is wrong.
-	OwnershipChecked bool
+	// Operation is the tool decision FR-043 records: SendOperationChecked
+	// for a non-start send ADR-065's rule was applied to (dispatch trusts it
+	// rather than re-deriving the verdict — see bus.OutboundMessage.Operation
+	// for why re-deriving is wrong), SendOperationStart for a start that
+	// passed T-3 (dispatch re-checks it).
+	Operation string
 }
 
 type SendCallback func(channel, chatID, content string, origin SendOrigin) error
@@ -44,6 +46,20 @@ type MessageTool struct {
 	// posture.
 	steerAudience steer.AudienceResolver
 	steerObserver steer.BoundaryObserver
+
+	// peerRouter / replyRouter serve the peer and reply forms (U8,
+	// message_address.go). Nil leaves each form refused, never defaulted.
+	peerRouter  PeerRouter
+	replyRouter ReplyRouter
+
+	// mainConnectorGuard, when set, reports whether (sessionID, channel) is a
+	// main session addressing a connector. The ordinary send form is refused
+	// there: a main reaches a connector ONLY by reply_to (FR-028).
+	mainConnectorGuard func(sessionID, channel string) bool
+
+	// startPolicy, when set, classifies starts (T-4) and runs T-3 for them
+	// (message_start.go). Nil keeps today's behaviour.
+	startPolicy StartPolicy
 }
 
 func NewMessageTool() *MessageTool {
@@ -99,6 +115,20 @@ func (t *MessageTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Optional: target chat/user ID",
 			},
+			"reply_to": map[string]any{
+				"type": "string",
+				"description": "Optional: the id of a request you were sent. Answers that request through its " +
+					"source; cannot be combined with channel, chat_id, workspace_id or agent_id.",
+			},
+			"workspace_id": map[string]any{
+				"type": "string",
+				"description": "Optional: with agent_id, the recipient pair for a peer request. Defaults to " +
+					"your current workspace when omitted.",
+			},
+			"agent_id": map[string]any{
+				"type":        "string",
+				"description": "Optional: the RECIPIENT agent for a peer request — the agent you are asking, never yourself or the author. Omit workspace_id to mean your current workspace.",
+			},
 		},
 		"required": []string{"content"},
 	}
@@ -125,6 +155,10 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		return &ToolResult{ForLLM: "content is required", IsError: true}
 	}
 
+	if result, handled := t.executeAddressedForm(ctx, content, args); handled {
+		return result
+	}
+
 	// The ACTING agent — never the session's original agent and never a
 	// parent. After a hand-off this is the handed-to agent, and inside a
 	// delegated sub-turn it is the delegate (ADR-065 spec FR-2a).
@@ -134,6 +168,8 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	turnChannel, turnChat := ToolChannel(ctx), ToolChatID(ctx)
 	channel, _ := args["channel"].(string)
 	chatID, _ := args["chat_id"].(string)
+	// T-4 step 2 reads the raw arguments, before the turn fills them in.
+	explicitTarget := channel != "" && chatID != ""
 
 	if channel == "" {
 		channel = turnChannel
@@ -158,6 +194,21 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		channel = resolved
 	}
 
+	// FR-028 (security review r1 F1): a main reaches a connector only by
+	// reply_to. The ordinary form - default destination or explicit channel -
+	// is refused before any ownership decision or send, so it can never leave
+	// a main without a captured return route.
+	// FR-042: with a start policy wired, a main naming both channel and
+	// chat_id explicitly goes on to the start check instead.
+	if t.mainConnectorGuard != nil && channel != "" && t.mainConnectorGuard(ToolTranscriptSessionID(ctx), channel) &&
+		(t.startPolicy == nil || !explicitTarget) {
+		return &ToolResult{
+			ForLLM:  t.mainConnectorReplyOnlyText(),
+			IsError: true,
+			Err:     ErrMainConnectorReplyOnly,
+		}
+	}
+
 	// ADR-091 boundary 8 (FR-B-009): a steered session's
 	// own-chat-only rule is checked FIRST and independently of ADR-065
 	// ownership — it must refuse a target that denyUnownedTarget alone
@@ -167,8 +218,13 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		return denied
 	}
 
-	if denied := t.denyUnownedTarget(channel, chatID, turnChannel, turnChat, workspaceID, actingAgent); denied != nil {
-		return denied
+	// T-4 step 5: a start is decided by T-3 (which includes the binding), not
+	// by the ownership rule of an ordinary send.
+	start := t.isStart(ctx, channel, chatID, turnChannel, turnChat)
+	if !start {
+		if denied := t.denyUnownedTarget(channel, chatID, turnChannel, turnChat, workspaceID, actingAgent); denied != nil {
+			return denied
+		}
 	}
 
 	if channel == "" {
@@ -190,11 +246,14 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	if t.sendCallback == nil {
 		return &ToolResult{ForLLM: "Message sending not configured", IsError: true}
 	}
+	if start {
+		return t.executeStart(channel, chatID, content, workspaceID, actingAgent)
+	}
 
 	// Ownership has now been decided for this message. Dispatch verifies that
 	// a decision was made rather than re-making it with less context
 	// (ADR-065 FR-7).
-	origin := SendOrigin{AgentID: actingAgent, WorkspaceID: workspaceID, OwnershipChecked: true}
+	origin := SendOrigin{AgentID: actingAgent, WorkspaceID: workspaceID, Operation: SendOperationChecked}
 	if err := t.sendCallback(channel, chatID, content, origin); err != nil {
 		return &ToolResult{
 			ForLLM:  fmt.Sprintf("sending message: %v", err),
@@ -264,10 +323,15 @@ func (t *MessageTool) resolveOwnChannel(workspaceID, actingAgent string) (string
 // ownership alone cannot stop a child from naming the root's chat id and
 // reaching the operator — closing exactly that hole (D3, C1 in Appendix C).
 //
-// Enforced only when the CALLING session classifies as steered
-// (steer.AudienceSteeringSession) — an ordinary root, or a session this
-// resolver has any doubt about, is unaffected (D3's audience answers are
-// user/steering_session/none; only the middle one triggers this rule).
+// Only a CALLING session the resolver classifies as an ordinary root
+// (steer.AudienceUser) is unaffected. A steered session
+// (steer.AudienceSteeringSession) may message only its own turn's
+// conversation. A session the resolver has any doubt about — it answers
+// steer.AudienceNone, or the lookup fails (treated as AudienceNone) — is
+// refused for every target, its own conversation included (fail closed
+// since 4f674cf4a). D3's audience answers are user/steering_session/none.
+// The check is skipped only when no resolver is wired or the context
+// carries no transcript session id.
 func (t *MessageTool) denySteeredSessionOffOwnChat(ctx context.Context, channel, chatID, turnChannel, turnChat string) *ToolResult {
 	if t.steerAudience == nil {
 		return nil

@@ -19,70 +19,42 @@ import type { DelegationEvent } from '@/lib/delegationEvents.types'
 const mockNavigate = vi.fn()
 const eventBox = vi.hoisted(() => ({ current: [] as DelegationEvent[] }))
 
-vi.mock('@assistant-ui/react', () => {
-  return {
-    useThreadViewportStore: () => ({ getState: () => ({ isAtBottom: true }) }),
-    ThreadPrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Viewport: React.forwardRef(
-        (
-          { children, className, style, 'data-testid': testId }: {
-            children?: React.ReactNode
-            className?: string
-            style?: React.CSSProperties
-            'data-testid'?: string
-          },
-          ref: React.Ref<HTMLDivElement>,
-        ) => React.createElement('div', { ref, className, style, 'data-testid': testId }, children),
-      ),
-      Messages: () => null,
-    },
-    MessagePrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Parts: () => null,
-    },
-    ComposerPrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Input: (props: Record<string, unknown>) =>
-        React.createElement('textarea', { ...props, 'data-testid': 'composer-input' }),
-      Send: ({ children, className, 'data-testid': testId }: { children?: React.ReactNode; className?: string; 'data-testid'?: string }) =>
-        React.createElement('button', { type: 'button', className, 'data-testid': testId ?? 'chat-send' }, children),
-      AddAttachment: ({ children, className }: { children?: React.ReactNode; className?: string }) =>
-        React.createElement('button', { type: 'button', className, 'data-testid': 'add-attachment' }, children),
-      Attachments: () => null,
-    },
-    AttachmentPrimitive: {
-      Root: ({ children }: { children?: React.ReactNode }) => React.createElement('div', {}, children),
-      Name: () => null,
-      Remove: ({ children }: { children?: React.ReactNode }) => React.createElement('button', { type: 'button' }, children),
-      Thumb: () => null,
-    },
-    MessagePartPrimitive: { InProgress: () => null },
-    ActionBarPrimitive: {
-      Root: ({ children }: { children: React.ReactNode }) => React.createElement('div', {}, children),
-      Copy: ({ children }: { children: React.ReactNode }) => React.createElement('span', {}, children),
-    },
-    AuiIf: () => null,
-    useComposerRuntime: () => ({
-      getState: () => ({ text: '' }),
-      setText: vi.fn(),
-      addAttachment: vi.fn(),
-      subscribe: vi.fn(() => vi.fn()),
-    }),
-    useMessage: () => ({ id: 'msg_streaming', role: 'assistant', status: { type: 'running' }, content: [] }),
-    useAttachment: vi.fn(() => ({ id: 'att', name: 'file.txt', contentType: 'text/plain', status: { type: 'complete' }, content: [] })),
-    makeAssistantToolUI: () => () => null,
-  }
-})
+import { MockButton, MockTextarea } from '@/test/assistantUiMock'
+vi.mock('@assistant-ui/react', async () => (await import('@/test/assistantUiMock')).createAssistantUiMock({
+  ThreadPrimitive: {
+    Viewport: React.forwardRef(
+              (
+                { children, className, style, 'data-testid': testId }: {
+                  children?: React.ReactNode
+                  className?: string
+                  style?: React.CSSProperties
+                  'data-testid'?: string
+                },
+                ref: React.Ref<HTMLDivElement>,
+              ) => React.createElement('div', { ref, className, style, 'data-testid': testId }, children),
+            ),
+  },
+  ComposerPrimitive: {
+    Input: (props: Record<string, unknown>) =>
+              React.createElement(MockTextarea, { ...props, 'data-testid': 'composer-input'}),
+    Send: ({ children, className, 'data-testid': testId }: { children?: React.ReactNode; className?: string; 'data-testid'?: string }) =>
+              React.createElement(MockButton, { type: 'button', className, 'data-testid': testId ?? 'chat-send', children: children}),
+    AddAttachment: ({ children, className }: { children?: React.ReactNode; className?: string }) =>
+              React.createElement(MockButton, { type: 'button', className, 'data-testid': 'add-attachment', children: children}),
+  },
+  AttachmentPrimitive: {
+    Root: ({ children }: { children?: React.ReactNode }) => React.createElement('div', {}, children),
+    Remove: ({ children }: { children?: React.ReactNode }) => React.createElement(MockButton, { type: 'button', children: children}),
+  },
+  useMessage: () => ({ id: 'msg_streaming', role: 'assistant', status: { type: 'running' }, content: [] }),
+  useAttachment: vi.fn(() => ({ id: 'att', name: 'file.txt', contentType: 'text/plain', status: { type: 'complete' }, content: [] })),
+}))
 
 vi.mock('@tanstack/react-query', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-query')>()
   return {
     ...actual,
-    useQuery: () => ({ data: [], isError: false, refetch: vi.fn() }),
+    useQuery: (opts: { queryKey?: readonly unknown[] }) => ({ data: queryDataWithEmptyHistory(opts?.queryKey), isError: false, refetch: vi.fn() }),
     useMutation: () => ({ mutate: vi.fn(), isPending: false }),
     useQueryClient: () => ({ invalidateQueries: vi.fn(), removeQueries: vi.fn() }),
   }
@@ -95,12 +67,14 @@ vi.mock('@tanstack/react-router', () => ({
   Link: ({ children }: { children: React.ReactNode }) => children,
 }))
 
+import { emptyHistoryPage, queryDataWithEmptyHistory, type HistoryReadPort } from '../../../tests/chat-history-paging/legacy-fixtures'
+
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([]),
-    fetchSessionMessages: vi.fn().mockResolvedValue([]),
+    fetchSessionMessages: vi.fn<HistoryReadPort>(async (sessionId) => emptyHistoryPage(sessionId)),
     fetchAboutInfo: vi.fn().mockResolvedValue({ preview_port: 5001 }),
     createSession: vi.fn(),
     uploadFiles: vi.fn(),
@@ -120,8 +94,6 @@ vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
 vi.mock('./tools/BrowserTool', () => ({ isReplayBrowserToolName: () => false, BrowserToolReplayBlock: () => null }))
 vi.mock('./tools/WebServeUI', () => ({ WebServeBlock: () => null }))
 vi.mock('./markdown-text', () => ({ MarkdownText: () => React.createElement('div', {}) }))
-vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
-vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
 vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 vi.mock('@/lib/memory-observer', () => ({

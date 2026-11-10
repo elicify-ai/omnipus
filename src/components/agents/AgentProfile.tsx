@@ -1,17 +1,12 @@
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
+import { Link, useRouter } from '@tanstack/react-router'
 import {
   X,
-  CaretDown,
   Sparkle,
-  Star,
   Lightning,
-  ArrowUp,
-  ArrowDown,
   Warning,
-  Lock,
   WarningCircle,
-  Trash,
   Brain,
 } from '@phosphor-icons/react'
 import { useAutoSave } from '@/hooks/useAutoSave'
@@ -27,7 +22,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { ModelSelector } from '@/components/ui/model-selector'
-import { useModelToProvider } from '@/lib/agents/modelToProvider'
+import { useModelToProvider, resolveUniqueModelProvider } from '@/lib/agents/modelToProvider'
 import { Switch } from '@/components/ui/switch'
 import { Separator } from '@/components/ui/separator'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
@@ -37,11 +32,15 @@ import {
   AccordionTrigger,
   AccordionContent,
 } from '@/components/ui/accordion'
-import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { DeleteAgentControl } from './DeleteAgentControl'
+import { classifyMutationFailure } from '@/lib/mutationOutcome'
+import { AgentPrivateSecrets } from './AgentPrivateSecrets'
+import { AGENT_PRIVATE_SECRETS_ENABLED } from '@/lib/featureSwitches'
 import { ToolsAndPermissions } from './ToolsAndPermissions'
 import { ExecutorSelector } from './ExecutorSelector'
-import { BehaviorFields, AvatarColorPicker, IconPicker, AvatarHeader, UploadMdButton } from './AgentFormFields'
-import { CliPathValidationHint } from './CliPathValidationHint'
+import { AgentLookPicker, BehaviorFields, UploadMdButton } from './AgentFormFields'
+import { AgentIcon } from '@/components/ui/agent-icon'
+import { AgentColor } from '@/lib/api/generated/schemas'
 import { CommandPreview } from './CommandPreview'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import {
@@ -49,8 +48,8 @@ import {
   fetchWorkspace,
   updateAgent,
   updateWorkspace,
-  deleteAgent,
   fetchProviders,
+  fetchConfig,
   fetchActivity,
   fetchSkills,
   testAgentRunner,
@@ -66,24 +65,23 @@ import {
   type WorkspaceMemberConfig,
 } from '@/lib/api'
 import { isApiError } from '@/lib/api-error'
-import { ConfigurationSaveError } from '@/lib/api/configuration'
 import { isProviderUsable } from '@/lib/providerStatus'
 import { formatTokens } from '@/lib/formatTokens'
 import { logDiagnostic } from '@/lib/telemetry'
 import { useUiStore } from '@/store/ui'
-import type { FallbackModel } from '@/lib/api/generated/openapi-types'
-import { type IconName, getIconComponent } from '@/lib/agentIcons'
-import { avatarColorName } from '@/lib/constants'
+import type { AgentColor as AgentColorValue, AgentFigure, AgentRole, FallbackModelPair } from '@/lib/api/generated/openapi-types'
 import { agentKindFlags } from '@/lib/agentKind'
-import { cliValidationBlocked, useCliPathValidation } from '@/hooks/useCliPathValidation'
-import { useCliDetect } from '@/hooks/useCliDetect'
 import { buildExecutorPreviewRequest } from '@/hooks/useCommandPreview'
-import { detectEntryFor, resolveCliDetectHint } from '@/lib/cliDetect'
 import { CONTEXT_WINDOW_SOURCE_LABEL } from '@/components/settings/ContextSection'
 import { buildAgentUpdate } from './agentDraft'
-
-/** Editor's fallback entry — `FallbackModel` from the contract with `provider` narrowed to required (the editor always populates it at hydration). */
-type FallbackEntry = FallbackModel & { provider: string }
+import { AgentFallbackModels, isCompleteFallback, type FallbackEntry } from './AgentFallbackModels'
+import { EffortControl } from '@/components/ui/model-effort-picker'
+import { providersCatalogQueryOptions } from '@/lib/providersCatalogQuery'
+import { findServedRow } from '@/lib/effort/servedReasoning'
+import { useEffortSwitch, type EffortPair } from '@/lib/effort/useEffortSwitch'
+import { ToolIterationLimitField } from './ToolIterationLimitField'
+import { useGlobalToolIterationLimit } from '@/hooks/useGlobalToolIterationLimit'
+import { useToolIterationLimitRefusal } from './useToolIterationLimitRefusal'
 
 /**
  * Echo-race fix, item 3 (belt-and-braces): true when the currently focused
@@ -126,16 +124,63 @@ function formatWindowTokens(n: number): string {
   return windowFormatter.format(n)
 }
 
+// Tailwind `sm` is 40rem. The profile mounts the desktop tabs and the phone
+// accordion together and hides one with CSS. jsdom does not apply that CSS, so
+// both copies stay in the accessibility tree unless the hidden layout is
+// marked. When matchMedia is missing (unit tests), treat the viewport as
+// desktop — the same default the tabs use.
+const SM_AND_UP = '(min-width: 40rem)'
+
+function useSmAndUp(): boolean {
+  const [matches, setMatches] = useState(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return true
+    return window.matchMedia(SM_AND_UP).matches
+  })
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return
+    const media = window.matchMedia(SM_AND_UP)
+    const apply = () => setMatches(media.matches)
+    apply()
+    media.addEventListener('change', apply)
+    return () => media.removeEventListener('change', apply)
+  }, [])
+  return matches
+}
+
+// r17 17.6: "Change in Settings" beside the read-only Program line. The
+// profile is hosted inside the app router; where no router is mounted (an
+// isolated component render) a plain link to the same address is used, since
+// a router Link cannot render without one.
+function ProgramSettingsLink() {
+  const router = useRouter({ warn: false })
+  const className =
+    'shrink-0 text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)] underline-offset-2 hover:underline'
+  if (!router) {
+    return (
+      <a href="/settings" tabIndex={0} data-testid="profile-program-settings-link" className={className}>
+        Change in Settings
+      </a>
+    )
+  }
+  return (
+    <Link to="/settings" tabIndex={0} data-testid="profile-program-settings-link" className={className}>
+      Change in Settings
+    </Link>
+  )
+}
+
 export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const editAgentId = useUiStore((s) => s.editAgentId)
   const closeEditAgentSlideOver = useUiStore((s) => s.closeEditAgentSlideOver)
   const addToast = useUiStore((s) => s.addToast)
   // FR-018 / A5: workspace context for the conditional Heartbeat tab (US-5).
-  // Set when the slide-over is opened from a Team tab; null on the global
-  // Agents screen, which suppresses the Heartbeat tab (FR-016 / FR-025).
+  // Set when the slide-over is opened from a Team tab; null when opened
+  // without a workspace (Settings → System agents), which suppresses the
+  // Heartbeat tab (FR-016 / FR-025).
   const editAgentWorkspaceId = useUiStore((s) => s.editAgentWorkspaceId)
   const agentId = agentIdProp ?? editAgentId
   const isOpen = agentId !== null
+  const smAndUp = useSmAndUp()
 
   const queryClient = useQueryClient()
 
@@ -175,7 +220,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
 
   // FR-016 / US-5: fetch the workspace when opened from a Team tab, so the
   // Heartbeat tab can read + write member_configs for this (workspace, agent).
-  // Disabled when there is no workspace context (global Agents screen) — in
+  // Disabled when there is no workspace context (Settings → System agents) — in
   // that case the Heartbeat tab is hidden and no fetch is needed.
   // M-5 / fix-1: use the canonical workspacesQueryKeys.detail key so the
   // onSuccess setQueryData in saveHeartbeatMutation lands on the same cache
@@ -261,17 +306,17 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // on every subsequent agent open.
   const [formHydrated, setFormHydrated] = useState(false)
 
-  // I12: cache the executor kind+cli+cli_path we've already passed the
-  // runner-test for, so the auto-save debounce (500 ms) doesn't re-fire the
-  // test on every unrelated keystroke while the user has external-cli
-  // selected. We re-test when the kind, cli, OR cli_path changes (or the
-  // agent id changes) — code-review m2: `cli_path` MUST be part of the
-  // signature, otherwise a cli_path-only edit (kind/cli unchanged) would
-  // never re-trigger the server-side runner test before the new path
-  // persists, silently autosaving an unverified path.
-  type ExecutorSig = { kind: ExecutorConfig['kind']; cli?: ExecutorConfig['cli']; cli_path?: string; agentId: string | null }
+  // I12: cache the executor kind+cli we've already passed the runner-test
+  // for, so the auto-save debounce (500 ms) doesn't re-fire the test on
+  // every unrelated keystroke while the user has external-cli selected. We
+  // re-test when the kind or cli changes (or the agent id changes). T8: the
+  // agent has no program path of its own any more — the program per CLI is
+  // set by a person in Settings → Third-party agents.
+  type ExecutorSig = { kind: ExecutorConfig['kind']; cli?: ExecutorConfig['cli']; agentId: string | null }
   const testedExecutorSig = useRef<ExecutorSig | null>(null)
 
+  // §6.3: the last save's outcome is unknown (transport failure), not refused.
+  const [saveUncertain, setSaveUncertain] = useState(false)
   // I2: conflict guard. Set in the 409 Conflict catch and cleared once the
   // refetchAgent() triggered by the "Refresh" toast action lands. While set,
   // the saveFn early-returns so subsequent debounced saves don't fire (and
@@ -322,11 +367,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // slide-over (typically the AgentCard button — also covers the
   // /agents/:id route mount) on close.
   //
-  // Wave 6 / B-fix: extracted to `useFocusRestore` hook so the same
-  // proven pattern (capture-in-onOpenAutoFocus + restore-via-RAF + try/
-  // catch) is shared with the modal in CreateAgentModal. Future Wave C
-  // consumers (ModelFooter slide-over) will adopt the hook instead of
-  // forking this block.
+  // Wave 6 / B-fix: extracted to the `useFocusRestore` hook (capture in
+  // onOpenAutoFocus + restore via RAF + try/catch) so other dialogs adopt
+  // the hook instead of forking this block.
   const { onOpenAutoFocus: handleOpenAutoFocus } = useFocusRestore(isOpen)
 
   const [name, setName] = useState('')
@@ -336,13 +379,15 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // Paired with model via onPairChange on the ModelSelector. Empty = resolve
   // via default provider (back-compat with pre-O3 agents).
   const [primaryProvider, setPrimaryProvider] = useState('')
+  // Effort of the primary model (FR-029): '' = Not set (an agent riding the
+  // default model then inherits the default model's effort).
+  const [reasoningEffort, setReasoningEffort] = useState('')
+  // A model-and-effort commit is a save (no confirm step, P-Q4 A): bumping
+  // this saves at once after the committed values have rendered.
+  const [immediateSaveTick, setImmediateSaveTick] = useState(0)
   const [selectedColor, setSelectedColor] = useState<string | undefined>(undefined)
-  const [selectedIcon, setSelectedIcon] = useState<IconName>('Robot')
-  // W6-B4 / G3: `default` flag mirrors Agent.default on the wire. At most one
-  // agent is default across the roster; the backend enforces that on PUT.
-  // The toggle in the Identity strip is the only way to flip it from the
-  // Edit profile (previously, users had to go back to the Agents list).
-  const [isDefault, setIsDefault] = useState(false)
+  const [selectedFigure, setSelectedFigure] = useState<AgentFigure>('Omnipus')
+  const [selectedRole, setSelectedRole] = useState<AgentRole>('general')
   // Fallback chain — the wire shape is `[{model, provider}]`; the editor
   // tracks it 1:1 with `provider` always populated (see FallbackEntry
   // type). Provider is needed for the chip badge; the wire payload in
@@ -363,55 +408,37 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // Schema-pinned on Agent.voice; TTS playback not yet active (tracked #306). Empty string
   // means "not configured" — the wire payload omits the field entirely.
   const [voice, setVoice] = useState('')
-  const [maxToolIterations, setMaxToolIterations] = useState(200)
-  // Draft strings for the two number inputs. A controlled number input backed
-  // directly by the committed number turns "clear the field to type" into
-  // Number('') === 0 — and because this form AUTO-SAVES on state change, the 0
-  // was persisted mid-keystroke (P0, 2026-07-03: five agents + the global
-  // default were zero-clobbered on a live install). The draft absorbs
-  // in-progress typing; only a VALID value commits (and autosaves); blur with
-  // an invalid/empty draft restores the last committed value.
-  const [maxToolIterationsDraft, setMaxToolIterationsDraft] = useState('200')
+  // #904 (tool-iteration-limit spec FR-017, D9): the operator's pending edit
+  // of the agent's OWN limit. `undefined` = untouched (the PUT omits the
+  // field, so an unrelated autosave never re-sends it — not even a capped
+  // own value above the global); `null` = "Use global limit" (PUT sends a
+  // raw JSON null); a number = set. Reset to untouched on every hydration —
+  // the server's effective/source/own fields are rendered from `agent`.
+  const [maxToolIterationsEdit, setMaxToolIterationsEdit] = useState<number | null | undefined>(undefined)
   // ADR-066 D9 (T068-30): per-agent context-window override (D2 rung 1,
   // lower-only — the backend clamps to the model's capability). Three-valued
   // on purpose: `undefined` = the wire omitted it and the operator has not
   // touched it (the PUT omits the field → backend leaves it unchanged);
   // `null` = the operator cleared it (the PUT sends null → backend clears);
-  // a number = set. Same draft pattern as the two inputs above so clearing
-  // the field to type never autosaves 0 (the wire minimum is 1).
+  // a number = set. A draft string absorbs typing so clearing the field to
+  // type never autosaves 0 (the wire minimum is 1) — the 2026-07-03
+  // zero-clobber P0.
   const [contextWindowOverride, setContextWindowOverride] = useState<number | null | undefined>(undefined)
   const [contextWindowOverrideDraft, setContextWindowOverrideDraft] = useState('')
-  // Wave 5 / spec §6.1 BDD #15: Edit slide-over footer Delete agent.
-  // Opens an AlertDialog; the confirm mutation invalidates the list and
-  // closes the slide-over. Locked agents do not render the trigger.
-  const [deleteOpen, setDeleteOpen] = useState(false)
   const [toolsCfg, setToolsCfg] = useState<AgentToolsCfg>({
     builtin: { policies: {} },
   })
   // US-E6: per-agent skill assignment (opt-in, default none).
   const [agentSkills, setAgentSkills] = useState<string[]>([])
-  // ADR-092: per-agent Auto-approve off-switch — off-only, default false
-  // (inherit the global/per-chat default).
-  const [autoApproveDisabled, setAutoApproveDisabled] = useState(false)
   // Spec-4 FR-4.1: sub-agent executor (native default / external-cli / remote-a2a).
   const [executor, setExecutor] = useState<ExecutorConfig | undefined>(undefined)
-
-  // external-executor-cli-path-detection spec (ADR-030) / US-5: same
-  // detect→prefill + validate-on-blur as the create wizard, because
-  // `cli_path` is mutable on edit (`cli` itself stays locked). Detection is
-  // shared with the create wizard via `useCliDetect` (Simplify F1), probed
-  // once while the Runtime tab's agent is a subagent_3p; `cliValidation`
-  // drives the inline status line and gates autosave the same way the
-  // wizard gates Create (FR-008/FR-018/FR-019).
-  const cliDetect = useCliDetect(agent?.type === 'subagent_3p')
-  const cliValidation = useCliPathValidation()
 
   // FR-016 / US-5: Heartbeat tab state — per-(workspace, agent) config, NOT
   // part of the agent autosave. Only meaningful when editAgentWorkspaceId is set.
   const [hbEnabled, setHbEnabled] = useState(false)
   const [hbIntervalMinutes, setHbIntervalMinutes] = useState(30)
-  // Draft string for the interval input (mirrors `timeoutDraft`/
-  // `maxToolIterationsDraft` above) — a controlled number input backed
+  // Draft string for the interval input (mirrors the context-window
+  // override draft above) — a controlled number input backed
   // directly by the committed number turned "clear the field to retype"
   // into an immediate snap-to-5 on every keystroke (Number('') coerced via
   // the old `raw === ''` branch), which fought the operator mid-edit: clear
@@ -577,20 +604,19 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     setModel(agent.model ?? '')
     // O3 two-field: hydrate the explicit provider routing key.
     setPrimaryProvider(agent.provider ?? '')
+    setReasoningEffort(agent.reasoning_effort ?? '')
     setSelectedColor(agent.color)
-    setSelectedIcon((agent.icon as IconName) ?? 'Robot')
-    // W6-B4 / G3: hydrate the `default` flag from the agent response. The
-    // wire field is a plain boolean; absent = false. The Identity strip
-    // shows the current state of this flag and lets the user flip it.
-    setIsDefault(agent.default ?? false)
+    setSelectedFigure(agent.figure ?? 'Omnipus')
+    setSelectedRole(agent.role ?? 'general')
     // Hydrate the fallback chain from the wire. `provider` is optional on
-    // the wire type; narrow to required by looking up via modelToProvider,
-    // else empty string (renders as a muted dash in the chip).
+    // the READ shape: a legacy entry saved without it stays '' (incomplete)
+    // — no provider is guessed for it, so it is never silently re-paired
+    // and re-sent (#1340). The chip asks the person to choose or remove it.
     const rawFallbacks = agent.fallback_models ?? []
     setFallbackModels(
       rawFallbacks.map((entry) => ({
         ...entry,
-        provider: entry.provider || modelToProvider(entry.model) || '',
+        provider: (entry.provider ?? '').trim(),
       })),
     )
     setTemperature(agent.model_params?.temperature ?? 1.0)
@@ -605,8 +631,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     // renders 3 spaces and the wire round-trip is clean (whitespace was
     // silently reaching the server).
     setVoice((agent.voice ?? '').trim())
-    setMaxToolIterations(agent.max_tool_iterations ?? 200)
-    setMaxToolIterationsDraft(String(agent.max_tool_iterations ?? 200))
+    setMaxToolIterationsEdit(undefined)
     setContextWindowOverride(agent.context_window_override ?? undefined)
     setContextWindowOverrideDraft(agent.context_window_override != null ? String(agent.context_window_override) : '')
     // Spec-4: hydrate executor (absent → native default, modelled as undefined).
@@ -617,8 +642,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     }))
     // US-E6: hydrate agent skills from the API response (default none).
     setAgentSkills(agent.skills ?? [])
-    // ADR-092: hydrate the per-agent Auto-approve off-switch (default false).
-    setAutoApproveDisabled(agent.auto_approve_disabled ?? false)
     reviewedAgentRef.current = agent
     hasHydrated.current = true
     // D3 fix: flip the reactive readiness flag as the LAST line of this
@@ -629,49 +652,99 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     setFormHydrated(true)
   }, [agentId, agent])
 
-  // US-1/US-5 AC-1: OFFER the detected absolute path when cli_path is EMPTY —
-  // purely derived (no state, no effect), so detection can NEVER itself mark
-  // the form dirty or commit into `executor`/`formData`. code-review M2a:
-  // the previous effect called `setExecutor` + `markDirty()` as soon as
-  // detection resolved, which meant merely OPENING a subagent_3p profile
-  // (before the operator touched anything) silently autosaved the detected
-  // path. The offered value is only committed into `executor.cli_path` when
-  // the operator actually edits the field (onChange) or leaves it with the
-  // offered value still showing (onBlur "confirms" it) — see the Input
-  // below. Never overwrites a non-empty value (US-4).
-  const detectedCliEntry = agent?.type === 'subagent_3p' ? detectEntryFor(cliDetect, executor?.cli) : undefined
-  const detectedCliPath = detectedCliEntry?.installed && detectedCliEntry.path ? detectedCliEntry.path : undefined
-  const offeredCliPath = (executor?.cli_path ?? '').trim().length === 0 ? detectedCliPath : undefined
-
   // Live command-line preview (executor-command-preview): built from the
   // same executor state the Runtime tab edits, plus the agent's top-level
   // `model` (ExecutorConfig carries no model field on the wire — the model
   // an external CLI runs with is `AgentConfig.model`, the same field every
   // agent type uses). `runtimePanel` (below) only ever renders for
-  // subagent_3p agents (`isExternalAgent`), and `formData` above shows that
-  // tier EXCLUDES `max_tool_iterations` from the wire payload entirely
-  // (agent-types-field-matrix.md Decisions #1 — the external CLI runs its
-  // own tool loop) — so it is deliberately omitted here too, letting the
-  // preview fall back to the same server-side default (50) real dispatch
-  // uses for this tier.
+  // subagent_3p agents (`isExternalAgent`). #904 D14: the agent's own
+  // tool-iteration limit (pending edit, else the stored own value) is sent
+  // too; with none the key is omitted and the server previews the global
+  // limit — the same effective value real dispatch passes.
+  const storedOwnToolIterationLimit = agent?.max_tool_iterations_override ?? null
+  const ownToolIterationLimit = maxToolIterationsEdit !== undefined ? maxToolIterationsEdit : storedOwnToolIterationLimit
+  const limitRefusal = useToolIterationLimitRefusal(agentId, agent?.name)
+  // Only while the sheet is open: AppShell mounts this editor on every page,
+  // and /api/v1/performance is an admin-only read (503 under dev-mode bypass).
+  const globalToolIterationLimit = useGlobalToolIterationLimit({ enabled: isOpen })
   const commandPreviewRequest: ExecutorCommandPreviewRequest | undefined = executor?.cli
-    ? buildExecutorPreviewRequest(executor.cli, model, executor.cli_path, executor.cli_args)
+    ? buildExecutorPreviewRequest(executor.cli, model, executor.effective_cli_path, executor.cli_args, ownToolIterationLimit ?? undefined)
     : undefined
+
+  // ── Effort of the primary model (effort-levels-spec-r10.md FR-019, FR-029,
+  // FR-047, FR-053, S-86) ─────────────────────────────────────────────────
+  // An agent with no model of its own rides the default model: its chip then
+  // describes the default model and, while its own effort is Not set, shows
+  // the default model's effort as what it inherits.
+  const { data: appConfig } = useQuery({ queryKey: ['config'], queryFn: fetchConfig, enabled: isOpen })
+  const effortCatalogQuery = useQuery({ ...providersCatalogQueryOptions(), enabled: isOpen })
+  const effortCatalog = effortCatalogQuery.data
+  const defaultModelPair = appConfig?.agents?.defaults?.default_model
+  const ridesDefaultModel = model.trim() === ''
+  const primaryEffortSlot = {
+    provider: ridesDefaultModel
+      ? (defaultModelPair?.provider ?? '')
+      : (primaryProvider || resolveUniqueModelProvider(usableProviders, model)),
+    model: ridesDefaultModel ? (defaultModelPair?.model ?? '') : model,
+    effort: reasoningEffort,
+  }
+  const primaryEffortInherit = ridesDefaultModel ? (defaultModelPair?.reasoning_effort ?? '') : undefined
+  const effortEditable = isFieldEditable('reasoning_effort')
+  const [primaryEffortNote, setPrimaryEffortNote] = useState<string | null>(null)
+  const effortLookup = useCallback(
+    (pair: EffortPair) => findServedRow(effortCatalog, pair.provider, pair.model),
+    [effortCatalog],
+  )
+  // S-57: the pair the server holds while a committed model/effort save is in
+  // flight, so a failed save can show it again; plus the chip to focus then.
+  const primaryShownRef = useRef({ model, provider: primaryProvider, effort: reasoningEffort })
+  primaryShownRef.current = { model, provider: primaryProvider, effort: reasoningEffort }
+  const primaryAcknowledgedRef = useRef<{ model: string; provider: string; effort: string } | null>(null)
+  const primaryChipRef = useRef<HTMLButtonElement | null>(null)
+  // One model-and-effort commit: both land together and save at once.
+  const commitPrimaryModelEffort = useCallback((pair: EffortPair, effort: string, note: string | null) => {
+    // An earlier commit still unsaved keeps its captured server pair.
+    primaryAcknowledgedRef.current ??= { ...primaryShownRef.current }
+    isDirtyRef.current = true
+    setModel(pair.model)
+    setPrimaryProvider(pair.provider)
+    setReasoningEffort(effort)
+    setPrimaryEffortNote(note)
+    setImmediateSaveTick((tick) => tick + 1)
+  }, [])
+  const primaryEffortSwitch = useEffortSwitch({
+    value: primaryEffortSlot,
+    inherit: primaryEffortInherit,
+    lookup: effortLookup,
+    onCommit: commitPrimaryModelEffort,
+    ready: effortCatalogQuery.status === 'success',
+  })
+
+  function setFallbackEffort(modelSlug: string, effort: string) {
+    markDirty()
+    setFallbackModels((prev) =>
+      prev.map((f) => {
+        if (f.model !== modelSlug) return f
+        const next: FallbackEntry = { ...f }
+        if (effort !== '') next.reasoning_effort = effort
+        else delete next.reasoning_effort
+        return next
+      }),
+    )
+    setImmediateSaveTick((tick) => tick + 1)
+  }
 
   const formData = useMemo(() => {
     // Spec-4 FR-4.1: subagent_3p agents run inside an external CLI, so many
     // Omnipus-native fields are irrelevant or explicitly rejected by the
     // backend. Build a restricted payload for that tier.
     const isSubagent3p = agent?.type === 'subagent_3p'
-    const identity = isSubagent3p
-      ? { name, description, color: selectedColor, icon: selectedIcon }
-      : { name, description, color: selectedColor, icon: selectedIcon, default: isDefault }
+    const identity = { name, description, color: selectedColor, figure: selectedFigure, role: selectedRole }
     if (isSubagent3p) {
-      // agent-types-field-matrix.md, Decisions #1 (resolved 2026-07-03):
-      // excluded — subagent_3p EXCLUDES max_tool_iterations — the external
-      // CLI runs its own tool loop, and the backend now rejects the field
-      // for this type. timeout_seconds STAYS (process-level kill for a
-      // hung CLI).
+      // #904 D14 supersedes agent-types-field-matrix.md Decisions #1: the
+      // own tool-iteration limit is the CLI's turn cap, sent only when the
+      // operator changed or reset it (FR-017). There is no timeout_seconds:
+      // a CLI run has no time limit (issue #1306).
       return {
         ...identity,
         model,
@@ -683,6 +756,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         // (pkg/gateway/agent_field_rules.go).
         memory_enabled: memoryEnabled,
         executor,
+        max_tool_iterations: maxToolIterationsEdit,
       }
     }
     return {
@@ -690,9 +764,23 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       model,
       // O3 two-field: include provider only when non-empty.
       provider: primaryProvider.trim(),
-      // Editor state matches the wire shape 1:1; emit `undefined` for
-      // empty (treated as "no fallbacks" by the backend).
-      fallback_models: fallbackModels,
+      // #1340: the update carries FallbackModelPair[] — both fields, always.
+      // While any entry is incomplete (a legacy unpaired fallback), the
+      // chain is left out of the update entirely: the server keeps the
+      // stored chain unchanged (an omitted field is not written), nothing
+      // unpaired is re-sent, and the save does not fail on it. The editor
+      // says so until the person completes or removes that entry.
+      ...(fallbackModels.every(isCompleteFallback)
+        ? {
+            fallback_models: fallbackModels.map((entry): FallbackModelPair => ({
+              model: entry.model,
+              provider: entry.provider,
+              ...(entry.reasoning_effort ? { reasoning_effort: entry.reasoning_effort } : {}),
+            })),
+          }
+        : {}),
+      // FR-029: sent only when it differs from the stored value ("" clears it).
+      reasoning_effort: reasoningEffort !== (agent?.reasoning_effort ?? '') ? reasoningEffort : undefined,
       model_params: { temperature, max_tokens: maxTokens },
       soul,
       // ADR-052 FR-039: "Allowed on all agents" per AgentUpdateRequest.yaml —
@@ -727,7 +815,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       // form's `data` shape differs for subagent_3p vs. not) for marginal
       // benefit given the existing shield — not done.
       voice: voice.trim() !== '' ? voice.trim() : null,
-      max_tool_iterations: maxToolIterations,
+      // #904 FR-017: undefined (untouched) is dropped by buildAgentUpdate and
+      // JSON.stringify, so the limit is sent only when changed or reset.
+      max_tool_iterations: maxToolIterationsEdit,
       // ADR-066 D9 / FR-037: omitted when untouched-and-absent (undefined is
       // dropped by JSON.stringify), null to clear, number to set. Not sent
       // for subagent_3p (the external CLI owns its own window; the agent
@@ -749,16 +839,12 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       // Omitting it (undefined) leaves the backend on its "native" default
       // rather than forcing an empty value over the wire.
       executor,
-      // ADR-092: per-agent Auto-approve off-switch. Sent unconditionally
-      // (false is the harmless "inherit the default" no-op), matching every
-      // other simple boolean field in this payload.
-      auto_approve_disabled: autoApproveDisabled,
     }
   }, [
-    agent?.type, name, description, model, primaryProvider, selectedColor, selectedIcon, isDefault, fallbackModels,
+    agent?.type, agent?.reasoning_effort, reasoningEffort, name, description, model, primaryProvider, selectedColor, selectedFigure, selectedRole, fallbackModels,
     temperature, maxTokens, soul, memoryEnabled, voice,
-    maxToolIterations, contextWindowOverride,
-    agentSkills, executor, autoApproveDisabled,
+    maxToolIterationsEdit, contextWindowOverride,
+    agentSkills, executor,
   ])
 
   const {
@@ -781,28 +867,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       // the form is re-hydrated from the server's current state — otherwise
       // the stale form would just 409 again on every debounce tick.
       if (conflictRef.current) return
-      // external-executor-cli-path-detection spec FR-008/FR-018/FR-019:
-      // block autosave when the last blur-triggered validate() call
-      // returned a definitive missing-binary/handshake-failed verdict for
-      // the CURRENT cli_path. Editing the path resets `cliValidation` to
-      // idle (see the Input's onChange below), so an unchecked/pending/
-      // errored state never blocks (no trap). This runs BEFORE the I12
-      // runner-test (which requires the agent to already be persisted) so a
-      // known-bad path never even reaches `updateAgent`.
-      if (data.executor?.kind === 'external-cli' && cliValidationBlocked(cliValidation.status)) {
-        const reason = cliValidation.status.kind === 'result' ? cliValidation.status.result.reason : 'unknown'
-        addToast({
-          message: `CLI path failed validation (${reason}). Fix the path before saving.`,
-          variant: 'error',
-        })
-        throw new Error(`CLI path validation failed: ${reason}`)
-      }
       // I12: when the agent's executor is external-cli, run the runner-test
-      // BEFORE allowing the save to commit. We re-test when the kind, cli, OR
-      // cli_path actually changes (or the agent id changes) so the auto-save
-      // debounce doesn't re-fire on every unrelated keystroke — but a path
-      // edit alone (code-review m2) MUST still re-fire the test, otherwise a
-      // definitively-bad path could silently persist unverified. On a
+      // BEFORE allowing the save to commit. We re-test when the kind or cli
+      // actually changes (or the agent id changes) so the auto-save
+      // debounce doesn't re-fire on every unrelated keystroke. On a
       // failure, throw — useAutoSave catches and surfaces the error inline,
       // the save is blocked, and the form stays dirty so the user can fix
       // and retry.
@@ -810,7 +878,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         const sig: ExecutorSig = {
           kind: data.executor.kind,
           cli: data.executor.cli,
-          cli_path: data.executor.cli_path,
           agentId,
         }
         const last = testedExecutorSig.current
@@ -818,7 +885,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           || last.agentId !== sig.agentId
           || last.kind !== sig.kind
           || last.cli !== sig.cli
-          || last.cli_path !== sig.cli_path
         if (needsTest) {
           let result
           try {
@@ -848,89 +914,93 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           testedExecutorSig.current = sig
         }
       }
-      const reviewedAgent = reviewedAgentRef.current
-      if (!reviewedAgent) return
-      const payload = buildAgentUpdate(reviewedAgent, data as Record<string, unknown>)
-      if (!payload) return
-      try {
-        const resp = await updateAgent(agentId, payload)
-        queryClient.invalidateQueries({ queryKey: ['agent-tools', agentId] })
-        // I2 / UAT data-loss fix (passive fallback_models repro): seed the
-        // query cache with the FULL PUT response — `PUT /agents/{id}`
-        // contractually "returns the complete updated agent object"
-        // (contracts/openapi.yaml), identical in shape to the GET response —
-        // not just `updated_at`. The earlier version only patched
-        // `updated_at` via `{ ...old, updated_at: resp.updated_at }`, which
-        // left every OTHER field (including `fallback_models`) pointing at
-        // the STALE pre-save `old` snapshot. That partial patch still swaps
-        // in a brand-new `agent` object reference, which re-triggers the
-        // `[agentId, agent]` hydration effect below on React's next render —
-        // and by the time that effect actually runs, `isDirtyRef.current`
-        // has ALREADY been cleared to `false` by this same save's own
-        // success path (a few lines down), so the hydration guard does not
-        // block it. The effect then re-hydrates EVERY field (not just
-        // updated_at) from that Frankenstein object, silently reverting
-        // `fallbackModels` state back to its pre-edit value. That reversion
-        // is a real `formData` change from useAutoSave's point of view, so
-        // it fires a second, correctly-serialized (not overlapping) debounce
-        // cycle roughly one `debounceMs` later — carrying the now-reverted,
-        // fallback_models-less payload — which silently clobbers the
-        // first save. Using the full response keeps the optimistic cache
-        // patch fully consistent with what the server now actually has, so
-        // if the hydration effect races and re-runs before the
-        // `invalidateQueries` refetch below lands, it reproduces the SAME
-        // correct state and no spurious second save fires. The
-        // `invalidateQueries` call below still runs to reconcile with a
-        // fresh GET (e.g. server-side derived fields), but this is no
-        // longer the only thing standing between a save and a stale cache.
-        //
-        // Round 2 of this same regression test (see
-        // `lastIncorporatedUpdatedAtRef`'s doc comment above): even with
-        // the full-response cache patch, a STALE `invalidateQueries`
-        // refetch immediately below can still swap in an `agent` snapshot
-        // that isn't newer than what we just saved — so the hydration
-        // effect's own `updated_at` monotonic check is the layer that
-        // actually closes the window. Set the ref here too (synchronously,
-        // before `isDirtyRef.current` is even cleared below) so there is
-        // no gap between "we know what we just saved" and "the hydration
-        // effect is willing to trust it."
-        if (resp) {
-          reviewedAgentRef.current = resp
-          queryClient.setQueryData(['agent', agentId], resp)
-          if (resp.updated_at) lastIncorporatedUpdatedAtRef.current = resp.updated_at
-        }
-      } catch (err) {
-        // W6-contracts: on a 409 Conflict, surface a toast with a Refresh
-        // action that refetches the agent state and drops pending edits.
-        if (isApiError(err) && err.status === 409) {
-          // I2: arm the conflict guard so subsequent debounced saves don't
-          // fire (and re-409) while the refetch is in flight. Cleared in the
-          // refetchAgent().then() callback below once the fresh state lands.
-          conflictRef.current = true
-          addToast({
-            message: 'This agent was changed elsewhere. Refresh to load the latest version.',
-            variant: 'error',
-            action: {
-              label: 'Refresh',
-              onClick: () => {
-                refetchAgent().then(() => {
-                  if (isDirtyRef.current) isDirtyRef.current = false
-                  // I2: refetch landed — re-arm the save path. The form will
-                  // re-hydrate from the fresh GET and the next edit debounces
-                  // normally against the server's current updated_at.
-                  conflictRef.current = false
-                })
+      // #904: a refused own limit is dropped from this and later saves so the
+      // other fields still save (useToolIterationLimitRefusal).
+      await limitRefusal.save(data, async (draft) => {
+        const reviewedAgent = reviewedAgentRef.current
+        if (!reviewedAgent) return false
+        const payload = buildAgentUpdate(reviewedAgent, draft as Record<string, unknown>)
+        if (!payload) return false
+        try {
+          const resp = await updateAgent(agentId, payload)
+          queryClient.invalidateQueries({ queryKey: ['agent-tools', agentId] })
+          // I2 / UAT data-loss fix (passive fallback_models repro): seed the
+          // query cache with the FULL PUT response — `PUT /agents/{id}`
+          // contractually "returns the complete updated agent object"
+          // (contracts/openapi.yaml), identical in shape to the GET response —
+          // not just `updated_at`. The earlier version only patched
+          // `updated_at` via `{ ...old, updated_at: resp.updated_at }`, which
+          // left every OTHER field (including `fallback_models`) pointing at
+          // the STALE pre-save `old` snapshot. That partial patch still swaps
+          // in a brand-new `agent` object reference, which re-triggers the
+          // `[agentId, agent]` hydration effect below on React's next render —
+          // and by the time that effect actually runs, `isDirtyRef.current`
+          // has ALREADY been cleared to `false` by this same save's own
+          // success path (a few lines down), so the hydration guard does not
+          // block it. The effect then re-hydrates EVERY field (not just
+          // updated_at) from that Frankenstein object, silently reverting
+          // `fallbackModels` state back to its pre-edit value. That reversion
+          // is a real `formData` change from useAutoSave's point of view, so
+          // it fires a second, correctly-serialized (not overlapping) debounce
+          // cycle roughly one `debounceMs` later — carrying the now-reverted,
+          // fallback_models-less payload — which silently clobbers the
+          // first save. Using the full response keeps the optimistic cache
+          // patch fully consistent with what the server now actually has, so
+          // if the hydration effect races and re-runs before the
+          // `invalidateQueries` refetch below lands, it reproduces the SAME
+          // correct state and no spurious second save fires. The
+          // `invalidateQueries` call below still runs to reconcile with a
+          // fresh GET (e.g. server-side derived fields), but this is no
+          // longer the only thing standing between a save and a stale cache.
+          //
+          // Round 2 (see `lastIncorporatedUpdatedAtRef`): a STALE refetch below
+          // can still swap in a snapshot no newer than this save, so the
+          // hydration effect's `updated_at` monotonic check closes the window.
+          // Set the ref here, synchronously, before dirty is cleared, so there
+          // is no gap between "we know what we saved" and "hydration trusts it".
+          setSaveUncertain(false)
+          if (resp) {
+            reviewedAgentRef.current = resp
+            queryClient.setQueryData(['agent', agentId], resp)
+            if (resp.updated_at) lastIncorporatedUpdatedAtRef.current = resp.updated_at
+          }
+        } catch (err) {
+          // omnipus-system-agent §6.3 ("Save not confirmed + Retry"): an
+          // answer that never arrived may still have saved — say so.
+          setSaveUncertain(classifyMutationFailure(err) === 'uncertain')
+          // W6-contracts: on a 409 Conflict, surface a toast with a Refresh
+          // action that refetches the agent state and drops pending edits.
+          if (isApiError(err) && err.status === 409) {
+            // I2: arm the conflict guard so subsequent debounced saves don't
+            // fire (and re-409) while the refetch is in flight. Cleared in the
+            // refetchAgent().then() callback below once the fresh state lands.
+            conflictRef.current = true
+            addToast({
+              message: 'This agent was changed elsewhere. Refresh to load the latest version.',
+              variant: 'error',
+              action: {
+                label: 'Refresh',
+                onClick: () => {
+                  refetchAgent().then(() => {
+                    if (isDirtyRef.current) isDirtyRef.current = false
+                    // I2: refetch landed — re-arm the save path. The form will
+                    // re-hydrate from the fresh GET and the next edit debounces
+                    // normally against the server's current updated_at.
+                    conflictRef.current = false
+                  })
+                },
               },
-            },
-          })
+            })
+          }
+          throw err
         }
-        throw err
-      }
-      // Draft-ownership rule: dirty clears via useAutoSave's `onSaved`
-      // callback below (only when the save snapshot still equals the live
-      // draft), NOT unconditionally here — see that callback for why.
-      queryClient.invalidateQueries({ queryKey: ['agent', agentId] })
-      queryClient.invalidateQueries({ queryKey: ['agents'] })
+        // Draft-ownership rule: dirty clears via useAutoSave's `onSaved`
+        // callback below (only when the save snapshot still equals the live
+        // draft), NOT unconditionally here — see that callback for why.
+        queryClient.invalidateQueries({ queryKey: ['agent', agentId] })
+        queryClient.invalidateQueries({ queryKey: ['agents'] })
+        return true
+      })
     },
     // Locked agents can still save model and tool changes — locked status
     // itself must NEVER disable auto-save (an `agent.locked` guard is a
@@ -982,7 +1052,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         // the debounce keeps firing no-op saves until the operator clicks
         // "Refresh").
         if (!hasHydrated.current || agentId === null || conflictRef.current) return
-        if (isCurrent) isDirtyRef.current = false
+        // A refused limit still in the draft keeps the form dirty so a refetch
+        // does not silently wipe it and its explanation.
+        if (isCurrent && !limitRefusal.holdsRefused(_saved.max_tool_iterations)) isDirtyRef.current = false
       },
       // I13: best-effort flush of pending edits on tab close / page hide /
       // unload. Auth is the omnipus-session HttpOnly cookie (US-5 / FR-010),
@@ -995,7 +1067,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         if (!reviewedAgent || agentId === null) return
         let payload
         try {
-          payload = buildAgentUpdate(reviewedAgent, formData as Record<string, unknown>)
+          payload = buildAgentUpdate(reviewedAgent, limitRefusal.withoutRefused(formData) as Record<string, unknown>)
         } catch (error) {
           console.error('AgentProfile: pagehide flush refused an invalid draft', error)
           return
@@ -1067,6 +1139,40 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const saveStatusRef = useRef(saveStatus)
   saveStatusRef.current = saveStatus
 
+  // A committed model/effort change saves at once (P-Q4 A, FR-054): this runs
+  // after the render that put the committed values into `formData`.
+  useEffect(() => {
+    if (immediateSaveTick === 0) return
+    saveAgentNow()
+  }, [immediateSaveTick])
+
+  // S-57 / U20: a committed model/effort save that fails shows the server's
+  // previous model and effort again and puts focus on the effort chip; the
+  // footer keeps the save error. A successful save drops the captured pair.
+  // The focus timer is cleared only on unmount: a saveStatus change in the
+  // same tick must not cancel the focus move.
+  const revertFocusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => {
+    if (revertFocusTimerRef.current !== null) clearTimeout(revertFocusTimerRef.current)
+  }, [])
+  useEffect(() => {
+    const acknowledged = primaryAcknowledgedRef.current
+    if (!acknowledged) return
+    if (saveStatus === 'saved') { primaryAcknowledgedRef.current = null; return }
+    if (saveStatus !== 'error') return
+    primaryAcknowledgedRef.current = null
+    setModel(acknowledged.model)
+    setPrimaryProvider(acknowledged.provider)
+    setReasoningEffort(acknowledged.effort)
+    setPrimaryEffortNote(null)
+    // The next tick lets a closing popover finish its own focus return first.
+    if (revertFocusTimerRef.current !== null) clearTimeout(revertFocusTimerRef.current)
+    revertFocusTimerRef.current = setTimeout(() => {
+      revertFocusTimerRef.current = null
+      primaryChipRef.current?.focus()
+    }, 0)
+  }, [saveStatus])
+
   // Item 1 (MERGE-BLOCKER — sheet-close data loss): AgentProfile is mounted
   // at the route level and does NOT unmount when the sheet closes (only
   // `editAgentId` flips to null) — so useAutoSave's own unmount-flush never
@@ -1097,48 +1203,42 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     closeEditAgentSlideOver()
   }
 
-  // W6-B4 / G3 fix: the "Default agent" toggle used to fire its success
-  // toast (and invalidate ['agents']) the instant the Switch was flipped —
-  // BEFORE the debounced autosave had actually persisted the flag.
-  // A slow network or a failed save left the toast lying: the operator saw
-  // "X is now the default agent" while the server still had the old value.
-  // This ref records the pending default-flag change; the effect below only
-  // fires the toast once `saveStatus` confirms it actually landed (and
-  // silently drops the pending flag on error — the AutoSaveIndicator already
-  // surfaces the failure, and a wrong-tense success toast would be worse).
-  const pendingDefaultToastRef = useRef<{ next: boolean; label: string } | null>(null)
-  useEffect(() => {
-    if (saveStatus === 'saved' && pendingDefaultToastRef.current) {
-      const { next, label } = pendingDefaultToastRef.current
-      pendingDefaultToastRef.current = null
-      queryClient.invalidateQueries({ queryKey: ['agents'] })
-      addToast({
-        message: next ? `${label} is now the default agent` : `${label} is no longer the default agent`,
-        variant: 'success',
-      })
-    } else if (saveStatus === 'error') {
-      pendingDefaultToastRef.current = null
-    }
-  }, [saveStatus, queryClient, addToast])
-
   // Add a fallback from the <ModelSelector> dropdown. Pairs the picked
-  // model with the provider that owns it (via modelToProvider). De-dupes
+  // model with the provider that owns it — the provider row the user
+  // actually picked under when onPairChange supplies it (H6: two providers
+  // can serve the same slug; the first-wins modelToProvider lookup cannot
+  // tell them apart), else the first-wins lookup for the onChange-only
+  // free-text path. handleSelect fires onChange BEFORE onPairChange for the
+  // same pick, so this runs twice: the first call seeds the entry via the
+  // lookup, the second patches it to the exact picked provider (both
+  // setStates batch into one render — the intermediate is never painted,
+  // and the debounced autosave only ever sees the final pair). De-dupes
   // by model — the fallback list cannot have the same model twice
   // (US-3). Free-text picks (model not in any connected provider) are
   // accepted but surface a warning toast.
-  function addFallbackFromSelector(modelSlug: string) {
+  function addFallbackFromSelector(modelSlug: string, providerOverride?: string) {
     const trimmed = modelSlug.trim()
     if (!trimmed) return
-    const knownProvider = modelToProvider(trimmed)
+    const knownProvider = providerOverride || modelToProvider(trimmed)
     if (!knownProvider) {
+      // #1340: a fallback is a (provider, model) pair — a model no connected
+      // provider lists cannot be paired, so it is not added.
       addToast({
-        message: `"${trimmed}" isn't listed by any connected provider — saving anyway, but the fallback may not work.`,
-        variant: 'warning',
+        message: `"${trimmed}" isn't listed by any connected provider — choose a model under a connected provider.`,
+        variant: 'error',
       })
+      return
     }
     setFallbackModels((prev) => {
-      if (prev.some((f) => f.model === trimmed)) return prev
-      return [...prev, { model: trimmed, provider: knownProvider ?? '' }]
+      const existing = prev.find((f) => f.model === trimmed)
+      if (existing) {
+        // Second callback of the same pick: patch the seeded entry to the
+        // exact picked provider. A plain re-pick of an existing entry stays
+        // a no-op (US-3 dedupe).
+        if (!providerOverride || existing.provider === providerOverride) return prev
+        return prev.map((f) => (f.model === trimmed ? { ...f, provider: providerOverride } : f))
+      }
+      return [...prev, { model: trimmed, provider: knownProvider }]
     })
   }
 
@@ -1148,11 +1248,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
 
   // W6-C2 / I9: per-chip provider picker. Picking a different provider
   // for an existing fallback updates the entry's `provider` field
-  // (the wire routing key — see FR-007 / FallbackModel.yaml). Picking
-  // "—" (empty) clears the provider so the chip flips into the
-  // "Provider not connected" state (I11). No-op when the value is
-  // unchanged.
+  // (the wire routing key — see FR-007 / FallbackModel.yaml). There is no
+  // empty choice: a fallback is always a (provider, model) pair (#1340).
   function setFallbackProvider(modelSlug: string, providerId: string) {
+    if (!providerId) return
     setFallbackModels((prev) =>
       prev.map((f) => (f.model === modelSlug ? { ...f, provider: providerId } : f)),
     )
@@ -1179,55 +1278,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
 
   // UploadButton moved to the shared UploadMdButton in AgentFormFields.tsx
   // (create/edit parity, P3 2026-07-03) — one implementation for both dialogs.
-
-  // Wave 5 / spec §6.1 BDD #15: Delete agent confirmation: the mutation invalidates
-  // the list cache on success, surfaces the API error inline on failure,
-  // and closes the slide-over only on success (so a network blip keeps
-  // the operator on the same page). The button itself is hidden for
-  // locked agents (see SheetFooter below).
-  const deleteAgentMutation = useMutation({
-    mutationFn: (id: string) => {
-      if (!agent?.revision) throw new Error('Agent has no reviewed revision. Reload before deleting.')
-      return deleteAgent(id, agent.revision)
-    },
-    onSuccess: () => {
-      // Drop the deleted agent from the list cache immediately so no
-      // per-id GET refetch fires for a resource that no longer exists.
-      queryClient.setQueryData(['agents'], (prev: unknown) => {
-        if (!Array.isArray(prev)) return prev
-        return prev.filter((a) => (a as { id?: string }).id !== agentId)
-      })
-      queryClient.invalidateQueries({ queryKey: ['agents'] })
-      queryClient.invalidateQueries({ queryKey: ['agent', agentId] })
-      setDeleteOpen(false)
-      closeEditAgentSlideOver()
-      addToast({ message: 'Agent deleted', variant: 'success' })
-    },
-    onError: (err: unknown) => {
-      if (err instanceof ConfigurationSaveError && err.state.persistence_status === 'complete') {
-        // Persistence is authoritative for what the next read will return.
-        // Discard the stale deleted resource even though live activation
-        // failed, then force both views to reconcile with stored state.
-        queryClient.setQueryData(['agents'], (prev: unknown) => {
-          if (!Array.isArray(prev)) return prev
-          return prev.filter((a) => (a as { id?: string }).id !== agentId)
-        })
-        queryClient.invalidateQueries({ queryKey: ['agents'] })
-        queryClient.invalidateQueries({ queryKey: ['agent', agentId] })
-        setDeleteOpen(false)
-        closeEditAgentSlideOver()
-        addToast({ message: `Delete incomplete: ${err.message}`, variant: 'error' })
-        return
-      }
-      const msg = isApiError(err)
-        ? err.userMessage
-        : err instanceof Error
-          ? err.message
-          : 'Delete failed'
-      addToast({ message: `Delete failed: ${msg}`, variant: 'error' })
-      setDeleteOpen(false)
-    },
-  })
 
   // FR-016 / A2/F-09: Heartbeat tab saves to the WORKSPACE — a separate mutation
   // from the agent autosave. The tab opts out of the agent autosave flow entirely.
@@ -1360,6 +1410,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // agent is not a worker (`!isWorker()` per A2/F-08). Workers are
   // delegation-only and have no heartbeat concept.
   const showHeartbeatTab = editAgentWorkspaceId !== null && !isWorkerAgent
+  // US-7: private variables belong to conversation agents (workers and system agents have none).
+  // Hidden until WU-4/5 (the /secrets server is not in L1 stage 1).
+  const showPrivateSecrets = AGENT_PRIVATE_SECRETS_ENABLED && !isWorkerAgent && !isSystemAgent
 
   // Operator decision (agent-types-field-matrix.md): locked core agents now
   // get editable Rate Limits + Execution knobs too, so the Advanced tab
@@ -1369,7 +1422,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
 
   // Section panels shared by desktop Tabs and mobile Accordion.
   // basics panel
-  const basicsPanel = (
+  // Rendered by both the tab layout and the narrow-screen accordion; only the
+  // active layout carries the effort chip, so its popover and live region
+  // exist once (the hidden copy stays mounted for layout switches).
+  const renderBasicsPanel = (activeLayout: boolean) => (
     <div className="space-y-[var(--space-4)]">
 
           {/* Identity — always rendered; read-only for locked (core) agents */}
@@ -1401,91 +1457,24 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   className="text-[length:var(--type-body-compact-size)] resize-none"
                 />
               </div>
-              {/* W6-B4 / G3: Default agent toggle. Locked core agents keep
-                  this editable (operator decision 2026-07-03 — execution/
-                  identity display knobs unhide for locked). Hidden for
-                  workers — the locked concept makes "default" a non-worker
-                  concept. ADR-049 D3/SD-C18: also hidden for System agents
-                  (the Judge) — unlike core, a System agent is never
-                  ★-eligible at all. */}
-              {!isWorkerAgent && !isSystemAgent && (
-                <div
-                  data-testid="default-toggle-row"
-                  className="flex items-center justify-between gap-[var(--space-2-5)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-2)]"
-                >
-                  <div className="flex items-center gap-[var(--space-2)] min-w-0">
-                    <Star
-                      size={14}
-                      weight={isDefault ? 'fill' : 'regular'}
-                      className={isDefault ? 'text-[var(--color-accent)] shrink-0' : 'text-[var(--color-muted)] shrink-0'}
-                      aria-hidden="true"
-                    />
-                    <div className="min-w-0">
-                      <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Default agent</p>
-                      <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-snug">
-                        Handles inbound messages with no more-specific routing rule. Only one agent is default at a time.
-                      </p>
-                    </div>
-                  </div>
-                  <Switch
-                    data-testid="default-toggle"
-                    checked={isDefault}
-                    disabled={!isFieldEditable('default')}
-                    onCheckedChange={(v) => {
-                      markDirty()
-                      setIsDefault(v)
-                      // Toast is deferred to the autosave success path (see
-                      // `pendingDefaultToastRef` effect above) — this flag
-                      // has not persisted yet.
-                      pendingDefaultToastRef.current = { next: v, label: name || agent.name }
-                    }}
-                    aria-label={isDefault ? 'Unset as default agent' : 'Set as default agent'}
-                  />
-                </div>
-              )}
-              {/* Operator decision 2026-07-03: color/icon become visible
-                  READ-ONLY for locked core agents (previously hidden
-                  entirely) — a static swatch/icon+label, not the
-                  interactive picker (which has no readOnly mode). */}
-              <div className="space-y-[var(--space-1)]">
-                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Avatar color</p>
-                {!isFieldEditable('color') ? (
-                  <div className="flex items-center gap-[var(--space-2)]" data-testid="avatar-color-readonly">
-                    <span
-                      className="w-7 h-7 rounded-full shrink-0 border border-[var(--color-border)]"
-                      style={{ backgroundColor: selectedColor || 'var(--color-surface-3)' }}
-                      aria-hidden="true"
-                    />
-                    <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">
-                      {avatarColorName(selectedColor)}
-                    </span>
-                  </div>
-                ) : (
-                  <AvatarColorPicker
-                    value={selectedColor ?? ''}
-                    onChange={(color) => { markDirty(); setSelectedColor(color) }}
-                    testIdPrefix="avatar-color"
-                  />
-                )}
-              </div>
-              <div className="space-y-[var(--space-1)]">
-                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Avatar icon</p>
-                {!isFieldEditable('icon') ? (
-                  <div className="flex items-center gap-[var(--space-2)]" data-testid="avatar-icon-readonly">
-                    {(() => {
-                      const ReadOnlyIcon = getIconComponent(selectedIcon)
-                      return <ReadOnlyIcon size={18} className="text-[var(--color-secondary)]" aria-hidden="true" />
-                    })()}
-                    <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">{selectedIcon}</span>
-                  </div>
-                ) : (
-                  <IconPicker
-                    value={selectedIcon}
-                    onChange={(icon) => { markDirty(); setSelectedIcon(icon) }}
-                    triggerTestId="avatar-icon-trigger"
-                  />
-                )}
-              </div>
+              {/* W1-6 / FR-020: the look (role badge, figure, colour) stays
+                  visible for built-ins, locked per field by the server's field
+                  descriptors. The same AgentLookPicker as the create wizard;
+                  like the header mark, it previews the SAVED name (a draft
+                  rename is not previewed before its autosave completes). */}
+              <AgentLookPicker
+                name={agent.name}
+                figure={selectedFigure}
+                role={selectedRole}
+                color={selectedColor}
+                figureLocked={!isFieldEditable('figure')}
+                roleLocked={!isFieldEditable('role')}
+                colorLocked={!isFieldEditable('color')}
+                onFigureChange={(figure) => { markDirty(); setSelectedFigure(figure) }}
+                onRoleChange={(role) => { markDirty(); setSelectedRole(role) }}
+                onColorChange={(color) => { markDirty(); setSelectedColor(color) }}
+                testIdPrefix="avatar"
+              />
             </div>
           </section>
 
@@ -1525,11 +1514,22 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 provider catalogue. Selection is limited to real models, so an
                 unresolvable slug cannot be saved here and the inline
                 "unresolved" warning can no longer occur. */
+            <div className="flex flex-wrap items-center gap-[var(--space-2)]">
+            <div className="min-w-0 flex-1">
             <ModelSelector
               models={availableModels}
               value={model}
-              onChange={(v) => { markDirty(); setModel(v) }}
-              onPairChange={({ provider: p }) => { setPrimaryProvider(p) }}
+              // H6 R2 (review round 1 — F3): the explicit provider wins; a
+              // pre-O3 agent with none saved resolves a row only when exactly
+              // ONE provider serves the slug — an ambiguous legacy value shows
+              // no chosen row instead of a first-listed guess.
+              valueProvider={primaryProvider || resolveUniqueModelProvider(usableProviders, model)}
+              // With an editable effort the pick runs the model-switch
+              // transaction (map the effort, or wait on the blocked step);
+              // otherwise the model alone changes, as before.
+              onChange={effortEditable ? primaryEffortSwitch.selectorHandlers.onChange : (v) => { markDirty(); setModel(v) }}
+              onPairChange={effortEditable ? primaryEffortSwitch.selectorHandlers.onPairChange : ({ provider: p }) => { setPrimaryProvider(p) }}
+              triggerTestId="agent-model-trigger"
               placeholder="Provider default"
               providerGroups={providerGroups}
               constrainToCatalog
@@ -1542,6 +1542,24 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               emptyCatalogHint="Connect a provider in Settings to pick a model"
               disabled={!isFieldEditable('model')}
             />
+            </div>
+            {effortEditable && activeLayout && (primaryEffortSlot.model !== '' || primaryEffortSwitch.pending !== null) && (
+              <EffortControl
+                scope="agent-primary"
+                value={primaryEffortSlot}
+                inherit={primaryEffortInherit}
+                contextName={`Effort for ${primaryEffortSlot.model}`}
+                pendingSwitch={primaryEffortSwitch.pending}
+                onSwitchComplete={primaryEffortSwitch.completePending}
+                onSwitchCancel={primaryEffortSwitch.cancelPending}
+                cancelFocusTarget={() => document.querySelector<HTMLElement>('[data-testid="agent-model-trigger"]')}
+                note={primaryEffortNote}
+                chipRef={primaryChipRef}
+                announcement={primaryEffortSwitch.announcement}
+                onChange={(effort) => commitPrimaryModelEffort({ provider: primaryProvider, model }, effort, null)}
+              />
+            )}
+            </div>
             )}
             {/* Sampling parameters — collapsed disclosure. Operator decision
                 2026-07-03: editable for locked core agents too (model,
@@ -1593,166 +1611,18 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               CONSOLIDATED into this single copy — testids keep the
               `-basics` suffix since this is now the only surface. */}
           {!isExternalAgent && (
-          <section className="space-y-[var(--space-2-5)]">
-            <p className="font-headline font-semibold text-[length:var(--type-body-size)] text-[var(--color-secondary)]">Fallback models</p>
-            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Tried in order if the primary model fails.</p>
-            {!isFieldEditable('fallback_models') ? (
-              <div
-                data-testid="fallback-summary-locked-basics"
-                className="space-y-[var(--space-2)] p-[var(--space-2-5)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)]"
-              >
-                <div className="flex items-center gap-[var(--space-2)] text-[var(--color-muted)]">
-                  <Lock size={12} weight="fill" aria-hidden="true" />
-                  <p className="text-[length:var(--type-caption-size)]">
-                    Locked: fallback models are inherited from the locked core config.
-                  </p>
-                </div>
-                {fallbackModels.length === 0 ? (
-                  <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">No fallback chain configured.</p>
-                ) : (
-                  <ol className="space-y-[var(--space-1)]" data-testid="fallback-summary-locked-basics-list">
-                    {fallbackModels.map((entry, idx) => (
-                      <li
-                        key={entry.model}
-                        className="flex items-center gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-secondary)]"
-                      >
-                        <span className="text-[var(--color-muted)] w-4 shrink-0 text-right">{idx + 1}.</span>
-                        <span
-                          data-testid={`fallback-summary-provider-${entry.model}`}
-                          className="inline-flex items-center px-[var(--space-1)] rounded text-[length:var(--type-caption-size)] font-semibold"
-                          style={{
-                            backgroundColor: 'color-mix(in srgb, var(--color-accent) 15%, transparent)',
-                            color: 'var(--color-accent)',
-                            border: '1px solid color-mix(in srgb, var(--color-accent) 30%, transparent)',
-                          }}
-                        >
-                          {entry.provider || '—'}
-                        </span>
-                        <span data-testid={`fallback-summary-model-${entry.model}`}>{entry.model}</span>
-                      </li>
-                    ))}
-                  </ol>
-                )}
-              </div>
-            ) : (
-              <div className="flex flex-wrap gap-[var(--space-1)] p-[var(--space-2)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] min-h-[36px]">
-                {fallbackModels.map((entry, idx) => {
-                  const providerMissing = entry.provider === ''
-                  const providerLabel = providerMissing
-                    ? '—'
-                    : (usableProviders.find((p) => p.id === entry.provider)?.display_name
-                        ?? usableProviders.find((p) => p.id === entry.provider)?.name
-                        ?? entry.provider)
-                  return (
-                    <span
-                      key={entry.model}
-                      data-testid={`fallback-chip-model-${entry.model}`}
-                      className="inline-flex items-center gap-[var(--space-1)] px-[var(--space-2)] py-[var(--space-0-5)] rounded text-[length:var(--type-caption-size)] font-mono bg-[var(--color-surface-2)] text-[var(--color-secondary)] border border-[var(--color-border)]"
-                    >
-                      <span
-                        data-testid={`fallback-chip-provider-${entry.model}`}
-                        className="inline-flex items-center px-[var(--space-1)] rounded text-[length:var(--type-caption-size)] font-semibold"
-                        style={{
-                          backgroundColor: 'color-mix(in srgb, var(--color-accent) 15%, transparent)',
-                          color: 'var(--color-accent)',
-                          border: '1px solid color-mix(in srgb, var(--color-accent) 30%, transparent)',
-                        }}
-                      >
-                        {providerLabel}
-                      </span>
-                      <span className="relative inline-block">
-                        <select tabIndex={0}
-                          data-testid={`fallback-provider-select-${entry.model}`}
-                          aria-label={`Provider for fallback ${entry.model}`}
-                          value={entry.provider}
-                          disabled={!isFieldEditable('fallback_models')}
-                          onChange={(e) => { markDirty(); setFallbackProvider(entry.model, e.target.value) }}
-                          className="appearance-none bg-transparent text-[var(--color-muted)] hover:text-[var(--color-secondary)] pl-[var(--space-1)] pr-[var(--space-2-5)] py-0 text-[length:var(--type-caption-size)] focus-visible:border-[var(--color-accent)] rounded cursor-pointer"
-                        >
-                          <option value="" data-testid={`fallback-provider-option-empty-${entry.model}`}>—</option>
-                          {usableProviders.map((p) => (
-                            <option
-                              key={p.id}
-                              value={p.id}
-                              data-testid={`fallback-provider-option-${p.id}-${entry.model}`}
-                            >
-                              {p.display_name ?? p.name ?? p.id}
-                            </option>
-                          ))}
-                        </select>
-                        <CaretDown
-                          size={9}
-                          className="pointer-events-none absolute right-0.5 top-1/2 -translate-y-1/2 text-[var(--color-muted)]"
-                          aria-hidden="true"
-                        />
-                      </span>
-                      <span>{entry.model}</span>
-                      <IconButton
-                        variant="ghost"
-                        size="sm"
-                        data-testid={`fallback-chip-up-${entry.model}`}
-                        aria-label={`Move fallback ${entry.model} up`}
-                        disabled={!isFieldEditable('fallback_models') || idx === 0}
-                        onClick={() => { markDirty(); moveFallback(entry.model, -1) }}
-                        className="h-auto w-auto text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)] disabled:hover:text-[var(--color-muted)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
-                      >
-                        <ArrowUp size={10} />
-                      </IconButton>
-                      <IconButton
-                        variant="ghost"
-                        size="sm"
-                        data-testid={`fallback-chip-down-${entry.model}`}
-                        aria-label={`Move fallback ${entry.model} down`}
-                        disabled={!isFieldEditable('fallback_models') || idx === fallbackModels.length - 1}
-                        onClick={() => { markDirty(); moveFallback(entry.model, 1) }}
-                        className="h-auto w-auto text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)] disabled:hover:text-[var(--color-muted)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
-                      >
-                        <ArrowDown size={10} />
-                      </IconButton>
-                      <IconButton
-                        variant="ghost"
-                        size="sm"
-                        data-testid={`fallback-chip-remove-${entry.model}`}
-                        aria-label={`Remove fallback ${entry.model}`}
-                        disabled={!isFieldEditable('fallback_models')}
-                        onClick={() => { markDirty(); removeFallback(entry.model) }}
-                        className="h-auto w-auto text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
-                      >
-                        <X size={10} />
-                      </IconButton>
-                      {providerMissing && (
-                        <span
-                          data-testid={`fallback-chip-warning-${entry.model}`}
-                          role="img"
-                          aria-label="Provider not connected — fallback will not be used at runtime"
-                          title="Provider not connected — fallback will not be used at runtime"
-                          className="inline-flex items-center text-[var(--color-warning)]"
-                        >
-                          <Warning size={11} weight="fill" />
-                        </span>
-                      )}
-                    </span>
-                  )
-                })}
-                <div className="min-w-[220px] flex-1">
-                  {/* UAT model-catalog fix: fallbacks must be real catalogue
-                      models, so this picker is constrained too. */}
-                  <ModelSelector
-                    models={availableModels}
-                    value=""
-                    onChange={(v) => { markDirty(); addFallbackFromSelector(v) }}
-                    placeholder="Add fallback…"
-                    providerGroups={providerGroups}
-                    triggerTestId="fallback-add-trigger"
-                    itemTestIdPrefix="fallback-add-item-"
-                    constrainToCatalog
-                    emptyCatalogHint="Connect a provider to add fallbacks"
-                    disabled={!isFieldEditable('fallback_models')}
-                  />
-                </div>
-              </div>
-            )}
-          </section>
+            <AgentFallbackModels
+              fallbackModels={fallbackModels}
+              editable={isFieldEditable('fallback_models')}
+              usableProviders={usableProviders}
+              availableModels={availableModels}
+              providerGroups={providerGroups}
+              onAdd={(m, p) => { markDirty(); addFallbackFromSelector(m, p) }}
+              onRemove={(m) => { markDirty(); removeFallback(m) }}
+              onMove={(m, direction) => { markDirty(); moveFallback(m, direction) }}
+              onSetProvider={(m, p) => { markDirty(); setFallbackProvider(m, p) }}
+              onSetEffort={setFallbackEffort}
+            />
           )}
 
     </div>
@@ -1862,8 +1732,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 isMcpEditable={isFieldEditable('mcp_servers')}
                 tools={toolsCfg}
                 onChange={setToolsCfg}
-                autoApproveDisabled={autoApproveDisabled}
-                onAutoApproveDisabledChange={(next) => { markDirty(); setAutoApproveDisabled(next) }}
                 onRevisionChange={(revision) => {
                   if (reviewedAgentRef.current) {
                     reviewedAgentRef.current = { ...reviewedAgentRef.current, revision }
@@ -1875,6 +1743,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               />
             </section>
           )}
+
+          {/* omnipus-system-agent US-7 / FR-241: the private variables this
+              agent's own commands see, per workspace — names only. */}
+          {showPrivateSecrets && <AgentPrivateSecrets agentId={agent.id} />}
 
     </div>
   )
@@ -1961,6 +1833,17 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                                   verified
                                 </span>
                               )}
+                              {granted && agent?.stale_skill_grants?.includes(skill.id) && (
+                                // UAT-1 F-9: the grant is bound to a previous skill with this
+                                // name, so the agent cannot load it (SKILL_GRANT_STALE).
+                                <span
+                                  data-testid={`skill-stale-badge-${skill.id}`}
+                                  title="This grant is for a previous skill with this name. Save the agent to grant the current one."
+                                  className="text-[length:var(--type-caption-size)] px-[var(--space-1)] rounded bg-[var(--color-warning)]/20 text-[var(--color-warning)] border border-[var(--color-warning)]/30"
+                                >
+                                  stale grant
+                                </span>
+                              )}
                             </div>
                           </div>
                         </Label>
@@ -1995,48 +1878,27 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 </span>
                 <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">(locked)</span>
               </div>
-              <div
-                data-testid="profile-cli-path"
-                className="space-y-[var(--space-1)]"
-              >
+              {/* T8 contract-first: the program is set by a person in
+                  Settings → Third-party agents, never on the agent. One
+                  read-only line; T11 slice B owns the rest of this screen. */}
+              <div data-testid="profile-cli-path" className="space-y-[var(--space-1)]">
                 <div className="flex items-center gap-[var(--space-2-5)]">
-                  <Label htmlFor="profile-cli-path-input" className="text-[var(--color-muted)] w-44 shrink-0">CLI path</Label>
-                  <Input
-                    id="profile-cli-path-input"
-                    value={executor?.cli_path ?? offeredCliPath ?? ''}
-                    onChange={(e) => {
-                      markDirty()
-                      // Editing invalidates any prior validate() verdict —
-                      // reset to idle so a stale block never survives an
-                      // edit (FR-019).
-                      cliValidation.reset()
-                      setExecutor((prev) => ({ ...(prev ?? { kind: 'external-cli', cli: executor?.cli ?? 'claude-code' }), cli_path: e.target.value }))
-                    }}
-                    onBlur={(e) => {
-                      const cli = executor?.cli ?? 'claude-code'
-                      // code-review M2a: commit an OFFERED (detected,
-                      // not-yet-typed) value into `executor.cli_path` at
-                      // blur — this is the "confirm" point. A field the
-                      // operator never focused never blurs, so merely
-                      // opening the profile still cannot autosave the
-                      // detected path; only actually visiting (and leaving)
-                      // the field counts as confirming it.
-                      if ((executor?.cli_path ?? '').trim().length === 0 && offeredCliPath) {
-                        markDirty()
-                        setExecutor((prev) => ({ ...(prev ?? { kind: 'external-cli', cli }), cli_path: offeredCliPath }))
-                      }
-                      cliValidation.validate(cli, e.target.value)
-                    }}
-                    placeholder="/usr/local/bin/claude"
-                    className="text-[length:var(--type-utility-xs-size)] h-8 font-mono"
-                    disabled={!isFieldEditable('executor')}
-                  />
+                  <span className="text-[var(--color-muted)] w-44 shrink-0">Program</span>
+                  <span
+                    data-testid="profile-program-path"
+                    className="font-mono text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] break-all"
+                    aria-describedby={executor?.program_warning ? 'profile-program-warning' : undefined}
+                  >
+                    {executor?.effective_cli_path ?? 'Not set'}
+                  </span>
+                  {/* r17 17.6: a link to where the program is set, not a disabled input. */}
+                  <ProgramSettingsLink />
                 </div>
-                <CliPathValidationHint
-                  validation={cliValidation.status}
-                  detectHint={resolveCliDetectHint(cliDetect, executor?.cli)}
-                  testId="profile-cli-path-status"
-                />
+                {executor?.program_warning && (
+                  <p id="profile-program-warning" data-testid="profile-program-warning" className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-snug">
+                    {executor.program_warning}
+                  </p>
+                )}
               </div>
               <div data-testid="profile-env-overrides" className="space-y-[var(--space-2)]">
                 <Label>Environment overrides</Label>
@@ -2080,6 +1942,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     </div>
   )
 
+  // #904 D10 / bound: only the server's refusal of the limit is pinned on the field.
+  const toolIterationLimitError = limitRefusal.messageFor(maxToolIterationsEdit)
+
   // advanced panel
   const advancedPanel = (
     <div className="space-y-[var(--space-4)]">
@@ -2093,48 +1958,22 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           <section className="space-y-[var(--space-2-5)]">
               <p className="font-headline font-semibold text-[length:var(--type-body-size)] text-[var(--color-secondary)]">Execution</p>
               <Card variant="default" className="space-y-[var(--space-2-5)] p-[var(--space-3)]">
-                {/* Max tool calls per turn — excluded for subagent_3p
-                    (agent-types-field-matrix.md, Decisions #1 (resolved
-                    2026-07-03): excluded): the external CLI runs its own
-                    tool loop, and the backend now rejects the field for
-                    this type. */}
-                {!isExternalAgent && (
-                  <div className="flex items-center gap-[var(--space-2-5)]">
-                    <Label htmlFor="agent-max-tool-calls-input" className="text-[var(--color-muted)] w-44 shrink-0">
-                      Max tool calls per turn
-                      <span className="block text-[length:var(--type-caption-size)] text-[var(--color-muted)]/70">
-                        Per single turn (one message, task, or heartbeat run) — the
-                        turn pauses at the limit and can be continued. Default: 200.
-                      </span>
-                    </Label>
-                    <Input
-                      id="agent-max-tool-calls-input"
-                      type="number"
-                      min={1}
-                      data-testid="agent-max-tool-calls-input"
-                      value={maxToolIterationsDraft}
-                      onChange={(e) => {
-                        const raw = e.target.value
-                        // Item 5 (draft-field dirty gap): mark dirty on EVERY
-                        // keystroke, not only once the draft commits to a
-                        // valid value — an external hydration mid-edit could
-                        // otherwise silently reset the field the operator is
-                        // still typing into.
-                        markDirty()
-                        setMaxToolIterationsDraft(raw)
-                        const parsed = Number(raw)
-                        // Commit (and autosave) only a real value >= 1; clearing
-                        // the field to type never persists a 0 again.
-                        if (raw !== '' && Number.isInteger(parsed) && parsed >= 1) {
-                          setMaxToolIterations(parsed)
-                        }
-                      }}
-                      onBlur={() => setMaxToolIterationsDraft(String(maxToolIterations))}
-                      className="text-[length:var(--type-utility-xs-size)] h-8"
-                      disabled={!isFieldEditable('max_tool_iterations')}
-                    />
-                  </div>
-                )}
+                {/* #904: Max tool calls per turn — every agent type,
+                    subagent_3p included (D14). Server-computed state only. */}
+                <ToolIterationLimitField
+                  value={ownToolIterationLimit}
+                  onEdit={() => { markDirty(); limitRefusal.clear() }}
+                  onChange={setMaxToolIterationsEdit}
+                  globalLimit={globalToolIterationLimit}
+                  server={{
+                    effective: agent.max_tool_iterations,
+                    source: agent.max_tool_iterations_source,
+                    overrideIgnored: agent.max_tool_iterations_override_ignored,
+                    storedOverride: agent.max_tool_iterations_override,
+                  }}
+                  serverError={toolIterationLimitError}
+                  disabled={!isFieldEditable('max_tool_iterations')}
+                />
                 {/* ADR-066 D9 (T068-30): per-agent context window override
                     plus the read-only effective window · source line and
                     the clamp indicator (FR-037, FR-002). The three read-only
@@ -2474,13 +2313,12 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       onOpenAutoFocus={handleOpenAutoFocus}
       contentRef={sheetContentRef}
     >
-      {/* Title row locked to 44px chrome; badges/description sit below so the
-          open panel aligns with the workspace top bar (flat shell chrome). */}
+      {/* Compact live identity header; badges and description remain below. */}
       <SheetHeader className="px-[var(--space-4)] sm:px-[var(--space-5)] pr-[var(--space-7)]">
         <div className="flex items-center gap-[var(--space-2)] min-w-0">
-          <AvatarHeader
-            color={selectedColor}
-            className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 [&>svg]:!w-3.5 [&>svg]:!h-3.5"
+          <AgentIcon figure={selectedFigure} role={selectedRole} size={26}
+            color={(selectedColor ?? AgentColor.options[9]) as AgentColorValue}
+            name={agent.name}
           />
           <h1 className="font-headline text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)] truncate">
             {agent.name}
@@ -2540,7 +2378,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         </div>
       )}
 
-      {/* Scrollable body. Inner padding/width mirrors CreateAgentModal etc. */}
+      {/* Scrollable body. */}
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-2xl mx-auto px-[var(--space-5)] py-[var(--space-4)] space-y-[var(--space-3)]">
       {/* W6-B1 / I1: cap the visible-on-open section count at Miller's 7±2.
@@ -2588,7 +2426,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           </div>
         </div>
       )}
-            <Tabs defaultValue="basics" className="hidden sm:block w-full">
+            <Tabs defaultValue="basics" className="hidden sm:block w-full" aria-hidden={smAndUp ? undefined : true}>
         {/* Tab order (item 4 reorg): Basics, Personality, Tools (or Runtime
             for external), Skills, Heartbeat, Advanced. Heartbeat moves from
             visually-first to between Skills and Advanced; defaultValue
@@ -2620,7 +2458,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             tab below; for native workers (no external-cli selected) the
             whole thing is inherited from the caller so it is shown as a
             read-only summary in Advanced. */}
-        <TabsContent value="basics" className="space-y-[var(--space-4)]">{basicsPanel}</TabsContent>
+        <TabsContent value="basics" className="space-y-[var(--space-4)]">{renderBasicsPanel(smAndUp)}</TabsContent>
 
         {/* ── PERSONALITY TAB ────────────────────────────────────────────
             BehaviorFields (SOUL.md / Task prompt + Voice), and the
@@ -2644,8 +2482,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             `subagent_3p` agents only (external CLI workers). The CLI
             itself is shown as a read-only chip (locked concept — the
             runtime kind is a property of the agent, not editable in
-            v0.1.0), while cli_path / env_overrides / cli_args are the
-            operator-tunable inputs (F-14). */}
+            v0.1.0), while env_overrides / cli_args are the
+            operator-tunable inputs (F-14). The program is a read-only
+            line: it is set in Settings → Third-party agents (T8). */}
         {isExternalAgent && (
           <TabsContent value="runtime" className="space-y-[var(--space-3)]">{runtimePanel}</TabsContent>
         )}
@@ -2675,10 +2514,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             for native workers; subagent_3p's editor is in Runtime. */}
         <TabsContent value="advanced" className="space-y-[var(--space-4)]">{advancedPanel}</TabsContent>
       </Tabs>
-      <Accordion type="single" collapsible defaultValue="basics" className="block sm:hidden">
+      <Accordion type="single" collapsible defaultValue="basics" className="block sm:hidden" aria-hidden={smAndUp ? true : undefined}>
         <AccordionItem value="basics">
           <AccordionTrigger data-testid="accordion-basics" className="font-headline">Basics</AccordionTrigger>
-          <AccordionContent>{basicsPanel}</AccordionContent>
+          <AccordionContent>{renderBasicsPanel(!smAndUp)}</AccordionContent>
         </AccordionItem>
         <AccordionItem value="personality">
           <AccordionTrigger data-testid="accordion-personality" className="font-headline">Personality</AccordionTrigger>
@@ -2725,7 +2564,15 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       <div className="px-[var(--space-5)] py-[var(--space-3)] border-t border-[var(--color-border)] bg-[var(--color-surface-1)] shrink-0 flex items-center justify-between gap-[var(--space-2-5)]">
         <div className="flex flex-col gap-[var(--space-0-5)] min-w-0">
           <div data-testid="last-saved-indicator">
-            <AutoSaveIndicator status={saveStatus} error={saveError} lastSavedAt={saveLastSavedAt} />
+            {saveStatus === 'error' && saveUncertain ? (
+              <span role="alert" className="inline-flex items-center gap-[var(--space-2)] text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
+                Save not confirmed — it may or may not have been stored.
+                <Button variant="ghost" size="sm" onClick={() => void saveAgentNow()} data-testid="agent-save-retry">Retry</Button>
+              </span>
+            ) : (
+              // #904: a refused limit is explained on the limit field; any other failure shows here.
+              <AutoSaveIndicator status={saveStatus} error={limitRefusal.isRefusalMessage(saveError) ? undefined : saveError} lastSavedAt={saveLastSavedAt} />
+            )}
           </div>
           {/* UAT 4b: make the autosave scope explicit — edits to a shared agent
               take effect in every chat / workspace / delegation it is used in. */}
@@ -2736,36 +2583,14 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             Changes save automatically and apply everywhere this agent is used.
           </p>
         </div>
-        {!isLocked && (
-          <Button
-            variant="destructive"
-            data-testid="delete-agent-button"
-            onClick={() => setDeleteOpen(true)}
-            className="ml-auto"
-          >
-            <Trash size={13} className="mr-[var(--space-1)]" />
-            Delete agent
-          </Button>
+        {!isLocked && agentId && (
+          <DeleteAgentControl
+            agentId={agentId}
+            agentName={formData.name || agent.name}
+            revision={agent.revision}
+          />
         )}
       </div>
-
-      {/* Wave 5 / spec §6.1 BDD #15: Delete confirmation dialog (catalogued
-          `ConfirmDialog`) so the destructive-confirm flow is identical
-          across the app. The confirm fires the deleteAgentMutation; on
-          success the slide-over closes and the agent is removed from the
-          list cache. */}
-      <ConfirmDialog
-        open={deleteOpen}
-        onOpenChange={setDeleteOpen}
-        title={`Delete ${formData.name || agent.name}?`}
-        description="This cannot be undone."
-        confirmLabel={deleteAgentMutation.isPending ? 'Deleting…' : 'Delete'}
-        destructive
-        pending={deleteAgentMutation.isPending}
-        onConfirm={() => {
-          if (agentId) deleteAgentMutation.mutate(agentId)
-        }}
-      />
 
     </ProfileSheet>
   )

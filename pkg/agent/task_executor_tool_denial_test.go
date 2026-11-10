@@ -163,6 +163,20 @@ func TestTaskRun_ToolDenialBudgetAbort_TaskLandsFailedNamingToolReasonAgent(t *t
 		running:      make(map[string]*taskSlot),
 		dispatchSema: newDispatchSemaphore(10),
 	}
+	// BDD-08 harness: this test constructs a STANDALONE TaskExecutor (a bare
+	// literal) and dispatches via te.ExecuteTask, so the runTask goroutine
+	// is tracked on te.wg — NOT on al.taskExecutor.wg that al.Close drains.
+	// The release/v0.1.1 CI red on PR #1001 ("TempDir RemoveAll cleanup:
+	// tasks/<id>/runs: directory not empty") was the exact same generic
+	// race class #952 (activeRequests) and #958 (FileMediaStore registry
+	// writers) already closed for their own detached writers: te.wg is
+	// the equivalent tracked-wait mechanism TaskExecutor exposes for this
+	// goroutine class, registered here so the test's own teardown path
+	// (this defer, fired by LIFO before al.Close runs) blocks on it before
+	// the temp-dir cleanup unlinks the storeDir tree the runTask goroutine
+	// is still writing run-history JSONL files into. Same shape as the
+	// production shutdown's taskExecutor.Drain(30s) in AgentLoop.Close.
+	defer te.Drain(30 * time.Second)
 
 	// A turn aborted by the denial budget breaks the run, which is one failed
 	// task attempt (founder decision 2026-09-14); a limit of 1 ends the task on

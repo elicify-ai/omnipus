@@ -45,7 +45,7 @@
 
 import { expect, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
-import { chatInput, agentPicker, waitForConnected } from './fixtures/selectors'
+import { chatInput, selectAgent, waitForConnected } from './fixtures/selectors'
 import { apiFetch } from './fixtures/conformance-helpers'
 
 interface AgentSummary {
@@ -183,11 +183,9 @@ test(
       await expect(input).toBeEnabled({ timeout: 20_000 })
       await waitForConnected(page, { timeout: 20_000 })
 
-      const picker = agentPicker(page)
-      await expect(picker).toBeVisible({ timeout: 15_000 })
-      await picker.click()
-      await page.getByRole('menuitem', { name: /Jim/i }).click()
-      await expect(picker).toContainText(/Jim/i, { timeout: 5_000 })
+      // Sidebar row click is the only agent switch since the composer
+      // AgentPicker was removed (nav commit e84ac0532; FR-029 no in-chat handover).
+      await selectAgent(page, /Jim/i)
 
       await input.fill(LONG_PROSE_PROMPT)
       await input.press('Enter')

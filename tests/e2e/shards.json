@@ -7,7 +7,11 @@
       "port": 6060,
       "specs": [
         "tests/e2e/chat.spec.ts",
-        "tests/e2e/truncation-notice-live.spec.ts"
+        "tests/e2e/provider-retry.spec.ts",
+        "tests/e2e/truncation-notice-live.spec.ts",
+        "tests/e2e/terminal-outcome.spec.ts",
+        "tests/e2e/parent-wake-stream.spec.ts",
+        "tests/e2e/groupchat1449-remote-image.spec.ts"
       ]
     },
     {
@@ -21,7 +25,6 @@
         "tests/e2e/reconnect-mid-turn.spec.ts",
         "tests/e2e/quiet-disconnect-banner.spec.ts",
         "tests/e2e/delegation-hidden.spec.ts",
-        "tests/e2e/recap-continuity.spec.ts",
         "tests/e2e/catchup-scenarios.spec.ts",
         "tests/e2e/steered-session-reachability.spec.ts"
       ]
@@ -63,9 +66,12 @@
       "port": 6063,
       "specs": [
         "tests/e2e/accessibility.spec.ts",
-        "tests/e2e/agents.spec.ts",
         "tests/e2e/auth.spec.ts",
-        "tests/e2e/burst-resilience.spec.ts"
+        "tests/e2e/burst-resilience.spec.ts",
+        "tests/e2e/side-panel-deeplink.spec.ts",
+        "tests/e2e/nav-wave1.spec.ts",
+        "tests/e2e/chat-history-paging.return-to-latest.spec.ts",
+        "tests/e2e/xss-history-paths.spec.ts"
       ]
     },
     {
@@ -76,7 +82,11 @@
         "tests/e2e/calendar-recurrence.spec.ts",
         "tests/e2e/calendar.spec.ts",
         "tests/e2e/contract-counters.spec.ts",
-        "tests/e2e/create-agent.spec.ts"
+        "tests/e2e/sidebar-agent-row-menu.spec.ts",
+        "tests/e2e/side-panel-signin-return.spec.ts",
+        "tests/e2e/chat-composer-focus-replay.spec.ts",
+        "tests/e2e/effort.spec.ts",
+        "tests/e2e/skills-builtin-copy.spec.ts"
       ]
     },
     {
@@ -87,7 +97,10 @@
         "tests/e2e/security-tools.spec.ts",
         "tests/e2e/sidebar.spec.ts",
         "tests/e2e/skills.spec.ts",
-        "tests/e2e/uat-audit-and-settings.spec.ts"
+        "tests/e2e/uat-audit-and-settings.spec.ts",
+        "tests/e2e/side-panel-expand-multitab.spec.ts",
+        "tests/e2e/workspace-header-standalone.spec.ts",
+        "tests/e2e/chat-header-narrow.spec.ts"
       ]
     },
     {
@@ -99,6 +112,7 @@
         "tests/e2e/ws-reconnect.spec.ts",
         "tests/e2e/xss.spec.ts",
         "tests/e2e/steered-session-stop.spec.ts",
+        "tests/e2e/mail-panel.spec.ts",
         "tests/e2e/steered-midturn-tool-rows.spec.ts"
       ]
     },
@@ -111,7 +125,9 @@
         "tests/e2e/browser-control-handover.spec.ts",
         "tests/e2e/browser-live-video.spec.ts",
         "tests/e2e/uat-browser-panel.spec.ts",
-        "tests/e2e/uat-ownership-api.spec.ts"
+        "tests/e2e/uat-ownership-api.spec.ts",
+        "tests/e2e/side-panel-browser-restore.spec.ts",
+        "tests/e2e/agent-picker-freshness.spec.ts"
       ]
     },
     {
@@ -122,7 +138,10 @@
         "tests/e2e/tool-order.spec.ts",
         "tests/e2e/csp-assumptions.spec.ts",
         "tests/e2e/preview-pdf.spec.ts",
-        "tests/e2e/truncation-notice.spec.ts"
+        "tests/e2e/truncation-notice.spec.ts",
+        "tests/e2e/stop-scope-tree.spec.ts",
+        "tests/e2e/chat-history-paging.open-scroll-anchor.spec.ts",
+        "tests/e2e/tooltip-visibility.spec.ts"
       ]
     },
     {
@@ -133,7 +152,10 @@
         "tests/e2e/about.spec.ts",
         "tests/e2e/api-errors.spec.ts",
         "tests/e2e/fresh-install.spec.ts",
-        "tests/e2e/iframe-preview-warmup.spec.ts"
+        "tests/e2e/iframe-preview-warmup.spec.ts",
+        "tests/e2e/chat-history-paging.keyboard-reader-states.spec.ts",
+        "tests/e2e/omnipus-retired-surfaces.spec.ts",
+        "tests/e2e/room-history-paging.spec.ts"
       ]
     },
     {
@@ -144,7 +166,11 @@
         "tests/e2e/mcp-add.spec.ts",
         "tests/e2e/onboarding.spec.ts",
         "tests/e2e/profile-fontsize.spec.ts",
-        "tests/e2e/providers.spec.ts"
+        "tests/e2e/providers.spec.ts",
+        "tests/e2e/providers-toast.spec.ts",
+        "tests/e2e/chat-history-paging.reconnect-retention-retry.spec.ts",
+        "tests/e2e/chat-history-paging.cancelled-tool-reload.spec.ts",
+        "tests/e2e/trace-secret-canary.spec.ts"
       ]
     },
     {
@@ -155,7 +181,10 @@
         "tests/e2e/settings-gateway.spec.ts",
         "tests/e2e/version-drift.spec.ts",
         "tests/e2e/web-serve-canonical.spec.ts",
-        "tests/e2e/web-serve-malformed.spec.ts"
+        "tests/e2e/web-serve-malformed.spec.ts",
+        "tests/e2e/chat-history-paging.soft-budget-screen-coverage.spec.ts",
+        "tests/e2e/chat-history-paging.usage-reload.spec.ts",
+        "tests/e2e/chat-history-paging.large-output-preview.spec.ts"
       ]
     },
     {
@@ -165,11 +194,16 @@
       "specs": [
         "tests/e2e/whatsapp-qr.spec.ts",
         "tests/e2e/channel-instance-crud.spec.ts",
-        "tests/e2e/channel-routing.spec.ts"
+        "tests/e2e/channel-routing.spec.ts",
+        "tests/e2e/channels-outbound.spec.ts",
+        "tests/e2e/tool-iteration-limit.spec.ts",
+        "tests/e2e/chat-history-paging.unavailable-history-live-controls.spec.ts",
+        "tests/e2e/agent-parity-approval.spec.ts",
+        "tests/e2e/sidebar-session-backdrop.spec.ts"
       ]
     },
     {
-      "_comment": "ADR-067 §13.4 isolation matrix. These specs are the ONLY files the isolation-chromium/firefox/webkit projects match, and each runs on all three engines, so this shard needs `playwright install firefox webkit` in addition to chromium -- a chromium-only runner cannot execute it. Its own shard for exactly that reason: the extra engine install is confined here instead of slowing every other shard. Nothing here calls an LLM, so the key_slot is irrelevant.",
+      "_comment": "ADR-067 \u00a713.4 isolation matrix. These specs are the ONLY files the isolation-chromium/firefox/webkit projects match, and each runs on all three engines, so this shard needs `playwright install firefox webkit` in addition to chromium -- a chromium-only runner cannot execute it. Its own shard for exactly that reason: the extra engine install is confined here instead of slowing every other shard. Nothing here calls an LLM, so the key_slot is irrelevant.",
       "group": "preview-isolation",
       "key_slot": "c",
       "port": 6083,
@@ -180,7 +214,7 @@
       ]
     },
     {
-      "_comment": "ADR-067 §13.4 item 4 / §0. The only two headed cases -- the browser's OWN PDF handling, which headless Chromium does not have. Needs a display (xvfb-run, or GitHub Actions' bundled X server) because playwright.config.ts sets headless:false on the `preview-headed` project. Separate shard so that requirement lands on one job rather than all of them.",
+      "_comment": "ADR-067 \u00a713.4 item 4 / \u00a70. The only two headed cases -- the browser's OWN PDF handling, which headless Chromium does not have. Needs a display (xvfb-run, or GitHub Actions' bundled X server) because playwright.config.ts sets headless:false on the `preview-headed` project. Separate shard so that requirement lands on one job rather than all of them.",
       "group": "preview-headed",
       "key_slot": "c",
       "port": 6073,
@@ -235,7 +269,7 @@
       ]
     },
     {
-      "_comment": "SOLO, and deliberately exactly these five specs: the timing-sensitive set measured to flake under ANY co-tenant CPU contention (commit 4b4948e2b, 2026-07-16: at 2-wide, idle-no-reconnect saw 9 WS reconnects in 90 s with pings unanswered, and multi-turn-render/replay-fidelity/settings-memory saw the chat input disabled >30 s while a CPU-heavy co-tenant shard starved the gateway). They need the whole worker. The eight specs that later joined the old ui-heavy shard were placed there for surface affinity, not timing sensitivity -- the 2026-09-16 rebalance moved them to the concurrent ui-browser/ui-render shards so only the measured-sensitive five pay the serial solo cost. Note: retention.spec.ts mints no login — its /reload calls authenticate with the non-rotating bearer global-setup.ts stores at suite start (tests/e2e/fixtures/.auth/admin-reload-bearer.txt), so the shared storageState cookie stays valid for settings-memory, which runs after it here exactly as before the split.",
+      "_comment": "SOLO. Five measured timing-sensitive specs. The timing-sensitive set measured to flake under ANY co-tenant CPU contention (commit 4b4948e2b, 2026-07-16: at 2-wide, idle-no-reconnect saw 9 WS reconnects in 90 s with pings unanswered, and multi-turn-render/replay-fidelity/settings-memory saw the chat input disabled >30 s while a CPU-heavy co-tenant shard starved the gateway). They need the whole worker. The eight specs that later joined the old ui-heavy shard were placed there for surface affinity, not timing sensitivity -- the 2026-09-16 rebalance moved them to the concurrent ui-browser/ui-render shards so only the measured-sensitive five pay the serial solo cost. Note: retention.spec.ts mints no login — its /reload calls authenticate with the non-rotating bearer global-setup.ts stores at suite start (tests/e2e/fixtures/.auth/admin-reload-bearer.txt), so the shared storageState cookie stays valid for settings-memory, which runs after it here exactly as before the split.",
       "group": "ui-heavy",
       "key_slot": "c",
       "port": 6065,
@@ -245,7 +279,8 @@
         "tests/e2e/multi-turn-render.spec.ts",
         "tests/e2e/replay-fidelity.spec.ts",
         "tests/e2e/retention.spec.ts",
-        "tests/e2e/settings-memory.spec.ts"
+        "tests/e2e/settings-memory.spec.ts",
+        "tests/e2e/chat-history-paging.prefix-and-real-session-evidence.spec.ts"
       ]
     },
     {

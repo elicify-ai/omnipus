@@ -42,6 +42,9 @@ func newBoundaryHarness(t *testing.T, provider providers.LLMProvider) (*AgentLoo
 	t.Helper()
 	al, cleanup := newSteerALWithProvider(t, provider)
 	t.Cleanup(cleanup)
+	// Production mints and registers the boot epoch before any admission;
+	// the ordinary-root positive controls below admit real turns.
+	mintGenuineBootEpochForLoop(t, al)
 
 	lifecycle := al.GetSessionLifecycleStore()
 	classifier := NewSteerRecordClassifier(lifecycle, al.GetSessionStore())

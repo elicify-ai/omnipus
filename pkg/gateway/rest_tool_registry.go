@@ -7,7 +7,6 @@
 // Implements:
 //   - GET  /api/v1/tools                        (FR-027) — registry snapshot
 //   - GET  /api/v1/agents/{id}/tools            (FR-028, FR-086) — per-agent policy view
-//   - GET  /api/v1/tools/builtin               (FR-029) — returns HTTP 404
 //   - POST /api/v1/tool-approvals/{approval_id} (FR-011, FR-014, FR-017, FR-018)
 
 package gateway
@@ -93,13 +92,6 @@ func toolRegistryAutoApprove(ctx context.Context, t tools.Tool, name, source str
 	}
 }
 
-// HandleBuiltinToolsDeprecated handles GET /api/v1/tools/builtin — returns HTTP 404.
-// The legacy catalog endpoint is replaced by GET /api/v1/tools (FR-029).
-func (a *restAPI) HandleBuiltinToolsDeprecated(w http.ResponseWriter, r *http.Request) {
-	// FR-029: /tools/builtin returns 404 post-redesign.
-	jsonErr(w, http.StatusNotFound, "endpoint removed: use GET /api/v1/tools instead")
-}
-
 // HandleToolsRegistry handles GET /api/v1/tools.
 //
 // Returns the snapshot of registered tools with per-entry:
@@ -115,6 +107,14 @@ func (a *restAPI) HandleBuiltinToolsDeprecated(w http.ResponseWriter, r *http.Re
 func (a *restAPI) HandleToolsRegistry(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	// FR-125 / §6.4: the central builtin registry is the only source; before
+	// boot wires it there is nothing truthful to list, so say so (503) rather
+	// than proxying one agent's tool set.
+	if a.builtinRegistry == nil {
+		jsonErr(w, http.StatusServiceUnavailable, toolRegistryNotReady)
 		return
 	}
 
@@ -146,13 +146,10 @@ func (a *restAPI) HandleToolsRegistry(w http.ResponseWriter, r *http.Request) {
 		entries = append(entries, entry)
 	}
 
-	// M16: central BuiltinRegistry is the authoritative supply-side source when wired.
-	// Comment: per-agent ToolRegistry remains the demand-side filter at LLM-call time.
-	// Full migration to central-registry-only at LLM call assembly is tracked separately.
-	if a.builtinRegistry != nil {
-		for _, t := range a.builtinRegistry.All() {
-			addTool(t, string(toolSourceBuiltin), "")
-		}
+	// M16: central BuiltinRegistry is the authoritative supply-side source.
+	// Per-agent ToolRegistry remains the demand-side filter at LLM-call time.
+	for _, t := range a.builtinRegistry.All() {
+		addTool(t, string(toolSourceBuiltin), "")
 	}
 
 	// M16: central MCPRegistry provides MCP tools when wired.
@@ -162,28 +159,6 @@ func (a *restAPI) HandleToolsRegistry(w http.ResponseWriter, r *http.Request) {
 		for _, t := range a.mcpRegistry.All() {
 			sid, _ := a.mcpRegistry.GetServerID(t.Name())
 			addTool(t, "mcp", sid)
-		}
-	}
-
-	// Fallback: when central registries are not wired (test setups or pre-boot),
-	// read from the default agent's tool set as before.
-	if a.builtinRegistry == nil {
-		registry := a.agentLoop.GetRegistry()
-		defaultAgent := registry.GetDefaultAgent()
-		if defaultAgent != nil {
-			for _, t := range defaultAgent.Tools.GetAll() {
-				// FR-027: source discriminator.
-				source := string(toolSourceBuiltin)
-				var serverID string
-				if t.Category() == tools.CategoryMCP {
-					source = "mcp"
-					// G11: attempt server ID lookup via mcpRegistry if wired.
-					if a.mcpRegistry != nil {
-						serverID, _ = a.mcpRegistry.GetServerID(t.Name())
-					}
-				}
-				addTool(t, source, serverID)
-			}
 		}
 	}
 
@@ -362,7 +337,7 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 	agentTypeVal := gen.AgentToolsResponseAgentType(wireAgentType)
 	state, stateErr := agentstore.New(a.homePath).ReadState(agentID)
 	if stateErr != nil {
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read agent revision: %v", stateErr))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not read agent revision", stateErr)
 		return
 	}
 	overrideNames := make([]string, 0)
@@ -569,6 +544,14 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// channels-spec-r8 FR-038(b): the lasting allow action is refused for an
+	// always-ask tool BEFORE the pending call is approved or resolved, so the
+	// card stays usable for approve-once, Deny or Cancel.
+	if recordGrant && tools.IsAlwaysAsk(entry.ToolName) {
+		jsonErr(w, http.StatusBadRequest, tools.AlwaysAskAllowRefusal(entry.ToolName))
+		return
+	}
+
 	// MERGE NOTE 2026-09-15: integrate's per-account owner gate (Claude review
 	// C4 / D-16 parity — 403 when another account decides an approval) is
 	// dropped here. The founder ruled tool approval comes from release (#683)
@@ -576,7 +559,7 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 	// scope against; release's ws_tool_approval.go has no audience rule.
 
 	// Attempt the state transition.
-	resolved, gone := a.approvalReg.resolve(approvalID, action, recordGrant)
+	resolved, gone := a.approvalReg.resolveBy(approvalID, action, recordGrant, requestUsername(r))
 	if gone {
 		// Entry already in terminal state — FR-018.
 		logsafeWarn("tool-approval: late action on resolved approval",
@@ -588,6 +571,7 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusNotFound, fmt.Sprintf("approval %q not found", approvalID))
 		return
 	}
+	a.awaitRoomAdmission(entry)
 
 	// "allow": the pending call is now approved — record the session-scoped
 	// grant. Identity (session_id, agent_id, tool, args) comes from the immutable
@@ -793,10 +777,14 @@ func toolsCfgToPolicy(cfg *config.AgentToolsCfg) *tools.ToolPolicyCfg {
 // always from the immutable approval entry — and the scope it records. A
 // "prefix" request on a bash call records an ADR-092 D4 prefix grant when
 // tools.BashPrefixGrantFor finds a safe one; every other case records the
-// exact-fingerprint grant.
+// exact-fingerprint grant. An always-ask tool (channels-spec-r8 FR-038(b))
+// gets a recorder that records nothing in any session and reports false.
 func (a *restAPI) approvalGrantRecorder(
 	entry *approvalEntry, requested gen.ToolApprovalActionRequestScope,
 ) (func(sessionID string) bool, gen.ToolApprovalResponseScope) {
+	if tools.IsAlwaysAsk(entry.ToolName) {
+		return func(string) bool { return false }, gen.ToolApprovalResponseScopeExact
+	}
 	grants := a.agentLoop.ApprovalGrants()
 	if requested == gen.ToolApprovalActionRequestScopePrefix && entry.ToolName == "bash" {
 		if g, ok := tools.BashPrefixGrantFor(entry.Args); ok {

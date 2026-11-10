@@ -34,6 +34,7 @@ import {
   ExecutorSmokeTestResponse as ExecutorSmokeTestResponseSchema,
   OperationResult as OperationResultSchema,
   IntegrationProvidersResponse as IntegrationProvidersResponseSchema,
+  SearchProviderCheckResponse as SearchProviderCheckResponseSchema,
 } from '@/lib/api/generated/schemas'
 import type {
   Provider,
@@ -57,6 +58,8 @@ import type {
   OperationResult,
   IntegrationProvidersResponse,
   IntegrationProviderUpdateRequest,
+  SearchProviderCheckRequest,
+  SearchProviderCheckResponse,
   // Real, live command-line preview for a subagent_3p executor (contract-first #8):
   ExecutorCommandPreviewRequest,
   ExecutorCommandPreviewResponse,
@@ -265,7 +268,7 @@ export function testProvider(id: string): Promise<OperationResult> {
 
 // checkEntitlement — "Check with my account" (ADR-068 FR-031, T068-27): one
 // live listing call made with this provider's own stored key, intersected
-// with the served catalog. 409 for protocol "cli" and custom rows (nothing to
+// with the served catalog. 409 for custom rows (nothing to
 // list with); 422 when no key resolves; 502 `{"error":"could not fetch
 // upstream model list: status <n>"}` on an upstream non-2xx with nothing
 // cached — surfaced by the caller as an inline warning, never a client retry.
@@ -277,20 +280,21 @@ export function checkEntitlement(id: string): Promise<EntitlementResponse> {
   )
 }
 
-// ── Provider sign-in (device code / CLI login, ADR-068 §8b, T068-33) ────────
+// ── Provider sign-in (device code, ADR-068 §8b, T068-33; WU-24 removed the
+//    CLI-login shape and the Codex-login import route outright) ─────────────
 //
 // SignInDialog (src/components/providers/SignInDialog.tsx) is the sole
-// caller. All five endpoints are `adminWrap` (401 when unauthenticated) with
+// caller. All endpoints are `adminWrap` (401 when unauthenticated) with
 // ONE documented exception (FR-050): while onboarding is incomplete they are
 // reachable without a session, which is what lets onboarding step 3 run a
 // real sign-in before any admin account exists to authenticate as. Once
 // onboarding completes they revert to the normal 401/503 posture.
 
 // startSignIn begins a vendor sign-in for a provider whose catalog row
-// declares `sign_in` (ADR-068 FR-008). Returns the `cli_login` instruction
-// (codex-cli / github-copilot — run the vendor CLI's own login command) or a
-// `device_code` session (openai-chatgpt, and xai once configured —
-// verification link + user code to poll, FR-044).
+// declares `sign_in` (ADR-068 FR-008). Returns a `device_code` session
+// (openai-chatgpt, and xai once configured — verification link + user code
+// to poll, FR-044). A provider without `sign_in` answers
+// 400 "provider does not support sign-in".
 export function startSignIn(id: string): Promise<SignInStartResponse> {
   return request<SignInStartResponse>(
     `/providers/${id}/sign-in`,
@@ -300,8 +304,8 @@ export function startSignIn(id: string): Promise<SignInStartResponse> {
 }
 
 // fetchSignInStatus reads a provider's current vendor sign-in state without
-// side effects — no vendor poll, no file write (FR-007/FR-009). Used for the
-// cli_login "Check sign-in" button.
+// side effects — no vendor poll, no file write (FR-007/FR-009). Used after a
+// successful poll to fetch the signed-in account label.
 export function fetchSignInStatus(id: string): Promise<SignInStatus> {
   return request<SignInStatus>(
     `/providers/${id}/sign-in/status`,
@@ -324,22 +328,9 @@ export function pollSignIn(id: string, deviceAuthId: string): Promise<SignInPoll
   )
 }
 
-// importCodexLogin copies an existing Codex CLI login (~/.codex/auth.json)
-// into openai-chatgpt's own encrypted OAuth entry (FR-047) — read-only, no
-// refresh token imported (that session ends at the copied token's `exp`).
-// 404 when no Codex login exists.
-export function importCodexLogin(): Promise<SignInStatus> {
-  return request<SignInStatus>(
-    '/providers/openai-chatgpt/sign-in/import',
-    { method: 'POST' },
-    SignInStatusSchema as ZodType<SignInStatus>,
-  )
-}
-
 // signOutProvider deletes the provider's stored OAuth credential entry
 // (device_code providers) and returns the row to not_signed_in (FR-048). A
-// missing entry is still success; a no-op success for cli_login providers,
-// which hold no Omnipus-side credential to delete.
+// missing entry is still success.
 export function signOutProvider(id: string): Promise<OperationResult> {
   return request<OperationResult>(
     `/providers/${id}/sign-in`,
@@ -349,8 +340,7 @@ export function signOutProvider(id: string): Promise<OperationResult> {
 }
 
 // fetchCliDetect probes the host for installed external CLIs (claude-code /
-// codex / opencode), used by the Agents screen to gate the "+ External
-// subagent" runtime choices. UAT fix: this MUST go through the authed
+// codex / opencode), used by the agent editor's runtime choices. UAT fix: this MUST go through the authed
 // `request()` wrapper so the omnipus-session cookie rides along
 // (credentials:'include') — the previous raw
 // `fetch('/api/v1/system/cli-detect')` sent no credentials and got a 401,
@@ -439,6 +429,20 @@ export function fetchIntegrationProviders(): Promise<IntegrationProvidersRespons
     '/integrations/providers',
     undefined,
     IntegrationProvidersResponseSchema as ZodType<IntegrationProvidersResponse>,
+  )
+}
+
+// One manual search-service diagnostic. The generated response distinguishes
+// upstream outcomes from gateway errors; no query, key or role is sent.
+export function checkSearchProviderConnection(
+  id: string,
+  opts?: { signal?: AbortSignal },
+): Promise<SearchProviderCheckResponse> {
+  const body: SearchProviderCheckRequest = {}
+  return request<SearchProviderCheckResponse>(
+    `/integrations/providers/${encodeURIComponent(id)}/check`,
+    { method: 'POST', body: JSON.stringify(body), signal: opts?.signal },
+    SearchProviderCheckResponseSchema as ZodType<SearchProviderCheckResponse>,
   )
 }
 

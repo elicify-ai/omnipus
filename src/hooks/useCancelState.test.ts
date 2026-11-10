@@ -37,7 +37,7 @@ describe('useCancelState — cancelIfStreaming (guarded)', () => {
 
   it('leaves stopLabel as stop but still calls cancelStream when isStreaming is false', () => {
     // Mirrors /cancel and the local Escape handler firing on an already-finished
-    // turn — cancelStream() still safely marks the last message interrupted.
+    // turn — cancelStream() sends nothing and marks nothing (only a streaming turn is marked).
     const cancelStream = vi.fn()
     const { result } = renderHook(() => useCancelState(false, cancelStream))
 
@@ -193,5 +193,107 @@ describe('useCancelState — T23 global Escape handler', () => {
     act(() => pressEscape())
 
     expect(cancelStream).toHaveBeenCalledTimes(1)
+  })
+})
+
+// Reviewer round 2 (founder stop rules 2026-10-06): W1 stuck "Stopping...",
+// W2 a Stop that sent nothing must not arm the 3 s window.
+describe('useCancelState — W1 label never sticks when no stream is running', () => {
+  it('second activation after the stream ended (inside the window) returns the label to stop', () => {
+    vi.useFakeTimers()
+    const cancelStream = vi.fn(() => true)
+    const { result, rerender } = renderHook(
+      ({ isStreaming }) => useCancelState(isStreaming, cancelStream),
+      { initialProps: { isStreaming: true } },
+    )
+
+    act(() => result.current.cancelUnconditional()) // click 1: session cancel + window
+    rerender({ isStreaming: false }) // the turn ended
+    act(() => { vi.advanceTimersByTime(1500) })
+    expect(result.current.stopLabel).toBe('stop')
+    expect(result.current.stopAllArmed).toBe(true)
+
+    act(() => result.current.cancelUnconditional()) // click 2 inside the window: tree
+    expect(cancelStream.mock.calls).toEqual([[], [undefined, 'tree']])
+    expect(result.current.stopLabel).toBe('stopping')
+
+    act(() => { vi.advanceTimersByTime(1001) })
+    expect(result.current.stopLabel).toBe('stop')
+    expect(result.current.stopAllArmed).toBe(false)
+  })
+
+  it('a first activation on an idle chat (not streaming) does not leave the label stuck', () => {
+    vi.useFakeTimers()
+    const cancelStream = vi.fn(() => true)
+    const { result } = renderHook(() => useCancelState(false, cancelStream))
+
+    act(() => result.current.cancelUnconditional())
+    expect(result.current.stopLabel).toBe('stopping')
+
+    act(() => { vi.advanceTimersByTime(1001) })
+    expect(result.current.stopLabel).toBe('stop')
+    act(() => { vi.advanceTimersByTime(2000) })
+    expect(result.current.stopAllArmed).toBe(false)
+  })
+})
+
+describe('useCancelState — W2 an undelivered cancel does not arm the window', () => {
+  it('no label change, no armed window, and the next press is again a first press', () => {
+    const cancelStream = vi.fn(() => false)
+    const { result } = renderHook(() => useCancelState(true, cancelStream))
+
+    act(() => result.current.cancelUnconditional())
+    expect(result.current.stopLabel).toBe('stop')
+    expect(result.current.stopAllArmed).toBe(false)
+
+    act(() => result.current.cancelUnconditional())
+    expect(cancelStream.mock.calls).toEqual([[], []])
+  })
+
+  it('an undelivered tree stop shows no Stopping label and leaves nothing armed', () => {
+    const cancelStream = vi.fn(() => false)
+    const { result } = renderHook(() => useCancelState(true, cancelStream))
+
+    act(() => result.current.cancelAllTreeScoped())
+    expect(cancelStream.mock.calls).toEqual([[undefined, 'tree']])
+    expect(result.current.stopLabel).toBe('stop')
+    expect(result.current.stopAllArmed).toBe(false)
+  })
+})
+
+// G1: the idle gap between a goal's turns has isStreaming false, but the goal
+// keeper resumes the session on its own, so an unfocused Escape must stop it.
+describe('useCancelState — global Escape in the idle gap of a goal (G1)', () => {
+  const goalState = (state: 'active' | 'done') => ({
+    type: 'goal_status' as const, session_id: 's', goal_id: 'g', condition: 'c',
+    round: 1, max_rounds: 5, latest_reason: '', active_loops: 1, cap: 3, state,
+  })
+  afterEach(() => { act(() => { useChatStore.setState({ goalStatus: null }) }) })
+
+  it('cancels when a goal is running and nothing streams', () => {
+    const cancelStream = vi.fn().mockReturnValue(true)
+    renderHook(() => useCancelState(false, cancelStream))
+    act(() => { useChatStore.setState({ goalStatus: goalState('active') }) })
+    act(() => pressEscape())
+    expect(cancelStream).toHaveBeenCalledTimes(1)
+  })
+
+  it('does nothing for a finished goal or no goal', () => {
+    const cancelStream = vi.fn()
+    renderHook(() => useCancelState(false, cancelStream))
+    act(() => pressEscape())
+    act(() => { useChatStore.setState({ goalStatus: goalState('done') }) })
+    act(() => pressEscape())
+    expect(cancelStream).not.toHaveBeenCalled()
+  })
+
+  it('still skips an Escape that was already defaultPrevented upstream', () => {
+    const cancelStream = vi.fn()
+    renderHook(() => useCancelState(false, cancelStream))
+    act(() => { useChatStore.setState({ goalStatus: goalState('active') }) })
+    const e = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true })
+    e.preventDefault()
+    act(() => { document.dispatchEvent(e) })
+    expect(cancelStream).not.toHaveBeenCalled()
   })
 })

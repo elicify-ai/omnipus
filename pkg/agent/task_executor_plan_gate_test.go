@@ -69,6 +69,10 @@ func newPlanGateTestTask(t *testing.T, al *AgentLoop, planID string) *task.Task 
 	if err := al.taskStore.Create(tk); err != nil {
 		t.Fatalf("create task: %v", err)
 	}
+	// DEL-18: fresh creation owns the task's paired goal record; a fixture that
+	// skips the pairing starts a run with no goal loop (goal_claim can then
+	// never complete it). See pairTaskGoalRecord.
+	pairTaskGoalRecord(t, al, tk)
 	return tk
 }
 

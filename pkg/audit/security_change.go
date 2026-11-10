@@ -74,6 +74,17 @@ var sensitiveSubstrings = []string{"password", "token", "apikey", "secret"}
 // map[string]any{"username": ..., "role": ...} — no hash field, no special
 // casing; the recursive redactor handles any leakage defensively.
 func EmitSecuritySettingChange(ctx context.Context, logger *Logger, resource string, oldValue, newValue any) error {
+	// Legacy audit failures are logged, not returned; removal uses the checked helper.
+	if err := EmitSecuritySettingChangeChecked(ctx, logger, resource, oldValue, newValue); err != nil {
+		slog.Warn("audit: security_setting_change failed; continuing because this legacy caller is best-effort", "error", err, "resource", resource)
+	}
+	return nil
+}
+
+// EmitSecuritySettingChangeChecked uses the same record, actor, redaction and
+// durable sink as EmitSecuritySettingChange, but returns marshal/write failures.
+// A nil logger remains disabled; callers requiring an audit record check it.
+func EmitSecuritySettingChangeChecked(ctx context.Context, logger *Logger, resource string, oldValue, newValue any) error {
 	if logger == nil {
 		return nil
 	}
@@ -105,7 +116,7 @@ func EmitSecuritySettingChange(ctx context.Context, logger *Logger, resource str
 	if err != nil {
 		slog.Error("audit: marshal security_setting_change failed",
 			"error", err, "resource", resource)
-		return nil
+		return err
 	}
 
 	// CRIT-5: security_setting_change is a security-relevant configuration
@@ -114,7 +125,7 @@ func EmitSecuritySettingChange(ctx context.Context, logger *Logger, resource str
 	if writeErr := logger.writeLine(data, true); writeErr != nil {
 		slog.Error("audit: write security_setting_change failed",
 			"error", writeErr, "resource", resource)
-		return nil
+		return writeErr
 	}
 	return nil
 }

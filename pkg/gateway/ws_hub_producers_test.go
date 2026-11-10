@@ -78,8 +78,8 @@ func frameSeq(t *testing.T, raw []byte) (int64, bool) {
 // a session, and returns its id.
 func mintSessionFor(t *testing.T, h *WSHandler, chatID string, wc *wsConn) string {
 	t.Helper()
-	h.handleChatMessageWithClientID(context.Background(), chatID, "", "first", "", nil,
-		"", "", false, "client-mint", nil, wc)
+	h.handleChatMessageWithClientID(context.Background(), chatID, "", "first", "mia", nil,
+		"", "", "client-mint", nil, wc)
 	frames := readMessageStatusFrames(t, wc, 1)
 	require.NotEmpty(t, frames[0].SessionId)
 	return frames[0].SessionId
@@ -105,8 +105,8 @@ func TestHub_H13_UserMessageAndTicks_ReachEveryTab(t *testing.T) {
 	other.sendCh = make(chan []byte, 256)
 	bindTestConnToSession(h, "chat-other", sid, other)
 
-	h.handleChatMessageWithClientID(context.Background(), "chat-sender", sid, "second message", "", nil,
-		"", "", false, "client-2", nil, sender)
+	h.handleChatMessageWithClientID(context.Background(), "chat-sender", sid, "second message", "mia", nil,
+		"", "", "client-2", nil, sender)
 
 	isReceived := func(m map[string]any) bool {
 		return m["type"] == "message_status" && m["state"] == "received" && m["client_message_id"] == "client-2"
@@ -269,8 +269,8 @@ func TestChatMessage_RetriedClientMessageID_IsIdempotent(t *testing.T) {
 		<-wc.sendCh
 	}
 
-	h.handleChatMessageWithClientID(context.Background(), "chat-retry", sid, "do the thing", "", nil,
-		"", "", false, "client-retry", nil, wc)
+	h.handleChatMessageWithClientID(context.Background(), "chat-retry", sid, "do the thing", "mia", nil,
+		"", "", "client-retry", nil, wc)
 	require.Equal(t, 1, drainInbound(), "the first send starts one turn")
 	hub := h.hubs.lookup(sid)
 	require.NotNil(t, hub)
@@ -280,8 +280,8 @@ func TestChatMessage_RetriedClientMessageID_IsIdempotent(t *testing.T) {
 	}
 
 	// The client never saw the ack and retries the SAME message.
-	h.handleChatMessageWithClientID(context.Background(), "chat-retry", sid, "do the thing", "", nil,
-		"", "", false, "client-retry", nil, wc)
+	h.handleChatMessageWithClientID(context.Background(), "chat-retry", sid, "do the thing", "mia", nil,
+		"", "", "client-retry", nil, wc)
 	assert.Equal(t, 0, drainInbound(), "a retried client_message_id must not start a second turn")
 	assert.Equal(t, echoesBefore, len(journalFramesOfType(t, hub, "user_message")),
 		"a retry publishes nothing new to the session")

@@ -5,6 +5,13 @@
 // GAP-2: SeedConfig recap flags on fresh vs existing config.
 // IMP-2: model-resolution tiers (recap_model → default_model → agent model).
 // IMP-3: recap fallback with distinct Provider routes through that provider.
+//
+// session-core U12 port: the recap-driving cases below originally drove the
+// recap via CloseSession(sid, "explicit"). FR-036 / DEL-08 retired the explicit
+// trigger (recap now fires only for idle/bootstrap/joined), so they are ported
+// to the still-valid "idle" trigger with every assertion unchanged — spec
+// "Regression protection": port safety assertions to the canonical
+// replacement, never weaken them.
 
 package agent
 
@@ -90,6 +97,7 @@ func TestRunRecap_AllCandidatesFail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
+	wu21ReaimStampWorkspace(t, store, meta.ID) // WU-21 re-aim: give the fallback a carry-forward target.
 	if appendErr := store.AppendTranscript(meta.ID, session.TranscriptEntry{
 		Role:      "user",
 		Content:   "all candidates fail test",
@@ -99,7 +107,7 @@ func TestRunRecap_AllCandidatesFail(t *testing.T) {
 		t.Fatalf("AppendTranscript: %v", appendErr)
 	}
 
-	al.CloseSession(meta.ID, "explicit")
+	al.CloseSession(meta.ID, "idle")
 
 	// Wait for the fallback retro to land.
 	deadline := time.Now().Add(5 * time.Second)
@@ -231,6 +239,7 @@ func runRecapModelResolutionScenario(t *testing.T, agentID, agentName, defaultMo
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
+	wu21ReaimStampWorkspace(t, store, meta.ID) // WU-21 re-aim: carry-forward target so the recap completes.
 	_ = store.AppendTranscript(meta.ID, session.TranscriptEntry{
 		Role:      "user",
 		Content:   "tier resolution test",
@@ -238,7 +247,7 @@ func runRecapModelResolutionScenario(t *testing.T, agentID, agentName, defaultMo
 		Timestamp: time.Now().UTC(),
 	})
 
-	al.CloseSession(meta.ID, "explicit")
+	al.CloseSession(meta.ID, "idle")
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
@@ -425,6 +434,7 @@ func TestRunRecap_FallbackDistinctProvider_RoutesCorrectly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
+	wu21ReaimStampWorkspace(t, store, meta.ID) // WU-21 re-aim: carry-forward target so the fallback completes.
 	_ = store.AppendTranscript(meta.ID, session.TranscriptEntry{
 		Role:      "user",
 		Content:   "distinct provider routing test",
@@ -432,7 +442,7 @@ func TestRunRecap_FallbackDistinctProvider_RoutesCorrectly(t *testing.T) {
 		Timestamp: time.Now().UTC(),
 	})
 
-	al.CloseSession(meta.ID, "explicit")
+	al.CloseSession(meta.ID, "idle")
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
@@ -514,6 +524,7 @@ func TestRunRecap_FallbackDistinctProvider_NoPoolEntryFallsBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
+	wu21ReaimStampWorkspace(t, store, meta.ID) // WU-21 re-aim: carry-forward target so the fallback completes.
 	_ = store.AppendTranscript(meta.ID, session.TranscriptEntry{
 		Role:      "user",
 		Content:   "pool-miss graceful degradation test",
@@ -521,7 +532,7 @@ func TestRunRecap_FallbackDistinctProvider_NoPoolEntryFallsBack(t *testing.T) {
 		Timestamp: time.Now().UTC(),
 	})
 
-	al.CloseSession(meta.ID, "explicit")
+	al.CloseSession(meta.ID, "idle")
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {

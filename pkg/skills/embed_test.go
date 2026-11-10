@@ -5,118 +5,87 @@ import (
 	"path/filepath"
 	"sort"
 	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-// TestDefaultSkills_EmbeddedAndSeeded verifies FR-9.3: the default skill set is
-// embedded into the binary and seeded into an empty skills dir on first boot.
-//
-// Traces to: Spec-6 BDD "Default skills embedded and seeded on fresh install".
+// TestDefaultSkills_EmbeddedAndSeeded preserves the exact WU-9/FR-010 shipped
+// inventory, first-boot materialization and loader coverage. r15 §8.2 replaces
+// the retired seeder with the real startup synchronizer.
 func TestDefaultSkills_EmbeddedAndSeeded(t *testing.T) {
 	want := []string{
-		"agent-authoring", "channel-setup", "deep-research", "define-goal",
-		"delegation-graph", "doctor", "elicify-docx", "elicify-pdf", "elicify-pptx", "elicify-xlsx",
-		"handoff", "inbox-triage", "interview",
-		"mcp-install", "orchestrate", "plan", "provider-setup", "skill-authoring",
-		"skill-mapping", "tool-mapping", "verify", "workspace-team",
+		"add-connector", "add-provider", "capability-plan", "change-agent",
+		"connect-channel", "create-agent", "deep-research", "define-goal",
+		"dependency-check", "disable-channel", "doctor-usage", "elicify-docx",
+		"elicify-pdf", "elicify-pptx", "elicify-xlsx", "inbox-triage",
+		"install-skill", "interview", "orchestrate", "plan", "provider-config",
+		"remove-agent", "remove-connector", "shell-diagnosis", "team-delegation",
+		"team-setup", "verify", "welcome-workspace", "write-skill",
 	}
-
-	// The embed FS must contain exactly the default set.
 	got := DefaultSkillNames()
 	sort.Strings(got)
-	if len(got) != len(want) {
-		t.Fatalf("DefaultSkillNames() = %v; want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("DefaultSkillNames() = %v; want %v", got, want)
-		}
-	}
+	require.Equal(t, want, got, "the embedded inventory is the independently specified WU-9 set")
 
-	// Seeding into an empty dir writes every default skill with a SKILL.md.
 	dest := t.TempDir()
-	res, err := SeedDefaults(dest)
-	if err != nil {
-		t.Fatalf("SeedDefaults: %v", err)
-	}
-	if len(res.Seeded) != len(want) {
-		t.Fatalf("seeded %v; want %d skills", res.Seeded, len(want))
-	}
-	if len(res.Skipped) != 0 {
-		t.Fatalf("expected no skips on empty seed, got %v", res.Skipped)
-	}
+	res, err := SyncBuiltins(dest, nil)
+	require.NoError(t, err)
+	sort.Strings(res.Installed)
+	assert.Equal(t, want, res.Installed, "fresh startup installs every shipped package exactly once")
+	assert.Empty(t, res.Updated, "an empty root has no previous built-in to update")
 	for _, name := range want {
-		skillFile := filepath.Join(dest, name, "SKILL.md")
-		data, rerr := os.ReadFile(skillFile)
-		if rerr != nil {
-			t.Fatalf("seeded skill %q missing SKILL.md: %v", name, rerr)
-		}
-		// Each seeded skill must pass the loader's validation contract.
-		if verr := ValidateSkillMarkdown(name, string(data)); verr != nil {
-			t.Errorf("seeded skill %q fails validation: %v", name, verr)
-		}
+		data, readErr := os.ReadFile(filepath.Join(dest, name, "SKILL.md"))
+		require.NoError(t, readErr, "installed %s has instructions", name)
+		assert.NoError(t, ValidateSkillMarkdown(name, string(data)), "installed %s validates", name)
+		requireSameTree(t, name, filepath.Join(dest, name))
 	}
 
-	// A loader rooted at the seeded dir must list all of them.
 	loader := NewSkillsLoader("", dest, "")
 	listed := loader.ListSkills()
-	if len(listed) != len(want) {
-		t.Fatalf("loader listed %d skills after seed; want %d", len(listed), len(want))
+	ids := make([]string, 0, len(listed))
+	for _, skill := range listed {
+		ids = append(ids, skill.ID)
 	}
+	sort.Strings(ids)
+	assert.Equal(t, want, ids, "the loader sees every installed package, not merely the right count")
 }
 
-// TestSeedDefaults_Idempotent verifies that an existing skill dir is never
-// overwritten (FR-9.3 edge case: "already present in the seed dir → not
-// overwritten").
-func TestSeedDefaults_Idempotent(t *testing.T) {
+// r15 §8.2 supersedes the old never-overwrite builtin oracle. Startup must
+// replace an outside edit, leave a differently named user skill untouched,
+// and then leave equal shipped content and identity completely untouched.
+func TestSyncBuiltins_ReplacesEditedBuiltinThenIsIdempotent(t *testing.T) {
 	dest := t.TempDir()
+	planDir := writeSkillFixture(t, dest, "plan") // an unstamped outside edit
+	before := readFile(t, filepath.Join(planDir, "SKILL.md"))
+	userDir := writeSkillFixture(t, dest, "my-plan")
+	userContent := readFile(t, filepath.Join(userDir, "SKILL.md"))
 
-	// Pre-create a user-edited "plan" skill.
-	planDir := filepath.Join(dest, "plan")
-	if err := os.MkdirAll(planDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	userContent := "---\nname: plan\ndescription: My customized plan skill that must survive seeding.\n---\n# Plan\nUser edited.\n"
-	if err := os.WriteFile(filepath.Join(planDir, "SKILL.md"), []byte(userContent), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	res, err := SyncBuiltins(dest, nil)
+	require.NoError(t, err)
+	updated := findOutcome(res.Updated, "plan")
+	require.NotNil(t, updated, "a differing built-in is updated, never skipped")
+	assert.Equal(t, BuiltinUpdated, updated.Case)
+	assert.NotContains(t, res.Installed, "plan", "replacing an existing folder is not a fresh installation")
+	requireSameTree(t, "plan", planDir)
+	shipped := readFile(t, filepath.Join(planDir, "SKILL.md"))
+	assert.NotEqual(t, before, shipped, "the outside edit was actually replaced")
+	assert.Equal(t, userContent, readFile(t, filepath.Join(userDir, "SKILL.md")), "unrelated user skill survives")
+	assert.NoDirExists(t, filepath.Join(SkillHistoryRoot(dest), "plan"), "built-ins never acquire version history")
+	generation := generationOf(t, planDir)
 
-	res, err := SeedDefaults(dest)
-	if err != nil {
-		t.Fatalf("SeedDefaults: %v", err)
-	}
-
-	// plan must be reported skipped, not seeded.
-	if !contains(res.Skipped, "plan") {
-		t.Errorf("expected 'plan' in Skipped, got Skipped=%v Seeded=%v", res.Skipped, res.Seeded)
-	}
-	if contains(res.Seeded, "plan") {
-		t.Errorf("'plan' must not be re-seeded, got Seeded=%v", res.Seeded)
-	}
-
-	// The user content must be intact.
-	data, rerr := os.ReadFile(filepath.Join(planDir, "SKILL.md"))
-	if rerr != nil {
-		t.Fatal(rerr)
-	}
-	if string(data) != userContent {
-		t.Errorf("user-edited plan SKILL.md was overwritten by seeding")
-	}
-
-	// A second seed run is a no-op (everything skipped).
-	res2, err := SeedDefaults(dest)
-	if err != nil {
-		t.Fatalf("second SeedDefaults: %v", err)
-	}
-	if len(res2.Seeded) != 0 {
-		t.Errorf("second seed should write nothing, got Seeded=%v", res2.Seeded)
-	}
-}
-
-func contains(ss []string, s string) bool {
-	for _, x := range ss {
-		if x == s {
-			return true
-		}
-	}
-	return false
+	oldTime := time.Now().Add(-time.Hour)
+	require.NoError(t, os.Chtimes(filepath.Join(planDir, "SKILL.md"), oldTime, oldTime))
+	ageDir(t, planDir, oldTime)
+	beforeDirTime := dirMtime(t, planDir)
+	beforeFileTime := fileMtime(t, filepath.Join(planDir, "SKILL.md"))
+	res2, err := SyncBuiltins(dest, nil)
+	require.NoError(t, err)
+	assert.Empty(t, res2.Installed, "equal second startup installs nothing")
+	assert.Empty(t, res2.Updated, "equal second startup updates nothing")
+	assert.Equal(t, shipped, readFile(t, filepath.Join(planDir, "SKILL.md")))
+	assert.Equal(t, generation, generationOf(t, planDir), "equal startup preserves the generation")
+	assert.True(t, beforeDirTime.Equal(dirMtime(t, planDir)), "equal folder mtime is unchanged")
+	assert.True(t, beforeFileTime.Equal(fileMtime(t, filepath.Join(planDir, "SKILL.md"))), "equal instruction mtime is unchanged")
+	assert.Equal(t, userContent, readFile(t, filepath.Join(userDir, "SKILL.md")))
 }

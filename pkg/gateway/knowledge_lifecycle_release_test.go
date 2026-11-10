@@ -130,13 +130,28 @@ func TestReleaseSweep_DriftScheduleStops(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	require.NotZero(t, kl.health.Runs(), "precondition: the drift schedule is running")
-	before := kl.health.Runs()
 
 	demoteOnDisk(t, vault)
+
+	// AttachWorkspace runs attachWorkspaceScope then ReleaseStaleCollections
+	// (knowledge_lifecycle.go::AttachWorkspace), which calls
+	// ReleaseDemotedCollection -> kl.health.Unwatch(root) SYNCHRONOUSLY and
+	// blocks on it (drift.go::HealthChecker.Unwatch: cancel(); <-w.done).
+	// HealthChecker.loop runs runOnce inline, in a single goroutine, with no
+	// concurrent runs; it can only reach its deferred close(w.done) after any
+	// runOnce already in flight when cancel() fired has fully returned (and
+	// counted itself), and it can never re-enter its tick case afterward. So
+	// by the time this call returns, the watcher for the released root is
+	// PROVABLY stopped: no further run for it can ever fire, and every run
+	// that could fire already has. Taking the snapshot here (rather than
+	// before this call) is what makes the assertion below deterministic
+	// instead of racing the still-ticking 40ms schedule.
 	kl.AttachWorkspace(ws)
 	require.Zero(t, kl.HoldersFor(vault))
+	before := kl.health.Runs()
 
-	// The schedule would have fired ~6 more times in 250ms at 40ms cadence.
+	// The watcher is confirmed stopped above, so this sleep is a settle
+	// window / negative-control period, not a race against a live ticker.
 	time.Sleep(250 * time.Millisecond)
 	assert.Equal(t, before, kl.health.Runs(),
 		"after release no further drift run may fire for the released root")

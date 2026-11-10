@@ -141,6 +141,7 @@
       "file": "tests/design-system/browser.spec.ts",
       "test": "Button [check:button-browser] browser",
       "story": "Default",
+      "requiredTargets": [{ "selector": "[data-testid=\"button\"]", "attribute": "type", "value": "button" }],
       "applicable": true
     },
     {
@@ -197,6 +198,7 @@
       "file": "tests/design-system/browser.spec.ts",
       "test": "Button [check:button-auxiliary-browser] browser",
       "story": "DisabledLinkBlocksAuxiliaryAction",
+      "requiredTargets": [{ "selector": "[data-testid=\"disabled-link\"]", "attribute": "href", "value": "#auxiliary-settings" }],
       "applicable": true
     },
     {

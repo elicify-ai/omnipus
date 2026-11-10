@@ -45,6 +45,7 @@ import {
 import { useQuery } from '@tanstack/react-query'
 import { fetchToolResult } from '@/lib/api'
 import { Button } from '@/components/ui/button'
+import { humanByteSize } from '@/lib/historyPreview'
 import type { TruncatedResult, MarshalErrorResult } from '@/lib/ws'
 import type {
   ToolResultRef,
@@ -56,6 +57,8 @@ import { isClientTruncatedResult, isToolResultRef } from '@/store/chat'
 import type { ClientTruncatedResult } from '@/store/chat'
 import {
   detectToolResultSentinels,
+  isProtectedFileRefusal,
+  isProtectedInternalFileDenial,
   policyAxisLabel,
 } from './toolResultSentinels'
 
@@ -129,6 +132,7 @@ export type ResolvedToolResult =
   | { kind: 'delegationDenied'; failure: DelegationFailure }
   | { kind: 'fileExists'; refusal: FileExistsRefusal }
   | { kind: 'permissionDenied'; failure: PermissionDenied }
+  | { kind: 'protectedFile'; message: string }
   | { kind: 'text'; text: string }
   | { kind: 'json'; text: string }
   | { kind: 'empty' }
@@ -148,7 +152,8 @@ export function isSentinelResolution(
     resolved.kind === 'marshalError' ||
     resolved.kind === 'delegationDenied' ||
     resolved.kind === 'fileExists' ||
-    resolved.kind === 'permissionDenied'
+    resolved.kind === 'permissionDenied' ||
+    resolved.kind === 'protectedFile'
   )
 }
 
@@ -162,7 +167,10 @@ export function isSentinelResolution(
  * `JSON.stringify` — never `String()` — is the fallback for a non-string
  * object.
  */
-export function resolveToolResult(result: unknown): ResolvedToolResult {
+export function resolveToolResult(result: unknown, error?: unknown): ResolvedToolResult {
+  // #1284: a protected-file refusal may arrive as the error text instead of
+  // the result; either way it gets its own block (never a plain failure).
+  if (isProtectedFileRefusal(error)) return { kind: 'protectedFile', message: error }
   if (result === undefined || result === null || result === '') {
     return { kind: 'empty' }
   }
@@ -174,6 +182,10 @@ export function resolveToolResult(result: unknown): ResolvedToolResult {
     return { kind: 'fileExists', refusal: sentinels.fileExistsRefusal }
   }
   if (sentinels.permissionDenied) {
+    // #1284: the structured marker decides, never the prose.
+    if (isProtectedInternalFileDenial(sentinels.permissionDenied)) {
+      return { kind: 'protectedFile', message: sentinels.permissionDenied.reason }
+    }
     return { kind: 'permissionDenied', failure: sentinels.permissionDenied }
   }
   if (isToolResultRef(result)) return { kind: 'ref', sentinel: result }
@@ -184,6 +196,7 @@ export function resolveToolResult(result: unknown): ResolvedToolResult {
   if (isMarshalErrorResult(result)) {
     return { kind: 'marshalError', sentinel: result }
   }
+  if (isProtectedFileRefusal(result)) return { kind: 'protectedFile', message: result }
   if (typeof result === 'string') return { kind: 'text', text: result }
   if (isTextEnvelopeResult(result)) return { kind: 'text', text: result.text }
   try {
@@ -196,11 +209,6 @@ export function resolveToolResult(result: unknown): ResolvedToolResult {
 // ── Shared sentinel displays (moved verbatim from GenericToolCall.tsx) ───────
 
 /** Format bytes into a human-readable size string (e.g. "2.3 MiB"). */
-function humanSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`
-}
 
 /** Renders a server-side ToolResultRef sentinel; full body fetched lazily on click. */
 export function ToolResultRefDisplay({
@@ -229,7 +237,7 @@ export function ToolResultRefDisplay({
       <div className="flex items-start gap-[var(--space-2)] border-l-2 border-[color-mix(in_srgb,var(--color-warning)_40%,transparent)] pl-[var(--space-2)] py-[var(--space-1)] mb-[var(--space-1)] font-body text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
         <Warning size={12} weight="fill" className="shrink-0 mt-[var(--space-0-5)]" />
         <span>
-          Result stored server-side ({humanSize(sentinel.original_size_bytes)}) — preview only
+          Result stored server-side ({humanByteSize(sentinel.original_size_bytes)}) — preview only
         </span>
       </div>
 
@@ -287,7 +295,7 @@ export function ClientTruncatedDisplay({ sentinel }: { sentinel: ClientTruncated
       <div className="flex items-start gap-[var(--space-2)] border-l-2 border-[color-mix(in_srgb,var(--color-warning)_40%,transparent)] pl-[var(--space-2)] py-[var(--space-1)] mb-[var(--space-1)] font-body text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
         <Warning size={12} weight="fill" className="shrink-0 mt-[var(--space-0-5)]" />
         <span>
-          Truncated client-side — showing first 4 KiB of {humanSize(sentinel.original_size_bytes)}.
+          Truncated client-side — showing first 4 KiB of {humanByteSize(sentinel.original_size_bytes)}.
           The full result is preserved in the server transcript.
         </span>
       </div>
@@ -446,7 +454,7 @@ export function ToolResultSentinelBody({
         >
           <Warning size={12} weight="fill" className="shrink-0 mt-[var(--space-0-5)]" />
           <span>
-            Truncated — showing first 10 KiB of {humanSize(resolved.sentinel.original_size_bytes)}
+            Truncated — showing first 10 KiB of {humanByteSize(resolved.sentinel.original_size_bytes)}
           </span>
         </div>
         <pre
@@ -483,5 +491,34 @@ export function ToolResultSentinelBody({
   if (resolved.kind === 'permissionDenied') {
     return <PermissionDeniedDisplay failure={resolved.failure} />
   }
+  if (resolved.kind === 'protectedFile') {
+    return <ProtectedFileRefusalDisplay message={resolved.message} />
+  }
   return null
+}
+
+/** The user-facing explanation of a #1284 refusal (wording follows docs/security.md). */
+export const PROTECTED_FILE_REFUSAL_TEXT =
+  "Omnipus's own files are protected from every agent, in every mode — God Mode included. " +
+  'Nothing can approve this: the agent has to work inside the workspace and use Omnipus\'s own tools for its internal data.'
+
+/**
+ * #1284: a refusal because the call named one of Omnipus's own protected
+ * files. Shown as its own block so it never reads like an ordinary failure
+ * that a retry or an approval could fix.
+ */
+export function ProtectedFileRefusalDisplay({ message }: { message: string }) {
+  return (
+    <div
+      data-testid="result-protected-file"
+      className="border-l-2 border-[color-mix(in_srgb,var(--color-warning)_60%,transparent)] pl-[var(--space-2)] py-[var(--space-2)] mb-[var(--space-1)] font-body text-[length:var(--type-caption-size)]"
+    >
+      <div className="mb-[var(--space-1)] flex items-center gap-[var(--space-2)] text-[var(--color-warning)]">
+        <Lock size={13} weight="fill" className="shrink-0" aria-hidden="true" />
+        <span className="font-medium">Protected Omnipus file — refused</span>
+      </div>
+      <p className="mb-[var(--space-1)] leading-relaxed text-[var(--color-secondary)]">{PROTECTED_FILE_REFUSAL_TEXT}</p>
+      <p className="break-words text-[var(--color-muted)]">{message}</p>
+    </div>
+  )
 }

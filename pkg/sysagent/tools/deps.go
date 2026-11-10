@@ -2,8 +2,10 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// Package systools implements the 33 exclusive system.* tools for the
-// Omnipus system agent per BRD Appendix D §D.4.
+// Package systools implements the exclusive system.* tools for the
+// Omnipus system agent per BRD Appendix D §D.4. The four *_in_workspace task
+// tools were retired by DEL-23 (merged into the canonical pkg/tools task
+// family); this package's remaining surface is the registry.go catalog.
 package systools
 
 import (
@@ -19,10 +21,13 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/plan"
+	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -98,6 +103,49 @@ type Deps struct {
 	// Tests that do not need real persistence can set it to a no-op or leave it
 	// nil (WithConfig will return an error in that case).
 	SaveConfigLocked func(cfg *config.Config) error
+	// LockConfigWrites takes the gateway config write lock (restAPI.configMu,
+	// the lock every Settings config write holds) and returns its unlock.
+	// Tool writes to the install-wide shared resources — providers, MCP
+	// servers, channel instances — take it BEFORE entering MutateConfig, so
+	// they serialize with Settings in the same order Settings uses (config
+	// lock → agent-loop lock, never the reverse; omnipus-system-agent FR-085,
+	// see withSharedResourceWrite). It must never be called while the
+	// agent-loop lock is held. The gateway wires it to lockConfigWrites; nil
+	// (unit tests building Deps by hand) adds no outer lock.
+	LockConfigWrites func() (unlock func())
+	// ApplyChannelOutbound is the one outbound writer (channels-spec-r8
+	// FR-020, FR-030): the gateway wires it to restAPI.applyOutboundChange,
+	// the same function behind PUT /api/v1/channels/{id}/outbound, and
+	// translates its refusals to *ChannelOutboundRefusalError and
+	// ErrChannelOutboundNotConfigured. Any other error is a save failure
+	// before the file write. Nil (unit tests) makes set_channel_outbound
+	// refuse with CONFIG_SAVE_FAILED.
+	ApplyChannelOutbound func(ctx context.Context, change ChannelOutboundChange) (ChannelOutboundSaved, error)
+	// PreviewChannelOutbound is the read-only run of the writer's checks
+	// before the approval card (Channels Q2-B): the gateway wires it to
+	// restAPI.previewOutboundChange, which shares its validation with the
+	// writer, audits its own refusals as refused_before_approval and
+	// returns errors in the same neutral types as ApplyChannelOutbound.
+	// change.ExpectedRevision empty means "use the current revision". Nil
+	// (unit tests) makes set_channel_outbound refuse before the card.
+	PreviewChannelOutbound func(ctx context.Context, change ChannelOutboundChange) (ChannelOutboundPreview, error)
+	// AuditChannelOutboundRefusal records one of set_channel_outbound's own
+	// refusals before the card (omnipus_only, invalid_input,
+	// own_connection) as channel.outbound.write, outcome
+	// refused_before_approval. Nil (unit tests) records nothing.
+	AuditChannelOutboundRefusal func(ctx context.Context, change ChannelOutboundChange, reason string)
+	// URLChecker is the SSRF guard for outbound checks a change tool makes to
+	// an operator- or agent-supplied endpoint (configure_provider's model
+	// listing, FR-031). A row whose catalog locality is local always uses
+	// providers.NoopChecker (a local endpoint is loopback/private by
+	// definition — the same rule as the gateway's entitlement listing). The
+	// gateway wires its SSRF checker; nil means no guard (unit tests).
+	URLChecker providers.URLChecker
+	// ListProviderModels replaces providers.ListModels in configure_provider's
+	// check. Nil (production) uses providers.ListModels; tests set it so a
+	// catalog provider's real endpoint is never called from a unit test.
+	ListProviderModels func(ctx context.Context, protocol catalog.Protocol, baseURL, apiKey string,
+		checker providers.URLChecker) ([]string, error)
 	// CredStore is the encrypted credential store.
 	CredStore *credentials.Store
 	// ReloadFunc triggers a hot-reload of the agent loop so newly created agents
@@ -131,7 +179,100 @@ type Deps struct {
 	// tools the same guarantee. The gateway wires this to a closure built on
 	// AgentLoop.TriggerReload + AgentLoop.IsReloadPending polling (the same
 	// primitive backing restAPI.triggerReloadAndWait).
+	//
+	// NOT safe for the create/update publish path (publishAgentActivation): the
+	// production wiring's FIRST action is an unconditional TriggerReload, so on
+	// the fast-path-success branch — where UpsertAgentFastFunc already
+	// updated the live registry inline with NOTHING queued — calling this
+	// field kicks off a fresh, full reload cycle (channels/cron/plan-engine/
+	// scheduler restart cascade, the exact ~60s-under-load mechanism issue
+	// #571 exists to avoid) just to wait for it. The create/update publish
+	// path uses WaitForPendingReloadFunc below instead, which only polls
+	// the pending flag and never triggers.
 	WaitForReloadFunc func() error
+	// ReloadAndWaitFallback is remove_secret's live-apply path when
+	// WaitForReloadFunc is not wired: the agent loop's own TriggerReload plus
+	// a bounded wait for the pending flag to clear. WireSysagentDeps fills it.
+	ReloadAndWaitFallback func() error
+	// ChannelLiveStatus reports whether a configured channel instance runs
+	// after the last reload, with a value-free failure reason (connect_channel).
+	// WireSysagentDeps fills it from the agent loop's channel manager.
+	ChannelLiveStatus func(id string) (running bool, failure string, known bool)
+	// PairingAttempts returns the one manager-owned pairing store for channel
+	// writer ordering. Resolve it before taking a channel guard; a guard holder
+	// must never acquire the manager lock. Nil means no manager is wired.
+	PairingAttempts func() *channels.PairingAttempts
+	// PublishPairingProgress emits immutable envelopes after writer locks release.
+	PublishPairingProgress func([]channels.PairingProgress)
+	// AdmitPairing reserves the next QR pairing attempt of a channel for the
+	// approved connect call (request id) in its chat (session id), before
+	// anything is saved; an error refuses it (another attempt is in flight
+	// and keeps its owner). Gate r3 M1, M5. WireSysagentDeps fills it.
+	AdmitPairing func(channelID, requestID, sessionID string) (attemptID string, err error)
+	// CommitPairing makes the admitted attempt startable once its
+	// configuration saved and asks the next reload for a fresh start (M4,
+	// M10, M14). It reports false when the attempt is no longer admitted (a
+	// Stop revoked it). WireSysagentDeps fills it.
+	CommitPairing func(channelID, attemptID string) bool
+	// ReleasePairing ends an admitted attempt no start consumed (a failed
+	// save, or a confirmed reload that did not start it). WireSysagentDeps
+	// fills it.
+	ReleasePairing func(channelID, attemptID string)
+	// RequestChannelRestart asks the next reload to start a registered
+	// channel that is not running — one stopped in place or whose earlier
+	// start failed — through the reload lifecycle (gate r1 F04, gate r3
+	// M10). WireSysagentDeps fills it.
+	RequestChannelRestart func(id string) bool
+	// LastStartError returns a channel's most recent start failure, for a
+	// value-free cause and repair (gate r2 T2-SF-10). WireSysagentDeps fills it.
+	LastStartError func(id string) error
+	// AdmitEnablePairing reserves an unowned pairing attempt for enable_channel
+	// turning a QR-paired connector on, before anything is saved (gate r4
+	// R4-A02, M1/M2). An error refuses it: another attempt is in flight
+	// (channels.ErrPairingConflict) or the connector is being deleted
+	// (channels.ErrPairingDeleting). WireSysagentDeps fills it.
+	AdmitEnablePairing func(channelID string) (attemptID string, err error)
+	// SettlePairing closes an admitted attempt its own confirmed reload did
+	// not start, and tells its chat (gate r5 R5-A05). WireSysagentDeps fills
+	// it.
+	SettlePairing func(channelID, attemptID string)
+	// RevokePairingForDisable ends a not-yet-started pairing admission of a
+	// connector disable_channel turns off, so it can never start late (gate r4
+	// R4-A02). WireSysagentDeps fills it.
+	RevokePairingForDisable func(channelID string)
+	// PairingAttemptState returns an admitted attempt's current record, so a
+	// connect result reports what its own start did — a running pairing, an
+	// already-linked device or a failed start (gate r4 R4-A05).
+	// WireSysagentDeps fills it.
+	PairingAttemptState func(channelID, attemptID string) (channels.PairingAttempt, bool)
+	// WaitForPendingReloadFunc BLOCKS until any reload already queued by a
+	// prior publish hook (UpsertAgentFastFunc / ReloadFunc) has actually
+	// landed in memory, OR returns an error after reloadWaitTimeout elapses.
+	// Unlike WaitForReloadFunc above it does NOT call TriggerReload — it
+	// only polls AgentLoop.IsReloadPending. Safe to call from the sysagent
+	// create/update publish path (publishAgentActivation) after a publish
+	// hook has returned nil, because by that point any actually-queued
+	// reload is already visible as pending: the gateway's
+	// UpsertAgentFastFunc closure that fell back to the async reloadTrigger
+	// reaches pkg/gateway/gateway_reload.go::beginReload, which marks the
+	// pending flag (under its own mutex) BEFORE returning on either the
+	// "owns the cycle" or the "request recorded, served by the owning cycle"
+	// branch — so by the time publishAgentActivation reaches this call, the
+	// flag accurately reflects whether a reload is actually pending.
+	//
+	// On the fast-path-success branch (UpsertAgentFastFunc updated the live
+	// registry inline with nothing queued) the flag is already clear, so this
+	// returns IMMEDIATELY — a genuine no-op, not just claimed to be one. That
+	// is the whole point of this field's existence: WaitForReloadFunc would
+	// NOT be safe in the same position because it unconditionally calls
+	// TriggerReload as its first action.
+	//
+	// Nil in tests or when not wired: publishAgentActivation falls back to
+	// the old behaviour of trusting the publish hook's nil return at face
+	// value (the test wiring either stubs the fast path to update inline or
+	// uses a synchronous ReloadFunc stand-in). Production always wires this
+	// field alongside WaitForReloadFunc above.
+	WaitForPendingReloadFunc func() error
 	// ReconcileMCP triggers live MCP reconciliation (connect/disconnect servers
 	// and re-sync every agent's tool registry plus the central MCPRegistry)
 	// after a config mutation that adds, removes, or edits an MCP server.
@@ -142,6 +283,33 @@ type Deps struct {
 	//
 	// The gateway wires this to AgentLoop.ReconcileMCP.
 	ReconcileMCP func(ctx context.Context) error
+
+	// EnsureWorkspaceMains provisions the main chat of every eligible member of
+	// the named workspace's team - the same path a workspace save runs
+	// (final-gate H2). create_agent calls it after it adds the new agent to the
+	// team, so the member's main exists without a restart or an unrelated
+	// workspace save. Nil in tests or when not wired; callers nil-check. The
+	// gateway wires it to restAPI.ensureWorkspaceMains.
+	EnsureWorkspaceMains func(workspaceID string) error
+
+	// UnbindWorkspaceChannels is the SAME hard channel-cleanup operation used
+	// by HTTP workspace deletion. Called under the workspace lock, before any
+	// deletion cascade. Returns the instance IDs whose disabled/unbound state
+	// was saved; a non-empty list with an error means persistence succeeded
+	// but live config refresh failed. The gateway owns its raw-JSON config
+	// transaction and config-lock -> agent-loop-lock ordering.
+	UnbindWorkspaceChannels func(workspaceID string) ([]string, error)
+
+	// DeleteSessionStore returns the loop's ONE live session store for the
+	// agent-delete cascade (DEL-10). It must not open a store: a nil return (or a
+	// nil field) fails the delete closed, and the same delete can be retried.
+	DeleteSessionStore func() AgentSessionStore
+
+	// StopSessionForDelete stops a session's running work (the session and its
+	// helper tree) before the agent-delete cascade deletes it. It returns a
+	// non-empty summary when the session could not be stopped, which keeps the
+	// session and the agent record. Nil means no stop is available (tests).
+	StopSessionForDelete func(sessionID string) string
 	// MCPStatus reports live per-server connection status so mcp tool results
 	// can be honest about whether a server actually connected rather than
 	// just echoing the config write. status is one of "connected", "error",
@@ -159,6 +327,10 @@ type Deps struct {
 	// inventory is unavailable (explicit skill IDs are rejected). A wired
 	// listing that returns no skills is a known-empty set, not a skip.
 	AgentConfigInventory func() AgentConfigInventory
+	// ToolCatalog snapshots real builtin and live MCP metadata for compact
+	// tool readback. Metadata is never executed; the reader applies the
+	// target agent's connector assignments and effective policies.
+	ToolCatalog func() []tools.Tool
 	// AgentIsLive reports whether id is present in the live agent registry.
 	// Registry membership alone does not prove which persisted revision is
 	// active; get_agent therefore uses AgentActiveRevision below.
@@ -177,7 +349,7 @@ type Deps struct {
 	// that agent's *AgentInstance into the live registry
 	// (AgentLoop.UpsertAgentFast) and rebuild the resolver/default-agent
 	// override so the agent is immediately resolvable via
-	// GetAgent/ResolveRoute/GetDefaultAgent — not merely present in a map
+	// GetAgent/ResolveRoute — not merely present in a map
 	// (see pkg/agent/registry.go's UpsertAgentFast doc comment for the two
 	// traps that requires closing).
 	//
@@ -193,6 +365,20 @@ type Deps struct {
 	// case, never a silent no-op. The production gateway wires this next to
 	// ReloadFunc; see gateway.go where sysAgentDeps is constructed.
 	UpsertAgentFastFunc func(agentID string) error
+	// NotifyAgentCreated is the agent-picker-freshness fix (#1009): called
+	// by AgentCreateTool after the new agent is durably persisted, so an
+	// agent creating another agent mid-conversation reaches the SAME
+	// agent_created WS broadcast pkg/gateway/rest_agents_create.go's REST
+	// createAgent handler already fans out — otherwise the tab watching
+	// this conversation would never see the new agent appear in its Agent
+	// Picker until the query's 30s staleTime elapsed or a reload happened,
+	// because this creation path never touches the gateway's HTTP handler
+	// at all. The gateway wires this to a closure over the restAPI's
+	// nil-safe emitAgentCreated (see gateway.go's wireSystemTools).
+	//
+	// Nil in tests or when not wired: AgentCreateTool must nil-check before
+	// calling, exactly like every other optional Deps callback field.
+	NotifyAgentCreated func(agentID string)
 	// SkillsLoader provides access to the locally installed skills tree
 	// (workspace, global, and builtin skill directories). Nil in tests or when
 	// not wired — callers must nil-check before use.
@@ -210,55 +396,19 @@ type Deps struct {
 	// produces a user override rather than mutating the shipped built-in in
 	// place. Nil in tests or when not wired — callers must nil-check before use.
 	SkillWriter *skills.SkillWriter
-	// DelegationDeny, when non-nil, applies the full FR-6.2 delegation policy
-	// (trust set + mode("task") + depth) to a cross-workspace task assignment or
-	// reassignment. It is the SAME gate the plain create_task / update_task tools
-	// enforce (pkg/tools/task.go), resolved dynamically from the live config for
-	// the CALLING agent — because the sysagent in_workspace tools are registered
-	// once on a central registry and cannot bind a per-agent checker at
-	// construction time.
-	//
-	// callerAgentID is the acting agent (tools.ToolAgentID(ctx)); targetAgentID is
-	// the agent_id being assigned. A nil return ALLOWS; a non-nil *tools.DelegationDenial
-	// DENIES (carrying the structured reason + policy axis the SPA renders).
-	//
-	// When nil (tests / standalone), the gate is SKIPPED (fail-open ONLY when
-	// unwired — matching how the plain tools no-op when their checker is unset).
-	// The production gateway MUST wire this; see gateway.go where sysAgentDeps is
-	// constructed.
-	DelegationDeny func(ctx context.Context, callerAgentID, targetAgentID string) *tools.DelegationDenial
-
-	// ResolveBashPolicy resolves an assignee agent's effective "bash" tool
-	// policy (ADR-049 D2 rule 5, FR-017/052, review r1 major M5) — the SAME
-	// gate the plain create_task tool enforces (pkg/tools/task.go), needed so
-	// create_task_in_workspace can reject a create whose criteria are ALL
-	// kind=check when that policy is deny or ask (structurally unsatisfiable:
-	// the machine check could never even run). Returns ok=false when the
-	// assignee agent cannot be resolved at all.
-	//
-	// FAIL CLOSED, not open, when nil (tests / standalone): an unwired
-	// checker is a configuration error, never a permission grant — mirrors
-	// the plain create_task tool's own bashPolicyChecker discipline
-	// (pkg/tools/task.go SetBashPolicyChecker), NOT DelegationDeny's
-	// documented fail-open-when-unwired convention above (a separate,
-	// pre-existing policy axis this fix does not touch). The production
-	// gateway MUST wire this; see gateway.go where sysAgentDeps is
-	// constructed.
-	ResolveBashPolicy func(assigneeAgentID string) (policy string, ok bool)
-
+	// SkillGrants removes a deleted skill's name from every agent's stored
+	// grant list (founder Q-S3: best-effort hygiene on delete; SD-30 identity
+	// binding stays the safety rule). edit_skill action=delete passes it to the
+	// pipeline exactly as the REST delete does. Nil in tests or when not wired:
+	// the delete then leaves the stale row, which never matches (SD-30).
+	SkillGrants skills.GrantEditor
 	// ResolveToolPolicy returns the live compositor verdict for a registered
 	// caller. ok is false when the identity is absent or no longer registered.
 	ResolveToolPolicy func(agentID, toolName string) (policy string, ok bool)
-
-	// AssigneeCannotFinish answers whether an assignee can finish a task at all
-	// (founder decision 2026-09-15) — the SAME answer the plain create_task /
-	// update_task tools and the task run's pre-run check use (pkg/agent
-	// AgentLoop.TaskAssigneeCannotFinish): the reason naming the fix, or "".
-	// When nil (tests / standalone) no refusal is made and a warning is logged
-	// once (tools.AssigneeCannotFinishRefusal); the task run's pre-run check
-	// still ends such a task at once. The production gateway wires it where
-	// sysAgentDeps is constructed.
-	AssigneeCannotFinish tools.AssigneeReadinessChecker
+	// GodModeActive reports whether the God Mode override is in effect now
+	// (agent.GodModeActive), so a reported effective policy matches what the
+	// runtime compositor resolves. Nil means not active.
+	GodModeActive func() bool
 
 	// ListSessions returns all sessions across all stores (shared + legacy per-agent),
 	// deduplicating entries that appear in both. Errors are per-store and non-fatal;
@@ -281,13 +431,10 @@ type Deps struct {
 	// make get_usage under-report real spend with a green build.
 	ListSessions func() ([]*session.UnifiedMeta, []error)
 
-	// PlanStore, when non-nil, backs create_task_in_workspace's optional
-	// plan_id linkage arg (ADR-052 FR-002): validates the same-workspace FK
-	// and rejects linking to a terminal (done/failed) plan. Mirrors the
-	// plain create_task tool's SetPlanStore (pkg/tools/task.go). A nil
-	// PlanStore with a non-empty plan_id arg fails closed — never a silent
-	// no-op linkage. The production gateway wires this to the same
-	// *plan.Store instance passed to the plain create_task tool.
+	// PlanStore, when non-nil, backs the create_plan / execute_plan tool
+	// surfaces (ADR-052 FR-002). A nil PlanStore fails closed on any plan
+	// operation that needs it. The production gateway wires this to the same
+	// *plan.Store instance passed to the plain task tools.
 	PlanStore *plan.Store
 }
 
@@ -373,7 +520,19 @@ func restoreConfig(cfg *config.Config, snapshotJSON []byte) error {
 //
 // Use this for all sysagent tool paths that mutate any part of the config.
 func (d *Deps) WithConfig(fn func(*config.Config) error) error {
+	// An unwired mutator is a wiring fault: refuse with the reason, never a
+	// nil-func panic that crashes the calling tool (same rule as the
+	// SaveConfigLocked check below).
+	if d.MutateConfig == nil {
+		return errors.New("config mutation is not wired (Deps.MutateConfig is nil); nothing was saved")
+	}
+	store := d.pairingStore()
 	return d.MutateConfig(func(cfg *config.Config) error {
+		if store != nil {
+			if err := store.CheckConfigSnapshot(cfg); err != nil {
+				return err
+			}
+		}
 		// Snapshot the JSON-serializable fields before mutation so any mutation
 		// can be rolled back without copying the sync.RWMutex field.
 		var snapshotBuf bytes.Buffer
@@ -381,8 +540,15 @@ func (d *Deps) WithConfig(fn func(*config.Config) error) error {
 			return fmt.Errorf("WithConfig: failed to snapshot config: %w", err)
 		}
 		snapshotJSON := snapshotBuf.Bytes()
+		// FR-018: the outbound guard's "before" is the config this tool
+		// write started from; no tool writes outbound (dedicated = false).
+		beforeOutbound := outboundSnapshot(cfg)
 
-		if fnErr := fn(cfg); fnErr != nil {
+		fnErr := fn(cfg)
+		if fnErr == nil {
+			_, fnErr = config.GuardOutbound(beforeOutbound, cfg, false)
+		}
+		if fnErr != nil {
 			// Roll back in-memory state to pre-mutation snapshot.
 			if restoreErr := restoreConfig(cfg, snapshotJSON); restoreErr != nil {
 				return fmt.Errorf("fn error: %w; also: restore failed: %w", fnErr, restoreErr)
@@ -410,6 +576,21 @@ func (d *Deps) WithConfig(fn func(*config.Config) error) error {
 		}
 		return nil
 	})
+}
+
+// outboundSnapshot copies the channel instances of cfg with their outbound
+// settings deep-copied, as the "before" side of config.GuardOutbound.
+func outboundSnapshot(cfg *config.Config) *config.Config {
+	before := &config.Config{Channels: make(map[string]config.ChannelInstanceConfig, len(cfg.Channels))}
+	for id, inst := range cfg.Channels {
+		inst.Outbound = inst.Outbound.Clone()
+		if inst.Identity != nil {
+			identity := *inst.Identity // the pair rows compare it; fn may edit in place
+			inst.Identity = &identity
+		}
+		before.Channels[id] = inst
+	}
+	return before
 }
 
 // validateID rejects entity IDs containing path separators, "..", or null bytes
@@ -524,46 +705,6 @@ func successJSON(v any) string {
 		return `{"success":true}`
 	}
 	return string(b)
-}
-
-// stringSliceArg coerces a JSON-decoded tool argument into a []string.
-// JSON arrays decode to []any; non-string elements are skipped. Returns nil
-// for nil/empty/non-array inputs so callers can leave the field unset.
-func stringSliceArg(v any) []string {
-	raw, ok := v.([]any)
-	if !ok || len(raw) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(raw))
-	for _, e := range raw {
-		if s, ok := e.(string); ok {
-			out = append(out, s)
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-// stringMapArg coerces a JSON-decoded tool argument into a map[string]string.
-// JSON objects decode to map[string]any; non-string values are skipped. Returns
-// nil for nil/empty/non-object inputs so callers can leave the field unset.
-func stringMapArg(v any) map[string]string {
-	raw, ok := v.(map[string]any)
-	if !ok || len(raw) == 0 {
-		return nil
-	}
-	out := make(map[string]string, len(raw))
-	for k, e := range raw {
-		if s, ok := e.(string); ok {
-			out[k] = s
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
 }
 
 // errorJSON returns a consistent error response per D.10.1.

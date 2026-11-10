@@ -4,6 +4,11 @@ Status: implemented (`deploy/ci-worker/ci-cluster.sh`), 2026-09-16. Operational 
 the machines themselves remains `deploy/ci-worker/CLAUDE.md`; this note records the design of
 the dispatcher and why the pieces are shaped the way they are.
 
+**Operating-policy amendment — 2026-10-23:** root `CLAUDE.md` ("CI scope and
+remote pre-flight", "CI quarantine") governs permission and qualified results. This
+document describes runner capabilities, not authorization to run full CI on work
+or lane branches; apply the shared skill's "Build and test" procedure first.
+
 ## Context
 
 The CI workers used to be one shared machine: every run took an exclusive `flock` on
@@ -21,34 +26,42 @@ every exit path — success, gate failure, pre-flight refusal, and Ctrl-C.**
 
 ## The tier map
 
-Gates are grouped so the heaviest Go work gets the biggest machine and lighter work overlaps
-it. The map is data at the top of `ci-cluster.sh` (machine ids from `CI_CLUSTER_*_MACHINE`
-env vars, whole map from `CI_CLUSTER_TIERS`) — never flow — because tier machines are
-provisioned by the harness and their ids are not known when the script is written.
+Gates are grouped so CPU-sensitive Go and SPA work runs sequentially on performance while
+contracts and cross-platform checks overlap it on shared machines. The map is data at the
+top of `ci-cluster.sh` (machine ids from `CI_CLUSTER_*_MACHINE` env vars, whole map from
+`CI_CLUSTER_TIERS`) — never dispatch logic. Placement follows the founder's 2026-10-21
+"ok a" decision; the 2026-10-12 no-resize ruling stands.
 
-| Tier | Machine | Gates (verified against `runci.sh`'s `case` block) |
+| Tier | Default machine | Gates, in dispatch order (from `runci.sh`'s `case` block) |
 |---|---|---|
-| `go` | 1 (largest) | `gofmt go-build go-vet lint go-test go-race` |
-| `node` | 2 | `contracts spa` |
-| `xplat` | 3 | `embed-build records-no-sqlite cli-verb-guard` |
+| `go` | `080d74db170408` (performance) | `gofmt go-build go-vet lint go-test go-race spa` |
+| `node` | `d8d0d90a1e9648` (shared) | `contracts` |
+| `xplat` | `78113d4f329908` (shared) | `embed-build records-no-sqlite cli-verb-guard` |
+
+The new placement has not been timed as a whole: the former Go-only tier was ~43 min
+(`go-race` alone ~25), contracts + SPA together ~12 min, and xplat ~8 min. The `go` tier
+now adds SPA time; contracts-only time has not been measured separately.
 
 Why these groups:
 
-- **`go` gets the big box** because `go-test` (~19 min for `pkg/agent` alone, measured
-  uncontended) and `go-race` dominate wall-clock; everything else rides along on a machine
-  that is CPU-saturated anyway. `gofmt` is seconds.
-- **`node` runs the npm side**: `contracts` (npm ci + verify-contracts) and `spa` (npm ci +
-  typecheck + vitest). The original proposal listed "typecheck, vitest, contracts" — but
-  `typecheck` and `vitest` are *steps inside the `spa` gate*, not dispatchable gates; `spa`
-  is the dispatchable unit that contains them.
+- **`go` uses performance** because `go-test` and `go-race` dominate CPU-bound work;
+  `spa` follows all of them in the same sequential tier, so it cannot compete with them.
+  `spa` runs npm ci + typecheck + vitest; `typecheck` and `vitest` are steps inside that
+  gate, not separately dispatchable gates.
+- **`node` keeps contracts only** (npm ci + verify-contracts). Both `contracts` and `spa`
+  call `runci.sh::run_npm`, which unconditionally runs `npm ci` and replaces `node_modules`.
+  A combined tier would not reuse an installed dependency tree. Keeping contracts on its
+  existing shared machine is the smallest change and preserves all per-tier overrides.
 - **`xplat` runs the cross-platform path**: `embed-build` (SPA build + embed sync + Go build,
   whose `run_gobuild` includes the mipsle/lite cross-compile link checks), plus the two small
   gates the proposal didn't place — `records-no-sqlite` (branch-scoped, usually skips) and
   `cli-verb-guard` (a grep).
-- **`e2e` is deliberately NOT in the default map**: it runs ~20–30 min, needs the
-  OpenRouter secrets, and would pin one machine for the length of a full cluster run. Run it
-  per-machine by hand (`fly ssh console --app ci-omnipus-1 --machine <id> -C
-  "/cache/runci.sh <ref> e2e"`) or add it to a custom `CI_CLUSTER_TIERS` line.
+- **`e2e` is deliberately NOT in the default map**: it runs ~20–30 min and needs the
+  OpenRouter secrets. Run it on performance `080d74db170408` after the entire `go` tier
+  (including SPA), never in parallel: by hand (`fly ssh console --app ci-omnipus-1
+  --machine 080d74db170408 -C "/cache/runci.sh <ref> e2e"`) or append `e2e` after `spa`
+  on the same `go` line in a custom `CI_CLUSTER_TIERS` map. Do not add a second tier on
+  that machine.
 - **`all` is refused outright** (exit 2): it would run every gate serially on one machine —
   exactly what the cluster exists to avoid.
 - **One tier per machine, enforced**: two tiers on one machine would serialize on that
@@ -78,6 +91,12 @@ All are documented with burn history in `deploy/ci-worker/CLAUDE.md`:
    RESULT line is `FAIL:no-result-line` (SSH drop or interruption) — never assumed green.
    The proof harness exploits this deliberately: its stub `fly` exits 0 even for failing
    gates, and the dispatcher still reports the failure.
+4. **A dead session must end in a verdict, never a hang (2026-10-18/19).** The worst
+   wrapper failure is not a wrong exit code but NO return: on 2026-10-18 the Fly session
+   server tore down a running lint gate mid-write (every remote process died at 13:59:26Z —
+   no guest OOM in dmesg, no flyd event), the local `fly ssh console` sat on a half-open
+   flow forever, and the dispatcher hung for ~3 hours with no verdict. Every gate's console
+   therefore runs under a liveness watchdog (below).
 4. **Stale-checkout false-red.** Every gate log's `HEAD: <sha>` line must be a prefix of the
    locally-resolved ref sha. A worker that tested a different commit fails its gates'
    verdicts (`FAIL:head-mismatch`), so a mixed-commit run can never be reported as a pass.
@@ -93,8 +112,39 @@ All are documented with burn history in `deploy/ci-worker/CLAUDE.md`:
    `fly ssh console` with output captured to `<logdir>/<tier>-<gate>.log`. Gates within a
    tier run sequentially (the machine's `runci.lock` would queue a second run for up to 90
    minutes); all gates in a tier run even after one fails, mirroring `runci.sh all`.
+
+   **Gate watchdog (2026-10-19, `ci-cluster.sh::dispatch_tier`).** While a gate's console
+   runs, the tier re-checks it every second (verdict-in-log first, then the console
+   process) and probes the REMOTE liveness of *this* gate's runci.sh
+   (`sh -c "pgrep -f '/cache/[r]unci[.]sh <ref> <gate> <attempt>'; echo PGREP_RC=$?"` — one
+   quoted pattern, bound to a per-invocation **attempt id** that the dispatcher passes to
+   runci.sh as its third argument, so a co-tenant's run of even the same gate and ref can
+   never make a dead gate look alive; the `PGREP_RC` sentinel separates a clean no-match
+   from a failed probe) once per `CI_CLUSTER_WATCH_INTERVAL` (default 30s). The watchdog's
+   own I/O is bounded separately from healthy gate runtime: a probe or recovery transfer
+   may take `CI_CLUSTER_CONTROL_TIMEOUT` (default 20s), a killed console gets
+   `CI_CLUSTER_REAP_GRACE` (default 5s) before KILL. After `CI_CLUSTER_DEAD_STRIKES`
+   (default 3) consecutive not-alive probes (`gone`, `unreachable` or `timeout`), the
+   console is terminated and `handle_incomplete_gate` decides: if the remote RUNLOG THIS
+   attempt announced in its own console capture (`/cache/logs/<gate>@…`, which runci.sh
+   tee's from its first output line, followed by an `ATTEMPT: <id>` line) can be fetched
+   within the bound and carries this attempt's id, this run's HEAD and a verdict — the
+   transport died but the run finished — the verdict is RECOVERED and the gate counts as
+   completed. The runner names its log with the attempt id and its pid and creates it without appending, and the dispatcher rejects any log that holds more than one `ATTEMPT:` identity (two runs in one file). There is no "newest log of this gate" fallback: an older green run of the
+   same gate and commit is never adopted, and collected evidence must carry the attempt
+   id too. Otherwise the tier ends with an explicit, non-zero
+   **STALLED/DIED** verdict naming the gate, the machine and the last log line. Liveness,
+   never a timer: a healthy go-race (~25 min) probes `alive` on every cycle and is never
+   killed. `runci.sh` complements this with HUP/INT/TERM traps that write a
+   `RUNCI: KILLED by signal …` trailer and exit 129/130/143 — a SIGKILL (guest OOM) cannot
+   be trapped, which is exactly why the dispatcher-side watchdog is the guarantee.
+   Verdict classification: `FAIL:stalled` (watchdog fired, nothing recoverable),
+   `FAIL:killed-by-signal` (trailer present — the log itself says why there is no
+   verdict), `FAIL:no-result-line` (console exited without a verdict; recovered-or-stalled
+   logic also applies). The knobs are environment variables so the selfcheck can run the
+   watchdog at 1s/2-strikes; production defaults stay 30s/3.
 3. **Collect**: verdicts + HEAD shas from the logs; a summary table; one exit code
-   (0 all green · 1 any failure/incomplete/mismatch · 2 config or pre-flight refusal).
+   (0 all green · 1 any failure/incomplete/stalled/mismatch · 2 config or pre-flight refusal).
 4. **Teardown**: an EXIT trap stops every machine *this run started* — including on gate
    failure and on SIGINT/SIGTERM (proven with a stubbed `fly` in the script's development
    log, 2026-09-16). Machines that were **already running** when the dispatcher arrived are
@@ -108,28 +158,38 @@ therefore about not paying for 8 idle vCPUs, not about zero bill. The volumes ar
 repeat runs fast (Go/npm caches and the cloned repo survive), so deleting them to save
 storage would trade minutes of every run for cents — not worth it.
 
-## Sizing — performance vs shared-cpu, measured or not at all
+## Sizing and placement - sized per test type, on purpose
 
-The `go` tier needs the big `performance-8x` box: `go-test` and `go-race` are sustained,
-CPU-bound compiles, and `runci.sh`'s own contention tuning (`-p 2` + `GOMAXPROCS=4`) assumes
-8 real cores.
+The cluster is deliberately NOT five identical machines. One machine is `performance` 8x/16 GB
+(`080d74db170408`); four are `shared` 8x/16 GB (`d8d3977c946558`, `d8d0d90a1e9648`,
+`78113d4f329908`, `48ee71eb1e9768`). Founder ruling, 2026-10-12: that is the intended setup and
+there is no plan to resize; the work is placed to fit the machine.
 
-The `node` and `xplat` tiers *may* be cheaper as `shared-cpu-4x` machines — but that must be
-**measured, not assumed**. Shared vCPUs throttle under sustained load, so 4 shared cores are
-not 4 performance cores on a long compile; a naive "vitest is just tests, shared is fine"
-guess is exactly how a wall-clock doubles silently. The measurement is one comparable run of
-each tier's heaviest gate on both machine sizes (for the `go` tier that is one `go-test` on
-shared vs performance; for the others, `spa` and `embed-build`), comparing wall-clock — and
-watching for throttle-induced timing flakes, which are the more dangerous outcome (a false
-RED trains people to ignore a gate; see the e2e trap history in `deploy/ci-worker/CLAUDE.md`).
-Until those numbers exist, all tiers stay on `performance`.
+| Work | Where | Why |
+|---|---|---|
+| `go` tier (Go gates, then `spa`) | the performance machine | CPU-bound Go work and timing-sensitive SPA tests run sequentially, without competing for cores |
+| full `e2e` gate | the performance machine, **after** the entire go tier including SPA, never in parallel with it | 24 shards of Chromium rendering; starves under shared vCPU throttling |
+| `node` tier (`contracts` only) | a shared machine (default `d8d0d90a1e9648`) | contract verification stays separate; no installed node_modules reuse between gates |
+| `xplat` tier (`embed-build`, `records-no-sqlite`, `cli-verb-guard`) | a shared machine (default `78113d4f329908`) | unchanged placement |
+| targeted few-spec e2e rerun (`E2E_SPECS=...`) | may use a shared machine | a handful of specs, no matrix |
+
+**Measured, not assumed.** Shared vCPUs throttle under sustained load. On 2026-10-11 the full
+e2e gate was run on shared machines: it ran 2 h at load around 21 and starved (even the baseline
+failed nearly everything). `embed-build` on a shared machine took ~46 min against minutes on the
+performance one. Both were a **placement error** - heavy sustained work put on a shared machine -
+not undersizing. A false RED from a starved machine trains people to ignore a gate (see the e2e
+trap history in `deploy/ci-worker/CLAUDE.md`), which is why the placement rule above is a rule.
+The 2026-10-21 founder decision moves SPA for the same placement reason: three shared-machine
+runs each failed a different timing test, the performance run passed all 13,599 tests, and a
+shared spare showed ~62% CPU steal (time taken by other virtual machines). These are the
+decision's supplied measurements, not a new cluster run for this dispatcher change.
 
 ## Configuration surface
 
 | Env | Meaning | Default |
 |---|---|---|
 | `CI_CLUSTER_APP` | Fly app name | `ci-omnipus-1` |
-| `CI_CLUSTER_GO_MACHINE` / `_NODE_` / `_XPLAT_` | machine id per tier (default map) | unset → tier skipped |
+| `CI_CLUSTER_GO_MACHINE` / `_NODE_` / `_XPLAT_` | machine id per tier (default map) | `080d74db170408` (performance) / `d8d0d90a1e9648` (shared) / `78113d4f329908` (shared); set EMPTY → tier skipped |
 | `CI_CLUSTER_TIERS` | full map override, `<name>\|<machine>\|<gates>` per line | the default map above |
 | `CI_CLUSTER_START_TIMEOUT` | seconds to wait for a started machine to answer SSH | 180 |
 | `CI_CLUSTER_LOG_DIR` | where per-gate logs go | fresh dir under `$TMPDIR` |

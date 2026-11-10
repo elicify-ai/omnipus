@@ -98,7 +98,7 @@ func discoveryAssertDoorForced(t *testing.T, al *AgentLoop, agentID string) {
 		"role %q: the infra floor must keep ToolSearch on the filtered surface", agentID)
 
 	ts := fakeTurnState(inst, "sess-discovery-door-"+agentID)
-	names := adr090DefNames(al.buildCompressedToolDefs(ts, pf))
+	names := adr090DefNames(mustBuildCompressedToolDefs(t, al, ts, pf))
 	assert.Truef(t, names["ToolSearch"],
 		"role %q: compressed defs must offer ToolSearch (non-deniable discovery door)", agentID)
 	assert.Equalf(t, "allow", al.resolveToolPolicyAtExec(ts, "ToolSearch", pmap),
@@ -132,8 +132,8 @@ func TestADR090_DiscoveryInfrastructure_NotDeniableGlobally(t *testing.T) {
 
 // TestADR090_DiscoveryInfrastructure_DeniedTargetsStayDenied is the other
 // half of the distinction: forcing the discovery door must not reveal, load,
-// or execute a target tool the agent's policy denies. Ava's knowledge_edit
-// is a seeded write-deny (ADR-090 knowledge matrix).
+// or execute a target tool the agent's policy denies. Omnipus's knowledge_edit
+// is a seeded deny (omnipus-system-agent §6.5: outside its supporting set).
 func TestADR090_DiscoveryInfrastructure_DeniedTargetsStayDenied(t *testing.T) {
 	const deniedTarget = "knowledge_edit"
 	cfg := newCompressedCfg(t)
@@ -142,22 +142,22 @@ func TestADR090_DiscoveryInfrastructure_DeniedTargetsStayDenied(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
 	defer al.Close()
 
-	ava, ok := al.registry.GetAgent(string(coreagent.IDAva))
+	ava, ok := al.registry.GetAgent(string(coreagent.IDOmnipus))
 	require.True(t, ok)
 	_, registered := ava.Tools.Get(deniedTarget)
-	require.True(t, registered, "precondition: %s must be registered for ava", deniedTarget)
+	require.True(t, registered, "precondition: %s must be registered for omnipus", deniedTarget)
 
 	pf, pmap := discoveryPrepareSurface(ava)
 	require.Equal(t, "allow", pmap["ToolSearch"],
 		"precondition: the discovery door is on the floor")
 	_, targetSurvived := pmap[deniedTarget]
 	require.False(t, targetSurvived,
-		"precondition: ava's filter must drop %s (seeded write deny)", deniedTarget)
+		"precondition: omnipus's filter must drop %s (seeded deny)", deniedTarget)
 	assert.NotContains(t, toolNameSet(pf), deniedTarget,
 		"denied target must not ride the infra floor onto the filtered slice")
 
 	ts := fakeTurnState(ava, "sess-discovery-target-deny")
-	names := adr090DefNames(al.buildCompressedToolDefs(ts, pf))
+	names := adr090DefNames(mustBuildCompressedToolDefs(t, al, ts, pf))
 	assert.True(t, names["ToolSearch"], "discovery door stays offered")
 	assert.False(t, names[deniedTarget],
 		"compressed defs must not offer a policy-denied target")
@@ -168,12 +168,12 @@ func TestADR090_DiscoveryInfrastructure_DeniedTargetsStayDenied(t *testing.T) {
 	assert.NotContains(t, note, "  - "+deniedTarget,
 		"preview must not list a policy-denied target")
 
-	load := adr090Load(t, al, string(coreagent.IDAva), "sess-discovery-target-deny", deniedTarget)
+	load := adr090Load(t, al, string(coreagent.IDOmnipus), "sess-discovery-target-deny", deniedTarget)
 	require.True(t, load.IsError, "loading a denied target through ToolSearch must fail")
 	assert.Contains(t, load.ForLLM, "denied by this agent's policy",
 		"the load failure must name the policy denial, got %q", load.ForLLM)
 
-	query := discoveryQuery(t, al, string(coreagent.IDAva), "sess-discovery-target-deny-q", deniedTarget)
+	query := discoveryQuery(t, al, string(coreagent.IDOmnipus), "sess-discovery-target-deny-q", deniedTarget)
 	assert.False(t, strings.Contains(query.ForLLM, `"name":"`+deniedTarget+`"`),
 		"query matches must not name a policy-denied target; got %q", query.ForLLM)
 }
@@ -196,13 +196,13 @@ func TestADR090_DiscoveryInfrastructure_AllowedTargetStillLoads(t *testing.T) {
 		"precondition: jim's %s must survive the filter", allowedTarget)
 
 	ts := fakeTurnState(jim, "sess-discovery-target-allow")
-	pre := adr090DefNames(al.buildCompressedToolDefs(ts, pf))
+	pre := adr090DefNames(mustBuildCompressedToolDefs(t, al, ts, pf))
 	require.False(t, pre[allowedTarget],
 		"precondition: %s is deferred (not callable before discovery)", allowedTarget)
 
 	res := adr090Load(t, al, string(coreagent.IDJim), "sess-discovery-target-allow", allowedTarget)
 	require.False(t, res.IsError, "loading jim's allowed %s must succeed: %s", allowedTarget, res.ForLLM)
-	post := adr090DefNames(al.buildCompressedToolDefs(ts, pf))
+	post := adr090DefNames(mustBuildCompressedToolDefs(t, al, ts, pf))
 	assert.True(t, post[allowedTarget],
 		"%s must be callable in this session after discovery", allowedTarget)
 }

@@ -117,7 +117,7 @@ func newLifecycleHarness(t *testing.T, store EnvironmentSetupStore) *lifecycleHa
 	tool := NewEnvironmentSetupTool(EnvironmentSetupToolDeps{
 		Home:            home,
 		AgentWorkDir:    agentDir,
-		Admin:           false,
+		SetupAuthority:  false,
 		GodMode:         true, // process-level tests; kernel confinement is the kernel fixture's job
 		Store:           store,
 		AuditFailClosed: true,

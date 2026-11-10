@@ -187,16 +187,8 @@ func (al *AgentLoop) evaluateTruncatedToolCallError(
 
 	*roundRepairUsed = true
 
-	// D3.9: the refused attempt was billed by the provider even though the
-	// call was refused locally — debit its usage exactly once, through the
-	// SAME function the success arm uses (debitLLMUsage). An earlier cut of
-	// this block re-typed the four accounting calls by hand and silently
-	// omitted SetLastUsage, so a turn whose last provider call was a refused
-	// truncated tool call reported the PREVIOUS call's usage as its last.
-	var tae *common.ToolArgumentsError
-	if errors.As(err, &tae) {
-		al.debitLLMUsage(ts, llmModel, tae.Usage)
-	}
+	// D3.9: the provider boundary already debited the refused attempt, before
+	// fallback/recovery. Scheduling its repair must not debit it again.
 
 	logger.WarnCF("agent", "tool call cut off at the output-token limit — re-prompting the model once",
 		map[string]any{
@@ -244,8 +236,8 @@ type truncationSuccessVerdict struct {
 // answer-so-far (D6.7's "re-appended exactly once").
 //
 // The response's own CONTENT is read from response.Content deliberately, NOT
-// from the caller's `responseContent` local: that local carries the
-// ReasoningContent substitution the empty-response path applies, so passing
+// from the caller's `responseContent` local: that local once carried a
+// ReasoningContent substitution (removed by effort-levels FR-018), and passing
 // it fed a reasoning-only truncated response's chain-of-thought into the
 // accumulator, echoed it back to the model under "Continue from exactly
 // where it stopped", and persisted it as the answer. A reasoning-only
@@ -269,6 +261,9 @@ func (al *AgentLoop) evaluateTruncatedSuccess(
 
 	responseContent := response.Content
 	accumulated := ts.appendToAccumulator(responseContent)
+	if responseContent != "" {
+		ts.markContinuationCallAccounting()
+	}
 
 	if strings.TrimSpace(accumulated) == "" {
 		// D4a: nothing was ever produced. No retry, no fallback
@@ -391,6 +386,8 @@ func (al *AgentLoop) truncationContinuationEligible(
 // post-context-overflow-trim assembly) all call it, so the shape the model
 // sees can never drift between the three.
 func continuationChainMessages(accumulated string) []providers.Message {
+	// A collapsed answer can span several provider replies. Never attach a
+	// single reply's signed thinking blocks to this synthesized text.
 	return []providers.Message{
 		{Role: "assistant", Content: accumulated},
 		truncationContinueMessage(),
@@ -432,6 +429,7 @@ func sameContinuationChainMessage(a, b providers.Message) bool {
 	return a.Role == b.Role &&
 		a.Content == b.Content &&
 		len(a.ToolCalls) == 0 && len(b.ToolCalls) == 0 &&
+		len(a.ThinkingBlocks) == 0 && len(b.ThinkingBlocks) == 0 &&
 		len(a.Media) == 0 && len(b.Media) == 0
 }
 
@@ -462,9 +460,15 @@ func sameContinuationChainMessage(a, b providers.Message) bool {
 // Written here rather than as a turnState method because pkg/agent/turn.go is
 // owned by a concurrent work item in this wave; the field access is
 // mutex-guarded exactly as turn.go's own accessors do it.
-func (al *AgentLoop) flushContinuationAccumulator(ts *turnState, continuationChain *[]providers.Message) {
+//
+// #1178 (amendment §4.2): the flush's model-window append returns its error.
+// The accumulator is already cleared and the transcript entry already written
+// when the append runs, so a failure is reported to the consumer
+// (recordToolCalls) instead of being logged away — a turn whose window write
+// failed must not continue into the following tool round.
+func (al *AgentLoop) flushContinuationAccumulator(ts *turnState, continuationChain *[]providers.Message) error {
 	if ts == nil {
-		return
+		return nil
 	}
 	ts.mu.Lock()
 	pending := ts.continuationAccum
@@ -474,12 +478,17 @@ func (al *AgentLoop) flushContinuationAccumulator(ts *turnState, continuationCha
 		*continuationChain = nil
 	}
 	if pending == "" {
-		return
+		return nil
 	}
+	restoreAccounting := ts.holdFollowingCallAccounting()
+	defer restoreAccounting()
 	ts.appendIntermediateAssistantTranscript(pending)
 	if !ts.opts.NoHistory && ts.agent != nil && ts.agent.Sessions != nil {
-		ts.agent.Sessions.AddMessage(ts.sessionKey, "assistant", pending)
+		if err := ts.agent.Sessions.AddMessage(ts.sessionKey, "assistant", pending); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 // preserveTruncatedAccumulator implements ADR-087 D6.8: every terminal exit
@@ -518,6 +527,13 @@ func (al *AgentLoop) preserveTruncatedAccumulator(ts *turnState) {
 		return
 	}
 	accumulated := ts.continuationAccumulated()
+	// #1534: a user Stop ended the current round; the text that round showed
+	// before the Stop is part of the answer the screen showed (stop_turn_end.go).
+	if ts.stopRequested.Load() {
+		if shown := ts.takeStopShown(); shown != "" {
+			accumulated = ts.appendToAccumulator(shown)
+		}
+	}
 	ts.SetFinalContent(accumulated)
 	ts.setTruncationReason(truncationReasonMaxOutputTokens)
 	ts.resolveContinuation()
@@ -533,7 +549,7 @@ func (al *AgentLoop) preserveTruncatedAccumulator(ts *turnState) {
 	}
 	// ADR-087 D4a/D4b: stamp Truncated/TruncationReason in the SAME write as
 	// the content — see appendAssistantTranscriptTruncated's doc comment.
-	// This replaces the former append-then-MarkLastEntryTruncated two-step,
+	// This replaces the former append-then-the former post-hoc truncation rewrite two-step,
 	// which reopened and rewrote the whole transcript.jsonl just to stamp
 	// two fields on the entry constructed one call earlier.
 	ts.appendAssistantTranscriptTruncated(accumulated, truncationReasonMaxOutputTokens)

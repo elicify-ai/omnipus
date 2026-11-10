@@ -2,6 +2,7 @@ package anthropicprovider
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -12,23 +13,29 @@ import (
 )
 
 func TestBuildParams_BasicMessage(t *testing.T) {
-	messages := []Message{
-		{Role: "user", Content: "Hello"},
-	}
-	params, err := buildParams(messages, nil, "claude-sonnet-4.6", map[string]any{
-		"max_tokens": 1024,
-	})
-	if err != nil {
-		t.Fatalf("buildParams() error: %v", err)
-	}
-	if params.Model != "claude-sonnet-4-6" {
-		t.Errorf("Model = %q, want %q", params.Model, "claude-sonnet-4-6")
-	}
-	if params.MaxTokens != 1024 {
-		t.Errorf("MaxTokens = %d, want 1024", params.MaxTokens)
-	}
-	if len(params.Messages) != 1 {
-		t.Fatalf("len(Messages) = %d, want 1", len(params.Messages))
+	// Prompt-caching spec FR-004, US-2 and TDD row 23: catalog model IDs go
+	// on the wire verbatim, including dots. A hyphenated ID stays unchanged too.
+	for _, model := range []string{"claude-sonnet-4.6", "MiniMax-M2.7", "claude-sonnet-4-6"} {
+		t.Run(model, func(t *testing.T) {
+			messages := []Message{
+				{Role: "user", Content: "Hello"},
+			}
+			params, err := buildParams(messages, nil, model, map[string]any{
+				"max_tokens": 1024,
+			})
+			if err != nil {
+				t.Fatalf("buildParams() error: %v", err)
+			}
+			if params.Model != model {
+				t.Errorf("Model = %q, want verbatim catalog ID %q (FR-004)", params.Model, model)
+			}
+			if params.MaxTokens != 1024 {
+				t.Errorf("MaxTokens = %d, want 1024", params.MaxTokens)
+			}
+			if len(params.Messages) != 1 {
+				t.Fatalf("len(Messages) = %d, want 1", len(params.Messages))
+			}
+		})
 	}
 }
 
@@ -230,22 +237,17 @@ func TestProvider_ChatUsesTokenSource(t *testing.T) {
 		var reqBody map[string]any
 		json.NewDecoder(r.Body).Decode(&reqBody)
 
-		resp := map[string]any{
-			"id":          "msg_test",
-			"type":        "message",
-			"role":        "assistant",
-			"model":       reqBody["model"],
-			"stop_reason": "end_turn",
-			"content": []map[string]any{
-				{"type": "text", "text": "ok"},
-			},
-			"usage": map[string]any{
-				"input_tokens":  1,
-				"output_tokens": 1,
-			},
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		// A token-source provider streams (OAuth/setup tokens require it), so the
+		// fixture speaks SSE. It used to answer with a bare JSON body, which the
+		// streaming path read as an empty stream and silently accepted; a stream
+		// without message_stop is now an error (issue #1278 sweep).
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintf(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":%q,\"stop_reason\":null,\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n", reqBody["model"])
+		fmt.Fprint(w, "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n")
+		fmt.Fprint(w, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"ok\"}}\n\n")
+		fmt.Fprint(w, "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n")
+		fmt.Fprint(w, "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n")
+		fmt.Fprint(w, "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
 	}))
 	defer server.Close()
 

@@ -15,7 +15,7 @@ func TestBuildAgentMainSessionKey(t *testing.T) {
 
 func TestBuildAgentMainSessionKey_Normalizes(t *testing.T) {
 	got := BuildAgentMainSessionKey("Sales Bot")
-	want := "agent:sales-bot:main"
+	want := "agent:Sales-Bot:main"
 	if got != want {
 		t.Errorf("BuildAgentMainSessionKey('Sales Bot') = %q, want %q", got, want)
 	}

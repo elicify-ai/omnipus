@@ -10,6 +10,11 @@ linters:
     - dupword
     - err113
     - exhaustruct
+    # exhaustruct_v5 is exhaustruct renamed upstream in golangci-lint
+    # v2.15.0; the disable above is the project's standing decision, and
+    # without this line `default: all` would silently re-enable it under
+    # the new name.
+    - exhaustruct_v5
     - funcorder
     - gochecknoglobals
     - godot
@@ -249,6 +254,22 @@ linters:
       - linters:
           - staticcheck
         path: ^pkg/(providers/azure/provider|tools/web)\.go$
+        text: 'ST1005'
+      # ST1005 — BuiltinRemovalMessage is the founder-fixed, user-facing refusal
+      # sentence ("Built-in agents can't be removed from this workspace"), pinned
+      # verbatim by builtin_roster_test.go and shown to end users by the REST and
+      # sysagent writers; it is prose, not an error string meant for wrapping.
+      - linters:
+          - staticcheck
+        path: ^pkg/workspace/builtin_roster\.go$
+        text: 'ST1005'
+      # ST1005 — errMainChatNotPrepared is the fixed client-facing sentence a
+      # user reads when an agent's main chat could not be prepared (capitalised,
+      # period-terminated prose like the other server-failure texts users read),
+      # not an error string meant for wrapping.
+      - linters:
+          - staticcheck
+        path: ^pkg/gateway/main_session\.go$
         text: 'ST1005'
       # ST1005 — ValidateDoDDistinct's refusal (GOAL-FR-021/FR-047/FR-048) is
       # read verbatim by end users in the task create/edit dialog (fix wave:

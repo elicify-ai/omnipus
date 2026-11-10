@@ -96,18 +96,11 @@ describe('mapToCalendarEvents', () => {
     expect(ev.editable).toBe(true)
   })
 
-  // ─── Test #3: every & recurring → 0 events ────────────────────────────────
-
-  it('#3 every trigger produces no events (deferred v1)', () => {
-    const task = makeTask({
-      trigger: { type: 'every', config: { every_ms: 3_600_000 } },
-    })
-    expect(mapToCalendarEvents([task])).toHaveLength(0)
-  })
+  // ─── Test #3: recurring → 0 events ────────────────────────────────
 
   it('#3 recurring trigger produces no events (deferred v1)', () => {
     const task = makeTask({
-      trigger: { type: 'recurring', config: { cron_expr: '0 9 * * MON' } },
+      trigger: { type: 'recurring', config: { rrule: 'FREQ=WEEKLY;BYDAY=MO', dtstart_ms: 1_800_000_000_000, tz: 'UTC' } },
     })
     expect(mapToCalendarEvents([task])).toHaveLength(0)
   })

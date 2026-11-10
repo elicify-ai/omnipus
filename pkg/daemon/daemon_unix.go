@@ -17,6 +17,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 // stopGracePeriod is how long Stop waits for SIGTERM to take effect before
@@ -140,24 +142,16 @@ func resolveExeName(pid int) (string, bool) {
 // daemonized deployment. Operator-facing diagnostics MUST go through
 // pkg/logger, which writes $OMNIPUS_HOME/logs/gateway.log; startup failures
 // before that is wired land in gateway_panic.log.
-func spawnProcess(exe string, args []string, _ string) (int, error) {
-	// Filter the parent env to pass only non-sensitive, runtime-relevant vars.
-	// We explicitly pass OMNIPUS_HOME so the child finds its data directory.
-	// We omit OMNIPUS_MASTER_KEY and OMNIPUS_KEY_FILE from the parent env on
-	// purpose: the spawned gateway must use its own unlock mode.  Callers that
-	// need a headless-unlock child should set those env vars in args or via the
-	// gateway config.
-	//
-	// Currently we pass through the full parent env so that PATH, OMNIPUS_HOME,
-	// OMNIPUS_MASTER_KEY (for non-interactive unlock), OMNIPUS_KEY_FILE, and
-	// OMNIPUS_BEARER_TOKEN all flow to the child without the caller having to
-	// re-enumerate them.  The env whitelist (FR-015 security hardening) is not
-	// applied on this path — deferred from the #155 security wave, no release
-	// scheduled.
-	childEnv := os.Environ()
-
+func spawnProcess(exe string, args []string, home string) (int, error) {
+	// FR-239: the child gateway starts from the closed child allowlist (PATH,
+	// HOME, ...) plus the named values its own boot contract consumes — see
+	// daemonChildEnvAdditions for why OMNIPUS_HOME and the operator-supplied
+	// unlock/bearer values are passed explicitly here. Everything else in the
+	// parent environment (provider keys, mailbox password, unknown vars) is
+	// stripped — the full pass-through this comment block used to document is
+	// gone, closing the long-standing FR-015/FR-239 gap on this path.
 	cmd := exec.Command(exe, args...)
-	cmd.Env = childEnv
+	cmd.Env = append(sandbox.ScrubGatewayEnv(), daemonChildEnvAdditions(home)...)
 	cmd.Stdin = nil // Go runtime connects this to /dev/null unconditionally for background children
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setpgid: true, // detach from parent process group

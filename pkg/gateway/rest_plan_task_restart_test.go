@@ -667,7 +667,7 @@ func TestPlanStop_EngineUnavailable503(t *testing.T) {
 			Defaults: config.AgentDefaults{
 				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 			List: []config.AgentConfig{
-				{ID: testPlansAgentID, Name: "Plans Test Agent", Default: true, Type: config.AgentTypeCustom, Home: agentWorkspace},
+				{ID: testPlansAgentID, Name: "Plans Test Agent", Type: config.AgentTypeCustom, Home: agentWorkspace},
 			},
 		},
 	}

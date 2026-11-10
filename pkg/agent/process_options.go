@@ -12,6 +12,7 @@
 package agent
 
 import (
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
@@ -23,6 +24,14 @@ type processOptions struct {
 	ChatID            string // Target chat ID for tool execution
 	SenderID          string // Current sender ID for dynamic context
 	SenderDisplayName string // Current sender display name for dynamic context
+	// InputOrigin is who the turn's triggering input came from (§6.18):
+	// a channel person on a connection, or another agent's request.
+	InputOrigin inputOrigin
+	// ConsumedInputOrigins are the origins of queued inputs a continuation
+	// turn was started to consume after the previous turn retired (the
+	// post-turn drain). They are recorded like InputOrigin, so consuming a
+	// channel person's queued message makes the new turn channel-triggered.
+	ConsumedInputOrigins []inputOrigin
 	// UserID is the authenticated gateway principal that initiated this turn,
 	// threaded from the WS connection (websocket.go wc.userID) via the dedicated
 	// bus.InboundMessage.GatewayUserID carrier (FR-017). It is stamped onto
@@ -30,8 +39,14 @@ type processOptions struct {
 	// sessions are attributable. Empty for channel-originated turns (the platform
 	// sender in Sender.Username is not a gateway principal and is never read here)
 	// and unauthenticated env-token / dev-bypass paths — never guessed.
-	UserID                  string              // Authenticated gateway principal (FR-017)
-	UserMessage             string              // User message content (may include prefix)
+	UserID      string // Authenticated gateway principal (FR-017)
+	UserMessage string // User message content (may include prefix)
+	// InputAlreadyArchived marks UserMessage as an instruction re-read from this
+	// session's archive by reconstructSteeredTurn (a launch or revive
+	// instruction). When it is also the newest line of the model window, the turn
+	// keeps using the text (routing, goal claim, external CLI) but neither adds it
+	// to the window a second time nor archives it again (turnState.userInputInWindow).
+	InputAlreadyArchived    bool
 	ForcedSkills            []string            // Skills explicitly requested for this message
 	Media                   []string            // media:// refs from inbound message
 	InitialSteeringMessages []providers.Message // Steering messages from refactor/agent
@@ -41,13 +56,21 @@ type processOptions struct {
 	// providers.Message: that struct is the literal LLM provider request
 	// wire shape, never a receipt-bookkeeping carrier.
 	InitialSteeringCorrelationIDs []string
-	DefaultResponse               string                // Response when LLM returns empty
-	SendResponse                  bool                  // Whether to send response via bus
-	SuppressToolFeedback          bool                  // Whether to suppress inline tool call and result feedback
-	NoHistory                     bool                  // If true, don't load session history (for heartbeat)
-	SkipInitialSteeringPoll       bool                  // If true, skip the steering poll at loop start (used by Continue)
-	TranscriptSessionID           string                // Session ID for transcript tool call recording (empty = disabled)
-	TranscriptStore               *session.UnifiedStore // Store for transcript tool call recording (nil = disabled)
+	DefaultResponse               string // Response when LLM returns empty
+	SendResponse                  bool   // Whether to send response via bus
+	SuppressToolFeedback          bool   // Whether to suppress inline tool call and result feedback
+	NoHistory                     bool   // If true, don't load session history (for heartbeat)
+	SkipInitialSteeringPoll       bool   // If true, skip the steering poll at loop start (used by Continue)
+	// ExternalCLIResume marks a turn that must deliver its steering instruction
+	// to an EXISTING native CLI conversation by resume rather than starting a
+	// fresh external-CLI run (FR-043). Set ONLY by the post-turn steering drain
+	// (steer_turn_drain.go::continueSteeredTurn), i.e. exactly when a queued
+	// follow-up instruction is delivered to a session whose external-CLI turn
+	// already ran; every other turn leaves it false (a first dispatch, a task
+	// run, a wake), so an ordinary external-CLI run is unchanged.
+	ExternalCLIResume   bool
+	TranscriptSessionID string                // Session ID for transcript tool call recording (empty = disabled)
+	TranscriptStore     *session.UnifiedStore // Store for transcript tool call recording (nil = disabled)
 	// OriginKind identifies the durable execution origin when this turn does
 	// not have a lifecycle record to supply it. The zero value is an ordinary
 	// interactive turn. Publication policy resolves the record first.
@@ -65,6 +88,22 @@ type processOptions struct {
 	// approval prompt would stall the run forever. Only ProcessScheduled sets
 	// this; interactive paths leave it false so `ask` keeps prompting.
 	AutoDenyAsk bool
+
+	// askRefusalReason is the denial reason an unattended turn refuses an
+	// unsettled Ask-policy call with (#1263 R4). Set only by
+	// applyTurnAttendance when the turn is built; empty means the headless
+	// scheduled reason.
+	askRefusalReason string
+	// askRefusalCause explains an unresolved ancestry walk behind the refusal
+	// (gate round 1, SF-05); carried into the refusal's audit context.
+	askRefusalCause string
+
+	// approvalOrigin is the server-derived origin every approval this turn
+	// raises carries (spec §6.18, K7 origin_label / room_ref): "while
+	// answering <person> on <connection>" for a channel message, "asked by
+	// <Agent>" for a peer agent's request, "for group <name>" plus the room
+	// reference for a group-chat room request. Zero for a plain web turn.
+	approvalOrigin approvalOrigin
 
 	// Metadata carries the inbound message metadata (bus.InboundMessage.Metadata)
 	// through to the turn flow. The agent loop reads Metadata["model_name"] to
@@ -134,4 +173,19 @@ type processOptions struct {
 	// != nil (ADR-093 D3's standing-root test); every other turn — root
 	// chat, heartbeat, scheduled, task — leaves it "" and stays unstamped.
 	SteeredSessionID string
+
+	// executionDisposition carries canonical admission ownership separately
+	// from routing, transcript containment and delegate tool authority.
+	executionDisposition *executionDisposition
+	// goalWake is an ordinary system input's expected pre-admission identity.
+	goalWake *ordinaryGoalWake
+	// goalReminderGoalID identifies only keeper reminders, not claim steers.
+	goalReminderGoalID string
+	// goalReminderFrame is the durable chat row carried by this turn's start.
+	goalReminderFrame *generated.ReplayMessageFrame
+
+	// roomCost owns handed-over room inputs before execution, independently
+	// of later pricing polls. Ordinary, system-wake and continuation turns all
+	// collect inputs/cost and settle their owned requests on exit (§6.14).
+	roomCost *roomCostMeter
 }

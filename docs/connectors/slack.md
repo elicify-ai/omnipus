@@ -24,8 +24,7 @@ Omnipus connects to Slack using [Socket Mode](https://api.slack.com/apis/socket-
       "placeholder": {
         "enabled": false,
         "text": []
-      },
-      "reasoning_channel_id": ""
+      }
     }
   }
 }
@@ -40,7 +39,6 @@ Omnipus connects to Slack using [Socket Mode](https://api.slack.com/apis/socket-
 | `group_trigger` | object | No | Controls when the bot responds in channels/group DMs. `mention_only: true` restricts responses to @-mentions; `prefixes` lists trigger prefixes. |
 | `typing` | object | No | Reserved; not actively read by the Slack channel. Typing indicators always run through `TypingCapable` when the agent loop calls for them. |
 | `placeholder` | object | No | Reserved; the Slack channel does not implement `PlaceholderCapable` today, so this block has no effect. |
-| `reasoning_channel_id` | string | No | Channel ID where extended reasoning traces are sent separately. |
 
 ## Setup
 
@@ -65,3 +63,7 @@ Omnipus connects to Slack using [Socket Mode](https://api.slack.com/apis/socket-
 - **Capabilities.** The Slack channel implements `TypingCapable`, `ReactionCapable`, `MediaSender`, and `CommandRegistrarCapable`. Typing indicators are driven by the agent loop via `TypingCapable`; the `typing` and `placeholder` config blocks are reserved fields and have no effect today.
 - **Message length.** Slack caps individual messages at 40 000 characters; longer responses are automatically split.
 - **Group chats.** Use `group_trigger.mention_only: true` so the bot only responds in channels when directly @-mentioned.
+
+## Starting messages
+
+Starting messages is not supported yet on this platform; the agent only answers. See [Starting messages](../connectors.md#starting-messages).

@@ -5,6 +5,9 @@ description: >
   and skills are editable. Hidden Judge/Supervisor instructions are editable while
   their identity and capabilities remain fixed. Runtime applicability is validated
   before any mutation. Protected same-value echoes are still rejected.
+  For figure, role, and color, only omission means unchanged. Explicit null and
+  invalid supplied values are rejected with HTTP 400, and no sibling field,
+  timestamp, or revision is changed.
 minProperties: 2
 additionalProperties: false
 required:
@@ -22,7 +25,8 @@ properties:
   name:
     type: string
     minLength: 1
-    description: New display name. Rejected on locked agents.
+    maxLength: 100
+    description: New display name. Rejected on locked agents. At most 100 characters, the same limit as Agent.name (#1075).
     example: "My Renamed Agent"
   description:
     type: string
@@ -45,6 +49,15 @@ properties:
       agents. Send an empty string to clear it (fall back to default-provider
       resolution).
     example: "openrouter"
+  reasoning_effort:
+    type: string
+    maxLength: 32
+    description: >
+      Stored effort for the primary model (effort-levels spec FR-029):
+      "" clears it (Not set; an agent riding the default model then inherits the
+      default's effort), "provider_default", a catalog level name, "on" or "off".
+      Omitted keeps the stored value. null is refused. Not checked against the
+      catalog (FR-048).
   context_window_override:
     type: integer
     minimum: 1
@@ -68,31 +81,39 @@ properties:
     example: "You are a helpful assistant..."
   max_tool_iterations:
     type: integer
-    description: New maximum tool calls per turn. Allowed on all agents.
+    minimum: 1
+    maximum: 1000
+    nullable: true
+    description: >
+      The agent's own tool-iteration limit (issue #904, tool-iteration-limit
+      spec D9/D10/D14). Omitted = unchanged; null = clear the own value (the
+      agent rides the global limit — "Use global limit"); a number = set the
+      own value, refused (400) if above the current global limit. Allowed on
+      every agent type, including subagent_3p.
     example: 100
+  figure:
+    $ref: './AgentFigure.yaml'
+    x-go-type: AgentFigure
+  role:
+    $ref: './AgentRole.yaml'
+    x-go-type: AgentRole
   color:
-    type: string
-    pattern: '^#[0-9A-Fa-f]{6}$'
-    description: Hex color code for agent avatar display (e.g. "#D4AF37").
-    example: "#D4AF37"
-  icon:
-    type: string
-    maxLength: 50
-    description: Phosphor icon name for agent avatar (e.g. "Robot", "Octopus").
-    example: "Robot"
+    $ref: './AgentColor.yaml'
+    x-go-type: AgentColor
   fallback_models:
     type: array
     maxItems: 2
     items:
-      $ref: './FallbackModel.yaml'
+      $ref: './FallbackModelPair.yaml'
     description: >
       Replace the agent's fallback model chain (Phase 1B / FR-005). Each
       entry carries its own provider so the fallback can route through
       a different provider than the primary (FR-007). Capped at 2 entries.
       Rejected 400 on subagent_3p agents (CLI handles its own retries).
 
-      Wire format is always the object form `[{model, provider}]`. Legacy
-      `[string]` payloads are normalized at config-load time (FR-006).
+      Wire format is always the object form `[{model, provider}]`, and every
+      entry must name both: an entry missing its provider or its model is
+      refused 400, naming the entry (issue #1340).
     example:
       - model: "claude-sonnet-4.6"
         provider: "anthropic"
@@ -113,29 +134,6 @@ properties:
         example: 4096
   tools_cfg:
     $ref: './AgentToolsCfg.yaml'
-  auto_approve_disabled:
-    type: boolean
-    description: >
-      Force Auto-approve off for this agent (ADR-092), overriding the
-      global default (SandboxConfig.auto_approve) for every tool this
-      agent resolves to "ask". Off-only: true disables Auto for this
-      agent; false (or omitting the field, which leaves the stored value
-      unchanged) does not loosen past the global default — there is no
-      value here that turns Auto on when the global default has it off.
-      Distinct from `tool_policy_changes`, which is unchanged and still
-      governs allow/deny/ask per tool.
-    example: false
-  default:
-    type: boolean
-    description: >
-      Send true to make this agent the global default that handles inbound
-      messages with no more-specific routing rule — replacing whichever agent
-      previously held it. Send false to clear the default, which only has an
-      effect if this agent currently holds it (sending false for an agent
-      that isn't the current default is a no-op). Omitting this field leaves
-      the default unchanged. Chat-capable core and custom Main agents only; workers, hidden and external
-      agents cannot be defaults. This does not change workspace membership.
-    example: false
   skills:
     type: array
     uniqueItems: true
@@ -156,7 +154,7 @@ properties:
       Send null to clear. Main only.
     example: "alloy"
   executor:
-    $ref: './ExecutorConfig.yaml'
+    $ref: './ExecutorConfigUpdate.yaml'
   memory_enabled:
     type: boolean
     description: >

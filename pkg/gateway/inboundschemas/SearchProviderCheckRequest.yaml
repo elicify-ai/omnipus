@@ -1,0 +1,8 @@
+type: object
+description: >
+  Body for a manual web-search connection check. The empty object is required;
+  keys, queries, URLs, depth, roles and all other fields are rejected. The
+  gateway supplies a fixed non-personal query and uses the saved key.
+additionalProperties: false
+properties: {}
+example: {}

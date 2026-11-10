@@ -57,6 +57,17 @@ import (
 // EffectiveVerifierWindowTokens, zero-backfilled at boot).
 const verifierWindowTokensDefault = 20000
 
+// VerifierConcurrencyBackoffReason is the distinct Unavailable reason
+// runVerifierAdjudication returns when it backs off because ANOTHER
+// adjudication already holds the unit's verifier-session registry entry
+// (corr-MAJOR-3/G-1) — both at the Lookup pre-check and at the atomic
+// Register CAS rejection. It is a BACK-OFF, not an outage: the in-flight
+// adjudication resolves the unit, so it must never be retried, surfaced as
+// judge-unavailable, or counted toward the consecutive-Unavailable streak.
+// Consumers key on this exact value — keep it in sync with every return
+// that produces it.
+const VerifierConcurrencyBackoffReason = "concurrent adjudication in flight for unit"
+
 // effectiveVerifierWindowTokens resolves the transcript-window token budget
 // (FR-032) from PlanningConfig, falling back to the compiled default when no
 // config is reachable (test scaffolding without a full config).
@@ -389,11 +400,10 @@ func (al *AgentLoop) sessionWindowText(store *session.UnifiedStore, sessionID st
 		logger.WarnCF("agent", "verifier: could not read session for window feed", fields)
 		return ""
 	}
-	// FR-105: redact tier-1 tool-call parameters/errors through the SAME
-	// RegisterSensitiveValues path every other tool-result-derived text the
-	// Judge sees already goes through (judge.go's evidenceStore() redact
-	// closure) — this feed puts recipients/tokens/paths in front of a model
-	// that did not previously see them.
+	// FR-105 / issue #721: redact the whole window (narration, tool-call
+	// parameters, errors and output) through the SAME unconditional scrubber
+	// judge.go's evidenceStore() uses — registered credential values plus
+	// the secret-shape patterns, whatever tools.filter_sensitive_data says.
 	return renderVerifierWindowText(entries, budgetTokens, withTierOneRedact(al.tierOneRedactFn()))
 }
 
@@ -410,25 +420,15 @@ func (al *AgentLoop) sessionWindowText(store *session.UnifiedStore, sessionID st
 // empty and the goal Judge fail-closed every criterion with "no evidence"
 // against a session whose transcript plainly held the reply — observed live
 // on the first end-to-end /goal UAT. The shared store is now consulted
-// first; the legacy per-agent store remains as a fallback for old installs
-// whose sessions still live there.
+// only: DEL-10 (a398d3fed) deleted the per-agent stores, so there is no
+// legacy fallback to consult.
 func (al *AgentLoop) goalSessionWindowText(goalSessionID, agentID string) string {
 	if goalSessionID == "" || agentID == "" {
 		logger.WarnCF("agent", "verifier: goal window feed skipped — empty session or agent id",
 			map[string]any{"goal_session_id": goalSessionID, "agent_id": agentID})
 		return ""
 	}
-	if shared := al.GetSessionStore(); shared != nil {
-		if text := al.sessionWindowText(shared, goalSessionID, al.effectiveVerifierWindowTokens(), nil); text != "" {
-			return text
-		}
-		logger.WarnCF("agent", "verifier: goal window empty from the SHARED store — falling back to the legacy per-agent store",
-			map[string]any{"goal_session_id": goalSessionID, "agent_id": agentID})
-	} else {
-		logger.WarnCF("agent", "verifier: no shared session store — goal window falling back to the legacy per-agent store",
-			map[string]any{"goal_session_id": goalSessionID, "agent_id": agentID})
-	}
-	store := al.GetAgentStore(agentID)
+	store := al.GetSessionStore()
 	if store == nil {
 		return ""
 	}
@@ -463,17 +463,11 @@ func (al *AgentLoop) taskSessionWindowText(taskID, assigneeAgentID string) strin
 	if t == nil || t.SessionID == "" {
 		return "" // task has no session yet — not an error, just nothing to feed
 	}
-	// Shared store first (see goalSessionWindowText's STORE RESOLUTION note —
-	// same 2026-09-06 UAT defect class; task sessions are written to the
-	// shared store too), legacy per-agent store as the old-install fallback.
-	if shared := al.GetSessionStore(); shared != nil {
-		if text := al.sessionWindowText(shared, t.SessionID, al.effectiveVerifierWindowTokens(), map[string]any{"task_id": taskID}); text != "" {
-			return text
-		}
-	}
-	store := al.GetAgentStore(assigneeAgentID)
+	// The shared store only (see goalSessionWindowText's STORE RESOLUTION note;
+	// task sessions are written to the shared store too).
+	store := al.GetSessionStore()
 	if store == nil {
-		logger.WarnCF("agent", "verifier: no session store for assignee agent (task window feed)",
+		logger.WarnCF("agent", "verifier: no session store (task window feed)",
 			map[string]any{"task_id": taskID, "agent_id": assigneeAgentID})
 		return ""
 	}
@@ -502,8 +496,9 @@ func (al *AgentLoop) taskSessionWindowText(taskID, assigneeAgentID string) strin
 //
 // FR-105/FR-106 (ADR-084 revision 9, D14, wave E10): tool calls now render
 // as "{tool, parameters, status, error}" (judge_evidence_tiers.go's
-// formatTierOneToolCall), durable fields only, bounded and optionally
-// redacted per opts — replacing the old name+status-only summary (C26's
+// formatTierOneToolCall) plus, since issue #1484, the model-visible tool
+// output (Result["text"], with the FR-106 projection marker kept when the
+// result was capped or emptied), bounded and redacted per opts — replacing the old name+status-only summary (C26's
 // defect: "the change is at renderTranscriptEntriesForWindow"). Signature
 // stays backward-compatible (opts is a variadic tail) because
 // verifier_adjudication_test.go — E9's write-set, not this wave's — calls
@@ -532,7 +527,14 @@ func renderTranscriptEntriesForWindow(
 			if role == "" {
 				role = "assistant"
 			}
-			items = append(items, item{msg: providers.Message{Role: role, Content: e.Content}})
+			content := e.Content
+			if redact != nil {
+				// Issue #721: narration is part of the window the Judge
+				// reads; a credential the agent quoted back must not reach
+				// it either.
+				content = redact(content)
+			}
+			items = append(items, item{msg: providers.Message{Role: role, Content: content}})
 		}
 		for _, tc := range e.ToolCalls {
 			content := formatTierOneToolCall(tc, redact)
@@ -711,9 +713,6 @@ func (al *AgentLoop) allSessionsForDescendantWalk(assigneeAgentID string) []*ses
 		}
 	}
 	add(al.GetSessionStore(), "shared")
-	if assigneeAgentID != "" {
-		add(al.GetAgentStore(assigneeAgentID), "per-agent")
-	}
 	return all
 }
 
@@ -792,7 +791,7 @@ func (al *AgentLoop) scopeWithDescendants(assigneeAgentID string, rootIDs []stri
 func (al *AgentLoop) newVerifierSessionChatID(sessionKey, unitID string) string {
 	fallback := "verify:" + sessionKey
 
-	sessStore := al.GetAgentStore(string(coreagent.IDJudge))
+	sessStore := al.GetSessionStore()
 	if sessStore == nil {
 		return fallback
 	}
@@ -1395,7 +1394,15 @@ func (al *AgentLoop) runVerifierAdjudication(
 	// consecutive-Unavailable streak. Reads the named return `unavailable`
 	// AFTER it has been set by whichever return statement below fires — a
 	// defer over a named return always observes the final value.
+	//
+	// #984: a concurrency back-off (VerifierConcurrencyBackoffReason) is NOT
+	// an outage — it is NEITHER counted toward (which would escalate to a
+	// false "verification is stalled" ERROR after three) NOR cleared (which
+	// would erase a genuine in-progress streak): neutral for the streak.
 	defer func() {
+		if unavailable && reason == VerifierConcurrencyBackoffReason {
+			return
+		}
 		recordVerifierAvailabilityOutcome(vs.va.unitID, unavailable)
 	}()
 
@@ -1476,7 +1483,10 @@ agentLoopRunVerifierAdjudicationLoop1:
 			// spy's Register returns nil, so the CAS never rejects in tests).
 			if richer, ok := vs.registry.(VerifierSessionRegistry); ok {
 				if existing, held := richer.Lookup(vs.va.unitID); held && existing != "" {
-					reason = "concurrent adjudication in flight for unit"
+					// #984: this is a BACK-OFF, not an outage — return the
+					// distinct reason so no caller retries it or paints it as
+					// a judge failure (see VerifierConcurrencyBackoffReason).
+					reason = VerifierConcurrencyBackoffReason
 					unavailable = true
 					return nil, "", "", true, reason, nil, nil
 				}
@@ -1488,6 +1498,7 @@ agentLoopRunVerifierAdjudicationLoop1:
 			// ts.transcriptSessionID, the value Stop/`/goal clear`'s
 			// RequestCancelForSession actually matches turns on.
 			vs.va.chatID = vs.va.al.newVerifierSessionChatID(vs.va.sessionKey, vs.va.unitID)
+			vs.va.sessionKey = verifierWindowKey(vs.va.sessionKey, vs.va.chatID)
 			if regErr := vs.registry.Register(vs.va.unitID, vs.va.chatID); regErr != nil {
 				// CAS guard (corr-MAJOR-3, G-1): lost the race between the
 				// Lookup pre-check above and this atomic Register — another
@@ -1498,7 +1509,11 @@ agentLoopRunVerifierAdjudicationLoop1:
 				// Unregister must not evict the other adjudication's live
 				// session. The chatID just minted is an abandoned shell, same
 				// as any other pre-create failure path above.
-				reason = "concurrent adjudication in flight for unit"
+				//
+				// #984: like the Lookup pre-check arm above, this is a
+				// BACK-OFF, not an outage — return the distinct reason so no
+				// caller retries it or paints it as a judge failure.
+				reason = VerifierConcurrencyBackoffReason
 				unavailable = true
 				return nil, "", "", true, reason, nil, nil
 			}
@@ -1664,7 +1679,10 @@ func (va *agentLoopRunVerifierAdjudication) resolveJudge(attempt int) agentLoopR
 
 // dispatchTurn configures and dispatches one confined verifier turn.
 func (va *agentLoopRunVerifierAdjudication) dispatchTurn() {
-	callCtx, cancel := context.WithTimeout(va.ctx, va.al.judgeTurnTimeout())
+	// The Judge keeps its own check time limit (founder, issue #1306), tagged
+	// with ErrJudgeTimeLimit so its expiry is reported as exactly that —
+	// never as "the model provider didn't answer".
+	callCtx, cancel := context.WithTimeoutCause(va.ctx, va.al.judgeTurnTimeout(), ErrJudgeTimeLimit)
 	// FR-033/R3-10/R3-11 (F2 half): plumb the engine-set inspect_session
 	// target scope onto the verifier's own turn ctx BEFORE dispatch — the
 	// ctx propagates through processTaskDirect's own derivation
@@ -1715,6 +1733,7 @@ func (va *agentLoopRunVerifierAdjudication) dispatchTurn() {
 	}
 	var flagged map[string]string
 	va.content, flagged, va.toolCalls, va.callErr = va.al.dispatchVerifierTurn(callCtx, va.judgeInst, va.prompt, va.sessionKey, va.chatID)
+	va.callErr = withDeadlineCause(callCtx, va.callErr)
 	cancel()
 	reportVerifierInjectionFlags(va.unitID, va.adjudicationID, flagged)
 }
@@ -1883,6 +1902,17 @@ func judgeDispatchNeedsOperator(callErr error) (code LLMErrorCode, message strin
 		return code, "the Judge agent is not on any workspace team; add it to one", true
 	case operatorFixWorkDirUnavailable:
 		return code, "the Judge's working folder could not be opened; check that the disk has space and the folder is writable", true
+	case operatorFixQuotaBilling:
+		return code, "the Judge's provider account is out of credit; top up the account or give the Judge agent a provider with credit", true
+	case operatorFixModelRetired:
+		return code, "the Judge's model has been withdrawn; pick a new model on the Judge agent", true
+	case operatorFixBadModel, operatorFixModelRouteUnavailable:
+		llm := TranslateTurnError(callErr)
+		pair := operatorModelPair(llm.Provider, llm.Model)
+		if cause == operatorFixBadModel {
+			return code, "the Judge cannot use " + pair + "; pick an offered model/provider pair in the Judge agent's settings", true
+		}
+		return code, "the Judge's connection for " + pair + " could not be set up; check the provider's API key and endpoint settings", true
 	}
 	return code, "", false
 }
@@ -2019,7 +2049,7 @@ func (al *AgentLoop) dispatchVerifierTurn(
 		DefaultResponse:        defaultResponse,
 		SendResponse:           false,
 		TranscriptSessionID:    chatID,
-		TranscriptStore:        al.GetAgentStore(judgeInst.ID),
+		TranscriptStore:        al.GetSessionStore(),
 		OriginKind:             session.OriginKindVerifier,
 		InitialDelegationDepth: delegationDepth,
 		IsTaskRun:              true,
@@ -2038,17 +2068,6 @@ func (al *AgentLoop) dispatchVerifierTurn(
 	ts := newTurnState(judgeInst, opts, al.newTurnEventScope(judgeInst.ID, sessionKey))
 	if delegationDepth > 0 {
 		ts.depth = delegationDepth
-	}
-	if opts.TranscriptSessionID != "" {
-		resolverKey := "session:" + opts.TranscriptSessionID
-		ts.activeAgentResolver = func() string {
-			if v, ok := al.sessionActiveAgent.Load(resolverKey); ok {
-				if id, ok := v.(string); ok && id != "" {
-					return id
-				}
-			}
-			return ""
-		}
 	}
 
 	// JUDGE-FR-051/FR-052: the caps come from the OPERATOR's JudgeConfig via
@@ -2163,7 +2182,10 @@ func verifierHandleReleased(registry VerifierSessionPublisher, unitID, chatID st
 // noteGoalJudgeRetryWait paints the wait before a Judge retry.
 func (al *AgentLoop) noteGoalJudgeRetryWait(in JudgeCriteriaInput, attempt int, cause string) {
 	wait := judgeBackoffDuration(attempt)
-	if rec := goalForJudgeRetryNotice(in); rec != nil {
+	rec, err := goalForJudgeRetryNotice(in)
+	if err != nil {
+		al.reportGoalReadError(in.GoalSessionID, "judge-retry wait notice", err)
+	} else if rec != nil {
 		reason := fmt.Sprintf("The Judge could not finish checking this goal: %s. Trying again in %d s (try %d).",
 			cause, int(wait.Round(time.Second)/time.Second), attempt+2)
 		al.emitGoalStatusFrame(in.GoalSessionID, rec.GoalID, rec.Prompt, rec.Round, rec.MaxRounds, reason, goalPillJudgeUnavailable)
@@ -2173,7 +2195,10 @@ func (al *AgentLoop) noteGoalJudgeRetryWait(in JudgeCriteriaInput, attempt int, 
 
 // noteGoalJudgeRetrying paints the Judge retry itself starting.
 func (al *AgentLoop) noteGoalJudgeRetrying(in JudgeCriteriaInput, attempt int) {
-	if rec := goalForJudgeRetryNotice(in); rec != nil {
+	rec, err := goalForJudgeRetryNotice(in)
+	if err != nil {
+		al.reportGoalReadError(in.GoalSessionID, "judge-retry notice", err)
+	} else if rec != nil {
 		al.emitGoalStatusFrame(in.GoalSessionID, rec.GoalID, rec.Prompt, rec.Round, rec.MaxRounds,
 			fmt.Sprintf("Checking this goal again (try %d).", attempt+1), goalPillJudging)
 	}
@@ -2205,11 +2230,11 @@ func (al *AgentLoop) notePlanJudgeRetrying(in JudgeCriteriaInput) {
 }
 
 // goalForJudgeRetryNotice returns the ACTIVE chat goal a retry notice belongs
-// to, or nil. A goal that has already ended (cleared, expired, met) is never
-// repainted.
-func goalForJudgeRetryNotice(in JudgeCriteriaInput) *goal.Goal {
+// to, or genuine absence. Read failures are returned separately; a goal that
+// has already ended (cleared, expired, met) is never repainted.
+func goalForJudgeRetryNotice(in JudgeCriteriaInput) (*goal.Goal, error) {
 	if in.Scope != task.VerdictScopeGoal || in.GoalSessionID == "" {
-		return nil
+		return nil, nil //nolint:nilnil // Non-goal scope or an empty session ID means no goal to look up, not a read failure.
 	}
 	return activeGoalForSession(in.GoalSessionID)
 }
@@ -2218,6 +2243,8 @@ func goalForJudgeRetryNotice(in JudgeCriteriaInput) *goal.Goal {
 // never the raw provider error (ADR-051 §RD5 CRIT-001).
 func judgeRetryCause(callErr error) string {
 	switch TranslateTurnError(callErr).Code {
+	case CodeJudgeTimeLimit:
+		return "it reached its own check time limit (judge.timeout_sec)"
 	case CodeTurnTimedOut:
 		return "its model did not answer in time"
 	case CodeProviderStalled:
@@ -2410,4 +2437,19 @@ func verdictFromJudgeResponse(criterionID string, pc judgeCriterionResponse) tas
 	}
 	v.Provenance = deriveVerdictProvenance(v.EvidenceSource)
 	return v
+}
+
+// verifierWindowKey is the model-window key a verifier turn runs under. The
+// window store derives its directory from the key (owningSessionID), so a key
+// that is not "agent:<id>:session:<session id>" makes the store create a
+// directory named after the key itself - one with window files and no
+// meta.json, which the next boot reports as an unreadable session. Once the
+// verifier's own session exists the window belongs in THAT session's directory.
+// When the session could not be created (chatID is the ad hoc fallback) the
+// original key stays, as before.
+func verifierWindowKey(adHocKey, chatID string) string {
+	if chatID == "" || chatID == "verify:"+adHocKey {
+		return adHocKey
+	}
+	return fmt.Sprintf("agent:%s:session:%s", string(coreagent.IDJudge), chatID)
 }

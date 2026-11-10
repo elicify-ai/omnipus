@@ -19,6 +19,10 @@ const artifactPathsLLMNote = "Use `send_file` with one of these paths to send it
 // It provides clear semantics for different types of results and supports
 // async operations, user-facing messages, and error handling.
 type ToolResult struct {
+	// invoked is a live-only registry fact, never a wire/history field. The
+	// registry sets it on its own per-call copy after actual invocation.
+	invoked bool
+
 	// ForLLM is the content sent to the LLM for context.
 	// Required for all results.
 	ForLLM string `json:"for_llm"`
@@ -77,23 +81,24 @@ type ToolResult struct {
 	Interrupted bool `json:"interrupted,omitempty"`
 
 	// ParksTurn signals that this tool call requires the ENCLOSING turn to
-	// stop immediately, without being treated as an error or an abort. Set
-	// exclusively by pkg/tools/message_parent.go on a successful kind=
-	// question, wait=true call — the exact moment it has parked the calling
-	// child's own durable LifecycleRecord into needs_input (ADR-053 §5.1,
-	// parkNeedsInput). pkg/agent/loop.go's runTurn tool-execution loop is the
-	// sole consumer (Correctness-C2, ADR-057 UAT 2026-08-03): on seeing this
-	// flag it finishes this tool call's own bookkeeping (transcript/message
-	// append) exactly as normal, marks any REMAINING queued tool calls in the
-	// same LLM batch as skipped (mirroring the graceful-interrupt skip path),
-	// and returns TurnEndStatusParked — deliberately WITHOUT the session
-	// rollback a hard-abort performs, so the durable needs_input record and
-	// the turn's own conversation history survive untouched, exactly as they
-	// were at park time, ready for `delegate respond` to resume. Every other
-	// tool/result constructor leaves this at its zero value (false); it must
-	// never be set for a failed/rejected park attempt (message_parent.go only
-	// sets it once inbox.Append AND parkNeedsInput have both already
-	// succeeded).
+	// stop immediately, without being treated as an error or an abort. Its
+	// only remaining producer is the owner-session clarification card
+	// (pkg/tools/ask_user_question.go: the tool parks the owner's own turn
+	// while the card waits for its answer). The delegated-session
+	// person-question park that message_parent used to set it for is
+	// GONE — ADR-20261004 ("Steering commands: no person question", locked
+	// decision 6) removed the pause; a helper question to its parent is an
+	// ordinary upward message and never parks anything.
+	// pkg/agent/loop.go's runTurn tool-execution loop is the sole consumer
+	// (Correctness-C2, ADR-057 UAT 2026-08-03): on seeing this flag it
+	// finishes this tool call's own bookkeeping (transcript/message append)
+	// exactly as normal, marks any REMAINING queued tool calls in the same
+	// LLM batch as skipped (mirroring the graceful-interrupt skip path), and
+	// returns TurnEndStatusParked — deliberately WITHOUT the session
+	// rollback a hard-abort performs, so the durable pending-question set
+	// and the turn's own conversation history survive untouched, ready for
+	// the card's answer dispatch to resume. Every other tool/result
+	// constructor leaves this at its zero value (false).
 	ParksTurn bool `json:"parks_turn,omitempty"`
 
 	// ExitCode is the real process exit code for a shell/bash foreground
@@ -497,6 +502,16 @@ const (
 	ToolAssemblyDuplicateCode = "tool_assembly_duplicate"
 	ToolArgumentsTooLargeCode = "tool_arguments_too_large"
 	ToolResultRecallMarkCode  = "tool_result_recall_mark"
+
+	// ProtectedInternalFileCode is the #1284 (amendment §2, fix round 1)
+	// VALUE of PermissionDenied's optional `code` field: present exactly
+	// when the refusal is Omnipus's protected-internal-file denial — the
+	// never-grantable internal-file refusal, God Mode included — so a
+	// consumer distinguishes it from an ordinary workspace-scope denial
+	// without parsing the reason text. Set by the filesystem-scope producer
+	// (PermissionDeniedResult on ErrCarveOut) and by bash's protected-operand
+	// command check (ProtectedInternalFileResult).
+	ProtectedInternalFileCode = "protected_internal_file"
 )
 
 // SkillNotFoundCode is the discriminator ADR-072 FR-054 mints so a skill-slug
@@ -517,6 +532,14 @@ const (
 // through marshalWithinBudget/generated, precisely because there is no
 // generated shape to route through.
 const SkillNotFoundCode = "skill_not_found"
+
+// SkillNotGrantedCode is the discriminator for a `delegate` requested_skill
+// whose slug exists but is not granted to the delegation target (#895). It is
+// a plain LLM-facing payload exactly like SkillNotFoundCode (same ADR-072 §7
+// reasoning: no gateway/SPA wire type, so not in AllStructuredFailureCodes) and
+// replaces the earlier delegation_denied/trust_set wording, which read as a
+// permissions failure when the delegation itself was allowed.
+const SkillNotGrantedCode = "skill_not_granted"
 
 // AllStructuredFailureCodes returns every structured tool-failure
 // discriminator this package defines. This is the SINGLE authoritative
@@ -707,7 +730,13 @@ func SanitiseMarkField(s, fallback string) string {
 // boolean value (ClassifyDenial's DenialClass.Permanent, or "always true"
 // for a filesystem-scope denial — see PermissionDeniedResult's own comment)
 // and must pass it explicitly.
-func PermissionDeniedPayload(tool, message, reason string, permanent bool) ([]byte, error) {
+//
+// code is #1284 fix round 1's optional marker (variadic so every existing
+// caller keeps compiling): when non-empty it rides PermissionDenied's
+// optional `code` field — today exactly ProtectedInternalFileCode, marking
+// the never-grantable internal-file refusal. Omitted (absent on the wire)
+// for every other denial.
+func PermissionDeniedPayload(tool, message, reason string, permanent bool, code ...string) ([]byte, error) {
 	// The contract requires all three string fields non-empty (minLength:1).
 	// A payload violating that is schema-invalid — nothing today actually
 	// enforces the ToolCallResultFrame.result oneOf at a boundary (neither
@@ -736,6 +765,10 @@ func PermissionDeniedPayload(tool, message, reason string, permanent bool) ([]by
 		Tool:      tool,
 		Reason:    reason,
 		Permanent: permanent,
+	}
+	if len(code) > 0 && code[0] != "" {
+		marker := clampRefusalField(code[0], maxRefusalToolRunes)
+		payload.Code = &marker
 	}
 	// All three of reason, tool, and message are offered to the shrink
 	// loop, in this PRIORITY ORDER (marshalWithinBudget exhausts each field

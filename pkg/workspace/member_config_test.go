@@ -276,7 +276,6 @@ func TestWorkspace_MemberConfigs_JSON(t *testing.T) {
 					Enabled:         true,
 					IntervalMinutes: 30,
 					Body:            "hello world",
-					SessionID:       "sess-123",
 				},
 			},
 		},
@@ -307,8 +306,12 @@ func TestWorkspace_MemberConfigs_JSON(t *testing.T) {
 	if got.Heartbeat.Body != "hello world" {
 		t.Errorf("expected Body=%q, got %q", "hello world", got.Heartbeat.Body)
 	}
-	if got.Heartbeat.SessionID != "sess-123" {
-		t.Errorf("expected SessionID=%q, got %q", "sess-123", got.Heartbeat.SessionID)
+	// session-core U1 / DEL-01: a heartbeat configuration carries no session
+	// address — the heartbeat runs in the member's computed main session. The
+	// assertion below is a control on the field's ABSENCE: a retired session_id
+	// persisted in an old record must not come back on the decoded struct.
+	if strings.Contains(string(data), "session_id") {
+		t.Errorf("heartbeat config must not carry a session address; got %s", string(data))
 	}
 }
 

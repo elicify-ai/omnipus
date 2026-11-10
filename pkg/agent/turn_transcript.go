@@ -3,6 +3,7 @@
 package agent
 
 import (
+	"fmt"
 	"sync/atomic"
 	"time"
 
@@ -49,12 +50,12 @@ func TranscriptWriteFailures() uint64 {
 }
 
 // outcomeRelabelApplies reports whether FR-017a's media-retry stamp should
-// override this persist/emit. Residual 4xx stays CodeUnknown so the stamp
-// can label that inconclusive trigger as media after a successful
+// override this persist/emit. Inconclusive400 is promoted only at terminal
+// presentation, so both it and CodeUnknown accept the successful recovery's
 // strip-retry. A later distinct classified failure must keep its own code
 // — otherwise reload tells the user the model rejected an image.
 func outcomeRelabelApplies(current, relabel LLMErrorCode) bool {
-	return relabel != "" && (current == "" || current == CodeUnknown)
+	return relabel != "" && (current == "" || current == CodeUnknown || current == CodeProviderRequestRejected)
 }
 
 // warnAbandonedTranscriptWrite emits the ADR-057 FR-003/BDD-04 WARN record
@@ -73,55 +74,85 @@ func (ts *turnState) warnAbandonedTranscriptWrite(writer string) {
 // It is a no-op when no transcript store or session ID is configured, or when
 // the turn has been marked abandoned (B4: suppresses writes from stuck goroutines).
 //
-// Bug 1 fix: the AgentID on the entry reflects the runtime-current active agent
-// (via activeAgentResolver) rather than the turn's starting agent. This ensures
-// that tool_call entries produced after a handoff carry the correct agent_id —
-// the new active agent — instead of the one that initiated the turn.
-func (ts *turnState) appendToolCallTranscript(tc session.ToolCall) {
+// The AgentID on the entry is the turn's own agent (a session has one immutable
+// owner and there is no mid-turn agent switch).
+func (ts *turnState) appendToolCallTranscript(tc session.ToolCall, archiveLine ...int) (err error) {
 	if ts.abandoned.Load() {
 		abandonedWritesSuppressed.Add(1)
 		ts.warnAbandonedTranscriptWrite("appendToolCallTranscript")
-		return
+		if len(archiveLine) > 0 {
+			return fmt.Errorf("context transcript: admitted result cannot be recorded by an abandoned turn")
+		}
+		return nil
 	}
 	if ts.transcriptStore == nil || ts.transcriptSessionID == "" {
-		return
+		return nil
 	}
-
-	// Approval-gate settle (approval_transcript.go): when this call previously
-	// wrote a "pending" placeholder because it blocked on human approval,
-	// REPLACE that entry rather than appending a second one with the same ID.
-	// Only ever true for ask-policy calls that actually reached the approver,
-	// so every other tool call skips straight to the append below.
-	//
-	// The placeholder itself arrives here with Status "pending" and must not
-	// try to replace itself, hence the status guard. A failed replacement falls
-	// through to the append — a duplicate entry is a far better outcome than a
-	// lost record of what the tool did.
+	defer func() {
+		if err != nil {
+			transcriptWriteFailures.Add(1)
+			logger.WarnCF("agent", "could not record tool call to transcript",
+				map[string]any{"session_id": ts.transcriptSessionID, "tool": tc.Tool, "error": err.Error()})
+		}
+	}()
+	var recordAddr func(session.ArchiveAddress) error
+	if len(archiveLine) > 0 {
+		store, snap, snapshotErr := ts.resultTranscriptSnapshot(tc, archiveLine[0])
+		if snapshotErr != nil {
+			return snapshotErr
+		}
+		recordAddr = func(addr session.ArchiveAddress) error {
+			return ts.persistResultTranscriptAddr(store, snap, tc, archiveLine[0], addr)
+		}
+	}
+	// An admitted result settles the approval placeholder through its remembered
+	// address, so its archive mapping records the actual placeholder record, not a
+	// later guess. An error here is returned: a placeholder that cannot be settled
+	// is a real failure, not a reason to write a second record with the same id.
 	if tc.Status != toolCallStatusPending {
 		if _, hadPending := ts.askPendingToolCalls.LoadAndDelete(tc.ID); hadPending {
-			if replaceToolCallInTranscript(ts, tc.ID, toolCallStatusPending, tc) {
-				return
+			if rec, known := ts.callRecordFor(tc.ID); known {
+				if _, settleErr := ts.transcriptStore.SettleToolCall(ts.transcriptSessionID, rec.addr, toolCallStatusPending, tc); settleErr != nil {
+					return settleErr
+				}
+				ts.rememberCallRecord(tc, rec.addr)
+				if recordAddr != nil {
+					return recordAddr(rec.addr)
+				}
+				return nil
 			}
 		}
 	}
-
-	agentID := ts.resolveActiveAgentID()
+	// A dispatched call's outcome settles its dispatch-time running record in
+	// place (started_tool_outcome.go::beginStartedTool), keeping one record
+	// per call at the position it started. The guard makes a second settle a
+	// no-op on read; a settle failure is returned, never a second record.
+	if tc.Status != toolCallStatusRunning {
+		if rec, known := ts.callRecordFor(tc.ID); known && rec.tc.Status == toolCallStatusRunning {
+			if _, settleErr := ts.transcriptStore.SettleToolCall(ts.transcriptSessionID, rec.addr, toolCallStatusRunning, tc); settleErr != nil {
+				return settleErr
+			}
+			ts.rememberCallRecord(tc, rec.addr)
+			if recordAddr != nil {
+				return recordAddr(rec.addr)
+			}
+			return nil
+		}
+	}
 	entry := session.TranscriptEntry{
-		ID:        string(tc.ID),
-		Type:      session.EntryTypeToolCall,
-		AgentID:   agentID,
-		Timestamp: time.Now().UTC(),
-		ToolCalls: []session.ToolCall{tc},
-		// ADR-066 FR-046: hydration attaches a standalone tool_call entry to
-		// the preceding assistant message of the SAME turn; the turn id makes
-		// that match exact instead of inferred from the last user boundary.
-		TurnID: ts.turnID,
+		ID: string(tc.ID), Type: session.EntryTypeToolCall,
+		AgentID: ts.resolveActiveAgentID(), Timestamp: time.Now().UTC(),
+		ToolCalls: []session.ToolCall{tc}, TurnID: ts.turnID, GoalID: ts.goalID,
 	}
-	if err := ts.transcriptStore.AppendTranscriptStrict(ts.transcriptSessionID, entry); err != nil {
-		transcriptWriteFailures.Add(1)
-		logger.WarnCF("agent", "could not record tool call to transcript",
-			map[string]any{"session_id": ts.transcriptSessionID, "tool": tc.Tool, "error": err.Error()})
+	addr, appendErr := ts.transcriptStore.AppendTranscriptAddressed(ts.transcriptSessionID, entry)
+	if appendErr != nil {
+		return appendErr
 	}
+	ts.rememberCallRecord(tc, addr)
+	if recordAddr == nil {
+		return nil
+	}
+	return recordAddr(addr)
 }
 
 // appendIntermediateAssistantTranscript persists an assistant text segment that
@@ -131,9 +162,9 @@ func (ts *turnState) appendToolCallTranscript(tc session.ToolCall) {
 // entries so the transcript faithfully reflects the interleaved order the user
 // saw live.
 //
-// Tokens and cost are always 0 for intermediate entries to avoid double-counting:
-// the turn total is attributed to the final assistant entry written by either
-// wsStreamer.Finalize (streaming path) or appendAssistantTranscript (non-streaming).
+// Each provider call owns its own accounting. A no-text tool call still writes
+// an empty-content accounting entry; replay does not create a visible bubble.
+// Native final and intermediate entries never repeat the whole turn total.
 //
 // Bug #416 fix: without this, only the last text segment reached the transcript.
 //
@@ -143,12 +174,18 @@ func (ts *turnState) appendToolCallTranscript(tc session.ToolCall) {
 // have just overwritten). Pass "" to fall back to ts.lastProducedModel
 // for callers that don't have a per-message producer.
 func (ts *turnState) appendIntermediateAssistantTranscript(content string, producedModel ...string) {
+	ts.appendIntermediateAssistantTranscriptImpl(content, "", producedModel...)
+}
+
+// appendIntermediateAssistantTranscriptImpl also keeps a terminal partial
+// answer's truncation mark when steering starts another reply in this turn.
+func (ts *turnState) appendIntermediateAssistantTranscriptImpl(content, truncationReason string, producedModel ...string) {
 	if ts.abandoned.Load() {
 		abandonedWritesSuppressed.Add(1)
 		ts.warnAbandonedTranscriptWrite("appendIntermediateAssistantTranscript")
 		return
 	}
-	if ts.transcriptStore == nil || ts.transcriptSessionID == "" || content == "" {
+	if ts.transcriptStore == nil || ts.transcriptSessionID == "" || (content == "" && truncationReason == "" && !ts.pendingCallAccounting()) {
 		return
 	}
 	agentID := ts.resolveActiveAgentID()
@@ -168,13 +205,21 @@ func (ts *turnState) appendIntermediateAssistantTranscript(content string, produ
 		Content:   content,
 		Timestamp: time.Now().UTC(),
 		Model:     model,
-		// TurnID: without this, neither MarkLastEntryTruncated's own
+		// A partial answer kept before steering retains its annotation on
+		// this write, under the same round id as the original answer.
+		Truncated:        truncationReason != "",
+		TruncationReason: truncationReason,
+		// TurnID: without this, neither the former truncation rewrite's own
 		// turn-scoped backward-walk (H2 fix — it matches on e.TurnID ==
 		// turnID) nor the frontend's turn_canceled -> assistant-message
 		// replay correlation can ever match a REAL entry; both were only
 		// ever exercised by tests that hand-seed TurnID directly. See
 		// appendAssistantTranscript's identical fix for the full rationale.
 		TurnID: ts.turnID,
+		// GoalID (session-core FR-039 / C-GOAL): the goal this producing turn
+		// was dispatched under, so the persisted entry joins to its exact keyed
+		// goal criteria live/replay/REST alike. Empty = unknown association.
+		GoalID: ts.goalID,
 		// ParentSpawnCallID: DOCUMENTED to be non-empty only when ts is a
 		// CHILD delegation sub-turn — pre-ADR-091, the deleted spawnSubTurn
 		// stamped childTS.parentSpawnCallID before any turn processing ran.
@@ -188,10 +233,10 @@ func (ts *turnState) appendIntermediateAssistantTranscript(content string, produ
 		// nothing assigns that field today, so ts.parentSpawnCallID is
 		// always "" here too. Flagged for the team, not fixed here.
 		ParentSpawnCallID: ts.parentSpawnCallID,
-		// Tokens and Cost are intentionally 0 — the turn total is attributed to
-		// the final assistant entry only. See appendAssistantTranscript.
+		// The completed call's immutable accounting is applied by
+		// persistAssistantAccounting immediately before this entry is saved.
 	}
-	if err := ts.transcriptStore.AppendTranscriptStrict(ts.transcriptSessionID, entry); err != nil {
+	if err := ts.persistAssistantAccounting(entry); err != nil {
 		transcriptWriteFailures.Add(1)
 		logger.WarnCF("agent", "could not record intermediate assistant message to transcript",
 			map[string]any{"session_id": ts.transcriptSessionID, "error": err.Error()})
@@ -212,12 +257,10 @@ func (ts *turnState) appendAssistantTranscript(content string, producedModel ...
 	ts.appendAssistantTranscriptImpl(content, false, false, "", producedModel...)
 }
 
-// validTruncationReasonsAgent mirrors pkg/session's unexported
-// validTruncationReasons (ADR-087 D2): the only two values
-// appendAssistantTranscriptTruncated will ever stamp onto a persisted
-// entry. Kept in lockstep with session.MarkLastEntryTruncated's own set —
-// pkg/session cannot be imported for the map itself since it is
-// unexported, but both lists must never diverge.
+// validTruncationReasonsAgent is the closed set of truncation reasons (ADR-087
+// D2): the only two values appendAssistantTranscriptTruncated will ever stamp
+// onto a persisted entry. It is the single list - pkg/session no longer keeps a
+// second one, so there is nothing to keep in step with.
 var validTruncationReasonsAgent = map[string]bool{
 	"cancelled":         true,
 	"max_output_tokens": true,
@@ -227,9 +270,8 @@ var validTruncationReasonsAgent = map[string]bool{
 // write-choke-point fix: it stamps Truncated=true and TruncationReason on
 // the assistant entry in the SAME construction/write appendAssistantTranscript
 // already performs, instead of the pre-fix two-step pattern (append the
-// entry, then have loop.go immediately call session.MarkLastEntryTruncated
-// to re-read, re-parse, and rewrite the whole transcript.jsonl just to
-// stamp two fields on the entry that was built one call earlier). The
+// entry, then have loop.go immediately re-read, re-parse and rewrite the
+// whole transcript.jsonl just to stamp two fields on the entry that was built one call earlier). The
 // streaming path already writes truncation state in a single pass via
 // wsStreamer.Finalize (commit 47c086ca); this brings the non-streaming
 // path to parity.
@@ -243,8 +285,7 @@ var validTruncationReasonsAgent = map[string]bool{
 // reason MUST be one of session's two accepted values ("cancelled",
 // "max_output_tokens" — ADR-087 D2, see validTruncationReasonsAgent). Any
 // other value is a programming error at this call site: rather than
-// silently persist an unrecognized reason (which session.MarkLastEntryTruncated
-// would itself have rejected), this logs loudly at Error level and falls
+// silently persist an unrecognized reason, this logs loudly at Error level and falls
 // back to writing the entry WITHOUT the truncation fields — so the
 // content is never lost, but a bad reason can never masquerade as a valid
 // one on disk.
@@ -279,9 +320,9 @@ func (ts *turnState) appendAssistantTranscriptImpl(content string, allowEmpty bo
 	if len(producedModel) > 0 && producedModel[0] != "" {
 		model = producedModel[0]
 	}
-	// Populate token/cost from accumulated turn stats so scheduled and
-	// non-websocket turns record real usage, mirroring the wsStreamer.Finalize
-	// path (#411). GetTurnStats is safe to call here — the turn is finishing.
+	// Non-provider/external callers retain their existing turn-stat fallback.
+	// Native calls replace these with their own captured call facts in
+	// persistAssistantAccounting, so earlier rounds are never counted again.
 	turnTokens, turnCost := ts.GetTurnStats()
 	turnCacheRead, turnCacheWrite := ts.GetTurnCacheStats()
 	turnPromptTokens, turnCompletionTokens := ts.GetTurnIOStats()
@@ -296,12 +337,15 @@ func (ts *turnState) appendAssistantTranscriptImpl(content string, allowEmpty bo
 		// the assistant entry it describes, so (1) the frontend's
 		// turn_canceled -> assistant-message replay correlation could never
 		// match a real entry (chatTurnCanceledNoMatch always fired on
-		// reload), and (2) MarkLastEntryTruncated's own turn-scoped
+		// reload), and (2) the former truncation rewrite's own turn-scoped
 		// backward-walk (which requires e.TurnID == turnID) could never
 		// match a real entry either, silently disabling the Truncated flag
 		// for every real cancel. Both were only ever exercised by tests that
 		// hand-seed TurnID directly on the entry.
-		TurnID:           ts.turnID,
+		TurnID: ts.turnID,
+		// GoalID (session-core FR-039 / C-GOAL): the goal this producing turn
+		// was dispatched under. Empty = unknown association.
+		GoalID:           ts.goalID,
 		Timestamp:        time.Now().UTC(),
 		Tokens:           int(turnTokens),
 		Cost:             turnCost,
@@ -321,7 +365,7 @@ func (ts *turnState) appendAssistantTranscriptImpl(content string, allowEmpty bo
 		Truncated:        truncated,
 		TruncationReason: truncationReason,
 	}
-	if err := ts.transcriptStore.AppendTranscriptStrict(ts.transcriptSessionID, entry); err != nil {
+	if err := ts.persistAssistantAccounting(entry); err != nil {
 		transcriptWriteFailures.Add(1)
 		logger.WarnCF("agent", "could not record assistant message to transcript",
 			map[string]any{"session_id": ts.transcriptSessionID, "error": err.Error()})
@@ -371,6 +415,12 @@ var trustedInternalStageSet = map[internalStage]struct{}{
 	{"llm_call", "error"}:          {},
 	{"llm_retry_backoff", "error"}: {},
 	{"turn_loop", "error"}:         {},
+	// Provider-messages spec §7.3/MAJ-104/C-14: the agent's provider-error
+	// handler persists the ASSEMBLED §6 sentence through the trusted
+	// bypass — a sentence assembled from a §6 template with the failing
+	// attempt's identity is agent-authored copy, and re-running the
+	// classifier over it would clobber it with catalogue copy.
+	{"provider", "error"}: {},
 	// ADR-058 §10.A3: FR-084 (the retired synthetic-error-floor feature) was
 	// deleted in full — no producer calls appendErrorTranscript with that
 	// stage name anymore, so a trust-set entry for it does not belong here.
@@ -426,17 +476,34 @@ func (ts *turnState) appendErrorTranscript(kind, stage, message string, pe ...*P
 // catalogue sentence through TranslateLLMError stamps unknown — the live
 // fix then vanishes on reload. Pass the live LLMError instead.
 func (ts *turnState) appendClassifiedError(kind, stage string, llm LLMError) {
-	ts.writeErrorTranscript(kind, stage, llm.Message, llm.Code)
+	ts.writeErrorTranscriptFlagged(kind, stage, llm.Message, llm.Code, llm.ProviderMessage)
+}
+
+// writeErrorTranscriptFlagged persists an already-classified error whose
+// provider_message flag the CALLER computed with the full error chain in
+// hand. Gate finding F7: appendClassifiedError used to drop llm.ProviderMessage,
+// the write side re-derived the flag from the bare message with providerErr
+// nil (always false), and persistErrorTranscript papered over the hole with
+// the string-literal trust bit `stage == "provider"` — which flagged every
+// provider-stage entry, including ones that never carried a provider
+// sentence.
+func (ts *turnState) writeErrorTranscriptFlagged(kind, stage, message string, code LLMErrorCode, providerMessage bool) {
+	ts.writeErrorTranscriptCore(kind, stage, message, code, false, &providerMessage)
 }
 
 func (ts *turnState) writeErrorTranscript(kind, stage, message string, code LLMErrorCode, pe ...*ProviderError) {
-	ts.writeErrorTranscriptWithAbandonment(kind, stage, message, code, false, pe...)
+	ts.writeErrorTranscriptCore(kind, stage, message, code, false, nil, pe...)
 }
 
-func (ts *turnState) writeErrorTranscriptWithAbandonment(
+// writeErrorTranscriptCore is the one error-transcript write engine.
+// providerMessageOverride nil derives the provider_message flag at write
+// time (TranslateLLMError's verdict for THIS write); non-nil is the
+// caller's already-computed flag and wins.
+func (ts *turnState) writeErrorTranscriptCore(
 	kind, stage, message string,
 	code LLMErrorCode,
 	allowAbandoned bool,
+	providerMessageOverride *bool,
 	pe ...*ProviderError,
 ) {
 	if !ts.canWriteErrorTranscript(kind, stage, message, allowAbandoned) {
@@ -486,7 +553,8 @@ func (ts *turnState) writeErrorTranscriptWithAbandonment(
 
 	// FR-017a: label an *inconclusive* residual 4xx after a successful
 	// strip-retry. Do not overwrite a later distinct classified code.
-	if outcomeRelabelApplies(llm.Code, ts.outcomeRelabel) {
+	relabeled := outcomeRelabelApplies(llm.Code, ts.outcomeRelabel)
+	if relabeled {
 		llm.Code = ts.outcomeRelabel
 		llm.Message = defaultUserMessage(ts.outcomeRelabel)
 	}
@@ -506,7 +574,15 @@ func (ts *turnState) writeErrorTranscriptWithAbandonment(
 		}
 	}
 
-	ts.persistErrorTranscript(kind, stage, llm, written)
+	providerMessage := llm.ProviderMessage
+	if providerMessageOverride != nil {
+		providerMessage = *providerMessageOverride
+	}
+	if relabeled {
+		providerMessage = false
+		written = llm.Message
+	}
+	ts.persistErrorTranscript(kind, stage, llm, written, providerMessage)
 }
 
 func (ts *turnState) canWriteErrorTranscript(kind, stage, message string, allowAbandoned bool) bool {
@@ -534,15 +610,23 @@ func (ts *turnState) canWriteErrorTranscript(kind, stage, message string, allowA
 	return true
 }
 
-func (ts *turnState) persistErrorTranscript(kind, stage string, llm LLMError, content string) {
+func (ts *turnState) persistErrorTranscript(kind, stage string, llm LLMError, content string, providerMessage bool) {
 	entry := session.TranscriptEntry{
 		ID:             uuid.New().String(),
 		Type:           session.EntryTypeSystem,
 		AgentID:        ts.resolveActiveAgentID(),
 		Content:        content,
 		Timestamp:      time.Now().UTC(),
+		GoalID:         ts.goalID,
 		ErrorCode:      string(llm.Code),
 		ErrorRetryable: llm.Retryable,
+		// MAJ-104/C-14: the persisted entry carries the provider_message
+		// flag exactly when the caller (or the write-side classifier, for
+		// raw provider errors) assembled the Section-6 sentence — the flag
+		// MEANS "this message is the assembled provider sentence", never
+		// "the write happened to use the provider stage". The replay path
+		// round-trips it.
+		ProviderMessage: providerMessage,
 		// Status="error" lets the replay path distinguish error entries from
 		// informational system entries (e.g. compaction summaries) without
 		// parsing the free-text Content.

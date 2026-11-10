@@ -1,9 +1,10 @@
-// providersCatalog.test.ts — pins the shape of the 190-entry catalog fixture
-// (ADR-068 T068-18). Every later ADR-068 SPA test renders against this
-// document, so a silent edit that drops the Popular count, the unsupported
-// row or the sign-in trio would break those tests far from the cause. These
-// assertions are the fixture's contract, restated from the spec (FR-022,
-// FR-025) rather than read off the JSON.
+// providersCatalog.test.ts — pins the shape of the 188-entry catalog fixture
+// (ADR-068 T068-18; WU-24 removed the two CLI model-provider rows). Every
+// later ADR-068 SPA test renders against this document, so a silent edit that
+// drops the Popular count, the unsupported row or the sign-in row would break
+// those tests far from the cause. These assertions are the fixture's
+// contract, restated from the spec (FR-022, FR-025) rather than read off the
+// JSON.
 
 import { describe, it, expect } from 'vitest'
 import { ProvidersCatalog as ProvidersCatalogSchema } from '@/lib/api/generated/schemas'
@@ -15,9 +16,9 @@ describe('providers-catalog.json fixture', () => {
     expect(result.success, JSON.stringify(result.success ? [] : result.error.issues.slice(0, 5))).toBe(true)
   })
 
-  it('carries exactly 190 providers with unique ids', () => {
-    expect(CATALOG_PROVIDERS).toHaveLength(190)
-    expect(new Set(CATALOG_PROVIDERS.map((p) => p.id)).size).toBe(190)
+  it('carries exactly 188 providers with unique ids', () => {
+    expect(CATALOG_PROVIDERS).toHaveLength(188)
+    expect(new Set(CATALOG_PROVIDERS.map((p) => p.id)).size).toBe(188)
   })
 
   it('has exactly 12 popular providers, each a distinct company (FR-022, twelve usage-backed)', () => {
@@ -63,17 +64,15 @@ describe('providers-catalog.json fixture', () => {
     expect(CATALOG_PROVIDERS.find((p) => p.id === 'zai')?.aliases).toContain('智谱')
   })
 
-  it('offers sign_in on exactly the three subscription rows (ADR-068 §8b)', () => {
+  it('offers sign_in on exactly the one subscription row (ADR-068 §8b; WU-24 removed the CLI rows)', () => {
     const signIn = CATALOG_PROVIDERS.filter((p) => p.auth_methods.includes('sign_in'))
-    expect(signIn.map((p) => p.id).sort()).toEqual(['codex-cli', 'github-copilot', 'openai-chatgpt'])
-    expect(CATALOG_PROVIDERS.find((p) => p.id === 'codex-cli')?.cli_kind).toBe('codex')
-    expect(CATALOG_PROVIDERS.find((p) => p.id === 'github-copilot')?.cli_kind).toBe('copilot')
+    expect(signIn.map((p) => p.id).sort()).toEqual(['openai-chatgpt'])
     // xAI stays key-only until Omnipus holds its own client id (§8b D3).
     expect(CATALOG_PROVIDERS.find((p) => p.id === 'xai')?.auth_methods).toEqual(['api_key'])
   })
 
   it('keeps each OpenAI-family row a single-variant company, so `openai` stays one-click', () => {
-    for (const id of ['openai', 'openai-chatgpt', 'codex-cli']) {
+    for (const id of ['openai', 'openai-chatgpt']) {
       const entry = CATALOG_PROVIDERS.find((p) => p.id === id)
       expect(entry, id).toBeDefined()
       expect(

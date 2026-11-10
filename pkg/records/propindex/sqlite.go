@@ -190,6 +190,12 @@ func Open(ctx context.Context, path string, opts Options) (Store, error) {
 //     cross-handle case the old comment described but did not address: a long
 //     reconcile overlapping a long query used to convert to SQLITE_BUSY after
 //     five seconds.
+//   - cache_size=-1024 — caps each connection's suggested page-cache maximum at
+//     1 MiB instead of modernc SQLite's compiled-in 2 MiB default. The index is
+//     streamed and derived, so keeping twice that much database-page data in
+//     every active connection spends process RSS without improving correctness;
+//     SQLite and the OS still cache pages normally, and the value does not alter
+//     the database file.
 //   - synchronous=NORMAL — was OFF. In WAL mode NORMAL is the documented safe
 //     setting: a crash can lose the most recent commits, and cannot corrupt the
 //     file. The index is derived, so losing recent commits costs a re-index of
@@ -214,6 +220,7 @@ func indexDSN(path string) (string, error) {
 	q := url.Values{}
 	for _, pragma := range []string{
 		"busy_timeout(5000)",
+		"cache_size(-1024)",
 		"journal_mode(WAL)",
 		"synchronous(NORMAL)",
 		"foreign_keys(OFF)",
@@ -945,6 +952,19 @@ func boolInt(b bool) int {
 	return 0
 }
 
+// observeCancellation reports ctx's cancellation synchronously. database/sql
+// closes a result set on cancellation from a watcher goroutine, so until that
+// goroutine runs rows.Next() keeps returning rows and a row loop that never
+// looks at ctx itself can finish as a silent full success. Every row loop calls
+// this once per row. The returned error wraps ctx.Err(), so errors.Is matches
+// context.Canceled and context.DeadlineExceeded.
+func observeCancellation(ctx context.Context, what string) error {
+	if cerr := ctx.Err(); cerr != nil {
+		return fmt.Errorf("propindex: the %s was cancelled: %w", what, cerr)
+	}
+	return nil
+}
+
 // AllPaths visits every path this store holds, with its kind and source hash.
 //
 // Unlike every statement below this comment, this query carries NO narrowing
@@ -964,6 +984,9 @@ func (ix *Index) AllPaths(ctx context.Context, visit func(IndexedNote) error) (e
 	}()
 
 	for rows.Next() {
+		if err := observeCancellation(ctx, "path listing"); err != nil {
+			return err
+		}
 		var n IndexedNote
 		if err := rows.Scan(&n.Path, &n.Kind, &n.SourceHash, &n.DeclaredType, &n.SchemaFingerprint); err != nil {
 			return fmt.Errorf("propindex: reading an indexed path: %w", err)
@@ -1109,6 +1132,14 @@ func (ix *Index) streamCandidates(ctx context.Context, q string, args []any, vis
 	}
 
 	for rows.Next() {
+		// database/sql closes the result set on cancellation from a watcher
+		// goroutine, so rows.Next() can keep returning rows — and the stream can
+		// run to its end and report success — for as long as that goroutine has
+		// not been scheduled. The stream therefore observes the cancellation
+		// itself, synchronously, once per row.
+		if cerr := ctx.Err(); cerr != nil {
+			return fmt.Errorf("propindex: the candidate stream was cancelled: %w", cerr)
+		}
 		var (
 			id                              int64
 			path, recordType, sourceHash    string
@@ -1217,6 +1248,9 @@ func (ix *Index) Tasks(ctx context.Context, sel Selector, visit func(TaskHit) er
 	}()
 
 	for rows.Next() {
+		if err := observeCancellation(ctx, "task stream"); err != nil {
+			return err
+		}
 		var (
 			hit  TaskHit
 			text []byte
@@ -1257,6 +1291,9 @@ func (ix *Index) Relations(ctx context.Context, sel Selector, visit func(Relatio
 	}()
 
 	for rows.Next() {
+		if err := observeCancellation(ctx, "relation stream"); err != nil {
+			return err
+		}
 		var (
 			hit                           RelationHit
 			recordID                      []byte
@@ -1324,6 +1361,9 @@ func (ix *Index) Tags(ctx context.Context, sel Selector, visit func(TagHit) erro
 	}()
 
 	for rows.Next() {
+		if err := observeCancellation(ctx, "tag stream"); err != nil {
+			return err
+		}
 		var (
 			hit TagHit
 			tag []byte
@@ -1369,6 +1409,9 @@ func (ix *Index) Links(ctx context.Context, sel Selector, visit func(LinkHit) er
 	}()
 
 	for rows.Next() {
+		if err := observeCancellation(ctx, "link stream"); err != nil {
+			return err
+		}
 		var (
 			hit                           LinkHit
 			target, heading, display, raw []byte

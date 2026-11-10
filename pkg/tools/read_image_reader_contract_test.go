@@ -524,7 +524,9 @@ func TestReadImage_HandleSnapshotStableAcrossPathReplacement(t *testing.T) {
 
 	// Replace with a symlink out of scope; a confined (Judge posture) turn
 	// must get the existing access refusal, not the image.
-	outside := filepath.Join(root, "outside.png")
+	// L1-AMENDMENTS-20261013.md §2 D1 / §2.4: keep the ordinary
+	// scope-refusal control outside home and pin the protected-home case below.
+	outside := filepath.Join(t.TempDir(), "outside.png")
 	if err := os.WriteFile(outside, first, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -545,9 +547,48 @@ func TestReadImage_HandleSnapshotStableAcrossPathReplacement(t *testing.T) {
 	if strings.Contains(denied.ForLLM, hex.EncodeToString(sha256.New().Sum(nil))) {
 		t.Fatal("refusal leaks digest-like content")
 	}
+
+	// Preserve the former fixture path as the D1 default-deny negative.
+	internal := filepath.Join(root, "outside.png")
+	if err := os.WriteFile(internal, first, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	requireInternalFileRefusal(t, tool.Execute(context.Background(), map[string]any{"path": internal}), "read_file")
 }
 
 // --- access, audit and metadata privacy (spec BDD-04/05, datasets B7-B11) ----
+
+func checkReadImageAuditRows(t *testing.T, auditLogger *audit.Logger, auditDir, inside, outside, adjudicationID, judgeAgentID, sessionID string) {
+	t.Helper()
+	rows := readAuditRows(t, auditLogger, auditDir)
+	var reads, denials []auditRow
+	for _, row := range rows {
+		switch {
+		case row.Event == audit.EventFileOp && row.detail("op") == "read":
+			reads = append(reads, row)
+		case row.Event == PathAccessDeniedEvent:
+			denials = append(denials, row)
+		}
+	}
+	if len(reads) != 1 {
+		t.Fatalf("want exactly 1 image read audit row, got %d (all rows: %+v)", len(reads), rows)
+	}
+	if reads[0].detail("path") != inside || reads[0].Decision != audit.DecisionAllow || reads[0].Tool != "read_file" {
+		t.Fatalf("image read audit row: %+v", reads[0])
+	}
+	if reads[0].detail("adjudication_id") != adjudicationID || reads[0].AgentID != judgeAgentID || reads[0].SessionID != sessionID {
+		t.Fatalf("image read audit correlation: %+v", reads[0])
+	}
+	var denialNamed bool
+	for _, row := range denials {
+		if row.detail("path") == outside && row.detail("adjudication_id") == adjudicationID {
+			denialNamed = true
+		}
+	}
+	if !denialNamed {
+		t.Fatalf("no correlated denial row names the out-of-scope image (rows: %+v)", rows)
+	}
+}
 
 // TestReadImage_AccessAuditAndMetadataPrivacy runs a Judge-posture turn with
 // a real audit logger over four image requests: an in-scope evidence image
@@ -615,52 +656,17 @@ func TestReadImage_AccessAuditAndMetadataPrivacy(t *testing.T) {
 	if !guarded.IsError || len(guarded.InspectionImages) != 0 {
 		t.Fatalf("metadata-hidden image was not refused: %#v", guarded)
 	}
-	if !strings.Contains(guarded.ForLLM, "read_agent_metadata") {
+	if !strings.Contains(guarded.ForLLM, "get_agent") {
 		t.Fatalf("metadata guard text: %q", guarded.ForLLM)
 	}
 
-	rows := readAuditRows(t, auditLogger, auditDir)
-	var reads, denials []auditRow
-	for _, row := range rows {
-		switch {
-		case row.Event == audit.EventFileOp && row.detail("op") == "read":
-			reads = append(reads, row)
-		case row.Event == PathAccessDeniedEvent:
-			denials = append(denials, row)
-		}
-	}
-	if len(reads) != 1 {
-		t.Fatalf("want exactly 1 image read audit row, got %d (all rows: %+v)", len(reads), rows)
-	}
-	if reads[0].detail("path") != inside || reads[0].Decision != audit.DecisionAllow || reads[0].Tool != "read_file" {
-		t.Fatalf("image read audit row: %+v", reads[0])
-	}
-	if reads[0].detail("adjudication_id") != adjudicationID || reads[0].AgentID != judgeAgentID || reads[0].SessionID != sessionID {
-		t.Fatalf("image read audit correlation: %+v", reads[0])
-	}
-	var denialNamed bool
-	for _, row := range denials {
-		if row.detail("path") == outside && row.detail("adjudication_id") == adjudicationID {
-			denialNamed = true
-		}
-	}
-	if !denialNamed {
-		t.Fatalf("no correlated denial row names the out-of-scope image (rows: %+v)", rows)
-	}
+	checkReadImageAuditRows(t, auditLogger, auditDir, inside, outside, adjudicationID, judgeAgentID, sessionID)
 }
 
 // --- unchanged reading contracts (spec BDD-03, datasets A7/A13, R1-R5) -------
 
-// TestReadImage_ExistingReadingContracts pins the pre-ADR-090 behavior of the
-// same Execute entry point now serving images: text pagination windows, the
-// empty-file marker, direct SVG text reads, document extraction (DOCX, XLSX,
-// PPTX, PDF), opaque-binary refusal, the 64 KiB text cap, and image
-// identification by content rather than filename — each against an
-// independently constructed expectation.
-func TestReadImage_ExistingReadingContracts(t *testing.T) {
-	root := t.TempDir()
-	tool := NewReadFileTool(root, false, MaxReadFileSize)
-
+func checkReadImageTextAndSVGContracts(t *testing.T, root string, tool *ReadFileTool) {
+	t.Helper()
 	// R1: exact pagination window. The pattern makes off-by-one windows
 	// visible: the window must end precisely at the requested boundary.
 	text := strings.Repeat("abcdefghij", 10) // 100 chars
@@ -700,6 +706,19 @@ func TestReadImage_ExistingReadingContracts(t *testing.T) {
 	if !strings.HasSuffix(svgRead.ForLLM, svg[:40]) || strings.Contains(svgRead.ForLLM, "[image:") {
 		t.Fatalf("direct SVG read lost text semantics: %q", svgRead.ForLLM)
 	}
+}
+
+// TestReadImage_ExistingReadingContracts pins the pre-ADR-090 behavior of the
+// same Execute entry point now serving images: text pagination windows, the
+// empty-file marker, direct SVG text reads, document extraction (DOCX, XLSX,
+// PPTX, PDF), opaque-binary refusal, the 64 KiB text cap, and image
+// identification by content rather than filename — each against an
+// independently constructed expectation.
+func TestReadImage_ExistingReadingContracts(t *testing.T) {
+	root := t.TempDir()
+	tool := NewReadFileTool(root, false, MaxReadFileSize)
+
+	checkReadImageTextAndSVGContracts(t, root, tool)
 
 	// A7: identification by bytes, not filename — PNG content under a
 	// non-image extension is an image candidate; a NUL-bearing blob under a

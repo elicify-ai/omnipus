@@ -40,6 +40,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/knowledge"
@@ -313,6 +314,26 @@ func (a *restAPI) renameNoteInCollection(
 	if err != nil {
 		mapKnowledgeRestructureErr(w, op, workspaceID, err)
 		return false
+	}
+	// §5.4 provenance: the knowledge Renamer moves files through its own
+	// link-FS engine, not through library.Root.Rename, so the root's attached
+	// marker hooks never see these moves — re-key explicitly, one marker move
+	// per physical move the rename performed (Moves are collection-relative;
+	// the marker index is keyed by workspace-relative paths, the same join
+	// relWithinCollection applies).
+	if !res.NoOp {
+		if marker := a.mailMarkerStore(workspaceID); marker != nil {
+			for _, mv := range res.Moves {
+				// Workspace-relative re-key paths — distinct names from the
+				// function's collection-relative parameters above.
+				fromWS := path.Join(note.collRel, mv.From)
+				toWS := path.Join(note.collRel, mv.To)
+				if err := marker.MovePrefix(fromWS, toWS); err != nil {
+					logger.WarnCF("rest", "library: knowledge rename landed but a mail-derived marker re-key failed",
+						map[string]any{"workspace_id": workspaceID, "from": fromWS, "to": toWS, "error": err.Error()})
+				}
+			}
+		}
 	}
 	if !res.NoOp {
 		var warning string

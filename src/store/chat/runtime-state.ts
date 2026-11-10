@@ -1,6 +1,7 @@
 // runtime-state.ts: Module-scoped replay, cancellation, routing, and diagnostics state used by the store
 
 import { emptySessionState } from './session'
+import type { SessionHistoryPage } from '@/lib/api/sessions'
 
 // Module-scoped handle for the 60s auto-clear timer on rate-limit events, keyed per session.
 export const rateLimitClearTimers: Record<string, ReturnType<typeof setTimeout>> = {}
@@ -29,6 +30,51 @@ export const sawReplayMessageThisTurn: Record<string, boolean> = {}
 // misattribute to whatever session happens to be foreground — see F-S3 below.
 export const pendingCancelAckSids = new Set<string>()
 
+// Founder ruling 2026-10-07 (UAT row S7): a /stop-redirect turn is a redirect,
+// not an interruption. Session ids this client has sent a `redirect` frame for
+// and not yet seen the server's answer to (the next typed `error` frame for the
+// session — turn_canceled when the redirect stopped the turn, anything else
+// when it was refused). The turn_canceled frame itself carries no cause, so the
+// sender's own knowledge is what lets the live view finalise the streaming
+// bubble as a normal answer (partial text kept, no "(interrupted)") instead of
+// treating it as an error. Cleared on socket drop with pendingCancelAckSids.
+export const pendingRedirectSids = new Set<string>()
+
+// FR-030/031 (U10b): the transcript re-read owed to a /clear, keyed by
+// session id. The intent belongs to the /clear OPERATION — it is recorded
+// when a /clear is actually sent on the wire (normal send, offline-queue
+// drain and Retry/resend all go through armClearRefresh) and is bound to
+// that send's client_message_id plus the turn that was active at send-time,
+// so that turn's own done can never consume it. The intent clears only
+// after the post-clear server projection — marker entry included — has been
+// applied to the bucket (see clear-refetch.ts).
+export interface PendingClearRefresh {
+  /** The client_message_id of the /clear send this refresh belongs to. */
+  clientMessageId: string
+  /** The turn id announced when the /clear was sent; its own done must not consume the refresh. */
+  turnIdAtArm: string | null
+  /** Wall-clock ms at arm time — the cutoff that keeps newer client-only rows (e.g. a /new refusal) in a merge. */
+  armedAt: number
+  /** A successfully fetched projection held back because the bucket was busy; applied once it goes idle. */
+  heldProjection?: SessionHistoryPage
+  /**
+   * Ids of the /clear marker rows the session's view already carried when
+   * this operation was armed (founder ruling 2026-10-11). The server keeps
+   * NO link between a /clear row and the marker it produced
+   * (pkg/session/transcript_view.go::sinceLastClear), so the marker itself —
+   * by identity — is the only acceptance signal, and a marker already known
+   * at arm time belongs to an EARLIER clear, never to this one.
+   */
+  knownMarkerIds?: string[]
+  /** Re-reads that did not settle this operation (no own user row, or no marker yet) — diagnostic only; there is NO bound (ruling S3-02). */
+  unresolvedReads?: number
+  /** Turn ends skipped since the last re-read while backing off (R2-S3-06). */
+  turnEndsSinceRead?: number
+  /** True once the user was told an application failure is being retried, so it is said once. */
+  applyFailureShown?: boolean
+}
+export const pendingClearRefetches: Record<string, PendingClearRefresh | undefined> = {}
+
 // #823 catch-up redesign, Opus review round 2 item 7 (LOW): applySeqGate's
 // gap branch (frames.ts) sends `attach_session{S, cursor}` to recover from a
 // sequence gap. Without a guard, EVERY subsequent gapped frame that arrives
@@ -55,6 +101,38 @@ export const replayErrorRetryTimers: Record<string, ReturnType<typeof setTimeout
 export const REPLAY_ERROR_BASE_DELAY_MS = 1_000
 export const REPLAY_ERROR_MAX_DELAY_MS = 30_000
 
+// Safety hardening (frontend-lead dispatch, subagent-control-plane stream):
+// applySeqGate's gap branch (frames.ts) sends a single, fire-once
+// `attach_session{since_seq, boot_id}` to recover from a sequence gap. If
+// that frame's response is lost — e.g. raced against a concurrent
+// attach_session for a DIFFERENT session sharing the same connection — the
+// session was left permanently stuck: inFlightReattachSids blocks a second
+// send, and nothing ever retries. Mirrors replayErrorRetryAttempts/Timers'
+// own pattern immediately above (same backoff shape, same per-session
+// keying), but — unlike the replay_error retry, whose re-schedule trigger is
+// an external "it failed again" `done` frame — this one has no external
+// retrigger signal (a lost ack is lost silently), so scheduleGapReattachRetry
+// (frames.ts) re-schedules ITSELF on each firing rather than waiting for a
+// caller to invoke it again. Cleared the same way replayErrorRetryAttempts/
+// Timers are: the timer on disconnect (clearCatchUpSideChannelsOnDisconnect,
+// outbound-lifecycle.ts — a stale timer would resend over a dead
+// connection), both timer and attempt count once the gap genuinely resolves
+// (inFlightReattachSids.delete, applySeqGate's own 'apply'/cursor-minting
+// branches).
+export const gapReattachRetryAttempts: Record<string, number> = {}
+export const gapReattachRetryTimers: Record<string, ReturnType<typeof setTimeout>> = {}
+export const GAP_REATTACH_BASE_DELAY_MS = 1_000
+export const GAP_REATTACH_MAX_DELAY_MS = 30_000
+// Silent-failure fix (8-reviewer gate finding): an unanswered gap re-attach
+// used to retry forever with no user-facing signal. After this many attempts
+// the user is told once per stuck episode that the session may be out of
+// sync. Own constant, not UNKNOWN_FRAME_TOAST_THRESHOLD — the two thresholds
+// govern unrelated failure modes. Value 5 against this retry's own backoff
+// curve (1+2+4+8+16s) warns at ~31s of a stuck session: late enough to ride
+// out every transient hiccup (a healthy re-attach resolves within the first
+// 1-2 retries), early enough to matter when the failure never self-heals.
+export const GAP_REATTACH_TOAST_THRESHOLD = 5
+
 export const EMPTY_BUCKET = emptySessionState()
 
 // F-S1: all server→client frames that must carry session_id.
@@ -63,9 +141,9 @@ export const EMPTY_BUCKET = emptySessionState()
 export const SESSION_SCOPED_FRAME_TYPES = new Set([
   'token', 'done', 'tool_call_start', 'tool_call_result',
   'subagent_start', 'subagent_end', 'replay_message', 'replay_done',
-  'agent_switched', 'task_status_changed',
+  'task_status_changed',
   'tool_approval_required', 'rate_limit', 'media', 'session_started',
-  'system_overload', 'session_close_ack', 'cancel_stage',
+  'system_overload', 'cancel_stage',
   'message_status',
   // ADR-092: SessionModeUpdatedFrame.session_id is required (min length 1) —
   // same "drop in production when missing" contract as cancel_stage above.
@@ -97,6 +175,10 @@ export const SESSION_SCOPED_FRAME_TYPES = new Set([
   // Goal outcome line (founder decision 2026-09-14): GoalOutcomeFrame carries
   // a required, min(1) `session_id` — session-scoped like goal_status.
   'goal_outcome',
+  // Parent-wake visibility: an event belongs only to its addressed transcript.
+  'helper_event',
+  // Q33: live and replayed context diagnostics require their owning session.
+  'context_window_notice',
   // ADR-091 D7/I-4 (FR-E-002): subagent_message/subagent_state always carry
   // a required `session_id` — the producing span's own session, reduced
   // onto the span record (frames.ts's `case 'subagent_message'`/

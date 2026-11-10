@@ -12,12 +12,19 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
-// newStartTaskNowWithRegistry builds a TaskExecutor whose agentLoop has a
-// registry with one agent pre-registered under agentID. It returns the executor,
-// the task store, the agentLoop, and the registered agentID.
+// newStartTaskNowWithRegistry builds an AgentLoop with one registered agent and
+// returns ITS TaskExecutor, wired the way production wires it: the session
+// stores, a genuine boot epoch and the real SteerLauncher.
+//
+// S1 M9 deleted the launcher-less start path ("no session launcher is
+// installed"), so a fixture that hands StartTaskNow a bare hand-built executor
+// no longer exercises any real behaviour — it only proves the refusal. These
+// tests are about the RUN the start path produces, so they must drive the same
+// executor the gateway's launcher dispatches into.
 func newStartTaskNowWithRegistry(t *testing.T) (*TaskExecutor, *task.Store, *AgentLoop, string) {
 	t.Helper()
 	home := t.TempDir()
@@ -28,26 +35,25 @@ func newStartTaskNowWithRegistry(t *testing.T) (*TaskExecutor, *task.Store, *Age
 	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
 	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
 	cfg.Agents.List = []config.AgentConfig{
-		{ID: agentID, Name: agentID, Type: config.AgentTypeCore},
+		{ID: agentID, Name: agentID, Type: config.AgentTypeCore, Home: filepath.Join(home, "agents", agentID)},
 	}
+	cfg.Sandbox.ToolPolicies = map[string]string{"goal_claim": "allow"}
 
 	msgBus := bus.NewMessageBus()
 	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
 	t.Cleanup(func() { al.Close() })
 
-	// Register the agent instance so StartTaskNow's registry.GetAgent check passes.
+	// Register the agent instance so StartTaskNow's registry look-up succeeds.
 	registerInstance(t, al, cfg, home, agentID, config.AgentTypeCore)
 
-	dir := t.TempDir()
-	store := task.New(filepath.Join(dir, "tasks"))
+	mintGenuineBootEpochForLoop(t, al)
+	lifecycle := session.NewLifecycleStore(filepath.Join(home, "session_lifecycle"))
+	al.SetSessionMessagingStores(
+		session.NewMessageInboxStore(filepath.Join(home, "session_messages")), lifecycle)
+	al.taskExecutor.SetLifecycleStore(lifecycle)
+	al.taskExecutor.SetSessionLauncher(NewSteerLauncher(al))
 
-	te := &TaskExecutor{
-		agentLoop:    al,
-		store:        store,
-		running:      make(map[string]*taskSlot),
-		dispatchSema: newDispatchSemaphore(4),
-	}
-	return te, store, al, agentID
+	return al.taskExecutor, al.taskStore, al, agentID
 }
 
 // TestStartTaskNow_GoroutineContextDetachedFromRequestContext is the regression

@@ -21,103 +21,43 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/stretchr/testify/require"
 )
 
 // --- steeringQueue unit tests ---
 
-func TestSteeringQueue_PushDequeue_OneAtATime(t *testing.T) {
-	sq := newSteeringQueue(SteeringOneAtATime)
+// FR-009 / DEL-04: the ordinary FIFO has one dequeue shape. The deleted
+// one-at-a-time mode and its per-poll drain are gone, so this covers the
+// surviving all-at-once scope drain (ordered, then empty).
+func TestSteeringQueue_PushDequeue_AllAtOnce(t *testing.T) {
+	sq := newSteeringQueue()
 
-	sq.push(providers.Message{Role: "user", Content: "msg1"})
-	sq.push(providers.Message{Role: "user", Content: "msg2"})
-	sq.push(providers.Message{Role: "user", Content: "msg3"})
-
+	for _, c := range []string{"msg1", "msg2", "msg3"} {
+		if err := sq.pushScope("test-scope", providers.Message{Role: "user", Content: c}); err != nil {
+			t.Fatalf("push %q: %v", c, err)
+		}
+	}
 	if sq.len() != 3 {
 		t.Fatalf("expected 3 messages, got %d", sq.len())
 	}
 
-	msgs := sq.dequeue()
-	if len(msgs) != 1 {
-		t.Fatalf("expected 1 message in one-at-a-time mode, got %d", len(msgs))
-	}
-	if msgs[0].Content != "msg1" {
-		t.Fatalf("expected 'msg1', got %q", msgs[0].Content)
-	}
-	if sq.len() != 2 {
-		t.Fatalf("expected 2 remaining, got %d", sq.len())
-	}
-
-	msgs = sq.dequeue()
-	if len(msgs) != 1 || msgs[0].Content != "msg2" {
-		t.Fatalf("expected 'msg2', got %v", msgs)
-	}
-
-	msgs = sq.dequeue()
-	if len(msgs) != 1 || msgs[0].Content != "msg3" {
-		t.Fatalf("expected 'msg3', got %v", msgs)
-	}
-
-	msgs = sq.dequeue()
-	if msgs != nil {
-		t.Fatalf("expected nil from empty queue, got %v", msgs)
-	}
-}
-
-func TestSteeringQueue_PushDequeue_All(t *testing.T) {
-	sq := newSteeringQueue(SteeringAll)
-
-	sq.push(providers.Message{Role: "user", Content: "msg1"})
-	sq.push(providers.Message{Role: "user", Content: "msg2"})
-	sq.push(providers.Message{Role: "user", Content: "msg3"})
-
-	msgs := sq.dequeue()
+	msgs := sq.dequeueScope("test-scope")
 	if len(msgs) != 3 {
-		t.Fatalf("expected 3 messages in all mode, got %d", len(msgs))
+		t.Fatalf("expected 3 messages drained at once, got %d", len(msgs))
 	}
 	if msgs[0].Content != "msg1" || msgs[1].Content != "msg2" || msgs[2].Content != "msg3" {
 		t.Fatalf("unexpected messages: %v", msgs)
 	}
-
 	if sq.len() != 0 {
 		t.Fatalf("expected 0 remaining, got %d", sq.len())
 	}
-
-	msgs = sq.dequeue()
-	if msgs != nil {
+	if msgs = sq.dequeueScope("test-scope"); msgs != nil {
 		t.Fatalf("expected nil from empty queue, got %v", msgs)
 	}
 }
 
-func TestSteeringQueue_EmptyDequeue(t *testing.T) {
-	sq := newSteeringQueue(SteeringOneAtATime)
-	if msgs := sq.dequeue(); msgs != nil {
-		t.Fatalf("expected nil, got %v", msgs)
-	}
-}
-
-func TestSteeringQueue_SetMode(t *testing.T) {
-	sq := newSteeringQueue(SteeringOneAtATime)
-	if sq.getMode() != SteeringOneAtATime {
-		t.Fatalf("expected one-at-a-time, got %v", sq.getMode())
-	}
-
-	sq.setMode(SteeringAll)
-	if sq.getMode() != SteeringAll {
-		t.Fatalf("expected all, got %v", sq.getMode())
-	}
-
-	// Push two messages and verify all-mode drains them
-	sq.push(providers.Message{Role: "user", Content: "a"})
-	sq.push(providers.Message{Role: "user", Content: "b"})
-
-	msgs := sq.dequeue()
-	if len(msgs) != 2 {
-		t.Fatalf("expected 2 messages after mode switch, got %d", len(msgs))
-	}
-}
-
 func TestSteeringQueue_ConcurrentAccess(t *testing.T) {
-	sq := newSteeringQueue(SteeringOneAtATime)
+	sq := newSteeringQueue()
 
 	var wg sync.WaitGroup
 	const n = MaxQueueSize
@@ -127,7 +67,7 @@ func TestSteeringQueue_ConcurrentAccess(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			sq.push(providers.Message{Role: "user", Content: fmt.Sprintf("msg%d", i)})
+			sq.pushScope("test-scope", providers.Message{Role: "user", Content: fmt.Sprintf("msg%d", i)})
 		}(i)
 	}
 	wg.Wait()
@@ -143,7 +83,7 @@ func TestSteeringQueue_ConcurrentAccess(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if msgs := sq.dequeue(); len(msgs) > 0 {
+			if msgs := sq.dequeueScope("test-scope"); len(msgs) > 0 {
 				mu.Lock()
 				drained += len(msgs)
 				mu.Unlock()
@@ -158,23 +98,24 @@ func TestSteeringQueue_ConcurrentAccess(t *testing.T) {
 }
 
 func TestSteeringQueue_Overflow(t *testing.T) {
-	sq := newSteeringQueue(SteeringOneAtATime)
+	sq := newSteeringQueue()
 
-	// Fill the queue up to its maximum capacity
-	for i := 0; i < MaxQueueSize; i++ {
-		err := sq.push(providers.Message{Role: "user", Content: fmt.Sprintf("msg%d", i)})
+	// Ordinary steer messages share the inbox retention-tail bound. Fill the
+	// queue to that exact capacity before checking both admission classes.
+	for i := 0; i < 200; i++ {
+		err := sq.pushScope("test-scope", providers.Message{Role: "user", Content: fmt.Sprintf("msg%d", i)})
 		if err != nil {
 			t.Fatalf("unexpected error pushing message %d: %v", i, err)
 		}
 	}
 
 	// Sanity check: ensure the queue is actually full
-	if sq.len() != MaxQueueSize {
-		t.Fatalf("expected queue length %d, got %d", MaxQueueSize, sq.len())
+	if sq.len() != 200 {
+		t.Fatalf("expected queue length 200, got %d", sq.len())
 	}
 
 	// Attempt to push one more message, which MUST fail
-	err := sq.push(providers.Message{Role: "user", Content: "overflow_msg"})
+	err := sq.pushScope("test-scope", providers.Message{Role: "user", Content: "overflow_msg"})
 
 	// Assert the error happened and is the exact one we expect
 	if err == nil {
@@ -185,25 +126,18 @@ func TestSteeringQueue_Overflow(t *testing.T) {
 	if err.Error() != expectedErr {
 		t.Errorf("expected error message %q, got %q", expectedErr, err.Error())
 	}
-}
 
-func TestParseSteeringMode(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected SteeringMode
-	}{
-		{"", SteeringOneAtATime},
-		{"one-at-a-time", SteeringOneAtATime},
-		{"all", SteeringAll},
-		{"unknown", SteeringOneAtATime},
+	// A completion wake is control flow, not producer traffic: it must remain
+	// admissible after the ordinary-message memory bound is reached.
+	wakeErr := sq.pushItemScope("test-scope", steeringQueueItem{
+		message: providers.Message{Role: "user", Content: "child completed"},
+		wake:    &steeringWake{messageID: "wake-after-full"},
+	})
+	if wakeErr != nil {
+		t.Fatalf("upward wake refused by ordinary steering cap: %v", wakeErr)
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			if got := parseSteeringMode(tt.input); got != tt.expected {
-				t.Fatalf("parseSteeringMode(%q) = %v, want %v", tt.input, got, tt.expected)
-			}
-		})
+	if sq.len() != 201 {
+		t.Fatalf("queue length after wake = %d, want 201", sq.len())
 	}
 }
 
@@ -229,71 +163,9 @@ func TestAgentLoop_Steer_Enqueues(t *testing.T) {
 		t.Fatalf("expected 1 steering message, got %d", al.steering.len())
 	}
 
-	msgs, _ := al.dequeueSteeringMessages()
+	msgs, _ := al.dequeueSteeringMessagesForScope("")
 	if len(msgs) != 1 || msgs[0].Content != "interrupt me" {
 		t.Fatalf("unexpected dequeued message: %v", msgs)
-	}
-}
-
-func TestAgentLoop_SteeringMode_GetSet(t *testing.T) {
-	al, cfg, msgBus, provider, cleanup := newTestAgentLoop(t)
-	defer cleanup()
-
-	if cfg == nil {
-		t.Fatal("expected config to be initialized")
-	}
-	if msgBus == nil {
-		t.Fatal("expected message bus to be initialized")
-	}
-	if provider == nil {
-		t.Fatal("expected provider to be initialized")
-	}
-
-	if al.SteeringMode() != SteeringOneAtATime {
-		t.Fatalf("expected default mode one-at-a-time, got %v", al.SteeringMode())
-	}
-
-	al.SetSteeringMode(SteeringAll)
-	if al.SteeringMode() != SteeringAll {
-		t.Fatalf("expected all mode, got %v", al.SteeringMode())
-	}
-}
-
-func TestAgentLoop_SteeringMode_ConfiguredFromConfig(t *testing.T) {
-	tmpDirOuter, err := os.MkdirTemp("", "agent-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDirOuter)
-	// Nested one level below the freshly-made outer container so
-	// filepath.Dir(tmpDir) (what NewAgentLoop roots the shared
-	// session/task store at) is THIS test's own private tmpDirOuter,
-	// never the shared OS temp root — see loop_test.go's
-	// newTestAgentLoop doc comment for the leak this closes.
-	tmpDir := filepath.Join(tmpDirOuter, "home")
-	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
-		t.Fatalf("Failed to create nested home dir: %v", err)
-	}
-
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Home:              tmpDir,
-				DefaultModel:      config.DefaultModel{Model: "test-model"},
-				MaxTokens:         4096,
-				MaxToolIterations: 10,
-				SteeringMode:      "all",
-			},
-			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
-		},
-	}
-
-	msgBus := bus.NewMessageBus()
-	provider := &mockProvider{}
-	al := mustNewAgentLoop(t, cfg, msgBus, provider)
-
-	if al.SteeringMode() != SteeringAll {
-		t.Fatalf("expected 'all' mode from config, got %v", al.SteeringMode())
 	}
 }
 
@@ -311,7 +183,7 @@ func TestAgentLoop_Continue_NoMessages(t *testing.T) {
 		t.Fatal("expected provider to be initialized")
 	}
 
-	resp, err := al.Continue(context.Background(), "test-session", "test", "chat1", "")
+	resp, err := al.Continue(context.Background(), "agent:mia:session:test-session", "test", "chat1", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -355,9 +227,13 @@ func TestAgentLoop_Continue_WithMessages(t *testing.T) {
 	provider := &simpleMockProvider{response: "continued response"}
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 
-	al.Steer(providers.Message{Role: "user", Content: "new direction"})
+	// DEL-04: the steering queue is scoped; a message is enqueued in the scope
+	// of the session that will consume it (there is no shared fallback bucket).
+	correlationID, _, err := al.enqueueSteeringMessage("agent:mia:session:test-session", "", providers.Message{Role: "user", Content: "new direction"}, "")
+	require.NoError(t, err, "SETUP: the steering enqueue must succeed")
+	require.NotEmpty(t, correlationID, "every queued steering item is minted a correlation id")
 
-	resp, err := al.Continue(context.Background(), "test-session", "test", "chat1", "")
+	resp, err := al.Continue(context.Background(), "agent:mia:session:test-session", "test", "chat1", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -430,6 +306,8 @@ func TestSessionWorker_DifferentScopesGetIndependentWorkers(t *testing.T) {
 		},
 	}
 
+	msg1 = al.addressToPrimaryForTest(msg1) // no default agent: the fixture names its agent
+	msg2 = al.addressToPrimaryForTest(msg2)
 	scope1, _, ok1 := al.resolveSteeringTarget(msg1)
 	scope2, _, ok2 := al.resolveSteeringTarget(msg2)
 	if !ok1 || !ok2 {
@@ -724,7 +602,7 @@ func TestAgentLoop_Steering_SkipsRemainingTools(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	al.RegisterTool(tool1)
 	al.RegisterTool(tool2)
-	defaultAgent := al.registry.GetDefaultAgent()
+	defaultAgent := al.registry.primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
@@ -743,7 +621,7 @@ func TestAgentLoop_Steering_SkipsRemainingTools(t *testing.T) {
 	resultCh := make(chan result, 1)
 
 	go func() {
-		resp, err := al.ProcessDirectWithChannel(
+		resp, err := al.processDirectWithChannelPrimaryForTest(
 			context.Background(),
 			"do something",
 			"test-session",
@@ -835,10 +713,20 @@ func TestAgentLoop_Steering_InitialPoll(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 
 	// Enqueue a steering message before processing starts
-	al.Steer(providers.Message{Role: "user", Content: "pre-enqueued steering"})
+	// DEL-04: enqueue in the scope of the session whose turn will poll it.
+	route, _, routeErr := al.resolveMessageRoute(bus.InboundMessage{
+		Channel: "test", ChatID: "chat1", SessionKey: "test-session", Content: "initial message",
+		Sender: bus.SenderInfo{CanonicalID: "cron"}, Metadata: map[string]string{"agent_id": "mia"},
+	})
+	if routeErr != nil {
+		t.Fatalf("resolve route: %v", routeErr)
+	}
+	correlationID, _, err := al.enqueueSteeringMessage(resolveScopeKey(route, "test-session"), "", providers.Message{Role: "user", Content: "pre-enqueued steering"}, "")
+	require.NoError(t, err, "SETUP: the steering enqueue must succeed")
+	require.NotEmpty(t, correlationID, "every queued steering item is minted a correlation id")
 
 	// Process a normal message - the initial steering poll should inject the steering message
-	_, err = al.ProcessDirectWithChannel(
+	_, err = al.processDirectWithChannelPrimaryForTest(
 		context.Background(),
 		"initial message",
 		"test-session",
@@ -918,7 +806,8 @@ func TestAgentLoop_Run_AutoContinuesLateSteeringMessage(t *testing.T) {
 	}()
 
 	first := bus.InboundMessage{
-		Channel: "test",
+		Channel:  "test",
+		Metadata: map[string]string{"agent_id": "mia"},
 		Sender: bus.SenderInfo{
 			CanonicalID: "user1",
 		},
@@ -930,7 +819,8 @@ func TestAgentLoop_Run_AutoContinuesLateSteeringMessage(t *testing.T) {
 		},
 	}
 	late := bus.InboundMessage{
-		Channel: "test",
+		Channel:  "test",
+		Metadata: map[string]string{"agent_id": "mia"},
 		Sender: bus.SenderInfo{
 			CanonicalID: "user1",
 		},
@@ -1076,7 +966,7 @@ func TestAgentLoop_Steering_DirectResponseContinuesWithQueuedMessage(t *testing.
 		err  error
 	}, 1)
 	go func() {
-		resp, err := al.ProcessDirectWithChannel(
+		resp, err := al.processDirectWithChannelPrimaryForTest(
 			context.Background(),
 			"initial request",
 			sessionKey,
@@ -1199,11 +1089,11 @@ func TestAgentLoop_Continue_PreservesSteeringMedia(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	al.SetMediaStore(store)
 
-	if err = al.Steer(providers.Message{
+	if _, _, err = al.enqueueSteeringMessage(sessionKey, "", providers.Message{
 		Role:    "user",
 		Content: "describe this image",
 		Media:   []string{ref},
-	}); err != nil {
+	}, ""); err != nil {
 		t.Fatalf("Steer failed: %v", err)
 	}
 
@@ -1233,7 +1123,7 @@ func TestAgentLoop_Continue_PreservesSteeringMedia(t *testing.T) {
 		t.Fatal("expected continue path to inject steering media into the provider request")
 	}
 
-	defaultAgent := al.registry.GetDefaultAgent()
+	defaultAgent := al.registry.primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
@@ -1316,7 +1206,7 @@ func TestAgentLoop_InterruptGraceful_UsesTerminalNoToolCall(t *testing.T) {
 	al.RegisterTool(tool1)
 	al.RegisterTool(tool2)
 	sessionKey := routing.BuildAgentMainSessionKey("mia")
-	defaultAgent := al.registry.GetDefaultAgent()
+	defaultAgent := al.registry.primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
@@ -1336,7 +1226,7 @@ func TestAgentLoop_InterruptGraceful_UsesTerminalNoToolCall(t *testing.T) {
 	}
 	resultCh := make(chan result, 1)
 	go func() {
-		resp, err := al.ProcessDirectWithChannel(
+		resp, err := al.processDirectWithChannelPrimaryForTest(
 			context.Background(),
 			"do something",
 			sessionKey,
@@ -1494,7 +1384,7 @@ func TestAgentLoop_InterruptHard_RestoresSession(t *testing.T) {
 	al.RegisterTool(&interruptibleTool{name: "cancel_tool", started: started})
 	sessionKey := routing.BuildAgentMainSessionKey("mia")
 
-	defaultAgent := al.registry.GetDefaultAgent()
+	defaultAgent := al.registry.primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
@@ -1509,7 +1399,7 @@ func TestAgentLoop_InterruptHard_RestoresSession(t *testing.T) {
 		{Role: "user", Content: "before"},
 		{Role: "assistant", Content: "after"},
 	}
-	defaultAgent.Sessions.SetHistory(sessionKey, originalHistory)
+	seedWindowHistory(defaultAgent.Sessions, sessionKey, originalHistory)
 
 	sub := al.SubscribeEvents(16)
 	defer al.UnsubscribeEvents(sub.ID)
@@ -1520,7 +1410,7 @@ func TestAgentLoop_InterruptHard_RestoresSession(t *testing.T) {
 	}
 	resultCh := make(chan result, 1)
 	go func() {
-		resp, err := al.ProcessDirectWithChannel(
+		resp, err := al.processDirectWithChannelPrimaryForTest(
 			context.Background(),
 			"do work",
 			sessionKey,
@@ -1703,7 +1593,7 @@ func TestAgentLoop_Steering_SkippedToolsHaveErrorResults(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, msgBus, wrappedProvider)
 	al.RegisterTool(tool1)
 	al.RegisterTool(tool2)
-	defaultAgent := al.registry.GetDefaultAgent()
+	defaultAgent := al.registry.primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
@@ -1716,7 +1606,7 @@ func TestAgentLoop_Steering_SkippedToolsHaveErrorResults(t *testing.T) {
 
 	resultCh := make(chan string, 1)
 	go func() {
-		resp, _ := al.ProcessDirectWithChannel(
+		resp, _ := al.processDirectWithChannelPrimaryForTest(
 			context.Background(), "go", "test-session", "test", "chat1",
 		)
 		resultCh <- resp
@@ -1816,7 +1706,7 @@ func stubTurnStateForCancel(t *testing.T, al *AgentLoop, sessionKey, transcriptS
 	t.Helper()
 	providerCancelledCh = make(chan struct{}, 1)
 
-	agent := al.registry.GetDefaultAgent()
+	agent := al.registry.primaryChatAgentForTest()
 	if agent == nil {
 		t.Fatal("expected default agent")
 	}
@@ -1919,90 +1809,128 @@ func TestInterruptSession_NoActiveTurnIsAttemptOnly(t *testing.T) {
 	}
 }
 
-// TestRequestCancelByChannelChat_CascadesToSubTurns verifies that a Tier B cancel
-// originating from a channel+chatID match propagates to sub-turns that share
-// the same transcriptSessionID even though sub-turns have empty channel/chatID.
+// TestRequestCancelByChannelChat_CascadesToSubTurns verifies that a Tier B
+// /cancel originating from a channel+chatID match stops the whole delegation
+// tree below that conversation through the one stop method.
 //
-// BDD: Given a root turn (depth=0, channel="telegram", chatID="123", transcriptSessionID="S")
-// and a sub-turn (depth=1, channel="", chatID="", transcriptSessionID="S"),
-// When RequestCancelByChannelChat(ctx, "telegram", "123", "") is called,
-// Then BOTH turns receive requestGracefulInterrupt (gracefulInterrupt=true).
+// Rebuilt for D9/D2 (the sub-turn model is retired, and a chat command is
+// authorised for the signed-in owner): a REAL tree -- a chat root with a
+// lifecycle record, a running helper and that helper's own running grandchild,
+// each a launched and dispatched session with a real admission identity -- and
+// an authenticated sender. The retired fixture hand-registered turnStates with
+// no identity and passed an empty user id.
 //
-// Refs: FR-6, FR-10.
+// BDD: Given a Telegram chat whose root session has a running helper that has
+// its own running helper, When the owner sends /cancel (RequestCancelByChannelChat),
+// Then both helpers are asked politely, shut down, and land stopped (note kept,
+// fence cleared), and so does the root; fired is reported.
+//
+// Refs: FR-6, FR-10, ADR-20260928 D7/D9.
 func TestRequestCancelByChannelChat_CascadesToSubTurns(t *testing.T) {
-	al, cleanup := newAL(t)
+	al, cleanup := newSteerAL(t)
 	defer cleanup()
+	al.GetConfig().Performance.MaxParallelAgents = 4
+	provider, _ := installParkedProvider(t, al)
 
-	const sid = "channel-chat-cascade-session"
-
-	agent := al.registry.GetDefaultAgent()
-	if agent == nil {
-		t.Fatal("expected default agent")
+	rootID := newTestSteeringSession(t, al, "ws-channel-tree")
+	if err := al.GetSessionLifecycleStore().Persist(&session.LifecycleRecord{
+		SessionID: rootID, Generation: 1, State: session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeHuman, WorkspaceID: "ws-channel-tree",
+		AgentID: testDefaultAgentID, Origin: &session.Origin{Kind: session.OriginKindChat},
+	}); err != nil {
+		t.Fatalf("SETUP persist the chat root's lifecycle record: %v", err)
 	}
-
-	// Helper to build a turnState stub with explicit channel/chatID/depth.
-	makeTurn := func(sessionKey, channel, chatID string, depth int, transcriptSID string) (*turnState, chan struct{}) {
-		t.Helper()
-		provCh := make(chan struct{}, 1)
-		opts := processOptions{
-			SessionKey:          sessionKey,
-			Channel:             channel,
-			ChatID:              chatID,
-			TranscriptSessionID: transcriptSID,
-		}
-		scope := al.newTurnEventScope(agent.ID, sessionKey)
-		ts := newTurnState(agent, opts, scope)
-		ts.depth = depth
-		ts.mu.Lock()
-		ts.providerCancel = func() {
-			select {
-			case provCh <- struct{}{}:
-			default:
-			}
-		}
-		ts.mu.Unlock()
-		al.activeTurnStates.Store(sessionKey, ts)
-		t.Cleanup(func() { al.activeTurnStates.Delete(sessionKey) })
-		return ts, provCh
+	launcher := NewSteerLauncher(al)
+	childID, childGen := launchSteeredChild(t, al, rootID, "call-chan-child", "the helper of the chat")
+	if _, err := launcher.Dispatch(context.Background(), childID, childGen); err != nil {
+		t.Fatalf("Dispatch(child): %v", err)
 	}
+	grandID, grandGen := launchSteeredChild(t, al, childID, "call-chan-grand", "the helper of the helper")
+	if _, err := launcher.Dispatch(context.Background(), grandID, grandGen); err != nil {
+		t.Fatalf("Dispatch(grandchild): %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		select {
+		case <-provider.entered:
+		case <-time.After(30 * time.Second):
+			t.Fatalf("only %d of the 2 helpers reached the provider", i)
+		}
+	}
+	childTS, grandTS := al.getActiveTurnState(childID), al.getActiveTurnState(grandID)
+	if childTS == nil || grandTS == nil {
+		t.Fatal("SETUP: both helpers must have live turns, or this test proves nothing")
+	}
+	// The channel index is populated at intake in production; map this chat to
+	// the real root session exactly as intake would.
+	al.channelSessionIdx.Store("telegram/123", rootID)
 
-	// Root turn: has channel/chatID populated.
-	parentTS, parentPC := makeTurn("parent-key", "telegram", "123", 0, sid)
-	// Sub-turn: inherits transcriptSessionID but has no channel/chatID (depth=1).
-	subTS, subPC := makeTurn("sub-key", "", "", 1, sid)
-
-	if _, _, err := al.RequestCancelByChannelChat(context.Background(), "telegram", "123", ""); err != nil {
+	fired, armed, err := al.RequestCancelByChannelChat(context.Background(), "telegram", "123", "telegram-owner")
+	if err != nil {
 		t.Fatalf("RequestCancelByChannelChat returned unexpected error: %v", err)
 	}
-
-	// Both providerCancel stubs must fire within 200ms (FR-12a).
-	timeout := time.After(200 * time.Millisecond)
-	for i, ch := range []chan struct{}{parentPC, subPC} {
-		select {
-		case <-ch:
-		case <-timeout:
-			t.Fatalf("providerCancel[%d] was not called within 200ms", i)
-		}
+	if !fired || armed {
+		t.Errorf("RequestCancelByChannelChat = fired %v armed %v, want fired true armed false", fired, armed)
 	}
 
-	// Both turns must have gracefulInterrupt set.
-	for i, ts := range []*turnState{parentTS, subTS} {
-		interrupted, _ := ts.gracefulInterruptRequested()
-		if !interrupted {
-			t.Errorf("turn %d: gracefulInterrupt not set after Tier B cascade", i)
+	for name, ts := range map[string]*turnState{"child": childTS, "grandchild": grandTS} {
+		if polite, _ := ts.gracefulInterruptRequested(); !polite {
+			t.Errorf("%s: no polite stop requested after the Tier B cascade", name)
+		}
+		select {
+		case <-ts.Finished():
+		case <-time.After(30 * time.Second):
+			t.Fatalf("the %s's turn is still running 30s after /cancel", name)
+		}
+	}
+	for name, id := range map[string]string{"root": rootID, "child": childID, "grandchild": grandID} {
+		rec := awaitLandedStopped(t, al, id, "the "+name)
+		if rec.StopNote.By != session.StopActorHumanUser("telegram-owner") {
+			t.Errorf("%s StopNote.By = %q, want %q — the signed-in owner who sent /cancel", name, rec.StopNote.By, session.StopActorHumanUser("telegram-owner"))
 		}
 	}
 }
 
-// TestRequestCancelByChannelChat_NoMatchIsNoop verifies that calling
-// RequestCancelByChannelChat when no root turn matches is a silent no-op.
+// TestRequestCancelByChannelChat_NoMatchIsNoop verifies the team-lead ruling
+// for /cancel with nothing running: when the conversation genuinely has
+// nothing to stop (no session is indexed for this channel/chat), the answer is
+// the truthful "nothing to stop" outcome -- no error, nothing fired, nothing
+// armed (the channel layer replies "Nothing to stop."). The retired reading
+// turned this into an error ("could not resolve this conversation's tree").
 func TestRequestCancelByChannelChat_NoMatchIsNoop(t *testing.T) {
 	al, cleanup := newAL(t)
 	defer cleanup()
 
 	// No turns registered — must return nil, not error.
-	if _, _, err := al.RequestCancelByChannelChat(context.Background(), "telegram", "999", ""); err != nil {
+	fired, armed, err := al.RequestCancelByChannelChat(context.Background(), "telegram", "999", "telegram-owner")
+	if err != nil {
 		t.Fatalf("expected nil for no-match, got: %v", err)
+	}
+	if fired || armed {
+		t.Errorf("no-match reported fired=%v armed=%v, want both false (a genuine nothing-to-stop)", fired, armed)
+	}
+}
+
+// TestRequestCancelByChannelChat_UnresolvableTreeIsAVisibleError is the other
+// half of the same ruling: when the conversation's tree CANNOT be resolved
+// because of a real failure (a corrupt channel index entry here), /cancel is a
+// visible error that says nothing was stopped -- never the quiet "Nothing to
+// stop.".
+func TestRequestCancelByChannelChat_UnresolvableTreeIsAVisibleError(t *testing.T) {
+	al, cleanup := newAL(t)
+	defer cleanup()
+	// The index holds a value of the wrong type: the conversation exists but
+	// its identity cannot be read.
+	al.channelSessionIdx.Store("telegram/777", 42)
+
+	fired, armed, err := al.RequestCancelByChannelChat(context.Background(), "telegram", "777", "telegram-owner")
+	if err == nil {
+		t.Fatalf("an unresolvable conversation tree was reported as a quiet no-op (fired=%v armed=%v)", fired, armed)
+	}
+	if !strings.Contains(err.Error(), "nothing was stopped") {
+		t.Errorf("error %q must say plainly that nothing was stopped", err.Error())
+	}
+	if fired || armed {
+		t.Errorf("a failed stop reported fired=%v armed=%v", fired, armed)
 	}
 }
 
@@ -2082,16 +2010,10 @@ func runDelegateSteer(t *testing.T, al *AgentLoop, callerSessionID, targetSessio
 	})
 }
 
-// TestDelegateSteer_RevivesStoppedQueuedChild is Finding 1's proof of done
-// (ADR-091 fix lane 2, Q17/D8): "a Stop survives a restart; only a newer
-// instruction revives the session, as a new generation." A queued child the
-// Stop cascade stamped never had a live turn, so nothing transitioned it —
-// SteerCanceller.Revive existed with zero production callers, and
-// executeSteer (pkg/tools/delegate_followup.go) enqueued into a steering
-// queue no live turn would ever drain, silently orphaning the message while
-// telling the model it would "apply at the child's next tool boundary" (a
-// false success). A steering message on a stopped-while-queued child must
-// instead revive it as a NEW generation and redispatch it for real.
+// Frozen control-plane ADR D2/Vocabulary: a queued stop lands with a note
+// and no current fence. October-4 amendment C1 / R1-RULING.md preserves the
+// steering input and real redispatch, but stopped-message resumption keeps the
+// SAME generation rather than the retired ADR-091 generation bump.
 func TestDelegateSteer_RevivesStoppedQueuedChild(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
@@ -2125,15 +2047,10 @@ func TestDelegateSteer_RevivesStoppedQueuedChild(t *testing.T) {
 	if _, cancelErr := canceller.CancelSubtree(context.Background(), queuedID, steer.Principal{Kind: steer.PrincipalKindHuman, ID: "operator"}); cancelErr != nil {
 		t.Fatalf("CancelSubtree(queued): %v", cancelErr)
 	}
-	stopped, err := al.GetSessionLifecycleStore().Load(queuedID)
-	if err != nil {
-		t.Fatalf("Load(queued after stop): %v", err)
-	}
-	if stopped.Stop == nil || stopped.Stop.Generation != stopped.Generation {
-		t.Fatalf("queued child has no current-generation Stop marker after CancelSubtree: %+v", stopped.Stop)
-	}
+	// D2 requires the actual landing, not an in-flight fence, before revival.
+	stopped := awaitSteeringRepairStopped(t, al, queuedID, queuedGen)
 
-	// The founder's decision: only a NEWER instruction revives it — steer it.
+	// October-4 locked decision 5/C1: this NEW steering input resumes it.
 	res := runDelegateSteer(t, al, parentID, queuedID, "please continue")
 	if res.IsError {
 		t.Fatalf("delegate(steer) on a stopped-while-queued child = error %q", res.ForLLM)
@@ -2143,11 +2060,13 @@ func TestDelegateSteer_RevivesStoppedQueuedChild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load(queued after steer): %v", err)
 	}
-	if revived.Generation != stopped.Generation+1 {
-		t.Fatalf("generation after steer = %d, want %d (a NEW generation)", revived.Generation, stopped.Generation+1)
+	// D2 and C1: only done/failed starts a next generation. The busy sibling
+	// still owns the only slot, so this same-generation replacement is queued.
+	if revived.Generation != stopped.Generation {
+		t.Fatalf("generation after steer = %d, want SAME stopped generation %d (D2/C1)", revived.Generation, stopped.Generation)
 	}
-	if revived.Terminal() {
-		t.Fatalf("revived child is terminal (state=%q) — the steer did not bring it back", revived.State)
+	if revived.State != session.LifecycleQueued || revived.Stop != nil || revived.StopNote != nil || revived.ExecutionID == nil {
+		t.Fatalf("steered replacement = state %q fence=%+v note=%+v identity=%+v, want genuinely admitted queued replacement with old stop cleared (D2/C1)", revived.State, revived.Stop, revived.StopNote, revived.ExecutionID)
 	}
 
 	// Prove it is not merely marked revived on disk — it actually redispatched
@@ -2195,7 +2114,7 @@ func TestAppendSteeredInstruction_RevivedTurnRunsTheNewInstructionNotTheOldOne(t
 	const replacement = "stop, do this instead: summarise the release notes"
 	childID, _ := launchSteeredChild(t, al, parentID, "call-revive-instruction", original)
 
-	if err := al.appendSteeredInstruction(childID, testDefaultAgentID, replacement); err != nil {
+	if err := al.appendSteeredInstruction(childID, testDefaultAgentID, replacement, false); err != nil {
 		t.Fatalf("appendSteeredInstruction: %v", err)
 	}
 
@@ -2225,7 +2144,7 @@ func TestAppendSteeredInstruction_ReportsAnInstructionThatCannotLand(t *testing.
 
 	// No session of this id exists in any store, so there is nowhere for the
 	// instruction to land.
-	err := al.appendSteeredInstruction("01JAAAAAAAAAAAAAAAAAAAAAAA", testDefaultAgentID, "do this instead")
+	err := al.appendSteeredInstruction("01JAAAAAAAAAAAAAAAAAAAAAAA", testDefaultAgentID, "do this instead", false)
 
 	if err == nil {
 		t.Fatal("appending an instruction that cannot land reported success — the caller will dispatch and re-run the old instruction")
@@ -2245,13 +2164,16 @@ func TestReviveStoppedSession_RefusesWhenTheNewInstructionCannotLand(t *testing.
 	// A durably stopped record whose UnifiedStore session does not exist:
 	// the new instruction has nowhere to land.
 	const ghostID = "01JBBBBBBBBBBBBBBBBBBBBBBB"
-	ghost := testSteerLifecycleRecord(ghostID, parentID, session.LifecycleRunning, 1)
+	// Frozen D2/Vocabulary: the stopped landing has already finished.
+	// A running record with a current fence tests the separate in-flight
+	// retry refusal, never the instruction-append failure this case owns.
+	ghost := testSteerLifecycleRecord(ghostID, parentID, session.LifecycleStopped, 1)
 	ghost.AgentID = testDefaultAgentID
-	ghost.Stop = &session.Stop{
-		At: time.Now().UTC(), Generation: 1,
-		By: steer.Principal{Kind: steer.PrincipalKindHuman, ID: "operator"},
+	ghost.StopNote = &session.StopNote{
+		At: time.Now().UTC(), By: "human:operator", Seq: 1, Cause: session.StopCauseStop,
 	}
 	persistSteerLifecycle(t, lifecycle, ghost)
+	awaitSteeringRepairStopped(t, al, ghostID, 1)
 
 	revived, err := al.ReviveStoppedSession(context.Background(), ghostID,
 		steer.Principal{Kind: steer.PrincipalKindHuman, ID: "operator"}, "do this instead")
@@ -2268,5 +2190,9 @@ func TestReviveStoppedSession_RefusesWhenTheNewInstructionCannotLand(t *testing.
 	}
 	if after.Generation != 1 {
 		t.Fatalf("Generation = %d, want 1 — the record was revived before the new instruction was known to be durable", after.Generation)
+	}
+	// D2's note-clear/queued transition cannot precede durable instruction.
+	if after.State != session.LifecycleStopped || after.Stop != nil || after.StopNote == nil || after.StopNote.By != ghost.StopNote.By || after.StopNote.Cause != ghost.StopNote.Cause || after.StopNote.Seq != ghost.StopNote.Seq || !after.StopNote.At.Equal(ghost.StopNote.At) {
+		t.Fatalf("failed instruction altered the stopped record: state=%q fence=%+v note=%+v, want original stopped state/note (D2)", after.State, after.Stop, after.StopNote)
 	}
 }

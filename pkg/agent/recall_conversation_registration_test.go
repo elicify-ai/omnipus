@@ -74,7 +74,7 @@ func TestRecallConversation_RealRegistration_ReachesEvictedTurns(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		history = append(history, makeTurn(filler, filler)...)
 	}
-	agent.Sessions.SetHistory(sessionKey, history)
+	seedWindowHistory(agent.Sessions, sessionKey, history)
 	require.NoError(t, agent.Sessions.Save(sessionKey))
 
 	windowBefore := agent.Sessions.GetHistory(sessionKey)

@@ -83,7 +83,8 @@
       "applicable": true,
       "file": "tests/design-system/browser.spec.ts",
       "test": "Sheet [check:sheet-browser] browser",
-      "story": "SheetContract"
+      "story": "SheetContract",
+      "requiredTargets": [{ "selector": "[data-ds-trigger]", "attribute": "data-ds-trigger", "value": "true" }]
     },
     {
       "id": "sheet-pointer",

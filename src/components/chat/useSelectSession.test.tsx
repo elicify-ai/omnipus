@@ -29,21 +29,23 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
 
 const agents = [
   {
+    figure: 'Omnipus', role: 'general',
     id: 'agent-chat-1',
     name: 'Chat Agent',
     type: 'core',
     status: 'active',
     description: 'Chat agent',
-    color: '#ff0000',
+    color: '#8E9196',
     icon: null,
   },
   {
+    figure: 'Omnipus', role: 'general',
     id: 'agent-task-1',
     name: 'Task Agent',
     type: 'custom',
     status: 'active',
     description: 'Task agent',
-    color: '#00ff00',
+    color: '#8E9196',
     icon: null,
   },
 ] as unknown as Agent[]
@@ -131,6 +133,54 @@ function renderSelectSession() {
   return result
 }
 
+// ── replace option (default: push) ─────────────────────────────────────────
+//
+// team-lead ruling 2026-10-11 (nav-adminentry): ONLY redirect stubs may
+// replace (the /admin/chat stub passes replace: true so Back cannot bounce
+// off it forever). The default must stay a push — a sidebar row or search
+// result is a place the user came from, and Back should return to it.
+
+describe('useSelectSession — replace option default', () => {
+  it('navigates as a PUSH by default: no replace in the navigate call, so the sidebar row is unchanged', () => {
+    act(() => {
+      useWorkspacesStore.setState({ activeWorkspaceId: 'ws-a' })
+    })
+    const result = renderSelectSession()
+    const session = makeSession({ id: 'sess-b', workspace_id: 'ws-b', title: 'In B' })
+
+    act(() => {
+      result.current(session)
+    })
+
+    expect(mockNavigate).toHaveBeenCalledTimes(1)
+    const call = mockNavigate.mock.calls[0][0] as { to: string; replace?: boolean }
+    expect(call.to).toBe('/workspaces/$workspaceId/chat')
+    // The strict pin: the key is ABSENT (undefined), not merely falsy — a
+    // hardcoded `replace: false` would also behave as a push, but the
+    // pass-through is the contract this pins.
+    expect(call.replace).toBeUndefined()
+  })
+
+  it('replaces the history entry when the caller passes replace: true', () => {
+    act(() => {
+      useWorkspacesStore.setState({ activeWorkspaceId: 'ws-a' })
+    })
+    const { result } = renderHook(() => useSelectSession({ agents, workspaces, onClose, replace: true }))
+    const session = makeSession({ id: 'sess-b', workspace_id: 'ws-b', title: 'In B' })
+
+    act(() => {
+      result.current(session)
+    })
+
+    expect(mockNavigate).toHaveBeenCalledWith({
+      to: '/workspaces/$workspaceId/chat',
+      params: { workspaceId: 'ws-b' },
+      search: { open: 'sess-b' },
+      replace: true,
+    })
+  })
+})
+
 // ── Workspace-switch branch ────────────────────────────────────────────────
 
 describe('useSelectSession — workspace-switch branch', () => {
@@ -152,6 +202,7 @@ describe('useSelectSession — workspace-switch branch', () => {
     expect(mockNavigate).toHaveBeenCalledWith({
       to: '/workspaces/$workspaceId/chat',
       params: { workspaceId: 'ws-b' },
+      search: { open: 'sess-b' },
     })
   })
 
@@ -172,6 +223,7 @@ describe('useSelectSession — workspace-switch branch', () => {
     expect(mockNavigate).toHaveBeenCalledWith({
       to: '/workspaces/$workspaceId/chat',
       params: { workspaceId: 'ws-a' },
+      search: { open: 'sess-a' },
     })
   })
 
@@ -223,6 +275,7 @@ describe('useSelectSession — in-place branch', () => {
     expect(mockNavigate).toHaveBeenCalledWith({
       to: '/workspaces/$workspaceId/chat',
       params: { workspaceId: 'ws-a' },
+      search: { open: 'sess-a' },
     })
   })
 
@@ -337,20 +390,24 @@ describe('useSelectSession — attach -> seedSessionTokens -> setActiveAgentType
       result.current(session)
     })
 
-    expect(seedSessionTokensSpy).toHaveBeenCalledWith(4200)
+    expect(seedSessionTokensSpy).toHaveBeenCalledWith(4200, 'sess-tok')
   })
 
-  it('does NOT seed the token counter when total_tokens is 0 or undefined', () => {
+  it('seeds an addressed recorded zero but never invents a known total for omitted usage', () => {
     const result = renderSelectSession()
 
     act(() => {
       result.current(makeSession({ id: 'sess-zero-tok', workspace_id: 'ws-a', title: 'Zero', total_tokens: 0 }))
     })
+    expect(seedSessionTokensSpy.mock.calls, 'D16: recorded zero is real evidence for this selected session').toStrictEqual([[0, 'sess-zero-tok']])
     act(() => {
       result.current(makeSession({ id: 'sess-no-tok', workspace_id: 'ws-a', title: 'None' }))
     })
 
-    expect(seedSessionTokensSpy).not.toHaveBeenCalled()
+    // The documented seam accepts undefined as a no-op. The hook may pass it
+    // through or omit that call; it must never substitute a known number.
+    expect(seedSessionTokensSpy.mock.calls.filter(([total]) => total !== undefined),
+      'D16: omitted aggregate is unknown, never an invented zero or another session total').toStrictEqual([[0, 'sess-zero-tok']])
   })
 
   it('sets activeAgentType from the resolved agent for a chat-type session', () => {

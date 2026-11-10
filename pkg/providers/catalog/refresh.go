@@ -117,7 +117,8 @@ func (c *Catalog) refreshLocked(ctx context.Context) error {
 	// Anti-downgrade (US-3.AC6): a pulled version below the served one is
 	// refused; an equal version is a permitted no-op re-apply.
 	if cur := c.cur.Load(); cur != nil && doc.Version.Compare(cur.doc.Version) < 0 {
-		err := fmt.Errorf("catalog: pulled version %s is below served version %s", doc.Version, cur.doc.Version)
+		err := fmt.Errorf("%w: pulled version %s is below served version %s",
+			ErrRegressed, doc.Version, cur.doc.Version)
 		c.rejectRefresh(err, reasonRegressed)
 		return err
 	}

@@ -6,34 +6,76 @@
 # FR-029/FR-029a's correctness is a property of an ASSIGNMENT SET, not of a
 # helper being called: the browser-wheel release decision lives entirely in
 # where `bus.InboundMessage.OperatorPrompt` is set `true`, and where
-# `bus.MessageBus.PublishInbound` is called at all. A Go unit test already
-# pins both of these (pkg/gateway/browser_release_sites_test.go's
-# TestOperatorPromptField_AssignmentPartitionIsPinned, B123's own territory)
-# — this script is the SAME two counts, verified independently and mechanically,
-# so a bad merge that silently drops or weakens that Go test still fails the
-# build (the repository's own rule: "a note in CLAUDE.md tells a human — it
-# does not stop `git merge`", and neither does a Go test that a merge can
-# delete along with the code it was guarding).
+# `bus.MessageBus.PublishInbound` is called at all.
+# This mechanical script is the only census enforcement. It pins both counts
+# so a new, un-classified publish site or a changed operator assignment fails
+# the build — a classification comment alone cannot enforce the partition.
 #
 # Two counts, both from the joint delivery plan's own text:
 #
 #   1. `bus.InboundMessage.OperatorPrompt` is assigned the literal `true` at
-#      EXACTLY THREE non-test sites in pkg/: pkg/gateway/websocket.go,
-#      pkg/gateway/sse.go, pkg/channels/base.go::HandleMessage. Never at
+#      EXACTLY TWO non-test sites in pkg/: pkg/gateway/websocket_chat.go and
+#      pkg/channels/base.go::HandleMessage. Never at
 #      pkg/gateway/ws_ask_user.go, pkg/agent/async_notifier.go, or
-#      pkg/agent/loop.go (the goal-loop follow-up re-injection) — a fourth
-#      site or a missing site are both failures (C-77's exact wording: "fails
-#      if OperatorPrompt is assigned true at any number of non-test sites
-#      other than exactly three").
+#      pkg/agent/loop.go (the goal-loop follow-up re-injection) — a third
+#      site or a missing site are both failures. (C-77's original wording was
+#      "exactly three"; pkg/gateway/sse.go's site went with the SSE transport,
+#      so the count is two. The pinned property is unchanged: a new site here
+#      silently changes when the wheel releases.)
 #   2. `bus.MessageBus.PublishInbound` is CALLED (never its own `func`
-#      definition in pkg/bus/bus.go) at EXACTLY SIX non-test sites in pkg/
-#      (BROWSER-FR-029a's own text: "the PublishInbound census is exactly six
-#      non-test call sites, so a new publish site cannot appear
-#      un-classified"). Verified today: pkg/agent/async_notifier.go,
-#      pkg/agent/loop.go (the goal-loop follow-up — this ONE call site is
-#      legitimate and must stay; the point is that no SEVENTH appears
-#      unclassified), pkg/gateway/sse.go, pkg/gateway/websocket.go,
-#      pkg/gateway/ws_ask_user.go, pkg/channels/base.go.
+#      definition in pkg/bus/bus.go) at EXACTLY ELEVEN non-test sites in pkg/
+#      (BROWSER-FR-029a's own text: the PublishInbound census is pinned, so a
+#      new publish site cannot appear un-classified). Verified today:
+#      pkg/agent/async_notifier.go, pkg/agent/loop.go (the goal-loop
+#      follow-up — this ONE call site is legitimate and must stay),
+#      pkg/agent/address_router.go (TWO sites: the request wake, which the
+#      held-request re-publication shares through publishRequestWake, and the
+#      owner wake for an answer), pkg/agent/connector_egress.go (the
+#      main-connector refusal note), pkg/agent/request_reminder.go (the
+#      unanswered-request reminder), pkg/agent/workspace_setup_offer.go (the
+#      server-initiated workspace-setup offer), pkg/agent/secret_request_wire.go
+#      (the reference-only secret-request continuation),
+#      pkg/gateway/websocket_chat.go, pkg/gateway/ws_ask_user.go,
+#      pkg/channels/base.go.
+#
+#      Security-lead ruling (OPSITE-connector_egress.md, u8-inbound-20261010):
+#      the connector_egress.go publication is a NON-operator, server-generated
+#      note. It never sets OperatorPrompt=true and it carries the owner-wake
+#      marker, so reviveInboundIsHumanTurn rejects it and it can never clear a
+#      landed human Stop; the pinned test is
+#      pkg/agent/refusal_note_stop_test.go.
+#
+#      Security-lead ruling (REVIEW-u8-r3-78271d0f0.md): the two
+#      pkg/agent/address_router.go publications and the
+#      pkg/agent/async_notifier.go publication are legitimate NON-operator
+#      sites — they must never set OperatorPrompt=true, and they do not. They
+#      are admitted here as non-operator publishes; a change that flips any of
+#      them to OperatorPrompt=true fails count 1.
+#
+#      Architect ruling 2026-10-12 (combined review): the
+#      pkg/agent/request_reminder.go::remindUnansweredRequests publication, a
+#      server-composed reminder to the receiver, is a legitimate NON-operator
+#      site — owner-wake marker, never OperatorPrompt. The held-request wake
+#      that used to be a tenth site now goes through
+#      address_router.go::publishRequestWake, the same function the admission
+#      uses, so the census was nine.
+#
+#      pkg/agent/workspace_setup_offer.go::PostWorkspaceSetupOffer
+#      (omnipus-system-agent FR-047, K9; WU-10, 2026-10-14) is a NON-operator,
+#      server-generated owner wake into Omnipus's main — owner-wake marker,
+#      never OperatorPrompt, never UserInitiated (pinned by
+#      pkg/agent/workspace_setup_offer_test.go). It brings the census to ten.
+#      Status: S1 security review waived by founder 2026-10-14.
+#
+#      Chief-approved classification (WU-4, 2026-10-16):
+#      pkg/agent/secret_request_wire.go::dispatchSecretResume, retried by
+#      pkg/secretrequest/recovery.go::RetryResumes, brings the census to eleven:
+#      server-generated, reference-only continuation of an already-approved secret request; OperatorPrompt=false; UserInitiated=false; bound to its request id, session and owner.
+#      Browser wheel: MUST never release a browser wheel grant.
+#      Explicit Stop: MUST never revive a turn the user explicitly stopped.
+#      Census limit: these comments record requirements; the guard pins counts,
+#      not per-site flags, reference-only content, request/session/owner binding,
+#      browser-wheel non-release or explicit-Stop non-revival.
 #
 # Per C-77: do NOT scan pkg/gateway/websocket.go's ADR-057 FR-089 "W5 audit
 # classification artefact" comment block for OperatorPrompt assignments. That
@@ -160,33 +202,32 @@ fail=0
 
 echo "=== check-operator-prompt-sites ==="
 echo ""
-echo "OperatorPrompt assigned true: $op_count site(s) (want exactly 3)"
+echo "OperatorPrompt assigned true: $op_count site(s) (want exactly 2)"
 if [ -n "$op_hits" ]; then
   printf '%s\n' "$op_hits" | sed 's/^/  /'
 fi
-if [ "$op_count" -ne 3 ]; then
+if [ "$op_count" -ne 2 ]; then
   fail=1
 fi
 
 echo ""
-echo "PublishInbound call sites: $pi_count (want exactly 6)"
+echo "PublishInbound call sites: $pi_count (want exactly 11)"
 if [ -n "$pi_hits" ]; then
   printf '%s\n' "$pi_hits" | sed 's/^/  /'
 fi
-if [ "$pi_count" -ne 6 ]; then
+if [ "$pi_count" -ne 11 ]; then
   fail=1
 fi
 
 echo ""
 if [ "$fail" -ne 0 ]; then
   echo "ERROR: BROWSER-FR-029/FR-029a's assignment partition is no longer exactly" >&2
-  echo "3 OperatorPrompt=true sites and 6 PublishInbound call sites (see counts" >&2
+  echo "2 OperatorPrompt=true sites and 11 PublishInbound call sites (see counts" >&2
   echo "above). This is the fail-closed browser-wheel release discriminator —" >&2
   echo "a new, un-classified site here silently changes when the wheel releases." >&2
-  echo "See docs/internal/specs/browser-control-handover-spec.md FR-029/FR-029a" >&2
-  echo "and pkg/gateway/browser_release_sites_test.go." >&2
+  echo "See docs/internal/specs/browser-control-handover-spec.md FR-029/FR-029a." >&2
   exit 1
 fi
 
-echo "OK: exactly 3 OperatorPrompt=true sites and 6 PublishInbound call sites."
+echo "OK: exactly 2 OperatorPrompt=true sites and 11 PublishInbound call sites."
 exit 0

@@ -219,7 +219,7 @@ func TestCancel_AuditEventEmitted(t *testing.T) {
 	sendWSAuthFrameDevMode(t, conn)
 
 	// Start a real turn.
-	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "start blocking turn for audit test"}
+	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "start blocking turn for audit test", AgentID: "mia"}
 	data, err := json.Marshal(msgFrame)
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))

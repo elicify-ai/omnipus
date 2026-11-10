@@ -36,16 +36,20 @@
 // pin that it does not. A turn blocked inside one genuinely long tool call is
 // indistinguishable from a wedged one at this layer (turn.go's
 // clearToolCallProgress documents exactly that), so the only honest action is
-// to stop LYING about it and let the calendar brake do its job.
+// to stop LYING about it and let the calendar brake do its job — once the
+// turn has ended (issue #1306: no clock ends a turn that is still registered;
+// Stop is the exit for a genuinely wedged one).
 package agent
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
 // registerWedgedTurn registers a turnState for sessionID that is alive and
@@ -72,7 +76,8 @@ func registerWedgedTurn(t *testing.T, al *AgentLoop, sessionID, turnID string) *
 	return ts
 }
 
-// TestWedgedTurnDoesNotDisarmTheGoalIdleExpirySweep is the regression anchor.
+// TestWedgedTurnDoesNotDisarmTheGoalIdleExpirySweep is the regression anchor,
+// updated for issue #1306 (founder: no clock ends work).
 //
 // Given an active goal whose session has a turn that is REGISTERED but doing
 //
@@ -82,9 +87,12 @@ func registerWedgedTurn(t *testing.T, al *AgentLoop, sessionID, turnID string) *
 //
 //	than the idle-expiry bound
 //
-// Then the goal still reaches its terminal expiry — the keeper must not keep
+// Then the goal is NOT expired while that turn is registered — a turn blocked
 //
-//	re-arming the clock that expiry is measured from.
+//	in one genuinely long tool call is indistinguishable from a wedged one,
+//	and no clock may end work; Stop is the exit — AND the keeper does not
+//	re-arm the activity clock on the strength of mere registration, so the
+//	moment the turn ends, the very next sweep expires the quiet goal.
 func TestWedgedTurnDoesNotDisarmTheGoalIdleExpirySweep(t *testing.T) {
 	h := newTaskKeeperHarness(t, taskGoalCondition, recordedGoalCriteria(taskGoalCondition))
 	registerWedgedTurn(t, h.al, h.sid, "turn-wedged")
@@ -100,34 +108,67 @@ func TestWedgedTurnDoesNotDisarmTheGoalIdleExpirySweep(t *testing.T) {
 	// Sanity: the arrange really is past the quiet window, so every sweep
 	// below genuinely reaches the live-turn branch rather than returning early
 	// at the window check. Without this the test could pass vacuously.
-	if now.Sub(h.armedAt) <= goalIdleQuietWindow {
+	if now.Sub(h.armedAt) <= DefaultGoalReminderQuietWindow {
 		t.Fatalf("arrange: goal armed %s ago, quiet window is %s — the keeper would never reach the live-turn branch",
-			now.Sub(h.armedAt), goalIdleQuietWindow)
+			now.Sub(h.armedAt), DefaultGoalReminderQuietWindow)
 	}
 
-	var expired bool
-	for i := 0; i < 8 && !expired; i++ {
+	for i := 0; i < 8; i++ {
 		h.al.goalIdleExpirySweep(cfg, now)
-		if h.record(t).State == generated.GoalStateExpired {
-			expired = true
-			break
+		if got := h.record(t); got.State != generated.GoalStateActive {
+			t.Fatalf("sweep %d: the goal left ACTIVE (%q) while its turn was still registered — a clock ended "+
+				"work (issue #1306: only finishing or an explicit Stop may)", i, got.State)
 		}
 		now = now.Add(sweepEvery)
 	}
 
+	// End the synthetic registered-turn premise, then settle the genuine
+	// queued task session through the same single-session Stop a user invokes.
+	// Removing only the memory handle would leave independent queued work.
+	beforeStop := h.record(t)
+	lifecycle := h.al.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		t.Fatal("arrange: the real queued task must have its lifecycle store")
+	}
+	queued, err := lifecycle.Load(h.sid)
+	if err != nil || queued == nil || queued.State != session.LifecycleQueued || queued.Origin == nil || queued.Origin.TaskID != h.taskID {
+		t.Fatalf("arrange: expected the real task's queued session before settlement: record=%+v err=%v", queued, err)
+	}
+	h.al.activeTurnStates.Delete(h.sid)
+	fired, armed, err := h.al.StopSessionTurn(context.Background(), h.sid, "wedged-fixture-owner", "webchat")
+	if err != nil || !fired || armed {
+		t.Fatalf("settle queued task session with single Stop: fired=%t armed=%t err=%v", fired, armed, err)
+	}
+	stopped, err := lifecycle.Load(h.sid)
+	if err != nil || stopped == nil || stopped.State != session.LifecycleStopped || stopped.Stop != nil || stopped.StopNote == nil ||
+		stopped.StopNote.Cause != session.StopCauseStop || stopped.Generation != queued.Generation ||
+		stopped.Origin == nil || stopped.Origin.TaskID != h.taskID {
+		t.Fatalf("queued Stop must durably settle the same task session: record=%+v err=%v", stopped, err)
+	}
+	settledGoal := h.record(t)
+	if settledGoal.State != generated.GoalStateActive || settledGoal.OwnerKind != generated.GoalOwnerKindTask ||
+		settledGoal.OwnerID != h.taskID || settledGoal.GoalID != beforeStop.GoalID ||
+		settledGoal.Round != beforeStop.Round || !settledGoal.LastActivityAt.Equal(beforeStop.LastActivityAt) {
+		t.Fatalf("session Stop must preserve the active task goal and its original expiry clock: before=%+v after=%+v", beforeStop, settledGoal)
+	}
+	pendingTask, err := h.al.taskStore.Get(h.taskID)
+	if err != nil || pendingTask == nil || pendingTask.Status != task.StatusNext {
+		t.Fatalf("settling the queued session must not start or finish the task: task=%+v err=%v", pendingTask, err)
+	}
+	if busy, why := h.al.goalWorkInFlight(settledGoal, h.sid); busy {
+		t.Fatalf("arrange: all work must actually be settled before expiry, not bypassed: %s", why)
+	}
+
+	// The keeper never re-armed the goal clock merely for registration, and
+	// Stop did not reset it. The unchanged next sweep can now expire the goal.
+	h.al.goalIdleExpirySweep(cfg, now)
 	after := h.record(t)
-	if !expired {
+	if after.State != generated.GoalStateExpired {
 		t.Fatalf(
-			"the goal never expired after %s of sweeping with a %d-day idle bound, because a REGISTERED-but-idle "+
-				"turn kept re-arming its activity clock.\n"+
-				"state = %q, last_activity_at = %s (the sweep compares NOW against this).\n\n"+
-				"maybeSettleGoalIdle's live-turn branch (pkg/agent/goal_triggers.go) must not call "+
-				"bumpGoalRecordActivity on the strength of a turn merely being REGISTERED: that clock is what "+
-				"goalIdleExpirySweep measures, and under operator decision D-A that sweep is the SOLE remaining "+
-				"terminator of a quiet goal. Re-arming it every tick makes a wedged goal eternal — no verdict, no "+
-				"expiry, no report. Re-arm only while the turn shows observable work "+
-				"(goalLiveTurnWorkFingerprint); past goalLiveTurnStallGrace, leave the clock alone.",
-			time.Duration(8)*sweepEvery, cfg.IdleExpiryDays, after.State, after.LastActivityAt.Format(time.RFC3339))
+			"after the registered turn ended, the goal did not expire (state %q, last_activity_at %s): "+
+				"the keeper must not re-arm the activity clock for a turn that is merely REGISTERED "+
+				"(goalLiveTurnWorkFingerprint), or a quiet goal could never end.",
+			after.State, after.LastActivityAt.Format(time.RFC3339))
 	}
 
 	// D13 / ADR-084 rev 9 is absolute: a quiet goal is never JUDGED without a

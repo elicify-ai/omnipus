@@ -630,6 +630,14 @@ type Plan struct { //nolint:revive // exported name matches package purpose
 	// boot sweep resolves the exemption through the session-side OwnsPlanID,
 	// which is the reliable direction at boot regardless).
 	OwnerSessionID string `json:"owner_session_id,omitempty"`
+	// InitiatedBy is the agent whose execute_plan call approved this plan's
+	// execution, set in the same write as draft->approved. Each member is
+	// authorized against it, with the live delegation graph, at the moment it
+	// is dispatched. Nil means a person approved or played the plan (their
+	// action carries the authority, so members dispatch without an agent edge
+	// check). Disk-only: the REST mapper does not copy it and it must not be
+	// added to any contracts/ schema.
+	InitiatedBy *task.Initiator `json:"initiated_by,omitempty"`
 	// Supervision is the durable PlanSupervisor adjudication state
 	// (ADR-055/FR-050). nil until the plan first enters the
 	// supervision-eligible phase set. See the Supervision type for its
@@ -692,7 +700,7 @@ type Plan struct { //nolint:revive // exported name matches package purpose
 	Owner string `json:"owner,omitempty"`
 	// CreatedBy is WHO authored the plan — a human username (REST/UI) or an
 	// agent ID (create_plan tool). A name from two namespaces with no
-	// discriminator: a human "admin" also resolves to the Admin agent, so
+	// discriminator: a username can equal an agent id, so
 	// CreatedByKind is the gate-authoritative discriminator and this field
 	// is display + attribution only.
 	CreatedBy string `json:"created_by,omitempty"`

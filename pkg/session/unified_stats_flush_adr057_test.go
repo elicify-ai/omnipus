@@ -372,11 +372,32 @@ func TestStatsThrottle_UnforcedFlushConverges(t *testing.T) {
 	_, statErrBefore := os.Stat(statsPath)
 	require.True(t, errors.Is(statErrBefore, os.ErrNotExist), "stats.json must not exist yet — the append is still only in-memory (FR-061)")
 
-	// More than one flush interval elapses on the REAL clock.
-	time.Sleep(3 * store.StatsFlushInterval())
-
-	data, err := os.ReadFile(statsPath)
-	require.NoError(t, err, "stats.json must exist and be current with NO external trigger at all — this is the property that fails on a dead flusher")
+	// Poll for stats.json to appear via the REAL periodic flusher instead of
+	// sleeping a fixed multiple of the interval then reading once (issue
+	// #634: this package runs concurrently with pkg/agent's own test suite,
+	// and under that host contention the flusher's atomic write can
+	// legitimately land later than 3 intervals predicts — the same
+	// host-contention risk TestStatsThrottle_NoFileWriteWithinInterval and
+	// TestStatsThrottle_ExactCountersAfterInterval already fixed with this
+	// poll+backstop idiom). os.ErrNotExist means "not yet"; any other read
+	// error fails immediately. The 10s deadline below is a backstop against
+	// a dead flusher, not the thing under test.
+	var data []byte
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var readErr error
+		data, readErr = os.ReadFile(statsPath)
+		if readErr == nil {
+			break
+		}
+		if !errors.Is(readErr, os.ErrNotExist) {
+			require.NoError(t, readErr)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("stats.json must exist and be current with NO external trigger at all — this is the property that fails on a dead flusher")
+		}
+		time.Sleep(store.StatsFlushInterval() / 2)
+	}
 	var onDisk u5StatsFile
 	require.NoError(t, json.Unmarshal(data, &onDisk))
 	assert.Equal(t, 6, onDisk.TokensIn)
@@ -454,9 +475,20 @@ func TestFlushInterval_ConfigKeyDefaultAndOverride(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, store.AppendTranscript(meta.ID, TranscriptEntry{Role: "user", Content: "x", Tokens: 1}))
 
-	time.Sleep(200 * time.Millisecond) // several multiples of 50ms; far less than the 5s default
-	_, statErr := os.Stat(filepath.Join(store.BaseDir(), meta.ID, "stats.json"))
-	require.NoError(t, statErr, "a non-default flush interval must be honoured end to end, not just stored")
+	// Poll rather than sleep-then-check-once: a fixed sleep assumes the
+	// background flusher goroutine gets scheduled AND completes a
+	// synchronous disk write (marshal + flock + fsync + rename + dir-fsync,
+	// see u5WriteStatsLocked) within that exact window — false under CI CPU
+	// contention. The 5s timeout is generous headroom over the 50ms interval
+	// (a hundred multiples) while staying far below the 5s OLD/default
+	// interval this test is proving was overridden; the 20ms poll tick is a
+	// fraction of the interval under test.
+	statsPath := filepath.Join(store.BaseDir(), meta.ID, "stats.json")
+	require.Eventually(t, func() bool {
+		_, statErr := os.Stat(statsPath)
+		return statErr == nil
+	}, 5*time.Second, 20*time.Millisecond,
+		"a non-default flush interval must be honoured end to end, not just stored")
 }
 
 // ---------------------------------------------------------------------

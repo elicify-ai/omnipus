@@ -10,6 +10,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 func createIntegrityPartialBody(t *testing.T, raw string) map[string]any {
@@ -21,39 +22,57 @@ func createIntegrityPartialBody(t *testing.T, raw string) map[string]any {
 	return body
 }
 
-func TestCreateAgent_RejectsNonStringHeartbeatWithoutWrite(t *testing.T) {
+// r17 AG-06 / FR-134 / 15.9: heartbeat is an unknown creation argument,
+// not an optional string. Keep the zero-write guarantee for every JSON kind.
+func TestCreateAgent_RejectsRetiredHeartbeatWithoutWrite(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		value any
 	}{
+		{"string", "stay brief"},
+		{"empty_string", ""},
 		{"null", nil},
 		{"number", float64(1)},
 		{"bool", true},
+		{"array", []any{"stay brief"}},
+		{"object", map[string]any{"body": "stay brief"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			deps, _ := newTestDeps()
-			args := createNativeArgs("Hb Type")
+			deps, _ := newTestDeps(t)
+			args := createNativeArgs("Retired Heartbeat")
 			args["heartbeat"] = tc.value
-			result := systools.NewAgentCreateTool(deps).Execute(context.Background(), args)
+			registry := tools.NewToolRegistry()
+			registry.Register(systools.NewAgentCreateTool(deps))
+			before := wu3DurableInventory(t, deps.Home)
+			result := registry.Execute(context.Background(), "create_agent", args)
 			if !result.IsError {
-				t.Fatalf("expected INVALID_INPUT, got success: %s", result.ForLLM)
+				t.Fatalf("retired heartbeat must be refused, got success: %s", result.ForLLM)
 			}
-			code, msg := toolErrorCode(t, result.ForLLM)
-			if code != "INVALID_INPUT" {
-				t.Errorf("code=%s, want INVALID_INPUT", code)
+			body := createIntegrityPartialBody(t, result.ForLLM)
+			errBody, ok := body["error"].(map[string]any)
+			if !ok {
+				t.Fatalf("schema refusal must identify the unknown argument: %s", result.ForLLM)
 			}
-			if !strings.Contains(msg, "heartbeat") {
-				t.Errorf("message=%q, want it to name heartbeat", msg)
+			const want = `invalid arguments for tool "create_agent": unexpected property "heartbeat"`
+			if errBody["message"] != want {
+				t.Errorf("message=%q, want %q", errBody["message"], want)
 			}
-			if _, err := agentstore.New(deps.Home).Get("hb-type"); err == nil {
-				t.Error("wrong-type heartbeat must not create the agent")
+			if body["outcome"] != tools.OutcomeFailedNothingSaved {
+				t.Errorf("outcome=%v, want %s", body["outcome"], tools.OutcomeFailedNothingSaved)
 			}
+			changed, ok := body["changed_fields"].([]any)
+			if !ok || len(changed) != 0 {
+				t.Errorf("changed_fields=%#v, want an empty array", body["changed_fields"])
+			}
+			requireNoDurableChange(t, deps.Home, before, "unknown heartbeat must not create any durable state")
 		})
 	}
 }
 
 func TestCreateAgent_InitAgentHomeFailureReportsPartial(t *testing.T) {
-	deps, _ := newTestDeps()
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
+	deps, _ := newTestDeps(t)
 	id := "home-fault"
 	sessions := filepath.Join(deps.Home, "agents", id, "sessions")
 	if err := os.MkdirAll(filepath.Dir(sessions), 0o700); err != nil {
@@ -94,55 +113,73 @@ func TestCreateAgent_InitAgentHomeFailureReportsPartial(t *testing.T) {
 	}
 }
 
-func TestCreateAgent_HeartbeatWriteFailureReportsPartial(t *testing.T) {
-	deps, _ := newTestDeps()
-	id := "hb-fault"
-	hbDir := filepath.Join(deps.Home, "agents", id, "HEARTBEAT.md")
-	if err := os.MkdirAll(hbDir, 0o700); err != nil {
+// AG-06 retires the heartbeat write stage. Preserve the partial-persistence
+// guarantee at a supported home-init stage; the sessions collision remains
+// covered by TestCreateAgent_InitAgentHomeFailureReportsPartial above.
+func TestCreateAgent_MemoryHomeFailureReportsPartial(t *testing.T) {
+	systools.UseNameKeyedAgentIDsForTest(t)
+	deps, _ := newTestDeps(t)
+	const id = "home-memory-fault"
+	memory := filepath.Join(deps.Home, "agents", id, "memory")
+	if err := os.MkdirAll(filepath.Dir(memory), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	args := createNativeArgs("Hb Fault")
-	args["heartbeat"] = "ping every morning"
-	result := systools.NewAgentCreateTool(deps).Execute(context.Background(), args)
+	if err := os.WriteFile(memory, []byte("not-a-directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result := systools.NewAgentCreateTool(deps).Execute(context.Background(), createNativeArgs("Home Memory Fault"))
 	if !result.IsError {
-		t.Fatalf("heartbeat write failure must not claim complete success: %s", result.ForLLM)
+		t.Fatalf("home initialization failure must not claim complete success: %s", result.ForLLM)
 	}
 	body := createIntegrityPartialBody(t, result.ForLLM)
 	if body["persistence_status"] != string(agentstore.PersistencePartial) {
 		t.Errorf("persistence_status=%v, want %s", body["persistence_status"], agentstore.PersistencePartial)
 	}
-	if body["error_stage"] != "heartbeat" {
-		t.Errorf("error_stage=%v, want heartbeat", body["error_stage"])
+	if body["error_stage"] != "init_home" {
+		t.Errorf("error_stage=%v, want init_home", body["error_stage"])
 	}
-	if body["revision"] == nil || body["revision"] == "" {
-		t.Errorf("revision missing on partial envelope: %#v", body["revision"])
+	if body["activation_status"] != string(agentstore.ActivationNotAttempted) {
+		t.Errorf("activation_status=%v, want %s", body["activation_status"], agentstore.ActivationNotAttempted)
 	}
-	if _, err := agentstore.New(deps.Home).Get(id); err != nil {
-		t.Fatalf("entity must remain after heartbeat write failure: %v", err)
+	if msg, _ := body["message"].(string); !strings.Contains(msg, "agent home could not be initialized") {
+		t.Errorf("message=%q, want the home-initialization failure", msg)
+	}
+	state, err := agentstore.New(deps.Home).ReadState(id)
+	if err != nil {
+		t.Fatalf("entity must remain readable after partial home initialization: %v", err)
+	}
+	if state.Agent == nil || state.Agent.Name != "Home Memory Fault" {
+		t.Fatalf("the protected entity must really have been persisted: %#v", state.Agent)
+	}
+	if state.Revision == "" || body["revision"] != state.Revision {
+		t.Errorf("partial revision=%v, want current readable revision %q", body["revision"], state.Revision)
 	}
 }
 
-func TestCreateAgent_HeartbeatFileModeIsPrivate(t *testing.T) {
-	deps, _ := newTestDeps()
-	args := createNativeArgs("Hb Mode")
-	args["heartbeat"] = "stay brief"
+// AG-06 removes heartbeat creation. Retain exact private-file content/mode
+// coverage for the supported native instruction file, SOUL.md.
+func TestCreateAgent_SoulFileModeIsPrivate(t *testing.T) {
+	systools.UseNameKeyedAgentIDsForTest(t)
+	deps, _ := newTestDeps(t)
+	args := createNativeArgs("Soul Mode")
+	args["soul"] = "stay brief"
 	result := systools.NewAgentCreateTool(deps).Execute(context.Background(), args)
 	if result.IsError {
 		t.Fatalf("expected success, got: %s", result.ForLLM)
 	}
-	path := filepath.Join(deps.Home, "agents", "hb-mode", "HEARTBEAT.md")
+	path := filepath.Join(deps.Home, "agents", "soul-mode", "SOUL.md")
 	info, err := os.Stat(path)
 	if err != nil {
-		t.Fatalf("HEARTBEAT.md missing: %v", err)
+		t.Fatalf("SOUL.md missing: %v", err)
 	}
 	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Errorf("HEARTBEAT.md mode=%o, want 0600", perm)
+		t.Errorf("SOUL.md mode=%o, want 0600", perm)
 	}
 	got, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(got) != "stay brief" {
-		t.Errorf("HEARTBEAT.md %q, want stay brief", got)
+		t.Errorf("SOUL.md %q, want stay brief", got)
 	}
 }

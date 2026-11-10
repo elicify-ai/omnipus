@@ -1,0 +1,61 @@
+title: MailAttachmentContentSource
+description: >
+  The server-issued content source of one metadata-only attachment preview
+  grant (ADR-20261001 "Temporary preview mint (F1)" row, correction I-05;
+  mail-live-access-landing-order register rows 5/8 — W0 is the single
+  publisher). Carries authorization and reference metadata ONLY — never
+  attachment bytes: the grant holds no payload, and every byte read is a
+  fresh, request-scoped fetch through the preview-purpose endpoint. All
+  URLs are server-issued, same-gateway and source-scoped — never
+  caller-selected, never the authenticated download endpoint.
+type: object
+additionalProperties: false
+required:
+  - byte_url
+  - isolated_html_url
+  - token
+  - expires_in_seconds
+properties:
+  byte_url:
+    type: string
+    minLength: 1
+    description: >
+      The dedicated preview-purpose byte endpoint for this grant
+      (correction I-05) — token-scoped, bound server-side to the minted
+      preview_id, the selected part_index and the grant's ownership
+      lifecycle (view exit, expiry, revoke and panel close all kill it).
+      Serves INLINE rendering disposition with Cache-Control: no-store, and
+      enforces the 25 MiB actual-decoded-byte cap BEFORE any success state
+      is committed — a size or decode failure discovered mid-transfer
+      aborts the response with a visible typed error, so a truncated stream
+      can never render as a completed preview. This is never the
+      authenticated attachment-download resource.
+    example: "/mail-preview/attachment/at_9f2c1e"
+  isolated_html_url:
+    type: string
+    nullable: true
+    description: >
+      The token-scoped scriptless rendering projection of the same preview
+      reader, present only when the attachment is renderable as isolated
+      HTML — served with the Mail isolation policy (script-src 'none', no
+      same-origin permission), never a raw HTML object URL, srcdoc or a
+      Library bundle token. Null for every non-HTML attachment.
+    example: "/mail-preview/attachment/at_9f2c1e/html"
+  token:
+    type: string
+    minLength: 1
+    description: >
+      Opaque, metadata-only grant token — authorization/reference metadata
+      for mint, revoke and byte-fetch binding. Holds no attachment bytes,
+      no body text and no payload of any kind (the retained-payload preview
+      grant shape is retired by the ADR's request-only body rule).
+    example: "at_9f2c1e"
+  expires_in_seconds:
+    type: integer
+    minimum: 1
+    description: >
+      Grant lifetime in seconds from mint, mirroring the existing preview
+      token TTL rules (the token store holds authorization/reference
+      metadata only; expiry is the backstop when a close could not be
+      delivered).
+    example: 900

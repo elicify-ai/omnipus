@@ -42,9 +42,11 @@ import (
 // is built with window 0 and runTurn refuses the turn with
 // context_window_unknown until the operator sets an override (FR-007/008).
 //
-// Exempt: a row whose cli_kind names a subprocess driver manages its own
-// context. Window 0, no source, every budget check skipped (FR-005). The
-// decision is by the field, never by a provider id.
+// Exempt: an external-CLI WORKER (subagent_3p) manages its own context.
+// Window 0, no source, every budget check skipped (FR-005). The decision is
+// by the agent's executor field, never by a provider id. The former
+// catalog-row subprocess exemption was deleted with the CLI-backed model
+// providers (WU-24, founder 2026-10-14).
 //
 // D8 is NOT adopted: nothing here learns a window from provider error text.
 
@@ -137,10 +139,9 @@ func liveWindowLookup() LiveWindowLookup {
 
 // windowRow is what the resolver needs to know about the provider behind a
 // (provider, model) pair: whether it exists at all, how ADR-067 classifies
-// it, whether it is a subprocess driver, and its base URL for the live key.
+// it, and its base URL for the live key.
 type windowRow struct {
 	known    bool
-	exempt   bool
 	locality catalog.Locality
 	baseURL  string
 }
@@ -154,7 +155,6 @@ func lookupWindowRow(cfg *config.Config, provider string) windowRow {
 	if p, ok := windowCatalog().Provider(provider); ok {
 		return windowRow{
 			known:    true,
-			exempt:   p.CLIKind != "", // a cli_kind is present iff the row is a subprocess driver (X-14)
 			locality: p.Locality,
 			baseURL:  p.API,
 		}
@@ -184,11 +184,15 @@ func lookupWindowRow(cfg *config.Config, provider string) windowRow {
 func ResolveWindow(cfg *config.Config, provider, model, agentID string) WindowResolution {
 	provider = strings.TrimSpace(provider)
 	model = strings.TrimSpace(model)
-	row := lookupWindowRow(cfg, provider)
 
-	if row.exempt {
+	// A subagent_3p agent (external-CLI executor) runs on its own engine:
+	// its CLI manages its own context (provider hotfix H4). Keyed by the
+	// agent's executor, never by an id.
+	if agentID != "" && cfg.IsExternalCLIWorkerID(agentID) {
 		return WindowResolution{Exempt: true}
 	}
+
+	row := lookupWindowRow(cfg, provider)
 
 	// Capability: the live-or-catalog value. 0 = nobody knows. Rung 4's
 	// Lookup never blocks: a cold cache answers (0, false) now and the live
@@ -255,6 +259,28 @@ func ResolveWindow(cfg *config.Config, provider, model, agentID string) WindowRe
 			"floor":    cloudWindowFloor,
 		})
 	return WindowResolution{Window: cloudWindowFloor, Source: WindowSourceFloor}
+}
+
+// RuntimeWindowPair returns the (provider, model) pair ResolveWindow must be
+// keyed by for a configured primary reference (provider, model) — the pair
+// the agent's turns actually run on (provider hotfix H4).
+//
+// A pinned provider is taken verbatim. An EMPTY provider (an agent whose
+// model was stored without one) is resolved exactly as NewAgentInstance
+// resolves it: through the candidate builder, whose primary goes through
+// the FR-040 resolver (resolveModelPair — a bare id offered by exactly one
+// configured provider resolves to that provider). Without this, the gateway
+// keyed the ladder by ("", model): a guaranteed catalog miss, the 128,000
+// cloud floor, and a clamp WARN for a model the catalog sizes at 1,048,576.
+func RuntimeWindowPair(cfg *config.Config, provider, model string) (string, string) {
+	provider = strings.TrimSpace(provider)
+	model = strings.TrimSpace(model)
+	if provider != "" || model == "" || cfg == nil {
+		return provider, model
+	}
+	defaultProvider := cfg.Agents.Defaults.DefaultModel.Provider
+	candidates := resolveAgentCandidatesWithPrimaryProvider(cfg, defaultProvider, model, "", nil, nil)
+	return primaryWindowPair(candidates, defaultProvider, model)
 }
 
 // operatorWindow walks rungs 1–3 and returns the first present override

@@ -39,7 +39,7 @@ func TestJudgeCriteria_BehaviorRung_TaskScope_Met_NoVerifierDispatch(t *testing.
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	judgeInst.Provider = behaviorVerifierMustNotBeCalled(t)
 
-	store := al.GetAgentStore("native-agent")
+	store := al.GetSessionStore()
 	meta, err := store.NewSession(session.SessionTypeChat, "web", "native-agent")
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
@@ -82,7 +82,7 @@ func TestJudgeCriteria_BehaviorRung_TaskScope_Unmet_NoVerifierDispatch(t *testin
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	judgeInst.Provider = behaviorVerifierMustNotBeCalled(t)
 
-	store := al.GetAgentStore("native-agent")
+	store := al.GetSessionStore()
 	meta, err := store.NewSession(session.SessionTypeChat, "web", "native-agent")
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
@@ -126,7 +126,7 @@ func TestJudgeCriteria_BehaviorRung_GoalScope_ViaGoalSessionID(t *testing.T) {
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	judgeInst.Provider = behaviorVerifierMustNotBeCalled(t)
 
-	store := al.GetAgentStore("native-agent")
+	store := al.GetSessionStore()
 	meta, err := store.NewSession(session.SessionTypeChat, "web", "native-agent")
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
@@ -228,7 +228,7 @@ func TestJudgeCriteria_BehaviorRung_AttemptScope_ValidStartedAt_UsesRealCutoff(t
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	judgeInst.Provider = behaviorVerifierMustNotBeCalled(t)
 
-	store := al.GetAgentStore("native-agent")
+	store := al.GetSessionStore()
 	meta, err := store.NewSession(session.SessionTypeChat, "web", "native-agent")
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
@@ -299,7 +299,7 @@ func TestJudgeCriteria_BehaviorRung_AttemptScope_MalformedStartedAt_FailsClosed(
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	judgeInst.Provider = behaviorVerifierMustNotBeCalled(t)
 
-	store := al.GetAgentStore("native-agent")
+	store := al.GetSessionStore()
 	meta, err := store.NewSession(session.SessionTypeChat, "web", "native-agent")
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
@@ -361,7 +361,7 @@ func TestJudgeCriteria_BehaviorRung_UnknownToolGuardTextSurfacesInVerdictReason(
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	judgeInst.Provider = behaviorVerifierMustNotBeCalled(t)
 
-	store := al.GetAgentStore("native-agent")
+	store := al.GetSessionStore()
 	meta, err := store.NewSession(session.SessionTypeChat, "web", "native-agent")
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)

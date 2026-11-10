@@ -39,6 +39,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	providers_pkg "github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
+	providercommon "github.com/elicify-ai/omnipus/pkg/providers/common"
 )
 
 const (
@@ -252,15 +253,19 @@ func (a *restAPI) handleProviderEntitlement(w http.ResponseWriter, r *http.Reque
 	// it is SSRF-checked before any outbound call — except on a `locality =
 	// local` row, which MEANS loopback/private and would fail the guard by
 	// definition (the same reasoning as fetchLocalModels).
-	local := src.locality == catalog.LocalityLocal
+	//
+	// The hosted edition's endpoint guard (common.EndpointGuard) has no such
+	// exception: a hosted tenant has no local model server, so a "local" row
+	// there is exactly the loopback target the guard exists to refuse.
+	local := src.locality == catalog.LocalityLocal && !providercommon.EndpointGuardActive()
 	checker := a.ssrfChk()
 	if local {
 		checker = providers_pkg.NoopChecker{}
-	} else if a.ssrfChecker != nil {
-		if err := a.ssrfChecker.CheckURL(r.Context(), src.apiBase); err != nil {
+	} else if guard := a.endpointChecker(); guard != nil {
+		if err := guard.CheckURL(r.Context(), src.apiBase); err != nil {
 			slog.Warn("rest: entitlement: SSRF blocked api_base",
 				"provider", providerID, "error", err)
-			jsonErr(w, http.StatusUnprocessableEntity, "provider endpoint not allowed (SSRF guard)")
+			jsonErr(w, http.StatusUnprocessableEntity, endpointRefusalMessage(err))
 			return
 		}
 	}
@@ -282,7 +287,7 @@ func (a *restAPI) handleProviderEntitlement(w http.ResponseWriter, r *http.Reque
 		slog.Warn("rest: entitlement: upstream listing failed",
 			"provider", providerID, "error", err)
 		jsonErr(w, http.StatusBadGateway,
-			fmt.Sprintf("could not fetch upstream model list: %v", err))
+			"could not fetch upstream model list: the provider could not be reached. Details are in the server log.")
 		return
 	}
 

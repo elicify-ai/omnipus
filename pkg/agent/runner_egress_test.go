@@ -9,7 +9,6 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -68,12 +67,12 @@ func TestExternalDispatch_InjectsEgressProxyEnv(t *testing.T) {
 	defer restore()
 
 	go func() {
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "ok"}})
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "ok"}}))
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd}))
 		fr.Cancel()
 	}()
 
-	if _, err := runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second); err != nil {
+	if _, err := runExternalCLISubTurn(context.Background(), al, ts, "task"); err != nil {
 		t.Fatalf("runExternalCLISubTurn: %v", err)
 	}
 
@@ -114,12 +113,12 @@ func TestExternalDispatch_GracefulDegradationNoProxy(t *testing.T) {
 	defer restore()
 
 	go func() {
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "degraded-ok"}})
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindOutput, Output: &runner.OutputEvent{Text: "degraded-ok"}}))
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd}))
 		fr.Cancel()
 	}()
 
-	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task", 30*time.Second)
+	res, err := runExternalCLISubTurn(context.Background(), al, ts, "task")
 	require.NoError(t, err)
 	assert.Equal(t, "degraded-ok", res.ForLLM)
 

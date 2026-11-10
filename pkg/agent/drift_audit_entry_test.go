@@ -97,7 +97,7 @@ func TestDriftDrop_EmitsAuditEntry_WithRequiredFields(t *testing.T) {
 	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
 	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
 	cfg.Agents.List = []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		// "ray" is intentionally absent (deleted) → drift condition.
 	}
 	cfg.Channels = map[string]config.ChannelInstanceConfig{
@@ -202,7 +202,7 @@ func TestDriftDrop_ExactlyOneEntryPerMessage(t *testing.T) {
 	cfg.Agents.Defaults.Home = filepath.Join(home, "default-workspace")
 	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
 	cfg.Agents.List = []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		// "ray" absent → drift.
 	}
 	cfg.Channels = map[string]config.ChannelInstanceConfig{

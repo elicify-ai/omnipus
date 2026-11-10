@@ -1,29 +1,85 @@
-// outbound-lifecycle.ts: queued sends, session kickoff, cancellation, and stream cleanup
+// outbound-lifecycle.ts: queued sends, cancellation, and stream cleanup
 
 
 import type { StoreApi } from 'zustand'
 import { produce } from 'immer'
 import { generateId } from '@/lib/constants'
+import { isGoalRunning } from '@/lib/goalActivity'
 import { useUiStore } from '@/store/ui'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
+import { blockSendForWorkspaceEntry } from '@/store/session/workspaceSendGate'
 // Runtime (value) schema from the self-contained ws-schemas.ts, not
 // schemas.ts — the latter also carries the REST Zodios `makeApi([...])`
 // call, which references every REST schema and defeats tree-shaking
 // (bundle-budget incident, PR #860).
 import { MessageFrame as MessageFrameSchema } from '@/lib/api/generated/ws-schemas'
+import type { CancelFrame, MessageFrame } from '@/lib/api/generated/asyncapi-types'
+import type { components } from '@/lib/api/generated/openapi-types'
+import { queryClient } from '@/lib/queryClient'
 import { useWorkspacesStore } from '@/store/workspacesStore'
+import { isOmnipusAgentId } from '@/lib/omnipus'
 import { logDiagnostic } from '@/lib/telemetry'
-import { buildWorkspaceSetupKickoffContent, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
-import { EMPTY_BUCKET, inFlightReattachSids, pendingCancelAckSids, replayErrorRetryTimers, replayingClearTimers } from '../runtime-state'
+import { findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
+import { EMPTY_BUCKET, gapReattachRetryTimers, inFlightReattachSids, pendingCancelAckSids, pendingRedirectSids, replayErrorRetryTimers, replayingClearTimers } from '../runtime-state'
+import { isClearCommandText, isClearContextMarker } from '@/lib/clearMarker'
+import { checkAddressedAgent, recipientAddressFailedBlockMessage, recipientAddressResendBlockMessage, recipientAddressUnresolvedBlockMessage, resolveAddressedAgent, retryAgentsRoster } from '../recipientSend'
+import { armClearRefresh } from '../clear-refetch'
 import { applyMessageArray, bakeOwnedCallsAtSteerClose, bakeToolCallsByOwner, stampToolCallOffset } from '../session'
 import type { ChatMessage, ChatStore, MediaAttachment, PositionedToolCall, SessionChatState } from '../types'
+import { getPendingFirstSend, startOrdinaryFirstSend } from '../first-send'
+import { discardHistoryStaging } from '../history'
+
+/** Accepted sends request a fresh current window; failures never move a reader. */
+function followAcceptedHistorySend(get: () => ChatStore, sid: string): void {
+  if (get().sessionsById[sid]?.history.viewMode !== 'historical') return
+  queueMicrotask(() => {
+    if (useSessionStore.getState().activeSessionId === sid && get().sessionsById[sid]?.history.viewMode === 'historical') void get().returnToLatestHistory(sid)
+  })
+}
 
 // ── #823 message-status helpers ──────────────────────────────────────────────
 // Kept at module scope (not nested inside createOutboundLifecycleSlice/
 // sendMessage) so their bodies do not count against those two functions'
 // grandfathered line budgets (scripts/budgets/functions.txt) — see
 // docs/internal/architecture/draft-module-map.md, "Size budgets".
+
+/** FR-122 (omnipus-system-agent K16): there is no default agent — a NEW chat
+ * names its agent on the minting frame, and the gateway refuses an agent-less
+ * one with the error frame "an agent must be named". A fresh sendMessage
+ * refuses here instead: visible warning, nothing put on the wire. Retained
+ * first-send retries reuse their original named-agent payload. Returns true
+ * when the caller must stop.
+ * (Follow-up frames on a REAL session are unaffected — the gateway routes
+ * those to the session's canonical owner.) */
+function refuseAgentlessNewChat(agentId: string | null | undefined, where: string): boolean {
+  if (agentId) return false
+  useUiStore.getState().addToast({
+    message: 'Select an agent before sending — there is no default agent.',
+    variant: 'warning',
+  })
+  logDiagnostic('chatNewChatRefusedNoAgentNamed', { where })
+  return true
+}
+
+/** Merge model_name + workspace_id into a single `metadata` object so the
+ * two payload build sites of sendMessage stay in sync. The frame omits
+ * `metadata` entirely when no field is present (an empty object would be
+ * sent otherwise, which the server treats the same but is noise on the
+ * wire). Effort levels FR-045/FR-055: the picked pair's provider and the
+ * chat's effort travel with the model name. */
+function buildMetadataFrame(
+  modelName: string,
+  opts: { provider?: string; reasoning_effort?: string } | undefined,
+  workspaceId: string,
+): { metadata?: NonNullable<MessageFrame['metadata']> } {
+  const metadata: NonNullable<MessageFrame['metadata']> = {}
+  if (modelName.length > 0) metadata.model_name = modelName
+  if (modelName.length > 0 && opts?.provider) metadata.provider = opts.provider
+  if (modelName.length > 0 && opts?.reasoning_effort) metadata.reasoning_effort = opts.reasoning_effort
+  if (workspaceId.length > 0) metadata.workspace_id = workspaceId
+  return Object.keys(metadata).length > 0 ? { metadata } : {}
+}
 
 /** Resolves the client-generated correlation id + queued timestamp for a
  * send, defaulting both when the caller (a fresh sendMessage call, not a
@@ -38,7 +94,11 @@ function beginSend(content: string, opts?: { clientMessageId?: string; queuedAt?
  * that MessageStatusFrame will later echo back (#823 state A). `mediaRefs`
  * (review finding 17) is stored alongside the display-only `media` so a
  * later `resendMessage` call can resend the SAME attachments — `media`
- * alone carries no wire-usable ref, see ChatMessage.mediaRefs' doc comment. */
+ * alone carries no wire-usable ref, see ChatMessage.mediaRefs' doc comment.
+ * Founder ruling 2026-10-11: a /clear shows as QUEUED from the moment it is
+ * sent — idle or mid-turn — and stays queued until the server's clear lands
+ * and the fresh view replaces the screen (or the "/clear was not performed"
+ * reply resolves the row); it never wears the transient "sending" look. */
 function buildQueuedUserMessage(
   sessionId: string,
   content: string,
@@ -47,6 +107,7 @@ function buildQueuedUserMessage(
   attachments: MediaAttachment[] = [],
   mediaRefs: string[] = [],
 ): ChatMessage {
+  const isClear = isClearCommandText(content)
   return {
     id: clientMessageId,
     session_id: sessionId,
@@ -54,7 +115,7 @@ function buildQueuedUserMessage(
     content,
     timestamp: queuedAt,
     status: 'done',
-    deliveryStatus: 'sending',
+    deliveryStatus: isClear ? 'queued' : 'sending',
     ...(attachments.length > 0 ? { media: attachments } : {}),
     ...(mediaRefs.length > 0 ? { mediaRefs } : {}),
   }
@@ -70,12 +131,63 @@ function markUserMessageFailed(draft: { messagesById: Record<string, { status?: 
   }
 }
 
-/** Same as markUserMessageFailed, for an array-mapped (non-draft) message list. */
-function withUserMessageFailed(m: ChatMessage, targetId: string): ChatMessage {
-  // #3: UserMessage allows status:'error'; cast is safe because a caller only
-  // ever passes this the message it just constructed with role:'user'. The
-  // discriminated union prevents inline spread without the cast.
-  return m.id === targetId ? ({ ...m, status: 'error' as const, deliveryStatus: 'failed' as const } as ChatMessage) : m
+/** A mid-turn steering send that never reached the gateway: the in-flight
+ * turn is unaffected — only THIS message failed. Mark just the user bubble
+ * as 'error' (Retry affordance) and leave `isStreaming` alone; there is no
+ * assistant placeholder to roll back because a mid-turn steering send never
+ * creates one. ADR-070 §2.1 deliberately does NOT close the pre-steer bubble
+ * here: the backend never received this steer, so it keeps writing into the
+ * SAME original segment exactly as before — closing the bubble would be
+ * actively wrong, not just unnecessary (a real, previously-uncaught gap:
+ * closing it unconditionally alongside the append broke the assertion that
+ * branch's own pre-existing test pins).
+ * Extracted out of sendMessage (pure relocation, 2026-10-10, same move
+ * performResendMessage made) so sendMessage stays within its grandfathered
+ * function-size budget; the behavior is byte-identical. */
+function handleFailedSteerSend(
+  withBucket: (sid: string | null, updater: (bucket: SessionChatState) => Partial<SessionChatState>) => void,
+  sessionId: string,
+  userMsgId: string,
+): void {
+  withBucket(sessionId, (b) => produce(b, (draft) => {
+    markUserMessageFailed(draft, userMsgId)
+  }) as Partial<SessionChatState>)
+  useConnectionStore.getState().setConnectionError(
+    'Message could not be sent — connection dropped. Your message was kept; press Retry to resend.'
+  )
+}
+
+/** FR-030/031 (U10b): a /clear just went out on the wire — record the
+ * transcript re-read the command owes the view (the server's marker entry is
+ * never pushed live). One shared arm for EVERY path that can put a /clear on
+ * the wire: the normal sendMessage branches and the Retry/resend path. A
+ * send that failed never reaches here, so a failed send arms nothing.
+ * Founder ruling 2026-10-11: the arm also snapshots the marker ids the
+ * session's view already carries — the server keeps no link between a /clear
+ * row and the marker it produced, so the acceptance keys on a marker the
+ * view did not already have (clear-refetch.ts::projectionCarriesFreshMarker). */
+function armClearRefreshForSend(sessionId: string, clientMessageId: string, get: StoreApi<ChatStore>['getState']): void {
+  const bucket = get().sessionsById[sessionId]
+  const knownMarkerIds = bucket
+    ? bucket.messageOrder.filter((id) => isClearContextMarker(bucket.messagesById[id] ?? {}))
+    : []
+  const latestKnown = bucket?.history.pageMetadata?.page_info.latest_clear?.entry_id
+  if (latestKnown && !knownMarkerIds.includes(latestKnown)) knownMarkerIds.push(latestKnown)
+  armClearRefresh(sessionId, clientMessageId, bucket?.activeTurnId ?? null, knownMarkerIds)
+}
+
+/** The @-recipient on an outbound frame (founder decision 2026-10-11 Q1 B —
+ * the restored @ agent menu addresses the MESSAGE; FR-029, no in-chat
+ * handover). Derived AT SEND TIME from the leading "@<Agent name>" prefix of
+ * the content, so it is not sticky: an edited prefix sends no recipient and
+ * the @-text travels verbatim either way. Attaching it is legal ONLY next to
+ * a session_id (contracts/asyncapi.yaml MessageFrame.recipient — the server
+ * refuses the pair alone), so every caller attaches it only in the
+ * session-carrying payloads; the composer's own visible block
+ * (ChatScreen's recipientAddressBlocked) is what stops an @-addressed
+ * submit in a brand-new chat long before this line. */
+function outgoingRecipient(content: string): { workspace_id: string; agent_id: string } | null {
+  return resolveAddressedAgent(content)?.recipient ?? null
 }
 
 /** Review finding 17: resends messageId IN PLACE — same id, original
@@ -112,10 +224,70 @@ function performResendMessage(
     }
   }
   if (!sid || !existing || existing.role !== 'user') return
+  if (blockSendForWorkspaceEntry('resend')) return
+
+  const ordinary = getPendingFirstSend(state)
+  if (ordinary && (existing.clientMessageId ?? existing.id) === ordinary.clientMessageId) {
+    state.retryFirstSend()
+    return
+  }
 
   const content = existing.content
   const mediaRefs = existing.mediaRefs ?? []
   const targetSid = sid
+
+  // C8 (R3 delta re-review): never drop the @ silently on a resend. A
+  // '__pending' target has no session for the recipient pair to ride on (the
+  // recipient-only-with-session_id wire rule), and an agents cache that has
+  // never resolved cannot check the address at all — the old code sent both
+  // unaddressed, a silent drop. Both refuse VISIBLY, the same way the
+  // composer blocks an @-send in a brand-new chat, and the row stays in its
+  // failed state (before the 'sending' reset below) so Retry remains. A
+  // roster that FAILED outright (S3-08) says so and offers a Retry of the
+  // load, instead of the loading copy's "try again in a moment".
+  const addressCheck = checkAddressedAgent(content)
+  if (addressCheck.kind === 'unresolvable') {
+    useUiStore.getState().addToast({
+      message: recipientAddressUnresolvedBlockMessage(addressCheck.nameGuess),
+      variant: 'warning',
+    })
+    logDiagnostic('chatRecipientResendBlockedAgentsUnavailable', { nameGuess: addressCheck.nameGuess })
+    return
+  }
+  if (addressCheck.kind === 'failed') {
+    useUiStore.getState().addToast({
+      message: recipientAddressFailedBlockMessage(addressCheck.nameGuess),
+      variant: 'warning',
+      action: { label: 'Retry', onClick: retryAgentsRoster },
+    })
+    logDiagnostic('chatRecipientResendBlockedAgentsErrored', { nameGuess: addressCheck.nameGuess })
+    return
+  }
+  if (targetSid === '__pending' && addressCheck.kind === 'addressed') {
+    useUiStore.getState().addToast({
+      message: recipientAddressResendBlockMessage(addressCheck.addressed.agentName),
+      variant: 'warning',
+    })
+    logDiagnostic('chatRecipientResendBlockedNoSession', { agentName: addressCheck.addressed.agentName })
+    return
+  }
+  // A background Retry belongs to its target session, not the foreground
+  // agent. If its owner is not loaded, keep the failed row retriable and
+  // explain how to recover instead of guessing or minting another chat.
+  const targetSession = loadedOutboundSession(targetSid)
+  const targetAgentId = targetSession?.agent_id
+  if (!targetAgentId?.trim()) {
+    logDiagnostic('chatResendBlockedOwnerUnavailable', {
+      sessionId: targetSid,
+      messageId,
+      reason: targetSession ? 'missing_or_blank_owner' : 'session_metadata_unavailable',
+    })
+    useUiStore.getState().addToast({
+      message: 'Could not retry this message — the conversation\'s agent is not loaded. Reopen the conversation and try again.',
+      variant: 'error',
+    })
+    return
+  }
 
   // Reset the SAME message in place first — 'sending' — never a second
   // bubble, unlike the pre-fix `sendMessage(content)` call this replaces.
@@ -125,6 +297,8 @@ function performResendMessage(
       m.status = 'done'
       m.deliveryStatus = 'sending'
     }
+    // A new answer was requested for this question: it is no longer unanswered.
+    if (draft.unansweredLastUserMessageId === messageId) draft.unansweredLastUserMessageId = null
   }) as Partial<SessionChatState>)
 
   const { connection, isConnected } = useConnectionStore.getState()
@@ -138,13 +312,23 @@ function performResendMessage(
     return
   }
 
+  const workspaceId = targetSid === '__pending' ? '' : outboundWorkspaceId(targetSid)
   const payload = {
     type: 'message' as const,
     content,
     session_id: targetSid === '__pending' ? undefined : targetSid,
     client_message_id: messageId,
-    agent_id: useSessionStore.getState().activeAgentId ?? undefined,
+    agent_id: targetAgentId,
+    ...(workspaceId ? { metadata: { workspace_id: workspaceId } } : {}),
     ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
+    // Recipient re-derived from the kept content at resend time. A '__pending'
+    // target has no session for the pair to ride on, so the recipient is
+    // omitted there (the recipient-only-with-session_id wire rule) — a corner
+    // the retained-first-send retry path (`retryFirstSend`) normally owns.
+    ...(targetSid !== '__pending' ? (() => {
+      const recipient = outgoingRecipient(content)
+      return recipient ? { recipient } : {}
+    })() : {}),
   }
   get()._validateOutboundFrame(payload, targetSid)
   const sent = connection.send(payload)
@@ -155,7 +339,12 @@ function performResendMessage(
     useConnectionStore.getState().setConnectionError(
       'Message could not be resent — connection dropped. Your message was kept; press Retry to resend.'
     )
+    return
   }
+  // FR-030/031 (U10b): a Retry that puts a /clear back on the wire arms the
+  // same transcript re-read the original send would have (review round 1,
+  // F3) — the retry IS the send, so the refresh belongs to it.
+  if (isClearCommandText(content)) armClearRefreshForSend(targetSid, messageId, get)
 }
 
 type OutboundLifecycleSlice = Pick<ChatStore,
@@ -164,7 +353,6 @@ type OutboundLifecycleSlice = Pick<ChatStore,
   | '_validateOutboundFrame'
   | 'sendMessage'
   | 'resendMessage'
-  | 'sendWorkspaceSetupKickoff'
   | 'cancelStream'
   | 'clearStreamingState'
 >
@@ -175,7 +363,6 @@ interface OutboundLifecycleContext {
   getActiveSid: () => string | null
   withBucket: (sid: string | null, updater: (bucket: SessionChatState) => Partial<SessionChatState>) => void
   bucketToForeground: (bucket: SessionChatState) => Omit<SessionChatState, 'messageOrder' | 'trimmedCount' | 'spanBySpanId' | 'pendingSpanUpdatesBySpanId' | 'toolCallOwnerMessageId'> & { messages: ChatMessage[]; lastAssistantMessageId: string | null }
-  abandonPendingKickoffInternal: () => void
   maybeDrainNext: () => void
   runtime: { agentIdAtLastMintSend: string | null }
 }
@@ -191,15 +378,58 @@ interface OutboundLifecycleContext {
 //   - N4: any replay_error retry timer scheduled for a PREVIOUS connection
 //     would send its eventual attach_session over a connection that no
 //     longer exists — same "reconnect goes through the normal path" reasoning.
+//   - Safety hardening (subagent-control-plane stream): the gap-reattach
+//     retry timer (scheduleGapReattachRetry, frames.ts) is the same
+//     shape of hazard as the replay_error timer just above — cancel it too,
+//     for the same reason. gapReattachRetryAttempts is intentionally left
+//     alone (same as replayErrorRetryAttempts): the backoff count should
+//     keep escalating across a flapping connection, not reset on every
+//     disconnect.
 function clearCatchUpSideChannelsOnDisconnect(): void {
+  discardHistoryStaging()
   inFlightReattachSids.clear()
   for (const sid of Object.keys(replayErrorRetryTimers)) {
     clearTimeout(replayErrorRetryTimers[sid])
     delete replayErrorRetryTimers[sid]
   }
+  for (const sid of Object.keys(gapReattachRetryTimers)) {
+    clearTimeout(gapReattachRetryTimers[sid])
+    delete gapReattachRetryTimers[sid]
+  }
 }
 
-export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucket, bucketToForeground, abandonPendingKickoffInternal, maybeDrainNext, runtime }: OutboundLifecycleContext): OutboundLifecycleSlice {
+/** Canonical identity from the validated saved-chat detail or sidebar list. */
+function loadedOutboundSession(sessionId: string): Pick<components['schemas']['Session'], 'id' | 'agent_id' | 'workspace_id'> | undefined {
+  const detail = queryClient.getQueryData<components['schemas']['SessionDetail']>(['session-detail', sessionId])
+  if (detail?.session?.id === sessionId) return detail.session
+  const sessions = queryClient.getQueryData<components['schemas']['Session'][]>(['sessions'])
+  return Array.isArray(sessions) ? sessions.find((candidate) => candidate.id === sessionId) : undefined
+}
+
+/** The immutable session binding, never the ambient workspace for a follow-up. */
+function outboundWorkspaceId(sessionId: string | null): string {
+  let workspaceId: components['schemas']['Session']['workspace_id'] | null
+  if (sessionId && sessionId !== '__pending') {
+    // These validated reads already back the saved-chat route and sidebar.
+    // Resolve by the TARGET id so a background message's Retry cannot borrow
+    // the foreground session's binding. Missing metadata, like a known
+    // workspace-less session, omits the field: the server retains its binding.
+    workspaceId = loadedOutboundSession(sessionId)?.workspace_id
+  } else {
+    // Only a NEW chat has no session binding yet. Keep its creation context
+    // (and the retained first-send payload's retry context) unchanged.
+    // Omnipus's one chat lives in the default workspace; workflow_start,
+    // not this metadata, names the workspace its workflow acts on.
+    if (isOmnipusAgentId(useSessionStore.getState().activeAgentId)) return ''
+    workspaceId = useWorkspacesStore.getState().activeWorkspaceId
+  }
+  // Preserve the MessageFrame contract's workspace-id bound.
+  return typeof workspaceId === 'string' && workspaceId.length > 0 && workspaceId.length <= 128
+    ? workspaceId
+    : ''
+}
+
+export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucket, bucketToForeground, maybeDrainNext, runtime }: OutboundLifecycleContext): OutboundLifecycleSlice {
   return {
     enqueueOutboundMessage: (content, queuedMessage) => {
       const MAX_QUEUE = 5
@@ -213,14 +443,12 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
 
     drainOutboundQueue: () => {
       const queue = get().outboundQueue
-      // Kickoff hardening: the early-return used to skip straight
-      // past `maybeDrainNext()` whenever `outboundQueue` was empty — but
-      // several kickoff-terminal cleanup paths (a rejecting error frame, a
-      // synchronous send failure, the "wrong workspace" migration) call
+      // The early-return used to skip straight past `maybeDrainNext()`
+      // whenever `outboundQueue` was empty — but terminal cleanup paths call
       // THIS function specifically (not `maybeDrainNext()` directly) to
       // release whatever is waiting, and what's waiting may already sit in
       // `pendingDrainQueue` (moved there by an EARLIER drain cycle that got
-      // stuck behind the kickoff's own `isStreaming` window) rather than in
+      // stuck behind an `isStreaming` window) rather than in
       // `outboundQueue`. Always falling through to `maybeDrainNext()` below
       // makes this function a safe, strict superset of it — correct to call
       // at every "an attempt just ended, try to free the next thing"
@@ -290,6 +518,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
     },
 
     sendMessage: (content, opts) => {
+      if (blockSendForWorkspaceEntry('send')) return
       const mediaRefs = opts?.mediaRefs ?? []
       const attachments = opts?.attachments ?? []
       const { clientMessageId, queuedAt, queuedMessage } = beginSend(content, opts)
@@ -299,47 +528,27 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       const modelNameRaw = opts?.model_name
       const modelName = typeof modelNameRaw === 'string' ? modelNameRaw.trim() : ''
 
-      // M4 workspace→turn binding (BLOCKER 1). When the user is chatting inside
-      // a workspace, the active workspace id is the single source of truth in
-      // useWorkspacesStore (set by WorkspaceTabContainer from the route param;
-      // null on the global/inbox chat). We forward it as `metadata.workspace_id`
-      // so the server stamps the session with this workspace and any task the
-      // agent creates this turn (task_create / delegation) lands on THIS
-      // workspace's board instead of the agent's default workspace. Absent (or
-      // empty) when not in a workspace, matching the backend's default-workspace
-      // fallback. The contract caps it at 128 chars; an over-length id is dropped
-      // rather than sent (the outbound Zod validator would otherwise toast every
-      // turn for a malformed local id).
-      const activeWorkspaceIdRaw = useWorkspacesStore.getState().activeWorkspaceId
-      const workspaceId =
-        typeof activeWorkspaceIdRaw === 'string' &&
-        activeWorkspaceIdRaw.length > 0 &&
-        activeWorkspaceIdRaw.length <= 128
-          ? activeWorkspaceIdRaw
-          : ''
-
-      // Merge model_name + workspace_id into a single `metadata` object so the
-      // two payload build sites below stay in sync. The frame omits `metadata`
-      // entirely when neither field is present (an empty object would be sent
-      // otherwise, which the server treats the same but is noise on the wire).
-      const metadata: { model_name?: string; workspace_id?: string } = {}
-      if (modelName.length > 0) metadata.model_name = modelName
-      if (workspaceId.length > 0) metadata.workspace_id = workspaceId
-      const metadataFrame = Object.keys(metadata).length > 0 ? { metadata } : {}
-      const { connection, isConnected } = useConnectionStore.getState()
       const { activeSessionId: rawActiveSessionId, activeAgentId } = useSessionStore.getState()
+      // Ordinary sends, mid-turn steering and new-answer requests share the
+      // attached session's canonical binding; only a first send uses context.
+      const workspaceId = outboundWorkspaceId(rawActiveSessionId)
+      // K8 (FR-012): target data naming the workflow a screen button started.
+      const workflowStartFrame = opts?.workflowStart ? { workflow_start: opts.workflowStart } : {}
+
+      const metadataFrame = buildMetadataFrame(modelName, opts, workspaceId)
+      const { connection, isConnected } = useConnectionStore.getState()
       const { isStreaming } = get()
       // Composer guard: a '__pending' sentinel with no in-flight
-      // stream is a STUCK state, not a real session — it means a workspace-
-      // setup kickoff started a turn under '__pending' and that turn ended
-      // (rejected, rolled back, or otherwise never got its session_started
-      // ack) without activeSessionId ever being reset back to null. Sending
+      // stream is a STUCK state, not a real session — a turn started under
+      // '__pending' ended (rejected, rolled back, or otherwise never got its
+      // session_started ack) without activeSessionId ever being reset back
+      // to null. Sending
       // `session_id: '__pending'` on the wire is a protocol violation the
       // gateway answers with a terminal "session not found" error. Treat it
       // exactly like "no active session yet" instead — an ordinary fresh
       // turn, no session_id on the wire — rather than propagating the
-      // sentinel. A '__pending' session that IS still streaming (the kickoff
-      // or a first message is actively in flight) is untouched here; that
+      // sentinel. A '__pending' session that IS still streaming (a first
+      // message is actively in flight) is untouched here; that
       // case is handled by the existing mid-turn-steering '__pending' branch
       // below.
       const activeSessionId = (rawActiveSessionId === '__pending' && !isStreaming) ? null : rawActiveSessionId
@@ -375,10 +584,13 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
         return
       }
 
-      // When activeSessionId is null we do NOT render optimistically until
-      // session_started arrives and gives us a real bucket key. This avoids
-      // a temporary bucket that we'd have to migrate on the ack, at the cost
-      // of ~1 round-trip of perceived latency on the very first message.
+      // An uncertain ordinary send owns __pending until confirmed or abandoned.
+      if (getPendingFirstSend(get()) && (rawActiveSessionId === null || rawActiveSessionId === '__pending')) {
+        if (!get().enqueueOutboundMessage(content, queuedMessage)) {
+          useConnectionStore.getState().setConnectionError('Queue full (5 messages max) — confirm delivery or start a new chat.')
+        }
+        return
+      }
       if (activeSessionId !== null) {
         const userMsg: ChatMessage = buildQueuedUserMessage(activeSessionId, content, clientMessageId, queuedAt, attachments, mediaRefs)
 
@@ -445,6 +657,14 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
             agent_id: activeAgentId ?? undefined,
             ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
             ...metadataFrame,
+            ...workflowStartFrame,
+            // @-addressed steer (founder 2026-10-11 Q1 B): legal here — a
+            // steer always carries a real session_id ('__pending' steers are
+            // enqueued above, never put on the wire).
+            ...(() => {
+              const recipient = outgoingRecipient(content)
+              return recipient ? { recipient } : {}
+            })(),
           }
           get()._validateOutboundFrame(steerPayload, activeSessionId)
           const steerSent = connection.send(steerPayload)
@@ -462,14 +682,13 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
             // just unnecessary (a real, previously-uncaught gap: closing it
             // unconditionally alongside the append broke the assertion this
             // branch's own pre-existing test pins).
-            withBucket(activeSessionId, (b) => produce(b, (draft) => {
-              markUserMessageFailed(draft, userMsg.id)
-            }) as Partial<SessionChatState>)
-            useConnectionStore.getState().setConnectionError(
-              'Message could not be sent — connection dropped. Your message was kept; press Retry to resend.'
-            )
+            handleFailedSteerSend(withBucket, activeSessionId, userMsg.id)
             return
           }
+
+          // Only this send owns its clear confirmation or explicit follow request.
+          if (isClearCommandText(content)) armClearRefreshForSend(activeSessionId, clientMessageId, get)
+          else followAcceptedHistorySend(get, activeSessionId)
 
           // ADR-070 §2.1: only NOW, once the steer has genuinely reached the
           // gateway, close the assistant bubble that was open at send-time —
@@ -585,6 +804,13 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
           agent_id: activeAgentId ?? undefined,
           ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
           ...metadataFrame,
+          ...workflowStartFrame,
+          // @-addressed ordinary send (founder 2026-10-11 Q1 B): the pair
+          // rides WITH this session_id, never alone.
+          ...(() => {
+            const recipient = outgoingRecipient(content)
+            return recipient ? { recipient } : {}
+          })(),
         }
         get()._validateOutboundFrame(payload, activeSessionId)
         const sent = connection.send(payload)
@@ -620,97 +846,24 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
           // The attempted turn is over (it never started) — free the next
           // drained message to send, if any.
           maybeDrainNext()
+        } else {
+          // Only this send owns its clear confirmation or explicit follow request.
+          if (isClearCommandText(content)) armClearRefreshForSend(activeSessionId, clientMessageId, get)
+          else followAcceptedHistorySend(get, activeSessionId)
         }
       } else {
-        // Kickoff hardening: a workspace-setup kickoff already owns
-        // the shared '__pending' bucket key (see `pendingKickoff`'s doc
-        // comment). Building a SECOND '__pending' bucket here would collide
-        // with — and, since `withBucket` appends rather than replaces,
-        // silently co-mingle content with — the kickoff's own placeholder,
-        // and this send's eventual `session_started` ack would then be
-        // ambiguous with the kickoff's own ack. Degrade to the same
-        // offline-style buffering `sendMessage` already uses for a
-        // disconnected WS / mid-turn '__pending' steering: enqueue and let
-        // it go out as an ordinary follow-up once the kickoff resolves
-        // (every kickoff-terminal cleanup path calls `drainOutboundQueue()`
-        // to release it).
-        if (get().pendingKickoff !== null) {
-          const enqueued = get().enqueueOutboundMessage(content, queuedMessage)
-          if (!enqueued) {
-            useConnectionStore.getState().setConnectionError(
-              'Queue full (5 messages max) — waiting to reconnect. Oldest pending messages will be sent first.'
-            )
-          }
-          return
-        }
-
-        // No active session — send without session_id; server will mint one
-        // and ack with session_started.
-        //
-        // #253(a): Render the user message optimistically in a temporary bucket
-        // so it is visible immediately. If the WS send fails, mark the message
-        // with status:'error' so the user sees a Retry affordance instead of a
-        // silent drop. The temporary bucket key '__pending' is replaced by the
-        // real session_id once session_started arrives (see handleFrame case
-        // 'session_started'). If the send succeeds, the message stays visible
-        // until session_started migrates the bucket.
-        const pendingSid = '__pending'
-        const userMsg: ChatMessage = buildQueuedUserMessage(pendingSid, content, clientMessageId, queuedAt, [], mediaRefs)
-        const assistantMsg: ChatMessage = {
-          id: generateId(),
-          session_id: pendingSid,
-          role: 'assistant',
-          content: '',
-          timestamp: new Date().toISOString(),
-          status: 'streaming',
-          isStreaming: true,
-        }
-        // Render optimistically in the pending bucket and activate it.
-        withBucket(pendingSid, (b) => {
-          const allMsgs = [...getMessages(b), userMsg, assistantMsg]
-          return { ...applyMessageArray(allMsgs, b), isStreaming: true, lastUserMessageAt: Date.now() }
-        })
-        useSessionStore.getState().setActiveSession(pendingSid, activeAgentId)
-        // Remember what this mint went out under, so its session_started ack
-        // can tell "server resolved an agent we didn't have" from "the user
-        // has since picked a different one" (see runtime.agentIdAtLastMintSend).
+        if (refuseAgentlessNewChat(activeAgentId, 'send')) return
         runtime.agentIdAtLastMintSend = activeAgentId ?? null
-
-        // ADR-092 (founder, 2026-09-24): a per-chat Auto choice made before this
-        // chat had a session rides on the minting message as `auto_approve`, so
-        // the server records it before the first turn runs (no post-ack race).
-        // Omitted when the user never touched the toggle.
         const autoApproveChoice = get().pendingAutoApproveChoice
-        const payload2 = {
-          type: 'message' as const,
+        startOrdinaryFirstSend({ set, get, withBucket }, {
+          type: 'message',
           content,
-          client_message_id: userMsg.id,
+          client_message_id: clientMessageId,
           agent_id: activeAgentId ?? undefined,
           ...(mediaRefs.length > 0 ? { media: mediaRefs } : {}),
           ...metadataFrame,
           ...(autoApproveChoice !== null ? { auto_approve: autoApproveChoice } : {}),
-        }
-        get()._validateOutboundFrame(payload2, pendingSid)
-        const sent = connection.send(payload2)
-
-        // Sticky model selection — see the active-session branch above: the
-        // pick persists after a successful send so the composer keeps showing
-        // it and the next message defaults to the same model.
-        if (!sent) {
-          // #253(a): Mark the user message with status:'error' and remove the
-          // optimistic assistant placeholder. This preserves the typed content
-          // as a retriable error bubble rather than silently dropping the message.
-          withBucket(pendingSid, (b) => {
-            const msgs = getMessages(b)
-              .map((m) => withUserMessageFailed(m, userMsg.id))
-              .filter((m) => m.id !== assistantMsg.id)
-            return { ...applyMessageArray(msgs, b), isStreaming: false }
-          })
-          useConnectionStore.getState().setConnectionError('Message could not be sent — connection dropped. Please try again.')
-          // The attempted turn is over (it never started) — free the next
-          // drained message to send, if any.
-          maybeDrainNext()
-        }
+        }, queuedAt, workspaceId || null, attachments)
       }
   },
 
@@ -719,115 +872,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
     // rather than here.
     resendMessage: (messageId) => performResendMessage(get, getActiveSid, withBucket, messageId),
 
-    sendWorkspaceSetupKickoff: (opts) => {
-      const { workspaceId, workspaceName, agentId, agentType } = opts
-      const { connection, isConnected } = useConnectionStore.getState()
-      const { activeSessionId } = useSessionStore.getState()
-      const { isStreaming, pendingKickoff } = get()
-
-      // Never kick off over an offline connection, a mid-turn stream, or an
-      // existing conversation — mirrors sendMessage's own guards, but as an
-      // outright bail (no queueing, no toast): a missed kickoff simply
-      // leaves `setup_pending` true, so the calling hook can retry on the
-      // next render once the blocking condition clears.
-      if (!connection || !isConnected) return false
-      if (isStreaming) return false
-      if (activeSessionId !== null) return false
-      // A DIFFERENT kickoff is already outstanding (its ack hasn't
-      // landed yet — see `pendingKickoff`'s doc comment). This can happen
-      // even with `activeSessionId === null` above: the user can navigate
-      // away from the workspace that triggered the first kickoff (which
-      // resets `activeSessionId` back to null via `enterWorkspaceChat`)
-      // before that kickoff's `session_started`/`error` ack arrives. Firing
-      // a second kickoff here would collide with the first on the shared
-      // `'__pending'` bucket key. Bail exactly like the other guards; the
-      // hook releases its own guard on `false` and retries later.
-      if (pendingKickoff !== null) return false
-
-      const content = buildWorkspaceSetupKickoffContent(workspaceName)
-      const pendingSid = '__pending'
-      const assistantMsg: ChatMessage = {
-        id: generateId(),
-        session_id: pendingSid,
-        role: 'assistant',
-        content: '',
-        timestamp: new Date().toISOString(),
-        status: 'streaming',
-        isStreaming: true,
-        // Stamp the target agent's identity on the placeholder
-        // immediately (mirrors the reconnect/reattach placeholders — see
-        // `resolveLastActiveAgentId` in OmnipusRuntimeProvider.tsx) so the
-        // thread shows the resolved agent right away instead of waiting for
-        // a later frame that also happens to carry `agent_id`.
-        agentId,
-      }
-
-      // Render ONLY the optimistic streaming assistant placeholder — no user
-      // bubble. This turn's "user" content is a synthetic instruction the
-      // backend records as a SYSTEM-role transcript entry (a centered pill
-      // on replay), not something the user typed, so echoing it as a user
-      // bubble here would show text the user never wrote.
-      withBucket(pendingSid, (b) => {
-        const allMsgs = [...getMessages(b), assistantMsg]
-        return { ...applyMessageArray(allMsgs, b), isStreaming: true, lastUserMessageAt: Date.now() }
-      })
-      // Activate the pending bucket AND select the agent in one write —
-      // mirrors AgentPicker's auto-select (setActiveSession with the
-      // resolved agent's id+type) so the composer/thread header show the
-      // agent immediately, same as sendMessage's own no-session branch
-      // activates '__pending' as foreground.
-      useSessionStore.getState().setActiveSession(pendingSid, agentId, agentType)
-      // Claim the single in-flight-kickoff slot BEFORE sending, so
-      // a synchronous re-render triggered by the writes above cannot race a
-      // second kickoff attempt in behind this one, and so the
-      // `session_started`/`error` handlers can find it as soon as either
-      // frame arrives.
-      set({ pendingKickoff: { workspaceId } })
-
-      const payload = {
-        type: 'message' as const,
-        content,
-        agent_id: agentId,
-        metadata: {
-          workspace_id: workspaceId,
-          workspace_setup_kickoff: true,
-        },
-      }
-      get()._validateOutboundFrame(payload, pendingSid)
-      const sent = connection.send(payload)
-
-      if (!sent) {
-        // FULL rollback — unlike sendMessage's failure rollback
-        // (which keeps a user's typed bubble as a retriable 'error'), a
-        // kickoff has no user-typed content to preserve, so tear the whole
-        // '__pending' bucket down rather than leaving an empty husk behind.
-        // Also reset session activation back to "no session" (retaining the
-        // agent selection just made above) — without this, `activeSessionId`
-        // would stay stuck at '__pending' forever and the hook's own guard
-        // (`activeSessionId === null`) would block every future retry,
-        // including the one it's about to attempt now that this call is
-        // returning `false`. `abandonPendingKickoffInternal` handles the
-        // `pendingKickoff` clear + bucket teardown + `kickoffAttemptStatus`
-        // 'failed' marking in one place, shared with the disconnect
-        // and reject-frame cleanup paths below.
-        abandonPendingKickoffInternal()
-        useSessionStore.getState().setActiveSession(null)
-        useConnectionStore.getState().setConnectionError(
-          'Could not start the workspace setup interview — connection dropped. Please try again.'
-        )
-        // Only `drainOutboundQueue()` (not `maybeDrainNext()`) moves
-        // items actually sitting in `outboundQueue` — e.g. a message that
-        // collided with THIS kickoff's `pendingKickoff` slot via the
-        // collision guard in `sendMessage` — into `pendingDrainQueue` and
-        // sends the head.
-        get().drainOutboundQueue()
-        return false
-      }
-
-      return true
-    },
-
-    cancelStream: (sessionId) => {
+    cancelStream: (sessionId, scope) => {
       const { connection } = useConnectionStore.getState()
       const { activeSessionId } = useSessionStore.getState()
       const targetSid = sessionId ?? activeSessionId
@@ -846,19 +891,31 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
         ? (get().sessionsById[sessionId]?.isStreaming ?? false)
         : get().isStreaming
 
-      // FR-21 / T21–T25: always mark the last assistant message as interrupted
-      // when the user explicitly invokes cancel (stop button, Escape, /cancel,
-      // or the browser panel's "Take over" for its pinned session). Scoped to
-      // `sessionId` when the caller passed one, else defaults to the active
-      // session (existing behaviour, unchanged). We do this BEFORE the
-      // isStreaming guard so that a stop-button click that races a done frame
-      // still produces the (interrupted) label. Without this, a turn that
-      // completes in <100ms after the stop button appears but before
-      // Playwright (or a real user) clicks it would silently do nothing because
-      // isStreaming flips to false between render and click.
-      get().markLastMessageInterrupted(sessionId)
+      // G1: between a goal's turns nothing streams but the goal keeper will resume
+      // the session, so an active goal counts as stoppable. No goal, nothing sent.
+      const goalRunning = isGoalRunning(targetSid ? get().sessionsById[targetSid]?.goalStatus : null)
+      // A Stop marks the answer interrupted only while a turn is actually streaming.
+      // An idle gap (goal running, nothing streaming) sends the cancel but leaves
+      // the finished answer untouched; an idle chat with no goal sends nothing and
+      // marks nothing. A Stop that races a `done` frame therefore marks nothing: the
+      // answer did finish. The one idle case that still shows "Stopping..." is `/stop`
+      // (cancelUnconditional): by design, the founder's second-Stop tree rule needs
+      // its first press to arm the confirmation window even on an idle parent chat.
+      if (targetIsStreaming) get().markLastMessageInterrupted(sessionId)
+      // A plain Stop supersedes any pending redirect: its turn_canceled is a
+      // stop, and must keep "(interrupted)".
+      if (targetSid) pendingRedirectSids.delete(targetSid)
 
-      if (!connection) return
+      // W2: a cancel that cannot even reach a transport is reported — to the
+      // caller (return false, so the Stop window is never armed for a click
+      // that sent nothing) and to the user (visible error toast).
+      if (!connection) {
+        useUiStore.getState().addToast({
+          message: 'Could not send cancel — the gateway connection is down. The response may keep running; reconnect and press Stop again.',
+          variant: 'error',
+        })
+        return false
+      }
       if (!targetSid) {
         // No server-side session established yet — just clear local streaming
         // state. S7: activeTurn* travels with isStreaming everywhere else in
@@ -870,15 +927,35 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
           activeTurnAgentId: null,
         }))
         maybeDrainNext()
-        return
+        return true
       }
 
-      if (targetIsStreaming) {
-        // Only send the cancel frame to the server if the turn is still active.
-        // Sending cancel for a completed turn is a no-op on the server but wastes
-        // a round-trip and may confuse the audit log.
-        const sent = connection.send({ type: 'cancel', session_id: targetSid })
+      // `delivered` is false only when the cancel could not be handed to the
+      // socket (the send-failed toast below is already shown). A completed
+      // turn with nothing to send is not a failure.
+      let delivered = true
+
+      // ADR-20260928 D9: a CONFIRMED tree stop sends even when this
+      // session's own turn already ended locally (the first activation
+      // marked it interrupted): the confirmation targets the whole tree,
+      // whose descendants may still be running. Session-scoped cancels keep
+      // the completed-turn no-op gate exactly as before — sending cancel for
+      // a completed turn is a no-op on the server but wastes a round-trip
+      // and may confuse the audit log.
+      if (targetIsStreaming || goalRunning || scope === 'tree') {
+        // ADR-20260928 MAJ-002: `scope` rides the generated CancelFrame
+        // verbatim. Omitted (every pre-existing call path) goes out WITHOUT
+        // the key — the wire default is `session`, a single-session stop the
+        // server must never cascade — and keeps the frame byte-identical to
+        // the pre-stop-all shape. Only the confirmed tree stop passes
+        // 'tree' (server dispatches on scope before cancelSteeredSubtree;
+        // never up or sideways — ADR D7).
+        const cancelFrame: CancelFrame = scope
+          ? { type: 'cancel', session_id: targetSid, scope }
+          : { type: 'cancel', session_id: targetSid }
+        const sent = connection.send(cancelFrame)
         if (!sent) {
+          delivered = false
           console.warn('[chat] cancelStream: send failed — connection may be closed')
           logDiagnostic('chatCancelStreamSendFailed', { sessionId: targetSid })
           useUiStore.getState().addToast({
@@ -912,24 +989,16 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
         // own isStreaming:false so AssistantUI renders it as incomplete/cancelled.
         return { toolCalls: updated }
       })
+      return delivered
     },
 
     clearStreamingState: () => {
-      // Kickoff hardening: a hard disconnect means no ack
-      // (session_started or error) can ever arrive on THIS connection for an
-      // outstanding workspace-setup kickoff — its '__pending' placeholder
-      // turn is dead. Clear the slot and drop the orphaned bucket now
-      // (quietly — no toast, no `activeSessionId` change: `activeSessionId`
-      // staying at '__pending' until reconnect is handled by
-      // `OmnipusRuntimeProvider.reattachActiveSession`) rather than
-      // leaving `pendingKickoff` wedged non-null forever, which would
-      // otherwise permanently block every future kickoff attempt via
-      // `sendWorkspaceSetupKickoff`'s own `pendingKickoff` guard.
-      abandonPendingKickoffInternal()
+      if (getPendingFirstSend(get())) get().markFirstSendDisconnected()
       // F-S3: a socket drop means no more terminal frames are coming for any
       // outstanding cancel — stale entries here would otherwise persist across
       // reconnects and could misattribute an unrelated later frame.
       pendingCancelAckSids.clear()
+      pendingRedirectSids.clear()
       clearCatchUpSideChannelsOnDisconnect()
       // S6: a socket drop means no more frames — done, error, or otherwise —
       // are coming on THIS connection for any outstanding replay either. A

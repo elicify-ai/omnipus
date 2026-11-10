@@ -681,6 +681,9 @@ test.describe('ADR-067 D3 — PDF rendering, laziness and the worker', () => {
     ).toEqual([])
   })
 
+})
+
+test.describe('ADR-067 D3 — PDF rendering, laziness and the worker', () => {
   /**
    * Spec test 96 — FR-019c. THE ONE MOST LIKELY TO BE SILENTLY WRONG.
    *
@@ -770,6 +773,9 @@ test.describe('ADR-067 D3 — PDF rendering, laziness and the worker', () => {
     expect(isMainThreadFallbackWarning('[vite] connected.')).toBe(false)
   })
 
+})
+
+test.describe('ADR-067 D3 — PDF rendering, laziness and the worker', () => {
   /**
    * FR-018a — the four runtime asset directories ship and are actually used.
    *
@@ -895,6 +901,9 @@ test.describe('ADR-067 D3 — PDF rendering, laziness and the worker', () => {
     expect(await page.getByTestId('library-pdf-page').count()).toBe(0)
   })
 
+})
+
+test.describe('ADR-067 D3 — PDF rendering, laziness and the worker', () => {
   /**
    * FR-019a — asserted against the SHIPPED ARTEFACT, as served.
    *
@@ -1046,6 +1055,9 @@ test.describe('ADR-067 D3 — PDF rendering, laziness and the worker', () => {
     expect(verdict.directive).toContain('script-src')
   })
 
+})
+
+test.describe('ADR-067 D3 — PDF rendering, laziness and the worker', () => {
   /**
    * Spec test 75 — NB-17. Read-only means read-only.
    *

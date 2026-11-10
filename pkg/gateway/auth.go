@@ -53,6 +53,11 @@ type AuthResult struct {
 	// tell the two apart — see CLITokenContextKey's doc for why that
 	// distinction matters.
 	ViaCLIToken bool
+	// ViaSessionCookie is true only when User was authenticated by the
+	// omnipus-session cookie a browser login issued, never by a bearer
+	// token. Person-only routes that refuse every token read it through
+	// sessionCookieAuthContextKey (tool-parity spec r17 §3.3, row 9.23).
+	ViaSessionCookie bool
 }
 
 // resolveBearerIdentity resolves a raw bearer token (already stripped of the
@@ -181,7 +186,7 @@ func checkBearerAuth(ctx context.Context, w http.ResponseWriter, r *http.Request
 		// present-but-invalid one, falls through to the same 401 the
 		// missing-Bearer case always returned.
 		if user, err := middleware.ResolveUserFromCookie(r, cfg.Gateway.Users); err == nil && user != nil {
-			return AuthResult{Authenticated: true, User: user}
+			return AuthResult{Authenticated: true, User: user, ViaSessionCookie: true}
 		}
 		// SFH-1: surface "cookie present but invalid" (replay/probe/stale
 		// cookie) as a log line — silent for the routine "no cookie at all"

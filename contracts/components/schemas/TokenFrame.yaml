@@ -16,7 +16,7 @@ properties:
   session_id:
     type: string
     minLength: 1
-    maxLength: 128
+    maxLength: 255
     description: Session this token belongs to.
   content:
     type: string
@@ -28,6 +28,14 @@ properties:
       Agent that produced this token. Identifies the origin agent for
       background/delegated sub-turns, where the client's active-agent
       session state would otherwise guess incorrectly.
+  reply_to_participant:
+    $ref: ./ChatParticipant.yaml
+  reply_to_message_id:
+    type: string
+    minLength: 1
+    description: >
+      Present only on a guest reply (session-core FR-027): the message_id of
+      the admitted request this answer addresses. Same value as on replay.
   turn_id:
     type: string
     description: >-
@@ -44,6 +52,15 @@ properties:
       token belongs to, stable across a reconnect/catch-up. The same id is stamped on the
       persisted transcript entry, so a replayed or projected version of this message and
       its live tokens converge on one bubble instead of duplicating it.
+  goal_id:
+    type: string
+    description: >-
+      session-core FR-039 / C-GOAL. The goal this producing turn was dispatched under
+      (captured at turn start from the session's active goal record) and stamped onto
+      every token of the turn. Lets the SPA join the bubble to the EXACT keyed goal
+      criteria (goalPills[goal_id]) instead of the latest-goal scalar. Absent means
+      UNKNOWN association (the turn ran under no proven goal); a later goal's frame must
+      never rebind this bubble.
   replace:
     type: boolean
     description: >
@@ -65,7 +82,15 @@ properties:
       hub as the single chokepoint through which every session-scoped frame is published.
       Optional: absent on an unsequenced copy of this frame (for example a projection
       token sent inside a snapshot, which has no seq of its own) — the client only
-      advances its per-session cursor for frames that carry seq. The client stores the
-      highest seq it has applied per session and sends it back as since_seq on
-      attach_session; frames at or below that cursor are ignored, which makes re-delivery
-      idempotent.
+      this seq is dedup state, never itself the resume cursor: the client's cursor is
+      committed only by a completed catch-up (catch_up_complete) and is sent back as
+      since_seq on attach_session (2026-10-26, architect ruling arch-q33 — an earlier
+      sentence here described per-frame cursor advance, which was stale). Frames at
+      or below that cursor are ignored, which makes re-delivery idempotent.
+  room_ref:
+    $ref: './RoomRef.yaml'
+    description: >
+      Spec omnipus-system-agent K33 (FR-202, FR-215). Present when this
+      main-session entry is a room request to this agent or this agent's
+      answer into a room, so live, history and replay render the same
+      collapsed entry.

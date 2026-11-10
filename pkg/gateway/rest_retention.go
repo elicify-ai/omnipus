@@ -201,7 +201,7 @@ func (a *restAPI) postRetentionSweep(w http.ResponseWriter, r *http.Request) {
 	removed, err := store.RetentionSweep(days)
 	if err != nil {
 		slog.Error("rest: on-demand retention sweep failed", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("sweep failed: %s", err.Error()))
+		jsonServerFailure(w, http.StatusInternalServerError, "sweep failed", err)
 		return
 	}
 

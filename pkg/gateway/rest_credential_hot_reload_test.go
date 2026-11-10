@@ -140,7 +140,7 @@ func TestSetCredential_HotReloadsProviderAPIKeyWithoutExplicitReloadCall(t *test
 			case <-stop:
 				return
 			case <-rs.manualReloadChan:
-				runReloadCycle(al, rs, nil, runOneReload, loadNext)
+				runReloadCycle(al, rs, nil, 0, runOneReload, loadNext)
 			}
 		}
 	}()

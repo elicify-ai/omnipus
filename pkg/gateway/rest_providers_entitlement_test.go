@@ -126,8 +126,9 @@ func (s *entitlementStub) setStatus(code int) {
 }
 
 // entitlementCatalogJSON is a valid 2.0.0 document carrying one row per
-// protocol the endpoint dispatches on, plus the `cli` row that must be
-// refused. Every hosted `api` is https on a public host — FR-033 rejects a
+// protocol the endpoint dispatches on. WU-24 (PLAN-omnipus-L1-v2-20261013.md
+// §10, founder 2026-10-14) removed the CLI model-provider row, including its
+// trailing JSON separator. Every hosted `api` is https on a public host — FR-033 rejects a
 // document that points a hosted row at loopback — so the stub URL rides on
 // each CONFIG row's api_base instead (a regional host / self-hosted
 // gateway, which is exactly what resolveProviderRow prefers).
@@ -183,12 +184,6 @@ func entitlementCatalogJSON() []byte {
 				"api": "http://localhost:11434/v1",
 				"protocol": "ollama", "tier": "standard",
 				"auth_methods": ["api_key"],
-				"models": []
-			},
-			{
-				"id": "codex-cli", "name": "Codex CLI", "company": "OpenAI",
-				"api": "", "protocol": "cli", "cli_kind": "codex",
-				"tier": "standard", "auth_methods": ["sign_in"],
 				"models": []
 			}
 		]
@@ -303,11 +298,6 @@ func TestRestProviders_Entitlement_PerProtocol(t *testing.T) {
 				name: "ollama → GET /api/tags",
 				id:   "ollama", protocol: "ollama", apiBaseSfx: "/v1",
 				wantStatus: http.StatusOK, wantPath: "/api/tags", wantCalls: 1,
-			},
-			{
-				name: "codex-cli — protocol cli → 409, nothing dialled",
-				id:   "codex-cli", protocol: "cli",
-				wantStatus: http.StatusConflict, wantCalls: 0,
 			},
 			{
 				name: "my-proxy — a custom row → 409, nothing dialled",

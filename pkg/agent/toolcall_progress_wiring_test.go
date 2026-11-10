@@ -146,7 +146,7 @@ func TestRunTurn_ToolCallProgressCallback_WiredIntoChatStream(t *testing.T) {
 	streamer := &asyncResultMockStreamer{}
 	msgBus.SetStreamDelegate(&asyncResultMockStreamDelegate{streamer: streamer})
 
-	_, _, err := al.processMessage(context.Background(), bus.InboundMessage{
+	_, _, err := al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
 		Channel: "webchat",
 		Sender:  bus.SenderInfo{CanonicalID: "user:1", DisplayName: "Tester"},
 		ChatID:  "direct",
@@ -211,7 +211,7 @@ func TestRunTurn_ToolCallProgressCallback_SurvivesBeforeLLMOptionsReplacement(t 
 
 	require.NoError(t, al.hooks.Mount(NamedHook("test-options-replacer", &optionsReplacingHook{})))
 
-	_, _, err := al.processMessage(context.Background(), bus.InboundMessage{
+	_, _, err := al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{
 		Channel: "webchat",
 		Sender:  bus.SenderInfo{CanonicalID: "user:1", DisplayName: "Tester"},
 		ChatID:  "direct",

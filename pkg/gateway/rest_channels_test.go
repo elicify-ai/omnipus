@@ -30,12 +30,12 @@ import (
 // ── F-6: SC-002 persistence assertion on rejection tests ─────────────────────
 
 // TestSetChannelRouting_Bound_EmptyAgentID_NothingPersisted extends the F-6
-// requirement: after a 422 (empty agent), cfg.Channels["whatsapp.eu"] must have
+// requirement: after a 400 (empty agent), cfg.Channels["whatsapp.eu"] must have
 // WorkspaceID=="" and Identity==nil (SC-002 "0 persist").
 func TestSetChannelRouting_Bound_EmptyAgentID_NothingPersisted(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		{ID: "ray"},
 	})
 	writeTestWorkspaceJSON(t, api, "sales", "active", []string{"mia", "ray"}, false)
@@ -43,15 +43,16 @@ func TestSetChannelRouting_Bound_EmptyAgentID_NothingPersisted(t *testing.T) {
 
 	w := setChannelRoutingReq(t, api, "whatsapp.eu",
 		`{"workspace_id":"sales","default_agent_id":""}`)
-	require.Equal(t, http.StatusUnprocessableEntity, w.Code,
-		"empty default_agent_id with workspace_id must be 422 (FR-005)")
+	require.Equal(t, http.StatusBadRequest, w.Code,
+		"empty default_agent_id with workspace_id must be 400 (omnipus-system-agent FR-127)")
+	assert.Contains(t, w.Body.String(), "bind this channel to an agent in a workspace")
 
 	// SC-002: nothing must be persisted.
 	cfg := api.agentLoop.GetConfig()
 	inst, ok := cfg.Channels["whatsapp.eu"]
 	require.True(t, ok, "channel entry must still exist after rejection")
-	assert.Empty(t, inst.WorkspaceID, "WorkspaceID must NOT be written on 422 rejection (SC-002)")
-	assert.Nil(t, inst.Identity, "Identity must NOT be written on 422 rejection (SC-002)")
+	assert.Empty(t, inst.WorkspaceID, "WorkspaceID must NOT be written on a rejected write (SC-002)")
+	assert.Nil(t, inst.Identity, "Identity must NOT be written on a rejected write (SC-002)")
 }
 
 // TestSetChannelRouting_Bound_AgentNotInTeam_NothingPersisted extends F-6:
@@ -59,7 +60,7 @@ func TestSetChannelRouting_Bound_EmptyAgentID_NothingPersisted(t *testing.T) {
 func TestSetChannelRouting_Bound_AgentNotInTeam_NothingPersisted(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		{ID: "ray"},
 		{ID: "jim"},
 	})
@@ -90,7 +91,7 @@ func TestSetChannelRouting_Bound_AgentNotInTeam_NothingPersisted(t *testing.T) {
 func TestSetChannelRouting_Bound_UnknownWorkspace_NothingPersisted(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 	})
 	seedChannelInstance(t, api, "whatsapp.eu")
 
@@ -111,7 +112,7 @@ func TestSetChannelRouting_Bound_UnknownWorkspace_NothingPersisted(t *testing.T)
 func TestSetChannelRouting_Bound_WorkerAgent_NothingPersisted(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		{ID: "worker1", Type: config.AgentTypeWorker},
 	})
 	writeTestWorkspaceJSON(t, api, "sales", "active", []string{"mia", "worker1"}, false)
@@ -144,7 +145,7 @@ func TestSetChannelRouting_Bound_WorkerAgent_NothingPersisted(t *testing.T) {
 func TestSetChannelRouting_EmitsAuditEvent(t *testing.T) {
 	api, auditDir := newTestAPIWithAuditor(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		{ID: "ray"},
 	})
 	writeTestWorkspaceJSON(t, api, "sales", "active", []string{"mia", "ray"}, false)
@@ -641,7 +642,7 @@ func TestHandleChannels_SurfacesInstanceIDAndIdentity(t *testing.T) {
 func TestSetChannelRouting_Bound_EmptyAgentID(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		{ID: "ray"},
 	})
 	writeTestWorkspaceJSON(t, api, "sales", "active", []string{"mia", "ray"}, false)
@@ -650,8 +651,8 @@ func TestSetChannelRouting_Bound_EmptyAgentID(t *testing.T) {
 	w := setChannelRoutingReq(t, api, "whatsapp.eu",
 		`{"workspace_id":"sales","default_agent_id":""}`)
 
-	assert.Equal(t, http.StatusUnprocessableEntity, w.Code,
-		"empty default_agent_id with workspace_id must be 422 (FR-005)")
+	assert.Equal(t, http.StatusBadRequest, w.Code,
+		"empty default_agent_id with workspace_id must be 400 (omnipus-system-agent FR-127)")
 }
 
 // TestSetChannelRouting_Bound_AgentNotInTeam verifies FR-006:
@@ -659,7 +660,7 @@ func TestSetChannelRouting_Bound_EmptyAgentID(t *testing.T) {
 func TestSetChannelRouting_Bound_AgentNotInTeam(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		{ID: "ray"},
 		{ID: "jim"},
 	})
@@ -685,7 +686,7 @@ func TestSetChannelRouting_Bound_AgentNotInTeam(t *testing.T) {
 func TestSetChannelRouting_Bound_UnknownWorkspace(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 	})
 	// No workspace "ghost" written.
 	seedChannelInstance(t, api, "whatsapp.eu")
@@ -702,7 +703,7 @@ func TestSetChannelRouting_Bound_UnknownWorkspace(t *testing.T) {
 func TestSetChannelRouting_Bound_ArchivedWorkspace(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 	})
 	writeTestWorkspaceJSON(t, api, "archived1", "archived", []string{"mia"}, false)
 	seedChannelInstance(t, api, "whatsapp.eu")
@@ -719,7 +720,7 @@ func TestSetChannelRouting_Bound_ArchivedWorkspace(t *testing.T) {
 func TestSetChannelRouting_Bound_WorkerAgent(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		{ID: "worker1", Type: config.AgentTypeWorker},
 	})
 	writeTestWorkspaceJSON(t, api, "sales", "active", []string{"mia", "worker1"}, false)
@@ -738,30 +739,6 @@ func TestSetChannelRouting_Bound_WorkerAgent(t *testing.T) {
 		"rejection must be the worker-type check (FR-008), not a generic agent-not-found")
 }
 
-// TestSetChannelRouting_Unbound_Worker_Returns422 verifies MIN-002 in the
-// unbound (legacy) flow: worker agent → 422, not 400.
-func TestSetChannelRouting_Unbound_Worker_Returns422(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
-		{ID: "worker1", Type: config.AgentTypeWorker},
-	})
-
-	// No workspace_id → unbound flow.
-	w := setChannelRoutingReq(t, api, "telegram",
-		`{"default_agent_id":"worker1"}`)
-
-	assert.Equal(t, http.StatusUnprocessableEntity, w.Code,
-		"unbound worker must be 422 (MIN-002)")
-	// Content check (anti-shortcut): in the UNBOUND flow "agent not found" is
-	// a 404, not a 422 (see rest.go's unbound-flow lookup) — so this
-	// particular pair can't be confused by status code alone, but pin the
-	// message anyway so a future change collapsing the two status codes
-	// still gets caught here.
-	assert.Contains(t, w.Body.String(), "workers are not chat targets",
-		"rejection must be the worker-type check (MIN-002), not a generic agent-not-found")
-}
-
 // ── TDD #14: valid bound binding persists ─────────────────────────────────────
 
 // TestSetChannelRouting_ValidBinding_SetsIdentity verifies FR-010/FR-029:
@@ -770,7 +747,7 @@ func TestSetChannelRouting_Unbound_Worker_Returns422(t *testing.T) {
 func TestSetChannelRouting_ValidBinding_SetsIdentity(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		{ID: "ray"},
 	})
 	writeTestWorkspaceJSON(t, api, "sales", "active", []string{"mia", "ray"}, false)
@@ -827,7 +804,7 @@ func TestSetChannelRouting_ValidBinding_SetsIdentity(t *testing.T) {
 func TestGetChannelRouting_BoundReadsIdentity(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		{ID: "ray"},
 	})
 	writeTestWorkspaceJSON(t, api, "sales", "active", []string{"mia", "ray"}, false)
@@ -846,42 +823,6 @@ func TestGetChannelRouting_BoundReadsIdentity(t *testing.T) {
 	require.NoError(t, json.Unmarshal(getW.Body.Bytes(), &resp))
 	assert.Equal(t, "sales", resp["workspace_id"], "GET must return workspace_id from Identity")
 	assert.Equal(t, "ray", resp["default_agent_id"], "GET must return agent_id from Identity")
-}
-
-// TestGetChannelRouting_UnboundReadsWildcard verifies that for an UNBOUND instance
-// GET returns the legacy wildcard binding agent_id and no workspace_id.
-func TestGetChannelRouting_UnboundReadsWildcard(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
-	})
-
-	// Plant a wildcard binding for telegram (unbound).
-	require.NoError(t, api.safeUpdateConfigJSON(func(m map[string]any) error {
-		m["bindings"] = []any{
-			map[string]any{
-				"agent_id": "mia",
-				"match": map[string]any{
-					"channel":    "telegram",
-					"account_id": "*",
-				},
-			},
-		}
-		return nil
-	}))
-
-	getW := getChannelRoutingReq(t, api, "telegram")
-	require.Equal(t, http.StatusOK, getW.Code)
-
-	var resp map[string]any
-	require.NoError(t, json.Unmarshal(getW.Body.Bytes(), &resp))
-	assert.Equal(t, "mia", resp["default_agent_id"],
-		"unbound GET must read the wildcard binding agent_id")
-	// workspace_id must be absent or empty for unbound instances.
-	wsVal, hasWS := resp["workspace_id"]
-	if hasWS && wsVal != nil && wsVal != "" {
-		t.Errorf("unbound GET must not return workspace_id; got %v", wsVal)
-	}
 }
 
 // ── S-1+S-2: HandleChannels slug grammar enforcement ─────────────────────────
@@ -922,70 +863,12 @@ func TestHandleChannels_BadSlug_Returns400_NothingWritten(t *testing.T) {
 
 // ── Fix 2: bound→unbound transition clears WorkspaceID and Identity ──────────
 
-// TestSetChannelRouting_UnbindClears_WorkspaceID_And_Identity verifies FR-029:
-// a PUT without workspace_id on a previously-bound instance clears WorkspaceID
-// and Identity so the next getChannelRouting returns the unbound representation.
-//
-// Without the fix, safeUpdateConfigJSON preserved the bound representation and
-// RepairStaleChannelWildcardBindings dropped the new wildcard on next load,
-// silently losing the unbind intent.
-func TestSetChannelRouting_UnbindClears_WorkspaceID_And_Identity(t *testing.T) {
+// Founder Q1 B: binding an unfiled connector selects a destination conversation,
+// never relabels the connector's already-used, unfiled conversation.
+func TestSetChannelRouting_Bound_PreservesExistingUnfiledSession(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
-		{ID: "ray"},
-	})
-	writeTestWorkspaceJSON(t, api, "sales", "active", []string{"mia", "ray"}, false)
-	seedChannelInstance(t, api, "whatsapp.eu")
-
-	// Step 1: bind the instance.
-	putW := setChannelRoutingReq(t, api, "whatsapp.eu",
-		`{"workspace_id":"sales","default_agent_id":"ray"}`)
-	require.Equal(t, http.StatusOK, putW.Code, "initial bind must succeed: %s", putW.Body.String())
-
-	// Verify it is bound.
-	cfg := api.agentLoop.GetConfig()
-	inst, ok := cfg.Channels["whatsapp.eu"]
-	require.True(t, ok, "channel entry must exist after bind")
-	require.Equal(t, "sales", inst.WorkspaceID, "pre-condition: WorkspaceID must be 'sales'")
-	require.NotNil(t, inst.Identity, "pre-condition: Identity must be set")
-
-	// Step 2: unbind by sending a PUT without workspace_id.
-	unbindW := setChannelRoutingReq(t, api, "whatsapp.eu",
-		`{"default_agent_id":"mia"}`)
-	require.Equal(t, http.StatusOK, unbindW.Code, "unbind must succeed (200): %s", unbindW.Body.String())
-
-	// Assert WorkspaceID and Identity are cleared in the live config.
-	afterCfg := api.agentLoop.GetConfig()
-	afterInst, instExists := afterCfg.Channels["whatsapp.eu"]
-	if instExists {
-		assert.Empty(t, afterInst.WorkspaceID,
-			"WorkspaceID must be cleared after unbound PUT (FR-029 mutual-exclusivity)")
-		assert.Nil(t, afterInst.Identity,
-			"Identity must be cleared after unbound PUT (FR-029 mutual-exclusivity)")
-	}
-	// If the entry is fully absent that is also a valid cleared state.
-
-	// Assert GET returns the unbound (wildcard) representation, not the old bound one.
-	getW := getChannelRoutingReq(t, api, "whatsapp.eu")
-	require.Equal(t, http.StatusOK, getW.Code)
-	var resp map[string]any
-	require.NoError(t, json.Unmarshal(getW.Body.Bytes(), &resp))
-	wsVal, hasWS := resp["workspace_id"]
-	if hasWS && wsVal != nil && wsVal != "" {
-		t.Errorf("GET after unbind must not return workspace_id; got %v", wsVal)
-	}
-	assert.Equal(t, "mia", resp["default_agent_id"],
-		"GET after unbind must return the new wildcard agent_id")
-}
-
-// TestSetChannelRouting_Bound_RestampsExistingSessions verifies that binding
-// an UNBOUND channel to a workspace re-stamps sessions that already existed
-// on that channel before the bind, not only sessions created afterward.
-func TestSetChannelRouting_Bound_RestampsExistingSessions(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		{ID: "ray"},
 	})
 	writeTestWorkspaceJSON(t, api, "sales", "active", []string{"mia", "ray"}, false)
@@ -994,6 +877,7 @@ func TestSetChannelRouting_Bound_RestampsExistingSessions(t *testing.T) {
 	// A conversation that already exists BEFORE the channel is ever bound.
 	existing := seedExistingChannelSession(t, api, "whatsapp.eu", "peer-1", "mia", "")
 	require.Empty(t, existing.WorkspaceID, "precondition: session starts with no workspace")
+	unchanged := round3ChannelUnchanged(t, api, existing.ID)
 
 	w := setChannelRoutingReq(t, api, "whatsapp.eu",
 		`{"workspace_id":"sales","default_agent_id":"ray"}`)
@@ -1002,17 +886,18 @@ func TestSetChannelRouting_Bound_RestampsExistingSessions(t *testing.T) {
 	store := api.agentLoop.GetSessionStore()
 	after, err := store.GetMeta(existing.ID)
 	require.NoError(t, err)
-	assert.Equal(t, "sales", after.WorkspaceID,
-		"binding the channel to a workspace must re-stamp an already-existing session's workspace_id")
+	assert.Empty(t, after.WorkspaceID, "binding must preserve the old unfiled conversation")
+	unchanged()
+	round3RequireChannelPair(t, api, "whatsapp.eu", "sales", "ray")
 }
 
-// TestSetChannelRouting_Rebind_UpdatesExistingSessions verifies that MOVING
-// a channel from workspace W1 to W2 re-stamps sessions off W1 onto W2 —
-// not just newly-bound state that only affects future sessions.
-func TestSetChannelRouting_Rebind_UpdatesExistingSessions(t *testing.T) {
+// Founder Q1 B: rebind changes the destination pair, not an old conversation.
+// Actual connector-input destination selection is covered by
+// TestMemoryRound3ConnectorDestination in the agent package.
+func TestSetChannelRouting_Rebind_PreservesExistingSession(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		{ID: "ray"},
 	})
 	writeTestWorkspaceJSON(t, api, "w1", "active", []string{"mia", "ray"}, false)
@@ -1027,6 +912,7 @@ func TestSetChannelRouting_Rebind_UpdatesExistingSessions(t *testing.T) {
 	// A conversation created while w1 was bound.
 	existing := seedExistingChannelSession(t, api, "whatsapp.eu", "peer-2", "ray", "w1")
 	require.Equal(t, "w1", existing.WorkspaceID)
+	unchanged := round3ChannelUnchanged(t, api, existing.ID)
 
 	// Re-bind the SAME instance to w2.
 	w2 := setChannelRoutingReq(t, api, "whatsapp.eu",
@@ -1036,39 +922,9 @@ func TestSetChannelRouting_Rebind_UpdatesExistingSessions(t *testing.T) {
 	store := api.agentLoop.GetSessionStore()
 	after, err := store.GetMeta(existing.ID)
 	require.NoError(t, err)
-	assert.Equal(t, "w2", after.WorkspaceID,
-		"re-binding a channel to a different workspace must move existing sessions off the stale workspace")
-}
-
-// TestSetChannelRouting_Unbind_ClearsExistingSessions verifies that
-// explicitly UNBINDING a previously-bound channel clears the stale
-// workspace_id off existing sessions rather than leaving them pinned to a
-// workspace the channel is no longer routed through.
-func TestSetChannelRouting_Unbind_ClearsExistingSessions(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
-		{ID: "ray"},
-	})
-	writeTestWorkspaceJSON(t, api, "sales", "active", []string{"mia", "ray"}, false)
-	seedChannelInstance(t, api, "whatsapp.eu")
-
-	w := setChannelRoutingReq(t, api, "whatsapp.eu",
-		`{"workspace_id":"sales","default_agent_id":"ray"}`)
-	require.Equal(t, http.StatusOK, w.Code)
-
-	existing := seedExistingChannelSession(t, api, "whatsapp.eu", "peer-3", "ray", "sales")
-	require.Equal(t, "sales", existing.WorkspaceID)
-
-	// Unbind: PUT with no workspace_id at all (legacy/unbound flow).
-	wu := setChannelRoutingReq(t, api, "whatsapp.eu", `{"default_agent_id":"ray"}`)
-	require.Equal(t, http.StatusOK, wu.Code, "unbind must succeed: %s", wu.Body.String())
-
-	store := api.agentLoop.GetSessionStore()
-	after, err := store.GetMeta(existing.ID)
-	require.NoError(t, err)
-	assert.Empty(t, after.WorkspaceID,
-		"unbinding a channel must clear the stale workspace_id off its existing sessions")
+	assert.Equal(t, "w1", after.WorkspaceID, "rebind must preserve the old workspace identity")
+	unchanged()
+	round3RequireChannelPair(t, api, "whatsapp.eu", "w2", "ray")
 }
 
 // TestSetChannelRouting_Bound_UnboundChannelSessionsUnaffected verifies that
@@ -1078,7 +934,7 @@ func TestSetChannelRouting_Unbind_ClearsExistingSessions(t *testing.T) {
 func TestSetChannelRouting_Bound_UnboundChannelSessionsUnaffected(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		{ID: "ray"},
 	})
 	writeTestWorkspaceJSON(t, api, "sales", "active", []string{"mia", "ray"}, false)
@@ -1100,23 +956,12 @@ func TestSetChannelRouting_Bound_UnboundChannelSessionsUnaffected(t *testing.T) 
 		"an unrelated, never-bound channel's existing sessions must be unaffected by another channel's bind")
 }
 
-// TestSetChannelRouting_SiblingInstanceIsUntouched is the defect this fix
-// exists to prevent, and the reason the session record needed an instance key.
-//
-// An install can hold a hundred WhatsApp numbers, each bound to its own
-// (workspace, agent) pair under ADR-029. Every one of their sessions records
-// Channel=="whatsapp". A restamp that matched on the bare TYPE would relabel
-// all hundred when an operator re-bound one of them — inflicting on the other
-// ninety-nine exactly the stale-workspace bug the restamp was written to fix,
-// and silently moving their delegation trust, memory rooms and task placement
-// to the wrong workspace.
-//
-// The first version of this fix did match by type. It only became visible
-// because someone asked whether that was acceptable behaviour.
+// Founder Q1 B: neither the changed instance's old conversation nor a sibling
+// instance's conversation is relabelled. Retain the multi-instance safety check.
 func TestSetChannelRouting_SiblingInstanceIsUntouched(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	addAgentsToAPI(t, api, []config.AgentConfig{
-		{ID: "mia", Default: true},
+		{ID: "mia"},
 		{ID: "ray"},
 	})
 	writeTestWorkspaceJSON(t, api, "emea", "active", []string{"mia", "ray"}, false)
@@ -1125,6 +970,8 @@ func TestSetChannelRouting_SiblingInstanceIsUntouched(t *testing.T) {
 
 	eu := seedExistingChannelSession(t, api, "whatsapp.eu", "peer-eu", "mia", "")
 	us := seedExistingChannelSession(t, api, "whatsapp.us", "peer-us", "ray", "americas")
+	unchangedEU := round3ChannelUnchanged(t, api, eu.ID)
+	unchangedUS := round3ChannelUnchanged(t, api, us.ID)
 
 	w := setChannelRoutingReq(t, api, "whatsapp.eu",
 		`{"workspace_id":"emea","default_agent_id":"mia"}`)
@@ -1134,7 +981,10 @@ func TestSetChannelRouting_SiblingInstanceIsUntouched(t *testing.T) {
 
 	afterEU, err := store.GetMeta(eu.ID)
 	require.NoError(t, err)
-	assert.Equal(t, "emea", afterEU.WorkspaceID, "the bound instance's own session must be restamped")
+	assert.Empty(t, afterEU.WorkspaceID, "the changed instance's old unfiled conversation stays unfiled")
+	unchangedEU()
+	unchangedUS()
+	round3RequireChannelPair(t, api, "whatsapp.eu", "emea", "mia")
 
 	afterUS, err := store.GetMeta(us.ID)
 	require.NoError(t, err)
@@ -1786,7 +1636,7 @@ func TestSetChannelRouting_RejectsWorkerTarget(t *testing.T) {
 				MaxToolIterations: 20,
 			},
 			List: []config.AgentConfig{
-				{ID: "mia", Name: "Mia", Type: config.AgentTypeCore, Default: true},
+				{ID: "mia", Name: "Mia", Type: config.AgentTypeCore},
 				{ID: "worker", Name: "Worker", Type: config.AgentTypeWorker},
 			},
 		},
@@ -1797,13 +1647,16 @@ func TestSetChannelRouting_RejectsWorkerTarget(t *testing.T) {
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
 	seedRoutingAgentEntities(t, tmpDir, cfg.Agents.List)
+	// FR-127: a routing write always names a workspace; both agents are on it
+	// so the worker refusal is the only reason under test.
+	writeTestWorkspaceJSON(t, api, "ops", "active", []string{"mia", "worker"}, false)
 
-	// Worker target → 400.
+	// Worker target → 422.
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(
 		http.MethodPut,
 		"/api/v1/channels/telegram/routing",
-		strings.NewReader(`{"default_agent_id": "worker"}`),
+		strings.NewReader(`{"workspace_id": "ops", "default_agent_id": "worker"}`),
 	)
 	api.HandleChannels(w, r)
 	// MIN-002: worker rejection standardized to 422 (was 400).
@@ -1814,7 +1667,7 @@ func TestSetChannelRouting_RejectsWorkerTarget(t *testing.T) {
 
 	// Confirm no binding was persisted for telegram.
 	liveCfg := api.agentLoop.GetConfig()
-	assert.Less(t, channelWildcardIdx(liveCfg.Bindings, "telegram"), 0,
+	assert.False(t, liveCfg.Channels["telegram"].IsWorkspaceBound(),
 		"rejected worker target must not persist a binding")
 
 	// Control: base agent target → 200.
@@ -1822,14 +1675,14 @@ func TestSetChannelRouting_RejectsWorkerTarget(t *testing.T) {
 	r2 := httptest.NewRequest(
 		http.MethodPut,
 		"/api/v1/channels/telegram/routing",
-		strings.NewReader(`{"default_agent_id": "mia"}`),
+		strings.NewReader(`{"workspace_id": "ops", "default_agent_id": "mia"}`),
 	)
 	api.HandleChannels(w2, r2)
 	require.Equal(t, http.StatusOK, w2.Code, "a base agent target must succeed (control)")
 	var resp gen.ChannelRouting
 	require.NoError(t, json.NewDecoder(w2.Body).Decode(&resp))
-	require.NotNil(t, resp.DefaultAgentId)
-	assert.Equal(t, "mia", *resp.DefaultAgentId)
+	assert.True(t, resp.Bound)
+	assert.Equal(t, "mia", resp.DefaultAgentId)
 }
 
 // --- HandleChannels tests ---

@@ -1,7 +1,9 @@
 package session
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -107,6 +109,25 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 	// Track session dirs we touched so we can decide which to remove entirely.
 	touchedSessionDirs := make(map[string]struct{})
 
+	// Rolled day partitions expire through the archive's own path, which also
+	// moves each session's window past the expired content. The generic walk
+	// below never deletes them.
+	var notices []expiryNotice
+	expiryErr := us.expireArchiveSessions(retentionDays, &removed, touchedSessionDirs, &notices)
+
+	// A main chat is deleted only with its agent (founder rule). Retention still
+	// expires a main chat's old rolled content above (FR-007), but never deletes
+	// its live partition, its identity (meta.json) or its directory.
+	protectedMain := make(map[string]bool)
+	isProtected := func(sessionID string) bool {
+		if p, ok := protectedMain[sessionID]; ok {
+			return p
+		}
+		p := us.retentionProtected(sessionID)
+		protectedMain[sessionID] = p
+		return p
+	}
+
 	err := filepath.WalkDir(us.baseDir, func(path string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			if path == us.baseDir {
@@ -133,6 +154,12 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 		}
 		parts := strings.SplitN(rel, string(filepath.Separator), 3)
 		if len(parts) < 2 {
+			return nil
+		}
+		if parts[0] != ".context" && transcriptDayPattern.MatchString(d.Name()) {
+			return nil // a rolled day partition: owned by expireArchiveSessions
+		}
+		if parts[0] != ".context" && isProtected(parts[0]) {
 			return nil
 		}
 
@@ -174,7 +201,7 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 	})
 	if err != nil {
 		unlock()
-		return removed, err
+		return removed, errors.Join(err, expiryErr)
 	}
 
 	// Second pass: remove session directories that lost all their transcripts
@@ -186,6 +213,9 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 	// child file is removed, breaking any post-deletion mtime comparison.
 	uploadsRoot := us.uploadsRoot() // home-rooted per ADR-017 D5 / N-B fix
 	for sessDir := range touchedSessionDirs {
+		if isProtected(filepath.Base(sessDir)) {
+			continue
+		}
 		entries, readErr := os.ReadDir(sessDir)
 		if readErr != nil {
 			continue
@@ -236,6 +266,14 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 	// lockAllSessionShards's hold, in either direction.
 	unlock()
 
+	// Reconcile persisted catalogs even after a zero-removal pass, outside all
+	// session shards so suffix content I/O never holds canonical writers.
+	expiryErr = errors.Join(expiryErr, us.reconcileExistingChatHistory(context.Background()))
+
+	// FR-007: tell each session whose window moved. Written after the shards
+	// are released (the append takes its own shard).
+	expiryErr = errors.Join(expiryErr, us.recordExpiryNotices(notices))
+
 	if goalRetentionSweepFn != nil {
 		goalRemoved, goalErr := goalRetentionSweepFn(retentionDays)
 		if goalErr != nil {
@@ -247,5 +285,88 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 		}
 	}
 
-	return removed, nil
+	return removed, expiryErr
+}
+
+// expireArchiveSessions runs the archive expiry path over every session
+// directory, adding the removed partition count to *removed and marking each
+// touched directory for the empty-directory pass. A session whose expiry fails
+// is skipped and its error joined into the result; the others still run.
+func (us *UnifiedStore) expireArchiveSessions(retentionDays int, removed *int, touched map[string]struct{}, notices *[]expiryNotice) error {
+	entries, err := os.ReadDir(us.baseDir)
+	if err != nil {
+		return fmt.Errorf("session: retention_sweep: list sessions: %w", err)
+	}
+	var errs error
+	for _, ent := range entries {
+		if !ent.IsDir() || strings.HasPrefix(ent.Name(), ".") {
+			continue
+		}
+		notice, expErr := us.backend.expireSession(ent.Name(), retentionDays)
+		// Account for what happened even when part of the expiry failed: the
+		// partitions that were removed are gone and the window moved past them.
+		if notice.Note != "" {
+			*notices = append(*notices, expiryNotice{sessionID: ent.Name(), note: notice.Note})
+		}
+		if notice.RemovedPartitions > 0 {
+			*removed += notice.RemovedPartitions
+			touched[filepath.Join(us.baseDir, ent.Name())] = struct{}{}
+		}
+		if expErr != nil {
+			slog.Warn("session: retention_sweep: archive expiry failed", "session_id", ent.Name(), "error", expErr)
+			errs = errors.Join(errs, fmt.Errorf("session %s: %w", ent.Name(), expErr))
+		}
+	}
+	return errs
+}
+
+// retentionProtected reports whether retention must leave a session's files and
+// directory alone: a main chat, or a session whose identity cannot be read (an
+// unknown session is never deleted on a guess). The caller holds every session
+// shard.
+func (us *UnifiedStore) retentionProtected(sessionID string) bool {
+	meta, err := us.readMetaLocked(sessionID)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false
+		}
+		slog.Warn("session: retention_sweep: cannot read session identity; leaving it untouched",
+			"session_id", sessionID, "error", err)
+		return true
+	}
+	return meta.Type == SessionTypeMain
+}
+
+// expiryNotice is one session's FR-007 agent expiry notice, waiting to be
+// written to its transcript.
+type expiryNotice struct{ sessionID, note string }
+
+// recordExpiryNotices appends each notice to its session's chat transcript as a
+// system entry (SystemSubtypeExpiryNotice). A session that no longer exists
+// (its emptied directory was removed by the same sweep) has nothing to tell.
+func (us *UnifiedStore) recordExpiryNotices(notices []expiryNotice) error {
+	var errs error
+	for _, n := range notices {
+		meta, err := us.GetMeta(n.sessionID)
+		if err != nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				errs = errors.Join(errs, fmt.Errorf("session %s: expiry notice: %w", n.sessionID, err))
+			}
+			continue
+		}
+		now := time.Now().UTC()
+		if _, err := us.AppendTranscriptAddressed(n.sessionID, TranscriptEntry{
+			ID:             fmt.Sprintf("expiry-%d", now.UnixNano()),
+			Type:           EntryTypeSystem,
+			Role:           "system",
+			Content:        n.note,
+			SystemSubtype:  SystemSubtypeExpiryNotice,
+			AgentID:        meta.AgentID,
+			Timestamp:      now,
+			ViewMembership: ViewMembershipChat,
+		}); err != nil {
+			errs = errors.Join(errs, fmt.Errorf("session %s: expiry notice: %w", n.sessionID, err))
+		}
+	}
+	return errs
 }

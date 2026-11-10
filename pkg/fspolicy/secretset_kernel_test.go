@@ -103,10 +103,16 @@ func TestKernelDeniedPaths_MatchIsCarveOutPathForPath(t *testing.T) {
 		{"re-rooted workspace turn (other workspace)", filepath.Join(home, "workspaces", "w2", "work")},
 	} {
 		t.Run(shape.name, func(t *testing.T) {
+			// The app half answers from the SAME model production carries:
+			// #1284 (amendment §2 D5) extends this lock to the new predicate,
+			// and EffectiveFSPolicy always populates HomeGuard — a policy
+			// without it answers the pre-#1284 question and the two layers
+			// "disagree" only because one side was built stale.
 			policy := FSPolicy{
 				WorkDir:   shape.workDir,
 				Scope:     FSScopeConfined,
 				CarveOuts: SecretPaths(home),
+				HomeGuard: BaseHomeGuard(home),
 			}
 			denied, err := KernelDeniedPathsFor(home, shape.workDir)
 			require.NoError(t, err)
@@ -187,10 +193,17 @@ func TestKernelDeniedPaths_AgentTurnDeniesSiblingsAndAdmitsOwn(t *testing.T) {
 			"root here, which is the hole a reviewer demonstrated with a real child")
 	assert.True(t, kernelDenies(t, denied, filepath.Join(home, "agents", "third")),
 		"every sibling, not just the one someone thought to test")
-	assert.False(t, kernelDenies(t, denied, filepath.Join(self, "AGENT.md")),
-		"the agent's OWN home must stay reachable — a deny here breaks the product")
-	assert.False(t, kernelDenies(t, denied, filepath.Join(self, "sessions")),
-		"…including subdirectories of its own home")
+	// #1284 amendment §2 D4: the own-tree exception no longer re-admits the
+	// agent-home internal set — .omnipus/**, memory/, sessions/, skills/ and
+	// the definition files stay protected even in the agent's own home.
+	assert.True(t, kernelDenies(t, denied, filepath.Join(self, "AGENT.md")),
+		"the agent's own AGENT.md is agent-home-internal (D4) — denied to children")
+	assert.True(t, kernelDenies(t, denied, filepath.Join(self, "sessions")),
+		"the agent's own sessions/ is agent-home-internal (D4) — denied to children")
+	// The rest of the own home stays a working area.
+	require.NoError(t, os.WriteFile(filepath.Join(self, "notes.txt"), []byte("x"), 0o600))
+	assert.False(t, kernelDenies(t, denied, filepath.Join(self, "notes.txt")),
+		"the agent's OWN home must stay reachable outside the D4 internal set")
 }
 
 // TestKernelDeniedPaths_WorkspaceTurnDeniesTheWorkspaceRecordItself: the

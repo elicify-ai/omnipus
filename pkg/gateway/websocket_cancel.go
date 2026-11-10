@@ -4,16 +4,15 @@ package gateway
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"sync"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/notifications"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -136,8 +135,34 @@ func cancelPartialSummary(report steer.CancelReport) string {
 	if len(report.Unreachable) == 0 {
 		return ""
 	}
-	return fmt.Sprintf("stopped %d of %d; %d unreachable",
-		len(report.Reached), len(report.Reached)+len(report.Unreachable), len(report.Unreachable))
+	// Count sessions, not list entries. The cascade lists a session as Reached
+	// when its Stop is stamped and as Unreachable when firing the live cancel
+	// then fails, so one session can sit in both lists (and a session can be
+	// unreachable for more than one reason). It is unreachable, once.
+	unreachable := make(map[string]struct{}, len(report.Unreachable))
+	treeUnlisted := false
+	for _, item := range report.Unreachable {
+		if item.HelperTreeUnlisted {
+			// Not a failure of item.ID's own Stop: reported on its own below.
+			treeUnlisted = true
+			continue
+		}
+		unreachable[item.ID] = struct{}{}
+	}
+	stopped := make(map[string]struct{}, len(report.Reached))
+	for _, id := range report.Reached {
+		if _, failed := unreachable[id]; !failed {
+			stopped[id] = struct{}{}
+		}
+	}
+	summary := fmt.Sprintf("stopped %d of %d", len(stopped), len(stopped)+len(unreachable))
+	if len(unreachable) > 0 {
+		summary += fmt.Sprintf("; %d unreachable", len(unreachable))
+	}
+	if treeUnlisted {
+		summary += "; helper sessions could not be listed"
+	}
+	return summary
 }
 
 // cancelIncompleteSubtreeSummary answers a DIFFERENT question from
@@ -159,22 +184,15 @@ func cancelIncompleteSubtreeSummary(report steer.CancelReport) string {
 	return summary + "; " + stillRunning
 }
 
-// sendCancelPartialNotice publishes the one-line PARTIAL-STOP notice as a
-// session error frame through the session hub (#823: every bound tab sees
-// it, numbered and journaled), with an unsequenced copy for an unbound
-// requester — the same delivery rule as the cancel_stage frame it
-// accompanies.
+// sendCancelPartialNotice persists and pushes the PARTIAL-STOP sentence as
+// a non-terminal, recipient-scoped header notice. Cascade facts remain on
+// cancel_stage; the notice must not finish this session's newer reply.
 func (h *WSHandler) sendCancelPartialNotice(wc *wsConn, sessionID string, report steer.CancelReport) {
 	message := cancelPartialSummary(report)
 	if message == "" {
 		return
 	}
-	sid := sessionID
-	h.hubPublishFrame(sessionID, string(generated.WsFrameTypeError), generated.ErrorFrame{
-		Type:      string(generated.WsFrameTypeError),
-		SessionId: &sid,
-		Message:   message,
-	}, wc)
+	h.publishStopNotice(wc, sessionID, "partial", "Stop was incomplete", message, notifications.SeverityWarning)
 }
 
 func (h *WSHandler) sendExternalCancelPartialNotice(ctx context.Context, sessionID string, report steer.CancelReport) {
@@ -202,95 +220,6 @@ func (h *WSHandler) sendExternalCancelPartialNotice(ctx context.Context, session
 		slog.Warn("ws: publish partial Stop notice to originating channel failed",
 			"session_id", sessionID, "channel", target.Channel, "chat_id", target.ChatID, "error", err)
 	}
-}
-
-// cancelSteeredSubtree applies ADR-091 Stop only when a durable lifecycle
-// record exists. Ordinary chats with no steering record keep using the legacy
-// live-turn cancel path and must not be falsely reported as partial.
-func cancelSteeredSubtree(ctx context.Context, al *agent.AgentLoop, sessionID string, by steer.Principal) (steer.CancelReport, bool) {
-	var report steer.CancelReport
-	if al == nil {
-		return report, false
-	}
-	store := al.GetSessionLifecycleStore()
-	if store == nil {
-		return report, false
-	}
-	if _, err := store.Load(sessionID); err != nil {
-		if errors.Is(err, session.ErrLifecycleNotFound) {
-			if _, statErr := os.Stat(filepath.Join(store.Dir(), sessionID+".jsonl")); errors.Is(statErr, os.ErrNotExist) {
-				return report, false
-			}
-		}
-		report.Unreachable = append(report.Unreachable, steer.UnreachableSession{ID: sessionID, Reason: err.Error()})
-		return report, true
-	}
-	canceller := gatewaySteerCanceller(al)
-	if canceller == nil {
-		report.Unreachable = append(report.Unreachable, steer.UnreachableSession{ID: sessionID, Reason: "steer canceller is not configured"})
-		return report, true
-	}
-	result, err := canceller.CancelSubtree(ctx, sessionID, by)
-	if err != nil {
-		result.Unreachable = append(result.Unreachable, steer.UnreachableSession{ID: sessionID, Reason: err.Error()})
-	}
-	return result, true
-}
-
-// u11CollectDescendantSessionIDs walks the durable lifecycle store's
-// SteeringSessionID edges (pkg/session/lifecycle.go, FR-019/FR-020;
-// LifecycleStore.List(LifecycleFilter{SteeringSessionID: id}) returns X's
-// DIRECT children only, index-backed per BDD-19) to collect EVERY descendant
-// of rootID, however many delegation levels deep. Returns only descendants —
-// rootID itself is never included; the caller prepends it.
-//
-// ADR-057 FR-032/W10c: cancelAllPendingForSessions matches a pending
-// approval by EXACT equality on the registry entry's own acting session id
-// (FR-080 — a delegated child's entry carries the CHILD's own id, never the
-// chat's), so a chat-level Stop that passed only the chat/root id would
-// cancel nothing inside any live child (BDD-33). The DURABLE lifecycle store
-// is reachable read-only through h.agentLoop's already-exported
-// GetSessionLifecycleStore() (pkg/agent/session_messaging_wire.go), and
-// every delegation — live or not — has a LifecycleRecord (User Story 4), so
-// this walk is authoritative independent of what is still running.
-//
-// [FIX-5, Defect 4, 2026-08-03] HOISTED: this used to be a byte-identical
-// duplicate of pkg/agent/cancel.go's collectDescendantSessionIDs, kept
-// separate only because a parallel-implementation ownership rule (then:
-// "neither of which this unit may edit") forbade this unit from touching
-// pkg/agent. That rule has expired — this is now a thin signature-compat
-// shim over the ONE hoisted implementation, agent.CollectDescendantSessionIDs
-// (pkg/agent/cancel.go), which also gained a real error return (Defect 2:
-// a lifecycleStore.List failure partway through the walk used to be
-// swallowed as "this node has no children" — silently truncating the
-// returned set with no signal). This shim is kept, rather than deleted and
-// inlined at every call site, because pkg/gateway/rest.go's deleteSession
-// handler and pkg/gateway/websocket_adr057_test.go's U11 unit tests call it
-// directly by this exact name/signature and are outside this fix's file
-// ownership — changing its signature would require edits there too. A
-// caller that CAN use the richer (typed-error) signature directly — see
-// buildCancelHooks's CancelPendingApprovals closure below — calls
-// agent.CollectDescendantSessionIDs itself instead of this shim, so it can
-// react to a partial-walk failure with a more specific diagnostic than the
-// generic one logged here.
-//
-// Guards against a corrupted or cyclic SteeringSessionID chain with a visited
-// set rather than trusting the configured delegation-depth cap to bound
-// recursion — this walk must terminate
-// even over on-disk state that predates or violates that cap. A nil store
-// (no delegation lifecycle store wired — most webchat-only installs never
-// mint one) yields an empty slice, so the caller degrades to exactly
-// cancelAllPendingForSession's documented single-id behavior. A walk error
-// is logged at WARN (never returned — see the shim rationale above) so this
-// call's INCOMPLETE-cascade case is never silent, even though it cannot be
-// propagated through this signature.
-func u11CollectDescendantSessionIDs(ls *session.LifecycleStore, rootID string) []string {
-	descendants, err := agent.CollectDescendantSessionIDs(ls, rootID)
-	if err != nil {
-		slog.Warn("ws: descendant walk: could not list children — the walk is INCOMPLETE; any descendant beyond the failure point is unreachable to this caller",
-			"session_id", rootID, "error", err)
-	}
-	return descendants
 }
 
 // buildCancelHooks constructs the transport-specific agent.CancelHooks for a
@@ -321,9 +250,11 @@ func (h *WSHandler) buildCancelHooksWithReport(wc *wsConn, report *steer.CancelR
 				return
 			}
 			// ADR-057 FR-032/W10c: cancel over the DESCENDANT SET, not the
-			// single chat/root id — see u11CollectDescendantSessionIDs' doc
-			// comment for why a single id would silently cancel nothing
-			// inside a live delegated child (BDD-33). The old single-id
+			// single chat/root id. Pending approvals match by EXACT equality on
+			// the acting session id (FR-080), so a chat-level Stop that passed
+			// only the root id would cancel nothing inside a live delegated
+			// child (BDD-33); the durable lifecycle store's edges make the walk
+			// authoritative whether or not the child is still running. The old single-id
 			// cancelAllPendingForSession still compiles and remains correct
 			// for a session with no descendants (its own doc comment says
 			// so); this call site is the one FR-032 requires use the plural
@@ -333,8 +264,7 @@ func (h *WSHandler) buildCancelHooksWithReport(wc *wsConn, report *steer.CancelR
 				lifecycleStore = h.agentLoop.GetSessionLifecycleStore()
 			}
 			// [FIX-5, Defect 2, 2026-08-03] Calls agent.CollectDescendantSessionIDs
-			// directly (not the u11CollectDescendantSessionIDs shim above) so this
-			// call site can react to a partial-walk failure with the specific,
+			// directly so this call site can react to a partial-walk failure with the specific,
 			// user-visible consequence it has here: a lifecycleStore.List error
 			// partway through the walk used to be swallowed as "no more
 			// children" and the dropped descendant's pending RequestApproval was
@@ -362,9 +292,13 @@ func (h *WSHandler) buildCancelHooksWithReport(wc *wsConn, report *steer.CancelR
 		SetSessionInterrupted: func(sid string) {
 			store := h.resolveSessionStore(sid)
 			if store != nil {
-				status := session.StatusInterrupted
+				// A cancel is a stop, not a failure — sub-agent control
+				// plane ADR D4/MAJ-009: stopped stays coarse-active
+				// (StatusInterrupted is for a restart-cut session only — the boot
+				// sweep writes it; a cancel never does).
+				status := session.StatusActive
 				if err := store.SetMeta(sid, session.MetaPatch{Status: &status}); err != nil {
-					slog.Warn("ws: could not mark session interrupted",
+					slog.Warn("ws: could not mark session active",
 						"session_id", sid, "error", err)
 				}
 			}
@@ -387,12 +321,15 @@ func (h *WSHandler) buildCancelHooksWithReport(wc *wsConn, report *steer.CancelR
 		// a cancel that IS proceeding. Reusing "graceful" here (as the
 		// no-active-turn case just above does, deliberately, for the
 		// still-pending case) would claim progress that never happened —
-		// over-signaling in exactly the place this fix must not. ErrorFrame
-		// is the right existing wire type instead: it is documented as
-		// "session-scoped... SPA displays the message as a toast or inline
-		// error... does NOT terminate the WebSocket connection" — precisely
-		// "something the user asked for did not happen", with no enum to
-		// extend and no contract change required.
+		// over-signaling in exactly the place this fix must not. These are
+		// operational Stop outcomes, not chat-turn exits: use the persisted,
+		// recipient-scoped notification path so a later reply stays intact.
+		OnStopSettled: func(sid string, err error) {
+			if err != nil && wc != nil {
+				h.publishStopNotice(wc, sid, "settled", "Stop could not finish",
+					"Stop could not finish; required storage or notice publication failed. Retry after storage is repaired.", notifications.SeverityError)
+			}
+		},
 		OnLatchExpired: func(scope agent.CancelScope, canceller agent.CancelCanceller) {
 			if wc == nil {
 				// No live connection to notify — buildCancelHooks(nil) is used
@@ -411,18 +348,38 @@ func (h *WSHandler) buildCancelHooksWithReport(wc *wsConn, report *steer.CancelR
 				)
 				return
 			}
-			var sidPtr *string
-			if scope.SessionID != "" {
-				sidCopy := scope.SessionID
-				sidPtr = &sidCopy
-			}
-			sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-				Type:      string(generated.WsFrameTypeError),
-				SessionId: sidPtr,
-				Message:   "Cancel request did not take effect: no matching operation was found before the request timed out. If something is still running, try Stop again.",
-			})
+			h.publishStopNotice(wc, scope.SessionID, "latch", "Stop did not take effect",
+				"Cancel request did not take effect: no matching operation was found before the request timed out. If something is still running, try Stop again.", notifications.SeverityWarning)
 		},
 	}
+}
+
+// handleCancelFrame is the frame dispatcher's entry point for a `cancel`
+// frame: parse, validate session_id, resolve the session/tree scope, and
+// route to handleCancelWithScope. Kept out of dispatchFrame's own body —
+// same reasoning as stringPtrOrEmpty and handleSessionModeUpdateFrame
+// elsewhere in that switch — so dispatchFrame's
+// grandfathered gocyclo budget (scripts/budgets/gocyclo.txt) doesn't grow;
+// the session-vs-tree scope check (stopAll) was the one that pushed it over.
+func (wh *wsHandlerReadLoop) handleCancelFrame(data []byte) wsHandlerReadLoopFlow {
+	var f generated.CancelFrame
+	if err := json.Unmarshal(data, &f); err != nil {
+		slog.Warn("ws: malformed cancel frame", "error", err)
+		return wsHandlerReadLoopContinue
+	}
+	if f.SessionId == "" {
+		wh.wc.inboundDropped.Add(1)
+		slog.Warn("ws: cancel frame missing required session_id — dropping",
+			"chat_id", wh.chatID)
+		sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			Type:    string(generated.WsFrameTypeError),
+			Message: "cancel requires session_id",
+		})
+		return wsHandlerReadLoopContinue
+	}
+	stopAll := f.Scope != nil && *f.Scope == "tree"
+	wh.h.handleCancelWithScope(wh.wc, f.SessionId, stopAll)
+	return wsHandlerReadLoopNext
 }
 
 // handleCancel delegates to agentLoop.RequestCancel — the canonical cancel
@@ -434,6 +391,10 @@ func (h *WSHandler) buildCancelHooksWithReport(wc *wsConn, report *steer.CancelR
 // This function is intentionally thin: it builds scope/canceller/hooks and
 // delegates. All state-machine logic lives in pkg/agent.RequestCancel.
 func (h *WSHandler) handleCancel(wc *wsConn, sessionID string) {
+	h.handleCancelWithScope(wc, sessionID, false)
+}
+
+func (h *WSHandler) handleCancelWithScope(wc *wsConn, sessionID string, stopAll bool) {
 	if sessionID == "" {
 		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 			Type:    string(generated.WsFrameTypeError),
@@ -442,34 +403,17 @@ func (h *WSHandler) handleCancel(wc *wsConn, sessionID string) {
 		return
 	}
 
-	report, cascaded := cancelSteeredSubtree(context.Background(), h.agentLoop, sessionID, steer.Principal{
-		Kind: steer.PrincipalKindHuman,
-		ID:   wc.userID,
-	})
+	report, cascaded, outcome, staged, err := h.requestScopedStop(wc, sessionID, stopAll)
 	if cascaded {
 		h.sendCancelPartialNotice(wc, sessionID, report)
 		h.sendExternalCancelPartialNotice(context.Background(), sessionID, report)
 	}
 
-	scope := agent.CancelScope{SessionID: sessionID}
-	canceller := agent.CancelCanceller{
-		UserID:  wc.userID,
-		Channel: "web",
-	}
-	var reportForHooks *steer.CancelReport
-	if cascaded {
-		reportForHooks = &report
-	}
-	hooks := h.buildCancelHooksWithReport(wc, reportForHooks)
-
-	outcome, err := h.agentLoop.RequestCancel(context.Background(), scope, canceller, hooks)
 	if err != nil {
 		slog.Warn("ws: handleCancel: RequestCancel error",
 			"session_id", sessionID, "error", err)
-		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-			Type:    string(generated.WsFrameTypeError),
-			Message: "cancel failed: " + err.Error(),
-		})
+		h.publishStopNotice(wc, sessionID, "failed", "Stop could not be completed",
+			"cancel failed: the Stop request could not be completed. Details are in the server log.", notifications.SeverityError)
 		return
 	}
 	if !outcome.Fired {
@@ -532,5 +476,12 @@ func (h *WSHandler) handleCancel(wc *wsConn, sessionID string) {
 		} else if outcome.BackgroundSessionsKilled > 0 || outcome.Armed {
 			h.sendCancelStageFrame(wc, sessionID, "graceful")
 		}
+		return
+	}
+	if cascaded && !staged {
+		// The Stop fired without a running turn of its own (a queued or
+		// never-ran session settled at once), so no stop timeline will send
+		// the requester a stage: acknowledge it with the cascade's report.
+		h.sendCancelReportFrame(wc, sessionID, "detached", report)
 	}
 }

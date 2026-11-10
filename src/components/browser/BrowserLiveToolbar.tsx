@@ -14,10 +14,10 @@ import {
   WarningCircle,
   X,
 } from '@phosphor-icons/react'
-import { cn, initialOf } from '@/lib/utils'
+import { cn } from '@/lib/utils'
 import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
-import { IconRenderer } from '@/components/shared/IconRenderer'
+import { AgentMark } from '@/components/agents/AgentMark'
 import type { Agent } from '@/lib/api'
 import type { DriveMode, LiveStatus, VisualState } from './browserLiveViewModel'
 
@@ -214,19 +214,7 @@ export function BrowserLiveToolbar({
         title={`Driving ${agentDisplayName}'s browser context`}
         className="flex shrink-0 items-center gap-[var(--space-1)] px-[var(--space-1)] text-[length:var(--type-caption-size)] font-medium text-[var(--color-secondary)] whitespace-nowrap"
       >
-        <span
-          aria-hidden="true"
-          className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[length:var(--type-caption-size)] font-bold text-[var(--color-primary)]"
-          style={{ backgroundColor: resolvedAgent?.color ?? 'var(--color-surface-3)' }}
-        >
-          {resolvedAgent?.icon ? (
-            <IconRenderer icon={resolvedAgent.icon} size={9} />
-          ) : resolvedAgent && resolvedAgent.name ? (
-            initialOf(resolvedAgent.name)
-          ) : (
-            <Robot size={9} />
-          )}
-        </span>
+        <AgentMark agent={resolvedAgent} name={agentDisplayName} size={18} />
         {/* Avatar always; the NAME yields first when the row is tight —
             identity survives as the coloured avatar, and the full name is in
             this chip's own `title`. */}

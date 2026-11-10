@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -24,6 +23,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/entity"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/routing"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -48,19 +48,14 @@ func testMutateConfig(mu *sync.Mutex, getCfg func() *config.Config) func(fn func
 // isolated-per-call directory. The historical shared fixed path
 // ("/tmp/omnipus-test") would leak entity files across test functions within
 // the same test binary run, causing order-dependent AGENT_ALREADY_EXISTS /
-// AGENT_NOT_FOUND failures. newTestDeps has no *testing.T (many call sites
-// predate this helper's use in agent-store-backed tests), so it cannot use
-// t.TempDir(); os.MkdirTemp gives each call its own unique directory instead
-// — never cleaned up automatically, but negligible (a handful of small JSON
-// files) for an ephemeral test run.
-func newTestDeps() (*systools.Deps, *config.Config) {
+// AGENT_NOT_FOUND failures. t.TempDir() gives each call its own unique
+// directory and removes it when the test ends.
+func newTestDeps(t *testing.T) (*systools.Deps, *config.Config) {
+	t.Helper()
 	cfg := config.DefaultConfig()
 	var mu sync.Mutex
 	getCfg := func() *config.Config { return cfg }
-	home, err := os.MkdirTemp("", "omnipus-agent-test-*")
-	if err != nil {
-		home = "/tmp/omnipus-test"
-	}
+	home := t.TempDir()
 	deps := &systools.Deps{
 		Home:         home,
 		ConfigPath:   filepath.Join(home, "config.json"),
@@ -70,6 +65,7 @@ func newTestDeps() (*systools.Deps, *config.Config) {
 		SaveConfigLocked: func(cfg *config.Config) error { return nil },
 		CredStore:        nil,
 	}
+	installLiveSessionStore(t, deps, home)
 	return deps, cfg
 }
 
@@ -148,15 +144,42 @@ func newTestDepsWithHome(t *testing.T) (*systools.Deps, string) {
 		SaveConfigLocked: func(cfg *config.Config) error { return nil },
 		CredStore:        nil,
 	}
+	installLiveSessionStore(t, deps, home)
 	return deps, home
 }
 
-// TestAgentCreate_WithColorAndIcon verifies that create persists color and icon
+// installLiveSessionStore gives deps the loop's ONE live session store the
+// agent-delete cascade runs on (DEL-10, architect final-gate item 1: the cascade
+// never opens a store of its own). Tests create their sessions through it
+// (liveSessionStore).
+func installLiveSessionStore(t *testing.T, deps *systools.Deps, home string) {
+	t.Helper()
+	live, err := session.NewUnifiedStore(filepath.Join(home, "sessions"))
+	if err != nil {
+		t.Fatalf("test setup: open the live session store: %v", err)
+	}
+	t.Cleanup(func() { _ = live.Close() })
+	deps.DeleteSessionStore = func() systools.AgentSessionStore { return live }
+}
+
+// liveSessionStore returns the live shared session store newTestDepsWithHome
+// installed in deps.
+func liveSessionStore(deps *systools.Deps) *session.UnifiedStore {
+	store, ok := deps.DeleteSessionStore().(*session.UnifiedStore)
+	if !ok {
+		panic("liveSessionStore: DeleteSessionStore is not a *session.UnifiedStore")
+	}
+	return store
+}
+
+// TestAgentCreate_WithColor verifies that create persists color
 // into the AgentConfig in-memory and returns them in the response.
 //
 // Traces to: wave5b-system-agent-spec.md — BRD §D.4.2 agent.create
-func TestAgentCreate_WithColorAndIcon(t *testing.T) {
-	deps, _ := newTestDeps()
+func TestAgentCreate_WithColor(t *testing.T) {
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
+	deps, _ := newTestDeps(t)
 	tool := systools.NewAgentCreateTool(deps)
 
 	result := tool.Execute(context.Background(), map[string]any{
@@ -164,8 +187,7 @@ func TestAgentCreate_WithColorAndIcon(t *testing.T) {
 		"description": "A research assistant",
 		"soul":        "You are a research bot.",
 		"model":       "test/model",
-		"color":       "#22C55E",
-		"icon":        "robot",
+		"color":       "#6E8BA8",
 	})
 
 	if result.IsError {
@@ -182,11 +204,8 @@ func TestAgentCreate_WithColorAndIcon(t *testing.T) {
 	if agent.ID != "research-bot" {
 		t.Errorf("ID = %q, want %q", agent.ID, "research-bot")
 	}
-	if agent.Color != "#22C55E" {
-		t.Errorf("Color = %q, want %q", agent.Color, "#22C55E")
-	}
-	if agent.Icon != "robot" {
-		t.Errorf("Icon = %q, want %q", agent.Icon, "robot")
+	if agent.Color != "#6E8BA8" {
+		t.Errorf("Color = %q, want %q", agent.Color, "#6E8BA8")
 	}
 }
 
@@ -195,7 +214,7 @@ func TestAgentCreate_WithColorAndIcon(t *testing.T) {
 //
 // Traces to: wave5b-system-agent-spec.md — BRD §D.4.2 agent.delete
 func TestAgentDelete_RequiresConfirm(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	// ADR-054: pre-populate a REAL entity record (entities/agents/my-agent.json)
 	// — delete_agent now resolves against the agent store, not cfg.Agents.List.
 	store := agentstore.New(deps.Home)
@@ -234,11 +253,11 @@ func TestAgentDelete_RequiresConfirm(t *testing.T) {
 }
 
 // TestAgentUpdate_PartialFields verifies that updating only `name` does not
-// clobber color and icon already set on the agent.
+// clobber color already set on the agent.
 //
 // Traces to: wave5b-system-agent-spec.md — BRD §D.4.2 agent.update
 func TestAgentUpdate_PartialFields(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	// ADR-054: pre-populate a REAL entity record — update_agent now resolves
 	// against the agent store, not cfg.Agents.List.
 	store := agentstore.New(deps.Home)
@@ -246,7 +265,6 @@ func TestAgentUpdate_PartialFields(t *testing.T) {
 		ID:    "my-agent",
 		Name:  "Old Name",
 		Color: "#FF0000",
-		Icon:  "star",
 	}); err != nil {
 		t.Fatalf("test setup: create agent entity record: %v", err)
 	}
@@ -269,16 +287,13 @@ func TestAgentUpdate_PartialFields(t *testing.T) {
 	if agent.Name != "New Name" {
 		t.Errorf("Name = %q, want %q", agent.Name, "New Name")
 	}
-	// Color and Icon must be unchanged.
+	// Color must be unchanged.
 	if agent.Color != "#FF0000" {
 		t.Errorf("Color changed to %q; expected %q", agent.Color, "#FF0000")
 	}
-	if agent.Icon != "star" {
-		t.Errorf("Icon changed to %q; expected %q", agent.Icon, "star")
-	}
 }
 
-// TestAgentCreate_PersistsToDisk verifies that create writes color and icon to
+// TestAgentCreate_PersistsToDisk verifies that create writes color to
 // disk. Catches JSON-tag typos and pointer-marshaling regressions.
 //
 // ADR-054: agents are per-entity records under entities/agents/<id>.json now,
@@ -289,6 +304,8 @@ func TestAgentUpdate_PartialFields(t *testing.T) {
 //
 // Traces to: wave5b-system-agent-spec.md — BRD §D.4.2 agent.create (persistence)
 func TestAgentCreate_PersistsToDisk(t *testing.T) {
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
 	deps, cfgPath := newTestDepsWithRealSave(t)
 
 	result := systools.NewAgentCreateTool(deps).Execute(context.Background(), map[string]any{
@@ -296,8 +313,7 @@ func TestAgentCreate_PersistsToDisk(t *testing.T) {
 		"description": "A disk bot",
 		"soul":        "You are a disk bot.",
 		"model":       "test/model",
-		"color":       "#22C55E",
-		"icon":        "robot",
+		"color":       "#6E8BA8",
 	})
 	if result.IsError {
 		t.Fatalf("create failed: %s", result.ForLLM)
@@ -312,11 +328,8 @@ func TestAgentCreate_PersistsToDisk(t *testing.T) {
 	if unmarshalErr := json.Unmarshal(data, &entry); unmarshalErr != nil {
 		t.Fatalf("unmarshal agent entity record: %v", unmarshalErr)
 	}
-	if entry["color"] != "#22C55E" {
-		t.Errorf("disk color = %v, want #22C55E", entry["color"])
-	}
-	if entry["icon"] != "robot" {
-		t.Errorf("disk icon = %v, want robot", entry["icon"])
+	if entry["color"] != "#6E8BA8" {
+		t.Errorf("disk color = %v, want #6E8BA8", entry["color"])
 	}
 
 	// config.json itself must carry no agents.list content.
@@ -340,7 +353,7 @@ func TestAgentCreate_PersistsToDisk(t *testing.T) {
 //
 // Traces to: architect finding #3 — self-deactivation guard
 func TestAgentDelete_RefusesLockedAgent(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	// ADR-054: seed a locked core agent as a REAL entity record — delete_agent
 	// now resolves the Locked check against the agent store, not
 	// cfg.Agents.List.
@@ -392,8 +405,8 @@ func TestAgentDelete_RefusesLockedAgent(t *testing.T) {
 
 // TestAgentCreate_RejectsInvalidColor verifies that invalid hex colors are rejected.
 func TestAgentCreate_RejectsInvalidColor(t *testing.T) {
-	deps, _ := newTestDeps()
-	for _, bad := range []string{"red", "#GGGGGG", "#12345", "22C55E", "#22C55E00"} {
+	deps, _ := newTestDeps(t)
+	for _, bad := range []string{"red", "#GGGGGG", "#12345", "22C55E", "#6E8BA800"} {
 		result := systools.NewAgentCreateTool(deps).Execute(context.Background(), map[string]any{
 			"name":        "Bot",
 			"description": "A test bot",
@@ -412,31 +425,9 @@ func TestAgentCreate_RejectsInvalidColor(t *testing.T) {
 	}
 }
 
-// TestAgentCreate_RejectsInvalidIcon verifies that invalid icon names are rejected.
-func TestAgentCreate_RejectsInvalidIcon(t *testing.T) {
-	deps, _ := newTestDeps()
-	for _, bad := range []string{"my icon", "icon!", "icon/sub", "icon..bad"} {
-		result := systools.NewAgentCreateTool(deps).Execute(context.Background(), map[string]any{
-			"name":        "Bot",
-			"description": "A test bot",
-			"soul":        "You are a test bot.",
-			"model":       "test/model",
-			"icon":        bad,
-		})
-		if !result.IsError {
-			t.Errorf("create with icon=%q should fail, got success", bad)
-		}
-		m := parseError(t, result.ForLLM)
-		errBlock, _ := m["error"].(map[string]any)
-		if errBlock["code"] != "INVALID_ICON" {
-			t.Errorf("icon=%q: code = %v, want INVALID_ICON", bad, errBlock["code"])
-		}
-	}
-}
-
 // TestAgentUpdate_RejectsInvalidColor verifies update validates color.
 func TestAgentUpdate_RejectsInvalidColor(t *testing.T) {
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDeps(t)
 	cfg.Agents.List = []config.AgentConfig{{ID: "my-agent", Name: "My Agent"}}
 	store := agentstore.New(deps.Home)
 	if err := store.Create("my-agent", &config.AgentConfig{ID: "my-agent", Name: "My Agent"}); err != nil {
@@ -512,8 +503,7 @@ func TestWithConfig_SerializesReaderWriter(t *testing.T) {
 						"description": "A test bot",
 						"soul":        "You are a test bot.",
 						"model":       "test/model",
-						"color":       "#22C55E",
-						"icon":        "robot",
+						"color":       "#6E8BA8",
 					})
 				}
 			}
@@ -691,39 +681,31 @@ func TestConcurrentRESTAndSysagentConfigWrite(t *testing.T) {
 					"description": "test",
 					"soul":        "test",
 					"model":       "test/model",
-					"color":       "#22C55E",
-					"icon":        "robot",
+					"color":       "#6E8BA8",
 				},
 			)
 		}
 	}
 }
 
-// TestAgentCreateUpdate_ContentOnly_NoMetadataToolBypass verifies that
-// system.agent.create and system.agent.update write content-only to SOUL.md
-// and HEARTBEAT.md (no extra frontmatter injection, no extra files).
-//
-// This locks the content-only invariant per issue #240: the create/update paths
-// are the canonical write path for soul/heartbeat content. agent.write_metadata
-// must not change this — both paths must produce byte-for-byte identical content
-// on disk.
-//
-// Traces to: issue #240 regression lock A.
+// TestAgentCreateUpdate_ContentOnly_NoMetadataToolBypass preserves issue
+// #240's exact content-only SOUL create/update invariant: no frontmatter
+// injection or extra files. r17 AG-06 removes heartbeat from create_agent;
+// its former write path is intentionally not a creation fixture anymore.
 func TestAgentCreateUpdate_ContentOnly_NoMetadataToolBypass(t *testing.T) {
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
 	deps, home := newTestDepsWithHome(t)
 
 	soulContent := "You are a focused research assistant."
-	heartbeatContent := "Check in every morning at 9am."
 
 	createTool := systools.NewAgentCreateTool(deps)
 	result := createTool.Execute(context.Background(), map[string]any{
 		"name":        "Content Only Bot",
 		"description": "A content-only research assistant",
 		"soul":        soulContent,
-		"heartbeat":   heartbeatContent,
 		"model":       "test/model",
-		"color":       "#22C55E",
-		"icon":        "robot",
+		"color":       "#6E8BA8",
 	})
 	if result.IsError {
 		t.Fatalf("create failed: %s", result.ForLLM)
@@ -737,14 +719,6 @@ func TestAgentCreateUpdate_ContentOnly_NoMetadataToolBypass(t *testing.T) {
 	}
 	if string(soulOnDisk) != soulContent {
 		t.Errorf("SOUL.md content mismatch:\ngot:  %q\nwant: %q", string(soulOnDisk), soulContent)
-	}
-
-	hbOnDisk, err := os.ReadFile(filepath.Join(wsPath, "HEARTBEAT.md"))
-	if err != nil {
-		t.Fatalf("read HEARTBEAT.md: %v", err)
-	}
-	if string(hbOnDisk) != heartbeatContent {
-		t.Errorf("HEARTBEAT.md content mismatch:\ngot:  %q\nwant: %q", string(hbOnDisk), heartbeatContent)
 	}
 
 	// Update soul — verify SOUL.md still content-only (no frontmatter injection).
@@ -782,22 +756,17 @@ func TestAgentCreateUpdate_ContentOnly_NoMetadataToolBypass(t *testing.T) {
 	}
 }
 
-// TestAgentMetadataTools_RoundTrip verifies system.agent.read_metadata's read
-// semantics. Its former write-side companion, agent.write_metadata, was
-// retired (tool-manifest-tier-redesign review F6): it was a redundant,
-// unguarded second door onto files update_agent already writes through a
-// properly-guarded path (update_agent refuses locked core agents;
-// write_agent_metadata had no such check). Content is seeded directly on
-// disk below — what the write tool used to do in this test — rather than
-// through a tool call. The former AGENT.md frontmatter-validation subtests
-// (malformed/valid/no-frontmatter) tested write-side behavior that no longer
-// exists anywhere in this package and were removed along with the tool.
+// TestAgentMetadataTools_RoundTrip verifies the read side of an agent's
+// instruction files through get_agent (spec r17 7.12: it replaced
+// read_agent_metadata). Content is seeded directly on disk, as the retired
+// write companion used to do.
 //
-// Scenario A: seed heartbeat content on disk, read it back → exact match.
-// Scenario B: the retired memory kind → typed redirect to the memory tools.
-// Scenario C: an unknown file key is rejected.
+// Removed with the tool, because the spec removed the behaviour (r17 7.12):
+// the HEARTBEAT.md read (per-agent HEARTBEAT.md is dead data) and the typed
+// redirect for the retired memory kind (get_agent has no such file kind; it
+// refuses any unknown field name, covered below).
 //
-// Traces to: issue #240 regression lock B; tool-manifest-tier-redesign review F6.
+// Traces to: issue #240 regression lock B; r17 7.12.1.
 func TestAgentMetadataTools_RoundTrip(t *testing.T) {
 	deps, home := newTestDepsWithHome(t)
 	agentID := "test-roundtrip-agent"
@@ -806,124 +775,87 @@ func TestAgentMetadataTools_RoundTrip(t *testing.T) {
 	if err := os.MkdirAll(wsPath, 0o700); err != nil {
 		t.Fatalf("setup workspace: %v", err)
 	}
+	seedAgentEntityForTest(t, home, agentID)
+	readTool := systools.NewAgentGetTool(deps)
 
-	readTool := systools.NewAgentReadMetadataTool(deps)
-
-	t.Run("heartbeat_roundtrip", func(t *testing.T) {
-		beatContent := "Remind the team about the standup at 10am."
-
-		if err := os.WriteFile(filepath.Join(wsPath, "HEARTBEAT.md"), []byte(beatContent), 0o644); err != nil {
-			t.Fatalf("seed HEARTBEAT.md: %v", err)
+	t.Run("soul_roundtrip", func(t *testing.T) {
+		soul := "Remind the team about the standup at 10am."
+		if err := os.WriteFile(filepath.Join(wsPath, "SOUL.md"), []byte(soul), 0o644); err != nil {
+			t.Fatalf("seed SOUL.md: %v", err)
 		}
-
-		readResult := readTool.Execute(context.Background(), map[string]any{
-			"file":     "heartbeat",
-			"agent_id": agentID,
-		})
+		readResult := readTool.Execute(context.Background(), map[string]any{"fields": []any{"soul"}, "id": agentID})
 		if readResult.IsError {
-			t.Fatalf("read_metadata(heartbeat) failed: %s", readResult.ForLLM)
+			t.Fatalf("get_agent(soul) failed: %s", readResult.ForLLM)
 		}
-
 		var body struct {
-			Content string `json:"content"`
+			Soul string `json:"soul"`
 		}
 		if err := json.Unmarshal([]byte(readResult.ForLLM), &body); err != nil {
-			t.Fatalf("parse read_metadata result: %v", err)
+			t.Fatalf("parse get_agent result: %v", err)
 		}
-		if body.Content != beatContent {
-			t.Errorf("read_metadata returned %q, want %q", body.Content, beatContent)
-		}
-	})
-
-	t.Run("retired_memory_kind_redirects_to_memory_tools", func(t *testing.T) {
-		legacyContent := "leftover data from an older install"
-		if err := os.WriteFile(filepath.Join(wsPath, "MEMORY.md"), []byte(legacyContent), 0o600); err != nil {
-			t.Fatalf("seed leftover MEMORY.md: %v", err)
-		}
-
-		readResult := readTool.Execute(context.Background(), map[string]any{
-			"file":     "memory",
-			"agent_id": agentID,
-		})
-		if !readResult.IsError {
-			t.Fatalf("retired memory kind should fail, got success: %s", readResult.ForLLM)
-		}
-		var m map[string]any
-		if err := json.Unmarshal([]byte(readResult.ForLLM), &m); err != nil {
-			t.Fatalf("result not JSON: %v", err)
-		}
-		errObj, _ := m["error"].(map[string]any)
-		if errObj["code"] != "INVALID_INPUT" {
-			t.Errorf("expected INVALID_INPUT error code, got %v", errObj["code"])
-		}
-		if !strings.Contains(readResult.ForLLM, "recall_memory") {
-			t.Errorf("retired memory error must name recall_memory, got: %s", readResult.ForLLM)
-		}
-		if !strings.Contains(readResult.ForLLM, "remember") {
-			t.Errorf("retired memory error must name remember, got: %s", readResult.ForLLM)
+		if body.Soul != soul {
+			t.Errorf("get_agent returned soul %q, want %q", body.Soul, soul)
 		}
 	})
 
-	t.Run("invalid_file_key_rejected", func(t *testing.T) {
-		result := readTool.Execute(context.Background(), map[string]any{
-			"file":     "totally-wrong",
-			"agent_id": agentID,
-		})
-		if !result.IsError {
-			t.Fatal("invalid file key should be rejected")
-		}
-		var m map[string]any
-		if err := json.Unmarshal([]byte(result.ForLLM), &m); err != nil {
-			t.Fatalf("result not JSON: %v", err)
-		}
-		errObj, _ := m["error"].(map[string]any)
-		if errObj["code"] != "INVALID_INPUT" {
-			t.Errorf("expected INVALID_INPUT, got %v", errObj["code"])
+	t.Run("retired_file_kinds_are_unknown_fields", func(t *testing.T) {
+		for _, field := range []string{"memory", "heartbeat", "totally-wrong"} {
+			result := readTool.Execute(context.Background(), map[string]any{"fields": []any{field}, "id": agentID})
+			if !result.IsError {
+				t.Fatalf("field %q must be refused, got success: %s", field, result.ForLLM)
+			}
+			if !strings.Contains(result.ForLLM, "unknown field") {
+				t.Errorf("field %q: refusal must name the unknown field, got: %s", field, result.ForLLM)
+			}
 		}
 	})
 }
 
-// TestAgentReadMetadataTool_DefinitionHasThreeKinds locks the public tool
-// contract after retiring the inert MEMORY.md metadata surface. The schema
-// must expose exactly the three files that read_agent_metadata can read, and
-// neither description may advertise MEMORY.md as real memory.
+// TestAgentGetFieldsDefinition locks the public tool contract after retiring
+// read_agent_metadata (r17 7.12.1): the fields enum offers soul and agent_md
+// but no heartbeat or memory kind, and no description advertises MEMORY.md.
 //
-// Traces to: issue #627.
-func TestAgentReadMetadataTool_DefinitionHasThreeKinds(t *testing.T) {
+// Traces to: issue #627; r17 7.12.1.
+func TestAgentGetFieldsDefinition(t *testing.T) {
 	deps, _ := newTestDepsWithHome(t)
-	tool := systools.NewAgentReadMetadataTool(deps)
+	tool := systools.NewAgentGetTool(deps)
 
 	properties, ok := tool.Parameters()["properties"].(map[string]any)
 	if !ok {
 		t.Fatal("parameters.properties is not an object")
 	}
-	fileSchema, ok := properties["file"].(map[string]any)
+	fieldsSchema, ok := properties["fields"].(map[string]any)
 	if !ok {
-		t.Fatal("parameters.properties.file is not an object")
+		t.Fatal("parameters.properties.fields is not an object")
 	}
-	gotEnum, ok := fileSchema["enum"].([]string)
+	items, ok := fieldsSchema["items"].(map[string]any)
 	if !ok {
-		t.Fatalf("file enum has type %T, want []string", fileSchema["enum"])
+		t.Fatal("fields.items is not an object")
 	}
-	wantEnum := []string{"soul", "heartbeat", "agent"}
-	if !reflect.DeepEqual(gotEnum, wantEnum) {
-		t.Fatalf("file enum = %v, want exactly %v", gotEnum, wantEnum)
+	enum, ok := items["enum"].([]any)
+	if !ok {
+		t.Fatalf("fields enum has type %T, want []any", items["enum"])
 	}
-
-	description := tool.Description()
-	for _, filename := range []string{"SOUL.md", "HEARTBEAT.md", "AGENT.md"} {
-		if !strings.Contains(description, filename) {
-			t.Errorf("tool description must name %s: %s", filename, description)
+	have := map[string]bool{}
+	for _, v := range enum {
+		s, isString := v.(string)
+		if !isString {
+			t.Fatalf("enum value %v has type %T, want string", v, v)
+		}
+		have[s] = true
+	}
+	for _, want := range []string{"all", "soul", "agent_md", "tool_permissions"} {
+		if !have[want] {
+			t.Errorf("fields enum must offer %q: %v", want, enum)
 		}
 	}
-	if strings.Count(description, ".md") != 3 {
-		t.Errorf("tool description must name exactly three metadata files: %s", description)
+	for _, retired := range []string{"heartbeat", "memory"} {
+		if have[retired] {
+			t.Errorf("fields enum must not offer retired kind %q: %v", retired, enum)
+		}
 	}
-	if strings.Contains(description, "MEMORY.md") {
-		t.Errorf("tool description must not advertise MEMORY.md: %s", description)
-	}
-	if fileDescription, _ := fileSchema["description"].(string); strings.Contains(strings.ToLower(fileDescription), "memory") {
-		t.Errorf("file parameter description must not advertise memory: %s", fileDescription)
+	if strings.Contains(tool.Description(), "MEMORY.md") || strings.Contains(tool.Description(), "HEARTBEAT.md") {
+		t.Errorf("tool description must not advertise MEMORY.md or HEARTBEAT.md: %s", tool.Description())
 	}
 }
 
@@ -933,15 +865,16 @@ func TestAgentReadMetadataTool_DefinitionHasThreeKinds(t *testing.T) {
 // tool path (AgentCreateTool.Execute), with no explicit bash policy entry
 // supplied by the caller — resolves the tool to "deny" by default.
 func TestBash_NewCustomAgentDeniedByDefault(t *testing.T) {
-	deps, _ := newTestDeps()
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
+	deps, _ := newTestDeps(t)
 
 	result := systools.NewAgentCreateTool(deps).Execute(context.Background(), map[string]any{
 		"name":        "Research Bot",
 		"description": "A research assistant",
 		"soul":        "You are a research bot.",
 		"model":       "test/model",
-		"color":       "#22C55E",
-		"icon":        "robot",
+		"color":       "#6E8BA8",
 		// Deliberately no bash policy override — proving the DEFAULT seed,
 		// not a caller-supplied one.
 	})
@@ -1063,8 +996,7 @@ func TestCreateAgent_NoGlobalAutoAdd_JoinsContextWorkspace(t *testing.T) {
 			"description": "Created in a workspace context",
 			"soul":        "You help.",
 			"model":       "test/model",
-			"color":       "#22C55E",
-			"icon":        "robot",
+			"color":       "#6E8BA8",
 		})
 		if result.IsError {
 			t.Fatalf("create failed: %s", result.ForLLM)
@@ -1101,8 +1033,7 @@ func TestCreateAgent_NoGlobalAutoAdd_JoinsContextWorkspace(t *testing.T) {
 			"description": "Created with no workspace context",
 			"soul":        "You help.",
 			"model":       "test/model",
-			"color":       "#22C55E",
-			"icon":        "robot",
+			"color":       "#6E8BA8",
 		})
 		if result.IsError {
 			t.Fatalf("create failed: %s", result.ForLLM)
@@ -1151,6 +1082,8 @@ func (p *reloadTestProvider) GetDefaultModel() string { return "mock-model" }
 // NO other call, makes the agent disappear from BOTH the live registry
 // (GetAgent/ListAgentIDs) and the channel-binding routing cascade.
 func TestAgentDelete_ImmediatelyUnroutableAndUnlisted_NoRestart(t *testing.T) {
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
 	home := t.TempDir()
 
 	cfg := &config.Config{
@@ -1201,6 +1134,13 @@ func TestAgentDelete_ImmediatelyUnroutableAndUnlisted_NoRestart(t *testing.T) {
 		},
 		SaveConfigLocked: func(*config.Config) error { return nil },
 		ReloadFunc:       reloadFunc,
+		// The production wiring: the loop's one live session store (DEL-10).
+		DeleteSessionStore: func() systools.AgentSessionStore {
+			if s := al.GetSessionStore(); s != nil {
+				return s
+			}
+			return nil
+		},
 	}
 
 	createResult := systools.NewAgentCreateTool(deps).Execute(context.Background(), map[string]any{
@@ -1208,8 +1148,7 @@ func TestAgentDelete_ImmediatelyUnroutableAndUnlisted_NoRestart(t *testing.T) {
 		"description": "proves delete_agent hot-reloads without a restart",
 		"soul":        "You are a test agent.",
 		"model":       "test-model",
-		"color":       "#22C55E",
-		"icon":        "robot",
+		"color":       "#6E8BA8",
 	})
 	if createResult.IsError {
 		t.Fatalf("create_agent failed: %s", createResult.ForLLM)
@@ -1232,8 +1171,7 @@ func TestAgentDelete_ImmediatelyUnroutableAndUnlisted_NoRestart(t *testing.T) {
 		"description": "stays in the roster after the other agent is deleted",
 		"soul":        "You persist.",
 		"model":       "test-model",
-		"color":       "#3366FF",
-		"icon":        "robot",
+		"color":       "#6E8BA8",
 	})
 	if keeperResult.IsError {
 		t.Fatalf("create_agent (keeper) failed: %s", keeperResult.ForLLM)
@@ -1246,7 +1184,7 @@ func TestAgentDelete_ImmediatelyUnroutableAndUnlisted_NoRestart(t *testing.T) {
 		t.Fatalf("test setup: expected %q to be registered immediately after create", agentID)
 	}
 	resolver := routing.NewRouteResolver(al.GetConfig())
-	route := resolver.ResolveRoute(routing.RouteInput{Channel: "telegram", AccountID: "acct-1"})
+	route := resolver.ResolveRoute(boundTelegramRouteInput(agentID))
 	if route.AgentID != agentID {
 		t.Fatalf("test setup: expected the telegram binding to route to %q, got %q (matched_by=%s)",
 			agentID, route.AgentID, route.MatchedBy)
@@ -1281,10 +1219,9 @@ func TestAgentDelete_ImmediatelyUnroutableAndUnlisted_NoRestart(t *testing.T) {
 	}
 
 	// UNROUTABLE, with NO restart: the same channel binding must no longer
-	// resolve to the deleted agent — it falls back to the default tier
-	// instead (pickAgentID's non-existent-agent branch).
+	// resolve to the deleted agent — the bound route drops (FR-121).
 	resolverAfter := routing.NewRouteResolver(al.GetConfig())
-	routeAfter := resolverAfter.ResolveRoute(routing.RouteInput{Channel: "telegram", AccountID: "acct-1"})
+	routeAfter := resolverAfter.ResolveRoute(boundTelegramRouteInput(agentID))
 	if routeAfter.AgentID == agentID {
 		t.Error("BUG: the telegram binding still routes to the deleted agent — delete_agent did not hot-reload")
 	}

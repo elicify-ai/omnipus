@@ -32,20 +32,16 @@
  * Traces to: quizzical-marinating-frog.md T4.2
  */
 
-import { test, expect } from '@playwright/test';
+import { expect } from '@playwright/test';
+import { test, canonicalHistoryAuthFile } from './fixtures/canonical-history';
 import * as fs from 'fs';
 import * as path from 'path';
-import { fileURLToPath } from 'url';
 import { agedTranscript, agedSessionExists } from './fixtures/aging';
+import { resumeCanonicalHistory } from './fixtures/chat-history';
 
 // ── Auth helpers ─────────────────────────────────────────────────────────────
 
-const AUTH_FILE = process.env.OMNIPUS_AUTH_FILE
-  ? path.resolve(process.env.OMNIPUS_AUTH_FILE)
-  : path.join(
-      path.dirname(fileURLToPath(import.meta.url)),
-      'fixtures/.auth/admin.json',
-    );
+let AUTH_FILE: string;
 
 /**
  * Read the admin Bearer token from the global-setup storageState file.
@@ -137,11 +133,13 @@ function storedReloadBearer(): string {
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060';
-
-const OMNIPUS_HOME =
-  process.env.OMNIPUS_HOME ||
-  (process.env.HOME ? path.join(process.env.HOME, '.omnipus') : '/tmp/omnipus-e2e-test');
+let BASE_URL: string;
+let OMNIPUS_HOME: string;
+test.beforeEach(async ({ canonicalGateway }) => {
+  BASE_URL = canonicalGateway.baseURL;
+  OMNIPUS_HOME = canonicalGateway.homeDir;
+  AUTH_FILE = canonicalHistoryAuthFile();
+});
 
 // Default retention period enforced by the gateway.
 // See pkg/config/keys.go and the default in pkg/gateway/rest.go.
@@ -166,14 +164,15 @@ test('seven_day_old_session_replays_cleanly', async ({ page }) => {
   // Bug class caught: SPA crash or blank-screen when a session's partition
   // file names do not match today's date, OR when meta.json has old timestamps.
 
-  const sessionId = `aged-7d-${Date.now()}`;
+  let sessionId = `aged-7d-${Date.now()}`;
 
   // Arrange: create a backdated session fixture directly in $OMNIPUS_HOME.
   // This simulates a session the user opened 7 days ago.
-  agedTranscript(OMNIPUS_HOME, sessionId, 7, { messageCount: 4 });
+  sessionId = await agedTranscript(OMNIPUS_HOME, sessionId, 7, { messageCount: 4 });
 
   // Assert the fixture was written correctly before proceeding.
   expect(agedSessionExists(OMNIPUS_HOME, sessionId)).toBe(true);
+  await resumeCanonicalHistory();
 
   // Navigate to the SPA root — the global-setup.ts has already authenticated.
   await page.goto('/');
@@ -219,12 +218,10 @@ test('seven_day_old_session_replays_cleanly', async ({ page }) => {
     //
     // The old "Open sessions panel" button and "Open session: <title>" rows
     // no longer exist — the session panel was redesigned into a two-mode
-    // SearchModal (src/components/search/SearchModal.tsx). The sidebar is
-    // closed by default (useSidebarStore: isOpen: false, isPinned: false),
-    // so open it first via the hamburger (aria-label="Toggle navigation
-    // sidebar", ScreenHeader.tsx / WorkspaceTabContainer.tsx), then click
-    // the sidebar's "Search sessions" icon (Sidebar.tsx:316), which opens
-    // SearchModal in its default 'sessions' mode. Session rows render
+    // SearchModal (src/components/search/SearchModal.tsx). A fresh visit is
+    // not pinned, so the sidebar starts closed and Show sidebar (the header
+    // hamburger) opens it; a saved pin leaves the sidebar on screen with
+    // Search sessions already visible. Session rows render
     // `{session.title || 'Untitled session'}` inside plain buttons (no
     // per-row aria-label), so the accessible name is just the title text.
     // NOTE on isVisible(): Playwright ^1.49 IGNORES the `timeout` option on
@@ -239,7 +236,7 @@ test('seven_day_old_session_replays_cleanly', async ({ page }) => {
     // alone (an unconditional click would close it).
     const searchSessionsBtn = page.getByRole('button', { name: 'Search sessions' });
     if (!(await searchSessionsBtn.isVisible())) {
-      const sidebarToggle = page.getByRole('button', { name: 'Toggle navigation sidebar' });
+      const sidebarToggle = page.getByRole('button', { name: 'Show sidebar' });
       await sidebarToggle.click();
     }
     await expect(searchSessionsBtn).toBeVisible({ timeout: 5_000 });
@@ -297,7 +294,7 @@ test('session_past_retention_threshold_is_swept', async ({ page }) => {
   // run at boot time. If the gateway does not run the sweep at boot, this test
   // will fail — which is the correct outcome (it documents the gap).
 
-  const sessionId = `aged-100d-${Date.now()}`;
+  let sessionId = `aged-100d-${Date.now()}`;
   const daysAgo = DEFAULT_RETENTION_DAYS + 10; // 100 days — comfortably past threshold
 
   // Arrange: write the backdated session BEFORE the retention-sweep runs.
@@ -322,8 +319,9 @@ test('session_past_retention_threshold_is_swept', async ({ page }) => {
   // the bug this test is designed to catch.
 
   // Write the fixture.
-  agedTranscript(OMNIPUS_HOME, sessionId, daysAgo, { messageCount: 4 });
+  sessionId = await agedTranscript(OMNIPUS_HOME, sessionId, daysAgo, { messageCount: 4 });
   expect(agedSessionExists(OMNIPUS_HOME, sessionId)).toBe(true);
+  await resumeCanonicalHistory();
 
   // Navigate to the SPA to ensure the gateway is serving requests.
   await page.goto('/');

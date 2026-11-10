@@ -203,6 +203,16 @@ func TestDeliver_ReDeliveryOfAnUnackedEntryStillWakes(t *testing.T) {
 	// read the SAME still-unacked entry straight out of the inbox (the
 	// gateway crashed before the wake landed, so it was never acked) and
 	// hand it BACK to Deliver unchanged.
+	//
+	// PW-D5 ("one outcome starts at most one parent turn") is enforced
+	// process-locally: pkg/agent/wake_session.go::AgentLoop.WakeSession holds
+	// an in-flight publication marker per (recipient, outcome id) and
+	// releases it only when the wake's receiver exits
+	// (pkg/agent/wake_input.go::AgentLoop.releaseWakePublication). A real
+	// crash destroys that marker with the process, so the simulated restart
+	// releases it the same way before re-delivering — the first wake's
+	// receiver never exits inside this test.
+	al.releaseWakePublication(rootID, first.MessageID)
 	msgs, _, _, err := al.GetMessageInboxStore().Drain(rootID, child.SessionID, "", 10)
 	if err != nil {
 		t.Fatalf("Drain(unacked): %v", err)

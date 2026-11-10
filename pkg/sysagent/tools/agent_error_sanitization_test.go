@@ -13,7 +13,7 @@ import (
 )
 
 func TestAgentUpdateStorageFailureIsSanitizedAndTruthful(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	store := agentstore.New(deps.Home)
 	_, err := store.CreateState("storage-failure", &config.AgentConfig{Name: "Unchanged"}, "original")
 	if err != nil {

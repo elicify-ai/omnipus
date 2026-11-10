@@ -14,72 +14,47 @@ import type { ChatMessage, SubagentSpan } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
+import type { SubagentStartFrame } from '@/lib/api/generated/asyncapi-types'
 
-vi.mock('@assistant-ui/react', () => {
-  return {
-    useThreadViewportStore: () => ({ getState: () => ({ isAtBottom: true }) }),
-    ThreadPrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Viewport: React.forwardRef(
-        (
-          { children, className, style, 'data-testid': testId }: {
-            children?: React.ReactNode
-            className?: string
-            style?: React.CSSProperties
-            'data-testid'?: string
-          },
-          ref: React.Ref<HTMLDivElement>,
-        ) => React.createElement('div', { ref, className, style, 'data-testid': testId }, children),
-      ),
-      Messages: () => null,
-    },
-    MessagePrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Parts: () => null,
-    },
-    ComposerPrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Input: (props: Record<string, unknown>) =>
-        React.createElement('textarea', { ...props, 'data-testid': 'composer-input' }),
-      Send: ({ children, className, 'data-testid': testId }: { children?: React.ReactNode; className?: string; 'data-testid'?: string }) =>
-        React.createElement('button', { type: 'button', className, 'data-testid': testId ?? 'chat-send' }, children),
-      AddAttachment: ({ children, className }: { children?: React.ReactNode; className?: string }) =>
-        React.createElement('button', { type: 'button', className, 'data-testid': 'add-attachment' }, children),
-      Attachments: () => null,
-    },
-    AttachmentPrimitive: {
-      Root: ({ children }: { children?: React.ReactNode }) => React.createElement('div', {}, children),
-      Name: () => null,
-      Remove: ({ children }: { children?: React.ReactNode }) => React.createElement('button', { type: 'button' }, children),
-      Thumb: () => null,
-    },
-    MessagePartPrimitive: { InProgress: () => null },
-    ActionBarPrimitive: {
-      Root: ({ children }: { children: React.ReactNode }) => React.createElement('div', {}, children),
-      Copy: ({ children }: { children: React.ReactNode }) => React.createElement('span', {}, children),
-    },
-    AuiIf: () => null,
-    useComposerRuntime: () => ({
-      getState: () => ({ text: '' }),
-      setText: vi.fn(),
-      addAttachment: vi.fn(),
-      subscribe: vi.fn(() => vi.fn()),
-    }),
-    useMessage: () => ({ id: 'msg_streaming', role: 'assistant', status: { type: 'running' }, content: [] }),
-    useAttachment: vi.fn(() => ({ id: 'att', name: 'file.txt', contentType: 'text/plain', status: { type: 'complete' }, content: [] })),
-    makeAssistantToolUI: () => () => null,
-  }
-})
+import { MockButton, MockTextarea } from '@/test/assistantUiMock'
+vi.mock('@assistant-ui/react', async () => (await import('@/test/assistantUiMock')).createAssistantUiMock({
+  ThreadPrimitive: {
+    Viewport: React.forwardRef(
+              (
+                { children, className, style, 'data-testid': testId }: {
+                  children?: React.ReactNode
+                  className?: string
+                  style?: React.CSSProperties
+                  'data-testid'?: string
+                },
+                ref: React.Ref<HTMLDivElement>,
+              ) => React.createElement('div', { ref, className, style, 'data-testid': testId }, children),
+            ),
+  },
+  ComposerPrimitive: {
+    Input: (props: Record<string, unknown>) =>
+              React.createElement(MockTextarea, { ...props, 'data-testid': 'composer-input'}),
+    Send: ({ children, className, 'data-testid': testId }: { children?: React.ReactNode; className?: string; 'data-testid'?: string }) =>
+              React.createElement(MockButton, { type: 'button', className, 'data-testid': testId ?? 'chat-send', children: children}),
+    AddAttachment: ({ children, className }: { children?: React.ReactNode; className?: string }) =>
+              React.createElement(MockButton, { type: 'button', className, 'data-testid': 'add-attachment', children: children}),
+  },
+  AttachmentPrimitive: {
+    Root: ({ children }: { children?: React.ReactNode }) => React.createElement('div', {}, children),
+    Remove: ({ children }: { children?: React.ReactNode }) => React.createElement(MockButton, { type: 'button', children: children}),
+  },
+  useMessage: () => ({ id: 'msg_streaming', role: 'assistant', status: { type: 'running' }, content: [] }),
+  useAttachment: vi.fn(() => ({ id: 'att', name: 'file.txt', contentType: 'text/plain', status: { type: 'complete' }, content: [] })),
+}))
+
+import { emptyHistoryPage, type HistoryReadPort } from '../../../tests/chat-history-paging/legacy-fixtures'
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual,
-    fetchAgents: vi.fn().mockResolvedValue([{ id: 'ray', name: 'Ray', type: 'Subagent', locked: false, status: 'active' }]),
-    fetchSessionMessages: vi.fn().mockResolvedValue([]),
+    fetchAgents: vi.fn().mockResolvedValue([{ figure: 'Omnipus', role: 'general', id: 'ray', name: 'Ray', type: 'Subagent', locked: false, status: 'active' }]),
+    fetchSessionMessages: vi.fn<HistoryReadPort>(async (sessionId) => emptyHistoryPage(sessionId)),
     fetchAboutInfo: vi.fn().mockResolvedValue({ preview_port: 5001 }),
     createSession: vi.fn(),
     uploadFiles: vi.fn(),
@@ -107,8 +82,6 @@ vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
 vi.mock('./tools/BrowserTool', () => ({ isReplayBrowserToolName: () => false, BrowserToolReplayBlock: () => null }))
 vi.mock('./tools/WebServeUI', () => ({ WebServeBlock: () => null }))
 vi.mock('./markdown-text', () => ({ MarkdownText: () => React.createElement('div', {}) }))
-vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
-vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
 vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 vi.mock('@/lib/memory-observer', () => ({
@@ -454,6 +427,97 @@ function finishedDelegationMessage(opts: {
     ],
   }
 }
+
+describe.each(['plain', 'virtualized'] as const)('ChatScreen %s repeated delegation frames', (mode) => {
+  it('renders each sibling event ID once before and after live calls are baked', async () => {
+    if (mode === 'virtualized') {
+      vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(800)
+      vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(800)
+      vi.stubGlobal('ResizeObserver', class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      })
+    }
+
+    const push = (frame: Parameters<ReturnType<typeof useChatStore.getState>['handleFrame']>[0]) => {
+      act(() => useChatStore.getState().handleFrame(frame))
+    }
+    // Reconstructed messages are not streaming even while their tool-call
+    // frames are still arriving. Keep the calls unbaked until the final done.
+    push({
+      type: 'replay_message',
+      session_id: SID,
+      id: 'm-siblings',
+      role: 'assistant',
+      content: 'Handing off both tasks.',
+      timestamp: '2026-09-25T12:00:00.000Z',
+    })
+
+    for (const sibling of ['one', 'two']) {
+      push({
+        type: 'tool_call_start',
+        session_id: SID,
+        call_id: `run-${sibling}`,
+        tool: 'delegate',
+        params: { action: 'run', agent_id: 'ray', label: `Sibling ${sibling}` },
+      })
+      push({
+        type: 'tool_call_result',
+        session_id: SID,
+        call_id: `run-${sibling}`,
+        tool: 'delegate',
+        status: 'success',
+        result: { session_id: `child-${sibling}`, generation: 1, state: 'running' },
+      })
+      const birth: SubagentStartFrame = {
+        type: 'subagent_start',
+        session_id: SID,
+        span_id: `span-${sibling}`,
+        parent_call_id: `run-${sibling}`,
+        child_session_id: `child-${sibling}`,
+        task_label: `Sibling ${sibling}`,
+        agent_id: 'ray',
+      }
+      push(birth)
+      push({ ...birth }) // The same birth delivered again by live/replay overlap.
+      push({
+        type: 'subagent_end',
+        session_id: SID,
+        span_id: birth.span_id,
+        parent_call_id: birth.parent_call_id,
+        status: 'success',
+        agent_id: 'ray',
+      })
+    }
+
+    const stored = useChatStore.getState().messages.find((message) => message.id === 'm-siblings')
+    expect(stored?.status).toBe('done')
+    expect(stored?.tool_calls ?? []).toEqual([])
+    expect(stored?.spans?.map((span) => span.childSessionId)).toEqual(['child-one', 'child-two'])
+    expect(useChatStore.getState().toolCallOrder).toEqual(['run-one', 'run-two'])
+
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const { container } = render(<QueryClientProvider client={client}><ChatScreen /></QueryClientProvider>)
+    await screen.findByText('Handing off both tasks.')
+
+    // The dispatch requires one line per ID, not one line per delivery, and
+    // separate birth/finish facts for both distinct siblings.
+    const expectedIds = ['delegated:span-one', 'finished:span-one', 'delegated:span-two', 'finished:span-two']
+    const lineIds = () => [...container.querySelectorAll('[data-testid="delegation-event-line"]')]
+      .map((line) => line.getAttribute('data-event-id'))
+    expect(lineIds()).toEqual(expectedIds)
+    if (mode === 'virtualized') {
+      expect(container.querySelector('[data-event-id="delegated:span-one"]')?.closest('[data-index]')).not.toBeNull()
+    }
+
+    push({ type: 'done', session_id: SID })
+    expect(useChatStore.getState().toolCallOrder).toEqual([])
+    expect(lineIds()).toEqual(expectedIds)
+  })
+
+  afterEach(() => vi.restoreAllMocks())
+})
 
 describe('ChatScreen virtualized list still shows each delegation line once', () => {
   const height = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight')

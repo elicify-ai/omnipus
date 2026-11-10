@@ -19,7 +19,8 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { render, screen } from '@testing-library/react'
+import { screen } from '@testing-library/react'
+import { renderTaskInfo as render } from './tasksLayoutFixtures'
 import { TaskCard, goalLoopStatusLabel, DEFAULT_TASK_MAX_ATTEMPTS } from './TaskCard'
 import type { Task, Plan } from '@/lib/api'
 
@@ -239,7 +240,7 @@ describe('TaskCard — goal-loop status affordance (FR-090)', () => {
       />,
     )
     expect(screen.getByText('attempt 1 of 3 · try 5 of 20')).toBeInTheDocument()
-    expect(screen.getByTestId('task-last-activity')).toHaveTextContent(/^In progress · last activity /)
+    expect(screen.getByTestId('task-last-activity')).toHaveTextContent(/^Last activity /)
   })
 
   it('shows nothing when attempt_count is absent (task not running a goal loop)', () => {

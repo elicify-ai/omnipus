@@ -2,6 +2,9 @@
 // (component half): tabs/advance/badge/underline/countdown/collapsed/
 // composer-lock note/hostile-markdown inertness, plus the client-fired
 // 5-minute grace auto-submit (US-3 S3).
+// Amended for #1066 Required behavior 4 / CHECK F1: single-choice selection
+// no longer advances by itself. Explicit confirmation replaces only that
+// superseded interaction; answer/frame/free-text/grace/negative oracles stay.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, fireEvent, act } from '@testing-library/react'
@@ -66,22 +69,25 @@ describe('AskUserQuestionCard — pending card', () => {
     expect(screen.getByTestId('ask-user-submit')).toBeDisabled()
   })
 
-  it('selecting answers marks the tab, auto-advances, and enables Answer only when all are answered', () => {
+  it('selecting answers marks the tab, explicit confirmation advances, and Answer enables only when all are answered', () => {
     vi.useFakeTimers()
     try {
       render(<AskUserQuestionCard card={makeCard()} />)
       fireEvent.click(screen.getAllByTestId('ask-user-option')[0])
       act(() => {
-        vi.advanceTimersByTime(300)
+        vi.runOnlyPendingTimers()
       })
-      // Auto-advanced to the second (unanswered) question.
+      // #1066: selection alone remains on Scope even after pending callbacks.
+      expect(screen.getByText('Which emails should this goal cover?')).toBeInTheDocument()
+      expect(screen.queryByText('Draft or send directly?')).not.toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: /^(next|confirm|continue)(?: question| selection| answer)?$/i }))
       expect(screen.getByText('Draft or send directly?')).toBeInTheDocument()
       expect(screen.getByTestId('ask-user-progress')).toHaveTextContent('1 / 2 answered')
       expect(screen.getByTestId('ask-user-submit')).toBeDisabled()
 
       fireEvent.click(screen.getAllByTestId('ask-user-option')[0])
       act(() => {
-        vi.advanceTimersByTime(300)
+        vi.runOnlyPendingTimers()
       })
       expect(screen.getByTestId('ask-user-progress')).toHaveTextContent('2 / 2 answered')
       expect(screen.getByTestId('ask-user-submit')).toBeEnabled()
@@ -181,6 +187,40 @@ describe('AskUserQuestionCard — pending card', () => {
     }
   })
 
+  it('renders hostile markdown context INERT through the sanitized chat pipeline', () => {
+    const hostile =
+      'Look: <img src=x onerror="window.__pwned=1"> and <script>window.__pwned=2</script> **bold ok**'
+    const card = makeCard({
+      questions: [
+        {
+          header: 'Scope',
+          question: 'Q?',
+          options: [{ label: 'A' }, { label: 'B' }],
+          context: hostile,
+        },
+      ],
+    })
+    render(<AskUserQuestionCard card={card} />)
+    const ctx = screen.getByTestId('ask-user-context')
+    // Raw HTML never materializes as elements — no img, no script.
+    expect(ctx.querySelector('img')).toBeNull()
+    expect(ctx.querySelector('script')).toBeNull()
+    expect((window as unknown as Record<string, unknown>).__pwned).toBeUndefined()
+    // Legitimate markdown still renders.
+    expect(ctx.textContent).toContain('bold ok')
+  })
+})
+
+// Split the two grace regressions out of the oversized callback. Keep the
+// same suite label, per-case setup and every test body/assertion unchanged.
+describe('AskUserQuestionCard — pending card', () => {
+  let sendSpy: ReturnType<typeof vi.fn<(answer: Omit<AskUserAnswerFrame, 'type'>) => void>>
+
+  beforeEach(() => {
+    sendSpy = vi.fn<(answer: Omit<AskUserAnswerFrame, 'type'>) => void>()
+    useChatStore.setState({ sendAskUserAnswer: sendSpy })
+  })
+
   // Stale-closure regression: the grace interval used to be keyed on
   // `allAnswered` and captured that render's drafts — once all questions were
   // first answered, a LATER edit changed the drafts but not the interval's
@@ -189,14 +229,16 @@ describe('AskUserQuestionCard — pending card', () => {
     vi.useFakeTimers()
     try {
       render(<AskUserQuestionCard card={makeCard()} />)
-      // Answer both questions (auto-advance between them).
+      // #1066: answer both questions with explicit confirmation between them.
       fireEvent.click(screen.getAllByTestId('ask-user-option')[0]) // Scope: Only unanswered
       act(() => {
-        vi.advanceTimersByTime(300)
+        vi.runOnlyPendingTimers()
       })
+      expect(screen.getByText('Which emails should this goal cover?')).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: /^(next|confirm|continue)(?: question| selection| answer)?$/i }))
       fireEvent.click(screen.getAllByTestId('ask-user-option')[0]) // Sending: Draft only
       act(() => {
-        vi.advanceTimersByTime(300)
+        vi.runOnlyPendingTimers()
       })
       expect(screen.getByTestId('ask-user-progress')).toHaveTextContent('2 / 2 answered')
 
@@ -230,11 +272,13 @@ describe('AskUserQuestionCard — pending card', () => {
       render(<AskUserQuestionCard card={makeCard()} />)
       fireEvent.click(screen.getAllByTestId('ask-user-option')[0])
       act(() => {
-        vi.advanceTimersByTime(300)
+        vi.runOnlyPendingTimers()
       })
+      expect(screen.getByText('Which emails should this goal cover?')).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: /^(next|confirm|continue)(?: question| selection| answer)?$/i }))
       fireEvent.click(screen.getAllByTestId('ask-user-option')[0])
       act(() => {
-        vi.advanceTimersByTime(300)
+        vi.runOnlyPendingTimers()
       })
 
       // EDIT the second question's answer into free text.
@@ -258,29 +302,6 @@ describe('AskUserQuestionCard — pending card', () => {
     } finally {
       vi.useRealTimers()
     }
-  })
-
-  it('renders hostile markdown context INERT through the sanitized chat pipeline', () => {
-    const hostile =
-      'Look: <img src=x onerror="window.__pwned=1"> and <script>window.__pwned=2</script> **bold ok**'
-    const card = makeCard({
-      questions: [
-        {
-          header: 'Scope',
-          question: 'Q?',
-          options: [{ label: 'A' }, { label: 'B' }],
-          context: hostile,
-        },
-      ],
-    })
-    render(<AskUserQuestionCard card={card} />)
-    const ctx = screen.getByTestId('ask-user-context')
-    // Raw HTML never materializes as elements — no img, no script.
-    expect(ctx.querySelector('img')).toBeNull()
-    expect(ctx.querySelector('script')).toBeNull()
-    expect((window as unknown as Record<string, unknown>).__pwned).toBeUndefined()
-    // Legitimate markdown still renders.
-    expect(ctx.textContent).toContain('bold ok')
   })
 })
 

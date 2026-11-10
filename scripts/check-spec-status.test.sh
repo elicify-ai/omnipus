@@ -31,7 +31,7 @@
 #
 # Exit code: 0 if every assertion passed, 1 if any failed.
 
-set -uo pipefail
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LINT_SCRIPT="${SCRIPT_DIR}/check-spec-status.sh"
@@ -42,6 +42,30 @@ ERRORS=()
 
 TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/check-spec-status-test.XXXXXX")
 trap 'rm -rf "$TMP_DIR"' EXIT
+TMP_DIR="$(cd "$TMP_DIR" && pwd -P)"
+# Child guards change cwd; give every child the same absolute scratch root.
+export TMPDIR="$TMP_DIR"
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR
+
+# Never let Git discover an enclosing checkout after fixture setup fails.
+fixture_git() {
+  local repo="$1" resolved
+  shift
+  if [[ "$repo" != /* ]]; then
+    printf 'fixture path must be absolute: %s\n' "$repo" >&2
+    return 1
+  fi
+  resolved="$(cd "$repo" && pwd -P)" || return
+  case "$resolved" in
+    "$TMP_DIR"/*) ;;
+    *) printf 'fixture path is outside temp root: %s\n' "$repo" >&2; return 1 ;;
+  esac
+  if [[ "$1" != init && ! -d "$resolved/.git" ]]; then
+    printf 'fixture has no own .git directory: %s\n' "$repo" >&2
+    return 1
+  fi
+  git -C "$resolved" "$@"
+}
 
 assert_exit_code() {
   local label="$1" expected="$2" actual="$3"
@@ -84,21 +108,24 @@ assert_output_not_contains() {
 # specs) and checks out a 'feature' branch on top of it for the caller to
 # add/modify/delete files on before invoking the guard.
 new_repo_with_feature_branch() {
-  REPO="$TMP_DIR/repo-$RANDOM"
-  mkdir -p "$REPO/docs/internal/specs"
-  git -C "$REPO" init --quiet --initial-branch=main
-  git -C "$REPO" config user.email "test@example.invalid"
-  git -C "$REPO" config user.name "check-spec-status test"
-  cat > "$REPO/docs/internal/specs/existing-spec.md" <<'EOF'
+  local repo
+  repo="$(mktemp -d "$TMP_DIR/repo.XXXXXX")" || return
+  # Explicit returns also apply when a caller captures an expected error,
+  # where Bash disables errexit. Stdout publishes only the completed path.
+  fixture_git "$repo" init --quiet --initial-branch=main >&2 || return
+  mkdir -p "$repo/docs/internal/specs" || return
+  fixture_git "$repo" config user.email "test@example.invalid" >&2 || return
+  fixture_git "$repo" config user.name "check-spec-status test" >&2 || return
+  cat > "$repo/docs/internal/specs/existing-spec.md" <<'EOF' || return
 # Existing feature — spec
 
 No Status field — this predates DECISIONS.md #7 and must never be flagged
 unless this branch itself touches it.
 EOF
-  git -C "$REPO" add -A
-  git -C "$REPO" commit --quiet -m "base: pre-existing spec with no Status field"
-  git -C "$REPO" checkout --quiet -b feature
-  echo "$REPO"
+  fixture_git "$repo" add -A >&2 || return
+  fixture_git "$repo" commit --quiet -m "base: pre-existing spec with no Status field" >&2 || return
+  fixture_git "$repo" checkout --quiet -b feature >&2 || return
+  printf '%s\n' "$repo"
 }
 
 echo "=== check-spec-status self-test ==="
@@ -107,13 +134,13 @@ echo "=== check-spec-status self-test ==="
 
 echo ""
 echo "Test 1: an unchanged pre-existing spec is not flagged"
-REPO="$(new_repo_with_feature_branch)"
+REPO="$(new_repo_with_feature_branch)" || exit 1
 # Touch an unrelated file so the branch has A commit to diff against main.
 echo "unrelated" > "$REPO/README.md"
-git -C "$REPO" add -A
-git -C "$REPO" commit --quiet -m "unrelated change"
-OUTPUT=$(REPO_ROOT="$REPO" CHECK_SPEC_STATUS_BASE_REF=main bash "$LINT_SCRIPT" 2>&1)
-EXIT_CODE=$?
+fixture_git "$REPO" add -A
+fixture_git "$REPO" commit --quiet -m "unrelated change"
+EXIT_CODE=0
+OUTPUT=$(REPO_ROOT="$REPO" CHECK_SPEC_STATUS_BASE_REF=main bash "$LINT_SCRIPT" 2>&1) || EXIT_CODE=$?
 assert_exit_code "unchanged-pre-existing-exit" 0 "$EXIT_CODE"
 assert_output_not_contains "unchanged-pre-existing-no-finding" "existing-spec.md" "$OUTPUT"
 
@@ -121,16 +148,16 @@ assert_output_not_contains "unchanged-pre-existing-no-finding" "existing-spec.md
 
 echo ""
 echo "Test 2: a new spec with no Status line is caught"
-REPO="$(new_repo_with_feature_branch)"
+REPO="$(new_repo_with_feature_branch)" || exit 1
 cat > "$REPO/docs/internal/specs/new-feature-spec.md" <<'EOF'
 # New feature — spec
 
 No status line here at all.
 EOF
-git -C "$REPO" add -A
-git -C "$REPO" commit --quiet -m "add new spec, no Status line"
-OUTPUT=$(REPO_ROOT="$REPO" CHECK_SPEC_STATUS_BASE_REF=main bash "$LINT_SCRIPT" 2>&1)
-EXIT_CODE=$?
+fixture_git "$REPO" add -A
+fixture_git "$REPO" commit --quiet -m "add new spec, no Status line"
+EXIT_CODE=0
+OUTPUT=$(REPO_ROOT="$REPO" CHECK_SPEC_STATUS_BASE_REF=main bash "$LINT_SCRIPT" 2>&1) || EXIT_CODE=$?
 assert_exit_code "new-no-status-exit" 1 "$EXIT_CODE"
 assert_output_contains "new-no-status-finding" "new-feature-spec.md" "$OUTPUT"
 
@@ -138,7 +165,7 @@ assert_output_contains "new-no-status-finding" "new-feature-spec.md" "$OUTPUT"
 
 echo ""
 echo "Test 3: a new spec with 'Status: Draft' is clean"
-REPO="$(new_repo_with_feature_branch)"
+REPO="$(new_repo_with_feature_branch)" || exit 1
 cat > "$REPO/docs/internal/specs/new-feature-spec.md" <<'EOF'
 # New feature — spec
 
@@ -146,10 +173,10 @@ Status: Draft
 
 Body.
 EOF
-git -C "$REPO" add -A
-git -C "$REPO" commit --quiet -m "add new spec with valid Status"
-OUTPUT=$(REPO_ROOT="$REPO" CHECK_SPEC_STATUS_BASE_REF=main bash "$LINT_SCRIPT" 2>&1)
-EXIT_CODE=$?
+fixture_git "$REPO" add -A
+fixture_git "$REPO" commit --quiet -m "add new spec with valid Status"
+EXIT_CODE=0
+OUTPUT=$(REPO_ROOT="$REPO" CHECK_SPEC_STATUS_BASE_REF=main bash "$LINT_SCRIPT" 2>&1) || EXIT_CODE=$?
 assert_exit_code "new-valid-status-exit" 0 "$EXIT_CODE"
 assert_output_not_contains "new-valid-status-no-finding" "new-feature-spec.md:" "$OUTPUT"
 
@@ -157,16 +184,16 @@ assert_output_not_contains "new-valid-status-no-finding" "new-feature-spec.md:" 
 
 echo ""
 echo "Test 4: a new spec with 'Status: WIP' (not one of the five) is caught"
-REPO="$(new_repo_with_feature_branch)"
+REPO="$(new_repo_with_feature_branch)" || exit 1
 cat > "$REPO/docs/internal/specs/new-feature-spec.md" <<'EOF'
 # New feature — spec
 
 Status: WIP
 EOF
-git -C "$REPO" add -A
-git -C "$REPO" commit --quiet -m "add new spec with invalid Status"
-OUTPUT=$(REPO_ROOT="$REPO" CHECK_SPEC_STATUS_BASE_REF=main bash "$LINT_SCRIPT" 2>&1)
-EXIT_CODE=$?
+fixture_git "$REPO" add -A
+fixture_git "$REPO" commit --quiet -m "add new spec with invalid Status"
+EXIT_CODE=0
+OUTPUT=$(REPO_ROOT="$REPO" CHECK_SPEC_STATUS_BASE_REF=main bash "$LINT_SCRIPT" 2>&1) || EXIT_CODE=$?
 assert_exit_code "new-invalid-status-exit" 1 "$EXIT_CODE"
 assert_output_contains "new-invalid-status-finding" "new-feature-spec.md" "$OUTPUT"
 
@@ -174,16 +201,16 @@ assert_output_contains "new-invalid-status-finding" "new-feature-spec.md" "$OUTP
 
 echo ""
 echo "Test 5: '**Status:** Approved' (bold markdown) is clean"
-REPO="$(new_repo_with_feature_branch)"
+REPO="$(new_repo_with_feature_branch)" || exit 1
 cat > "$REPO/docs/internal/specs/new-feature-spec.md" <<'EOF'
 # New feature — spec
 
 **Status:** Approved
 EOF
-git -C "$REPO" add -A
-git -C "$REPO" commit --quiet -m "add new spec with bold Status"
-OUTPUT=$(REPO_ROOT="$REPO" CHECK_SPEC_STATUS_BASE_REF=main bash "$LINT_SCRIPT" 2>&1)
-EXIT_CODE=$?
+fixture_git "$REPO" add -A
+fixture_git "$REPO" commit --quiet -m "add new spec with bold Status"
+EXIT_CODE=0
+OUTPUT=$(REPO_ROOT="$REPO" CHECK_SPEC_STATUS_BASE_REF=main bash "$LINT_SCRIPT" 2>&1) || EXIT_CODE=$?
 assert_exit_code "bold-status-exit" 0 "$EXIT_CODE"
 assert_output_not_contains "bold-status-no-finding" "new-feature-spec.md:" "$OUTPUT"
 
@@ -191,15 +218,15 @@ assert_output_not_contains "bold-status-no-finding" "new-feature-spec.md:" "$OUT
 
 echo ""
 echo "Test 6: a pre-existing spec modified (still no Status) is caught"
-REPO="$(new_repo_with_feature_branch)"
+REPO="$(new_repo_with_feature_branch)" || exit 1
 cat >> "$REPO/docs/internal/specs/existing-spec.md" <<'EOF'
 
 One more paragraph, still no Status field.
 EOF
-git -C "$REPO" add -A
-git -C "$REPO" commit --quiet -m "touch the pre-existing spec, still no Status"
-OUTPUT=$(REPO_ROOT="$REPO" CHECK_SPEC_STATUS_BASE_REF=main bash "$LINT_SCRIPT" 2>&1)
-EXIT_CODE=$?
+fixture_git "$REPO" add -A
+fixture_git "$REPO" commit --quiet -m "touch the pre-existing spec, still no Status"
+EXIT_CODE=0
+OUTPUT=$(REPO_ROOT="$REPO" CHECK_SPEC_STATUS_BASE_REF=main bash "$LINT_SCRIPT" 2>&1) || EXIT_CODE=$?
 assert_exit_code "changed-pre-existing-exit" 1 "$EXIT_CODE"
 assert_output_contains "changed-pre-existing-finding" "existing-spec.md" "$OUTPUT"
 
@@ -207,11 +234,11 @@ assert_output_contains "changed-pre-existing-finding" "existing-spec.md" "$OUTPU
 
 echo ""
 echo "Test 7: a pre-existing spec deleted on the branch is not flagged"
-REPO="$(new_repo_with_feature_branch)"
-git -C "$REPO" rm --quiet "docs/internal/specs/existing-spec.md"
-git -C "$REPO" commit --quiet -m "remove the pre-existing spec"
-OUTPUT=$(REPO_ROOT="$REPO" CHECK_SPEC_STATUS_BASE_REF=main bash "$LINT_SCRIPT" 2>&1)
-EXIT_CODE=$?
+REPO="$(new_repo_with_feature_branch)" || exit 1
+fixture_git "$REPO" rm --quiet "docs/internal/specs/existing-spec.md"
+fixture_git "$REPO" commit --quiet -m "remove the pre-existing spec"
+EXIT_CODE=0
+OUTPUT=$(REPO_ROOT="$REPO" CHECK_SPEC_STATUS_BASE_REF=main bash "$LINT_SCRIPT" 2>&1) || EXIT_CODE=$?
 assert_exit_code "deleted-spec-exit" 0 "$EXIT_CODE"
 assert_output_not_contains "deleted-spec-no-finding" "existing-spec.md" "$OUTPUT"
 
@@ -219,14 +246,14 @@ assert_output_not_contains "deleted-spec-no-finding" "existing-spec.md" "$OUTPUT
 
 echo ""
 echo "Test 8: a changed *-spec-review.md file is never scanned"
-REPO="$(new_repo_with_feature_branch)"
+REPO="$(new_repo_with_feature_branch)" || exit 1
 cat > "$REPO/docs/internal/specs/new-feature-spec-review.md" <<'EOF'
 # Review — no Status field, and none required: this is not a *-spec.md file.
 EOF
-git -C "$REPO" add -A
-git -C "$REPO" commit --quiet -m "add a spec review file"
-OUTPUT=$(REPO_ROOT="$REPO" CHECK_SPEC_STATUS_BASE_REF=main bash "$LINT_SCRIPT" 2>&1)
-EXIT_CODE=$?
+fixture_git "$REPO" add -A
+fixture_git "$REPO" commit --quiet -m "add a spec review file"
+EXIT_CODE=0
+OUTPUT=$(REPO_ROOT="$REPO" CHECK_SPEC_STATUS_BASE_REF=main bash "$LINT_SCRIPT" 2>&1) || EXIT_CODE=$?
 assert_exit_code "review-file-exit" 0 "$EXIT_CODE"
 assert_output_not_contains "review-file-no-finding" "new-feature-spec-review.md" "$OUTPUT"
 
@@ -234,17 +261,17 @@ assert_output_not_contains "review-file-no-finding" "new-feature-spec-review.md"
 
 echo ""
 echo "Test 9: an unresolvable base ref warns and exits 0, never scans everything"
-REPO="$(new_repo_with_feature_branch)"
+REPO="$(new_repo_with_feature_branch)" || exit 1
 cat > "$REPO/docs/internal/specs/new-feature-spec.md" <<'EOF'
 # New feature — spec
 
 No Status line — if this guard fell back to scanning everything on an
 unresolvable base, this file (and existing-spec.md) would both fail here.
 EOF
-git -C "$REPO" add -A
-git -C "$REPO" commit --quiet -m "add new spec, no Status line"
-OUTPUT=$(REPO_ROOT="$REPO" CHECK_SPEC_STATUS_BASE_REF="does-not-exist-anywhere" bash "$LINT_SCRIPT" 2>&1)
-EXIT_CODE=$?
+fixture_git "$REPO" add -A
+fixture_git "$REPO" commit --quiet -m "add new spec, no Status line"
+EXIT_CODE=0
+OUTPUT=$(REPO_ROOT="$REPO" CHECK_SPEC_STATUS_BASE_REF="does-not-exist-anywhere" bash "$LINT_SCRIPT" 2>&1) || EXIT_CODE=$?
 assert_exit_code "unresolvable-base-exit" 0 "$EXIT_CODE"
 assert_output_contains "unresolvable-base-warning" "cannot resolve integration branch" "$OUTPUT"
 assert_output_not_contains "unresolvable-base-no-finding" "new-feature-spec.md:" "$OUTPUT"
@@ -253,8 +280,8 @@ assert_output_not_contains "unresolvable-base-no-finding" "new-feature-spec.md:"
 
 echo ""
 echo "Test 10: a nonexistent REPO_ROOT exits 2"
-OUTPUT=$(REPO_ROOT="$TMP_DIR/does-not-exist" bash "$LINT_SCRIPT" 2>&1)
-EXIT_CODE=$?
+EXIT_CODE=0
+OUTPUT=$(REPO_ROOT="$TMP_DIR/does-not-exist" bash "$LINT_SCRIPT" 2>&1) || EXIT_CODE=$?
 assert_exit_code "bad-repo-root-exit" 2 "$EXIT_CODE"
 
 # --- Test 11: REPO_ROOT not a git repository — exit 2 -----------------------
@@ -263,34 +290,37 @@ echo ""
 echo "Test 11: a REPO_ROOT with no .git exits 2"
 NOTAREPO="$TMP_DIR/not-a-repo"
 mkdir -p "$NOTAREPO"
-OUTPUT=$(REPO_ROOT="$NOTAREPO" bash "$LINT_SCRIPT" 2>&1)
-EXIT_CODE=$?
+EXIT_CODE=0
+OUTPUT=$(REPO_ROOT="$NOTAREPO" bash "$LINT_SCRIPT" 2>&1) || EXIT_CODE=$?
 assert_exit_code "not-a-repo-exit" 2 "$EXIT_CODE"
 
 # --- Summary -----------------------------------------------------------------
 
 # ── Self-contained cases for base resolution without a PR base ──
-BR=$(mktemp -d)
-git -C "$BR" init --quiet --initial-branch=main
-git -C "$BR" config user.email t@example.invalid; git -C "$BR" config user.name t
+BR=$(mktemp -d "$TMP_DIR/push-repo.XXXXXX")
+fixture_git "$BR" init --quiet --initial-branch=main
+fixture_git "$BR" config user.email t@example.invalid; fixture_git "$BR" config user.name t
 mkdir -p "$BR/docs/internal/specs"; echo "x" > "$BR/README.md"
-git -C "$BR" add -A; git -C "$BR" commit --quiet -m base
-BEFORE_SHA=$(git -C "$BR" rev-parse HEAD)
+fixture_git "$BR" add -A; fixture_git "$BR" commit --quiet -m base
+BEFORE_SHA=$(fixture_git "$BR" rev-parse HEAD)
 printf '# New spec without a status line\n' > "$BR/docs/internal/specs/new-thing-spec.md"
-git -C "$BR" add -A; git -C "$BR" commit --quiet -m "add spec"
+fixture_git "$BR" add -A; fixture_git "$BR" commit --quiet -m "add spec"
 
 # no base at all -> WARNING + pass (never a main fallback)
-OUT=$(cd "$BR" && env -u GITHUB_BASE_REF -u OMNIPUS_INTEGRATION_BRANCH -u CHECK_SPEC_STATUS_BASE_REF -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH REPO_ROOT="$BR" bash "$LINT_SCRIPT" 2>&1); RC=$?
+RC=0
+OUT=$(cd "$BR" && env -u GITHUB_BASE_REF -u OMNIPUS_INTEGRATION_BRANCH -u CHECK_SPEC_STATUS_BASE_REF -u GITHUB_EVENT_NAME -u GITHUB_EVENT_PATH REPO_ROOT="$BR" bash "$LINT_SCRIPT" 2>&1) || RC=$?
 if [ $RC -eq 0 ] && printf '%s' "$OUT" | grep -q "no base, fail-open"; then echo "PASS [no-base-fail-open]"; PASS=$((PASS+1)); else echo "FAIL [no-base-fail-open]"; FAIL=$((FAIL+1)); ERRORS+=("no-base-fail-open: rc=$RC $OUT"); fi
 
 # push event -> compares against github.event.before, so the spec added by the push is checked and fails
-EVT=$(mktemp); printf '{"before":"%s"}' "$BEFORE_SHA" > "$EVT"
-OUT=$(cd "$BR" && env -u GITHUB_BASE_REF -u OMNIPUS_INTEGRATION_BRANCH -u CHECK_SPEC_STATUS_BASE_REF REPO_ROOT="$BR" GITHUB_EVENT_NAME=push GITHUB_EVENT_PATH="$EVT" bash "$LINT_SCRIPT" 2>&1); RC=$?
+EVT=$(mktemp "$TMP_DIR/push-event.XXXXXX"); printf '{"before":"%s"}' "$BEFORE_SHA" > "$EVT"
+RC=0
+OUT=$(cd "$BR" && env -u GITHUB_BASE_REF -u OMNIPUS_INTEGRATION_BRANCH -u CHECK_SPEC_STATUS_BASE_REF REPO_ROOT="$BR" GITHUB_EVENT_NAME=push GITHUB_EVENT_PATH="$EVT" bash "$LINT_SCRIPT" 2>&1) || RC=$?
 if [ $RC -ne 0 ] && printf '%s' "$OUT" | grep -q "new-thing-spec.md"; then echo "PASS [push-before-base-catches-new-spec]"; PASS=$((PASS+1)); else echo "FAIL [push-before-base-catches-new-spec]"; FAIL=$((FAIL+1)); ERRORS+=("push-before-base: rc=$RC $OUT"); fi
 
 # push event creating the branch (before = all zeros) -> WARNING + pass
 printf '{"before":"0000000000000000000000000000000000000000"}' > "$EVT"
-OUT=$(cd "$BR" && env -u GITHUB_BASE_REF -u OMNIPUS_INTEGRATION_BRANCH -u CHECK_SPEC_STATUS_BASE_REF REPO_ROOT="$BR" GITHUB_EVENT_NAME=push GITHUB_EVENT_PATH="$EVT" bash "$LINT_SCRIPT" 2>&1); RC=$?
+RC=0
+OUT=$(cd "$BR" && env -u GITHUB_BASE_REF -u OMNIPUS_INTEGRATION_BRANCH -u CHECK_SPEC_STATUS_BASE_REF REPO_ROOT="$BR" GITHUB_EVENT_NAME=push GITHUB_EVENT_PATH="$EVT" bash "$LINT_SCRIPT" 2>&1) || RC=$?
 if [ $RC -eq 0 ] && printf '%s' "$OUT" | grep -q "no base, fail-open"; then echo "PASS [push-new-branch-fail-open]"; PASS=$((PASS+1)); else echo "FAIL [push-new-branch-fail-open]"; FAIL=$((FAIL+1)); ERRORS+=("push-new-branch: rc=$RC $OUT"); fi
 rm -rf "$BR" "$EVT"
 

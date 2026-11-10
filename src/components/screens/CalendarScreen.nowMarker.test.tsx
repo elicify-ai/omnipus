@@ -1,28 +1,33 @@
 /**
- * CalendarScreen.nowMarker.test.tsx
+ * CalendarScreen.nowMarker.test.tsx — SP-39 RETIREMENT pack (wave-3 join,
+ * 2026-10-05).
  *
- * Covers the Agenda-view (`listWeek`) live "now" divider added to
- * CalendarScreen/FullCalendarView/types.ts. `@fullcalendar/list` has no time
- * axis and structurally cannot render FullCalendar's built-in `nowIndicator`
- * (which already works correctly, untouched, in Week/Day via native
- * timeGrid). CalendarScreen instead appends a single synthetic
- * `kind: 'now-marker'` EventInput to the events it passes to
- * FullCalendarView — ONLY while Agenda is the active view AND the
- * live-ticking "now" timestamp falls inside FullCalendar's own reported
- * visible range (`activeRange`, sourced from `onDatesSet`).
+ * SUPERSEDED SCOPE: this pack used to cover the Agenda-view (`listWeek`)
+ * live "now" divider — CalendarScreen appended a single synthetic
+ * `kind: 'now-marker'` EventInput ONLY while Agenda was active and "now"
+ * fell inside FullCalendar's reported visible range. SP-39 drops Agenda
+ * (side-panel-shell-spec.md §13 SP-39 — "Calendar docks default Week,
+ * view selectable … the spec names only Day/Week/Month"; wireframe §4
+ * "Agenda is dropped"), and the join removed the marker machinery from
+ * CalendarScreen/FullCalendarView/types.ts with it. The old tests'
+ * expected behaviour is therefore EXPRESSLY superseded by the approved
+ * spec, and the pack now pins the RETIREMENT instead — with the same
+ * strength, because every old inclusion scenario becomes an absence
+ * oracle that fails if the marker (or the Agenda view it served) ever
+ * comes back:
  *
- * Strategy mirrors CalendarScreen.occurrencesDegrade.test.tsx (spec §9 —
- * F-03): jsdom cannot lay out FullCalendar's own DOM, so FullCalendarView is
- * mocked at the module boundary and its captured `events`/`onDatesSet`/
- * `onEventClick` props drive the assertions.
+ *   - no surviving view (Week/Day/Month — the only views SP-39 names)
+ *     ever receives a now-marker event, in range or out;
+ *   - the old clock boundaries (now == range start / end, 30s re-ticks)
+ *     never produce one either;
+ *   - every event handed to FullCalendarView carries one of the five
+ *     surviving `CalendarEventExtProps` kinds — nothing synthetic exists
+ *     to click (supersedes the old click no-op tests).
  *
- * The inclusion/exclusion/click describes below use the REAL `Date.now()` at
- * component-mount time (the `nowTick` state initializer), computing each
- * test's `activeStart`/`activeEnd` window relative to the real current time
- * — no fake timers needed there. The boundary/interval describe further down
- * DOES use `vi.useFakeTimers()` + `vi.setSystemTime()`, since exact half-open
- * range-edge behaviour and 30s-tick/cleanup coverage both require pinning
- * the clock precisely (same convention as useAutoSave.test.tsx).
+ * Strategy unchanged (spec §9 F-03): jsdom cannot lay out FullCalendar's
+ * DOM, so FullCalendarView is mocked at the module boundary and its
+ * captured `events`/`onDatesSet` props drive the assertions. The old
+ * 1:1 supersession mapping is cited per test.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -38,12 +43,14 @@ type CapturedProps = {
   events: EventInput[]
   onEventClick: ((arg: EventClickArg) => void) | null
   onDatesSet: ((title: string, view: CalendarViewName, activeStart: Date, activeEnd: Date) => void) | null
+  isLoading: boolean
 }
 
 const capturedProps: CapturedProps = {
   events: [],
   onEventClick: null,
   onDatesSet: null,
+  isLoading: true,
 }
 
 vi.mock('@/components/calendar/FullCalendarView', () => ({
@@ -51,11 +58,15 @@ vi.mock('@/components/calendar/FullCalendarView', () => ({
     events: EventInput[]
     onEventClick: (arg: EventClickArg) => void
     onDatesSet?: (title: string, view: CalendarViewName, activeStart: Date, activeEnd: Date) => void
+    isLoading?: boolean
   }) => {
     capturedProps.events = props.events
     capturedProps.onEventClick = props.onEventClick
     capturedProps.onDatesSet = props.onDatesSet ?? null
-    return <div data-testid="fullcalendar-stub">FullCalendar stub</div>
+    capturedProps.isLoading = props.isLoading ?? false
+    // Loading is observable DOM state, so MutationObserver can wake waitFor
+    // even when fake interval polling is paused during the clock cases.
+    return <div data-testid="fullcalendar-stub" data-loading={String(props.isLoading ?? false)}>FullCalendar stub</div>
   },
 }))
 
@@ -63,7 +74,9 @@ vi.mock('@/components/calendar/CalendarToolbar', () => ({
   CalendarToolbar: () => <div data-testid="calendar-toolbar-stub" />,
 }))
 
-// ── 2. Mock slide-overs / popover — capture state so a no-op click is provable ─
+// ── 2. Mock slide-overs — the marker's old click-no-op contract is covered
+//    by the events-kind invariant (nothing synthetic exists to click), so the
+//    slide-over captures stay to prove a real event still opens normally.
 
 const capturedEventSlideOver = { open: false, taskId: '' }
 
@@ -81,11 +94,10 @@ vi.mock('@/components/calendar/CalendarEventSlideOver', () => ({
   },
 }))
 
-const capturedTaskDetailSlideOver = { taskId: '' }
-
+const capturedTaskDetail = { taskId: '' }
 vi.mock('@/components/workspaces/TaskDetailSlideOver', () => ({
   TaskDetailSlideOver: ({ task }: { task: { id: string } | null }) => {
-    capturedTaskDetailSlideOver.taskId = task?.id ?? ''
+    capturedTaskDetail.taskId = task?.id ?? ''
     return <div data-testid="task-detail-slideover" data-task-id={task?.id ?? ''} />
   },
 }))
@@ -130,11 +142,10 @@ vi.mock('@/store/ui', () => ({
 
 const WORKSPACE_ID = 'ws-test-123'
 
-// A "due" task lands the calendar a `task-due` chip via mapToCalendarEvents —
-// present so `filteredEvents.length > 0` (the marker's inclusion condition
-// requires at least one real item to divide; see CalendarScreen.tsx). Kept
-// far from "now" (a fixed 2026-06-20 date) so it never collides with the
-// marker's own real-time-derived position in any of these tests.
+// A real "due" task so `filteredEvents.length > 0` — the old marker's
+// inclusion condition required at least one real item; the retirement
+// oracles hold with or without it, and the real chip doubles as the
+// known-kind control in the invariant test.
 function makeTask(overrides: Record<string, unknown> = {}) {
   return {
     id: 'task-1',
@@ -167,289 +178,232 @@ function renderCalendarScreen() {
   )
 }
 
-/** True when `events` contains the synthetic now-marker EventInput. */
+/** True when `events` contains the synthetic now-marker EventInput — the
+ * exact detector the old inclusion tests used; the retirement oracle is its
+ * negation everywhere. The kind is compared as a widened string: the
+ * generated union no longer contains `'now-marker'`, so a typed comparison
+ * would be a compile-time tautology — the whole point of this detector is to
+ * catch a REINTRODUCED marker the types do not know about. */
 function hasNowMarker(events: EventInput[]): boolean {
   return events.some(
-    (e) => e.id === 'now-marker' && (e.extendedProps as CalendarEventExtProps | undefined)?.kind === 'now-marker',
+    (e) =>
+      e.id === 'now-marker' &&
+      (e.extendedProps as { kind?: string } | undefined)?.kind === 'now-marker',
   )
+}
+
+/** The five surviving CalendarEventExtProps kinds (SP-39 retired no kind
+ * besides adding none; 'now-marker' is NOT among them). */
+const SURVIVING_KINDS: CalendarEventExtProps['kind'][] = [
+  'task-due',
+  'task-fire',
+  'task-occurrence',
+  'task-occurrence-agg',
+  'task-occurrence-more',
+]
+
+function kindsOf(events: EventInput[]): string[] {
+  return events.map((e) => (e.extendedProps as CalendarEventExtProps | undefined)?.kind ?? '<none>')
+}
+
+/** Wait for actual query completion, not an already-defined empty array. */
+async function renderReadyCalendar() {
+  const mounted = renderCalendarScreen()
+  await waitFor(() => {
+    expect(capturedProps.onDatesSet).not.toBeNull()
+    expect(capturedProps.isLoading).toBe(false)
+  })
+  return mounted
+}
+
+async function reportRange(view: CalendarViewName, activeStart: Date, activeEnd: Date) {
+  await act(async () => {
+    capturedProps.onDatesSet!('Test Range', view, activeStart, activeEnd)
+  })
+  return capturedProps.events
+}
+
+async function eventsForView(view: CalendarViewName, activeStart: Date, activeEnd: Date) {
+  await renderReadyCalendar()
+  return reportRange(view, activeStart, activeEnd)
+}
+
+function assertNoAgendaMarker(events: EventInput[]) {
+  expect(hasNowMarker(events), 'SP-39: no retired Agenda marker is emitted').toBe(false)
+  for (const kind of kindsOf(events)) {
+    expect(SURVIVING_KINDS, `unexpected emitted event kind ${kind}`).toContain(kind)
+  }
 }
 
 beforeEach(() => {
   capturedProps.events = []
   capturedProps.onEventClick = null
   capturedProps.onDatesSet = null
+  capturedProps.isLoading = true
   capturedEventSlideOver.open = false
   capturedEventSlideOver.taskId = ''
-  capturedTaskDetailSlideOver.taskId = ''
+  capturedTaskDetail.taskId = ''
 
-  // A real task by default so `filteredEvents.length > 0` — the marker's
-  // inclusion condition requires at least one real item to divide (see
-  // makeTask's own comment). The dedicated "no real events" test below
-  // overrides this back to `[]` to cover that path explicitly.
   vi.mocked(fetchTasks).mockResolvedValue([makeTask()])
   mockAddToast.mockReset()
   mockUseOccurrences.mockReturnValue({ data: [], isError: false, isLoading: false })
 })
 
+afterEach(() => {
+  vi.restoreAllMocks()
+  vi.useRealTimers()
+})
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-describe('CalendarScreen — Agenda "now" marker inclusion (listWeek only, in-range only)', () => {
-  it('includes the now-marker when the active view is listWeek AND "now" falls inside the visible range', async () => {
-    renderCalendarScreen()
-
-    await waitFor(() => expect(capturedProps.onDatesSet).not.toBeNull())
-
+// One separate case for each of the 12 inherited Agenda cases; SP-39 is the
+// supersession authority. Numeric range/tick inputs retain their old roles.
+describe('CalendarScreen — SP-39 supersessions of all inherited Agenda cases', () => {
+  it('in-range inclusion superseded: Week retains real events but emits no Agenda marker', async () => {
     const now = Date.now()
-    const activeStart = new Date(now - 24 * 60 * 60 * 1000) // yesterday
-    const activeEnd = new Date(now + 24 * 60 * 60 * 1000) // tomorrow
-
-    await act(async () => {
-      capturedProps.onDatesSet!('This Week', 'listWeek', activeStart, activeEnd)
-    })
-
-    await waitFor(() => expect(hasNowMarker(capturedProps.events)).toBe(true))
+    const events = await eventsForView('timeGridWeek', new Date(now - 86_400_000), new Date(now + 86_400_000))
+    expect(kindsOf(events)).toEqual(['task-due'])
+    assertNoAgendaMarker(events)
   })
 
-  it('excludes the now-marker when the active view is NOT listWeek, even though "now" is inside the range', async () => {
-    renderCalendarScreen()
-
-    await waitFor(() => expect(capturedProps.onDatesSet).not.toBeNull())
-
+  it('non-Agenda exclusion retained: Day emits no synthetic marker with now inside the range', async () => {
     const now = Date.now()
-    const activeStart = new Date(now - 24 * 60 * 60 * 1000)
-    const activeEnd = new Date(now + 24 * 60 * 60 * 1000)
-
-    await act(async () => {
-      capturedProps.onDatesSet!('June 2026', 'dayGridMonth', activeStart, activeEnd)
-    })
-
-    // Give any pending re-render a chance to land, then assert it never appears.
-    await waitFor(() => expect(capturedProps.events).toBeDefined())
-    expect(hasNowMarker(capturedProps.events)).toBe(false)
+    const events = await eventsForView('timeGridDay', new Date(now - 86_400_000), new Date(now + 86_400_000))
+    expect(kindsOf(events)).toEqual(['task-due'])
+    assertNoAgendaMarker(events)
   })
 
-  it('excludes the now-marker when listWeek is active but "now" falls OUTSIDE the visible range', async () => {
-    renderCalendarScreen()
-
-    await waitFor(() => expect(capturedProps.onDatesSet).not.toBeNull())
-
+  it('out-of-range exclusion retained: a future Week range cannot emit the retired marker', async () => {
     const now = Date.now()
-    // A week comfortably in the future — "now" cannot be inside it.
-    const activeStart = new Date(now + 100 * 24 * 60 * 60 * 1000)
-    const activeEnd = new Date(now + 107 * 24 * 60 * 60 * 1000)
-
-    await act(async () => {
-      capturedProps.onDatesSet!('Far Future Week', 'listWeek', activeStart, activeEnd)
-    })
-
-    await waitFor(() => expect(capturedProps.events).toBeDefined())
-    expect(hasNowMarker(capturedProps.events)).toBe(false)
+    // Original case used a range 100..107 days ahead of now.
+    const events = await eventsForView('timeGridWeek', new Date(now + 100 * 86_400_000), new Date(now + 107 * 86_400_000))
+    expect(kindsOf(events)).toEqual(['task-due'])
+    assertNoAgendaMarker(events)
   })
 
-  it('differentiation: switching the SAME range from dayGridMonth to listWeek makes the marker appear', async () => {
-    renderCalendarScreen()
-
-    await waitFor(() => expect(capturedProps.onDatesSet).not.toBeNull())
-
+  it('same-range differentiation superseded: switching Month to Week never adds a synthetic item', async () => {
     const now = Date.now()
-    const activeStart = new Date(now - 24 * 60 * 60 * 1000)
-    const activeEnd = new Date(now + 24 * 60 * 60 * 1000)
-
-    await act(async () => {
-      capturedProps.onDatesSet!('June 2026', 'dayGridMonth', activeStart, activeEnd)
-    })
-    expect(hasNowMarker(capturedProps.events)).toBe(false)
-
-    await act(async () => {
-      capturedProps.onDatesSet!('This Week', 'listWeek', activeStart, activeEnd)
-    })
-    await waitFor(() => expect(hasNowMarker(capturedProps.events)).toBe(true))
+    const start = new Date(now - 86_400_000)
+    const end = new Date(now + 86_400_000)
+    const month = await eventsForView('dayGridMonth', start, end)
+    expect(kindsOf(month)).toEqual(['task-due'])
+    assertNoAgendaMarker(month)
+    const week = await reportRange('timeGridWeek', start, end)
+    expect(week).toEqual(month)
+    assertNoAgendaMarker(week)
   })
 
-  it('never shows the marker when there are zero real events — it would coexist with the "No scheduled items" empty-state hint, which reads as contradictory', async () => {
+  it('zero-real-events exclusion retained: the empty view never grows a synthetic marker', async () => {
     vi.mocked(fetchTasks).mockResolvedValue([])
-    renderCalendarScreen()
-
-    await waitFor(() => expect(capturedProps.onDatesSet).not.toBeNull())
-
     const now = Date.now()
-    const activeStart = new Date(now - 24 * 60 * 60 * 1000)
-    const activeEnd = new Date(now + 24 * 60 * 60 * 1000)
-
-    await act(async () => {
-      capturedProps.onDatesSet!('This Week', 'listWeek', activeStart, activeEnd)
-    })
-
-    await waitFor(() => expect(capturedProps.events).toBeDefined())
-    expect(hasNowMarker(capturedProps.events)).toBe(false)
-    expect(capturedProps.events.length).toBe(0)
+    const events = await eventsForView('timeGridWeek', new Date(now - 86_400_000), new Date(now + 86_400_000))
+    expect(events).toEqual([])
+    assertNoAgendaMarker(events)
   })
-})
 
-describe('CalendarScreen — now-marker click is a no-op (mirrors task-occurrence-more)', () => {
-  it('clicking the now-marker does not open the event slide-over or task detail panel, and does not throw', async () => {
-    renderCalendarScreen()
-
-    await waitFor(() => expect(capturedProps.onEventClick).not.toBeNull())
-
-    const ext: CalendarEventExtProps = { kind: 'now-marker', timeLabel: '3:05 PM' }
-
-    await expect(
-      act(async () => {
-        capturedProps.onEventClick!({
-          event: { extendedProps: ext },
-          jsEvent: { target: document.createElement('div') },
-        } as unknown as EventClickArg)
-      }),
-    ).resolves.not.toThrow()
-
+  it('marker-click case superseded: no synthetic clickable event exists, while the real due item stays reachable', async () => {
+    const events = await eventsForView('timeGridWeek', new Date('2026-06-13T00:00:00'), new Date('2026-06-27T00:00:00'))
+    expect(kindsOf(events)).toEqual(['task-due'])
+    assertNoAgendaMarker(events)
     expect(capturedEventSlideOver.open).toBe(false)
-    expect(capturedTaskDetailSlideOver.taskId).toBe('')
+    const real = events[0]
+    // The old test clicked a kind removed with Agenda. The surviving real
+    // chip remains actionable; no unsupported synthetic payload is invented.
+    await act(async () => {
+      capturedProps.onEventClick!({
+        event: { ...real, start: new Date('2026-06-20T00:00:00') },
+        el: document.createElement('div'),
+      } as unknown as EventClickArg)
+    })
+    // Due/fire items retain their original TaskDetailSlideOver path;
+    // occurrence items use CalendarEventSlideOver. Agenda retirement does
+    // not change that surviving routing distinction.
+    expect(capturedTaskDetail.taskId).toBe('task-1')
+    expect(capturedEventSlideOver.open).toBe(false)
+  })
+
+  it('inclusive-start boundary superseded: now exactly at range start still emits no Agenda marker', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-08-15T10:00:00'))
+    const events = await eventsForView('timeGridWeek', new Date('2026-08-15T10:00:00'), new Date('2026-08-22T10:00:00'))
+    expect(kindsOf(events)).toEqual(['task-due'])
+    assertNoAgendaMarker(events)
+  })
+
+  it('exclusive-end boundary retained: now exactly at range end emits no Agenda marker', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-08-22T10:00:00'))
+    const events = await eventsForView('timeGridWeek', new Date('2026-08-15T10:00:00'), new Date('2026-08-22T10:00:00'))
+    expect(kindsOf(events)).toEqual(['task-due'])
+    assertNoAgendaMarker(events)
+  })
+
+  it('midnight-duration case superseded: no synthetic interval can span either side of midnight', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-08-15T23:59:59.999'))
+    const before = await eventsForView('timeGridWeek', new Date('2026-08-15T00:00:00'), new Date('2026-08-17T00:00:00'))
+    expect(kindsOf(before)).toEqual(['task-due'])
+    assertNoAgendaMarker(before)
+    vi.setSystemTime(new Date('2026-08-16T00:00:00'))
+    const after = await reportRange('timeGridWeek', new Date('2026-08-15T00:00:00'), new Date('2026-08-17T00:00:00'))
+    expect(after).toEqual(before)
+    assertNoAgendaMarker(after)
+  })
+
+  it('30-second-tick case superseded: clock advance never schedules an Agenda-marker interval or changes real events', async () => {
+    // Fake the actual interval APIs as well as Date; advancing Date-only
+    // timers would not exercise the old 30s timer path.
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
+    vi.setSystemTime(new Date('2026-08-15T10:00:00'))
+    const intervals = vi.spyOn(window, 'setInterval')
+    const initial = await eventsForView('timeGridWeek', new Date('2026-08-14T00:00:00'), new Date('2026-08-17T00:00:00'))
+    expect(kindsOf(initial)).toEqual(['task-due'])
+    await act(async () => { vi.advanceTimersByTime(90_000) })
+    assertNoAgendaMarker(capturedProps.events)
+    expect(capturedProps.events).toEqual(initial)
+    expect(intervals.mock.calls.filter((args) => args[1] === 30_000)).toEqual([])
+    intervals.mockRestore()
+  })
+
+  it('activation-resync case superseded: entering Week after a clock jump never emits a marker immediately or later', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
+    vi.setSystemTime(new Date('2026-08-15T10:00:00'))
+    const start = new Date('2026-08-14T00:00:00')
+    const end = new Date('2026-08-17T00:00:00')
+    const initial = await eventsForView('dayGridMonth', start, end)
+    vi.setSystemTime(new Date('2026-08-15T12:00:00'))
+    const week = await reportRange('timeGridWeek', start, end)
+    expect(week).toEqual(initial)
+    assertNoAgendaMarker(week)
+    await act(async () => { vi.advanceTimersByTime(30_000) })
+    expect(capturedProps.events).toEqual(initial)
+    assertNoAgendaMarker(capturedProps.events)
+  })
+
+  it('interval-cleanup case superseded: leaving Week and unmounting retains no retired marker timer', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
+    vi.setSystemTime(new Date('2026-08-15T10:00:00'))
+    const intervals = vi.spyOn(window, 'setInterval')
+    const mounted = await renderReadyCalendar()
+    const start = new Date('2026-08-14T00:00:00')
+    const end = new Date('2026-08-17T00:00:00')
+    await reportRange('timeGridWeek', start, end)
+    const day = await reportRange('timeGridDay', start, end)
+    expect(kindsOf(day)).toEqual(['task-due'])
+    mounted.unmount()
+    await act(async () => { vi.advanceTimersByTime(90_000) })
+    expect(capturedProps.events).toEqual(day)
+    assertNoAgendaMarker(day)
+    expect(intervals.mock.calls.filter((args) => args[1] === 30_000)).toEqual([])
+    intervals.mockRestore()
   })
 })
 
-describe('CalendarScreen — now-marker range boundary + 30s tick + interval cleanup', () => {
-  const FIXED_NOW = new Date('2026-07-20T12:00:00.000Z').getTime()
-
-  beforeEach(() => {
-    // Scoped fake — NOT a blanket vi.useFakeTimers(). Faking setTimeout too
-    // freezes React's own scheduler and Testing Library's `waitFor` polling
-    // (both lean on setTimeout/MessageChannel internally), hanging every
-    // `await waitFor(...)` below until the real 15s test timeout. Only the
-    // APIs this code under test actually touches (setInterval/clearInterval
-    // for the 30s tick, Date for `Date.now()`) need to be fake.
-    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
-    vi.setSystemTime(FIXED_NOW)
-  })
-
-  afterEach(() => {
-    vi.useRealTimers()
-  })
-
-  it('includes the marker when "now" equals activeRange.start exactly (inclusive lower bound)', async () => {
-    renderCalendarScreen()
-    await waitFor(() => expect(capturedProps.onDatesSet).not.toBeNull())
-
-    await act(async () => {
-      capturedProps.onDatesSet!('Boundary', 'listWeek', new Date(FIXED_NOW), new Date(FIXED_NOW + 60_000))
-    })
-
-    expect(hasNowMarker(capturedProps.events)).toBe(true)
-  })
-
-  it('excludes the marker when "now" equals activeRange.end exactly (exclusive upper bound)', async () => {
-    renderCalendarScreen()
-    await waitFor(() => expect(capturedProps.onDatesSet).not.toBeNull())
-
-    await act(async () => {
-      capturedProps.onDatesSet!('Boundary', 'listWeek', new Date(FIXED_NOW - 60_000), new Date(FIXED_NOW))
-    })
-
-    expect(hasNowMarker(capturedProps.events)).toBe(false)
-  })
-
-  it('has an end strictly after start (NOT equal) — never spans past midnight into a second day', async () => {
-    // Regression, two layers deep:
-    //  1. Without an explicit `end`, FullCalendar assigns its own
-    //     defaultTimedEventDuration (1 hour) to a timed event. Late at night
-    //     that pushed the marker's span across midnight, and Agenda's list
-    //     view renders a segment of any day-spanning event on EVERY day it
-    //     touches — reported live (Asia/Jakarta, ~23:20 local): the marker
-    //     appeared twice, once under today and once under tomorrow.
-    //  2. The first fix attempt (end === start) was ALSO wrong and produced
-    //     the SAME live symptom — confirmed by re-testing after deploying
-    //     it. @fullcalendar/core's own parseSingle treats `end <= start` as
-    //     "no end provided" (`if (startMarker && endMarker <= startMarker)
-    //     endMarker = null`) and falls through to the identical 1-hour
-    //     default. `end` must be STRICTLY after `start`.
-    const LATE_NIGHT = new Date('2026-07-20T23:24:00.000Z').getTime()
-    vi.setSystemTime(LATE_NIGHT)
-    renderCalendarScreen()
-    await waitFor(() => expect(capturedProps.onDatesSet).not.toBeNull())
-
-    await act(async () => {
-      capturedProps.onDatesSet!('Late night', 'listWeek', new Date(LATE_NIGHT - 3_600_000), new Date(LATE_NIGHT + 3_600_000))
-    })
-
-    const marker = capturedProps.events.find((e) => e.id === 'now-marker')
-    expect(marker?.start).toEqual(new Date(LATE_NIGHT))
-    expect(marker?.end).toBeDefined()
-    expect((marker!.end as Date).getTime()).toBeGreaterThan((marker!.start as Date).getTime())
-    // ...and short enough to never itself reach the next day, regardless of
-    // exactly how close to midnight "now" is (a multi-hour buffer, like the
-    // very default this fix avoids, would just reintroduce the same bug).
-    expect((marker!.end as Date).getTime() - (marker!.start as Date).getTime()).toBeLessThan(60_000)
-  })
-
-  it('re-ticks every 30s while Agenda stays open, advancing the marker\'s own start time', async () => {
-    renderCalendarScreen()
-    await waitFor(() => expect(capturedProps.onDatesSet).not.toBeNull())
-
-    // Wide, static range so only the tick — not range validity — changes.
-    await act(async () => {
-      capturedProps.onDatesSet!('Wide', 'listWeek', new Date(FIXED_NOW - 3_600_000), new Date(FIXED_NOW + 3_600_000))
-    })
-    const marker1 = capturedProps.events.find((e) => e.id === 'now-marker')
-    expect(marker1?.start).toEqual(new Date(FIXED_NOW))
-
-    // advanceTimersByTime alone moves the faked Date forward as it processes
-    // the elapsed virtual time — an extra vi.setSystemTime here would jump
-    // the clock AND fire any now-due interval immediately, then
-    // advanceTimersByTime fires it again, double-counting the tick.
-    await act(async () => {
-      vi.advanceTimersByTime(30_000)
-    })
-
-    const marker2 = capturedProps.events.find((e) => e.id === 'now-marker')
-    expect(marker2?.start).toEqual(new Date(FIXED_NOW + 30_000))
-  })
-
-  it('resyncs immediately (not stale until the first tick) the instant Agenda becomes active', async () => {
-    renderCalendarScreen()
-    await waitFor(() => expect(capturedProps.onDatesSet).not.toBeNull())
-
-    // Mount happens at FIXED_NOW (nowTick's initializer). Stay on Month for a
-    // while — simulating the operator-reported "switch in after minutes on
-    // another view" case — THEN advance the clock before switching to
-    // Agenda. Without the immediate resync this fix added, the marker would
-    // render at the STALE mount-time tick until the next 30s interval fires.
-    await act(async () => {
-      capturedProps.onDatesSet!('Month', 'dayGridMonth', new Date(FIXED_NOW - 3_600_000), new Date(FIXED_NOW + 3_600_000))
-    })
-    vi.setSystemTime(FIXED_NOW + 5 * 60_000) // 5 minutes later, still on Month
-
-    await act(async () => {
-      capturedProps.onDatesSet!('Agenda', 'listWeek', new Date(FIXED_NOW - 3_600_000), new Date(FIXED_NOW + 3_600_000))
-    })
-
-    const marker = capturedProps.events.find((e) => e.id === 'now-marker')
-    expect(marker?.start).toEqual(new Date(FIXED_NOW + 5 * 60_000))
-  })
-
-  it('tears the interval down when leaving listWeek — no leaked timer ticking in the background', async () => {
-    const clearIntervalSpy = vi.spyOn(window, 'clearInterval')
-    renderCalendarScreen()
-    await waitFor(() => expect(capturedProps.onDatesSet).not.toBeNull())
-
-    await act(async () => {
-      capturedProps.onDatesSet!('Wide', 'listWeek', new Date(FIXED_NOW - 3_600_000), new Date(FIXED_NOW + 3_600_000))
-    })
-    expect(hasNowMarker(capturedProps.events)).toBe(true)
-
-    await act(async () => {
-      capturedProps.onDatesSet!('Wide', 'dayGridMonth', new Date(FIXED_NOW - 3_600_000), new Date(FIXED_NOW + 3_600_000))
-    })
-    expect(clearIntervalSpy).toHaveBeenCalled()
-    expect(hasNowMarker(capturedProps.events)).toBe(false)
-
-    // Advancing time after leaving listWeek must produce no further re-tick —
-    // the interval is gone, not just its output momentarily hidden by the
-    // view gate.
-    const callsBefore = clearIntervalSpy.mock.calls.length
-    await act(async () => {
-      vi.advanceTimersByTime(120_000)
-    })
-    expect(clearIntervalSpy.mock.calls.length).toBe(callsBefore) // no additional teardown — nothing to tear down
-    expect(hasNowMarker(capturedProps.events)).toBe(false)
+describe('retirement detector instrument', () => {
+  it('accepts the real kind control but rejects an injected synthetic marker', () => {
+    const real: EventInput[] = [{ id: 'due', extendedProps: { kind: 'task-due' } }]
+    expect(() => assertNoAgendaMarker(real)).not.toThrow()
+    const mutant: EventInput[] = [...real, { id: 'now-marker', extendedProps: { kind: 'now-marker' } }]
+    expect(() => assertNoAgendaMarker(mutant)).toThrow(/no retired Agenda marker/)
   })
 })

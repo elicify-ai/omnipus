@@ -126,7 +126,7 @@ describe('ChatControls — no More/kebab popover', () => {
 describe('ChatControls — Open browser launcher', () => {
   beforeEach(() => {
     act(() => {
-      useUiStore.setState({ browserPanel: null, toasts: [] })
+      useUiStore.setState({ activePanel: null, toasts: [] })
       // Explicit, not incidental: every case in this block asserts the exact
       // workspace argument the launcher sends, so the "no workspace" cases
       // must start from a real null rather than whatever a prior test left.
@@ -156,9 +156,9 @@ describe('ChatControls — Open browser launcher', () => {
     renderControls()
     const btn = await vi.waitFor(() => screen.getByRole('button', { name: /open browser/i }))
 
-    expect(useUiStore.getState().browserPanel).toBeNull()
+    expect(useUiStore.getState().activePanel).toBeNull()
     fireEvent.click(btn)
-    expect(useUiStore.getState().browserPanel).toEqual({ sessionId: 'sess_1', agentId: 'mia' })
+    expect(useUiStore.getState().activePanel).toEqual({ id: 'browser', context: { sessionId: 'sess_1', agentId: 'mia' } })
     // No session existed to create — createSession must not be called.
     expect(api.createSession).not.toHaveBeenCalled()
   })
@@ -193,7 +193,7 @@ describe('ChatControls — Open browser launcher', () => {
       expect(api.createSession).toHaveBeenCalledWith('mia', undefined)
     })
     await vi.waitFor(() => {
-      expect(useUiStore.getState().browserPanel).toEqual({ sessionId: 'sess_new', agentId: 'mia' })
+      expect(useUiStore.getState().activePanel).toEqual({ id: 'browser', context: { sessionId: 'sess_new', agentId: 'mia' } })
     })
     expect(useSessionStore.getState().activeSessionId).toBe('sess_new')
     // No error toast — this is the success path.
@@ -203,7 +203,7 @@ describe('ChatControls — Open browser launcher', () => {
   // U2. The launcher's session is the ONE the live browser panel then attaches
   // against, and the gateway decides which workspace's browser — and whose
   // live logins — that panel shows by reading the workspace off this session's
-  // own meta, server-side (ADR-075 FR-016/FR-017). Creating it with agent_id
+  // own meta, server-side (ADR-075 D1.13; browser_ws.go::handleAttach). Creating it with agent_id
   // alone left the panel nothing to read: an agent on more than one
   // workspace's team was refused and told to "open this panel from a chat that
   // belongs to the workspace you mean" — from inside exactly such a chat. The
@@ -245,7 +245,7 @@ describe('ChatControls — Open browser launcher', () => {
     const btn = await vi.waitFor(() => screen.getByRole('button', { name: /open browser/i }))
 
     fireEvent.click(btn)
-    expect(useUiStore.getState().browserPanel).toBeNull()
+    expect(useUiStore.getState().activePanel).toBeNull()
     expect(useUiStore.getState().toasts.some((t) => /select an agent/i.test(t.message))).toBe(true)
     expect(api.createSession).not.toHaveBeenCalled()
   })
@@ -263,6 +263,6 @@ describe('ChatControls — Open browser launcher', () => {
     await vi.waitFor(() => {
       expect(useUiStore.getState().toasts.some((t) => t.variant === 'error' && /network down/i.test(t.message))).toBe(true)
     })
-    expect(useUiStore.getState().browserPanel).toBeNull()
+    expect(useUiStore.getState().activePanel).toBeNull()
   })
 })

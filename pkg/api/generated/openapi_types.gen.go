@@ -479,6 +479,123 @@ func (e AgentType) Valid() bool {
 	}
 }
 
+// Defines values for AgentActivityRunKind.
+const (
+	AgentActivityRunKindScheduled AgentActivityRunKind = "scheduled"
+	AgentActivityRunKindTask      AgentActivityRunKind = "task"
+)
+
+// Valid indicates whether the value is a known member of the AgentActivityRunKind enum.
+func (e AgentActivityRunKind) Valid() bool {
+	switch e {
+	case AgentActivityRunKindScheduled:
+		return true
+	case AgentActivityRunKindTask:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentActivityRunMode.
+const (
+	AgentActivityRunModeIsolated AgentActivityRunMode = "isolated"
+	AgentActivityRunModeMain     AgentActivityRunMode = "main"
+)
+
+// Valid indicates whether the value is a known member of the AgentActivityRunMode enum.
+func (e AgentActivityRunMode) Valid() bool {
+	switch e {
+	case AgentActivityRunModeIsolated:
+		return true
+	case AgentActivityRunModeMain:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentActivityRunRole.
+const (
+	AgentActivityRunRoleAssignee  AgentActivityRunRole = "assignee"
+	AgentActivityRunRoleRecipient AgentActivityRunRole = "recipient"
+)
+
+// Valid indicates whether the value is a known member of the AgentActivityRunRole enum.
+func (e AgentActivityRunRole) Valid() bool {
+	switch e {
+	case AgentActivityRunRoleAssignee:
+		return true
+	case AgentActivityRunRoleRecipient:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentActivityRunState.
+const (
+	AgentActivityRunStateQueued  AgentActivityRunState = "queued"
+	AgentActivityRunStateRunning AgentActivityRunState = "running"
+	AgentActivityRunStateWaiting AgentActivityRunState = "waiting"
+)
+
+// Valid indicates whether the value is a known member of the AgentActivityRunState enum.
+func (e AgentActivityRunState) Valid() bool {
+	switch e {
+	case AgentActivityRunStateQueued:
+		return true
+	case AgentActivityRunStateRunning:
+		return true
+	case AgentActivityRunStateWaiting:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentColor.
+const (
+	AgentColorHash4F8A80 AgentColor = "#4F8A80"
+	AgentColorHash5E6973 AgentColor = "#5E6973"
+	AgentColorHash6E8BA8 AgentColor = "#6E8BA8"
+	AgentColorHash7A8C9E AgentColor = "#7A8C9E"
+	AgentColorHash7B7290 AgentColor = "#7B7290"
+	AgentColorHash8E9196 AgentColor = "#8E9196"
+	AgentColorHash9C8A5B AgentColor = "#9C8A5B"
+	AgentColorHashA97142 AgentColor = "#A97142"
+	AgentColorHashB76E79 AgentColor = "#B76E79"
+	AgentColorHashCDBA96 AgentColor = "#CDBA96"
+)
+
+// Valid indicates whether the value is a known member of the AgentColor enum.
+func (e AgentColor) Valid() bool {
+	switch e {
+	case AgentColorHash4F8A80:
+		return true
+	case AgentColorHash5E6973:
+		return true
+	case AgentColorHash6E8BA8:
+		return true
+	case AgentColorHash7A8C9E:
+		return true
+	case AgentColorHash7B7290:
+		return true
+	case AgentColorHash8E9196:
+		return true
+	case AgentColorHash9C8A5B:
+		return true
+	case AgentColorHashA97142:
+		return true
+	case AgentColorHashB76E79:
+		return true
+	case AgentColorHashCDBA96:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AgentCreateRequestMainToolPolicyChangesSet.
 const (
 	AgentCreateRequestMainToolPolicyChangesSetAllow AgentCreateRequestMainToolPolicyChangesSet = "allow"
@@ -593,27 +710,6 @@ func (e AgentCreateRequestSubagentType) Valid() bool {
 	}
 }
 
-// Defines values for AgentCreateRequestSubagent3pExecutorKind.
-const (
-	AgentCreateRequestSubagent3pExecutorKindExternalCli AgentCreateRequestSubagent3pExecutorKind = "external-cli"
-	AgentCreateRequestSubagent3pExecutorKindNative      AgentCreateRequestSubagent3pExecutorKind = "native"
-	AgentCreateRequestSubagent3pExecutorKindRemoteA2a   AgentCreateRequestSubagent3pExecutorKind = "remote-a2a"
-)
-
-// Valid indicates whether the value is a known member of the AgentCreateRequestSubagent3pExecutorKind enum.
-func (e AgentCreateRequestSubagent3pExecutorKind) Valid() bool {
-	switch e {
-	case AgentCreateRequestSubagent3pExecutorKindExternalCli:
-		return true
-	case AgentCreateRequestSubagent3pExecutorKindNative:
-		return true
-	case AgentCreateRequestSubagent3pExecutorKindRemoteA2a:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for AgentCreateRequestSubagent3pType.
 const (
 	AgentCreateRequestSubagent3pTypeSubagent3p AgentCreateRequestSubagent3pType = "subagent_3p"
@@ -623,6 +719,387 @@ const (
 func (e AgentCreateRequestSubagent3pType) Valid() bool {
 	switch e {
 	case AgentCreateRequestSubagent3pTypeSubagent3p:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentDependencyKind.
+const (
+	AgentDependencyKindChannelMainAgent AgentDependencyKind = "channel_main_agent"
+	AgentDependencyKindMailbox          AgentDependencyKind = "mailbox"
+	AgentDependencyKindPeopleRow        AgentDependencyKind = "people_row"
+	AgentDependencyKindPrivateSecret    AgentDependencyKind = "private_secret"
+	AgentDependencyKindRoom             AgentDependencyKind = "room"
+)
+
+// Valid indicates whether the value is a known member of the AgentDependencyKind enum.
+func (e AgentDependencyKind) Valid() bool {
+	switch e {
+	case AgentDependencyKindChannelMainAgent:
+		return true
+	case AgentDependencyKindMailbox:
+		return true
+	case AgentDependencyKindPeopleRow:
+		return true
+	case AgentDependencyKindPrivateSecret:
+		return true
+	case AgentDependencyKindRoom:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentDependencyListDependenciesKind.
+const (
+	AgentDependencyListDependenciesKindChannelMainAgent AgentDependencyListDependenciesKind = "channel_main_agent"
+	AgentDependencyListDependenciesKindMailbox          AgentDependencyListDependenciesKind = "mailbox"
+	AgentDependencyListDependenciesKindPeopleRow        AgentDependencyListDependenciesKind = "people_row"
+	AgentDependencyListDependenciesKindPrivateSecret    AgentDependencyListDependenciesKind = "private_secret"
+	AgentDependencyListDependenciesKindRoom             AgentDependencyListDependenciesKind = "room"
+)
+
+// Valid indicates whether the value is a known member of the AgentDependencyListDependenciesKind enum.
+func (e AgentDependencyListDependenciesKind) Valid() bool {
+	switch e {
+	case AgentDependencyListDependenciesKindChannelMainAgent:
+		return true
+	case AgentDependencyListDependenciesKindMailbox:
+		return true
+	case AgentDependencyListDependenciesKindPeopleRow:
+		return true
+	case AgentDependencyListDependenciesKindPrivateSecret:
+		return true
+	case AgentDependencyListDependenciesKindRoom:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentDetailActivationStatus.
+const (
+	AgentDetailActivationStatusActive       AgentDetailActivationStatus = "active"
+	AgentDetailActivationStatusFailed       AgentDetailActivationStatus = "failed"
+	AgentDetailActivationStatusNotAttempted AgentDetailActivationStatus = "not_attempted"
+)
+
+// Valid indicates whether the value is a known member of the AgentDetailActivationStatus enum.
+func (e AgentDetailActivationStatus) Valid() bool {
+	switch e {
+	case AgentDetailActivationStatusActive:
+		return true
+	case AgentDetailActivationStatusFailed:
+		return true
+	case AgentDetailActivationStatusNotAttempted:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentDetailExecutorKind.
+const (
+	AgentDetailExecutorKindExternalCli AgentDetailExecutorKind = "external-cli"
+	AgentDetailExecutorKindNative      AgentDetailExecutorKind = "native"
+	AgentDetailExecutorKindRemoteA2a   AgentDetailExecutorKind = "remote-a2a"
+)
+
+// Valid indicates whether the value is a known member of the AgentDetailExecutorKind enum.
+func (e AgentDetailExecutorKind) Valid() bool {
+	switch e {
+	case AgentDetailExecutorKindExternalCli:
+		return true
+	case AgentDetailExecutorKindNative:
+		return true
+	case AgentDetailExecutorKindRemoteA2a:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentDetailStoredOverrides.
+const (
+	AgentDetailStoredOverridesAllow AgentDetailStoredOverrides = "allow"
+	AgentDetailStoredOverridesAsk   AgentDetailStoredOverrides = "ask"
+	AgentDetailStoredOverridesDeny  AgentDetailStoredOverrides = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentDetailStoredOverrides enum.
+func (e AgentDetailStoredOverrides) Valid() bool {
+	switch e {
+	case AgentDetailStoredOverridesAllow:
+		return true
+	case AgentDetailStoredOverridesAsk:
+		return true
+	case AgentDetailStoredOverridesDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentDetailToolPermissionsEffective.
+const (
+	AgentDetailToolPermissionsEffectiveAllow AgentDetailToolPermissionsEffective = "allow"
+	AgentDetailToolPermissionsEffectiveAsk   AgentDetailToolPermissionsEffective = "ask"
+	AgentDetailToolPermissionsEffectiveDeny  AgentDetailToolPermissionsEffective = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentDetailToolPermissionsEffective enum.
+func (e AgentDetailToolPermissionsEffective) Valid() bool {
+	switch e {
+	case AgentDetailToolPermissionsEffectiveAllow:
+		return true
+	case AgentDetailToolPermissionsEffectiveAsk:
+		return true
+	case AgentDetailToolPermissionsEffectiveDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentDetailToolPermissionsOverride.
+const (
+	AgentDetailToolPermissionsOverrideAllow AgentDetailToolPermissionsOverride = "allow"
+	AgentDetailToolPermissionsOverrideAsk   AgentDetailToolPermissionsOverride = "ask"
+	AgentDetailToolPermissionsOverrideDeny  AgentDetailToolPermissionsOverride = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentDetailToolPermissionsOverride enum.
+func (e AgentDetailToolPermissionsOverride) Valid() bool {
+	switch e {
+	case AgentDetailToolPermissionsOverrideAllow:
+		return true
+	case AgentDetailToolPermissionsOverrideAsk:
+		return true
+	case AgentDetailToolPermissionsOverrideDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentDetailType.
+const (
+	AgentDetailTypeCore       AgentDetailType = "core"
+	AgentDetailTypeMain       AgentDetailType = "Main"
+	AgentDetailTypeSubagent   AgentDetailType = "Subagent"
+	AgentDetailTypeSubagent3p AgentDetailType = "subagent_3p"
+	AgentDetailTypeSystem     AgentDetailType = "system"
+)
+
+// Valid indicates whether the value is a known member of the AgentDetailType enum.
+func (e AgentDetailType) Valid() bool {
+	switch e {
+	case AgentDetailTypeCore:
+		return true
+	case AgentDetailTypeMain:
+		return true
+	case AgentDetailTypeSubagent:
+		return true
+	case AgentDetailTypeSubagent3p:
+		return true
+	case AgentDetailTypeSystem:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentFigure.
+const (
+	AgentFigureMan      AgentFigure = "Man"
+	AgentFigureMonogram AgentFigure = "Monogram"
+	AgentFigureOmnipus  AgentFigure = "Omnipus"
+	AgentFigureRobot    AgentFigure = "Robot"
+	AgentFigureWoman    AgentFigure = "Woman"
+)
+
+// Valid indicates whether the value is a known member of the AgentFigure enum.
+func (e AgentFigure) Valid() bool {
+	switch e {
+	case AgentFigureMan:
+		return true
+	case AgentFigureMonogram:
+		return true
+	case AgentFigureOmnipus:
+		return true
+	case AgentFigureRobot:
+		return true
+	case AgentFigureWoman:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentPreviewPreviewOf.
+const (
+	AgentPreviewPreviewOfMain       AgentPreviewPreviewOf = "Main"
+	AgentPreviewPreviewOfSubagent   AgentPreviewPreviewOf = "Subagent"
+	AgentPreviewPreviewOfSubagent3p AgentPreviewPreviewOf = "subagent_3p"
+)
+
+// Valid indicates whether the value is a known member of the AgentPreviewPreviewOf enum.
+func (e AgentPreviewPreviewOf) Valid() bool {
+	switch e {
+	case AgentPreviewPreviewOfMain:
+		return true
+	case AgentPreviewPreviewOfSubagent:
+		return true
+	case AgentPreviewPreviewOfSubagent3p:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentPreviewToolPermissionsEffective.
+const (
+	AgentPreviewToolPermissionsEffectiveAllow AgentPreviewToolPermissionsEffective = "allow"
+	AgentPreviewToolPermissionsEffectiveAsk   AgentPreviewToolPermissionsEffective = "ask"
+	AgentPreviewToolPermissionsEffectiveDeny  AgentPreviewToolPermissionsEffective = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentPreviewToolPermissionsEffective enum.
+func (e AgentPreviewToolPermissionsEffective) Valid() bool {
+	switch e {
+	case AgentPreviewToolPermissionsEffectiveAllow:
+		return true
+	case AgentPreviewToolPermissionsEffectiveAsk:
+		return true
+	case AgentPreviewToolPermissionsEffectiveDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentPreviewToolPermissionsOverride.
+const (
+	AgentPreviewToolPermissionsOverrideAllow AgentPreviewToolPermissionsOverride = "allow"
+	AgentPreviewToolPermissionsOverrideAsk   AgentPreviewToolPermissionsOverride = "ask"
+	AgentPreviewToolPermissionsOverrideDeny  AgentPreviewToolPermissionsOverride = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentPreviewToolPermissionsOverride enum.
+func (e AgentPreviewToolPermissionsOverride) Valid() bool {
+	switch e {
+	case AgentPreviewToolPermissionsOverrideAllow:
+		return true
+	case AgentPreviewToolPermissionsOverrideAsk:
+		return true
+	case AgentPreviewToolPermissionsOverrideDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentRole.
+const (
+	AgentRoleAnalyst      AgentRole = "analyst"
+	AgentRoleAudio        AgentRole = "audio"
+	AgentRoleAutomation   AgentRole = "automation"
+	AgentRoleData         AgentRole = "data"
+	AgentRoleDesigner     AgentRole = "designer"
+	AgentRoleDeveloper    AgentRole = "developer"
+	AgentRoleDocuments    AgentRole = "documents"
+	AgentRoleFinance      AgentRole = "finance"
+	AgentRoleGeneral      AgentRole = "general"
+	AgentRoleImage        AgentRole = "image"
+	AgentRoleItops        AgentRole = "itops"
+	AgentRoleKnowledge    AgentRole = "knowledge"
+	AgentRoleLegal        AgentRole = "legal"
+	AgentRoleMarketing    AgentRole = "marketing"
+	AgentRoleOffice       AgentRole = "office"
+	AgentRoleOrchestrator AgentRole = "orchestrator"
+	AgentRolePeople       AgentRole = "people"
+	AgentRolePersonal     AgentRole = "personal"
+	AgentRoleProduct      AgentRole = "product"
+	AgentRoleProject      AgentRole = "project"
+	AgentRoleQuality      AgentRole = "quality"
+	AgentRoleResearcher   AgentRole = "researcher"
+	AgentRoleSales        AgentRole = "sales"
+	AgentRoleScience      AgentRole = "science"
+	AgentRoleSecurity     AgentRole = "security"
+	AgentRoleSocial       AgentRole = "social"
+	AgentRoleSupport      AgentRole = "support"
+	AgentRoleTranslator   AgentRole = "translator"
+	AgentRoleTutor        AgentRole = "tutor"
+	AgentRoleVideo        AgentRole = "video"
+	AgentRoleWriter       AgentRole = "writer"
+)
+
+// Valid indicates whether the value is a known member of the AgentRole enum.
+func (e AgentRole) Valid() bool {
+	switch e {
+	case AgentRoleAnalyst:
+		return true
+	case AgentRoleAudio:
+		return true
+	case AgentRoleAutomation:
+		return true
+	case AgentRoleData:
+		return true
+	case AgentRoleDesigner:
+		return true
+	case AgentRoleDeveloper:
+		return true
+	case AgentRoleDocuments:
+		return true
+	case AgentRoleFinance:
+		return true
+	case AgentRoleGeneral:
+		return true
+	case AgentRoleImage:
+		return true
+	case AgentRoleItops:
+		return true
+	case AgentRoleKnowledge:
+		return true
+	case AgentRoleLegal:
+		return true
+	case AgentRoleMarketing:
+		return true
+	case AgentRoleOffice:
+		return true
+	case AgentRoleOrchestrator:
+		return true
+	case AgentRolePeople:
+		return true
+	case AgentRolePersonal:
+		return true
+	case AgentRoleProduct:
+		return true
+	case AgentRoleProject:
+		return true
+	case AgentRoleQuality:
+		return true
+	case AgentRoleResearcher:
+		return true
+	case AgentRoleSales:
+		return true
+	case AgentRoleScience:
+		return true
+	case AgentRoleSecurity:
+		return true
+	case AgentRoleSocial:
+		return true
+	case AgentRoleSupport:
+		return true
+	case AgentRoleTranslator:
+		return true
+	case AgentRoleTutor:
+		return true
+	case AgentRoleVideo:
+		return true
+	case AgentRoleWriter:
 		return true
 	default:
 		return false
@@ -686,6 +1163,48 @@ func (e AgentToolEntryManifestTier) Valid() bool {
 	case AgentToolEntryManifestTierFull:
 		return true
 	case AgentToolEntryManifestTierInfra:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentToolPermissionEffective.
+const (
+	AgentToolPermissionEffectiveAllow AgentToolPermissionEffective = "allow"
+	AgentToolPermissionEffectiveAsk   AgentToolPermissionEffective = "ask"
+	AgentToolPermissionEffectiveDeny  AgentToolPermissionEffective = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentToolPermissionEffective enum.
+func (e AgentToolPermissionEffective) Valid() bool {
+	switch e {
+	case AgentToolPermissionEffectiveAllow:
+		return true
+	case AgentToolPermissionEffectiveAsk:
+		return true
+	case AgentToolPermissionEffectiveDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentToolPermissionOverride.
+const (
+	AgentToolPermissionOverrideAllow AgentToolPermissionOverride = "allow"
+	AgentToolPermissionOverrideAsk   AgentToolPermissionOverride = "ask"
+	AgentToolPermissionOverrideDeny  AgentToolPermissionOverride = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentToolPermissionOverride enum.
+func (e AgentToolPermissionOverride) Valid() bool {
+	switch e {
+	case AgentToolPermissionOverrideAllow:
+		return true
+	case AgentToolPermissionOverrideAsk:
+		return true
+	case AgentToolPermissionOverrideDeny:
 		return true
 	default:
 		return false
@@ -899,27 +1418,6 @@ func (e AgentToolsUpdateRequestConfigBuiltinPolicies) Valid() bool {
 	case AgentToolsUpdateRequestConfigBuiltinPoliciesAsk:
 		return true
 	case AgentToolsUpdateRequestConfigBuiltinPoliciesDeny:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for AgentUpdateRequestExecutorKind.
-const (
-	AgentUpdateRequestExecutorKindExternalCli AgentUpdateRequestExecutorKind = "external-cli"
-	AgentUpdateRequestExecutorKindNative      AgentUpdateRequestExecutorKind = "native"
-	AgentUpdateRequestExecutorKindRemoteA2a   AgentUpdateRequestExecutorKind = "remote-a2a"
-)
-
-// Valid indicates whether the value is a known member of the AgentUpdateRequestExecutorKind enum.
-func (e AgentUpdateRequestExecutorKind) Valid() bool {
-	switch e {
-	case AgentUpdateRequestExecutorKindExternalCli:
-		return true
-	case AgentUpdateRequestExecutorKindNative:
-		return true
-	case AgentUpdateRequestExecutorKindRemoteA2a:
 		return true
 	default:
 		return false
@@ -1230,7 +1728,6 @@ func (e CatalogModelWindowSource) Valid() bool {
 const (
 	CatalogProtocolProtocolAnthropic        CatalogProtocolProtocol = "anthropic"
 	CatalogProtocolProtocolBedrock          CatalogProtocolProtocol = "bedrock"
-	CatalogProtocolProtocolCli              CatalogProtocolProtocol = "cli"
 	CatalogProtocolProtocolGoogle           CatalogProtocolProtocol = "google"
 	CatalogProtocolProtocolOllama           CatalogProtocolProtocol = "ollama"
 	CatalogProtocolProtocolOpenaiCompatible CatalogProtocolProtocol = "openai-compatible"
@@ -1242,8 +1739,6 @@ func (e CatalogProtocolProtocol) Valid() bool {
 	case CatalogProtocolProtocolAnthropic:
 		return true
 	case CatalogProtocolProtocolBedrock:
-		return true
-	case CatalogProtocolProtocolCli:
 		return true
 	case CatalogProtocolProtocolGoogle:
 		return true
@@ -1268,24 +1763,6 @@ func (e CatalogProviderAuthMethods) Valid() bool {
 	case CatalogProviderAuthMethodsApiKey:
 		return true
 	case CatalogProviderAuthMethodsSignIn:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for CatalogProviderCliKind.
-const (
-	CatalogProviderCliKindCodex   CatalogProviderCliKind = "codex"
-	CatalogProviderCliKindCopilot CatalogProviderCliKind = "copilot"
-)
-
-// Valid indicates whether the value is a known member of the CatalogProviderCliKind enum.
-func (e CatalogProviderCliKind) Valid() bool {
-	switch e {
-	case CatalogProviderCliKindCodex:
-		return true
-	case CatalogProviderCliKindCopilot:
 		return true
 	default:
 		return false
@@ -1413,7 +1890,6 @@ func (e CatalogProviderModelsWindowSource) Valid() bool {
 const (
 	CatalogProviderProtocolAnthropic        CatalogProviderProtocol = "anthropic"
 	CatalogProviderProtocolBedrock          CatalogProviderProtocol = "bedrock"
-	CatalogProviderProtocolCli              CatalogProviderProtocol = "cli"
 	CatalogProviderProtocolGoogle           CatalogProviderProtocol = "google"
 	CatalogProviderProtocolOllama           CatalogProviderProtocol = "ollama"
 	CatalogProviderProtocolOpenaiCompatible CatalogProviderProtocol = "openai-compatible"
@@ -1425,8 +1901,6 @@ func (e CatalogProviderProtocol) Valid() bool {
 	case CatalogProviderProtocolAnthropic:
 		return true
 	case CatalogProviderProtocolBedrock:
-		return true
-	case CatalogProviderProtocolCli:
 		return true
 	case CatalogProviderProtocolGoogle:
 		return true
@@ -1443,7 +1917,6 @@ func (e CatalogProviderProtocol) Valid() bool {
 const (
 	CatalogProviderProtocolsProtocolAnthropic        CatalogProviderProtocolsProtocol = "anthropic"
 	CatalogProviderProtocolsProtocolBedrock          CatalogProviderProtocolsProtocol = "bedrock"
-	CatalogProviderProtocolsProtocolCli              CatalogProviderProtocolsProtocol = "cli"
 	CatalogProviderProtocolsProtocolGoogle           CatalogProviderProtocolsProtocol = "google"
 	CatalogProviderProtocolsProtocolOllama           CatalogProviderProtocolsProtocol = "ollama"
 	CatalogProviderProtocolsProtocolOpenaiCompatible CatalogProviderProtocolsProtocol = "openai-compatible"
@@ -1455,8 +1928,6 @@ func (e CatalogProviderProtocolsProtocol) Valid() bool {
 	case CatalogProviderProtocolsProtocolAnthropic:
 		return true
 	case CatalogProviderProtocolsProtocolBedrock:
-		return true
-	case CatalogProviderProtocolsProtocolCli:
 		return true
 	case CatalogProviderProtocolsProtocolGoogle:
 		return true
@@ -1577,6 +2048,48 @@ func (e CatalogProviderRegionGroup) Valid() bool {
 	}
 }
 
+// Defines values for ChannelAvailabilityState.
+const (
+	ChannelAvailabilityStateNotLoaded  ChannelAvailabilityState = "not_loaded"
+	ChannelAvailabilityStateNotRunning ChannelAvailabilityState = "not_running"
+	ChannelAvailabilityStateRunning    ChannelAvailabilityState = "running"
+)
+
+// Valid indicates whether the value is a known member of the ChannelAvailabilityState enum.
+func (e ChannelAvailabilityState) Valid() bool {
+	switch e {
+	case ChannelAvailabilityStateNotLoaded:
+		return true
+	case ChannelAvailabilityStateNotRunning:
+		return true
+	case ChannelAvailabilityStateRunning:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelConfigureErrorCode.
+const (
+	ChannelConfigureErrorCodeCouldNotSave            ChannelConfigureErrorCode = "could_not_save"
+	ChannelConfigureErrorCodeCredentialSavedNotSaved ChannelConfigureErrorCode = "credential_saved_not_saved"
+	ChannelConfigureErrorCodeSavedNotRefreshed       ChannelConfigureErrorCode = "saved_not_refreshed"
+)
+
+// Valid indicates whether the value is a known member of the ChannelConfigureErrorCode enum.
+func (e ChannelConfigureErrorCode) Valid() bool {
+	switch e {
+	case ChannelConfigureErrorCodeCouldNotSave:
+		return true
+	case ChannelConfigureErrorCodeCredentialSavedNotSaved:
+		return true
+	case ChannelConfigureErrorCodeSavedNotRefreshed:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ChannelConfigureRequestIdentityKind.
 const (
 	ChannelConfigureRequestIdentityKindAgent ChannelConfigureRequestIdentityKind = "agent"
@@ -1595,6 +2108,33 @@ func (e ChannelConfigureRequestIdentityKind) Valid() bool {
 	}
 }
 
+// Defines values for ChannelConfigureResponseApplyOutcome.
+const (
+	ChannelConfigureResponseApplyOutcomeApplied           ChannelConfigureResponseApplyOutcome = "applied"
+	ChannelConfigureResponseApplyOutcomeAppliedNotRunning ChannelConfigureResponseApplyOutcome = "applied_not_running"
+	ChannelConfigureResponseApplyOutcomeFailed            ChannelConfigureResponseApplyOutcome = "failed"
+	ChannelConfigureResponseApplyOutcomeNoReloadNeeded    ChannelConfigureResponseApplyOutcome = "no_reload_needed"
+	ChannelConfigureResponseApplyOutcomeUnconfirmed       ChannelConfigureResponseApplyOutcome = "unconfirmed"
+)
+
+// Valid indicates whether the value is a known member of the ChannelConfigureResponseApplyOutcome enum.
+func (e ChannelConfigureResponseApplyOutcome) Valid() bool {
+	switch e {
+	case ChannelConfigureResponseApplyOutcomeApplied:
+		return true
+	case ChannelConfigureResponseApplyOutcomeAppliedNotRunning:
+		return true
+	case ChannelConfigureResponseApplyOutcomeFailed:
+		return true
+	case ChannelConfigureResponseApplyOutcomeNoReloadNeeded:
+		return true
+	case ChannelConfigureResponseApplyOutcomeUnconfirmed:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ChannelEntryIdentityKind.
 const (
 	ChannelEntryIdentityKindAgent ChannelEntryIdentityKind = "agent"
@@ -1607,6 +2147,24 @@ func (e ChannelEntryIdentityKind) Valid() bool {
 	case ChannelEntryIdentityKindAgent:
 		return true
 	case ChannelEntryIdentityKindUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelEntryOutboundPolicy.
+const (
+	ChannelEntryOutboundPolicyAgentMayStart ChannelEntryOutboundPolicy = "agent_may_start"
+	ChannelEntryOutboundPolicyReplyOnly     ChannelEntryOutboundPolicy = "reply_only"
+)
+
+// Valid indicates whether the value is a known member of the ChannelEntryOutboundPolicy enum.
+func (e ChannelEntryOutboundPolicy) Valid() bool {
+	switch e {
+	case ChannelEntryOutboundPolicyAgentMayStart:
+		return true
+	case ChannelEntryOutboundPolicyReplyOnly:
 		return true
 	default:
 		return false
@@ -1661,6 +2219,171 @@ func (e ChannelIdentityKind) Valid() bool {
 	case ChannelIdentityKindAgent:
 		return true
 	case ChannelIdentityKindUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelOutboundPolicy.
+const (
+	ChannelOutboundPolicyAgentMayStart ChannelOutboundPolicy = "agent_may_start"
+	ChannelOutboundPolicyReplyOnly     ChannelOutboundPolicy = "reply_only"
+)
+
+// Valid indicates whether the value is a known member of the ChannelOutboundPolicy enum.
+func (e ChannelOutboundPolicy) Valid() bool {
+	switch e {
+	case ChannelOutboundPolicyAgentMayStart:
+		return true
+	case ChannelOutboundPolicyReplyOnly:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelOutboundReadAvailabilityState.
+const (
+	ChannelOutboundReadAvailabilityStateNotLoaded  ChannelOutboundReadAvailabilityState = "not_loaded"
+	ChannelOutboundReadAvailabilityStateNotRunning ChannelOutboundReadAvailabilityState = "not_running"
+	ChannelOutboundReadAvailabilityStateRunning    ChannelOutboundReadAvailabilityState = "running"
+)
+
+// Valid indicates whether the value is a known member of the ChannelOutboundReadAvailabilityState enum.
+func (e ChannelOutboundReadAvailabilityState) Valid() bool {
+	switch e {
+	case ChannelOutboundReadAvailabilityStateNotLoaded:
+		return true
+	case ChannelOutboundReadAvailabilityStateNotRunning:
+		return true
+	case ChannelOutboundReadAvailabilityStateRunning:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelOutboundReadOutboundPolicy.
+const (
+	ChannelOutboundReadOutboundPolicyAgentMayStart ChannelOutboundReadOutboundPolicy = "agent_may_start"
+	ChannelOutboundReadOutboundPolicyReplyOnly     ChannelOutboundReadOutboundPolicy = "reply_only"
+)
+
+// Valid indicates whether the value is a known member of the ChannelOutboundReadOutboundPolicy enum.
+func (e ChannelOutboundReadOutboundPolicy) Valid() bool {
+	switch e {
+	case ChannelOutboundReadOutboundPolicyAgentMayStart:
+		return true
+	case ChannelOutboundReadOutboundPolicyReplyOnly:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelOutboundRejectionCode.
+const (
+	ChannelOutboundRejectionCodeConnectFirst                ChannelOutboundRejectionCode = "connect_first"
+	ChannelOutboundRejectionCodeInvalidTargets              ChannelOutboundRejectionCode = "invalid_targets"
+	ChannelOutboundRejectionCodeLookupUnavailable           ChannelOutboundRejectionCode = "lookup_unavailable"
+	ChannelOutboundRejectionCodePlatformCannotMessagePeople ChannelOutboundRejectionCode = "platform_cannot_message_people"
+	ChannelOutboundRejectionCodePlatformCannotStart         ChannelOutboundRejectionCode = "platform_cannot_start"
+	ChannelOutboundRejectionCodeSavedLiveMismatch           ChannelOutboundRejectionCode = "saved_live_mismatch"
+	ChannelOutboundRejectionCodeStaleRevision               ChannelOutboundRejectionCode = "stale_revision"
+	ChannelOutboundRejectionCodeTooManyTargets              ChannelOutboundRejectionCode = "too_many_targets"
+)
+
+// Valid indicates whether the value is a known member of the ChannelOutboundRejectionCode enum.
+func (e ChannelOutboundRejectionCode) Valid() bool {
+	switch e {
+	case ChannelOutboundRejectionCodeConnectFirst:
+		return true
+	case ChannelOutboundRejectionCodeInvalidTargets:
+		return true
+	case ChannelOutboundRejectionCodeLookupUnavailable:
+		return true
+	case ChannelOutboundRejectionCodePlatformCannotMessagePeople:
+		return true
+	case ChannelOutboundRejectionCodePlatformCannotStart:
+		return true
+	case ChannelOutboundRejectionCodeSavedLiveMismatch:
+		return true
+	case ChannelOutboundRejectionCodeStaleRevision:
+		return true
+	case ChannelOutboundRejectionCodeTooManyTargets:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelOutboundRejectionTargetErrorsCode.
+const (
+	ChannelOutboundRejectionTargetErrorsCodeCannotMessagePeople    ChannelOutboundRejectionTargetErrorsCode = "cannot_message_people"
+	ChannelOutboundRejectionTargetErrorsCodeInvalidId              ChannelOutboundRejectionTargetErrorsCode = "invalid_id"
+	ChannelOutboundRejectionTargetErrorsCodeLookupUnavailable      ChannelOutboundRejectionTargetErrorsCode = "lookup_unavailable"
+	ChannelOutboundRejectionTargetErrorsCodeNotFound               ChannelOutboundRejectionTargetErrorsCode = "not_found"
+	ChannelOutboundRejectionTargetErrorsCodeUnsupportedChannelKind ChannelOutboundRejectionTargetErrorsCode = "unsupported_channel_kind"
+	ChannelOutboundRejectionTargetErrorsCodeUsernameNotAllowed     ChannelOutboundRejectionTargetErrorsCode = "username_not_allowed"
+	ChannelOutboundRejectionTargetErrorsCodeWildcardNotAllowed     ChannelOutboundRejectionTargetErrorsCode = "wildcard_not_allowed"
+	ChannelOutboundRejectionTargetErrorsCodeWrongPlatform          ChannelOutboundRejectionTargetErrorsCode = "wrong_platform"
+)
+
+// Valid indicates whether the value is a known member of the ChannelOutboundRejectionTargetErrorsCode enum.
+func (e ChannelOutboundRejectionTargetErrorsCode) Valid() bool {
+	switch e {
+	case ChannelOutboundRejectionTargetErrorsCodeCannotMessagePeople:
+		return true
+	case ChannelOutboundRejectionTargetErrorsCodeInvalidId:
+		return true
+	case ChannelOutboundRejectionTargetErrorsCodeLookupUnavailable:
+		return true
+	case ChannelOutboundRejectionTargetErrorsCodeNotFound:
+		return true
+	case ChannelOutboundRejectionTargetErrorsCodeUnsupportedChannelKind:
+		return true
+	case ChannelOutboundRejectionTargetErrorsCodeUsernameNotAllowed:
+		return true
+	case ChannelOutboundRejectionTargetErrorsCodeWildcardNotAllowed:
+		return true
+	case ChannelOutboundRejectionTargetErrorsCodeWrongPlatform:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelOutboundUpdateRequestPolicy.
+const (
+	ChannelOutboundUpdateRequestPolicyAgentMayStart ChannelOutboundUpdateRequestPolicy = "agent_may_start"
+	ChannelOutboundUpdateRequestPolicyReplyOnly     ChannelOutboundUpdateRequestPolicy = "reply_only"
+)
+
+// Valid indicates whether the value is a known member of the ChannelOutboundUpdateRequestPolicy enum.
+func (e ChannelOutboundUpdateRequestPolicy) Valid() bool {
+	switch e {
+	case ChannelOutboundUpdateRequestPolicyAgentMayStart:
+		return true
+	case ChannelOutboundUpdateRequestPolicyReplyOnly:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ChannelOutboundWriteResponseOutboundPolicy.
+const (
+	ChannelOutboundWriteResponseOutboundPolicyAgentMayStart ChannelOutboundWriteResponseOutboundPolicy = "agent_may_start"
+	ChannelOutboundWriteResponseOutboundPolicyReplyOnly     ChannelOutboundWriteResponseOutboundPolicy = "reply_only"
+)
+
+// Valid indicates whether the value is a known member of the ChannelOutboundWriteResponseOutboundPolicy enum.
+func (e ChannelOutboundWriteResponseOutboundPolicy) Valid() bool {
+	switch e {
+	case ChannelOutboundWriteResponseOutboundPolicyAgentMayStart:
+		return true
+	case ChannelOutboundWriteResponseOutboundPolicyReplyOnly:
 		return true
 	default:
 		return false
@@ -1748,6 +2471,24 @@ func (e CliDetectEntrySource) Valid() bool {
 	case CliDetectEntrySourcePath:
 		return true
 	case CliDetectEntrySourceWellKnown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CliPresetViewDetectedSource.
+const (
+	CliPresetViewDetectedSourcePath      CliPresetViewDetectedSource = "path"
+	CliPresetViewDetectedSourceWellKnown CliPresetViewDetectedSource = "well-known"
+)
+
+// Valid indicates whether the value is a known member of the CliPresetViewDetectedSource enum.
+func (e CliPresetViewDetectedSource) Valid() bool {
+	switch e {
+	case CliPresetViewDetectedSourcePath:
+		return true
+	case CliPresetViewDetectedSourceWellKnown:
 		return true
 	default:
 		return false
@@ -1907,6 +2648,24 @@ func (e ConfigurationPersistenceStatus) Valid() bool {
 	}
 }
 
+// Defines values for ContextWindowNoticeKind.
+const (
+	ContextWindowNoticeKindMidTurn       ContextWindowNoticeKind = "mid_turn"
+	ContextWindowNoticeKindProviderRetry ContextWindowNoticeKind = "provider_retry"
+)
+
+// Valid indicates whether the value is a known member of the ContextWindowNoticeKind enum.
+func (e ContextWindowNoticeKind) Valid() bool {
+	switch e {
+	case ContextWindowNoticeKindMidTurn:
+		return true
+	case ContextWindowNoticeKindProviderRetry:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ContextWindowSource.
 const (
 	ContextWindowSourceCatalog  ContextWindowSource = "catalog"
@@ -2012,30 +2771,15 @@ func (e DefaultModelWindowSource) Valid() bool {
 	}
 }
 
-// Defines values for DelegateCancelActionAction.
+// Defines values for DelegateClearGoalActionAction.
 const (
-	DelegateCancelActionActionCancel DelegateCancelActionAction = "cancel"
+	DelegateClearGoalActionActionClearGoal DelegateClearGoalActionAction = "clear_goal"
 )
 
-// Valid indicates whether the value is a known member of the DelegateCancelActionAction enum.
-func (e DelegateCancelActionAction) Valid() bool {
+// Valid indicates whether the value is a known member of the DelegateClearGoalActionAction enum.
+func (e DelegateClearGoalActionAction) Valid() bool {
 	switch e {
-	case DelegateCancelActionActionCancel:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for DelegateFollowUpActionAction.
-const (
-	DelegateFollowUpActionActionFollowUp DelegateFollowUpActionAction = "follow_up"
-)
-
-// Valid indicates whether the value is a known member of the DelegateFollowUpActionAction enum.
-func (e DelegateFollowUpActionAction) Valid() bool {
-	switch e {
-	case DelegateFollowUpActionActionFollowUp:
+	case DelegateClearGoalActionActionClearGoal:
 		return true
 	default:
 		return false
@@ -2072,6 +2816,30 @@ func (e DelegateInboxActionAction) Valid() bool {
 	}
 }
 
+// Defines values for DelegateNotDeliveredSummaryLastReason.
+const (
+	DelegateNotDeliveredSummaryLastReasonBodyTooLarge           DelegateNotDeliveredSummaryLastReason = "body_too_large"
+	DelegateNotDeliveredSummaryLastReasonQuestionBlockerCeiling DelegateNotDeliveredSummaryLastReason = "question_blocker_ceiling"
+	DelegateNotDeliveredSummaryLastReasonRateLimited            DelegateNotDeliveredSummaryLastReason = "rate_limited"
+	DelegateNotDeliveredSummaryLastReasonUnackedCap             DelegateNotDeliveredSummaryLastReason = "unacked_cap"
+)
+
+// Valid indicates whether the value is a known member of the DelegateNotDeliveredSummaryLastReason enum.
+func (e DelegateNotDeliveredSummaryLastReason) Valid() bool {
+	switch e {
+	case DelegateNotDeliveredSummaryLastReasonBodyTooLarge:
+		return true
+	case DelegateNotDeliveredSummaryLastReasonQuestionBlockerCeiling:
+		return true
+	case DelegateNotDeliveredSummaryLastReasonRateLimited:
+		return true
+	case DelegateNotDeliveredSummaryLastReasonUnackedCap:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DelegatePeekActionAction.
 const (
 	DelegatePeekActionActionPeek DelegatePeekActionAction = "peek"
@@ -2089,34 +2857,46 @@ func (e DelegatePeekActionAction) Valid() bool {
 
 // Defines values for DelegatePeekResponseState.
 const (
-	DelegatePeekResponseStateCancelled  DelegatePeekResponseState = "cancelled"
-	DelegatePeekResponseStateCompleted  DelegatePeekResponseState = "completed"
-	DelegatePeekResponseStateFailed     DelegatePeekResponseState = "failed"
-	DelegatePeekResponseStateNeedsInput DelegatePeekResponseState = "needs_input"
-	DelegatePeekResponseStatePaused     DelegatePeekResponseState = "paused"
-	DelegatePeekResponseStateQueued     DelegatePeekResponseState = "queued"
-	DelegatePeekResponseStateRunning    DelegatePeekResponseState = "running"
-	DelegatePeekResponseStateTimedOut   DelegatePeekResponseState = "timed_out"
+	DelegatePeekResponseStateCompleted   DelegatePeekResponseState = "completed"
+	DelegatePeekResponseStateFailed      DelegatePeekResponseState = "failed"
+	DelegatePeekResponseStateInterrupted DelegatePeekResponseState = "interrupted"
+	DelegatePeekResponseStateNeedsInput  DelegatePeekResponseState = "needs_input"
+	DelegatePeekResponseStateQueued      DelegatePeekResponseState = "queued"
+	DelegatePeekResponseStateRunning     DelegatePeekResponseState = "running"
+	DelegatePeekResponseStateStopped     DelegatePeekResponseState = "stopped"
 )
 
 // Valid indicates whether the value is a known member of the DelegatePeekResponseState enum.
 func (e DelegatePeekResponseState) Valid() bool {
 	switch e {
-	case DelegatePeekResponseStateCancelled:
-		return true
 	case DelegatePeekResponseStateCompleted:
 		return true
 	case DelegatePeekResponseStateFailed:
 		return true
-	case DelegatePeekResponseStateNeedsInput:
+	case DelegatePeekResponseStateInterrupted:
 		return true
-	case DelegatePeekResponseStatePaused:
+	case DelegatePeekResponseStateNeedsInput:
 		return true
 	case DelegatePeekResponseStateQueued:
 		return true
 	case DelegatePeekResponseStateRunning:
 		return true
-	case DelegatePeekResponseStateTimedOut:
+	case DelegatePeekResponseStateStopped:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateRedirectActionAction.
+const (
+	DelegateRedirectActionActionRedirect DelegateRedirectActionAction = "redirect"
+)
+
+// Valid indicates whether the value is a known member of the DelegateRedirectActionAction enum.
+func (e DelegateRedirectActionAction) Valid() bool {
+	switch e {
+	case DelegateRedirectActionActionRedirect:
 		return true
 	default:
 		return false
@@ -2138,36 +2918,15 @@ func (e DelegateRespondActionAction) Valid() bool {
 	}
 }
 
-// Defines values for DelegateRespondResponseCorrectiveSessionState.
+// Defines values for DelegateResumeActionAction.
 const (
-	DelegateRespondResponseCorrectiveSessionStateCancelled  DelegateRespondResponseCorrectiveSessionState = "cancelled"
-	DelegateRespondResponseCorrectiveSessionStateCompleted  DelegateRespondResponseCorrectiveSessionState = "completed"
-	DelegateRespondResponseCorrectiveSessionStateFailed     DelegateRespondResponseCorrectiveSessionState = "failed"
-	DelegateRespondResponseCorrectiveSessionStateNeedsInput DelegateRespondResponseCorrectiveSessionState = "needs_input"
-	DelegateRespondResponseCorrectiveSessionStatePaused     DelegateRespondResponseCorrectiveSessionState = "paused"
-	DelegateRespondResponseCorrectiveSessionStateQueued     DelegateRespondResponseCorrectiveSessionState = "queued"
-	DelegateRespondResponseCorrectiveSessionStateRunning    DelegateRespondResponseCorrectiveSessionState = "running"
-	DelegateRespondResponseCorrectiveSessionStateTimedOut   DelegateRespondResponseCorrectiveSessionState = "timed_out"
+	DelegateResumeActionActionResume DelegateResumeActionAction = "resume"
 )
 
-// Valid indicates whether the value is a known member of the DelegateRespondResponseCorrectiveSessionState enum.
-func (e DelegateRespondResponseCorrectiveSessionState) Valid() bool {
+// Valid indicates whether the value is a known member of the DelegateResumeActionAction enum.
+func (e DelegateResumeActionAction) Valid() bool {
 	switch e {
-	case DelegateRespondResponseCorrectiveSessionStateCancelled:
-		return true
-	case DelegateRespondResponseCorrectiveSessionStateCompleted:
-		return true
-	case DelegateRespondResponseCorrectiveSessionStateFailed:
-		return true
-	case DelegateRespondResponseCorrectiveSessionStateNeedsInput:
-		return true
-	case DelegateRespondResponseCorrectiveSessionStatePaused:
-		return true
-	case DelegateRespondResponseCorrectiveSessionStateQueued:
-		return true
-	case DelegateRespondResponseCorrectiveSessionStateRunning:
-		return true
-	case DelegateRespondResponseCorrectiveSessionStateTimedOut:
+	case DelegateResumeActionActionResume:
 		return true
 	default:
 		return false
@@ -2953,34 +3712,28 @@ func (e DelegateRunActionGoalTerminalHistoryVerdictScope) Valid() bool {
 
 // Defines values for DelegateSessionResponseState.
 const (
-	DelegateSessionResponseStateCancelled  DelegateSessionResponseState = "cancelled"
 	DelegateSessionResponseStateCompleted  DelegateSessionResponseState = "completed"
 	DelegateSessionResponseStateFailed     DelegateSessionResponseState = "failed"
 	DelegateSessionResponseStateNeedsInput DelegateSessionResponseState = "needs_input"
-	DelegateSessionResponseStatePaused     DelegateSessionResponseState = "paused"
 	DelegateSessionResponseStateQueued     DelegateSessionResponseState = "queued"
 	DelegateSessionResponseStateRunning    DelegateSessionResponseState = "running"
-	DelegateSessionResponseStateTimedOut   DelegateSessionResponseState = "timed_out"
+	DelegateSessionResponseStateStopped    DelegateSessionResponseState = "stopped"
 )
 
 // Valid indicates whether the value is a known member of the DelegateSessionResponseState enum.
 func (e DelegateSessionResponseState) Valid() bool {
 	switch e {
-	case DelegateSessionResponseStateCancelled:
-		return true
 	case DelegateSessionResponseStateCompleted:
 		return true
 	case DelegateSessionResponseStateFailed:
 		return true
 	case DelegateSessionResponseStateNeedsInput:
 		return true
-	case DelegateSessionResponseStatePaused:
-		return true
 	case DelegateSessionResponseStateQueued:
 		return true
 	case DelegateSessionResponseStateRunning:
 		return true
-	case DelegateSessionResponseStateTimedOut:
+	case DelegateSessionResponseStateStopped:
 		return true
 	default:
 		return false
@@ -3009,6 +3762,7 @@ const (
 	DelegateStatusResponseSessionOriginKindDelegate  DelegateStatusResponseSessionOriginKind = "delegate"
 	DelegateStatusResponseSessionOriginKindHeartbeat DelegateStatusResponseSessionOriginKind = "heartbeat"
 	DelegateStatusResponseSessionOriginKindHuman     DelegateStatusResponseSessionOriginKind = "human"
+	DelegateStatusResponseSessionOriginKindMain      DelegateStatusResponseSessionOriginKind = "main"
 	DelegateStatusResponseSessionOriginKindPlan      DelegateStatusResponseSessionOriginKind = "plan"
 	DelegateStatusResponseSessionOriginKindScheduled DelegateStatusResponseSessionOriginKind = "scheduled"
 	DelegateStatusResponseSessionOriginKindTask      DelegateStatusResponseSessionOriginKind = "task"
@@ -3027,6 +3781,8 @@ func (e DelegateStatusResponseSessionOriginKind) Valid() bool {
 	case DelegateStatusResponseSessionOriginKindHeartbeat:
 		return true
 	case DelegateStatusResponseSessionOriginKindHuman:
+		return true
+	case DelegateStatusResponseSessionOriginKindMain:
 		return true
 	case DelegateStatusResponseSessionOriginKindPlan:
 		return true
@@ -3064,34 +3820,28 @@ func (e DelegateStatusResponseSessionOwnerScopeKind) Valid() bool {
 
 // Defines values for DelegateStatusResponseSessionState.
 const (
-	DelegateStatusResponseSessionStateCancelled  DelegateStatusResponseSessionState = "cancelled"
 	DelegateStatusResponseSessionStateCompleted  DelegateStatusResponseSessionState = "completed"
 	DelegateStatusResponseSessionStateFailed     DelegateStatusResponseSessionState = "failed"
 	DelegateStatusResponseSessionStateNeedsInput DelegateStatusResponseSessionState = "needs_input"
-	DelegateStatusResponseSessionStatePaused     DelegateStatusResponseSessionState = "paused"
 	DelegateStatusResponseSessionStateQueued     DelegateStatusResponseSessionState = "queued"
 	DelegateStatusResponseSessionStateRunning    DelegateStatusResponseSessionState = "running"
-	DelegateStatusResponseSessionStateTimedOut   DelegateStatusResponseSessionState = "timed_out"
+	DelegateStatusResponseSessionStateStopped    DelegateStatusResponseSessionState = "stopped"
 )
 
 // Valid indicates whether the value is a known member of the DelegateStatusResponseSessionState enum.
 func (e DelegateStatusResponseSessionState) Valid() bool {
 	switch e {
-	case DelegateStatusResponseSessionStateCancelled:
-		return true
 	case DelegateStatusResponseSessionStateCompleted:
 		return true
 	case DelegateStatusResponseSessionStateFailed:
 		return true
 	case DelegateStatusResponseSessionStateNeedsInput:
 		return true
-	case DelegateStatusResponseSessionStatePaused:
-		return true
 	case DelegateStatusResponseSessionStateQueued:
 		return true
 	case DelegateStatusResponseSessionStateRunning:
 		return true
-	case DelegateStatusResponseSessionStateTimedOut:
+	case DelegateStatusResponseSessionStateStopped:
 		return true
 	default:
 		return false
@@ -3143,6 +3893,21 @@ const (
 func (e DelegateSteerActionAction) Valid() bool {
 	switch e {
 	case DelegateSteerActionActionSteer:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DelegateStopAllActionAction.
+const (
+	DelegateStopAllActionActionStopAll DelegateStopAllActionAction = "stop_all"
+)
+
+// Valid indicates whether the value is a known member of the DelegateStopAllActionAction enum.
+func (e DelegateStopAllActionAction) Valid() bool {
+	switch e {
+	case DelegateStopAllActionActionStopAll:
 		return true
 	default:
 		return false
@@ -4298,6 +5063,90 @@ func (e HealthResponseStatus) Valid() bool {
 	}
 }
 
+// Defines values for HelperEventKind.
+const (
+	HelperEventKindBlocker       HelperEventKind = "blocker"
+	HelperEventKindFailed        HelperEventKind = "failed"
+	HelperEventKindFinished      HelperEventKind = "finished"
+	HelperEventKindNotVerified   HelperEventKind = "not_verified"
+	HelperEventKindQuestion      HelperEventKind = "question"
+	HelperEventKindRestarted     HelperEventKind = "restarted"
+	HelperEventKindResumeRefused HelperEventKind = "resume_refused"
+	HelperEventKindStopped       HelperEventKind = "stopped"
+	HelperEventKindTimedOut      HelperEventKind = "timed_out"
+	HelperEventKindVerdictUnmet  HelperEventKind = "verdict_unmet"
+)
+
+// Valid indicates whether the value is a known member of the HelperEventKind enum.
+func (e HelperEventKind) Valid() bool {
+	switch e {
+	case HelperEventKindBlocker:
+		return true
+	case HelperEventKindFailed:
+		return true
+	case HelperEventKindFinished:
+		return true
+	case HelperEventKindNotVerified:
+		return true
+	case HelperEventKindQuestion:
+		return true
+	case HelperEventKindRestarted:
+		return true
+	case HelperEventKindResumeRefused:
+		return true
+	case HelperEventKindStopped:
+		return true
+	case HelperEventKindTimedOut:
+		return true
+	case HelperEventKindVerdictUnmet:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for IntegrationProviderId.
+const (
+	IntegrationProviderIdAudioModel IntegrationProviderId = "audio-model"
+	IntegrationProviderIdBaidu      IntegrationProviderId = "baidu"
+	IntegrationProviderIdBrave      IntegrationProviderId = "brave"
+	IntegrationProviderIdDuckduckgo IntegrationProviderId = "duckduckgo"
+	IntegrationProviderIdElevenlabs IntegrationProviderId = "elevenlabs"
+	IntegrationProviderIdExa        IntegrationProviderId = "exa"
+	IntegrationProviderIdGlm        IntegrationProviderId = "glm"
+	IntegrationProviderIdGroq       IntegrationProviderId = "groq"
+	IntegrationProviderIdPerplexity IntegrationProviderId = "perplexity"
+	IntegrationProviderIdTavily     IntegrationProviderId = "tavily"
+)
+
+// Valid indicates whether the value is a known member of the IntegrationProviderId enum.
+func (e IntegrationProviderId) Valid() bool {
+	switch e {
+	case IntegrationProviderIdAudioModel:
+		return true
+	case IntegrationProviderIdBaidu:
+		return true
+	case IntegrationProviderIdBrave:
+		return true
+	case IntegrationProviderIdDuckduckgo:
+		return true
+	case IntegrationProviderIdElevenlabs:
+		return true
+	case IntegrationProviderIdExa:
+		return true
+	case IntegrationProviderIdGlm:
+		return true
+	case IntegrationProviderIdGroq:
+		return true
+	case IntegrationProviderIdPerplexity:
+		return true
+	case IntegrationProviderIdTavily:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for IntegrationProviderKind.
 const (
 	IntegrationProviderKindSearch IntegrationProviderKind = "search"
@@ -4679,6 +5528,24 @@ func (e LibraryConflictErrorCode) Valid() bool {
 	}
 }
 
+// Defines values for LibraryEntryPreviewProfile.
+const (
+	LibraryEntryPreviewProfileMailRestricted LibraryEntryPreviewProfile = "mail_restricted"
+	LibraryEntryPreviewProfileWorkspace      LibraryEntryPreviewProfile = "workspace"
+)
+
+// Valid indicates whether the value is a known member of the LibraryEntryPreviewProfile enum.
+func (e LibraryEntryPreviewProfile) Valid() bool {
+	switch e {
+	case LibraryEntryPreviewProfileMailRestricted:
+		return true
+	case LibraryEntryPreviewProfileWorkspace:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for LibraryInlineDispositionDisposition.
 const (
 	LibraryInlineDispositionDispositionAttachment LibraryInlineDispositionDisposition = "attachment"
@@ -4766,6 +5633,870 @@ func (e LibraryPreviewTokenResponseScope) Valid() bool {
 	case LibraryPreviewTokenResponseScopeBundle:
 		return true
 	case LibraryPreviewTokenResponseScopeFile:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailAttachmentPreviewRequestFolder.
+const (
+	MailAttachmentPreviewRequestFolderDrafts MailAttachmentPreviewRequestFolder = "drafts"
+	MailAttachmentPreviewRequestFolderInbox  MailAttachmentPreviewRequestFolder = "inbox"
+	MailAttachmentPreviewRequestFolderSent   MailAttachmentPreviewRequestFolder = "sent"
+)
+
+// Valid indicates whether the value is a known member of the MailAttachmentPreviewRequestFolder enum.
+func (e MailAttachmentPreviewRequestFolder) Valid() bool {
+	switch e {
+	case MailAttachmentPreviewRequestFolderDrafts:
+		return true
+	case MailAttachmentPreviewRequestFolderInbox:
+		return true
+	case MailAttachmentPreviewRequestFolderSent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailAttachmentPreviewResponseKind.
+const (
+	MailAttachmentPreviewResponseKindMailAttachment MailAttachmentPreviewResponseKind = "mail_attachment"
+)
+
+// Valid indicates whether the value is a known member of the MailAttachmentPreviewResponseKind enum.
+func (e MailAttachmentPreviewResponseKind) Valid() bool {
+	switch e {
+	case MailAttachmentPreviewResponseKindMailAttachment:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailAttachmentPreviewResponseReadOnly.
+const (
+	MailAttachmentPreviewResponseReadOnlyTrue MailAttachmentPreviewResponseReadOnly = true
+)
+
+// Valid indicates whether the value is a known member of the MailAttachmentPreviewResponseReadOnly enum.
+func (e MailAttachmentPreviewResponseReadOnly) Valid() bool {
+	switch e {
+	case MailAttachmentPreviewResponseReadOnlyTrue:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailAttachmentSaveResponseAuditStatus.
+const (
+	MailAttachmentSaveResponseAuditStatusDisabled MailAttachmentSaveResponseAuditStatus = "disabled"
+	MailAttachmentSaveResponseAuditStatusFailed   MailAttachmentSaveResponseAuditStatus = "failed"
+	MailAttachmentSaveResponseAuditStatusRecorded MailAttachmentSaveResponseAuditStatus = "recorded"
+)
+
+// Valid indicates whether the value is a known member of the MailAttachmentSaveResponseAuditStatus enum.
+func (e MailAttachmentSaveResponseAuditStatus) Valid() bool {
+	switch e {
+	case MailAttachmentSaveResponseAuditStatusDisabled:
+		return true
+	case MailAttachmentSaveResponseAuditStatusFailed:
+		return true
+	case MailAttachmentSaveResponseAuditStatusRecorded:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailAttachmentSaveResponseEntryPreviewProfile.
+const (
+	MailAttachmentSaveResponseEntryPreviewProfileMailRestricted MailAttachmentSaveResponseEntryPreviewProfile = "mail_restricted"
+	MailAttachmentSaveResponseEntryPreviewProfileWorkspace      MailAttachmentSaveResponseEntryPreviewProfile = "workspace"
+)
+
+// Valid indicates whether the value is a known member of the MailAttachmentSaveResponseEntryPreviewProfile enum.
+func (e MailAttachmentSaveResponseEntryPreviewProfile) Valid() bool {
+	switch e {
+	case MailAttachmentSaveResponseEntryPreviewProfileMailRestricted:
+		return true
+	case MailAttachmentSaveResponseEntryPreviewProfileWorkspace:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailAttachmentSaveResponseSaved.
+const (
+	MailAttachmentSaveResponseSavedTrue MailAttachmentSaveResponseSaved = true
+)
+
+// Valid indicates whether the value is a known member of the MailAttachmentSaveResponseSaved enum.
+func (e MailAttachmentSaveResponseSaved) Valid() bool {
+	switch e {
+	case MailAttachmentSaveResponseSavedTrue:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailAttachmentSaveResponseWarningCode.
+const (
+	MailAttachmentSaveResponseWarningCodeAuditWriteFailed MailAttachmentSaveResponseWarningCode = "audit_write_failed"
+)
+
+// Valid indicates whether the value is a known member of the MailAttachmentSaveResponseWarningCode enum.
+func (e MailAttachmentSaveResponseWarningCode) Valid() bool {
+	switch e {
+	case MailAttachmentSaveResponseWarningCodeAuditWriteFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailFolderAvailability.
+const (
+	MailFolderAvailabilityAbsent  MailFolderAvailability = "absent"
+	MailFolderAvailabilityPresent MailFolderAvailability = "present"
+	MailFolderAvailabilityUnknown MailFolderAvailability = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the MailFolderAvailability enum.
+func (e MailFolderAvailability) Valid() bool {
+	switch e {
+	case MailFolderAvailabilityAbsent:
+		return true
+	case MailFolderAvailabilityPresent:
+		return true
+	case MailFolderAvailabilityUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailFolderCountMetadataNoticeCode.
+const (
+	MailFolderCountMetadataNoticeCodeCacheUnavailable MailFolderCountMetadataNoticeCode = "cache_unavailable"
+)
+
+// Valid indicates whether the value is a known member of the MailFolderCountMetadataNoticeCode enum.
+func (e MailFolderCountMetadataNoticeCode) Valid() bool {
+	switch e {
+	case MailFolderCountMetadataNoticeCodeCacheUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailFolderCountMetadataSource.
+const (
+	MailFolderCountMetadataSourceEncryptedDisk MailFolderCountMetadataSource = "encrypted_disk"
+	MailFolderCountMetadataSourceLive          MailFolderCountMetadataSource = "live"
+	MailFolderCountMetadataSourceMemory        MailFolderCountMetadataSource = "memory"
+	MailFolderCountMetadataSourceNone          MailFolderCountMetadataSource = "none"
+)
+
+// Valid indicates whether the value is a known member of the MailFolderCountMetadataSource enum.
+func (e MailFolderCountMetadataSource) Valid() bool {
+	switch e {
+	case MailFolderCountMetadataSourceEncryptedDisk:
+		return true
+	case MailFolderCountMetadataSourceLive:
+		return true
+	case MailFolderCountMetadataSourceMemory:
+		return true
+	case MailFolderCountMetadataSourceNone:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailFolderMappingMetadataNoticeCode.
+const (
+	MailFolderMappingMetadataNoticeCodeCacheUnavailable MailFolderMappingMetadataNoticeCode = "cache_unavailable"
+)
+
+// Valid indicates whether the value is a known member of the MailFolderMappingMetadataNoticeCode enum.
+func (e MailFolderMappingMetadataNoticeCode) Valid() bool {
+	switch e {
+	case MailFolderMappingMetadataNoticeCodeCacheUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailFolderMappingMetadataSource.
+const (
+	MailFolderMappingMetadataSourceEncryptedDisk MailFolderMappingMetadataSource = "encrypted_disk"
+	MailFolderMappingMetadataSourceLive          MailFolderMappingMetadataSource = "live"
+	MailFolderMappingMetadataSourceMemory        MailFolderMappingMetadataSource = "memory"
+	MailFolderMappingMetadataSourceNone          MailFolderMappingMetadataSource = "none"
+)
+
+// Valid indicates whether the value is a known member of the MailFolderMappingMetadataSource enum.
+func (e MailFolderMappingMetadataSource) Valid() bool {
+	switch e {
+	case MailFolderMappingMetadataSourceEncryptedDisk:
+		return true
+	case MailFolderMappingMetadataSourceLive:
+		return true
+	case MailFolderMappingMetadataSourceMemory:
+		return true
+	case MailFolderMappingMetadataSourceNone:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailFolderMappingSource.
+const (
+	MailFolderMappingSourceFallback   MailFolderMappingSource = "fallback"
+	MailFolderMappingSourceNone       MailFolderMappingSource = "none"
+	MailFolderMappingSourceOverride   MailFolderMappingSource = "override"
+	MailFolderMappingSourceSaved      MailFolderMappingSource = "saved"
+	MailFolderMappingSourceSpecialUse MailFolderMappingSource = "special_use"
+)
+
+// Valid indicates whether the value is a known member of the MailFolderMappingSource enum.
+func (e MailFolderMappingSource) Valid() bool {
+	switch e {
+	case MailFolderMappingSourceFallback:
+		return true
+	case MailFolderMappingSourceNone:
+		return true
+	case MailFolderMappingSourceOverride:
+		return true
+	case MailFolderMappingSourceSaved:
+		return true
+	case MailFolderMappingSourceSpecialUse:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailFolderSlug.
+const (
+	MailFolderSlugDrafts MailFolderSlug = "drafts"
+	MailFolderSlugInbox  MailFolderSlug = "inbox"
+	MailFolderSlugSent   MailFolderSlug = "sent"
+)
+
+// Valid indicates whether the value is a known member of the MailFolderSlug enum.
+func (e MailFolderSlug) Valid() bool {
+	switch e {
+	case MailFolderSlugDrafts:
+		return true
+	case MailFolderSlugInbox:
+		return true
+	case MailFolderSlugSent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailFolderListFoldersAvailability.
+const (
+	MailFolderListFoldersAvailabilityAbsent  MailFolderListFoldersAvailability = "absent"
+	MailFolderListFoldersAvailabilityPresent MailFolderListFoldersAvailability = "present"
+	MailFolderListFoldersAvailabilityUnknown MailFolderListFoldersAvailability = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the MailFolderListFoldersAvailability enum.
+func (e MailFolderListFoldersAvailability) Valid() bool {
+	switch e {
+	case MailFolderListFoldersAvailabilityAbsent:
+		return true
+	case MailFolderListFoldersAvailabilityPresent:
+		return true
+	case MailFolderListFoldersAvailabilityUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailFolderListFoldersCountMetadataNoticeCode.
+const (
+	MailFolderListFoldersCountMetadataNoticeCodeCacheUnavailable MailFolderListFoldersCountMetadataNoticeCode = "cache_unavailable"
+)
+
+// Valid indicates whether the value is a known member of the MailFolderListFoldersCountMetadataNoticeCode enum.
+func (e MailFolderListFoldersCountMetadataNoticeCode) Valid() bool {
+	switch e {
+	case MailFolderListFoldersCountMetadataNoticeCodeCacheUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailFolderListFoldersCountMetadataSource.
+const (
+	MailFolderListFoldersCountMetadataSourceEncryptedDisk MailFolderListFoldersCountMetadataSource = "encrypted_disk"
+	MailFolderListFoldersCountMetadataSourceLive          MailFolderListFoldersCountMetadataSource = "live"
+	MailFolderListFoldersCountMetadataSourceMemory        MailFolderListFoldersCountMetadataSource = "memory"
+	MailFolderListFoldersCountMetadataSourceNone          MailFolderListFoldersCountMetadataSource = "none"
+)
+
+// Valid indicates whether the value is a known member of the MailFolderListFoldersCountMetadataSource enum.
+func (e MailFolderListFoldersCountMetadataSource) Valid() bool {
+	switch e {
+	case MailFolderListFoldersCountMetadataSourceEncryptedDisk:
+		return true
+	case MailFolderListFoldersCountMetadataSourceLive:
+		return true
+	case MailFolderListFoldersCountMetadataSourceMemory:
+		return true
+	case MailFolderListFoldersCountMetadataSourceNone:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailFolderListFoldersMappingMetadataNoticeCode.
+const (
+	MailFolderListFoldersMappingMetadataNoticeCodeCacheUnavailable MailFolderListFoldersMappingMetadataNoticeCode = "cache_unavailable"
+)
+
+// Valid indicates whether the value is a known member of the MailFolderListFoldersMappingMetadataNoticeCode enum.
+func (e MailFolderListFoldersMappingMetadataNoticeCode) Valid() bool {
+	switch e {
+	case MailFolderListFoldersMappingMetadataNoticeCodeCacheUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailFolderListFoldersMappingMetadataSource.
+const (
+	MailFolderListFoldersMappingMetadataSourceEncryptedDisk MailFolderListFoldersMappingMetadataSource = "encrypted_disk"
+	MailFolderListFoldersMappingMetadataSourceLive          MailFolderListFoldersMappingMetadataSource = "live"
+	MailFolderListFoldersMappingMetadataSourceMemory        MailFolderListFoldersMappingMetadataSource = "memory"
+	MailFolderListFoldersMappingMetadataSourceNone          MailFolderListFoldersMappingMetadataSource = "none"
+)
+
+// Valid indicates whether the value is a known member of the MailFolderListFoldersMappingMetadataSource enum.
+func (e MailFolderListFoldersMappingMetadataSource) Valid() bool {
+	switch e {
+	case MailFolderListFoldersMappingMetadataSourceEncryptedDisk:
+		return true
+	case MailFolderListFoldersMappingMetadataSourceLive:
+		return true
+	case MailFolderListFoldersMappingMetadataSourceMemory:
+		return true
+	case MailFolderListFoldersMappingMetadataSourceNone:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailFolderListFoldersMappingSource.
+const (
+	MailFolderListFoldersMappingSourceFallback   MailFolderListFoldersMappingSource = "fallback"
+	MailFolderListFoldersMappingSourceNone       MailFolderListFoldersMappingSource = "none"
+	MailFolderListFoldersMappingSourceOverride   MailFolderListFoldersMappingSource = "override"
+	MailFolderListFoldersMappingSourceSaved      MailFolderListFoldersMappingSource = "saved"
+	MailFolderListFoldersMappingSourceSpecialUse MailFolderListFoldersMappingSource = "special_use"
+)
+
+// Valid indicates whether the value is a known member of the MailFolderListFoldersMappingSource enum.
+func (e MailFolderListFoldersMappingSource) Valid() bool {
+	switch e {
+	case MailFolderListFoldersMappingSourceFallback:
+		return true
+	case MailFolderListFoldersMappingSourceNone:
+		return true
+	case MailFolderListFoldersMappingSourceOverride:
+		return true
+	case MailFolderListFoldersMappingSourceSaved:
+		return true
+	case MailFolderListFoldersMappingSourceSpecialUse:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailFolderListFoldersSlug.
+const (
+	MailFolderListFoldersSlugDrafts MailFolderListFoldersSlug = "drafts"
+	MailFolderListFoldersSlugInbox  MailFolderListFoldersSlug = "inbox"
+	MailFolderListFoldersSlugSent   MailFolderListFoldersSlug = "sent"
+)
+
+// Valid indicates whether the value is a known member of the MailFolderListFoldersSlug enum.
+func (e MailFolderListFoldersSlug) Valid() bool {
+	switch e {
+	case MailFolderListFoldersSlugDrafts:
+		return true
+	case MailFolderListFoldersSlugInbox:
+		return true
+	case MailFolderListFoldersSlugSent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailFolderListMetadataNoticeCode.
+const (
+	MailFolderListMetadataNoticeCodeCacheUnavailable MailFolderListMetadataNoticeCode = "cache_unavailable"
+)
+
+// Valid indicates whether the value is a known member of the MailFolderListMetadataNoticeCode enum.
+func (e MailFolderListMetadataNoticeCode) Valid() bool {
+	switch e {
+	case MailFolderListMetadataNoticeCodeCacheUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailFolderListMetadataSource.
+const (
+	MailFolderListMetadataSourceEncryptedDisk MailFolderListMetadataSource = "encrypted_disk"
+	MailFolderListMetadataSourceLive          MailFolderListMetadataSource = "live"
+	MailFolderListMetadataSourceMemory        MailFolderListMetadataSource = "memory"
+	MailFolderListMetadataSourceNone          MailFolderListMetadataSource = "none"
+)
+
+// Valid indicates whether the value is a known member of the MailFolderListMetadataSource enum.
+func (e MailFolderListMetadataSource) Valid() bool {
+	switch e {
+	case MailFolderListMetadataSourceEncryptedDisk:
+		return true
+	case MailFolderListMetadataSourceLive:
+		return true
+	case MailFolderListMetadataSourceMemory:
+		return true
+	case MailFolderListMetadataSourceNone:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailHtmlPreviewTokenRequestFolder.
+const (
+	MailHtmlPreviewTokenRequestFolderDrafts MailHtmlPreviewTokenRequestFolder = "drafts"
+	MailHtmlPreviewTokenRequestFolderInbox  MailHtmlPreviewTokenRequestFolder = "inbox"
+	MailHtmlPreviewTokenRequestFolderSent   MailHtmlPreviewTokenRequestFolder = "sent"
+)
+
+// Valid indicates whether the value is a known member of the MailHtmlPreviewTokenRequestFolder enum.
+func (e MailHtmlPreviewTokenRequestFolder) Valid() bool {
+	switch e {
+	case MailHtmlPreviewTokenRequestFolderDrafts:
+		return true
+	case MailHtmlPreviewTokenRequestFolderInbox:
+		return true
+	case MailHtmlPreviewTokenRequestFolderSent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailMessageFolder.
+const (
+	MailMessageFolderDrafts MailMessageFolder = "drafts"
+	MailMessageFolderInbox  MailMessageFolder = "inbox"
+	MailMessageFolderSent   MailMessageFolder = "sent"
+)
+
+// Valid indicates whether the value is a known member of the MailMessageFolder enum.
+func (e MailMessageFolder) Valid() bool {
+	switch e {
+	case MailMessageFolderDrafts:
+		return true
+	case MailMessageFolderInbox:
+		return true
+	case MailMessageFolderSent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailMessagePageMessagesFolder.
+const (
+	MailMessagePageMessagesFolderDrafts MailMessagePageMessagesFolder = "drafts"
+	MailMessagePageMessagesFolderInbox  MailMessagePageMessagesFolder = "inbox"
+	MailMessagePageMessagesFolderSent   MailMessagePageMessagesFolder = "sent"
+)
+
+// Valid indicates whether the value is a known member of the MailMessagePageMessagesFolder enum.
+func (e MailMessagePageMessagesFolder) Valid() bool {
+	switch e {
+	case MailMessagePageMessagesFolderDrafts:
+		return true
+	case MailMessagePageMessagesFolderInbox:
+		return true
+	case MailMessagePageMessagesFolderSent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailMessagePageMetadataNoticeCode.
+const (
+	MailMessagePageMetadataNoticeCodeCacheUnavailable MailMessagePageMetadataNoticeCode = "cache_unavailable"
+)
+
+// Valid indicates whether the value is a known member of the MailMessagePageMetadataNoticeCode enum.
+func (e MailMessagePageMetadataNoticeCode) Valid() bool {
+	switch e {
+	case MailMessagePageMetadataNoticeCodeCacheUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailMessagePageMetadataSource.
+const (
+	MailMessagePageMetadataSourceEncryptedDisk MailMessagePageMetadataSource = "encrypted_disk"
+	MailMessagePageMetadataSourceLive          MailMessagePageMetadataSource = "live"
+	MailMessagePageMetadataSourceMemory        MailMessagePageMetadataSource = "memory"
+	MailMessagePageMetadataSourceNone          MailMessagePageMetadataSource = "none"
+)
+
+// Valid indicates whether the value is a known member of the MailMessagePageMetadataSource enum.
+func (e MailMessagePageMetadataSource) Valid() bool {
+	switch e {
+	case MailMessagePageMetadataSourceEncryptedDisk:
+		return true
+	case MailMessagePageMetadataSourceLive:
+		return true
+	case MailMessagePageMetadataSourceMemory:
+		return true
+	case MailMessagePageMetadataSourceNone:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailMessageSummaryFolder.
+const (
+	MailMessageSummaryFolderDrafts MailMessageSummaryFolder = "drafts"
+	MailMessageSummaryFolderInbox  MailMessageSummaryFolder = "inbox"
+	MailMessageSummaryFolderSent   MailMessageSummaryFolder = "sent"
+)
+
+// Valid indicates whether the value is a known member of the MailMessageSummaryFolder enum.
+func (e MailMessageSummaryFolder) Valid() bool {
+	switch e {
+	case MailMessageSummaryFolderDrafts:
+		return true
+	case MailMessageSummaryFolderInbox:
+		return true
+	case MailMessageSummaryFolderSent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailReadMetadataNoticeCode.
+const (
+	MailReadMetadataNoticeCodeCacheUnavailable MailReadMetadataNoticeCode = "cache_unavailable"
+)
+
+// Valid indicates whether the value is a known member of the MailReadMetadataNoticeCode enum.
+func (e MailReadMetadataNoticeCode) Valid() bool {
+	switch e {
+	case MailReadMetadataNoticeCodeCacheUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailReadMetadataSource.
+const (
+	MailReadMetadataSourceEncryptedDisk MailReadMetadataSource = "encrypted_disk"
+	MailReadMetadataSourceLive          MailReadMetadataSource = "live"
+	MailReadMetadataSourceMemory        MailReadMetadataSource = "memory"
+	MailReadMetadataSourceNone          MailReadMetadataSource = "none"
+)
+
+// Valid indicates whether the value is a known member of the MailReadMetadataSource enum.
+func (e MailReadMetadataSource) Valid() bool {
+	switch e {
+	case MailReadMetadataSourceEncryptedDisk:
+		return true
+	case MailReadMetadataSourceLive:
+		return true
+	case MailReadMetadataSourceMemory:
+		return true
+	case MailReadMetadataSourceNone:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailReplyContextRequestMode.
+const (
+	MailReplyContextRequestModeReply    MailReplyContextRequestMode = "reply"
+	MailReplyContextRequestModeReplyAll MailReplyContextRequestMode = "reply_all"
+)
+
+// Valid indicates whether the value is a known member of the MailReplyContextRequestMode enum.
+func (e MailReplyContextRequestMode) Valid() bool {
+	switch e {
+	case MailReplyContextRequestModeReply:
+		return true
+	case MailReplyContextRequestModeReplyAll:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailStaleReferenceErrorCode.
+const (
+	MailStaleReferenceErrorCodeStaleCursor    MailStaleReferenceErrorCode = "stale_cursor"
+	MailStaleReferenceErrorCodeStaleReference MailStaleReferenceErrorCode = "stale_reference"
+)
+
+// Valid indicates whether the value is a known member of the MailStaleReferenceErrorCode enum.
+func (e MailStaleReferenceErrorCode) Valid() bool {
+	switch e {
+	case MailStaleReferenceErrorCodeStaleCursor:
+		return true
+	case MailStaleReferenceErrorCodeStaleReference:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailSummaryListItemsWatcherState.
+const (
+	MailSummaryListItemsWatcherStateBackoff MailSummaryListItemsWatcherState = "backoff"
+	MailSummaryListItemsWatcherStateError   MailSummaryListItemsWatcherState = "error"
+	MailSummaryListItemsWatcherStateOk      MailSummaryListItemsWatcherState = "ok"
+)
+
+// Valid indicates whether the value is a known member of the MailSummaryListItemsWatcherState enum.
+func (e MailSummaryListItemsWatcherState) Valid() bool {
+	switch e {
+	case MailSummaryListItemsWatcherStateBackoff:
+		return true
+	case MailSummaryListItemsWatcherStateError:
+		return true
+	case MailSummaryListItemsWatcherStateOk:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailUnavailableErrorCode.
+const (
+	MailUnavailableErrorCodeBackoff MailUnavailableErrorCode = "backoff"
+	MailUnavailableErrorCodeBusy    MailUnavailableErrorCode = "busy"
+)
+
+// Valid indicates whether the value is a known member of the MailUnavailableErrorCode enum.
+func (e MailUnavailableErrorCode) Valid() bool {
+	switch e {
+	case MailUnavailableErrorCodeBackoff:
+		return true
+	case MailUnavailableErrorCodeBusy:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailUnavailableErrorLastErrorClass.
+const (
+	MailUnavailableErrorLastErrorClassAuthFailed     MailUnavailableErrorLastErrorClass = "auth_failed"
+	MailUnavailableErrorLastErrorClassConnectRefused MailUnavailableErrorLastErrorClass = "connect_refused"
+	MailUnavailableErrorLastErrorClassDns            MailUnavailableErrorLastErrorClass = "dns"
+	MailUnavailableErrorLastErrorClassFolderMissing  MailUnavailableErrorLastErrorClass = "folder_missing"
+	MailUnavailableErrorLastErrorClassServerError    MailUnavailableErrorLastErrorClass = "server_error"
+	MailUnavailableErrorLastErrorClassTimeout        MailUnavailableErrorLastErrorClass = "timeout"
+	MailUnavailableErrorLastErrorClassTls            MailUnavailableErrorLastErrorClass = "tls"
+)
+
+// Valid indicates whether the value is a known member of the MailUnavailableErrorLastErrorClass enum.
+func (e MailUnavailableErrorLastErrorClass) Valid() bool {
+	switch e {
+	case MailUnavailableErrorLastErrorClassAuthFailed:
+		return true
+	case MailUnavailableErrorLastErrorClassConnectRefused:
+		return true
+	case MailUnavailableErrorLastErrorClassDns:
+		return true
+	case MailUnavailableErrorLastErrorClassFolderMissing:
+		return true
+	case MailUnavailableErrorLastErrorClassServerError:
+		return true
+	case MailUnavailableErrorLastErrorClassTimeout:
+		return true
+	case MailUnavailableErrorLastErrorClassTls:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailUnavailableErrorReason.
+const (
+	MailUnavailableErrorReasonAccountBusy           MailUnavailableErrorReason = "account_busy"
+	MailUnavailableErrorReasonBackoff               MailUnavailableErrorReason = "backoff"
+	MailUnavailableErrorReasonPoolBusy              MailUnavailableErrorReason = "pool_busy"
+	MailUnavailableErrorReasonServerConnectionLimit MailUnavailableErrorReason = "server_connection_limit"
+)
+
+// Valid indicates whether the value is a known member of the MailUnavailableErrorReason enum.
+func (e MailUnavailableErrorReason) Valid() bool {
+	switch e {
+	case MailUnavailableErrorReasonAccountBusy:
+		return true
+	case MailUnavailableErrorReasonBackoff:
+		return true
+	case MailUnavailableErrorReasonPoolBusy:
+		return true
+	case MailUnavailableErrorReasonServerConnectionLimit:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailboxStatus.
+const (
+	MailboxStatusDegraded MailboxStatus = "degraded"
+	MailboxStatusOk       MailboxStatus = "ok"
+)
+
+// Valid indicates whether the value is a known member of the MailboxStatus enum.
+func (e MailboxStatus) Valid() bool {
+	switch e {
+	case MailboxStatusDegraded:
+		return true
+	case MailboxStatusOk:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailboxListResponseMailboxesStatus.
+const (
+	MailboxListResponseMailboxesStatusDegraded MailboxListResponseMailboxesStatus = "degraded"
+	MailboxListResponseMailboxesStatusOk       MailboxListResponseMailboxesStatus = "ok"
+)
+
+// Valid indicates whether the value is a known member of the MailboxListResponseMailboxesStatus enum.
+func (e MailboxListResponseMailboxesStatus) Valid() bool {
+	switch e {
+	case MailboxListResponseMailboxesStatusDegraded:
+		return true
+	case MailboxListResponseMailboxesStatusOk:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailboxNewMailSummaryWatcherState.
+const (
+	MailboxNewMailSummaryWatcherStateBackoff MailboxNewMailSummaryWatcherState = "backoff"
+	MailboxNewMailSummaryWatcherStateError   MailboxNewMailSummaryWatcherState = "error"
+	MailboxNewMailSummaryWatcherStateOk      MailboxNewMailSummaryWatcherState = "ok"
+)
+
+// Valid indicates whether the value is a known member of the MailboxNewMailSummaryWatcherState enum.
+func (e MailboxNewMailSummaryWatcherState) Valid() bool {
+	switch e {
+	case MailboxNewMailSummaryWatcherStateBackoff:
+		return true
+	case MailboxNewMailSummaryWatcherStateError:
+		return true
+	case MailboxNewMailSummaryWatcherStateOk:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MailboxRemovalResultOutcome.
+const (
+	MailboxRemovalResultOutcomeRemoved               MailboxRemovalResultOutcome = "removed"
+	MailboxRemovalResultOutcomeRemovedCleanupPending MailboxRemovalResultOutcome = "removed_cleanup_pending"
+)
+
+// Valid indicates whether the value is a known member of the MailboxRemovalResultOutcome enum.
+func (e MailboxRemovalResultOutcome) Valid() bool {
+	switch e {
+	case MailboxRemovalResultOutcomeRemoved:
+		return true
+	case MailboxRemovalResultOutcomeRemovedCleanupPending:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MaxToolIterationsSavedState.
+const (
+	MaxToolIterationsSavedStateAboveMax MaxToolIterationsSavedState = "above_max"
+	MaxToolIterationsSavedStateBelowMin MaxToolIterationsSavedState = "below_min"
+	MaxToolIterationsSavedStateMissing  MaxToolIterationsSavedState = "missing"
+	MaxToolIterationsSavedStateOk       MaxToolIterationsSavedState = "ok"
+)
+
+// Valid indicates whether the value is a known member of the MaxToolIterationsSavedState enum.
+func (e MaxToolIterationsSavedState) Valid() bool {
+	switch e {
+	case MaxToolIterationsSavedStateAboveMax:
+		return true
+	case MaxToolIterationsSavedStateBelowMin:
+		return true
+	case MaxToolIterationsSavedStateMissing:
+		return true
+	case MaxToolIterationsSavedStateOk:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MaxToolIterationsSource.
+const (
+	MaxToolIterationsSourceAgent  MaxToolIterationsSource = "agent"
+	MaxToolIterationsSourceGlobal MaxToolIterationsSource = "global"
+)
+
+// Valid indicates whether the value is a known member of the MaxToolIterationsSource enum.
+func (e MaxToolIterationsSource) Valid() bool {
+	switch e {
+	case MaxToolIterationsSourceAgent:
+		return true
+	case MaxToolIterationsSourceGlobal:
 		return true
 	default:
 		return false
@@ -4913,6 +6644,54 @@ func (e MessageCancelMethod) Valid() bool {
 	}
 }
 
+// Defines values for MessageContextWindowNoticeKind.
+const (
+	MessageContextWindowNoticeKindMidTurn       MessageContextWindowNoticeKind = "mid_turn"
+	MessageContextWindowNoticeKindProviderRetry MessageContextWindowNoticeKind = "provider_retry"
+)
+
+// Valid indicates whether the value is a known member of the MessageContextWindowNoticeKind enum.
+func (e MessageContextWindowNoticeKind) Valid() bool {
+	switch e {
+	case MessageContextWindowNoticeKindMidTurn:
+		return true
+	case MessageContextWindowNoticeKindProviderRetry:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageEffortReason.
+const (
+	MessageEffortReasonContinuation    MessageEffortReason = "continuation"
+	MessageEffortReasonExtraBody       MessageEffortReason = "extra_body"
+	MessageEffortReasonMapped          MessageEffortReason = "mapped"
+	MessageEffortReasonNotSupported    MessageEffortReason = "not_supported"
+	MessageEffortReasonRejected        MessageEffortReason = "rejected"
+	MessageEffortReasonRejectedEarlier MessageEffortReason = "rejected_earlier"
+)
+
+// Valid indicates whether the value is a known member of the MessageEffortReason enum.
+func (e MessageEffortReason) Valid() bool {
+	switch e {
+	case MessageEffortReasonContinuation:
+		return true
+	case MessageEffortReasonExtraBody:
+		return true
+	case MessageEffortReasonMapped:
+		return true
+	case MessageEffortReasonNotSupported:
+		return true
+	case MessageEffortReasonRejected:
+		return true
+	case MessageEffortReasonRejectedEarlier:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MessageGoalOutcomeEnding.
 const (
 	MessageGoalOutcomeEndingMet             MessageGoalOutcomeEnding = "met"
@@ -4937,6 +6716,114 @@ func (e MessageGoalOutcomeEnding) Valid() bool {
 	}
 }
 
+// Defines values for MessageHelperEventKind.
+const (
+	MessageHelperEventKindBlocker       MessageHelperEventKind = "blocker"
+	MessageHelperEventKindFailed        MessageHelperEventKind = "failed"
+	MessageHelperEventKindFinished      MessageHelperEventKind = "finished"
+	MessageHelperEventKindNotVerified   MessageHelperEventKind = "not_verified"
+	MessageHelperEventKindQuestion      MessageHelperEventKind = "question"
+	MessageHelperEventKindRestarted     MessageHelperEventKind = "restarted"
+	MessageHelperEventKindResumeRefused MessageHelperEventKind = "resume_refused"
+	MessageHelperEventKindStopped       MessageHelperEventKind = "stopped"
+	MessageHelperEventKindTimedOut      MessageHelperEventKind = "timed_out"
+	MessageHelperEventKindVerdictUnmet  MessageHelperEventKind = "verdict_unmet"
+)
+
+// Valid indicates whether the value is a known member of the MessageHelperEventKind enum.
+func (e MessageHelperEventKind) Valid() bool {
+	switch e {
+	case MessageHelperEventKindBlocker:
+		return true
+	case MessageHelperEventKindFailed:
+		return true
+	case MessageHelperEventKindFinished:
+		return true
+	case MessageHelperEventKindNotVerified:
+		return true
+	case MessageHelperEventKindQuestion:
+		return true
+	case MessageHelperEventKindRestarted:
+		return true
+	case MessageHelperEventKindResumeRefused:
+		return true
+	case MessageHelperEventKindStopped:
+		return true
+	case MessageHelperEventKindTimedOut:
+		return true
+	case MessageHelperEventKindVerdictUnmet:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageInputDispositionReason.
+const (
+	MessageInputDispositionReasonStoppedBeforeDelivery MessageInputDispositionReason = "stopped_before_delivery"
+)
+
+// Valid indicates whether the value is a known member of the MessageInputDispositionReason enum.
+func (e MessageInputDispositionReason) Valid() bool {
+	switch e {
+	case MessageInputDispositionReasonStoppedBeforeDelivery:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageInputDispositionState.
+const (
+	MessageInputDispositionStateDiscarded MessageInputDispositionState = "discarded"
+)
+
+// Valid indicates whether the value is a known member of the MessageInputDispositionState enum.
+func (e MessageInputDispositionState) Valid() bool {
+	switch e {
+	case MessageInputDispositionStateDiscarded:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageParticipantKind.
+const (
+	MessageParticipantKindAgent MessageParticipantKind = "agent"
+	MessageParticipantKindHuman MessageParticipantKind = "human"
+)
+
+// Valid indicates whether the value is a known member of the MessageParticipantKind enum.
+func (e MessageParticipantKind) Valid() bool {
+	switch e {
+	case MessageParticipantKindAgent:
+		return true
+	case MessageParticipantKindHuman:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageReplyToParticipantKind.
+const (
+	MessageReplyToParticipantKindAgent MessageReplyToParticipantKind = "agent"
+	MessageReplyToParticipantKindHuman MessageReplyToParticipantKind = "human"
+)
+
+// Valid indicates whether the value is a known member of the MessageReplyToParticipantKind enum.
+func (e MessageReplyToParticipantKind) Valid() bool {
+	switch e {
+	case MessageReplyToParticipantKindAgent:
+		return true
+	case MessageReplyToParticipantKindHuman:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MessageRole.
 const (
 	MessageRoleAssistant MessageRole = "assistant"
@@ -4952,6 +6839,24 @@ func (e MessageRole) Valid() bool {
 	case MessageRoleSystem:
 		return true
 	case MessageRoleUser:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageRoomRefRole.
+const (
+	MessageRoomRefRoleAnswer  MessageRoomRefRole = "answer"
+	MessageRoomRefRoleRequest MessageRoomRefRole = "request"
+)
+
+// Valid indicates whether the value is a known member of the MessageRoomRefRole enum.
+func (e MessageRoomRefRole) Valid() bool {
+	switch e {
+	case MessageRoomRefRoleAnswer:
+		return true
+	case MessageRoomRefRoleRequest:
 		return true
 	default:
 		return false
@@ -5050,17 +6955,17 @@ func (e MessageSubagentEndType) Valid() bool {
 
 // Defines values for MessageSubagentMessageKind.
 const (
-	MessageSubagentMessageKindArtifact        MessageSubagentMessageKind = "artifact"
-	MessageSubagentMessageKindBlocker         MessageSubagentMessageKind = "blocker"
-	MessageSubagentMessageKindCheckpoint      MessageSubagentMessageKind = "checkpoint"
-	MessageSubagentMessageKindDecisionRequest MessageSubagentMessageKind = "decision_request"
-	MessageSubagentMessageKindError           MessageSubagentMessageKind = "error"
-	MessageSubagentMessageKindGoalStatus      MessageSubagentMessageKind = "goal_status"
-	MessageSubagentMessageKindHandback        MessageSubagentMessageKind = "handback"
-	MessageSubagentMessageKindProgress        MessageSubagentMessageKind = "progress"
-	MessageSubagentMessageKindQuestion        MessageSubagentMessageKind = "question"
-	MessageSubagentMessageKindRespond         MessageSubagentMessageKind = "respond"
-	MessageSubagentMessageKindSteer           MessageSubagentMessageKind = "steer"
+	MessageSubagentMessageKindArtifact     MessageSubagentMessageKind = "artifact"
+	MessageSubagentMessageKindBlocker      MessageSubagentMessageKind = "blocker"
+	MessageSubagentMessageKindCheckpoint   MessageSubagentMessageKind = "checkpoint"
+	MessageSubagentMessageKindError        MessageSubagentMessageKind = "error"
+	MessageSubagentMessageKindGoalStatus   MessageSubagentMessageKind = "goal_status"
+	MessageSubagentMessageKindHandback     MessageSubagentMessageKind = "handback"
+	MessageSubagentMessageKindNotDelivered MessageSubagentMessageKind = "not_delivered"
+	MessageSubagentMessageKindProgress     MessageSubagentMessageKind = "progress"
+	MessageSubagentMessageKindQuestion     MessageSubagentMessageKind = "question"
+	MessageSubagentMessageKindRespond      MessageSubagentMessageKind = "respond"
+	MessageSubagentMessageKindSteer        MessageSubagentMessageKind = "steer"
 )
 
 // Valid indicates whether the value is a known member of the MessageSubagentMessageKind enum.
@@ -5072,13 +6977,13 @@ func (e MessageSubagentMessageKind) Valid() bool {
 		return true
 	case MessageSubagentMessageKindCheckpoint:
 		return true
-	case MessageSubagentMessageKindDecisionRequest:
-		return true
 	case MessageSubagentMessageKindError:
 		return true
 	case MessageSubagentMessageKindGoalStatus:
 		return true
 	case MessageSubagentMessageKindHandback:
+		return true
+	case MessageSubagentMessageKindNotDelivered:
 		return true
 	case MessageSubagentMessageKindProgress:
 		return true
@@ -5123,36 +7028,87 @@ func (e MessageSubagentStartType) Valid() bool {
 	}
 }
 
+// Defines values for MessageSubagentStateControlReceiptState.
+const (
+	MessageSubagentStateControlReceiptStateApplied    MessageSubagentStateControlReceiptState = "applied"
+	MessageSubagentStateControlReceiptStateDelivered  MessageSubagentStateControlReceiptState = "delivered"
+	MessageSubagentStateControlReceiptStateQueued     MessageSubagentStateControlReceiptState = "queued"
+	MessageSubagentStateControlReceiptStateSuperseded MessageSubagentStateControlReceiptState = "superseded"
+)
+
+// Valid indicates whether the value is a known member of the MessageSubagentStateControlReceiptState enum.
+func (e MessageSubagentStateControlReceiptState) Valid() bool {
+	switch e {
+	case MessageSubagentStateControlReceiptStateApplied:
+		return true
+	case MessageSubagentStateControlReceiptStateDelivered:
+		return true
+	case MessageSubagentStateControlReceiptStateQueued:
+		return true
+	case MessageSubagentStateControlReceiptStateSuperseded:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageSubagentStateControlReceiptVerb.
+const (
+	MessageSubagentStateControlReceiptVerbClearGoal MessageSubagentStateControlReceiptVerb = "clear_goal"
+	MessageSubagentStateControlReceiptVerbRedirect  MessageSubagentStateControlReceiptVerb = "redirect"
+	MessageSubagentStateControlReceiptVerbRespond   MessageSubagentStateControlReceiptVerb = "respond"
+	MessageSubagentStateControlReceiptVerbResume    MessageSubagentStateControlReceiptVerb = "resume"
+	MessageSubagentStateControlReceiptVerbSteer     MessageSubagentStateControlReceiptVerb = "steer"
+	MessageSubagentStateControlReceiptVerbStop      MessageSubagentStateControlReceiptVerb = "stop"
+	MessageSubagentStateControlReceiptVerbStopAll   MessageSubagentStateControlReceiptVerb = "stop_all"
+)
+
+// Valid indicates whether the value is a known member of the MessageSubagentStateControlReceiptVerb enum.
+func (e MessageSubagentStateControlReceiptVerb) Valid() bool {
+	switch e {
+	case MessageSubagentStateControlReceiptVerbClearGoal:
+		return true
+	case MessageSubagentStateControlReceiptVerbRedirect:
+		return true
+	case MessageSubagentStateControlReceiptVerbRespond:
+		return true
+	case MessageSubagentStateControlReceiptVerbResume:
+		return true
+	case MessageSubagentStateControlReceiptVerbSteer:
+		return true
+	case MessageSubagentStateControlReceiptVerbStop:
+		return true
+	case MessageSubagentStateControlReceiptVerbStopAll:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for MessageSubagentStateState.
 const (
-	MessageSubagentStateStateCancelled  MessageSubagentStateState = "cancelled"
 	MessageSubagentStateStateCompleted  MessageSubagentStateState = "completed"
 	MessageSubagentStateStateFailed     MessageSubagentStateState = "failed"
 	MessageSubagentStateStateNeedsInput MessageSubagentStateState = "needs_input"
-	MessageSubagentStateStatePaused     MessageSubagentStateState = "paused"
 	MessageSubagentStateStateQueued     MessageSubagentStateState = "queued"
 	MessageSubagentStateStateRunning    MessageSubagentStateState = "running"
-	MessageSubagentStateStateTimedOut   MessageSubagentStateState = "timed_out"
+	MessageSubagentStateStateStopped    MessageSubagentStateState = "stopped"
 )
 
 // Valid indicates whether the value is a known member of the MessageSubagentStateState enum.
 func (e MessageSubagentStateState) Valid() bool {
 	switch e {
-	case MessageSubagentStateStateCancelled:
-		return true
 	case MessageSubagentStateStateCompleted:
 		return true
 	case MessageSubagentStateStateFailed:
 		return true
 	case MessageSubagentStateStateNeedsInput:
 		return true
-	case MessageSubagentStateStatePaused:
-		return true
 	case MessageSubagentStateStateQueued:
 		return true
 	case MessageSubagentStateStateRunning:
 		return true
-	case MessageSubagentStateStateTimedOut:
+	case MessageSubagentStateStateStopped:
 		return true
 	default:
 		return false
@@ -5177,7 +7133,9 @@ func (e MessageSubagentStateType) Valid() bool {
 // Defines values for MessageSystemSubtype.
 const (
 	MessageSystemSubtypeBrowserHandoverNotice MessageSystemSubtype = "browser_handover_notice"
+	MessageSystemSubtypeExpiryNotice          MessageSystemSubtype = "expiry_notice"
 	MessageSystemSubtypeGoalOutcome           MessageSystemSubtype = "goal_outcome"
+	MessageSystemSubtypeHelperEvent           MessageSystemSubtype = "helper_event"
 	MessageSystemSubtypeSubagentEnd           MessageSystemSubtype = "subagent_end"
 	MessageSystemSubtypeSubagentMessage       MessageSystemSubtype = "subagent_message"
 	MessageSystemSubtypeSubagentStart         MessageSystemSubtype = "subagent_start"
@@ -5189,7 +7147,11 @@ func (e MessageSystemSubtype) Valid() bool {
 	switch e {
 	case MessageSystemSubtypeBrowserHandoverNotice:
 		return true
+	case MessageSystemSubtypeExpiryNotice:
+		return true
 	case MessageSystemSubtypeGoalOutcome:
+		return true
+	case MessageSystemSubtypeHelperEvent:
 		return true
 	case MessageSystemSubtypeSubagentEnd:
 		return true
@@ -5281,12 +7243,14 @@ func (e MessageTruncationReason) Valid() bool {
 
 // Defines values for MessageType.
 const (
-	MessageTypeCompaction   MessageType = "compaction"
-	MessageTypeJudgeVerdict MessageType = "judge_verdict"
-	MessageTypeMessage      MessageType = "message"
-	MessageTypeSystem       MessageType = "system"
-	MessageTypeToolCall     MessageType = "tool_call"
-	MessageTypeTurnCanceled MessageType = "turn_canceled"
+	MessageTypeCompaction          MessageType = "compaction"
+	MessageTypeContextWindowNotice MessageType = "context_window_notice"
+	MessageTypeJudgeVerdict        MessageType = "judge_verdict"
+	MessageTypeMessage             MessageType = "message"
+	MessageTypeProviderFallback    MessageType = "provider_fallback"
+	MessageTypeSystem              MessageType = "system"
+	MessageTypeToolCall            MessageType = "tool_call"
+	MessageTypeTurnCanceled        MessageType = "turn_canceled"
 )
 
 // Valid indicates whether the value is a known member of the MessageType enum.
@@ -5294,15 +7258,37 @@ func (e MessageType) Valid() bool {
 	switch e {
 	case MessageTypeCompaction:
 		return true
+	case MessageTypeContextWindowNotice:
+		return true
 	case MessageTypeJudgeVerdict:
 		return true
 	case MessageTypeMessage:
+		return true
+	case MessageTypeProviderFallback:
 		return true
 	case MessageTypeSystem:
 		return true
 	case MessageTypeToolCall:
 		return true
 	case MessageTypeTurnCanceled:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageUnavailableCode.
+const (
+	MessageUnavailableCodeModelRetired MessageUnavailableCode = "model_retired"
+	MessageUnavailableCodeRateLimited  MessageUnavailableCode = "rate_limited"
+)
+
+// Valid indicates whether the value is a known member of the MessageUnavailableCode enum.
+func (e MessageUnavailableCode) Valid() bool {
+	switch e {
+	case MessageUnavailableCodeModelRetired:
+		return true
+	case MessageUnavailableCodeRateLimited:
 		return true
 	default:
 		return false
@@ -5381,6 +7367,27 @@ func (e MessageVerdictScope) Valid() bool {
 	case MessageVerdictScopePlan:
 		return true
 	case MessageVerdictScopeTask:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MessageViewMembership.
+const (
+	MessageViewMembershipBoth  MessageViewMembership = "both"
+	MessageViewMembershipChat  MessageViewMembership = "chat"
+	MessageViewMembershipModel MessageViewMembership = "model"
+)
+
+// Valid indicates whether the value is a known member of the MessageViewMembership enum.
+func (e MessageViewMembership) Valid() bool {
+	switch e {
+	case MessageViewMembershipBoth:
+		return true
+	case MessageViewMembershipChat:
+		return true
+	case MessageViewMembershipModel:
 		return true
 	default:
 		return false
@@ -5501,24 +7508,6 @@ func (e MessageParentProgressKind) Valid() bool {
 	}
 }
 
-// Defines values for MessageParentQuestionAuthority.
-const (
-	MessageParentQuestionAuthorityOwnerRequired MessageParentQuestionAuthority = "owner_required"
-	MessageParentQuestionAuthoritySelfOk        MessageParentQuestionAuthority = "self_ok"
-)
-
-// Valid indicates whether the value is a known member of the MessageParentQuestionAuthority enum.
-func (e MessageParentQuestionAuthority) Valid() bool {
-	switch e {
-	case MessageParentQuestionAuthorityOwnerRequired:
-		return true
-	case MessageParentQuestionAuthoritySelfOk:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for MessageParentQuestionKind.
 const (
 	MessageParentQuestionKindQuestion MessageParentQuestionKind = "question"
@@ -5557,16 +7546,22 @@ func (e NotificationSeverity) Valid() bool {
 
 // Defines values for NotificationType.
 const (
+	NotificationTypeGoalPaused     NotificationType = "goal_paused"
 	NotificationTypeKnowledgeDrift NotificationType = "knowledge_drift"
 	NotificationTypeScheduleFailed NotificationType = "schedule_failed"
+	NotificationTypeStopNotice     NotificationType = "stop_notice"
 )
 
 // Valid indicates whether the value is a known member of the NotificationType enum.
 func (e NotificationType) Valid() bool {
 	switch e {
+	case NotificationTypeGoalPaused:
+		return true
 	case NotificationTypeKnowledgeDrift:
 		return true
 	case NotificationTypeScheduleFailed:
+		return true
+	case NotificationTypeStopNotice:
 		return true
 	default:
 		return false
@@ -5596,16 +7591,22 @@ func (e NotificationListNotificationsSeverity) Valid() bool {
 
 // Defines values for NotificationListNotificationsType.
 const (
+	NotificationListNotificationsTypeGoalPaused     NotificationListNotificationsType = "goal_paused"
 	NotificationListNotificationsTypeKnowledgeDrift NotificationListNotificationsType = "knowledge_drift"
 	NotificationListNotificationsTypeScheduleFailed NotificationListNotificationsType = "schedule_failed"
+	NotificationListNotificationsTypeStopNotice     NotificationListNotificationsType = "stop_notice"
 )
 
 // Valid indicates whether the value is a known member of the NotificationListNotificationsType enum.
 func (e NotificationListNotificationsType) Valid() bool {
 	switch e {
+	case NotificationListNotificationsTypeGoalPaused:
+		return true
 	case NotificationListNotificationsTypeKnowledgeDrift:
 		return true
 	case NotificationListNotificationsTypeScheduleFailed:
+		return true
+	case NotificationListNotificationsTypeStopNotice:
 		return true
 	default:
 		return false
@@ -5666,6 +7667,24 @@ func (e OnboardingProviderApiKeyAuthMethod) Valid() bool {
 	}
 }
 
+// Defines values for OnboardingProviderApiKeyProtocol.
+const (
+	OnboardingProviderApiKeyProtocolAnthropic        OnboardingProviderApiKeyProtocol = "anthropic"
+	OnboardingProviderApiKeyProtocolOpenaiCompatible OnboardingProviderApiKeyProtocol = "openai-compatible"
+)
+
+// Valid indicates whether the value is a known member of the OnboardingProviderApiKeyProtocol enum.
+func (e OnboardingProviderApiKeyProtocol) Valid() bool {
+	switch e {
+	case OnboardingProviderApiKeyProtocolAnthropic:
+		return true
+	case OnboardingProviderApiKeyProtocolOpenaiCompatible:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for OnboardingProviderSignInAuthMethod.
 const (
 	OnboardingProviderSignInAuthMethodSignIn OnboardingProviderSignInAuthMethod = "sign_in"
@@ -5702,6 +7721,108 @@ func (e OperationResultValidationOutcome) Valid() bool {
 	case OperationResultValidationOutcomeUnreachable:
 		return true
 	case OperationResultValidationOutcomeValid:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PerformancePendingApplyChangedFields.
+const (
+	PerformancePendingApplyChangedFieldsGoalMaxRounds             PerformancePendingApplyChangedFields = "goal_max_rounds"
+	PerformancePendingApplyChangedFieldsGoalReminderQuietSeconds  PerformancePendingApplyChangedFields = "goal_reminder_quiet_seconds"
+	PerformancePendingApplyChangedFieldsGoalStalledCheckinEnabled PerformancePendingApplyChangedFields = "goal_stalled_checkin_enabled"
+	PerformancePendingApplyChangedFieldsGoalStalledCheckinMinutes PerformancePendingApplyChangedFields = "goal_stalled_checkin_minutes"
+	PerformancePendingApplyChangedFieldsMaxParallelAgents         PerformancePendingApplyChangedFields = "max_parallel_agents"
+	PerformancePendingApplyChangedFieldsMaxToolIterations         PerformancePendingApplyChangedFields = "max_tool_iterations"
+	PerformancePendingApplyChangedFieldsToolsOnDemand             PerformancePendingApplyChangedFields = "tools_on_demand"
+)
+
+// Valid indicates whether the value is a known member of the PerformancePendingApplyChangedFields enum.
+func (e PerformancePendingApplyChangedFields) Valid() bool {
+	switch e {
+	case PerformancePendingApplyChangedFieldsGoalMaxRounds:
+		return true
+	case PerformancePendingApplyChangedFieldsGoalReminderQuietSeconds:
+		return true
+	case PerformancePendingApplyChangedFieldsGoalStalledCheckinEnabled:
+		return true
+	case PerformancePendingApplyChangedFieldsGoalStalledCheckinMinutes:
+		return true
+	case PerformancePendingApplyChangedFieldsMaxParallelAgents:
+		return true
+	case PerformancePendingApplyChangedFieldsMaxToolIterations:
+		return true
+	case PerformancePendingApplyChangedFieldsToolsOnDemand:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PerformancePendingApplyStage.
+const (
+	PerformancePendingApplyStageRefresh PerformancePendingApplyStage = "refresh"
+	PerformancePendingApplyStageReload  PerformancePendingApplyStage = "reload"
+)
+
+// Valid indicates whether the value is a known member of the PerformancePendingApplyStage enum.
+func (e PerformancePendingApplyStage) Valid() bool {
+	switch e {
+	case PerformancePendingApplyStageRefresh:
+		return true
+	case PerformancePendingApplyStageReload:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PerformanceReloadFailedDetailsChangedFields.
+const (
+	PerformanceReloadFailedDetailsChangedFieldsGoalMaxRounds             PerformanceReloadFailedDetailsChangedFields = "goal_max_rounds"
+	PerformanceReloadFailedDetailsChangedFieldsGoalReminderQuietSeconds  PerformanceReloadFailedDetailsChangedFields = "goal_reminder_quiet_seconds"
+	PerformanceReloadFailedDetailsChangedFieldsGoalStalledCheckinEnabled PerformanceReloadFailedDetailsChangedFields = "goal_stalled_checkin_enabled"
+	PerformanceReloadFailedDetailsChangedFieldsGoalStalledCheckinMinutes PerformanceReloadFailedDetailsChangedFields = "goal_stalled_checkin_minutes"
+	PerformanceReloadFailedDetailsChangedFieldsMaxParallelAgents         PerformanceReloadFailedDetailsChangedFields = "max_parallel_agents"
+	PerformanceReloadFailedDetailsChangedFieldsMaxToolIterations         PerformanceReloadFailedDetailsChangedFields = "max_tool_iterations"
+	PerformanceReloadFailedDetailsChangedFieldsToolsOnDemand             PerformanceReloadFailedDetailsChangedFields = "tools_on_demand"
+)
+
+// Valid indicates whether the value is a known member of the PerformanceReloadFailedDetailsChangedFields enum.
+func (e PerformanceReloadFailedDetailsChangedFields) Valid() bool {
+	switch e {
+	case PerformanceReloadFailedDetailsChangedFieldsGoalMaxRounds:
+		return true
+	case PerformanceReloadFailedDetailsChangedFieldsGoalReminderQuietSeconds:
+		return true
+	case PerformanceReloadFailedDetailsChangedFieldsGoalStalledCheckinEnabled:
+		return true
+	case PerformanceReloadFailedDetailsChangedFieldsGoalStalledCheckinMinutes:
+		return true
+	case PerformanceReloadFailedDetailsChangedFieldsMaxParallelAgents:
+		return true
+	case PerformanceReloadFailedDetailsChangedFieldsMaxToolIterations:
+		return true
+	case PerformanceReloadFailedDetailsChangedFieldsToolsOnDemand:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PerformanceReloadFailedDetailsStage.
+const (
+	PerformanceReloadFailedDetailsStageRefresh PerformanceReloadFailedDetailsStage = "refresh"
+	PerformanceReloadFailedDetailsStageReload  PerformanceReloadFailedDetailsStage = "reload"
+)
+
+// Valid indicates whether the value is a known member of the PerformanceReloadFailedDetailsStage enum.
+func (e PerformanceReloadFailedDetailsStage) Valid() bool {
+	switch e {
+	case PerformanceReloadFailedDetailsStageRefresh:
+		return true
+	case PerformanceReloadFailedDetailsStageReload:
 		return true
 	default:
 		return false
@@ -6800,24 +8921,6 @@ func (e ProviderAuthMethod) Valid() bool {
 	}
 }
 
-// Defines values for ProviderCliKind.
-const (
-	ProviderCliKindCodex   ProviderCliKind = "codex"
-	ProviderCliKindCopilot ProviderCliKind = "copilot"
-)
-
-// Valid indicates whether the value is a known member of the ProviderCliKind enum.
-func (e ProviderCliKind) Valid() bool {
-	switch e {
-	case ProviderCliKindCodex:
-		return true
-	case ProviderCliKindCopilot:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for ProviderDependentsRole.
 const (
 	ProviderDependentsRoleFallback    ProviderDependentsRole = "fallback"
@@ -6870,7 +8973,6 @@ func (e ProviderLocality) Valid() bool {
 const (
 	ProviderProtocolAnthropic        ProviderProtocol = "anthropic"
 	ProviderProtocolBedrock          ProviderProtocol = "bedrock"
-	ProviderProtocolCli              ProviderProtocol = "cli"
 	ProviderProtocolGoogle           ProviderProtocol = "google"
 	ProviderProtocolOllama           ProviderProtocol = "ollama"
 	ProviderProtocolOpenaiCompatible ProviderProtocol = "openai-compatible"
@@ -6882,8 +8984,6 @@ func (e ProviderProtocol) Valid() bool {
 	case ProviderProtocolAnthropic:
 		return true
 	case ProviderProtocolBedrock:
-		return true
-	case ProviderProtocolCli:
 		return true
 	case ProviderProtocolGoogle:
 		return true
@@ -7035,7 +9135,6 @@ func (e ProviderUpdateRequestAuthMethod) Valid() bool {
 const (
 	ProviderUpdateRequestProtocolAnthropic        ProviderUpdateRequestProtocol = "anthropic"
 	ProviderUpdateRequestProtocolBedrock          ProviderUpdateRequestProtocol = "bedrock"
-	ProviderUpdateRequestProtocolCli              ProviderUpdateRequestProtocol = "cli"
 	ProviderUpdateRequestProtocolGoogle           ProviderUpdateRequestProtocol = "google"
 	ProviderUpdateRequestProtocolOllama           ProviderUpdateRequestProtocol = "ollama"
 	ProviderUpdateRequestProtocolOpenaiCompatible ProviderUpdateRequestProtocol = "openai-compatible"
@@ -7047,8 +9146,6 @@ func (e ProviderUpdateRequestProtocol) Valid() bool {
 	case ProviderUpdateRequestProtocolAnthropic:
 		return true
 	case ProviderUpdateRequestProtocolBedrock:
-		return true
-	case ProviderUpdateRequestProtocolCli:
 		return true
 	case ProviderUpdateRequestProtocolGoogle:
 		return true
@@ -7073,24 +9170,6 @@ func (e ProvidersCatalogProvidersAuthMethods) Valid() bool {
 	case ProvidersCatalogProvidersAuthMethodsApiKey:
 		return true
 	case ProvidersCatalogProvidersAuthMethodsSignIn:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for ProvidersCatalogProvidersCliKind.
-const (
-	ProvidersCatalogProvidersCliKindCodex   ProvidersCatalogProvidersCliKind = "codex"
-	ProvidersCatalogProvidersCliKindCopilot ProvidersCatalogProvidersCliKind = "copilot"
-)
-
-// Valid indicates whether the value is a known member of the ProvidersCatalogProvidersCliKind enum.
-func (e ProvidersCatalogProvidersCliKind) Valid() bool {
-	switch e {
-	case ProvidersCatalogProvidersCliKindCodex:
-		return true
-	case ProvidersCatalogProvidersCliKindCopilot:
 		return true
 	default:
 		return false
@@ -7218,7 +9297,6 @@ func (e ProvidersCatalogProvidersModelsWindowSource) Valid() bool {
 const (
 	ProvidersCatalogProvidersProtocolAnthropic        ProvidersCatalogProvidersProtocol = "anthropic"
 	ProvidersCatalogProvidersProtocolBedrock          ProvidersCatalogProvidersProtocol = "bedrock"
-	ProvidersCatalogProvidersProtocolCli              ProvidersCatalogProvidersProtocol = "cli"
 	ProvidersCatalogProvidersProtocolGoogle           ProvidersCatalogProvidersProtocol = "google"
 	ProvidersCatalogProvidersProtocolOllama           ProvidersCatalogProvidersProtocol = "ollama"
 	ProvidersCatalogProvidersProtocolOpenaiCompatible ProvidersCatalogProvidersProtocol = "openai-compatible"
@@ -7230,8 +9308,6 @@ func (e ProvidersCatalogProvidersProtocol) Valid() bool {
 	case ProvidersCatalogProvidersProtocolAnthropic:
 		return true
 	case ProvidersCatalogProvidersProtocolBedrock:
-		return true
-	case ProvidersCatalogProvidersProtocolCli:
 		return true
 	case ProvidersCatalogProvidersProtocolGoogle:
 		return true
@@ -7248,7 +9324,6 @@ func (e ProvidersCatalogProvidersProtocol) Valid() bool {
 const (
 	ProvidersCatalogProvidersProtocolsProtocolAnthropic        ProvidersCatalogProvidersProtocolsProtocol = "anthropic"
 	ProvidersCatalogProvidersProtocolsProtocolBedrock          ProvidersCatalogProvidersProtocolsProtocol = "bedrock"
-	ProvidersCatalogProvidersProtocolsProtocolCli              ProvidersCatalogProvidersProtocolsProtocol = "cli"
 	ProvidersCatalogProvidersProtocolsProtocolGoogle           ProvidersCatalogProvidersProtocolsProtocol = "google"
 	ProvidersCatalogProvidersProtocolsProtocolOllama           ProvidersCatalogProvidersProtocolsProtocol = "ollama"
 	ProvidersCatalogProvidersProtocolsProtocolOpenaiCompatible ProvidersCatalogProvidersProtocolsProtocol = "openai-compatible"
@@ -7260,8 +9335,6 @@ func (e ProvidersCatalogProvidersProtocolsProtocol) Valid() bool {
 	case ProvidersCatalogProvidersProtocolsProtocolAnthropic:
 		return true
 	case ProvidersCatalogProvidersProtocolsProtocolBedrock:
-		return true
-	case ProvidersCatalogProvidersProtocolsProtocolCli:
 		return true
 	case ProvidersCatalogProvidersProtocolsProtocolGoogle:
 		return true
@@ -7853,6 +9926,90 @@ func (e RevisionEntryVerb) Valid() bool {
 	}
 }
 
+// Defines values for RoomKind.
+const (
+	RoomKindAdhoc RoomKind = "adhoc"
+	RoomKindSquad RoomKind = "squad"
+	RoomKindTeam  RoomKind = "team"
+)
+
+// Valid indicates whether the value is a known member of the RoomKind enum.
+func (e RoomKind) Valid() bool {
+	switch e {
+	case RoomKindAdhoc:
+		return true
+	case RoomKindSquad:
+		return true
+	case RoomKindTeam:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RoomCreateRequestKind.
+const (
+	RoomCreateRequestKindAdhoc RoomCreateRequestKind = "adhoc"
+	RoomCreateRequestKindSquad RoomCreateRequestKind = "squad"
+)
+
+// Valid indicates whether the value is a known member of the RoomCreateRequestKind enum.
+func (e RoomCreateRequestKind) Valid() bool {
+	switch e {
+	case RoomCreateRequestKindAdhoc:
+		return true
+	case RoomCreateRequestKindSquad:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RoomInvitationStatus.
+const (
+	RoomInvitationStatusGenerating  RoomInvitationStatus = "generating"
+	RoomInvitationStatusReady       RoomInvitationStatus = "ready"
+	RoomInvitationStatusUnavailable RoomInvitationStatus = "unavailable"
+)
+
+// Valid indicates whether the value is a known member of the RoomInvitationStatus enum.
+func (e RoomInvitationStatus) Valid() bool {
+	switch e {
+	case RoomInvitationStatusGenerating:
+		return true
+	case RoomInvitationStatusReady:
+		return true
+	case RoomInvitationStatusUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RoomMembersUpdateRequestAction.
+const (
+	RoomMembersUpdateRequestActionAdd    RoomMembersUpdateRequestAction = "add"
+	RoomMembersUpdateRequestActionMute   RoomMembersUpdateRequestAction = "mute"
+	RoomMembersUpdateRequestActionRemove RoomMembersUpdateRequestAction = "remove"
+	RoomMembersUpdateRequestActionUnmute RoomMembersUpdateRequestAction = "unmute"
+)
+
+// Valid indicates whether the value is a known member of the RoomMembersUpdateRequestAction enum.
+func (e RoomMembersUpdateRequestAction) Valid() bool {
+	switch e {
+	case RoomMembersUpdateRequestActionAdd:
+		return true
+	case RoomMembersUpdateRequestActionMute:
+		return true
+	case RoomMembersUpdateRequestActionRemove:
+		return true
+	case RoomMembersUpdateRequestActionUnmute:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RunnerTestResponseReason.
 const (
 	RunnerTestResponseReasonEmpty           RunnerTestResponseReason = ""
@@ -8003,27 +10160,6 @@ func (e ScheduleRunsStatus) Valid() bool {
 	}
 }
 
-// Defines values for ScheduleSessionMode.
-const (
-	ScheduleSessionModeContinue ScheduleSessionMode = "continue"
-	ScheduleSessionModeIsolated ScheduleSessionMode = "isolated"
-	ScheduleSessionModeMain     ScheduleSessionMode = "main"
-)
-
-// Valid indicates whether the value is a known member of the ScheduleSessionMode enum.
-func (e ScheduleSessionMode) Valid() bool {
-	switch e {
-	case ScheduleSessionModeContinue:
-		return true
-	case ScheduleSessionModeIsolated:
-		return true
-	case ScheduleSessionModeMain:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for ScheduleTriggerKind.
 const (
 	ScheduleTriggerKindAt    ScheduleTriggerKind = "at"
@@ -8039,27 +10175,6 @@ func (e ScheduleTriggerKind) Valid() bool {
 	case ScheduleTriggerKindCron:
 		return true
 	case ScheduleTriggerKindEvery:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for ScheduleCreateSessionMode.
-const (
-	ScheduleCreateSessionModeContinue ScheduleCreateSessionMode = "continue"
-	ScheduleCreateSessionModeIsolated ScheduleCreateSessionMode = "isolated"
-	ScheduleCreateSessionModeMain     ScheduleCreateSessionMode = "main"
-)
-
-// Valid indicates whether the value is a known member of the ScheduleCreateSessionMode enum.
-func (e ScheduleCreateSessionMode) Valid() bool {
-	switch e {
-	case ScheduleCreateSessionModeContinue:
-		return true
-	case ScheduleCreateSessionModeIsolated:
-		return true
-	case ScheduleCreateSessionModeMain:
 		return true
 	default:
 		return false
@@ -8105,27 +10220,6 @@ func (e ScheduleListSchedulesRunsStatus) Valid() bool {
 	case ScheduleListSchedulesRunsStatusSkipped:
 		return true
 	case ScheduleListSchedulesRunsStatusTimeout:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for ScheduleListSchedulesSessionMode.
-const (
-	ScheduleListSchedulesSessionModeContinue ScheduleListSchedulesSessionMode = "continue"
-	ScheduleListSchedulesSessionModeIsolated ScheduleListSchedulesSessionMode = "isolated"
-	ScheduleListSchedulesSessionModeMain     ScheduleListSchedulesSessionMode = "main"
-)
-
-// Valid indicates whether the value is a known member of the ScheduleListSchedulesSessionMode enum.
-func (e ScheduleListSchedulesSessionMode) Valid() bool {
-	switch e {
-	case ScheduleListSchedulesSessionModeContinue:
-		return true
-	case ScheduleListSchedulesSessionModeIsolated:
-		return true
-	case ScheduleListSchedulesSessionModeMain:
 		return true
 	default:
 		return false
@@ -8201,27 +10295,6 @@ func (e ScheduleRunResultStatus) Valid() bool {
 	}
 }
 
-// Defines values for ScheduleUpdateSessionMode.
-const (
-	ScheduleUpdateSessionModeContinue ScheduleUpdateSessionMode = "continue"
-	ScheduleUpdateSessionModeIsolated ScheduleUpdateSessionMode = "isolated"
-	ScheduleUpdateSessionModeMain     ScheduleUpdateSessionMode = "main"
-)
-
-// Valid indicates whether the value is a known member of the ScheduleUpdateSessionMode enum.
-func (e ScheduleUpdateSessionMode) Valid() bool {
-	switch e {
-	case ScheduleUpdateSessionModeContinue:
-		return true
-	case ScheduleUpdateSessionModeIsolated:
-		return true
-	case ScheduleUpdateSessionModeMain:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for ScheduleUpdateTriggerKind.
 const (
 	ScheduleUpdateTriggerKindAt    ScheduleUpdateTriggerKind = "at"
@@ -8243,10 +10316,248 @@ func (e ScheduleUpdateTriggerKind) Valid() bool {
 	}
 }
 
+// Defines values for SearchProviderCheckResponseProviderId.
+const (
+	SearchProviderCheckResponseProviderIdBaidu      SearchProviderCheckResponseProviderId = "baidu"
+	SearchProviderCheckResponseProviderIdBrave      SearchProviderCheckResponseProviderId = "brave"
+	SearchProviderCheckResponseProviderIdExa        SearchProviderCheckResponseProviderId = "exa"
+	SearchProviderCheckResponseProviderIdGlm        SearchProviderCheckResponseProviderId = "glm"
+	SearchProviderCheckResponseProviderIdPerplexity SearchProviderCheckResponseProviderId = "perplexity"
+	SearchProviderCheckResponseProviderIdTavily     SearchProviderCheckResponseProviderId = "tavily"
+)
+
+// Valid indicates whether the value is a known member of the SearchProviderCheckResponseProviderId enum.
+func (e SearchProviderCheckResponseProviderId) Valid() bool {
+	switch e {
+	case SearchProviderCheckResponseProviderIdBaidu:
+		return true
+	case SearchProviderCheckResponseProviderIdBrave:
+		return true
+	case SearchProviderCheckResponseProviderIdExa:
+		return true
+	case SearchProviderCheckResponseProviderIdGlm:
+		return true
+	case SearchProviderCheckResponseProviderIdPerplexity:
+		return true
+	case SearchProviderCheckResponseProviderIdTavily:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SearchProviderCheckResponseStatus.
+const (
+	SearchProviderCheckResponseStatusAuthError       SearchProviderCheckResponseStatus = "auth_error"
+	SearchProviderCheckResponseStatusInvalidResponse SearchProviderCheckResponseStatus = "invalid_response"
+	SearchProviderCheckResponseStatusNetworkError    SearchProviderCheckResponseStatus = "network_error"
+	SearchProviderCheckResponseStatusProviderError   SearchProviderCheckResponseStatus = "provider_error"
+	SearchProviderCheckResponseStatusRateLimited     SearchProviderCheckResponseStatus = "rate_limited"
+	SearchProviderCheckResponseStatusSuccess         SearchProviderCheckResponseStatus = "success"
+	SearchProviderCheckResponseStatusTimeout         SearchProviderCheckResponseStatus = "timeout"
+)
+
+// Valid indicates whether the value is a known member of the SearchProviderCheckResponseStatus enum.
+func (e SearchProviderCheckResponseStatus) Valid() bool {
+	switch e {
+	case SearchProviderCheckResponseStatusAuthError:
+		return true
+	case SearchProviderCheckResponseStatusInvalidResponse:
+		return true
+	case SearchProviderCheckResponseStatusNetworkError:
+		return true
+	case SearchProviderCheckResponseStatusProviderError:
+		return true
+	case SearchProviderCheckResponseStatusRateLimited:
+		return true
+	case SearchProviderCheckResponseStatusSuccess:
+		return true
+	case SearchProviderCheckResponseStatusTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecretNameEntryKind.
+const (
+	SecretNameEntryKindAgentPrivate      SecretNameEntryKind = "agent_private"
+	SecretNameEntryKindChannelCredential SecretNameEntryKind = "channel_credential"
+	SecretNameEntryKindMailboxPassword   SecretNameEntryKind = "mailbox_password"
+	SecretNameEntryKindMcpEnv            SecretNameEntryKind = "mcp_env"
+	SecretNameEntryKindProviderKey       SecretNameEntryKind = "provider_key"
+	SecretNameEntryKindUnbound           SecretNameEntryKind = "unbound"
+)
+
+// Valid indicates whether the value is a known member of the SecretNameEntryKind enum.
+func (e SecretNameEntryKind) Valid() bool {
+	switch e {
+	case SecretNameEntryKindAgentPrivate:
+		return true
+	case SecretNameEntryKindChannelCredential:
+		return true
+	case SecretNameEntryKindMailboxPassword:
+		return true
+	case SecretNameEntryKindMcpEnv:
+		return true
+	case SecretNameEntryKindProviderKey:
+		return true
+	case SecretNameEntryKindUnbound:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecretNameEntryRecipientKind.
+const (
+	SecretNameEntryRecipientKindAgentPrivate      SecretNameEntryRecipientKind = "agent_private"
+	SecretNameEntryRecipientKindChannelCredential SecretNameEntryRecipientKind = "channel_credential"
+	SecretNameEntryRecipientKindMailboxPassword   SecretNameEntryRecipientKind = "mailbox_password"
+	SecretNameEntryRecipientKindMcpEnv            SecretNameEntryRecipientKind = "mcp_env"
+	SecretNameEntryRecipientKindProviderKey       SecretNameEntryRecipientKind = "provider_key"
+	SecretNameEntryRecipientKindUnbound           SecretNameEntryRecipientKind = "unbound"
+)
+
+// Valid indicates whether the value is a known member of the SecretNameEntryRecipientKind enum.
+func (e SecretNameEntryRecipientKind) Valid() bool {
+	switch e {
+	case SecretNameEntryRecipientKindAgentPrivate:
+		return true
+	case SecretNameEntryRecipientKindChannelCredential:
+		return true
+	case SecretNameEntryRecipientKindMailboxPassword:
+		return true
+	case SecretNameEntryRecipientKindMcpEnv:
+		return true
+	case SecretNameEntryRecipientKindProviderKey:
+		return true
+	case SecretNameEntryRecipientKindUnbound:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecretNameEntryState.
+const (
+	SecretNameEntryStateSelected   SecretNameEntryState = "selected"
+	SecretNameEntryStateStored     SecretNameEntryState = "stored"
+	SecretNameEntryStateSuperseded SecretNameEntryState = "superseded"
+)
+
+// Valid indicates whether the value is a known member of the SecretNameEntryState enum.
+func (e SecretNameEntryState) Valid() bool {
+	switch e {
+	case SecretNameEntryStateSelected:
+		return true
+	case SecretNameEntryStateStored:
+		return true
+	case SecretNameEntryStateSuperseded:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecretRequestStateState.
+const (
+	SecretRequestStateStateCancelled   SecretRequestStateState = "cancelled"
+	SecretRequestStateStateInterrupted SecretRequestStateState = "interrupted"
+	SecretRequestStateStatePending     SecretRequestStateState = "pending"
+	SecretRequestStateStateRefused     SecretRequestStateState = "refused"
+	SecretRequestStateStateStopped     SecretRequestStateState = "stopped"
+	SecretRequestStateStateSubmitted   SecretRequestStateState = "submitted"
+)
+
+// Valid indicates whether the value is a known member of the SecretRequestStateState enum.
+func (e SecretRequestStateState) Valid() bool {
+	switch e {
+	case SecretRequestStateStateCancelled:
+		return true
+	case SecretRequestStateStateInterrupted:
+		return true
+	case SecretRequestStateStatePending:
+		return true
+	case SecretRequestStateStateRefused:
+		return true
+	case SecretRequestStateStateStopped:
+		return true
+	case SecretRequestStateStateSubmitted:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecretSubmitRequestCancel.
+const (
+	SecretSubmitRequestCancelTrue SecretSubmitRequestCancel = true
+)
+
+// Valid indicates whether the value is a known member of the SecretSubmitRequestCancel enum.
+func (e SecretSubmitRequestCancel) Valid() bool {
+	switch e {
+	case SecretSubmitRequestCancelTrue:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionExecution.
+const (
+	SessionExecutionQueued  SessionExecution = "queued"
+	SessionExecutionRunning SessionExecution = "running"
+)
+
+// Valid indicates whether the value is a known member of the SessionExecution enum.
+func (e SessionExecution) Valid() bool {
+	switch e {
+	case SessionExecutionQueued:
+		return true
+	case SessionExecutionRunning:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionLifecycleState.
+const (
+	SessionLifecycleStateDone             SessionLifecycleState = "done"
+	SessionLifecycleStateFailed           SessionLifecycleState = "failed"
+	SessionLifecycleStateInterrupted      SessionLifecycleState = "interrupted"
+	SessionLifecycleStateStopped          SessionLifecycleState = "stopped"
+	SessionLifecycleStateWaitingForAnswer SessionLifecycleState = "waiting_for_answer"
+	SessionLifecycleStateWorking          SessionLifecycleState = "working"
+)
+
+// Valid indicates whether the value is a known member of the SessionLifecycleState enum.
+func (e SessionLifecycleState) Valid() bool {
+	switch e {
+	case SessionLifecycleStateDone:
+		return true
+	case SessionLifecycleStateFailed:
+		return true
+	case SessionLifecycleStateInterrupted:
+		return true
+	case SessionLifecycleStateStopped:
+		return true
+	case SessionLifecycleStateWaitingForAnswer:
+		return true
+	case SessionLifecycleStateWorking:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SessionStatus.
 const (
 	SessionStatusActive      SessionStatus = "active"
 	SessionStatusArchived    SessionStatus = "archived"
+	SessionStatusFailed      SessionStatus = "failed"
 	SessionStatusInterrupted SessionStatus = "interrupted"
 )
 
@@ -8257,7 +10568,36 @@ func (e SessionStatus) Valid() bool {
 		return true
 	case SessionStatusArchived:
 		return true
+	case SessionStatusFailed:
+		return true
 	case SessionStatusInterrupted:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionStopNoteCause.
+const (
+	SessionStopNoteCauseCascade       SessionStopNoteCause = "cascade"
+	SessionStopNoteCauseRedirectPause SessionStopNoteCause = "redirect_pause"
+	SessionStopNoteCauseRestart       SessionStopNoteCause = "restart"
+	SessionStopNoteCauseStop          SessionStopNoteCause = "stop"
+	SessionStopNoteCauseTimeout       SessionStopNoteCause = "timeout"
+)
+
+// Valid indicates whether the value is a known member of the SessionStopNoteCause enum.
+func (e SessionStopNoteCause) Valid() bool {
+	switch e {
+	case SessionStopNoteCauseCascade:
+		return true
+	case SessionStopNoteCauseRedirectPause:
+		return true
+	case SessionStopNoteCauseRestart:
+		return true
+	case SessionStopNoteCauseStop:
+		return true
+	case SessionStopNoteCauseTimeout:
 		return true
 	default:
 		return false
@@ -8269,7 +10609,7 @@ const (
 	SessionTypeChannel   SessionType = "channel"
 	SessionTypeChat      SessionType = "chat"
 	SessionTypeDelegate  SessionType = "delegate"
-	SessionTypeHeartbeat SessionType = "heartbeat"
+	SessionTypeMain      SessionType = "main"
 	SessionTypeScheduled SessionType = "scheduled"
 	SessionTypeTask      SessionType = "task"
 	SessionTypeVerifier  SessionType = "verifier"
@@ -8284,7 +10624,7 @@ func (e SessionType) Valid() bool {
 		return true
 	case SessionTypeDelegate:
 		return true
-	case SessionTypeHeartbeat:
+	case SessionTypeMain:
 		return true
 	case SessionTypeScheduled:
 		return true
@@ -8318,516 +10658,48 @@ func (e SessionCreateRequestType) Valid() bool {
 	}
 }
 
-// Defines values for SessionDetailMessagesAttachmentsType.
+// Defines values for SessionDetailSessionExecution.
 const (
-	SessionDetailMessagesAttachmentsTypeAudio SessionDetailMessagesAttachmentsType = "audio"
-	SessionDetailMessagesAttachmentsTypeFile  SessionDetailMessagesAttachmentsType = "file"
-	SessionDetailMessagesAttachmentsTypeImage SessionDetailMessagesAttachmentsType = "image"
-	SessionDetailMessagesAttachmentsTypeVideo SessionDetailMessagesAttachmentsType = "video"
+	SessionDetailSessionExecutionQueued  SessionDetailSessionExecution = "queued"
+	SessionDetailSessionExecutionRunning SessionDetailSessionExecution = "running"
 )
 
-// Valid indicates whether the value is a known member of the SessionDetailMessagesAttachmentsType enum.
-func (e SessionDetailMessagesAttachmentsType) Valid() bool {
+// Valid indicates whether the value is a known member of the SessionDetailSessionExecution enum.
+func (e SessionDetailSessionExecution) Valid() bool {
 	switch e {
-	case SessionDetailMessagesAttachmentsTypeAudio:
+	case SessionDetailSessionExecutionQueued:
 		return true
-	case SessionDetailMessagesAttachmentsTypeFile:
-		return true
-	case SessionDetailMessagesAttachmentsTypeImage:
-		return true
-	case SessionDetailMessagesAttachmentsTypeVideo:
+	case SessionDetailSessionExecutionRunning:
 		return true
 	default:
 		return false
 	}
 }
 
-// Defines values for SessionDetailMessagesCancelMethod.
+// Defines values for SessionDetailSessionLifecycleState.
 const (
-	SessionDetailMessagesCancelMethodGraceful SessionDetailMessagesCancelMethod = "graceful"
-	SessionDetailMessagesCancelMethodHard     SessionDetailMessagesCancelMethod = "hard"
+	SessionDetailSessionLifecycleStateDone             SessionDetailSessionLifecycleState = "done"
+	SessionDetailSessionLifecycleStateFailed           SessionDetailSessionLifecycleState = "failed"
+	SessionDetailSessionLifecycleStateInterrupted      SessionDetailSessionLifecycleState = "interrupted"
+	SessionDetailSessionLifecycleStateStopped          SessionDetailSessionLifecycleState = "stopped"
+	SessionDetailSessionLifecycleStateWaitingForAnswer SessionDetailSessionLifecycleState = "waiting_for_answer"
+	SessionDetailSessionLifecycleStateWorking          SessionDetailSessionLifecycleState = "working"
 )
 
-// Valid indicates whether the value is a known member of the SessionDetailMessagesCancelMethod enum.
-func (e SessionDetailMessagesCancelMethod) Valid() bool {
+// Valid indicates whether the value is a known member of the SessionDetailSessionLifecycleState enum.
+func (e SessionDetailSessionLifecycleState) Valid() bool {
 	switch e {
-	case SessionDetailMessagesCancelMethodGraceful:
+	case SessionDetailSessionLifecycleStateDone:
 		return true
-	case SessionDetailMessagesCancelMethodHard:
+	case SessionDetailSessionLifecycleStateFailed:
 		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesGoalOutcomeEnding.
-const (
-	SessionDetailMessagesGoalOutcomeEndingMet             SessionDetailMessagesGoalOutcomeEnding = "met"
-	SessionDetailMessagesGoalOutcomeEndingOther           SessionDetailMessagesGoalOutcomeEnding = "other"
-	SessionDetailMessagesGoalOutcomeEndingRoundsExhausted SessionDetailMessagesGoalOutcomeEnding = "rounds_exhausted"
-	SessionDetailMessagesGoalOutcomeEndingStoppedByUser   SessionDetailMessagesGoalOutcomeEnding = "stopped_by_user"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesGoalOutcomeEnding enum.
-func (e SessionDetailMessagesGoalOutcomeEnding) Valid() bool {
-	switch e {
-	case SessionDetailMessagesGoalOutcomeEndingMet:
+	case SessionDetailSessionLifecycleStateInterrupted:
 		return true
-	case SessionDetailMessagesGoalOutcomeEndingOther:
+	case SessionDetailSessionLifecycleStateStopped:
 		return true
-	case SessionDetailMessagesGoalOutcomeEndingRoundsExhausted:
+	case SessionDetailSessionLifecycleStateWaitingForAnswer:
 		return true
-	case SessionDetailMessagesGoalOutcomeEndingStoppedByUser:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesRole.
-const (
-	SessionDetailMessagesRoleAssistant SessionDetailMessagesRole = "assistant"
-	SessionDetailMessagesRoleSystem    SessionDetailMessagesRole = "system"
-	SessionDetailMessagesRoleUser      SessionDetailMessagesRole = "user"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesRole enum.
-func (e SessionDetailMessagesRole) Valid() bool {
-	switch e {
-	case SessionDetailMessagesRoleAssistant:
-		return true
-	case SessionDetailMessagesRoleSystem:
-		return true
-	case SessionDetailMessagesRoleUser:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesStatus.
-const (
-	SessionDetailMessagesStatusError       SessionDetailMessagesStatus = "error"
-	SessionDetailMessagesStatusInterrupted SessionDetailMessagesStatus = "interrupted"
-	SessionDetailMessagesStatusOk          SessionDetailMessagesStatus = "ok"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesStatus enum.
-func (e SessionDetailMessagesStatus) Valid() bool {
-	switch e {
-	case SessionDetailMessagesStatusError:
-		return true
-	case SessionDetailMessagesStatusInterrupted:
-		return true
-	case SessionDetailMessagesStatusOk:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesSubagentEndReason.
-const (
-	SessionDetailMessagesSubagentEndReasonParentCancelled SessionDetailMessagesSubagentEndReason = "parent_cancelled"
-	SessionDetailMessagesSubagentEndReasonParentDoneEarly SessionDetailMessagesSubagentEndReason = "parent_done_early"
-	SessionDetailMessagesSubagentEndReasonParentTimeout   SessionDetailMessagesSubagentEndReason = "parent_timeout"
-	SessionDetailMessagesSubagentEndReasonUnknown         SessionDetailMessagesSubagentEndReason = "unknown"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentEndReason enum.
-func (e SessionDetailMessagesSubagentEndReason) Valid() bool {
-	switch e {
-	case SessionDetailMessagesSubagentEndReasonParentCancelled:
-		return true
-	case SessionDetailMessagesSubagentEndReasonParentDoneEarly:
-		return true
-	case SessionDetailMessagesSubagentEndReasonParentTimeout:
-		return true
-	case SessionDetailMessagesSubagentEndReasonUnknown:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesSubagentEndStatus.
-const (
-	SessionDetailMessagesSubagentEndStatusCancelled   SessionDetailMessagesSubagentEndStatus = "cancelled"
-	SessionDetailMessagesSubagentEndStatusError       SessionDetailMessagesSubagentEndStatus = "error"
-	SessionDetailMessagesSubagentEndStatusInterrupted SessionDetailMessagesSubagentEndStatus = "interrupted"
-	SessionDetailMessagesSubagentEndStatusParked      SessionDetailMessagesSubagentEndStatus = "parked"
-	SessionDetailMessagesSubagentEndStatusSuccess     SessionDetailMessagesSubagentEndStatus = "success"
-	SessionDetailMessagesSubagentEndStatusTimeout     SessionDetailMessagesSubagentEndStatus = "timeout"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentEndStatus enum.
-func (e SessionDetailMessagesSubagentEndStatus) Valid() bool {
-	switch e {
-	case SessionDetailMessagesSubagentEndStatusCancelled:
-		return true
-	case SessionDetailMessagesSubagentEndStatusError:
-		return true
-	case SessionDetailMessagesSubagentEndStatusInterrupted:
-		return true
-	case SessionDetailMessagesSubagentEndStatusParked:
-		return true
-	case SessionDetailMessagesSubagentEndStatusSuccess:
-		return true
-	case SessionDetailMessagesSubagentEndStatusTimeout:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesSubagentEndType.
-const (
-	SessionDetailMessagesSubagentEndTypeSubagentEnd SessionDetailMessagesSubagentEndType = "subagent_end"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentEndType enum.
-func (e SessionDetailMessagesSubagentEndType) Valid() bool {
-	switch e {
-	case SessionDetailMessagesSubagentEndTypeSubagentEnd:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesSubagentMessageKind.
-const (
-	SessionDetailMessagesSubagentMessageKindArtifact        SessionDetailMessagesSubagentMessageKind = "artifact"
-	SessionDetailMessagesSubagentMessageKindBlocker         SessionDetailMessagesSubagentMessageKind = "blocker"
-	SessionDetailMessagesSubagentMessageKindCheckpoint      SessionDetailMessagesSubagentMessageKind = "checkpoint"
-	SessionDetailMessagesSubagentMessageKindDecisionRequest SessionDetailMessagesSubagentMessageKind = "decision_request"
-	SessionDetailMessagesSubagentMessageKindError           SessionDetailMessagesSubagentMessageKind = "error"
-	SessionDetailMessagesSubagentMessageKindGoalStatus      SessionDetailMessagesSubagentMessageKind = "goal_status"
-	SessionDetailMessagesSubagentMessageKindHandback        SessionDetailMessagesSubagentMessageKind = "handback"
-	SessionDetailMessagesSubagentMessageKindProgress        SessionDetailMessagesSubagentMessageKind = "progress"
-	SessionDetailMessagesSubagentMessageKindQuestion        SessionDetailMessagesSubagentMessageKind = "question"
-	SessionDetailMessagesSubagentMessageKindRespond         SessionDetailMessagesSubagentMessageKind = "respond"
-	SessionDetailMessagesSubagentMessageKindSteer           SessionDetailMessagesSubagentMessageKind = "steer"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentMessageKind enum.
-func (e SessionDetailMessagesSubagentMessageKind) Valid() bool {
-	switch e {
-	case SessionDetailMessagesSubagentMessageKindArtifact:
-		return true
-	case SessionDetailMessagesSubagentMessageKindBlocker:
-		return true
-	case SessionDetailMessagesSubagentMessageKindCheckpoint:
-		return true
-	case SessionDetailMessagesSubagentMessageKindDecisionRequest:
-		return true
-	case SessionDetailMessagesSubagentMessageKindError:
-		return true
-	case SessionDetailMessagesSubagentMessageKindGoalStatus:
-		return true
-	case SessionDetailMessagesSubagentMessageKindHandback:
-		return true
-	case SessionDetailMessagesSubagentMessageKindProgress:
-		return true
-	case SessionDetailMessagesSubagentMessageKindQuestion:
-		return true
-	case SessionDetailMessagesSubagentMessageKindRespond:
-		return true
-	case SessionDetailMessagesSubagentMessageKindSteer:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesSubagentMessageType.
-const (
-	SessionDetailMessagesSubagentMessageTypeSubagentMessage SessionDetailMessagesSubagentMessageType = "subagent_message"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentMessageType enum.
-func (e SessionDetailMessagesSubagentMessageType) Valid() bool {
-	switch e {
-	case SessionDetailMessagesSubagentMessageTypeSubagentMessage:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesSubagentStartType.
-const (
-	SessionDetailMessagesSubagentStartTypeSubagentStart SessionDetailMessagesSubagentStartType = "subagent_start"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentStartType enum.
-func (e SessionDetailMessagesSubagentStartType) Valid() bool {
-	switch e {
-	case SessionDetailMessagesSubagentStartTypeSubagentStart:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesSubagentStateState.
-const (
-	SessionDetailMessagesSubagentStateStateCancelled  SessionDetailMessagesSubagentStateState = "cancelled"
-	SessionDetailMessagesSubagentStateStateCompleted  SessionDetailMessagesSubagentStateState = "completed"
-	SessionDetailMessagesSubagentStateStateFailed     SessionDetailMessagesSubagentStateState = "failed"
-	SessionDetailMessagesSubagentStateStateNeedsInput SessionDetailMessagesSubagentStateState = "needs_input"
-	SessionDetailMessagesSubagentStateStatePaused     SessionDetailMessagesSubagentStateState = "paused"
-	SessionDetailMessagesSubagentStateStateQueued     SessionDetailMessagesSubagentStateState = "queued"
-	SessionDetailMessagesSubagentStateStateRunning    SessionDetailMessagesSubagentStateState = "running"
-	SessionDetailMessagesSubagentStateStateTimedOut   SessionDetailMessagesSubagentStateState = "timed_out"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentStateState enum.
-func (e SessionDetailMessagesSubagentStateState) Valid() bool {
-	switch e {
-	case SessionDetailMessagesSubagentStateStateCancelled:
-		return true
-	case SessionDetailMessagesSubagentStateStateCompleted:
-		return true
-	case SessionDetailMessagesSubagentStateStateFailed:
-		return true
-	case SessionDetailMessagesSubagentStateStateNeedsInput:
-		return true
-	case SessionDetailMessagesSubagentStateStatePaused:
-		return true
-	case SessionDetailMessagesSubagentStateStateQueued:
-		return true
-	case SessionDetailMessagesSubagentStateStateRunning:
-		return true
-	case SessionDetailMessagesSubagentStateStateTimedOut:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesSubagentStateType.
-const (
-	SessionDetailMessagesSubagentStateTypeSubagentState SessionDetailMessagesSubagentStateType = "subagent_state"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesSubagentStateType enum.
-func (e SessionDetailMessagesSubagentStateType) Valid() bool {
-	switch e {
-	case SessionDetailMessagesSubagentStateTypeSubagentState:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesSystemSubtype.
-const (
-	SessionDetailMessagesSystemSubtypeBrowserHandoverNotice SessionDetailMessagesSystemSubtype = "browser_handover_notice"
-	SessionDetailMessagesSystemSubtypeGoalOutcome           SessionDetailMessagesSystemSubtype = "goal_outcome"
-	SessionDetailMessagesSystemSubtypeSubagentEnd           SessionDetailMessagesSystemSubtype = "subagent_end"
-	SessionDetailMessagesSystemSubtypeSubagentMessage       SessionDetailMessagesSystemSubtype = "subagent_message"
-	SessionDetailMessagesSystemSubtypeSubagentStart         SessionDetailMessagesSystemSubtype = "subagent_start"
-	SessionDetailMessagesSystemSubtypeSubagentState         SessionDetailMessagesSystemSubtype = "subagent_state"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesSystemSubtype enum.
-func (e SessionDetailMessagesSystemSubtype) Valid() bool {
-	switch e {
-	case SessionDetailMessagesSystemSubtypeBrowserHandoverNotice:
-		return true
-	case SessionDetailMessagesSystemSubtypeGoalOutcome:
-		return true
-	case SessionDetailMessagesSystemSubtypeSubagentEnd:
-		return true
-	case SessionDetailMessagesSystemSubtypeSubagentMessage:
-		return true
-	case SessionDetailMessagesSystemSubtypeSubagentStart:
-		return true
-	case SessionDetailMessagesSystemSubtypeSubagentState:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesToolCallsContentState.
-const (
-	SessionDetailMessagesToolCallsContentStateCapped  SessionDetailMessagesToolCallsContentState = "capped"
-	SessionDetailMessagesToolCallsContentStateEmptied SessionDetailMessagesToolCallsContentState = "emptied"
-	SessionDetailMessagesToolCallsContentStateFull    SessionDetailMessagesToolCallsContentState = "full"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesToolCallsContentState enum.
-func (e SessionDetailMessagesToolCallsContentState) Valid() bool {
-	switch e {
-	case SessionDetailMessagesToolCallsContentStateCapped:
-		return true
-	case SessionDetailMessagesToolCallsContentStateEmptied:
-		return true
-	case SessionDetailMessagesToolCallsContentStateFull:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesToolCallsStatus.
-const (
-	SessionDetailMessagesToolCallsStatusCancelled   SessionDetailMessagesToolCallsStatus = "cancelled"
-	SessionDetailMessagesToolCallsStatusDenied      SessionDetailMessagesToolCallsStatus = "denied"
-	SessionDetailMessagesToolCallsStatusError       SessionDetailMessagesToolCallsStatus = "error"
-	SessionDetailMessagesToolCallsStatusInterrupted SessionDetailMessagesToolCallsStatus = "interrupted"
-	SessionDetailMessagesToolCallsStatusParked      SessionDetailMessagesToolCallsStatus = "parked"
-	SessionDetailMessagesToolCallsStatusPending     SessionDetailMessagesToolCallsStatus = "pending"
-	SessionDetailMessagesToolCallsStatusRunning     SessionDetailMessagesToolCallsStatus = "running"
-	SessionDetailMessagesToolCallsStatusSuccess     SessionDetailMessagesToolCallsStatus = "success"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesToolCallsStatus enum.
-func (e SessionDetailMessagesToolCallsStatus) Valid() bool {
-	switch e {
-	case SessionDetailMessagesToolCallsStatusCancelled:
-		return true
-	case SessionDetailMessagesToolCallsStatusDenied:
-		return true
-	case SessionDetailMessagesToolCallsStatusError:
-		return true
-	case SessionDetailMessagesToolCallsStatusInterrupted:
-		return true
-	case SessionDetailMessagesToolCallsStatusParked:
-		return true
-	case SessionDetailMessagesToolCallsStatusPending:
-		return true
-	case SessionDetailMessagesToolCallsStatusRunning:
-		return true
-	case SessionDetailMessagesToolCallsStatusSuccess:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesTruncationReason.
-const (
-	SessionDetailMessagesTruncationReasonCancelled       SessionDetailMessagesTruncationReason = "cancelled"
-	SessionDetailMessagesTruncationReasonMaxOutputTokens SessionDetailMessagesTruncationReason = "max_output_tokens"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesTruncationReason enum.
-func (e SessionDetailMessagesTruncationReason) Valid() bool {
-	switch e {
-	case SessionDetailMessagesTruncationReasonCancelled:
-		return true
-	case SessionDetailMessagesTruncationReasonMaxOutputTokens:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesType.
-const (
-	SessionDetailMessagesTypeCompaction   SessionDetailMessagesType = "compaction"
-	SessionDetailMessagesTypeJudgeVerdict SessionDetailMessagesType = "judge_verdict"
-	SessionDetailMessagesTypeMessage      SessionDetailMessagesType = "message"
-	SessionDetailMessagesTypeSystem       SessionDetailMessagesType = "system"
-	SessionDetailMessagesTypeToolCall     SessionDetailMessagesType = "tool_call"
-	SessionDetailMessagesTypeTurnCanceled SessionDetailMessagesType = "turn_canceled"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesType enum.
-func (e SessionDetailMessagesType) Valid() bool {
-	switch e {
-	case SessionDetailMessagesTypeCompaction:
-		return true
-	case SessionDetailMessagesTypeJudgeVerdict:
-		return true
-	case SessionDetailMessagesTypeMessage:
-		return true
-	case SessionDetailMessagesTypeSystem:
-		return true
-	case SessionDetailMessagesTypeToolCall:
-		return true
-	case SessionDetailMessagesTypeTurnCanceled:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesVerdictPerCriterionEvidenceSource.
-const (
-	SessionDetailMessagesVerdictPerCriterionEvidenceSourceDiff         SessionDetailMessagesVerdictPerCriterionEvidenceSource = "diff"
-	SessionDetailMessagesVerdictPerCriterionEvidenceSourceFileRead     SessionDetailMessagesVerdictPerCriterionEvidenceSource = "file_read"
-	SessionDetailMessagesVerdictPerCriterionEvidenceSourceMachineCheck SessionDetailMessagesVerdictPerCriterionEvidenceSource = "machine_check"
-	SessionDetailMessagesVerdictPerCriterionEvidenceSourceSessionRead  SessionDetailMessagesVerdictPerCriterionEvidenceSource = "session_read"
-	SessionDetailMessagesVerdictPerCriterionEvidenceSourceTranscript   SessionDetailMessagesVerdictPerCriterionEvidenceSource = "transcript"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesVerdictPerCriterionEvidenceSource enum.
-func (e SessionDetailMessagesVerdictPerCriterionEvidenceSource) Valid() bool {
-	switch e {
-	case SessionDetailMessagesVerdictPerCriterionEvidenceSourceDiff:
-		return true
-	case SessionDetailMessagesVerdictPerCriterionEvidenceSourceFileRead:
-		return true
-	case SessionDetailMessagesVerdictPerCriterionEvidenceSourceMachineCheck:
-		return true
-	case SessionDetailMessagesVerdictPerCriterionEvidenceSourceSessionRead:
-		return true
-	case SessionDetailMessagesVerdictPerCriterionEvidenceSourceTranscript:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesVerdictPerCriterionProvenance.
-const (
-	SessionDetailMessagesVerdictPerCriterionProvenanceDeterministicCheck SessionDetailMessagesVerdictPerCriterionProvenance = "deterministic_check"
-	SessionDetailMessagesVerdictPerCriterionProvenanceDiff               SessionDetailMessagesVerdictPerCriterionProvenance = "diff"
-	SessionDetailMessagesVerdictPerCriterionProvenanceJudgeRead          SessionDetailMessagesVerdictPerCriterionProvenance = "judge_read"
-	SessionDetailMessagesVerdictPerCriterionProvenanceNone               SessionDetailMessagesVerdictPerCriterionProvenance = "none"
-	SessionDetailMessagesVerdictPerCriterionProvenanceSessionRead        SessionDetailMessagesVerdictPerCriterionProvenance = "session_read"
-	SessionDetailMessagesVerdictPerCriterionProvenanceTranscript         SessionDetailMessagesVerdictPerCriterionProvenance = "transcript"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesVerdictPerCriterionProvenance enum.
-func (e SessionDetailMessagesVerdictPerCriterionProvenance) Valid() bool {
-	switch e {
-	case SessionDetailMessagesVerdictPerCriterionProvenanceDeterministicCheck:
-		return true
-	case SessionDetailMessagesVerdictPerCriterionProvenanceDiff:
-		return true
-	case SessionDetailMessagesVerdictPerCriterionProvenanceJudgeRead:
-		return true
-	case SessionDetailMessagesVerdictPerCriterionProvenanceNone:
-		return true
-	case SessionDetailMessagesVerdictPerCriterionProvenanceSessionRead:
-		return true
-	case SessionDetailMessagesVerdictPerCriterionProvenanceTranscript:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionDetailMessagesVerdictScope.
-const (
-	SessionDetailMessagesVerdictScopeGoal SessionDetailMessagesVerdictScope = "goal"
-	SessionDetailMessagesVerdictScopePlan SessionDetailMessagesVerdictScope = "plan"
-	SessionDetailMessagesVerdictScopeTask SessionDetailMessagesVerdictScope = "task"
-)
-
-// Valid indicates whether the value is a known member of the SessionDetailMessagesVerdictScope enum.
-func (e SessionDetailMessagesVerdictScope) Valid() bool {
-	switch e {
-	case SessionDetailMessagesVerdictScopeGoal:
-		return true
-	case SessionDetailMessagesVerdictScopePlan:
-		return true
-	case SessionDetailMessagesVerdictScopeTask:
+	case SessionDetailSessionLifecycleStateWorking:
 		return true
 	default:
 		return false
@@ -8838,6 +10710,7 @@ func (e SessionDetailMessagesVerdictScope) Valid() bool {
 const (
 	SessionDetailSessionStatusActive      SessionDetailSessionStatus = "active"
 	SessionDetailSessionStatusArchived    SessionDetailSessionStatus = "archived"
+	SessionDetailSessionStatusFailed      SessionDetailSessionStatus = "failed"
 	SessionDetailSessionStatusInterrupted SessionDetailSessionStatus = "interrupted"
 )
 
@@ -8848,7 +10721,36 @@ func (e SessionDetailSessionStatus) Valid() bool {
 		return true
 	case SessionDetailSessionStatusArchived:
 		return true
+	case SessionDetailSessionStatusFailed:
+		return true
 	case SessionDetailSessionStatusInterrupted:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SessionDetailSessionStopNoteCause.
+const (
+	SessionDetailSessionStopNoteCauseCascade       SessionDetailSessionStopNoteCause = "cascade"
+	SessionDetailSessionStopNoteCauseRedirectPause SessionDetailSessionStopNoteCause = "redirect_pause"
+	SessionDetailSessionStopNoteCauseRestart       SessionDetailSessionStopNoteCause = "restart"
+	SessionDetailSessionStopNoteCauseStop          SessionDetailSessionStopNoteCause = "stop"
+	SessionDetailSessionStopNoteCauseTimeout       SessionDetailSessionStopNoteCause = "timeout"
+)
+
+// Valid indicates whether the value is a known member of the SessionDetailSessionStopNoteCause enum.
+func (e SessionDetailSessionStopNoteCause) Valid() bool {
+	switch e {
+	case SessionDetailSessionStopNoteCauseCascade:
+		return true
+	case SessionDetailSessionStopNoteCauseRedirectPause:
+		return true
+	case SessionDetailSessionStopNoteCauseRestart:
+		return true
+	case SessionDetailSessionStopNoteCauseStop:
+		return true
+	case SessionDetailSessionStopNoteCauseTimeout:
 		return true
 	default:
 		return false
@@ -8860,7 +10762,7 @@ const (
 	SessionDetailSessionTypeChannel   SessionDetailSessionType = "channel"
 	SessionDetailSessionTypeChat      SessionDetailSessionType = "chat"
 	SessionDetailSessionTypeDelegate  SessionDetailSessionType = "delegate"
-	SessionDetailSessionTypeHeartbeat SessionDetailSessionType = "heartbeat"
+	SessionDetailSessionTypeMain      SessionDetailSessionType = "main"
 	SessionDetailSessionTypeScheduled SessionDetailSessionType = "scheduled"
 	SessionDetailSessionTypeTask      SessionDetailSessionType = "task"
 	SessionDetailSessionTypeVerifier  SessionDetailSessionType = "verifier"
@@ -8875,7 +10777,7 @@ func (e SessionDetailSessionType) Valid() bool {
 		return true
 	case SessionDetailSessionTypeDelegate:
 		return true
-	case SessionDetailSessionTypeHeartbeat:
+	case SessionDetailSessionTypeMain:
 		return true
 	case SessionDetailSessionTypeScheduled:
 		return true
@@ -8895,6 +10797,7 @@ const (
 	SessionLifecycleRecordOriginKindDelegate  SessionLifecycleRecordOriginKind = "delegate"
 	SessionLifecycleRecordOriginKindHeartbeat SessionLifecycleRecordOriginKind = "heartbeat"
 	SessionLifecycleRecordOriginKindHuman     SessionLifecycleRecordOriginKind = "human"
+	SessionLifecycleRecordOriginKindMain      SessionLifecycleRecordOriginKind = "main"
 	SessionLifecycleRecordOriginKindPlan      SessionLifecycleRecordOriginKind = "plan"
 	SessionLifecycleRecordOriginKindScheduled SessionLifecycleRecordOriginKind = "scheduled"
 	SessionLifecycleRecordOriginKindTask      SessionLifecycleRecordOriginKind = "task"
@@ -8913,6 +10816,8 @@ func (e SessionLifecycleRecordOriginKind) Valid() bool {
 	case SessionLifecycleRecordOriginKindHeartbeat:
 		return true
 	case SessionLifecycleRecordOriginKindHuman:
+		return true
+	case SessionLifecycleRecordOriginKindMain:
 		return true
 	case SessionLifecycleRecordOriginKindPlan:
 		return true
@@ -8950,34 +10855,28 @@ func (e SessionLifecycleRecordOwnerScopeKind) Valid() bool {
 
 // Defines values for SessionLifecycleRecordState.
 const (
-	SessionLifecycleRecordStateCancelled  SessionLifecycleRecordState = "cancelled"
 	SessionLifecycleRecordStateCompleted  SessionLifecycleRecordState = "completed"
 	SessionLifecycleRecordStateFailed     SessionLifecycleRecordState = "failed"
 	SessionLifecycleRecordStateNeedsInput SessionLifecycleRecordState = "needs_input"
-	SessionLifecycleRecordStatePaused     SessionLifecycleRecordState = "paused"
 	SessionLifecycleRecordStateQueued     SessionLifecycleRecordState = "queued"
 	SessionLifecycleRecordStateRunning    SessionLifecycleRecordState = "running"
-	SessionLifecycleRecordStateTimedOut   SessionLifecycleRecordState = "timed_out"
+	SessionLifecycleRecordStateStopped    SessionLifecycleRecordState = "stopped"
 )
 
 // Valid indicates whether the value is a known member of the SessionLifecycleRecordState enum.
 func (e SessionLifecycleRecordState) Valid() bool {
 	switch e {
-	case SessionLifecycleRecordStateCancelled:
-		return true
 	case SessionLifecycleRecordStateCompleted:
 		return true
 	case SessionLifecycleRecordStateFailed:
 		return true
 	case SessionLifecycleRecordStateNeedsInput:
 		return true
-	case SessionLifecycleRecordStatePaused:
-		return true
 	case SessionLifecycleRecordStateQueued:
 		return true
 	case SessionLifecycleRecordStateRunning:
 		return true
-	case SessionLifecycleRecordStateTimedOut:
+	case SessionLifecycleRecordStateStopped:
 		return true
 	default:
 		return false
@@ -9125,54 +11024,6 @@ const (
 func (e SessionMessageCheckpointKind) Valid() bool {
 	switch e {
 	case SessionMessageCheckpointKindCheckpoint:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionMessageDecisionRequestAuthority.
-const (
-	SessionMessageDecisionRequestAuthorityOwnerRequired SessionMessageDecisionRequestAuthority = "owner_required"
-	SessionMessageDecisionRequestAuthoritySelfOk        SessionMessageDecisionRequestAuthority = "self_ok"
-)
-
-// Valid indicates whether the value is a known member of the SessionMessageDecisionRequestAuthority enum.
-func (e SessionMessageDecisionRequestAuthority) Valid() bool {
-	switch e {
-	case SessionMessageDecisionRequestAuthorityOwnerRequired:
-		return true
-	case SessionMessageDecisionRequestAuthoritySelfOk:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionMessageDecisionRequestDirection.
-const (
-	SessionMessageDecisionRequestDirectionChildToParent SessionMessageDecisionRequestDirection = "child_to_parent"
-)
-
-// Valid indicates whether the value is a known member of the SessionMessageDecisionRequestDirection enum.
-func (e SessionMessageDecisionRequestDirection) Valid() bool {
-	switch e {
-	case SessionMessageDecisionRequestDirectionChildToParent:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionMessageDecisionRequestKind.
-const (
-	SessionMessageDecisionRequestKindDecisionRequest SessionMessageDecisionRequestKind = "decision_request"
-)
-
-// Valid indicates whether the value is a known member of the SessionMessageDecisionRequestKind enum.
-func (e SessionMessageDecisionRequestKind) Valid() bool {
-	switch e {
-	case SessionMessageDecisionRequestKindDecisionRequest:
 		return true
 	default:
 		return false
@@ -9335,24 +11186,6 @@ const (
 func (e SessionMessageProgressKind) Valid() bool {
 	switch e {
 	case SessionMessageProgressKindProgress:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SessionMessageQuestionAuthority.
-const (
-	SessionMessageQuestionAuthorityOwnerRequired SessionMessageQuestionAuthority = "owner_required"
-	SessionMessageQuestionAuthoritySelfOk        SessionMessageQuestionAuthority = "self_ok"
-)
-
-// Valid indicates whether the value is a known member of the SessionMessageQuestionAuthority enum.
-func (e SessionMessageQuestionAuthority) Valid() bool {
-	switch e {
-	case SessionMessageQuestionAuthorityOwnerRequired:
-		return true
-	case SessionMessageQuestionAuthoritySelfOk:
 		return true
 	default:
 		return false
@@ -9575,15 +11408,15 @@ func (e SignInPollResponseState) Valid() bool {
 	}
 }
 
-// Defines values for SignInStartResponseCliLoginMethod.
+// Defines values for SignInStartResponseMethod.
 const (
-	SignInStartResponseCliLoginMethodCliLogin SignInStartResponseCliLoginMethod = "cli_login"
+	SignInStartResponseMethodDeviceCode SignInStartResponseMethod = "device_code"
 )
 
-// Valid indicates whether the value is a known member of the SignInStartResponseCliLoginMethod enum.
-func (e SignInStartResponseCliLoginMethod) Valid() bool {
+// Valid indicates whether the value is a known member of the SignInStartResponseMethod enum.
+func (e SignInStartResponseMethod) Valid() bool {
 	switch e {
-	case SignInStartResponseCliLoginMethodCliLogin:
+	case SignInStartResponseMethodDeviceCode:
 		return true
 	default:
 		return false
@@ -9710,6 +11543,60 @@ func (e SkillStatus) Valid() bool {
 	case SkillStatusError:
 		return true
 	case SkillStatusInactive:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SkillDetailNeedsStatus.
+const (
+	SkillDetailNeedsStatusMissing SkillDetailNeedsStatus = "missing"
+	SkillDetailNeedsStatusPresent SkillDetailNeedsStatus = "present"
+)
+
+// Valid indicates whether the value is a known member of the SkillDetailNeedsStatus enum.
+func (e SkillDetailNeedsStatus) Valid() bool {
+	switch e {
+	case SkillDetailNeedsStatusMissing:
+		return true
+	case SkillDetailNeedsStatusPresent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SkillDetailShelf.
+const (
+	SkillDetailShelfBuiltin  SkillDetailShelf = "builtin"
+	SkillDetailShelfRegistry SkillDetailShelf = "registry"
+)
+
+// Valid indicates whether the value is a known member of the SkillDetailShelf enum.
+func (e SkillDetailShelf) Valid() bool {
+	switch e {
+	case SkillDetailShelfBuiltin:
+		return true
+	case SkillDetailShelfRegistry:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SkillDetailState.
+const (
+	SkillDetailStateDeleted   SkillDetailState = "deleted"
+	SkillDetailStateInstalled SkillDetailState = "installed"
+)
+
+// Valid indicates whether the value is a known member of the SkillDetailState enum.
+func (e SkillDetailState) Valid() bool {
+	switch e {
+	case SkillDetailStateDeleted:
+		return true
+	case SkillDetailStateInstalled:
 		return true
 	default:
 		return false
@@ -10189,7 +12076,6 @@ func (e TaskTodosStatus) Valid() bool {
 
 // Defines values for TaskTriggerType.
 const (
-	TaskTriggerTypeEvery     TaskTriggerType = "every"
 	TaskTriggerTypeManual    TaskTriggerType = "manual"
 	TaskTriggerTypeOnce      TaskTriggerType = "once"
 	TaskTriggerTypeRecurring TaskTriggerType = "recurring"
@@ -10198,8 +12084,6 @@ const (
 // Valid indicates whether the value is a known member of the TaskTriggerType enum.
 func (e TaskTriggerType) Valid() bool {
 	switch e {
-	case TaskTriggerTypeEvery:
-		return true
 	case TaskTriggerTypeManual:
 		return true
 	case TaskTriggerTypeOnce:
@@ -10513,7 +12397,6 @@ func (e TaskCreateRequestTodosStatus) Valid() bool {
 
 // Defines values for TaskCreateRequestTriggerType.
 const (
-	TaskCreateRequestTriggerTypeEvery     TaskCreateRequestTriggerType = "every"
 	TaskCreateRequestTriggerTypeManual    TaskCreateRequestTriggerType = "manual"
 	TaskCreateRequestTriggerTypeOnce      TaskCreateRequestTriggerType = "once"
 	TaskCreateRequestTriggerTypeRecurring TaskCreateRequestTriggerType = "recurring"
@@ -10522,8 +12405,6 @@ const (
 // Valid indicates whether the value is a known member of the TaskCreateRequestTriggerType enum.
 func (e TaskCreateRequestTriggerType) Valid() bool {
 	switch e {
-	case TaskCreateRequestTriggerTypeEvery:
-		return true
 	case TaskCreateRequestTriggerTypeManual:
 		return true
 	case TaskCreateRequestTriggerTypeOnce:
@@ -10540,6 +12421,7 @@ const (
 	TaskOccurrenceSetOccurrenceRunsStatusDone       TaskOccurrenceSetOccurrenceRunsStatus = "done"
 	TaskOccurrenceSetOccurrenceRunsStatusFailed     TaskOccurrenceSetOccurrenceRunsStatus = "failed"
 	TaskOccurrenceSetOccurrenceRunsStatusInProgress TaskOccurrenceSetOccurrenceRunsStatus = "in_progress"
+	TaskOccurrenceSetOccurrenceRunsStatusMissed     TaskOccurrenceSetOccurrenceRunsStatus = "missed"
 	TaskOccurrenceSetOccurrenceRunsStatusSkipped    TaskOccurrenceSetOccurrenceRunsStatus = "skipped"
 )
 
@@ -10551,6 +12433,8 @@ func (e TaskOccurrenceSetOccurrenceRunsStatus) Valid() bool {
 	case TaskOccurrenceSetOccurrenceRunsStatusFailed:
 		return true
 	case TaskOccurrenceSetOccurrenceRunsStatusInProgress:
+		return true
+	case TaskOccurrenceSetOccurrenceRunsStatusMissed:
 		return true
 	case TaskOccurrenceSetOccurrenceRunsStatusSkipped:
 		return true
@@ -10582,6 +12466,7 @@ const (
 	TaskRunStatusDone       TaskRunStatus = "done"
 	TaskRunStatusFailed     TaskRunStatus = "failed"
 	TaskRunStatusInProgress TaskRunStatus = "in_progress"
+	TaskRunStatusMissed     TaskRunStatus = "missed"
 	TaskRunStatusSkipped    TaskRunStatus = "skipped"
 )
 
@@ -10593,6 +12478,8 @@ func (e TaskRunStatus) Valid() bool {
 	case TaskRunStatusFailed:
 		return true
 	case TaskRunStatusInProgress:
+		return true
+	case TaskRunStatusMissed:
 		return true
 	case TaskRunStatusSkipped:
 		return true
@@ -10918,7 +12805,6 @@ func (e TaskUpdateRequestTodosStatus) Valid() bool {
 
 // Defines values for TaskUpdateRequestTriggerType.
 const (
-	TaskUpdateRequestTriggerTypeEvery     TaskUpdateRequestTriggerType = "every"
 	TaskUpdateRequestTriggerTypeManual    TaskUpdateRequestTriggerType = "manual"
 	TaskUpdateRequestTriggerTypeOnce      TaskUpdateRequestTriggerType = "once"
 	TaskUpdateRequestTriggerTypeRecurring TaskUpdateRequestTriggerType = "recurring"
@@ -10927,13 +12813,65 @@ const (
 // Valid indicates whether the value is a known member of the TaskUpdateRequestTriggerType enum.
 func (e TaskUpdateRequestTriggerType) Valid() bool {
 	switch e {
-	case TaskUpdateRequestTriggerTypeEvery:
-		return true
 	case TaskUpdateRequestTriggerTypeManual:
 		return true
 	case TaskUpdateRequestTriggerTypeOnce:
 		return true
 	case TaskUpdateRequestTriggerTypeRecurring:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ThirdPartyAgentSettingsViewClisClaudeCodeDetectedSource.
+const (
+	ThirdPartyAgentSettingsViewClisClaudeCodeDetectedSourcePath      ThirdPartyAgentSettingsViewClisClaudeCodeDetectedSource = "path"
+	ThirdPartyAgentSettingsViewClisClaudeCodeDetectedSourceWellKnown ThirdPartyAgentSettingsViewClisClaudeCodeDetectedSource = "well-known"
+)
+
+// Valid indicates whether the value is a known member of the ThirdPartyAgentSettingsViewClisClaudeCodeDetectedSource enum.
+func (e ThirdPartyAgentSettingsViewClisClaudeCodeDetectedSource) Valid() bool {
+	switch e {
+	case ThirdPartyAgentSettingsViewClisClaudeCodeDetectedSourcePath:
+		return true
+	case ThirdPartyAgentSettingsViewClisClaudeCodeDetectedSourceWellKnown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ThirdPartyAgentSettingsViewClisCodexDetectedSource.
+const (
+	ThirdPartyAgentSettingsViewClisCodexDetectedSourcePath      ThirdPartyAgentSettingsViewClisCodexDetectedSource = "path"
+	ThirdPartyAgentSettingsViewClisCodexDetectedSourceWellKnown ThirdPartyAgentSettingsViewClisCodexDetectedSource = "well-known"
+)
+
+// Valid indicates whether the value is a known member of the ThirdPartyAgentSettingsViewClisCodexDetectedSource enum.
+func (e ThirdPartyAgentSettingsViewClisCodexDetectedSource) Valid() bool {
+	switch e {
+	case ThirdPartyAgentSettingsViewClisCodexDetectedSourcePath:
+		return true
+	case ThirdPartyAgentSettingsViewClisCodexDetectedSourceWellKnown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ThirdPartyAgentSettingsViewClisOpencodeDetectedSource.
+const (
+	ThirdPartyAgentSettingsViewClisOpencodeDetectedSourcePath      ThirdPartyAgentSettingsViewClisOpencodeDetectedSource = "path"
+	ThirdPartyAgentSettingsViewClisOpencodeDetectedSourceWellKnown ThirdPartyAgentSettingsViewClisOpencodeDetectedSource = "well-known"
+)
+
+// Valid indicates whether the value is a known member of the ThirdPartyAgentSettingsViewClisOpencodeDetectedSource enum.
+func (e ThirdPartyAgentSettingsViewClisOpencodeDetectedSource) Valid() bool {
+	switch e {
+	case ThirdPartyAgentSettingsViewClisOpencodeDetectedSourcePath:
+		return true
+	case ThirdPartyAgentSettingsViewClisOpencodeDetectedSourceWellKnown:
 		return true
 	default:
 		return false
@@ -12109,6 +14047,7 @@ const (
 	ListSessionsParamsTypeChannel   ListSessionsParamsType = "channel"
 	ListSessionsParamsTypeChat      ListSessionsParamsType = "chat"
 	ListSessionsParamsTypeDelegate  ListSessionsParamsType = "delegate"
+	ListSessionsParamsTypeMain      ListSessionsParamsType = "main"
 	ListSessionsParamsTypeScheduled ListSessionsParamsType = "scheduled"
 	ListSessionsParamsTypeTask      ListSessionsParamsType = "task"
 	ListSessionsParamsTypeVerifier  ListSessionsParamsType = "verifier"
@@ -12122,6 +14061,8 @@ func (e ListSessionsParamsType) Valid() bool {
 	case ListSessionsParamsTypeChat:
 		return true
 	case ListSessionsParamsTypeDelegate:
+		return true
+	case ListSessionsParamsTypeMain:
 		return true
 	case ListSessionsParamsTypeScheduled:
 		return true
@@ -12221,6 +14162,168 @@ func (e ListWorkspacesParamsStatus) Valid() bool {
 	case ListWorkspacesParamsStatusAll:
 		return true
 	case ListWorkspacesParamsStatusArchived:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListMailFoldersParamsMode.
+const (
+	ListMailFoldersParamsModeCacheFirst ListMailFoldersParamsMode = "cache_first"
+	ListMailFoldersParamsModeLive       ListMailFoldersParamsMode = "live"
+)
+
+// Valid indicates whether the value is a known member of the ListMailFoldersParamsMode enum.
+func (e ListMailFoldersParamsMode) Valid() bool {
+	switch e {
+	case ListMailFoldersParamsModeCacheFirst:
+		return true
+	case ListMailFoldersParamsModeLive:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListMailMessagesParamsMode.
+const (
+	ListMailMessagesParamsModeCacheFirst ListMailMessagesParamsMode = "cache_first"
+	ListMailMessagesParamsModeLive       ListMailMessagesParamsMode = "live"
+)
+
+// Valid indicates whether the value is a known member of the ListMailMessagesParamsMode enum.
+func (e ListMailMessagesParamsMode) Valid() bool {
+	switch e {
+	case ListMailMessagesParamsModeCacheFirst:
+		return true
+	case ListMailMessagesParamsModeLive:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ListMailMessagesParamsFolder.
+const (
+	ListMailMessagesParamsFolderDrafts ListMailMessagesParamsFolder = "drafts"
+	ListMailMessagesParamsFolderInbox  ListMailMessagesParamsFolder = "inbox"
+	ListMailMessagesParamsFolderSent   ListMailMessagesParamsFolder = "sent"
+)
+
+// Valid indicates whether the value is a known member of the ListMailMessagesParamsFolder enum.
+func (e ListMailMessagesParamsFolder) Valid() bool {
+	switch e {
+	case ListMailMessagesParamsFolderDrafts:
+		return true
+	case ListMailMessagesParamsFolderInbox:
+		return true
+	case ListMailMessagesParamsFolderSent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetMailMessageParamsFolder.
+const (
+	GetMailMessageParamsFolderDrafts GetMailMessageParamsFolder = "drafts"
+	GetMailMessageParamsFolderInbox  GetMailMessageParamsFolder = "inbox"
+	GetMailMessageParamsFolderSent   GetMailMessageParamsFolder = "sent"
+)
+
+// Valid indicates whether the value is a known member of the GetMailMessageParamsFolder enum.
+func (e GetMailMessageParamsFolder) Valid() bool {
+	switch e {
+	case GetMailMessageParamsFolderDrafts:
+		return true
+	case GetMailMessageParamsFolderInbox:
+		return true
+	case GetMailMessageParamsFolderSent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetMailAttachmentParamsFolder.
+const (
+	GetMailAttachmentParamsFolderDrafts GetMailAttachmentParamsFolder = "drafts"
+	GetMailAttachmentParamsFolderInbox  GetMailAttachmentParamsFolder = "inbox"
+	GetMailAttachmentParamsFolderSent   GetMailAttachmentParamsFolder = "sent"
+)
+
+// Valid indicates whether the value is a known member of the GetMailAttachmentParamsFolder enum.
+func (e GetMailAttachmentParamsFolder) Valid() bool {
+	switch e {
+	case GetMailAttachmentParamsFolderDrafts:
+		return true
+	case GetMailAttachmentParamsFolderInbox:
+		return true
+	case GetMailAttachmentParamsFolderSent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SaveMailAttachmentToLibraryParamsFolder.
+const (
+	SaveMailAttachmentToLibraryParamsFolderDrafts SaveMailAttachmentToLibraryParamsFolder = "drafts"
+	SaveMailAttachmentToLibraryParamsFolderInbox  SaveMailAttachmentToLibraryParamsFolder = "inbox"
+	SaveMailAttachmentToLibraryParamsFolderSent   SaveMailAttachmentToLibraryParamsFolder = "sent"
+)
+
+// Valid indicates whether the value is a known member of the SaveMailAttachmentToLibraryParamsFolder enum.
+func (e SaveMailAttachmentToLibraryParamsFolder) Valid() bool {
+	switch e {
+	case SaveMailAttachmentToLibraryParamsFolderDrafts:
+		return true
+	case SaveMailAttachmentToLibraryParamsFolderInbox:
+		return true
+	case SaveMailAttachmentToLibraryParamsFolderSent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetMailReplyContextParamsFolder.
+const (
+	GetMailReplyContextParamsFolderDrafts GetMailReplyContextParamsFolder = "drafts"
+	GetMailReplyContextParamsFolderInbox  GetMailReplyContextParamsFolder = "inbox"
+	GetMailReplyContextParamsFolderSent   GetMailReplyContextParamsFolder = "sent"
+)
+
+// Valid indicates whether the value is a known member of the GetMailReplyContextParamsFolder enum.
+func (e GetMailReplyContextParamsFolder) Valid() bool {
+	switch e {
+	case GetMailReplyContextParamsFolderDrafts:
+		return true
+	case GetMailReplyContextParamsFolderInbox:
+		return true
+	case GetMailReplyContextParamsFolderSent:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MarkMailMessageSeenParamsFolder.
+const (
+	MarkMailMessageSeenParamsFolderDrafts MarkMailMessageSeenParamsFolder = "drafts"
+	MarkMailMessageSeenParamsFolderInbox  MarkMailMessageSeenParamsFolder = "inbox"
+	MarkMailMessageSeenParamsFolderSent   MarkMailMessageSeenParamsFolder = "sent"
+)
+
+// Valid indicates whether the value is a known member of the MarkMailMessageSeenParamsFolder enum.
+func (e MarkMailMessageSeenParamsFolder) Valid() bool {
+	switch e {
+	case MarkMailMessageSeenParamsFolderDrafts:
+		return true
+	case MarkMailMessageSeenParamsFolderInbox:
+		return true
+	case MarkMailMessageSeenParamsFolderSent:
 		return true
 	default:
 		return false
@@ -12471,13 +14574,10 @@ type ActivityEventsResponseEventsType string
 type Agent struct {
 	// ActivationStatus Whether the saved configuration is active. A saved but inactive configuration is not completed work.
 	ActivationStatus *AgentActivationStatus `json:"activation_status,omitempty"`
+	ChangedFields    *[]string              `json:"changed_fields,omitempty"`
 
-	// AutoApproveDisabled ADR-092 per-agent override of the global Auto-approve default (SandboxConfig.auto_approve). Off-only, by construction: this field can only ever mean "force Auto off for this agent's ask-policy tool calls" — there is no value meaning "force it on," so a per-agent write can never loosen past the global default (tighten-only, matching every scope except the per-chat session modifier, SessionModeUpdateFrame). false (the default) means this agent inherits the global default unchanged. Distinct from `tools_cfg.builtin.policies`, which is unchanged by ADR-092 and still governs the ordinary allow/deny/ask value per tool — this field only ever narrows what "ask" DOES for this agent's tools, never which tools are allow/deny/ask.
-	AutoApproveDisabled *bool     `json:"auto_approve_disabled,omitempty"`
-	ChangedFields       *[]string `json:"changed_fields,omitempty"`
-
-	// Color Hex color code for agent avatar display (e.g. "#D4AF37").
-	Color *string `json:"color,omitempty"`
+	// Color Identity colour. Uppercase canonical hex. The ten values are the whole set (the metallic, brand-derived palette: Steel blue, Titanium, Verdigris, Gunmetal, Graphite violet, Rose gold, Bronze, Antique brass, Champagne, Pewter). Gold, warning yellow, semantic green, semantic red and Liquid Silver are not in it; note that Champagne and Antique brass sit near the gold accent, by founder choice. Letter-case of a listed hex is normalized to this form on write. Any other value, including a colour of the removed previous palette, is invalid: rejected on write, and a stored value outside the ten is returned as the default (Pewter) on read (no stored file is rewritten). JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	Color *AgentColor `json:"color,omitempty"`
 
 	// ContextWindowClamped Read-only (ADR-066 D2): true when an operator override exceeded the model's capability and was clamped down to it (a WARN names the agent). Optional — absent until the resolver lands.
 	ContextWindowClamped *bool `json:"context_window_clamped,omitempty"`
@@ -12491,18 +14591,17 @@ type Agent struct {
 	// ContextWindowSource Which rung of the ADR-066 D2 resolution ladder produced an effective context window. Owned by ADR-066; $ref'd by Agent.context_window_source, DefaultModel.window_source and CatalogModel.window_source — never an inline enum anywhere else (cross-spec X-06). "operator" = a per-agent, per-(provider, model) or global operator override (ContextSettings); "live" = the provider's own limits endpoint (cached 24 h); "catalog" = the registry-fed providers catalog (ADR-067); "floor" = the conservative cloud floor applied when nothing else knew the window (WARN logged). There is no "learned" value (ADR-066 D8 was not adopted).
 	ContextWindowSource *AgentContextWindowSource `json:"context_window_source,omitempty"`
 
-	// Default Whether this agent is the current global default that handles inbound messages with no more-specific routing rule. This is a COMPUTED value — the backend derives it by comparing the agent's id against the single default-agent setting each time it builds a response; it is never stored per-agent. At most one agent is default at a time. Main only — workers never default.
-	Default *bool `json:"default,omitempty"`
-
 	// DegradedReason Present iff the agent cannot run a turn because of its provider binding (ADR-067 FR-016/FR-031): "needs_provider" = the primary model's provider id is neither a catalog id nor a custom row (or fails exact match). Such an agent refuses turns with LLMError code needs_provider and makes zero upstream requests. When both this and needs_model apply, the "needs a provider" copy wins in the UI. Absent when the agent is healthy.
 	DegradedReason *AgentDegradedReason `json:"degraded_reason,omitempty"`
 
 	// Description Short description of the agent's purpose.
-	Description    *string                 `json:"description,omitempty"`
+	Description *string `json:"description,omitempty"`
+
+	// EditableFields Per-field editability for this agent. For custom subagent_3p agents the executor descriptors are executor.env_overrides, executor.env_overrides_remove and executor.cli_args (editable; other agents get the reason "Only external-CLI workers have a runtime environment."), executor.cli (never: "Locked after create; create a new agent to switch CLIs."), executor.effective_cli_path (never: "Set in Settings -> Third-party agents.") and executor.kind (never: "Derived from the agent type.").
 	EditableFields *[]AgentFieldDescriptor `json:"editable_fields,omitempty"`
 	ErrorStage     *string                 `json:"error_stage,omitempty"`
 
-	// Executor Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
+	// Executor Executor configuration for a sub-agent (READ model: returned by REST GET, the agent list, create and update echoes, and get_agent). Controls which runtime is used to execute the sub-agent's tasks. Write models are ExecutorConfigCreate (create) and ExecutorConfigUpdate (update). There is no per-agent program path: the program for each CLI is set by a person in Settings -> Third-party agents (effective_cli_path, effective_preset_args and program_warning report it here, read-only).
 	// "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
 	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like shell_policy / tools_cfg / fallback_models / model_params / skills are hidden for subagent_3p agents and rejected 400 on PUT if set.
 	// "cli" (required for subagent_3p agents when kind="external-cli") is locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
@@ -12513,25 +14612,31 @@ type Agent struct {
 		// Cli The three external CLI executors Omnipus can drive for a subagent_3p worker (kind="external-cli"): "claude-code" (pkg/agent/runner/driver_claude.go), "codex" (driver_codex.go), and "opencode" (driver_opencode.go). Shared by ExecutorConfig.cli (the agent's configured executor), ExecutorDefaults.cli (GET /api/v1/agents/executor-defaults' per-CLI reference row), and CliValidateRequest.cli (POST /api/v1/system/cli-validate) so the three stay a single generated type instead of three independently-declared enums that can drift apart (see the earlier oapi-codegen collision this schema resolves: before extraction, the symbol clash across the three inline enums forced generated constant names like "ExecutorConfigCliClaudeCode" instead of a clean shared "ExternalCliToolClaudeCode"). Titled "ExternalCliTool" rather than the shorter "ExternalCli" because ExecutorConfig.kind's "external-cli" enum VALUE (a completely different field, the execution- runtime selector) already generates an unprefixed Go constant literally named `ExternalCli` (of type ExecutorConfigKind) — reusing that identifier here would collide at compile time.
 		Cli *ExternalCliTool `json:"cli,omitempty"`
 
-		// CliArgs Free-form additional CLI arguments appended to the spawn invocation. The spawn layer uses execve (no shell interpolation), so values are passed safely; warn (but do not reject) on shell-injection chars in the value.
+		// CliArgs Free-form additional CLI arguments as stored, appended to the spawn invocation after the driver's built-in flags. The spawn layer uses execve (no shell interpolation); flags the safety filter would drop are removed at run time.
 		CliArgs *string `json:"cli_args,omitempty"`
 
-		// CliPath Filesystem path to the CLI binary. Required for subagent_3p agents. Mutable on PUT (allows upgrading the CLI binary without re-creating the agent). When empty, the OS $PATH is used (fragile when multiple CLI versions are installed — recommend an absolute path).
-		CliPath *string `json:"cli_path,omitempty"`
+		// EffectiveCliPath Read-only. The program path saved in Settings -> Third-party agents for this agent's CLI, exactly as the person entered it. Absent when no path is saved for that CLI. A run uses only this Settings path (checked again at spawn, the resolved file is exec'd); there is no per-agent program path, no fallback to an old stored path and no $PATH lookup.
+		EffectiveCliPath *string `json:"effective_cli_path,omitempty"`
 
-		// EnvOverrides Additional environment variables merged into the spawned CLI process's environment alongside Omnipus's own (OMNIPUS_AGENT_NAME, OMNIPUS_AGENT_TYPE, and the master-key env var are NOT overridable — user-supplied keys take precedence only for non-Omnipus vars).
+		// EffectivePresetArgs Read-only. The standard parameters saved in Settings -> Third-party agents for this agent's CLI, exactly as typed. Absent when none are saved. Appended after this agent's cli_args at spawn, unfiltered.
+		EffectivePresetArgs *string `json:"effective_preset_args,omitempty"`
+
+		// EnvOverrides Environment variables merged into the spawned CLI process's environment alongside Omnipus's own (OMNIPUS_* names are reserved and refused). On every read (REST GET, list, create and update echoes, get_agent) each value is replaced by the fixed mask "••••••"; only the names are readable. Written through ExecutorConfigCreate (whole map) and ExecutorConfigUpdate (merge plus env_overrides_remove).
 		EnvOverrides *map[string]string `json:"env_overrides,omitempty"`
 
 		// Kind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
 		Kind *AgentExecutorKind `json:"kind,omitempty"`
+
+		// ProgramWarning Read-only. The exact text a run of this agent would be refused with right now: "This agent cannot run: no program path is set for <Name>. A person can set it in Settings -> Third-party agents -> <Name>." or "This agent cannot run: the program set for <Name> in Settings -> Third-party agents does not pass its checks (<check> at <at>). A person can fix it there." Absent when a run would start.
+		ProgramWarning *string `json:"program_warning,omitempty"`
 	} `json:"executor,omitempty"`
 
 	// FallbackModels Ordered list of fallback model entries tried when the primary model returns an error (Phase 1B / FR-005). Each entry carries its own provider so the fallback can route through a different provider than the primary — useful when the primary's provider is rate-limited (FR-007). Capped at 2 entries. Hidden for subagent_3p.
 	// Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
 	FallbackModels *[]FallbackModel `json:"fallback_models,omitempty"`
 
-	// Icon Phosphor icon name for agent avatar (e.g. "Robot", "Octopus").
-	Icon *string `json:"icon,omitempty"`
+	// Figure Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write. Monogram draws the uppercased first letter or digit of the agent's display name as the mark, in the agent's colour; a first character that is not a letter or digit renders ?. The other values draw figure art.
+	Figure AgentFigure `json:"figure"`
 
 	// Id Unique agent identifier. UUID for user-created agents; well-known strings for core agents (e.g. "jim").
 	Id string `json:"id"`
@@ -12539,8 +14644,17 @@ type Agent struct {
 	// Locked Identity is fixed on built-ins. Ordinary built-in souls are fixed; hidden Judge/Supervisor souls are editable. Use editable_fields for capability and runtime-specific editability.
 	Locked bool `json:"locked"`
 
-	// MaxToolIterations Maximum number of tool calls allowed per turn. Inherited from agents.defaults.max_tool_iterations when not overridden.
+	// MaxToolIterations The EFFECTIVE maximum number of tool calls allowed per turn (issue #904, tool-iteration-limit spec D1): the global limit (agents.defaults.max_tool_iterations) unless the agent has its own value lower than or equal to it, in which case the own value. An own value above the global never raises the limit — it is ignored (see max_tool_iterations_override_ignored). max_tool_iterations_source says which rule applied.
 	MaxToolIterations int `json:"max_tool_iterations"`
+
+	// MaxToolIterationsOverride The agent's own stored tool-iteration limit (issue #904). Absent when the agent has none (it rides the global). No maximum: a hand-edited stored value may exceed 1000 and is shown truthfully.
+	MaxToolIterationsOverride *int `json:"max_tool_iterations_override,omitempty"`
+
+	// MaxToolIterationsOverrideIgnored True when the agent's own stored value is above the global limit and therefore has no effect (issue #904, tool-iteration-limit spec D1); the effective value is then the global and max_tool_iterations_source is "global". False otherwise, including when the agent has no own value.
+	MaxToolIterationsOverrideIgnored bool `json:"max_tool_iterations_override_ignored"`
+
+	// MaxToolIterationsSource Which rule produced an agent's effective tool-iteration limit (issue #904, tool-iteration-limit spec D1). $ref'd by Agent.max_tool_iterations_source — never an inline enum anywhere else (mirrors ContextWindowSource). "global" = the effective value is the global limit (agents.defaults.max_tool_iterations): the agent has no own value, or its own value is above the global and therefore ignored (Agent.max_tool_iterations_override_ignored is then true). "agent" = the agent's own value, lower than or equal to the global, applies.
+	MaxToolIterationsSource MaxToolIterationsSource `json:"max_tool_iterations_source"`
 
 	// MemoryEnabled Gates ContextBuilder memory injection for this agent (ADR-052 FR-039). Defaults to true for ordinary agents. The seeded Judge (and, by extension, any verifier-role agent) is seeded false — memory OFF produces reproducible, impartial verdicts (same evidence -> same verdict) since injected memory would otherwise vary the outcome between runs.
 	MemoryEnabled *bool   `json:"memory_enabled,omitempty"`
@@ -12570,29 +14684,26 @@ type Agent struct {
 	// Provider Explicit routing key for the agent's primary model (O3 two-field model), mirroring fallback_models[].provider. Distinct from any "provider/" prefix embedded in `model`. When set, model resolution uses this provider directly and never infers one. Empty/absent for agents that predate the migration or whose model resolves via the default provider.
 	Provider *string `json:"provider,omitempty"`
 
-	// RateLimits Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies and per-agent overrides are ignored.
-	RateLimits *struct {
-		// MaxCostPerDay Maximum USD cost per day for this agent. Absent = no per-agent cap.
-		MaxCostPerDay *float64 `json:"max_cost_per_day,omitempty"`
-
-		// MaxLlmCallsPerHour Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
-		MaxLlmCallsPerHour *int `json:"max_llm_calls_per_hour,omitempty"`
-
-		// MaxToolCallsPerMinute Maximum tool calls per minute for this agent. Absent = no per-agent cap.
-		MaxToolCallsPerMinute *int `json:"max_tool_calls_per_minute,omitempty"`
-
-		// UseGlobalDefaults When true, global rate limits are used and per-agent overrides are ignored.
-		UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
-	} `json:"rate_limits,omitempty"`
+	// ReasoningEffort Stored effort for the primary model (effort-levels spec FR-029): "" clears it (Not set; an agent riding the default model then inherits the default's effort), "provider_default", a catalog level name, "on" or "off". Omitted keeps the stored value. null is refused. Not checked against the catalog (FR-048).
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 
 	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
 	Revision string `json:"revision"`
+
+	// Role Curated role slug. The badge shown with the agent's avatar. Labels and the five groups are not on the wire. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	Role AgentRole `json:"role"`
+
+	// SkillGrants Skill key → generation the grant is bound to (SD-30). Written wholesale by the server at every agent create/update from its own observation of the installed skill folders; requests stay name-only. An absent field or entry is unbound and authorizes nothing.
+	SkillGrants *map[string]string `json:"skill_grants,omitempty"`
 
 	// Skills List of skill IDs granted to this agent. Only skills in this list are available during this agent's runs. When no skills are granted the field is omitted entirely from the response (the backend does not emit an empty array). Absence of the field and an empty array are semantically identical (opt-in, default none).
 	Skills *[]string `json:"skills,omitempty"`
 
 	// Soul Contents of SOUL.md — the agent's system prompt. Empty string for locked core agents (prompt is compiled in, not exposed via API). Empty string for draft agents (no SOUL.md written yet). Always present (never null). For `type: system` agents (e.g. the Judge), this is ALSO the judging rubric — one unified soul concept (ADR-052 FR-038, no separate `rubric` field); the Judge's soul is editable while the agent stays otherwise locked.
 	Soul string `json:"soul"`
+
+	// StaleSkillGrants Names from `skills` whose skill is installed but whose grant is bound to a previous skill with that name (or to none), so the agent cannot load it (SKILL_GRANT_STALE). Computed by the server on the agent detail read (GET /agents/{id}); saving the agent again re-binds the grant. A name whose skill is not installed is not listed. Omitted when empty.
+	StaleSkillGrants *[]string `json:"stale_skill_grants,omitempty"`
 
 	// Stats Aggregate runtime statistics for an agent. Absent on the Agent object when no sessions have been run.
 	Stats *struct {
@@ -12612,14 +14723,11 @@ type Agent struct {
 	// Status Current runtime status. "active" = agent is processing a turn. "idle" = ready and waiting. "draft" = SOUL.md is empty (no prompt written yet). "error" is a frontend-added possibility not emitted by the backend today.
 	Status AgentStatus `json:"status"`
 
-	// TimeoutSeconds Maximum seconds a single agent turn may run before being interrupted. Inherited from agents.defaults.timeout_seconds when not overridden per-agent.
-	TimeoutSeconds int `json:"timeout_seconds"`
-
 	// ToolsCfg Per-agent tool configuration governing which builtin tools are accessible and which MCP servers are bound (config.AgentToolsCfg on the Go side, AgentToolsCfg interface in src/lib/api.ts).
 	ToolsCfg *struct {
 		// Builtin Controls builtin tool visibility for this agent.
 		Builtin *struct {
-			// Policies Policy map. GET tools returns the complete effective catalog while persisted ordinary built-in maps contain sparse overrides. Dedicated replacement requests require every static tool as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
+			// Policies Policy map. GET tools returns the complete effective catalog while persisted ordinary built-in maps contain sparse overrides. Dedicated replacement requests require every implemented static builtin listed by GET /api/v1/tools as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value. Declared future tool names are accepted when supplied but are not required before implementation; omitted existing policies for those names are preserved on replacement, never newly seeded. Wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
 			Policies map[string]AgentToolsCfgBuiltinPolicies `json:"policies"`
 		} `json:"builtin,omitempty"`
 
@@ -12667,18 +14775,64 @@ type AgentToolsCfgBuiltinPolicies string
 // AgentType Agent lifecycle classification. Built-in chat colleagues Mia, Jim, Ava and Admin use core; built-in Planner, Researcher and General Purpose use Subagent on the wire. Hidden Judge and Plan Supervisor use system and are excluded from chat/team/delegation selection. Custom creation accepts Main, Subagent and subagent_3p only. Runtime type is immutable after creation. Hidden instructions and supported model tuning remain editable, while hidden capabilities are fixed. Ordinary built-in capabilities are editable within the global policy ceiling. Use editable_fields for the exact rules.
 type AgentType string
 
+// AgentActivityRun One task or scheduler run shown as a row in the Activity panel for an agent (session-core FR-033). It exists even when the current chat spawned nothing: the agent is either the run's assignee or one of its captured recipients (FR-019). Only OPEN runs are listed. Provider-run token availability is not carried (descoped); a client must treat a missing figure as unknown, never zero.
+type AgentActivityRun struct {
+	// AgentId The task's assignee agent.
+	AgentId string `json:"agent_id"`
+
+	// Kind How the run started - a person or agent starting the task (`task`), or a scheduled fire (`scheduled`).
+	Kind AgentActivityRunKind `json:"kind"`
+
+	// Mode `main` when the run is a fresh child of the assignee's main (FR-017) - the client shows it as the one MAIN row for that run, not as a task row plus a child row; `isolated` for an independent chat.
+	Mode AgentActivityRunMode `json:"mode"`
+
+	// Role Why the agent sees this run - it is the assignee, or its main is one of the run's captured recipients.
+	Role AgentActivityRunRole `json:"role"`
+
+	// RunId The TaskRun id.
+	RunId string `json:"run_id"`
+
+	// SessionId The run's own session - the target of the row's Open control. Absent when the run has no session yet.
+	SessionId *string `json:"session_id,omitempty"`
+
+	// StartedAt When the run opened.
+	StartedAt time.Time `json:"started_at"`
+
+	// State The run's session lifecycle - running, queued for a slot, or waiting on input.
+	State AgentActivityRunState `json:"state"`
+
+	// TaskId The task this run belongs to.
+	TaskId string `json:"task_id"`
+
+	// TaskTitle The task title, for the row label.
+	TaskTitle string `json:"task_title"`
+}
+
+// AgentActivityRunKind How the run started - a person or agent starting the task (`task`), or a scheduled fire (`scheduled`).
+type AgentActivityRunKind string
+
+// AgentActivityRunMode `main` when the run is a fresh child of the assignee's main (FR-017) - the client shows it as the one MAIN row for that run, not as a task row plus a child row; `isolated` for an independent chat.
+type AgentActivityRunMode string
+
+// AgentActivityRunRole Why the agent sees this run - it is the assignee, or its main is one of the run's captured recipients.
+type AgentActivityRunRole string
+
+// AgentActivityRunState The run's session lifecycle - running, queued for a slot, or waiting on input.
+type AgentActivityRunState string
+
+// AgentColor Identity colour. Uppercase canonical hex. The ten values are the whole set (the metallic, brand-derived palette: Steel blue, Titanium, Verdigris, Gunmetal, Graphite violet, Rose gold, Bronze, Antique brass, Champagne, Pewter). Gold, warning yellow, semantic green, semantic red and Liquid Silver are not in it; note that Champagne and Antique brass sit near the gold accent, by founder choice. Letter-case of a listed hex is normalized to this form on write. Any other value, including a colour of the removed previous palette, is invalid: rejected on write, and a stored value outside the ten is returned as the default (Pewter) on read (no stored file is rewritten). JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+type AgentColor string
+
 // AgentCreateRequest Body for POST /agents. Creates a new agent; a UUID is assigned by the server and the agent starts in "draft" status (no SOUL.md written yet). Discriminated by `type` — each agent type carries EXACTLY the fields the agent-types field matrix allows it; a field sent on the wrong variant is a schema violation (400), never silently persisted. `type` is REQUIRED on every variant (the historical omit-type→Main default is retired).
 type AgentCreateRequest struct {
 	union json.RawMessage
 }
 
 // AgentCreateRequestMain Create a Main agent — a user-defined chat colleague on the Omnipus engine. Field set per docs/internal/architecture/agent-types-field-matrix.md: voice is Main-only; executor is absent (Main never has one).
+// Create-input identity normalization (founder ruling 2026-10-09): on this create request only, `figure`, `role`, and `color` are lenient at the boundary — omitted, null, or "" (empty string) each mean "use the default" (Omnipus / general / #8E9196), and a letter-case variant of one of the ten palette hexes is normalized to its uppercase enum value before the strict schema check (gateway.validate_inbound) and again on store. The enum schemas stay exact-case and closed: any other non-empty figure or role value, and any non-palette hex, is rejected 400 with the setting on or off. On PUT (AgentUpdateRequest) an explicit null or empty identity value is rejected instead.
 type AgentCreateRequestMain struct {
-	// AutoApproveDisabled Initial per-agent override forcing Auto-approve off (ADR-092) for this agent, regardless of the global default (SandboxConfig.auto_approve). Off-only — omit or send false to inherit the global default. Distinct from `tools_cfg`, which is unchanged and still governs allow/deny/ask per tool.
-	AutoApproveDisabled *bool `json:"auto_approve_disabled,omitempty"`
-
-	// Color Hex color code for the agent avatar.
-	Color *string `json:"color,omitempty"`
+	// Color Identity colour. Uppercase canonical hex. The ten values are the whole set (the metallic, brand-derived palette: Steel blue, Titanium, Verdigris, Gunmetal, Graphite violet, Rose gold, Bronze, Antique brass, Champagne, Pewter). Gold, warning yellow, semantic green, semantic red and Liquid Silver are not in it; note that Champagne and Antique brass sit near the gold accent, by founder choice. Letter-case of a listed hex is normalized to this form on write. Any other value, including a colour of the removed previous palette, is invalid: rejected on write, and a stored value outside the ten is returned as the default (Pewter) on read (no stored file is rewritten). JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	Color *AgentColor `json:"color,omitempty"`
 
 	// Description Short description of the agent's purpose. Required (non-empty after trim) for Subagent and subagent_3p — the orchestrator uses it as the basis on which it decides which agent to delegate to. Optional for Main.
 	Description *string `json:"description,omitempty"`
@@ -12687,10 +14841,10 @@ type AgentCreateRequestMain struct {
 	// Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
 	FallbackModels *[]FallbackModel `json:"fallback_models,omitempty"`
 
-	// Icon Phosphor icon name for the agent avatar.
-	Icon *string `json:"icon,omitempty"`
+	// Figure Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write. Monogram draws the uppercased first letter or digit of the agent's display name as the mark, in the agent's colour; a first character that is not a letter or digit renders ?. The other values draw figure art.
+	Figure *AgentFigure `json:"figure,omitempty"`
 
-	// MaxToolIterations Maximum number of tool calls allowed per turn.
+	// MaxToolIterations The new agent's own tool-iteration limit (issue #904). Omitted = the agent rides the global limit. Refused (400) if above the current global limit.
 	MaxToolIterations *int `json:"max_tool_iterations,omitempty"`
 
 	// McpServers Omission preserves assignments; an explicit empty list removes all assignments. Null is rejected.
@@ -12713,11 +14867,17 @@ type AgentCreateRequestMain struct {
 		Temperature *float64 `json:"temperature,omitempty"`
 	} `json:"model_params,omitempty"`
 
-	// Name Display name for the new agent.
+	// Name Display name for the new agent. At most 100 characters, the same limit as Agent.name (#1075).
 	Name string `json:"name"`
 
 	// Provider Explicit routing key for the primary model (O3 two-field model), mirroring fallback_models[].provider. When set, resolution uses it directly and never infers a provider. Optional; when omitted the model resolves via the default provider.
 	Provider *string `json:"provider,omitempty"`
+
+	// ReasoningEffort Stored effort for the primary model (effort-levels spec FR-029): "" clears it (Not set; an agent riding the default model then inherits the default's effort), "provider_default", a catalog level name, "on" or "off". Omitted keeps the stored value. null is refused. Not checked against the catalog (FR-048).
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
+
+	// Role Curated role slug. The badge shown with the agent's avatar. Labels and the five groups are not on the wire. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	Role *AgentRole `json:"role,omitempty"`
 
 	// Skills Initial list of skill IDs granted to this agent. An empty list (or absent field) means no skills are granted (opt-in, default none).
 	Skills *[]string `json:"skills,omitempty"`
@@ -12735,7 +14895,7 @@ type AgentCreateRequestMain struct {
 	ToolsCfg *struct {
 		// Builtin Controls builtin tool visibility for this agent.
 		Builtin *struct {
-			// Policies Policy map. GET tools returns the complete effective catalog while persisted ordinary built-in maps contain sparse overrides. Dedicated replacement requests require every static tool as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
+			// Policies Policy map. GET tools returns the complete effective catalog while persisted ordinary built-in maps contain sparse overrides. Dedicated replacement requests require every implemented static builtin listed by GET /api/v1/tools as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value. Declared future tool names are accepted when supplied but are not required before implementation; omitted existing policies for those names are preserved on replacement, never newly seeded. Wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
 			Policies map[string]AgentCreateRequestMainToolsCfgBuiltinPolicies `json:"policies"`
 		} `json:"builtin,omitempty"`
 
@@ -12763,12 +14923,10 @@ type AgentCreateRequestMainToolsCfgBuiltinPolicies string
 type AgentCreateRequestMainType string
 
 // AgentCreateRequestSubagent Create a Subagent — a user-defined delegation-only worker on the Omnipus engine. Field set per the agent-types field matrix: no voice (no chat/TTS surface), no executor (native is derived server-side — never sent by the client). Description is enforced non-empty-after-trim by the handler (the orchestrator delegates based on it).
+// Create-input identity normalization (founder ruling 2026-10-09): on this create request only, `figure`, `role`, and `color` are lenient at the boundary — omitted, null, or "" (empty string) each mean "use the default" (Omnipus / general / #8E9196), and a letter-case variant of one of the ten palette hexes is normalized to its uppercase enum value before the strict schema check (gateway.validate_inbound) and again on store. The enum schemas stay exact-case and closed: any other non-empty figure or role value, and any non-palette hex, is rejected 400 with the setting on or off. On PUT (AgentUpdateRequest) an explicit null or empty identity value is rejected instead.
 type AgentCreateRequestSubagent struct {
-	// AutoApproveDisabled Initial per-agent override forcing Auto-approve off (ADR-092) for this agent, regardless of the global default (SandboxConfig.auto_approve). Off-only — omit or send false to inherit the global default. Distinct from `tools_cfg`, which is unchanged and still governs allow/deny/ask per tool.
-	AutoApproveDisabled *bool `json:"auto_approve_disabled,omitempty"`
-
-	// Color Hex color code for the agent avatar.
-	Color *string `json:"color,omitempty"`
+	// Color Identity colour. Uppercase canonical hex. The ten values are the whole set (the metallic, brand-derived palette: Steel blue, Titanium, Verdigris, Gunmetal, Graphite violet, Rose gold, Bronze, Antique brass, Champagne, Pewter). Gold, warning yellow, semantic green, semantic red and Liquid Silver are not in it; note that Champagne and Antique brass sit near the gold accent, by founder choice. Letter-case of a listed hex is normalized to this form on write. Any other value, including a colour of the removed previous palette, is invalid: rejected on write, and a stored value outside the ten is returned as the default (Pewter) on read (no stored file is rewritten). JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	Color *AgentColor `json:"color,omitempty"`
 
 	// Description Short description of the agent's purpose. Required (non-empty after trim) for Subagent and subagent_3p — the orchestrator uses it as the basis on which it decides which agent to delegate to. Optional for Main.
 	Description *string `json:"description,omitempty"`
@@ -12777,10 +14935,10 @@ type AgentCreateRequestSubagent struct {
 	// Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
 	FallbackModels *[]FallbackModel `json:"fallback_models,omitempty"`
 
-	// Icon Phosphor icon name for the agent avatar.
-	Icon *string `json:"icon,omitempty"`
+	// Figure Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write. Monogram draws the uppercased first letter or digit of the agent's display name as the mark, in the agent's colour; a first character that is not a letter or digit renders ?. The other values draw figure art.
+	Figure *AgentFigure `json:"figure,omitempty"`
 
-	// MaxToolIterations Maximum number of tool calls allowed per turn.
+	// MaxToolIterations The new agent's own tool-iteration limit (issue #904). Omitted = the agent rides the global limit. Refused (400) if above the current global limit.
 	MaxToolIterations *int `json:"max_tool_iterations,omitempty"`
 
 	// McpServers Omission preserves assignments; an explicit empty list removes all assignments. Null is rejected.
@@ -12803,11 +14961,17 @@ type AgentCreateRequestSubagent struct {
 		Temperature *float64 `json:"temperature,omitempty"`
 	} `json:"model_params,omitempty"`
 
-	// Name Display name for the new agent.
+	// Name Display name for the new agent. At most 100 characters, the same limit as Agent.name (#1075).
 	Name string `json:"name"`
 
 	// Provider Explicit routing key for the primary model (O3 two-field model), mirroring fallback_models[].provider. When set, resolution uses it directly and never infers a provider. Optional; when omitted the model resolves via the default provider.
 	Provider *string `json:"provider,omitempty"`
+
+	// ReasoningEffort Stored effort for the primary model (effort-levels spec FR-029): "" clears it (Not set; an agent riding the default model then inherits the default's effort), "provider_default", a catalog level name, "on" or "off". Omitted keeps the stored value. null is refused. Not checked against the catalog (FR-048).
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
+
+	// Role Curated role slug. The badge shown with the agent's avatar. Labels and the five groups are not on the wire. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	Role *AgentRole `json:"role,omitempty"`
 
 	// Skills Initial list of skill IDs granted to this agent. An empty list (or absent field) means no skills are granted (opt-in, default none).
 	Skills *[]string `json:"skills,omitempty"`
@@ -12825,7 +14989,7 @@ type AgentCreateRequestSubagent struct {
 	ToolsCfg *struct {
 		// Builtin Controls builtin tool visibility for this agent.
 		Builtin *struct {
-			// Policies Policy map. GET tools returns the complete effective catalog while persisted ordinary built-in maps contain sparse overrides. Dedicated replacement requests require every static tool as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
+			// Policies Policy map. GET tools returns the complete effective catalog while persisted ordinary built-in maps contain sparse overrides. Dedicated replacement requests require every implemented static builtin listed by GET /api/v1/tools as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value. Declared future tool names are accepted when supplied but are not required before implementation; omitted existing policies for those names are preserved on replacement, never newly seeded. Wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
 			Policies map[string]AgentCreateRequestSubagentToolsCfgBuiltinPolicies `json:"policies"`
 		} `json:"builtin,omitempty"`
 
@@ -12849,80 +15013,302 @@ type AgentCreateRequestSubagentToolsCfgBuiltinPolicies string
 // AgentCreateRequestSubagentType Discriminator. Must be exactly "Subagent" for this variant.
 type AgentCreateRequestSubagentType string
 
-// AgentCreateRequestSubagent3p Create a subagent_3p — a delegation-only worker that runs on an external CLI (claude-code / codex / opencode). The runner manages its own isolation, auth, retries, and tool loop, so tools_cfg, skills, fallback_models, model_params, shell_policy, voice, and max_tool_iterations do not exist on this variant (additionalProperties: false rejects them). timeout_seconds stays (process-level kill for a hung CLI). executor is REQUIRED (kind external-cli with cli + cli_path; the handler additionally rejects whitespace-only cli_path).
+// AgentCreateRequestSubagent3p Create a subagent_3p — a delegation-only worker that runs on an external CLI (claude-code / codex / opencode). The runner manages its own isolation, auth, retries, and tool loop, so tools_cfg, skills, fallback_models, model_params, shell_policy, and voice do not exist on this variant (additionalProperties: false rejects them). max_tool_iterations does exist (issue #904, D14): it becomes the CLI's turn cap. There is no time limit: a CLI run ends when it finishes or is explicitly stopped. executor is REQUIRED (ExecutorConfigCreate: cli plus optional env_overrides and cli_args; kind and cli_path are rejected). The program for the chosen CLI is set by a person in Settings -> Third-party agents; creating an agent for a CLI with no usable Settings path succeeds and the echo carries executor.program_warning. There is no soul: a third-party agent has no SOUL.md (soul is rejected as an unknown field).
+// Create-input identity normalization (founder ruling 2026-10-09): on this create request only, `figure`, `role`, and `color` are lenient at the boundary — omitted, null, or "" (empty string) each mean "use the default" (Omnipus / general / #8E9196), and a letter-case variant of one of the ten palette hexes is normalized to its uppercase enum value before the strict schema check (gateway.validate_inbound) and again on store. The enum schemas stay exact-case and closed: any other non-empty figure or role value, and any non-palette hex, is rejected 400 with the setting on or off. On PUT (AgentUpdateRequest) an explicit null or empty identity value is rejected instead.
 type AgentCreateRequestSubagent3p struct {
-	// Color Hex color code for the agent avatar.
-	Color *string `json:"color,omitempty"`
+	// Color Identity colour. Uppercase canonical hex. The ten values are the whole set (the metallic, brand-derived palette: Steel blue, Titanium, Verdigris, Gunmetal, Graphite violet, Rose gold, Bronze, Antique brass, Champagne, Pewter). Gold, warning yellow, semantic green, semantic red and Liquid Silver are not in it; note that Champagne and Antique brass sit near the gold accent, by founder choice. Letter-case of a listed hex is normalized to this form on write. Any other value, including a colour of the removed previous palette, is invalid: rejected on write, and a stored value outside the ten is returned as the default (Pewter) on read (no stored file is rewritten). JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	Color *AgentColor `json:"color,omitempty"`
 
 	// Description Short description of the agent's purpose. Required (non-empty after trim) for Subagent and subagent_3p — the orchestrator uses it as the basis on which it decides which agent to delegate to. Optional for Main.
 	Description *string `json:"description,omitempty"`
 
-	// Executor Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
+	// Executor Executor block of a subagent_3p create request (WRITE model). `kind` is derived from the agent type and `cli_path` does not exist: the program for each CLI is set by a person in Settings -> Third-party agents. Both are rejected as unknown fields. Creating an agent for a CLI with no usable Settings path succeeds; the echo carries `program_warning`.
+	Executor struct {
+		// Cli The three external CLI executors Omnipus can drive for a subagent_3p worker (kind="external-cli"): "claude-code" (pkg/agent/runner/driver_claude.go), "codex" (driver_codex.go), and "opencode" (driver_opencode.go). Shared by ExecutorConfig.cli (the agent's configured executor), ExecutorDefaults.cli (GET /api/v1/agents/executor-defaults' per-CLI reference row), and CliValidateRequest.cli (POST /api/v1/system/cli-validate) so the three stay a single generated type instead of three independently-declared enums that can drift apart (see the earlier oapi-codegen collision this schema resolves: before extraction, the symbol clash across the three inline enums forced generated constant names like "ExecutorConfigCliClaudeCode" instead of a clean shared "ExternalCliToolClaudeCode"). Titled "ExternalCliTool" rather than the shorter "ExternalCli" because ExecutorConfig.kind's "external-cli" enum VALUE (a completely different field, the execution- runtime selector) already generates an unprefixed Go constant literally named `ExternalCli` (of type ExecutorConfigKind) — reusing that identifier here would collide at compile time.
+		Cli ExternalCliTool `json:"cli"`
+
+		// CliArgs Additional CLI arguments, one string, stored as typed. Shell metacharacters warn, never refuse. Flags the safety filter would drop are reported in the tool result's cli_args.dropped_at_run and removed at run time.
+		CliArgs *string `json:"cli_args,omitempty"`
+
+		// EnvOverrides Environment variables for the spawned CLI process. Names match ^[A-Za-z_][A-Za-z0-9_]*$ and are at most 128 characters; at most 64 entries; each value at most 8,192 characters. OMNIPUS_* names are reserved and refused, naming the key. A value equal to the read mask "••••••" is refused. Values are never echoed: every read masks them.
+		EnvOverrides *map[string]string `json:"env_overrides,omitempty"`
+	} `json:"executor"`
+
+	// Figure Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write. Monogram draws the uppercased first letter or digit of the agent's display name as the mark, in the agent's colour; a first character that is not a letter or digit renders ?. The other values draw figure art.
+	Figure *AgentFigure `json:"figure,omitempty"`
+
+	// MaxToolIterations The new worker's own tool-iteration limit (issue #904, D14), passed to the external CLI as its turn cap. Omitted = the worker rides the global limit. Refused (400) if above the current global limit.
+	MaxToolIterations *int `json:"max_tool_iterations,omitempty"`
+
+	// Model Model slug for LLM calls. When omitted, the global agents.defaults.model_name is used. With the O3 two-field model this is the bare slug; pair it with `provider` for explicit routing.
+	Model *string `json:"model,omitempty"`
+
+	// Name Display name for the new agent. At most 100 characters, the same limit as Agent.name (#1075).
+	Name string `json:"name"`
+
+	// Provider Explicit routing key for the primary model (O3 two-field model), mirroring fallback_models[].provider. When set, resolution uses it directly and never infers a provider. Optional; when omitted the model resolves via the default provider.
+	Provider *string `json:"provider,omitempty"`
+
+	// Role Curated role slug. The badge shown with the agent's avatar. Labels and the five groups are not on the wire. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	Role *AgentRole `json:"role,omitempty"`
+
+	// Type Discriminator. Must be exactly "subagent_3p" for this variant.
+	Type AgentCreateRequestSubagent3pType `json:"type"`
+}
+
+// AgentCreateRequestSubagent3pType Discriminator. Must be exactly "subagent_3p" for this variant.
+type AgentCreateRequestSubagent3pType string
+
+// AgentDependency One thing that depends on an agent in one workspace (spec omnipus-system-agent K50, §6.19; FR-243). Landing 1 kinds: a channel connection whose main agent it is, a mailbox, a private secret, a room; `people_row` is filled from landing 2 (WU-14).
+type AgentDependency struct {
+	// Id Id of the dependent item (connection id, mailbox id, reference name, room id).
+	Id   string              `json:"id"`
+	Kind AgentDependencyKind `json:"kind"`
+
+	// Label Display label.
+	Label       string `json:"label"`
+	WorkspaceId string `json:"workspace_id"`
+}
+
+// AgentDependencyKind defines model for AgentDependency.Kind.
+type AgentDependencyKind string
+
+// AgentDependencyList Everything that depends on an agent (spec omnipus-system-agent K50, §6.19; FR-243, FR-244). Returned by GET /api/v1/agents/{id}/dependencies, and as the 409 body when a delete is refused because the list is non-empty and `delete_everything` was not true.
+type AgentDependencyList struct {
+	AgentId string `json:"agent_id"`
+
+	// Dependencies Never null; empty when nothing depends on the agent.
+	Dependencies []struct {
+		// Id Id of the dependent item (connection id, mailbox id, reference name, room id).
+		Id   string                              `json:"id"`
+		Kind AgentDependencyListDependenciesKind `json:"kind"`
+
+		// Label Display label.
+		Label       string `json:"label"`
+		WorkspaceId string `json:"workspace_id"`
+	} `json:"dependencies"`
+}
+
+// AgentDependencyListDependenciesKind defines model for AgentDependencyList.Dependencies.Kind.
+type AgentDependencyListDependenciesKind string
+
+// AgentDetail Result of the get_agent tool: the agent's stored definition plus its effective model chain. Stored fields stay as stored; model_chain is the resolved view (primary first, then each fallback). Only id and revision are always present: the get_agent `fields` tool parameter filters the result, and the size bound may cut long fields. absent_fields and truncated_fields are result metadata, never selectable through `fields`. A new-agent preview (get_agent with new_agent_type) returns AgentPreview instead. Effort (effort-levels spec FR-071): reasoning_effort is the primary's stored effort, each fallback_models entry carries its own, and each model_chain entry lists effort_options.
+type AgentDetail struct {
+	// AbsentFields Result metadata, never selectable: requested properties the full object does not carry. Absent or empty when none.
+	AbsentFields *[]string `json:"absent_fields,omitempty"`
+
+	// ActivationStatus Whether the saved configuration is active. A saved but inactive configuration is not completed work.
+	ActivationStatus *AgentDetailActivationStatus `json:"activation_status,omitempty"`
+
+	// AgentMd AGENT.md content written beside the record ("" when none).
+	AgentMd *string `json:"agent_md,omitempty"`
+
+	// Color Identity colour. Uppercase canonical hex. The ten values are the whole set (the metallic, brand-derived palette: Steel blue, Titanium, Verdigris, Gunmetal, Graphite violet, Rose gold, Bronze, Antique brass, Champagne, Pewter). Gold, warning yellow, semantic green, semantic red and Liquid Silver are not in it; note that Champagne and Antique brass sit near the gold accent, by founder choice. Letter-case of a listed hex is normalized to this form on write. Any other value, including a colour of the removed previous palette, is invalid: rejected on write, and a stored value outside the ten is returned as the default (Pewter) on read (no stored file is rewritten). JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	Color *AgentColor `json:"color,omitempty"`
+
+	// Connectors The agent's explicitly assigned connector (MCP server) bindings.
+	Connectors *[]struct {
+		Id string `json:"id"`
+
+		// Tools Omitted means all tools on this explicitly assigned server; [] means no tools. Null is rejected. A lone wildcard means all, but mixing wildcard with exact names is rejected by runtime validation.
+		Tools *[]string `json:"tools,omitempty"`
+	} `json:"connectors,omitempty"`
+
+	// ContextWindowOverride The stored per-agent context-window override; null when none.
+	ContextWindowOverride *int                    `json:"context_window_override,omitempty"`
+	Description           *string                 `json:"description,omitempty"`
+	EditableFields        *[]AgentFieldDescriptor `json:"editable_fields,omitempty"`
+
+	// Executor Executor configuration for a sub-agent (READ model: returned by REST GET, the agent list, create and update echoes, and get_agent). Controls which runtime is used to execute the sub-agent's tasks. Write models are ExecutorConfigCreate (create) and ExecutorConfigUpdate (update). There is no per-agent program path: the program for each CLI is set by a person in Settings -> Third-party agents (effective_cli_path, effective_preset_args and program_warning report it here, read-only).
 	// "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
 	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like shell_policy / tools_cfg / fallback_models / model_params / skills are hidden for subagent_3p agents and rejected 400 on PUT if set.
 	// "cli" (required for subagent_3p agents when kind="external-cli") is locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
 	// "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
 	// The "kind" field is derived server-side from the agent's type (Main -> native, Subagent -> native, subagent_3p -> external-cli). It is exposed in responses but is NOT a writable field on create/update — clients cannot choose kind directly. Server-side derive at the handler boundary per the agent-form spec.
 	// When the agent has no executor block, the default is "native".
-	Executor struct {
+	Executor *struct {
 		// Cli The three external CLI executors Omnipus can drive for a subagent_3p worker (kind="external-cli"): "claude-code" (pkg/agent/runner/driver_claude.go), "codex" (driver_codex.go), and "opencode" (driver_opencode.go). Shared by ExecutorConfig.cli (the agent's configured executor), ExecutorDefaults.cli (GET /api/v1/agents/executor-defaults' per-CLI reference row), and CliValidateRequest.cli (POST /api/v1/system/cli-validate) so the three stay a single generated type instead of three independently-declared enums that can drift apart (see the earlier oapi-codegen collision this schema resolves: before extraction, the symbol clash across the three inline enums forced generated constant names like "ExecutorConfigCliClaudeCode" instead of a clean shared "ExternalCliToolClaudeCode"). Titled "ExternalCliTool" rather than the shorter "ExternalCli" because ExecutorConfig.kind's "external-cli" enum VALUE (a completely different field, the execution- runtime selector) already generates an unprefixed Go constant literally named `ExternalCli` (of type ExecutorConfigKind) — reusing that identifier here would collide at compile time.
 		Cli *ExternalCliTool `json:"cli,omitempty"`
 
-		// CliArgs Free-form additional CLI arguments appended to the spawn invocation. The spawn layer uses execve (no shell interpolation), so values are passed safely; warn (but do not reject) on shell-injection chars in the value.
+		// CliArgs Free-form additional CLI arguments as stored, appended to the spawn invocation after the driver's built-in flags. The spawn layer uses execve (no shell interpolation); flags the safety filter would drop are removed at run time.
 		CliArgs *string `json:"cli_args,omitempty"`
 
-		// CliPath Filesystem path to the CLI binary. Required for subagent_3p agents. Mutable on PUT (allows upgrading the CLI binary without re-creating the agent). When empty, the OS $PATH is used (fragile when multiple CLI versions are installed — recommend an absolute path).
-		CliPath *string `json:"cli_path,omitempty"`
+		// EffectiveCliPath Read-only. The program path saved in Settings -> Third-party agents for this agent's CLI, exactly as the person entered it. Absent when no path is saved for that CLI. A run uses only this Settings path (checked again at spawn, the resolved file is exec'd); there is no per-agent program path, no fallback to an old stored path and no $PATH lookup.
+		EffectiveCliPath *string `json:"effective_cli_path,omitempty"`
 
-		// EnvOverrides Additional environment variables merged into the spawned CLI process's environment alongside Omnipus's own (OMNIPUS_AGENT_NAME, OMNIPUS_AGENT_TYPE, and the master-key env var are NOT overridable — user-supplied keys take precedence only for non-Omnipus vars).
+		// EffectivePresetArgs Read-only. The standard parameters saved in Settings -> Third-party agents for this agent's CLI, exactly as typed. Absent when none are saved. Appended after this agent's cli_args at spawn, unfiltered.
+		EffectivePresetArgs *string `json:"effective_preset_args,omitempty"`
+
+		// EnvOverrides Environment variables merged into the spawned CLI process's environment alongside Omnipus's own (OMNIPUS_* names are reserved and refused). On every read (REST GET, list, create and update echoes, get_agent) each value is replaced by the fixed mask "••••••"; only the names are readable. Written through ExecutorConfigCreate (whole map) and ExecutorConfigUpdate (merge plus env_overrides_remove).
 		EnvOverrides *map[string]string `json:"env_overrides,omitempty"`
 
 		// Kind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
-		Kind *AgentCreateRequestSubagent3pExecutorKind `json:"kind,omitempty"`
-	} `json:"executor"`
+		Kind *AgentDetailExecutorKind `json:"kind,omitempty"`
 
-	// Icon Phosphor icon name for the agent avatar.
-	Icon *string `json:"icon,omitempty"`
+		// ProgramWarning Read-only. The exact text a run of this agent would be refused with right now: "This agent cannot run: no program path is set for <Name>. A person can set it in Settings -> Third-party agents -> <Name>." or "This agent cannot run: the program set for <Name> in Settings -> Third-party agents does not pass its checks (<check> at <at>). A person can fix it there." Absent when a run would start.
+		ProgramWarning *string `json:"program_warning,omitempty"`
+	} `json:"executor,omitempty"`
 
-	// Model Model slug for LLM calls. When omitted, the global agents.defaults.model_name is used. With the O3 two-field model this is the bare slug; pair it with `provider` for explicit routing.
+	// FallbackModels The stored fallback entries, as stored.
+	FallbackModels *[]FallbackModel `json:"fallback_models,omitempty"`
+
+	// Figure Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write. Monogram draws the uppercased first letter or digit of the agent's display name as the mark, in the agent's colour; a first character that is not a letter or digit renders ?. The other values draw figure art.
+	Figure *AgentFigure `json:"figure,omitempty"`
+
+	// HasMainChat True when the agent has a main chat.
+	HasMainChat *bool  `json:"has_main_chat,omitempty"`
+	Id          string `json:"id"`
+
+	// Locked As Agent.locked — identity is fixed on built-ins.
+	Locked *bool `json:"locked,omitempty"`
+
+	// MaxToolIterations The agent's own stored tool-iteration limit; null when it rides the global limit.
+	MaxToolIterations *int  `json:"max_tool_iterations,omitempty"`
+	MemoryEnabled     *bool `json:"memory_enabled,omitempty"`
+
+	// Model The stored primary model slug ("" when the agent inherits the default).
 	Model *string `json:"model,omitempty"`
 
-	// Name Display name for the new agent.
-	Name string `json:"name"`
+	// ModelChain The effective model chain: primary first, then each fallback in order, derived through the real resolver; unknown values are null.
+	ModelChain *[]struct {
+		// AcceptsImages The resolved model's image-input capability; null when not known.
+		AcceptsImages *bool `json:"accepts_images"`
 
-	// Provider Explicit routing key for the primary model (O3 two-field model), mirroring fallback_models[].provider. When set, resolution uses it directly and never infers a provider. Optional; when omitted the model resolves via the default provider.
+		// EffortOptions The effort values update_agent accepts for this entry's pair, in order (effort-levels spec FR-065, D8): "provider_default", then the levels as the catalog publishes them, then "off" and "on" for a switch-only model ("off" only when the model also has levels without "none"). A primary that rides the default model lists "" (Not set) first. ["provider_default"] when the model reasons but nothing can be sent; null when the catalog has no row for the pair, the model does not reason, or the agent is an external-CLI worker.
+		EffortOptions *[]string `json:"effort_options"`
+
+		// Model The model slug this entry routes to (the resolved default when the agent inherits its primary).
+		Model string `json:"model"`
+
+		// ModelOffered True when the provider offers the model; null when not known.
+		ModelOffered *bool `json:"model_offered"`
+
+		// Position "primary", or "fallback_<n>" counting from 1 in chain order.
+		Position string `json:"position"`
+
+		// Provider The resolved provider key; null when it cannot be resolved.
+		Provider *string `json:"provider"`
+
+		// ProviderConfigured True when the provider is configured on this install.
+		ProviderConfigured bool `json:"provider_configured"`
+
+		// Warning Present when this entry cannot be used as configured, e.g. "fallback 2 has no configured provider — will never be used", "primary model "x" is not offered by provider "y"", or for a legacy model-only fallback "not paired with a provider — reported, never routed". Absent otherwise.
+		Warning *string `json:"warning,omitempty"`
+	} `json:"model_chain,omitempty"`
+
+	// ModelParams LLM sampling parameters applied to an agent's requests. When absent, the provider defaults are used.
+	ModelParams *struct {
+		// MaxTokens Maximum tokens to generate per turn.
+		MaxTokens *int `json:"max_tokens,omitempty"`
+
+		// Temperature Sampling temperature (0.0 – 2.0). Lower = more deterministic.
+		Temperature *float64 `json:"temperature,omitempty"`
+	} `json:"model_params,omitempty"`
+	Name *string `json:"name,omitempty"`
+
+	// ProgramWarning Same text as executor.program_warning: the exact text a run would be refused with right now. Absent when a run would start.
+	ProgramWarning *string `json:"program_warning,omitempty"`
+
+	// Provider The stored primary provider key ("" when not pinned).
 	Provider *string `json:"provider,omitempty"`
 
-	// RateLimits Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies.
-	RateLimits *struct {
-		// MaxCostPerDay Maximum USD cost per day for this agent. Absent = no per-agent cap.
-		MaxCostPerDay *float64 `json:"max_cost_per_day,omitempty"`
+	// ReasoningEffort The primary model's stored effort as written ("high", "provider_default", "on", "off"), never the resolved value. null when Not set (stored "") or when it does not apply (subagent_3p external-CLI workers). Effort-levels spec FR-071, S-76.
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 
-		// MaxLlmCallsPerHour Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
-		MaxLlmCallsPerHour *int `json:"max_llm_calls_per_hour,omitempty"`
+	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
+	Revision string `json:"revision"`
 
-		// MaxToolCallsPerMinute Maximum tool calls per minute for this agent. Absent = no per-agent cap.
-		MaxToolCallsPerMinute *int `json:"max_tool_calls_per_minute,omitempty"`
+	// Role Curated role slug. The badge shown with the agent's avatar. Labels and the five groups are not on the wire. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	Role *AgentRole `json:"role,omitempty"`
 
-		// UseGlobalDefaults When true, global rate limits are used and per-agent overrides are ignored.
-		UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
-	} `json:"rate_limits,omitempty"`
+	// Runnable True when a run of this agent would start now (no program_warning applies).
+	Runnable *bool     `json:"runnable,omitempty"`
+	Skills   *[]string `json:"skills,omitempty"`
 
-	// Soul Initial SOUL.md content. Required for every user-creatable type — including Subagent (External), where it is passed as part of the CLI prompt at runtime. The CLI never reads a file from disk. Backend trims before length-validation, so whitespace-only is rejected as minLength violation.
-	Soul string `json:"soul"`
+	// Soul SOUL.md content. Absent for subagent_3p agents (third-party agents have no soul).
+	Soul *string `json:"soul,omitempty"`
 
-	// TimeoutSeconds Maximum seconds a single agent turn may run before being interrupted.
-	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
+	// StaleSkillGrants Names from `skills` whose skill is installed but whose grant is bound to a previous skill with that name (or to none), so the agent cannot load it (SKILL_GRANT_STALE). The same list the REST agent detail returns as `stale_skill_grants`; empty when none is stale.
+	StaleSkillGrants *[]string `json:"stale_skill_grants,omitempty"`
 
-	// Type Discriminator. Must be exactly "subagent_3p" for this variant.
-	Type AgentCreateRequestSubagent3pType `json:"type"`
+	// StoredOverrides The agent's raw stored per-agent policy map, exactly as stored: MCP wildcards and stale keys included.
+	StoredOverrides *map[string]AgentDetailStoredOverrides `json:"stored_overrides,omitempty"`
+
+	// ToolPermissions Per-tool effective policy and the agent's own stored override.
+	ToolPermissions *[]struct {
+		// Description Short description of the tool (at most 40 characters). Omitted when effective is deny.
+		Description *string `json:"description,omitempty"`
+
+		// Effective The policy that applies to this agent's calls of the tool.
+		Effective AgentDetailToolPermissionsEffective `json:"effective"`
+
+		// Override The stored value of this tool's exact key in the agent's per-agent policy map; null when there is none. A value inherited through a stored wildcard shows in `effective` and in AgentDetail.stored_overrides, not here.
+		Override *AgentDetailToolPermissionsOverride `json:"override"`
+
+		// Tool The tool name.
+		Tool string `json:"tool"`
+	} `json:"tool_permissions,omitempty"`
+
+	// TruncatedFields Result metadata, never selectable: names of fields cut by the result size bound; the cut text ends with "…[cut: 8,000 of <n> characters]". Absent or empty when nothing was cut.
+	TruncatedFields *[]string `json:"truncated_fields,omitempty"`
+
+	// Type Agent type, as in Agent.type.
+	Type  *AgentDetailType `json:"type,omitempty"`
+	Voice *string          `json:"voice,omitempty"`
 }
 
-// AgentCreateRequestSubagent3pExecutorKind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
-type AgentCreateRequestSubagent3pExecutorKind string
+// AgentDetailActivationStatus Whether the saved configuration is active. A saved but inactive configuration is not completed work.
+type AgentDetailActivationStatus string
 
-// AgentCreateRequestSubagent3pType Discriminator. Must be exactly "subagent_3p" for this variant.
-type AgentCreateRequestSubagent3pType string
+// AgentDetailExecutorKind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
+type AgentDetailExecutorKind string
+
+// AgentDetailStoredOverrides defines model for AgentDetail.StoredOverrides.
+type AgentDetailStoredOverrides string
+
+// AgentDetailToolPermissionsEffective The policy that applies to this agent's calls of the tool.
+type AgentDetailToolPermissionsEffective string
+
+// AgentDetailToolPermissionsOverride The stored value of this tool's exact key in the agent's per-agent policy map; null when there is none. A value inherited through a stored wildcard shows in `effective` and in AgentDetail.stored_overrides, not here.
+type AgentDetailToolPermissionsOverride string
+
+// AgentDetailType Agent type, as in Agent.type.
+type AgentDetailType string
+
+// AgentExecutorSettingsResult Executor-settings block of a create_agent or update_agent tool result, present when executor settings were supplied. Never carries an environment value: only names.
+type AgentExecutorSettingsResult struct {
+	CliArgs *struct {
+		// Argv The stored cli_args after tokenisation, in order.
+		Argv []string `json:"argv"`
+
+		// DroppedAtRun Tokens the safety filter will drop at run time, with its reason.
+		DroppedAtRun []struct {
+			Flag   string `json:"flag"`
+			Reason string `json:"reason"`
+		} `json:"dropped_at_run"`
+	} `json:"cli_args,omitempty"`
+
+	// Env Environment names by outcome.
+	Env *struct {
+		// AbsentRemoved Names listed in env_overrides_remove that were not stored (reported, not refused).
+		AbsentRemoved []string `json:"absent_removed"`
+
+		// Added Names that were not stored before and are now set.
+		Added []string `json:"added"`
+
+		// Removed Names removed through env_overrides_remove.
+		Removed []string `json:"removed"`
+
+		// Replaced Names whose stored value was replaced.
+		Replaced []string `json:"replaced"`
+	} `json:"env,omitempty"`
+
+	// ProgramWarning The exact text a run of this agent would be refused with right now (see ExecutorConfig.program_warning). Absent when a run would start.
+	ProgramWarning *string `json:"program_warning,omitempty"`
+
+	// Runnable create_agent only. True when a run would start now; false when the Settings program path for the agent's CLI is missing or fails its checks (program_warning then carries the text).
+	Runnable *bool `json:"runnable,omitempty"`
+}
 
 // AgentFieldDescriptor defines model for AgentFieldDescriptor.
 type AgentFieldDescriptor struct {
@@ -12933,12 +15319,42 @@ type AgentFieldDescriptor struct {
 	Reason *string `json:"reason,omitempty"`
 }
 
+// AgentFigure Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write. Monogram draws the uppercased first letter or digit of the agent's display name as the mark, in the agent's colour; a first character that is not a letter or digit renders ?. The other values draw figure art.
+type AgentFigure string
+
 // AgentMCPBinding defines model for AgentMCPBinding.
 type AgentMCPBinding struct {
 	Id string `json:"id"`
 
 	// Tools Omitted means all tools on this explicitly assigned server; [] means no tools. Null is rejected. A lone wildcard means all, but mixing wildcard with exact names is rejected by runtime validation.
 	Tools *[]string `json:"tools,omitempty"`
+}
+
+// AgentModelChainEntry One entry of an agent's EFFECTIVE model chain as reported by get_agent (AgentDetail.model_chain): the primary first, then each fallback in order. Derived through the real resolver (ResolveModelPairCfg and the agent's fallback selection), never guessed: a value that is not known is null.
+type AgentModelChainEntry struct {
+	// AcceptsImages The resolved model's image-input capability; null when not known.
+	AcceptsImages *bool `json:"accepts_images"`
+
+	// EffortOptions The effort values update_agent accepts for this entry's pair, in order (effort-levels spec FR-065, D8): "provider_default", then the levels as the catalog publishes them, then "off" and "on" for a switch-only model ("off" only when the model also has levels without "none"). A primary that rides the default model lists "" (Not set) first. ["provider_default"] when the model reasons but nothing can be sent; null when the catalog has no row for the pair, the model does not reason, or the agent is an external-CLI worker.
+	EffortOptions *[]string `json:"effort_options"`
+
+	// Model The model slug this entry routes to (the resolved default when the agent inherits its primary).
+	Model string `json:"model"`
+
+	// ModelOffered True when the provider offers the model; null when not known.
+	ModelOffered *bool `json:"model_offered"`
+
+	// Position "primary", or "fallback_<n>" counting from 1 in chain order.
+	Position string `json:"position"`
+
+	// Provider The resolved provider key; null when it cannot be resolved.
+	Provider *string `json:"provider"`
+
+	// ProviderConfigured True when the provider is configured on this install.
+	ProviderConfigured bool `json:"provider_configured"`
+
+	// Warning Present when this entry cannot be used as configured, e.g. "fallback 2 has no configured provider — will never be used", "primary model "x" is not offered by provider "y"", or for a legacy model-only fallback "not paired with a provider — reported, never routed". Absent otherwise.
+	Warning *string `json:"warning,omitempty"`
 }
 
 // AgentModelParams LLM sampling parameters applied to an agent's requests. When absent, the provider defaults are used.
@@ -12950,20 +15366,52 @@ type AgentModelParams struct {
 	Temperature *float64 `json:"temperature,omitempty"`
 }
 
-// AgentRateLimits Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies and per-agent overrides are ignored.
-type AgentRateLimits struct {
-	// MaxCostPerDay Maximum USD cost per day for this agent. Absent = no per-agent cap.
-	MaxCostPerDay *float64 `json:"max_cost_per_day,omitempty"`
+// AgentPreview Result of the get_agent tool with new_agent_type: a preview of what a new agent of that type would get. The agent does not exist, so there is no id and no revision. absent_fields and truncated_fields are result metadata.
+type AgentPreview struct {
+	// AbsentFields Result metadata: requested properties the preview does not carry.
+	AbsentFields *[]string `json:"absent_fields,omitempty"`
 
-	// MaxLlmCallsPerHour Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
-	MaxLlmCallsPerHour *int `json:"max_llm_calls_per_hour,omitempty"`
+	// Connectors Connector (MCP server) bindings a new agent of this type would get.
+	Connectors *[]struct {
+		Id string `json:"id"`
 
-	// MaxToolCallsPerMinute Maximum tool calls per minute for this agent. Absent = no per-agent cap.
-	MaxToolCallsPerMinute *int `json:"max_tool_calls_per_minute,omitempty"`
+		// Tools Omitted means all tools on this explicitly assigned server; [] means no tools. Null is rejected. A lone wildcard means all, but mixing wildcard with exact names is rejected by runtime validation.
+		Tools *[]string `json:"tools,omitempty"`
+	} `json:"connectors,omitempty"`
 
-	// UseGlobalDefaults When true, global rate limits are used and per-agent overrides are ignored.
-	UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
+	// PreviewOf The agent type being previewed.
+	PreviewOf AgentPreviewPreviewOf `json:"preview_of"`
+
+	// ToolPermissions Per-tool effective policy a new agent of this type would get.
+	ToolPermissions *[]struct {
+		// Description Short description of the tool (at most 40 characters). Omitted when effective is deny.
+		Description *string `json:"description,omitempty"`
+
+		// Effective The policy that applies to this agent's calls of the tool.
+		Effective AgentPreviewToolPermissionsEffective `json:"effective"`
+
+		// Override The stored value of this tool's exact key in the agent's per-agent policy map; null when there is none. A value inherited through a stored wildcard shows in `effective` and in AgentDetail.stored_overrides, not here.
+		Override *AgentPreviewToolPermissionsOverride `json:"override"`
+
+		// Tool The tool name.
+		Tool string `json:"tool"`
+	} `json:"tool_permissions,omitempty"`
+
+	// TruncatedFields Result metadata: names of fields cut by the result size bound; the cut text ends with "…[cut: 8,000 of <n> characters]".
+	TruncatedFields *[]string `json:"truncated_fields,omitempty"`
 }
+
+// AgentPreviewPreviewOf The agent type being previewed.
+type AgentPreviewPreviewOf string
+
+// AgentPreviewToolPermissionsEffective The policy that applies to this agent's calls of the tool.
+type AgentPreviewToolPermissionsEffective string
+
+// AgentPreviewToolPermissionsOverride The stored value of this tool's exact key in the agent's per-agent policy map; null when there is none. A value inherited through a stored wildcard shows in `effective` and in AgentDetail.stored_overrides, not here.
+type AgentPreviewToolPermissionsOverride string
+
+// AgentRole Curated role slug. The badge shown with the agent's avatar. Labels and the five groups are not on the wire. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+type AgentRole string
 
 // AgentSession Minimal session summary as returned by GET /agents/{id}/sessions. Maps to the AgentSession interface in src/lib/api.ts. This is the same underlying session.UnifiedMeta object, but the SPA consumes it through the AgentSession interface which reads id, title, created_at, and updated_at directly.
 type AgentSession struct {
@@ -13002,6 +15450,9 @@ type AgentTokenEntry struct {
 
 	// ByModel Per-model breakdown for this agent. Absent when no model data is available.
 	ByModel *map[string]struct {
+		// CacheHitRatio Cache-hit ratio for this cell: cache_read / (in + cache_read + cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. in is uncached input.
+		CacheHitRatio *float64 `json:"cache_hit_ratio"`
+
 		// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
 		CacheRead *int `json:"cache_read,omitempty"`
 
@@ -13014,9 +15465,15 @@ type AgentTokenEntry struct {
 		// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 		Out *int `json:"out,omitempty"`
 
+		// Reasoning Effort levels spec (FR-024). Reasoning tokens reported by the provider for this cell: the sum of the per-call counts of the entries that reported one. A subset of out, never added to total. Absent when no entry reported a count.
+		Reasoning *int `json:"reasoning,omitempty"`
+
 		// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 		Total int `json:"total"`
 	} `json:"by_model,omitempty"`
+
+	// CacheHitRatio Cache-hit ratio for this agent: tokens_cache_read / (tokens_in + tokens_cache_read + tokens_cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. tokens_in is uncached input.
+	CacheHitRatio *float64 `json:"cache_hit_ratio"`
 
 	// TokensCacheRead Total cache-read tokens for this agent in the period.
 	TokensCacheRead *int `json:"tokens_cache_read,omitempty"`
@@ -13052,11 +15509,32 @@ type AgentToolEntryEffectivePolicy string
 // AgentToolEntryManifestTier How the tool is presented to the LLM when the manifest optimization is active. "full" = always sent as a callable tool definition every turn; "compressed" = listed by name only in the system context, schema fetched on demand via ToolSearch; "infra" = always-callable discovery tool (ToolSearch) that drives the manifest mechanism itself and never appears in the manifest block.
 type AgentToolEntryManifestTier string
 
+// AgentToolPermission One tool's permission for an agent, as reported by get_agent (AgentDetail.tool_permissions): the effective policy after the global ceiling and the agent's own override (strictest wins), plus the agent's stored override when it has one.
+type AgentToolPermission struct {
+	// Description Short description of the tool (at most 40 characters). Omitted when effective is deny.
+	Description *string `json:"description,omitempty"`
+
+	// Effective The policy that applies to this agent's calls of the tool.
+	Effective AgentToolPermissionEffective `json:"effective"`
+
+	// Override The stored value of this tool's exact key in the agent's per-agent policy map; null when there is none. A value inherited through a stored wildcard shows in `effective` and in AgentDetail.stored_overrides, not here.
+	Override *AgentToolPermissionOverride `json:"override"`
+
+	// Tool The tool name.
+	Tool string `json:"tool"`
+}
+
+// AgentToolPermissionEffective The policy that applies to this agent's calls of the tool.
+type AgentToolPermissionEffective string
+
+// AgentToolPermissionOverride The stored value of this tool's exact key in the agent's per-agent policy map; null when there is none. A value inherited through a stored wildcard shows in `effective` and in AgentDetail.stored_overrides, not here.
+type AgentToolPermissionOverride string
+
 // AgentToolsCfg Per-agent tool configuration governing which builtin tools are accessible and which MCP servers are bound (config.AgentToolsCfg on the Go side, AgentToolsCfg interface in src/lib/api.ts).
 type AgentToolsCfg struct {
 	// Builtin Controls builtin tool visibility for this agent.
 	Builtin *struct {
-		// Policies Policy map. GET tools returns the complete effective catalog while persisted ordinary built-in maps contain sparse overrides. Dedicated replacement requests require every static tool as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
+		// Policies Policy map. GET tools returns the complete effective catalog while persisted ordinary built-in maps contain sparse overrides. Dedicated replacement requests require every implemented static builtin listed by GET /api/v1/tools as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value. Declared future tool names are accepted when supplied but are not required before implementation; omitted existing policies for those names are preserved on replacement, never newly seeded. Wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
 		Policies map[string]AgentToolsCfgBuiltinPolicies `json:"policies"`
 	} `json:"builtin,omitempty"`
 
@@ -13089,7 +15567,7 @@ type AgentToolsResponse struct {
 	Config struct {
 		// Builtin Controls builtin tool visibility for this agent.
 		Builtin *struct {
-			// Policies Policy map. GET tools returns the complete effective catalog while persisted ordinary built-in maps contain sparse overrides. Dedicated replacement requests require every static tool as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
+			// Policies Policy map. GET tools returns the complete effective catalog while persisted ordinary built-in maps contain sparse overrides. Dedicated replacement requests require every implemented static builtin listed by GET /api/v1/tools as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value. Declared future tool names are accepted when supplied but are not required before implementation; omitted existing policies for those names are preserved on replacement, never newly seeded. Wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
 			Policies map[string]AgentToolsResponseConfigBuiltinPolicies `json:"policies"`
 		} `json:"builtin,omitempty"`
 
@@ -13146,14 +15624,14 @@ type AgentToolsResponseToolsEffectivePolicy string
 // AgentToolsResponseToolsManifestTier How the tool is presented to the LLM when the manifest optimization is active. "full" = always sent as a callable tool definition every turn; "compressed" = listed by name only in the system context, schema fetched on demand via ToolSearch; "infra" = always-callable discovery tool (ToolSearch) that drives the manifest mechanism itself and never appears in the manifest block.
 type AgentToolsResponseToolsManifestTier string
 
-// AgentToolsUpdateRequest Replace tool settings using a complete effective policies map and explicit sparse override intent. revision and override_names are required. Only keys in override_names are persisted as local overrides; unlisted values must equal the current global ceiling or the request conflicts. Ordinary built-ins are editable; hidden capabilities remain fixed. Connector omission preserves and explicit empty removes assignments. The existing config wrapper is accepted.
+// AgentToolsUpdateRequest Replace tool settings using a complete effective policies map and explicit sparse override intent. revision and override_names are required. For supplied tools, only keys in override_names are persisted as local overrides; unlisted values must equal the current global ceiling or the request conflicts. Existing policies for declared future tools omitted from the request are preserved, never newly seeded. Ordinary built-ins are editable; hidden capabilities remain fixed. Connector omission preserves and explicit empty removes assignments. The existing config wrapper is accepted.
 type AgentToolsUpdateRequest struct {
 	// Builtin Builtin tool policy configuration for this agent.
 	Builtin *struct {
 		// Mode Legacy format, retained for one release of transitional compatibility. Ignored outright when a complete policies map is also present (policies always wins). Sent ALONE (no policies), mode does not successfully "build" a working policy on its own any more: under the mandatory coverage-validation model (no default_policy fallback), "explicit" converts visible[] into agent-level "allow" entries for just those names — it does not synthesize a deny-all baseline for every other static builtin tool — and "inherit" produces no per-tool entries at all. Both leave most static builtin tools without an explicit policy entry, so the request is rejected with 400 (a coverage-gap error) unless the global sandbox.tool_policies floor happens to cover every remaining tool. Callers must send a complete policies map to reliably succeed.
 		Mode *AgentToolsUpdateRequestBuiltinMode `json:"mode,omitempty"`
 
-		// Policies Complete per-tool policy map. Every static builtin tool name MUST be present as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — this is not a sparse override set with a fallback default, and wildcard keys are not valid for the static builtin catalog. There is no default_policy field. Required on every request that includes builtin. Legacy callers that only have mode/visible available must resolve them to a complete policies map before sending this request; the server still accepts mode/visible alongside policies (ignored) for one release of transitional compatibility but no longer accepts them alone.
+		// Policies Complete per-tool policy map. Every implemented static builtin tool listed by GET /api/v1/tools MUST be present as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value. Declared future tool names are accepted when supplied but are not required before implementation; omitted existing policies for those names are preserved, never newly seeded. This is not a sparse override set with a fallback default, and wildcard keys are not valid for the static builtin catalog. There is no default_policy field. Required on every request that includes builtin. Legacy callers that only have mode/visible available must resolve them to a complete policies map before sending this request; the server still accepts mode/visible alongside policies (ignored) for one release of transitional compatibility but no longer accepts them alone.
 		Policies map[string]AgentToolsUpdateRequestBuiltinPolicies `json:"policies"`
 
 		// Visible Legacy format: tool names converted to agent-level "allow" entries when mode="explicit". Ignored outright when policies is also present. Sent alone with mode="explicit", it does not cover every other static builtin tool, so the request is rejected with 400 for a coverage gap unless the global policy floor already covers the rest — see mode's description.
@@ -13164,7 +15642,7 @@ type AgentToolsUpdateRequest struct {
 	Config *struct {
 		// Builtin Controls builtin tool visibility for this agent.
 		Builtin *struct {
-			// Policies Policy map. GET tools returns the complete effective catalog while persisted ordinary built-in maps contain sparse overrides. Dedicated replacement requests require every static tool as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
+			// Policies Policy map. GET tools returns the complete effective catalog while persisted ordinary built-in maps contain sparse overrides. Dedicated replacement requests require every implemented static builtin listed by GET /api/v1/tools as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value. Declared future tool names are accepted when supplied but are not required before implementation; omitted existing policies for those names are preserved on replacement, never newly seeded. Wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
 			Policies map[string]AgentToolsUpdateRequestConfigBuiltinPolicies `json:"policies"`
 		} `json:"builtin,omitempty"`
 
@@ -13181,7 +15659,7 @@ type AgentToolsUpdateRequest struct {
 		Servers *[]AgentToolsMcpServerBinding `json:"servers,omitempty"`
 	} `json:"mcp,omitempty"`
 
-	// OverrideNames Stored local override keys; an empty list removes all local overrides.
+	// OverrideNames Stored local override keys for supplied tools; an empty list removes their local overrides. Existing policies for omitted, declared future tool names are preserved.
 	OverrideNames []string `json:"override_names"`
 
 	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
@@ -13197,55 +15675,37 @@ type AgentToolsUpdateRequestBuiltinPolicies string
 // AgentToolsUpdateRequestConfigBuiltinPolicies defines model for AgentToolsUpdateRequest.Config.Builtin.Policies.
 type AgentToolsUpdateRequestConfigBuiltinPolicies string
 
-// AgentUpdateRequest Partial agent update. Revision and at least one changed field are required. Ordinary built-in identity and soul are fixed; tool policies, connector assignments and skills are editable. Hidden Judge/Supervisor instructions are editable while their identity and capabilities remain fixed. Runtime applicability is validated before any mutation. Protected same-value echoes are still rejected.
+// AgentUpdateRequest Partial agent update. Revision and at least one changed field are required. Ordinary built-in identity and soul are fixed; tool policies, connector assignments and skills are editable. Hidden Judge/Supervisor instructions are editable while their identity and capabilities remain fixed. Runtime applicability is validated before any mutation. Protected same-value echoes are still rejected. For figure, role, and color, only omission means unchanged. Explicit null and invalid supplied values are rejected with HTTP 400, and no sibling field, timestamp, or revision is changed.
 type AgentUpdateRequest struct {
-	// AutoApproveDisabled Force Auto-approve off for this agent (ADR-092), overriding the global default (SandboxConfig.auto_approve) for every tool this agent resolves to "ask". Off-only: true disables Auto for this agent; false (or omitting the field, which leaves the stored value unchanged) does not loosen past the global default — there is no value here that turns Auto on when the global default has it off. Distinct from `tool_policy_changes`, which is unchanged and still governs allow/deny/ask per tool.
-	AutoApproveDisabled *bool `json:"auto_approve_disabled,omitempty"`
-
-	// Color Hex color code for agent avatar display (e.g. "#D4AF37").
-	Color *string `json:"color,omitempty"`
+	// Color Identity colour. Uppercase canonical hex. The ten values are the whole set (the metallic, brand-derived palette: Steel blue, Titanium, Verdigris, Gunmetal, Graphite violet, Rose gold, Bronze, Antique brass, Champagne, Pewter). Gold, warning yellow, semantic green, semantic red and Liquid Silver are not in it; note that Champagne and Antique brass sit near the gold accent, by founder choice. Letter-case of a listed hex is normalized to this form on write. Any other value, including a colour of the removed previous palette, is invalid: rejected on write, and a stored value outside the ten is returned as the default (Pewter) on read (no stored file is rewritten). JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	Color *AgentColor `json:"color,omitempty"`
 
 	// ContextWindowOverride Per-agent context-window override in tokens (ADR-066 D2 rung 1, D9). Lower-only — clamped to the model's capability on resolution (a WARN names the agent and the clamp). Send null to clear. Every write triggers a registry reload so the next turn uses the new window.
 	ContextWindowOverride *int `json:"context_window_override,omitempty"`
 
-	// Default Send true to make this agent the global default that handles inbound messages with no more-specific routing rule — replacing whichever agent previously held it. Send false to clear the default, which only has an effect if this agent currently holds it (sending false for an agent that isn't the current default is a no-op). Omitting this field leaves the default unchanged. Chat-capable core and custom Main agents only; workers, hidden and external agents cannot be defaults. This does not change workspace membership.
-	Default *bool `json:"default,omitempty"`
-
 	// Description New description. Rejected on locked agents. Empty string removes it. For Subagent / subagent_3p, an empty string after trim is rejected 400 (description is required for workers per the routing contract).
 	Description *string `json:"description,omitempty"`
 
-	// Executor Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
-	// "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
-	// "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like shell_policy / tools_cfg / fallback_models / model_params / skills are hidden for subagent_3p agents and rejected 400 on PUT if set.
-	// "cli" (required for subagent_3p agents when kind="external-cli") is locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
-	// "remote-a2a" is RESERVED for future A2A protocol resolution. The schema accepts it for forward-compatibility, but dispatch rejects it in v0.1.0 with an error ("not available in v0.1.0").
-	// The "kind" field is derived server-side from the agent's type (Main -> native, Subagent -> native, subagent_3p -> external-cli). It is exposed in responses but is NOT a writable field on create/update — clients cannot choose kind directly. Server-side derive at the handler boundary per the agent-form spec.
-	// When the agent has no executor block, the default is "native".
+	// Executor Executor block of an agent update (WRITE model). Editable for custom subagent_3p agents only ("Only external-CLI workers have a runtime environment."). `kind` (derived from the agent type), `cli` (locked after create; create a new agent to switch CLIs) and `cli_path` (the program is set by a person in Settings -> Third-party agents) are rejected as unknown fields.
 	Executor *struct {
-		// Cli The three external CLI executors Omnipus can drive for a subagent_3p worker (kind="external-cli"): "claude-code" (pkg/agent/runner/driver_claude.go), "codex" (driver_codex.go), and "opencode" (driver_opencode.go). Shared by ExecutorConfig.cli (the agent's configured executor), ExecutorDefaults.cli (GET /api/v1/agents/executor-defaults' per-CLI reference row), and CliValidateRequest.cli (POST /api/v1/system/cli-validate) so the three stay a single generated type instead of three independently-declared enums that can drift apart (see the earlier oapi-codegen collision this schema resolves: before extraction, the symbol clash across the three inline enums forced generated constant names like "ExecutorConfigCliClaudeCode" instead of a clean shared "ExternalCliToolClaudeCode"). Titled "ExternalCliTool" rather than the shorter "ExternalCli" because ExecutorConfig.kind's "external-cli" enum VALUE (a completely different field, the execution- runtime selector) already generates an unprefixed Go constant literally named `ExternalCli` (of type ExecutorConfigKind) — reusing that identifier here would collide at compile time.
-		Cli *ExternalCliTool `json:"cli,omitempty"`
-
-		// CliArgs Free-form additional CLI arguments appended to the spawn invocation. The spawn layer uses execve (no shell interpolation), so values are passed safely; warn (but do not reject) on shell-injection chars in the value.
+		// CliArgs Replacement CLI arguments, one string, stored as typed. Shell metacharacters warn, never refuse.
 		CliArgs *string `json:"cli_args,omitempty"`
 
-		// CliPath Filesystem path to the CLI binary. Required for subagent_3p agents. Mutable on PUT (allows upgrading the CLI binary without re-creating the agent). When empty, the OS $PATH is used (fragile when multiple CLI versions are installed — recommend an absolute path).
-		CliPath *string `json:"cli_path,omitempty"`
-
-		// EnvOverrides Additional environment variables merged into the spawned CLI process's environment alongside Omnipus's own (OMNIPUS_AGENT_NAME, OMNIPUS_AGENT_TYPE, and the master-key env var are NOT overridable — user-supplied keys take precedence only for non-Omnipus vars).
+		// EnvOverrides MERGE: each supplied name is added or its value replaced; names not supplied are kept; {} is a no-op. The merged result obeys the create limits (at most 64 entries, name pattern ^[A-Za-z_][A-Za-z0-9_]*$ and at most 128 characters, value at most 8,192 characters, OMNIPUS_* refused). A value equal to the read mask "••••••" is refused.
 		EnvOverrides *map[string]string `json:"env_overrides,omitempty"`
 
-		// Kind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
-		Kind *AgentUpdateRequestExecutorKind `json:"kind,omitempty"`
+		// EnvOverridesRemove Names to remove from the stored environment. A name that is not stored is reported as absent_removed, not refused. A name that is both set in env_overrides and listed here is refused 400.
+		EnvOverridesRemove *[]string `json:"env_overrides_remove,omitempty"`
 	} `json:"executor,omitempty"`
 
 	// FallbackModels Replace the agent's fallback model chain (Phase 1B / FR-005). Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007). Capped at 2 entries. Rejected 400 on subagent_3p agents (CLI handles its own retries).
-	// Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
+	// Wire format is always the object form `[{model, provider}]`, and every entry must name both: an entry missing its provider or its model is refused 400, naming the entry (issue #1340).
 	FallbackModels *[]FallbackModel `json:"fallback_models,omitempty"`
 
-	// Icon Phosphor icon name for agent avatar (e.g. "Robot", "Octopus").
-	Icon *string `json:"icon,omitempty"`
+	// Figure Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write. Monogram draws the uppercased first letter or digit of the agent's display name as the mark, in the agent's colour; a first character that is not a letter or digit renders ?. The other values draw figure art.
+	Figure *AgentFigure `json:"figure,omitempty"`
 
-	// MaxToolIterations New maximum tool calls per turn. Allowed on all agents.
+	// MaxToolIterations The agent's own tool-iteration limit (issue #904, tool-iteration-limit spec D9/D10/D14). Omitted = unchanged; null = clear the own value (the agent rides the global limit — "Use global limit"); a number = set the own value, refused (400) if above the current global limit. Allowed on every agent type, including subagent_3p.
 	MaxToolIterations *int `json:"max_tool_iterations,omitempty"`
 
 	// McpServers Omission preserves assignments; an explicit empty list removes all assignments. Null is rejected.
@@ -13271,14 +15731,20 @@ type AgentUpdateRequest struct {
 		Temperature *float64 `json:"temperature,omitempty"`
 	} `json:"model_params,omitempty"`
 
-	// Name New display name. Rejected on locked agents.
+	// Name New display name. Rejected on locked agents. At most 100 characters, the same limit as Agent.name (#1075).
 	Name *string `json:"name,omitempty"`
 
 	// Provider New explicit routing key for the primary model (O3 two-field model). When set, resolution uses it directly and never infers a provider. Allowed on all agents. Send an empty string to clear it (fall back to default-provider resolution).
 	Provider *string `json:"provider,omitempty"`
 
+	// ReasoningEffort Stored effort for the primary model (effort-levels spec FR-029): "" clears it (Not set; an agent riding the default model then inherits the default's effort), "provider_default", a catalog level name, "on" or "off". Omitted keeps the stored value. null is refused. Not checked against the catalog (FR-048).
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
+
 	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
 	Revision string `json:"revision"`
+
+	// Role Curated role slug. The badge shown with the agent's avatar. Labels and the five groups are not on the wire. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+	Role *AgentRole `json:"role,omitempty"`
 
 	// Skills Replace the agent's skill list. Only the skill IDs in this list will be granted; omitting this field leaves the existing list unchanged. Send an empty array to remove all skills. Rejected 400 on subagent_3p agents (CLI doesn't see Omnipus skills).
 	Skills *[]string `json:"skills,omitempty"`
@@ -13296,7 +15762,7 @@ type AgentUpdateRequest struct {
 	ToolsCfg *struct {
 		// Builtin Controls builtin tool visibility for this agent.
 		Builtin *struct {
-			// Policies Policy map. GET tools returns the complete effective catalog while persisted ordinary built-in maps contain sparse overrides. Dedicated replacement requests require every static tool as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
+			// Policies Policy map. GET tools returns the complete effective catalog while persisted ordinary built-in maps contain sparse overrides. Dedicated replacement requests require every implemented static builtin listed by GET /api/v1/tools as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value. Declared future tool names are accepted when supplied but are not required before implementation; omitted existing policies for those names are preserved on replacement, never newly seeded. Wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
 			Policies map[string]AgentUpdateRequestToolsCfgBuiltinPolicies `json:"policies"`
 		} `json:"builtin,omitempty"`
 
@@ -13310,9 +15776,6 @@ type AgentUpdateRequest struct {
 	// Voice Per-agent persona voice identifier. Schema-pinned; not yet active (TTS, tracked #306). Send null to clear. Main only.
 	Voice *string `json:"voice,omitempty"`
 }
-
-// AgentUpdateRequestExecutorKind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
-type AgentUpdateRequestExecutorKind string
 
 // AgentUpdateRequestToolPolicyChangesSet defines model for AgentUpdateRequest.ToolPolicyChanges.Set.
 type AgentUpdateRequestToolPolicyChangesSet string
@@ -13672,6 +16135,15 @@ type CatalogModel struct {
 	// Name Display name (Unicode preserved).
 	Name string `json:"name"`
 
+	// Reasoning Effort levels spec (effort-levels-spec-r10, FR-035, FR-049). The model's served reasoning capability. Presence of the object means "this model reasons"; an object with no levels and no switch means "reasons, but nothing Omnipus can send" (the UI shows a muted chip). The gateway filters the object by its encoder table for the serving route before it is served, so a level or switch the route cannot encode never appears here.
+	Reasoning *struct {
+		// Levels Effort level names, ascending, as published by the provider (may include "none"). Empty when the model offers no sendable levels; never null.
+		Levels []string `json:"levels"`
+
+		// Switch True when reasoning can be turned on and off as a switch.
+		Switch bool `json:"switch"`
+	} `json:"reasoning,omitempty"`
+
 	// ReleaseDate Release date as YYYY-MM-DD. Optional; undated models sort last in the picker.
 	ReleaseDate *string `json:"release_date,omitempty"`
 
@@ -13700,6 +16172,15 @@ type CatalogModelStatus string
 // CatalogModelWindowSource Which rung of the ADR-066 D2 resolution ladder produced an effective context window. Owned by ADR-066; $ref'd by Agent.context_window_source, DefaultModel.window_source and CatalogModel.window_source — never an inline enum anywhere else (cross-spec X-06). "operator" = a per-agent, per-(provider, model) or global operator override (ContextSettings); "live" = the provider's own limits endpoint (cached 24 h); "catalog" = the registry-fed providers catalog (ADR-067); "floor" = the conservative cloud floor applied when nothing else knew the window (WARN logged). There is no "learned" value (ADR-066 D8 was not adopted).
 type CatalogModelWindowSource string
 
+// CatalogModelReasoning Effort levels spec (effort-levels-spec-r10, FR-035, FR-049). The model's served reasoning capability. Presence of the object means "this model reasons"; an object with no levels and no switch means "reasons, but nothing Omnipus can send" (the UI shows a muted chip). The gateway filters the object by its encoder table for the serving route before it is served, so a level or switch the route cannot encode never appears here.
+type CatalogModelReasoning struct {
+	// Levels Effort level names, ascending, as published by the provider (may include "none"). Empty when the model offers no sendable levels; never null.
+	Levels []string `json:"levels"`
+
+	// Switch True when reasoning can be turned on and off as a switch.
+	Switch bool `json:"switch"`
+}
+
 // CatalogProtocol One wire protocol a catalog provider offers, with the base URL to use for it. When a provider lists protocols[], the list MUST include the primary protocol with the same api URL; entries are unique (ADR-067 FR-002, F-19).
 type CatalogProtocol struct {
 	// Api Absolute https base URL for this protocol (FR-033 URL rule; local rows may use http).
@@ -13720,9 +16201,6 @@ type CatalogProvider struct {
 
 	// AuthMethods Auth methods the provider offers (ADR-068 FR-004); the UI renders a sign-in control only when sign_in is present.
 	AuthMethods []CatalogProviderAuthMethods `json:"auth_methods"`
-
-	// CliKind Required iff protocol is "cli" — selects the subprocess driver (ADR-067 X-14), never chosen by id.
-	CliKind *CatalogProviderCliKind `json:"cli_kind,omitempty"`
 
 	// Company Grouping key for the picker (ADR-067 X-10): one tile/row per company, its plan × region variants being the providers that share it. Comes from overrides/ via the models.dev name family; defaults to name.
 	Company string `json:"company"`
@@ -13769,18 +16247,12 @@ type CatalogProvider struct {
 	// Tier Picker tier (ADR-067 FR-018, data not code). The popular set is rendered as pinned tiles in catalog order; "unsupported" rows are visible but disabled with unsupported_reason.
 	Tier CatalogProviderTier `json:"tier"`
 
-	// TokenSource Optional token source for sign-in HTTP rows (e.g. "codex-auth-json" for openai-chatgpt, X-41).
-	TokenSource *string `json:"token_source,omitempty"`
-
 	// UnsupportedReason Required when tier is "unsupported". "cloud-iam" = needs request signing (Bedrock, Vertex, watsonx, SAP AI Core); "deployment-url" = needs a per-deployment URL (Azure); "withdrawn" = vanished upstream. Never shown raw — the SPA maps it to copy.
 	UnsupportedReason *CatalogProviderUnsupportedReason `json:"unsupported_reason,omitempty"`
 }
 
 // CatalogProviderAuthMethods defines model for CatalogProvider.AuthMethods.
 type CatalogProviderAuthMethods string
-
-// CatalogProviderCliKind Required iff protocol is "cli" — selects the subprocess driver (ADR-067 X-14), never chosen by id.
-type CatalogProviderCliKind string
 
 // CatalogProviderLocality Derived on load by the gateway (FR-039); the only local/cloud classification ADR-066/ADR-068 consume.
 type CatalogProviderLocality string
@@ -13831,6 +16303,9 @@ type CatalogResizeLimits struct {
 
 	// MaxBytes Maximum encoded image size in bytes.
 	MaxBytes int `json:"max_bytes"`
+
+	// MaxPatches Optional ceiling on the number of 32x32-pixel tiles a vision provider counts in an image, computed as ceil(width/32) * ceil(height/32) (e.g. OpenAI's 30,000-patch limit). Absent means the provider's patch accounting is unknown and no patch cap is applied for that row; a provider row without the field inherits the document default.
+	MaxPatches *int `json:"max_patches,omitempty"`
 }
 
 // ChangePasswordRequest Body for POST /auth/change-password. Changes the authenticated user's own password.
@@ -13842,8 +16317,38 @@ type ChangePasswordRequest struct {
 	NewPassword string `json:"new_password"`
 }
 
+// ChannelAvailability Whether a chat connection's adapter is running right now, read from the channel manager's existing records (channels spec T-7, FR-051). "running" is the adapter's own flag; a network loss does not necessarily clear it.
+type ChannelAvailability struct {
+	// Reason Why the connection is not running. Present only when state is not running: the connection's own reason when it reports one (for example WhatsApp's "the connection to WhatsApp was lost and is being re-established automatically" while it reconnects), else the last start error, the construction failure, "not started" or "not loaded". Never contains a secret.
+	Reason *string `json:"reason,omitempty"`
+
+	// State running = registered and running; not_running = registered but not running (start failed, not started, or it started and later lost its connection, which is being re-established); not_loaded = not registered (for example the adapter could not be constructed).
+	State ChannelAvailabilityState `json:"state"`
+}
+
+// ChannelAvailabilityState running = registered and running; not_running = registered but not running (start failed, not started, or it started and later lost its connection, which is being re-established); not_loaded = not registered (for example the adapter could not be constructed).
+type ChannelAvailabilityState string
+
+// ChannelConfigureError 500 body of PUT /api/v1/channels/{id}/configure (channels spec FR-056, FR-057, T-6b, T-6c). The code says what the request durably changed.
+type ChannelConfigureError struct {
+	// Code could_not_save = nothing durable changed (no credential of this request was stored and the configuration was not written). credential_saved_not_saved = at least one credential of this request was stored, then the write path failed; never reported as "nothing changed". saved_not_refreshed = the file was written but the running configuration could not be refreshed; the connection was not restarted.
+	Code ChannelConfigureErrorCode `json:"code"`
+
+	// Detail Short reason, never a secret.
+	Detail *string `json:"detail,omitempty"`
+
+	// Error The normative text for the code. could_not_save: "could not save config". credential_saved_not_saved: "The credential was saved, but the configuration change was not: nothing else was applied. ..." (T-6b). saved_not_refreshed: "settings saved, but the running configuration could not be refreshed; the connection was not restarted".
+	Error string `json:"error"`
+}
+
+// ChannelConfigureErrorCode could_not_save = nothing durable changed (no credential of this request was stored and the configuration was not written). credential_saved_not_saved = at least one credential of this request was stored, then the write path failed; never reported as "nothing changed". saved_not_refreshed = the file was written but the running configuration could not be refreshed; the connection was not restarted.
+type ChannelConfigureErrorCode string
+
 // ChannelConfigureRequest Request body for PUT /api/v1/channels/{id}/configure. Merges the supplied fields into the channel's config section. The "enabled" field is reserved and silently removed — use the separate enable/disable endpoints instead. Field names and value types are channel-specific; unknown fields are stored as-is and passed through to the channel implementation.
 type ChannelConfigureRequest struct {
+	// AllowFrom Allowed sender ids for this channel instance ("Allow From"), one id per element. An empty list admits every sender. The server saves a list. For compatibility with older clients the server also accepts one string when inbound schema validation is off; it splits that string on commas (",", full-width "，") and, except on WhatsApp, on whitespace, trims each id and drops empty pieces. WhatsApp ids are account ids (digits@s.whatsapp.net or a group JID), not phone numbers, and split on commas only. A null value is refused with 400 and nothing is saved.
+	AllowFrom *[]string `json:"allow_from,omitempty"`
+
 	// AppId Application ID (used by Slack, Discord).
 	AppId *string `json:"app_id,omitempty"`
 
@@ -13894,6 +16399,22 @@ type ChannelConfigureRequest struct {
 // ChannelConfigureRequestIdentityKind Routing kind for this channel instance.
 type ChannelConfigureRequestIdentityKind string
 
+// ChannelConfigureResponse 200 body of PUT /api/v1/channels/{id}/configure: the updated channel configuration with credential fields redacted (structure varies by channel type), plus how the save was applied to the running connection (channels spec T-6, FR-050, FR-052).
+type ChannelConfigureResponse struct {
+	// ApplyNote Present whenever a reload was attempted (every outcome except no_reload_needed): "A connection restart was attempted; other connections and scheduled services may have paused briefly while it ran."
+	ApplyNote *string `json:"apply_note,omitempty"`
+
+	// ApplyOutcome applied = reload confirmed and the connection is running. applied_not_running = reload confirmed but the connection is not running (apply_reason says why). unconfirmed = the reload was not confirmed within the wait window. failed = the reload returned an error (apply_reason is a fixed, secret-free phrase, never the raw error text); it does not claim the old settings are still running. no_reload_needed = the instance is disabled, or nothing changed, no credential was stored and the connection is current.
+	ApplyOutcome ChannelConfigureResponseApplyOutcome `json:"apply_outcome"`
+
+	// ApplyReason Present for applied_not_running (the availability reason) and failed (a fixed, secret-free phrase, never the raw error text). For failed, use "the configuration reload failed; details are in the server log", or, when the applied/current predicate reaches the pending-disposal leg, "the previous connection did not finish shutting down; the next save retries it". A config-changing save uses the reload phrase because the applied-hash check precedes the disposal check. An identical save with matching applied settings while a disposal remains pending uses the disposal phrase. Error details stay in the server log. Never a secret.
+	ApplyReason          *string                `json:"apply_reason,omitempty"`
+	AdditionalProperties map[string]interface{} `json:"-"`
+}
+
+// ChannelConfigureResponseApplyOutcome applied = reload confirmed and the connection is running. applied_not_running = reload confirmed but the connection is not running (apply_reason says why). unconfirmed = the reload was not confirmed within the wait window. failed = the reload returned an error (apply_reason is a fixed, secret-free phrase, never the raw error text); it does not claim the old settings are still running. no_reload_needed = the instance is disabled, or nothing changed, no credential was stored and the connection is current.
+type ChannelConfigureResponseApplyOutcome string
+
 // ChannelCreateRequest Request body for POST /channels — creates a new channel instance. The instance key is derived as "<type>.<slug>" (ADR-029 FR-017).
 type ChannelCreateRequest struct {
 	// Slug Per-instance disambiguator matching [a-z0-9-]{1,32} (all lowercase, 1–32 chars). Combined with type to form the instance key "<type>.<slug>".
@@ -13915,6 +16436,18 @@ type ChannelCreateResponse struct {
 	Type string `json:"type"`
 }
 
+// ChannelEnableRequest Optional body of PUT /api/v1/channels/{id}/enable. An absent body or {} is an ordinary enable and grants no chat ownership of a pairing. pairing_retry is an explicit chat Retry of a WhatsApp QR pairing (spec omnipus-system-agent FR-081 / K10, BDD-8.8): the gateway proves the caller owns session_id and that the request/session pair is the channel's recorded pairing owner, then claims the next pairing attempt for that chat before enabling. A WebSocket subscription never grants this ownership.
+type ChannelEnableRequest struct {
+	// PairingRetry The original connect call and chat of the pairing being retried (not newly minted identifiers). Compared verbatim. A mismatch, a stale owner or a competing attempt is refused with 409 pairing_retry_conflict and nothing is enabled.
+	PairingRetry *struct {
+		// RequestId The connect_channel tool-call ID that started the pairing.
+		RequestId string `json:"request_id"`
+
+		// SessionId The chat session that started the pairing.
+		SessionId string `json:"session_id"`
+	} `json:"pairing_retry,omitempty"`
+}
+
 // ChannelEnabledResponse Response from PUT /api/v1/channels/{id}/enable and PUT /api/v1/channels/{id}/disable. Returns the channel ID and its new enabled state.
 type ChannelEnabledResponse struct {
 	// Enabled Whether the channel is now enabled.
@@ -13926,10 +16459,10 @@ type ChannelEnabledResponse struct {
 
 // ChannelEntry A communication channel entry returned by GET /api/v1/channels.
 type ChannelEntry struct {
-	// Degraded True when the channel is enabled in config but failed to construct at runtime (e.g. native WhatsApp requested on a build without it, or an invalid credential). The channel is NOT serving despite enabled=true.
+	// Degraded True when the channel is enabled in config but failed to construct at runtime (e.g. native WhatsApp requested on a build without it, or an invalid credential) — the channel is NOT serving despite enabled=true — or when it dropped an inbound message it could not route (omnipus-system-agent FR-121, K15: unbound instance, missing or ineligible bound agent). A routing degradation is cleared when a valid binding is saved (FR-129).
 	Degraded *bool `json:"degraded,omitempty"`
 
-	// DegradedReason Human-readable reason the channel is degraded. Present only when degraded is true.
+	// DegradedReason Human-readable reason the channel is degraded. Present only when degraded is true. For a routing drop it is the drop reason, e.g. "bind this channel to an agent in a workspace".
 	DegradedReason *string `json:"degraded_reason,omitempty"`
 
 	// Description Short description of the channel.
@@ -13953,11 +16486,26 @@ type ChannelEntry struct {
 	// InstanceId The map key under which this instance is stored in config.json (currently equals the channel type in v0.1 cap-1). Included in responses so the SPA can address per-instance configure/enable/routing endpoints without hardcoding the key.
 	InstanceId *string `json:"instance_id,omitempty"`
 
+	// LastDroppedAt When this channel last dropped an inbound message it could not route (K15). Present only while the routing degradation is active.
+	LastDroppedAt *time.Time `json:"last_dropped_at,omitempty"`
+
 	// Name Human-readable channel name.
 	Name string `json:"name"`
 
 	// NativeAvailable WhatsApp only: whether the native (whatsmeow) transport is compiled into this binary. False on a lite build or an architecture where it is excluded. Omitted for channels to which it does not apply. When false, clients MUST NOT offer native mode (the QR pairing flow cannot work).
 	NativeAvailable *bool `json:"native_available,omitempty"`
+
+	// OutboundPolicy The connection's outbound setting, for the row's summary text (channels spec "Contract Changes"). reply_only = "Only answer"; agent_may_start = "Answer and also start messages".
+	OutboundPolicy *ChannelEntryOutboundPolicy `json:"outbound_policy,omitempty"`
+
+	// RejectedSenders Senders a running connection ignored because they are not on its allowed list (channels spec FR-060, FR-061). Kept on the adapter instance; a rebuilt adapter starts empty.
+	RejectedSenders *struct {
+		// Count How many messages were ignored since the adapter started.
+		Count int `json:"count"`
+
+		// Recent Canonical sender ids of the latest ignored senders, most recent first.
+		Recent []string `json:"recent"`
+	} `json:"rejected_senders,omitempty"`
 
 	// Transport Transport mechanism used by this channel.
 	Transport ChannelEntryTransport `json:"transport"`
@@ -13965,6 +16513,9 @@ type ChannelEntry struct {
 
 // ChannelEntryIdentityKind Routing kind for this channel instance.
 type ChannelEntryIdentityKind string
+
+// ChannelEntryOutboundPolicy The connection's outbound setting, for the row's summary text (channels spec "Contract Changes"). reply_only = "Only answer"; agent_may_start = "Answer and also start messages".
+type ChannelEntryOutboundPolicy string
 
 // ChannelEntryTransport Transport mechanism used by this channel.
 type ChannelEntryTransport string
@@ -13984,13 +16535,149 @@ type ChannelIdentity struct {
 // ChannelIdentityKind Routing kind for this channel instance.
 type ChannelIdentityKind string
 
-// ChannelRouting Routing configuration for a single communication channel. Controls which agent handles inbound messages arriving on this channel.
-type ChannelRouting struct {
-	// DefaultAgentId ID of the agent that handles this channel's inbound messages. Omitted or empty means fall back to the global default agent.
-	DefaultAgentId *string `json:"default_agent_id,omitempty"`
+// ChannelOutbound Whether the agent bound to a chat connection may start messages on it, and to whom (channels spec "Contract Changes", FR-010, FR-012). Absent in config.json means {policy: reply_only, targets: []}. Targets are stored in canonical "platform:id" form; their length is counted with the prefix. The longest valid canonical value is 40 characters (telegram:-9223372036854775807/2147483647), so the 64-character bound never refuses a valid id.
+type ChannelOutbound struct {
+	// Policy reply_only = "Only answer" (the default; the agent never starts a conversation). agent_may_start = "Answer and also start messages", but only to the listed targets; an empty list allows nothing.
+	Policy ChannelOutboundPolicy `json:"policy"`
 
-	// WorkspaceId Workspace this channel instance is bound to. Required (non-empty) for a bound instance; empty/omitted = unbound (legacy default routing).
-	WorkspaceId *string `json:"workspace_id,omitempty"`
+	// Targets Canonical "platform:id" targets the agent may start messages to: a person's user id (a direct message) or a group's chat id. At most 20, no wildcard, no @name.
+	Targets []string `json:"targets"`
+}
+
+// ChannelOutboundPolicy reply_only = "Only answer" (the default; the agent never starts a conversation). agent_may_start = "Answer and also start messages", but only to the listed targets; an empty list allows nothing.
+type ChannelOutboundPolicy string
+
+// ChannelOutboundRead Response of GET /api/v1/channels/{id}/outbound (channels spec FR-021), read from one live configuration snapshot.
+type ChannelOutboundRead struct {
+	// Availability Whether a chat connection's adapter is running right now, read from the channel manager's existing records (channels spec T-7, FR-051). "running" is the adapter's own flag; a network loss does not necessarily clear it.
+	Availability struct {
+		// Reason Why the connection is not running. Present only when state is not running: the connection's own reason when it reports one (for example WhatsApp's "the connection to WhatsApp was lost and is being re-established automatically" while it reconnects), else the last start error, the construction failure, "not started" or "not loaded". Never contains a secret.
+		Reason *string `json:"reason,omitempty"`
+
+		// State running = registered and running; not_running = registered but not running (start failed, not started, or it started and later lost its connection, which is being re-established); not_loaded = not registered (for example the adapter could not be constructed).
+		State ChannelOutboundReadAvailabilityState `json:"state"`
+	} `json:"availability"`
+
+	// Outbound Whether the agent bound to a chat connection may start messages on it, and to whom (channels spec "Contract Changes", FR-010, FR-012). Absent in config.json means {policy: reply_only, targets: []}. Targets are stored in canonical "platform:id" form; their length is counted with the prefix. The longest valid canonical value is 40 characters (telegram:-9223372036854775807/2147483647), so the 64-character bound never refuses a valid id.
+	Outbound struct {
+		// Policy reply_only = "Only answer" (the default; the agent never starts a conversation). agent_may_start = "Answer and also start messages", but only to the listed targets; an empty list allows nothing.
+		Policy ChannelOutboundReadOutboundPolicy `json:"policy"`
+
+		// Targets Canonical "platform:id" targets the agent may start messages to: a person's user id (a direct message) or a group's chat id. At most 20, no wildcard, no @name.
+		Targets []string `json:"targets"`
+	} `json:"outbound"`
+
+	// Revision The channel revision token (FR-088) computed over the live configuration — the same token list_channels returns and the writer compares against expected_revision. "absent" when the connection is not configured.
+	Revision string `json:"revision"`
+
+	// StartSupported True only for platforms that can start messages in this release (Discord and Telegram). Other platforms show "not supported yet".
+	StartSupported bool `json:"start_supported"`
+}
+
+// ChannelOutboundReadAvailabilityState running = registered and running; not_running = registered but not running (start failed, not started, or it started and later lost its connection, which is being re-established); not_loaded = not registered (for example the adapter could not be constructed).
+type ChannelOutboundReadAvailabilityState string
+
+// ChannelOutboundReadOutboundPolicy reply_only = "Only answer" (the default; the agent never starts a conversation). agent_may_start = "Answer and also start messages", but only to the listed targets; an empty list allows nothing.
+type ChannelOutboundReadOutboundPolicy string
+
+// ChannelOutboundRejection Error body of PUT /api/v1/channels/{id}/outbound for 400, 409, 422 and 502 (channels spec "Contract Changes", FR-020, FR-026, T-9). Nothing was saved.
+// Safe-echo set: every string of this schema (error, target_errors[].target, target_errors[].reason) is restricted by its pattern to printable ASCII (0x20-0x7E) except the five characters Go's json.Marshal HTML-escapes (double quote, backslash, <, >, &). The server drops any other character before serializing; it never escapes or substitutes. Each string character therefore serializes to exactly one byte, which keeps the worst-case body at about 2.7 KB, under the SPA error decoder's 4 KiB cap, with no non-printable characters for its binary sniff.
+type ChannelOutboundRejection struct {
+	// Code Machine-readable reason. 400: invalid_targets, too_many_targets. 409: stale_revision, connect_first, saved_live_mismatch. 422: platform_cannot_start, platform_cannot_message_people. 502: lookup_unavailable.
+	Code ChannelOutboundRejectionCode `json:"code"`
+
+	// Error Human-readable reason, in the safe-echo set. For 502 lookup_unavailable it is "Discord could not be reached to check <ids>; nothing was saved; try again", listing unavailable ids in request order until the next id would exceed 500 characters, then "+<N> more".
+	Error string `json:"error"`
+
+	// OmittedCount Present only when more than 10 entries were invalid: how many invalid entries are not listed in target_errors.
+	OmittedCount *int `json:"omitted_count,omitempty"`
+
+	// TargetErrors Per-target errors: the first 10 invalid entries in request order.
+	TargetErrors *[]struct {
+		// Code Why this entry was refused.
+		Code ChannelOutboundRejectionTargetErrorsCode `json:"code"`
+
+		// Index 0-based position of the entry in the request's targets array (the client shows it on textarea line index + 1). This is the identifier; target is only a hint.
+		Index int `json:"index"`
+
+		// Reason Fixed catalog text for the code, in the safe-echo set (the longest, unsupported_channel_kind's, is 115 characters).
+		Reason *string `json:"reason,omitempty"`
+
+		// Target A sanitized hint of the entry: its first 20 safe-echo characters after dropping every other character, plus "..." when more than 20 survived.
+		Target string `json:"target"`
+	} `json:"target_errors,omitempty"`
+}
+
+// ChannelOutboundRejectionCode Machine-readable reason. 400: invalid_targets, too_many_targets. 409: stale_revision, connect_first, saved_live_mismatch. 422: platform_cannot_start, platform_cannot_message_people. 502: lookup_unavailable.
+type ChannelOutboundRejectionCode string
+
+// ChannelOutboundRejectionTargetErrorsCode Why this entry was refused.
+type ChannelOutboundRejectionTargetErrorsCode string
+
+// ChannelOutboundUpdateRequest Request body of PUT /api/v1/channels/{id}/outbound (channels spec FR-020, FR-022). The whole target list replaces the stored one. Targets are raw input: the server trims, canonicalizes, removes duplicates and then enforces the limit of 20 (too_many_targets).
+type ChannelOutboundUpdateRequest struct {
+	// ExpectedRevision The revision returned by GET /api/v1/channels/{id}/outbound (or list_channels). A different current revision is refused with 409 stale_revision.
+	ExpectedRevision string `json:"expected_revision"`
+
+	// Policy reply_only = "Only answer"; agent_may_start = "Answer and also start messages".
+	Policy ChannelOutboundUpdateRequestPolicy `json:"policy"`
+
+	// Targets Raw target entries, one per textarea line: a bare id or "platform:id". Rejections refer to an entry by its 0-based index in this array.
+	Targets []string `json:"targets"`
+}
+
+// ChannelOutboundUpdateRequestPolicy reply_only = "Only answer"; agent_may_start = "Answer and also start messages".
+type ChannelOutboundUpdateRequestPolicy string
+
+// ChannelOutboundWriteResponse Response of a successful PUT /api/v1/channels/{id}/outbound (channels spec FR-020, FR-027, T-6b).
+type ChannelOutboundWriteResponse struct {
+	// Outbound Whether the agent bound to a chat connection may start messages on it, and to whom (channels spec "Contract Changes", FR-010, FR-012). Absent in config.json means {policy: reply_only, targets: []}. Targets are stored in canonical "platform:id" form; their length is counted with the prefix. The longest valid canonical value is 40 characters (telegram:-9223372036854775807/2147483647), so the 64-character bound never refuses a valid id.
+	Outbound struct {
+		// Policy reply_only = "Only answer" (the default; the agent never starts a conversation). agent_may_start = "Answer and also start messages", but only to the listed targets; an empty list allows nothing.
+		Policy ChannelOutboundWriteResponseOutboundPolicy `json:"policy"`
+
+		// Targets Canonical "platform:id" targets the agent may start messages to: a person's user id (a direct message) or a group's chat id. At most 20, no wildcard, no @name.
+		Targets []string `json:"targets"`
+	} `json:"outbound"`
+
+	// Revision The new channel revision token (FR-088) over the live configuration.
+	Revision string `json:"revision"`
+
+	// Warning Present only when the file was written but the rest of the running configuration could not be refreshed. The saved list is in force anyway. Text: "Saved and in force for starting messages. Other settings could not be refreshed: <short reason>. Check the server log."
+	Warning *string `json:"warning,omitempty"`
+}
+
+// ChannelOutboundWriteResponseOutboundPolicy reply_only = "Only answer" (the default; the agent never starts a conversation). agent_may_start = "Answer and also start messages", but only to the listed targets; an empty list allows nothing.
+type ChannelOutboundWriteResponseOutboundPolicy string
+
+// ChannelRejectedSenders Senders a running connection ignored because they are not on its allowed list (channels spec FR-060, FR-061). Kept on the adapter instance; a rebuilt adapter starts empty.
+type ChannelRejectedSenders struct {
+	// Count How many messages were ignored since the adapter started.
+	Count int `json:"count"`
+
+	// Recent Canonical sender ids of the latest ignored senders, most recent first.
+	Recent []string `json:"recent"`
+}
+
+// ChannelRouting Routing configuration for a single communication channel instance, as read back by GET and returned by PUT /channels/{id}/routing. Every channel is bound to a workspace and names that binding's main agent (omnipus-system-agent FR-127, K14); there is no global default agent and no unbound routing mode. An instance that has no binding yet is reported truthfully (FR-128): `bound` is false and both ids are empty strings — never an invented or legacy destination.
+type ChannelRouting struct {
+	// Bound True when the instance is bound to a workspace and names a main agent. An unbound instance drops every inbound message loudly until bound.
+	Bound bool `json:"bound"`
+
+	// DefaultAgentId ID of the bound main agent that answers this channel's inbound messages. Empty string when `bound` is false. (Landing 1 keeps the historical key name; it no longer means any global-default fallback.)
+	DefaultAgentId string `json:"default_agent_id"`
+
+	// WorkspaceId Workspace this channel instance is bound to. Empty string when `bound` is false.
+	WorkspaceId string `json:"workspace_id"`
+}
+
+// ChannelRoutingUpdateRequest Body for PUT /channels/{id}/routing. Binds the channel instance to a workspace and names the main agent that answers it. Both fields are required and nonblank (omnipus-system-agent FR-127, K14); the legacy unbound mode is removed, so a request missing either is refused with 400 "bind this channel to an agent in a workspace" and changes nothing. Saving a valid binding clears the instance's routing `degraded` status (FR-129).
+type ChannelRoutingUpdateRequest struct {
+	// DefaultAgentId The bound main agent: a chat-capable member of the workspace's team (never a worker or system agent). Landing 1 keeps the historical key name.
+	DefaultAgentId string `json:"default_agent_id"`
+
+	// WorkspaceId Workspace to bind the channel instance to. Must exist and be active.
+	WorkspaceId string `json:"workspace_id"`
 }
 
 // ChannelTestResponse Response from POST /api/v1/channels/{id}/test. Returns whether required credentials are configured.
@@ -14002,12 +16689,13 @@ type ChannelTestResponse struct {
 	Success bool `json:"success"`
 }
 
-// ClearAllSessionsResponse Response from DELETE /api/v1/sessions/all (HTTP 200). Reports how many sessions were removed and any non-fatal per-agent errors encountered along the way (partial removal is still possible when warnings are present).
+// ClearAllSessionsResponse Response from DELETE /api/v1/sessions/all (HTTP 200). Reports how many ordinary chats were deleted. Main chats are never deleted (a main chat goes only with its agent), so a "cleared" status does not mean every chat is gone: warnings count the chats that were kept (a turn that would not stop, storage that failed, or data that could not be read) and the main chats left alone.
 type ClearAllSessionsResponse struct {
+	// Count Number of ordinary chats deleted (main chats are not counted).
 	Count  int                            `json:"count"`
 	Status ClearAllSessionsResponseStatus `json:"status"`
 
-	// Warnings Per-agent errors (non-fatal — partial removal possible).
+	// Warnings Fixed-text notices, never carrying a session id or path: how many chats were kept because they could not be deleted, and how many main chats were left alone. Absent when every chat was deleted and there are no main chats.
 	Warnings *[]string `json:"warnings,omitempty"`
 }
 
@@ -14021,7 +16709,10 @@ type CliDetect struct {
 		// Installed Whether the binary was located on $PATH or in a well-known install directory.
 		Installed bool `json:"installed"`
 
-		// Path Absolute, symlink-resolved path to the binary. Null when installed=false. This is the exact value the SPA prefills into the executor cli_path field — detection, validation, and the runtime spawn all resolve this same path.
+		// LinkPath The path as found on $PATH or in a well-known install folder, BEFORE symlink resolution (equal to `path` when no symlink is involved). Null when installed=false. The Settings -> Third-party agents screen pre-fills its program path from this value when present, else from `path`.
+		LinkPath *string `json:"link_path,omitempty"`
+
+		// Path Absolute, symlink-resolved path to the binary (the final file). Null when installed=false. Not the value to pre-fill into Settings -> Third-party agents: a versioned symlink target would break on the next package update; pre-fill from link_path when present, else this path.
 		Path *string `json:"path,omitempty"`
 
 		// Source How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
@@ -14033,7 +16724,10 @@ type CliDetect struct {
 		// Installed Whether the binary was located on $PATH or in a well-known install directory.
 		Installed bool `json:"installed"`
 
-		// Path Absolute, symlink-resolved path to the binary. Null when installed=false. This is the exact value the SPA prefills into the executor cli_path field — detection, validation, and the runtime spawn all resolve this same path.
+		// LinkPath The path as found on $PATH or in a well-known install folder, BEFORE symlink resolution (equal to `path` when no symlink is involved). Null when installed=false. The Settings -> Third-party agents screen pre-fills its program path from this value when present, else from `path`.
+		LinkPath *string `json:"link_path,omitempty"`
+
+		// Path Absolute, symlink-resolved path to the binary (the final file). Null when installed=false. Not the value to pre-fill into Settings -> Third-party agents: a versioned symlink target would break on the next package update; pre-fill from link_path when present, else this path.
 		Path *string `json:"path,omitempty"`
 
 		// Source How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
@@ -14045,7 +16739,10 @@ type CliDetect struct {
 		// Installed Whether the binary was located on $PATH or in a well-known install directory.
 		Installed bool `json:"installed"`
 
-		// Path Absolute, symlink-resolved path to the binary. Null when installed=false. This is the exact value the SPA prefills into the executor cli_path field — detection, validation, and the runtime spawn all resolve this same path.
+		// LinkPath The path as found on $PATH or in a well-known install folder, BEFORE symlink resolution (equal to `path` when no symlink is involved). Null when installed=false. The Settings -> Third-party agents screen pre-fills its program path from this value when present, else from `path`.
+		LinkPath *string `json:"link_path,omitempty"`
+
+		// Path Absolute, symlink-resolved path to the binary (the final file). Null when installed=false. Not the value to pre-fill into Settings -> Third-party agents: a versioned symlink target would break on the next package update; pre-fill from link_path when present, else this path.
 		Path *string `json:"path,omitempty"`
 
 		// Source How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
@@ -14067,7 +16764,10 @@ type CliDetectEntry struct {
 	// Installed Whether the binary was located on $PATH or in a well-known install directory.
 	Installed bool `json:"installed"`
 
-	// Path Absolute, symlink-resolved path to the binary. Null when installed=false. This is the exact value the SPA prefills into the executor cli_path field — detection, validation, and the runtime spawn all resolve this same path.
+	// LinkPath The path as found on $PATH or in a well-known install folder, BEFORE symlink resolution (equal to `path` when no symlink is involved). Null when installed=false. The Settings -> Third-party agents screen pre-fills its program path from this value when present, else from `path`.
+	LinkPath *string `json:"link_path,omitempty"`
+
+	// Path Absolute, symlink-resolved path to the binary (the final file). Null when installed=false. Not the value to pre-fill into Settings -> Third-party agents: a versioned symlink target would break on the next package update; pre-fill from link_path when present, else this path.
 	Path *string `json:"path,omitempty"`
 
 	// Source How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
@@ -14076,6 +16776,42 @@ type CliDetectEntry struct {
 
 // CliDetectEntrySource How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
 type CliDetectEntrySource string
+
+// CliPreset One external CLI's row in Settings -> Third-party agents, as a person saves it (PUT /api/v1/settings/third-party-agents). Set only by a signed-in person; agents have no route, tool parameter or config path that writes it.
+type CliPreset struct {
+	// Path Program path exactly as the person typed it ("" = no program saved for this CLI). Stored as entered, never the resolved target. A non-empty value must pass thirdpartycli.ValidateProgramPath on save (absolute; every symlink's folder and the final file and its folder not world-writable and not inside an agent-writable location; the final file a regular, executable file), otherwise the save is refused 400 with code cli_path_invalid. Every run checks it again and execs the resolved file.
+	Path string `json:"path"`
+
+	// PresetArgs Standard parameters for this CLI, one line of free text, stored exactly as typed ("" = none). No NUL, no line breaks (refused 400 with code cli_preset_invalid). Any token is allowed: no allow list and no flag filter. At spawn the parameters are appended after the agent's own cli_args (which are filtered) and before the prompt hand-off, so a person's value beats an agent flag of the same name.
+	PresetArgs string `json:"preset_args"`
+}
+
+// CliPresetView One external CLI's row in the Settings -> Third-party agents read model: the saved values plus a live detection result.
+type CliPresetView struct {
+	// Detected Host-side detection result for a single external-CLI runner binary (claude-code/codex/opencode). The gateway searches its own $PATH first, then a curated per-OS well-known-install-location list, and reports which strategy found the binary via `source`. Detection is a filesystem probe only — it never spawns a subprocess.
+	Detected struct {
+		// Installed Whether the binary was located on $PATH or in a well-known install directory.
+		Installed bool `json:"installed"`
+
+		// LinkPath The path as found on $PATH or in a well-known install folder, BEFORE symlink resolution (equal to `path` when no symlink is involved). Null when installed=false. The Settings -> Third-party agents screen pre-fills its program path from this value when present, else from `path`.
+		LinkPath *string `json:"link_path,omitempty"`
+
+		// Path Absolute, symlink-resolved path to the binary (the final file). Null when installed=false. Not the value to pre-fill into Settings -> Third-party agents: a versioned symlink target would break on the next package update; pre-fill from link_path when present, else this path.
+		Path *string `json:"path,omitempty"`
+
+		// Source How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
+		Source *CliPresetViewDetectedSource `json:"source,omitempty"`
+	} `json:"detected"`
+
+	// Path The saved program path exactly as entered; "" when nothing is saved.
+	Path string `json:"path"`
+
+	// PresetArgs The saved standard parameters exactly as typed; "" when nothing is saved.
+	PresetArgs string `json:"preset_args"`
+}
+
+// CliPresetViewDetectedSource How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
+type CliPresetViewDetectedSource string
 
 // CliValidateRequest Request body for POST /api/v1/system/cli-validate. Stateless, create-time validation of an external-executor CLI: confirms the binary at cli_path actually runs and reports a version, before the operator saves the subagent_3p agent. Reuses runner.TestConnectionWithPath verbatim — the same handshake used by the post-create /agents/{id}/runner/test endpoint.
 type CliValidateRequest struct {
@@ -14172,9 +16908,6 @@ type ContextModelOverride struct {
 
 // ContextSettings Global context-budget controls (ADR-066 D9), as returned by GET /api/v1/settings/context and echoed by PUT. User-facing location is Settings → Models. Every successful PUT triggers a registry reload so the next turn uses the new values without a restart. Readable and writable by any authenticated user (withAuth, the /settings/memory precedent — not RequireNotBypass).
 type ContextSettings struct {
-	// AbsoluteTriggerChars Absolute tool-result share trigger (chars) for the mid-turn window check (D6); the token share is this ÷ 2.5. Default 400,000.
-	AbsoluteTriggerChars int `json:"absolute_trigger_chars"`
-
 	// BuiltinFailureCap Per-result cap (chars) for a failed, denied or skipped tool result — builtin or MCP (D4 "builtin-failure" surface). Default 10,000; ceiling 150,000.
 	BuiltinFailureCap int `json:"builtin_failure_cap"`
 
@@ -14192,21 +16925,56 @@ type ContextSettings struct {
 
 	// ModelOverrides Per-(provider, model) context-window overrides (D2 rung 2). Empty array when none.
 	ModelOverrides []ContextModelOverride `json:"model_overrides"`
+
+	// ToolResultShareFraction Finite fraction of the resolved model window W used for the tool-result share limit (ADR-066 MAJ-CW-007, FR-036): 0 < f ≤ 1. Default 0.5. S = max(1, floor(f × W)); this is a fraction of W, not the total-request budget B. Settings → Models displays it as a percentage (default 50%); the wire carries the dimensionless fraction, so 12.5% is 0.125.
+	ToolResultShareFraction float64 `json:"tool_result_share_fraction"`
 }
 
-// ContextSettingsUpdate Partial update body for PUT /api/v1/settings/context (ADR-066 D9). Every field is optional; an omitted field is unchanged. Validation (400 naming the field and the limit): any cap > 150,000 or < 1; absolute_trigger_chars < 1; ingest_bound_bytes ≥ 8,388,608 or < 1; model_overrides[].context_window < 1. Set default_context_window to null to clear it. model_overrides, when present, replaces the whole list.
+// ContextSettingsUpdate Partial update body for PUT /api/v1/settings/context (ADR-066 D9). Every field is optional; an omitted field is unchanged. Validation (400 naming the field and the valid interval): any cap > 150,000 or < 1; tool_result_share_fraction must be a finite JSON number with 0 < f ≤ 1 (null, strings, booleans, zero, negatives and values > 1 are invalid); ingest_bound_bytes ≥ 8,388,608 or < 1; model_overrides[].context_window < 1. Malformed/nonfinite JSON and unknown fields are rejected with 400. Set default_context_window to null to clear it. model_overrides, when present, replaces the whole list.
 type ContextSettingsUpdate struct {
-	AbsoluteTriggerChars *int                    `json:"absolute_trigger_chars,omitempty"`
 	BuiltinFailureCap    *int                    `json:"builtin_failure_cap,omitempty"`
 	BuiltinSuccessCap    *int                    `json:"builtin_success_cap,omitempty"`
 	DefaultContextWindow *int                    `json:"default_context_window,omitempty"`
 	IngestBoundBytes     *int                    `json:"ingest_bound_bytes,omitempty"`
 	McpResultCap         *int                    `json:"mcp_result_cap,omitempty"`
 	ModelOverrides       *[]ContextModelOverride `json:"model_overrides,omitempty"`
+
+	// ToolResultShareFraction Finite fraction of the resolved model window W: 0 < f ≤ 1; numeric 1 is valid. Omitted means unchanged, not reset to the fresh default 0.5. The wire carries a fraction, not a percentage (12.5% is 0.125).
+	ToolResultShareFraction *float64 `json:"tool_result_share_fraction,omitempty"`
 }
+
+// ContextWindowNotice Classified context-window diagnostic (ADR-066 MAJ-CW-009). Shared by ContextWindowNoticeFrame.notice and Message.context_window_notice; rendered only when Verbose chat is enabled. Not a model-history message or the transient model-only context notice.
+type ContextWindowNotice struct {
+	Kind    ContextWindowNoticeKind `json:"kind"`
+	Message string                  `json:"message"`
+}
+
+// ContextWindowNoticeKind defines model for ContextWindowNotice.Kind.
+type ContextWindowNoticeKind string
 
 // ContextWindowSource Which rung of the ADR-066 D2 resolution ladder produced an effective context window. Owned by ADR-066; $ref'd by Agent.context_window_source, DefaultModel.window_source and CatalogModel.window_source — never an inline enum anywhere else (cross-spec X-06). "operator" = a per-agent, per-(provider, model) or global operator override (ContextSettings); "live" = the provider's own limits endpoint (cached 24 h); "catalog" = the registry-fed providers catalog (ADR-067); "floor" = the conservative cloud floor applied when nothing else knew the window (WARN logged). There is no "learned" value (ADR-066 D8 was not adopted).
 type ContextWindowSource string
+
+// CreateEmailDraftResult Result of the create_email_draft agent tool (spec §2.4 — the tool returns exactly this shape). Crosses the gateway→SPA boundary: the chat tool-result renderer consumes the generated type (round-2 MIN-013). Property names are exactly as the tool emits them.
+type CreateEmailDraftResult struct {
+	// ChatLink Absolute http(s) chat link built from gateway.public_url exactly like serve_web derives its origin — http allowed (round-1 MAJ-013; pkg/tools/web_serve.go precedent). Null when no origin is derivable (unset public_url, wildcard bind) — the tool still succeeds and chat_link_reason carries the stated reason.
+	ChatLink *string `json:"chat_link"`
+
+	// ChatLinkReason The stated reason when chat_link is null; null otherwise.
+	ChatLinkReason *string `json:"chat_link_reason"`
+
+	// Created Whether the draft was APPENDed (MC-11 asserts created=true).
+	Created bool `json:"created"`
+
+	// MessageId The draft's Message-ID, generated by the tool itself (<random-128-bit@domain-of-the-mailbox's-From-address>, fallback omnipus.invalid) and kept through panel edits and the final send (round-1 MIN-004).
+	MessageId string `json:"message_id"`
+
+	// Uid IMAP UID of the APPENDed draft in the Drafts folder.
+	Uid int `json:"uid"`
+
+	// Uidvalidity UIDVALIDITY of the Drafts folder.
+	Uidvalidity int `json:"uidvalidity"`
+}
 
 // CreateVaultRequest Request body for POST /api/v1/library/{workspace_id}/vaults. Creates a new Omnipus knowledge base ("vault") as a folder inside the workspace's work tree (pkg/knowledge.CreateInWorkspace — FR-022/FR-023/FR-025), writing the .omnipus-vault/ marker plus empty records/ and views/ control-plane directories so the vault is immediately usable by knowledge_configure. workspace_id is NOT a body field — it is already the {workspace_id} path parameter, matching every other per-workspace Library create/write route (LibraryMkdirRequest, LibraryContentRequest, ...) rather than duplicating it and risking the two disagreeing.
 type CreateVaultRequest struct {
@@ -14319,6 +17087,9 @@ type DefaultModel struct {
 	// Provider Catalog provider id or operator-named custom row id. Empty when unset.
 	Provider string `json:"provider"`
 
+	// ReasoningEffort Stored effort for the default model (effort-levels spec FR-067): "" (Not set), "provider_default", a catalog level name, "on" or "off". Agents riding the default model with no effort of their own use it. Omitted keeps the stored value; null is refused.
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
+
 	// WindowSource Which rung of the ADR-066 D2 resolution ladder produced an effective context window. Owned by ADR-066; $ref'd by Agent.context_window_source, DefaultModel.window_source and CatalogModel.window_source — never an inline enum anywhere else (cross-spec X-06). "operator" = a per-agent, per-(provider, model) or global operator override (ContextSettings); "live" = the provider's own limits endpoint (cached 24 h); "catalog" = the registry-fed providers catalog (ADR-067); "floor" = the conservative cloud floor applied when nothing else knew the window (WARN logged). There is no "learned" value (ADR-066 D8 was not adopted).
 	WindowSource *DefaultModelWindowSource `json:"window_source,omitempty"`
 
@@ -14333,40 +17104,26 @@ type DefaultModelWindowSource string
 type DefaultModelUpdateRequest struct {
 	Model    string `json:"model"`
 	Provider string `json:"provider"`
+
+	// ReasoningEffort Stored effort for the default model (effort-levels spec FR-067): "" (Not set), "provider_default", a catalog level name, "on" or "off". Agents riding the default model with no effort of their own use it. Omitted keeps the stored value; null is refused.
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 }
 
-// DelegateActionRequest The `delegate` tool call's argument shape, discriminated by `action` — the corrected 9-action set (ADR-053 §5.1) replacing the legacy `run | status` pair. `run` spawns a new child; `status`/`inbox`/`inbox_ack`/`peek` are read/ack surfaces; `steer`/`respond`/`cancel`/`follow_up` are control surfaces. Steering is always available for a direct delegation (see ADR-053 Amendment).
+// DelegateActionRequest The `delegate` tool call's argument shape, discriminated by `action` — the ADR-053 §5.1 action set plus `clear_goal`, replacing the legacy `run | status` pair. `run` spawns a new child; `status`/`inbox`/`inbox_ack`/`peek` are read/ack surfaces; `steer`/`respond`/`stop_all`/`clear_goal`/`resume`/`redirect` are control surfaces (ADR-20261004: `cancel` is renamed `stop_all` and `follow_up` is renamed `resume`, no alias path; `redirect` and `resume` are new actions). Steering is always available for a direct delegation (see ADR-053 Amendment).
 type DelegateActionRequest struct {
 	union json.RawMessage
 }
 
-// DelegateCancelAction `delegate` tool call, `action: cancel` (ADR-053 §5.1). `hard: false` (default) is the SOFT cooperative stop — a tool-boundary checkpoint flush inside `session_messaging.cancel_grace`. `hard: true` is the backstop `RequestCancel` fired after grace elapses (or immediately, at the parent's discretion).
-type DelegateCancelAction struct {
-	Action DelegateCancelActionAction `json:"action"`
+// DelegateClearGoalAction `delegate` tool call, `action: clear_goal`. Clears the selected helper's goal without cascading to its descendants.
+type DelegateClearGoalAction struct {
+	Action DelegateClearGoalActionAction `json:"action"`
 
-	// Hard False (default) — cooperative soft cancel with grace. True — immediate hard cancel, bypassing the grace window.
-	Hard *bool `json:"hard,omitempty"`
-
-	// SessionId The child session to cancel.
+	// SessionId The child session whose goal to clear.
 	SessionId string `json:"session_id"`
 }
 
-// DelegateCancelActionAction defines model for DelegateCancelAction.Action.
-type DelegateCancelActionAction string
-
-// DelegateFollowUpAction `delegate` tool call, `action: follow_up` (ADR-053 §5.1). Native: warm resume of the SAME session with retained context. 3P: cold — spawns a new session carrying the prior result. A terminal record is never mutated in place; this always mints a new `generation` via `resumed_from` (immutable-terminal invariant, L-3/MAJ-1/N-7).
-type DelegateFollowUpAction struct {
-	Action DelegateFollowUpActionAction `json:"action"`
-
-	// SessionId The (terminal) child session to follow up on.
-	SessionId string `json:"session_id"`
-
-	// Task Optional additional instructions for the resumed/new session.
-	Task *string `json:"task,omitempty"`
-}
-
-// DelegateFollowUpActionAction defines model for DelegateFollowUpAction.Action.
-type DelegateFollowUpActionAction string
+// DelegateClearGoalActionAction defines model for DelegateClearGoalAction.Action.
+type DelegateClearGoalActionAction string
 
 // DelegateInboxAckAction `delegate` tool call, `action: inbox_ack` (ADR-053 §5.1). Explicit ack; the runtime dedupes by `message_id` before surfacing and persists acked messages in the audit log.
 type DelegateInboxAckAction struct {
@@ -14382,7 +17139,7 @@ type DelegateInboxAckAction struct {
 // DelegateInboxAckActionAction defines model for DelegateInboxAckAction.Action.
 type DelegateInboxAckActionAction string
 
-// DelegateInboxAction `delegate` tool call, `action: inbox` (ADR-053 §5.1). Drains the child->parent typed inbox (progress/checkpoint/artifact/blocker/ question/decision_request/error/handback), durable and keyed to the parent's chat/plan id (D16).
+// DelegateInboxAction `delegate` tool call, `action: inbox` (ADR-053 §5.1). Drains the child->parent typed inbox (progress/checkpoint/artifact/blocker/ question/error/handback), durable and keyed to the parent's chat/plan id (D16).
 type DelegateInboxAction struct {
 	Action DelegateInboxActionAction `json:"action"`
 
@@ -14409,7 +17166,28 @@ type DelegateInboxResponse struct {
 
 	// NextCursor Opaque cursor to pass as since_cursor on the next drain.
 	NextCursor *string `json:"next_cursor,omitempty"`
+
+	// NotDelivered Reports from this helper that were refused at an inbox cap and NOT saved (FR-013, #1211). Counts and the last refusal only; refused content is never kept.
+	NotDelivered *DelegateNotDeliveredSummary `json:"not_delivered,omitempty"`
 }
+
+// DelegateNotDeliveredSummary Reports from this helper that were refused at an inbox cap and NOT saved (FR-013, #1211). Counts and the last refusal only; refused content is never kept.
+type DelegateNotDeliveredSummary struct {
+	// Count Cumulative number of refused reports for this child session; never reset.
+	Count int64 `json:"count"`
+
+	// LastAt When the last refusal happened.
+	LastAt time.Time `json:"last_at"`
+
+	// LastKind SessionMessage kind of the last refused report.
+	LastKind string `json:"last_kind"`
+
+	// LastReason Why the most recent report was refused.
+	LastReason DelegateNotDeliveredSummaryLastReason `json:"last_reason"`
+}
+
+// DelegateNotDeliveredSummaryLastReason Why the most recent report was refused.
+type DelegateNotDeliveredSummaryLastReason string
 
 // DelegatePeekAction `delegate` tool call, `action: peek` (ADR-053 §5.1). AGENT-callable, read-only Agent-View parity read WITHOUT attach — inspects the child's latest checkpoint/progress without steering, without consuming the child's unacked ceiling, and without enqueuing anything on the child's steering queue (m8). Distinct from the human-facing FE-5 `ActivityPanel -> Agent-View` render surface, which is a separate UI concept, not this tool action.
 type DelegatePeekAction struct {
@@ -14431,62 +17209,68 @@ type DelegatePeekResponse struct {
 	LatestProgressPct *int `json:"latest_progress_pct,omitempty"`
 
 	// LatestProgressText The most recent progress narration text, if any.
-	LatestProgressText *string                   `json:"latest_progress_text,omitempty"`
-	SessionId          string                    `json:"session_id"`
-	State              DelegatePeekResponseState `json:"state"`
+	LatestProgressText *string `json:"latest_progress_text,omitempty"`
+	SessionId          string  `json:"session_id"`
+
+	// State `interrupted` is a helper session a gateway restart cut off (a lifecycle `failed` record whose failed_reason is `interrupted`; founder rule 2026-10-06: a session does not fail because of a restart). `failed` is a genuine failure only.
+	State DelegatePeekResponseState `json:"state"`
 }
 
-// DelegatePeekResponseState defines model for DelegatePeekResponse.State.
+// DelegatePeekResponseState `interrupted` is a helper session a gateway restart cut off (a lifecycle `failed` record whose failed_reason is `interrupted`; founder rule 2026-10-06: a session does not fail because of a restart). `failed` is a genuine failure only.
 type DelegatePeekResponseState string
 
-// DelegateRespondAction `delegate` tool call, `action: respond` (ADR-053 §5.1). Answers a `question`/`decision_request` by `correlation_id`; out-of-order answers are safe. Native: warm-resumes the SAME child session generation. 3P (external CLI): spawns a NEW corrective session (original prompt + answer folded in, D5) — never an in-place warm resume, since external CLIs have no warm-resume primitive. The runtime REJECTS a `respond` targeting a question whose derived authority is `owner_required` (R§8.2) — a business rule enforced at the handler, not schema- expressible.
+// DelegateRedirectAction `delegate` tool call, `action: redirect` (ADR-20260928 D2, retained by ADR-20260929 ruling 8; ADR-20261004 locked decision 3). Replaces the helper's current turn with the new instruction: the running turn is stopped (single session — never a cascade; descendants keep going) and the replacement turn runs with `text`. On an already-stopped helper it resumes it with the instruction; on a done/failed helper it starts nothing — use `resume`.
+type DelegateRedirectAction struct {
+	Action DelegateRedirectActionAction `json:"action"`
+
+	// SessionId The child session whose current turn is replaced.
+	SessionId string `json:"session_id"`
+
+	// Text The replacement instruction the new turn runs with.
+	Text string `json:"text"`
+}
+
+// DelegateRedirectActionAction defines model for DelegateRedirectAction.Action.
+type DelegateRedirectActionAction string
+
+// DelegateRespondAction `delegate` tool call, `action: respond` (ADR-053 §5.1; ADR-20261004 locked decisions 6–7). The parent's reply to one of the child's messages, referenced by `correlation_id`; the text is delivered downward as an ordinary message, and the recipient's state decides the effect (working: into the current turn; stopped: same-generation resume; done/failed: next round). Native: warm-resumes the SAME child session generation when a resume applies. 3P (external CLI): spawns a NEW corrective session (original prompt + answer folded in, D5) — never an in-place warm resume, since external CLIs have no warm-resume primitive. The former owner-answer authority check was withdrawn with the person-question pause (ADR-20261004); a respond is an ordinary steering message, not an authenticated owner answer.
 type DelegateRespondAction struct {
 	Action DelegateRespondActionAction `json:"action"`
 
-	// CorrelationId The `correlation_id` of the question/decision_request being answered.
+	// CorrelationId The `correlation_id` of the question being answered.
 	CorrelationId string `json:"correlation_id"`
 
 	// SessionId The child session being answered.
 	SessionId string `json:"session_id"`
 
-	// Text The answer. For a `decision_request`, names the chosen option verbatim.
+	// Text The answer to the child's question. The maximum length is the server's steer_body byte limit (configurable, default 65,536 UTF-8 bytes); the server enforces it.
 	Text string `json:"text"`
 }
 
 // DelegateRespondActionAction defines model for DelegateRespondAction.Action.
 type DelegateRespondActionAction string
 
-// DelegateRespondResponse Response to `delegate` `action: respond` (ADR-053 §5.1). Native: acknowledgement only (the answer routes into the child's warm-resumed turn). 3P: a new corrective session was spawned (D5) — see `corrective_session` for its identity.
+// DelegateRespondResponse Response to `delegate` `action: respond` (ADR-053 §5.1): acknowledgement only. A native answer routes into the child's turn; an external-CLI answer reaches the same CLI conversation by interrupt and resume, or is refused. No session is created or replaced by a respond.
 type DelegateRespondResponse struct {
 	// Acknowledged True when the response was accepted and routed by `correlation_id`.
 	Acknowledged bool `json:"acknowledged"`
-
-	// CorrectiveSession Response shape shared by `delegate` actions that spawn or resume a child session — `run`, `follow_up` (native warm resume or 3P cold respawn), and a 3P `respond` (which spawns a new corrective session, D5). Reused rather than duplicated across those three actions (DoD-11).
-	CorrectiveSession *struct {
-		// Generation The generation this response corresponds to.
-		Generation int `json:"generation"`
-
-		// Is3p True when this session dispatches via an external CLI runner.
-		Is3p bool `json:"is_3p"`
-
-		// QueuePosition 1-based position in the admission queue when `state == queued`, else 0. Lets the caller know its place in line for execution (ADR-091 I-2).
-		QueuePosition *int `json:"queue_position,omitempty"`
-
-		// ResumedFrom The prior session id this generation resumed from, when applicable.
-		ResumedFrom *string `json:"resumed_from,omitempty"`
-
-		// SessionId The child session id. For a native `follow_up`, equals the input `session_id` (warm resume, same session, new generation). For a 3P `follow_up`/`respond`, a NEW session id (cold respawn, D5).
-		SessionId string `json:"session_id"`
-
-		// State The newly-spawned/resumed session's initial lifecycle state.
-		State DelegateRespondResponseCorrectiveSessionState `json:"state"`
-	} `json:"corrective_session,omitempty"`
 }
 
-// DelegateRespondResponseCorrectiveSessionState The newly-spawned/resumed session's initial lifecycle state.
-type DelegateRespondResponseCorrectiveSessionState string
+// DelegateResumeAction `delegate` tool call, `action: resume` (ADR-20261004, locked decision 4 — renamed from `follow_up` with no alias path). Continues a stopped helper on the same conversation and the same generation, or starts the next round when the helper is done or failed. Native: warm resume of the SAME session; a terminal continuation mints a new `generation` via `resumed_from` (immutable-terminal invariant, L-3/MAJ-1/N-7). 3P: cold — spawns a new session carrying the prior result (external CLIs have no warm-resume primitive).
+type DelegateResumeAction struct {
+	Action DelegateResumeActionAction `json:"action"`
 
-// DelegateRunAction `delegate` tool call, `action: run` (ADR-053 §5.1/§Contract Surface). Spawns a new child session. `snapshot` carries ONLY the DISCRETIONARY portion of the curated context snapshot (R§8.5) — parent-named artifact references + optional notes. The MANDATORY core (task prompt + compiled criteria + engine-injected child identity from the target agent, ADR-032) is assembled server-side and is EXEMPT from `snapshot_max_bytes` (m4); only `snapshot` here is subject to `snapshot_max_bytes`/ `snapshot_max_refs`. Steering is always available for a direct delegation — there is no longer a launch-profile choice gating it (see ADR-053 Amendment).
+	// SessionId The stopped or finished child session to resume.
+	SessionId string `json:"session_id"`
+
+	// Text Optional additional instructions for the resumed/next round.
+	Text *string `json:"text,omitempty"`
+}
+
+// DelegateResumeActionAction defines model for DelegateResumeAction.Action.
+type DelegateResumeActionAction string
+
+// DelegateRunAction `delegate` tool call, `action: run` (ADR-053 §5.1/§Contract Surface). Spawns a new child session. `snapshot` carries ONLY the DISCRETIONARY portion of the curated context snapshot (R§8.5) — parent-named artifact references + optional notes. The MANDATORY core (task prompt + compiled criteria + engine-injected child identity from the target agent, ADR-032) is assembled server-side and is EXEMPT from `snapshot_max_bytes` (m4); only `snapshot` here is subject to `snapshot_max_bytes`/ `snapshot_max_refs`. A native child can always be steered at its next tool boundary — there is no launch-profile choice gating it (see ADR-053 Amendment). An external-CLI child is steered by interrupting its subprocess and resuming the same CLI conversation, and only while a CLI run is in flight; otherwise steering is refused as not_steerable.
 type DelegateRunAction struct {
 	Action DelegateRunActionAction `json:"action"`
 
@@ -14965,9 +17749,6 @@ type DelegateRunAction struct {
 
 	// Task The task prompt handed to the child as its first user message.
 	Task string `json:"task"`
-
-	// TimeoutSeconds Maximum seconds before this delegation is force-cancelled. 0 = default (30 min).
-	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
 }
 
 // DelegateRunActionAction defines model for DelegateRunAction.Action.
@@ -15078,12 +17859,12 @@ type DelegateRunActionGoalTerminalHistoryVerdictPerCriterionProvenance string
 // DelegateRunActionGoalTerminalHistoryVerdictScope Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
 type DelegateRunActionGoalTerminalHistoryVerdictScope string
 
-// DelegateSessionResponse Response shape shared by `delegate` actions that spawn or resume a child session — `run`, `follow_up` (native warm resume or 3P cold respawn), and a 3P `respond` (which spawns a new corrective session, D5). Reused rather than duplicated across those three actions (DoD-11).
+// DelegateSessionResponse Response shape for a `delegate` action that publishes a child session (`run`). No action creates a replacement session for an existing child: resume and respond continue the same child (an external-CLI child continues the same CLI conversation or the action is refused).
 type DelegateSessionResponse struct {
 	// Generation The generation this response corresponds to.
 	Generation int `json:"generation"`
 
-	// Is3p True when this session dispatches via an external CLI runner.
+	// Is3p True when this session dispatches via an external CLI runner. Taken from the classification persisted at launch, not re-read from a mutable registry.
 	Is3p bool `json:"is_3p"`
 
 	// QueuePosition 1-based position in the admission queue when `state == queued`, else 0. Lets the caller know its place in line for execution (ADR-091 I-2).
@@ -15092,7 +17873,7 @@ type DelegateSessionResponse struct {
 	// ResumedFrom The prior session id this generation resumed from, when applicable.
 	ResumedFrom *string `json:"resumed_from,omitempty"`
 
-	// SessionId The child session id. For a native `follow_up`, equals the input `session_id` (warm resume, same session, new generation). For a 3P `follow_up`/`respond`, a NEW session id (cold respawn, D5).
+	// SessionId The id of the newly published child session.
 	SessionId string `json:"session_id"`
 
 	// State The newly-spawned/resumed session's initial lifecycle state.
@@ -15108,9 +17889,6 @@ type DelegateStatusAction struct {
 
 	// SessionId The child session to query.
 	SessionId string `json:"session_id"`
-
-	// TaskId DEPRECATED compat alias for `session_id` (pre-ADR-053 callers). When both are present, `session_id` wins.
-	TaskId *string `json:"task_id,omitempty"`
 }
 
 // DelegateStatusActionAction defines model for DelegateStatusAction.Action.
@@ -15133,7 +17911,7 @@ type DelegateStatusResponse struct {
 		Text      *string    `json:"text,omitempty"`
 	} `json:"last_progress,omitempty"`
 
-	// Session The durable, per-entity-JSONL 8-state session-lifecycle record (ADR-053 §Contract Surface, S2). Distinct from `Session.status` (active/archived/ interrupted — the older chat-transcript-metadata status) and from `Plan.state` (the 5-state draft/approved/running/done/failed plan state machine) — do not conflate the three. This record is the durable authority the boot sweep (§5), idle settlement, `blocked_by`, and the S4 interlock state machine all read from. The immutable-terminal invariant (L-3) holds: a terminal record (`completed`/`failed`/ `cancelled`/`timed_out`) is never mutated in place — `follow_up`/Play mint a NEW record with a new `generation`, linked back via `resumed_from`.
+	// Session The durable, per-entity-JSONL 6-state session-lifecycle record (ADR-053 §Contract Surface, S2; state consolidated per F0929-2). Distinct from `Session.status` (active/archived/failed — the coarse chat-transcript- metadata status; see `Session.lifecycle_state` for the exact 5-state display projection of this record) and from `Plan.state` (the 5-state draft/approved/running/ done/failed plan state machine) — do not conflate the three. This record is the durable authority the boot sweep (§5), idle settlement, `blocked_by`, and the S4 interlock state machine all read from. The immutable-terminal invariant (L-3) holds: a terminal record (`completed`/`failed`) is never mutated in place — `follow_up`/Play mint a NEW record with a new `generation`, linked back via `resumed_from`.
 	Session struct {
 		// AgentId The agent running this session.
 		AgentId string `json:"agent_id"`
@@ -15158,7 +17936,7 @@ type DelegateStatusResponse struct {
 
 		// NeedsInput Present iff `state == needs_input`; absent otherwise (no schema `nullable: true` — an optional-object field paired with `nullable` generates a `T | null | undefined` Zod type against an openapi-typescript TS type that only ever emits `T | undefined` for a nullable, non-required, non-scalar property, a real codegen mismatch between the two generators for this shape; plain optional-only is unambiguous and matches how every other optional nested object in this contract set is expressed). `reconstructable` is a PARK-TIME HINT ONLY (m5) — the authoritative determination is `isNeedsInputReconstructable(rec)` re-evaluated AT BOOT (R§8.6), never this stored value.
 		NeedsInput *struct {
-			// CorrelationId The open question/decision_request this session is parked on.
+			// CorrelationId The open question this session is parked on.
 			CorrelationId string `json:"correlation_id"`
 
 			// Reconstructable Park-time hint (m5) — NOT authoritative. See description above.
@@ -15173,7 +17951,7 @@ type DelegateStatusResponse struct {
 			// CallId For delegate/task-origin sessions, the tool-call id (span key) of the originating delegate or create_task call. Absent for other kinds.
 			CallId *string `json:"call_id,omitempty"`
 
-			// Kind The launch path that created this session. Root kinds (chat/channel/scheduled/heartbeat/verifier/plan/human) and derived kinds (delegate/task) — the kind's own definition.
+			// Kind The launch path that created this session. Root kinds (chat/channel/main/scheduled/heartbeat/verifier/plan/human) and derived kinds (delegate/task) — the kind's own definition.
 			Kind DelegateStatusResponseSessionOriginKind `json:"kind"`
 
 			// TaskId For task-origin sessions, the persistent task id from the task record (persisted on the task disk-only, by tools/task.go). Absent for delegate-origin and other kinds.
@@ -15186,7 +17964,7 @@ type DelegateStatusResponse struct {
 		// OwnerScopeKind SHAPE DECISION (flagged for review): the spec's field table describes `owner_scope` as a union of `parent_session_id | plan_id | human`. A bare `oneOf` of untagged strings has no discriminator and is not meaningfully validatable/codegen-friendly, so it is split into this enum tag plus `owner_scope_id` below (empty for `human`, which has no single owning id — N-9 top-level chat-goal sessions are owned by the human/chat-principal).
 		OwnerScopeKind DelegateStatusResponseSessionOwnerScopeKind `json:"owner_scope_kind"`
 
-		// OwnsPlanId Set when THIS session is a plan's OWNER session — the reciprocal of `Plan.owner_session_id` (m-3/FR-147). Lets the boot sweep exempt a `paused` owner session whose `owner_scope_kind == human` but which is legitimately idle awaiting an owner correction on the named plan.
+		// OwnsPlanId Set when THIS session is a plan's OWNER session — the reciprocal of `Plan.owner_session_id` (m-3/FR-147). Lets the boot sweep exempt a `stopped` owner session whose `owner_scope_kind == human` but which is legitimately idle awaiting an owner correction on the named plan.
 		OwnsPlanId *string `json:"owns_plan_id,omitempty"`
 
 		// ResumedFrom The prior generation's `session_id` this record resumed from. Null for generation 1 (the original spawn).
@@ -15195,7 +17973,7 @@ type DelegateStatusResponse struct {
 		// SessionId Unique durable session identifier.
 		SessionId string `json:"session_id"`
 
-		// State The durable 8-state lifecycle (S2, the S4 interlock state machine's authority). `paused` covers BOTH cooperative cancel-soft grace AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a 9th state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
+		// State The durable 6-state lifecycle (S2, the S4 interlock state machine's authority). `stopped` replaces the former `cancelled`/`timed_out`/ `paused` states as one non-terminal state (session alive, continuable) — it covers cancellation, timeout, AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a separate state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
 		State DelegateStatusResponseSessionState `json:"state"`
 
 		// SteeredBy Present for steered sessions (a session launched by another session's delegate or create_task). Absent for ordinary-root sessions that nobody steers (ADR-091 I-1). No `nullable: true` — an optional-object field should use optional-only semantics to avoid Zod/openapi-typescript codegen mismatch (see needs_input field comment).
@@ -15208,12 +17986,6 @@ type DelegateStatusResponse struct {
 				// RemainingDepth Remaining delegation depth budget for this child's own onward delegations. Decremented from the edge or global default.
 				RemainingDepth int `json:"remaining_depth"`
 			} `json:"authorization"`
-
-			// Limits Creator-set session limits.
-			Limits *struct {
-				// TimeoutSeconds Maximum seconds before this delegation is force-cancelled. 0 = the configured default. Scope is the session's lifetime across re-entries (ADR-091 I-1).
-				TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
-			} `json:"limits,omitempty"`
 
 			// ReportingTarget The steering session's own address; where completion wakes it.
 			ReportingTarget *struct {
@@ -15250,7 +18022,7 @@ type DelegateStatusResponse struct {
 			Generation int `json:"generation"`
 		} `json:"stop,omitempty"`
 
-		// Terminal Server-derived: true iff `state` is one of `completed`/`failed`/ `cancelled`/`timed_out`.
+		// Terminal Server-derived: true iff `state` is one of `completed`/`failed`.
 		Terminal *bool `json:"terminal,omitempty"`
 
 		// UndeliveredMessageIds `message_id`s not yet delivered/acked at the time of the last persist — carried forward across a boot-sweep `failed(interrupted)` transition so the reason is inspectable.
@@ -15267,13 +18039,13 @@ type DelegateStatusResponse struct {
 	UnackedCount int `json:"unacked_count"`
 }
 
-// DelegateStatusResponseSessionOriginKind The launch path that created this session. Root kinds (chat/channel/scheduled/heartbeat/verifier/plan/human) and derived kinds (delegate/task) — the kind's own definition.
+// DelegateStatusResponseSessionOriginKind The launch path that created this session. Root kinds (chat/channel/main/scheduled/heartbeat/verifier/plan/human) and derived kinds (delegate/task) — the kind's own definition.
 type DelegateStatusResponseSessionOriginKind string
 
 // DelegateStatusResponseSessionOwnerScopeKind SHAPE DECISION (flagged for review): the spec's field table describes `owner_scope` as a union of `parent_session_id | plan_id | human`. A bare `oneOf` of untagged strings has no discriminator and is not meaningfully validatable/codegen-friendly, so it is split into this enum tag plus `owner_scope_id` below (empty for `human`, which has no single owning id — N-9 top-level chat-goal sessions are owned by the human/chat-principal).
 type DelegateStatusResponseSessionOwnerScopeKind string
 
-// DelegateStatusResponseSessionState The durable 8-state lifecycle (S2, the S4 interlock state machine's authority). `paused` covers BOTH cooperative cancel-soft grace AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a 9th state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
+// DelegateStatusResponseSessionState The durable 6-state lifecycle (S2, the S4 interlock state machine's authority). `stopped` replaces the former `cancelled`/`timed_out`/ `paused` states as one non-terminal state (session alive, continuable) — it covers cancellation, timeout, AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a separate state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
 type DelegateStatusResponseSessionState string
 
 // DelegateStatusResponseSessionSteeredByAuthorizationMode How the child was authorized. `direct` for delegate-origin, `task` for task-origin.
@@ -15282,7 +18054,7 @@ type DelegateStatusResponseSessionSteeredByAuthorizationMode string
 // DelegateStatusResponseSessionStopByKind Principal kind (agent or human).
 type DelegateStatusResponseSessionStopByKind string
 
-// DelegateSteerAction `delegate` tool call, `action: steer` (ADR-053 §5.1). Mid-run injection at the child's next tool boundary (skip-remaining-batch semantics identical to chat steering). Rate-capped 6/min, 16 KiB body.
+// DelegateSteerAction `delegate` tool call, `action: steer` (ADR-053 §5.1). Mid-run injection at the child's next tool boundary (skip-remaining-batch semantics identical to chat steering). Rate-capped (default 60/min) and body-capped (default 65,536 UTF-8 bytes) by session_messaging.steer_rate/steer_body.
 type DelegateSteerAction struct {
 	Action DelegateSteerActionAction `json:"action"`
 
@@ -15292,12 +18064,23 @@ type DelegateSteerAction struct {
 	// SessionId The child session to steer.
 	SessionId string `json:"session_id"`
 
-	// Text Steering instruction.
+	// Text Steering instruction. The maximum length is the server's steer_body byte limit (configurable, default 65,536 UTF-8 bytes); the server enforces it.
 	Text string `json:"text"`
 }
 
 // DelegateSteerActionAction defines model for DelegateSteerAction.Action.
 type DelegateSteerActionAction string
+
+// DelegateStopAllAction `delegate` tool call, `action: stop_all` (ADR-20261004, locked decision 2 — renamed from `cancel` with no alias path). Stops that helper and every helper under it through the same session Stop a person uses: each running turn is asked to stop, then stopped forcibly after 3 seconds. Each reached session lands `stopped`, never failed, once its running work has shut down, and its parent sees a stop notice.
+type DelegateStopAllAction struct {
+	Action DelegateStopAllActionAction `json:"action"`
+
+	// SessionId The child session whose whole subtree stops.
+	SessionId string `json:"session_id"`
+}
+
+// DelegateStopAllActionAction defines model for DelegateStopAllAction.Action.
+type DelegateStopAllActionAction string
 
 // DevicePaired A device that has been successfully paired. Returned as part of the DevicesResponse from GET /api/v1/devices.
 type DevicePaired struct {
@@ -15504,10 +18287,10 @@ type EnumValueDefGroup string
 
 // ErrorResponse Standard error envelope returned by all non-2xx responses.
 type ErrorResponse struct {
-	// Code Machine-readable error code for programmatic branching (e.g. "csrf_missing", "rate_limited").
+	// Code Machine-readable error code for programmatic branching (e.g. "csrf_missing", "rate_limited"). PUT /settings/third-party-agents uses "cli_path_invalid" (field clis.<cli>.path; details.cli, details.check one of not_absolute, not_found, not_regular_file, not_executable, agent_writable_location, writable_by_others, windows_extension, windows_short_name, windows_stream; details.at the path element that failed) and "cli_preset_invalid" (field clis.<cli>.preset_args; details.cli, details.check one of too_long, contains_nul, contains_line_break).
 	Code *string `json:"code,omitempty"`
 
-	// Details Optional structured details about the error.
+	// Details Optional structured details about the error. For cli_path_invalid and cli_preset_invalid: `cli` (claude-code, codex or opencode), `check` (the failed check's name) and, for cli_path_invalid, `at` (the path element that failed: the link or the final file).
 	Details *map[string]interface{} `json:"details,omitempty"`
 
 	// Error Human-readable error message.
@@ -15576,7 +18359,7 @@ type ExecutorCommandPreviewRequest struct {
 	// CliPath Optional executor.cli_path override to preview. Empty means "resolved via the OS $PATH at spawn time" and the response's binary field reflects that (the bare command name, not an absolute path).
 	CliPath *string `json:"cli_path,omitempty"`
 
-	// MaxToolIterations Optional turn cap to preview (mirrors AgentConfig.max_tool_iterations). Omitted or zero previews with the external-CLI dispatch default (50) — the same fallback runExternalCLISubTurn applies when an agent has no explicit cap.
+	// MaxToolIterations Optional: the agent's own tool-iteration limit being previewed (mirrors AgentConfig.max_tool_iterations); omit when the agent has none. The server previews the same effective value the runtime uses (issue #904): min(global limit, this value), or the global limit when omitted.
 	MaxToolIterations *int `json:"max_tool_iterations,omitempty"`
 
 	// Model Model slug/shape to preview with. Omit or leave empty to preview the "no model configured" case (the --model/-m flag is simply absent from the resulting command for claude-code and codex; for opencode the flag is also absent when the value is not "provider/model"-shaped — see the response's model_dropped_reason for that case).
@@ -15613,7 +18396,7 @@ type ExecutorCommandPreviewResponse struct {
 // ExecutorCommandPreviewResponsePromptDelivery How the actual task prompt (soul + instructions, composed at real dispatch time) reaches this CLI — never a --prompt flag on any of the three supported CLIs. claude-code and codex read it from stdin; opencode receives it as the last positional argument after a literal "--" end-of-options separator.
 type ExecutorCommandPreviewResponsePromptDelivery string
 
-// ExecutorConfig Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
+// ExecutorConfig Executor configuration for a sub-agent (READ model: returned by REST GET, the agent list, create and update echoes, and get_agent). Controls which runtime is used to execute the sub-agent's tasks. Write models are ExecutorConfigCreate (create) and ExecutorConfigUpdate (update). There is no per-agent program path: the program for each CLI is set by a person in Settings -> Third-party agents (effective_cli_path, effective_preset_args and program_warning report it here, read-only).
 // "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
 // "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like shell_policy / tools_cfg / fallback_models / model_params / skills are hidden for subagent_3p agents and rejected 400 on PUT if set.
 // "cli" (required for subagent_3p agents when kind="external-cli") is locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
@@ -15624,21 +18407,51 @@ type ExecutorConfig struct {
 	// Cli The three external CLI executors Omnipus can drive for a subagent_3p worker (kind="external-cli"): "claude-code" (pkg/agent/runner/driver_claude.go), "codex" (driver_codex.go), and "opencode" (driver_opencode.go). Shared by ExecutorConfig.cli (the agent's configured executor), ExecutorDefaults.cli (GET /api/v1/agents/executor-defaults' per-CLI reference row), and CliValidateRequest.cli (POST /api/v1/system/cli-validate) so the three stay a single generated type instead of three independently-declared enums that can drift apart (see the earlier oapi-codegen collision this schema resolves: before extraction, the symbol clash across the three inline enums forced generated constant names like "ExecutorConfigCliClaudeCode" instead of a clean shared "ExternalCliToolClaudeCode"). Titled "ExternalCliTool" rather than the shorter "ExternalCli" because ExecutorConfig.kind's "external-cli" enum VALUE (a completely different field, the execution- runtime selector) already generates an unprefixed Go constant literally named `ExternalCli` (of type ExecutorConfigKind) — reusing that identifier here would collide at compile time.
 	Cli *ExternalCliTool `json:"cli,omitempty"`
 
-	// CliArgs Free-form additional CLI arguments appended to the spawn invocation. The spawn layer uses execve (no shell interpolation), so values are passed safely; warn (but do not reject) on shell-injection chars in the value.
+	// CliArgs Free-form additional CLI arguments as stored, appended to the spawn invocation after the driver's built-in flags. The spawn layer uses execve (no shell interpolation); flags the safety filter would drop are removed at run time.
 	CliArgs *string `json:"cli_args,omitempty"`
 
-	// CliPath Filesystem path to the CLI binary. Required for subagent_3p agents. Mutable on PUT (allows upgrading the CLI binary without re-creating the agent). When empty, the OS $PATH is used (fragile when multiple CLI versions are installed — recommend an absolute path).
-	CliPath *string `json:"cli_path,omitempty"`
+	// EffectiveCliPath Read-only. The program path saved in Settings -> Third-party agents for this agent's CLI, exactly as the person entered it. Absent when no path is saved for that CLI. A run uses only this Settings path (checked again at spawn, the resolved file is exec'd); there is no per-agent program path, no fallback to an old stored path and no $PATH lookup.
+	EffectiveCliPath *string `json:"effective_cli_path,omitempty"`
 
-	// EnvOverrides Additional environment variables merged into the spawned CLI process's environment alongside Omnipus's own (OMNIPUS_AGENT_NAME, OMNIPUS_AGENT_TYPE, and the master-key env var are NOT overridable — user-supplied keys take precedence only for non-Omnipus vars).
+	// EffectivePresetArgs Read-only. The standard parameters saved in Settings -> Third-party agents for this agent's CLI, exactly as typed. Absent when none are saved. Appended after this agent's cli_args at spawn, unfiltered.
+	EffectivePresetArgs *string `json:"effective_preset_args,omitempty"`
+
+	// EnvOverrides Environment variables merged into the spawned CLI process's environment alongside Omnipus's own (OMNIPUS_* names are reserved and refused). On every read (REST GET, list, create and update echoes, get_agent) each value is replaced by the fixed mask "••••••"; only the names are readable. Written through ExecutorConfigCreate (whole map) and ExecutorConfigUpdate (merge plus env_overrides_remove).
 	EnvOverrides *map[string]string `json:"env_overrides,omitempty"`
 
 	// Kind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
 	Kind *ExecutorConfigKind `json:"kind,omitempty"`
+
+	// ProgramWarning Read-only. The exact text a run of this agent would be refused with right now: "This agent cannot run: no program path is set for <Name>. A person can set it in Settings -> Third-party agents -> <Name>." or "This agent cannot run: the program set for <Name> in Settings -> Third-party agents does not pass its checks (<check> at <at>). A person can fix it there." Absent when a run would start.
+	ProgramWarning *string `json:"program_warning,omitempty"`
 }
 
 // ExecutorConfigKind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
 type ExecutorConfigKind string
+
+// ExecutorConfigCreate Executor block of a subagent_3p create request (WRITE model). `kind` is derived from the agent type and `cli_path` does not exist: the program for each CLI is set by a person in Settings -> Third-party agents. Both are rejected as unknown fields. Creating an agent for a CLI with no usable Settings path succeeds; the echo carries `program_warning`.
+type ExecutorConfigCreate struct {
+	// Cli The three external CLI executors Omnipus can drive for a subagent_3p worker (kind="external-cli"): "claude-code" (pkg/agent/runner/driver_claude.go), "codex" (driver_codex.go), and "opencode" (driver_opencode.go). Shared by ExecutorConfig.cli (the agent's configured executor), ExecutorDefaults.cli (GET /api/v1/agents/executor-defaults' per-CLI reference row), and CliValidateRequest.cli (POST /api/v1/system/cli-validate) so the three stay a single generated type instead of three independently-declared enums that can drift apart (see the earlier oapi-codegen collision this schema resolves: before extraction, the symbol clash across the three inline enums forced generated constant names like "ExecutorConfigCliClaudeCode" instead of a clean shared "ExternalCliToolClaudeCode"). Titled "ExternalCliTool" rather than the shorter "ExternalCli" because ExecutorConfig.kind's "external-cli" enum VALUE (a completely different field, the execution- runtime selector) already generates an unprefixed Go constant literally named `ExternalCli` (of type ExecutorConfigKind) — reusing that identifier here would collide at compile time.
+	Cli ExternalCliTool `json:"cli"`
+
+	// CliArgs Additional CLI arguments, one string, stored as typed. Shell metacharacters warn, never refuse. Flags the safety filter would drop are reported in the tool result's cli_args.dropped_at_run and removed at run time.
+	CliArgs *string `json:"cli_args,omitempty"`
+
+	// EnvOverrides Environment variables for the spawned CLI process. Names match ^[A-Za-z_][A-Za-z0-9_]*$ and are at most 128 characters; at most 64 entries; each value at most 8,192 characters. OMNIPUS_* names are reserved and refused, naming the key. A value equal to the read mask "••••••" is refused. Values are never echoed: every read masks them.
+	EnvOverrides *map[string]string `json:"env_overrides,omitempty"`
+}
+
+// ExecutorConfigUpdate Executor block of an agent update (WRITE model). Editable for custom subagent_3p agents only ("Only external-CLI workers have a runtime environment."). `kind` (derived from the agent type), `cli` (locked after create; create a new agent to switch CLIs) and `cli_path` (the program is set by a person in Settings -> Third-party agents) are rejected as unknown fields.
+type ExecutorConfigUpdate struct {
+	// CliArgs Replacement CLI arguments, one string, stored as typed. Shell metacharacters warn, never refuse.
+	CliArgs *string `json:"cli_args,omitempty"`
+
+	// EnvOverrides MERGE: each supplied name is added or its value replaced; names not supplied are kept; {} is a no-op. The merged result obeys the create limits (at most 64 entries, name pattern ^[A-Za-z_][A-Za-z0-9_]*$ and at most 128 characters, value at most 8,192 characters, OMNIPUS_* refused). A value equal to the read mask "••••••" is refused.
+	EnvOverrides *map[string]string `json:"env_overrides,omitempty"`
+
+	// EnvOverridesRemove Names to remove from the stored environment. A name that is not stored is reported as absent_removed, not refused. A name that is both set in env_overrides and listed here is refused 400.
+	EnvOverridesRemove *[]string `json:"env_overrides_remove,omitempty"`
+}
 
 // ExecutorDefaults Static reference data describing the CLI arguments Omnipus's external-CLI driver automatically applies when spawning a subagent_3p worker on this CLI (kind="external-cli"), as returned by GET /api/v1/agents/executor-defaults. This is READ-ONLY, computed reference information — it does not reflect any particular agent's configuration and there is nothing to write back. It exists so the Agent Profile UI can show operators the REAL, auto-applied flags (not merely HTML placeholder ghost-text) before they add their own executor.cli_args. The values are sourced directly from each driver's buildArgs() (pkg/agent/runner/driver_claude.go, driver_codex.go, driver_opencode.go) and must be kept byte-accurate to that code — this is reference documentation for a running system, not a design aspiration.
 type ExecutorDefaults struct {
@@ -15692,15 +18505,30 @@ type ExecutorSmokeTestResponse struct {
 type ExternalCliTool string
 
 // FallbackModel One entry in an agent's fallback model chain. Carries its own provider so the fallback can route through a different provider than the primary (FR-007 / Phase 1B).
-// Wire format: `{ "model": "<model-slug>", "provider": "<provider-key>" }`.
+// Wire format: `{ "model": "<model-slug>", "provider": "<provider-key>", "reasoning_effort": "<effort>" }` (reasoning_effort optional).
 // Order matters — entries are tried in the order they appear in the parent's `fallback_models` array.
-// `additionalProperties: false` — the wire type has exactly two fields; unknown keys are rejected (rendered as Zod strict mode). This prevents legacy `[string]` payloads from sneaking through and is the single source of truth for the object-form contract (Q1/Q7 reconciled — see docs/internal/specs/phase-1-chat-model-and-errors.md).
+// `additionalProperties: false` — the wire type has exactly these fields; unknown keys are rejected (rendered as Zod strict mode). This prevents legacy `[string]` payloads from sneaking through and is the single source of truth for the object-form contract (Q1/Q7 reconciled — see docs/internal/specs/phase-1-chat-model-and-errors.md).
 type FallbackModel struct {
 	// Model Model slug for this fallback. May be a bare slug ("claude-sonnet-4.6") when `provider` is set, or a "provider/model" string when the slug routes through a passthrough provider.
 	Model string `json:"model"`
 
 	// Provider Routing key (e.g. "openrouter", "anthropic", "openai"). When set, the fallback uses this provider's API credentials — independent of the agent's primary model's provider. This is the FR-007 contract: a rate-limited primary does NOT poison the fallback's provider.
 	Provider *string `json:"provider,omitempty"`
+
+	// ReasoningEffort Stored effort for this model slot (effort-levels spec FR-029): "" (Not set; on a recap slot, the Off default), "provider_default", a catalog level name, "on" or "off". Omitted keeps the stored value; null is refused.
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
+}
+
+// FallbackModelPair One fallback entry written by an agent update: a (provider, model) PAIR. Both fields are required and non-empty — a fallback is never a model alone (issue #1340, founder rule 2026-10-18). The server refuses an update whose chain carries an entry missing its provider or its model, naming the entry. Same wire shape as FallbackModel (`{ "model": "<model-slug>", "provider": "<provider-key>" }`); FallbackModel stays the read shape so a legacy unpaired entry already saved is still visible and can be corrected.
+type FallbackModelPair struct {
+	// Model Model id exactly as the provider names it (a `/` inside it is data).
+	Model string `json:"model"`
+
+	// Provider Routing key (e.g. "openrouter", "anthropic", "openai"). The fallback uses this provider's connection — independent of the primary's provider.
+	Provider string `json:"provider"`
+
+	// ReasoningEffort Stored effort for this model slot (effort-levels spec FR-029): "" (Not set; on a recap slot, the Off default), "provider_default", a catalog level name, "on" or "off". Omitted keeps the stored value; null is refused.
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 }
 
 // FileSearchHit One file-search hit (ADR-081; spec MV-14). A hit is ONE matching line — the first match position on that line is what `line` reports; two matches on one line are still one hit. A name/path match is one hit with match_kind "name" and no line.
@@ -16492,7 +19320,7 @@ type GoalTerminalHistoryVerdictPerCriterionProvenance string
 // GoalTerminalHistoryVerdictScope Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
 type GoalTerminalHistoryVerdictScope string
 
-// GoalOutcome How a goal ENDED — the single durable, structured record behind the always-visible goal outcome line in the chat thread (founder decision 2026-09-14: a goal's ending must leave a clear, lasting line in the chat, not only a pill that hides 4 seconds after turning terminal, and not only the Verbose-chat-gated `judge_verdict` card). Written EXACTLY ONCE per goal ending, by the same terminal transition that ends the goal record (`pkg/agent/goal_loop.go::clearGoalStatus` — every ending kind flows through it). An intermediate UNMET Judge round with rounds remaining is NOT an ending (the worker is steered and keeps going) and never produces one of these. Two carriers share this exact shape so they cannot silently disagree (the `JudgeVerdict` precedent): (a) the persisted transcript entry `Message.type: system`, `Message.system_subtype: goal_outcome`, `Message.goal_outcome: <this>` (cold REST load), and (b) the `GoalOutcomeFrame` WS push, emitted live at the ending AND re-emitted by `pkg/gateway/replay.go` from the persisted entry (discriminating on the stamped `system_subtype`, never on `content`). The WS copy is the hand-synced duplicate `GoalOutcomeFrameOutcome` in `contracts/asyncapi.yaml` (AsyncAPI codegen does not resolve cross-file `$ref`, and the Go package cannot hold two types named `GoalOutcome`) — any field edit here MUST be mirrored there.
+// GoalOutcome How a goal ENDED — the single durable, structured record behind the always-visible goal outcome line in the chat thread (founder decision 2026-09-14: a goal's ending must leave a clear, lasting line in the chat, not only a pill that hides 4 seconds after turning terminal, and not only the Verbose-chat-gated `judge_verdict` card). Written once per goal ending on the helper transcript and, when a parent exists, once on the parent transcript, with different message ids but the same goal id, ending, rounds and Judge reason. Written by the same terminal transition that ends the goal record (`pkg/agent/goal_loop.go::clearGoalStatus` — every ending kind flows through it). An intermediate UNMET Judge round with rounds remaining is NOT an ending (the worker is steered and keeps going) and never produces one of these. Two carriers share this exact shape so they cannot silently disagree (the `JudgeVerdict` precedent): (a) the persisted transcript entry `Message.type: system`, `Message.system_subtype: goal_outcome`, `Message.goal_outcome: <this>` (cold REST load), and (b) the `GoalOutcomeFrame` WS push, emitted live at the ending AND re-emitted by `pkg/gateway/replay.go` from the persisted entry (discriminating on the stamped `system_subtype`, never on `content`). The WS copy is the hand-synced duplicate `GoalOutcomeFrameOutcome` in `contracts/asyncapi.yaml` (AsyncAPI codegen does not resolve cross-file `$ref`, and the Go package cannot hold two types named `GoalOutcome`) — any field edit here MUST be mirrored there.
 type GoalOutcome struct {
 	// CriteriaTotal Number of criteria the deciding Judge verdict evaluated (`per_criterion` length). OPTIONAL — present only when a verdict exists. With `ending: met` every one of them was confirmed.
 	CriteriaTotal *int `json:"criteria_total,omitempty"`
@@ -16500,7 +19328,7 @@ type GoalOutcome struct {
 	// EndedAt RFC 3339 UTC timestamp of the terminal transition.
 	EndedAt time.Time `json:"ended_at"`
 
-	// Ending WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — a deliberate `/goal clear|stop|off|reset|cancel| none` (Goal.state `cleared`, terminal note "cleared by user"). `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
+	// Ending WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — an EXPLICIT user ending only: the owning session's `/goal clear` (aliases `stop|off|reset|cancel|none`) or an authorized parent's `delegate(action="clear_goal")` (Goal.state `cleared`, terminal note "cleared by user"). NEVER written for a session lifecycle transition — a Stop, timeout, plan stop, restart or failure keeps the goal record active; only natural met / round-exhaustion adjudication and these explicit clears end a goal. `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
 	Ending GoalOutcomeEnding `json:"ending"`
 
 	// GoalId The goal that ended (`Goal.goal_id`).
@@ -16519,7 +19347,7 @@ type GoalOutcome struct {
 	RoundsUsed int `json:"rounds_used"`
 }
 
-// GoalOutcomeEnding WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — a deliberate `/goal clear|stop|off|reset|cancel| none` (Goal.state `cleared`, terminal note "cleared by user"). `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
+// GoalOutcomeEnding WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — an EXPLICIT user ending only: the owning session's `/goal clear` (aliases `stop|off|reset|cancel|none`) or an authorized parent's `delegate(action="clear_goal")` (Goal.state `cleared`, terminal note "cleared by user"). NEVER written for a session lifecycle transition — a Stop, timeout, plan stop, restart or failure keeps the goal record active; only natural met / round-exhaustion adjudication and these explicit clears end a goal. `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
 type GoalOutcomeEnding string
 
 // GodModeStatus O14 god-mode runtime state, returned by GET /api/v1/gateway/god-mode. God mode is the single global "bypass-permissions" switch: when enabled, every agent's tool policy is floored at "allow" (no prompts), the kernel sandbox's filesystem confinement and network port controls are off, and outbound network access is open for the shell tool — regardless of per-agent profiles. An agent's own stricter tool policy, an operator deny command rule, and the shell's own outside-workspace write refusal are never overridden — that refusal still applies, it just never prompts. Audit logging, the prompt-injection guard, and rate limiting are never disabled. The override is non-destructive: switching god mode off restores prior behavior exactly.
@@ -16552,7 +19380,7 @@ type GodModeUpdateResponse struct {
 	RestartRequired bool `json:"restart_required"`
 }
 
-// HealthResponse Response from GET /health. HTTP 200 with status "ok" when the gateway is serving; HTTP 503 with status "degraded" and a reason when a gateway-fatal condition holds (agent loop dead, config reload failed, default agent unloadable). The audit_* and catalog objects are FIELDS, not status drivers: they describe a subsystem that is degraded while the gateway itself is still serving, so an operator can see the problem without reading logs and without the process being taken out of a load balancer. No authentication required.
+// HealthResponse Response from GET /health. HTTP 200 with status "ok" when the gateway is serving; HTTP 503 with status "degraded" and a reason when a gateway-fatal condition holds (agent loop dead, config reload failed). The audit_* and catalog objects are FIELDS, not status drivers: they describe a subsystem that is degraded while the gateway itself is still serving, so an operator can see the problem without reading logs and without the process being taken out of a load balancer. No authentication required.
 type HealthResponse struct {
 	// AuditDegraded True when the operator asked for audit logging and it is not working, or when audit writes are being dropped. Does not change the HTTP status.
 	AuditDegraded *bool `json:"audit_degraded,omitempty"`
@@ -16592,6 +19420,21 @@ type HealthResponseAuditLogger string
 
 // HealthResponseStatus "ok" when the gateway is serving; "degraded" alongside HTTP 503.
 type HealthResponseStatus string
+
+// HelperEvent An immutable helper event shown in the addressed chat independently of the model's reply. Source-event identity plus destination transcript determines the message id. Live, replay and cold load carry the same filtered payload.
+type HelperEvent struct {
+	CreatedAt       time.Time       `json:"created_at"`
+	GoalId          *string         `json:"goal_id,omitempty"`
+	HelperSessionId string          `json:"helper_session_id"`
+	HelperTitle     *string         `json:"helper_title,omitempty"`
+	Kind            HelperEventKind `json:"kind"`
+
+	// Text Sensitive-data-filtered sentence saved before live publication.
+	Text string `json:"text"`
+}
+
+// HelperEventKind defines model for HelperEvent.Kind.
+type HelperEventKind string
 
 // HostFolderEntry One directory inside a HostFolderListing, with the verdict on whether it may be mounted. The verdict travels WITH the row so the client can disable the choice at the point of selection, rather than letting the operator pick a folder and only then be told no.
 type HostFolderEntry struct {
@@ -16640,37 +19483,58 @@ type HostFolderListing struct {
 	Path string `json:"path"`
 }
 
-// IntegrationProvider A single configurable non-LLM integration provider as surfaced in Settings → Integrations (FR-12.1). Covers web-search providers (SearchProvider) and voice-input transcription providers (Transcriber). API keys are stored encrypted in credentials.json (via api_key_ref) — never returned in plaintext; configured is true when a key (or, for keyless providers like DuckDuckGo, the provider itself) is available.
+// IntegrationProvider A single configurable non-LLM integration provider as surfaced in Settings → Integrations (FR-12.1). Covers web-search providers (SearchProvider) and voice-input transcription providers (Transcriber). API keys are stored encrypted in credentials.json (via api_key_ref) — never returned in plaintext; configured is true when a key (or, for keyless providers like DuckDuckGo, the provider itself) is available. ADR-096: search rows additionally carry the provider's resolved web-search roles — default vs fallback — and its usability, and id is an enum derived from the single search-provider catalogue (FR-035). Voice rows keep today's shape: they report active only and leave the search-role fields unset.
 type IntegrationProvider struct {
-	// Active True when this provider is the one currently selected for its kind (the active search engine or the active transcriber).
+	// Active True when this provider is the one currently selected for its kind. Voice rows: unchanged — the active transcriber. Search rows: true only when this row is the web-search default (ADR-096 D13 — no longer "whoever the old priority list picked"); kept so an older client still has the field. The Default/Fallback badges are built from default_search, fallback_search and the row's own usable flag instead.
 	Active *bool `json:"active,omitempty"`
 
-	// Configured True when this provider is usable — an API key is present (or, for keyless providers such as DuckDuckGo, always true).
+	// Configured Search rows: true when this provider's credential entry resolves in the credential store (the vault test, ADR-096 D13) — and, for the keyless search row, when its prerequisite holds (duckduckgo always). It says nothing about runtime usability: a configured provider can still be switched off or fail to have its key reach search. For whether search can use the provider right now, see usable. Voice rows: true when the provider's credential resolves; audio-model when voice.model_name is set.
 	Configured bool `json:"configured"`
 
 	// DisplayName Human-readable provider name for UI presentation.
 	DisplayName string `json:"display_name"`
 
-	// Id Provider identifier (e.g. "brave", "tavily", "duckduckgo", "elevenlabs").
-	Id string `json:"id"`
+	// Fallback Search rows only; unset on voice rows. True when this provider is the resolved web-search fallback — the provider tried once when the default fails with a hop-class failure (ADR-096 D4, D17). True does not by itself mean the provider will be called: a known-but-unusable fallback (R4b) keeps the fallback role and is never called — the payload lists it under not called with its reason.
+	Fallback *bool `json:"fallback,omitempty"`
+
+	// FallbackAutomatic Search rows only; unset on voice rows. True when this row is the fallback because the stored fallback value is absent and the automatic rule (R3) resolved it to DuckDuckGo — not because the operator picked the fallback radio. Set together with fallback: true.
+	FallbackAutomatic *bool `json:"fallback_automatic,omitempty"`
+
+	// Id Provider identifier, from the single integration catalogue — not free-form. The search ids (brave, tavily, perplexity, duckduckgo, glm, baidu, exa) derive from the searchProviderCatalogue (ADR-096 FR-035); the voice ids (elevenlabs, groq, audio-model) are listed so voice rows stay valid under this shared schema.
+	Id IntegrationProviderId `json:"id"`
 
 	// Kind Whether this provider supplies web search or voice-input transcription.
 	Kind IntegrationProviderKind `json:"kind"`
 
 	// RequiresKey Whether this provider needs an API key to function.
 	RequiresKey bool `json:"requires_key"`
+
+	// SearchDepthCap Search rows only; omitted on providers without a depth setting and on voice rows. For Tavily, the effective operator-set search_depth ceiling (advanced when an existing install has no saved depth).
+	SearchDepthCap *string `json:"search_depth_cap,omitempty"`
+
+	// Usable Search rows only; unset on voice rows. The tool's usability test (ADR-096 Definitions): switched on and a required key resolves to a non-empty process value — or, for DuckDuckGo, simply switched on. False when the key name is set but the resolved key is empty ("key not reaching search"). This is the badge test; configured (the secret is in the vault) is not it.
+	Usable *bool `json:"usable,omitempty"`
 }
+
+// IntegrationProviderId Provider identifier, from the single integration catalogue — not free-form. The search ids (brave, tavily, perplexity, duckduckgo, glm, baidu, exa) derive from the searchProviderCatalogue (ADR-096 FR-035); the voice ids (elevenlabs, groq, audio-model) are listed so voice rows stay valid under this shared schema.
+type IntegrationProviderId string
 
 // IntegrationProviderKind Whether this provider supplies web search or voice-input transcription.
 type IntegrationProviderKind string
 
-// IntegrationProviderUpdateRequest Body for PUT /api/v1/integrations/providers/{id}. Configures a search or voice-input integration provider (FR-12.1). Setting an api_key stores it encrypted (AES-256-GCM) in credentials.json and writes only the credential reference to config.json. Setting active=true selects this provider as the active one for its kind. Integration edits are sensitive. In the core edition (local auth mode) the request must carry a re-auth consent token in the X-Reauth-Token header — call POST /api/v1/auth/reauth first (Spec-6 FR-12.2); in the desktop and hosted editions (platform auth mode) the SPA confirms the change with the operator before sending and the wire guard is the authenticated session (ADR-0008 ruling 6).
+// IntegrationProviderUpdateRequest Body for PUT /api/v1/integrations/providers/{id}. Configures a search or voice-input integration provider (FR-12.1). ADR-096: storing a key is separable from assigning a role — an api_key alone changes no role — and the PUT makes its writes live in the same request by triggering a config reload before it responds; the response is built from post-reload state (FR-033). Integration edits are sensitive. In the core edition (local auth mode) the request must carry a re-auth consent token in the X-Reauth-Token header — call POST /api/v1/auth/reauth first (Spec-6 FR-12.2); in the desktop and hosted editions (platform auth mode) the SPA confirms the change with the operator before sending and the wire guard is the authenticated session (ADR-0008 ruling 6).
 type IntegrationProviderUpdateRequest struct {
-	// Active When true, select this provider as the active one for its kind.
+	// Active Assign the default role. Search: make this provider the web-search default (tried first; it also switches the provider on, and never deletes another provider's key reference — ADR-096 FR-005). Voice: make this provider the active transcriber — behaviour unchanged (ADR-096 D19-neutral voice rule). An explicit false is rejected with 400: roles are moved by setting another provider active, they are not unset (ADR-096 D18 — a silently accepted no-op is how a UI comes to lie).
 	Active *bool `json:"active,omitempty"`
 
-	// ApiKey API key for the provider. Stored encrypted; omit to leave the current key unchanged. Required when first configuring a key-requiring provider.
+	// ApiKey API key for the provider. Stored encrypted; omit to leave the current key unchanged. Required when first configuring a key-requiring provider. Storing a key alone (with no role fields in the same request) changes no role (ADR-096 D18 / AC-15).
 	ApiKey *string `json:"api_key,omitempty"`
+
+	// ClearApiKey Search-only, keyed providers: true explicitly removes the catalogue-owned saved key and switches this service off without changing the default, fallback or role migration marker. Requires the same consent as saving. When true, api_key, active and fallback must all be absent, including empty or false values. Omitted or false leaves existing update semantics unchanged; an empty api_key never deletes a key. Undecided roles, a custom credential reference or a key shared with another connection return 409 without writes. Removal does not revoke the upstream key. A later-stage failure returns a non-success response describing any persisted change.
+	ClearApiKey *bool `json:"clear_api_key,omitempty"`
+
+	// Fallback Assign the fallback role. Search only; a fallback field on a voice request is rejected with 400. Search, true: make this provider the web-search fallback — the provider tried once when the default fails with a hop-class failure (ADR-096 D4, D17). Rejected with 400 when this id is also the default in the same request, or is the stored default — a provider cannot fall back to itself (ADR-096 FR-006 / R5's save rule). Search, false: set the fallback to none ("No fallback"), regardless of which provider id is addressed — an explicit none is a choice, and is never flipped when the default changes (ADR-096 D4). An explicit false on a voice request is rejected with 400 for the same reason an explicit false active is.
+	Fallback *bool `json:"fallback,omitempty"`
 
 	// Kind Whether this provider is a search engine or a voice transcriber.
 	Kind IntegrationProviderUpdateRequestKind `json:"kind"`
@@ -16679,13 +19543,25 @@ type IntegrationProviderUpdateRequest struct {
 // IntegrationProviderUpdateRequestKind Whether this provider is a search engine or a voice transcriber.
 type IntegrationProviderUpdateRequestKind string
 
-// IntegrationProvidersResponse Response from GET /api/v1/integrations/providers. Lists every configurable search and voice-input integration provider (FR-12.1), plus which provider is currently active for each kind. Defined inline so the search/voice arrays reference the shared IntegrationProvider component (a relative file $ref would inline as anonymous structs).
+// IntegrationProvidersResponse Response from GET /api/v1/integrations/providers. Lists every configurable search and voice-input integration provider (FR-12.1), plus which provider is currently active for each kind. ADR-096: search rows additionally carry the resolved web-search roles — the default, the resolved fallback, and each row's usability. Defined inline so the search/voice arrays reference the shared IntegrationProvider component (a relative file $ref would inline as anonymous structs).
 type IntegrationProvidersResponse struct {
-	// ActiveSearch id of the currently active search provider, when one is selected.
+	// ActiveSearch id of the currently active search provider, when one is selected. ADR-096: for search rows this mirrors default_search — kept so an older client still has the field.
 	ActiveSearch *string `json:"active_search,omitempty"`
 
 	// ActiveVoice id of the currently active voice transcriber, when one is configured.
 	ActiveVoice *string `json:"active_voice,omitempty"`
+
+	// DefaultSearch id of the web-search default — the provider tried first (ADR-096 D4). Absent when the roles are not yet decided (the migration has not run, e.g. it deferred on an ambiguous install).
+	DefaultSearch *string `json:"default_search,omitempty"`
+
+	// FallbackIgnoredReason Present only when the stored fallback was ignored at resolution time; value `same_as_default` when the stored fallback names the default and the R5 rule healed the file's interpretation without a write (ADR-096 D4 R5).
+	FallbackIgnoredReason *string `json:"fallback_ignored_reason,omitempty"`
+
+	// FallbackSearch id of the resolved web-search fallback, or null when there is none ("No fallback", or the stored value is absent with no automatic fallback). Absent when the roles are not yet decided.
+	FallbackSearch *string `json:"fallback_search,omitempty"`
+
+	// NativeSearchInEffect True when the active model's native search is in effect (prefer_native is set and the active provider reports native search). The search group's role settings are then not deciding who answers, and the UI must state that and name no provider as the answerer (ADR-096 D19, FR-031). WS-CX lane addition: FR-031/test 52 require this state on the payload but the spec's Contract shape section does not define it.
+	NativeSearchInEffect *bool `json:"native_search_in_effect,omitempty"`
 
 	// Search Configurable web-search providers.
 	Search []IntegrationProvider `json:"search"`
@@ -17175,6 +20051,9 @@ type LibraryContentResponse struct {
 
 // LibraryEntry One file-explorer entry inside a workspace's work tree (library-spec.md D-2: "the Library is a file explorer over workspace trees, not a blob list" — entries are workspace-relative PATHS, not UUIDs, distinct from MediaLibraryEntry which is UUID-keyed). Returned by GET /api/v1/library/{workspace_id}/entries (directory listing), and echoed back by the write/rename/upload operations that produce or mutate a single entry.
 type LibraryEntry struct {
+	// ChatCopy True when this file has an associated chat copy (the copy chats show, in the workspace media library) that deleting this entry also removes (#1449 D26, FR-086, FR-087). Absent or false means no associated chat copy: deleting the entry removes only this file.
+	ChatCopy *bool `json:"chat_copy,omitempty"`
+
 	// IsDir True when this entry is a directory.
 	IsDir bool `json:"is_dir"`
 
@@ -17186,6 +20065,9 @@ type LibraryEntry struct {
 
 	// IsTextEditable Whether the SPA should offer this entry for CodeMirror text editing (library-spec.md D-5 / section 4 scope table). Always false for directories. This is a best-effort hint from the directory listing, not a guarantee — GET .../content's is_text/too_large fields are the authoritative check at read time.
 	IsTextEditable bool `json:"is_text_editable"`
+
+	// IsView True when this entry is a saved view (#1017): a file the knowledge base's view loader accepted from `<knowledge base root>/.omnipus-vault/views/`. Set ONLY by GET .../entries called with include_views=true; there it is true on a view entry and absent on every other entry. On any other response that returns a LibraryEntry (write, rename, move, copy, upload), and on a listing made without include_views, it is absent and states nothing. `view` is present exactly when this is true.
+	IsView *bool `json:"is_view,omitempty"`
 
 	// Mime Best-effort MIME type sniffed from the file extension/content. Absent for directories and for files where sniffing was inconclusive.
 	Mime *string `json:"mime,omitempty"`
@@ -17212,9 +20094,29 @@ type LibraryEntry struct {
 	// Path Workspace-relative path from the work-tree root (workspaces/<id>/work/, the root the Library explorer shows in full — not merely the reserved work/.library/ upload directory), forward-slash separated. Never absolute and never containing a ".." segment — every Library path operation resolves inside the target workspace's work tree, with symlinks not followed out of the root (library-spec.md Constraints).
 	Path string `json:"path"`
 
+	// PreviewProfile Preview isolation profile for this file (founder Q5=A, recorded 2026-10-02, final; ADR-20261001 "Saved mail-derived HTML profile" row; mail-live-access-landing-order register row 8 — W0 is the single publisher). workspace = the ordinary isolated script-permitting workspace profile. mail_restricted = the file was written by an explicit Save from Mail: original bytes preserved, rendered with scripts OFF by default under the stricter mail-derived policy. The mail-derived marker is written only by explicit Save (never by Open), must survive move, copy, rename and restore-from-backup (provenance survival is a traced, proved implementation obligation), and a missing or corrupt expected marker fails safely rather than silently upgrading a known mail-derived file. Absent on entries that predate this field = ordinary workspace profile.
+	PreviewProfile *LibraryEntryPreviewProfile `json:"preview_profile,omitempty"`
+
+	// PreviewScriptsAllowed The per-file scripts checkbox (founder Q5=A) — true only when the user explicitly allowed scripts for THIS one file, switching only its preview to the ordinary isolated script-permitting profile. Visible, per file, never silent and never global. Meaningful only with preview_profile=mail_restricted; on ordinary workspace files the isolated profile is the default state and this field is absent.
+	PreviewScriptsAllowed *bool `json:"preview_scripts_allowed,omitempty"`
+
 	// Size File size in bytes. Always 0 for directories.
 	Size int64 `json:"size"`
+
+	// View The saved-view facts carried by a LibraryEntry that is a saved view (#1017). Present exactly when the parent entry's `is_view` is true, and only in a GET /library/{workspace_id}/entries response requested with include_views=true.
+	//
+	// A saved view is the file `<collection root>/.omnipus-vault/views/<slug>.yaml` that the collection's view loader ACCEPTED (the same load GET .../knowledge/views uses: the same parser and record schemas, reading only regular files inside the knowledge base, within the listing's size limits). Every field here is read from that loaded view, never re-derived by the client: the same no-re-derivation rule KnowledgeBaseView states.
+	//
+	// To show the view's rows, pass `collection_id` and `name` VERBATIM to GET /library/{workspace_id}/knowledge/view (its `collection_id` and `view` query parameters). The entry's own `path` is the saved view FILE; reading it returns the view's YAML definition, not its rows.
+	//
+	// Every emitted (`collection_id`, `name`) can be opened: GET .../knowledge/views?collection_id=<collection_id> lists `name`, and GET .../knowledge/view with the pair returns the view rather than `unknown_view`. That is why only a knowledge base that is itself a collection of the workspace's knowledge scope carries view entries; a knowledge base nested inside another one carries none (see the include_views parameter of GET .../entries).
+	//
+	// Grouping a nested group of optional facts behind one presence check follows the `mount` precedent (LibraryEntryMount.yaml).
+	View *LibraryEntryView `json:"view,omitempty"`
 }
+
+// LibraryEntryPreviewProfile Preview isolation profile for this file (founder Q5=A, recorded 2026-10-02, final; ADR-20261001 "Saved mail-derived HTML profile" row; mail-live-access-landing-order register row 8 — W0 is the single publisher). workspace = the ordinary isolated script-permitting workspace profile. mail_restricted = the file was written by an explicit Save from Mail: original bytes preserved, rendered with scripts OFF by default under the stricter mail-derived policy. The mail-derived marker is written only by explicit Save (never by Open), must survive move, copy, rename and restore-from-backup (provenance survival is a traced, proved implementation obligation), and a missing or corrupt expected marker fails safely rather than silently upgrading a known mail-derived file. Absent on entries that predate this field = ordinary workspace profile.
+type LibraryEntryPreviewProfile string
 
 // LibraryEntryMount Present ONLY on a LibraryEntry that is a mounted folder's own entry — a real local folder on the operator's machine made writable inside this workspace (ADR-063 D4). Absent on every ordinary file and directory, so its presence is itself the signal "this entry is not workspace storage".
 // It exists because a mount is visually indistinguishable from a folder without it, and the consequences differ sharply: a write inside a mount lands on the operator's real disk, and the destructive verb is REVOKE (which deletes nothing) rather than DELETE (which would remove their actual files). A client that cannot tell the two apart cannot label either correctly.
@@ -17227,6 +20129,32 @@ type LibraryEntryMount struct {
 
 	// Name The mount's name, which is also its single path segment inside work/. Equal to the entry's own `name`; repeated here so a client holding only this object can still identify the mount to the mount endpoints.
 	Name string `json:"name"`
+}
+
+// LibraryEntryView The saved-view facts carried by a LibraryEntry that is a saved view (#1017). Present exactly when the parent entry's `is_view` is true, and only in a GET /library/{workspace_id}/entries response requested with include_views=true.
+//
+// A saved view is the file `<collection root>/.omnipus-vault/views/<slug>.yaml` that the collection's view loader ACCEPTED (the same load GET .../knowledge/views uses: the same parser and record schemas, reading only regular files inside the knowledge base, within the listing's size limits). Every field here is read from that loaded view, never re-derived by the client: the same no-re-derivation rule KnowledgeBaseView states.
+//
+// To show the view's rows, pass `collection_id` and `name` VERBATIM to GET /library/{workspace_id}/knowledge/view (its `collection_id` and `view` query parameters). The entry's own `path` is the saved view FILE; reading it returns the view's YAML definition, not its rows.
+//
+// Every emitted (`collection_id`, `name`) can be opened: GET .../knowledge/views?collection_id=<collection_id> lists `name`, and GET .../knowledge/view with the pair returns the view rather than `unknown_view`. That is why only a knowledge base that is itself a collection of the workspace's knowledge scope carries view entries; a knowledge base nested inside another one carries none (see the include_views parameter of GET .../entries).
+//
+// Grouping a nested group of optional facts behind one presence check follows the `mount` precedent (LibraryEntryMount.yaml).
+type LibraryEntryView struct {
+	// CollectionId The opaque id of the knowledge base that owns this view — the same value KnowledgeBaseInfo.collection_id and KnowledgeCollectionViews.collection_id carry for that knowledge base. Pass it as `collection_id` to GET .../knowledge/view. Never parse a path out of it.
+	CollectionId string `json:"collection_id"`
+
+	// Kind The view kind declared in the view file (ViewDef.kind), echoed verbatim — today one of table, list, tiles, board, calendar, summary, trend or breakdown, the values ViewDef.kind allows. Absent when the file declares no kind: views imported from a `.base` file and views written before the kinds existed usually have none, and no kind is ever invented for them. A plain string rather than an enum, like KnowledgeBaseView.kind and ViewResult.kind, so a kind added to ViewDef later can never make this listing fail client-side validation; a client that does not recognise a value shows its generic view icon.
+	Kind *string `json:"kind,omitempty"`
+
+	// Label What to show a reader: the view's declared `label` when it has one, otherwise its `name` (records.SavedView.DisplayLabel, the same value KnowledgeBaseView.label carries).
+	Label string `json:"label"`
+
+	// Name The saved view's own name (records.SavedView.Name) — the server's slug and the view's only address. Pass it VERBATIM as the `view` query parameter of GET .../knowledge/view. Never reconstructed by a client, and not the same thing as the entry's `name` (which is the file name, `<slug>.yaml`).
+	Name string `json:"name"`
+
+	// Source The `.base` file this view was imported from: the view file's own `source` key (records.SavedView.DeclaredSource), echoed verbatim — a path relative to the knowledge base root, exactly as KnowledgeBaseView.source reports it. Absent for a view authored in place (knowledge_configure create_view / write_view), which belongs to the knowledge base as a whole rather than to any file. It is also what decides which folder lists the view (see the include_views parameter of GET .../entries); it does not imply the `.base` file still exists.
+	Source *string `json:"source,omitempty"`
 }
 
 // LibraryInlineDisposition Inline-preview metadata for one Library file (ADR-067 D18 / D15). Returned by GET /api/v1/library/{workspace_id}/inline-disposition?path=...
@@ -17345,47 +20273,7 @@ type LibraryTransferRequest struct {
 // LibraryUploadResponse Response from POST /api/v1/library/{workspace_id}/upload (HTTP 201). Returns the work-tree entries created by the upload — mirrors UploadFilesResponse's shape for the session-scoped uploader, but with LibraryEntry (path-keyed) items rather than UploadedFile.
 type LibraryUploadResponse struct {
 	// Entries Entries created by this upload, in the order the multipart parts were received.
-	Entries []struct {
-		// IsDir True when this entry is a directory.
-		IsDir bool `json:"is_dir"`
-
-		// IsHidden True when this entry's name begins with a dot (".") — the sole, explicit definition of "hidden" for the Library, so client and server cannot drift on it. Excluded from GET .../entries by default (see that operation's include_hidden parameter); the reserved work-tree directory where uploads land, work/.library/, is the prototypical hidden entry. Included and set true here so the SPA can still style a hidden entry distinctly when the caller explicitly asks to see it.
-		IsHidden bool `json:"is_hidden"`
-
-		// IsKnowledgeBase True when this DIRECTORY is itself a knowledge base, using the exact same marker-based detection GET /library/{workspace_id}/knowledge answers per folder (KnowledgeBaseInfo.is_knowledge_base) — computed once per directory entry during listing so the Library explorer's Vault icon is a fact the server states, not something the client infers from whichever folders it happens to have queried this session (a directory never opened yet, or a session whose cache was evicted, used to render as a plain folder even though it was a real knowledge base). Present (true or false) for a directory whenever detection could complete; absent when the entry is a file, or when detection could not complete for this one row (a listing failure on a single entry never fails the whole directory listing). Optional on the wire so SPA builds and fixtures that predate this field keep working.
-		IsKnowledgeBase *bool `json:"is_knowledge_base,omitempty"`
-
-		// IsTextEditable Whether the SPA should offer this entry for CodeMirror text editing (library-spec.md D-5 / section 4 scope table). Always false for directories. This is a best-effort hint from the directory listing, not a guarantee — GET .../content's is_text/too_large fields are the authoritative check at read time.
-		IsTextEditable bool `json:"is_text_editable"`
-
-		// Mime Best-effort MIME type sniffed from the file extension/content. Absent for directories and for files where sniffing was inconclusive.
-		Mime *string `json:"mime,omitempty"`
-
-		// ModifiedAt RFC3339 UTC last-modified timestamp of the underlying file or directory.
-		ModifiedAt time.Time `json:"modified_at"`
-
-		// Mount Present ONLY on a LibraryEntry that is a mounted folder's own entry — a real local folder on the operator's machine made writable inside this workspace (ADR-063 D4). Absent on every ordinary file and directory, so its presence is itself the signal "this entry is not workspace storage".
-		// It exists because a mount is visually indistinguishable from a folder without it, and the consequences differ sharply: a write inside a mount lands on the operator's real disk, and the destructive verb is REVOKE (which deletes nothing) rather than DELETE (which would remove their actual files). A client that cannot tell the two apart cannot label either correctly.
-		Mount *struct {
-			// Broad True when the target is one of the deliberately wide locations — the home directory, the filesystem root, or a top-level system directory. Such a mount is ALLOWED (operator decision, FR-7.4/FR-7.6) but must never be silent: the client is expected to mark it distinctly from an ordinary mount. Recomputed from the path on every read rather than stored, so it cannot go stale against the definition.
-			Broad bool `json:"broad"`
-
-			// HostPath The realpath-resolved absolute path on the operator's machine that this mount grants write access to. Shown in the UI rather than hidden behind a tooltip: it is the whole reason the entry is treated differently, and a grant the operator cannot see is a grant they cannot review.
-			HostPath string `json:"host_path"`
-
-			// Name The mount's name, which is also its single path segment inside work/. Equal to the entry's own `name`; repeated here so a client holding only this object can still identify the mount to the mount endpoints.
-			Name string `json:"name"`
-		} `json:"mount,omitempty"`
-
-		// Name Base filename or directory name (final path segment).
-		Name string `json:"name"`
-
-		// Path Workspace-relative path from the work-tree root (workspaces/<id>/work/, the root the Library explorer shows in full — not merely the reserved work/.library/ upload directory), forward-slash separated. Never absolute and never containing a ".." segment — every Library path operation resolves inside the target workspace's work tree, with symlinks not followed out of the root (library-spec.md Constraints).
-		Path string `json:"path"`
-
-		// Size File size in bytes. Always 0 for directories.
-		Size int64 `json:"size"`
-	} `json:"entries"`
+	Entries []LibraryEntry `json:"entries"`
 }
 
 // LibraryWorkspaceNode One workspace as a node in the Library's virtual root listing (GET /api/v1/library/workspaces) — the sidebar entry point (library-spec.md D-3: "two entry points, one component"). Drilling into a node scopes all subsequent Library operations to that workspace's work tree via {workspace_id}.
@@ -17421,6 +20309,984 @@ type LoginResponse struct {
 	Warning *string `json:"warning,omitempty"`
 }
 
+// MailAttachment Attachment descriptor on MailMessage (D28 — inbound messages, drafts and sent copies). The gateway never returns raw MIME names: filename is sanitized for download (no path separators, edge case 21) and the same sanitized name is what the download endpoint serves.
+type MailAttachment struct {
+	// ContentType The MIME part's declared content type, as listed. (The download endpoint serves with an extension-derived content type instead — MC-42.)
+	ContentType string `json:"content_type"`
+
+	// Filename Sanitized attachment filename — no path separators, never trusted raw from the MIME part (MC-32; the same sanitized form is served on the download's Content-Disposition per MC-42).
+	Filename string `json:"filename"`
+
+	// PartIndex Index of the MIME part within the message — the {partIndex} path parameter of the download endpoint (GET /workspaces/{id}/mail/{agentId}/folders/{folder}/messages/{ref}/attachments/{partIndex}).
+	PartIndex int `json:"part_index"`
+
+	// ReportedSizeBytes Optional, labelled server-reported transfer size for the part — present only when the server reports one. Distinct from the decoded size_bytes: metadata-only reads may carry this without having decoded the part, and a false or unknown report is caught at actual transfer time (the preview contract aborts on a mid-transfer size or decode failure — correction I-05). Never substituted for size_bytes.
+	ReportedSizeBytes *int64 `json:"reported_size_bytes,omitempty"`
+
+	// SizeBytes Decoded attachment size in bytes (ADR-20261001 "Attachment metadata (F1/F3/F7)" row; register row 8). Metadata-only list/read results establish structure, not a decoded transfer, so a labelled reported_size_bytes may carry the server-reported transfer size instead — the decoded value is never silently substituted by IMAP structure octets (potentially encoded) and never by 0 for unknown. Becomes nullable (unknown honestly) together with its consumer changes per the landing order's Wave C/D sequencing; the actual decoded transfer remains the cap authority.
+	SizeBytes int `json:"size_bytes"`
+}
+
+// MailAttachmentContentSource The server-issued content source of one metadata-only attachment preview grant (ADR-20261001 "Temporary preview mint (F1)" row, correction I-05; mail-live-access-landing-order register rows 5/8 — W0 is the single publisher). Carries authorization and reference metadata ONLY — never attachment bytes: the grant holds no payload, and every byte read is a fresh, request-scoped fetch through the preview-purpose endpoint. All URLs are server-issued, same-gateway and source-scoped — never caller-selected, never the authenticated download endpoint.
+type MailAttachmentContentSource struct {
+	// ByteUrl The dedicated preview-purpose byte endpoint for this grant (correction I-05) — token-scoped, bound server-side to the minted preview_id, the selected part_index and the grant's ownership lifecycle (view exit, expiry, revoke and panel close all kill it). Serves INLINE rendering disposition with Cache-Control: no-store, and enforces the 25 MiB actual-decoded-byte cap BEFORE any success state is committed — a size or decode failure discovered mid-transfer aborts the response with a visible typed error, so a truncated stream can never render as a completed preview. This is never the authenticated attachment-download resource.
+	ByteUrl string `json:"byte_url"`
+
+	// ExpiresInSeconds Grant lifetime in seconds from mint, mirroring the existing preview token TTL rules (the token store holds authorization/reference metadata only; expiry is the backstop when a close could not be delivered).
+	ExpiresInSeconds int `json:"expires_in_seconds"`
+
+	// IsolatedHtmlUrl The token-scoped scriptless rendering projection of the same preview reader, present only when the attachment is renderable as isolated HTML — served with the Mail isolation policy (script-src 'none', no same-origin permission), never a raw HTML object URL, srcdoc or a Library bundle token. Null for every non-HTML attachment.
+	IsolatedHtmlUrl *string `json:"isolated_html_url"`
+
+	// Token Opaque, metadata-only grant token — authorization/reference metadata for mint, revoke and byte-fetch binding. Holds no attachment bytes, no body text and no payload of any kind (the retained-payload preview grant shape is retired by the ADR's request-only body rule).
+	Token string `json:"token"`
+}
+
+// MailAttachmentInput One attachment supplied for an outbound message (D28) — on the human paths (MailSendRequest.attachments, MailDraftUpdateRequest.attachments). The agent path carries no wire schema: agent tool attachments are workspace-file references resolved server-side through pkg/tools/resolvepath.go::ResolvePath under its open-read rule (D33, security sign-off C2; no separate policy or gate — MC-35).
+type MailAttachmentInput struct {
+	// ContentType The attachment's content type as supplied by the composer.
+	ContentType string `json:"content_type"`
+
+	// DataBase64 The attachment bytes, base64-encoded. Across all attachments of one message the decoded total is capped at 25 MiB with at most 10 files (MC-32) — enforced before any SMTP connection or draft APPEND.
+	DataBase64 []byte `json:"data_base64"`
+
+	// Filename Attachment filename. Sanitized on serve and on attach (MC-32) — no path separators are ever stored or served.
+	Filename string `json:"filename"`
+}
+
+// MailAttachmentPreviewRequest Mint request for one attachment's temporary, metadata-only preview grant (ADR-20261001 "Temporary preview mint (F1)" row; w4 spec §2.3 — W0 is the single publisher). Carries no host path, arbitrary URL, destination, upload bytes or new approval: authorization binds to the current session, the exact pair/config/folder generation, the message and the selected part. Minting creates no file, retains no bytes and writes nothing to disk (F1 "No storage" row) — it is the metadata grant the temporary Library viewer consumes. Rate-limited by the existing dedicated preview-token limiter family.
+type MailAttachmentPreviewRequest struct {
+	// AgentId ID of the mailbox-owning agent.
+	AgentId string `json:"agent_id"`
+
+	// Folder Folder slug — exactly inbox, sent or drafts (MC-5).
+	Folder MailAttachmentPreviewRequestFolder `json:"folder"`
+
+	// MessageRef The gateway-issued message reference from the list/read result that named this attachment (correction I-03) — consumed unchanged, never a model-synthesized identity and never dependent on the optional Message-ID. Bound to the authorized pair, folder and configuration generation; validated on the same lease that serves the preview.
+	MessageRef string `json:"message_ref"`
+
+	// ObserverId Opaque per-panel observer ID (mail_panel_observer frame) when the mint belongs to an open Mail panel — binds the grant's ownership lifecycle to that observer so panel close revokes it. Absent for non-panel (agent-tool) mints; the grant then lives for its bounded TTL only.
+	ObserverId *string `json:"observer_id,omitempty"`
+
+	// PartIndex Stable leaf index of the attachment part (MailAttachment.part_index) — resolved against MIME including nested parts, with the Omnipus draft-body marker excluded. Only this part is ever fetched (PEEK — flags unchanged).
+	PartIndex int `json:"part_index"`
+
+	// WorkspaceId Workspace of the mailbox pair.
+	WorkspaceId string `json:"workspace_id"`
+}
+
+// MailAttachmentPreviewRequestFolder Folder slug — exactly inbox, sent or drafts (MC-5).
+type MailAttachmentPreviewRequestFolder string
+
+// MailAttachmentPreviewResponse Metadata-only response of one attachment preview mint (ADR-20261001 "Temporary preview mint (F1)" row; w3 spec §2.4 and w5 spec §8 step 6 — W0 is the single publisher). Returns authorization/reference metadata for the temporary Library viewer — kind, display subject, the attachment descriptor, the text_readable classification hint, the content source and read-only capability — and NO cached payload: every byte read is a fresh request-scoped fetch through content_source.byte_url. This response is the temporary alternative of the F1 content-source union; it is never a LibraryEntry and carries no path, filesystem identity or stored-file capability.
+type MailAttachmentPreviewResponse struct {
+	// Attachment Attachment descriptor on MailMessage (D28 — inbound messages, drafts and sent copies). The gateway never returns raw MIME names: filename is sanitized for download (no path separators, edge case 21) and the same sanitized name is what the download endpoint serves.
+	Attachment struct {
+		// ContentType The MIME part's declared content type, as listed. (The download endpoint serves with an extension-derived content type instead — MC-42.)
+		ContentType string `json:"content_type"`
+
+		// Filename Sanitized attachment filename — no path separators, never trusted raw from the MIME part (MC-32; the same sanitized form is served on the download's Content-Disposition per MC-42).
+		Filename string `json:"filename"`
+
+		// PartIndex Index of the MIME part within the message — the {partIndex} path parameter of the download endpoint (GET /workspaces/{id}/mail/{agentId}/folders/{folder}/messages/{ref}/attachments/{partIndex}).
+		PartIndex int `json:"part_index"`
+
+		// ReportedSizeBytes Optional, labelled server-reported transfer size for the part — present only when the server reports one. Distinct from the decoded size_bytes: metadata-only reads may carry this without having decoded the part, and a false or unknown report is caught at actual transfer time (the preview contract aborts on a mid-transfer size or decode failure — correction I-05). Never substituted for size_bytes.
+		ReportedSizeBytes *int64 `json:"reported_size_bytes,omitempty"`
+
+		// SizeBytes Decoded attachment size in bytes (ADR-20261001 "Attachment metadata (F1/F3/F7)" row; register row 8). Metadata-only list/read results establish structure, not a decoded transfer, so a labelled reported_size_bytes may carry the server-reported transfer size instead — the decoded value is never silently substituted by IMAP structure octets (potentially encoded) and never by 0 for unknown. Becomes nullable (unknown honestly) together with its consumer changes per the landing order's Wave C/D sequencing; the actual decoded transfer remains the cap authority.
+		SizeBytes int `json:"size_bytes"`
+	} `json:"attachment"`
+
+	// ContentSource The server-issued content source of one metadata-only attachment preview grant (ADR-20261001 "Temporary preview mint (F1)" row, correction I-05; mail-live-access-landing-order register rows 5/8 — W0 is the single publisher). Carries authorization and reference metadata ONLY — never attachment bytes: the grant holds no payload, and every byte read is a fresh, request-scoped fetch through the preview-purpose endpoint. All URLs are server-issued, same-gateway and source-scoped — never caller-selected, never the authenticated download endpoint.
+	ContentSource struct {
+		// ByteUrl The dedicated preview-purpose byte endpoint for this grant (correction I-05) — token-scoped, bound server-side to the minted preview_id, the selected part_index and the grant's ownership lifecycle (view exit, expiry, revoke and panel close all kill it). Serves INLINE rendering disposition with Cache-Control: no-store, and enforces the 25 MiB actual-decoded-byte cap BEFORE any success state is committed — a size or decode failure discovered mid-transfer aborts the response with a visible typed error, so a truncated stream can never render as a completed preview. This is never the authenticated attachment-download resource.
+		ByteUrl string `json:"byte_url"`
+
+		// ExpiresInSeconds Grant lifetime in seconds from mint, mirroring the existing preview token TTL rules (the token store holds authorization/reference metadata only; expiry is the backstop when a close could not be delivered).
+		ExpiresInSeconds int `json:"expires_in_seconds"`
+
+		// IsolatedHtmlUrl The token-scoped scriptless rendering projection of the same preview reader, present only when the attachment is renderable as isolated HTML — served with the Mail isolation policy (script-src 'none', no same-origin permission), never a raw HTML object URL, srcdoc or a Library bundle token. Null for every non-HTML attachment.
+		IsolatedHtmlUrl *string `json:"isolated_html_url"`
+
+		// Token Opaque, metadata-only grant token — authorization/reference metadata for mint, revoke and byte-fetch binding. Holds no attachment bytes, no body text and no payload of any kind (the retained-payload preview grant shape is retired by the ADR's request-only body rule).
+		Token string `json:"token"`
+	} `json:"content_source"`
+
+	// Kind Fixed discriminator of the temporary (mail attachment) alternative of the Library content-source union — the SPA branches on it without string matching on any other field.
+	Kind MailAttachmentPreviewResponseKind `json:"kind"`
+
+	// PreviewId Opaque grant identifier — the revoke and lifecycle key of this preview. Server-issued; never synthesized by the client.
+	PreviewId string `json:"preview_id"`
+
+	// ReadOnly Always true — the temporary source is read-only by construction. No stored-file action (Library edit, rename, move/copy/delete, PDF fill/sign, Library download) is available until Save to Library succeeds; capability checks prevent the calls, they do not merely hide buttons.
+	ReadOnly MailAttachmentPreviewResponseReadOnly `json:"read_only"`
+
+	// Subject Decoded subject of the message the attachment belongs to (RFC 2047 decoded) — display metadata for the exact "From mail: <subject> · Back to mail · Save to Library" context bar (correction I-06).
+	Subject string `json:"subject"`
+
+	// TextReadable Classification hint for the Library viewer's text classifier (F1 "Renderer adapters" row) — whether the attachment is expected to render as readable text. It never grants editing, and actual text/decode/size is still validated at read time, independently of this hint.
+	TextReadable bool `json:"text_readable"`
+}
+
+// MailAttachmentPreviewResponseKind Fixed discriminator of the temporary (mail attachment) alternative of the Library content-source union — the SPA branches on it without string matching on any other field.
+type MailAttachmentPreviewResponseKind string
+
+// MailAttachmentPreviewResponseReadOnly Always true — the temporary source is read-only by construction. No stored-file action (Library edit, rename, move/copy/delete, PDF fill/sign, Library download) is available until Save to Library succeeds; capability checks prevent the calls, they do not merely hide buttons.
+type MailAttachmentPreviewResponseReadOnly bool
+
+// MailAttachmentSaveRequest Request body of the save-to-library subresource for one attachment part (ADR-20261001 "Save-to-workspace request/response (F2)" row, correction M-02; w5 spec §8 — W0 is the single publisher). Source identity is in the route (pair, folder, message ref, part index); the body carries only the current view's optional observer and the save-operation token. There is no arbitrary save path, destination or overwrite switch: folder, leaf name and month hierarchy are server-selected. The human Save click (or the ask-approved agent download) is the explicit request — never a guarantee the server can write; refusals return typed errors, and a lost response resolves ONLY through the bounded same-token retry path.
+type MailAttachmentSaveRequest struct {
+	// ObserverId Opaque per-panel observer ID (mail_panel_observer frame) when the save belongs to an open Mail panel — associates the work with that observer's retention semantics. Absent for agent-tool saves. Never grants access by itself: the route's pair authorization is checked independently.
+	ObserverId *string `json:"observer_id,omitempty"`
+
+	// SaveOperationToken Client-generated opaque token for THIS save attempt (correction M-02) — echoed by the response. An explicit user retry carrying the SAME token is answered with the prior save receipt when that save already committed — exactly one file exists, no second numbered duplicate — and only a genuinely uncommitted operation performs the save. A different token is a new user request. No automatic replay ever carries a token: reconciliation is bounded to this explicit retry path, not a general exactly-once framework.
+	SaveOperationToken string `json:"save_operation_token"`
+}
+
+// MailAttachmentSaveResponse Success response of an attachment save to the Library (panel Save and the agent download share this one shape — ADR-20261001 "Save-to-workspace request/response (F2)" and F3 rows; w3 spec §2.4, w4 spec §2.3 — W0 is the single publisher). Returned only for a completed save: the file is fully written under the mail → <mailbox> → <year-month> hierarchy with a sanitized, unique, suffixed name. Refusals are typed errors with no invented path — never a saved=true with a fabricated destination. A lost response resolves through the same-token retry, which returns THIS receipt again for the already-committed save (correction M-02). This is also the "shared Save response/path fields" of the agent download_email_attachment result (F3) — one shape, no second.
+type MailAttachmentSaveResponse struct {
+	// AbsolutePath Separately resolved absolute path of the saved file — the form the agent's normal file/document tools consume. The panel never needs it; the agent result carries it (F3). Server-resolved inside the authorized work root; never client-derived.
+	AbsolutePath string `json:"absolute_path"`
+
+	// AuditStatus Truthful audit outcome of the mail.attachment_saved event (ADR F2 "Audit" row). recorded = the audit entry was written; disabled = the operator's audit setting is off; failed = the audit write failed AFTER the file landed — the save stands (saved=true with the real path), this field and warning_code carry the visible warning, and no retry is invited (a retry would duplicate the file).
+	AuditStatus MailAttachmentSaveResponseAuditStatus `json:"audit_status"`
+
+	// Entry One file-explorer entry inside a workspace's work tree (library-spec.md D-2: "the Library is a file explorer over workspace trees, not a blob list" — entries are workspace-relative PATHS, not UUIDs, distinct from MediaLibraryEntry which is UUID-keyed). Returned by GET /api/v1/library/{workspace_id}/entries (directory listing), and echoed back by the write/rename/upload operations that produce or mutate a single entry.
+	Entry struct {
+		// ChatCopy True when this file has an associated chat copy (the copy chats show, in the workspace media library) that deleting this entry also removes (#1449 D26, FR-086, FR-087). Absent or false means no associated chat copy: deleting the entry removes only this file.
+		ChatCopy *bool `json:"chat_copy,omitempty"`
+
+		// IsDir True when this entry is a directory.
+		IsDir bool `json:"is_dir"`
+
+		// IsHidden True when this entry's name begins with a dot (".") — the sole, explicit definition of "hidden" for the Library, so client and server cannot drift on it. Excluded from GET .../entries by default (see that operation's include_hidden parameter); the reserved work-tree directory where uploads land, work/.library/, is the prototypical hidden entry. Included and set true here so the SPA can still style a hidden entry distinctly when the caller explicitly asks to see it.
+		IsHidden bool `json:"is_hidden"`
+
+		// IsKnowledgeBase True when this DIRECTORY is itself a knowledge base, using the exact same marker-based detection GET /library/{workspace_id}/knowledge answers per folder (KnowledgeBaseInfo.is_knowledge_base) — computed once per directory entry during listing so the Library explorer's Vault icon is a fact the server states, not something the client infers from whichever folders it happens to have queried this session (a directory never opened yet, or a session whose cache was evicted, used to render as a plain folder even though it was a real knowledge base). Present (true or false) for a directory whenever detection could complete; absent when the entry is a file, or when detection could not complete for this one row (a listing failure on a single entry never fails the whole directory listing). Optional on the wire so SPA builds and fixtures that predate this field keep working.
+		IsKnowledgeBase *bool `json:"is_knowledge_base,omitempty"`
+
+		// IsTextEditable Whether the SPA should offer this entry for CodeMirror text editing (library-spec.md D-5 / section 4 scope table). Always false for directories. This is a best-effort hint from the directory listing, not a guarantee — GET .../content's is_text/too_large fields are the authoritative check at read time.
+		IsTextEditable bool `json:"is_text_editable"`
+
+		// IsView True when this entry is a saved view (#1017): a file the knowledge base's view loader accepted from `<knowledge base root>/.omnipus-vault/views/`. Set ONLY by GET .../entries called with include_views=true; there it is true on a view entry and absent on every other entry. On any other response that returns a LibraryEntry (write, rename, move, copy, upload), and on a listing made without include_views, it is absent and states nothing. `view` is present exactly when this is true.
+		IsView *bool `json:"is_view,omitempty"`
+
+		// Mime Best-effort MIME type sniffed from the file extension/content. Absent for directories and for files where sniffing was inconclusive.
+		Mime *string `json:"mime,omitempty"`
+
+		// ModifiedAt RFC3339 UTC last-modified timestamp of the underlying file or directory.
+		ModifiedAt time.Time `json:"modified_at"`
+
+		// Mount Present ONLY on a LibraryEntry that is a mounted folder's own entry — a real local folder on the operator's machine made writable inside this workspace (ADR-063 D4). Absent on every ordinary file and directory, so its presence is itself the signal "this entry is not workspace storage".
+		// It exists because a mount is visually indistinguishable from a folder without it, and the consequences differ sharply: a write inside a mount lands on the operator's real disk, and the destructive verb is REVOKE (which deletes nothing) rather than DELETE (which would remove their actual files). A client that cannot tell the two apart cannot label either correctly.
+		Mount *struct {
+			// Broad True when the target is one of the deliberately wide locations — the home directory, the filesystem root, or a top-level system directory. Such a mount is ALLOWED (operator decision, FR-7.4/FR-7.6) but must never be silent: the client is expected to mark it distinctly from an ordinary mount. Recomputed from the path on every read rather than stored, so it cannot go stale against the definition.
+			Broad bool `json:"broad"`
+
+			// HostPath The realpath-resolved absolute path on the operator's machine that this mount grants write access to. Shown in the UI rather than hidden behind a tooltip: it is the whole reason the entry is treated differently, and a grant the operator cannot see is a grant they cannot review.
+			HostPath string `json:"host_path"`
+
+			// Name The mount's name, which is also its single path segment inside work/. Equal to the entry's own `name`; repeated here so a client holding only this object can still identify the mount to the mount endpoints.
+			Name string `json:"name"`
+		} `json:"mount,omitempty"`
+
+		// Name Base filename or directory name (final path segment).
+		Name string `json:"name"`
+
+		// Path Workspace-relative path from the work-tree root (workspaces/<id>/work/, the root the Library explorer shows in full — not merely the reserved work/.library/ upload directory), forward-slash separated. Never absolute and never containing a ".." segment — every Library path operation resolves inside the target workspace's work tree, with symlinks not followed out of the root (library-spec.md Constraints).
+		Path string `json:"path"`
+
+		// PreviewProfile Preview isolation profile for this file (founder Q5=A, recorded 2026-10-02, final; ADR-20261001 "Saved mail-derived HTML profile" row; mail-live-access-landing-order register row 8 — W0 is the single publisher). workspace = the ordinary isolated script-permitting workspace profile. mail_restricted = the file was written by an explicit Save from Mail: original bytes preserved, rendered with scripts OFF by default under the stricter mail-derived policy. The mail-derived marker is written only by explicit Save (never by Open), must survive move, copy, rename and restore-from-backup (provenance survival is a traced, proved implementation obligation), and a missing or corrupt expected marker fails safely rather than silently upgrading a known mail-derived file. Absent on entries that predate this field = ordinary workspace profile.
+		PreviewProfile *MailAttachmentSaveResponseEntryPreviewProfile `json:"preview_profile,omitempty"`
+
+		// PreviewScriptsAllowed The per-file scripts checkbox (founder Q5=A) — true only when the user explicitly allowed scripts for THIS one file, switching only its preview to the ordinary isolated script-permitting profile. Visible, per file, never silent and never global. Meaningful only with preview_profile=mail_restricted; on ordinary workspace files the isolated profile is the default state and this field is absent.
+		PreviewScriptsAllowed *bool `json:"preview_scripts_allowed,omitempty"`
+
+		// Size File size in bytes. Always 0 for directories.
+		Size int64 `json:"size"`
+
+		// View The saved-view facts carried by a LibraryEntry that is a saved view (#1017). Present exactly when the parent entry's `is_view` is true, and only in a GET /library/{workspace_id}/entries response requested with include_views=true.
+		//
+		// A saved view is the file `<collection root>/.omnipus-vault/views/<slug>.yaml` that the collection's view loader ACCEPTED (the same load GET .../knowledge/views uses: the same parser and record schemas, reading only regular files inside the knowledge base, within the listing's size limits). Every field here is read from that loaded view, never re-derived by the client: the same no-re-derivation rule KnowledgeBaseView states.
+		//
+		// To show the view's rows, pass `collection_id` and `name` VERBATIM to GET /library/{workspace_id}/knowledge/view (its `collection_id` and `view` query parameters). The entry's own `path` is the saved view FILE; reading it returns the view's YAML definition, not its rows.
+		//
+		// Every emitted (`collection_id`, `name`) can be opened: GET .../knowledge/views?collection_id=<collection_id> lists `name`, and GET .../knowledge/view with the pair returns the view rather than `unknown_view`. That is why only a knowledge base that is itself a collection of the workspace's knowledge scope carries view entries; a knowledge base nested inside another one carries none (see the include_views parameter of GET .../entries).
+		//
+		// Grouping a nested group of optional facts behind one presence check follows the `mount` precedent (LibraryEntryMount.yaml).
+		View *LibraryEntryView `json:"view,omitempty"`
+	} `json:"entry"`
+
+	// Path Final workspace-relative path of the saved file — includes any numbered collision suffix; identical to entry.path. The actual saved name is entry.name.
+	Path string `json:"path"`
+
+	// Saved Always true on this shape — a response that did not save is a typed error, never a saved=false body. The visible "Save result unknown" state (lost response) resolves to this receipt via the same-token retry.
+	Saved MailAttachmentSaveResponseSaved `json:"saved"`
+
+	// SizeBytes Actual byte count of the committed file.
+	SizeBytes int64 `json:"size_bytes"`
+
+	// WarningCode Closed safe warning code accompanying audit_status, or null. The one Phase-1 warning: audit_write_failed — the file is saved and usable, but its audit event could not be recorded. Never carries raw error text, tokens or credentials.
+	WarningCode *MailAttachmentSaveResponseWarningCode `json:"warning_code"`
+
+	// WorkspaceId Workspace the file was saved into.
+	WorkspaceId string `json:"workspace_id"`
+}
+
+// MailAttachmentSaveResponseAuditStatus Truthful audit outcome of the mail.attachment_saved event (ADR F2 "Audit" row). recorded = the audit entry was written; disabled = the operator's audit setting is off; failed = the audit write failed AFTER the file landed — the save stands (saved=true with the real path), this field and warning_code carry the visible warning, and no retry is invited (a retry would duplicate the file).
+type MailAttachmentSaveResponseAuditStatus string
+
+// MailAttachmentSaveResponseEntryPreviewProfile Preview isolation profile for this file (founder Q5=A, recorded 2026-10-02, final; ADR-20261001 "Saved mail-derived HTML profile" row; mail-live-access-landing-order register row 8 — W0 is the single publisher). workspace = the ordinary isolated script-permitting workspace profile. mail_restricted = the file was written by an explicit Save from Mail: original bytes preserved, rendered with scripts OFF by default under the stricter mail-derived policy. The mail-derived marker is written only by explicit Save (never by Open), must survive move, copy, rename and restore-from-backup (provenance survival is a traced, proved implementation obligation), and a missing or corrupt expected marker fails safely rather than silently upgrading a known mail-derived file. Absent on entries that predate this field = ordinary workspace profile.
+type MailAttachmentSaveResponseEntryPreviewProfile string
+
+// MailAttachmentSaveResponseSaved Always true on this shape — a response that did not save is a typed error, never a saved=false body. The visible "Save result unknown" state (lost response) resolves to this receipt via the same-token retry.
+type MailAttachmentSaveResponseSaved bool
+
+// MailAttachmentSaveResponseWarningCode Closed safe warning code accompanying audit_status, or null. The one Phase-1 warning: audit_write_failed — the file is saved and usable, but its audit event could not be recorded. Never carries raw error text, tokens or credentials.
+type MailAttachmentSaveResponseWarningCode string
+
+// MailDraftSendRequest Panel send (D12, POST /workspaces/{id}/mail/{agentId}/folders/drafts/messages/{ref}/send): the panel IS the approval. Transmits exactly the request's content — never re-reads the draft as truth (round-1 MAJ-002) — APPENDs the Sent copy (D18) and \Deleted-flags the draft (FR-032). Idempotent per draft Message-ID (round-2 MAJ-009): a repeat submit after a completed send returns the recorded first outcome, never a second transmission (FR-021). keep_attachment_parts is optional here and defaults to carrying ALL of the current copy's attachments (spec §2.2; the UI lists exactly what will be carried, D28). Audit event + rate limit.
+type MailDraftSendRequest struct {
+	// Bcc The displayed/edited Bcc recipients. Absent or empty means none.
+	Bcc *[]string `json:"bcc,omitempty"`
+
+	// BodyMarkdown The displayed/edited Markdown body, rendered at send time (MC-3).
+	BodyMarkdown string `json:"body_markdown"`
+
+	// Cc The displayed/edited Cc recipients. Absent or empty means none.
+	Cc *[]string `json:"cc,omitempty"`
+
+	// KeepAttachmentParts Part indices from the current copy's MailMessage.attachments to carry onto the sent message. Each value is the attachment's own stable part_index — the same value the download endpoint's {partIndex} path parameter expects — NOT its position in the listing array. Optional — absent or empty-list semantics: absent carries ALL of the current copy's attachments (spec §2.2 default carry all); an explicit list carries exactly those parts.
+	KeepAttachmentParts *[]int `json:"keep_attachment_parts,omitempty"`
+
+	// Subject The displayed/edited subject, transmitted as-is.
+	Subject string `json:"subject"`
+
+	// To The displayed/edited To recipients, transmitted as-is (round-1 MAJ-002).
+	To []string `json:"to"`
+
+	// Uid uid of the draft as the panel viewed it — staleness precondition (round-2 MAJ-008, MC-16).
+	Uid int64 `json:"uid"`
+
+	// Uidvalidity uidvalidity of the draft as the panel viewed it — staleness precondition (round-2 MAJ-008, MC-16).
+	Uidvalidity int64 `json:"uidvalidity"`
+}
+
+// MailDraftUpdateRequest Panel edit of a draft (D12/D23, PUT /workspaces/{id}/mail/{agentId}/folders/drafts/messages/{ref}): the full displayed content plus the staleness precondition (round-2 MAJ-008). The APPEND keeps the draft's Message-ID and \Deleted-flag the old copy (FR-032). Attachment carry-over is by part reference (FR-035): keep_attachment_parts lists the part indices from the current copy's MailMessage.attachments to carry over, and attachments carries new files. Full-replace semantics: keep_attachment_parts is required — the panel lists exactly what will be carried (D28). Audit event + rate limit.
+type MailDraftUpdateRequest struct {
+	// Attachments New files added in the panel (D28).
+	Attachments *[]struct {
+		// ContentType The attachment's content type as supplied by the composer.
+		ContentType string `json:"content_type"`
+
+		// DataBase64 The attachment bytes, base64-encoded. Across all attachments of one message the decoded total is capped at 25 MiB with at most 10 files (MC-32) — enforced before any SMTP connection or draft APPEND.
+		DataBase64 []byte `json:"data_base64"`
+
+		// Filename Attachment filename. Sanitized on serve and on attach (MC-32) — no path separators are ever stored or served.
+		Filename string `json:"filename"`
+	} `json:"attachments,omitempty"`
+
+	// Bcc Bcc recipients replacing the draft's current list. Absent or empty means none.
+	Bcc *[]string `json:"bcc,omitempty"`
+
+	// BodyMarkdown New editable Markdown source (D23). For an Omnipus draft it replaces the stored text/markdown part and re-stamps X-Omnipus-Render-Hash (MC-29); for a foreign draft it replaces the derived source, with the formatting-loss statement shown in the panel (D24).
+	BodyMarkdown string `json:"body_markdown"`
+
+	// Cc Cc recipients replacing the draft's current list. Absent or empty means none.
+	Cc *[]string `json:"cc,omitempty"`
+
+	// KeepAttachmentParts Part indices from the current copy's MailMessage.attachments to carry over (FR-035, server-side carry-over by part reference). Each value is the attachment's own stable part_index — the same value the download endpoint's {partIndex} path parameter expects — NOT its position in the listing array. Required — the panel lists exactly what will be carried (D28).
+	KeepAttachmentParts []int `json:"keep_attachment_parts"`
+
+	// Subject New subject (D23).
+	Subject string `json:"subject"`
+
+	// To To recipients, replacing the draft's current list (D23 — recipients editable).
+	To []string `json:"to"`
+
+	// Uid uid of the draft as the panel viewed it — staleness precondition (round-2 MAJ-008).
+	Uid int64 `json:"uid"`
+
+	// Uidvalidity uidvalidity of the draft as the panel viewed it — staleness precondition (round-2 MAJ-008).
+	Uidvalidity int64 `json:"uidvalidity"`
+}
+
+// MailFolder One of the three mail folders (D5 — Inbox, Sent, Drafts) for one mailbox, as listed from the mail server (email-mail-view-spec D5; ADR-20261001 "Missing versus unknown folder/count" row; mail-live-access-landing-order register row 3 — W0 is the single publisher, w2's discovery is the only producer of the role fields' values). Counts and freshness are per role: mapping and count metadata are separate objects, and a confirmed-absent Sent/Drafts has total=0 with an explanation while an unknown or failed count has total=null — never an invented zero. Missing INBOX remains an account error, not an unknown folder. The role fields (availability, uidvalidity, mapping_source) and the two metadata objects are optional on the wire until the discovery producer lands — fixtures and builds predating them keep working (the is_knowledge_base precedent); producers emit them always once landed.
+type MailFolder struct {
+	// Availability [Optional on the wire until the discovery producer lands — fixtures and builds predating this field keep working, the is_knowledge_base precedent; producers emit it always once landed.] Discovery outcome for this role (correction M-01). present = a resolved mapping was validated against the server. absent = discovery completed successfully AND every candidate probe returned the server's structural not-found — confirmed absence only; the role is shown empty with the server-folder-absent explanation. unknown = unresolved: discovery commands failed or timed out, an auth/TLS/DNS/ permission error occurred, LIST-EXTENDED was unsupported with no candidate probe succeeding, or the server simply holds an untagged, locally named folder outside the candidate list — from the client's seat that is indistinguishable from absence, so the role renders unresolved with the per-mailbox name setting offered. Absence is never inferred from a finite candidate list failing (w2 spec §4.1).
+	Availability *MailFolderAvailability `json:"availability,omitempty"`
+
+	// CountMetadata Freshness metadata carried by a Mail read response (ADR-20261001 "Freshness metadata" row; mail-live-access-landing-order register row 2 — W0 is the single publisher, w2 is the only value producer, w5 attaches and advances in gateway responses). A 200 cache response is not evidence of a live success: the SPA renders "last checked / checking / refresh failed" from these fields, and drops a delayed response whose publication_revision is superseded (correction I-02). A missing last_validated_at means unknown/stale, never just fetched. A mapping, its counts and a page of headers carry SEPARATE metadata objects — a validation of one is not a validation of the others. Metadata describes successful validation, not rendering or access time; timestamps never advance on failure (ADR failure table).
+	CountMetadata *struct {
+		// LastValidatedAt RFC 3339 timestamp of the last successful server validation of this data, or null when the data has never been validated (unknown) or the source is live in this request. Null means unknown/stale — never "just fetched". Cache timestamps never advance on a failed refresh.
+		LastValidatedAt *time.Time `json:"last_validated_at"`
+
+		// NoticeCode Closed-enum safe notice when the reusable cache could not serve or could not be written, so live access was used instead (or had to be). cache_unavailable = the reusable cache is unavailable for this data (exclusion gate refused, byte/row bound exceeded, envelope unreadable) — the read itself may still have succeeded live. Null = no notice. The enum is closed; a new code is a contract change, not a free-form string.
+		NoticeCode *MailFolderCountMetadataNoticeCode `json:"notice_code"`
+
+		// PublicationRevision Opaque, monotonically advancing publication revision (correction I-02) the served data was produced under, owned by the gateway/cache service. A delayed frontend response carrying a revision older than the newest one it has applied is dropped — never rendered, never published into cache state. Null = no revision attaches to this read (e.g. data with no invalidation events yet). Never parsed by the SPA: compare for equality/recency only, treat as opaque.
+		PublicationRevision *string `json:"publication_revision"`
+
+		// RefreshNeeded True when one eligible live refresh for this data is still owed under the event-driven refresh rules (panel open, folder switch, own successful action, manual Refresh — ADR P1.1). Never true because of a timer; no repeating refresh timer exists (founder decision).
+		RefreshNeeded bool `json:"refresh_needed"`
+
+		// Source Where the served data came from. live = validated against the mail server in this read; memory = the bounded in-memory working cache; encrypted_disk = the encrypted on-disk snapshot (Phase 1: the folder mapping only — headers never emit encrypted_disk in Phase 1, they are memory-only; w2 §4.1); none = no reusable source served this data (absent/unknown data, or a live read that could not be validated).
+		Source MailFolderCountMetadataSource `json:"source"`
+
+		// Stale True when the served data is older than its freshness threshold (5 minutes for counts and headers, 24 hours for the saved folder mapping — ADR P1.1/P2.2) at the time of this response. Stale rows stay visible and labelled; they are never silently replaced by a skeleton or presented as live.
+		Stale bool `json:"stale"`
+	} `json:"count_metadata,omitempty"`
+
+	// DisplayName The mail server's real folder name for this slug (the per-mailbox sent_folder_name / drafts_folder_name override applies, else the auto-resolved standard name).
+	DisplayName string `json:"display_name"`
+
+	// MappingMetadata Freshness metadata carried by a Mail read response (ADR-20261001 "Freshness metadata" row; mail-live-access-landing-order register row 2 — W0 is the single publisher, w2 is the only value producer, w5 attaches and advances in gateway responses). A 200 cache response is not evidence of a live success: the SPA renders "last checked / checking / refresh failed" from these fields, and drops a delayed response whose publication_revision is superseded (correction I-02). A missing last_validated_at means unknown/stale, never just fetched. A mapping, its counts and a page of headers carry SEPARATE metadata objects — a validation of one is not a validation of the others. Metadata describes successful validation, not rendering or access time; timestamps never advance on failure (ADR failure table).
+	MappingMetadata *struct {
+		// LastValidatedAt RFC 3339 timestamp of the last successful server validation of this data, or null when the data has never been validated (unknown) or the source is live in this request. Null means unknown/stale — never "just fetched". Cache timestamps never advance on a failed refresh.
+		LastValidatedAt *time.Time `json:"last_validated_at"`
+
+		// NoticeCode Closed-enum safe notice when the reusable cache could not serve or could not be written, so live access was used instead (or had to be). cache_unavailable = the reusable cache is unavailable for this data (exclusion gate refused, byte/row bound exceeded, envelope unreadable) — the read itself may still have succeeded live. Null = no notice. The enum is closed; a new code is a contract change, not a free-form string.
+		NoticeCode *MailFolderMappingMetadataNoticeCode `json:"notice_code"`
+
+		// PublicationRevision Opaque, monotonically advancing publication revision (correction I-02) the served data was produced under, owned by the gateway/cache service. A delayed frontend response carrying a revision older than the newest one it has applied is dropped — never rendered, never published into cache state. Null = no revision attaches to this read (e.g. data with no invalidation events yet). Never parsed by the SPA: compare for equality/recency only, treat as opaque.
+		PublicationRevision *string `json:"publication_revision"`
+
+		// RefreshNeeded True when one eligible live refresh for this data is still owed under the event-driven refresh rules (panel open, folder switch, own successful action, manual Refresh — ADR P1.1). Never true because of a timer; no repeating refresh timer exists (founder decision).
+		RefreshNeeded bool `json:"refresh_needed"`
+
+		// Source Where the served data came from. live = validated against the mail server in this read; memory = the bounded in-memory working cache; encrypted_disk = the encrypted on-disk snapshot (Phase 1: the folder mapping only — headers never emit encrypted_disk in Phase 1, they are memory-only; w2 §4.1); none = no reusable source served this data (absent/unknown data, or a live read that could not be validated).
+		Source MailFolderMappingMetadataSource `json:"source"`
+
+		// Stale True when the served data is older than its freshness threshold (5 minutes for counts and headers, 24 hours for the saved folder mapping — ADR P1.1/P2.2) at the time of this response. Stale rows stay visible and labelled; they are never silently replaced by a skeleton or presented as live.
+		Stale bool `json:"stale"`
+	} `json:"mapping_metadata,omitempty"`
+
+	// MappingSource How this role's folder name was resolved (register row 3 settles the five values; the ADR's four-value proposal is superseded). override = the operator's explicit per-mailbox Sent/Drafts name setting wins. special_use = the server advertised the role (LIST-EXTENDED SPECIAL-USE). fallback = a common-name candidate probe succeeded without special-use support. saved = a still-valid previously saved mapping was reused. none = no recognized role and no successful candidate probe (availability=unknown), or the role is confirmed absent.
+	MappingSource *MailFolderMappingSource `json:"mapping_source,omitempty"`
+
+	// Slug The folder slug. Exactly these three values exist (D5, MC-5); any other value is rejected with HTTP 400 on the paths that take a folder parameter.
+	Slug MailFolderSlug `json:"slug"`
+
+	// Total Live message count of the folder. A confirmed-absent optional role reports 0 with its explanation (correction M-01; w2 spec §4.1). Deferred nullability (register row 3; acceptance recorded in mail-live-access-landing-order §8, 2026-10-02): this schema cannot yet express an unknown or failed count — total is required and non-nullable here — and the W0 amendment that makes it nullable executes atomically with the Wave C/D consumer PRs. From that amendment on, the value may be absent on responses until the w2 discovery producer supplies it; a consumer must treat an absent total as unknown and never as 0 or false — a fabricated 0 never masquerades as "checked, empty".
+	Total int `json:"total"`
+
+	// Uidvalidity IMAP UIDVALIDITY of the resolved folder — the epoch its UIDs (and any paging cursors) are valid in. Null before validation or when the role's mapping is unknown: unknown is represented as null, never a fabricated version (ADR P1.3 "UIDVALIDITY changes" row). A changed uidvalidity discards affected header entries and cursors before new rows are published.
+	Uidvalidity *int64 `json:"uidvalidity,omitempty"`
+
+	// UnreadCount Live IMAP UNSEEN count. Present for the Inbox only; null for Sent and Drafts (round-1 MIN-005). The watcher's per-mailbox unseen_total is the only other unread surface — the list endpoint never filters by it (round-2 OBS-001 dropped the unseen_only query parameter).
+	UnreadCount *int `json:"unread_count"`
+}
+
+// MailFolderAvailability [Optional on the wire until the discovery producer lands — fixtures and builds predating this field keep working, the is_knowledge_base precedent; producers emit it always once landed.] Discovery outcome for this role (correction M-01). present = a resolved mapping was validated against the server. absent = discovery completed successfully AND every candidate probe returned the server's structural not-found — confirmed absence only; the role is shown empty with the server-folder-absent explanation. unknown = unresolved: discovery commands failed or timed out, an auth/TLS/DNS/ permission error occurred, LIST-EXTENDED was unsupported with no candidate probe succeeding, or the server simply holds an untagged, locally named folder outside the candidate list — from the client's seat that is indistinguishable from absence, so the role renders unresolved with the per-mailbox name setting offered. Absence is never inferred from a finite candidate list failing (w2 spec §4.1).
+type MailFolderAvailability string
+
+// MailFolderCountMetadataNoticeCode Closed-enum safe notice when the reusable cache could not serve or could not be written, so live access was used instead (or had to be). cache_unavailable = the reusable cache is unavailable for this data (exclusion gate refused, byte/row bound exceeded, envelope unreadable) — the read itself may still have succeeded live. Null = no notice. The enum is closed; a new code is a contract change, not a free-form string.
+type MailFolderCountMetadataNoticeCode string
+
+// MailFolderCountMetadataSource Where the served data came from. live = validated against the mail server in this read; memory = the bounded in-memory working cache; encrypted_disk = the encrypted on-disk snapshot (Phase 1: the folder mapping only — headers never emit encrypted_disk in Phase 1, they are memory-only; w2 §4.1); none = no reusable source served this data (absent/unknown data, or a live read that could not be validated).
+type MailFolderCountMetadataSource string
+
+// MailFolderMappingMetadataNoticeCode Closed-enum safe notice when the reusable cache could not serve or could not be written, so live access was used instead (or had to be). cache_unavailable = the reusable cache is unavailable for this data (exclusion gate refused, byte/row bound exceeded, envelope unreadable) — the read itself may still have succeeded live. Null = no notice. The enum is closed; a new code is a contract change, not a free-form string.
+type MailFolderMappingMetadataNoticeCode string
+
+// MailFolderMappingMetadataSource Where the served data came from. live = validated against the mail server in this read; memory = the bounded in-memory working cache; encrypted_disk = the encrypted on-disk snapshot (Phase 1: the folder mapping only — headers never emit encrypted_disk in Phase 1, they are memory-only; w2 §4.1); none = no reusable source served this data (absent/unknown data, or a live read that could not be validated).
+type MailFolderMappingMetadataSource string
+
+// MailFolderMappingSource How this role's folder name was resolved (register row 3 settles the five values; the ADR's four-value proposal is superseded). override = the operator's explicit per-mailbox Sent/Drafts name setting wins. special_use = the server advertised the role (LIST-EXTENDED SPECIAL-USE). fallback = a common-name candidate probe succeeded without special-use support. saved = a still-valid previously saved mapping was reused. none = no recognized role and no successful candidate probe (availability=unknown), or the role is confirmed absent.
+type MailFolderMappingSource string
+
+// MailFolderSlug The folder slug. Exactly these three values exist (D5, MC-5); any other value is rejected with HTTP 400 on the paths that take a folder parameter.
+type MailFolderSlug string
+
+// MailFolderList The three mail folders (D5) of one mailbox with counts and freshness — the response of GET /workspaces/{id}/mail/{agentId}/folders (mail-live-access-landing-order register rows 2/3; ADR-20261001 "Freshness metadata" row). The list-level metadata describes THIS read; each folder carries its own mapping and count metadata, because a mapping validation and a count fetch are separate successes with separate timestamps.
+type MailFolderList struct {
+	// Folders Exactly the three D5 folders (Inbox, Sent, Drafts).
+	Folders []struct {
+		// Availability [Optional on the wire until the discovery producer lands — fixtures and builds predating this field keep working, the is_knowledge_base precedent; producers emit it always once landed.] Discovery outcome for this role (correction M-01). present = a resolved mapping was validated against the server. absent = discovery completed successfully AND every candidate probe returned the server's structural not-found — confirmed absence only; the role is shown empty with the server-folder-absent explanation. unknown = unresolved: discovery commands failed or timed out, an auth/TLS/DNS/ permission error occurred, LIST-EXTENDED was unsupported with no candidate probe succeeding, or the server simply holds an untagged, locally named folder outside the candidate list — from the client's seat that is indistinguishable from absence, so the role renders unresolved with the per-mailbox name setting offered. Absence is never inferred from a finite candidate list failing (w2 spec §4.1).
+		Availability *MailFolderListFoldersAvailability `json:"availability,omitempty"`
+
+		// CountMetadata Freshness metadata carried by a Mail read response (ADR-20261001 "Freshness metadata" row; mail-live-access-landing-order register row 2 — W0 is the single publisher, w2 is the only value producer, w5 attaches and advances in gateway responses). A 200 cache response is not evidence of a live success: the SPA renders "last checked / checking / refresh failed" from these fields, and drops a delayed response whose publication_revision is superseded (correction I-02). A missing last_validated_at means unknown/stale, never just fetched. A mapping, its counts and a page of headers carry SEPARATE metadata objects — a validation of one is not a validation of the others. Metadata describes successful validation, not rendering or access time; timestamps never advance on failure (ADR failure table).
+		CountMetadata *struct {
+			// LastValidatedAt RFC 3339 timestamp of the last successful server validation of this data, or null when the data has never been validated (unknown) or the source is live in this request. Null means unknown/stale — never "just fetched". Cache timestamps never advance on a failed refresh.
+			LastValidatedAt *time.Time `json:"last_validated_at"`
+
+			// NoticeCode Closed-enum safe notice when the reusable cache could not serve or could not be written, so live access was used instead (or had to be). cache_unavailable = the reusable cache is unavailable for this data (exclusion gate refused, byte/row bound exceeded, envelope unreadable) — the read itself may still have succeeded live. Null = no notice. The enum is closed; a new code is a contract change, not a free-form string.
+			NoticeCode *MailFolderListFoldersCountMetadataNoticeCode `json:"notice_code"`
+
+			// PublicationRevision Opaque, monotonically advancing publication revision (correction I-02) the served data was produced under, owned by the gateway/cache service. A delayed frontend response carrying a revision older than the newest one it has applied is dropped — never rendered, never published into cache state. Null = no revision attaches to this read (e.g. data with no invalidation events yet). Never parsed by the SPA: compare for equality/recency only, treat as opaque.
+			PublicationRevision *string `json:"publication_revision"`
+
+			// RefreshNeeded True when one eligible live refresh for this data is still owed under the event-driven refresh rules (panel open, folder switch, own successful action, manual Refresh — ADR P1.1). Never true because of a timer; no repeating refresh timer exists (founder decision).
+			RefreshNeeded bool `json:"refresh_needed"`
+
+			// Source Where the served data came from. live = validated against the mail server in this read; memory = the bounded in-memory working cache; encrypted_disk = the encrypted on-disk snapshot (Phase 1: the folder mapping only — headers never emit encrypted_disk in Phase 1, they are memory-only; w2 §4.1); none = no reusable source served this data (absent/unknown data, or a live read that could not be validated).
+			Source MailFolderListFoldersCountMetadataSource `json:"source"`
+
+			// Stale True when the served data is older than its freshness threshold (5 minutes for counts and headers, 24 hours for the saved folder mapping — ADR P1.1/P2.2) at the time of this response. Stale rows stay visible and labelled; they are never silently replaced by a skeleton or presented as live.
+			Stale bool `json:"stale"`
+		} `json:"count_metadata,omitempty"`
+
+		// DisplayName The mail server's real folder name for this slug (the per-mailbox sent_folder_name / drafts_folder_name override applies, else the auto-resolved standard name).
+		DisplayName string `json:"display_name"`
+
+		// MappingMetadata Freshness metadata carried by a Mail read response (ADR-20261001 "Freshness metadata" row; mail-live-access-landing-order register row 2 — W0 is the single publisher, w2 is the only value producer, w5 attaches and advances in gateway responses). A 200 cache response is not evidence of a live success: the SPA renders "last checked / checking / refresh failed" from these fields, and drops a delayed response whose publication_revision is superseded (correction I-02). A missing last_validated_at means unknown/stale, never just fetched. A mapping, its counts and a page of headers carry SEPARATE metadata objects — a validation of one is not a validation of the others. Metadata describes successful validation, not rendering or access time; timestamps never advance on failure (ADR failure table).
+		MappingMetadata *struct {
+			// LastValidatedAt RFC 3339 timestamp of the last successful server validation of this data, or null when the data has never been validated (unknown) or the source is live in this request. Null means unknown/stale — never "just fetched". Cache timestamps never advance on a failed refresh.
+			LastValidatedAt *time.Time `json:"last_validated_at"`
+
+			// NoticeCode Closed-enum safe notice when the reusable cache could not serve or could not be written, so live access was used instead (or had to be). cache_unavailable = the reusable cache is unavailable for this data (exclusion gate refused, byte/row bound exceeded, envelope unreadable) — the read itself may still have succeeded live. Null = no notice. The enum is closed; a new code is a contract change, not a free-form string.
+			NoticeCode *MailFolderListFoldersMappingMetadataNoticeCode `json:"notice_code"`
+
+			// PublicationRevision Opaque, monotonically advancing publication revision (correction I-02) the served data was produced under, owned by the gateway/cache service. A delayed frontend response carrying a revision older than the newest one it has applied is dropped — never rendered, never published into cache state. Null = no revision attaches to this read (e.g. data with no invalidation events yet). Never parsed by the SPA: compare for equality/recency only, treat as opaque.
+			PublicationRevision *string `json:"publication_revision"`
+
+			// RefreshNeeded True when one eligible live refresh for this data is still owed under the event-driven refresh rules (panel open, folder switch, own successful action, manual Refresh — ADR P1.1). Never true because of a timer; no repeating refresh timer exists (founder decision).
+			RefreshNeeded bool `json:"refresh_needed"`
+
+			// Source Where the served data came from. live = validated against the mail server in this read; memory = the bounded in-memory working cache; encrypted_disk = the encrypted on-disk snapshot (Phase 1: the folder mapping only — headers never emit encrypted_disk in Phase 1, they are memory-only; w2 §4.1); none = no reusable source served this data (absent/unknown data, or a live read that could not be validated).
+			Source MailFolderListFoldersMappingMetadataSource `json:"source"`
+
+			// Stale True when the served data is older than its freshness threshold (5 minutes for counts and headers, 24 hours for the saved folder mapping — ADR P1.1/P2.2) at the time of this response. Stale rows stay visible and labelled; they are never silently replaced by a skeleton or presented as live.
+			Stale bool `json:"stale"`
+		} `json:"mapping_metadata,omitempty"`
+
+		// MappingSource How this role's folder name was resolved (register row 3 settles the five values; the ADR's four-value proposal is superseded). override = the operator's explicit per-mailbox Sent/Drafts name setting wins. special_use = the server advertised the role (LIST-EXTENDED SPECIAL-USE). fallback = a common-name candidate probe succeeded without special-use support. saved = a still-valid previously saved mapping was reused. none = no recognized role and no successful candidate probe (availability=unknown), or the role is confirmed absent.
+		MappingSource *MailFolderListFoldersMappingSource `json:"mapping_source,omitempty"`
+
+		// Slug The folder slug. Exactly these three values exist (D5, MC-5); any other value is rejected with HTTP 400 on the paths that take a folder parameter.
+		Slug MailFolderListFoldersSlug `json:"slug"`
+
+		// Total Live message count of the folder. A confirmed-absent optional role reports 0 with its explanation (correction M-01; w2 spec §4.1). Deferred nullability (register row 3; acceptance recorded in mail-live-access-landing-order §8, 2026-10-02): this schema cannot yet express an unknown or failed count — total is required and non-nullable here — and the W0 amendment that makes it nullable executes atomically with the Wave C/D consumer PRs. From that amendment on, the value may be absent on responses until the w2 discovery producer supplies it; a consumer must treat an absent total as unknown and never as 0 or false — a fabricated 0 never masquerades as "checked, empty".
+		Total int `json:"total"`
+
+		// Uidvalidity IMAP UIDVALIDITY of the resolved folder — the epoch its UIDs (and any paging cursors) are valid in. Null before validation or when the role's mapping is unknown: unknown is represented as null, never a fabricated version (ADR P1.3 "UIDVALIDITY changes" row). A changed uidvalidity discards affected header entries and cursors before new rows are published.
+		Uidvalidity *int64 `json:"uidvalidity,omitempty"`
+
+		// UnreadCount Live IMAP UNSEEN count. Present for the Inbox only; null for Sent and Drafts (round-1 MIN-005). The watcher's per-mailbox unseen_total is the only other unread surface — the list endpoint never filters by it (round-2 OBS-001 dropped the unseen_only query parameter).
+		UnreadCount *int `json:"unread_count"`
+	} `json:"folders"`
+
+	// Metadata Freshness metadata carried by a Mail read response (ADR-20261001 "Freshness metadata" row; mail-live-access-landing-order register row 2 — W0 is the single publisher, w2 is the only value producer, w5 attaches and advances in gateway responses). A 200 cache response is not evidence of a live success: the SPA renders "last checked / checking / refresh failed" from these fields, and drops a delayed response whose publication_revision is superseded (correction I-02). A missing last_validated_at means unknown/stale, never just fetched. A mapping, its counts and a page of headers carry SEPARATE metadata objects — a validation of one is not a validation of the others. Metadata describes successful validation, not rendering or access time; timestamps never advance on failure (ADR failure table).
+	Metadata *struct {
+		// LastValidatedAt RFC 3339 timestamp of the last successful server validation of this data, or null when the data has never been validated (unknown) or the source is live in this request. Null means unknown/stale — never "just fetched". Cache timestamps never advance on a failed refresh.
+		LastValidatedAt *time.Time `json:"last_validated_at"`
+
+		// NoticeCode Closed-enum safe notice when the reusable cache could not serve or could not be written, so live access was used instead (or had to be). cache_unavailable = the reusable cache is unavailable for this data (exclusion gate refused, byte/row bound exceeded, envelope unreadable) — the read itself may still have succeeded live. Null = no notice. The enum is closed; a new code is a contract change, not a free-form string.
+		NoticeCode *MailFolderListMetadataNoticeCode `json:"notice_code"`
+
+		// PublicationRevision Opaque, monotonically advancing publication revision (correction I-02) the served data was produced under, owned by the gateway/cache service. A delayed frontend response carrying a revision older than the newest one it has applied is dropped — never rendered, never published into cache state. Null = no revision attaches to this read (e.g. data with no invalidation events yet). Never parsed by the SPA: compare for equality/recency only, treat as opaque.
+		PublicationRevision *string `json:"publication_revision"`
+
+		// RefreshNeeded True when one eligible live refresh for this data is still owed under the event-driven refresh rules (panel open, folder switch, own successful action, manual Refresh — ADR P1.1). Never true because of a timer; no repeating refresh timer exists (founder decision).
+		RefreshNeeded bool `json:"refresh_needed"`
+
+		// Source Where the served data came from. live = validated against the mail server in this read; memory = the bounded in-memory working cache; encrypted_disk = the encrypted on-disk snapshot (Phase 1: the folder mapping only — headers never emit encrypted_disk in Phase 1, they are memory-only; w2 §4.1); none = no reusable source served this data (absent/unknown data, or a live read that could not be validated).
+		Source MailFolderListMetadataSource `json:"source"`
+
+		// Stale True when the served data is older than its freshness threshold (5 minutes for counts and headers, 24 hours for the saved folder mapping — ADR P1.1/P2.2) at the time of this response. Stale rows stay visible and labelled; they are never silently replaced by a skeleton or presented as live.
+		Stale bool `json:"stale"`
+	} `json:"metadata,omitempty"`
+}
+
+// MailFolderListFoldersAvailability [Optional on the wire until the discovery producer lands — fixtures and builds predating this field keep working, the is_knowledge_base precedent; producers emit it always once landed.] Discovery outcome for this role (correction M-01). present = a resolved mapping was validated against the server. absent = discovery completed successfully AND every candidate probe returned the server's structural not-found — confirmed absence only; the role is shown empty with the server-folder-absent explanation. unknown = unresolved: discovery commands failed or timed out, an auth/TLS/DNS/ permission error occurred, LIST-EXTENDED was unsupported with no candidate probe succeeding, or the server simply holds an untagged, locally named folder outside the candidate list — from the client's seat that is indistinguishable from absence, so the role renders unresolved with the per-mailbox name setting offered. Absence is never inferred from a finite candidate list failing (w2 spec §4.1).
+type MailFolderListFoldersAvailability string
+
+// MailFolderListFoldersCountMetadataNoticeCode Closed-enum safe notice when the reusable cache could not serve or could not be written, so live access was used instead (or had to be). cache_unavailable = the reusable cache is unavailable for this data (exclusion gate refused, byte/row bound exceeded, envelope unreadable) — the read itself may still have succeeded live. Null = no notice. The enum is closed; a new code is a contract change, not a free-form string.
+type MailFolderListFoldersCountMetadataNoticeCode string
+
+// MailFolderListFoldersCountMetadataSource Where the served data came from. live = validated against the mail server in this read; memory = the bounded in-memory working cache; encrypted_disk = the encrypted on-disk snapshot (Phase 1: the folder mapping only — headers never emit encrypted_disk in Phase 1, they are memory-only; w2 §4.1); none = no reusable source served this data (absent/unknown data, or a live read that could not be validated).
+type MailFolderListFoldersCountMetadataSource string
+
+// MailFolderListFoldersMappingMetadataNoticeCode Closed-enum safe notice when the reusable cache could not serve or could not be written, so live access was used instead (or had to be). cache_unavailable = the reusable cache is unavailable for this data (exclusion gate refused, byte/row bound exceeded, envelope unreadable) — the read itself may still have succeeded live. Null = no notice. The enum is closed; a new code is a contract change, not a free-form string.
+type MailFolderListFoldersMappingMetadataNoticeCode string
+
+// MailFolderListFoldersMappingMetadataSource Where the served data came from. live = validated against the mail server in this read; memory = the bounded in-memory working cache; encrypted_disk = the encrypted on-disk snapshot (Phase 1: the folder mapping only — headers never emit encrypted_disk in Phase 1, they are memory-only; w2 §4.1); none = no reusable source served this data (absent/unknown data, or a live read that could not be validated).
+type MailFolderListFoldersMappingMetadataSource string
+
+// MailFolderListFoldersMappingSource How this role's folder name was resolved (register row 3 settles the five values; the ADR's four-value proposal is superseded). override = the operator's explicit per-mailbox Sent/Drafts name setting wins. special_use = the server advertised the role (LIST-EXTENDED SPECIAL-USE). fallback = a common-name candidate probe succeeded without special-use support. saved = a still-valid previously saved mapping was reused. none = no recognized role and no successful candidate probe (availability=unknown), or the role is confirmed absent.
+type MailFolderListFoldersMappingSource string
+
+// MailFolderListFoldersSlug The folder slug. Exactly these three values exist (D5, MC-5); any other value is rejected with HTTP 400 on the paths that take a folder parameter.
+type MailFolderListFoldersSlug string
+
+// MailFolderListMetadataNoticeCode Closed-enum safe notice when the reusable cache could not serve or could not be written, so live access was used instead (or had to be). cache_unavailable = the reusable cache is unavailable for this data (exclusion gate refused, byte/row bound exceeded, envelope unreadable) — the read itself may still have succeeded live. Null = no notice. The enum is closed; a new code is a contract change, not a free-form string.
+type MailFolderListMetadataNoticeCode string
+
+// MailFolderListMetadataSource Where the served data came from. live = validated against the mail server in this read; memory = the bounded in-memory working cache; encrypted_disk = the encrypted on-disk snapshot (Phase 1: the folder mapping only — headers never emit encrypted_disk in Phase 1, they are memory-only; w2 §4.1); none = no reusable source served this data (absent/unknown data, or a live read that could not be validated).
+type MailFolderListMetadataSource string
+
+// MailHtmlPreviewTokenRequest Request to mint a short-lived token for one message's HTML body (D13/D17, POST /mail/html-preview-token — session-authenticated, stays in the API namespace, security sign-off C1). This mint is the ONE live-IMAP fetch of the preview flow: the message is fetched once, sanitized, and its body plus inline cid: parts and the load_remote remote-image URL list are held in the in-memory token store for the TTL — the /mail-preview/ serve routes (§2.3a) never dial IMAP. load_remote defaults to false (D17 — remote images blocked by default; "Load images" re-mints with true). Rate-limited by a dedicated per-IP limiter (MC-44).
+type MailHtmlPreviewTokenRequest struct {
+	// AgentId ID of the mailbox-owning agent.
+	AgentId string `json:"agent_id"`
+
+	// Folder Folder slug — exactly inbox, sent or drafts (MC-5).
+	Folder MailHtmlPreviewTokenRequestFolder `json:"folder"`
+
+	// LoadRemote Whether the preview may load remote images through the gateway's bounded proxy (D17). Default false — blocked by default; the "Load images" action re-mints with true.
+	LoadRemote *bool `json:"load_remote,omitempty"`
+
+	// MessageRef Folder-scoped message reference: `uid:<uidvalidity>:<uid>` or `mid:<Message-ID>` — the same ref grammar as the read endpoint (§2.3).
+	MessageRef string `json:"message_ref"`
+
+	// WorkspaceId Workspace of the mailbox pair.
+	WorkspaceId string `json:"workspace_id"`
+}
+
+// MailHtmlPreviewTokenRequestFolder Folder slug — exactly inbox, sent or drafts (MC-5).
+type MailHtmlPreviewTokenRequestFolder string
+
+// MailHtmlPreviewTokenResponse Minted preview token for one message's HTML body (D13/D17). Mirrors the Library token hygiene (MC-43): 256-bit crypto/rand token, fail-closed on entropy failure, named TTL, per-session live-token cap that refuses never evicts, indistinguishable 404s on the serve routes, logout revocation, bound to (pair, folder, ref, load_remote). The SPA constructs the /mail-preview/html/{token} and /mail-preview/part/{token}/{index} URLs from the token; expiry comes from expires_in_seconds.
+type MailHtmlPreviewTokenResponse struct {
+	// ExpiresInSeconds Seconds from the moment this response was produced until the token stops working (Library precedent: 900 for the 15-minute PreviewTokenTTL).
+	ExpiresInSeconds int `json:"expires_in_seconds"`
+
+	// Token The credential: 32 bytes from a cryptographic random source, encoded base64url without padding — 43 characters (Library token hygiene, MC-43). This string is the entire security of the unauthenticated /mail-preview/ serve routes, so it MUST NOT be logged, put in an audit record, or sent in a Referer header (Referrer-Policy: no-referrer on the served responses).
+	Token string `json:"token"`
+}
+
+// MailMessage Full message for the Mail panel read path (GET /workspaces/{id}/mail/{agentId}/folders/{folder}/messages/{ref}) and the response of a panel draft edit (PUT .../folders/drafts/messages/{ref}). Carries every MailMessageSummary field plus the read-path extras. Fetching never writes flags (BODY.PEEK — round-2 MAJ-003); the only \Seen writers are the panel's seen endpoint and agent read_message (D38). bcc is returned only on the owner's own copies (drafts and Sent) and is null otherwise (§2.3 note). No message body text is persisted anywhere by Omnipus (D6) — this object is assembled live from the mail server.
+type MailMessage struct {
+	// Attachments Attachment descriptors (D28) — sanitized names, part indices.
+	Attachments []struct {
+		// ContentType The MIME part's declared content type, as listed. (The download endpoint serves with an extension-derived content type instead — MC-42.)
+		ContentType string `json:"content_type"`
+
+		// Filename Sanitized attachment filename — no path separators, never trusted raw from the MIME part (MC-32; the same sanitized form is served on the download's Content-Disposition per MC-42).
+		Filename string `json:"filename"`
+
+		// PartIndex Index of the MIME part within the message — the {partIndex} path parameter of the download endpoint (GET /workspaces/{id}/mail/{agentId}/folders/{folder}/messages/{ref}/attachments/{partIndex}).
+		PartIndex int `json:"part_index"`
+
+		// ReportedSizeBytes Optional, labelled server-reported transfer size for the part — present only when the server reports one. Distinct from the decoded size_bytes: metadata-only reads may carry this without having decoded the part, and a false or unknown report is caught at actual transfer time (the preview contract aborts on a mid-transfer size or decode failure — correction I-05). Never substituted for size_bytes.
+		ReportedSizeBytes *int64 `json:"reported_size_bytes,omitempty"`
+
+		// SizeBytes Decoded attachment size in bytes (ADR-20261001 "Attachment metadata (F1/F3/F7)" row; register row 8). Metadata-only list/read results establish structure, not a decoded transfer, so a labelled reported_size_bytes may carry the server-reported transfer size instead — the decoded value is never silently substituted by IMAP structure octets (potentially encoded) and never by 0 for unknown. Becomes nullable (unknown honestly) together with its consumer changes per the landing order's Wave C/D sequencing; the actual decoded transfer remains the cap authority.
+		SizeBytes int `json:"size_bytes"`
+	} `json:"attachments"`
+
+	// Bcc Bcc addresses — returned only on the owner's own copies (drafts and Sent); null on every other message (§2.3 note, D29/R2-3).
+	Bcc *[]string `json:"bcc"`
+
+	// BodyMarkdown The draft's editable Markdown source: the stored text/markdown part of an Omnipus draft whose X-Omnipus-Render-Hash matches the rendered text part; otherwise the server-derived Markdown of a foreign draft (FR-030) with markdown_lossy=true. Null on non-draft messages without an editable source.
+	BodyMarkdown *string `json:"body_markdown"`
+
+	// BodyText Decoded plain-text body.
+	BodyText string `json:"body_text"`
+
+	// Cc Cc addresses (D26).
+	Cc []string `json:"cc"`
+
+	// Date Message date (RFC 3339), required-but-nullable — the W0 amendment (register row 8; acceptance recorded in mail-live-access-landing-order §8, 2026-10-02). Null is the founder's #1175 "No date" state: the Date header was missing or unparsable and no internal date exists; a consumer renders it as unknown (no date), never as false or a zero/epoch value (US-6.AC-4). When the effective date (a valid Date header, else the internal date) IS known, producers carry that true value — never blank, never fabricated.
+	Date *time.Time `json:"date"`
+
+	// DraftCleanupWarning Set when the OLD draft copy could not be removed after a successful update-APPEND of the new copy (MAJ-009/MC-28 — the panel warns of a possible duplicate draft). Same underlying mechanism as the send path's draft_cleanup_warning (MailSendResponse), triggered by update instead of send. Null when cleanup succeeded, and always null on the read paths (GET message, list messages) — only the update endpoint can set it.
+	DraftCleanupWarning *string `json:"draft_cleanup_warning,omitempty"`
+
+	// Folder The folder slug the message lives in (MC-5).
+	Folder MailMessageFolder `json:"folder"`
+
+	// From The From address (addr-spec).
+	From string `json:"from"`
+
+	// FromName Display name of the sender when present, else null.
+	FromName *string `json:"from_name"`
+
+	// HasAttachments Paperclip indicator (F7) — same derivation and semantics as MailMessageSummary.has_attachments; carried consistently on the detail shape (register row 8). False is confirmed absence.
+	HasAttachments *bool `json:"has_attachments,omitempty"`
+
+	// HasHtml Whether an HTML body part exists. The HTML itself is never in this object — it is served only through the token-gated mail-preview routes (D13, §2.3a).
+	HasHtml bool `json:"has_html"`
+
+	// InReplyTo In-Reply-To Message-ID when present, else null.
+	InReplyTo *string `json:"in_reply_to"`
+
+	// IsDraft Whether the message carries the \Draft flag (MC-14).
+	IsDraft bool `json:"is_draft"`
+
+	// IsOmnipusDraft Whether the X-Omnipus-Draft header is present (FR-029).
+	IsOmnipusDraft bool `json:"is_omnipus_draft"`
+
+	// MarkdownLossy True when body_markdown was derived rather than read from a stored text/markdown part — editing such a draft may lose formatting (D24; the panel states the loss plainly).
+	MarkdownLossy bool `json:"markdown_lossy"`
+
+	// MessageId The Message-ID header value, or null when the mail carries none.
+	MessageId *string `json:"message_id"`
+
+	// MessageRef Gateway-issued opaque message reference (correction I-03; register row 8) — same shape and rules as MailMessageSummary.message_ref. The detail result's issued reference: every follow-up operation on this message (attachment preview, save, reply context, seen) consumes it unchanged, and the gateway validates its embedded folder epoch, pair and configuration generation on the same lease that serves the follow-up — a mismatch is the typed 409 stale-reference refusal before any fetch or mutation.
+	MessageRef *string `json:"message_ref,omitempty"`
+
+	// ReadByAgent Whether the flag list carries the $OmnipusAgentRead keyword (D38, FR-039) — derived per fetch, never stored by Omnipus.
+	ReadByAgent bool `json:"read_by_agent"`
+
+	// References References header (thread chain) when present, else null.
+	References *string `json:"references"`
+
+	// ReplyTo Reply-To address when the message carries one, else null.
+	ReplyTo *string `json:"reply_to"`
+
+	// Seen Whether the message carries the \Seen flag.
+	Seen bool `json:"seen"`
+
+	// Subject Decoded subject (RFC 2047 decoded).
+	Subject string `json:"subject"`
+
+	// To To addresses.
+	To []string `json:"to"`
+
+	// Uid IMAP UID of the message within its folder.
+	Uid int64 `json:"uid"`
+
+	// Uidvalidity IMAP UIDVALIDITY of the folder.
+	Uidvalidity int64 `json:"uidvalidity"`
+}
+
+// MailMessageFolder The folder slug the message lives in (MC-5).
+type MailMessageFolder string
+
+// MailMessagePage One page of mail message envelopes (GET /workspaces/{id}/mail/{agentId}/folders/{folder}/messages). Paging is cursor-based and explicit (ADR-20261001 "Paging and search" row; mail-live-access-landing-order register row 4 — W0 is the single publisher): next_cursor is an opaque string binding the pair/config generation, folder version, query and number delivered in this browse/search sequence; has_more states whether a next page exists; view_limit_reached marks the 200-rows-per-folder-per-view hard ceiling, beyond which the user searches — no next browse cursor is issued at the ceiling. The page never silently drops rows. Legacy numeric paging (truncated / next_before_uid / the before_uid query parameter) is superseded by the cursor fields and is retained only until the panel's consumer migration lands (landing-order Wave C); it is then removed in one atomic contract step.
+type MailMessagePage struct {
+	// HasMore Whether more messages exist beyond this page in this sequence. Optional on the wire until the cursor-issuing producer lands; the legacy truncated flag remains authoritative for pre-cursor consumers until the migration removes it.
+	HasMore *bool `json:"has_more,omitempty"`
+
+	// Messages The envelopes of this page, newest first.
+	Messages []struct {
+		// Cc Cc addresses (D26 — recipient lists on every mail surface).
+		Cc []string `json:"cc"`
+
+		// Date Message date (RFC 3339), required-but-nullable — the W0 amendment (register row 8; acceptance recorded in mail-live-access-landing-order §8, 2026-10-02). Null is the founder's #1175 "No date" state: the Date header was missing or unparsable and no internal date exists; a consumer renders it as unknown (no date), never as false or a zero/epoch value (US-6.AC-4). When the effective date (a valid Date header, else the internal date) IS known, producers carry that true value — never blank, never fabricated.
+		Date *time.Time `json:"date"`
+
+		// Folder The folder slug the message was listed from (MC-5).
+		Folder MailMessagePageMessagesFolder `json:"folder"`
+
+		// From The From address (addr-spec).
+		From string `json:"from"`
+
+		// FromName Display name of the sender when present, else null.
+		FromName *string `json:"from_name"`
+
+		// HasAttachments Paperclip indicator (F7, #1174 display half; register row 8) — producers serialize it always once the MIME classifier lands; absent on results predating it means not-yet-computed, and false (once present) is confirmed absence, never an omitted or uncomputed value. Derived from MIME structure/part headers in the bounded list fetch — never by downloading message or attachment bodies. Actual named/attachment parts count; inline CID resources alone and the dedicated Omnipus draft-body marker do not, but a genuine user message.md does. If metadata cannot be classified the read fails visibly rather than fabricating false. The indicator is inside the allowed header-cache field set; attachment bytes and lists are not.
+		HasAttachments *bool `json:"has_attachments,omitempty"`
+
+		// IsDraft Whether the message carries the \Draft flag (MC-14).
+		IsDraft bool `json:"is_draft"`
+
+		// IsOmnipusDraft Whether the X-Omnipus-Draft header is present (FR-029) — an agent-created draft the approval panel can edit losslessly.
+		IsOmnipusDraft bool `json:"is_omnipus_draft"`
+
+		// MessageId The Message-ID header value, or null when the inbound mail carries none (some mail does). Mid-style refs cannot address such a message.
+		MessageId *string `json:"message_id"`
+
+		// MessageRef Gateway-issued opaque message reference for this message (mail-live-access-landing-order register row 8; ADR correction I-03) — bound to the authorized pair, folder and configuration generation, carrying its folder epoch. Issued with the result that names the message and consumed unchanged by every follow-up operation (attachment preview, save, reply context, seen) — never a model-synthesized identity, never dependent on the optional Message-ID, and validated against the live folder epoch on the same lease that serves the follow-up. A mismatched epoch, pair or generation is the typed 409 stale-reference refusal, before any fetch or mutation. Optional on the wire until the issuing gateway work lands (the is_knowledge_base precedent); producers emit it always once landed.
+		MessageRef *string `json:"message_ref,omitempty"`
+
+		// ReadByAgent Whether the message's flag list carries the $OmnipusAgentRead keyword (D38, FR-039). Derived from the fetched flag list on every fetch — never stored by Omnipus (D6). When the mail server rejects custom keywords the value is false and nothing errors (MC-36).
+		ReadByAgent bool `json:"read_by_agent"`
+
+		// Seen Whether the message carries the \Seen flag.
+		Seen bool `json:"seen"`
+
+		// Subject Decoded subject (RFC 2047 decoded).
+		Subject string `json:"subject"`
+
+		// To To addresses.
+		To []string `json:"to"`
+
+		// Uid IMAP UID of the message within its folder (valid under uidvalidity).
+		Uid int64 `json:"uid"`
+
+		// Uidvalidity IMAP UIDVALIDITY of the folder — the epoch the uid is valid in. A changed uidvalidity renumbers uids; the mid: ref form survives that (round-1 MAJ-005, D21).
+		Uidvalidity int64 `json:"uidvalidity"`
+	} `json:"messages"`
+
+	// Metadata Freshness metadata carried by a Mail read response (ADR-20261001 "Freshness metadata" row; mail-live-access-landing-order register row 2 — W0 is the single publisher, w2 is the only value producer, w5 attaches and advances in gateway responses). A 200 cache response is not evidence of a live success: the SPA renders "last checked / checking / refresh failed" from these fields, and drops a delayed response whose publication_revision is superseded (correction I-02). A missing last_validated_at means unknown/stale, never just fetched. A mapping, its counts and a page of headers carry SEPARATE metadata objects — a validation of one is not a validation of the others. Metadata describes successful validation, not rendering or access time; timestamps never advance on failure (ADR failure table).
+	Metadata *struct {
+		// LastValidatedAt RFC 3339 timestamp of the last successful server validation of this data, or null when the data has never been validated (unknown) or the source is live in this request. Null means unknown/stale — never "just fetched". Cache timestamps never advance on a failed refresh.
+		LastValidatedAt *time.Time `json:"last_validated_at"`
+
+		// NoticeCode Closed-enum safe notice when the reusable cache could not serve or could not be written, so live access was used instead (or had to be). cache_unavailable = the reusable cache is unavailable for this data (exclusion gate refused, byte/row bound exceeded, envelope unreadable) — the read itself may still have succeeded live. Null = no notice. The enum is closed; a new code is a contract change, not a free-form string.
+		NoticeCode *MailMessagePageMetadataNoticeCode `json:"notice_code"`
+
+		// PublicationRevision Opaque, monotonically advancing publication revision (correction I-02) the served data was produced under, owned by the gateway/cache service. A delayed frontend response carrying a revision older than the newest one it has applied is dropped — never rendered, never published into cache state. Null = no revision attaches to this read (e.g. data with no invalidation events yet). Never parsed by the SPA: compare for equality/recency only, treat as opaque.
+		PublicationRevision *string `json:"publication_revision"`
+
+		// RefreshNeeded True when one eligible live refresh for this data is still owed under the event-driven refresh rules (panel open, folder switch, own successful action, manual Refresh — ADR P1.1). Never true because of a timer; no repeating refresh timer exists (founder decision).
+		RefreshNeeded bool `json:"refresh_needed"`
+
+		// Source Where the served data came from. live = validated against the mail server in this read; memory = the bounded in-memory working cache; encrypted_disk = the encrypted on-disk snapshot (Phase 1: the folder mapping only — headers never emit encrypted_disk in Phase 1, they are memory-only; w2 §4.1); none = no reusable source served this data (absent/unknown data, or a live read that could not be validated).
+		Source MailMessagePageMetadataSource `json:"source"`
+
+		// Stale True when the served data is older than its freshness threshold (5 minutes for counts and headers, 24 hours for the saved folder mapping — ADR P1.1/P2.2) at the time of this response. Stale rows stay visible and labelled; they are never silently replaced by a skeleton or presented as live.
+		Stale bool `json:"stale"`
+	} `json:"metadata,omitempty"`
+
+	// NextBeforeUid Legacy numeric cursor — superseded by next_cursor; retained only until the consumer migration lands, then removed.
+	NextBeforeUid *int64 `json:"next_before_uid"`
+
+	// NextCursor Opaque cursor for the next page when has_more is true and the view limit is not reached; null on the last page or at the 200-row ceiling. Binds the pair/config generation, folder version (UIDVALIDITY), the browse/search query and the number of rows already delivered in this sequence. Presenting a stale or mismatched cursor returns the typed 409 stale-cursor result — the client resets the view once, never spins or replays. Optional on the wire until the cursor-issuing producer lands (the is_knowledge_base precedent); producers emit it always once landed.
+	NextCursor *string `json:"next_cursor,omitempty"`
+
+	// Truncated Legacy explicit-truncation flag (email-mail-view-spec §2.3) — superseded by has_more; retained only until the consumer migration lands, then removed.
+	Truncated bool `json:"truncated"`
+
+	// ViewLimitReached True when this page delivered up to the 200-rows-per-folder-per-view hard ceiling (ADR P1.1 "Display pagination") — no next browse cursor is issued; the panel offers the reachable folder-scoped search instead ("Search to find older messages"). Older loaded pages remain the active view's working set and are released on view exit; they never enlarge the reusable newest-50 cache. Optional on the wire until the producer lands.
+	ViewLimitReached *bool `json:"view_limit_reached,omitempty"`
+}
+
+// MailMessagePageMessagesFolder The folder slug the message was listed from (MC-5).
+type MailMessagePageMessagesFolder string
+
+// MailMessagePageMetadataNoticeCode Closed-enum safe notice when the reusable cache could not serve or could not be written, so live access was used instead (or had to be). cache_unavailable = the reusable cache is unavailable for this data (exclusion gate refused, byte/row bound exceeded, envelope unreadable) — the read itself may still have succeeded live. Null = no notice. The enum is closed; a new code is a contract change, not a free-form string.
+type MailMessagePageMetadataNoticeCode string
+
+// MailMessagePageMetadataSource Where the served data came from. live = validated against the mail server in this read; memory = the bounded in-memory working cache; encrypted_disk = the encrypted on-disk snapshot (Phase 1: the folder mapping only — headers never emit encrypted_disk in Phase 1, they are memory-only; w2 §4.1); none = no reusable source served this data (absent/unknown data, or a live read that could not be validated).
+type MailMessagePageMetadataSource string
+
+// MailMessageSummary Envelope row for one mail message as shown in a Mail panel list result (GET /workspaces/{id}/mail/{agentId}/folders/{folder}/messages). All fields are always serialized; nullable fields are the ones the mail server itself may leave unset (round-1 MIN-003 — types and nullability explicit). Fetches behind this row never change flags (BODY.PEEK / EXAMINE — round-2 MAJ-003).
+type MailMessageSummary struct {
+	// Cc Cc addresses (D26 — recipient lists on every mail surface).
+	Cc []string `json:"cc"`
+
+	// Date Message date (RFC 3339), required-but-nullable — the W0 amendment (register row 8; acceptance recorded in mail-live-access-landing-order §8, 2026-10-02). Null is the founder's #1175 "No date" state: the Date header was missing or unparsable and no internal date exists; a consumer renders it as unknown (no date), never as false or a zero/epoch value (US-6.AC-4). When the effective date (a valid Date header, else the internal date) IS known, producers carry that true value — never blank, never fabricated.
+	Date *time.Time `json:"date"`
+
+	// Folder The folder slug the message was listed from (MC-5).
+	Folder MailMessageSummaryFolder `json:"folder"`
+
+	// From The From address (addr-spec).
+	From string `json:"from"`
+
+	// FromName Display name of the sender when present, else null.
+	FromName *string `json:"from_name"`
+
+	// HasAttachments Paperclip indicator (F7, #1174 display half; register row 8) — producers serialize it always once the MIME classifier lands; absent on results predating it means not-yet-computed, and false (once present) is confirmed absence, never an omitted or uncomputed value. Derived from MIME structure/part headers in the bounded list fetch — never by downloading message or attachment bodies. Actual named/attachment parts count; inline CID resources alone and the dedicated Omnipus draft-body marker do not, but a genuine user message.md does. If metadata cannot be classified the read fails visibly rather than fabricating false. The indicator is inside the allowed header-cache field set; attachment bytes and lists are not.
+	HasAttachments *bool `json:"has_attachments,omitempty"`
+
+	// IsDraft Whether the message carries the \Draft flag (MC-14).
+	IsDraft bool `json:"is_draft"`
+
+	// IsOmnipusDraft Whether the X-Omnipus-Draft header is present (FR-029) — an agent-created draft the approval panel can edit losslessly.
+	IsOmnipusDraft bool `json:"is_omnipus_draft"`
+
+	// MessageId The Message-ID header value, or null when the inbound mail carries none (some mail does). Mid-style refs cannot address such a message.
+	MessageId *string `json:"message_id"`
+
+	// MessageRef Gateway-issued opaque message reference for this message (mail-live-access-landing-order register row 8; ADR correction I-03) — bound to the authorized pair, folder and configuration generation, carrying its folder epoch. Issued with the result that names the message and consumed unchanged by every follow-up operation (attachment preview, save, reply context, seen) — never a model-synthesized identity, never dependent on the optional Message-ID, and validated against the live folder epoch on the same lease that serves the follow-up. A mismatched epoch, pair or generation is the typed 409 stale-reference refusal, before any fetch or mutation. Optional on the wire until the issuing gateway work lands (the is_knowledge_base precedent); producers emit it always once landed.
+	MessageRef *string `json:"message_ref,omitempty"`
+
+	// ReadByAgent Whether the message's flag list carries the $OmnipusAgentRead keyword (D38, FR-039). Derived from the fetched flag list on every fetch — never stored by Omnipus (D6). When the mail server rejects custom keywords the value is false and nothing errors (MC-36).
+	ReadByAgent bool `json:"read_by_agent"`
+
+	// Seen Whether the message carries the \Seen flag.
+	Seen bool `json:"seen"`
+
+	// Subject Decoded subject (RFC 2047 decoded).
+	Subject string `json:"subject"`
+
+	// To To addresses.
+	To []string `json:"to"`
+
+	// Uid IMAP UID of the message within its folder (valid under uidvalidity).
+	Uid int64 `json:"uid"`
+
+	// Uidvalidity IMAP UIDVALIDITY of the folder — the epoch the uid is valid in. A changed uidvalidity renumbers uids; the mid: ref form survives that (round-1 MAJ-005, D21).
+	Uidvalidity int64 `json:"uidvalidity"`
+}
+
+// MailMessageSummaryFolder The folder slug the message was listed from (MC-5).
+type MailMessageSummaryFolder string
+
+// MailReadMetadata Freshness metadata carried by a Mail read response (ADR-20261001 "Freshness metadata" row; mail-live-access-landing-order register row 2 — W0 is the single publisher, w2 is the only value producer, w5 attaches and advances in gateway responses). A 200 cache response is not evidence of a live success: the SPA renders "last checked / checking / refresh failed" from these fields, and drops a delayed response whose publication_revision is superseded (correction I-02). A missing last_validated_at means unknown/stale, never just fetched. A mapping, its counts and a page of headers carry SEPARATE metadata objects — a validation of one is not a validation of the others. Metadata describes successful validation, not rendering or access time; timestamps never advance on failure (ADR failure table).
+type MailReadMetadata struct {
+	// LastValidatedAt RFC 3339 timestamp of the last successful server validation of this data, or null when the data has never been validated (unknown) or the source is live in this request. Null means unknown/stale — never "just fetched". Cache timestamps never advance on a failed refresh.
+	LastValidatedAt *time.Time `json:"last_validated_at"`
+
+	// NoticeCode Closed-enum safe notice when the reusable cache could not serve or could not be written, so live access was used instead (or had to be). cache_unavailable = the reusable cache is unavailable for this data (exclusion gate refused, byte/row bound exceeded, envelope unreadable) — the read itself may still have succeeded live. Null = no notice. The enum is closed; a new code is a contract change, not a free-form string.
+	NoticeCode *MailReadMetadataNoticeCode `json:"notice_code"`
+
+	// PublicationRevision Opaque, monotonically advancing publication revision (correction I-02) the served data was produced under, owned by the gateway/cache service. A delayed frontend response carrying a revision older than the newest one it has applied is dropped — never rendered, never published into cache state. Null = no revision attaches to this read (e.g. data with no invalidation events yet). Never parsed by the SPA: compare for equality/recency only, treat as opaque.
+	PublicationRevision *string `json:"publication_revision"`
+
+	// RefreshNeeded True when one eligible live refresh for this data is still owed under the event-driven refresh rules (panel open, folder switch, own successful action, manual Refresh — ADR P1.1). Never true because of a timer; no repeating refresh timer exists (founder decision).
+	RefreshNeeded bool `json:"refresh_needed"`
+
+	// Source Where the served data came from. live = validated against the mail server in this read; memory = the bounded in-memory working cache; encrypted_disk = the encrypted on-disk snapshot (Phase 1: the folder mapping only — headers never emit encrypted_disk in Phase 1, they are memory-only; w2 §4.1); none = no reusable source served this data (absent/unknown data, or a live read that could not be validated).
+	Source MailReadMetadataSource `json:"source"`
+
+	// Stale True when the served data is older than its freshness threshold (5 minutes for counts and headers, 24 hours for the saved folder mapping — ADR P1.1/P2.2) at the time of this response. Stale rows stay visible and labelled; they are never silently replaced by a skeleton or presented as live.
+	Stale bool `json:"stale"`
+}
+
+// MailReadMetadataNoticeCode Closed-enum safe notice when the reusable cache could not serve or could not be written, so live access was used instead (or had to be). cache_unavailable = the reusable cache is unavailable for this data (exclusion gate refused, byte/row bound exceeded, envelope unreadable) — the read itself may still have succeeded live. Null = no notice. The enum is closed; a new code is a contract change, not a free-form string.
+type MailReadMetadataNoticeCode string
+
+// MailReadMetadataSource Where the served data came from. live = validated against the mail server in this read; memory = the bounded in-memory working cache; encrypted_disk = the encrypted on-disk snapshot (Phase 1: the folder mapping only — headers never emit encrypted_disk in Phase 1, they are memory-only; w2 §4.1); none = no reusable source served this data (absent/unknown data, or a live read that could not be validated).
+type MailReadMetadataSource string
+
+// MailReplyContextRequest Request for one message's reply/quote context (ADR-20261001 "Reply / Reply all context (F5)" row; w3 spec §2.4 — W0 is the single publisher). Session-authenticated message subresource; the source pair/folder/ref is independently authorized. Assembles current-compose state only — never a server draft, never a body cache, never a send.
+type MailReplyContextRequest struct {
+	// Mode reply = sender/Reply-To only (Cc/Bcc start empty). reply_all = To = eligible primary (Reply-To if present, else From); Cc = original To + original Cc minus the mailbox's own address and the primary, deduplicated. The original Bcc is never copied into a reply.
+	Mode MailReplyContextRequestMode `json:"mode"`
+}
+
+// MailReplyContextRequestMode reply = sender/Reply-To only (Cc/Bcc start empty). reply_all = To = eligible primary (Reply-To if present, else From); Cc = original To + original Cc minus the mailbox's own address and the primary, deduplicated. The original Bcc is never copied into a reply.
+type MailReplyContextRequestMode string
+
+// MailReplyContextResponse Reply/quote context for the compose draft (ADR-20261001 "Reply / Reply all context (F5)" row; w3 spec §2.4 — W0 is the single publisher). Produced by the ONE shared recipient rule (BuildReplyRecipients) called by both the gateway and the agent reply adapter — the SPA implements no second recipient algorithm. Prefills user-requested compose state only: not a server draft, not a send. A delayed/stale context response for a different message or mailbox is discarded by the consumer; it never overwrites compose input.
+type MailReplyContextResponse struct {
+	// Bcc Always empty — Bcc is never copied into an incoming reply.
+	Bcc []string `json:"bcc"`
+
+	// BodyMarkdown Editable quoted original as a safe text/Markdown projection with escaped attribution (sender/date, or "No date" per F6) — the original text's Markdown/image/embed syntax is escaped so the quote cannot load remote images or workspace embeds inside Compose. Never raw active HTML; never the original's attachments.
+	BodyMarkdown string `json:"body_markdown"`
+
+	// Cc Cc — empty for plain reply; original To + original Cc minus the mailbox's own address and the primary, deduplicated, for reply_all. Never contains the original Bcc.
+	Cc []string `json:"cc"`
+
+	// InReplyTo The original message's Message-ID for threading (RFC 5322 In-Reply-To), or null when the inbound mail carries none.
+	InReplyTo *string `json:"in_reply_to"`
+
+	// Subject Subject for the compose draft — the original subject with the Re: prefix applied exactly once (no duplicate Re:, no signature duplication).
+	Subject string `json:"subject"`
+
+	// To Primary recipients — the parsed Reply-To when present, otherwise From. Editable compose state: an invalid/missing eligible recipient is an actionable error or an editable empty set, never a silent replacement or a send to self.
+	To []string `json:"to"`
+}
+
+// MailSendRequest Human manual send from the Mail panel compose (D9, POST /workspaces/{id}/mail/{agentId}/messages). Body is Markdown; the backend renders sanitized HTML + plain text (multipart/alternative, MC-3), appends the mailbox signature, sends over SMTP and APPENDs the Sent copy (D7, D18 — always, no provider detection). Audit event + dedicated mailMutationLimiter rate limit (MC-20). The ≤ 50-recipient total cap (D29/R2-6, MC-27) and the attachment caps (≤ 10 files, ≤ 25 MiB total — MC-32) are enforced before any SMTP connection.
+type MailSendRequest struct {
+	// Attachments Files to attach (D28). Decoded total across all files ≤ 25 MiB, at most 10 files (MC-32) — checked pre-dial.
+	Attachments *[]struct {
+		// ContentType The attachment's content type as supplied by the composer.
+		ContentType string `json:"content_type"`
+
+		// DataBase64 The attachment bytes, base64-encoded. Across all attachments of one message the decoded total is capped at 25 MiB with at most 10 files (MC-32) — enforced before any SMTP connection or draft APPEND.
+		DataBase64 []byte `json:"data_base64"`
+
+		// Filename Attachment filename. Sanitized on serve and on attach (MC-32) — no path separators are ever stored or served.
+		Filename string `json:"filename"`
+	} `json:"attachments,omitempty"`
+
+	// Bcc Bcc recipients. Absent or empty means none.
+	Bcc *[]string `json:"bcc,omitempty"`
+
+	// BodyMarkdown Markdown body — rendered server-side to sanitized HTML plus plain text (multipart/alternative, MC-3), signature appended. Bounded at 1 MiB (MC-22).
+	BodyMarkdown string `json:"body_markdown"`
+
+	// Cc Cc recipients. Absent or empty means none.
+	Cc *[]string `json:"cc,omitempty"`
+
+	// InReplyTo Message-ID of the message being replied to — set by the panel Reply action (round-2 MIN-009); In-Reply-To/References are carried through to the sent message. Absent or null = standalone compose.
+	InReplyTo *string `json:"in_reply_to,omitempty"`
+
+	// Subject Subject line; CRLF/LF injection is sanitized (MC-4).
+	Subject string `json:"subject"`
+
+	// To To recipients (de-duplicated, RFC 2047 display names preserved).
+	To []string `json:"to"`
+}
+
+// MailSendResponse Send outcome for the manual send (POST /workspaces/{id}/mail/{agentId}/messages) and the panel send (POST .../folders/drafts/messages/{ref}/send). The `sent` field was dropped (round-2 MIN-006 — it was always true on a 200). Save failures are never silent (D7): a Sent-APPEND failure after a successful SMTP send sets sent_saved=false plus save_warning. A draft that could not be removed after a successful panel send sets draft_cleanup_warning (MAJ-009/MC-28).
+type MailSendResponse struct {
+	// DraftCleanupWarning Set when the draft could not be removed after a successful panel send (MAJ-009/MC-28 — the panel warns of a possible duplicate). Null when cleanup succeeded or there was no draft.
+	DraftCleanupWarning *string `json:"draft_cleanup_warning"`
+
+	// MessageId The sent message's Message-ID (stable across panel edits).
+	MessageId string `json:"message_id"`
+
+	// SaveWarning Set when the Sent APPEND failed after a successful SMTP send — never silent (D7, MC-9); the tool result carries the same warning. Null when the save succeeded.
+	SaveWarning *string `json:"save_warning"`
+
+	// SentSaved Whether the Sent-folder APPEND (D7) succeeded; false plus a non-empty save_warning when the APPEND failed after a successful SMTP send (MC-9, never silent).
+	SentSaved bool `json:"sent_saved"`
+}
+
+// MailSignaturePreviewTokenRequest Request to mint a short-lived token for the draft signature's live preview (POST /mail/signature-preview-token — session-authenticated, stays in the API namespace). Unlike the message HTML-preview mint, this endpoint NEVER dials IMAP: there is no workspace/agent/folder/ref in the request — the signature HTML is sanitized at mint (strip meta/base/forms/scripts/event handlers, harden anchors; the signature policy keeps inline style, tables and https+data images per FR-003) and held in the in-memory token store for the TTL. Mint never persists: the sanitized HTML lives only in memory and dies with the token (logout revocation or TTL expiry). Rate-limited by a dedicated per-IP limiter (MC-44) — 60 req/min, 429 with Retry-After.
+type MailSignaturePreviewTokenRequest struct {
+	// SignatureHtml The signature editor's current HTML (MC-1 bound: 1..16384 characters). Sanitized at mint before it is ever served into the sandboxed preview frame; storage sanitization stays the draft PUT's job — this mint never writes the signature anywhere.
+	SignatureHtml string `json:"signature_html"`
+}
+
+// MailSignaturePreviewTokenResponse Minted preview token for the draft signature's live preview. Mirrors the message preview's token hygiene (MC-43): 256-bit crypto/rand token, fail-closed on entropy failure, named TTL, indistinguishable 404s on the serve routes, logout revocation. Signature-token specifics: the TTL is the named 2-minute MailSignaturePreviewTokenTTL (bounds replay; the preview outlives debounce+render), and mints REPLACE — a session holds at most one live signature token (a new mint revokes the session's previous signature token; message-preview tokens keep their separate cap-8-refuses hygiene). The SPA constructs the /mail-preview/html/{token} URL from the token; expiry comes from expires_in_seconds.
+type MailSignaturePreviewTokenResponse struct {
+	// ExpiresInSeconds Seconds from the moment this response was produced until the token stops working (named signature TTL: 120 for the 2-minute MailSignaturePreviewTokenTTL — replace-on-mint keeps exactly one live signature token per session).
+	ExpiresInSeconds int `json:"expires_in_seconds"`
+
+	// Token The credential: 32 bytes from a cryptographic random source, encoded base64url without padding — 43 characters (Library token hygiene, MC-43). This string is the entire security of the unauthenticated /mail-preview/ serve routes, so it MUST NOT be logged, put in an audit record, or sent in a Referer header (Referrer-Policy: no-referrer on the served responses).
+	Token string `json:"token"`
+}
+
+// MailStaleReferenceError Typed 409 body for a stale Mail cursor or reference (mail-live-access-landing-order register row 4 — W0 is the single publisher; ADR-20261001 "Human Retry and upstream limits" row: "Use a typed 409 stale-cursor/reference result to request one view reset; never spin/reset/replay indefinitely"). code=stale_cursor: a paging/search cursor no longer matches the folder epoch (UIDVALIDITY), configuration generation or browse/search sequence it was issued in — the client restarts the list view once. code=stale_reference: a message reference's embedded folder epoch, pair or configuration binding no longer matches the live folder (correction I-03) — the client re-reads the list; the gateway refused the fetch/mutation BEFORE any server work. Never a best-effort result against whatever the folder now holds. Shares the error/code convention with ErrorResponse and MailUnavailableError.
+type MailStaleReferenceError struct {
+	// Code Machine-readable discriminator. stale_cursor = the paging/search cursor is stale or mismatched — reset the view once. stale_reference = the message reference failed its epoch/pair/generation validation on the lease that would have served it — refresh the list. A client branches on it without string matching on the message.
+	Code MailStaleReferenceErrorCode `json:"code"`
+
+	// Error Human-readable message, safe to display.
+	Error string `json:"error"`
+}
+
+// MailStaleReferenceErrorCode Machine-readable discriminator. stale_cursor = the paging/search cursor is stale or mismatched — reset the view once. stale_reference = the message reference failed its epoch/pair/generation validation on the lease that would have served it — refresh the list. A client branches on it without string matching on the message.
+type MailStaleReferenceErrorCode string
+
+// MailSummaryList Watcher-driven badge summary for every mailbox in a workspace (GET /workspaces/{id}/mail/summary) — one MailboxNewMailSummary per (agent, workspace) mailbox pair. Served from saved watcher state; never dials IMAP.
+type MailSummaryList struct {
+	// Items One entry per mailbox in the workspace.
+	Items []struct {
+		// AgentId ID of the agent owning the mailbox (the workspace rides the path).
+		AgentId string `json:"agent_id"`
+
+		// LastErrorClass Sanitized error class of the last failed cycle, from the closed enum timeout|dns|connect_refused|auth_failed|tls|folder_missing|server_error (MC-8); null when the last cycle succeeded.
+		LastErrorClass *string `json:"last_error_class"`
+
+		// LastSeenUid Highest UID the watcher has seen (MC-31 baselining applies); null before the first state was saved. Makes UID advance observable.
+		LastSeenUid *int64 `json:"last_seen_uid"`
+
+		// LastSuccessAt RFC 3339 instant of the last successful watcher cycle; null when no cycle has ever succeeded (round-2 MAJ-019 — ok never lies about blindness).
+		LastSuccessAt *time.Time `json:"last_success_at"`
+
+		// NextAttemptAt RFC 3339 instant of the watcher's next attempt while backing off (D29/R2-8 — the badge renders "retrying at hh:mm"); null otherwise.
+		NextAttemptAt *time.Time `json:"next_attempt_at"`
+
+		// UnseenTotal The mailbox's live IMAP UNSEEN count as of the watcher's last completed cycle (A11).
+		UnseenTotal int `json:"unseen_total"`
+
+		// WatcherState The watcher's cycle state: ok (last cycle succeeded), error (last cycle failed, next attempt not yet deferred), backoff (failing repeatedly — next_attempt_at carries the next try).
+		WatcherState MailSummaryListItemsWatcherState `json:"watcher_state"`
+	} `json:"items"`
+}
+
+// MailSummaryListItemsWatcherState The watcher's cycle state: ok (last cycle succeeded), error (last cycle failed, next attempt not yet deferred), backoff (failing repeatedly — next_attempt_at carries the next try).
+type MailSummaryListItemsWatcherState string
+
+// MailUnavailableError Typed 503 body for a mail read that the gateway refused to dial: code=backoff (automatic poll during watcher backoff — carries the saved last error class and next_attempt_at) or code=busy (request queued past the per-mailbox concurrency cap beyond the request deadline — MIN-003). Shares error/code with ErrorResponse so generic handlers work unchanged.
+type MailUnavailableError struct {
+	// Code Machine-readable discriminator. backoff = the automatic poll hit the watcher's backoff window; busy = the request queued past the per-mailbox concurrency cap beyond the request deadline (MIN-003). A client branches on it without string matching on the message.
+	Code MailUnavailableErrorCode `json:"code"`
+
+	// Error Human-readable message, safe to display.
+	Error string `json:"error"`
+
+	// LastErrorClass Present when code=backoff — the watcher's saved upstream class (same closed enum as the 502 body's code field, MC-8).
+	LastErrorClass *MailUnavailableErrorLastErrorClass `json:"last_error_class,omitempty"`
+
+	// NextAttemptAt Present when code=backoff.
+	NextAttemptAt *time.Time `json:"next_attempt_at,omitempty"`
+
+	// Reason Safe refusal reason (mail-live-access-landing-order register row 7 — W0 is the single publisher; ADR-20261001 "Human Retry and upstream limits" row). pool_busy = the global eight-socket ceiling stayed exhausted past the bounded acquisition wait (distinct from an account-slot refusal — w1 spec §4.6). account_busy = the per-account two-slot work gate (the existing busy code's queue-timeout case). server_connection_limit = the server itself refused further connections and the response structurally established that limit — recognized only from the structural response, never promoted from unknown response text; the refused session is retired and the effective per-mailbox capacity for that server is reduced in-process. backoff = the watcher backoff gate. Present where applicable; absent = no more specific reason than code carries. Retry remains explicit and bounded: a human retry bypasses only backoff, never the semaphore, socket cap, TLS validation or mutation safeguards.
+	Reason *MailUnavailableErrorReason `json:"reason,omitempty"`
+}
+
+// MailUnavailableErrorCode Machine-readable discriminator. backoff = the automatic poll hit the watcher's backoff window; busy = the request queued past the per-mailbox concurrency cap beyond the request deadline (MIN-003). A client branches on it without string matching on the message.
+type MailUnavailableErrorCode string
+
+// MailUnavailableErrorLastErrorClass Present when code=backoff — the watcher's saved upstream class (same closed enum as the 502 body's code field, MC-8).
+type MailUnavailableErrorLastErrorClass string
+
+// MailUnavailableErrorReason Safe refusal reason (mail-live-access-landing-order register row 7 — W0 is the single publisher; ADR-20261001 "Human Retry and upstream limits" row). pool_busy = the global eight-socket ceiling stayed exhausted past the bounded acquisition wait (distinct from an account-slot refusal — w1 spec §4.6). account_busy = the per-account two-slot work gate (the existing busy code's queue-timeout case). server_connection_limit = the server itself refused further connections and the response structurally established that limit — recognized only from the structural response, never promoted from unknown response text; the refused session is retired and the effective per-mailbox capacity for that server is reduced in-process. backoff = the watcher backoff gate. Present where applicable; absent = no more specific reason than code carries. Retry remains explicit and bounded: a human retry bypasses only backoff, never the semaphore, socket cap, TLS validation or mutation safeguards.
+type MailUnavailableErrorReason string
+
 // Mailbox One (agent, workspace) email mailbox account (M11). Email is a TOOL surface, not a conversational channel: a mailbox belongs to exactly one (agent, workspace) pair — an agent can hold a different mailbox in each workspace it belongs to (different roles, different inboxes), and several agents may each have mailboxes in the same workspace. The mailbox password is stored in the encrypted credential store and is NEVER returned by this endpoint — the `configured` flag reports whether a password is on file.
 type Mailbox struct {
 	// AgentId ID of the agent that owns this mailbox.
@@ -17429,7 +21295,10 @@ type Mailbox struct {
 	// Configured True when a mailbox password is present in the credential store (the mailbox can authenticate). The password value itself is never returned.
 	Configured bool `json:"configured"`
 
-	// Enabled Whether the email tools (read_inbox, search_email, read_message, send_email, reply) are registered for the owning agent.
+	// DraftsFolderName Advanced override for the mailbox's Drafts folder name. Empty (default) means the folder is auto-resolved by its standard name.
+	DraftsFolderName *string `json:"drafts_folder_name,omitempty"`
+
+	// Enabled Whether the email tools (read_inbox, search_email, read_message, send_email, reply, create_email_draft) are registered for the owning agent.
 	Enabled bool `json:"enabled"`
 
 	// ImapHost IMAP server hostname (implicit TLS / IMAPS).
@@ -17438,11 +21307,23 @@ type Mailbox struct {
 	// ImapPort IMAP server port. Defaults to 993 when omitted.
 	ImapPort *int `json:"imap_port,omitempty"`
 
+	// SentFolderName Advanced override for the mailbox's Sent folder name. Empty (default) means the folder is auto-resolved by its standard name.
+	SentFolderName *string `json:"sent_folder_name,omitempty"`
+
+	// SignatureHtml Optional per-mailbox HTML signature (D2). Sanitized on save with the dedicated signature policy — operator HTML never ships raw into outbound mail. The plain-text signature part is derived at compose time and never stored. Absent or empty means no signature is applied. This is configuration, not mail content: storing it in config.json does not violate the no-local-mail-store rule (D6). A value longer than 16,384 characters is rejected with HTTP 400 on configure.
+	SignatureHtml *string `json:"signature_html,omitempty"`
+
 	// SmtpHost SMTP server hostname.
 	SmtpHost *string `json:"smtp_host,omitempty"`
 
 	// SmtpPort SMTP server port. Defaults to 587 (STARTTLS); 465 selects implicit TLS.
 	SmtpPort *int `json:"smtp_port,omitempty"`
+
+	// Status #1277. Whether the mailbox can serve. "degraded" when it is enabled but cannot start — for example its password secret reference is missing; status_reason then names the cause. Optional: omitted by servers that do not report it.
+	Status *MailboxStatus `json:"status,omitempty"`
+
+	// StatusReason #1277. Human-readable reason for the status, safe to display — for example the missing secret reference. Present only when status is "degraded"; never contains a secret value.
+	StatusReason *string `json:"status_reason,omitempty"`
 
 	// Username The email address / login used for IMAP and SMTP authentication.
 	Username *string `json:"username,omitempty"`
@@ -17451,8 +21332,20 @@ type Mailbox struct {
 	WorkspaceId string `json:"workspace_id"`
 }
 
+// MailboxStatus #1277. Whether the mailbox can serve. "degraded" when it is enabled but cannot start — for example its password secret reference is missing; status_reason then names the cause. Optional: omitted by servers that do not report it.
+type MailboxStatus string
+
+// MailboxCleanupRequest Request of the separately authorized Retry-cleanup operation (ADR-20261001 "Removal with incomplete cleanup" row; w5 spec §8 step 5 — W0 is the single publisher). Keyed by the opaque cleanup_intent returned with a removed_cleanup_pending outcome; deliberately carries nothing else — the intent is the only address, so the retry keeps working after the mailbox's config row is gone.
+type MailboxCleanupRequest struct {
+	// CleanupIntent Opaque cleanup intent from MailboxRemovalResult.cleanup_intent — server-issued, never synthesized. Unknown, expired or already completed intents are refused with 404, not silently treated as success.
+	CleanupIntent string `json:"cleanup_intent"`
+}
+
 // MailboxConfigureRequest Request body to configure one (agent, workspace) mailbox account (M11). The target agent and workspace are both path parameters (PUT /agents/{id}/mailboxes/{workspaceId}) — an agent can hold a different mailbox in each workspace it belongs to. The password, when present, is routed into the encrypted credential store and persisted only as a credential reference — it is never written to config.json. Omitting the password leaves any existing stored password unchanged; sending an empty string clears it.
 type MailboxConfigureRequest struct {
+	// DraftsFolderName Advanced override for the mailbox's Drafts folder name. Empty (default) means the folder is auto-resolved by its standard name.
+	DraftsFolderName *string `json:"drafts_folder_name,omitempty"`
+
 	// Enabled Whether to register the email tools for the owning agent.
 	Enabled bool `json:"enabled"`
 
@@ -17464,6 +21357,12 @@ type MailboxConfigureRequest struct {
 
 	// Password Mailbox password (or app password). Routed to the encrypted credential store; never persisted inline. Omit to keep the existing stored password; send an empty string to clear it.
 	Password *string `json:"password,omitempty"`
+
+	// SentFolderName Advanced override for the mailbox's Sent folder name. Empty (default) means the folder is auto-resolved by its standard name.
+	SentFolderName *string `json:"sent_folder_name,omitempty"`
+
+	// SignatureHtml Optional per-mailbox HTML signature (D2). Sanitized on save with the dedicated signature policy before it is persisted. A value longer than 16,384 characters is rejected with HTTP 400. The plain-text signature part is derived at compose time, never stored. Absent or empty means no signature is applied.
+	SignatureHtml *string `json:"signature_html,omitempty"`
 
 	// SmtpHost SMTP server hostname.
 	SmtpHost string `json:"smtp_host"`
@@ -17485,7 +21384,10 @@ type MailboxListResponse struct {
 		// Configured True when a mailbox password is present in the credential store (the mailbox can authenticate). The password value itself is never returned.
 		Configured bool `json:"configured"`
 
-		// Enabled Whether the email tools (read_inbox, search_email, read_message, send_email, reply) are registered for the owning agent.
+		// DraftsFolderName Advanced override for the mailbox's Drafts folder name. Empty (default) means the folder is auto-resolved by its standard name.
+		DraftsFolderName *string `json:"drafts_folder_name,omitempty"`
+
+		// Enabled Whether the email tools (read_inbox, search_email, read_message, send_email, reply, create_email_draft) are registered for the owning agent.
 		Enabled bool `json:"enabled"`
 
 		// ImapHost IMAP server hostname (implicit TLS / IMAPS).
@@ -17494,11 +21396,23 @@ type MailboxListResponse struct {
 		// ImapPort IMAP server port. Defaults to 993 when omitted.
 		ImapPort *int `json:"imap_port,omitempty"`
 
+		// SentFolderName Advanced override for the mailbox's Sent folder name. Empty (default) means the folder is auto-resolved by its standard name.
+		SentFolderName *string `json:"sent_folder_name,omitempty"`
+
+		// SignatureHtml Optional per-mailbox HTML signature (D2). Sanitized on save with the dedicated signature policy — operator HTML never ships raw into outbound mail. The plain-text signature part is derived at compose time and never stored. Absent or empty means no signature is applied. This is configuration, not mail content: storing it in config.json does not violate the no-local-mail-store rule (D6). A value longer than 16,384 characters is rejected with HTTP 400 on configure.
+		SignatureHtml *string `json:"signature_html,omitempty"`
+
 		// SmtpHost SMTP server hostname.
 		SmtpHost *string `json:"smtp_host,omitempty"`
 
 		// SmtpPort SMTP server port. Defaults to 587 (STARTTLS); 465 selects implicit TLS.
 		SmtpPort *int `json:"smtp_port,omitempty"`
+
+		// Status #1277. Whether the mailbox can serve. "degraded" when it is enabled but cannot start — for example its password secret reference is missing; status_reason then names the cause. Optional: omitted by servers that do not report it.
+		Status *MailboxListResponseMailboxesStatus `json:"status,omitempty"`
+
+		// StatusReason #1277. Human-readable reason for the status, safe to display — for example the missing secret reference. Present only when status is "degraded"; never contains a secret value.
+		StatusReason *string `json:"status_reason,omitempty"`
 
 		// Username The email address / login used for IMAP and SMTP authentication.
 		Username *string `json:"username,omitempty"`
@@ -17507,6 +21421,102 @@ type MailboxListResponse struct {
 		WorkspaceId string `json:"workspace_id"`
 	} `json:"mailboxes"`
 }
+
+// MailboxListResponseMailboxesStatus #1277. Whether the mailbox can serve. "degraded" when it is enabled but cannot start — for example its password secret reference is missing; status_reason then names the cause. Optional: omitted by servers that do not report it.
+type MailboxListResponseMailboxesStatus string
+
+// MailboxNewMailSummary Watcher-driven badge state for one mailbox (GET /workspaces/{id}/mail/summary). Served from the watcher's saved state file — this response never dials IMAP (D29/R2-5, FR-033); the only reference metadata Omnipus stores for a mailbox is this UID/count/error-class state (D6). watcher_state ok never lies about blindness: last_success_at is null until a cycle has actually succeeded, and last_seen_uid makes UID advance observable (round-2 MAJ-019).
+type MailboxNewMailSummary struct {
+	// AgentId ID of the agent owning the mailbox (the workspace rides the path).
+	AgentId string `json:"agent_id"`
+
+	// LastErrorClass Sanitized error class of the last failed cycle, from the closed enum timeout|dns|connect_refused|auth_failed|tls|folder_missing|server_error (MC-8); null when the last cycle succeeded.
+	LastErrorClass *string `json:"last_error_class"`
+
+	// LastSeenUid Highest UID the watcher has seen (MC-31 baselining applies); null before the first state was saved. Makes UID advance observable.
+	LastSeenUid *int64 `json:"last_seen_uid"`
+
+	// LastSuccessAt RFC 3339 instant of the last successful watcher cycle; null when no cycle has ever succeeded (round-2 MAJ-019 — ok never lies about blindness).
+	LastSuccessAt *time.Time `json:"last_success_at"`
+
+	// NextAttemptAt RFC 3339 instant of the watcher's next attempt while backing off (D29/R2-8 — the badge renders "retrying at hh:mm"); null otherwise.
+	NextAttemptAt *time.Time `json:"next_attempt_at"`
+
+	// UnseenTotal The mailbox's live IMAP UNSEEN count as of the watcher's last completed cycle (A11).
+	UnseenTotal int `json:"unseen_total"`
+
+	// WatcherState The watcher's cycle state: ok (last cycle succeeded), error (last cycle failed, next attempt not yet deferred), backoff (failing repeatedly — next_attempt_at carries the next try).
+	WatcherState MailboxNewMailSummaryWatcherState `json:"watcher_state"`
+}
+
+// MailboxNewMailSummaryWatcherState The watcher's cycle state: ok (last cycle succeeded), error (last cycle failed, next attempt not yet deferred), backoff (failing repeatedly — next_attempt_at carries the next try).
+type MailboxNewMailSummaryWatcherState string
+
+// MailboxRemovalResult Truthful outcome of a mailbox removal with cleanup (ADR-20261001 "Removal with incomplete cleanup" row; w5 spec §8 step 5 — W0 is the single publisher). Distinguishes a fully removed pair from one whose cleanup did not fully complete, instead of an unconditional success=true over best-effort failures. Marking the pair disabled and preventing new acquisitions always happen FIRST; cleanup_pending never serves residual files. cleanup_intent keys the separately authorized Retry-cleanup operation and keeps working after the config row is gone; it carries no plaintext copy of anything cleaned.
+type MailboxRemovalResult struct {
+	// CleanupCode Safe, closed-class cleanup failure code — present exactly when outcome is removed_cleanup_pending, null otherwise. No raw upstream error text, no paths, no credentials. A logged unlink failure is never reported as a successful purge.
+	CleanupCode *string `json:"cleanup_code"`
+
+	// CleanupIntent Opaque retry key for the separately authorized Retry-cleanup operation, present exactly when outcome is removed_cleanup_pending — null when removed. Survives the config row's deletion so the retry path still works afterwards.
+	CleanupIntent *string `json:"cleanup_intent"`
+
+	// Outcome removed = the pair is gone and every cleanup step succeeded. removed_cleanup_pending = the pair is disabled, removed from config and acquires nothing, but at least one cleanup step (cache purge, credential deletion, reload) failed and is retried via Retry-cleanup.
+	Outcome MailboxRemovalResultOutcome `json:"outcome"`
+}
+
+// MailboxRemovalResultOutcome removed = the pair is gone and every cleanup step succeeded. removed_cleanup_pending = the pair is disabled, removed from config and acquires nothing, but at least one cleanup step (cache purge, credential deletion, reload) failed and is retried via Retry-cleanup.
+type MailboxRemovalResultOutcome string
+
+// MaxToolIterationAgentChange One agent whose own tool-iteration limit is (or would be) lowered to a new global limit (issue #904, tool-iteration-limit spec D11). Used by the lowering preview, the 409 drift body and the PUT /performance response.
+type MaxToolIterationAgentChange struct {
+	// AgentId ID of the affected agent.
+	AgentId string `json:"agent_id"`
+
+	// AgentName Display name of the affected agent.
+	AgentName string `json:"agent_name"`
+
+	// NewValue The agent's own value after lowering (the new global limit).
+	NewValue int `json:"new_value"`
+
+	// OldValue The agent's own value before lowering. No upper bound: a hand-edited stored value may exceed 1000 and is shown truthfully.
+	OldValue int `json:"old_value"`
+}
+
+// MaxToolIterationsConfirmedAgent One entry of PerformanceSettingsUpdate.confirmed_lowering: an agent the admin saw in the lowering preview and confirmed (issue #904, tool-iteration-limit spec D11/D16). The new value is implied by the PUT's max_tool_iterations.
+type MaxToolIterationsConfirmedAgent struct {
+	// AgentId ID of the agent whose own value will be lowered.
+	AgentId string `json:"agent_id"`
+
+	// OldValue The agent's own value as shown in the preview. Must still match the stored value at write time, or the PUT is refused as drift (409).
+	OldValue int `json:"old_value"`
+}
+
+// MaxToolIterationsLoweringConflict 409 body of PUT /performance when the set of agents that the new global tool-iteration limit would lower differs from confirmed_lowering (issue #904, tool-iteration-limit spec D16 drift). Nothing was written. Envelope-compatible with ErrorResponse (error + code) and additionally carries the fresh preview computed at refusal time, so the client can re-open the confirm dialog without a second preview call.
+type MaxToolIterationsLoweringConflict struct {
+	// Code Machine-readable error code; always "max_tool_iterations_lowering_drift".
+	Code string `json:"code"`
+
+	// Error Human-readable error message.
+	Error string `json:"error"`
+
+	// Preview Read-only preview of which agents' own tool-iteration limits would be lowered if the global limit were set to `value` (issue #904, tool-iteration-limit spec D11). Only agents whose own value is strictly above `value` are listed; agents equal to or below it, and agents with no own value, are excluded. Returned by GET /performance/max-tool-iterations/preview and embedded in the 409 MaxToolIterationsLoweringConflict body.
+	Preview MaxToolIterationsLoweringPreview `json:"preview"`
+}
+
+// MaxToolIterationsLoweringPreview Read-only preview of which agents' own tool-iteration limits would be lowered if the global limit were set to `value` (issue #904, tool-iteration-limit spec D11). Only agents whose own value is strictly above `value` are listed; agents equal to or below it, and agents with no own value, are excluded. Returned by GET /performance/max-tool-iterations/preview and embedded in the 409 MaxToolIterationsLoweringConflict body.
+type MaxToolIterationsLoweringPreview struct {
+	// Agents Agents that would be lowered; empty when nothing would change.
+	Agents []MaxToolIterationAgentChange `json:"agents"`
+
+	// Value The candidate global limit the preview was computed for.
+	Value int `json:"value"`
+}
+
+// MaxToolIterationsSavedState State of the global tool-iteration limit as saved in config.json (agents.defaults.max_tool_iterations), used for the Settings warning (issue #904, tool-iteration-limit spec D13). The file is never rewritten to correct it; the value in force is PerformanceSettings.max_tool_iterations. "ok" = saved value within 1–1000 and in force as saved; "missing" = key absent (the shipped default is in force); "below_min" = saved value below 1 (0 and negative included; the shipped default is in force); "above_max" = saved value above 1000 (1000 is in force).
+type MaxToolIterationsSavedState string
+
+// MaxToolIterationsSource Which rule produced an agent's effective tool-iteration limit (issue #904, tool-iteration-limit spec D1). $ref'd by Agent.max_tool_iterations_source — never an inline enum anywhere else (mirrors ContextWindowSource). "global" = the effective value is the global limit (agents.defaults.max_tool_iterations): the agent has no own value, or its own value is above the global and therefore ignored (Agent.max_tool_iterations_override_ignored is then true). "agent" = the agent's own value, lower than or equal to the global, applies.
+type MaxToolIterationsSource string
 
 // McpServer An MCP server entry as returned by GET /mcp-servers and POST /mcp-servers.
 type McpServer struct {
@@ -17536,6 +21546,9 @@ type McpServer struct {
 
 	// Status Current connection status of the MCP server.
 	Status McpServerStatus `json:"status"`
+
+	// StatusReason Human-readable reason for the current status, safe to display — for example the missing secret reference that keeps an enabled server from starting (#1277). Present only when status is "error"; never contains a secret value.
+	StatusReason *string `json:"status_reason,omitempty"`
 
 	// ToolCount Number of tools exposed by this server.
 	ToolCount int `json:"tool_count"`
@@ -17691,6 +21704,9 @@ type MediaLibraryEntry struct {
 	// LastRefcountSeenAt RFC3339 UTC timestamp of the latest refcount observation. Required on every entry (Wave 1 TD-M2).
 	LastRefcountSeenAt *time.Time `json:"last_refcount_seen_at,omitempty"`
 
+	// LibraryPath Workspace-relative path of this entry's Library file (for example .library/shot.png), with the same path rules as LibraryEntry.path (#1449 D26, FR-086). The durable association between the chat copy and the Library file: written when the file is published, kept across a rename or a move inside the workspace, cleared when the Library file is deleted or moved to another workspace. Absent when the entry has no associated Library file.
+	LibraryPath *string `json:"library_path,omitempty"`
+
 	// Mime MIME type sniffed from the stored bytes.
 	Mime *string `json:"mime,omitempty"`
 
@@ -17733,23 +21749,59 @@ type MemorySettings struct {
 	// BootstrapRecapMaxPerMinute Maximum number of bootstrap recap operations to run per minute (rate-limit / throttle). This is the only bound on a boot sweep. Maps to agents.defaults.bootstrap_recap_max_per_minute.
 	BootstrapRecapMaxPerMinute *int `json:"bootstrap_recap_max_per_minute,omitempty"`
 
+	// BootstrapRecapMinSpacingSeconds Least time between two boot-time recaps, in seconds. Default 1. A stored value outside the range is clamped on use. Maps to agents.defaults.bootstrap_recap_min_spacing_seconds.
+	BootstrapRecapMinSpacingSeconds *int `json:"bootstrap_recap_min_spacing_seconds,omitempty"`
+
 	// IdleTimeoutMinutes Minutes of inactivity after which a session is considered idle and a recap is triggered. Maps to agents.defaults.idle_timeout_minutes.
 	IdleTimeoutMinutes *int `json:"idle_timeout_minutes,omitempty"`
 
 	// MemoryRetrosDays Number of days to retain memory retrospective files. Defaults longer than session retention (180 vs 90) so reflections outlive their transcripts. Maps to storage.retention.memory_retros_days.
 	MemoryRetrosDays *int `json:"memory_retros_days,omitempty"`
 
+	// RecapCharsPerToken Characters counted as one token when sizing recap input. Default 4. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_chars_per_token.
+	RecapCharsPerToken *int `json:"recap_chars_per_token,omitempty"`
+
+	// RecapFallbackContextChars Characters of recent context kept when no recap model answers. Default 1500. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_fallback_context_chars.
+	RecapFallbackContextChars *int `json:"recap_fallback_context_chars,omitempty"`
+
 	// RecapFallbackModels Ordered fallback chain for the recap model, tried in order when the primary recap model fails — same shape and behaviour as an agent's fallback_models. Maps to agents.defaults.recap_fallback_models.
 	RecapFallbackModels *[]FallbackModel `json:"recap_fallback_models,omitempty"`
 
+	// RecapInputTokens Token budget of the transcript text sent to the recap model. Default 2000. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_input_tokens.
+	RecapInputTokens *int `json:"recap_input_tokens,omitempty"`
+
+	// RecapListItems Most items in each recap list (topics, decisions, open items). Default 5. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_list_items.
+	RecapListItems *int `json:"recap_list_items,omitempty"`
+
+	// RecapMaxOutputTokens Most output tokens one recap call may produce. Default 2048. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_max_output_tokens.
+	RecapMaxOutputTokens *int `json:"recap_max_output_tokens,omitempty"`
+
 	// RecapModel Model slug used for session recap / summarization. A fast, cheap model is recommended. Empty → falls back to agents.defaults.model_name (the overall default model), then to the session's own agent model. Maps to agents.defaults.recap_model.
 	RecapModel *string `json:"recap_model,omitempty"`
+
+	// RecapProvider Provider of the recap model (#1291), stored with recap_model so the recap routes through it. Maps to agents.defaults.recap_provider.
+	RecapProvider *string `json:"recap_provider,omitempty"`
+
+	// RecapReasoningEffort Effort for the recap model (effort-levels spec FR-072): absent or "" means Off (the recap default); "provider_default", a catalog level name or "on" turn reasoning on. null is refused.
+	RecapReasoningEffort *string `json:"recap_reasoning_effort,omitempty"`
+
+	// RecapRetryPauseMs Base pause between recap retries, in milliseconds (try n waits n times this). Default 500. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_retry_pause_ms.
+	RecapRetryPauseMs *int `json:"recap_retry_pause_ms,omitempty"`
+
+	// RecapStreamRetries Retries of a recap call whose stream broke. Default 2. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_stream_retries.
+	RecapStreamRetries *int `json:"recap_stream_retries,omitempty"`
+
+	// RecapSummaryWords Target length of the recap summary, in words. Default 150. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_summary_words.
+	RecapSummaryWords *int `json:"recap_summary_words,omitempty"`
+
+	// RecapTimeoutSeconds Overall time limit for one recap, across every model tried and every retry. Default 60. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_timeout_seconds.
+	RecapTimeoutSeconds *int `json:"recap_timeout_seconds,omitempty"`
 
 	// SessionDays Number of days to retain session JSONL files before the retention sweep removes them. Maps to storage.retention.session_days.
 	SessionDays *int `json:"session_days,omitempty"`
 }
 
-// Message A single transcript entry (session.TranscriptEntry on the Go side). Maps to the Message interface in src/lib/api.ts. The SPA reads this from GET /sessions/{id}/messages.
+// Message The public CHAT PROJECTION of one entry of a session's single append-only archive, served by GET /sessions/{id}/messages and mapped to the Message interface in src/lib/api.ts. This is a projection of the canonical disk archive (session.TranscriptEntry on the Go side), never the raw private persistence record: the archive's private model payload (model_message), its body-free same-session consumption reference (type=model_ref / model_ref), its trusted source/return-route provenance, and its partition/encoded-byte/entry-id marks are disk-only and MUST NOT appear here (session-core C-ARCHIVE / U2; FR-004/FR-005). The one display-only exception (F15) is participant / reply_to_participant (ChatParticipant): a name, a kind and a source label, never an id or a route. Entries that belong to the model view only (view_membership="model") are excluded from this projection entirely.
 type Message struct {
 	// AgentId ID of the agent that produced this entry (FR-002). Always present.
 	AgentId string `json:"agent_id"`
@@ -17781,8 +21833,17 @@ type Message struct {
 	// ClientMessageId #823 catch-up redesign. Present on a user entry that was persisted with a client-supplied correlation id (mirrors MessageFrame.client_message_id / ReplayMessageFrame.client_message_id). Lets a client reconcile its own pending/sent bubble against this REST-loaded entry by id instead of by content+timestamp matching. Absent on entries written before this field existed and on non-user entries.
 	ClientMessageId *string `json:"client_message_id,omitempty"`
 
-	// Content Raw markdown/text content of the message.
+	// Content Raw markdown/text content of the message. On a history page this may be a display preview; see content_original_size_bytes.
 	Content *string `json:"content,omitempty"`
+
+	// ContentOriginalSizeBytes Present only when `content` is a read-time display preview of an ordinary user/assistant chat message (entry type `message` or omitted) whose saved text exceeds 65,536 UTF-8 bytes: `content` then holds its first at most 65,536 bytes cut back to a character boundary, and this field is the exact UTF-8 length of the full saved text (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)", A2.1/A2.2). The full text is read through getSessionHistoryEntry. Unrelated to `truncated`/`truncation_reason`, which mean the turn itself was cut short. Never present on a getSessionHistoryEntry response, which carries the full content.
+	ContentOriginalSizeBytes *int `json:"content_original_size_bytes,omitempty"`
+
+	// ContextWindowNotice Classified context-window diagnostic (ADR-066 MAJ-CW-009). Shared by ContextWindowNoticeFrame.notice and Message.context_window_notice; rendered only when Verbose chat is enabled. Not a model-history message or the transient model-only context notice.
+	ContextWindowNotice *struct {
+		Kind    MessageContextWindowNoticeKind `json:"kind"`
+		Message string                         `json:"message"`
+	} `json:"context_window_notice,omitempty"`
 
 	// Cost USD cost for this entry. Absent when zero.
 	Cost *float64 `json:"cost,omitempty"`
@@ -17790,7 +21851,28 @@ type Message struct {
 	// DescendantsCanceled IDs of descendant turns that were canceled in cascade — present only on type="turn_canceled" entries (FR-6a).
 	DescendantsCanceled *[]string `json:"descendants_canceled,omitempty"`
 
-	// GoalOutcome How a goal ENDED — the single durable, structured record behind the always-visible goal outcome line in the chat thread (founder decision 2026-09-14: a goal's ending must leave a clear, lasting line in the chat, not only a pill that hides 4 seconds after turning terminal, and not only the Verbose-chat-gated `judge_verdict` card). Written EXACTLY ONCE per goal ending, by the same terminal transition that ends the goal record (`pkg/agent/goal_loop.go::clearGoalStatus` — every ending kind flows through it). An intermediate UNMET Judge round with rounds remaining is NOT an ending (the worker is steered and keeps going) and never produces one of these. Two carriers share this exact shape so they cannot silently disagree (the `JudgeVerdict` precedent): (a) the persisted transcript entry `Message.type: system`, `Message.system_subtype: goal_outcome`, `Message.goal_outcome: <this>` (cold REST load), and (b) the `GoalOutcomeFrame` WS push, emitted live at the ending AND re-emitted by `pkg/gateway/replay.go` from the persisted entry (discriminating on the stamped `system_subtype`, never on `content`). The WS copy is the hand-synced duplicate `GoalOutcomeFrameOutcome` in `contracts/asyncapi.yaml` (AsyncAPI codegen does not resolve cross-file `$ref`, and the Go package cannot hold two types named `GoalOutcome`) — any field edit here MUST be mirrored there.
+	// Effort Effort levels spec (effort-levels-spec-r10, FR-058). The per-turn effort record of the answering candidate: what was chosen, what the final request body actually carried, and why the two differ. One record per answering candidate, on the live done frame and on the answering transcript entry; both history transports project the stored record unchanged. A note is shown only when `sent` differs from `chosen`. Never carries reasoning text or signature material (FR-043).
+	Effort *struct {
+		// Chosen The resolved setting for the answering candidate, as stored (for example "high", "off", "on", "provider_default"). Absent when nothing was chosen.
+		Chosen *string `json:"chosen,omitempty"`
+
+		// Model The answering candidate's model id.
+		Model *string `json:"model,omitempty"`
+
+		// Provider The answering candidate's provider id.
+		Provider *string `json:"provider,omitempty"`
+
+		// Reason Why `sent` differs from `chosen`. Absent when the chosen value was sent as chosen.
+		Reason *MessageEffortReason `json:"reason,omitempty"`
+
+		// Sent The effort value actually present in the final serialised request body, after mapping, guards and extra_body. Absent when nothing was sent.
+		Sent *string `json:"sent,omitempty"`
+	} `json:"effort,omitempty"`
+
+	// GoalId session-core FR-039 / C-GOAL. The goal the entry's producing turn was dispatched under (from session.TranscriptEntry.GoalID). REST history, live delivery and replay retain the SAME association so the SPA joins each message to its own exact keyed goal criteria. Absent means UNKNOWN association; a later goal's frame must never rebind an earlier message.
+	GoalId *string `json:"goal_id,omitempty"`
+
+	// GoalOutcome How a goal ENDED — the single durable, structured record behind the always-visible goal outcome line in the chat thread (founder decision 2026-09-14: a goal's ending must leave a clear, lasting line in the chat, not only a pill that hides 4 seconds after turning terminal, and not only the Verbose-chat-gated `judge_verdict` card). Written once per goal ending on the helper transcript and, when a parent exists, once on the parent transcript, with different message ids but the same goal id, ending, rounds and Judge reason. Written by the same terminal transition that ends the goal record (`pkg/agent/goal_loop.go::clearGoalStatus` — every ending kind flows through it). An intermediate UNMET Judge round with rounds remaining is NOT an ending (the worker is steered and keeps going) and never produces one of these. Two carriers share this exact shape so they cannot silently disagree (the `JudgeVerdict` precedent): (a) the persisted transcript entry `Message.type: system`, `Message.system_subtype: goal_outcome`, `Message.goal_outcome: <this>` (cold REST load), and (b) the `GoalOutcomeFrame` WS push, emitted live at the ending AND re-emitted by `pkg/gateway/replay.go` from the persisted entry (discriminating on the stamped `system_subtype`, never on `content`). The WS copy is the hand-synced duplicate `GoalOutcomeFrameOutcome` in `contracts/asyncapi.yaml` (AsyncAPI codegen does not resolve cross-file `$ref`, and the Go package cannot hold two types named `GoalOutcome`) — any field edit here MUST be mirrored there.
 	GoalOutcome *struct {
 		// CriteriaTotal Number of criteria the deciding Judge verdict evaluated (`per_criterion` length). OPTIONAL — present only when a verdict exists. With `ending: met` every one of them was confirmed.
 		CriteriaTotal *int `json:"criteria_total,omitempty"`
@@ -17798,7 +21880,7 @@ type Message struct {
 		// EndedAt RFC 3339 UTC timestamp of the terminal transition.
 		EndedAt time.Time `json:"ended_at"`
 
-		// Ending WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — a deliberate `/goal clear|stop|off|reset|cancel| none` (Goal.state `cleared`, terminal note "cleared by user"). `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
+		// Ending WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — an EXPLICIT user ending only: the owning session's `/goal clear` (aliases `stop|off|reset|cancel|none`) or an authorized parent's `delegate(action="clear_goal")` (Goal.state `cleared`, terminal note "cleared by user"). NEVER written for a session lifecycle transition — a Stop, timeout, plan stop, restart or failure keeps the goal record active; only natural met / round-exhaustion adjudication and these explicit clears end a goal. `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
 		Ending MessageGoalOutcomeEnding `json:"ending"`
 
 		// GoalId The goal that ended (`Goal.goal_id`).
@@ -17817,17 +21899,101 @@ type Message struct {
 		RoundsUsed int `json:"rounds_used"`
 	} `json:"goal_outcome,omitempty"`
 
+	// HelperEvent An immutable helper event shown in the addressed chat independently of the model's reply. Source-event identity plus destination transcript determines the message id. Live, replay and cold load carry the same filtered payload.
+	HelperEvent *struct {
+		CreatedAt       time.Time              `json:"created_at"`
+		GoalId          *string                `json:"goal_id,omitempty"`
+		HelperSessionId string                 `json:"helper_session_id"`
+		HelperTitle     *string                `json:"helper_title,omitempty"`
+		Kind            MessageHelperEventKind `json:"kind"`
+
+		// Text Sensitive-data-filtered sentence saved before live publication.
+		Text string `json:"text"`
+	} `json:"helper_event,omitempty"`
+
+	// HistoryPosition Same-session occurrence fingerprint (chat history paging D2), present on every paged entry. Preserves the original recorded id separately. Stable across appends/restarts and reconstruction of unchanged final canonical bytes; opaque, not a live sequence, model ordinal, authorization grant or disk address.
+	HistoryPosition *string `json:"history_position,omitempty"`
+
 	// Id Unique message identifier.
 	Id string `json:"id"`
+
+	// InputDisposition Read-only record that this user input was DISCARDED by Stop before it was delivered into the agent's model input (session-core FR-024). Absent on every delivered message. There is no client action to release or discard it; the archived message bytes are unchanged and this only labels them.
+	InputDisposition *struct {
+		// ClientMessageId The sender's client_message_id, when the input carried one.
+		ClientMessageId *string `json:"client_message_id,omitempty"`
+
+		// MessageId The original input message id (this entry's id).
+		MessageId string                        `json:"message_id"`
+		Reason    MessageInputDispositionReason `json:"reason"`
+		State     MessageInputDispositionState  `json:"state"`
+	} `json:"input_disposition,omitempty"`
 
 	// MessagesCompacted Number of messages compacted (present only on compaction entries).
 	MessagesCompacted *int `json:"messages_compacted,omitempty"`
 
-	// Model Identifier of the model that produced this assistant turn (per-turn record). Present on assistant entries only. Absent on legacy turns recorded before the per-turn model field was added — those entries do not display any model info in the UI (no placeholder). Empty string is treated the same as absent for UI display.
+	// Model Identifier of the model that produced this assistant turn (per-turn record). Present on assistant entries, and on a provider_fallback note it is the fallback model that actually answered (ProviderFallbackNote's answered_model). Absent on legacy turns recorded before the per-turn model field was added — those entries do not display any model info in the UI (no placeholder). Empty string is treated the same as absent for UI display.
 	Model *string `json:"model,omitempty"`
+
+	// Participant A server-made display record of one participant in a chat (session-core F15): who wrote a user-role entry (Message.participant) or who a reply went to (Message.reply_to_participant). It is a display label, not identity and not authorization: it carries no principal, platform or canonical id, no instance, chat, thread or message id, and no route. Assistant authorship stays agent_id. Stamped only by the server, from the authenticated connection or the server-held request capture — never from model or tool input.
+	// Field rule (one flat schema; the server enforces it, the wire type does not): `source` and `agent` are mutually exclusive and keyed on `kind`. kind=human carries `source` and never `agent`; kind=agent carries `agent` and never `source`. A sender that names an agent is always kind=agent, even if it also carries a platform or principal. Readers must treat any other combination as invalid and ignore the unexpected field. `agent` (an AgentAddress) is present iff kind=agent.
+	Participant *struct {
+		// Agent A {workspace_id, agent_id} pair addressing one agent within one workspace (session-core C-ADDRESS, FR-045). The server resolves the pair to that agent's computed, eligible main session; a client never builds a main session id. Both parts are required and bounded at the existing 128 characters.
+		Agent *struct {
+			// AgentId The addressed (recipient) agent. Never the author.
+			AgentId string `json:"agent_id"`
+
+			// WorkspaceId Workspace of the addressed agent.
+			WorkspaceId string `json:"workspace_id"`
+		} `json:"agent,omitempty"`
+
+		// DisplayName Plain text. The server strips control characters before stamping.
+		DisplayName string                 `json:"display_name"`
+		Kind        MessageParticipantKind `json:"kind"`
+
+		// Source Present iff kind=human; absent when kind=agent. "web" for the web UI, otherwise the connector's platform (telegram, slack, google-chat, ...). Never an instance id.
+		Source *string `json:"source,omitempty"`
+	} `json:"participant,omitempty"`
+
+	// ReplyToMessageId Present only on a guest reply (session-core FR-027): the message_id of the admitted request this entry answers. The guest author is the existing agent_id. Same value live and on replay.
+	ReplyToMessageId *string `json:"reply_to_message_id,omitempty"`
+
+	// ReplyToParticipant A server-made display record of one participant in a chat (session-core F15): who wrote a user-role entry (Message.participant) or who a reply went to (Message.reply_to_participant). It is a display label, not identity and not authorization: it carries no principal, platform or canonical id, no instance, chat, thread or message id, and no route. Assistant authorship stays agent_id. Stamped only by the server, from the authenticated connection or the server-held request capture — never from model or tool input.
+	// Field rule (one flat schema; the server enforces it, the wire type does not): `source` and `agent` are mutually exclusive and keyed on `kind`. kind=human carries `source` and never `agent`; kind=agent carries `agent` and never `source`. A sender that names an agent is always kind=agent, even if it also carries a platform or principal. Readers must treat any other combination as invalid and ignore the unexpected field. `agent` (an AgentAddress) is present iff kind=agent.
+	ReplyToParticipant *struct {
+		// Agent A {workspace_id, agent_id} pair addressing one agent within one workspace (session-core C-ADDRESS, FR-045). The server resolves the pair to that agent's computed, eligible main session; a client never builds a main session id. Both parts are required and bounded at the existing 128 characters.
+		Agent *struct {
+			// AgentId The addressed (recipient) agent. Never the author.
+			AgentId string `json:"agent_id"`
+
+			// WorkspaceId Workspace of the addressed agent.
+			WorkspaceId string `json:"workspace_id"`
+		} `json:"agent,omitempty"`
+
+		// DisplayName Plain text. The server strips control characters before stamping.
+		DisplayName string                        `json:"display_name"`
+		Kind        MessageReplyToParticipantKind `json:"kind"`
+
+		// Source Present iff kind=human; absent when kind=agent. "web" for the web UI, otherwise the connector's platform (telegram, slack, google-chat, ...). Never an instance id.
+		Source *string `json:"source,omitempty"`
+	} `json:"reply_to_participant,omitempty"`
 
 	// Role Author role. Absent on compaction entries.
 	Role *MessageRole `json:"role,omitempty"`
+
+	// RoomRef Reference from a main-session entry (or an approval) to the room (group chat) it belongs to (spec omnipus-system-agent K7, K33; FR-202, FR-215, FR-251). Display and navigation data only: it never grants access to the room. `role` says whether the entry is the room's request to this agent or this agent's answer into the room; a room pre-admission approval card (FR-251) carries role `request`. Mirrored inline in contracts/asyncapi.yaml (components.schemas.RoomRef) — keep both copies in sync by hand.
+	RoomRef *struct {
+		// RequestId The room delivery id, which is also the receiver's request id (spec §6.11, FR-216).
+		RequestId string `json:"request_id"`
+
+		// Role `request` — the room's request delivered to this agent; `answer` — this agent's answer appended to the room.
+		Role MessageRoomRefRole `json:"role"`
+
+		// RoomId Id of the room.
+		RoomId string `json:"room_id"`
+
+		// RoomName Display name of the room at the time the entry was written.
+		RoomName string `json:"room_name"`
+	} `json:"room_ref,omitempty"`
 
 	// Status Completion status of this message turn.
 	Status *MessageStatus `json:"status,omitempty"`
@@ -17843,6 +22009,9 @@ type Message struct {
 		// FinalResult Optional textual summary of the sub-turn's output.
 		FinalResult *string `json:"final_result,omitempty"`
 
+		// HistoryOrigin Local ownership of an entry-derived historical replay frame (chat history paging D2/D4). Required by the producer for every frame derived from a selected persisted entry; optional on general frame schemas because live, unsequenced non-history and session-only rehydration copies can have no persisted source. Not a transport cursor, authorization grant or reversible archive address. No frame ordinals or manifest.
+		HistoryOrigin *HistoryEntryOrigin `json:"history_origin,omitempty"`
+
 		// Message Internal reason string emitted by the orphan-watchdog synthetic end frame. Not rendered directly in the UI.
 		Message *string `json:"message,omitempty"`
 
@@ -17852,7 +22021,7 @@ type Message struct {
 		// Reason When status is "interrupted": why the sub-turn was interrupted by the parent. Populated by W1-9 coordination in the agent loop.
 		Reason *MessageSubagentEndReason `json:"reason,omitempty"`
 
-		// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+		// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — this seq is dedup state, never itself the resume cursor: the client's cursor is committed only by a completed catch-up (catch_up_complete) and is sent back as since_seq on attach_session (2026-10-26, architect ruling arch-q33 — an earlier sentence here described per-frame cursor advance, which was stale). Frames at or below that cursor are ignored, which makes re-delivery idempotent.
 		Seq *int64 `json:"seq,omitempty"`
 
 		// SessionId Session in which this sub-turn ran.
@@ -17872,13 +22041,16 @@ type Message struct {
 		// ChildSessionId Optional session id of the delegated child session this mid-span update is reporting on — the same value the bracketing `subagent_start` frame's `child_session_id` carries (ADR-091 I-4). Present for steered sessions; absent for legacy subturn spans.
 		ChildSessionId *string `json:"child_session_id,omitempty"`
 
-		// CorrelationId Present for `question`/`decision_request`/`steer`/`respond` — lets the SPA thread a live reply.
+		// CorrelationId Present for `question`/`steer`/`respond` — lets the SPA thread a live reply.
 		CorrelationId *string `json:"correlation_id,omitempty"`
 
 		// CreatedAt RFC3339 timestamp the underlying message was created.
 		CreatedAt time.Time `json:"created_at"`
 
-		// Kind The underlying SessionMessage kind. `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
+		// HistoryOrigin Local ownership of an entry-derived historical replay frame (chat history paging D2/D4). Required by the producer for every frame derived from a selected persisted entry; optional on general frame schemas because live, unsequenced non-history and session-only rehydration copies can have no persisted source. Not a transport cursor, authorization grant or reversible archive address. No frame ordinals or manifest.
+		HistoryOrigin *HistoryEntryOrigin `json:"history_origin,omitempty"`
+
+		// Kind The underlying SessionMessage kind, or `not_delivered` (FR-013): a server-authored line saying a child's report was refused at an inbox cap and not saved (`untrusted_origin` is false; `text` never carries the refused body). `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
 		Kind MessageSubagentMessageKind `json:"kind"`
 
 		// MessageId The underlying SessionMessage's `message_id` — correlates this live ping with the full record fetchable via `delegate.inbox`/`peek`.
@@ -17890,7 +22062,7 @@ type Message struct {
 		// SenderIdentity Agent ID (or "human") that authored the underlying message.
 		SenderIdentity string `json:"sender_identity"`
 
-		// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a replayed transcript entry) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+		// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a replayed transcript entry) — this seq is dedup state, never itself the resume cursor: the client's cursor is committed only by a completed catch-up (catch_up_complete) and is sent back as since_seq on attach_session (2026-10-26, architect ruling arch-q33 — an earlier sentence here described per-frame cursor advance, which was stale). Frames at or below that cursor are ignored, which makes re-delivery idempotent.
 		Seq *int64 `json:"seq,omitempty"`
 
 		// SessionId Session in which the parent's span is running.
@@ -17915,10 +22087,13 @@ type Message struct {
 		// ChildSessionId Optional session id of the opened child session. Present for steered sessions; absent for legacy subturn spans. Enables the open control on the side panel row (ADR-091 I-4).
 		ChildSessionId *string `json:"child_session_id,omitempty"`
 
+		// HistoryOrigin Local ownership of an entry-derived historical replay frame (chat history paging D2/D4). Required by the producer for every frame derived from a selected persisted entry; optional on general frame schemas because live, unsequenced non-history and session-only rehydration copies can have no persisted source. Not a transport cursor, authorization grant or reversible archive address. No frame ordinals or manifest.
+		HistoryOrigin *HistoryEntryOrigin `json:"history_origin,omitempty"`
+
 		// ParentCallId The originating delegate or create_task tool-call id. For delegate-origin children, this is the delegate tool-call id. For create_task-origin children (task sessions), this is the create_task tool-call id (the span key for I-4). This is the span identifier used for both fronts.
 		ParentCallId string `json:"parent_call_id"`
 
-		// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+		// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — this seq is dedup state, never itself the resume cursor: the client's cursor is committed only by a completed catch-up (catch_up_complete) and is sent back as since_seq on attach_session (2026-10-26, architect ruling arch-q33 — an earlier sentence here described per-frame cursor advance, which was stale). Frames at or below that cursor are ignored, which makes re-delivery idempotent.
 		Seq *int64 `json:"seq,omitempty"`
 
 		// SessionId Session in which this sub-turn is running.
@@ -17932,15 +22107,55 @@ type Message struct {
 		Type      MessageSubagentStartType `json:"type"`
 	} `json:"subagent_start,omitempty"`
 
-	// SubagentState Server -> client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A mid-span live lifecycle ping riding between the existing `subagent_start`/`subagent_end` brackets — a flat projection of the child's `SessionLifecycleRecord.state` (see `SubagentMessageFrame` for the same flat-projection-over-full-record shape decision and its rationale) plus an optional steering-receipt acknowledgement.
+	// SubagentState Server -> client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A mid-span live lifecycle ping riding between the existing `subagent_start`/`subagent_end` brackets — a flat projection of the child's `SessionLifecycleRecord.state` (see `SubagentMessageFrame` for the same flat-projection-over-full-record shape decision and its rationale) plus an optional control-receipt acknowledgement (sub-agent control plane ADR D4/MIN-003; `control_receipt` replaces the former `steering_receipt`, see `ControlReceipt.yaml`). A dev install replaying an old persisted frame that still carries `steering_receipt` drops that unknown field rather than failing validation (ADR OBS-003) — the field is gone from this schema and Go's default lenient JSON decode on the replay path (`pkg/gateway/replay.go`) already does not reject it.
 	SubagentState *struct {
 		// ChildSessionId Optional session id of the delegated child session this lifecycle ping is reporting on — the same value the bracketing `subagent_start` frame's `child_session_id` carries (ADR-091 I-4). Present for steered sessions; absent for legacy subturn spans.
 		ChildSessionId *string `json:"child_session_id,omitempty"`
 
+		// ControlReceipt Sub-agent control plane ADR D4/MIN-001/MIN-003. The receipt for one accepted control on a steered session (`steer`, `stop`, `stop_all`, `redirect`, `resume`, `respond`, `clear_goal`). ADR-20261004 ("Steering commands: no person question") withdrew the `escalate` relay verb with the person-question pause. Replaces `SubagentStateFrame.yaml`'s former `steering_receipt` shape (`{correlation_id, applied_at}`, issue #870) with the full control-ledger receipt shape the ADR specifies.
+		// Train-3 scope note: only the `steer` verb is wired to this shape today, via `pkg/agent/steer_frames.go::deliverSubagentState`. The per-session control ledger that assigns a true monotonic `seq` and tracks a control's own `accepted_at` moment (ADR D4, "Controls") is NOT built in this PR — `seq` and `accepted_at` are stamped as documented stand-ins (the same pattern `pkg/session/lifecycle_edge.go::StopNote.Seq` already uses: the record's own generation substituting for a ledger sequence until the ledger exists). `control_id` reuses the existing correlation id. `verb` and `state` are constants for this call site (`"steer"` / `"delivered"`) until other verbs are wired. Every other field below belongs to the ADR's full future shape and is never populated by this call site.
+		ControlReceipt *struct {
+			// AcceptedAt When the control was accepted into the ledger. Stand-in value today (same moment as `delivered_at`/`applied_at` at this call site, since no separate acceptance moment is tracked ahead of the ledger) — see the schema description above.
+			AcceptedAt time.Time `json:"accepted_at"`
+
+			// AppliedAt When a non-steer control reached `applied` (runtime-enforced effect).
+			AppliedAt *time.Time `json:"applied_at,omitempty"`
+
+			// ControlId The accepted control's identifier — caller-supplied correlation id, or server-assigned when blank.
+			ControlId string `json:"control_id"`
+
+			// DeliveredAt When a `steer` reached `delivered` (durable transcript injection).
+			DeliveredAt *time.Time `json:"delivered_at,omitempty"`
+
+			// Reason Free-text reason, set for a `superseded` state or a notable transition.
+			Reason *string `json:"reason,omitempty"`
+
+			// ReleasedControlIds Control ids released together with this receipt (e.g. a RESUME that releases preserved restart-pending controls in sequence, ADR D4 boot reconciliation).
+			ReleasedControlIds *[]string `json:"released_control_ids,omitempty"`
+
+			// Seq Monotonic per-child control sequence (ADR D4). Stand-in value today — see the schema description above.
+			Seq int64 `json:"seq"`
+
+			// State ADR D4's control-receipt state machine. `queued`: accepted, durable, not yet in front of the child. `delivered` (steer only): the instruction is durably present in the child's transcript at its next tool boundary — `steer`'s runtime-final receipt; never a claim of model compliance. `applied`: the runtime enforced the effect (stop, redirect, stop_all, respond, resume, clear_goal). `superseded`: replaced before delivery by a newer control, or made moot.
+			State MessageSubagentStateControlReceiptState `json:"state"`
+
+			// SupersededAt When this control was superseded.
+			SupersededAt *time.Time `json:"superseded_at,omitempty"`
+
+			// SupersededBySeq The superseding control's own `seq`, when `state == superseded`.
+			SupersededBySeq *int64 `json:"superseded_by_seq,omitempty"`
+
+			// Verb Which control this receipt reports on.
+			Verb MessageSubagentStateControlReceiptVerb `json:"verb"`
+		} `json:"control_receipt,omitempty"`
+
 		// CreatedAt RFC3339 timestamp this state ping was emitted.
 		CreatedAt time.Time `json:"created_at"`
 
-		// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a replayed transcript entry) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+		// HistoryOrigin Local ownership of an entry-derived historical replay frame (chat history paging D2/D4). Required by the producer for every frame derived from a selected persisted entry; optional on general frame schemas because live, unsequenced non-history and session-only rehydration copies can have no persisted source. Not a transport cursor, authorization grant or reversible archive address. No frame ordinals or manifest.
+		HistoryOrigin *HistoryEntryOrigin `json:"history_origin,omitempty"`
+
+		// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a replayed transcript entry) — this seq is dedup state, never itself the resume cursor: the client's cursor is committed only by a completed catch-up (catch_up_complete) and is sent back as since_seq on attach_session (2026-10-26, architect ruling arch-q33 — an earlier sentence here described per-frame cursor advance, which was stale). Frames at or below that cursor are ignored, which makes re-delivery idempotent.
 		Seq *int64 `json:"seq,omitempty"`
 
 		// SessionId Session in which the parent's span is running.
@@ -17951,15 +22166,7 @@ type Message struct {
 
 		// State The child's current durable lifecycle state (SessionLifecycleRecord.state).
 		State MessageSubagentStateState `json:"state"`
-
-		// SteeringReceipt Present when this state ping is reporting that a prior `steer`/`respond` was applied at the child's next tool boundary (INV-3).
-		SteeringReceipt *struct {
-			AppliedAt time.Time `json:"applied_at"`
-
-			// CorrelationId The `correlation_id` of the applied steer/respond, when one was supplied; otherwise a server-assigned reference.
-			CorrelationId string `json:"correlation_id"`
-		} `json:"steering_receipt,omitempty"`
-		Type MessageSubagentStateType `json:"type"`
+		Type  MessageSubagentStateType  `json:"type"`
 	} `json:"subagent_state,omitempty"`
 
 	// Summary Compaction summary text (present only on type=compaction entries).
@@ -17967,6 +22174,9 @@ type Message struct {
 
 	// SystemSubtype BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not one of the subtypes below. A closed enum so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same frame type on replay as was emitted live: `browser_handover_notice` → `BrowserHandoverNoticeFrame` (BROWSER-FR-043a); `goal_outcome` → `GoalOutcomeFrame` (the goal outcome line, founder decision 2026-09-14 — the entry also carries `goal_outcome`); `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` → the matching `SubagentStartFrame` / `SubagentStateFrame` / `SubagentMessageFrame` / `SubagentEndFrame` (ADR-091 D7/I-4 — steer_frames.go's persisted sub-agent lifecycle frames, carried on this `Message` by the dedicated `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` fields below, the same stamped-field convention `goal_outcome` already established). Hard Constraint #8: this closes the gap where the gateway served these four subtypes without the generated validator ever having learned them, failing every fetch of a session that delegated (the tester's own run only exercised three of the four — subagent_message persists through the identical path, steer_frames.go's persistSubagentEntry, so this fix covers it too rather than leaving the same defect for the next delegation that happens to emit one).
 	SystemSubtype *MessageSystemSubtype `json:"system_subtype,omitempty"`
+
+	// TerminalOutcome Present and true only on an assistant entry that is a turn's distinct terminal outcome sentence, separate from its preceding narration. Same value as ReplayMessageFrame.terminal_outcome; historical hydration must not merge this entry into the preceding same-turn assistant message. Absent on other entries, including older entries without this recorded field.
+	TerminalOutcome *bool `json:"terminal_outcome,omitempty"`
 
 	// Timestamp RFC3339 timestamp when this entry was recorded.
 	Timestamp time.Time `json:"timestamp"`
@@ -17995,10 +22205,11 @@ type Message struct {
 		// ParentToolCallId Parent tool call ID for nested subagent tool invocations.
 		ParentToolCallId *string `json:"parent_tool_call_id,omitempty"`
 
-		// Result Return value from the tool. Shape is tool-specific.
+		// Result Return value from the tool. Shape is tool-specific. This is the PROJECTED content the model saw (see `content_state`); the full admitted provider result bytes live in the canonical session day archive and projection changes never mutate those retained bytes (session-core C-ARCHIVE / U2; FR-004/FR-006).
+		// `_history_preview` is a reserved key (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)", A2.2): on a history page, session detail or snapshot a saved result over 51,200 encoded bytes is replaced by a HistoryResultPreview marker, and an object carrying `_history_preview` must match HistoryResultPreview exactly. An ordinary result never carries that key. The `not` below expresses this rule ("not: carries the key and fails HistoryResultPreview"); the 4,096-byte UTF-8 limit on `preview` is checked separately at the server and browser boundaries. getSessionHistoryEntry never returns a marker.
 		Result *map[string]interface{} `json:"result,omitempty"`
 
-		// Status Outcome of the tool call. "interrupted" is written by the tool-call status derivation in `pkg/agent/loop_run_turn_tools.go` onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
+		// Status Outcome of the tool call. "interrupted" is recorded on a delegate/spawn tool call's own persisted record when the parent turn is canceled or aborted mid-flight while the sub-turn is still in progress. "parked" (ADR-057 UAT defect C2 fix) is recorded the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
 		Status MessageToolCallsStatus `json:"status"`
 
 		// Tool Tool name as registered in the tool registry (e.g. "workspace.shell", "web_search").
@@ -18008,14 +22219,23 @@ type Message struct {
 	// Truncated Set to true on the last assistant entry when the entry is incomplete — see `truncation_reason` for why. Only present when true.
 	Truncated *bool `json:"truncated,omitempty"`
 
-	// TruncationReason Narrows why `truncated` is true: "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a `truncated: true` entry means "cancelled" — every entry written before this field existed predates it and was always a cancel (ADR-087 D2).
+	// TruncationReason Narrows why `truncated` is true: "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a `truncated: true` entry means the reason is not recorded: readers do not default it to "cancelled" or to anything else (ADR-087 D2; session-core DEL-F36).
 	TruncationReason *MessageTruncationReason `json:"truncation_reason,omitempty"`
 
-	// TurnId Turn identifier — present only on type="turn_canceled" entries (FR-15). Identifies the turn that was canceled.
+	// TurnId Turn identifier — present on type="turn_canceled" entries (FR-15) and type="context_window_notice" diagnostics (ADR-066 MAJ-CW-009). Retains the original turn identity in REST history, live delivery and replay.
 	TurnId *string `json:"turn_id,omitempty"`
 
-	// Type Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
+	// TurnReasoningTokens Effort levels spec (FR-024). The stored display-only snapshot of the turn's reported reasoning-token sum, copied from the answering entry; never summed at read time. Absent = no call of the turn reported a count; 0 = reported zero.
+	TurnReasoningTokens *int `json:"turn_reasoning_tokens,omitempty"`
+
+	// Type Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). "context_window_notice" entries retain a classified Verbose-only diagnostic (ADR-066 MAJ-CW-009), not a model-history message. Runtime validation requires their `context_window_notice` payload; live and replay carry the same payload as ContextWindowNoticeFrame.notice with the original entry id, timestamp, agent_id and turn_id. "provider_fallback" entries (chat-history paging spec D10 PF=A) are a persisted provider-fallback note written by the real fallback chain after its assistant answer: system-role system information with `content` equal to the saved note text verbatim and the optional `model` / `unavailable_model` / `unavailable_code` facts recorded at the time. The same note replays as a `replay_provider_fallback` ProviderFallbackNote and was announced live by the separate provider_fallback frame; a valid note must never be degraded to the malformed-item placeholder.
 	Type *MessageType `json:"type,omitempty"`
+
+	// UnavailableCode Recorded fallback condition; model_retired controls the existing model-settings hint.
+	UnavailableCode *MessageUnavailableCode `json:"unavailable_code,omitempty"`
+
+	// UnavailableModel Recorded unavailable primary model on a provider_fallback note; omitted when unknown.
+	UnavailableModel *string `json:"unavailable_model,omitempty"`
 
 	// Verdict A single judge adjudication of a task attempt or plan round (ADR-049 D2/D4). Persisted alongside the run and also emitted as (a) a session-transcript entry (`Message.type: judge_verdict`, `Message.verdict`) and (b) a live `JudgeVerdictFrame` WS push — both carriers share this exact shape so they cannot silently disagree (review Q3). Absence of a verdict never defaults to success (NFR-2, fail-closed): a judge that is merely unavailable (throttled/cost-capped/provider error/timeout) does NOT produce a JudgeVerdict at all — the loop pauses and retries instead (ADR D7).
 	Verdict *struct {
@@ -18085,6 +22305,9 @@ type Message struct {
 		// TaskId Task being judged. Present when `scope == task`.
 		TaskId *string `json:"task_id,omitempty"`
 	} `json:"verdict,omitempty"`
+
+	// ViewMembership C-ARCHIVE (session-core FR-004): which view(s) of the single append-only archive this entry belongs to — "chat" (rendered in the conversation), "model" (part of the model context window), or "both". Server-owned (readOnly): the server writes it and emits the entry's effective chat/both membership for included entries; clients never send it. An entry classified "model" is not part of the chat projection and is not returned here. Optional and additive: entries written before this field existed carry no value, and the server treats absent as unknown rather than re-deriving a view. This is a per-entry classification on the one archive, never by itself a second store.
+	ViewMembership *MessageViewMembership `json:"view_membership,omitempty"`
 }
 
 // MessageAttachmentsType Attachment category. Aligned with MediaPart.type enum.
@@ -18093,11 +22316,35 @@ type MessageAttachmentsType string
 // MessageCancelMethod How the cancel was applied — present only on type="turn_canceled" entries (FR-15). "graceful" lets the in-flight tool finish; "hard" interrupts immediately.
 type MessageCancelMethod string
 
-// MessageGoalOutcomeEnding WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — a deliberate `/goal clear|stop|off|reset|cancel| none` (Goal.state `cleared`, terminal note "cleared by user"). `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
+// MessageContextWindowNoticeKind defines model for Message.ContextWindowNotice.Kind.
+type MessageContextWindowNoticeKind string
+
+// MessageEffortReason Why `sent` differs from `chosen`. Absent when the chosen value was sent as chosen.
+type MessageEffortReason string
+
+// MessageGoalOutcomeEnding WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — an EXPLICIT user ending only: the owning session's `/goal clear` (aliases `stop|off|reset|cancel|none`) or an authorized parent's `delegate(action="clear_goal")` (Goal.state `cleared`, terminal note "cleared by user"). NEVER written for a session lifecycle transition — a Stop, timeout, plan stop, restart or failure keeps the goal record active; only natural met / round-exhaustion adjudication and these explicit clears end a goal. `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
 type MessageGoalOutcomeEnding string
+
+// MessageHelperEventKind defines model for Message.HelperEvent.Kind.
+type MessageHelperEventKind string
+
+// MessageInputDispositionReason defines model for Message.InputDisposition.Reason.
+type MessageInputDispositionReason string
+
+// MessageInputDispositionState defines model for Message.InputDisposition.State.
+type MessageInputDispositionState string
+
+// MessageParticipantKind defines model for Message.Participant.Kind.
+type MessageParticipantKind string
+
+// MessageReplyToParticipantKind defines model for Message.ReplyToParticipant.Kind.
+type MessageReplyToParticipantKind string
 
 // MessageRole Author role. Absent on compaction entries.
 type MessageRole string
+
+// MessageRoomRefRole `request` — the room's request delivered to this agent; `answer` — this agent's answer appended to the room.
+type MessageRoomRefRole string
 
 // MessageStatus Completion status of this message turn.
 type MessageStatus string
@@ -18111,7 +22358,7 @@ type MessageSubagentEndStatus string
 // MessageSubagentEndType defines model for Message.SubagentEnd.Type.
 type MessageSubagentEndType string
 
-// MessageSubagentMessageKind The underlying SessionMessage kind. `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
+// MessageSubagentMessageKind The underlying SessionMessage kind, or `not_delivered` (FR-013): a server-authored line saying a child's report was refused at an inbox cap and not saved (`untrusted_origin` is false; `text` never carries the refused body). `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
 type MessageSubagentMessageKind string
 
 // MessageSubagentMessageType defines model for Message.SubagentMessage.Type.
@@ -18119,6 +22366,12 @@ type MessageSubagentMessageType string
 
 // MessageSubagentStartType defines model for Message.SubagentStart.Type.
 type MessageSubagentStartType string
+
+// MessageSubagentStateControlReceiptState ADR D4's control-receipt state machine. `queued`: accepted, durable, not yet in front of the child. `delivered` (steer only): the instruction is durably present in the child's transcript at its next tool boundary — `steer`'s runtime-final receipt; never a claim of model compliance. `applied`: the runtime enforced the effect (stop, redirect, stop_all, respond, resume, clear_goal). `superseded`: replaced before delivery by a newer control, or made moot.
+type MessageSubagentStateControlReceiptState string
+
+// MessageSubagentStateControlReceiptVerb Which control this receipt reports on.
+type MessageSubagentStateControlReceiptVerb string
 
 // MessageSubagentStateState The child's current durable lifecycle state (SessionLifecycleRecord.state).
 type MessageSubagentStateState string
@@ -18132,14 +22385,17 @@ type MessageSystemSubtype string
 // MessageToolCallsContentState ADR-066 D4/D5 projection state of this call's result in the model's window, as persisted in window meta and returned on transcript read. "full" = the result entered unmodified; "capped" = it entered head-and-tail truncated with a mark (the archive line holds the full content); "emptied" = it was later emptied in place, leaving a recall mark. The transcript `result` is the PROJECTED content the model saw; the full content stays in the gateway tool_results/ store for Verbose chat. Absent = full.
 type MessageToolCallsContentState string
 
-// MessageToolCallsStatus Outcome of the tool call. "interrupted" is written by the tool-call status derivation in `pkg/agent/loop_run_turn_tools.go` onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
+// MessageToolCallsStatus Outcome of the tool call. "interrupted" is recorded on a delegate/spawn tool call's own persisted record when the parent turn is canceled or aborted mid-flight while the sub-turn is still in progress. "parked" (ADR-057 UAT defect C2 fix) is recorded the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
 type MessageToolCallsStatus string
 
-// MessageTruncationReason Narrows why `truncated` is true: "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a `truncated: true` entry means "cancelled" — every entry written before this field existed predates it and was always a cancel (ADR-087 D2).
+// MessageTruncationReason Narrows why `truncated` is true: "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a `truncated: true` entry means the reason is not recorded: readers do not default it to "cancelled" or to anything else (ADR-087 D2; session-core DEL-F36).
 type MessageTruncationReason string
 
-// MessageType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
+// MessageType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). "context_window_notice" entries retain a classified Verbose-only diagnostic (ADR-066 MAJ-CW-009), not a model-history message. Runtime validation requires their `context_window_notice` payload; live and replay carry the same payload as ContextWindowNoticeFrame.notice with the original entry id, timestamp, agent_id and turn_id. "provider_fallback" entries (chat-history paging spec D10 PF=A) are a persisted provider-fallback note written by the real fallback chain after its assistant answer: system-role system information with `content` equal to the saved note text verbatim and the optional `model` / `unavailable_model` / `unavailable_code` facts recorded at the time. The same note replays as a `replay_provider_fallback` ProviderFallbackNote and was announced live by the separate provider_fallback frame; a valid note must never be degraded to the malformed-item placeholder.
 type MessageType string
+
+// MessageUnavailableCode Recorded fallback condition; model_retired controls the existing model-settings hint.
+type MessageUnavailableCode string
 
 // MessageVerdictPerCriterionEvidenceSource JUDGE-FR-065/FR-066 — where the grounding evidence for this verdict came from, derived (never trusted) server-side: `machine_check` when a veto or check evidence decided it, otherwise mapped from the validated evidence_source the investigation recorded. OPTIONAL and a REPORTING field only (D-B, ADR-084 revision 9 §10) — absence, or a value that does not verify, NEVER flips `met` to anything else; it never gates a verdict, it only explains one.
 type MessageVerdictPerCriterionEvidenceSource string
@@ -18149,6 +22405,9 @@ type MessageVerdictPerCriterionProvenance string
 
 // MessageVerdictScope Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
 type MessageVerdictScope string
+
+// MessageViewMembership C-ARCHIVE (session-core FR-004): which view(s) of the single append-only archive this entry belongs to — "chat" (rendered in the conversation), "model" (part of the model context window), or "both". Server-owned (readOnly): the server writes it and emits the entry's effective chat/both membership for included entries; clients never send it. An entry classified "model" is not part of the chat projection and is not returned here. Optional and additive: entries written before this field existed carry no value, and the server treats absent as unknown rather than re-deriving a view. This is a per-entry classification on the one archive, never by itself a second store.
+type MessageViewMembership string
 
 // MessageParentArtifact `message_parent` child tool call, `kind: artifact` (ADR-053 §5.1). Payload-only — see `MessageParentProgress` for the request/record split rationale.
 type MessageParentArtifact struct {
@@ -18248,11 +22507,8 @@ type MessageParentProgress struct {
 // MessageParentProgressKind defines model for MessageParentProgress.Kind.
 type MessageParentProgressKind string
 
-// MessageParentQuestion `message_parent` child tool call, `kind: question` (ADR-053 §5.1, R§8.2). `wait: true` parks the CALLING child in `needs_input` (native only — a 3P child never calls this kind, D5). `authority` is child-authored and NEVER trusted at face value — the runtime's `deriveQuestionAuthority(q)` re-derives the effective authority server-side (fail-closed default `owner_required` on omission; a child can only be UPGRADED to `owner_required`, never downgraded). Counts toward the per-child unacked ceiling (D15, max 20 open question+blocker) — payload-only, see `MessageParentProgress` for the request/record split rationale.
+// MessageParentQuestion `message_parent` child tool call, `kind: question` (ADR-053 §5.1). An ordinary upward message: ADR-20261004 ("Steering commands: no person question", locked decision 6) removed the person-question pause — there is no `wait`/`authority`, the calling child is never parked, and no answer expiry exists. Counts toward the per-child unacked ceiling (D15, max 20 open question+blocker) — payload-only, see `MessageParentProgress` for the request/record split rationale.
 type MessageParentQuestion struct {
-	// Authority Child-authored authority tag. Untrusted (M3) — see `SessionMessageQuestion.authority` for the identical fail-closed derivation rule.
-	Authority *MessageParentQuestionAuthority `json:"authority,omitempty"`
-
 	// CorrelationId Optional child-supplied correlation id (server-generated when absent) that a subsequent `respond` will reference.
 	CorrelationId *string                   `json:"correlation_id,omitempty"`
 	Kind          MessageParentQuestionKind `json:"kind"`
@@ -18262,18 +22518,12 @@ type MessageParentQuestion struct {
 
 	// Text Untrusted question text.
 	Text string `json:"text"`
-
-	// Wait True parks the calling child in `needs_input` awaiting a `respond`.
-	Wait bool `json:"wait"`
 }
-
-// MessageParentQuestionAuthority Child-authored authority tag. Untrusted (M3) — see `SessionMessageQuestion.authority` for the identical fail-closed derivation rule.
-type MessageParentQuestionAuthority string
 
 // MessageParentQuestionKind defines model for MessageParentQuestion.Kind.
 type MessageParentQuestionKind string
 
-// MessageParentRequest The first-class child-side `message_parent` tool's argument shape, discriminated by `kind` (ADR-053 §5.1). A child uses this exactly ONE tool to push a typed message into its parent's inbox — `progress | checkpoint | artifact | blocker | question | handback`. `decision_request`/`error`/`revision_entry`/ `goal_status`/`steer`/`respond` are SessionMessage kinds the child tool does NOT expose (decision_request is reserved for future use; the other four are engine/parent-only or session- internal).
+// MessageParentRequest The first-class child-side `message_parent` tool's argument shape, discriminated by `kind` (ADR-053 §5.1). A child uses this exactly ONE tool to push a typed message into its parent's inbox — `progress | checkpoint | artifact | blocker | question | handback`. `error`/`revision_entry`/`goal_status`/`steer`/ `respond` are SessionMessage kinds the child tool does NOT expose (they are engine/parent-only or session-internal).
 type MessageParentRequest struct {
 	union json.RawMessage
 }
@@ -18295,6 +22545,9 @@ type MessageParentResponse struct {
 
 // ModelTokens Per-model token breakdown within a session or usage summary.
 type ModelTokens struct {
+	// CacheHitRatio Cache-hit ratio for this cell: cache_read / (in + cache_read + cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. in is uncached input.
+	CacheHitRatio *float64 `json:"cache_hit_ratio"`
+
 	// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
 	CacheRead *int `json:"cache_read,omitempty"`
 
@@ -18307,11 +22560,14 @@ type ModelTokens struct {
 	// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 	Out *int `json:"out,omitempty"`
 
+	// Reasoning Effort levels spec (FR-024). Reasoning tokens reported by the provider for this cell: the sum of the per-call counts of the entries that reported one. A subset of out, never added to total. Absent when no entry reported a count.
+	Reasoning *int `json:"reasoning,omitempty"`
+
 	// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 	Total int `json:"total"`
 }
 
-// Notification A user-facing notification (#264) surfaced in the header notification center. Raised on scheduled-run failures and on knowledge-base drift repair (ADR-067 FR-038a); the type is open for future sources. Coalesced per source where noted (e.g. one item per schedule, updated).
+// Notification A user-facing notification (#264) surfaced in the header notification center. Raised on scheduled-run failures, knowledge-base drift repair (ADR-067 FR-038a), and operational Stop outcomes; the type is open for future sources. Coalesced per source where noted (e.g. one item per schedule, updated).
 type Notification struct {
 	// AgentId The agent the notification concerns.
 	AgentId *string `json:"agent_id,omitempty"`
@@ -18335,6 +22591,7 @@ type Notification struct {
 	// Type The event class. Extensible; consumers must tolerate unknown values.
 	//
 	// "knowledge_drift" (ADR-067 FR-038a) means the automatic drift check found that a knowledge base's search index no longer matched the folder on disk, and the index is being rebuilt from that folder. It is raised ONLY when something was actually wrong — a healthy check produces no notification — and it never reports a change to the operator's own files.
+	// "stop_notice" reports an operational Stop outcome: a selected request was already approved, cleanup was partial, or Stop did not complete. It is a non-terminal header notification and must not be sent as a chat ErrorFrame.
 	Type NotificationType `json:"type"`
 
 	// UpdatedAtMs Set when a coalesced notification is updated (e.g. repeated schedule failure).
@@ -18347,6 +22604,7 @@ type NotificationSeverity string
 // NotificationType The event class. Extensible; consumers must tolerate unknown values.
 //
 // "knowledge_drift" (ADR-067 FR-038a) means the automatic drift check found that a knowledge base's search index no longer matched the folder on disk, and the index is being rebuilt from that folder. It is raised ONLY when something was actually wrong — a healthy check produces no notification — and it never reports a change to the operator's own files.
+// "stop_notice" reports an operational Stop outcome: a selected request was already approved, cleanup was partial, or Stop did not complete. It is a non-terminal header notification and must not be sent as a chat ErrorFrame.
 type NotificationType string
 
 // NotificationList The authenticated user's notifications plus the unread count (#264).
@@ -18375,6 +22633,7 @@ type NotificationList struct {
 		// Type The event class. Extensible; consumers must tolerate unknown values.
 		//
 		// "knowledge_drift" (ADR-067 FR-038a) means the automatic drift check found that a knowledge base's search index no longer matched the folder on disk, and the index is being rebuilt from that folder. It is raised ONLY when something was actually wrong — a healthy check produces no notification — and it never reports a change to the operator's own files.
+		// "stop_notice" reports an operational Stop outcome: a selected request was already approved, cleanup was partial, or Stop did not complete. It is a non-terminal header notification and must not be sent as a chat ErrorFrame.
 		Type NotificationListNotificationsType `json:"type"`
 
 		// UpdatedAtMs Set when a coalesced notification is updated (e.g. repeated schedule failure).
@@ -18391,6 +22650,7 @@ type NotificationListNotificationsSeverity string
 // NotificationListNotificationsType The event class. Extensible; consumers must tolerate unknown values.
 //
 // "knowledge_drift" (ADR-067 FR-038a) means the automatic drift check found that a knowledge base's search index no longer matched the folder on disk, and the index is being rebuilt from that folder. It is raised ONLY when something was actually wrong — a healthy check produces no notification — and it never reports a change to the operator's own files.
+// "stop_notice" reports an operational Stop outcome: a selected request was already approved, cleanup was partial, or Stop did not complete. It is a non-terminal header notification and must not be sent as a chat ErrorFrame.
 type NotificationListNotificationsType string
 
 // OnboardingCompleteRequest Body for POST /onboarding/complete. WP5 (ADR-0010) composes this by auth mode: in local mode (open-source edition) the route runs BEFORE any session exists and mints the instance's first account — `admin` is REQUIRED, upstream's behaviour restored. In platform mode (hosted/desktop) the caller is ALREADY signed in (ADR-0008 rulings 1 and 2: the omnipus.ai account is the login) — `admin` is REFUSED (400) because no local credential is ever minted on that edition. `provider` is discriminated by `auth_method`: `api_key` requires `api_key`; `sign_in` forbids it (ADR-068 MAJ-014). `preferences` is optional in both modes.
@@ -18454,14 +22714,20 @@ type OnboardingProviderApiKey struct {
 	// AuthMethod Discriminator — this variant authenticates with an API key.
 	AuthMethod OnboardingProviderApiKeyAuthMethod `json:"auth_method"`
 
-	// Endpoint Optional custom API base URL, persisted as the provider entry's api_base. Required for providers that have no fixed default endpoint (e.g. azure, azure-openai — a per-resource host); also usable to override the regional default. When omitted, the provider's built-in default base is used.
+	// Endpoint Base URL, persisted as the provider entry's api_base. For a catalog provider: optional override of its base URL. For a custom endpoint (see `protocol`): required, the endpoint's base URL.
 	Endpoint *string `json:"endpoint,omitempty"`
 
-	// Id Provider id (e.g. "anthropic", "openai", "openrouter", "gemini"). Must be a known protocol; unknown values are rejected with 400.
+	// Id Provider id (e.g. "anthropic", "openai", "openrouter", "gemini"). A catalog provider id, or — together with `endpoint` and `protocol` — the name of a custom endpoint. Anything else is rejected with 400.
 	Id string `json:"id"`
 
 	// Model The model chosen for the first agent — the probe-validated pick from step 3, persisted as agents.defaults.default_model together with the provider id.
 	Model *string `json:"model,omitempty"`
+
+	// Protocol Wire protocol of an operator-named custom endpoint (ADR-067 §3.2 item 3, clarification 2026-11-08, #1700). Send it only when `id` is NOT a catalog provider id: then `id`, `endpoint` (the base URL) and `protocol` together create a custom row, saved with custom=true, this protocol and endpoint as api_base; `model` is then required and `region` is refused. Must be absent for a catalog provider id (400 on field `id`). Omitted by older clients: the request then behaves exactly as before this field existed.
+	Protocol *OnboardingProviderApiKeyProtocol `json:"protocol,omitempty"`
+
+	// ReasoningEffort Effort for the chosen model (effort-levels spec FR-067), persisted as agents.defaults.default_model.reasoning_effort in the completion's single configuration write, never on the provider row. null is refused.
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 
 	// Region Issue #800 (Bedrock region contract): the selected region for a provider whose catalog entry carries `regions` (CatalogProvider.regions), persisted as the provider entry's `region`. Ignored for a provider whose catalog entry carries no `regions`.
 	Region *string `json:"region,omitempty"`
@@ -18469,6 +22735,9 @@ type OnboardingProviderApiKey struct {
 
 // OnboardingProviderApiKeyAuthMethod Discriminator — this variant authenticates with an API key.
 type OnboardingProviderApiKeyAuthMethod string
+
+// OnboardingProviderApiKeyProtocol Wire protocol of an operator-named custom endpoint (ADR-067 §3.2 item 3, clarification 2026-11-08, #1700). Send it only when `id` is NOT a catalog provider id: then `id`, `endpoint` (the base URL) and `protocol` together create a custom row, saved with custom=true, this protocol and endpoint as api_base; `model` is then required and `region` is refused. Must be absent for a catalog provider id (400 on field `id`). Omitted by older clients: the request then behaves exactly as before this field existed.
+type OnboardingProviderApiKeyProtocol string
 
 // OnboardingProviderSignIn The `sign_in` variant of OnboardingCompleteRequest.provider (ADR-068, MAJ-014). The vendor CLI holds the login; Omnipus stores no credential, so `api_key` is not a property here and a body carrying one is a schema violation (400 "api_key not allowed with sign_in").
 type OnboardingProviderSignIn struct {
@@ -18478,11 +22747,14 @@ type OnboardingProviderSignIn struct {
 	// Endpoint Optional custom API base URL, persisted as the provider entry's api_base.
 	Endpoint *string `json:"endpoint,omitempty"`
 
-	// Id Provider id whose catalog row declares `sign_in` in auth_methods (e.g. "codex-cli", "openai-chatgpt", "github-copilot"); any other id is rejected with 400 "provider does not support sign-in".
+	// Id Provider id whose catalog row declares `sign_in` in auth_methods (e.g. "openai-chatgpt"); any other id is rejected with 400 "provider does not support sign-in".
 	Id string `json:"id"`
 
 	// Model The model chosen for the first agent — the sign-in-probe-validated pick from step 3, persisted as agents.defaults.default_model together with the provider id.
 	Model *string `json:"model,omitempty"`
+
+	// ReasoningEffort Effort for the chosen model (effort-levels spec FR-067), persisted as agents.defaults.default_model.reasoning_effort in the completion's single configuration write, never on the provider row. null is refused.
+	ReasoningEffort *string `json:"reasoning_effort,omitempty"`
 }
 
 // OnboardingProviderSignInAuthMethod Discriminator — this variant uses the vendor CLI's saved login.
@@ -18527,6 +22799,51 @@ type PendingRestartEntry struct {
 	PersistedValue interface{} `json:"persisted_value"`
 }
 
+// PerformancePendingApply Server-side "saved but not applied yet" state of the Performance settings (issue #904). Set when a PUT /performance ends in a performance_reload_failed answer (its writes are committed on disk but not in force). It survives page reloads and new sessions — it lives in the gateway, not in the client — and is cleared only when a later refresh of the running configuration AND an agent registry reload both succeed: a later successful PUT /performance (which always reloads the agents while this state is set), or a successful manual or automatic configuration reload. A gateway restart applies everything on disk, so a restarted gateway never reports it.
+type PerformancePendingApply struct {
+	// ChangedFields Every Performance setting saved but not yet in force — the union of the changed_fields of each failed PUT since the settings were last fully applied, in contract enum order.
+	ChangedFields []PerformancePendingApplyChangedFields `json:"changed_fields"`
+
+	// Stage How far the most recent failed apply got (same meaning as PerformanceReloadFailedDetails.stage). refresh — the running configuration was NOT refreshed: the other fields of this response still show the OLD values. reload — the running configuration shows the NEW values but the agents were not rebuilt: their next turns keep the old limits.
+	Stage PerformancePendingApplyStage `json:"stage"`
+}
+
+// PerformancePendingApplyChangedFields defines model for PerformancePendingApply.ChangedFields.
+type PerformancePendingApplyChangedFields string
+
+// PerformancePendingApplyStage How far the most recent failed apply got (same meaning as PerformanceReloadFailedDetails.stage). refresh — the running configuration was NOT refreshed: the other fields of this response still show the OLD values. reload — the running configuration shows the NEW values but the agents were not rebuilt: their next turns keep the old limits.
+type PerformancePendingApplyStage string
+
+// PerformanceReloadFailedDetails details of the 500 performance_reload_failed answer of PUT /performance (issue #904). Every write of the request is COMMITTED (config.json and any lowered agents are on disk and audited; nothing is rolled back), but the new values are not in force yet. stage says how far the apply got, and so what GET /performance shows until the next reload or restart.
+type PerformanceReloadFailedDetails struct {
+	// ChangedFields The performance settings this request changed, i.e. the fields present in the PUT body. The client names these — and only these — in its "saved, not applied yet" message.
+	ChangedFields []PerformanceReloadFailedDetailsChangedFields `json:"changed_fields"`
+
+	// LoweredAgents The agents whose own tool-iteration limit this request lowered (spec D11); empty when none. GET /performance does not carry them, so this is the only place the summary survives.
+	LoweredAgents []MaxToolIterationAgentChange `json:"lowered_agents"`
+
+	// Stage refresh — config.json was written but the in-memory configuration was NOT swapped: GET /performance still shows the OLD values and running agents keep them until the gateway reloads its configuration or restarts. reload — the in-memory configuration was updated (GET /performance shows the NEW values) but the agent registry reload failed: the agents' next turns keep the old limits until the next reload or restart.
+	Stage PerformanceReloadFailedDetailsStage `json:"stage"`
+}
+
+// PerformanceReloadFailedDetailsChangedFields defines model for PerformanceReloadFailedDetails.ChangedFields.
+type PerformanceReloadFailedDetailsChangedFields string
+
+// PerformanceReloadFailedDetailsStage refresh — config.json was written but the in-memory configuration was NOT swapped: GET /performance still shows the OLD values and running agents keep them until the gateway reloads its configuration or restarts. reload — the in-memory configuration was updated (GET /performance shows the NEW values) but the agent registry reload failed: the agents' next turns keep the old limits until the next reload or restart.
+type PerformanceReloadFailedDetailsStage string
+
+// PerformanceReloadFailedError 500 body of PUT /performance with code performance_reload_failed (issue #904): the settings are saved but not applied yet. Envelope-compatible with ErrorResponse (error + code + details); details is typed as PerformanceReloadFailedDetails.
+type PerformanceReloadFailedError struct {
+	// Code Machine-readable error code; always "performance_reload_failed".
+	Code string `json:"code"`
+
+	// Details details of the 500 performance_reload_failed answer of PUT /performance (issue #904). Every write of the request is COMMITTED (config.json and any lowered agents are on disk and audited; nothing is rolled back), but the new values are not in force yet. stage says how far the apply got, and so what GET /performance shows until the next reload or restart.
+	Details PerformanceReloadFailedDetails `json:"details"`
+
+	// Error Human-readable message naming only the settings this request changed.
+	Error string `json:"error"`
+}
+
 // PerformanceSettings Agent concurrency and fan-out settings returned by GET /api/v1/performance. Concurrency is bounded by LIVE available memory at the moment of admission, not by a number precomputed at startup.
 type PerformanceSettings struct {
 	// EffectiveMaxParallelAgents The resolved value actually in use. When max_parallel_agents_configured is true this is the operator's own value (from config or the OMNIPUS_MAX_PARALLEL_AGENTS env var). When it is false, this is the physical OS-thread-safety backstop and NOT a capacity recommendation — a client must not present it as one; render the automatic, memory-bounded state instead. Always present in responses; absent in requests.
@@ -18535,11 +22852,35 @@ type PerformanceSettings struct {
 	// GoalMaxRounds GOAL-FR-024/FR-045, MV-1, D-D/D-E (2026-09-11, operator-ratified) — the SINGLE, GLOBAL adjudication-round ceiling for EVERY goal, task and chat identically. Default 20. THERE IS NO PER-GOAL OVERRIDE anywhere in this delivery — GOAL-FR-046 ("a human-editable budget control for a goal's per-goal override") and GOAL-US-8 ("an operator can give a goal more room") are RETIRED in full. This is the ONE control: `Goal.max_rounds` on every goal record resolves from this value alone (`pkg/config/planning.go::EffectiveGoalMaxRounds`, unmodified signature — NQ-2). It bounds the tries a goal gets in chat and within one run of a task alike; it does NOT bound how many fresh runs a task gets (`Task.effective_max_attempts`, a separate limit — founder decision 2026-09-14, issue #710). A goal keeps the value in force when it started. Lives under Settings → Performance (`src/components/settings/PerformanceSection.tsx`, GOAL-FR-045) — no new settings tab. Always present in responses.
 	GoalMaxRounds *int `json:"goal_max_rounds,omitempty"`
 
+	// GoalReminderQuietSeconds Idle-only quiet window before an automatic goal reminder, in seconds. Default 60; there is no off value. Always resolved in responses. Live changes apply on the next fixed 30-second sweep without restart.
+	GoalReminderQuietSeconds *int `json:"goal_reminder_quiet_seconds,omitempty"`
+
+	// GoalStalledCheckinEnabled Whether stalled busy work can receive a check-in. Default true. This is the only stalled-work off switch; it does not disable idle reminders. Always resolved in responses. Live without restart.
+	GoalStalledCheckinEnabled *bool `json:"goal_stalled_checkin_enabled,omitempty"`
+
+	// GoalStalledCheckinMinutes Busy-work stall threshold in minutes, independent of the idle quiet window. Default 30. Retained while check-ins are disabled; bounds still apply while disabled. Always resolved in responses. Live without restart.
+	GoalStalledCheckinMinutes *int `json:"goal_stalled_checkin_minutes,omitempty"`
+
 	// MaxParallelAgents Maximum number of tasks/subagents that may run concurrently on the dispatch path. There is no longer a computed default: 0 on disk means "not configured", and is surfaced here as the resolved effective value (see effective_max_parallel_agents and max_parallel_agents_configured) because 0 is an internal sentinel that is never a real concurrency value. When nothing is configured, concurrency is bounded by live available memory at the moment each agent turn is admitted, and the number reported here is a PHYSICAL OS-thread-safety backstop rather than an estimate of what this machine can run. There is NO policy ceiling: an explicitly configured value is always honored as given (never silently clamped — only a floor of 1 applies), including a value above the physical backstop, which is honored in full with a server-side warning logged rather than being lowered. Overridden by the OMNIPUS_MAX_PARALLEL_AGENTS env var.
 	MaxParallelAgents *int `json:"max_parallel_agents,omitempty"`
 
 	// MaxParallelAgentsConfigured Whether max_parallel_agents was actually set by an operator, in config.json or via the OMNIPUS_MAX_PARALLEL_AGENTS env var. false means nothing is configured and concurrency is bounded by live available memory; effective_max_parallel_agents then carries the physical backstop, which is not a number to show an operator as a recommendation. This field exists because the two cases are otherwise indistinguishable on the wire — max_parallel_agents substitutes the effective value whenever the configured value is below the schema floor, so an unconfigured host looks exactly like an explicitly configured one. Always present in responses; absent in requests.
 	MaxParallelAgentsConfigured *bool `json:"max_parallel_agents_configured,omitempty"`
+
+	// MaxToolIterations The global tool-iteration limit IN FORCE ("Max tool calls per turn", issue #904, tool-iteration-limit spec): the ceiling for every agent's turns. An agent's own value may only lower it. When the value saved in config.json is missing or out of range this is the value actually used, not the saved one (see max_tool_iterations_saved_state). Always present in responses.
+	MaxToolIterations *int `json:"max_tool_iterations,omitempty"`
+
+	// MaxToolIterationsLoweredAgents Agents whose own limit this request lowered to the new global (spec D11). Present only on a PUT response that lowered at least one agent; absent on GET and on every other PUT.
+	MaxToolIterationsLoweredAgents *[]MaxToolIterationAgentChange `json:"max_tool_iterations_lowered_agents,omitempty"`
+
+	// MaxToolIterationsSavedRaw The global limit exactly as found in config.json. Present only when max_tool_iterations_saved_state is below_min or above_max (spec D13 Settings warning); absent otherwise.
+	MaxToolIterationsSavedRaw *int `json:"max_tool_iterations_saved_raw,omitempty"`
+
+	// MaxToolIterationsSavedState State of the global tool-iteration limit as saved in config.json (agents.defaults.max_tool_iterations), used for the Settings warning (issue #904, tool-iteration-limit spec D13). The file is never rewritten to correct it; the value in force is PerformanceSettings.max_tool_iterations. "ok" = saved value within 1–1000 and in force as saved; "missing" = key absent (the shipped default is in force); "below_min" = saved value below 1 (0 and negative included; the shipped default is in force); "above_max" = saved value above 1000 (1000 is in force).
+	MaxToolIterationsSavedState *MaxToolIterationsSavedState `json:"max_tool_iterations_saved_state,omitempty"`
+
+	// PendingApply Server-side "saved but not applied yet" state of the Performance settings (issue #904). Set when a PUT /performance ends in a performance_reload_failed answer (its writes are committed on disk but not in force). It survives page reloads and new sessions — it lives in the gateway, not in the client — and is cleared only when a later refresh of the running configuration AND an agent registry reload both succeed: a later successful PUT /performance (which always reloads the agents while this state is set), or a successful manual or automatic configuration reload. A gateway restart applies everything on disk, so a restarted gateway never reports it.
+	PendingApply *PerformancePendingApply `json:"pending_apply,omitempty"`
 
 	// ToolsOnDemand Tool-loading mode. true (default) — agents load tools on demand to keep each message small (the compressed tool manifest); a load step is required before a non-core tool is callable. false — every allowed tool is sent on every message with no loading step (more tokens per message). Maps to tools.manifest.compressed. Always present in responses.
 	ToolsOnDemand *bool `json:"tools_on_demand,omitempty"`
@@ -18547,11 +22888,26 @@ type PerformanceSettings struct {
 
 // PerformanceSettingsUpdate Request body for PUT /api/v1/performance. Partial update — only supplied fields are modified.
 type PerformanceSettingsUpdate struct {
+	// ConfirmedLowering The exact agent snapshot (id + old value) the admin saw in GET /performance/max-tool-iterations/preview and confirmed (spec D11, D16). Absent = empty. At write time the server recomputes the set of agents whose own value is above the new max_tool_iterations; the PUT succeeds only if that set equals this list compared as a set keyed by agent_id — order-independent (same ids, and for each id the same old value). Naming the same agent_id twice is malformed (400). Any difference — an extra agent, a missing agent, a changed old value, or this field absent while agents would be lowered — is drift: nothing is written and the PUT answers 409 MaxToolIterationsLoweringConflict.
+	ConfirmedLowering *[]MaxToolIterationsConfirmedAgent `json:"confirmed_lowering,omitempty"`
+
 	// GoalMaxRounds New value for the SINGLE, GLOBAL goal-adjudication-round ceiling (GOAL-FR-024/FR-045, D-D/D-E) — governs task goals and chat goals identically; there is no per-goal override anywhere (GOAL-FR-046/ US-8 retired). Rejected below 1. Omitted = unchanged (partial update).
 	GoalMaxRounds *int `json:"goal_max_rounds,omitempty"`
 
+	// GoalReminderQuietSeconds New idle-only quiet window in seconds, 30 through 3600. Default 60 when absent from configuration, not a PUT default. Omitted = unchanged. No off value. Live on the next fixed 30-second sweep without restart.
+	GoalReminderQuietSeconds *int `json:"goal_reminder_quiet_seconds,omitempty"`
+
+	// GoalStalledCheckinEnabled Enable or disable stalled busy-work check-ins. Omitted = unchanged; explicit false is saved. Disabling does not disable idle reminders or discard goal_stalled_checkin_minutes. Live without restart.
+	GoalStalledCheckinEnabled *bool `json:"goal_stalled_checkin_enabled,omitempty"`
+
+	// GoalStalledCheckinMinutes New busy-work stall threshold in minutes, independent of idle quiet. Omitted = unchanged. Reject out-of-range values even when check-ins are disabled; disabling retains the chosen minutes. Live without restart.
+	GoalStalledCheckinMinutes *int `json:"goal_stalled_checkin_minutes,omitempty"`
+
 	// MaxParallelAgents New value for the maximum concurrent task/subagent dispatch cap — the SINGLE authority for agent concurrency (concurrency-gate consolidation, 2026-08-04). Set to 0 to restore the auto-detected default (sized from available memory, floored so a small box still functions). Any other value is honored EXACTLY as given — there is no ceiling; a value is never silently lowered. (Fixed 2026-08-04: this field previously declared `minimum: 2`, which contradicted this very description's "set to 0" instruction and would have rejected 0 under schema validation — corrected alongside the ceiling removal since both are the same field.)
 	MaxParallelAgents *int `json:"max_parallel_agents,omitempty"`
+
+	// MaxToolIterations New global tool-iteration limit (issue #904). Omitted = unchanged (partial update). When the new value is below some agents' own values, confirmed_lowering must list exactly those agents (see below), or the PUT is refused with 409.
+	MaxToolIterations *int `json:"max_tool_iterations,omitempty"`
 
 	// ToolsOnDemand New tool-loading mode. true = load tools on demand (fewer tokens per message); false = all allowed tools sent every message (no loading step). Maps to tools.manifest.compressed. Omitted = unchanged (partial update).
 	ToolsOnDemand *bool `json:"tools_on_demand,omitempty"`
@@ -18577,7 +22933,7 @@ type Plan struct {
 		// SupervisionMaxAttempts Override of FR-022's ceiling on supervision wakes that produce no valid correction; exhausting it terminates the plan `failed(supervision_unavailable)` (global default `planning.supervision_max_attempts`, 3).
 		SupervisionMaxAttempts *int `json:"supervision_max_attempts,omitempty"`
 
-		// SupervisionTurnTimeoutSeconds Override of FR-021's supervision observation deadline — how long the PlanSupervisor waits on an armed supervision wake before that attempt counts as spent (global default `planning.supervision_turn_timeout_seconds`, 600 s).
+		// SupervisionTurnTimeoutSeconds Override of FR-021's supervision observation deadline — how long the PlanSupervisor waits on an armed supervision wake before that attempt counts as spent (global default `planning.supervision_turn_timeout_seconds`, 600 s). It is a minimum observation interval counted from the wake (wake_at), and it is never evaluated while that supervision turn is still in flight — so it never stops a running review. A review that runs longer than the interval is judged as soon as it ends; there is no extra grace after it settles.
 		SupervisionTurnTimeoutSeconds *int `json:"supervision_turn_timeout_seconds,omitempty"`
 	} `json:"bounds,omitempty"`
 
@@ -18784,7 +23140,7 @@ type PlanCreateRequest struct {
 		// SupervisionMaxAttempts Override of FR-022's no-correction supervision attempt ceiling (global default `planning.supervision_max_attempts`, 3).
 		SupervisionMaxAttempts *int `json:"supervision_max_attempts,omitempty"`
 
-		// SupervisionTurnTimeoutSeconds Override of FR-021's supervision observation deadline (global default `planning.supervision_turn_timeout_seconds`, 600 s).
+		// SupervisionTurnTimeoutSeconds Override of FR-021's supervision observation deadline (global default `planning.supervision_turn_timeout_seconds`, 600 s). It is a minimum observation interval counted from the wake (wake_at), and it is never evaluated while that supervision turn is still in flight — so it never stops a running review. A review that runs longer than the interval is judged as soon as it ends; there is no extra grace after it settles.
 		SupervisionTurnTimeoutSeconds *int `json:"supervision_turn_timeout_seconds,omitempty"`
 	} `json:"bounds,omitempty"`
 
@@ -18903,7 +23259,7 @@ type PlanListResponse struct {
 			// SupervisionMaxAttempts Override of FR-022's ceiling on supervision wakes that produce no valid correction; exhausting it terminates the plan `failed(supervision_unavailable)` (global default `planning.supervision_max_attempts`, 3).
 			SupervisionMaxAttempts *int `json:"supervision_max_attempts,omitempty"`
 
-			// SupervisionTurnTimeoutSeconds Override of FR-021's supervision observation deadline — how long the PlanSupervisor waits on an armed supervision wake before that attempt counts as spent (global default `planning.supervision_turn_timeout_seconds`, 600 s).
+			// SupervisionTurnTimeoutSeconds Override of FR-021's supervision observation deadline — how long the PlanSupervisor waits on an armed supervision wake before that attempt counts as spent (global default `planning.supervision_turn_timeout_seconds`, 600 s). It is a minimum observation interval counted from the wake (wake_at), and it is never evaluated while that supervision turn is still in flight — so it never stops a running review. A review that runs longer than the interval is judged as soon as it ends; there is no extra grace after it settles.
 			SupervisionTurnTimeoutSeconds *int `json:"supervision_turn_timeout_seconds,omitempty"`
 		} `json:"bounds,omitempty"`
 
@@ -19115,7 +23471,7 @@ type PlanRestartResponse struct {
 			// SupervisionMaxAttempts Override of FR-022's ceiling on supervision wakes that produce no valid correction; exhausting it terminates the plan `failed(supervision_unavailable)` (global default `planning.supervision_max_attempts`, 3).
 			SupervisionMaxAttempts *int `json:"supervision_max_attempts,omitempty"`
 
-			// SupervisionTurnTimeoutSeconds Override of FR-021's supervision observation deadline — how long the PlanSupervisor waits on an armed supervision wake before that attempt counts as spent (global default `planning.supervision_turn_timeout_seconds`, 600 s).
+			// SupervisionTurnTimeoutSeconds Override of FR-021's supervision observation deadline — how long the PlanSupervisor waits on an armed supervision wake before that attempt counts as spent (global default `planning.supervision_turn_timeout_seconds`, 600 s). It is a minimum observation interval counted from the wake (wake_at), and it is never evaluated while that supervision turn is still in flight — so it never stops a running review. A review that runs longer than the interval is judged as soon as it ends; there is no extra grace after it settles.
 			SupervisionTurnTimeoutSeconds *int `json:"supervision_turn_timeout_seconds,omitempty"`
 		} `json:"bounds,omitempty"`
 
@@ -19312,7 +23668,7 @@ type PlanUpdateRequest struct {
 		// SupervisionMaxAttempts Override of FR-022's no-correction supervision attempt ceiling (global default `planning.supervision_max_attempts`, 3).
 		SupervisionMaxAttempts *int `json:"supervision_max_attempts,omitempty"`
 
-		// SupervisionTurnTimeoutSeconds Override of FR-021's supervision observation deadline (global default `planning.supervision_turn_timeout_seconds`, 600 s).
+		// SupervisionTurnTimeoutSeconds Override of FR-021's supervision observation deadline (global default `planning.supervision_turn_timeout_seconds`, 600 s). It is a minimum observation interval counted from the wake (wake_at), and it is never evaluated while that supervision turn is still in flight — so it never stops a running review. A review that runs longer than the interval is judged as soon as it ends; there is no extra grace after it settles.
 		SupervisionTurnTimeoutSeconds *int `json:"supervision_turn_timeout_seconds,omitempty"`
 	} `json:"bounds,omitempty"`
 
@@ -19606,9 +23962,6 @@ type Provider struct {
 	// BacksDefault True iff agents.defaults.default_model names this provider (ADR-068). Always present; such a row cannot be deleted without a new_default.
 	BacksDefault bool `json:"backs_default"`
 
-	// CliKind For protocol "cli" rows, the subprocess driver selected by the catalog row (ADR-067 X-14).
-	CliKind *ProviderCliKind `json:"cli_kind,omitempty"`
-
 	// Company Catalog grouping key (CatalogProvider.company) for the configured row's provider; absent for custom and unknown rows.
 	Company *string `json:"company,omitempty"`
 
@@ -19670,9 +24023,6 @@ type Provider struct {
 // ProviderAuthMethod How this row authenticates (ADR-068; closed set — oauth/token no longer exist). Always present; "api_key" until ADR-068's computation lands.
 type ProviderAuthMethod string
 
-// ProviderCliKind For protocol "cli" rows, the subprocess driver selected by the catalog row (ADR-067 X-14).
-type ProviderCliKind string
-
 // ProviderDependentsRole defines model for Provider.Dependents.Role.
 type ProviderDependentsRole string
 
@@ -19723,7 +24073,7 @@ type ProviderDependentRole string
 
 // ProviderUpdateRequest Request body for PUT /api/v1/providers/{id}. Adds or updates an LLM provider configuration. On new providers, api_key is required. On existing providers, api_key may be omitted to keep the current key.
 type ProviderUpdateRequest struct {
-	// ApiBase Explicit base URL. Required for a custom row; optional override for a catalog provider (wins over the catalog row). SSRF-checked. For a provider with a `regions` picker (e.g. amazon-bedrock), this is the optional custom/private endpoint override (e.g. a VPC endpoint) — when set it wins over the region-derived endpoint.
+	// ApiBase Explicit base URL. Required when creating a custom row; kept from the stored row when omitted; optional override for a catalog provider (wins over the catalog row). SSRF-checked. For a provider with a `regions` picker (e.g. amazon-bedrock), this is the optional custom/private endpoint override (e.g. a VPC endpoint) — when set it wins over the region-derived endpoint.
 	ApiBase *string `json:"api_base,omitempty"`
 
 	// ApiKey API key for the provider. Stored encrypted (AES-256-GCM) in credentials.json. Required when adding a new provider; optional when updating an existing one (omit to leave the current key unchanged).
@@ -19738,7 +24088,7 @@ type ProviderUpdateRequest struct {
 	// Models User-supplied catalogue of model slugs for a provider that does NOT expose a live /models endpoint (custom / unknown OpenAI-compatible gateways). When present, these slugs replace the provider's stored catalogue and constrain the model picker. Ignored for providers WITH a live endpoint (has_models_endpoint=true), whose catalogue is fetched from upstream. Omit to leave the existing list unchanged; send an empty array to clear it.
 	Models *[]string `json:"models,omitempty"`
 
-	// Protocol Wire protocol to use (ADR-067 FR-013/FR-014). For a catalog provider: optional; absent → the catalog's primary; a protocol the provider does not offer → 400. For a custom row (id not in the catalog): required and restricted to openai-compatible | anthropic (400 otherwise).
+	// Protocol Wire protocol to use (ADR-067 FR-013/FR-014; the retired subprocess protocol is no longer accepted — WU-24, founder 2026-10-14). For a catalog provider: optional; absent → the catalog's primary; a protocol the provider does not offer → 400. For a custom row (id not in the catalog): required when creating a custom row; kept from the stored row when omitted. Restricted to openai-compatible | anthropic (400 otherwise).
 	Protocol *ProviderUpdateRequestProtocol `json:"protocol,omitempty"`
 
 	// Region Issue #800 (Bedrock region contract): the selected region for a provider row whose catalog entry carries `regions` (CatalogProvider.regions). Precedence at runtime is row setting → `AWS_REGION` environment variable → the catalog's own default `region`. Ignored for a provider whose catalog entry carries no `regions`.
@@ -19748,7 +24098,7 @@ type ProviderUpdateRequest struct {
 // ProviderUpdateRequestAuthMethod Auth method for this row (ADR-068). Absent → api_key. sign_in is accepted only for providers whose catalog auth_methods include it (400 otherwise) and must not be combined with api_key.
 type ProviderUpdateRequestAuthMethod string
 
-// ProviderUpdateRequestProtocol Wire protocol to use (ADR-067 FR-013/FR-014). For a catalog provider: optional; absent → the catalog's primary; a protocol the provider does not offer → 400. For a custom row (id not in the catalog): required and restricted to openai-compatible | anthropic (400 otherwise).
+// ProviderUpdateRequestProtocol Wire protocol to use (ADR-067 FR-013/FR-014; the retired subprocess protocol is no longer accepted — WU-24, founder 2026-10-14). For a catalog provider: optional; absent → the catalog's primary; a protocol the provider does not offer → 400. For a custom row (id not in the catalog): required when creating a custom row; kept from the stored row when omitted. Restricted to openai-compatible | anthropic (400 otherwise).
 type ProviderUpdateRequestProtocol string
 
 // ProviderValidation Classified outcome of a provider API-key validation probe. Carried as an optional field on Provider (PUT save 200), ProbeProviderResponse (onboarding probe), and OperationResult (Settings Test) whenever a key probe was performed. Absent on non-probing responses (e.g. model-only edits).
@@ -19787,9 +24137,6 @@ type ProvidersCatalog struct {
 
 // ProvidersCatalogProvidersAuthMethods defines model for ProvidersCatalog.Providers.AuthMethods.
 type ProvidersCatalogProvidersAuthMethods string
-
-// ProvidersCatalogProvidersCliKind Required iff protocol is "cli" — selects the subprocess driver (ADR-067 X-14), never chosen by id.
-type ProvidersCatalogProvidersCliKind string
 
 // ProvidersCatalogProvidersLocality Derived on load by the gateway (FR-039); the only local/cloud classification ADR-066/ADR-068 consume.
 type ProvidersCatalogProvidersLocality string
@@ -20502,6 +24849,125 @@ type RevisionEntry struct {
 // RevisionEntryVerb `append` adds a new tail to the DAG. `supersede` marks a `done` member's outcome as superseded by a corrective tail (the superseded member's own record stays immutable — only Judge weighting changes). `targeted_retry` resets a single frozen-transient member for another attempt. `abandon` (ADR-055/FR-046b) is the honest exit: the adjudicator judges the Definition of Done unreachable from the plan's current state and adds no corrective work at all, terminating the plan `failed(dod_unreachable)` with the falsified assumption on the record — as opposed to burning the remaining round budget on corrections that cannot succeed. It is the one verb that adds no tail members and names no existing member.
 type RevisionEntryVerb string
 
+// Room A group chat (spec omnipus-system-agent K23, K35 folded in; FR-158, FR-171, FR-199, FR-217). Rooms are not Sessions: ordinary sessions keep their required agent_id. Members work in their own main sessions (GC-8). Served by GET /api/v1/workspaces/{id}/rooms and GET /api/v1/rooms/{id}. invitation_context_status is present on every room the server returns (#1449 FR-041): only an ad-hoc group started with Add participant from a main chat ever has a summary, every other group reports unavailable. invitation_context (with the text) is returned by GET /api/v1/rooms/{id} only.
+type Room struct {
+	// AllocatedCostMicroUsd Allocated cost in micro-dollars (§6.14).
+	AllocatedCostMicroUsd int64 `json:"allocated_cost_micro_usd"`
+
+	// AllocatedCostUnpriced True when at least one counted turn had an unknown price ("plus unpriced turns").
+	AllocatedCostUnpriced bool `json:"allocated_cost_unpriced"`
+
+	// Generation Durable pause generation; /pause increments it (§6.11).
+	Generation int64 `json:"generation"`
+
+	// Hidden Team room below two conversation agents: hidden, history kept.
+	Hidden bool   `json:"hidden"`
+	Id     string `json:"id"`
+
+	// InvitationContext The invitation context of an ad-hoc group started with Add participant from an agent's main chat (#1449 D10, D18, D20; FR-039 to FR-046). A short background summary written with the starting agent's model and sent once, as quoted background, with each other member's first request. It is never posted into the group or any chat. The text is returned only by GET /api/v1/rooms/{id} (getRoom); lists and live frames carry the status only. Best-effort filters remove registered secret values and known credential shapes; a password written in plain prose may not be caught (D18, #1467).
+	InvitationContext *RoomInvitationContext `json:"invitation_context,omitempty"`
+
+	// InvitationContextStatus State of the invitation summary of a group (#1449 D10, D20, FR-041): generating while it is being written; ready when it is stored; unavailable when it could not be produced (provider error, quota, the 45-second limit, a restart while generating, the group deleted or the starting agent removed, or nothing to summarise).
+	InvitationContextStatus *RoomInvitationStatus `json:"invitation_context_status,omitempty"`
+	Kind                    RoomKind              `json:"kind"`
+
+	// Members Member agent ids. Never null.
+	Members []string `json:"members"`
+
+	// Muted Muted member agent ids (all room kinds). Never null.
+	Muted []string `json:"muted"`
+	Name  string   `json:"name"`
+
+	// NeedsAttention Derived: true while any member state is awaiting_approval or waiting_on_user.
+	NeedsAttention bool `json:"needs_attention"`
+
+	// OriginSessionId The main chat the room was started from, when any.
+	OriginSessionId *string `json:"origin_session_id,omitempty"`
+	Paused          bool    `json:"paused"`
+
+	// ReadOnlyReason Present when the room is read-only, with the reason.
+	ReadOnlyReason *string `json:"read_only_reason,omitempty"`
+	WorkspaceId    string  `json:"workspace_id"`
+}
+
+// RoomKind defines model for Room.Kind.
+type RoomKind string
+
+// RoomCreateRequest Body of POST /api/v1/workspaces/{id}/rooms (spec omnipus-system-agent K24; FR-161, FR-172). Creates a squad or an ad-hoc room; the team room is never created through this route. Semantic rules enforced by the handler with inbound validation on and off: a squad needs a name; at least two distinct agents, all members of the workspace.
+type RoomCreateRequest struct {
+	AgentIds []string              `json:"agent_ids"`
+	Kind     RoomCreateRequestKind `json:"kind"`
+
+	// Name Required for a squad.
+	Name *string `json:"name,omitempty"`
+
+	// OriginSessionId The main chat the room is started from, when any.
+	OriginSessionId *string `json:"origin_session_id,omitempty"`
+}
+
+// RoomCreateRequestKind defines model for RoomCreateRequest.Kind.
+type RoomCreateRequestKind string
+
+// RoomHistoryResponse One backward page of the complete retained room transcript (#1332). Select the newest entries eligible for the exclusive before_seq cursor and applied limit, then return them in strictly ascending entry seq order. An omitted cursor includes the newest entry. This page does not change the live room stream position or the forward attach subscription.
+// has_older is true exactly when another actual eligible entry precedes this page, not merely when the page is full or sequence numbers have gaps. next_before_seq is present if and only if has_older is true and equals the first returned entry's seq. Otherwise omit it, never send null or zero. An empty page is entries: [] with has_older: false and no next_before_seq. These conditional continuation rules are producer/consumer invariants; structural schema validation alone does not prove them.
+type RoomHistoryResponse struct {
+	// Entries The newest eligible entries, returned oldest to newest in strictly ascending seq order, with at most the applied limit. Always present and non-null, including an empty array at the beginning of history. Every entry belongs to the requested room and includes its existing delivery projection.
+	Entries []RoomEntry `json:"entries"`
+
+	// HasOlder True exactly when another actual eligible entry precedes the first returned entry. False for an empty page or when the beginning of history has been reached, even if the page is full.
+	HasOlder bool `json:"has_older"`
+
+	// NextBeforeSeq Present if and only if has_older is true; exactly the first returned entry's seq, to use as the next exclusive before_seq cursor. Omitted when has_older is false; never null or zero.
+	NextBeforeSeq *int64 `json:"next_before_seq,omitempty"`
+}
+
+// RoomInvitationContext The invitation context of an ad-hoc group started with Add participant from an agent's main chat (#1449 D10, D18, D20; FR-039 to FR-046). A short background summary written with the starting agent's model and sent once, as quoted background, with each other member's first request. It is never posted into the group or any chat. The text is returned only by GET /api/v1/rooms/{id} (getRoom); lists and live frames carry the status only. Best-effort filters remove registered secret values and known credential shapes; a password written in plain prose may not be caught (D18, #1467).
+type RoomInvitationContext struct {
+	// AuthorAgentId The starting agent, whose model wrote the summary.
+	AuthorAgentId string `json:"author_agent_id"`
+
+	// CostMicroUsd Cost of the summary call in micro-dollars, counted once into the group's cost. Absent when no call ran.
+	CostMicroUsd *int64 `json:"cost_micro_usd,omitempty"`
+
+	// CostUnpriced True when the summary call ran but reported no price.
+	CostUnpriced *bool `json:"cost_unpriced,omitempty"`
+
+	// GeneratedAt When the summary became ready.
+	GeneratedAt *time.Time `json:"generated_at,omitempty"`
+
+	// Status State of the invitation summary of a group (#1449 D10, D20, FR-041): generating while it is being written; ready when it is stored; unavailable when it could not be produced (provider error, quota, the 45-second limit, a restart while generating, the group deleted or the starting agent removed, or nothing to summarise).
+	Status RoomInvitationStatus `json:"status"`
+
+	// Text The summary text. Present only when status is ready.
+	Text *string `json:"text,omitempty"`
+}
+
+// RoomInvitationStatus State of the invitation summary of a group (#1449 D10, D20, FR-041): generating while it is being written; ready when it is stored; unavailable when it could not be produced (provider error, quota, the 45-second limit, a restart while generating, the group deleted or the starting agent removed, or nothing to summarise).
+type RoomInvitationStatus string
+
+// RoomMembersUpdateRequest Body of PATCH /api/v1/rooms/{id}/members (spec omnipus-system-agent K24; FR-204, FR-207). The team room accepts only mute and unmute; removing a member below two agents follows the two-agent rule (FR-204).
+type RoomMembersUpdateRequest struct {
+	Action   RoomMembersUpdateRequestAction `json:"action"`
+	AgentIds []string                       `json:"agent_ids"`
+}
+
+// RoomMembersUpdateRequestAction defines model for RoomMembersUpdateRequest.Action.
+type RoomMembersUpdateRequestAction string
+
+// RoomMessageRequest Body of POST /api/v1/rooms/{id}/messages (spec omnipus-system-agent K26; FR-166, §6.13). `mentions` come from the picker and are authoritative; typed text resolves only by §6.13's exact-name rule. The recorded entry arrives over the WebSocket as room_entry, carrying the same client_message_id.
+type RoomMessageRequest struct {
+	ClientMessageId string `json:"client_message_id"`
+
+	// Media Files attached to the message (#1449 D3, FR-018): each a media://workspace/<this room's workspace id>/<id> reference returned by POST /upload with workspace_id. Every reference is resolved before anything is recorded; a reference that is not a file of this room's workspace, is missing or is stranded refuses the whole message with 422 and nothing is posted. More than 16 is a 400. The same reference listed twice is kept as listed. Attachments never count toward the text size limit.
+	Media *[]string `json:"media,omitempty"`
+
+	// Mentions Agent ids picked in the @-picker, or the reserved value `all`.
+	Mentions []string `json:"mentions"`
+
+	// Text The message text: at most 65,536 UTF-8 bytes (counted in bytes, not characters); an operator can lower this limit with session_messaging.steer_body, never raise it (#1449 D24, D27). The server enforces the limit in force in UTF-8 bytes before any schema check, with inbound validation on and off, and answers 422 naming the size and the limit; maxLength states the same 65,536 maximum (a byte count is never less than the character count, so the server check always answers first). Text may be empty only when media is not empty: a message with neither non-blank text nor media is refused with 422.
+	Text string `json:"text"`
+}
+
 // RotateTokenResponse Response from POST /api/v1/config/gateway/rotate-token. Returns the newly generated bearer token. The caller must immediately update any stored token references — the previous token is no longer valid once the gateway processes the next request with the new token active.
 type RotateTokenResponse struct {
 	// Token Canonical opaque bearer token format used by Omnipus. Two forms are accepted: the current id-tagged form "omnipus_" + 8 hex (token id) + "_" + 64 hex (32 random bytes) = 81 characters, and the legacy form "omnipus_" + 64 hex = 72 characters (still honored for tokens minted before the multi-token model). The id segment routes verification to the right hash in the user's token set; only the 64-hex secret is bcrypt-hashed (kept under bcrypt's 72-byte limit). Used in Authorization headers, WS AuthFrame, and rotate-token responses.
@@ -20547,7 +25013,7 @@ type SandboxConfig struct {
 	AppliedMode *string `json:"applied_mode,omitempty"`
 
 	// AutoApprove ADR-092's global default for Auto-approve (fresh-install default: true). Auto is NOT a tool-policy value — every tool, including bash, keeps the ordinary three-value policy ("allow" runs unprompted with none of this machinery, "deny" makes the tool invisible to the agent, "ask" is where Auto applies). For every tool currently resolved to "ask", Auto-approve ON auto-approves the cases the pre-flight/rule matcher can positively clear (ADR-092 D3/D7/D8) and still prompts for everything else; Auto-approve OFF means an "ask" tool always prompts. Auto never touches an "allow" or "deny" tool. [2026-09-24, founder decision] Auto no longer additionally requires an enforcing kernel sandbox: it applies to bash and every other tool whether or not a kernel sandbox is confining spawned children (see SandboxStatus.kernel_sandbox_active, now purely informational for this purpose). Without a kernel sandbox, the D7/D8 pre-flights and the surviving text-based guards are the only checks on what a bash command touches — a disguised command can slip past a text-based check where a kernel boundary would have caught it; this is the accepted, founder-approved risk, not an oversight.
-	// This is the GLOBAL default only. Two narrower scopes layer on top, neither stored here: a per-agent setting (Agent.auto_approve_disabled) that may only turn Auto OFF for that agent, and a per-chat session modifier (SessionModeUpdateFrame, asyncapi.yaml) that may turn Auto ON OR OFF for that one chat — deliberately allowed to loosen, since a human is present in that session; every other scope in this contract is tighten-only.
+	// This is the GLOBAL default only. One narrower scope layers on top, not stored here: a per-chat session modifier (SessionModeUpdateFrame, asyncapi.yaml) that may turn Auto ON OR OFF for that one chat — deliberately allowed to loosen, since a human is present in that session; every other scope in this contract is tighten-only.
 	// Deliberately named `auto_approve`, not `mode` — this schema's existing `mode` field is the unrelated kernel sandbox enforcement mode (off/permissive/enforce); reusing that key for a different value domain would collide. Hot-reloaded, like the rest of this handler's fields — no restart required.
 	AutoApprove *bool `json:"auto_approve,omitempty"`
 
@@ -20605,7 +25071,7 @@ type SandboxConfigUpdate struct {
 	AllowedPaths *[]string `json:"allowed_paths,omitempty"`
 
 	// AutoApprove Set the ADR-092 global default for Auto-approve. Auto is a SEPARATE setting from tool policy — it only has meaning for a tool currently resolved to "ask" (see SandboxConfig.auto_approve for the full behavioural description) and applies to every such tool, not only bash. Hot-reloaded — takes effect immediately, no restart required. Deliberately not named `mode` — that key above is the unrelated kernel sandbox enforcement mode (off/permissive/enforce).
-	// Per-agent and per-chat Auto settings are NOT set here: a per-agent override is `auto_approve_disabled` on PUT /agents/{id} (AgentUpdateRequest) — off-only, tighten-only. A chat's session modifier is the session_mode_update WS frame (asyncapi.yaml, SessionModeUpdateFrame) — the one place in this contract allowed to LOOSEN (turn Auto on for that chat even when the agent or this global default has it off), because a human is present in that session. The per-agent field is tighten-only relative to this global default; this global default has no scope above it to tighten against.
+	// The per-chat Auto setting is NOT set here: a chat's session modifier is the session_mode_update WS frame (asyncapi.yaml, SessionModeUpdateFrame) — the one place in this contract allowed to LOOSEN (turn Auto on for that chat even when this global default has it off), because a human is present in that session.
 	AutoApprove *bool `json:"auto_approve,omitempty"`
 
 	// FilesystemModel Switch the ADR-062 filesystem model. "confined" restricts reads and execution to enumerated paths; "open" leaves both unrestricted apart from the secret set. Neither model changes what may be WRITTEN.
@@ -20646,7 +25112,7 @@ type SandboxStatus struct {
 	// AuditOnly True when the sandbox is in permissive (audit-only) mode — policy violations are logged but not blocked.
 	AuditOnly *bool `json:"audit_only,omitempty"`
 
-	// AutoApproveEffective The gateway-wide Auto-approve DEFAULT: exactly the live SandboxConfig.auto_approve value, reported here so the chat-header badge needs no second request. It is NOT combined with kernel_sandbox_active and NOT resolved for any agent or chat (this endpoint has no agent or session context). Auto actually takes effect for a call when the tool resolves to "ask", the resolved Auto-approve for that chat is on (this default, turned off by the agent's auto_approve_disabled, then overridden either way by the chat's own modifier — SessionModeUpdatedFrame / SessionStateFrame.auto_approve_modifier), and god_mode_active is false. [2026-09-24, founder decision] Auto no longer also requires kernel_sandbox_active — it now means exactly what the agent loop's autoApproveActive predicate computes (God Mode off, Auto resolved on), independent of kernel enforcement. Badge reading, before the per-agent and per-chat layers are folded in: god_mode_active=true shows "God Mode" whatever the other two fields say; else auto_approve_effective=false shows "Ask"; else kernel_sandbox_active= true shows "Auto"; else kernel_sandbox_active=false shows "Auto — no sandbox" with a warning tooltip (Auto is on and DOES clear "ask" calls for every tool except the shell; a shell command now asks first unless it is read-only or fully covered by an operator allow rule — there is no kernel confining what a disguised command can reach either way). There is no more "Auto → Ask" degraded state: Auto never silently becomes Ask for lack of a kernel sandbox. Always present from this gateway.
+	// AutoApproveEffective The gateway-wide Auto-approve DEFAULT: exactly the live SandboxConfig.auto_approve value, reported here so the chat-header badge needs no second request. It is NOT combined with kernel_sandbox_active and NOT resolved for any agent or chat (this endpoint has no agent or session context). Auto actually takes effect for a call when the tool resolves to "ask", the resolved Auto-approve for that chat is on (this default, overridden either way by the chat's own modifier — SessionModeUpdatedFrame / SessionStateFrame.auto_approve_modifier), and god_mode_active is false. [2026-09-24, founder decision] Auto no longer also requires kernel_sandbox_active — it now means exactly what the agent loop's autoApproveActive predicate computes (God Mode off, Auto resolved on), independent of kernel enforcement. Badge reading, before the per-agent and per-chat layers are folded in: god_mode_active=true shows "God Mode" whatever the other two fields say; else auto_approve_effective=false shows "Ask"; else kernel_sandbox_active= true shows "Auto"; else kernel_sandbox_active=false shows "Auto — no sandbox" with a warning tooltip (Auto is on and DOES clear "ask" calls for every tool except the shell; a shell command now asks first unless it is read-only or fully covered by an operator allow rule — there is no kernel confining what a disguised command can reach either way). There is no more "Auto → Ask" degraded state: Auto never silently becomes Ask for lack of a kernel sandbox. Always present from this gateway.
 	AutoApproveEffective *bool `json:"auto_approve_effective,omitempty"`
 
 	// Available Whether the backend is available on this platform.
@@ -20724,6 +25190,9 @@ type Schedule struct {
 	// OwnerAgentId The agent that runs this schedule. Pinned; never falls back to the default agent.
 	OwnerAgentId string `json:"owner_agent_id"`
 
+	// RunIsolated True when every run is forced into a fresh independent chat (session-core FR-017). The run mode is otherwise derived from the owner; there is no user-facing session-mode choice.
+	RunIsolated *bool `json:"run_isolated,omitempty"`
+
 	// Runs The most recent runs (newest first), capped at 20.
 	Runs *[]struct {
 		// DurationMs Wall-clock duration of the run in milliseconds.
@@ -20738,15 +25207,12 @@ type Schedule struct {
 		// SessionId The scheduled session this run executed in (links to the transcript).
 		SessionId *string `json:"session_id,omitempty"`
 
-		// Status ok=succeeded, error=failed, skipped=overlap/cap, timeout=deadline aborted.
+		// Status ok=succeeded, error=failed, skipped=overlap/cap. timeout is historical: a run recorded before scheduled runs lost their time limit (issue #1306); never written now.
 		Status ScheduleRunsStatus `json:"status"`
 	} `json:"runs,omitempty"`
 
 	// SessionId For continue/main modes, the persistent session id this schedule runs in.
 	SessionId *string `json:"session_id,omitempty"`
-
-	// SessionMode isolated=fresh scheduled session per run; continue=persistent per-schedule session; main=owner's reserved main session.
-	SessionMode ScheduleSessionMode `json:"session_mode"`
 
 	// State Runtime state of a schedule (#264). All fields are server-maintained.
 	State struct {
@@ -20759,7 +25225,7 @@ type Schedule struct {
 		// LastRunAtMs Unix epoch milliseconds of the most recent run.
 		LastRunAtMs *int64 `json:"last_run_at_ms,omitempty"`
 
-		// LastStatus Status of the most recent run (ok/error/skipped/timeout), empty if never run.
+		// LastStatus Status of the most recent run (ok/error/skipped, or the historical timeout), empty if never run.
 		LastStatus *string `json:"last_status,omitempty"`
 
 		// NextRunAtMs Unix epoch milliseconds of the next computed run, if enabled.
@@ -20768,9 +25234,6 @@ type Schedule struct {
 		// Running True while a run of this schedule is currently in progress (overlap guard).
 		Running *bool `json:"running,omitempty"`
 	} `json:"state"`
-
-	// TimeoutSeconds Per-run deadline in seconds; 0 means use the global schedules.run_timeout_seconds default.
-	TimeoutSeconds int `json:"timeout_seconds"`
 
 	// Trigger When a schedule fires (#264). Exactly one of cron_expr / every_ms / at_ms is meaningful, selected by kind: cron (cron expression), every (fixed interval), at (one-shot at a unix-ms instant).
 	Trigger struct {
@@ -20787,11 +25250,8 @@ type Schedule struct {
 	UpdatedAtMs int64 `json:"updated_at_ms"`
 }
 
-// ScheduleRunsStatus ok=succeeded, error=failed, skipped=overlap/cap, timeout=deadline aborted.
+// ScheduleRunsStatus ok=succeeded, error=failed, skipped=overlap/cap. timeout is historical: a run recorded before scheduled runs lost their time limit (issue #1306); never written now.
 type ScheduleRunsStatus string
-
-// ScheduleSessionMode isolated=fresh scheduled session per run; continue=persistent per-schedule session; main=owner's reserved main session.
-type ScheduleSessionMode string
 
 // ScheduleTriggerKind defines model for Schedule.Trigger.Kind.
 type ScheduleTriggerKind string
@@ -20804,11 +25264,8 @@ type ScheduleCreate struct {
 	Name         string `json:"name"`
 	OwnerAgentId string `json:"owner_agent_id"`
 
-	// SessionMode Default isolated.
-	SessionMode *ScheduleCreateSessionMode `json:"session_mode,omitempty"`
-
-	// TimeoutSeconds Per-run deadline; default 0 = use the global default.
-	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
+	// RunIsolated Optional. True forces every run of this work into a fresh independent chat, for either role (session-core FR-017). Default false: a task whose assignee owns an eligible main runs as a fresh child of that main; a worker runs isolated once or continues its own chat when recurring. There is no other session-mode choice.
+	RunIsolated *bool `json:"run_isolated,omitempty"`
 
 	// Trigger When a schedule fires (#264). Exactly one of cron_expr / every_ms / at_ms is meaningful, selected by kind: cron (cron expression), every (fixed interval), at (one-shot at a unix-ms instant).
 	Trigger struct {
@@ -20823,9 +25280,6 @@ type ScheduleCreate struct {
 		Kind    ScheduleCreateTriggerKind `json:"kind"`
 	} `json:"trigger"`
 }
-
-// ScheduleCreateSessionMode Default isolated.
-type ScheduleCreateSessionMode string
 
 // ScheduleCreateTriggerKind defines model for ScheduleCreate.Trigger.Kind.
 type ScheduleCreateTriggerKind string
@@ -20851,6 +25305,9 @@ type ScheduleList struct {
 		// OwnerAgentId The agent that runs this schedule. Pinned; never falls back to the default agent.
 		OwnerAgentId string `json:"owner_agent_id"`
 
+		// RunIsolated True when every run is forced into a fresh independent chat (session-core FR-017). The run mode is otherwise derived from the owner; there is no user-facing session-mode choice.
+		RunIsolated *bool `json:"run_isolated,omitempty"`
+
 		// Runs The most recent runs (newest first), capped at 20.
 		Runs *[]struct {
 			// DurationMs Wall-clock duration of the run in milliseconds.
@@ -20865,15 +25322,12 @@ type ScheduleList struct {
 			// SessionId The scheduled session this run executed in (links to the transcript).
 			SessionId *string `json:"session_id,omitempty"`
 
-			// Status ok=succeeded, error=failed, skipped=overlap/cap, timeout=deadline aborted.
+			// Status ok=succeeded, error=failed, skipped=overlap/cap. timeout is historical: a run recorded before scheduled runs lost their time limit (issue #1306); never written now.
 			Status ScheduleListSchedulesRunsStatus `json:"status"`
 		} `json:"runs,omitempty"`
 
 		// SessionId For continue/main modes, the persistent session id this schedule runs in.
 		SessionId *string `json:"session_id,omitempty"`
-
-		// SessionMode isolated=fresh scheduled session per run; continue=persistent per-schedule session; main=owner's reserved main session.
-		SessionMode ScheduleListSchedulesSessionMode `json:"session_mode"`
 
 		// State Runtime state of a schedule (#264). All fields are server-maintained.
 		State struct {
@@ -20886,7 +25340,7 @@ type ScheduleList struct {
 			// LastRunAtMs Unix epoch milliseconds of the most recent run.
 			LastRunAtMs *int64 `json:"last_run_at_ms,omitempty"`
 
-			// LastStatus Status of the most recent run (ok/error/skipped/timeout), empty if never run.
+			// LastStatus Status of the most recent run (ok/error/skipped, or the historical timeout), empty if never run.
 			LastStatus *string `json:"last_status,omitempty"`
 
 			// NextRunAtMs Unix epoch milliseconds of the next computed run, if enabled.
@@ -20895,9 +25349,6 @@ type ScheduleList struct {
 			// Running True while a run of this schedule is currently in progress (overlap guard).
 			Running *bool `json:"running,omitempty"`
 		} `json:"state"`
-
-		// TimeoutSeconds Per-run deadline in seconds; 0 means use the global schedules.run_timeout_seconds default.
-		TimeoutSeconds int `json:"timeout_seconds"`
 
 		// Trigger When a schedule fires (#264). Exactly one of cron_expr / every_ms / at_ms is meaningful, selected by kind: cron (cron expression), every (fixed interval), at (one-shot at a unix-ms instant).
 		Trigger struct {
@@ -20915,11 +25366,8 @@ type ScheduleList struct {
 	} `json:"schedules"`
 }
 
-// ScheduleListSchedulesRunsStatus ok=succeeded, error=failed, skipped=overlap/cap, timeout=deadline aborted.
+// ScheduleListSchedulesRunsStatus ok=succeeded, error=failed, skipped=overlap/cap. timeout is historical: a run recorded before scheduled runs lost their time limit (issue #1306); never written now.
 type ScheduleListSchedulesRunsStatus string
-
-// ScheduleListSchedulesSessionMode isolated=fresh scheduled session per run; continue=persistent per-schedule session; main=owner's reserved main session.
-type ScheduleListSchedulesSessionMode string
 
 // ScheduleListSchedulesTriggerKind defines model for ScheduleList.Schedules.Trigger.Kind.
 type ScheduleListSchedulesTriggerKind string
@@ -20938,11 +25386,11 @@ type ScheduleRunRecord struct {
 	// SessionId The scheduled session this run executed in (links to the transcript).
 	SessionId *string `json:"session_id,omitempty"`
 
-	// Status ok=succeeded, error=failed, skipped=overlap/cap, timeout=deadline aborted.
+	// Status ok=succeeded, error=failed, skipped=overlap/cap. timeout is historical: a run recorded before scheduled runs lost their time limit (issue #1306); never written now.
 	Status ScheduleRunRecordStatus `json:"status"`
 }
 
-// ScheduleRunRecordStatus ok=succeeded, error=failed, skipped=overlap/cap, timeout=deadline aborted.
+// ScheduleRunRecordStatus ok=succeeded, error=failed, skipped=overlap/cap. timeout is historical: a run recorded before scheduled runs lost their time limit (issue #1306); never written now.
 type ScheduleRunRecordStatus string
 
 // ScheduleRunResult Result of a run-now request (#264).
@@ -20971,7 +25419,7 @@ type ScheduleState struct {
 	// LastRunAtMs Unix epoch milliseconds of the most recent run.
 	LastRunAtMs *int64 `json:"last_run_at_ms,omitempty"`
 
-	// LastStatus Status of the most recent run (ok/error/skipped/timeout), empty if never run.
+	// LastStatus Status of the most recent run (ok/error/skipped, or the historical timeout), empty if never run.
 	LastStatus *string `json:"last_status,omitempty"`
 
 	// NextRunAtMs Unix epoch milliseconds of the next computed run, if enabled.
@@ -20996,12 +25444,13 @@ type ScheduleTrigger struct {
 
 // ScheduleUpdate Request body to update a schedule (#264). All fields optional; only provided fields are changed. Changing owner_agent_id is re-authorized.
 type ScheduleUpdate struct {
-	Enabled        *bool                      `json:"enabled,omitempty"`
-	Message        *string                    `json:"message,omitempty"`
-	Name           *string                    `json:"name,omitempty"`
-	OwnerAgentId   *string                    `json:"owner_agent_id,omitempty"`
-	SessionMode    *ScheduleUpdateSessionMode `json:"session_mode,omitempty"`
-	TimeoutSeconds *int                       `json:"timeout_seconds,omitempty"`
+	Enabled      *bool   `json:"enabled,omitempty"`
+	Message      *string `json:"message,omitempty"`
+	Name         *string `json:"name,omitempty"`
+	OwnerAgentId *string `json:"owner_agent_id,omitempty"`
+
+	// RunIsolated Optional. True forces every run of this work into a fresh independent chat, for either role (session-core FR-017). Default false: a task whose assignee owns an eligible main runs as a fresh child of that main; a worker runs isolated once or continues its own chat when recurring. There is no other session-mode choice.
+	RunIsolated *bool `json:"run_isolated,omitempty"`
 
 	// Trigger When a schedule fires (#264). Exactly one of cron_expr / every_ms / at_ms is meaningful, selected by kind: cron (cron expression), every (fixed interval), at (one-shot at a unix-ms instant).
 	Trigger *struct {
@@ -21017,22 +25466,124 @@ type ScheduleUpdate struct {
 	} `json:"trigger,omitempty"`
 }
 
-// ScheduleUpdateSessionMode defines model for ScheduleUpdate.SessionMode.
-type ScheduleUpdateSessionMode string
-
 // ScheduleUpdateTriggerKind defines model for ScheduleUpdate.Trigger.Kind.
 type ScheduleUpdateTriggerKind string
 
+// SearchProviderCheckRequest Body for a manual web-search connection check. The empty object is required; keys, queries, URLs, depth, roles and all other fields are rejected. The gateway supplies a fixed non-personal query and uses the saved key.
+type SearchProviderCheckRequest = map[string]interface{}
+
+// SearchProviderCheckResponse Temporary outcome of one real search through the addressed service. Readiness is unchanged: success is not persisted health, and failure does not disable the service or change its roles. Contains no key, results, authorization, upstream payload or free-form upstream error.
+type SearchProviderCheckResponse struct {
+	// CheckedAt UTC completion timestamp for this attempt.
+	CheckedAt time.Time `json:"checked_at"`
+
+	// ProviderId The keyed search catalogue entry that was checked.
+	ProviderId SearchProviderCheckResponseProviderId `json:"provider_id"`
+
+	// RetryAfterSeconds Optional upstream retry guidance for rate_limited. No automatic retry is scheduled. Local admission limits instead use HTTP 429 and Retry-After.
+	RetryAfterSeconds *int `json:"retry_after_seconds,omitempty"`
+
+	// Status Normalized diagnostic outcome; a valid empty result is success.
+	Status SearchProviderCheckResponseStatus `json:"status"`
+}
+
+// SearchProviderCheckResponseProviderId The keyed search catalogue entry that was checked.
+type SearchProviderCheckResponseProviderId string
+
+// SearchProviderCheckResponseStatus Normalized diagnostic outcome; a valid empty result is success.
+type SearchProviderCheckResponseStatus string
+
+// SecretNameEntry One stored secret version as listed by GET /api/v1/secrets (spec omnipus-system-agent K6; FR-073, FR-086, FR-241). Names and metadata only — never a value.
+type SecretNameEntry struct {
+	// AvailableInChannelTurns agent_private kind only (FR-241): whether the variable is injected into turns triggered by a channel person. Default false.
+	AvailableInChannelTurns *bool `json:"available_in_channel_turns,omitempty"`
+
+	// Consumers What uses this version (display labels). Never null.
+	Consumers []string `json:"consumers"`
+
+	// Kind Recorded recipient kind. `unbound` is a stored value with no recipient recorded (stored via Settings or boot configuration); it never carries `owner` or `available_in_channel_turns`, its version is 1, and where it is used is stated only by `consumers`. Not the retired unbound-channel routing mode.
+	Kind SecretNameEntryKind `json:"kind"`
+
+	// Owner A {workspace_id, agent_id} pair addressing one agent within one workspace (session-core C-ADDRESS, FR-045). The server resolves the pair to that agent's computed, eligible main session; a client never builds a main session id. Both parts are required and bounded at the existing 128 characters.
+	Owner *struct {
+		// AgentId The addressed (recipient) agent. Never the author.
+		AgentId string `json:"agent_id"`
+
+		// WorkspaceId Workspace of the addressed agent.
+		WorkspaceId string `json:"workspace_id"`
+	} `json:"owner,omitempty"`
+
+	// Recipient Server-composed, value-free description of where a secret will be used (spec omnipus-system-agent K2; FR-065). Built by the server from the recorded recipient descriptor; a client never supplies it. `lines` are the display lines for the kind: endpoint (provider_key); transport + command or URL (mcp_env); channel instance + field (channel_credential); hosts + username + mailbox id (mailbox_password); workspace + agent + variable (agent_private); for unbound (a stored value with no recipient recorded) exactly the single fixed line "Stored in Settings; no recipient recorded". Mirrored inline in contracts/asyncapi.yaml (components.schemas.SecretRecipientDisplay) — keep both copies in sync by hand.
+	Recipient struct {
+		// Kind Recipient kind.
+		Kind SecretNameEntryRecipientKind `json:"kind"`
+
+		// Lines Display lines, in order. Never null, never empty.
+		Lines []string `json:"lines"`
+	} `json:"recipient"`
+
+	// Reference Reference name of this version.
+	Reference string               `json:"reference"`
+	State     SecretNameEntryState `json:"state"`
+	Version   int64                `json:"version"`
+}
+
+// SecretNameEntryKind Recorded recipient kind. `unbound` is a stored value with no recipient recorded (stored via Settings or boot configuration); it never carries `owner` or `available_in_channel_turns`, its version is 1, and where it is used is stated only by `consumers`. Not the retired unbound-channel routing mode.
+type SecretNameEntryKind string
+
+// SecretNameEntryRecipientKind Recipient kind.
+type SecretNameEntryRecipientKind string
+
+// SecretNameEntryState defines model for SecretNameEntry.State.
+type SecretNameEntryState string
+
+// SecretOptionsUpdateRequest Body of PATCH /api/v1/secrets/{reference}/options (spec omnipus-system-agent K49; FR-241). Private kind only; authenticated web user only; audited.
+type SecretOptionsUpdateRequest struct {
+	// AvailableInChannelTurns Inject this private variable into channel-triggered turns.
+	AvailableInChannelTurns bool `json:"available_in_channel_turns"`
+}
+
+// SecretRequestState Value-free state of one secret request (spec omnipus-system-agent K5; FR-079). Returned by GET /api/v1/secret-requests/{id}, by a successful submit, and as the body of a 409 (request not pending) so the client learns the true current state. Also returned with HTTP 503 when the submission is committed but post-commit metadata or continuation dispatch is not confirmed; state is submitted and reference_names are the committed names. Boot or chat attach retries an undelivered continuation. A repeated submit returns 409 with that same submitted state, never another write. Absence is never read as success.
+type SecretRequestState struct {
+	// ReferenceNames Reference names the values were stored under. Present only when state is `submitted`.
+	ReferenceNames *[]string               `json:"reference_names,omitempty"`
+	RequestId      string                  `json:"request_id"`
+	State          SecretRequestStateState `json:"state"`
+	UpdatedAt      time.Time               `json:"updated_at"`
+}
+
+// SecretRequestStateState defines model for SecretRequestState.State.
+type SecretRequestStateState string
+
+// SecretSubmitRequest Body of POST /api/v1/secret-requests/{id}/submit (spec omnipus-system-agent K5; FR-062, FR-063). Exactly one of `values` or `cancel: true`. The only place secret values ever travel. Semantic rules enforced by the handler with inbound validation on AND off (§7.2): the keys of `values` must equal the request's field keys; each value is 4–16,384 bytes of UTF-8 without NUL; the whole body is at most 65,536 bytes (413). The schema's character limits are deliberately no stricter than those byte rules. Errors never echo a value.
+type SecretSubmitRequest struct {
+	// Cancel The person cancelled the card; nothing is stored.
+	Cancel *SecretSubmitRequestCancel `json:"cancel,omitempty"`
+
+	// Values Field key → typed value. Keys are the card's field keys (`^[a-z][a-z0-9_]{0,31}$`); the handler refuses any other key.
+	Values *map[string]string `json:"values,omitempty"`
+	union  json.RawMessage
+}
+
+// SecretSubmitRequestCancel The person cancelled the card; nothing is stored.
+type SecretSubmitRequestCancel bool
+
+// SecretSubmitRequest0 defines model for .
+type SecretSubmitRequest0 = interface{}
+
+// SecretSubmitRequest1 defines model for .
+type SecretSubmitRequest1 = interface{}
+
 // Session Session metadata object (maps to session.UnifiedMeta + session.SessionMeta). Returned in list and detail endpoints. The SPA maps this through rawToSession() which reads stats.message_count, stats.tokens_total, and stats.cost.
 type Session struct {
-	// ActiveAgentId The agent ID currently handling this session (multi-agent sessions only).
-	ActiveAgentId *string `json:"active_agent_id,omitempty"`
-
 	// AgentId ID of the primary agent that owns this session.
 	AgentId string `json:"agent_id"`
 
 	// AgentIds All agent IDs that have participated in this session (multi-agent sessions). For legacy single-agent sessions this field is absent; callers should fall back to [agent_id] when agent_ids is undefined.
 	AgentIds *[]string `json:"agent_ids,omitempty"`
+
+	// BackgroundCommandCount How many background shell commands this session itself owns right now. Omitted when the process table is not available (unknown, not zero). Zero means the table was checked and this session owns none. Not a roll-up of child sessions.
+	BackgroundCommandCount *int `json:"background_command_count,omitempty"`
 
 	// Channel Channel identifier that initiated this session (e.g. "webchat", "telegram"). Always present (may be empty string for legacy sessions).
 	Channel string `json:"channel"`
@@ -21046,14 +25597,23 @@ type Session struct {
 	// CreatedAt RFC3339 timestamp when the session was created.
 	CreatedAt time.Time `json:"created_at"`
 
-	// Id Unique session identifier (UUID).
+	// Execution Projected queued/running classification for the session's current lifecycle display. Present only when the same loaded lifecycle record, evaluated through the canonical current-boot lifecycle projection, produces `lifecycle_state: working`: `queued` for a queued record and `running` for a running record. Omitted for any other projected display state, including Interrupted after a prior-boot root execution, and when no usable lifecycle record is available. Not a raw lifecycle-state export. The Sessions Running filter matches `running`; queued does not match. A nonmatching parent may still be included as hierarchy context.
+	Execution *SessionExecution `json:"execution,omitempty"`
+
+	// Id Unique session identifier. A main session's id is the server-computed main session id (format decided later). Other sessions keep their existing ids.
 	Id string `json:"id"`
 
 	// LastCompactionSummary Summary of the last context compaction pass (present only when compaction has occurred).
 	LastCompactionSummary *string `json:"last_compaction_summary,omitempty"`
 
+	// LifecycleState Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A `failed` lifecycle record whose `failed_reason` is `interrupted` (a session a gateway restart cut off — the boot sweep) maps to `interrupted`, not `failed` (founder ruling 2026-10-06: a session does not fail because of a restart; this adds a sixth value to F0929-2's five). The canonical current-boot lifecycle projection is restart-aware: a prior-boot root with raw `queued` or `running` state can display `interrupted` without a recovery write; this suppresses `execution`. Interrupted describes the session's current interruption, not permanent history: once the session is re-adopted or explicitly resumed with a fresh current-boot execution identity, its current record determines the display. A resumed `running` record projects to `working` and publishes `execution: running`, rather than retaining a stale Interrupted display. Gateway availability alone does not mean an old execution has resumed. A genuinely failed record still maps to `failed`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
+	LifecycleState *SessionLifecycleState `json:"lifecycle_state,omitempty"`
+
 	// Model LLM model name used in this session (may be empty for legacy sessions).
 	Model *string `json:"model,omitempty"`
+
+	// NeedsAttention Present as true or false on a valid main, including the default-workspace Admin main. Omitted on every other session, and on a main whose attention sources could not be read. An omitted value means unknown (the client shows unknown, never false). True for a pending structured question, a pending tool approval on the main or one of its helpers, or a finished or failed goal outcome not yet seen; never for a goal the user stopped.
+	NeedsAttention *bool `json:"needs_attention,omitempty"`
 
 	// ParentSessionId ADR-057 FR-008/FR-091. The direct parent's session id, present only on a subordinate ("delegate") session created by a delegation. Absent (never empty-string) on a root session. A session whose parent_session_id names an id that no longer resolves is still surfaced as a root by GET /api/v1/sessions rather than being silently dropped (FR-091, BDD-106).
 	ParentSessionId *string `json:"parent_session_id,omitempty"`
@@ -21061,7 +25621,7 @@ type Session struct {
 	// Partitions List of JSONL partition file names (e.g. ["2026-05-16.jsonl"]). Always present as an array (may be empty for new sessions with no messages). One partition per day, so 3650 covers ~10 years of daily partitions.
 	Partitions []string `json:"partitions"`
 
-	// Protected Computed field: true while the heartbeat member whose session_id matches this session's id has heartbeat.enabled = true in its workspace member_configs. NOT a stored flag — derived server-side from member_configs on each GET /sessions response. When true, the SPA pins the session to the top of the Session panel and hides the delete (trash) button; DELETE /sessions/{id} returns 409. (FR-021, FR-028, A2/G-01)
+	// Protected Computed, not stored. True for a main session whether or not that member's heartbeat is enabled. When true, the SPA pins the session to the top of the Session panel and hides the delete (trash) button; DELETE /sessions/{id} returns 409.
 	Protected *bool `json:"protected,omitempty"`
 
 	// Provider Provider identifier (e.g. "anthropic", "openai") for this session.
@@ -21071,6 +25631,9 @@ type Session struct {
 	Stats struct {
 		// ByModel Per-model token breakdown. Keys are model name strings (e.g. "claude-sonnet-4-6"). Absent for legacy sessions. subagent_3p turns are excluded (they run on a separate engine).
 		ByModel *map[string]struct {
+			// CacheHitRatio Cache-hit ratio for this cell: cache_read / (in + cache_read + cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. in is uncached input.
+			CacheHitRatio *float64 `json:"cache_hit_ratio"`
+
 			// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
 			CacheRead *int `json:"cache_read,omitempty"`
 
@@ -21083,15 +25646,45 @@ type Session struct {
 			// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 			Out *int `json:"out,omitempty"`
 
+			// Reasoning Effort levels spec (FR-024). Reasoning tokens reported by the provider for this cell: the sum of the per-call counts of the entries that reported one. A subset of out, never added to total. Absent when no entry reported a count.
+			Reasoning *int `json:"reasoning,omitempty"`
+
 			// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 			Total int `json:"total"`
 		} `json:"by_model,omitempty"`
 
-		// Cost Total USD cost for this session (based on provider pricing).
+		// ByProvider Per-provider token breakdown. Same cell shape as by_model. Keys are catalog provider ids. Summed from the stored per-call provider id, including after reload. Absent for legacy sessions.
+		ByProvider *map[string]struct {
+			// CacheHitRatio Cache-hit ratio for this cell: cache_read / (in + cache_read + cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. in is uncached input.
+			CacheHitRatio *float64 `json:"cache_hit_ratio"`
+
+			// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
+			CacheRead *int `json:"cache_read,omitempty"`
+
+			// CacheWrite Cache-write tokens (written into a new cache entry) for this model. Additive to total alongside in and out — see cache_read's description.
+			CacheWrite *int `json:"cache_write,omitempty"`
+
+			// In Uncached input (prompt) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no input tokens".
+			In *int `json:"in,omitempty"`
+
+			// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
+			Out *int `json:"out,omitempty"`
+
+			// Reasoning Effort levels spec (FR-024). Reasoning tokens reported by the provider for this cell: the sum of the per-call counts of the entries that reported one. A subset of out, never added to total. Absent when no entry reported a count.
+			Reasoning *int `json:"reasoning,omitempty"`
+
+			// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
+			Total int `json:"total"`
+		} `json:"by_provider,omitempty"`
+
+		// Cost Total USD cost for this session: the sum of priced portions only. A cost of zero together with unpriced_tokens greater than zero means the session is unpriced, not free. subscription_tokens are excluded from cost; those tokens recorded no dollars.
 		Cost float64 `json:"cost"`
 
 		// MessageCount Number of transcript entries in this session.
 		MessageCount int `json:"message_count"`
+
+		// SubscriptionTokens Tokens from ChatGPT sign-in calls. Those tokens recorded no dollars and are excluded from cost.
+		SubscriptionTokens *int `json:"subscription_tokens,omitempty"`
 
 		// TokensCacheRead Total cache-read tokens across all assistant turns (tokens served from provider KV cache, not re-computed). 0 for sessions without caching or created before Wave 1 token tracking.
 		TokensCacheRead *int `json:"tokens_cache_read,omitempty"`
@@ -21110,10 +25703,31 @@ type Session struct {
 
 		// ToolCalls Total number of tool calls made in this session.
 		ToolCalls int `json:"tool_calls"`
+
+		// UnpricedTokens Unpriced token portions in this session. Counts only the unpriced portion of each call, not the whole call. A session with cost 0 and unpriced_tokens greater than 0 is unpriced, not free.
+		UnpricedTokens *int `json:"unpriced_tokens,omitempty"`
 	} `json:"stats"`
 
-	// Status Current lifecycle status of the session.
+	// Status Coarse chat-transcript-metadata status. `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `interrupted` is a session whose turn a gateway restart cut off (the boot sweep writes it — founder rule 2026-10-06: a session does not fail because of a restart; it supersedes the sub-agent control plane ADR D4/MAJ-009 retirement of this value); `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed`/`interrupted` session resets this metadata back to `active`.
 	Status SessionStatus `json:"status"`
+
+	// StopNote The durable, LASTING record of who stopped a session, when, and why (sub-agent control plane ADR D2/D6; `pkg/session/lifecycle_edge.go::StopNote`). Distinct from the in-flight dispatch fence (`LifecycleRecord.stop` / `SessionLifecycleRecord.yaml::stop`), which is cleared the instant the stop it names is carried out — this note is RETAINED on the landed `stopped` record so a direct parent's stopped-child notice, and any later observer, can read who/why/when. Exposed on `Session.yaml::stop_note` only when the session's authoritative lifecycle record has landed `stopped` for its current generation; absent otherwise.
+	StopNote *struct {
+		// At RFC3339 timestamp when this stop note was written.
+		At time.Time `json:"at"`
+
+		// BootSeq Boot epoch of the writer — the monotonic boot counter, persisted in the data dir, of the boot that wrote this note. Present only for physical boot-restart notes — those whose `by` is the literal "restart" (sub-agent control plane ADR D8.3); absent otherwise. A non-boot goal-loop supersession is written by:"system" and carries no boot_seq.
+		BootSeq *int64 `json:"boot_seq,omitempty"`
+
+		// By Who or what initiated the stop, formatted "human:<id>" / "agent:<id>", "system" for a cause with no human/agent principal behind it (a goal-loop attempt supersession, or a historical lifetime-budget timeout), or the literal "restart" for a boot-recovery restart (sub-agent control plane ADR D8.3) — see `pkg/session/lifecycle_edge.go::StopActorFromPrincipal` / `::StopActorSystem` / `::StopActorRestart`.
+		By string `json:"by"`
+
+		// Cause The closed vocabulary naming WHY the session last landed `stopped` (`pkg/session/lifecycle_edge.go::StopCause`). `timeout` is historical: it is only read from records written before delegated work lost its time limit (issue #1306) and is never written any more.
+		Cause SessionStopNoteCause `json:"cause"`
+
+		// Seq Stamped from the record's own generation at the moment of write — a documented stand-in until the per-session control ledger (sub-agent control plane ADR D4, "Controls") exists and can supply a true per-control monotonic sequence (`pkg/session/lifecycle_edge.go::StopNote` doc comment).
+		Seq int64 `json:"seq"`
+	} `json:"stop_note,omitempty"`
 
 	// TaskId Associated task ID when this session was created to service a task.
 	TaskId *string `json:"task_id,omitempty"`
@@ -21121,8 +25735,8 @@ type Session struct {
 	// Title Human-readable session title. May be auto-generated or user-renamed.
 	Title string `json:"title"`
 
-	// Type Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists. "heartbeat" tags the eager standing session created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron job continues this session rather than starting a fresh one. "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand. "delegate" (ADR-057 FR-008) is the subordinate type a child session gains when minted by a delegation — it always carries a non-empty `parent_session_id`. Like "scheduled"/"heartbeat"/"verifier", it is server-minted only: intentionally absent from SessionCreateRequest.yaml's narrower create-time enum (a client cannot POST /sessions directly into this type).
-	Type *SessionType `json:"type,omitempty"`
+	// Type Session classification. Required on a stored session; a missing type is invalid and is not defaulted to "chat". "main" is the one standing session for an eligible (workspace, agent) pair, and for Admin in the default workspace. Its id is the server-computed main session id (format decided later). Server-created only: "main" is absent from SessionCreateRequest's create-time enum, so a client cannot POST /sessions into this type. "scheduled" tags a session created by a fired schedule run (issue #264, FR-005). "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand. "delegate" (ADR-057 FR-008) is the subordinate type a child session gains when minted by a delegation — it always carries a non-empty `parent_session_id`. Like "scheduled"/"main"/"verifier", it is server-minted only and absent from the client-create enum.
+	Type SessionType `json:"type"`
 
 	// UpdatedAt RFC3339 timestamp of the last modification to session metadata or transcript.
 	UpdatedAt time.Time `json:"updated_at"`
@@ -21131,18 +25745,27 @@ type Session struct {
 	WorkspaceId *string `json:"workspace_id,omitempty"`
 }
 
-// SessionStatus Current lifecycle status of the session.
+// SessionExecution Projected queued/running classification for the session's current lifecycle display. Present only when the same loaded lifecycle record, evaluated through the canonical current-boot lifecycle projection, produces `lifecycle_state: working`: `queued` for a queued record and `running` for a running record. Omitted for any other projected display state, including Interrupted after a prior-boot root execution, and when no usable lifecycle record is available. Not a raw lifecycle-state export. The Sessions Running filter matches `running`; queued does not match. A nonmatching parent may still be included as hierarchy context.
+type SessionExecution string
+
+// SessionLifecycleState Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A `failed` lifecycle record whose `failed_reason` is `interrupted` (a session a gateway restart cut off — the boot sweep) maps to `interrupted`, not `failed` (founder ruling 2026-10-06: a session does not fail because of a restart; this adds a sixth value to F0929-2's five). The canonical current-boot lifecycle projection is restart-aware: a prior-boot root with raw `queued` or `running` state can display `interrupted` without a recovery write; this suppresses `execution`. Interrupted describes the session's current interruption, not permanent history: once the session is re-adopted or explicitly resumed with a fresh current-boot execution identity, its current record determines the display. A resumed `running` record projects to `working` and publishes `execution: running`, rather than retaining a stale Interrupted display. Gateway availability alone does not mean an old execution has resumed. A genuinely failed record still maps to `failed`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
+type SessionLifecycleState string
+
+// SessionStatus Coarse chat-transcript-metadata status. `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `interrupted` is a session whose turn a gateway restart cut off (the boot sweep writes it — founder rule 2026-10-06: a session does not fail because of a restart; it supersedes the sub-agent control plane ADR D4/MAJ-009 retirement of this value); `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed`/`interrupted` session resets this metadata back to `active`.
 type SessionStatus string
 
-// SessionType Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists. "heartbeat" tags the eager standing session created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron job continues this session rather than starting a fresh one. "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand. "delegate" (ADR-057 FR-008) is the subordinate type a child session gains when minted by a delegation — it always carries a non-empty `parent_session_id`. Like "scheduled"/"heartbeat"/"verifier", it is server-minted only: intentionally absent from SessionCreateRequest.yaml's narrower create-time enum (a client cannot POST /sessions directly into this type).
+// SessionStopNoteCause The closed vocabulary naming WHY the session last landed `stopped` (`pkg/session/lifecycle_edge.go::StopCause`). `timeout` is historical: it is only read from records written before delegated work lost its time limit (issue #1306) and is never written any more.
+type SessionStopNoteCause string
+
+// SessionType Session classification. Required on a stored session; a missing type is invalid and is not defaulted to "chat". "main" is the one standing session for an eligible (workspace, agent) pair, and for Admin in the default workspace. Its id is the server-computed main session id (format decided later). Server-created only: "main" is absent from SessionCreateRequest's create-time enum, so a client cannot POST /sessions into this type. "scheduled" tags a session created by a fired schedule run (issue #264, FR-005). "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand. "delegate" (ADR-057 FR-008) is the subordinate type a child session gains when minted by a delegation — it always carries a non-empty `parent_session_id`. Like "scheduled"/"main"/"verifier", it is server-minted only and absent from the client-create enum.
 type SessionType string
 
 // SessionCreateRequest Body for POST /sessions. Creates a new session for an agent.
 type SessionCreateRequest struct {
-	// AgentId Agent ID that will own this session. Defaults to "main" when omitted. Must reference an existing agent (400 if not found).
-	AgentId *string `json:"agent_id,omitempty"`
+	// AgentId Agent ID that will own this session. Required and nonblank — there is no default agent (omnipus-system-agent FR-122, K16); a missing or blank value is refused with 400 "an agent must be named". Must reference an existing chat-target agent (400 if not found). Omnipus has exactly one conversation, so naming Omnipus is refused with 409 carrying its main session id (FR-005).
+	AgentId string `json:"agent_id"`
 
-	// Type Session type. Defaults to "chat" when omitted.
+	// Type Session type. Defaults to "chat" when omitted. "main" is absent.
 	Type *SessionCreateRequestType `json:"type,omitempty"`
 
 	// WorkspaceId The workspace this session belongs to. Optional; omit it for a session that belongs to no workspace (the global/inbox chat), which is NOT the same as a default — an absent value stays absent and is never guessed at.
@@ -21151,362 +25774,45 @@ type SessionCreateRequest struct {
 	WorkspaceId *string `json:"workspace_id,omitempty"`
 }
 
-// SessionCreateRequestType Session type. Defaults to "chat" when omitted.
+// SessionCreateRequestType Session type. Defaults to "chat" when omitted. "main" is absent.
 type SessionCreateRequestType string
 
-// SessionDetail Full session detail as returned by GET /sessions/{id}. Contains the session metadata plus the complete ordered transcript.
+// SessionDetail Authorized session metadata and explicit history readiness (chat history paging D7a/D10). No paging selectors: available history is the same bounded latest page as GET /sessions/{id}/messages with defaults 40/20. When history_state.status is available, messages, page_info, has_earlier and has_later are required; cursor presence follows the same iff/first/last rules as SessionHistoryResponse. When unavailable, omit messages, page_info, both flags and both cursors, never synthesize messages:[]. session and optional agent_removed remain usable for routing/attach. Generated shape plus producer/consumer semantic checks enforce these mutually exclusive field sets. Absence is not successful empty history; no optional nulls.
 type SessionDetail struct {
 	// AgentRemoved True when the agent that owned this session has been deleted from the config. Used by the SPA to display a banner informing the user that the original agent no longer exists. Absent (or false) in the common case.
 	AgentRemoved *bool `json:"agent_removed,omitempty"`
 
-	// Messages Ordered list of transcript entries for this session. Capped at 100000 messages to bound response payload size.
-	Messages []struct {
-		// AgentId ID of the agent that produced this entry (FR-002). Always present.
-		AgentId string `json:"agent_id"`
+	// HasEarlier Required iff available; actual retained earlier groups, including across a closed clear.
+	HasEarlier *bool `json:"has_earlier,omitempty"`
 
-		// Attachments File attachments associated with this message.
-		Attachments *[]struct {
-			// MimeType MIME type of the attachment.
-			MimeType string `json:"mime_type"`
+	// HasLater Required iff available; actual eligible retained later groups.
+	HasLater *bool `json:"has_later,omitempty"`
 
-			// Path Relative path within the session workspace.
-			Path string `json:"path"`
+	// HistoryState Server history readiness, not proof that this client loaded a page (chat history paging D7a/D10). status=available omits reason and message. status=unavailable requires both reason and a fixed sanitized message. Producers and consumers must reject any other combination. No preparing state or successful empty-history fallback. Current authorized live controls and canonical sends remain independent.
+	HistoryState SessionHistoryState `json:"history_state"`
 
-			// Size File size in bytes.
-			Size int64 `json:"size"`
+	// Messages Required non-null bounded latest entries iff history is available; omitted when unavailable. Every paged occurrence carries history_position.
+	Messages *[]Message `json:"messages,omitempty"`
 
-			// Type Attachment category. Aligned with MediaPart.type enum.
-			Type SessionDetailMessagesAttachmentsType `json:"type"`
-		} `json:"attachments,omitempty"`
+	// NextAfter Present iff available and has_later; equals the last selected history_position.
+	NextAfter *string `json:"next_after,omitempty"`
 
-		// CancelMethod How the cancel was applied — present only on type="turn_canceled" entries (FR-15). "graceful" lets the in-flight tool finish; "hard" interrupts immediately.
-		CancelMethod *SessionDetailMessagesCancelMethod `json:"cancel_method,omitempty"`
+	// NextBefore Present iff available and has_earlier; equals the first selected history_position.
+	NextBefore *string `json:"next_before,omitempty"`
 
-		// CanceledByChannel Channel that originated the cancel request — present only on type="turn_canceled" entries (FR-15).
-		CanceledByChannel *string `json:"canceled_by_channel,omitempty"`
-
-		// CanceledByUser Username of the actor who triggered the cancel — present only on type="turn_canceled" entries (FR-15).
-		CanceledByUser *string `json:"canceled_by_user,omitempty"`
-
-		// ClientMessageId #823 catch-up redesign. Present on a user entry that was persisted with a client-supplied correlation id (mirrors MessageFrame.client_message_id / ReplayMessageFrame.client_message_id). Lets a client reconcile its own pending/sent bubble against this REST-loaded entry by id instead of by content+timestamp matching. Absent on entries written before this field existed and on non-user entries.
-		ClientMessageId *string `json:"client_message_id,omitempty"`
-
-		// Content Raw markdown/text content of the message.
-		Content *string `json:"content,omitempty"`
-
-		// Cost USD cost for this entry. Absent when zero.
-		Cost *float64 `json:"cost,omitempty"`
-
-		// DescendantsCanceled IDs of descendant turns that were canceled in cascade — present only on type="turn_canceled" entries (FR-6a).
-		DescendantsCanceled *[]string `json:"descendants_canceled,omitempty"`
-
-		// GoalOutcome How a goal ENDED — the single durable, structured record behind the always-visible goal outcome line in the chat thread (founder decision 2026-09-14: a goal's ending must leave a clear, lasting line in the chat, not only a pill that hides 4 seconds after turning terminal, and not only the Verbose-chat-gated `judge_verdict` card). Written EXACTLY ONCE per goal ending, by the same terminal transition that ends the goal record (`pkg/agent/goal_loop.go::clearGoalStatus` — every ending kind flows through it). An intermediate UNMET Judge round with rounds remaining is NOT an ending (the worker is steered and keeps going) and never produces one of these. Two carriers share this exact shape so they cannot silently disagree (the `JudgeVerdict` precedent): (a) the persisted transcript entry `Message.type: system`, `Message.system_subtype: goal_outcome`, `Message.goal_outcome: <this>` (cold REST load), and (b) the `GoalOutcomeFrame` WS push, emitted live at the ending AND re-emitted by `pkg/gateway/replay.go` from the persisted entry (discriminating on the stamped `system_subtype`, never on `content`). The WS copy is the hand-synced duplicate `GoalOutcomeFrameOutcome` in `contracts/asyncapi.yaml` (AsyncAPI codegen does not resolve cross-file `$ref`, and the Go package cannot hold two types named `GoalOutcome`) — any field edit here MUST be mirrored there.
-		GoalOutcome *struct {
-			// CriteriaTotal Number of criteria the deciding Judge verdict evaluated (`per_criterion` length). OPTIONAL — present only when a verdict exists. With `ending: met` every one of them was confirmed.
-			CriteriaTotal *int `json:"criteria_total,omitempty"`
-
-			// EndedAt RFC 3339 UTC timestamp of the terminal transition.
-			EndedAt time.Time `json:"ended_at"`
-
-			// Ending WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — a deliberate `/goal clear|stop|off|reset|cancel| none` (Goal.state `cleared`, terminal note "cleared by user"). `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
-			Ending SessionDetailMessagesGoalOutcomeEnding `json:"ending"`
-
-			// GoalId The goal that ended (`Goal.goal_id`).
-			GoalId string `json:"goal_id"`
-
-			// GoalText The goal's own text, verbatim (`Goal.prompt`) — what the user asked for. Rendered after the outcome headline.
-			GoalText string `json:"goal_text"`
-
-			// JudgeReason The Judge's most recent reason — for a not-met ending, the last UNMET reason fed back to the worker; for `met`, the deciding verdict's reasoning. OPTIONAL: absent when no Judge round ever ran or no reason was recorded. The writer MUST omit the field rather than send a placeholder (e.g. the internal "(no reason recorded)" sentinel).
-			JudgeReason *string `json:"judge_reason,omitempty"`
-
-			// MaxRounds The goal's round limit at the time it ended (`Goal.max_rounds`).
-			MaxRounds int `json:"max_rounds"`
-
-			// RoundsUsed Adjudication rounds consumed when the goal ended (shown to the user as "tries"). For `rounds_exhausted` this is the round that hit the limit (normally equal to `max_rounds`); for every other ending it is the number of rounds actually completed. Always the real persisted count — never defaulted to `max_rounds`.
-			RoundsUsed int `json:"rounds_used"`
-		} `json:"goal_outcome,omitempty"`
-
-		// Id Unique message identifier.
-		Id string `json:"id"`
-
-		// MessagesCompacted Number of messages compacted (present only on compaction entries).
-		MessagesCompacted *int `json:"messages_compacted,omitempty"`
-
-		// Model Identifier of the model that produced this assistant turn (per-turn record). Present on assistant entries only. Absent on legacy turns recorded before the per-turn model field was added — those entries do not display any model info in the UI (no placeholder). Empty string is treated the same as absent for UI display.
-		Model *string `json:"model,omitempty"`
-
-		// Role Author role. Absent on compaction entries.
-		Role *SessionDetailMessagesRole `json:"role,omitempty"`
-
-		// Status Completion status of this message turn.
-		Status *SessionDetailMessagesStatus `json:"status,omitempty"`
-
-		// SubagentEnd Server → client (FR-H-004). Closing bracket of a subagent span. Emitted when the sub-turn finishes. The SPA transitions the span from "running" to a terminal status and records duration and optional result. NOTE: status MUST be validated — the SPA's generated Zod schema (src/lib/api/generated/schemas.ts, built from this enum) rejects any status string not in this set; such frames are dropped.
-		SubagentEnd *struct {
-			// AgentId Agent that ran the sub-turn.
-			AgentId *string `json:"agent_id,omitempty"`
-
-			// DurationMs Wall-clock duration of the sub-turn in milliseconds.
-			DurationMs *int `json:"duration_ms,omitempty"`
-
-			// FinalResult Optional textual summary of the sub-turn's output.
-			FinalResult *string `json:"final_result,omitempty"`
-
-			// Message Internal reason string emitted by the orphan-watchdog synthetic end frame. Not rendered directly in the UI.
-			Message *string `json:"message,omitempty"`
-
-			// ParentCallId The spawn ToolCall.ID that triggered this sub-turn.
-			ParentCallId *string `json:"parent_call_id,omitempty"`
-
-			// Reason When status is "interrupted": why the sub-turn was interrupted by the parent. Populated by W1-9 coordination in the agent loop.
-			Reason *SessionDetailMessagesSubagentEndReason `json:"reason,omitempty"`
-
-			// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
-			Seq *int64 `json:"seq,omitempty"`
-
-			// SessionId Session in which this sub-turn ran.
-			SessionId string `json:"session_id"`
-
-			// SpanId Matches the span_id from the preceding subagent_start frame.
-			SpanId string `json:"span_id"`
-
-			// Status Terminal status of the sub-turn.  The SPA validates this field and drops frames with any other value to prevent unknown-status render crashes (W4-6). "parked" (ADR-057 UAT defect C2 fix): the child sub-turn stopped because a successful message_parent(kind="question", wait=true) call parked it awaiting the parent's answer — not a success, error, cancellation, or timeout. The span itself is over (a `delegate respond` that later answers the question runs a FRESH sub-turn with its own new span, not a continuation of this one); the child's own durable session lifecycle stays "needs_input" independently of this per-span wire status.
-			Status SessionDetailMessagesSubagentEndStatus `json:"status"`
-			Type   SessionDetailMessagesSubagentEndType   `json:"type"`
-		} `json:"subagent_end,omitempty"`
-
-		// SubagentMessage Server -> client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A mid-span event riding between the existing `subagent_start`/`subagent_end` brackets, feeding pill/panel/board live as a child pushes typed messages / the parent steers it. Rides the existing since-cursor WS replay (same pattern as `ReplayMessageFrame`).
-		// SHAPE DECISION (flagged for review): this is a FLAT, UI-facing PROJECTION of the underlying `SessionMessage` — it does not embed the full 12-variant `SessionMessage` discriminated union. Reasons: (1) the full union is hosted INLINE in `openapi.yaml` per ADR-034 specifically because oapi-codegen needs internal component refs inside a `oneOf` — embedding it inside an asyncapi frame would require a second, hand-duplicated copy of all 12 variants inside `asyncapi.yaml` (which does not resolve cross-file `$ref` for its own codegen, per the existing `GoalStatusFrame.yaml` note), multiplying maintenance burden for a live UI ping that only ever needs a handful of display fields; (2) this mirrors the established precedent of `GoalStatusFrame` itself being a flat projection of goal state rather than embedding a full Goal record. Full-fidelity SessionMessage data (every typed field, for every kind) is available via `delegate.inbox`/`delegate.peek` (`DelegateInboxResponse`/`DelegatePeekResponse`) — this frame is a live nudge, not the source of truth.
-		SubagentMessage *struct {
-			// ChildSessionId Optional session id of the delegated child session this mid-span update is reporting on — the same value the bracketing `subagent_start` frame's `child_session_id` carries (ADR-091 I-4). Present for steered sessions; absent for legacy subturn spans.
-			ChildSessionId *string `json:"child_session_id,omitempty"`
-
-			// CorrelationId Present for `question`/`decision_request`/`steer`/`respond` — lets the SPA thread a live reply.
-			CorrelationId *string `json:"correlation_id,omitempty"`
-
-			// CreatedAt RFC3339 timestamp the underlying message was created.
-			CreatedAt time.Time `json:"created_at"`
-
-			// Kind The underlying SessionMessage kind. `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
-			Kind SessionDetailMessagesSubagentMessageKind `json:"kind"`
-
-			// MessageId The underlying SessionMessage's `message_id` — correlates this live ping with the full record fetchable via `delegate.inbox`/`peek`.
-			MessageId string `json:"message_id"`
-
-			// Pct Present for `kind: progress` when a percentage estimate was given.
-			Pct *int `json:"pct,omitempty"`
-
-			// SenderIdentity Agent ID (or "human") that authored the underlying message.
-			SenderIdentity string `json:"sender_identity"`
-
-			// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a replayed transcript entry) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
-			Seq *int64 `json:"seq,omitempty"`
-
-			// SessionId Session in which the parent's span is running.
-			SessionId string `json:"session_id"`
-
-			// SpanId Matches the `span_id` from the bracketing `subagent_start` frame.
-			SpanId string `json:"span_id"`
-
-			// Text Flattened display text (progress.text / checkpoint.summary / blocker.text / question.text / error.text / steer.text / respond.text), when the kind carries one.
-			Text *string                                  `json:"text,omitempty"`
-			Type SessionDetailMessagesSubagentMessageType `json:"type"`
-
-			// UntrustedOrigin True when the underlying message's free-text content originated from a child agent and must render in untrusted-content framing (FE-7/MAJ-12).
-			UntrustedOrigin bool `json:"untrusted_origin"`
-		} `json:"subagent_message,omitempty"`
-
-		// SubagentStart Server → client (FR-H-004). Opening bracket of a subagent span. Emitted when the agent loop spawns a sub-turn. The SPA uses span_id to group subsequent nested tool_call_start / tool_call_result frames under a collapsible span UI.
-		SubagentStart *struct {
-			// AgentId Agent running the sub-turn.
-			AgentId *string `json:"agent_id,omitempty"`
-
-			// ChildSessionId Optional session id of the opened child session. Present for steered sessions; absent for legacy subturn spans. Enables the open control on the side panel row (ADR-091 I-4).
-			ChildSessionId *string `json:"child_session_id,omitempty"`
-
-			// ParentCallId The originating delegate or create_task tool-call id. For delegate-origin children, this is the delegate tool-call id. For create_task-origin children (task sessions), this is the create_task tool-call id (the span key for I-4). This is the span identifier used for both fronts.
-			ParentCallId string `json:"parent_call_id"`
-
-			// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
-			Seq *int64 `json:"seq,omitempty"`
-
-			// SessionId Session in which this sub-turn is running.
-			SessionId string `json:"session_id"`
-
-			// SpanId Unique identifier for this span. Opaque on the wire. The server builds it with pkg/agent.SubagentSpanID from the parent spawn ToolCall.ID (parent_call_id) and the child's generation. Generation 1, and any generation below 2, is "span_" plus that id. Generation N of 2 or above is that same string plus "_g" plus N, so a follow-up does not reuse generation 1's id. This frame has no generation field. Replay recovers N from the transcript entry id ("<call id>:g<N>:start" or ":end").
-			SpanId string `json:"span_id"`
-
-			// TaskLabel Human-readable label for the subagent task, extracted from the spawn call's "label" or "task" parameter (truncated to 60 chars by the server; schema allows up to 100 to accommodate edge cases).
-			TaskLabel string                                 `json:"task_label"`
-			Type      SessionDetailMessagesSubagentStartType `json:"type"`
-		} `json:"subagent_start,omitempty"`
-
-		// SubagentState Server -> client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A mid-span live lifecycle ping riding between the existing `subagent_start`/`subagent_end` brackets — a flat projection of the child's `SessionLifecycleRecord.state` (see `SubagentMessageFrame` for the same flat-projection-over-full-record shape decision and its rationale) plus an optional steering-receipt acknowledgement.
-		SubagentState *struct {
-			// ChildSessionId Optional session id of the delegated child session this lifecycle ping is reporting on — the same value the bracketing `subagent_start` frame's `child_session_id` carries (ADR-091 I-4). Present for steered sessions; absent for legacy subturn spans.
-			ChildSessionId *string `json:"child_session_id,omitempty"`
-
-			// CreatedAt RFC3339 timestamp this state ping was emitted.
-			CreatedAt time.Time `json:"created_at"`
-
-			// Seq Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a replayed transcript entry) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
-			Seq *int64 `json:"seq,omitempty"`
-
-			// SessionId Session in which the parent's span is running.
-			SessionId string `json:"session_id"`
-
-			// SpanId Matches the `span_id` from the bracketing `subagent_start` frame.
-			SpanId string `json:"span_id"`
-
-			// State The child's current durable lifecycle state (SessionLifecycleRecord.state).
-			State SessionDetailMessagesSubagentStateState `json:"state"`
-
-			// SteeringReceipt Present when this state ping is reporting that a prior `steer`/`respond` was applied at the child's next tool boundary (INV-3).
-			SteeringReceipt *struct {
-				AppliedAt time.Time `json:"applied_at"`
-
-				// CorrelationId The `correlation_id` of the applied steer/respond, when one was supplied; otherwise a server-assigned reference.
-				CorrelationId string `json:"correlation_id"`
-			} `json:"steering_receipt,omitempty"`
-			Type SessionDetailMessagesSubagentStateType `json:"type"`
-		} `json:"subagent_state,omitempty"`
-
-		// Summary Compaction summary text (present only on type=compaction entries).
-		Summary *string `json:"summary,omitempty"`
-
-		// SystemSubtype BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not one of the subtypes below. A closed enum so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same frame type on replay as was emitted live: `browser_handover_notice` → `BrowserHandoverNoticeFrame` (BROWSER-FR-043a); `goal_outcome` → `GoalOutcomeFrame` (the goal outcome line, founder decision 2026-09-14 — the entry also carries `goal_outcome`); `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` → the matching `SubagentStartFrame` / `SubagentStateFrame` / `SubagentMessageFrame` / `SubagentEndFrame` (ADR-091 D7/I-4 — steer_frames.go's persisted sub-agent lifecycle frames, carried on this `Message` by the dedicated `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` fields below, the same stamped-field convention `goal_outcome` already established). Hard Constraint #8: this closes the gap where the gateway served these four subtypes without the generated validator ever having learned them, failing every fetch of a session that delegated (the tester's own run only exercised three of the four — subagent_message persists through the identical path, steer_frames.go's persistSubagentEntry, so this fix covers it too rather than leaving the same defect for the next delegation that happens to emit one).
-		SystemSubtype *SessionDetailMessagesSystemSubtype `json:"system_subtype,omitempty"`
-
-		// Timestamp RFC3339 timestamp when this entry was recorded.
-		Timestamp time.Time `json:"timestamp"`
-
-		// Tokens Token count for this entry (input + output). Absent when zero.
-		Tokens *int `json:"tokens,omitempty"`
-
-		// ToolCalls Tool invocations made during this message turn.
-		ToolCalls *[]struct {
-			// ContentState ADR-066 D4/D5 projection state of this call's result in the model's window, as persisted in window meta and returned on transcript read. "full" = the result entered unmodified; "capped" = it entered head-and-tail truncated with a mark (the archive line holds the full content); "emptied" = it was later emptied in place, leaving a recall mark. The transcript `result` is the PROJECTED content the model saw; the full content stays in the gateway tool_results/ store for Verbose chat. Absent = full.
-			ContentState *SessionDetailMessagesToolCallsContentState `json:"content_state,omitempty"`
-
-			// DurationMs Elapsed time in milliseconds. Absent when still running.
-			DurationMs *int64 `json:"duration_ms,omitempty"`
-
-			// Error Human-readable failure reason when status is "error". Mirrors the equivalent field on ToolCallResultFrame so a reloaded transcript carries the same explanation the live WS frame did.
-			// Previously this did not exist: the reason was computed in the agent loop and logged at ERROR level, but the persisted record kept only {tool, status, duration_ms, parameters} with a null result. Nothing — not the UI, not post-hoc analysis, and critically not the agent itself — could see WHY a call failed, so an orchestrating agent retried blindly against failures it had no way to understand.
-			Error *string `json:"error,omitempty"`
-
-			// Id Unique tool call identifier (ToolCallID type on the Go side).
-			Id string `json:"id"`
-
-			// Parameters Input parameters passed to the tool.
-			Parameters *map[string]interface{} `json:"parameters,omitempty"`
-
-			// ParentToolCallId Parent tool call ID for nested subagent tool invocations.
-			ParentToolCallId *string `json:"parent_tool_call_id,omitempty"`
-
-			// Result Return value from the tool. Shape is tool-specific.
-			Result *map[string]interface{} `json:"result,omitempty"`
-
-			// Status Outcome of the tool call. "interrupted" is written by the tool-call status derivation in `pkg/agent/loop_run_turn_tools.go` onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
-			Status SessionDetailMessagesToolCallsStatus `json:"status"`
-
-			// Tool Tool name as registered in the tool registry (e.g. "workspace.shell", "web_search").
-			Tool string `json:"tool"`
-		} `json:"tool_calls,omitempty"`
-
-		// Truncated Set to true on the last assistant entry when the entry is incomplete — see `truncation_reason` for why. Only present when true.
-		Truncated *bool `json:"truncated,omitempty"`
-
-		// TruncationReason Narrows why `truncated` is true: "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a `truncated: true` entry means "cancelled" — every entry written before this field existed predates it and was always a cancel (ADR-087 D2).
-		TruncationReason *SessionDetailMessagesTruncationReason `json:"truncation_reason,omitempty"`
-
-		// TurnId Turn identifier — present only on type="turn_canceled" entries (FR-15). Identifies the turn that was canceled.
-		TurnId *string `json:"turn_id,omitempty"`
-
-		// Type Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
-		Type *SessionDetailMessagesType `json:"type,omitempty"`
-
-		// Verdict A single judge adjudication of a task attempt or plan round (ADR-049 D2/D4). Persisted alongside the run and also emitted as (a) a session-transcript entry (`Message.type: judge_verdict`, `Message.verdict`) and (b) a live `JudgeVerdictFrame` WS push — both carriers share this exact shape so they cannot silently disagree (review Q3). Absence of a verdict never defaults to success (NFR-2, fail-closed): a judge that is merely unavailable (throttled/cost-capped/provider error/timeout) does NOT produce a JudgeVerdict at all — the loop pauses and retries instead (ADR D7).
-		Verdict *struct {
-			// Id Server-set verdict identifier (UUID).
-			Id string `json:"id"`
-
-			// JudgeAgentId ID of the Judge System Agent that produced this verdict (NFR-5 correlation — usage metering is attributed to this `agent_id` alongside the plan/task/goal correlation IDs).
-			JudgeAgentId string `json:"judge_agent_id"`
-
-			// JudgedAt RFC 3339 UTC timestamp when the verdict was produced.
-			JudgedAt time.Time `json:"judged_at"`
-
-			// Met Overall PASS/FAIL verdict across all criteria. Fail-closed default `false` — absence of a verdict never defaults to `true` (NFR-2).
-			Met bool `json:"met"`
-
-			// Model Judge model used to produce this verdict (transparency / NFR-5 metering).
-			Model string `json:"model"`
-
-			// PerCriterion Per-criterion outcomes making up the overall verdict.
-			PerCriterion []struct {
-				// CriterionId ID of the AcceptanceCriterion this verdict judges.
-				CriterionId string `json:"criterion_id"`
-
-				// Evidence JUDGE-FR-006 — one entry per clause of the criterion this verdict judges, each answering that clause with its own grounding excerpt. NEW, OPTIONAL, sibling field alongside `evidence_quote` (FR-006's own wording) — `evidence_quote` keeps its existing type/length/optionality unchanged for every reader that does not know about this field (C2); when `evidence` is present the engine populates `evidence_quote` from `evidence[0].quote` so no existing persisted-verdict reader, replay frame or SPA render is affected. A criterion with no machine-checkable form and no located evidence for one or more of its clauses is still the NORMAL case and may still be `met` on the Judge's reasoned conviction (GOAL-FR-038/FR-039, D-B) — this array is a REPORTING obligation the Judge uses to show its work and flag any clause it could not ground, never a gate that can turn a `met` into an `unmet`.
-				Evidence *[]struct {
-					// Part The clause text (a substring of the criterion's own `text`) this entry answers.
-					Part string `json:"part"`
-
-					// Quote The verbatim, rune-truncated (500 code points) grounding excerpt for this clause. UNTRUSTED CONTENT — same framing obligation as `evidence_quote` above. MAY be empty when the Judge could not locate grounding for this clause and is reporting that gap rather than fabricating a quote (D-B: an empty/failed entry here is reported, not fabricated, and never by itself flips the overall verdict).
-					Quote string `json:"quote"`
-
-					// Source Where this clause's grounding excerpt came from. Plain string here (not a closed enum, unlike the verdict-level `evidence_source` above) — a codegen constraint (oapi-codegen cannot auto-name two same-shaped nested enum types across this document without a shared top-level schema, which is out of this wave's write-set) and, independently, a defensible one: this per-entry value is a REPORTING detail (D-B), never compared against by code the way the top-level `evidence_source` is (FR-066's derivation).
-					Source *string `json:"source,omitempty"`
-
-					// Target The specific artifact this clause's excerpt was read from.
-					Target *string `json:"target,omitempty"`
-				} `json:"evidence,omitempty"`
-
-				// EvidenceQuote ADR-074 D7 — the verbatim evidence excerpt the judge grounded this verdict in, copied out of the UNTRUSTED-DATA region of its input (diff/window/claim) per the rubric's quote-before-verdict instruction. Optional and empty-safe: absent/empty on every fail-closed verdict, every pre-D7 persisted verdict, and installs whose Judge soul predates the quote-emitting rubric. Truncated rune-safe to 500 code points at the parser. UNTRUSTED CONTENT — any re-emission into another agent's prompt MUST wrap it in UNTRUSTED-DATA framing; the UI renders it as inert quoted text. FR-071: when `evidence` (below) is present, `evidence_quote` MUST equal `evidence[0].quote`.
-				EvidenceQuote *string `json:"evidence_quote,omitempty"`
-
-				// EvidenceSource JUDGE-FR-065/FR-066 — where the grounding evidence for this verdict came from, derived (never trusted) server-side: `machine_check` when a veto or check evidence decided it, otherwise mapped from the validated evidence_source the investigation recorded. OPTIONAL and a REPORTING field only (D-B, ADR-084 revision 9 §10) — absence, or a value that does not verify, NEVER flips `met` to anything else; it never gates a verdict, it only explains one.
-				EvidenceSource *SessionDetailMessagesVerdictPerCriterionEvidenceSource `json:"evidence_source,omitempty"`
-
-				// EvidenceTarget JUDGE-FR-065 — the specific artifact the grounding evidence was read from (a file path, a diff hunk's changed file, a transcript tool-call id, …), paired with `evidence_source`. OPTIONAL REPORTING field only (D-B) — never a proof gate.
-				EvidenceTarget *string `json:"evidence_target,omitempty"`
-
-				// Met Whether this criterion was satisfied. Fail-closed default `false` — absence of evidence never defaults to `true` (NFR-2).
-				Met bool `json:"met"`
-
-				// Provenance JUDGE-FR-065 — the investigation-log provenance of this verdict: `deterministic_check` when a veto or check evidence decided it; `judge_read`/`diff`/`transcript`/`session_read` mapped from the validated `evidence_source` when the Judge's own reading decided it; `none` when neither applies (e.g. a fail-closed verdict, or a legacy rubric that emits no `evidence_source`). OPTIONAL REPORTING field only (D-B) — the Judge's authority to rule `met` on reasoned conviction alone is never conditioned on this field being present or non-`none`.
-				Provenance *SessionDetailMessagesVerdictPerCriterionProvenance `json:"provenance,omitempty"`
-
-				// Reason The judge's rationale for this criterion, fed forward as steering context on the next attempt when `met` is false.
-				Reason string `json:"reason"`
-			} `json:"per_criterion"`
-
-			// PlanId Plan being judged. Present when `scope == plan`.
-			PlanId *string `json:"plan_id,omitempty"`
-
-			// Round Attempt/round index (ADR D7 — a "round" is one worker turn plus its judge evaluation).
-			Round int `json:"round"`
-
-			// Scope Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
-			Scope SessionDetailMessagesVerdictScope `json:"scope"`
-
-			// TaskId Task being judged. Present when `scope == task`.
-			TaskId *string `json:"task_id,omitempty"`
-		} `json:"verdict,omitempty"`
-	} `json:"messages"`
+	// PageInfo Shared metadata/context for REST messages, bounded latest session detail and the selected replay page of a snapshot (chat history paging D3/D4a/D10). Positions are opaque same-session occurrence selectors, never lexically ordered or live cursors. Cross-field invariants are checked by producers and consumers: min_rows <= limit; source_group_count matches selected groups and is at most 100; first/last positions exist iff nonempty; budget_override exists iff byte_budget_exceeded; a byte_budget stop cannot underfill min_rows, while a byte_ceiling stop can; projected_bytes <= byte_ceiling unless source_group_count is 1. No optional absence is serialized as null.
+	PageInfo *SessionHistoryPageInfo `json:"page_info,omitempty"`
 
 	// Session Session metadata object (maps to session.UnifiedMeta + session.SessionMeta). Returned in list and detail endpoints. The SPA maps this through rawToSession() which reads stats.message_count, stats.tokens_total, and stats.cost.
 	Session struct {
-		// ActiveAgentId The agent ID currently handling this session (multi-agent sessions only).
-		ActiveAgentId *string `json:"active_agent_id,omitempty"`
-
 		// AgentId ID of the primary agent that owns this session.
 		AgentId string `json:"agent_id"`
 
 		// AgentIds All agent IDs that have participated in this session (multi-agent sessions). For legacy single-agent sessions this field is absent; callers should fall back to [agent_id] when agent_ids is undefined.
 		AgentIds *[]string `json:"agent_ids,omitempty"`
+
+		// BackgroundCommandCount How many background shell commands this session itself owns right now. Omitted when the process table is not available (unknown, not zero). Zero means the table was checked and this session owns none. Not a roll-up of child sessions.
+		BackgroundCommandCount *int `json:"background_command_count,omitempty"`
 
 		// Channel Channel identifier that initiated this session (e.g. "webchat", "telegram"). Always present (may be empty string for legacy sessions).
 		Channel string `json:"channel"`
@@ -21520,14 +25826,23 @@ type SessionDetail struct {
 		// CreatedAt RFC3339 timestamp when the session was created.
 		CreatedAt time.Time `json:"created_at"`
 
-		// Id Unique session identifier (UUID).
+		// Execution Projected queued/running classification for the session's current lifecycle display. Present only when the same loaded lifecycle record, evaluated through the canonical current-boot lifecycle projection, produces `lifecycle_state: working`: `queued` for a queued record and `running` for a running record. Omitted for any other projected display state, including Interrupted after a prior-boot root execution, and when no usable lifecycle record is available. Not a raw lifecycle-state export. The Sessions Running filter matches `running`; queued does not match. A nonmatching parent may still be included as hierarchy context.
+		Execution *SessionDetailSessionExecution `json:"execution,omitempty"`
+
+		// Id Unique session identifier. A main session's id is the server-computed main session id (format decided later). Other sessions keep their existing ids.
 		Id string `json:"id"`
 
 		// LastCompactionSummary Summary of the last context compaction pass (present only when compaction has occurred).
 		LastCompactionSummary *string `json:"last_compaction_summary,omitempty"`
 
+		// LifecycleState Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A `failed` lifecycle record whose `failed_reason` is `interrupted` (a session a gateway restart cut off — the boot sweep) maps to `interrupted`, not `failed` (founder ruling 2026-10-06: a session does not fail because of a restart; this adds a sixth value to F0929-2's five). The canonical current-boot lifecycle projection is restart-aware: a prior-boot root with raw `queued` or `running` state can display `interrupted` without a recovery write; this suppresses `execution`. Interrupted describes the session's current interruption, not permanent history: once the session is re-adopted or explicitly resumed with a fresh current-boot execution identity, its current record determines the display. A resumed `running` record projects to `working` and publishes `execution: running`, rather than retaining a stale Interrupted display. Gateway availability alone does not mean an old execution has resumed. A genuinely failed record still maps to `failed`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
+		LifecycleState *SessionDetailSessionLifecycleState `json:"lifecycle_state,omitempty"`
+
 		// Model LLM model name used in this session (may be empty for legacy sessions).
 		Model *string `json:"model,omitempty"`
+
+		// NeedsAttention Present as true or false on a valid main, including the default-workspace Admin main. Omitted on every other session, and on a main whose attention sources could not be read. An omitted value means unknown (the client shows unknown, never false). True for a pending structured question, a pending tool approval on the main or one of its helpers, or a finished or failed goal outcome not yet seen; never for a goal the user stopped.
+		NeedsAttention *bool `json:"needs_attention,omitempty"`
 
 		// ParentSessionId ADR-057 FR-008/FR-091. The direct parent's session id, present only on a subordinate ("delegate") session created by a delegation. Absent (never empty-string) on a root session. A session whose parent_session_id names an id that no longer resolves is still surfaced as a root by GET /api/v1/sessions rather than being silently dropped (FR-091, BDD-106).
 		ParentSessionId *string `json:"parent_session_id,omitempty"`
@@ -21535,7 +25850,7 @@ type SessionDetail struct {
 		// Partitions List of JSONL partition file names (e.g. ["2026-05-16.jsonl"]). Always present as an array (may be empty for new sessions with no messages). One partition per day, so 3650 covers ~10 years of daily partitions.
 		Partitions []string `json:"partitions"`
 
-		// Protected Computed field: true while the heartbeat member whose session_id matches this session's id has heartbeat.enabled = true in its workspace member_configs. NOT a stored flag — derived server-side from member_configs on each GET /sessions response. When true, the SPA pins the session to the top of the Session panel and hides the delete (trash) button; DELETE /sessions/{id} returns 409. (FR-021, FR-028, A2/G-01)
+		// Protected Computed, not stored. True for a main session whether or not that member's heartbeat is enabled. When true, the SPA pins the session to the top of the Session panel and hides the delete (trash) button; DELETE /sessions/{id} returns 409.
 		Protected *bool `json:"protected,omitempty"`
 
 		// Provider Provider identifier (e.g. "anthropic", "openai") for this session.
@@ -21545,6 +25860,9 @@ type SessionDetail struct {
 		Stats struct {
 			// ByModel Per-model token breakdown. Keys are model name strings (e.g. "claude-sonnet-4-6"). Absent for legacy sessions. subagent_3p turns are excluded (they run on a separate engine).
 			ByModel *map[string]struct {
+				// CacheHitRatio Cache-hit ratio for this cell: cache_read / (in + cache_read + cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. in is uncached input.
+				CacheHitRatio *float64 `json:"cache_hit_ratio"`
+
 				// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
 				CacheRead *int `json:"cache_read,omitempty"`
 
@@ -21557,15 +25875,45 @@ type SessionDetail struct {
 				// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 				Out *int `json:"out,omitempty"`
 
+				// Reasoning Effort levels spec (FR-024). Reasoning tokens reported by the provider for this cell: the sum of the per-call counts of the entries that reported one. A subset of out, never added to total. Absent when no entry reported a count.
+				Reasoning *int `json:"reasoning,omitempty"`
+
 				// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 				Total int `json:"total"`
 			} `json:"by_model,omitempty"`
 
-			// Cost Total USD cost for this session (based on provider pricing).
+			// ByProvider Per-provider token breakdown. Same cell shape as by_model. Keys are catalog provider ids. Summed from the stored per-call provider id, including after reload. Absent for legacy sessions.
+			ByProvider *map[string]struct {
+				// CacheHitRatio Cache-hit ratio for this cell: cache_read / (in + cache_read + cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. in is uncached input.
+				CacheHitRatio *float64 `json:"cache_hit_ratio"`
+
+				// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
+				CacheRead *int `json:"cache_read,omitempty"`
+
+				// CacheWrite Cache-write tokens (written into a new cache entry) for this model. Additive to total alongside in and out — see cache_read's description.
+				CacheWrite *int `json:"cache_write,omitempty"`
+
+				// In Uncached input (prompt) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no input tokens".
+				In *int `json:"in,omitempty"`
+
+				// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
+				Out *int `json:"out,omitempty"`
+
+				// Reasoning Effort levels spec (FR-024). Reasoning tokens reported by the provider for this cell: the sum of the per-call counts of the entries that reported one. A subset of out, never added to total. Absent when no entry reported a count.
+				Reasoning *int `json:"reasoning,omitempty"`
+
+				// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
+				Total int `json:"total"`
+			} `json:"by_provider,omitempty"`
+
+			// Cost Total USD cost for this session: the sum of priced portions only. A cost of zero together with unpriced_tokens greater than zero means the session is unpriced, not free. subscription_tokens are excluded from cost; those tokens recorded no dollars.
 			Cost float64 `json:"cost"`
 
 			// MessageCount Number of transcript entries in this session.
 			MessageCount int `json:"message_count"`
+
+			// SubscriptionTokens Tokens from ChatGPT sign-in calls. Those tokens recorded no dollars and are excluded from cost.
+			SubscriptionTokens *int `json:"subscription_tokens,omitempty"`
 
 			// TokensCacheRead Total cache-read tokens across all assistant turns (tokens served from provider KV cache, not re-computed). 0 for sessions without caching or created before Wave 1 token tracking.
 			TokensCacheRead *int `json:"tokens_cache_read,omitempty"`
@@ -21584,10 +25932,31 @@ type SessionDetail struct {
 
 			// ToolCalls Total number of tool calls made in this session.
 			ToolCalls int `json:"tool_calls"`
+
+			// UnpricedTokens Unpriced token portions in this session. Counts only the unpriced portion of each call, not the whole call. A session with cost 0 and unpriced_tokens greater than 0 is unpriced, not free.
+			UnpricedTokens *int `json:"unpriced_tokens,omitempty"`
 		} `json:"stats"`
 
-		// Status Current lifecycle status of the session.
+		// Status Coarse chat-transcript-metadata status. `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `interrupted` is a session whose turn a gateway restart cut off (the boot sweep writes it — founder rule 2026-10-06: a session does not fail because of a restart; it supersedes the sub-agent control plane ADR D4/MAJ-009 retirement of this value); `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed`/`interrupted` session resets this metadata back to `active`.
 		Status SessionDetailSessionStatus `json:"status"`
+
+		// StopNote The durable, LASTING record of who stopped a session, when, and why (sub-agent control plane ADR D2/D6; `pkg/session/lifecycle_edge.go::StopNote`). Distinct from the in-flight dispatch fence (`LifecycleRecord.stop` / `SessionLifecycleRecord.yaml::stop`), which is cleared the instant the stop it names is carried out — this note is RETAINED on the landed `stopped` record so a direct parent's stopped-child notice, and any later observer, can read who/why/when. Exposed on `Session.yaml::stop_note` only when the session's authoritative lifecycle record has landed `stopped` for its current generation; absent otherwise.
+		StopNote *struct {
+			// At RFC3339 timestamp when this stop note was written.
+			At time.Time `json:"at"`
+
+			// BootSeq Boot epoch of the writer — the monotonic boot counter, persisted in the data dir, of the boot that wrote this note. Present only for physical boot-restart notes — those whose `by` is the literal "restart" (sub-agent control plane ADR D8.3); absent otherwise. A non-boot goal-loop supersession is written by:"system" and carries no boot_seq.
+			BootSeq *int64 `json:"boot_seq,omitempty"`
+
+			// By Who or what initiated the stop, formatted "human:<id>" / "agent:<id>", "system" for a cause with no human/agent principal behind it (a goal-loop attempt supersession, or a historical lifetime-budget timeout), or the literal "restart" for a boot-recovery restart (sub-agent control plane ADR D8.3) — see `pkg/session/lifecycle_edge.go::StopActorFromPrincipal` / `::StopActorSystem` / `::StopActorRestart`.
+			By string `json:"by"`
+
+			// Cause The closed vocabulary naming WHY the session last landed `stopped` (`pkg/session/lifecycle_edge.go::StopCause`). `timeout` is historical: it is only read from records written before delegated work lost its time limit (issue #1306) and is never written any more.
+			Cause SessionDetailSessionStopNoteCause `json:"cause"`
+
+			// Seq Stamped from the record's own generation at the moment of write — a documented stand-in until the per-session control ledger (sub-agent control plane ADR D4, "Controls") exists and can supply a true per-control monotonic sequence (`pkg/session/lifecycle_edge.go::StopNote` doc comment).
+			Seq int64 `json:"seq"`
+		} `json:"stop_note,omitempty"`
 
 		// TaskId Associated task ID when this session was created to service a task.
 		TaskId *string `json:"task_id,omitempty"`
@@ -21595,8 +25964,8 @@ type SessionDetail struct {
 		// Title Human-readable session title. May be auto-generated or user-renamed.
 		Title string `json:"title"`
 
-		// Type Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists. "heartbeat" tags the eager standing session created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron job continues this session rather than starting a fresh one. "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand. "delegate" (ADR-057 FR-008) is the subordinate type a child session gains when minted by a delegation — it always carries a non-empty `parent_session_id`. Like "scheduled"/"heartbeat"/"verifier", it is server-minted only: intentionally absent from SessionCreateRequest.yaml's narrower create-time enum (a client cannot POST /sessions directly into this type).
-		Type *SessionDetailSessionType `json:"type,omitempty"`
+		// Type Session classification. Required on a stored session; a missing type is invalid and is not defaulted to "chat". "main" is the one standing session for an eligible (workspace, agent) pair, and for Admin in the default workspace. Its id is the server-computed main session id (format decided later). Server-created only: "main" is absent from SessionCreateRequest's create-time enum, so a client cannot POST /sessions into this type. "scheduled" tags a session created by a fired schedule run (issue #264, FR-005). "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand. "delegate" (ADR-057 FR-008) is the subordinate type a child session gains when minted by a delegation — it always carries a non-empty `parent_session_id`. Like "scheduled"/"main"/"verifier", it is server-minted only and absent from the client-create enum.
+		Type SessionDetailSessionType `json:"type"`
 
 		// UpdatedAt RFC3339 timestamp of the last modification to session metadata or transcript.
 		UpdatedAt time.Time `json:"updated_at"`
@@ -21606,76 +25975,43 @@ type SessionDetail struct {
 	} `json:"session"`
 }
 
-// SessionDetailMessagesAttachmentsType Attachment category. Aligned with MediaPart.type enum.
-type SessionDetailMessagesAttachmentsType string
+// SessionDetailSessionExecution Projected queued/running classification for the session's current lifecycle display. Present only when the same loaded lifecycle record, evaluated through the canonical current-boot lifecycle projection, produces `lifecycle_state: working`: `queued` for a queued record and `running` for a running record. Omitted for any other projected display state, including Interrupted after a prior-boot root execution, and when no usable lifecycle record is available. Not a raw lifecycle-state export. The Sessions Running filter matches `running`; queued does not match. A nonmatching parent may still be included as hierarchy context.
+type SessionDetailSessionExecution string
 
-// SessionDetailMessagesCancelMethod How the cancel was applied — present only on type="turn_canceled" entries (FR-15). "graceful" lets the in-flight tool finish; "hard" interrupts immediately.
-type SessionDetailMessagesCancelMethod string
+// SessionDetailSessionLifecycleState Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A `failed` lifecycle record whose `failed_reason` is `interrupted` (a session a gateway restart cut off — the boot sweep) maps to `interrupted`, not `failed` (founder ruling 2026-10-06: a session does not fail because of a restart; this adds a sixth value to F0929-2's five). The canonical current-boot lifecycle projection is restart-aware: a prior-boot root with raw `queued` or `running` state can display `interrupted` without a recovery write; this suppresses `execution`. Interrupted describes the session's current interruption, not permanent history: once the session is re-adopted or explicitly resumed with a fresh current-boot execution identity, its current record determines the display. A resumed `running` record projects to `working` and publishes `execution: running`, rather than retaining a stale Interrupted display. Gateway availability alone does not mean an old execution has resumed. A genuinely failed record still maps to `failed`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
+type SessionDetailSessionLifecycleState string
 
-// SessionDetailMessagesGoalOutcomeEnding WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — a deliberate `/goal clear|stop|off|reset|cancel| none` (Goal.state `cleared`, terminal note "cleared by user"). `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
-type SessionDetailMessagesGoalOutcomeEnding string
-
-// SessionDetailMessagesRole Author role. Absent on compaction entries.
-type SessionDetailMessagesRole string
-
-// SessionDetailMessagesStatus Completion status of this message turn.
-type SessionDetailMessagesStatus string
-
-// SessionDetailMessagesSubagentEndReason When status is "interrupted": why the sub-turn was interrupted by the parent. Populated by W1-9 coordination in the agent loop.
-type SessionDetailMessagesSubagentEndReason string
-
-// SessionDetailMessagesSubagentEndStatus Terminal status of the sub-turn.  The SPA validates this field and drops frames with any other value to prevent unknown-status render crashes (W4-6). "parked" (ADR-057 UAT defect C2 fix): the child sub-turn stopped because a successful message_parent(kind="question", wait=true) call parked it awaiting the parent's answer — not a success, error, cancellation, or timeout. The span itself is over (a `delegate respond` that later answers the question runs a FRESH sub-turn with its own new span, not a continuation of this one); the child's own durable session lifecycle stays "needs_input" independently of this per-span wire status.
-type SessionDetailMessagesSubagentEndStatus string
-
-// SessionDetailMessagesSubagentEndType defines model for SessionDetail.Messages.SubagentEnd.Type.
-type SessionDetailMessagesSubagentEndType string
-
-// SessionDetailMessagesSubagentMessageKind The underlying SessionMessage kind. `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
-type SessionDetailMessagesSubagentMessageKind string
-
-// SessionDetailMessagesSubagentMessageType defines model for SessionDetail.Messages.SubagentMessage.Type.
-type SessionDetailMessagesSubagentMessageType string
-
-// SessionDetailMessagesSubagentStartType defines model for SessionDetail.Messages.SubagentStart.Type.
-type SessionDetailMessagesSubagentStartType string
-
-// SessionDetailMessagesSubagentStateState The child's current durable lifecycle state (SessionLifecycleRecord.state).
-type SessionDetailMessagesSubagentStateState string
-
-// SessionDetailMessagesSubagentStateType defines model for SessionDetail.Messages.SubagentState.Type.
-type SessionDetailMessagesSubagentStateType string
-
-// SessionDetailMessagesSystemSubtype BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not one of the subtypes below. A closed enum so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same frame type on replay as was emitted live: `browser_handover_notice` → `BrowserHandoverNoticeFrame` (BROWSER-FR-043a); `goal_outcome` → `GoalOutcomeFrame` (the goal outcome line, founder decision 2026-09-14 — the entry also carries `goal_outcome`); `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` → the matching `SubagentStartFrame` / `SubagentStateFrame` / `SubagentMessageFrame` / `SubagentEndFrame` (ADR-091 D7/I-4 — steer_frames.go's persisted sub-agent lifecycle frames, carried on this `Message` by the dedicated `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` fields below, the same stamped-field convention `goal_outcome` already established). Hard Constraint #8: this closes the gap where the gateway served these four subtypes without the generated validator ever having learned them, failing every fetch of a session that delegated (the tester's own run only exercised three of the four — subagent_message persists through the identical path, steer_frames.go's persistSubagentEntry, so this fix covers it too rather than leaving the same defect for the next delegation that happens to emit one).
-type SessionDetailMessagesSystemSubtype string
-
-// SessionDetailMessagesToolCallsContentState ADR-066 D4/D5 projection state of this call's result in the model's window, as persisted in window meta and returned on transcript read. "full" = the result entered unmodified; "capped" = it entered head-and-tail truncated with a mark (the archive line holds the full content); "emptied" = it was later emptied in place, leaving a recall mark. The transcript `result` is the PROJECTED content the model saw; the full content stays in the gateway tool_results/ store for Verbose chat. Absent = full.
-type SessionDetailMessagesToolCallsContentState string
-
-// SessionDetailMessagesToolCallsStatus Outcome of the tool call. "interrupted" is written by the tool-call status derivation in `pkg/agent/loop_run_turn_tools.go` onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
-type SessionDetailMessagesToolCallsStatus string
-
-// SessionDetailMessagesTruncationReason Narrows why `truncated` is true: "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a `truncated: true` entry means "cancelled" — every entry written before this field existed predates it and was always a cancel (ADR-087 D2).
-type SessionDetailMessagesTruncationReason string
-
-// SessionDetailMessagesType Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
-type SessionDetailMessagesType string
-
-// SessionDetailMessagesVerdictPerCriterionEvidenceSource JUDGE-FR-065/FR-066 — where the grounding evidence for this verdict came from, derived (never trusted) server-side: `machine_check` when a veto or check evidence decided it, otherwise mapped from the validated evidence_source the investigation recorded. OPTIONAL and a REPORTING field only (D-B, ADR-084 revision 9 §10) — absence, or a value that does not verify, NEVER flips `met` to anything else; it never gates a verdict, it only explains one.
-type SessionDetailMessagesVerdictPerCriterionEvidenceSource string
-
-// SessionDetailMessagesVerdictPerCriterionProvenance JUDGE-FR-065 — the investigation-log provenance of this verdict: `deterministic_check` when a veto or check evidence decided it; `judge_read`/`diff`/`transcript`/`session_read` mapped from the validated `evidence_source` when the Judge's own reading decided it; `none` when neither applies (e.g. a fail-closed verdict, or a legacy rubric that emits no `evidence_source`). OPTIONAL REPORTING field only (D-B) — the Judge's authority to rule `met` on reasoned conviction alone is never conditioned on this field being present or non-`none`.
-type SessionDetailMessagesVerdictPerCriterionProvenance string
-
-// SessionDetailMessagesVerdictScope Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
-type SessionDetailMessagesVerdictScope string
-
-// SessionDetailSessionStatus Current lifecycle status of the session.
+// SessionDetailSessionStatus Coarse chat-transcript-metadata status. `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `interrupted` is a session whose turn a gateway restart cut off (the boot sweep writes it — founder rule 2026-10-06: a session does not fail because of a restart; it supersedes the sub-agent control plane ADR D4/MAJ-009 retirement of this value); `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed`/`interrupted` session resets this metadata back to `active`.
 type SessionDetailSessionStatus string
 
-// SessionDetailSessionType Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists. "heartbeat" tags the eager standing session created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron job continues this session rather than starting a fresh one. "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand. "delegate" (ADR-057 FR-008) is the subordinate type a child session gains when minted by a delegation — it always carries a non-empty `parent_session_id`. Like "scheduled"/"heartbeat"/"verifier", it is server-minted only: intentionally absent from SessionCreateRequest.yaml's narrower create-time enum (a client cannot POST /sessions directly into this type).
+// SessionDetailSessionStopNoteCause The closed vocabulary naming WHY the session last landed `stopped` (`pkg/session/lifecycle_edge.go::StopCause`). `timeout` is historical: it is only read from records written before delegated work lost its time limit (issue #1306) and is never written any more.
+type SessionDetailSessionStopNoteCause string
+
+// SessionDetailSessionType Session classification. Required on a stored session; a missing type is invalid and is not defaulted to "chat". "main" is the one standing session for an eligible (workspace, agent) pair, and for Admin in the default workspace. Its id is the server-computed main session id (format decided later). Server-created only: "main" is absent from SessionCreateRequest's create-time enum, so a client cannot POST /sessions into this type. "scheduled" tags a session created by a fired schedule run (issue #264, FR-005). "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand. "delegate" (ADR-057 FR-008) is the subordinate type a child session gains when minted by a delegation — it always carries a non-empty `parent_session_id`. Like "scheduled"/"main"/"verifier", it is server-minted only and absent from the client-create enum.
 type SessionDetailSessionType string
 
-// SessionLifecycleRecord The durable, per-entity-JSONL 8-state session-lifecycle record (ADR-053 §Contract Surface, S2). Distinct from `Session.status` (active/archived/ interrupted — the older chat-transcript-metadata status) and from `Plan.state` (the 5-state draft/approved/running/done/failed plan state machine) — do not conflate the three. This record is the durable authority the boot sweep (§5), idle settlement, `blocked_by`, and the S4 interlock state machine all read from. The immutable-terminal invariant (L-3) holds: a terminal record (`completed`/`failed`/ `cancelled`/`timed_out`) is never mutated in place — `follow_up`/Play mint a NEW record with a new `generation`, linked back via `resumed_from`.
+// SessionHistoryResponse Bounded public session-history page (chat history paging D3/D10), selected nearest the requested boundary and returned in ascending acceptance order. has_earlier and has_later mean actual eligible retained groups in the read domain: the closed window for window_refresh, otherwise the retained archive. They are not inferred from fullness, sequence gaps or a detached live tail. next_before/next_after exist iff the respective flag is true and equal the first/last selected position. An empty page has both flags false and no cursors; an exactly-full terminal page also has no continuation. Producers/consumers validate these cross-field rules. No manifest, header side channel or duplicate entry-reference list.
+type SessionHistoryResponse struct {
+	// Entries Non-null public entries, one per whole selected source group. Every paged occurrence has history_position and preserves its recorded id. An individual group's drawn-row weight can exceed 100; its start/result are never split.
+	Entries    []Message `json:"entries"`
+	HasEarlier bool      `json:"has_earlier"`
+	HasLater   bool      `json:"has_later"`
+
+	// NextAfter Present iff has_later, equal to the last selected history_position.
+	NextAfter *string `json:"next_after,omitempty"`
+
+	// NextBefore Present iff has_earlier, equal to the first selected history_position.
+	NextBefore *string `json:"next_before,omitempty"`
+
+	// PageInfo Shared metadata/context for REST messages, bounded latest session detail and the selected replay page of a snapshot (chat history paging D3/D4a/D10). Positions are opaque same-session occurrence selectors, never lexically ordered or live cursors. Cross-field invariants are checked by producers and consumers: min_rows <= limit; source_group_count matches selected groups and is at most 100; first/last positions exist iff nonempty; budget_override exists iff byte_budget_exceeded; a byte_budget stop cannot underfill min_rows, while a byte_ceiling stop can; projected_bytes <= byte_ceiling unless source_group_count is 1. No optional absence is serialized as null.
+	PageInfo  SessionHistoryPageInfo `json:"page_info"`
+	SessionId string                 `json:"session_id"`
+
+	// SessionTokensTotal Authoritative absolute session-wide consumed-token total, with the same meaning as SessionStats.tokens_total, independent of the selected history range. Present when authoritative usage is available; omitted means unknown, never zero. Not a sum of this page's entries or a per-turn delta.
+	SessionTokensTotal *int `json:"session_tokens_total,omitempty"`
+}
+
+// SessionLifecycleRecord The durable, per-entity-JSONL 6-state session-lifecycle record (ADR-053 §Contract Surface, S2; state consolidated per F0929-2). Distinct from `Session.status` (active/archived/failed — the coarse chat-transcript- metadata status; see `Session.lifecycle_state` for the exact 5-state display projection of this record) and from `Plan.state` (the 5-state draft/approved/running/ done/failed plan state machine) — do not conflate the three. This record is the durable authority the boot sweep (§5), idle settlement, `blocked_by`, and the S4 interlock state machine all read from. The immutable-terminal invariant (L-3) holds: a terminal record (`completed`/`failed`) is never mutated in place — `follow_up`/Play mint a NEW record with a new `generation`, linked back via `resumed_from`.
 type SessionLifecycleRecord struct {
 	// AgentId The agent running this session.
 	AgentId string `json:"agent_id"`
@@ -21700,7 +26036,7 @@ type SessionLifecycleRecord struct {
 
 	// NeedsInput Present iff `state == needs_input`; absent otherwise (no schema `nullable: true` — an optional-object field paired with `nullable` generates a `T | null | undefined` Zod type against an openapi-typescript TS type that only ever emits `T | undefined` for a nullable, non-required, non-scalar property, a real codegen mismatch between the two generators for this shape; plain optional-only is unambiguous and matches how every other optional nested object in this contract set is expressed). `reconstructable` is a PARK-TIME HINT ONLY (m5) — the authoritative determination is `isNeedsInputReconstructable(rec)` re-evaluated AT BOOT (R§8.6), never this stored value.
 	NeedsInput *struct {
-		// CorrelationId The open question/decision_request this session is parked on.
+		// CorrelationId The open question this session is parked on.
 		CorrelationId string `json:"correlation_id"`
 
 		// Reconstructable Park-time hint (m5) — NOT authoritative. See description above.
@@ -21715,7 +26051,7 @@ type SessionLifecycleRecord struct {
 		// CallId For delegate/task-origin sessions, the tool-call id (span key) of the originating delegate or create_task call. Absent for other kinds.
 		CallId *string `json:"call_id,omitempty"`
 
-		// Kind The launch path that created this session. Root kinds (chat/channel/scheduled/heartbeat/verifier/plan/human) and derived kinds (delegate/task) — the kind's own definition.
+		// Kind The launch path that created this session. Root kinds (chat/channel/main/scheduled/heartbeat/verifier/plan/human) and derived kinds (delegate/task) — the kind's own definition.
 		Kind SessionLifecycleRecordOriginKind `json:"kind"`
 
 		// TaskId For task-origin sessions, the persistent task id from the task record (persisted on the task disk-only, by tools/task.go). Absent for delegate-origin and other kinds.
@@ -21728,7 +26064,7 @@ type SessionLifecycleRecord struct {
 	// OwnerScopeKind SHAPE DECISION (flagged for review): the spec's field table describes `owner_scope` as a union of `parent_session_id | plan_id | human`. A bare `oneOf` of untagged strings has no discriminator and is not meaningfully validatable/codegen-friendly, so it is split into this enum tag plus `owner_scope_id` below (empty for `human`, which has no single owning id — N-9 top-level chat-goal sessions are owned by the human/chat-principal).
 	OwnerScopeKind SessionLifecycleRecordOwnerScopeKind `json:"owner_scope_kind"`
 
-	// OwnsPlanId Set when THIS session is a plan's OWNER session — the reciprocal of `Plan.owner_session_id` (m-3/FR-147). Lets the boot sweep exempt a `paused` owner session whose `owner_scope_kind == human` but which is legitimately idle awaiting an owner correction on the named plan.
+	// OwnsPlanId Set when THIS session is a plan's OWNER session — the reciprocal of `Plan.owner_session_id` (m-3/FR-147). Lets the boot sweep exempt a `stopped` owner session whose `owner_scope_kind == human` but which is legitimately idle awaiting an owner correction on the named plan.
 	OwnsPlanId *string `json:"owns_plan_id,omitempty"`
 
 	// ResumedFrom The prior generation's `session_id` this record resumed from. Null for generation 1 (the original spawn).
@@ -21737,7 +26073,7 @@ type SessionLifecycleRecord struct {
 	// SessionId Unique durable session identifier.
 	SessionId string `json:"session_id"`
 
-	// State The durable 8-state lifecycle (S2, the S4 interlock state machine's authority). `paused` covers BOTH cooperative cancel-soft grace AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a 9th state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
+	// State The durable 6-state lifecycle (S2, the S4 interlock state machine's authority). `stopped` replaces the former `cancelled`/`timed_out`/ `paused` states as one non-terminal state (session alive, continuable) — it covers cancellation, timeout, AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a separate state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
 	State SessionLifecycleRecordState `json:"state"`
 
 	// SteeredBy Present for steered sessions (a session launched by another session's delegate or create_task). Absent for ordinary-root sessions that nobody steers (ADR-091 I-1). No `nullable: true` — an optional-object field should use optional-only semantics to avoid Zod/openapi-typescript codegen mismatch (see needs_input field comment).
@@ -21750,12 +26086,6 @@ type SessionLifecycleRecord struct {
 			// RemainingDepth Remaining delegation depth budget for this child's own onward delegations. Decremented from the edge or global default.
 			RemainingDepth int `json:"remaining_depth"`
 		} `json:"authorization"`
-
-		// Limits Creator-set session limits.
-		Limits *struct {
-			// TimeoutSeconds Maximum seconds before this delegation is force-cancelled. 0 = the configured default. Scope is the session's lifetime across re-entries (ADR-091 I-1).
-			TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
-		} `json:"limits,omitempty"`
 
 		// ReportingTarget The steering session's own address; where completion wakes it.
 		ReportingTarget *struct {
@@ -21792,7 +26122,7 @@ type SessionLifecycleRecord struct {
 		Generation int `json:"generation"`
 	} `json:"stop,omitempty"`
 
-	// Terminal Server-derived: true iff `state` is one of `completed`/`failed`/ `cancelled`/`timed_out`.
+	// Terminal Server-derived: true iff `state` is one of `completed`/`failed`.
 	Terminal *bool `json:"terminal,omitempty"`
 
 	// UndeliveredMessageIds `message_id`s not yet delivered/acked at the time of the last persist — carried forward across a boot-sweep `failed(interrupted)` transition so the reason is inspectable.
@@ -21805,13 +26135,13 @@ type SessionLifecycleRecord struct {
 	WorkspaceId string `json:"workspace_id"`
 }
 
-// SessionLifecycleRecordOriginKind The launch path that created this session. Root kinds (chat/channel/scheduled/heartbeat/verifier/plan/human) and derived kinds (delegate/task) — the kind's own definition.
+// SessionLifecycleRecordOriginKind The launch path that created this session. Root kinds (chat/channel/main/scheduled/heartbeat/verifier/plan/human) and derived kinds (delegate/task) — the kind's own definition.
 type SessionLifecycleRecordOriginKind string
 
 // SessionLifecycleRecordOwnerScopeKind SHAPE DECISION (flagged for review): the spec's field table describes `owner_scope` as a union of `parent_session_id | plan_id | human`. A bare `oneOf` of untagged strings has no discriminator and is not meaningfully validatable/codegen-friendly, so it is split into this enum tag plus `owner_scope_id` below (empty for `human`, which has no single owning id — N-9 top-level chat-goal sessions are owned by the human/chat-principal).
 type SessionLifecycleRecordOwnerScopeKind string
 
-// SessionLifecycleRecordState The durable 8-state lifecycle (S2, the S4 interlock state machine's authority). `paused` covers BOTH cooperative cancel-soft grace AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a 9th state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
+// SessionLifecycleRecordState The durable 6-state lifecycle (S2, the S4 interlock state machine's authority). `stopped` replaces the former `cancelled`/`timed_out`/ `paused` states as one non-terminal state (session alive, continuable) — it covers cancellation, timeout, AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a separate state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
 type SessionLifecycleRecordState string
 
 // SessionLifecycleRecordSteeredByAuthorizationMode How the child was authorized. `direct` for delegate-origin, `task` for task-origin.
@@ -21820,7 +26150,7 @@ type SessionLifecycleRecordSteeredByAuthorizationMode string
 // SessionLifecycleRecordStopByKind Principal kind (agent or human).
 type SessionLifecycleRecordStopByKind string
 
-// SessionMessage The typed, schema-validated envelope carried over the existing pkg/bus MessageBus (no new transport) that derives every control/visibility surface of the session-control plane (ADR-053 S6/US-6). Discriminated by `kind` — 12 variants covering child->parent reporting (progress/checkpoint/artifact/blocker/ question/decision_request/error/handback), engine-emitted control (revision_entry), session->UI propagation (goal_status), and parent->child control (steer/respond). `direction` is one of `child_to_parent | parent_to_child | session_to_ui | engine` — the historical `human` value is dropped (M8); every kind variant maps to exactly one of the four. Every field/kind/direction pairing is the ratified shape from the spec's Contract Surface table — see the individual variant files for full per-kind documentation and caps (10 msgs/min, 32 KiB, depth <=5 for child sends; 6/min, 16 KiB for steer; per-child unacked ceiling 20 open question+blocker, D15).
+// SessionMessage The typed, schema-validated envelope carried over the existing pkg/bus MessageBus (no new transport) that derives every control/visibility surface of the session-control plane (ADR-053 S6/US-6). Discriminated by `kind` — 11 variants covering child->parent reporting (progress/checkpoint/artifact/blocker/ question/error/handback), engine-emitted control (revision_entry), session->UI propagation (goal_status), and parent->child control (steer/respond). `direction` is one of `child_to_parent | parent_to_child | session_to_ui | engine` — the historical `human` value is dropped (M8); every kind variant maps to exactly one of the four. Every field/kind/direction pairing is the ratified shape from the spec's Contract Surface table — see the individual variant files for full per-kind documentation and caps (10 msgs/min, 32 KiB, depth <=5 for child sends; 6/min, 16 KiB for steer; per-child unacked ceiling 20 open question+blocker, D15).
 type SessionMessage struct {
 	union json.RawMessage
 }
@@ -21909,40 +26239,6 @@ type SessionMessageCheckpointDirection string
 
 // SessionMessageCheckpointKind defines model for SessionMessageCheckpoint.Kind.
 type SessionMessageCheckpointKind string
-
-// SessionMessageDecisionRequest SessionMessage `oneOf` variant, `kind: decision_request` (ADR-053 §Contract Surface, R§8.2). Child -> parent. Like `question` but enumerates discrete `options[]`; the answering `respond.text` names the chosen option. Same untrusted-authority handling as `question` (M3). Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
-type SessionMessageDecisionRequest struct {
-	// Authority Child-authored authority tag, untrusted (M3) — see SessionMessageQuestion.authority for the identical fail-closed derivation rule.
-	Authority *SessionMessageDecisionRequestAuthority `json:"authority,omitempty"`
-
-	// CorrelationId Routes the eventual `respond` back to this decision request.
-	CorrelationId string                                 `json:"correlation_id"`
-	CreatedAt     time.Time                              `json:"created_at"`
-	Depth         int                                    `json:"depth"`
-	Direction     SessionMessageDecisionRequestDirection `json:"direction"`
-	Generation    *int                                   `json:"generation,omitempty"`
-	Kind          SessionMessageDecisionRequestKind      `json:"kind"`
-	MessageId     string                                 `json:"message_id"`
-
-	// Options The enumerated choices. The answering `respond.text` names the chosen option verbatim.
-	Options         []string `json:"options"`
-	ParentSessionId *string  `json:"parent_session_id,omitempty"`
-	SenderIdentity  string   `json:"sender_identity"`
-	SessionId       string   `json:"session_id"`
-
-	// Text Untrusted decision prompt.
-	Text            string `json:"text"`
-	UntrustedOrigin bool   `json:"untrusted_origin"`
-}
-
-// SessionMessageDecisionRequestAuthority Child-authored authority tag, untrusted (M3) — see SessionMessageQuestion.authority for the identical fail-closed derivation rule.
-type SessionMessageDecisionRequestAuthority string
-
-// SessionMessageDecisionRequestDirection defines model for SessionMessageDecisionRequest.Direction.
-type SessionMessageDecisionRequestDirection string
-
-// SessionMessageDecisionRequestKind defines model for SessionMessageDecisionRequest.Kind.
-type SessionMessageDecisionRequestKind string
 
 // SessionMessageError SessionMessage `oneOf` variant, `kind: error` (ADR-053 §Contract Surface). Child -> parent. Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
 type SessionMessageError struct {
@@ -22051,7 +26347,7 @@ type SessionMessageProgress struct {
 	// CreatedAt RFC3339 timestamp this message was created.
 	CreatedAt time.Time `json:"created_at"`
 
-	// Depth Message-hop cap (m7) — how many parent<->child hops this message has traversed. Distinct from and independent of the spawn-nesting delegation-depth backstop (`defaultMaxSubTurnDepth`, default 3, `pkg/agent/delegation_runtime.go`) — one caps message forwarding, the other caps spawn nesting (m-5).
+	// Depth Message-hop cap (m7) — how many parent<->child hops this message has traversed. Distinct from and independent of the spawn-nesting delegation-depth backstop (`defaultMaxSubTurnDepth`, default 10, `pkg/agent/delegation_runtime.go`) — one caps message forwarding, the other caps spawn nesting (m-5).
 	Depth int `json:"depth"`
 
 	// Direction M8 — the unused `human` value is dropped. `progress` is always child -> parent.
@@ -22091,11 +26387,8 @@ type SessionMessageProgressDirection string
 // SessionMessageProgressKind Discriminator for the SessionMessage `oneOf`.
 type SessionMessageProgressKind string
 
-// SessionMessageQuestion SessionMessage `oneOf` variant, `kind: question` (ADR-053 §Contract Surface, R§8.2). Child -> parent. `wait: true` parks the child in `needs_input` (native-only; 3P children never advertise this kind, D5). `authority` is child-authored but NEVER trusted at face value — the runtime's `deriveQuestionAuthority(q)` re-derives the effective authority server-side (fail-closed default `owner_required` on omission; a child can only be UPGRADED to `owner_required`, never downgraded to `self_ok`). Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
+// SessionMessageQuestion SessionMessage `oneOf` variant, `kind: question` (ADR-053 §Contract Surface). Child -> parent. An ordinary upward message — ADR-20261004 ("Steering commands: no person question", locked decision 6) removed the person-question pause: a question parks nothing and carries no `wait`/`authority` fields; the parent answers through ordinary steering (`respond`/`steer`), and C1's message/state table applies to any resume effect. Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
 type SessionMessageQuestion struct {
-	// Authority Child-authored authority tag. Untrusted (M3) — the runtime's `deriveQuestionAuthority(q)` is the authoritative determination; an omitted tag is treated as `owner_required` server-side (fail-closed default is NOT a schema `default:` — it is applied at the handler, per the project convention of never mixing `required` semantics with a JSON-Schema `default` on a field the server overrides).
-	Authority *SessionMessageQuestionAuthority `json:"authority,omitempty"`
-
 	// CorrelationId Routes the eventual `respond`/`inbox_ack` back to this question. Out-of-order answers are safe (V-3/M-3).
 	CorrelationId   string                          `json:"correlation_id"`
 	CreatedAt       time.Time                       `json:"created_at"`
@@ -22111,13 +26404,7 @@ type SessionMessageQuestion struct {
 	// Text Untrusted question text.
 	Text            string `json:"text"`
 	UntrustedOrigin bool   `json:"untrusted_origin"`
-
-	// Wait True parks the child in `needs_input` awaiting a `respond` (native only). False is a fire-and-forget question the child does not block on.
-	Wait bool `json:"wait"`
 }
-
-// SessionMessageQuestionAuthority Child-authored authority tag. Untrusted (M3) — the runtime's `deriveQuestionAuthority(q)` is the authoritative determination; an omitted tag is treated as `owner_required` server-side (fail-closed default is NOT a schema `default:` — it is applied at the handler, per the project convention of never mixing `required` semantics with a JSON-Schema `default` on a field the server overrides).
-type SessionMessageQuestionAuthority string
 
 // SessionMessageQuestionDirection defines model for SessionMessageQuestion.Direction.
 type SessionMessageQuestionDirection string
@@ -22125,9 +26412,9 @@ type SessionMessageQuestionDirection string
 // SessionMessageQuestionKind defines model for SessionMessageQuestion.Kind.
 type SessionMessageQuestionKind string
 
-// SessionMessageRespond SessionMessage `oneOf` variant, `kind: respond` (ADR-053 §Contract Surface). Parent -> child. Answers a `question`/`decision_request` by `correlation_id`; out-of-order answers are safe (INV-4/V-3/M-3). The runtime validator REJECTS a `respond` whose target question's derived authority is `owner_required` (R§8.2) — that rejection is a runtime business rule, not schema-expressible; this schema only shapes the request. Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
+// SessionMessageRespond SessionMessage `oneOf` variant, `kind: respond` (ADR-053 §Contract Surface). Parent -> child. Answers a `question` by `correlation_id`; out-of-order answers are safe (INV-4/V-3/M-3). The text is delivered as an ordinary steering message; the recipient's state decides the effect (ADR-20261004 C1). The former owner-answer authority rejection was withdrawn with the person-question pause (ADR-20261004, locked decision 7). Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
 type SessionMessageRespond struct {
-	// CorrelationId The `correlation_id` of the `question`/`decision_request` being answered.
+	// CorrelationId The `correlation_id` of the `question` being answered.
 	CorrelationId string                         `json:"correlation_id"`
 	CreatedAt     time.Time                      `json:"created_at"`
 	Depth         int                            `json:"depth"`
@@ -22143,7 +26430,7 @@ type SessionMessageRespond struct {
 	// SessionId The CHILD session being answered.
 	SessionId string `json:"session_id"`
 
-	// Text The answer. For a `decision_request`, names the chosen option verbatim from its `options[]`.
+	// Text The answer to the child's question. The maximum length is the server's steer_body byte limit (configurable, default 65,536 UTF-8 bytes); the server enforces it.
 	Text string `json:"text"`
 
 	// UntrustedOrigin False — parent-authored, trusted content.
@@ -22227,7 +26514,7 @@ type SessionMessageRevisionEntryKind string
 // SessionMessageRevisionEntryRevisionVerb `append` adds a new tail to the DAG. `supersede` marks a `done` member's outcome as superseded by a corrective tail (the superseded member's own record stays immutable — only Judge weighting changes). `targeted_retry` resets a single frozen-transient member for another attempt. `abandon` (ADR-055/FR-046b) is the honest exit: the adjudicator judges the Definition of Done unreachable from the plan's current state and adds no corrective work at all, terminating the plan `failed(dod_unreachable)` with the falsified assumption on the record — as opposed to burning the remaining round budget on corrections that cannot succeed. It is the one verb that adds no tail members and names no existing member.
 type SessionMessageRevisionEntryRevisionVerb string
 
-// SessionMessageSteer SessionMessage `oneOf` variant, `kind: steer` (ADR-053 §Contract Surface). Parent -> child. Mid-run injection applied at the child's next tool boundary (skip-remaining-batch semantics identical to chat steering, INV-3) — never mid-tool, never interleaved with an in-flight verdict write. Rate-capped 6/min, 16 KiB body (session_messaging. steer_rate/steer_body). Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
+// SessionMessageSteer SessionMessage `oneOf` variant, `kind: steer` (ADR-053 §Contract Surface). Parent -> child. Mid-run injection applied at the child's next tool boundary (skip-remaining-batch semantics identical to chat steering, INV-3) — never mid-tool, never interleaved with an in-flight verdict write. Rate-capped (default 60/min) and body-capped (default 65,536 UTF-8 bytes) by session_messaging.steer_rate/steer_body. Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
 type SessionMessageSteer struct {
 	// CorrelationId Optional — set when this steer is issued alongside/answering a specific open question or blocker.
 	CorrelationId *string                      `json:"correlation_id,omitempty"`
@@ -22245,7 +26532,7 @@ type SessionMessageSteer struct {
 	// SessionId The CHILD session being steered.
 	SessionId string `json:"session_id"`
 
-	// Text Steering instruction injected at the child's next tool boundary.
+	// Text Steering instruction injected at the child's next tool boundary. The maximum length is the server's steer_body byte limit (configurable, default 65,536 UTF-8 bytes); the server enforces it.
 	Text string `json:"text"`
 
 	// UntrustedOrigin False — parent-authored, trusted content.
@@ -22258,12 +26545,12 @@ type SessionMessageSteerDirection string
 // SessionMessageSteerKind defines model for SessionMessageSteer.Kind.
 type SessionMessageSteerKind string
 
-// SessionPage Paged envelope for GET /sessions (ADR-057 US-19/FR-091/FR-098). `sessions` is this page's rows: root sessions by default, that node's direct children when parent_session_id is supplied, or every session (roots and subordinates) when flat=true (FR-104). `partial_errors` composes with paging: a page whose merge hit a failing legacy per-agent store still returns its healthy rows, still returns next_cursor, and populates partial_errors — a failing store contributes zero rows and does not halt the page or invalidate the cursor (FR-098).
+// SessionPage Paged envelope for GET /sessions (ADR-057 US-19/FR-091/FR-098). `sessions` is this page's rows: root sessions by default, that node's direct children when parent_session_id is supplied, or every session (roots and subordinates) when flat=true (FR-104). `partial_errors` composes with paging: a page whose merge hit a failing legacy per-agent store still returns its healthy rows, still returns next_cursor, and populates partial_errors — a failing store contributes zero rows and does not halt the page or invalidate the cursor (FR-098). This is also the page's general degradation channel: an unexpected per-session lifecycle-journal read failure keeps the row, omits lifecycle_state, stop_note, and execution (never null), and appends a sanitized session-scoped token. A missing lifecycle record is normal and contributes no token.
 type SessionPage struct {
 	// NextCursor Opaque pagination cursor for the next page. Absent when this is the last page.
 	NextCursor *string `json:"next_cursor,omitempty"`
 
-	// PartialErrors Opaque error tokens (agent ID + sanitized reason) from any store that failed during this page's merge. Present only when at least one store failed.
+	// PartialErrors General page-degradation channel. Distinguishable opaque tokens: agent=<id>: session_list_failed for a store enumeration failure; session=<id>: lifecycle_read_unavailable for an unexpected per-session lifecycle-journal read failure. No filesystem paths or underlying error details are exposed. An unreadable journal keeps its session row but omits lifecycle_state, stop_note, and execution, never sending null or inventing a state. A missing lifecycle record (ErrLifecycleNotFound) is normal, not degradation. Present only when at least one degradation occurred; omitted when empty. Rows and next_cursor remain valid, so clients can warn that the list or runtime state is incomplete and offer Retry.
 	PartialErrors *[]string `json:"partial_errors,omitempty"`
 	Sessions      []Session `json:"sessions"`
 }
@@ -22311,6 +26598,9 @@ type SessionScopeUpdateResponse struct {
 type SessionStats struct {
 	// ByModel Per-model token breakdown. Keys are model name strings (e.g. "claude-sonnet-4-6"). Absent for legacy sessions. subagent_3p turns are excluded (they run on a separate engine).
 	ByModel *map[string]struct {
+		// CacheHitRatio Cache-hit ratio for this cell: cache_read / (in + cache_read + cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. in is uncached input.
+		CacheHitRatio *float64 `json:"cache_hit_ratio"`
+
 		// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
 		CacheRead *int `json:"cache_read,omitempty"`
 
@@ -22323,15 +26613,45 @@ type SessionStats struct {
 		// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 		Out *int `json:"out,omitempty"`
 
+		// Reasoning Effort levels spec (FR-024). Reasoning tokens reported by the provider for this cell: the sum of the per-call counts of the entries that reported one. A subset of out, never added to total. Absent when no entry reported a count.
+		Reasoning *int `json:"reasoning,omitempty"`
+
 		// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 		Total int `json:"total"`
 	} `json:"by_model,omitempty"`
 
-	// Cost Total USD cost for this session (based on provider pricing).
+	// ByProvider Per-provider token breakdown. Same cell shape as by_model. Keys are catalog provider ids. Summed from the stored per-call provider id, including after reload. Absent for legacy sessions.
+	ByProvider *map[string]struct {
+		// CacheHitRatio Cache-hit ratio for this cell: cache_read / (in + cache_read + cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. in is uncached input.
+		CacheHitRatio *float64 `json:"cache_hit_ratio"`
+
+		// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
+		CacheRead *int `json:"cache_read,omitempty"`
+
+		// CacheWrite Cache-write tokens (written into a new cache entry) for this model. Additive to total alongside in and out — see cache_read's description.
+		CacheWrite *int `json:"cache_write,omitempty"`
+
+		// In Uncached input (prompt) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no input tokens".
+		In *int `json:"in,omitempty"`
+
+		// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
+		Out *int `json:"out,omitempty"`
+
+		// Reasoning Effort levels spec (FR-024). Reasoning tokens reported by the provider for this cell: the sum of the per-call counts of the entries that reported one. A subset of out, never added to total. Absent when no entry reported a count.
+		Reasoning *int `json:"reasoning,omitempty"`
+
+		// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
+		Total int `json:"total"`
+	} `json:"by_provider,omitempty"`
+
+	// Cost Total USD cost for this session: the sum of priced portions only. A cost of zero together with unpriced_tokens greater than zero means the session is unpriced, not free. subscription_tokens are excluded from cost; those tokens recorded no dollars.
 	Cost float64 `json:"cost"`
 
 	// MessageCount Number of transcript entries in this session.
 	MessageCount int `json:"message_count"`
+
+	// SubscriptionTokens Tokens from ChatGPT sign-in calls. Those tokens recorded no dollars and are excluded from cost.
+	SubscriptionTokens *int `json:"subscription_tokens,omitempty"`
 
 	// TokensCacheRead Total cache-read tokens across all assistant turns (tokens served from provider KV cache, not re-computed). 0 for sessions without caching or created before Wave 1 token tracking.
 	TokensCacheRead *int `json:"tokens_cache_read,omitempty"`
@@ -22350,6 +26670,9 @@ type SessionStats struct {
 
 	// ToolCalls Total number of tool calls made in this session.
 	ToolCalls int `json:"tool_calls"`
+
+	// UnpricedTokens Unpriced token portions in this session. Counts only the unpriced portion of each call, not the whole call. A session with cost 0 and unpriced_tokens greater than 0 is unpriced, not free.
+	UnpricedTokens *int `json:"unpriced_tokens,omitempty"`
 }
 
 // SignInPollRequest Body for POST /providers/{id}/sign-in/poll (ADR-068 FR-044, added 2026-08-23 §8b). Identifies which open device-code session to check.
@@ -22370,25 +26693,29 @@ type SignInPollResponse struct {
 // SignInPollResponseState pending while the operator has not yet approved the session; signed_in once the OAuth tokens are stored; expired when the device-code session's own expires_at has passed; denied when the operator explicitly declined on the vendor's page.
 type SignInPollResponseState string
 
-// SignInStartResponse Response from POST /providers/{id}/sign-in (ADR-068 FR-008, amended 2026-08-23 §8b). `cli_login` for codex-cli / github-copilot: the vendor CLI's own login command, run by the operator in a terminal. `device_code` for openai-chatgpt (and xai once its catalog row carries sign_in): Omnipus requests a device code itself and the SPA shows the verification link and user code. Discriminated by `method`.
+// SignInStartResponse The `device_code` variant of SignInStartResponse (ADR-068 FR-008/FR-044, added 2026-08-23 §8b). For `openai-chatgpt` (and `xai` once its catalog row carries `sign_in`): Omnipus requests a device code from the vendor itself and the SPA renders the verification link and user code for the operator to approve on any device. `device_auth_id` is an opaque server-side handle for POST /providers/{id}/sign-in/poll — the vendor's own device code and any PKCE verifier are held only by the gateway and never appear on the wire.
 type SignInStartResponse struct {
-	union json.RawMessage
+	// DeviceAuthId Opaque handle identifying this device-code session for POST /providers/{id}/sign-in/poll. Never the vendor's own device code.
+	DeviceAuthId string `json:"device_auth_id"`
+
+	// ExpiresAt When this device-code session expires server-side (ceiling 15 minutes from start, FR-044). The dialog shows the matching expired end state once past this time.
+	ExpiresAt time.Time `json:"expires_at"`
+
+	// IntervalSeconds Minimum seconds between polls. The SPA must never poll faster than this, and must back off when a later poll response raises it (FR-045, vendor slow_down).
+	IntervalSeconds int `json:"interval_seconds"`
+
+	// Method Discriminator — a device-code session was started; poll for completion.
+	Method SignInStartResponseMethod `json:"method"`
+
+	// UserCode Short code the operator enters (or confirms) on the verification page.
+	UserCode string `json:"user_code"`
+
+	// VerificationUrl The vendor page the operator opens (new tab) to approve the sign-in.
+	VerificationUrl string `json:"verification_url"`
 }
 
-// SignInStartResponseCliLogin The `cli_login` variant of SignInStartResponse (ADR-068 FR-008, amended 2026-08-23 §8b). For `codex-cli` and `github-copilot`: Omnipus never performs or stores the vendor login itself — this returns the one instruction the operator needs, the vendor CLI's own login command, so the SPA can show it beside a *Check sign-in* button.
-type SignInStartResponseCliLogin struct {
-	// Command The exact command the operator runs in a terminal (e.g. "codex login", "copilot login").
-	Command string `json:"command"`
-
-	// Instructions Human-readable guidance shown beside the command, ending with the prompt to click Check sign-in.
-	Instructions string `json:"instructions"`
-
-	// Method Discriminator — run the vendor CLI's login command.
-	Method SignInStartResponseCliLoginMethod `json:"method"`
-}
-
-// SignInStartResponseCliLoginMethod Discriminator — run the vendor CLI's login command.
-type SignInStartResponseCliLoginMethod string
+// SignInStartResponseMethod Discriminator — a device-code session was started; poll for completion.
+type SignInStartResponseMethod string
 
 // SignInStartResponseDeviceCode The `device_code` variant of SignInStartResponse (ADR-068 FR-008/FR-044, added 2026-08-23 §8b). For `openai-chatgpt` (and `xai` once its catalog row carries `sign_in`): Omnipus requests a device code from the vendor itself and the SPA renders the verification link and user code for the operator to approve on any device. `device_auth_id` is an opaque server-side handle for POST /providers/{id}/sign-in/poll — the vendor's own device code and any PKCE verifier are held only by the gateway and never appear on the wire.
 type SignInStartResponseDeviceCode struct {
@@ -22414,9 +26741,9 @@ type SignInStartResponseDeviceCode struct {
 // SignInStartResponseDeviceCodeMethod Discriminator — a device-code session was started; poll for completion.
 type SignInStartResponseDeviceCodeMethod string
 
-// SignInStatus Response from GET /providers/{id}/sign-in/status (ADR-068 FR-009, amended 2026-08-23 §8b). For `cli_login` providers (codex-cli, github-copilot): read from the vendor CLI's saved login only — Omnipus never refreshes that file — `expired` follows the access token's JWT `exp` (decoded unverified, display only) when decodable, else the saved login file being older than one hour. For `device_code` providers (openai-chatgpt, and xai once its catalog row carries `sign_in`): the state comes from the stored `<id>_OAUTH` entry in Omnipus's own encrypted credential store — `expired` means the access token is past `exp` AND a refresh attempt failed or no refresh token is available. `pending` is returned only while a device-code session started by POST /sign-in is open and not yet approved.
+// SignInStatus Response from GET /providers/{id}/sign-in/status (ADR-068 FR-009, amended 2026-08-23 §8b). The state comes from the stored `<id>_OAUTH` entry in Omnipus's own encrypted credential store (device_code providers: openai-chatgpt, and xai once its catalog row carries `sign_in`) — `expired` means the access token is past `exp` AND a refresh attempt failed or no refresh token is available. `pending` is returned only while a device-code session started by POST /sign-in is open and not yet approved. (The former vendor-CLI-file reads were deleted with the CLI-backed model providers — WU-24, founder 2026-10-14.)
 type SignInStatus struct {
-	// AccountLabel Opaque account identifier — `tokens.account_id` for codex-cli, the GitHub login for Copilot when the CLI reports one, or the stored OAuth entry's account_id for device_code providers. Present only when known; never an e-mail.
+	// AccountLabel Opaque account identifier — the stored OAuth entry's account_id. Present only when known; never an e-mail.
 	AccountLabel *string `json:"account_label,omitempty"`
 
 	// ExpiresAt The access token's expiry when known. Absent otherwise.
@@ -22425,11 +26752,11 @@ type SignInStatus struct {
 	// Reason Plain-language explanation, for the operator, of why a check reported `not_signed_in` when the check itself could not run or could not be interpreted (the CLI is missing, could not start, timed out, or printed an unrecognised message). Absent for every definite state — signed in, expired, a recognised not-signed-in, and pending — and absent when the reason is already implied by the state. Safe for display: it names the stage that failed, never the CLI's raw output or a filesystem path.
 	Reason *string `json:"reason,omitempty"`
 
-	// State not_signed_in when no saved login / stored OAuth entry exists (or it is unreadable / malformed — logged as a warning); pending while an open device-code session awaits approval; signed_in when a usable login or OAuth entry exists; expired per the per-method rule above.
+	// State not_signed_in when no stored OAuth entry exists (or it is unreadable / malformed — logged as a warning); pending while an open device-code session awaits approval; signed_in when a usable OAuth entry exists; expired when it is past exp and cannot refresh.
 	State SignInStatusState `json:"state"`
 }
 
-// SignInStatusState not_signed_in when no saved login / stored OAuth entry exists (or it is unreadable / malformed — logged as a warning); pending while an open device-code session awaits approval; signed_in when a usable login or OAuth entry exists; expired per the per-method rule above.
+// SignInStatusState not_signed_in when no stored OAuth entry exists (or it is unreadable / malformed — logged as a warning); pending while an open device-code session awaits approval; signed_in when a usable OAuth entry exists; expired when it is past exp and cannot refresh.
 type SignInStatusState string
 
 // Skill A single installed skill as returned by GET /skills. Skills are SKILL.md/package bundles loaded from ~/.omnipus/skills/ that extend agent capabilities. Each skill has an ID, version, and human-readable metadata.
@@ -22450,6 +26777,9 @@ type Skill struct {
 	// Description Short description of what the skill does.
 	Description *string `json:"description,omitempty"`
 	ErrorStage  *string `json:"error_stage,omitempty"`
+
+	// HasLocalChanges true when any of: (a) the newest version's kind is not install or install_replace (a restore of an install version counts as a change); (b) the live folder's current content revision differs from the newest version's revision (an outside change not yet recorded) — evaluated at read time, never by writing history; (c) history is missing or unreadable. Always false for built-ins.
+	HasLocalChanges bool `json:"has_local_changes"`
 
 	// Id Unique skill identifier (typically the skill directory name or npm package name).
 	Id string `json:"id"`
@@ -22492,8 +26822,82 @@ type SkillSource string
 // SkillStatus "active" when the skill is loaded and its tools are available to agents. "disabled" when the skill has been installed but deactivated. "inactive" when the skill is installed but not currently activated. "error" when the skill failed to load (malformed SKILL.md, missing dependency, etc.).
 type SkillStatus string
 
+// SkillCopyRequest Request body for POST /api/v1/skills/{name}/copy: the name of the new user-owned copy. The copy starts ungranted.
+type SkillCopyRequest struct {
+	// NewId Slug of the new skill (letters, digits and single hyphens).
+	NewId string `json:"new_id"`
+}
+
+// SkillDetail Tool-only: the complete result envelope of the get_skill agent tool (skills spec §5.2). Not served by any REST route; it exists so the selectable `fields` names are generated and compared, not typed twice.
+type SkillDetail struct {
+	AbsentFields  *[]string `json:"absent_fields,omitempty"`
+	AllowedTools  *[]string `json:"allowed_tools,omitempty"`
+	Compatibility *string   `json:"compatibility,omitempty"`
+	Description   *string   `json:"description,omitempty"`
+	Files         *struct {
+		Items []struct {
+			Exec bool   `json:"exec"`
+			Path string `json:"path"`
+			Size int64  `json:"size"`
+		} `json:"items"`
+		Total int `json:"total"`
+	} `json:"files,omitempty"`
+	Folder          *string `json:"folder,omitempty"`
+	HasLocalChanges *bool   `json:"has_local_changes,omitempty"`
+
+	// Id The skill slug as it is on disk.
+	Id           string  `json:"id"`
+	Instructions *string `json:"instructions,omitempty"`
+	LastChange   *struct {
+		Actor       *string   `json:"actor,omitempty"`
+		At          *string   `json:"at,omitempty"`
+		Paths       *[]string `json:"paths,omitempty"`
+		ShippedWith *string   `json:"shipped_with,omitempty"`
+		Tool        *string   `json:"tool,omitempty"`
+		Unknown     *bool     `json:"unknown,omitempty"`
+	} `json:"last_change,omitempty"`
+	Metadata *map[string]string `json:"metadata,omitempty"`
+	Name     *string            `json:"name,omitempty"`
+	Needs    *[]struct {
+		Path    *string                `json:"path,omitempty"`
+		Program string                 `json:"program"`
+		Status  SkillDetailNeedsStatus `json:"status"`
+	} `json:"needs,omitempty"`
+
+	// Revision Content revision; null only for a deleted skill.
+	Revision        *string           `json:"revision"`
+	Shelf           *SkillDetailShelf `json:"shelf,omitempty"`
+	State           *SkillDetailState `json:"state,omitempty"`
+	TruncatedFields *[]string         `json:"truncated_fields,omitempty"`
+	Versions        *struct {
+		Items []struct {
+			Actor      string   `json:"actor"`
+			At         string   `json:"at"`
+			Id         string   `json:"id"`
+			Kind       string   `json:"kind"`
+			Paths      []string `json:"paths"`
+			PathsTotal int      `json:"paths_total"`
+			Tool       *string  `json:"tool,omitempty"`
+		} `json:"items"`
+		NextBefore *string `json:"next_before"`
+		Total      int     `json:"total"`
+	} `json:"versions,omitempty"`
+}
+
+// SkillDetailNeedsStatus defines model for SkillDetail.Needs.Status.
+type SkillDetailNeedsStatus string
+
+// SkillDetailShelf defines model for SkillDetail.Shelf.
+type SkillDetailShelf string
+
+// SkillDetailState defines model for SkillDetail.State.
+type SkillDetailState string
+
 // SkillInstallRequest Request body for POST /api/v1/skills/install. Exactly one source is required: a marketplace slug, or the opaque media ref returned as UploadedFile.ref for an authorized local .md/.zip upload. Replacing an installed skill requires its revision; an omitted revision requires target absence under the authoritative installation lock. version applies only to marketplace slug installs.
 type SkillInstallRequest struct {
+	// ReplaceLocalChanges Required true to replace an installed skill whose has_local_changes is true. Absent means false.
+	ReplaceLocalChanges *bool `json:"replace_local_changes,omitempty"`
+
 	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
 	Revision *string `json:"revision,omitempty"`
 
@@ -22600,7 +27004,7 @@ type SlashCommand struct {
 	// AvailableWhileStreaming Whether the command can be invoked mid-turn (e.g. /cancel).
 	AvailableWhileStreaming *bool `json:"available_while_streaming,omitempty"`
 
-	// Delivery How the web client dispatches the command. "client" = the SPA handles it locally (e.g. /clear, /model) and does NOT send it to the agent. "agent" = the SPA inserts it as text and forwards it via the message frame (e.g. /skill). Only meaningful for web-surfaced commands; defaults to "agent".
+	// Delivery How the web client dispatches the command. "client" = the SPA handles it locally (e.g. /model, /skills) and does NOT send it to the agent. "agent" = the SPA inserts it as text and forwards it via the message frame, where the server executes it (e.g. /status, /channels). Only meaningful for web-surfaced commands; defaults to "agent".
 	Delivery SlashCommandDelivery `json:"delivery"`
 
 	// Description One-line description shown in the palette and help.
@@ -22616,14 +27020,8 @@ type SlashCommand struct {
 	Usage *string `json:"usage,omitempty"`
 }
 
-// SlashCommandDelivery How the web client dispatches the command. "client" = the SPA handles it locally (e.g. /clear, /model) and does NOT send it to the agent. "agent" = the SPA inserts it as text and forwards it via the message frame (e.g. /skill). Only meaningful for web-surfaced commands; defaults to "agent".
+// SlashCommandDelivery How the web client dispatches the command. "client" = the SPA handles it locally (e.g. /model, /skills) and does NOT send it to the agent. "agent" = the SPA inserts it as text and forwards it via the message frame, where the server executes it (e.g. /status, /channels). Only meaningful for web-surfaced commands; defaults to "agent".
 type SlashCommandDelivery string
-
-// SseChatRequest Request body for POST /api/v1/chat (SSE streaming endpoint). Sends a user message to the agent and streams the response via Server-Sent Events.
-type SseChatRequest struct {
-	// Message The user message to send to the agent. Must not be empty.
-	Message string `json:"message"`
-}
 
 // StorageStats Storage statistics returned by GET /api/v1/storage/stats. Reports session count, workspace disk usage, memory entry count, and any non-fatal warnings encountered while collecting the stats.
 type StorageStats struct {
@@ -22856,6 +27254,9 @@ type Task struct {
 		Status TaskRollupStatus `json:"status"`
 	} `json:"rollup,omitempty"`
 
+	// RunIsolated True forces every run of this work into a fresh independent chat, for either role (session-core FR-017).
+	RunIsolated *bool `json:"run_isolated,omitempty"`
+
 	// SessionId Session ID created/linked when the task runs.
 	SessionId *string `json:"session_id,omitempty"`
 
@@ -22885,6 +27286,9 @@ type Task struct {
 
 	// Todos Lightweight `{text, done}` checklist items on this task (Tier 1 of the three-tier model). A todo is NOT a task — it has no agent, no status, no trigger. Distinct from a subtask (a full child Task with `parent_task_id`).
 	Todos *[]struct {
+		// ActiveForm Optional phrasing for the item while it is in progress.
+		ActiveForm *string `json:"active_form,omitempty"`
+
 		// Status Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
 		Status TaskTodosStatus `json:"status"`
 
@@ -22899,20 +27303,16 @@ type Task struct {
 	//                   `llm` action that runs the assigned agent. `config` is empty.
 	//   - `once`      — fire exactly once at an absolute instant. `config.at_ms` is the
 	//                   Unix epoch-milliseconds instant (required).
-	//   - `every`     — fire repeatedly on a fixed interval. `config.every_ms` is the
-	//                   interval in milliseconds (required, min 1000). Each fire spawns
-	//                   a FRESH run (fresh session + run history + pause).
-	//   - `recurring` — fire on a repeat rule. `config` carries EXACTLY ONE of:
-	//                   `cron_expr` (legacy, 5/6-field cron expression, still accepted
-	//                   and validated via gronx) or `rrule` (RFC 5545 RRULE body, e.g.
-	//                   `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`) plus its required
-	//                   siblings `dtstart_ms` (anchor instant) and `tz` (IANA zone).
-	//                   Each fire spawns a FRESH run.
+	//   - `recurring` — fire on a repeat rule. `config` carries `rrule` (RFC 5545
+	//                   RRULE body, e.g. `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`)
+	//                   plus its required siblings `dtstart_ms` (anchor instant) and
+	//                   `tz` (IANA zone). Each fire spawns a FRESH run.
 	//
-	// `once`/`every`/`recurring` triggers are executed by the existing per-agent Schedules engine (`pkg/cron`) acting as the trigger executor — a schedule is just a task with a time trigger; a heartbeat is a `recurring` task with `surface: heartbeat` (Main-only). This folds in the legacy `ScheduleTrigger` semantics (`at_ms` / `every_ms` / `cron_expr`); the Task's own trigger is this type rather than `ScheduleTrigger`.
+	// The legacy `every` trigger type and the `every_ms` and `cron_expr` config keys were removed (session-core DEL-19); the server refuses them with a 400.
+	// `once`/`recurring` triggers are executed by the existing per-agent Schedules engine (`pkg/cron`) acting as the trigger executor — a schedule is just a task with a time trigger; a heartbeat is a `recurring` task with `surface: heartbeat` (Main-only).
 	// ## Future growth path (design intent — DO NOT build in this release) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
 	Trigger *struct {
-		// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — future event kinds add their own keys here without changing the outer shape.
+		// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `recurring` → `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — future event kinds add their own keys here without changing the outer shape.
 		Config Task_Trigger_Config `json:"config"`
 
 		// Type The trigger kind (discriminator). Tier 2 ships time-only kinds; future growth adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
@@ -22986,21 +27386,15 @@ type TaskSurface string
 // TaskTodosStatus Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
 type TaskTodosStatus string
 
-// Task_Trigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — future event kinds add their own keys here without changing the outer shape.
+// Task_Trigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `recurring` → `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — future event kinds add their own keys here without changing the outer shape.
 type Task_Trigger_Config struct {
 	// AtMs Unix epoch milliseconds for a one-shot fire. Required when `type = once`; ignored otherwise.
 	AtMs *int64 `json:"at_ms,omitempty"`
 
-	// CronExpr Cron expression (5 or 6 fields), legacy path. Valid only when `type = recurring`; ignored otherwise. Exactly one of `cron_expr` / `rrule` is present on a `recurring` trigger — never both.
-	CronExpr *string `json:"cron_expr,omitempty"`
-
 	// DtstartMs Anchor instant for `rrule` — the first occurrence's wall-clock moment, Unix epoch milliseconds. Required sibling of `rrule`; ignored otherwise.
 	DtstartMs *int64 `json:"dtstart_ms,omitempty"`
 
-	// EveryMs Interval in milliseconds between fires. Required when `type = every` (minimum 1000ms); ignored otherwise.
-	EveryMs *int64 `json:"every_ms,omitempty"`
-
-	// Rrule RFC 5545 RRULE body (no `RRULE:` prefix), e.g. `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`. Valid only when `type = recurring`; ignored otherwise. Exactly one of `cron_expr` / `rrule` is present on a `recurring` trigger — never both. Requires the sibling keys `dtstart_ms` and `tz`. Server-validated: input bounds (≤512 chars, no `FREQ=SECONDLY`, no foreign `BYSECOND`), bounded-window minimum-gap scan (≥60s between occurrences), liveness (must produce an occurrence within 5 years of `dtstart_ms`), and `COUNT` ≤ 100000.
+	// Rrule RFC 5545 RRULE body (no `RRULE:` prefix), e.g. `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`. Valid only when `type = recurring`; ignored otherwise. Requires the sibling keys `dtstart_ms` and `tz`. Server-validated: input bounds (≤512 chars, no `FREQ=SECONDLY`, no foreign `BYSECOND`), bounded-window minimum-gap scan (≥60s between occurrences), liveness (must produce an occurrence within 5 years of `dtstart_ms`), and `COUNT` ≤ 100000.
 	Rrule *string `json:"rrule,omitempty"`
 
 	// Tz IANA timezone name in which `rrule`'s wall-clock times are interpreted (e.g. "Europe/Berlin"). Required sibling of `rrule`; ignored otherwise. Occurrences are wall-clock in this zone across DST transitions (Timezone Semantics).
@@ -23162,6 +27556,9 @@ type TaskCreateRequest struct {
 	// Prompt Optional agent prompt for an `llm` action.
 	Prompt *string `json:"prompt,omitempty"`
 
+	// RunIsolated Optional. True forces every run of this work into a fresh independent chat, for either role (session-core FR-017). Default false: a task whose assignee owns an eligible main runs as a fresh child of that main; a worker runs isolated once or continues its own chat when recurring. There is no other session-mode choice.
+	RunIsolated *bool `json:"run_isolated,omitempty"`
+
 	// SourceChannel Originating channel for a delegated task (Detail
 	SourceChannel *string `json:"source_channel,omitempty"`
 
@@ -23182,6 +27579,9 @@ type TaskCreateRequest struct {
 
 	// Todos Optional initial checklist items.
 	Todos *[]struct {
+		// ActiveForm Optional phrasing for the item while it is in progress.
+		ActiveForm *string `json:"active_form,omitempty"`
+
 		// Status Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
 		Status TaskCreateRequestTodosStatus `json:"status"`
 
@@ -23196,20 +27596,16 @@ type TaskCreateRequest struct {
 	//                   `llm` action that runs the assigned agent. `config` is empty.
 	//   - `once`      — fire exactly once at an absolute instant. `config.at_ms` is the
 	//                   Unix epoch-milliseconds instant (required).
-	//   - `every`     — fire repeatedly on a fixed interval. `config.every_ms` is the
-	//                   interval in milliseconds (required, min 1000). Each fire spawns
-	//                   a FRESH run (fresh session + run history + pause).
-	//   - `recurring` — fire on a repeat rule. `config` carries EXACTLY ONE of:
-	//                   `cron_expr` (legacy, 5/6-field cron expression, still accepted
-	//                   and validated via gronx) or `rrule` (RFC 5545 RRULE body, e.g.
-	//                   `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`) plus its required
-	//                   siblings `dtstart_ms` (anchor instant) and `tz` (IANA zone).
-	//                   Each fire spawns a FRESH run.
+	//   - `recurring` — fire on a repeat rule. `config` carries `rrule` (RFC 5545
+	//                   RRULE body, e.g. `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`)
+	//                   plus its required siblings `dtstart_ms` (anchor instant) and
+	//                   `tz` (IANA zone). Each fire spawns a FRESH run.
 	//
-	// `once`/`every`/`recurring` triggers are executed by the existing per-agent Schedules engine (`pkg/cron`) acting as the trigger executor — a schedule is just a task with a time trigger; a heartbeat is a `recurring` task with `surface: heartbeat` (Main-only). This folds in the legacy `ScheduleTrigger` semantics (`at_ms` / `every_ms` / `cron_expr`); the Task's own trigger is this type rather than `ScheduleTrigger`.
+	// The legacy `every` trigger type and the `every_ms` and `cron_expr` config keys were removed (session-core DEL-19); the server refuses them with a 400.
+	// `once`/`recurring` triggers are executed by the existing per-agent Schedules engine (`pkg/cron`) acting as the trigger executor — a schedule is just a task with a time trigger; a heartbeat is a `recurring` task with `surface: heartbeat` (Main-only).
 	// ## Future growth path (design intent — DO NOT build in this release) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
 	Trigger *struct {
-		// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — future event kinds add their own keys here without changing the outer shape.
+		// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `recurring` → `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — future event kinds add their own keys here without changing the outer shape.
 		Config TaskCreateRequest_Trigger_Config `json:"config"`
 
 		// Type The trigger kind (discriminator). Tier 2 ships time-only kinds; future growth adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
@@ -23268,21 +27664,15 @@ type TaskCreateRequestSurface string
 // TaskCreateRequestTodosStatus Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
 type TaskCreateRequestTodosStatus string
 
-// TaskCreateRequest_Trigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — future event kinds add their own keys here without changing the outer shape.
+// TaskCreateRequest_Trigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `recurring` → `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — future event kinds add their own keys here without changing the outer shape.
 type TaskCreateRequest_Trigger_Config struct {
 	// AtMs Unix epoch milliseconds for a one-shot fire. Required when `type = once`; ignored otherwise.
 	AtMs *int64 `json:"at_ms,omitempty"`
 
-	// CronExpr Cron expression (5 or 6 fields), legacy path. Valid only when `type = recurring`; ignored otherwise. Exactly one of `cron_expr` / `rrule` is present on a `recurring` trigger — never both.
-	CronExpr *string `json:"cron_expr,omitempty"`
-
 	// DtstartMs Anchor instant for `rrule` — the first occurrence's wall-clock moment, Unix epoch milliseconds. Required sibling of `rrule`; ignored otherwise.
 	DtstartMs *int64 `json:"dtstart_ms,omitempty"`
 
-	// EveryMs Interval in milliseconds between fires. Required when `type = every` (minimum 1000ms); ignored otherwise.
-	EveryMs *int64 `json:"every_ms,omitempty"`
-
-	// Rrule RFC 5545 RRULE body (no `RRULE:` prefix), e.g. `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`. Valid only when `type = recurring`; ignored otherwise. Exactly one of `cron_expr` / `rrule` is present on a `recurring` trigger — never both. Requires the sibling keys `dtstart_ms` and `tz`. Server-validated: input bounds (≤512 chars, no `FREQ=SECONDLY`, no foreign `BYSECOND`), bounded-window minimum-gap scan (≥60s between occurrences), liveness (must produce an occurrence within 5 years of `dtstart_ms`), and `COUNT` ≤ 100000.
+	// Rrule RFC 5545 RRULE body (no `RRULE:` prefix), e.g. `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`. Valid only when `type = recurring`; ignored otherwise. Requires the sibling keys `dtstart_ms` and `tz`. Server-validated: input bounds (≤512 chars, no `FREQ=SECONDLY`, no foreign `BYSECOND`), bounded-window minimum-gap scan (≥60s between occurrences), liveness (must produce an occurrence within 5 years of `dtstart_ms`), and `COUNT` ≤ 100000.
 	Rrule *string `json:"rrule,omitempty"`
 
 	// Tz IANA timezone name in which `rrule`'s wall-clock times are interpreted (e.g. "Europe/Berlin"). Required sibling of `rrule`; ignored otherwise. Occurrences are wall-clock in this zone across DST transitions (Timezone Semantics).
@@ -23293,7 +27683,7 @@ type TaskCreateRequest_Trigger_Config struct {
 // TaskCreateRequestTriggerType The trigger kind (discriminator). Tier 2 ships time-only kinds; future growth adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
 type TaskCreateRequestTriggerType string
 
-// TaskOccurrenceSet The server-expanded occurrence set of one recurring-capable task within the queried range, returned by `GET /api/v1/tasks/occurrences`. Covers all trigger flavors that can recur (`rrule` via rrule-go, legacy `cron_expr` via gronx in the server zone, and `every_ms` as a forward-only projection off the live job's next-run instant — FR-008a). Only tasks the scheduler would actually arm are expanded (non-terminal, non-`heartbeat`-surface); tasks with zero occurrences in range are omitted from the response array entirely — an empty result is `[]`, never null.
+// TaskOccurrenceSet The server-expanded occurrence set of one recurring-capable task within the queried range, returned by `GET /api/v1/tasks/occurrences`. Covers all trigger flavor that can recur (`rrule` via rrule-go). Only tasks the scheduler would actually arm are expanded (non-terminal, non-`heartbeat`-surface); tasks with zero occurrences in range are omitted from the response array entirely — an empty result is `[]`, never null.
 type TaskOccurrenceSet struct {
 	// DayBuckets Aggregated days — only populated for overview-range queries (span > 8×24h) on query-tz days with more than 3 occurrences (D6).
 	DayBuckets []struct {
@@ -23340,7 +27730,7 @@ type TaskOccurrenceSet struct {
 		// SessionId The matched run's chat session ID.
 		SessionId string `json:"session_id"`
 
-		// Status The matched run's status.
+		// Status The matched run's status. `missed` marks a scheduled fire that came due while the server was down — recorded at the next boot for the missed instant, never replayed.
 		Status TaskOccurrenceSetOccurrenceRunsStatus `json:"status"`
 	} `json:"occurrence_runs,omitempty"`
 
@@ -23350,11 +27740,11 @@ type TaskOccurrenceSet struct {
 	// TaskId The task this occurrence set belongs to.
 	TaskId string `json:"task_id"`
 
-	// Truncated True when the 500-instant cap or the 10,000-computed-occurrence per-task iteration budget was hit before fully covering the requested range. The client renders a "more occurrences not shown" marker on the last covered day. False for provably regular triggers (fixed-interval `every_ms` or a plain `rrule` with no BY* modifiers), whose bucket counts and positions are derived arithmetically rather than iterated.
+	// Truncated True when the 500-instant cap or the 10,000-computed-occurrence per-task iteration budget was hit before fully covering the requested range. The client renders a "more occurrences not shown" marker on the last covered day. False for provably regular triggers (a plain `rrule` with no BY* modifiers), whose bucket counts and positions are derived arithmetically rather than iterated.
 	Truncated bool `json:"truncated"`
 }
 
-// TaskOccurrenceSetOccurrenceRunsStatus The matched run's status.
+// TaskOccurrenceSetOccurrenceRunsStatus The matched run's status. `missed` marks a scheduled fire that came due while the server was down — recorded at the next boot for the missed instant, never replayed.
 type TaskOccurrenceSetOccurrenceRunsStatus string
 
 // TaskRun One execution record for a task (ADR-050 / docs/internal/specs/task-run-history-spec.md §2.1) — a purely additive record layer. Runs are append-only and event-sourced: an "open" record is written when a dispatch is claimed (`status: in_progress`, `ended_at: null`) and a "close" record carrying the SAME `run_id` is appended when it finishes (`status: done|failed`, `result`, `ended_at`). Readers fold by `run_id`, last record wins. `Task.status`/`result`/`session_id` keep their existing behaviour completely unchanged (RD2) — TaskRun is read by the calendar occurrence overlay (`occurrence_runs` on TaskOccurrenceSet, `run_counts` on DayBucket) and the task-detail run-history list. Returned by GET /tasks/{id}/runs.
@@ -23368,6 +27758,9 @@ type TaskRun struct {
 	// OccurrenceMs The scheduled RRULE instant this run realizes (the calendar join key, Unix epoch milliseconds). Null for an ad-hoc/once/manual run.
 	OccurrenceMs *int64 `json:"occurrence_ms"`
 
+	// RecipientSessionIds Session ids captured when this run actually started (FR-019): the starting agent's main and the assignee's main, deduplicated. Never the creator. Fixed for the life of the run. Absent when there is no recipient (a skipped run, or a person/scheduler-started worker run).
+	RecipientSessionIds *[]string `json:"recipient_session_ids,omitempty"`
+
 	// Result Terminal-run output text. Absent while the run is `in_progress` (mirrors Task.result's own "absent while running" convention).
 	Result *string `json:"result,omitempty"`
 
@@ -23380,7 +27773,7 @@ type TaskRun struct {
 	// StartedAt RFC 3339 timestamp when the run opened (also the on-disk day-partition key for the open record).
 	StartedAt time.Time `json:"started_at"`
 
-	// Status Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has no producer today; a stuck-run reaper closes abandoned runs to `failed`). `skipped` records a scheduled fire that never ran at all because the overlap guard found the previous occurrence still `in_progress` — a purely bookkeeping close, not a failure.
+	// Status Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has no producer today; a stuck-run reaper closes abandoned runs to `failed`). `skipped` records a scheduled fire that never ran at all because the overlap guard found the previous occurrence still `in_progress` — a purely bookkeeping close, not a failure. `missed` records a scheduled fire that came due while the server was down and could never run: recorded once at the next boot for the missed instant, never replayed (founder decision 2026-10-29 — a missed Calendar run stays skipped, never replayed).
 	Status TaskRunStatus `json:"status"`
 
 	// TaskId The task this run belongs to.
@@ -23390,7 +27783,7 @@ type TaskRun struct {
 // TaskRunKind How the run started — an automatic trigger fire, or a user Run-now.
 type TaskRunKind string
 
-// TaskRunStatus Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has no producer today; a stuck-run reaper closes abandoned runs to `failed`). `skipped` records a scheduled fire that never ran at all because the overlap guard found the previous occurrence still `in_progress` — a purely bookkeeping close, not a failure.
+// TaskRunStatus Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has no producer today; a stuck-run reaper closes abandoned runs to `failed`). `skipped` records a scheduled fire that never ran at all because the overlap guard found the previous occurrence still `in_progress` — a purely bookkeeping close, not a failure. `missed` records a scheduled fire that came due while the server was down and could never run: recorded once at the next boot for the missed instant, never replayed (founder decision 2026-10-29 — a missed Calendar run stays skipped, never replayed).
 type TaskRunStatus string
 
 // TaskTrigger When (and how) a Task fires (Detail #3). Modelled as an extensible `{type, config}` shape so the future multi-trigger / boolean-composition growth path can grow ADDITIVELY, but RESTRICTED to time-only kinds in Tier 2.
@@ -23400,41 +27793,31 @@ type TaskRunStatus string
 //     `llm` action that runs the assigned agent. `config` is empty.
 //   - `once`      — fire exactly once at an absolute instant. `config.at_ms` is the
 //     Unix epoch-milliseconds instant (required).
-//   - `every`     — fire repeatedly on a fixed interval. `config.every_ms` is the
-//     interval in milliseconds (required, min 1000). Each fire spawns
-//     a FRESH run (fresh session + run history + pause).
-//   - `recurring` — fire on a repeat rule. `config` carries EXACTLY ONE of:
-//     `cron_expr` (legacy, 5/6-field cron expression, still accepted
-//     and validated via gronx) or `rrule` (RFC 5545 RRULE body, e.g.
-//     `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`) plus its required
-//     siblings `dtstart_ms` (anchor instant) and `tz` (IANA zone).
-//     Each fire spawns a FRESH run.
+//   - `recurring` — fire on a repeat rule. `config` carries `rrule` (RFC 5545
+//     RRULE body, e.g. `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`)
+//     plus its required siblings `dtstart_ms` (anchor instant) and
+//     `tz` (IANA zone). Each fire spawns a FRESH run.
 //
-// `once`/`every`/`recurring` triggers are executed by the existing per-agent Schedules engine (`pkg/cron`) acting as the trigger executor — a schedule is just a task with a time trigger; a heartbeat is a `recurring` task with `surface: heartbeat` (Main-only). This folds in the legacy `ScheduleTrigger` semantics (`at_ms` / `every_ms` / `cron_expr`); the Task's own trigger is this type rather than `ScheduleTrigger`.
+// The legacy `every` trigger type and the `every_ms` and `cron_expr` config keys were removed (session-core DEL-19); the server refuses them with a 400.
+// `once`/`recurring` triggers are executed by the existing per-agent Schedules engine (`pkg/cron`) acting as the trigger executor — a schedule is just a task with a time trigger; a heartbeat is a `recurring` task with `surface: heartbeat` (Main-only).
 // ## Future growth path (design intent — DO NOT build in this release) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
 type TaskTrigger struct {
-	// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — future event kinds add their own keys here without changing the outer shape.
+	// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `recurring` → `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — future event kinds add their own keys here without changing the outer shape.
 	Config TaskTrigger_Config `json:"config"`
 
 	// Type The trigger kind (discriminator). Tier 2 ships time-only kinds; future growth adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
 	Type TaskTriggerType `json:"type"`
 }
 
-// TaskTrigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — future event kinds add their own keys here without changing the outer shape.
+// TaskTrigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `recurring` → `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — future event kinds add their own keys here without changing the outer shape.
 type TaskTrigger_Config struct {
 	// AtMs Unix epoch milliseconds for a one-shot fire. Required when `type = once`; ignored otherwise.
 	AtMs *int64 `json:"at_ms,omitempty"`
 
-	// CronExpr Cron expression (5 or 6 fields), legacy path. Valid only when `type = recurring`; ignored otherwise. Exactly one of `cron_expr` / `rrule` is present on a `recurring` trigger — never both.
-	CronExpr *string `json:"cron_expr,omitempty"`
-
 	// DtstartMs Anchor instant for `rrule` — the first occurrence's wall-clock moment, Unix epoch milliseconds. Required sibling of `rrule`; ignored otherwise.
 	DtstartMs *int64 `json:"dtstart_ms,omitempty"`
 
-	// EveryMs Interval in milliseconds between fires. Required when `type = every` (minimum 1000ms); ignored otherwise.
-	EveryMs *int64 `json:"every_ms,omitempty"`
-
-	// Rrule RFC 5545 RRULE body (no `RRULE:` prefix), e.g. `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`. Valid only when `type = recurring`; ignored otherwise. Exactly one of `cron_expr` / `rrule` is present on a `recurring` trigger — never both. Requires the sibling keys `dtstart_ms` and `tz`. Server-validated: input bounds (≤512 chars, no `FREQ=SECONDLY`, no foreign `BYSECOND`), bounded-window minimum-gap scan (≥60s between occurrences), liveness (must produce an occurrence within 5 years of `dtstart_ms`), and `COUNT` ≤ 100000.
+	// Rrule RFC 5545 RRULE body (no `RRULE:` prefix), e.g. `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`. Valid only when `type = recurring`; ignored otherwise. Requires the sibling keys `dtstart_ms` and `tz`. Server-validated: input bounds (≤512 chars, no `FREQ=SECONDLY`, no foreign `BYSECOND`), bounded-window minimum-gap scan (≥60s between occurrences), liveness (must produce an occurrence within 5 years of `dtstart_ms`), and `COUNT` ≤ 100000.
 	Rrule *string `json:"rrule,omitempty"`
 
 	// Tz IANA timezone name in which `rrule`'s wall-clock times are interpreted (e.g. "Europe/Berlin"). Required sibling of `rrule`; ignored otherwise. Occurrences are wall-clock in this zone across DST transitions (Timezone Semantics).
@@ -23598,6 +27981,9 @@ type TaskUpdateRequest struct {
 	// Result Task result or output summary.
 	Result *string `json:"result,omitempty"`
 
+	// RunIsolated Optional. True forces every run of this work into a fresh independent chat, for either role (session-core FR-017); false clears it. Omitted leaves it unchanged.
+	RunIsolated *bool `json:"run_isolated,omitempty"`
+
 	// StartedAt When the task started execution.
 	StartedAt *time.Time `json:"started_at,omitempty"`
 
@@ -23618,6 +28004,9 @@ type TaskUpdateRequest struct {
 
 	// Todos Replacement checklist (replaces the current `todos` atomically).
 	Todos *[]struct {
+		// ActiveForm Optional phrasing for the item while it is in progress.
+		ActiveForm *string `json:"active_form,omitempty"`
+
 		// Status Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
 		Status TaskUpdateRequestTodosStatus `json:"status"`
 
@@ -23632,20 +28021,16 @@ type TaskUpdateRequest struct {
 	//                   `llm` action that runs the assigned agent. `config` is empty.
 	//   - `once`      — fire exactly once at an absolute instant. `config.at_ms` is the
 	//                   Unix epoch-milliseconds instant (required).
-	//   - `every`     — fire repeatedly on a fixed interval. `config.every_ms` is the
-	//                   interval in milliseconds (required, min 1000). Each fire spawns
-	//                   a FRESH run (fresh session + run history + pause).
-	//   - `recurring` — fire on a repeat rule. `config` carries EXACTLY ONE of:
-	//                   `cron_expr` (legacy, 5/6-field cron expression, still accepted
-	//                   and validated via gronx) or `rrule` (RFC 5545 RRULE body, e.g.
-	//                   `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`) plus its required
-	//                   siblings `dtstart_ms` (anchor instant) and `tz` (IANA zone).
-	//                   Each fire spawns a FRESH run.
+	//   - `recurring` — fire on a repeat rule. `config` carries `rrule` (RFC 5545
+	//                   RRULE body, e.g. `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`)
+	//                   plus its required siblings `dtstart_ms` (anchor instant) and
+	//                   `tz` (IANA zone). Each fire spawns a FRESH run.
 	//
-	// `once`/`every`/`recurring` triggers are executed by the existing per-agent Schedules engine (`pkg/cron`) acting as the trigger executor — a schedule is just a task with a time trigger; a heartbeat is a `recurring` task with `surface: heartbeat` (Main-only). This folds in the legacy `ScheduleTrigger` semantics (`at_ms` / `every_ms` / `cron_expr`); the Task's own trigger is this type rather than `ScheduleTrigger`.
+	// The legacy `every` trigger type and the `every_ms` and `cron_expr` config keys were removed (session-core DEL-19); the server refuses them with a 400.
+	// `once`/`recurring` triggers are executed by the existing per-agent Schedules engine (`pkg/cron`) acting as the trigger executor — a schedule is just a task with a time trigger; a heartbeat is a `recurring` task with `surface: heartbeat` (Main-only).
 	// ## Future growth path (design intent — DO NOT build in this release) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
 	Trigger *struct {
-		// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — future event kinds add their own keys here without changing the outer shape.
+		// Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `recurring` → `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — future event kinds add their own keys here without changing the outer shape.
 		Config TaskUpdateRequest_Trigger_Config `json:"config"`
 
 		// Type The trigger kind (discriminator). Tier 2 ships time-only kinds; future growth adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
@@ -23701,21 +28086,15 @@ type TaskUpdateRequestSurface string
 // TaskUpdateRequestTodosStatus Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
 type TaskUpdateRequestTodosStatus string
 
-// TaskUpdateRequest_Trigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — future event kinds add their own keys here without changing the outer shape.
+// TaskUpdateRequest_Trigger_Config Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `recurring` → `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — future event kinds add their own keys here without changing the outer shape.
 type TaskUpdateRequest_Trigger_Config struct {
 	// AtMs Unix epoch milliseconds for a one-shot fire. Required when `type = once`; ignored otherwise.
 	AtMs *int64 `json:"at_ms,omitempty"`
 
-	// CronExpr Cron expression (5 or 6 fields), legacy path. Valid only when `type = recurring`; ignored otherwise. Exactly one of `cron_expr` / `rrule` is present on a `recurring` trigger — never both.
-	CronExpr *string `json:"cron_expr,omitempty"`
-
 	// DtstartMs Anchor instant for `rrule` — the first occurrence's wall-clock moment, Unix epoch milliseconds. Required sibling of `rrule`; ignored otherwise.
 	DtstartMs *int64 `json:"dtstart_ms,omitempty"`
 
-	// EveryMs Interval in milliseconds between fires. Required when `type = every` (minimum 1000ms); ignored otherwise.
-	EveryMs *int64 `json:"every_ms,omitempty"`
-
-	// Rrule RFC 5545 RRULE body (no `RRULE:` prefix), e.g. `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`. Valid only when `type = recurring`; ignored otherwise. Exactly one of `cron_expr` / `rrule` is present on a `recurring` trigger — never both. Requires the sibling keys `dtstart_ms` and `tz`. Server-validated: input bounds (≤512 chars, no `FREQ=SECONDLY`, no foreign `BYSECOND`), bounded-window minimum-gap scan (≥60s between occurrences), liveness (must produce an occurrence within 5 years of `dtstart_ms`), and `COUNT` ≤ 100000.
+	// Rrule RFC 5545 RRULE body (no `RRULE:` prefix), e.g. `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`. Valid only when `type = recurring`; ignored otherwise. Requires the sibling keys `dtstart_ms` and `tz`. Server-validated: input bounds (≤512 chars, no `FREQ=SECONDLY`, no foreign `BYSECOND`), bounded-window minimum-gap scan (≥60s between occurrences), liveness (must produce an occurrence within 5 years of `dtstart_ms`), and `COUNT` ≤ 100000.
 	Rrule *string `json:"rrule,omitempty"`
 
 	// Tz IANA timezone name in which `rrule`'s wall-clock times are interpreted (e.g. "Europe/Berlin"). Required sibling of `rrule`; ignored otherwise. Occurrences are wall-clock in this zone across DST transitions (Timezone Semantics).
@@ -23726,8 +28105,130 @@ type TaskUpdateRequest_Trigger_Config struct {
 // TaskUpdateRequestTriggerType The trigger kind (discriminator). Tier 2 ships time-only kinds; future growth adds event kinds (`on_task`/`on_agent`/`on_message`/`webhook`/`on_condition`) additively.
 type TaskUpdateRequestTriggerType string
 
+// ThirdPartyAgentSettings Request body of PUT /api/v1/settings/third-party-agents. Replaces the whole Settings -> Third-party agents section in one call: a CLI key absent from `clis` is saved as {path: "", preset_args: ""}. Every row is validated before anything is written (order claude-code, codex, opencode; path before preset_args); the first failing row and field is returned and nothing is written, valid rows included. No revision and no 409: the last save wins. Stored in config.json under sandbox.third_party_agents.clis.<cli>.
+type ThirdPartyAgentSettings struct {
+	// Clis One row per external CLI, keyed by the agent `cli` enum values (ExternalCliTool). Only these three keys are accepted.
+	Clis struct {
+		// ClaudeCode One external CLI's row in Settings -> Third-party agents, as a person saves it (PUT /api/v1/settings/third-party-agents). Set only by a signed-in person; agents have no route, tool parameter or config path that writes it.
+		ClaudeCode *struct {
+			// Path Program path exactly as the person typed it ("" = no program saved for this CLI). Stored as entered, never the resolved target. A non-empty value must pass thirdpartycli.ValidateProgramPath on save (absolute; every symlink's folder and the final file and its folder not world-writable and not inside an agent-writable location; the final file a regular, executable file), otherwise the save is refused 400 with code cli_path_invalid. Every run checks it again and execs the resolved file.
+			Path string `json:"path"`
+
+			// PresetArgs Standard parameters for this CLI, one line of free text, stored exactly as typed ("" = none). No NUL, no line breaks (refused 400 with code cli_preset_invalid). Any token is allowed: no allow list and no flag filter. At spawn the parameters are appended after the agent's own cli_args (which are filtered) and before the prompt hand-off, so a person's value beats an agent flag of the same name.
+			PresetArgs string `json:"preset_args"`
+		} `json:"claude-code,omitempty"`
+
+		// Codex One external CLI's row in Settings -> Third-party agents, as a person saves it (PUT /api/v1/settings/third-party-agents). Set only by a signed-in person; agents have no route, tool parameter or config path that writes it.
+		Codex *struct {
+			// Path Program path exactly as the person typed it ("" = no program saved for this CLI). Stored as entered, never the resolved target. A non-empty value must pass thirdpartycli.ValidateProgramPath on save (absolute; every symlink's folder and the final file and its folder not world-writable and not inside an agent-writable location; the final file a regular, executable file), otherwise the save is refused 400 with code cli_path_invalid. Every run checks it again and execs the resolved file.
+			Path string `json:"path"`
+
+			// PresetArgs Standard parameters for this CLI, one line of free text, stored exactly as typed ("" = none). No NUL, no line breaks (refused 400 with code cli_preset_invalid). Any token is allowed: no allow list and no flag filter. At spawn the parameters are appended after the agent's own cli_args (which are filtered) and before the prompt hand-off, so a person's value beats an agent flag of the same name.
+			PresetArgs string `json:"preset_args"`
+		} `json:"codex,omitempty"`
+
+		// Opencode One external CLI's row in Settings -> Third-party agents, as a person saves it (PUT /api/v1/settings/third-party-agents). Set only by a signed-in person; agents have no route, tool parameter or config path that writes it.
+		Opencode *struct {
+			// Path Program path exactly as the person typed it ("" = no program saved for this CLI). Stored as entered, never the resolved target. A non-empty value must pass thirdpartycli.ValidateProgramPath on save (absolute; every symlink's folder and the final file and its folder not world-writable and not inside an agent-writable location; the final file a regular, executable file), otherwise the save is refused 400 with code cli_path_invalid. Every run checks it again and execs the resolved file.
+			Path string `json:"path"`
+
+			// PresetArgs Standard parameters for this CLI, one line of free text, stored exactly as typed ("" = none). No NUL, no line breaks (refused 400 with code cli_preset_invalid). Any token is allowed: no allow list and no flag filter. At spawn the parameters are appended after the agent's own cli_args (which are filtered) and before the prompt hand-off, so a person's value beats an agent flag of the same name.
+			PresetArgs string `json:"preset_args"`
+		} `json:"opencode,omitempty"`
+	} `json:"clis"`
+}
+
+// ThirdPartyAgentSettingsView Response of GET and PUT /api/v1/settings/third-party-agents: the saved Settings -> Third-party agents section. All three CLI keys are always present; a CLI with nothing saved has path "" and preset_args "". Each row's `detected` is host detection read live on every request and never stored; the server maps detection key "claude" to "claude-code", so the screen never maps keys itself.
+type ThirdPartyAgentSettingsView struct {
+	Clis struct {
+		// ClaudeCode One external CLI's row in the Settings -> Third-party agents read model: the saved values plus a live detection result.
+		ClaudeCode struct {
+			// Detected Host-side detection result for a single external-CLI runner binary (claude-code/codex/opencode). The gateway searches its own $PATH first, then a curated per-OS well-known-install-location list, and reports which strategy found the binary via `source`. Detection is a filesystem probe only — it never spawns a subprocess.
+			Detected struct {
+				// Installed Whether the binary was located on $PATH or in a well-known install directory.
+				Installed bool `json:"installed"`
+
+				// LinkPath The path as found on $PATH or in a well-known install folder, BEFORE symlink resolution (equal to `path` when no symlink is involved). Null when installed=false. The Settings -> Third-party agents screen pre-fills its program path from this value when present, else from `path`.
+				LinkPath *string `json:"link_path,omitempty"`
+
+				// Path Absolute, symlink-resolved path to the binary (the final file). Null when installed=false. Not the value to pre-fill into Settings -> Third-party agents: a versioned symlink target would break on the next package update; pre-fill from link_path when present, else this path.
+				Path *string `json:"path,omitempty"`
+
+				// Source How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
+				Source *ThirdPartyAgentSettingsViewClisClaudeCodeDetectedSource `json:"source,omitempty"`
+			} `json:"detected"`
+
+			// Path The saved program path exactly as entered; "" when nothing is saved.
+			Path string `json:"path"`
+
+			// PresetArgs The saved standard parameters exactly as typed; "" when nothing is saved.
+			PresetArgs string `json:"preset_args"`
+		} `json:"claude-code"`
+
+		// Codex One external CLI's row in the Settings -> Third-party agents read model: the saved values plus a live detection result.
+		Codex struct {
+			// Detected Host-side detection result for a single external-CLI runner binary (claude-code/codex/opencode). The gateway searches its own $PATH first, then a curated per-OS well-known-install-location list, and reports which strategy found the binary via `source`. Detection is a filesystem probe only — it never spawns a subprocess.
+			Detected struct {
+				// Installed Whether the binary was located on $PATH or in a well-known install directory.
+				Installed bool `json:"installed"`
+
+				// LinkPath The path as found on $PATH or in a well-known install folder, BEFORE symlink resolution (equal to `path` when no symlink is involved). Null when installed=false. The Settings -> Third-party agents screen pre-fills its program path from this value when present, else from `path`.
+				LinkPath *string `json:"link_path,omitempty"`
+
+				// Path Absolute, symlink-resolved path to the binary (the final file). Null when installed=false. Not the value to pre-fill into Settings -> Third-party agents: a versioned symlink target would break on the next package update; pre-fill from link_path when present, else this path.
+				Path *string `json:"path,omitempty"`
+
+				// Source How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
+				Source *ThirdPartyAgentSettingsViewClisCodexDetectedSource `json:"source,omitempty"`
+			} `json:"detected"`
+
+			// Path The saved program path exactly as entered; "" when nothing is saved.
+			Path string `json:"path"`
+
+			// PresetArgs The saved standard parameters exactly as typed; "" when nothing is saved.
+			PresetArgs string `json:"preset_args"`
+		} `json:"codex"`
+
+		// Opencode One external CLI's row in the Settings -> Third-party agents read model: the saved values plus a live detection result.
+		Opencode struct {
+			// Detected Host-side detection result for a single external-CLI runner binary (claude-code/codex/opencode). The gateway searches its own $PATH first, then a curated per-OS well-known-install-location list, and reports which strategy found the binary via `source`. Detection is a filesystem probe only — it never spawns a subprocess.
+			Detected struct {
+				// Installed Whether the binary was located on $PATH or in a well-known install directory.
+				Installed bool `json:"installed"`
+
+				// LinkPath The path as found on $PATH or in a well-known install folder, BEFORE symlink resolution (equal to `path` when no symlink is involved). Null when installed=false. The Settings -> Third-party agents screen pre-fills its program path from this value when present, else from `path`.
+				LinkPath *string `json:"link_path,omitempty"`
+
+				// Path Absolute, symlink-resolved path to the binary (the final file). Null when installed=false. Not the value to pre-fill into Settings -> Third-party agents: a versioned symlink target would break on the next package update; pre-fill from link_path when present, else this path.
+				Path *string `json:"path,omitempty"`
+
+				// Source How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
+				Source *ThirdPartyAgentSettingsViewClisOpencodeDetectedSource `json:"source,omitempty"`
+			} `json:"detected"`
+
+			// Path The saved program path exactly as entered; "" when nothing is saved.
+			Path string `json:"path"`
+
+			// PresetArgs The saved standard parameters exactly as typed; "" when nothing is saved.
+			PresetArgs string `json:"preset_args"`
+		} `json:"opencode"`
+	} `json:"clis"`
+}
+
+// ThirdPartyAgentSettingsViewClisClaudeCodeDetectedSource How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
+type ThirdPartyAgentSettingsViewClisClaudeCodeDetectedSource string
+
+// ThirdPartyAgentSettingsViewClisCodexDetectedSource How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
+type ThirdPartyAgentSettingsViewClisCodexDetectedSource string
+
+// ThirdPartyAgentSettingsViewClisOpencodeDetectedSource How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
+type ThirdPartyAgentSettingsViewClisOpencodeDetectedSource string
+
 // Todo A lightweight checklist item on a Task (`task.todos[]`) — Tier 1 of the three-tier model (todo < subtask < task). A todo is NOT a task: it has no agent, no trigger, and no ID — it is a `{text, status}` pair. Use a subtask (a full child Task with `parent_task_id`) when you need an independent agent/trigger. The `status` tri-state (`pending`/`in_progress`/`completed`) replaces the legacy boolean `done` so a checklist can express work-in-progress (§3 tasks-system refactor — the `set_todos` agent scratchpad rides this same array).
 type Todo struct {
+	// ActiveForm Optional phrasing for the item while it is in progress.
+	ActiveForm *string `json:"active_form,omitempty"`
+
 	// Status Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
 	Status TodoStatus `json:"status"`
 
@@ -23746,6 +28247,9 @@ type TokenUsageSummary struct {
 
 		// ByModel Per-model breakdown for this agent. Absent when no model data is available.
 		ByModel *map[string]struct {
+			// CacheHitRatio Cache-hit ratio for this cell: cache_read / (in + cache_read + cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. in is uncached input.
+			CacheHitRatio *float64 `json:"cache_hit_ratio"`
+
 			// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
 			CacheRead *int `json:"cache_read,omitempty"`
 
@@ -23758,9 +28262,15 @@ type TokenUsageSummary struct {
 			// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 			Out *int `json:"out,omitempty"`
 
+			// Reasoning Effort levels spec (FR-024). Reasoning tokens reported by the provider for this cell: the sum of the per-call counts of the entries that reported one. A subset of out, never added to total. Absent when no entry reported a count.
+			Reasoning *int `json:"reasoning,omitempty"`
+
 			// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 			Total int `json:"total"`
 		} `json:"by_model,omitempty"`
+
+		// CacheHitRatio Cache-hit ratio for this agent: tokens_cache_read / (tokens_in + tokens_cache_read + tokens_cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. tokens_in is uncached input.
+		CacheHitRatio *float64 `json:"cache_hit_ratio"`
 
 		// TokensCacheRead Total cache-read tokens for this agent in the period.
 		TokensCacheRead *int `json:"tokens_cache_read,omitempty"`
@@ -23774,6 +28284,9 @@ type TokenUsageSummary struct {
 
 	// ByModel Cross-agent per-model breakdown for the period. Keys are model name strings. Absent when no model data is available.
 	ByModel *map[string]struct {
+		// CacheHitRatio Cache-hit ratio for this cell: cache_read / (in + cache_read + cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. in is uncached input.
+		CacheHitRatio *float64 `json:"cache_hit_ratio"`
+
 		// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
 		CacheRead *int `json:"cache_read,omitempty"`
 
@@ -23786,9 +28299,36 @@ type TokenUsageSummary struct {
 		// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
 		Out *int `json:"out,omitempty"`
 
+		// Reasoning Effort levels spec (FR-024). Reasoning tokens reported by the provider for this cell: the sum of the per-call counts of the entries that reported one. A subset of out, never added to total. Absent when no entry reported a count.
+		Reasoning *int `json:"reasoning,omitempty"`
+
 		// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
 		Total int `json:"total"`
 	} `json:"by_model,omitempty"`
+
+	// ByProvider Per-provider token breakdown for the period. Same cell shape as by_model. Keys are catalog provider ids. Absent when no provider data is available.
+	ByProvider *map[string]struct {
+		// CacheHitRatio Cache-hit ratio for this cell: cache_read / (in + cache_read + cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. in is uncached input.
+		CacheHitRatio *float64 `json:"cache_hit_ratio"`
+
+		// CacheRead Cache-read tokens (served from KV cache) for this model. Additive to total alongside in and out, matching the provider's own usage accounting (total = in + out + cache_read + cache_write) — NOT a subset of total.
+		CacheRead *int `json:"cache_read,omitempty"`
+
+		// CacheWrite Cache-write tokens (written into a new cache entry) for this model. Additive to total alongside in and out — see cache_read's description.
+		CacheWrite *int `json:"cache_write,omitempty"`
+
+		// In Uncached input (prompt) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no input tokens".
+		In *int `json:"in,omitempty"`
+
+		// Out Output (completion) tokens for this model, as reported by the provider. Populated on the assistant-turn write path. Entries written before the provider split was recorded carry 0 here with the whole turn total in total, so a 0 means "not recorded", not "no output tokens".
+		Out *int `json:"out,omitempty"`
+
+		// Reasoning Effort levels spec (FR-024). Reasoning tokens reported by the provider for this cell: the sum of the per-call counts of the entries that reported one. A subset of out, never added to total. Absent when no entry reported a count.
+		Reasoning *int `json:"reasoning,omitempty"`
+
+		// Total Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
+		Total int `json:"total"`
+	} `json:"by_provider,omitempty"`
 
 	// Partial True when one or more session stores failed to load during aggregation, so the totals may under-count. Clients should surface a "some sessions could not be read" indicator rather than presenting the number as authoritative. Absent (or false) when every store loaded cleanly.
 	Partial *bool `json:"partial,omitempty"`
@@ -23802,16 +28342,22 @@ type TokenUsageSummary struct {
 	// PeriodStart Start of the aggregation period (inclusive), UTC.
 	PeriodStart time.Time `json:"period_start"`
 
+	// SubscriptionTokens Sum of tokens from ChatGPT sign-in calls in the period. Those tokens recorded no dollars and are excluded from any priced cost.
+	SubscriptionTokens *int `json:"subscription_tokens,omitempty"`
+
 	// TokensCacheRead Grand total cache-read tokens across all agents in the period.
 	TokensCacheRead *int `json:"tokens_cache_read,omitempty"`
 
 	// TokensCacheWrite Grand total cache-write tokens across all agents in the period.
 	TokensCacheWrite *int `json:"tokens_cache_write,omitempty"`
+
+	// UnpricedTokens Sum of unpriced token portions in the period. Counts only the unpriced portion of each call, not the whole call. A period with no priced cost and unpriced_tokens greater than zero is unpriced, not free.
+	UnpricedTokens *int `json:"unpriced_tokens,omitempty"`
 }
 
-// ToolApprovalActionRequest Request body for POST /api/v1/tool-approvals/{approval_id}. Resolves a pending tool call approval (ADR-092 D4). Renamed from the 4-value approve|deny|cancel|always set: "approve" -> "allow_once", "always" -> "allow" (greenfield, no upgrade path). `cancel` is retained in the enum with no corresponding UI button — see its own description.
+// ToolApprovalActionRequest Request body for POST /api/v1/tool-approvals/{approval_id}. Resolves a pending tool call approval (ADR-092 D4). Renamed from the 4-value approve|deny|cancel|always set: "approve" -> "allow_once", "always" -> "allow" (greenfield, no upgrade path). `deny` and `cancel` remain distinct non-approval resolution actions.
 type ToolApprovalActionRequest struct {
-	// Action Action to take on this approval. deny       — reject this single invocation (also the resolution for Escape/overlay-click/X in the UI, none of which render a Cancel button any more). allow_once — allow this single invocation only, no grant recorded. allow      — allow this invocation AND record a session-scoped grant per `scope` below so future matching calls in the same session auto-approve without re-prompting. cancel     — client-issued resolution for the stuck-approval recovery path only (a lost-server 404), distinct from `deny` (a network failure, which leaves the approval unresolved so a later snapshot can restore it) — ToolApprovalModal.resolution.test.tsx and the headless CLI approval path (pkg/app/internal/run/run.go) both depend on `deny` and `cancel` remaining distinct wire values. Never shown as a button.
+	// Action Action to take on this approval. deny       — reject this single invocation. allow_once — allow this single invocation only, no grant recorded. allow      — allow this invocation AND record a session-scoped grant per `scope` below so future matching calls in the same session auto-approve without re-prompting. Refused with 400 for an always-ask tool (today exactly set_channel_outbound): its approvals are never remembered, so only allow_once, deny and cancel apply (channels spec FR-038). cancel    — dismiss this approval without approving the invocation. It remains a distinct wire value from deny.
 	Action ToolApprovalActionRequestAction `json:"action"`
 
 	// Scope Grant scope (ADR-092 D4/FR-024). Present only when action is "allow"; ignored otherwise. "exact" (default when omitted) — command text + cwd, unchanged from the pre-ADR-092 "always" grant. "prefix" — a new {binary, arg_prefix} grant, ignores cwd, token-boundary matched (e.g. "npm run test" does not match "npm run testfoo"). run_in_background is a separate match dimension for both scopes and is not carried here — it is read from the pending approval's own recorded tool-call args.
@@ -23820,7 +28366,7 @@ type ToolApprovalActionRequest struct {
 	Scope *ToolApprovalActionRequestScope `json:"scope,omitempty"`
 }
 
-// ToolApprovalActionRequestAction Action to take on this approval. deny       — reject this single invocation (also the resolution for Escape/overlay-click/X in the UI, none of which render a Cancel button any more). allow_once — allow this single invocation only, no grant recorded. allow      — allow this invocation AND record a session-scoped grant per `scope` below so future matching calls in the same session auto-approve without re-prompting. cancel     — client-issued resolution for the stuck-approval recovery path only (a lost-server 404), distinct from `deny` (a network failure, which leaves the approval unresolved so a later snapshot can restore it) — ToolApprovalModal.resolution.test.tsx and the headless CLI approval path (pkg/app/internal/run/run.go) both depend on `deny` and `cancel` remaining distinct wire values. Never shown as a button.
+// ToolApprovalActionRequestAction Action to take on this approval. deny       — reject this single invocation. allow_once — allow this single invocation only, no grant recorded. allow      — allow this invocation AND record a session-scoped grant per `scope` below so future matching calls in the same session auto-approve without re-prompting. Refused with 400 for an always-ask tool (today exactly set_channel_outbound): its approvals are never remembered, so only allow_once, deny and cancel apply (channels spec FR-038). cancel    — dismiss this approval without approving the invocation. It remains a distinct wire value from deny.
 type ToolApprovalActionRequestAction string
 
 // ToolApprovalActionRequestScope Grant scope (ADR-092 D4/FR-024). Present only when action is "allow"; ignored otherwise. "exact" (default when omitted) — command text + cwd, unchanged from the pre-ADR-092 "always" grant. "prefix" — a new {binary, arg_prefix} grant, ignores cwd, token-boundary matched (e.g. "npm run test" does not match "npm run testfoo"). run_in_background is a separate match dimension for both scopes and is not carried here — it is read from the pending approval's own recorded tool-call args.
@@ -23855,7 +28401,7 @@ type ToolApprovalResponseScope string
 // ToolApprovalResponseStatus Result status. Always "ok" when the action was accepted.
 type ToolApprovalResponseStatus string
 
-// ToolCall A single tool invocation recorded in a transcript entry. Maps to session.ToolCall on the Go side and ToolCall interface in src/lib/api.ts.
+// ToolCall The DISPLAY/STATUS projection of a single tool invocation in a transcript entry — the {id, tool, status, parameters, result} form the SPA renders. This is NOT providers.ToolCall (the provider wire shape on the Go side): it carries no provider call identity beyond `id`, no thought signature and no raw function-argument string, and it must never be used in place of the provider call shape (session-core C-ARCHIVE / U2; FR-004). Maps to session.ToolCall on the Go side and the ToolCall interface in src/lib/api.ts.
 type ToolCall struct {
 	// ContentState ADR-066 D4/D5 projection state of this call's result in the model's window, as persisted in window meta and returned on transcript read. "full" = the result entered unmodified; "capped" = it entered head-and-tail truncated with a mark (the archive line holds the full content); "emptied" = it was later emptied in place, leaving a recall mark. The transcript `result` is the PROJECTED content the model saw; the full content stays in the gateway tool_results/ store for Verbose chat. Absent = full.
 	ContentState *ToolCallContentState `json:"content_state,omitempty"`
@@ -23876,10 +28422,11 @@ type ToolCall struct {
 	// ParentToolCallId Parent tool call ID for nested subagent tool invocations.
 	ParentToolCallId *string `json:"parent_tool_call_id,omitempty"`
 
-	// Result Return value from the tool. Shape is tool-specific.
+	// Result Return value from the tool. Shape is tool-specific. This is the PROJECTED content the model saw (see `content_state`); the full admitted provider result bytes live in the canonical session day archive and projection changes never mutate those retained bytes (session-core C-ARCHIVE / U2; FR-004/FR-006).
+	// `_history_preview` is a reserved key (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)", A2.2): on a history page, session detail or snapshot a saved result over 51,200 encoded bytes is replaced by a HistoryResultPreview marker, and an object carrying `_history_preview` must match HistoryResultPreview exactly. An ordinary result never carries that key. The `not` below expresses this rule ("not: carries the key and fails HistoryResultPreview"); the 4,096-byte UTF-8 limit on `preview` is checked separately at the server and browser boundaries. getSessionHistoryEntry never returns a marker.
 	Result *map[string]interface{} `json:"result,omitempty"`
 
-	// Status Outcome of the tool call. "interrupted" is written by the tool-call status derivation in `pkg/agent/loop_run_turn_tools.go` onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
+	// Status Outcome of the tool call. "interrupted" is recorded on a delegate/spawn tool call's own persisted record when the parent turn is canceled or aborted mid-flight while the sub-turn is still in progress. "parked" (ADR-057 UAT defect C2 fix) is recorded the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
 	Status ToolCallStatus `json:"status"`
 
 	// Tool Tool name as registered in the tool registry (e.g. "workspace.shell", "web_search").
@@ -23889,7 +28436,7 @@ type ToolCall struct {
 // ToolCallContentState ADR-066 D4/D5 projection state of this call's result in the model's window, as persisted in window meta and returned on transcript read. "full" = the result entered unmodified; "capped" = it entered head-and-tail truncated with a mark (the archive line holds the full content); "emptied" = it was later emptied in place, leaving a recall mark. The transcript `result` is the PROJECTED content the model saw; the full content stays in the gateway tool_results/ store for Verbose chat. Absent = full.
 type ToolCallContentState string
 
-// ToolCallStatus Outcome of the tool call. "interrupted" is written by the tool-call status derivation in `pkg/agent/loop_run_turn_tools.go` onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
+// ToolCallStatus Outcome of the tool call. "interrupted" is recorded on a delegate/spawn tool call's own persisted record when the parent turn is canceled or aborted mid-flight while the sub-turn is still in progress. "parked" (ADR-057 UAT defect C2 fix) is recorded the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
 type ToolCallStatus string
 
 // ToolPolicy A policy value governing whether a tool call is allowed, requires approval, or is denied.
@@ -25158,7 +29705,10 @@ type VoiceProvider struct {
 type Workspace struct {
 	// ActivationStatus Whether the saved configuration is active. A saved but inactive configuration is not completed work.
 	ActivationStatus *WorkspaceActivationStatus `json:"activation_status,omitempty"`
-	ChangedFields    *[]string                  `json:"changed_fields,omitempty"`
+
+	// AdminMainSessionId Server-computed id of the built-in Admin's main session in this workspace. Present only on the default workspace (is_default true) and only when that main resolves (same validation as WorkspaceMemberConfig.main_session_id). Omitted on every other workspace and whenever the main does not resolve - never a guessed id. Admin is not a workspace member; this is not a membership entry. The main's state (needs_attention, protected, etc.) comes from Session list/detail like any other main. Server-owned and read-only.
+	AdminMainSessionId *string   `json:"admin_main_session_id,omitempty"`
+	ChangedFields      *[]string `json:"changed_fields,omitempty"`
 
 	// CoreTeam Default agent roster for this workspace. Not an access gate — any agent can work on any workspace's tasks. Deduplicated at write time.
 	CoreTeam *[]string `json:"core_team,omitempty"`
@@ -25177,7 +29727,7 @@ type Workspace struct {
 		// Modes Allowed delegation modes for this edge. An empty/absent list means all modes are allowed. "direct" = Direct Delegation — the delegate tool dispatches to the target agent, either synchronously (await) or as a background spawn. Which of the two happens is a runtime parameter of the delegate tool call itself, not a trust distinction the edge gates separately — an edge that allows "direct" allows both call patterns. "task" = Task Delegation — task_create-style delegation (a persistent task assigned to another agent).
 		Modes *[]WorkspaceDelegationModes `json:"modes,omitempty"`
 
-		// ToAgent Agent ID of the delegate (the target node). Must be a member of the workspace team. Self-edges (from_agent == to_agent) are rejected.
+		// ToAgent Agent ID of the delegate (the target node). Must be a member of the workspace team. A self-edge (from_agent == to_agent) is an ordinary, fully valid edge — the agent forks a new session running itself, and any agent may hold one. Which agents ship a seeded self-edge is a config-level default, not a graph constraint expressed here.
 		ToAgent string `json:"to_agent"`
 	} `json:"delegation,omitempty"`
 
@@ -25191,7 +29741,7 @@ type Workspace struct {
 	// IsDefault True only for the auto-created default workspace. The default workspace cannot be deleted and always appears first in the sidebar.
 	IsDefault *bool `json:"is_default,omitempty"`
 
-	// MemberConfigs Per-member (agentId → config) heartbeat settings for this workspace. Absent when no member has a config (empty map). Keys are agent IDs.
+	// MemberConfigs Per-member (agentId → config) settings for this workspace, keyed by agent ID. Absent when no member has a config (empty map). Carries heartbeat settings, the display-only hidden_from_sidebar flag (in updates: absent preserves the stored flag; a pure hide/show entry — flag present, heartbeat absent — preserves the stored heartbeat), and the server-computed read-only main_session_id; it does NOT carry a session address for the heartbeat — a heartbeat runs in the member's computed main session, and the retired per-member session_id is no longer part of this shape.
 	MemberConfigs *map[string]WorkspaceMemberConfig `json:"member_configs,omitempty"`
 	Message       *string                           `json:"message,omitempty"`
 
@@ -25225,7 +29775,7 @@ type Workspace struct {
 	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
 	Revision string `json:"revision"`
 
-	// SetupPending True while this workspace's initial team-setup interview has not yet run. Set server-side at creation when the default (Ava-only) roster was auto-seeded; cleared server-side when the setup kickoff turn is accepted. Absent/false otherwise. Server-set; ignored on input (readOnly).
+	// SetupPending True while this workspace's setup offer is pending. Set server-side when a workspace is created with an empty team; cleared server-side when the server posts the setup offer into Omnipus's main chat (omnipus-system-agent FR-047, K9), and set back to true if posting it fails. Absent/false otherwise. Server-set; ignored on input (readOnly).
 	SetupPending *bool `json:"setup_pending,omitempty"`
 
 	// Status Workspace visibility status. active (default) — appears in default list. archived — hidden from default list, shown under Archive section.
@@ -25312,14 +29862,14 @@ type WorkspaceDelegationEdge struct {
 	// Modes Allowed delegation modes for this edge. An empty/absent list means all modes are allowed. "direct" = Direct Delegation — the delegate tool dispatches to the target agent, either synchronously (await) or as a background spawn. Which of the two happens is a runtime parameter of the delegate tool call itself, not a trust distinction the edge gates separately — an edge that allows "direct" allows both call patterns. "task" = Task Delegation — task_create-style delegation (a persistent task assigned to another agent).
 	Modes *[]WorkspaceDelegationEdgeModes `json:"modes,omitempty"`
 
-	// ToAgent Agent ID of the delegate (the target node). Must be a member of the workspace team. Self-edges (from_agent == to_agent) are rejected.
+	// ToAgent Agent ID of the delegate (the target node). Must be a member of the workspace team. A self-edge (from_agent == to_agent) is an ordinary, fully valid edge — the agent forks a new session running itself, and any agent may hold one. Which agents ship a seeded self-edge is a config-level default, not a graph constraint expressed here.
 	ToAgent string `json:"to_agent"`
 }
 
 // WorkspaceDelegationEdgeModes defines model for WorkspaceDelegationEdge.Modes.
 type WorkspaceDelegationEdgeModes string
 
-// WorkspaceDelegationUpdateRequest Request body for PUT /workspaces/{id}/delegation. Replaces the workspace's delegation edge set wholesale (full replace, not a merge) so the Team-tab graph editor can persist the exact graph the operator drew. Every from_agent / to_agent must resolve to an eligible member of the candidate team. Only explicit Jim and General Purpose self-edges are permitted, bounded by the global and edge depth. Revision covers both membership and the authoritative graph.
+// WorkspaceDelegationUpdateRequest Request body for PUT /workspaces/{id}/delegation. Replaces the workspace's delegation edge set wholesale (full replace, not a merge) so the Team-tab graph editor can persist the exact graph the operator drew. Every from_agent / to_agent must resolve to an eligible member of the candidate team. A self-edge is an ordinary edge like any other — any agent may hold one — bounded by the global and edge depth. Revision covers both membership and the authoritative graph.
 type WorkspaceDelegationUpdateRequest struct {
 	// Edges The complete set of delegation edges for this workspace. An empty array clears all delegation. Deduplicated by (from_agent, to_agent) at write time.
 	Edges []WorkspaceDelegationEdge `json:"edges"`
@@ -25353,6 +29903,15 @@ type WorkspaceInstructionsResponse struct {
 type WorkspaceMemberConfig struct {
 	// Heartbeat Heartbeat settings for this (workspace, agent) pair.
 	Heartbeat *WorkspaceMemberHeartbeat `json:"heartbeat,omitempty"`
+
+	// HiddenFromSidebar Display-only: when true the sidebar omits this member's row in this workspace, but the member stays a full team member — messageable, delegable, @-addressable; main and work untouched. Merge rules inside an incoming member config: absent => the stored flag is preserved (a heartbeat save never un-hides). Present with heartbeat absent (a pure hide/show) => the stored heartbeat is preserved unchanged. An entry with neither field ({}) keeps the ordinary replace behaviour: the stored heartbeat is cleared and the flag is still preserved by the absent rule. A heartbeat that IS present is always replaced wholesale, never merged field-by-field. Off-team entries are garbage-collected, so removing a member clears the flag and re-adding the agent starts visible.
+	HiddenFromSidebar *bool `json:"hidden_from_sidebar,omitempty"`
+
+	// MainSessionError Safe, server-classified reason why this eligible member's main chat could not be prepared or resolved. Omitted when main_session_id is present or the member is ineligible. Contains no raw error text, filesystem paths, file names, session IDs or stored identity values.
+	MainSessionError *string `json:"main_session_error,omitempty"`
+
+	// MainSessionId The member's server-computed main session id (format decided later). Omitted for members who are not eligible for a main (workers, other system agents, and Admin, who is not a workspace member). Server-owned and read-only.
+	MainSessionId *string `json:"main_session_id,omitempty"`
 }
 
 // WorkspaceMemberHeartbeat Heartbeat settings for this (workspace, agent) pair.
@@ -25365,9 +29924,6 @@ type WorkspaceMemberHeartbeat struct {
 
 	// IntervalMinutes Interval in minutes between heartbeat passes. Minimum 5.
 	IntervalMinutes *int `json:"interval_minutes,omitempty"`
-
-	// SessionId Eager standing session id created when the heartbeat is enabled (FR-010). Stamped with workspace_id + agent + type="heartbeat". Stored here so the cron job can continue the pre-created session rather than starting a fresh one. Set server-side at enable time; read-only from the client's perspective.
-	SessionId *string `json:"session_id,omitempty"`
 }
 
 // WorkspaceMountCreateRequest Request body for POST /workspaces/{id}/mounts (FR-7.1, ADR-063 D4). Creates a new named write-grant on a real local folder. See WorkspaceMount.yaml for the exact shape rules `name` and `host_path` must satisfy.
@@ -25422,12 +29978,12 @@ type WorkspaceUpdateRequest struct {
 		// Modes Allowed delegation modes for this edge. An empty/absent list means all modes are allowed. "direct" = Direct Delegation — the delegate tool dispatches to the target agent, either synchronously (await) or as a background spawn. Which of the two happens is a runtime parameter of the delegate tool call itself, not a trust distinction the edge gates separately — an edge that allows "direct" allows both call patterns. "task" = Task Delegation — task_create-style delegation (a persistent task assigned to another agent).
 		Modes *[]WorkspaceUpdateRequestDelegationModes `json:"modes,omitempty"`
 
-		// ToAgent Agent ID of the delegate (the target node). Must be a member of the workspace team. Self-edges (from_agent == to_agent) are rejected.
+		// ToAgent Agent ID of the delegate (the target node). Must be a member of the workspace team. A self-edge (from_agent == to_agent) is an ordinary, fully valid edge — the agent forks a new session running itself, and any agent may hold one. Which agents ship a seeded self-edge is a config-level default, not a graph constraint expressed here.
 		ToAgent string `json:"to_agent"`
 	} `json:"delegation,omitempty"`
 	Description *string `json:"description,omitempty"`
 
-	// MemberConfigs Per-member (agentId → config) heartbeat settings. Merge semantics: when present, replaces the config for each listed agent and garbage-collects entries for agents no longer on the core team. session_id is server-managed (set at heartbeat-enable time) and ignored on input.
+	// MemberConfigs Per-member (agentId → config) settings. Merge semantics: when present, replaces the config for each listed agent and garbage-collects entries for agents no longer on the core team. main_session_id is server-owned and read-only: a value sent here is ignored, and the server always reprojects its own computed main session id. There is no client-supplied session address of any kind. Two display-flag exceptions: hidden_from_sidebar absent => the stored flag is preserved (a heartbeat save never un-hides); hidden_from_sidebar present with heartbeat absent (a pure hide/show) => the stored heartbeat is preserved unchanged. An entry with neither field ({}) keeps the ordinary replace behaviour — the stored heartbeat is cleared. A heartbeat that IS present is always replaced wholesale, never merged field-by-field.
 	MemberConfigs *map[string]WorkspaceMemberConfig `json:"member_configs,omitempty"`
 	Name          *string                           `json:"name,omitempty"`
 	PinOrder      *int                              `json:"pin_order,omitempty"`
@@ -25485,6 +30041,21 @@ type bearerAuthContextKey string
 // DeleteAgentParams defines parameters for DeleteAgent.
 type DeleteAgentParams struct {
 	Revision ConfigurationRevision `form:"revision" json:"revision"`
+
+	// DeleteEverything Spec omnipus-system-agent K50, §6.19 (FR-243; landing 1, WU-20). Explicit, audited opt-in to delete the agent together with its dependencies (AgentDependencyList). Without it, a non-empty dependency list refuses the delete with 409.
+	DeleteEverything *bool `form:"delete_everything,omitempty" json:"delete_everything,omitempty"`
+}
+
+// ListAgentActivityRunsParams defines parameters for ListAgentActivityRuns.
+type ListAgentActivityRunsParams struct {
+	// WorkspaceId Restrict to runs of tasks in this workspace.
+	WorkspaceId *string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
+}
+
+// GetAgentDependenciesParams defines parameters for GetAgentDependencies.
+type GetAgentDependenciesParams struct {
+	// WorkspaceId Limit the list to one workspace.
+	WorkspaceId *string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
 }
 
 // ConfigureChannelJSONBody defines parameters for ConfigureChannel.
@@ -25530,6 +30101,21 @@ type ListLibraryEntriesParams struct {
 
 	// IncludeHidden When true, also returns entries whose name begins with a dot (".") — e.g. the reserved work/.library/ upload directory. Defaults to false (hidden entries omitted) so the explorer's default view matches a conventional file browser.
 	IncludeHidden *bool `form:"include_hidden,omitempty" json:"include_hidden,omitempty"`
+
+	// IncludeViews When true, the knowledge base's saved views are listed in the folder they belong to, as ordinary rows with is_view=true and a `view` object (LibraryEntryView; #1017). Defaults to false, and with false the response is exactly what it was before this parameter existed (no view rows, no is_view, no view object), so a client that does not ask is unaffected.
+	//
+	// WHICH VIEWS. Only views of the knowledge base that most closely encloses the listed directory (the deepest one, when knowledge bases are nested), and only when that knowledge base is itself one of the collections of this workspace's knowledge scope. The set is the `views` GET .../knowledge/views returns for that knowledge base: same parser, same record schemas, and every emitted (view.collection_id, view.name) is listed by GET .../knowledge/views?collection_id=<that id> and opens through GET .../knowledge/view. A view file that failed to load is not listed here; that endpoint's `unloadable` list remains where it is reported. The listing, like that endpoint, reads only regular files inside the knowledge base (never a link), at most 256 KiB per file, 128 files per folder and 4 MiB per listing; a view file beyond those limits is left out and the listing still succeeds.
+	//
+	// NESTED KNOWLEDGE BASES. A knowledge base that is not itself a collection of the workspace's knowledge scope (for example, one nested inside another knowledge base) contributes no view rows. No folder at or below its root lists one, including its own `.omnipus-vault/views` reached with include_hidden=true. Views of the enclosing collection are still placed by the folder rule below, which never places them inside the nested knowledge base.
+	//
+	// WHICH FOLDER. A view whose `source` is a clean relative path (no ".." segment, not absolute, not inside `.omnipus-vault/`) whose parent folder exists as a directory of the same knowledge base, and not inside a deeper nested knowledge base, is listed in that parent folder — next to its `.base` file, whether or not that file still exists. Every other view (no `source`, or a `source` that fails any of those conditions) is listed at the knowledge base root.
+	//
+	// WHAT A VIEW ROW LOOKS LIKE. It describes the saved view file itself: `path` is that file's real workspace-relative path (`<knowledge base root>/.omnipus-vault/views/<slug>.yaml`), `name` is its file name, and size, modified_at, mime and is_text_editable are that file's own. A view row is therefore the one kind of row whose `path` is NOT inside the listed directory. It is a file row and sorts with the files by `name`, like every other row. Its is_hidden follows the usual dot rule on `name`, and include_hidden applies to it as to any row.
+	//
+	// THE STORAGE FOLDER. When `.omnipus-vault/views/` itself is listed (include_hidden is needed to reach it), each file there that is a loaded view also carries is_view=true and the same `view` object, so a path is described the same way wherever it is listed.
+	//
+	// FAILURE. If the views cannot be read (unreadable folder, schema load error), the listing still succeeds without view rows and the server logs a warning; a views failure never fails the listing.
+	IncludeViews *bool `form:"include_views,omitempty" json:"include_views,omitempty"`
 }
 
 // GetLibraryInlineDispositionParams defines parameters for GetLibraryInlineDisposition.
@@ -25607,6 +30193,12 @@ type UploadLibraryFilesParams struct {
 	Path *string `form:"path,omitempty" json:"path,omitempty"`
 }
 
+// PreviewMaxToolIterationsLoweringParams defines parameters for PreviewMaxToolIterationsLowering.
+type PreviewMaxToolIterationsLoweringParams struct {
+	// Value Candidate global tool-iteration limit (1–1000).
+	Value int `form:"value" json:"value"`
+}
+
 // GetProvidersCatalogParams defines parameters for GetProvidersCatalog.
 type GetProvidersCatalogParams struct {
 	// IfNoneMatch The quoted strong ETag from a previous 200. Exact match → 304.
@@ -25615,6 +30207,20 @@ type GetProvidersCatalogParams struct {
 
 // RestoreBackup200JSONResponseBodyStatus defines parameters for RestoreBackup.
 type RestoreBackup200JSONResponseBodyStatus string
+
+// GetRoomHistoryParams defines parameters for GetRoomHistory.
+type GetRoomHistoryParams struct {
+	// BeforeSeq Exclusive entry-sequence boundary, with no default. Omit for the newest page. Only decimal digits are accepted; leading zeroes may parse normally. Empty values, signs, whitespace, decimal points, exponents, non-numeric text, signed int64 overflow and repeated occurrences (even identical ones) are rejected with the exact before_seq syntax 400 documented above. Must not exceed the newest actual entry seq, not the live stream high-water sequence; a cursor beyond that bound returns the distinct cursor-ahead 400 above. Positive values within the bound need not identify an existing entry, including values before the first entry.
+	BeforeSeq *int64 `form:"before_seq,omitempty" json:"before_seq,omitempty"`
+
+	// Limit Maximum number of entries to return. Omitted means 100; present empty does not mean default. Only decimal digits are accepted; leading zeroes may parse normally. Empty values, signs, whitespace, decimal points, exponents, non-numeric text, overflow, values outside 1 to 1000 and repeated occurrences (even identical ones) return exactly 400 {"error":"limit must be an integer from 1 to 1000"}. Never clamp an invalid value.
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// SubmitSecretRequest503JSONResponseBody defines parameters for SubmitSecretRequest.
+type SubmitSecretRequest503JSONResponseBody struct {
+	union json.RawMessage
+}
 
 // ListSessionsParams defines parameters for ListSessions.
 type ListSessionsParams struct {
@@ -25642,6 +30248,27 @@ type ListSessionsParams struct {
 
 // ListSessionsParamsType defines parameters for ListSessions.
 type ListSessionsParamsType string
+
+// GetSessionMessagesParams defines parameters for GetSessionMessages.
+type GetSessionMessagesParams struct {
+	// Limit Drawn-row target. Exactly one digits-only decimal value from 20 to 100; leading zeroes allowed. Omitted means 40, never unlimited. Invalid or duplicate values return 400 with "limit must be an integer from 20 to 100".
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// MinRows Advisory estimated two-screen row floor, one digits-only decimal value from 1 to the effective limit. Omitted means 20. Validate only after a valid limit; invalid/duplicate values return 400 with "min_rows must be an integer from 1 to limit". Not proof of geometry or a hard byte defense.
+	MinRows *int `form:"min_rows,omitempty" json:"min_rows,omitempty"`
+
+	// Before Exclusive older boundary. Mutually exclusive with after. In window_refresh, must resolve inside or at the interval's upper boundary, and remains exclusive.
+	Before *string `form:"before,omitempty" json:"before,omitempty"`
+
+	// After Exclusive newer boundary; forbidden with before or any window-refresh range.
+	After *string `form:"after,omitempty" json:"after,omitempty"`
+
+	// WindowStart Inclusive lower occurrence boundary of an already-displayed closed range; requires window_end from the same authorized session in acceptance order.
+	WindowStart *string `form:"window_start,omitempty" json:"window_start,omitempty"`
+
+	// WindowEnd Inclusive upper boundary; requires window_start. Known expired bounds remain usable.
+	WindowEnd *string `form:"window_end,omitempty" json:"window_end,omitempty"`
+}
 
 // SearchSkillsParams defines parameters for SearchSkills.
 type SearchSkillsParams struct {
@@ -25731,12 +30358,18 @@ type UploadFilesMultipartBody struct {
 
 	// SessionId Session ID (alternative to query parameter).
 	SessionId *string `json:"session_id,omitempty"`
+
+	// WorkspaceId Workspace ID (alternative to the query parameter); must precede the file parts.
+	WorkspaceId *string `json:"workspace_id,omitempty"`
 }
 
 // UploadFilesParams defines parameters for UploadFiles.
 type UploadFilesParams struct {
-	// SessionId Session ID to associate the uploaded files with. May also be supplied as a multipart form field.
+	// SessionId Session ID to associate the uploaded files with. May also be supplied as a multipart form field. Ignored when workspace_id is given.
 	SessionId *string `form:"session_id,omitempty" json:"session_id,omitempty"`
+
+	// WorkspaceId Workspace whose media library receives the files (#1449 C-I1). May also be supplied as a multipart form field before the file parts. Takes precedence over session_id.
+	WorkspaceId *string `form:"workspace_id,omitempty" json:"workspace_id,omitempty"`
 }
 
 // TranscribeAudioMultipartBody defines parameters for TranscribeAudio.
@@ -25758,6 +30391,84 @@ type ListWorkspacesParamsStatus string
 type DeleteWorkspaceParams struct {
 	Revision ConfigurationRevision `form:"revision" json:"revision"`
 }
+
+// ListMailFoldersParams defines parameters for ListMailFolders.
+type ListMailFoldersParams struct {
+	// Retry Human-initiated fetch marker (D29/R2-9, MC-33). Absent/false = automatic panel poll: while the mailbox watcher is in backoff this request does NOT dial — it returns 503 immediately with code=backoff, the watcher's last error class and next_attempt_at. true = human-initiated (mount, folder switch, Retry click, open message): bypasses the backoff gate for this one request; the concurrency cap and coalescing still apply. Retry never bypasses capacity, security checks or mutation safeguards, and an automatic refresh never sets it (ADR-20261001 failure table).
+	Retry *bool `form:"retry,omitempty" json:"retry,omitempty"`
+
+	// Mode Cache-first versus live read (ADR-20261001 "Cached read versus genuine refresh" row; register rows 2/6). Omitted or live = today's live read. cache_first = serve the labelled cached mapping/counts immediately without dialing; a cache hit consumes no A8 work slot and opens no socket. A cache-first response is metadata-labelled (MailFolderList.metadata) and is never evidence of a live success; on one eligible stale/dirty event the panel makes at most one separate mode=live request, which either returns validated data or a visible error — it can never return the same stale page as a successful refresh. A cache miss falls through once to live under the normal budget. Requests without valid panel presence may execute live request-scoped work but cannot start detached panel refreshes or retain sockets.
+	Mode *ListMailFoldersParamsMode `form:"mode,omitempty" json:"mode,omitempty"`
+
+	// RefreshMapping Force the folder-mapping validation on this read (ADR-20261001 cached-read row: "For the rail, add refresh_mapping Boolean"). false/absent = a normal live count refresh reuses a valid mapping. true = this read also validates the mapping — the panel-open with a missing/>24-hour mapping case, the manual Refresh click, and the one permitted rediscovery after a missing-folder failure or observed folder-version change set it explicitly. It is never turned on by the 5-minute count refresh.
+	RefreshMapping *bool `form:"refresh_mapping,omitempty" json:"refresh_mapping,omitempty"`
+
+	// ObserverId Opaque per-panel observer ID (mail-live-access-landing-order register row 6; ADR-20261001 "Mail panel presence" row) from the mail_panel_observer WebSocket frame — the read opts into panel semantics when the ID is bound to this authenticated connection/workspace: the read may retain pooled sockets while that observer remains open, and its cache reads ride the panel's retention. Absent or unknown observer = conservative request-scoped work; REST can never claim another socket/user's observer. Never grants authorization by itself — the pair scope is checked independently.
+	ObserverId *string `form:"observer_id,omitempty" json:"observer_id,omitempty"`
+}
+
+// ListMailFoldersParamsMode defines parameters for ListMailFolders.
+type ListMailFoldersParamsMode string
+
+// ListMailMessagesParams defines parameters for ListMailMessages.
+type ListMailMessagesParams struct {
+	// Limit Page size. Zero, negative or absent means the default 20; values above 100 are clamped to 100 (MC-6, mirrors clampLimit in pkg/email/transport.go). A non-integer value is rejected 400. These 20/100 bounds are the pre-ADR-20261001 state and stay the operative bounds until the consumer-timed W0 amendment raises list paging to the ADR's 25-row page and 200-row view limits (register row 4; lands in the same step as the cursor switch in w3's consumer work) — the search parameter's "same 25-row page" statement on this operation describes that amended state, not this one.
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// BeforeUid Cursor — list envelopes with uid lower than this value (from MailMessagePage.next_before_uid of the previous page).
+	BeforeUid *int `form:"before_uid,omitempty" json:"before_uid,omitempty"`
+
+	// Retry Human-initiated fetch marker (D29/R2-9, MC-33). Absent/false = automatic panel poll: while the mailbox watcher is in backoff this request does NOT dial — it returns 503 immediately with code=backoff, the watcher's last error class and next_attempt_at. true = human-initiated (mount, folder switch, Retry click, open message): bypasses the backoff gate for this one request; the concurrency cap and coalescing still apply. Retry never bypasses capacity, security checks or mutation safeguards, and an automatic refresh never sets it (ADR-20261001 failure table).
+	Retry *bool `form:"retry,omitempty" json:"retry,omitempty"`
+
+	// Mode Cache-first versus live read (ADR-20261001 "Cached read versus genuine refresh" row; register rows 2/6). Omitted or live = today's live read. cache_first = serve the labelled cached newest page immediately without dialing; a cache hit consumes no A8 work slot and opens no socket, and the response's MailMessagePage.metadata states its source and age. A cache-first response is never evidence of a live success; on one eligible stale/dirty event the panel makes at most one separate mode=live request. Search sequences and pages beyond the cached newest window always run live.
+	Mode *ListMailMessagesParamsMode `form:"mode,omitempty" json:"mode,omitempty"`
+
+	// RefreshMapping Force the folder-mapping validation on this read (register rows 2/6; the list rides the same flag so a folder switch with its list can validate the mapping in one event). false/absent = a normal live refresh reuses a valid mapping.
+	RefreshMapping *bool `form:"refresh_mapping,omitempty" json:"refresh_mapping,omitempty"`
+
+	// ObserverId Opaque per-panel observer ID (register row 6; ADR-20261001 "Mail panel presence" row) — the read opts into panel semantics when the ID is bound to this authenticated connection/workspace. Absent or unknown observer = conservative request-scoped work.
+	ObserverId *string `form:"observer_id,omitempty" json:"observer_id,omitempty"`
+
+	// Search Folder-scoped server-side search query (ADR-20261001 "Paging and search" row; register row 4). Starts a bounded search sequence under the same 25-row page and 200-row view limits, matched server-side — no local index, no full-text/offline search, and never a whole-mailbox fetch. Matching fields and bounds are founder-settled (decision Q-D answered 2026-10-02, option A): subject plus sender/recipient substring matching, server-side header search, the same 25/200 bounds; the mail-live-access W2/W3 specs fix the exact search semantics within that decision. Presenting search and cursor together is rejected 400.
+	Search *string `form:"search,omitempty" json:"search,omitempty"`
+
+	// Cursor Opaque continuation cursor from MailMessagePage.next_cursor (register row 4) — continues the browse or search sequence it was issued in. A stale or mismatched cursor (folder epoch changed, configuration generation changed, sequence mismatch) is refused with the typed 409 stale-cursor result — the client resets the view once. Supersedes before_uid, which is retained only until the panel consumer migration lands.
+	Cursor *string `form:"cursor,omitempty" json:"cursor,omitempty"`
+}
+
+// ListMailMessagesParamsMode defines parameters for ListMailMessages.
+type ListMailMessagesParamsMode string
+
+// ListMailMessagesParamsFolder defines parameters for ListMailMessages.
+type ListMailMessagesParamsFolder string
+
+// GetMailMessageParams defines parameters for GetMailMessage.
+type GetMailMessageParams struct {
+	// Retry Human-initiated fetch marker (D29/R2-9, MC-33). Absent/false = automatic panel poll: while the mailbox watcher is in backoff this request does NOT dial — it returns 503 immediately with code=backoff, the watcher's last error class and next_attempt_at. true = human-initiated (mount, folder switch, Retry click, open message): bypasses the backoff gate for this one request; the concurrency cap and coalescing still apply.
+	Retry *bool `form:"retry,omitempty" json:"retry,omitempty"`
+}
+
+// GetMailMessageParamsFolder defines parameters for GetMailMessage.
+type GetMailMessageParamsFolder string
+
+// GetMailAttachmentParams defines parameters for GetMailAttachment.
+type GetMailAttachmentParams struct {
+	// Retry Human-initiated fetch marker (D29/R2-9, MC-33). Absent/false = automatic panel poll: while the mailbox watcher is in backoff this request does NOT dial — it returns 503 immediately with code=backoff, the watcher's last error class and next_attempt_at. true = human-initiated (mount, folder switch, Retry click, open message): bypasses the backoff gate for this one request; the concurrency cap and coalescing still apply.
+	Retry *bool `form:"retry,omitempty" json:"retry,omitempty"`
+}
+
+// GetMailAttachmentParamsFolder defines parameters for GetMailAttachment.
+type GetMailAttachmentParamsFolder string
+
+// SaveMailAttachmentToLibraryParamsFolder defines parameters for SaveMailAttachmentToLibrary.
+type SaveMailAttachmentToLibraryParamsFolder string
+
+// GetMailReplyContextParamsFolder defines parameters for GetMailReplyContext.
+type GetMailReplyContextParamsFolder string
+
+// MarkMailMessageSeenParamsFolder defines parameters for MarkMailMessageSeen.
+type MarkMailMessageSeenParamsFolder string
 
 // CreateAgentJSONRequestBody defines body for CreateAgent for application/json ContentType.
 type CreateAgentJSONRequestBody = AgentCreateRequest
@@ -25801,11 +30512,14 @@ type CreateChannelInstanceJSONRequestBody = ChannelCreateRequest
 // ConfigureChannelJSONRequestBody defines body for ConfigureChannel for application/json ContentType.
 type ConfigureChannelJSONRequestBody ConfigureChannelJSONBody
 
-// SetChannelRoutingJSONRequestBody defines body for SetChannelRouting for application/json ContentType.
-type SetChannelRoutingJSONRequestBody = ChannelRouting
+// EnableChannelJSONRequestBody defines body for EnableChannel for application/json ContentType.
+type EnableChannelJSONRequestBody = ChannelEnableRequest
 
-// PostChatJSONRequestBody defines body for PostChat for application/json ContentType.
-type PostChatJSONRequestBody = SseChatRequest
+// SetChannelOutboundJSONRequestBody defines body for SetChannelOutbound for application/json ContentType.
+type SetChannelOutboundJSONRequestBody = ChannelOutboundUpdateRequest
+
+// SetChannelRoutingJSONRequestBody defines body for SetChannelRouting for application/json ContentType.
+type SetChannelRoutingJSONRequestBody = ChannelRoutingUpdateRequest
 
 // SetCredentialJSONRequestBody defines body for SetCredential for application/json ContentType.
 type SetCredentialJSONRequestBody = CredentialSetRequest
@@ -25818,6 +30532,9 @@ type SetGodModeJSONRequestBody = GodModeUpdateRequest
 
 // UpdateIntegrationProviderJSONRequestBody defines body for UpdateIntegrationProvider for application/json ContentType.
 type UpdateIntegrationProviderJSONRequestBody = IntegrationProviderUpdateRequest
+
+// CheckSearchProviderConnectionJSONRequestBody defines body for CheckSearchProviderConnection for application/json ContentType.
+type CheckSearchProviderConnectionJSONRequestBody = SearchProviderCheckRequest
 
 // CopyLibraryEntryJSONRequestBody defines body for CopyLibraryEntry for application/json ContentType.
 type CopyLibraryEntryJSONRequestBody = LibraryTransferRequest
@@ -25858,6 +30575,18 @@ type UploadLibraryFilesMultipartRequestBody UploadLibraryFilesMultipartBody
 // CreateVaultJSONRequestBody defines body for CreateVault for application/json ContentType.
 type CreateVaultJSONRequestBody = CreateVaultRequest
 
+// MintMailAttachmentPreviewJSONRequestBody defines body for MintMailAttachmentPreview for application/json ContentType.
+type MintMailAttachmentPreviewJSONRequestBody = MailAttachmentPreviewRequest
+
+// MintMailHtmlPreviewTokenJSONRequestBody defines body for MintMailHtmlPreviewToken for application/json ContentType.
+type MintMailHtmlPreviewTokenJSONRequestBody = MailHtmlPreviewTokenRequest
+
+// MintMailSignaturePreviewTokenJSONRequestBody defines body for MintMailSignaturePreviewToken for application/json ContentType.
+type MintMailSignaturePreviewTokenJSONRequestBody = MailSignaturePreviewTokenRequest
+
+// RetryMailboxCleanupJSONRequestBody defines body for RetryMailboxCleanup for application/json ContentType.
+type RetryMailboxCleanupJSONRequestBody = MailboxCleanupRequest
+
 // AddMcpServerJSONRequestBody defines body for AddMcpServer for application/json ContentType.
 type AddMcpServerJSONRequestBody = McpServerCreate
 
@@ -25891,11 +30620,23 @@ type PollProviderSignInJSONRequestBody = SignInPollRequest
 // RestoreBackupJSONRequestBody defines body for RestoreBackup for application/json ContentType.
 type RestoreBackupJSONRequestBody = RestoreBackupRequest
 
+// UpdateRoomMembersJSONRequestBody defines body for UpdateRoomMembers for application/json ContentType.
+type UpdateRoomMembersJSONRequestBody = RoomMembersUpdateRequest
+
+// PostRoomMessageJSONRequestBody defines body for PostRoomMessage for application/json ContentType.
+type PostRoomMessageJSONRequestBody = RoomMessageRequest
+
 // CreateScheduleJSONRequestBody defines body for CreateSchedule for application/json ContentType.
 type CreateScheduleJSONRequestBody = ScheduleCreate
 
 // UpdateScheduleJSONRequestBody defines body for UpdateSchedule for application/json ContentType.
 type UpdateScheduleJSONRequestBody = ScheduleUpdate
+
+// SubmitSecretRequestJSONRequestBody defines body for SubmitSecretRequest for application/json ContentType.
+type SubmitSecretRequestJSONRequestBody = SecretSubmitRequest
+
+// UpdateSecretOptionsJSONRequestBody defines body for UpdateSecretOptions for application/json ContentType.
+type UpdateSecretOptionsJSONRequestBody = SecretOptionsUpdateRequest
 
 // UpdateAuditLogToggleJSONRequestBody defines body for UpdateAuditLogToggle for application/json ContentType.
 type UpdateAuditLogToggleJSONRequestBody = AuditLogToggleRequest
@@ -25933,8 +30674,14 @@ type UpdateContextSettingsJSONRequestBody = ContextSettingsUpdate
 // UpdateMemorySettingsJSONRequestBody defines body for UpdateMemorySettings for application/json ContentType.
 type UpdateMemorySettingsJSONRequestBody = MemorySettings
 
+// UpdateThirdPartyAgentSettingsJSONRequestBody defines body for UpdateThirdPartyAgentSettings for application/json ContentType.
+type UpdateThirdPartyAgentSettingsJSONRequestBody = ThirdPartyAgentSettings
+
 // InstallSkillJSONRequestBody defines body for InstallSkill for application/json ContentType.
 type InstallSkillJSONRequestBody = SkillInstallRequest
+
+// CopySkillJSONRequestBody defines body for CopySkill for application/json ContentType.
+type CopySkillJSONRequestBody = SkillCopyRequest
 
 // PatchAppStateJSONRequestBody defines body for PatchAppState for application/json ContentType.
 type PatchAppStateJSONRequestBody = AppStatePatchRequest
@@ -25984,6 +30731,21 @@ type UpdateWorkspaceDelegationJSONRequestBody = WorkspaceDelegationUpdateRequest
 // PutWorkspaceInstructionsJSONRequestBody defines body for PutWorkspaceInstructions for application/json ContentType.
 type PutWorkspaceInstructionsJSONRequestBody = WorkspaceInstructionsRequest
 
+// UpdateMailDraftJSONRequestBody defines body for UpdateMailDraft for application/json ContentType.
+type UpdateMailDraftJSONRequestBody = MailDraftUpdateRequest
+
+// SendMailDraftJSONRequestBody defines body for SendMailDraft for application/json ContentType.
+type SendMailDraftJSONRequestBody = MailDraftSendRequest
+
+// SaveMailAttachmentToLibraryJSONRequestBody defines body for SaveMailAttachmentToLibrary for application/json ContentType.
+type SaveMailAttachmentToLibraryJSONRequestBody = MailAttachmentSaveRequest
+
+// GetMailReplyContextJSONRequestBody defines body for GetMailReplyContext for application/json ContentType.
+type GetMailReplyContextJSONRequestBody = MailReplyContextRequest
+
+// SendMailMessageJSONRequestBody defines body for SendMailMessage for application/json ContentType.
+type SendMailMessageJSONRequestBody = MailSendRequest
+
 // CreateWorkspaceMediaAttachmentJSONRequestBody defines body for CreateWorkspaceMediaAttachment for application/json ContentType.
 type CreateWorkspaceMediaAttachmentJSONRequestBody = MediaAttachmentRequest
 
@@ -25992,6 +30754,9 @@ type CreateWorkspaceMountJSONRequestBody = WorkspaceMountCreateRequest
 
 // CreateWorkspacePlanJSONRequestBody defines body for CreateWorkspacePlan for application/json ContentType.
 type CreateWorkspacePlanJSONRequestBody = PlanCreateRequest
+
+// CreateRoomJSONRequestBody defines body for CreateRoom for application/json ContentType.
+type CreateRoomJSONRequestBody = RoomCreateRequest
 
 // Getter for additional properties for ChannelConfigureRequest. Returns the specified
 // element and whether it was found
@@ -26016,6 +30781,14 @@ func (a *ChannelConfigureRequest) UnmarshalJSON(b []byte) error {
 	err := json.Unmarshal(b, &object)
 	if err != nil {
 		return err
+	}
+
+	if raw, found := object["allow_from"]; found {
+		err = json.Unmarshal(raw, &a.AllowFrom)
+		if err != nil {
+			return fmt.Errorf("error reading 'allow_from': %w", err)
+		}
+		delete(object, "allow_from")
 	}
 
 	if raw, found := object["app_id"]; found {
@@ -26141,6 +30914,13 @@ func (a ChannelConfigureRequest) MarshalJSON() ([]byte, error) {
 	var err error
 	object := make(map[string]json.RawMessage)
 
+	if a.AllowFrom != nil {
+		object["allow_from"], err = json.Marshal(a.AllowFrom)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'allow_from': %w", err)
+		}
+	}
+
 	if a.AppId != nil {
 		object["app_id"], err = json.Marshal(a.AppId)
 		if err != nil {
@@ -26229,6 +31009,102 @@ func (a ChannelConfigureRequest) MarshalJSON() ([]byte, error) {
 		object["webhook_secret"], err = json.Marshal(a.WebhookSecret)
 		if err != nil {
 			return nil, fmt.Errorf("error marshaling 'webhook_secret': %w", err)
+		}
+	}
+
+	for fieldName, field := range a.AdditionalProperties {
+		object[fieldName], err = json.Marshal(field)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling '%s': %w", fieldName, err)
+		}
+	}
+	return json.Marshal(object)
+}
+
+// Getter for additional properties for ChannelConfigureResponse. Returns the specified
+// element and whether it was found
+func (a ChannelConfigureResponse) Get(fieldName string) (value interface{}, found bool) {
+	if a.AdditionalProperties != nil {
+		value, found = a.AdditionalProperties[fieldName]
+	}
+	return
+}
+
+// Setter for additional properties for ChannelConfigureResponse
+func (a *ChannelConfigureResponse) Set(fieldName string, value interface{}) {
+	if a.AdditionalProperties == nil {
+		a.AdditionalProperties = make(map[string]interface{})
+	}
+	a.AdditionalProperties[fieldName] = value
+}
+
+// Override default JSON handling for ChannelConfigureResponse to handle AdditionalProperties
+func (a *ChannelConfigureResponse) UnmarshalJSON(b []byte) error {
+	object := make(map[string]json.RawMessage)
+	err := json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["apply_note"]; found {
+		err = json.Unmarshal(raw, &a.ApplyNote)
+		if err != nil {
+			return fmt.Errorf("error reading 'apply_note': %w", err)
+		}
+		delete(object, "apply_note")
+	}
+
+	if raw, found := object["apply_outcome"]; found {
+		err = json.Unmarshal(raw, &a.ApplyOutcome)
+		if err != nil {
+			return fmt.Errorf("error reading 'apply_outcome': %w", err)
+		}
+		delete(object, "apply_outcome")
+	}
+
+	if raw, found := object["apply_reason"]; found {
+		err = json.Unmarshal(raw, &a.ApplyReason)
+		if err != nil {
+			return fmt.Errorf("error reading 'apply_reason': %w", err)
+		}
+		delete(object, "apply_reason")
+	}
+
+	if len(object) != 0 {
+		a.AdditionalProperties = make(map[string]interface{})
+		for fieldName, fieldBuf := range object {
+			var fieldVal interface{}
+			err := json.Unmarshal(fieldBuf, &fieldVal)
+			if err != nil {
+				return fmt.Errorf("error unmarshaling field %s: %w", fieldName, err)
+			}
+			a.AdditionalProperties[fieldName] = fieldVal
+		}
+	}
+	return nil
+}
+
+// Override default JSON handling for ChannelConfigureResponse to handle AdditionalProperties
+func (a ChannelConfigureResponse) MarshalJSON() ([]byte, error) {
+	var err error
+	object := make(map[string]json.RawMessage)
+
+	if a.ApplyNote != nil {
+		object["apply_note"], err = json.Marshal(a.ApplyNote)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'apply_note': %w", err)
+		}
+	}
+
+	object["apply_outcome"], err = json.Marshal(a.ApplyOutcome)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling 'apply_outcome': %w", err)
+	}
+
+	if a.ApplyReason != nil {
+		object["apply_reason"], err = json.Marshal(a.ApplyReason)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'apply_reason': %w", err)
 		}
 	}
 
@@ -26396,28 +31272,12 @@ func (a *Task_Trigger_Config) UnmarshalJSON(b []byte) error {
 		delete(object, "at_ms")
 	}
 
-	if raw, found := object["cron_expr"]; found {
-		err = json.Unmarshal(raw, &a.CronExpr)
-		if err != nil {
-			return fmt.Errorf("error reading 'cron_expr': %w", err)
-		}
-		delete(object, "cron_expr")
-	}
-
 	if raw, found := object["dtstart_ms"]; found {
 		err = json.Unmarshal(raw, &a.DtstartMs)
 		if err != nil {
 			return fmt.Errorf("error reading 'dtstart_ms': %w", err)
 		}
 		delete(object, "dtstart_ms")
-	}
-
-	if raw, found := object["every_ms"]; found {
-		err = json.Unmarshal(raw, &a.EveryMs)
-		if err != nil {
-			return fmt.Errorf("error reading 'every_ms': %w", err)
-		}
-		delete(object, "every_ms")
 	}
 
 	if raw, found := object["rrule"]; found {
@@ -26462,24 +31322,10 @@ func (a Task_Trigger_Config) MarshalJSON() ([]byte, error) {
 		}
 	}
 
-	if a.CronExpr != nil {
-		object["cron_expr"], err = json.Marshal(a.CronExpr)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'cron_expr': %w", err)
-		}
-	}
-
 	if a.DtstartMs != nil {
 		object["dtstart_ms"], err = json.Marshal(a.DtstartMs)
 		if err != nil {
 			return nil, fmt.Errorf("error marshaling 'dtstart_ms': %w", err)
-		}
-	}
-
-	if a.EveryMs != nil {
-		object["every_ms"], err = json.Marshal(a.EveryMs)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'every_ms': %w", err)
 		}
 	}
 
@@ -26539,28 +31385,12 @@ func (a *TaskCreateRequest_Trigger_Config) UnmarshalJSON(b []byte) error {
 		delete(object, "at_ms")
 	}
 
-	if raw, found := object["cron_expr"]; found {
-		err = json.Unmarshal(raw, &a.CronExpr)
-		if err != nil {
-			return fmt.Errorf("error reading 'cron_expr': %w", err)
-		}
-		delete(object, "cron_expr")
-	}
-
 	if raw, found := object["dtstart_ms"]; found {
 		err = json.Unmarshal(raw, &a.DtstartMs)
 		if err != nil {
 			return fmt.Errorf("error reading 'dtstart_ms': %w", err)
 		}
 		delete(object, "dtstart_ms")
-	}
-
-	if raw, found := object["every_ms"]; found {
-		err = json.Unmarshal(raw, &a.EveryMs)
-		if err != nil {
-			return fmt.Errorf("error reading 'every_ms': %w", err)
-		}
-		delete(object, "every_ms")
 	}
 
 	if raw, found := object["rrule"]; found {
@@ -26605,24 +31435,10 @@ func (a TaskCreateRequest_Trigger_Config) MarshalJSON() ([]byte, error) {
 		}
 	}
 
-	if a.CronExpr != nil {
-		object["cron_expr"], err = json.Marshal(a.CronExpr)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'cron_expr': %w", err)
-		}
-	}
-
 	if a.DtstartMs != nil {
 		object["dtstart_ms"], err = json.Marshal(a.DtstartMs)
 		if err != nil {
 			return nil, fmt.Errorf("error marshaling 'dtstart_ms': %w", err)
-		}
-	}
-
-	if a.EveryMs != nil {
-		object["every_ms"], err = json.Marshal(a.EveryMs)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'every_ms': %w", err)
 		}
 	}
 
@@ -26682,28 +31498,12 @@ func (a *TaskTrigger_Config) UnmarshalJSON(b []byte) error {
 		delete(object, "at_ms")
 	}
 
-	if raw, found := object["cron_expr"]; found {
-		err = json.Unmarshal(raw, &a.CronExpr)
-		if err != nil {
-			return fmt.Errorf("error reading 'cron_expr': %w", err)
-		}
-		delete(object, "cron_expr")
-	}
-
 	if raw, found := object["dtstart_ms"]; found {
 		err = json.Unmarshal(raw, &a.DtstartMs)
 		if err != nil {
 			return fmt.Errorf("error reading 'dtstart_ms': %w", err)
 		}
 		delete(object, "dtstart_ms")
-	}
-
-	if raw, found := object["every_ms"]; found {
-		err = json.Unmarshal(raw, &a.EveryMs)
-		if err != nil {
-			return fmt.Errorf("error reading 'every_ms': %w", err)
-		}
-		delete(object, "every_ms")
 	}
 
 	if raw, found := object["rrule"]; found {
@@ -26748,24 +31548,10 @@ func (a TaskTrigger_Config) MarshalJSON() ([]byte, error) {
 		}
 	}
 
-	if a.CronExpr != nil {
-		object["cron_expr"], err = json.Marshal(a.CronExpr)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'cron_expr': %w", err)
-		}
-	}
-
 	if a.DtstartMs != nil {
 		object["dtstart_ms"], err = json.Marshal(a.DtstartMs)
 		if err != nil {
 			return nil, fmt.Errorf("error marshaling 'dtstart_ms': %w", err)
-		}
-	}
-
-	if a.EveryMs != nil {
-		object["every_ms"], err = json.Marshal(a.EveryMs)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'every_ms': %w", err)
 		}
 	}
 
@@ -26825,28 +31611,12 @@ func (a *TaskUpdateRequest_Trigger_Config) UnmarshalJSON(b []byte) error {
 		delete(object, "at_ms")
 	}
 
-	if raw, found := object["cron_expr"]; found {
-		err = json.Unmarshal(raw, &a.CronExpr)
-		if err != nil {
-			return fmt.Errorf("error reading 'cron_expr': %w", err)
-		}
-		delete(object, "cron_expr")
-	}
-
 	if raw, found := object["dtstart_ms"]; found {
 		err = json.Unmarshal(raw, &a.DtstartMs)
 		if err != nil {
 			return fmt.Errorf("error reading 'dtstart_ms': %w", err)
 		}
 		delete(object, "dtstart_ms")
-	}
-
-	if raw, found := object["every_ms"]; found {
-		err = json.Unmarshal(raw, &a.EveryMs)
-		if err != nil {
-			return fmt.Errorf("error reading 'every_ms': %w", err)
-		}
-		delete(object, "every_ms")
 	}
 
 	if raw, found := object["rrule"]; found {
@@ -26891,24 +31661,10 @@ func (a TaskUpdateRequest_Trigger_Config) MarshalJSON() ([]byte, error) {
 		}
 	}
 
-	if a.CronExpr != nil {
-		object["cron_expr"], err = json.Marshal(a.CronExpr)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'cron_expr': %w", err)
-		}
-	}
-
 	if a.DtstartMs != nil {
 		object["dtstart_ms"], err = json.Marshal(a.DtstartMs)
 		if err != nil {
 			return nil, fmt.Errorf("error marshaling 'dtstart_ms': %w", err)
-		}
-	}
-
-	if a.EveryMs != nil {
-		object["every_ms"], err = json.Marshal(a.EveryMs)
-		if err != nil {
-			return nil, fmt.Errorf("error marshaling 'every_ms': %w", err)
 		}
 	}
 
@@ -27222,24 +31978,24 @@ func (t *DelegateActionRequest) MergeDelegateRespondAction(v DelegateRespondActi
 	return err
 }
 
-// AsDelegateCancelAction returns the union data inside the DelegateActionRequest as a DelegateCancelAction
-func (t DelegateActionRequest) AsDelegateCancelAction() (DelegateCancelAction, error) {
-	var body DelegateCancelAction
+// AsDelegateStopAllAction returns the union data inside the DelegateActionRequest as a DelegateStopAllAction
+func (t DelegateActionRequest) AsDelegateStopAllAction() (DelegateStopAllAction, error) {
+	var body DelegateStopAllAction
 	err := json.Unmarshal(t.union, &body)
 	return body, err
 }
 
-// FromDelegateCancelAction overwrites any union data inside the DelegateActionRequest as the provided DelegateCancelAction
-func (t *DelegateActionRequest) FromDelegateCancelAction(v DelegateCancelAction) error {
-	v.Action = "cancel"
+// FromDelegateStopAllAction overwrites any union data inside the DelegateActionRequest as the provided DelegateStopAllAction
+func (t *DelegateActionRequest) FromDelegateStopAllAction(v DelegateStopAllAction) error {
+	v.Action = "stop_all"
 	b, err := json.Marshal(v)
 	t.union = b
 	return err
 }
 
-// MergeDelegateCancelAction performs a merge with any union data inside the DelegateActionRequest, using the provided DelegateCancelAction
-func (t *DelegateActionRequest) MergeDelegateCancelAction(v DelegateCancelAction) error {
-	v.Action = "cancel"
+// MergeDelegateStopAllAction performs a merge with any union data inside the DelegateActionRequest, using the provided DelegateStopAllAction
+func (t *DelegateActionRequest) MergeDelegateStopAllAction(v DelegateStopAllAction) error {
+	v.Action = "stop_all"
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -27250,24 +32006,80 @@ func (t *DelegateActionRequest) MergeDelegateCancelAction(v DelegateCancelAction
 	return err
 }
 
-// AsDelegateFollowUpAction returns the union data inside the DelegateActionRequest as a DelegateFollowUpAction
-func (t DelegateActionRequest) AsDelegateFollowUpAction() (DelegateFollowUpAction, error) {
-	var body DelegateFollowUpAction
+// AsDelegateClearGoalAction returns the union data inside the DelegateActionRequest as a DelegateClearGoalAction
+func (t DelegateActionRequest) AsDelegateClearGoalAction() (DelegateClearGoalAction, error) {
+	var body DelegateClearGoalAction
 	err := json.Unmarshal(t.union, &body)
 	return body, err
 }
 
-// FromDelegateFollowUpAction overwrites any union data inside the DelegateActionRequest as the provided DelegateFollowUpAction
-func (t *DelegateActionRequest) FromDelegateFollowUpAction(v DelegateFollowUpAction) error {
-	v.Action = "follow_up"
+// FromDelegateClearGoalAction overwrites any union data inside the DelegateActionRequest as the provided DelegateClearGoalAction
+func (t *DelegateActionRequest) FromDelegateClearGoalAction(v DelegateClearGoalAction) error {
+	v.Action = "clear_goal"
 	b, err := json.Marshal(v)
 	t.union = b
 	return err
 }
 
-// MergeDelegateFollowUpAction performs a merge with any union data inside the DelegateActionRequest, using the provided DelegateFollowUpAction
-func (t *DelegateActionRequest) MergeDelegateFollowUpAction(v DelegateFollowUpAction) error {
-	v.Action = "follow_up"
+// MergeDelegateClearGoalAction performs a merge with any union data inside the DelegateActionRequest, using the provided DelegateClearGoalAction
+func (t *DelegateActionRequest) MergeDelegateClearGoalAction(v DelegateClearGoalAction) error {
+	v.Action = "clear_goal"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsDelegateResumeAction returns the union data inside the DelegateActionRequest as a DelegateResumeAction
+func (t DelegateActionRequest) AsDelegateResumeAction() (DelegateResumeAction, error) {
+	var body DelegateResumeAction
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromDelegateResumeAction overwrites any union data inside the DelegateActionRequest as the provided DelegateResumeAction
+func (t *DelegateActionRequest) FromDelegateResumeAction(v DelegateResumeAction) error {
+	v.Action = "resume"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeDelegateResumeAction performs a merge with any union data inside the DelegateActionRequest, using the provided DelegateResumeAction
+func (t *DelegateActionRequest) MergeDelegateResumeAction(v DelegateResumeAction) error {
+	v.Action = "resume"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsDelegateRedirectAction returns the union data inside the DelegateActionRequest as a DelegateRedirectAction
+func (t DelegateActionRequest) AsDelegateRedirectAction() (DelegateRedirectAction, error) {
+	var body DelegateRedirectAction
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromDelegateRedirectAction overwrites any union data inside the DelegateActionRequest as the provided DelegateRedirectAction
+func (t *DelegateActionRequest) FromDelegateRedirectAction(v DelegateRedirectAction) error {
+	v.Action = "redirect"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeDelegateRedirectAction performs a merge with any union data inside the DelegateActionRequest, using the provided DelegateRedirectAction
+func (t *DelegateActionRequest) MergeDelegateRedirectAction(v DelegateRedirectAction) error {
+	v.Action = "redirect"
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -27320,24 +32132,28 @@ func (t DelegateActionRequest) ValueByDiscriminator() (interface{}, error) {
 		return nil, err
 	}
 	switch discriminator {
-	case "cancel":
-		return t.AsDelegateCancelAction()
-	case "follow_up":
-		return t.AsDelegateFollowUpAction()
+	case "clear_goal":
+		return t.AsDelegateClearGoalAction()
 	case "inbox":
 		return t.AsDelegateInboxAction()
 	case "inbox_ack":
 		return t.AsDelegateInboxAckAction()
 	case "peek":
 		return t.AsDelegatePeekAction()
+	case "redirect":
+		return t.AsDelegateRedirectAction()
 	case "respond":
 		return t.AsDelegateRespondAction()
+	case "resume":
+		return t.AsDelegateResumeAction()
 	case "run":
 		return t.AsDelegateRunAction()
 	case "status":
 		return t.AsDelegateStatusAction()
 	case "steer":
 		return t.AsDelegateSteerAction()
+	case "stop_all":
+		return t.AsDelegateStopAllAction()
 	default:
 		return nil, errors.New("unknown discriminator value: " + discriminator)
 	}
@@ -27740,6 +32556,116 @@ func (t *RecordWriteRequest) UnmarshalJSON(b []byte) error {
 	return err
 }
 
+// AsSecretSubmitRequest0 returns the union data inside the SecretSubmitRequest as a SecretSubmitRequest0
+func (t SecretSubmitRequest) AsSecretSubmitRequest0() (SecretSubmitRequest0, error) {
+	var body SecretSubmitRequest0
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromSecretSubmitRequest0 overwrites any union data inside the SecretSubmitRequest as the provided SecretSubmitRequest0
+func (t *SecretSubmitRequest) FromSecretSubmitRequest0(v SecretSubmitRequest0) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeSecretSubmitRequest0 performs a merge with any union data inside the SecretSubmitRequest, using the provided SecretSubmitRequest0
+func (t *SecretSubmitRequest) MergeSecretSubmitRequest0(v SecretSubmitRequest0) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsSecretSubmitRequest1 returns the union data inside the SecretSubmitRequest as a SecretSubmitRequest1
+func (t SecretSubmitRequest) AsSecretSubmitRequest1() (SecretSubmitRequest1, error) {
+	var body SecretSubmitRequest1
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromSecretSubmitRequest1 overwrites any union data inside the SecretSubmitRequest as the provided SecretSubmitRequest1
+func (t *SecretSubmitRequest) FromSecretSubmitRequest1(v SecretSubmitRequest1) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeSecretSubmitRequest1 performs a merge with any union data inside the SecretSubmitRequest, using the provided SecretSubmitRequest1
+func (t *SecretSubmitRequest) MergeSecretSubmitRequest1(v SecretSubmitRequest1) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t SecretSubmitRequest) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	object := make(map[string]json.RawMessage)
+	if t.union != nil {
+		err = json.Unmarshal(b, &object)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if t.Cancel != nil {
+		object["cancel"], err = json.Marshal(t.Cancel)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'cancel': %w", err)
+		}
+	}
+
+	if t.Values != nil {
+		object["values"], err = json.Marshal(t.Values)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'values': %w", err)
+		}
+	}
+	b, err = json.Marshal(object)
+	return b, err
+}
+
+func (t *SecretSubmitRequest) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	if err != nil {
+		return err
+	}
+	object := make(map[string]json.RawMessage)
+	err = json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["cancel"]; found {
+		err = json.Unmarshal(raw, &t.Cancel)
+		if err != nil {
+			return fmt.Errorf("error reading 'cancel': %w", err)
+		}
+	}
+
+	if raw, found := object["values"]; found {
+		err = json.Unmarshal(raw, &t.Values)
+		if err != nil {
+			return fmt.Errorf("error reading 'values': %w", err)
+		}
+	}
+
+	return err
+}
+
 // AsSessionMessageProgress returns the union data inside the SessionMessage as a SessionMessageProgress
 func (t SessionMessage) AsSessionMessageProgress() (SessionMessageProgress, error) {
 	var body SessionMessageProgress
@@ -27870,34 +32796,6 @@ func (t *SessionMessage) FromSessionMessageQuestion(v SessionMessageQuestion) er
 // MergeSessionMessageQuestion performs a merge with any union data inside the SessionMessage, using the provided SessionMessageQuestion
 func (t *SessionMessage) MergeSessionMessageQuestion(v SessionMessageQuestion) error {
 	v.Kind = "question"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsSessionMessageDecisionRequest returns the union data inside the SessionMessage as a SessionMessageDecisionRequest
-func (t SessionMessage) AsSessionMessageDecisionRequest() (SessionMessageDecisionRequest, error) {
-	var body SessionMessageDecisionRequest
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromSessionMessageDecisionRequest overwrites any union data inside the SessionMessage as the provided SessionMessageDecisionRequest
-func (t *SessionMessage) FromSessionMessageDecisionRequest(v SessionMessageDecisionRequest) error {
-	v.Kind = "decision_request"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeSessionMessageDecisionRequest performs a merge with any union data inside the SessionMessage, using the provided SessionMessageDecisionRequest
-func (t *SessionMessage) MergeSessionMessageDecisionRequest(v SessionMessageDecisionRequest) error {
-	v.Kind = "decision_request"
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -28096,8 +32994,6 @@ func (t SessionMessage) ValueByDiscriminator() (interface{}, error) {
 		return t.AsSessionMessageBlocker()
 	case "checkpoint":
 		return t.AsSessionMessageCheckpoint()
-	case "decision_request":
-		return t.AsSessionMessageDecisionRequest()
 	case "error":
 		return t.AsSessionMessageError()
 	case "goal_status":
@@ -28125,95 +33021,6 @@ func (t SessionMessage) MarshalJSON() ([]byte, error) {
 }
 
 func (t *SessionMessage) UnmarshalJSON(b []byte) error {
-	err := t.union.UnmarshalJSON(b)
-	return err
-}
-
-// AsSignInStartResponseCliLogin returns the union data inside the SignInStartResponse as a SignInStartResponseCliLogin
-func (t SignInStartResponse) AsSignInStartResponseCliLogin() (SignInStartResponseCliLogin, error) {
-	var body SignInStartResponseCliLogin
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromSignInStartResponseCliLogin overwrites any union data inside the SignInStartResponse as the provided SignInStartResponseCliLogin
-func (t *SignInStartResponse) FromSignInStartResponseCliLogin(v SignInStartResponseCliLogin) error {
-	v.Method = "cli_login"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeSignInStartResponseCliLogin performs a merge with any union data inside the SignInStartResponse, using the provided SignInStartResponseCliLogin
-func (t *SignInStartResponse) MergeSignInStartResponseCliLogin(v SignInStartResponseCliLogin) error {
-	v.Method = "cli_login"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsSignInStartResponseDeviceCode returns the union data inside the SignInStartResponse as a SignInStartResponseDeviceCode
-func (t SignInStartResponse) AsSignInStartResponseDeviceCode() (SignInStartResponseDeviceCode, error) {
-	var body SignInStartResponseDeviceCode
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromSignInStartResponseDeviceCode overwrites any union data inside the SignInStartResponse as the provided SignInStartResponseDeviceCode
-func (t *SignInStartResponse) FromSignInStartResponseDeviceCode(v SignInStartResponseDeviceCode) error {
-	v.Method = "device_code"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeSignInStartResponseDeviceCode performs a merge with any union data inside the SignInStartResponse, using the provided SignInStartResponseDeviceCode
-func (t *SignInStartResponse) MergeSignInStartResponseDeviceCode(v SignInStartResponseDeviceCode) error {
-	v.Method = "device_code"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-func (t SignInStartResponse) Discriminator() (string, error) {
-	var discriminator struct {
-		Discriminator string `json:"method"`
-	}
-	err := json.Unmarshal(t.union, &discriminator)
-	return discriminator.Discriminator, err
-}
-
-func (t SignInStartResponse) ValueByDiscriminator() (interface{}, error) {
-	discriminator, err := t.Discriminator()
-	if err != nil {
-		return nil, err
-	}
-	switch discriminator {
-	case "cli_login":
-		return t.AsSignInStartResponseCliLogin()
-	case "device_code":
-		return t.AsSignInStartResponseDeviceCode()
-	default:
-		return nil, errors.New("unknown discriminator value: " + discriminator)
-	}
-}
-
-func (t SignInStartResponse) MarshalJSON() ([]byte, error) {
-	b, err := t.union.MarshalJSON()
-	return b, err
-}
-
-func (t *SignInStartResponse) UnmarshalJSON(b []byte) error {
 	err := t.union.UnmarshalJSON(b)
 	return err
 }
@@ -28283,6 +33090,13 @@ func (t SkillInstallRequest) MarshalJSON() ([]byte, error) {
 		}
 	}
 
+	if t.ReplaceLocalChanges != nil {
+		object["replace_local_changes"], err = json.Marshal(t.ReplaceLocalChanges)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'replace_local_changes': %w", err)
+		}
+	}
+
 	if t.Revision != nil {
 		object["revision"], err = json.Marshal(t.Revision)
 		if err != nil {
@@ -28325,6 +33139,13 @@ func (t *SkillInstallRequest) UnmarshalJSON(b []byte) error {
 		return err
 	}
 
+	if raw, found := object["replace_local_changes"]; found {
+		err = json.Unmarshal(raw, &t.ReplaceLocalChanges)
+		if err != nil {
+			return fmt.Errorf("error reading 'replace_local_changes': %w", err)
+		}
+	}
+
 	if raw, found := object["revision"]; found {
 		err = json.Unmarshal(raw, &t.Revision)
 		if err != nil {
@@ -28353,5 +33174,67 @@ func (t *SkillInstallRequest) UnmarshalJSON(b []byte) error {
 		}
 	}
 
+	return err
+}
+
+// AsSecretRequestState returns the union data inside the SubmitSecretRequest503JSONResponseBody as a SecretRequestState
+func (t SubmitSecretRequest503JSONResponseBody) AsSecretRequestState() (SecretRequestState, error) {
+	var body SecretRequestState
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromSecretRequestState overwrites any union data inside the SubmitSecretRequest503JSONResponseBody as the provided SecretRequestState
+func (t *SubmitSecretRequest503JSONResponseBody) FromSecretRequestState(v SecretRequestState) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeSecretRequestState performs a merge with any union data inside the SubmitSecretRequest503JSONResponseBody, using the provided SecretRequestState
+func (t *SubmitSecretRequest503JSONResponseBody) MergeSecretRequestState(v SecretRequestState) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsErrorResponse returns the union data inside the SubmitSecretRequest503JSONResponseBody as a ErrorResponse
+func (t SubmitSecretRequest503JSONResponseBody) AsErrorResponse() (ErrorResponse, error) {
+	var body ErrorResponse
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromErrorResponse overwrites any union data inside the SubmitSecretRequest503JSONResponseBody as the provided ErrorResponse
+func (t *SubmitSecretRequest503JSONResponseBody) FromErrorResponse(v ErrorResponse) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeErrorResponse performs a merge with any union data inside the SubmitSecretRequest503JSONResponseBody, using the provided ErrorResponse
+func (t *SubmitSecretRequest503JSONResponseBody) MergeErrorResponse(v ErrorResponse) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t SubmitSecretRequest503JSONResponseBody) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *SubmitSecretRequest503JSONResponseBody) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
 	return err
 }

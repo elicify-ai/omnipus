@@ -43,9 +43,10 @@ properties:
       and why.
   max_tool_iterations:
     type: integer
-    minimum: 0
+    minimum: 1
+    maximum: 1000
     description: >
-      Optional turn cap to preview (mirrors AgentConfig.max_tool_iterations).
-      Omitted or zero previews with the external-CLI dispatch default (50) —
-      the same fallback runExternalCLISubTurn applies when an agent has no
-      explicit cap.
+      Optional: the agent's own tool-iteration limit being previewed (mirrors
+      AgentConfig.max_tool_iterations); omit when the agent has none. The
+      server previews the same effective value the runtime uses (issue #904):
+      min(global limit, this value), or the global limit when omitted.

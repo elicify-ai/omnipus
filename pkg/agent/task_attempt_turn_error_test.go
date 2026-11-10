@@ -59,7 +59,7 @@ const cleanWorkerEvidence = "ran ./greeting.sh | wc -l -> 1, exit 0"
 // finish: a goal_claim(met) call, then — once the tool result is back — the
 // turn's closing text.
 func cleanClaimTurn(msgs []providers.Message) *providers.LLMResponse {
-	if n := len(msgs); n > 0 && msgs[n-1].Role == "tool" {
+	if lastConversationMessageForFixture(msgs).Role == "tool" {
 		return &providers.LLMResponse{Content: "greeting.sh now prints exactly one line."}
 	}
 	return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{
@@ -163,6 +163,11 @@ func newTurnErrorTask(t *testing.T, al *AgentLoop, title string, maxAttempts int
 	if err := al.taskStore.Create(tk); err != nil {
 		t.Fatalf("create task: %v", err)
 	}
+	// DEL-18: fresh creation owns the task's paired goal record. Without one the
+	// run starts with NO goal loop, so the try that ended on malformed tool
+	// output can never be judged and the task fails after its attempts instead
+	// of continuing the run — which is the behaviour under test.
+	pairTaskGoalRecordUsingTaskCriteria(t, al, tk.ID)
 	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
 	}

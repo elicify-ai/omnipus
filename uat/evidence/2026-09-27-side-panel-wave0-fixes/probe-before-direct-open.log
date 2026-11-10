@@ -1,0 +1,264 @@
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:29] "GET / HTTP/1.1" 200 -
+
+Running 2 tests using 1 worker
+
+[1/2] [chromium] › tests/design-system/tmp-probe.spec.ts:35:1 › manager route applies phone viewport on direct open
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:32] "GET /index.html?path=/story/side-panel-shell-demo-workspace--phone-takeover HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:32] "GET /sb-addons/storybook-core-server-presets-0/common-manager-bundle.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:32] "GET /sb-addons/a11y-1/manager-bundle.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:32] "GET /sb-manager/runtime.js HTTP/1.1" 200 -
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:32] "GET /sb-addons/vitest-2/manager-bundle.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:32] "GET /sb-manager/globals-runtime.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:34] "GET /iframe.html?id=side-panel-shell-demo-workspace--phone-takeover&viewMode=story HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:34] "GET /index.json HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:34] "GET /sb-common-assets/nunito-sans-regular.woff2 HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:34] "GET /sb-common-assets/nunito-sans-bold.woff2 HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:35] "GET /assets/iframe-B0x9_Tun.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:35] "GET /vite-inject-mocker-entry.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:35] "GET /assets/iframe-Cb75SMLT.css HTTP/1.1" 200 -
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:35] "GET /assets/rolldown-runtime-PE7_xIU0.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:35] "GET /assets/preload-helper-C5IVwt_D.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/jsx-runtime-DjOA8AOY.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/esm-D3nEmPTw.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/api-BJ3kb6AJ.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/react-dom-9khhhBGU.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/panel-shell.stories-P-yMvGIj.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/purify.es-BEdVptV5.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/ui-_7HEjF2V.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/queryClient-D8zFV2Kh.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/knowledgeIndex-tl-ZKMNN.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/utils-DU-9nLZt.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/badge-xY6cD4kc.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/dist-bhmDu0QC.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/use-loading-visibility-DgXgCSsh.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/dist-DtQvirrm.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/index.es-OdV-i0bM.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/button-DND7DnKR.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/icon-button-CVR9D1Nr.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/textarea-BibVga6v.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/dropdown-menu-CRrsXyJ_.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/dist-DBJo0zF2.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/dist-BxYLxZ61.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/dist-DEEHE2vs.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/es2015-B7PoPKHk.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/dist-CRO7TUch.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/dist-nnY6UFKE.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/dist-C4GCRxJG.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/dist-B4aR41Bd.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/dist-BUWRCO2u.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/switch-BxwYkvD-.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/confirm-dialog-CvA7LJAb.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/resize-separator-C1J4LVgx.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/label-LWc7hjFc.js HTTP/1.1" 200 -
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/dist-6WXwCRPc.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/query-error-state-DN7jW86p.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/card-dcdu5-lT.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/dialog-C1JAMI2r.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/input-B49YEte8.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/dist-BjDk3Reh.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/select-BUBKfbO2.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/tabs-7S32yd2g.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/AutoSaveIndicator-CXoN8FxP.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/segmented-control-CZr1aDJp.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/zoomable-view-6V05aoNH.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:36] "GET /assets/panel-shell-T1coqdfa.css HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:37] "GET /assets/react-18-DzVcmqsf.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:37] "GET /assets/popover-BJeKVM6F.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:37] "GET /assets/command-BdKadWWN.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:37] "GET /assets/separator-CIrOt4Jw.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:37] "GET /assets/AutoApproveControl.stories-BKQhlBzK.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:37] "GET /assets/smart-select-BX7tjYsV.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:37] "GET /assets/table-CV8xihPT.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:37] "GET /assets/radio-group-xROzQNRz.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:37] "GET /assets/disclosure-row-DVf3Jo89.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:38] "GET /assets/inter-latin-400-normal-C38fXH4l.woff2 HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:38] "GET /assets/inter-latin-600-normal-LgqL8muc.woff2 HTTP/1.1" 200 -
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:38] "GET /assets/inter-latin-500-normal-Cerq10X2.woff2 HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:38] "GET /assets/axe-Y1P4vi3q.js HTTP/1.1" 200 -
+[chromium] › tests/design-system/tmp-probe.spec.ts:35:1 › manager route applies phone viewport on direct open
+MANAGER STATE: {"chatVisible":true,"panelWidth":null,"rowWidth":1100}
+
+[2/2] [chromium] › tests/design-system/tmp-probe.spec.ts:45:1 › standalone iframe does not apply viewport globals (documented)
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:40] "GET /iframe.html?id=side-panel-shell-demo-workspace--phone-takeover&viewMode=story HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:40] "GET /assets/iframe-Cb75SMLT.css HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:40] "GET /assets/iframe-B0x9_Tun.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:40] "GET /assets/preload-helper-C5IVwt_D.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:40] "GET /vite-inject-mocker-entry.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:40] "GET /assets/rolldown-runtime-PE7_xIU0.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:40] "GET /index.json HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:40] "GET /assets/panel-shell.stories-P-yMvGIj.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:40] "GET /assets/react-dom-9khhhBGU.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:40] "GET /assets/jsx-runtime-DjOA8AOY.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:40] "GET /assets/purify.es-BEdVptV5.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:40] "GET /assets/api-BJ3kb6AJ.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:40] "GET /assets/esm-D3nEmPTw.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/ui-_7HEjF2V.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/queryClient-D8zFV2Kh.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/knowledgeIndex-tl-ZKMNN.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/utils-DU-9nLZt.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/badge-xY6cD4kc.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/dist-bhmDu0QC.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/index.es-OdV-i0bM.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/button-DND7DnKR.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/dist-DtQvirrm.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/use-loading-visibility-DgXgCSsh.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/icon-button-CVR9D1Nr.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/textarea-BibVga6v.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/dist-BxYLxZ61.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/dropdown-menu-CRrsXyJ_.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/panel-shell-T1coqdfa.css HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/dist-DBJo0zF2.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/dist-CRO7TUch.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/es2015-B7PoPKHk.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/dist-C4GCRxJG.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/dist-DEEHE2vs.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/dist-nnY6UFKE.js HTTP/1.1" 200 -
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/dist-B4aR41Bd.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/dist-BUWRCO2u.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/resize-separator-C1J4LVgx.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/switch-BxwYkvD-.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/label-LWc7hjFc.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/confirm-dialog-CvA7LJAb.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/query-error-state-DN7jW86p.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/dist-6WXwCRPc.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/card-dcdu5-lT.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/dialog-C1JAMI2r.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/input-B49YEte8.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/select-BUBKfbO2.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/dist-BjDk3Reh.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/tabs-7S32yd2g.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/segmented-control-CZr1aDJp.js HTTP/1.1" 200 -
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/AutoSaveIndicator-CXoN8FxP.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/zoomable-view-6V05aoNH.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/react-18-DzVcmqsf.js HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/inter-latin-400-normal-C38fXH4l.woff2 HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/inter-latin-600-normal-LgqL8muc.woff2 HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/inter-latin-500-normal-Cerq10X2.woff2 HTTP/1.1" 200 -
+
+[WebServer] ::ffff:127.0.0.1 - - [27/Sep/2026 01:05:41] "GET /assets/axe-Y1P4vi3q.js HTTP/1.1" 200 -
+[chromium] › tests/design-system/tmp-probe.spec.ts:45:1 › standalone iframe does not apply viewport globals (documented)
+IFRAME STATE: {"chatVisible":true,"panelWidth":null,"rowWidth":1400}
+
+  2 passed (30.6s)

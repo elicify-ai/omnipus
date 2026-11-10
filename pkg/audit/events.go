@@ -55,6 +55,13 @@ const (
 	// FR-047, FR-054, FR-074, FR-065 (combined event for batch short-circuit).
 	EventToolPolicyAskDenied = "tool.policy.ask.denied"
 
+	// EventChannelOutboundWrite — INFO. The outcome of one approved
+	// set_channel_outbound call at the shared writer (channels security S3):
+	// saved (with the resulting FR-088 revision) or refused/failed after
+	// approval (with the writer's reason). Correlated with its consent records
+	// by approval_id, tool_call_id and session_id; never carries target values.
+	EventChannelOutboundWrite = "channel.outbound.write"
+
 	// EventToolCollisionMCPRejected — WARN. Central registry refused an MCP
 	// registration because of a name collision with a builtin or a
 	// previously-registered MCP server. FR-034, FR-060.
@@ -137,7 +144,7 @@ const (
 	EventTurnCancelled = "turn.cancelled"
 
 	// EventTurnCancelStuck — WARN. The turn goroutine did not exit within
-	// 5 seconds after the hard-abort signal was sent. The turn has been
+	// 3 seconds after the hard-abort signal was sent. The turn has been
 	// detached (abandoned=true) and the gateway will stop waiting for it
 	// (FR-19, FR-20, FR-21).
 	EventTurnCancelStuck = "turn.cancel.stuck"
@@ -160,6 +167,12 @@ const (
 	// sent >= 10 cancel requests within 60 seconds, suggesting runaway client
 	// logic or intentional abuse (FR-25a).
 	EventCancelAbusePattern = "cancel.abuse_pattern"
+
+	// EventExternalCLIRun — INFO. One external-CLI spawn (r17 §3.10): agent,
+	// CLI, entered and resolved program, agent flags the filter dropped,
+	// the person's preset as typed, and whether a preset token bypassed the
+	// filter.
+	EventExternalCLIRun = "external_cli.run"
 
 	// EventBrowserInstanceCreated — INFO. A workspace's browser instance came
 	// into existence: the first turn to resolve a browser for a given
@@ -368,6 +381,20 @@ const (
 	// {instance_id, workspace_id, intended_agent_id, chat_id, reason}.
 	EventChannelRoutingDriftDrop = "channel.routing.drift_drop"
 
+	// EventChannelMessageDropped — WARN. An inbound channel message was
+	// dropped because it could not be routed: the instance is not bound to a
+	// workspace and a main agent, or its main agent is missing, not a chat
+	// target, or not on the workspace's team (omnipus-system-agent FR-121).
+	// No agent sees the message. Fields: {instance_id, channel, chat_id,
+	// reason}.
+	EventChannelMessageDropped = "channel.message.dropped"
+
+	// EventSystemMessageDiscarded — WARN. A system message carried no
+	// addressable originating agent and was discarded rather than handed to
+	// any agent (omnipus-system-agent FR-131). Fields: {channel, chat_id,
+	// reason}.
+	EventSystemMessageDiscarded = "system.message.discarded"
+
 	// EventChannelRoutingChanged — INFO. An operator updated the workspace
 	// binding or routing configuration of a channel instance via the REST API
 	// (ADR-029 FR-029). Emitted by pkg/gateway/rest.go's channel routing PUT
@@ -385,6 +412,44 @@ const (
 	// credential blob could not be removed and is now orphaned in the store — the
 	// operator asked to delete the credential but it remains encrypted at rest.
 	EventChannelInstanceDeleted = "channel.instance.deleted"
+
+	// Mail panel mutation events (email-mail-view-spec 2.3, MC-19/D46): every
+	// human-initiated mutation from the Mail panel carries an audit entry.
+	// Fields emitted by the gateway handlers: {workspace_id, agent_id,
+	// message_id, recipients_count, attachment_count}; draft events add
+	// {ref_folder: "drafts", uid, uidvalidity}. Per the founder's D46 ruling,
+	// the events also carry the FULL field set: recipients (the complete
+	// address list, incl. Bcc), origin (human | agent-draft | owner-draft),
+	// arg_hash (FR-080 ArgsHash), folder, and — for attachment-bearing
+	// sends — per-attachment {filename, size_bytes} records. An earlier
+	// count-only comment claimed addresses are PII the auditor redacts; that
+	// claim was never true (the audit log is operator-readable, plaintext)
+	// and is superseded by D46.
+	EventMailPanelSend = "mail.panel.send"
+
+	// EventMailPanelDraftUpdated — INFO. The panel edited a draft (D12/D23):
+	// APPEND with the same Message-ID, old copy \Deleted-flagged. Fields:
+	// {workspace_id, agent_id, message_id, uid, uidvalidity}.
+	EventMailPanelDraftUpdated = "mail.panel.draft_updated"
+
+	// EventMailPanelDraftSent — INFO. The panel send IS the approval (D12):
+	// the draft's content transmitted, Sent APPEND, draft cleanup. Fields:
+	// {workspace_id, agent_id, message_id, sent_saved, draft_cleanup_warning}.
+	EventMailPanelDraftSent = "mail.panel.draft_sent"
+
+	// EventMailPanelDraftDiscarded — INFO. The panel discarded a draft
+	// (FR-032/MC-17): \Deleted + UID EXPUNGE when UIDPLUS, else deferred.
+	// Fields: {workspace_id, agent_id, uid, uidvalidity, expunged}.
+	EventMailPanelDraftDiscarded = "mail.panel.draft_discarded"
+
+	// EventMailAttachmentSaved — INFO. One attachment was explicitly saved
+	// into the workspace Library (ADR-20261001 F2; w4 spec US-2.AC-4) — the
+	// user-directed export shared by the panel's Save and the agent's
+	// download_email_attachment. Fields: actor, workspace_id, agent_id
+	// (pair), folder, message_ref, part_index, original_name, final_name,
+	// final path, size_bytes. NO attachment bytes, subject, password or
+	// token — the save_operation_token never enters the audit log.
+	EventMailAttachmentSaved = "mail.attachment_saved"
 
 	// EventBrowserWebRTCStreamStarted — INFO. A per-agent WebRTC capture
 	// session's encoder page was successfully started (the FIRST
@@ -488,6 +553,24 @@ const (
 	// filenames, bytes_freed, count}. Same shape convention as
 	// EventMediaDelete / workspace.delete.
 	EventMediaCascadeDelete = "media.cascade_delete"
+
+	// EventRoomChanged — INFO. A group chat (room) was created, its
+	// membership or mutes changed, its team room followed a workspace team
+	// change, or it was deleted (omnipus-system-agent FR-172). Emitted by
+	// pkg/gateway/rooms_runtime.go for pkg/rooms. User = the authenticated web
+	// user (empty for a change driven by a workspace edit). Fields:
+	// {room_id, workspace_id, action, agent_ids}.
+	EventRoomChanged = "room.changed"
+
+	// EventTaskTriggerFireNotStarted — WARN. A scheduled task fire that was
+	// held at gateway start-up until the agents were ready could not start
+	// when it was released (6b U2b). Emitted by
+	// pkg/agent/task_trigger_boot_hold.go. Fields: {task_id, job_id, reason,
+	// error}. reason is one of task_deleted (the task is gone; the fire is
+	// dropped), task_unreadable or dispatch_failed (the fire is kept and runs
+	// at the next start), or agent_missing (the task's agent is gone; a failed
+	// run is recorded on the task).
+	EventTaskTriggerFireNotStarted = "task.trigger.fire_not_started"
 )
 
 // ---------------------------------------------------------------------------
@@ -559,6 +642,20 @@ const (
 	// tool.policy.deny.attempted entry (via emitPolicyDenyAudit's extra Details
 	// map) and on the structured INFO log line in emitScheduledAutoDenyAudit.
 	AskDenyReasonScheduled AskDenyReason = "scheduled"
+
+	// AskDenyReasonTaskRun — the call ran in a task or plan session chain
+	// (#1263 R4): task and plan runs, whatever started them, never ask a
+	// person, so an Ask-policy call that Auto, an operator rule or a standing
+	// grant did not settle is refused at once. Distinct from
+	// AskDenyReasonScheduled so a task refusal never reads as a cron job with
+	// missing identity.
+	AskDenyReasonTaskRun AskDenyReason = "task_run"
+
+	// AskDenyReasonMissingTurnID — the request carried no turn id, so no
+	// client could ever render its card (D-03); the registry refuses it
+	// before admission. Its request record is written too, so the refusal
+	// is the terminal decision paired with it (channels security S3).
+	AskDenyReasonMissingTurnID AskDenyReason = "missing_turn_id"
 )
 
 // IsValidAskDenyReason reports whether `r` is one of the known enum values
@@ -571,7 +668,9 @@ func IsValidAskDenyReason(r AskDenyReason) bool {
 		AskDenyReasonRestart,
 		AskDenyReasonSaturated,
 		AskDenyReasonBatchShortCircuit,
-		AskDenyReasonScheduled:
+		AskDenyReasonScheduled,
+		AskDenyReasonTaskRun,
+		AskDenyReasonMissingTurnID:
 		return true
 	}
 	return false
@@ -749,6 +848,19 @@ func EmitToolPolicyAskRequested(
 	approvalID, toolCallID, toolName, agentID, sessionID, turnID string,
 	args map[string]any,
 ) {
+	EmitToolPolicyAskRequestedWithPreview(ctx, logger, approvalID, toolCallID, toolName, agentID, sessionID, turnID, args, args)
+}
+
+// EmitToolPolicyAskRequestedWithPreview is EmitToolPolicyAskRequested with a
+// separate preview source: args_hash still covers the full `args` the card
+// showed, while args_preview is ArgsPreview(previewArgs) — a tool-specific
+// projection that keeps private values out of the audit log (Q2-B A2.1).
+func EmitToolPolicyAskRequestedWithPreview(
+	ctx context.Context,
+	logger *Logger,
+	approvalID, toolCallID, toolName, agentID, sessionID, turnID string,
+	args, previewArgs map[string]any,
+) {
 	hash, hashErr := ArgsHash(args)
 	if hashErr != nil {
 		// A hashing failure means args_hash below will be empty — log it so
@@ -764,7 +876,7 @@ func EmitToolPolicyAskRequested(
 		"session_id":   sessionID,
 		"turn_id":      turnID,
 		"args_hash":    hash,
-		"args_preview": ArgsPreview(args),
+		"args_preview": ArgsPreview(previewArgs),
 	}
 	Emit(ctx, logger, EventToolPolicyAskRequested, SeverityInfo, fields)
 }

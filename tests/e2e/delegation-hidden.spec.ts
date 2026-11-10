@@ -53,6 +53,16 @@
  * need no panel (zero subagent-collapsed, exactly one delegate chip);
  * closeActivityPanel is gone with its only call site.
  *
+ * UPDATE (2026-09-28, delegation-hidden-224 lane, CI run 36373062469 job
+ * 108773503946): the child's task asked for a bash `echo` — but the parent
+ * prompt names no target agent, so the child ran as Jim, whose explicit
+ * ADR-090 bash Deny made it refuse; the parent then woke on the hand-back,
+ * re-delegated the command to General Purpose and polled twice more — 5
+ * delegate calls where the tail pins exactly one (badge count 1 vs 5). The
+ * child's task now needs no tool at all ("reply with the single word done,
+ * use no tool"), which is agent-independent. Assertions, timeouts and the
+ * count(1) pin are unchanged.
+ *
  * UPDATE (2026-07-17): the two root causes the history block below
  * documents are now BOTH fixed.
  *   (1) `src/routes/_app/sessions.$sessionId.tsx`'s loader no longer
@@ -156,8 +166,10 @@
 
 import { expect, type Page } from '@playwright/test';
 import { test } from './fixtures/console-errors';
-import { chatInput, assistantMessages, selectAgent } from './fixtures/selectors';
+import { chatInput, assistantMessages } from './fixtures/selectors';
+import { freshChat, type FreshChat } from './fixtures/session-setup';
 import { completedDelegation, type DelegationFrame } from './fixtures/delegation-completion';
+import { requireLiveModelKeys } from './fixtures/e2e-model-keys';
 
 // Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).
 // Deliberately does NOT call enableVerboseChat — this spec asserts the
@@ -197,28 +209,33 @@ test.beforeEach(async ({ page }) => {
   await page.goto('/');
 });
 
-// Helper: assert OPENROUTER_API_KEY_CI is present (mirrors subagent.spec.ts's
+// Helper: assert the live-model keys are present (mirrors subagent.spec.ts's
 // requireApiKey — this test drives a real LLM delegate call).
 function requireApiKey(): void {
-  if (!process.env.OPENROUTER_API_KEY_CI) {
-    throw new Error(
-      'BLOCKED: OPENROUTER_API_KEY_CI not set. ' +
-      'This test requires a real LLM. ' +
-      'The key must be present in CI — see tests/e2e/README.md prerequisites.',
-    );
-  }
+  requireLiveModelKeys('delegation-hidden.spec.ts')
 }
 
 // Helper: start a fresh chat session and route to Jim (delegate-capable —
 // mirrors subagent.spec.ts's startFreshChat; Mia's guide persona refuses to
 // delegate, see that file's own comment).
-async function startFreshChat(page: import('@playwright/test').Page): Promise<void> {
-  const newChat = page.getByRole('banner').getByRole('button', { name: 'New Chat' });
-  if (await newChat.isVisible({ timeout: 5_000 })) {
-    await newChat.click();
-    await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 });
-  }
-  await selectAgent(page, process.env.E2E_DELEGATION_AGENT_NAME || /Jim/i);
+async function startFreshChat(page: import('@playwright/test').Page): Promise<FreshChat> {
+  // The banner "New Chat" button this guarded click targeted is REMOVED
+  // (founder decision D7 — no New-chat UI entry anywhere), so the
+  // isVisible guard had stopped firing and this helper had silently lost
+  // its empty-thread guarantee. freshChat (public REST create + the SPA's
+  // own deep-link route) restores it unconditionally.
+  //
+  // 2026-10-18 (release run 39029558027): create the empty chat FOR the
+  // delegating agent, exactly as subagent.spec.ts's startFreshChat does. The
+  // old shape — freshChat for the selected agent, THEN selectAgent(Jim) —
+  // checked the empty thread on the fresh session and then clicked Jim's row,
+  // which navigates to Jim's MAIN chat (selectors.ts::selectAgent), so the test
+  // ran in a long-lived thread shared with every earlier attempt: retry #1
+  // counted 4 delegate badges (attempt 0's two plus its own two). The
+  // empty-transcript assertion now runs on the session the test sends into.
+  const chat = await freshChat(page, process.env.E2E_DELEGATION_AGENT_NAME || /Jim/i);
+  await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 });
+  return chat;
 }
 
 test(
@@ -228,13 +245,13 @@ test(
   'default policy: a completed live delegation never shows a subagent-collapsed card (deleted by ADR-091); the Activity panel row + open control are verified while the panel is held open from in-flight through completion, and the delegate line + zero-card rule persist across the verbose-chat toggle (no reload)',
   async ({ page }) => {
     requireApiKey();
-    // 300s budget: one live delegate round-trip (parent delegate + subagent's
-    // bash echo) plus the Settings toggle + reopen. Matches the sibling
+    // 300s budget: one live delegate round-trip (parent delegate + a no-tool
+    // child reply) plus the Settings toggle + reopen. Matches the sibling
     // specs' documented 150-300s range for a single delegate call under
     // suite load (see handoff.spec.ts's (b) comment for the same figure).
     test.setTimeout(300_000);
 
-    await startFreshChat(page);
+    const chat = await startFreshChat(page);
 
     const label = `delegation-hidden-${Date.now()}`;
     const frames = framesByPage.get(page)!;
@@ -252,11 +269,30 @@ test(
 
     // When: a real delegation completes. Deterministic prompt mirrors
     // handoff.spec.ts's (b) — explicit tool name, exact arguments, no prose.
+    // The child's task deliberately needs NO tool (changed 2026-09-28, CI run
+    // 36373062469 job 108773503946): the prompt names no target agent, so the
+    // child ran as Jim, whose explicit ADR-090 bash Deny made the old echo
+    // task refuse — the parent then woke on the hand-back, re-delegated the
+    // command to General Purpose and polled twice more, emitting 5 delegate
+    // calls where this test pins exactly one. A no-tool task is
+    // agent-independent: any child can reply "done" unaided.
+    //
+    // agent_id is named explicitly (2026-10-18, release run 39029558027):
+    // since 7ed881cbf (2026-10-09) delegate REQUIRES an explicit target
+    // (pkg/tools/delegate_run.go::validateRequest — "agent_id is required and
+    // must be a non-empty string"); there is no implicit caller substitution
+    // any more. The old argument list named no target, so the model's first
+    // call was refused, it retried with an agent_id of its own choosing, and
+    // the thread carried two delegate calls where this test pins exactly
+    // one. The delegating agent's OWN id keeps the child the same agent the
+    // old untargeted call ran (the seeded self-edge,
+    // pkg/coreagent/seed.go), so the child's no-tool task is unchanged.
     await input.fill(
       [
         'Call the `delegate` tool exactly once, right now, with these arguments:',
+        `  agent_id: "${chat.agentId}"`,
         `  label: "${label}"`,
-        '  task: "You are the subagent. Call the `bash` tool ONCE with action=\\"run\\" and command=\\"echo hello\\". Then reply with the single word \\"done\\". Do not use any other tool."',
+        '  task: "You are the subagent. Reply with the single word \\"done\\". Do not use any tool."',
         'Do not reply in prose. Do not call any other tool. Call delegate now.',
       ].join('\n'),
     );
@@ -267,12 +303,18 @@ test(
     // parent emits the call) — while the span is still open. It is the
     // earliest reliably-mountable moment for the Activity bar: subagent_start
     // puts an agent item in `running`, satisfying ActivityBar.tsx's
-    // shouldMount (= hasOpenAgentChildren || panelOpen || hasFailedRecent,
-    // ActivityBar.tsx:94). This test's child ("echo hello" then "reply
-    // done") can complete in well under 30s under a fast model — CI run
-    // 36026415761: attempt 1 lost the old post-settings panel-open race at
-    // 28.9s, retry #1 won it at 27.2s; that coin flip is what this
-    // reordering removes.
+    // mount gate (showAgents = agentOpen || failedAgents ||
+    // panelOpen-retention — `if (!showAgents && !showCommands) return null`,
+    // ActivityBar.tsx::ActivityBar). The no-tool child completes fast (one LLM turn, no
+    // tool round-trip — faster than the old "echo hello" child), but the
+    // panel open does not race the child's duration: it fires from this
+    // anchor within a render of the span's birth, and panelOpen (React state
+    // on the unchanged ChatScreen mount) holds the bar up through completion
+    // regardless of when subagent_end lands. The historical race this
+    // reordering removed was against the OLD post-settings panel open (CI run
+    // 36026415761: attempt 1 lost at 28.9s, retry #1 won it at 27.2s) — a
+    // race a faster child would only make worse, which is why the anchor, not
+    // the child's runtime, is what the open rests on.
     //
     // UPDATE 2026-09-27: fe1e2406a (delegation-chat-surface spec D2) hid the
     // delegate tool-call badge from the default non-verbose thread, so the
@@ -353,11 +395,14 @@ test(
     await expect(verboseSwitch).toHaveAttribute('aria-checked', 'true');
 
     // And when: navigating back to the SAME chat (browser back — restores
-    // the workspace-scoped chat URL Jim's session lives at, no session id in
-    // the URL per cancel-cross-channel.spec.ts's own comment on this IA — no
-    // re-fetch, no re-open, no replay).
+    // the chat route this test's session was opened at by freshChat's deep
+    // link; no re-open by the test).
     await page.goBack();
     await expect(input).toBeVisible({ timeout: 15_000 });
+    // The counts below are about THIS test's session, so pin that the back
+    // navigation landed on it (the same binding attribute freshChat's deep
+    // link waits on — fixtures/session-setup.ts::openSessionByDeepLink).
+    await expect(page.locator(`[data-active-session-id="${chat.sessionId}"]`)).toBeVisible({ timeout: 15_000 });
 
     // Then: the deleted subagent-collapsed card does NOT come back under
     // verbose chat either (CONFIRMED CI FAILURE, GitHub run 35997069836 —

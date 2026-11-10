@@ -1,0 +1,60 @@
+title: AgentModelChainEntry
+description: >
+  One entry of an agent's EFFECTIVE model chain as reported by get_agent
+  (AgentDetail.model_chain): the primary first, then each fallback in order.
+  Derived through the real resolver (ResolveModelPairCfg and the agent's
+  fallback selection), never guessed: a value that is not known is null.
+type: object
+additionalProperties: false
+required: [position, model, provider, provider_configured, model_offered, accepts_images, effort_options]
+properties:
+  position:
+    type: string
+    pattern: '^(primary|fallback_[1-9][0-9]*)$'
+    description: '"primary", or "fallback_<n>" counting from 1 in chain order.'
+    example: "fallback_1"
+  model:
+    type: string
+    description: The model slug this entry routes to (the resolved default when the agent inherits its primary).
+    example: "deepseek/deepseek-v4.1-flash"
+  provider:
+    type: string
+    nullable: true
+    description: The resolved provider key; null when it cannot be resolved.
+    example: "openrouter"
+  provider_configured:
+    type: boolean
+    description: True when the provider is configured on this install.
+    example: true
+  model_offered:
+    type: boolean
+    nullable: true
+    description: True when the provider offers the model; null when not known.
+    example: true
+  accepts_images:
+    type: boolean
+    nullable: true
+    description: The resolved model's image-input capability; null when not known.
+    example: false
+  effort_options:
+    type: array
+    nullable: true
+    items:
+      type: string
+    description: >
+      The effort values update_agent accepts for this entry's pair, in order
+      (effort-levels spec FR-065, D8): "provider_default", then the levels as
+      the catalog publishes them, then "off" and "on" for a switch-only model
+      ("off" only when the model also has levels without "none"). A primary
+      that rides the default model lists "" (Not set) first.
+      ["provider_default"] when the model reasons but nothing can be sent;
+      null when the catalog has no row for the pair, the model does not
+      reason, or the agent is an external-CLI worker.
+    example: ["provider_default", "low", "high"]
+  warning:
+    type: string
+    description: >
+      Present when this entry cannot be used as configured, e.g. "fallback 2
+      has no configured provider — will never be used", "primary model "x" is
+      not offered by provider "y"", or for a legacy model-only fallback "not
+      paired with a provider — reported, never routed". Absent otherwise.

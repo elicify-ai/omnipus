@@ -13,7 +13,8 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, within, fireEvent } from '@testing-library/react'
+import { showTaskInfo } from './tasksLayoutFixtures'
 import { TaskCard } from './TaskCard'
 import type { Task } from '@/lib/api'
 
@@ -42,11 +43,13 @@ describe('TaskCard — tag chips (replaces the milestone chip)', () => {
 
   it('renders a chip per tag', () => {
     render(<TaskCard task={makeTask({ tags: ['release', 'urgent'] })} onClick={() => {}} showActions={false} />)
+    expect(screen.queryByText('release')).not.toBeInTheDocument() // T26: no card tags.
+    showTaskInfo('Sample task')
     expect(screen.getByText('release')).toBeInTheDocument()
     expect(screen.getByText('urgent')).toBeInTheDocument()
   })
 
-  it('caps visible chips at 3 with a "+N" overflow indicator', () => {
+  it('T26 keeps all tags available in details instead of a capped card row', () => {
     render(
       <TaskCard
         task={makeTask({ tags: ['a', 'b', 'c', 'd', 'e'] })}
@@ -54,24 +57,27 @@ describe('TaskCard — tag chips (replaces the milestone chip)', () => {
         showActions={false}
       />,
     )
-    expect(screen.getByText('a')).toBeInTheDocument()
-    expect(screen.getByText('b')).toBeInTheDocument()
-    expect(screen.getByText('c')).toBeInTheDocument()
-    expect(screen.queryByText('d')).toBeNull()
-    expect(screen.queryByText('e')).toBeNull()
-    expect(screen.getByText('+2')).toBeInTheDocument()
+    for (const tag of ['a', 'b', 'c', 'd', 'e']) expect(screen.queryByText(tag)).not.toBeInTheDocument()
+    const details = showTaskInfo('Sample task')
+    for (const tag of ['a', 'b', 'c', 'd', 'e']) expect(within(details).getByText(tag)).toBeInTheDocument()
+    expect(screen.queryByText('+2')).not.toBeInTheDocument()
   })
 
   it('renders a migrated milestone:<name> tag as an ordinary chip, verbatim', () => {
     render(<TaskCard task={makeTask({ tags: ['milestone:q3'] })} onClick={() => {}} showActions={false} />)
+    showTaskInfo('Sample task')
     expect(screen.getByText('milestone:q3')).toBeInTheDocument()
     // No dedicated "Milestone" label/dropdown/select anywhere on the card.
     expect(screen.queryByText(/^milestone$/i)).toBeNull()
   })
 
-  it('a chip carries the full tag as its title (tooltip) for truncation', () => {
+  it('T15 exposes the full long tag from info hover, without a whole-card hover tooltip', async () => {
     const longTag = 'a'.repeat(64)
     render(<TaskCard task={makeTask({ tags: [longTag] })} onClick={() => {}} showActions={false} />)
-    expect(screen.getByTitle(longTag)).toBeInTheDocument()
+    expect(screen.queryByTitle(longTag)).not.toBeInTheDocument()
+    expect(screen.queryByText(longTag)).not.toBeInTheDocument()
+    fireEvent.pointerEnter(screen.getByRole('button', { name: 'Task details: Sample task' }), { pointerType: 'mouse' })
+    const details = await screen.findByRole('dialog', { name: 'Task details' })
+    expect(within(details).getByText(longTag)).toBeVisible()
   })
 })

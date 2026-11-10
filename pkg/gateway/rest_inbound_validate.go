@@ -94,6 +94,25 @@ func (inboundSchemaLoader) Load(rawURL string) (any, error) {
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("inboundSchemaLoader: unmarshal %s: %w", path, err)
 	}
+	normalizeOpenAPINullability(doc)
+
+	// ContextSettings and ContextSettingsUpdate use the OpenAPI-3.0.3-dialect
+	// boolean exclusiveMinimum/exclusiveMaximum form (paired with
+	// minimum/maximum) for tool_result_share_fraction — `redocly lint`
+	// requires this exact form and rejects both a numeric exclusiveMinimum
+	// and a $schema key on the component schema file itself, so neither can
+	// be fixed in the YAML. Tag just these two files as draft-04 here, in
+	// memory, after loading — never in the committed schema files. Every
+	// other embedded schema keeps the compiler's own default (2020-12, set
+	// in initInboundValidator), where `const` and the rest of the modern
+	// vocabulary work. See ADR-013 §7.
+	switch strings.TrimSuffix(path, ".yaml") {
+	case "ContextSettings", "ContextSettingsUpdate":
+		if m, ok := doc.(map[string]any); ok {
+			m["$schema"] = "http://json-schema.org/draft-04/schema"
+		}
+	}
+
 	return doc, nil
 }
 
@@ -102,6 +121,14 @@ func (inboundSchemaLoader) Load(rawURL string) (any, error) {
 func initInboundValidator() *jsonschema.Compiler {
 	inboundValidatorState.once.Do(func() {
 		c := jsonschema.NewCompiler()
+		// These embedded schemas are the OpenAPI 3.0.3 component schemas
+		// (contracts/components/schemas/, synced by scripts/gen-contracts.sh
+		// step 5), which `redocly lint` enforces as OpenAPI 3.0.3 dialect.
+		// Pin the default draft explicitly (2020-12) rather than relying on
+		// the library's own default, so every schema here gets `const` and
+		// the rest of the modern vocabulary — see ADR-013 §7 for the full
+		// history and why a single global draft can't satisfy every file.
+		c.DefaultDraft(jsonschema.Draft2020)
 		c.UseLoader(jsonschema.SchemeURLLoader{
 			"file": inboundSchemaLoader{},
 		})
@@ -213,25 +240,58 @@ func decodeAndValidate(w http.ResponseWriter, r *http.Request, schemaName string
 		return false
 	}
 
-	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-		jsonErr(w, http.StatusBadRequest, "request body is required")
-		return false
-	}
+	return decodeAndValidateBytes(w, raw, schemaName, dst, true, "")
+}
 
-	if errMsg, serverErr := validateBodyAgainstSchema(schemaName, raw); errMsg != "" {
-		if serverErr {
-			jsonErr(w, http.StatusInternalServerError, "inbound schema unavailable")
-		} else {
-			jsonErr(
-				w,
-				http.StatusBadRequest,
-				fmt.Sprintf("request body does not match schema %s: %s", schemaName, errMsg),
-			)
+// decodeAndValidateBytes decodes bytes whose incoming wire size was already
+// bounded by the caller. Do not re-limit a normalized representation: JSON
+// escaping can expand it beyond the original request's byte count. fieldContext
+// is controlled validation copy, never request contents or a parser error.
+func decodeAndValidateBytes(w http.ResponseWriter, raw []byte, schemaName string, dst any, validateEnabled bool, fieldContext string) bool {
+	if validateEnabled {
+		if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			jsonErr(w, http.StatusBadRequest, "request body is required")
+			return false
 		}
-		return false
+
+		if errMsg, serverErr := validateBodyAgainstSchema(schemaName, raw); errMsg != "" {
+			if serverErr {
+				jsonErr(w, http.StatusInternalServerError, "inbound schema unavailable")
+			} else {
+				message := fmt.Sprintf("request body does not match schema %s: %s", schemaName, errMsg)
+				if fieldContext != "" {
+					message = fieldContext + ": " + message
+				}
+				jsonErr(w, http.StatusBadRequest, message)
+			}
+			return false
+		}
 	}
 
 	if err := json.Unmarshal(raw, dst); err != nil {
+		message := "invalid JSON body"
+		if fieldContext != "" {
+			message = fieldContext
+		}
+		jsonErr(w, http.StatusBadRequest, message)
+		return false
+	}
+	return true
+}
+
+// decodeAndValidateStrict is decodeAndValidate for endpoints whose contract
+// forbids unknown fields in BOTH validation modes: with inbound validation
+// off it still refuses an unknown member (400 "invalid JSON body") instead of
+// silently dropping it, so a required-field rule cannot be bypassed by a
+// misspelt key. With validation on, the schema's additionalProperties:false
+// already refuses it.
+func decodeAndValidateStrict(w http.ResponseWriter, r *http.Request, schemaName string, dst any, validateEnabled bool) bool {
+	if validateEnabled {
+		return decodeAndValidate(w, r, schemaName, dst, true)
+	}
+	dec := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
 		return false
 	}

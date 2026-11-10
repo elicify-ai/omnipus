@@ -38,11 +38,15 @@ func (r *Root) Delete(rel string) error {
 		if err := rt.RemoveAll(sub); err != nil {
 			return fmt.Errorf("library: remove directory: %w", err)
 		}
+		// §5.4 provenance: a removed directory takes its files' markers with
+		// it (prefix-aware, so every entry beneath rel drops too).
+		markerDrop(r.marker, rel)
 		return nil
 	}
 	if err := rt.Remove(sub); err != nil {
 		return fmt.Errorf("library: remove file: %w", err)
 	}
+	markerDrop(r.marker, rel)
 	return nil
 }
 
@@ -124,6 +128,11 @@ func (r *Root) Rename(fromRel, toRel string) (os.FileInfo, error) {
 	if err := rtTo.Rename(subFrom, subTo); err != nil {
 		return nil, fmt.Errorf("library: rename: %w", err)
 	}
+	// §5.4 provenance: the marker follows the file (or every file beneath the
+	// renamed directory) to its new path — before the stat, so a caller that
+	// acts on the returned entry never sees a rename whose marker is still
+	// pending.
+	markerMove(r.marker, fromRel, toRel)
 	fi, err := rtTo.Stat(subTo)
 	if err != nil {
 		return nil, fmt.Errorf("library: stat renamed entry: %w", err)
@@ -247,6 +256,11 @@ func CopyInto(fromRoot, toRoot *Root, fromRel, toRel string) (os.FileInfo, error
 			return nil, copyErr
 		}
 	}
+	// §5.4 provenance: the copy is equally mail-derived, and its marker is
+	// its own (allowance starts un-answered, per the per-file rule). The
+	// source entries are read from the source root's store, so a copy across
+	// two workspaces composes through the same seam as a same-workspace copy.
+	markerCopy(fromRoot.marker, toRoot.marker, fromRel, toRel)
 	fi, err := dstRt.Stat(dstSub)
 	if err != nil {
 		return nil, fmt.Errorf("library: stat copy destination: %w", err)

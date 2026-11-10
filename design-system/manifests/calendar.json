@@ -71,6 +71,7 @@
       "file": "tests/design-system/browser.spec.ts",
       "test": "Calendar [check:calendar-browser] browser",
       "story": "Default",
+      "requiredTargets": [{ "selector": "[role=\"grid\"]", "attribute": "aria-label" }],
       "applicable": true
     },
     {

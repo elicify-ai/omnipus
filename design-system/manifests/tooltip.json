@@ -2,14 +2,17 @@
   "version": 1,
   "component": "Tooltip",
   "exports": [
-    "Tooltip"
+    "TooltipProvider",
+    "Tooltip",
+    "TooltipTrigger",
+    "TooltipContent"
   ],
   "category": "primitive",
   "source": "src/components/ui/tooltip.tsx",
   "documentation": "docs/internal/design/components/tooltip.md",
   "owner": "design-system",
   "themes": [
-    "sovereign-deep"
+    "dark"
   ],
   "variants": [
     "default"
@@ -25,7 +28,8 @@
       "file": "src/components/ui/tooltip.stories.tsx",
       "exports": [
         "Default",
-        "Keyboard"
+        "Keyboard",
+        "EdgeOfViewport"
       ]
     }
   ],
@@ -33,89 +37,93 @@
     {
       "id": "tooltip-unit",
       "kind": "unit",
-      "applicable": true,
-      "file": "src/components/ui/tooltip.test.tsx",
-      "test": "Tooltip — accessibility contract Escape dismisses the bubble WITHOUT moving focus off the trigger (not a focus trap)"
+      "file": "src/components/ui/tooltip.radix.test.tsx",
+      "test": "Tooltip (Radix) — open/close behaviour (§2.9) Escape dismisses the bubble, keeps focus on the trigger, and clears aria-describedby",
+      "applicable": true
     },
     {
       "id": "tooltip-interaction",
       "kind": "interaction",
-      "applicable": true,
       "file": "src/components/ui/tooltip.stories.tsx",
       "test": "Default",
-      "story": "Default"
+      "story": "Default",
+      "applicable": true
     },
     {
       "id": "tooltip-axe",
       "kind": "axe",
-      "applicable": true,
       "file": "tests/design-system/browser.spec.ts",
       "test": "Tooltip [check:tooltip-axe] axe",
-      "story": "Default"
+      "story": "Default",
+      "applicable": true
     },
     {
       "id": "tooltip-keyboard",
       "kind": "keyboard",
-      "applicable": true,
       "file": "tests/design-system/browser.spec.ts",
       "test": "Tooltip [check:tooltip-keyboard] keyboard",
-      "story": "Keyboard"
+      "story": "Keyboard",
+      "applicable": true
     },
     {
       "id": "tooltip-browser",
       "kind": "browser",
-      "applicable": true,
       "file": "tests/design-system/browser.spec.ts",
       "test": "Tooltip [check:tooltip-browser] browser",
-      "story": "Default"
+      "story": "Default",
+      "applicable": true,
+      "requiredTargets": [
+        {
+          "selector": "[data-testid=\"tooltip-trigger\"]",
+          "attribute": "aria-describedby"
+        }
+      ]
     },
     {
       "id": "tooltip-pointer",
       "kind": "pointer",
-      "applicable": true,
       "file": "tests/design-system/browser.spec.ts",
       "test": "Tooltip [check:tooltip-pointer] pointer",
-      "story": "Default"
+      "story": "Default",
+      "applicable": true
     },
     {
       "id": "tooltip-reduced-motion",
       "kind": "reduced-motion",
-      "applicable": true,
       "file": "tests/design-system/browser.spec.ts",
       "test": "Tooltip [check:tooltip-reduced-motion] reduced-motion",
-      "story": "Default"
+      "story": "Default",
+      "applicable": true
     },
     {
       "id": "tooltip-forced-colors",
       "kind": "forced-colors",
-      "applicable": true,
       "file": "tests/design-system/browser.spec.ts",
       "test": "Tooltip [check:tooltip-forced-colors] forced-colors",
-      "story": "Default"
+      "story": "Default",
+      "applicable": true
     },
     {
       "id": "tooltip-root-size",
       "kind": "root-size",
-      "applicable": true,
       "file": "tests/design-system/browser.spec.ts",
       "test": "Tooltip [check:tooltip-root-size] root-size",
-      "story": "Default"
+      "story": "Default",
+      "applicable": true
     },
     {
       "id": "tooltip-zoom",
       "kind": "zoom",
-      "applicable": true,
-      "file": "tests/design-system/browser.spec.ts",
-      "test": "Tooltip [check:tooltip-zoom] zoom",
-      "story": "Default"
+      "applicable": false,
+      "reason": "CSS zoom is not valid cross-engine evidence for portalled Radix positioning because layout and visual coordinate spaces diverge. Native 200% browser zoom remains mandatory manual release evidence and is pending in docs/internal/design/evidence/native-200-percent-zoom-checklist.md."
     },
     {
       "id": "tooltip-reflow",
       "kind": "reflow",
-      "applicable": true,
       "file": "tests/design-system/browser.spec.ts",
       "test": "Tooltip [check:tooltip-reflow] reflow",
-      "story": "Default"
+      "story": "Default",
+      "applicable": true
     }
   ]
 }

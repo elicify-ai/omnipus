@@ -97,6 +97,7 @@ vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: '/test-avatar.
 import { probeProvider, completeOnboardingTransaction, fetchProvidersCatalog } from '@/lib/api'
 import { evaluatePasswordStrength, friendlyProbeError, PROVIDERS_REQUIRING_ENDPOINT, ONBOARDING_MODEL_LABEL } from './onboarding'
 import { LOCAL_PROVIDER_CREDENTIAL } from '@/components/providers/ProviderDetailPanel'
+import { useUiStore } from '@/store/ui'
 import type { ProbeProviderRequest } from '@/lib/api/generated/openapi-types'
 import { readFileSync } from 'fs'
 import { join, dirname } from 'path'
@@ -487,27 +488,43 @@ describe('OnboardingWizard — step 4 renders the shared provider picker (FR-021
     expect(screen.getAllByText('Step 4 of 4').length).toBeGreaterThan(0)
   })
 
-  it('switching the auth segment to API key reveals the key field and hides the sign-in radios', async () => {
+  it('switching the real OpenAI auth segment reveals the key field without navigation or progress changes', async () => {
+    // WU-24 CHECK W1: the kept HTTP and API-key rows are one company in
+    // the real catalog. Regroup only these existing fixture entries; never
+    // resurrect a removed transport as the trigger for a retained behavior.
+    const openAIIds = new Set(['openai', 'openai-chatgpt'])
+    expect(CATALOG_PROVIDERS.filter((entry) => openAIIds.has(entry.id)).map((entry) => entry.id).sort()).toEqual([
+      'openai', 'openai-chatgpt',
+    ])
+    vi.mocked(fetchProvidersCatalog).mockResolvedValue({
+      ...PROVIDERS_CATALOG,
+      providers: CATALOG_PROVIDERS.map((entry) => openAIIds.has(entry.id) ? { ...entry, company: 'OpenAI' } : entry),
+    })
     await goToStep4()
-    // GitHub is the fixture's company that offers BOTH methods (github-copilot
-    // sign-in beside the github-models key row), so it is where the segmented
-    // control exists at all.
-    await openPanelForCompany('GitHub', 'github')
-
-    // Sign-in is pre-selected where offered (FR-005).
-    expect(screen.getByTestId('provider-detail-panel-auth-segment-sign_in')).toHaveAttribute(
-      'aria-pressed',
-      'true',
-    )
+    await openPanelForTile('openai')
+    const picker = screen.getByTestId('onboarding-provider-picker')
+    const panel = screen.getByTestId('provider-detail-panel')
+    const progress = screen.getByRole('progressbar')
+    expect(progress).toHaveAttribute('aria-valuemax', '4')
+    expect(progress).toHaveAttribute('aria-valuenow', '4')
+    expect(screen.getByTestId('provider-detail-panel-auth-segment-sign_in')).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByTestId('provider-detail-panel-auth-signin')).toBeInTheDocument()
     expect(screen.queryByTestId('provider-detail-panel-api-key-input')).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByTestId('provider-detail-panel-auth-segment-api_key'))
-
-    expect(screen.getByTestId('provider-detail-panel-api-key-input')).toBeInTheDocument()
+    const key = screen.getByTestId('provider-detail-panel-api-key-input')
+    fireEvent.change(key, { target: { value: 'wu24-fixture-api-key' } })
+    expect(key).toHaveValue('wu24-fixture-api-key')
+    expect(screen.getByTestId('provider-detail-panel-auth-segment-api_key')).toHaveAttribute('aria-pressed', 'true')
     expect(screen.queryByTestId('provider-detail-panel-auth-signin')).not.toBeInTheDocument()
-    // Still four steps — the whole point of FR-028.
-    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuemax', '4')
+    expect(screen.getByTestId('onboarding-provider-picker')).toBe(picker)
+    expect(screen.getByTestId('provider-detail-panel')).toBe(panel)
+    expect(screen.getByRole('progressbar')).toBe(progress)
+    expect(progress).toHaveAttribute('aria-valuemax', '4')
+    expect(progress).toHaveAttribute('aria-valuenow', '4')
+    expect(mockNavigate).not.toHaveBeenCalled()
+    expect(completeOnboardingTransaction).not.toHaveBeenCalled()
+    expect(probeProvider).not.toHaveBeenCalled()
   })
 
   it('the confirmed row renders the subtitle and endpoint derived from the fetched document (US-7 parity)', async () => {
@@ -724,11 +741,14 @@ describe('OnboardingWizard — model field (FR-029)', () => {
 // =====================================================================
 
 describe('OnboardingWizard — sign-in path', () => {
-  const CODEX_MODEL = CATALOG_PROVIDERS.find((e) => e.id === 'codex-cli')!.models![0]!.id
+  // WU-24 (founder 2026-10-14): the retired CLI sign-in rows are gone, so the
+  // sign-in path runs through the one remaining sign_in catalog row,
+  // openai-chatgpt (company "ChatGPT").
+  const SIGNIN_MODEL = CATALOG_PROVIDERS.find((e) => e.id === 'openai-chatgpt')!.models![0]!.id
 
-  async function chooseCodexCli() {
+  async function chooseChatGptSignIn() {
     await goToStep4()
-    await openPanelForCompany('Codex CLI', 'codex')
+    await openPanelForCompany('ChatGPT', 'chatgpt')
     // Sign-in only: no segment, no key field, sign-in pre-selected (FR-005).
     expect(screen.queryByTestId('provider-detail-panel-auth-segment')).not.toBeInTheDocument()
     expect(screen.queryByTestId('provider-detail-panel-api-key-input')).not.toBeInTheDocument()
@@ -737,21 +757,21 @@ describe('OnboardingWizard — sign-in path', () => {
   }
 
   it('Check sign-in probes auth: sign_in with the chosen model and NO api_key', async () => {
-    vi.mocked(probeProvider).mockResolvedValue({ success: true, probed_model: CODEX_MODEL })
-    await chooseCodexCli()
-    await pickModel(CODEX_MODEL)
+    vi.mocked(probeProvider).mockResolvedValue({ success: true, probed_model: SIGNIN_MODEL })
+    await chooseChatGptSignIn()
+    await pickModel(SIGNIN_MODEL)
     await waitFor(() => expect(probeProvider).toHaveBeenCalled())
 
     const req = lastProbeRequest()
-    expect(req.id).toBe('codex-cli')
+    expect(req.id).toBe('openai-chatgpt')
     expect(req.auth).toBe('sign_in')
-    expect(req.model).toBe(CODEX_MODEL)
+    expect(req.model).toBe(SIGNIN_MODEL)
     expect(Object.prototype.hasOwnProperty.call(req, 'api_key')).toBe(false)
   })
 
   it('the check button is labelled Check sign-in on the sign-in path', async () => {
     vi.mocked(probeProvider).mockResolvedValue({ success: false, error: 'not signed in' })
-    await chooseCodexCli()
+    await chooseChatGptSignIn()
     expect(screen.getByTestId('onboarding-probe-button')).toHaveTextContent('Check sign-in')
 
     fireEvent.click(screen.getByTestId('onboarding-probe-button'))
@@ -759,24 +779,10 @@ describe('OnboardingWizard — sign-in path', () => {
     expect(lastProbeRequest().auth).toBe('sign_in')
   })
 
-  it('a missing CLI binary reads as "codex not found on this machine", not as a key error', async () => {
-    vi.mocked(probeProvider).mockResolvedValue({
-      success: false,
-      error: 'exec: "codex": executable file not found in $PATH',
-    })
-    await chooseCodexCli()
-    fireEvent.click(screen.getByTestId('onboarding-probe-button'))
-
-    await waitFor(() => screen.getByTestId('onboarding-cli-missing'))
-    expect(screen.getByTestId('onboarding-cli-missing').textContent).toContain(
-      'codex not found on this machine',
-    )
-  })
-
   it('completion sends the OnboardingProviderSignIn variant — auth_method sign_in, no api_key', async () => {
-    vi.mocked(probeProvider).mockResolvedValue({ success: true, probed_model: CODEX_MODEL })
-    await chooseCodexCli()
-    await pickModel(CODEX_MODEL)
+    vi.mocked(probeProvider).mockResolvedValue({ success: true, probed_model: SIGNIN_MODEL })
+    await chooseChatGptSignIn()
+    await pickModel(SIGNIN_MODEL)
     await waitFor(() => expect(finishButton()).not.toBeDisabled())
 
     fireEvent.click(finishButton())
@@ -785,8 +791,8 @@ describe('OnboardingWizard — sign-in path', () => {
     const body = vi.mocked(completeOnboardingTransaction).mock.calls[0]![0]
     expect(body.provider).toEqual({
       auth_method: 'sign_in',
-      id: 'codex-cli',
-      model: CODEX_MODEL,
+      id: 'openai-chatgpt',
+      model: SIGNIN_MODEL,
     })
     expect(Object.prototype.hasOwnProperty.call(body.provider, 'api_key')).toBe(false)
   })
@@ -805,6 +811,10 @@ describe('OnboardingWizard — sign-in path', () => {
       api_key: 'sk-ant-api03-test',
       model: ANTHROPIC_MODEL,
     })
+    // WP-1 #1700 (design R22): a confirmed CATALOG row never sends protocol —
+    // only the Custom endpoint path sets it. Explicit because the server now
+    // refuses protocol on a catalog id (design K1).
+    expect(body.provider).not.toHaveProperty('protocol')
   })
 
   // Issue #800 (Bedrock region contract): the picker's second-level panel
@@ -945,13 +955,65 @@ describe('OnboardingWizard — catalog unavailable', () => {
     await waitFor(() => expect(finishButton()).not.toBeDisabled())
     fireEvent.click(finishButton())
     await waitFor(() => expect(completeOnboardingTransaction).toHaveBeenCalledOnce())
+    // WP-1 #1700 (design R21): the custom endpoint's protocol MUST reach the
+    // completion request — the server needs it to save the row's wire
+    // protocol. The old expectation without `protocol` was the bug.
     expect(vi.mocked(completeOnboardingTransaction).mock.calls[0]![0].provider).toEqual({
       auth_method: 'api_key',
       id: 'my-proxy',
       api_key: 'sk-proxy',
       model: 'my-model',
       endpoint: 'https://proxy.example.com/v1',
+      protocol: 'openai-compatible',
     })
+  })
+
+  // WP-1 #1700 (design R24): when the server refuses the completion with M1
+  // (the custom endpoint's id is a listed provider's name), the wizard shows
+  // "Could not complete setup: " + M1 inline AND as an error toast, and stays
+  // on the provider step. The catalog is down in this lane — the form cannot
+  // pre-check the id, so the server's refusal is the backstop the design
+  // relies on (§3: takenIds is passed only when the catalog is loaded).
+  it('shows the server M1 refusal inline and as a toast, staying on the provider step', async () => {
+    const M1_AZURE =
+      '"azure" is the name of a listed provider. Choose a different name for your custom endpoint, for example "my-azure".'
+    useUiStore.setState({ toasts: [] })
+    vi.mocked(fetchProvidersCatalog).mockRejectedValue(new Error('503'))
+    vi.mocked(probeProvider).mockResolvedValue({ success: true, probed_model: 'my-model' })
+    vi.mocked(completeOnboardingTransaction).mockRejectedValue(new Error(M1_AZURE))
+
+    await goToStep4()
+    await waitFor(() => screen.getByTestId('picker-catalog-error'))
+
+    fireEvent.click(screen.getByTestId('picker-custom-endpoint'))
+    await waitFor(() => screen.getByTestId('custom-endpoint-id'))
+    fireEvent.change(screen.getByTestId('custom-endpoint-id'), { target: { value: 'azure' } })
+    fireEvent.change(screen.getByTestId('custom-endpoint-api-base'), {
+      target: { value: 'https://azure.example.com/v1' },
+    })
+    fireEvent.change(screen.getByTestId('custom-endpoint-api-key'), { target: { value: 'sk-azure' } })
+    fireEvent.click(screen.getByTestId('custom-endpoint-submit'))
+
+    await waitFor(() => screen.getByTestId('onboarding-provider-summary'))
+    fireEvent.change(screen.getByTestId('onboarding-model-select'), { target: { value: 'my-model' } })
+    fireEvent.click(screen.getByTestId('onboarding-probe-button'))
+    await waitFor(() => expect(finishButton()).not.toBeDisabled())
+
+    fireEvent.click(finishButton())
+    await waitFor(() =>
+      expect(screen.getByTestId('onboarding-error')).toHaveTextContent(
+        `Could not complete setup: ${M1_AZURE}`,
+      ),
+    )
+
+    const toasts = useUiStore.getState().toasts
+    expect(toasts.length).toBeGreaterThan(0)
+    expect(toasts[toasts.length - 1]).toEqual(
+      expect.objectContaining({ message: `Could not complete setup: ${M1_AZURE}`, variant: 'error' }),
+    )
+
+    expect(screen.getByText(/select your model provider and default model/i)).toBeInTheDocument()
+    expect(screen.queryByText(/meet your assistant/i)).not.toBeInTheDocument()
   })
 })
 
@@ -1346,18 +1408,20 @@ describe('OnboardingWizard — finish', () => {
     })
   })
 
-  it('Meet your Assistant shows Mia with the default-star badge and her role', async () => {
+  it('Meet your Assistant shows Mia with her role and never calls her a default agent', async () => {
 
     await goToCompleteReady()
     fireEvent.click(screen.getByRole('button', { name: /finish/i }))
     await waitFor(() => screen.getByText(/Mia — Assistant/i))
 
-    // Default-agent star badge is present.
-    expect(screen.getByLabelText(/default agent/i)).toBeInTheDocument()
+    // omnipus-system-agent FR-120/FR-122: there is no default agent, so the
+    // screen names none — neither as a label nor in its copy.
+    expect(screen.queryByLabelText(/default agent/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/default agent/i)).not.toBeInTheDocument()
     // Role line.
     expect(screen.getByText(/memory-rich, cross-workspace recall/i)).toBeInTheDocument()
-    // Intro line referencing My Workspace + default agent.
-    expect(screen.getByText(/bound to my workspace/i)).toBeInTheDocument()
+    // Intro line: Mia's team membership and where Start chatting goes.
+    expect(screen.getByText(/Mia is on the team of My Workspace, where Start chatting takes you\./)).toBeInTheDocument()
   })
 
   it('surfaces an inline error and stays on step 4 with Retry setup when finish fails', async () => {

@@ -27,6 +27,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/goal"
+	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -134,7 +135,15 @@ func e2eAnyMessageContains(msgs []providers.Message, substr string) bool {
 // contract: build the resume as an ordinary continuation turn on the same
 // session. Counts invocations so the S-32 stale-card subtest can assert
 // DispatchResume was NEVER called for a superseded card.
+//
+// turnMu models the per-session serialization production gets from the session
+// worker: a resume is an inbox message that runs only after the parked turn
+// that raised the card has returned. Every runTurn on this session goes
+// through runSerialized, so a default-safe auto-submit that fires while the
+// parked turn is still recording its tool result waits instead of appending
+// to the archive underneath that turn's compare-and-commit.
 type e2eResumeDispatcher struct {
+	turnMu  sync.Mutex
 	mu      sync.Mutex
 	calls   int
 	lastErr error
@@ -146,6 +155,67 @@ type e2eResumeDispatcher struct {
 	channel    string
 	chatID     string
 	sessionKey string
+}
+
+// slowFirstCommitSessions stretches the FIRST checkpoint commit of a turn so the
+// window between a turn's metadata snapshot and its compare-and-commit is
+// wider than any default-safe timer. It makes the interleaving that a loaded CI
+// runner produces by luck happen on every run, without touching production.
+type slowFirstCommitSessions struct {
+	session.SessionStore
+	inner session.ContextWindowStore
+	once  sync.Once
+	delay time.Duration
+}
+
+func newSlowFirstCommitSessions(t *testing.T, base session.SessionStore, delay time.Duration) *slowFirstCommitSessions {
+	t.Helper()
+	inner, ok := base.(session.ContextWindowStore)
+	if !ok {
+		t.Fatalf("session store %T does not support context-window checkpoints", base)
+	}
+	return &slowFirstCommitSessions{SessionStore: base, inner: inner, delay: delay}
+}
+
+func (s *slowFirstCommitSessions) AppendWindowMessage(ctx context.Context, key string, msg providers.Message) (session.WindowView, error) {
+	return appendWindowMsg(s.inner, ctx, key, msg)
+}
+
+func (s *slowFirstCommitSessions) AppendModelMessage(ctx context.Context, key string, in session.ModelAppend) (session.ModelSlot, session.WindowView, error) {
+	return s.inner.AppendModelMessage(ctx, key, in)
+}
+
+func (s *slowFirstCommitSessions) PlaceSavedInput(ctx context.Context, key string, src session.ArchiveAddress) (session.ModelSlot, session.WindowView, error) {
+	return s.inner.PlaceSavedInput(ctx, key, src)
+}
+
+func (s *slowFirstCommitSessions) ReadModelSlots(ctx context.Context, key string, from, to int, fn func(session.ModelSlot, []byte) error) error {
+	return s.inner.ReadModelSlots(ctx, key, from, to, fn)
+}
+
+func (s *slowFirstCommitSessions) WindowView(ctx context.Context, key string) (session.WindowView, error) {
+	return s.inner.WindowView(ctx, key)
+}
+
+func (s *slowFirstCommitSessions) CommitWindow(ctx context.Context, key string, before, after memory.WindowState) error {
+	s.once.Do(func() { time.Sleep(s.delay) })
+	return s.inner.CommitWindow(ctx, key, before, after)
+}
+
+func (s *slowFirstCommitSessions) RestoreWindow(ctx context.Context, key string, before, after memory.WindowState) error {
+	return s.inner.RestoreWindow(ctx, key, before, after)
+}
+
+func (s *slowFirstCommitSessions) RollbackWindow(ctx context.Context, key string, start memory.WindowState) error {
+	return s.inner.RollbackWindow(ctx, key, start)
+}
+
+// runSerialized runs one turn on the session, never overlapping another.
+func (d *e2eResumeDispatcher) runSerialized(opts processOptions) (turnResult, error) {
+	d.turnMu.Lock()
+	defer d.turnMu.Unlock()
+	ts := newTurnState(d.agentInst, opts, d.al.newTurnEventScope(d.agentInst.ID, opts.SessionKey))
+	return d.al.runTurn(context.Background(), ts)
 }
 
 func (d *e2eResumeDispatcher) DispatchResume(set *askuser.PendingSet, resumeText string) error {
@@ -172,8 +242,7 @@ func (d *e2eResumeDispatcher) DispatchResume(set *askuser.PendingSet, resumeText
 		UserMessage: resumeText, UserInitiated: userInitiated,
 		DefaultResponse: "done",
 	}
-	ts := newTurnState(d.agentInst, opts, d.al.newTurnEventScope(d.agentInst.ID, opts.SessionKey))
-	_, err := d.al.runTurn(context.Background(), ts)
+	_, err := d.runSerialized(opts)
 	d.mu.Lock()
 	d.lastErr = err
 	d.mu.Unlock()
@@ -363,6 +432,7 @@ func TestGoalClarify_WebCardRoundtrip(t *testing.T) {
 			t.Fatal("native-agent not registered")
 		}
 		allowGoalToolsPolicy(agentInst)
+		agentInst.Sessions = newSlowFirstCommitSessions(t, agentInst.Sessions, 200*time.Millisecond)
 		store, sid := newGoalTestSession(t, al, agentInst.ID)
 
 		dispatcher := &e2eResumeDispatcher{
@@ -383,8 +453,7 @@ func TestGoalClarify_WebCardRoundtrip(t *testing.T) {
 			t.Fatalf("activation: matched=%v handled=%v reply=%q, want matched=true handled=false reply=\"\"", matched, handled, reply)
 		}
 
-		ts := newTurnState(agentInst, opts, al.newTurnEventScope(agentInst.ID, opts.SessionKey))
-		result, err := al.runTurn(context.Background(), ts)
+		result, err := dispatcher.runSerialized(opts)
 		if err != nil {
 			t.Fatalf("runTurn: %v", err)
 		}
@@ -571,6 +640,7 @@ func TestGoalFlow_EndToEnd_Web(t *testing.T) {
 		fallback: "unexpected extra call",
 	}
 	al, judgeInst := newGoalLoopTestLoop(t, provider, nil)
+	grPrepareLegacyReminderRuntime(t, al)
 	agentInst, ok := al.GetRegistry().GetAgent("native-agent")
 	if !ok {
 		t.Fatal("native-agent not registered")
@@ -730,8 +800,8 @@ func TestGoalFlow_EndToEnd_Web(t *testing.T) {
 	if afterCycle1.Round != 0 {
 		t.Fatalf("cycle 1: rounds_used = %d, want 0 (idle settlement must never consume a round, JUDGE-FR-095)", afterCycle1.Round)
 	}
-	if afterCycle1.ZeroOutputPushes != 1 {
-		t.Fatalf("cycle 1: goal record ZeroOutputPushes = %d, want 1 (the unified push ladder dispatched a bounded continue-push)", afterCycle1.ZeroOutputPushes)
+	if afterCycle1.ZeroOutputPushes != 0 {
+		t.Fatalf("cycle 1: assessed outcomes = %d, want 0 before first reminder outcome (R6)", afterCycle1.ZeroOutputPushes)
 	}
 
 	var steerMsg bus.InboundMessage
@@ -753,29 +823,20 @@ func TestGoalFlow_EndToEnd_Web(t *testing.T) {
 
 	// --- A SECOND idle cycle must be able to fire (C-7). ---
 	//
-	// wave R7C: the continuation-push turn processed above (a bare TEXT
-	// reply, "Continuing to work on the unmet items.", no tool calls) does
-	// not reset GoalZeroOutputPushes — nothing in checkGoalLoopAfterTurn's
-	// ordinary-turn path resets a RECORDED goal's push counter; only a
-	// fresh activation or the recordless engine-fallback compile zero it
-	// (goal_loop.go, goal_triggers.go::dispatchGoalFallbackCompile). Under
-	// the unified push ladder every idle cycle for a recorded goal is a
-	// push, never an adjudication (JUDGE-FR-095/FR-097), so the counter is
-	// monotonic across cycles: push 1 (above) then push 2 (below). This
-	// assertion proves the SECOND cycle genuinely fires (the push counter
-	// advances) rather than silently doing nothing — the un-wedge invariant
-	// itself was already proven above (idleSettling cleared after the steer
-	// turn was accepted).
+	// R6: the actual text-only reminder above is one unproductive outcome.
+	// The second cycle assesses it as 1; a real published second reminder
+	// independently proves the keeper re-armed rather than silently wedging.
 	rewindGoalLastActivity(t, store, sid)
 	al.goalQuietWindowSettle(time.Now()) // cycle 2: push 2
 	if got := cp.callCount(); got != 0 {
 		t.Fatalf("cycle 2: Judge calls = %d, want 0 (unchanged — idle settlement never adjudicates, JUDGE-FR-095)", got)
 	}
 	afterCycle2 := mustActiveGoalRecord(t, sid)
-	if afterCycle2.ZeroOutputPushes != 2 {
-		t.Fatalf("cycle 2: goal record ZeroOutputPushes = %d, want 2 (a second full idle cycle must complete — no wedge; monotonic push counter, no adjudication ever resets it)",
+	if afterCycle2.ZeroOutputPushes != 1 {
+		t.Fatalf("cycle 2: assessed outcomes = %d, want 1 after the first text-only reminder (R6)",
 			afterCycle2.ZeroOutputPushes)
 	}
+	grTakePublishedReminder(t, al, sid)
 }
 
 // rewindGoalLastActivity pushes sid's goal-record LastActivityAt into the

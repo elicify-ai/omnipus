@@ -1,0 +1,173 @@
+{
+  "requirement": "G1",
+  "candidate_lint_source": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squad-1266/ci-7d2d03675/120316210293.log",
+  "candidate_raw_lint": "failed20issues; actual saved CI log",
+  "code_input": "7c1a92f80f75e29cf2c89b8de0ba90a76a569ad0",
+  "source_verified_original_issue_count": 20,
+  "rows": [
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-be/pkg/gateway/chat_history_d16_cancel_engine_test.go",
+      "CI_line": 91,
+      "issue": "type assertion must be checked (forcetypeassert)",
+      "original_statement": "assert.Equal(t, agent.TurnEndStatusAborted, end.Payload.(agent.TurnEndPayload).Status)",
+      "original_scoped_statement_replaced": true,
+      "source_sha256": "34d091fee17fdf244eaacd3a7dab75c1fe5062fd18e7b8496f65c248f0ba60f4"
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-be/pkg/gateway/chat_history_d16_cancel_engine_test.go",
+      "CI_line": 161,
+      "issue": "type assertion must be checked (forcetypeassert)",
+      "original_statement": "payload := started.Payload.(agent.ToolExecStartPayload)",
+      "original_scoped_statement_replaced": true,
+      "source_sha256": "34d091fee17fdf244eaacd3a7dab75c1fe5062fd18e7b8496f65c248f0ba60f4"
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-be/pkg/session/chat_history_footerless_fixture_test.go",
+      "CI_line": 135,
+      "issue": "shadow: declaration of \"err\" shadows declaration at line 124 (govet)",
+      "original_statement": "encoded, err := historyEncodeFrame(historyFrame{Commit: &cp})",
+      "original_scoped_statement_replaced": true,
+      "source_sha256": "89af33f89a002a994798dffe74781450263cd61f441a344ac8c0ff5ac1790d63"
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-be/pkg/session/chat_history_footerless_recovery_red_test.go",
+      "CI_line": 60,
+      "issue": "shadow: declaration of \"err\" shadows declaration at line 41 (govet)",
+      "original_statement": "after, err := os.ReadFile(checkpointPath)",
+      "original_scoped_statement_replaced": true,
+      "source_sha256": "2a90cec7d8fc446bec599d8ba786fb7ef099c99c11662a84b58def1cb886a129"
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-be/pkg/session/chat_history_footerless_recovery_red_test.go",
+      "CI_line": 78,
+      "issue": "shadow: declaration of \"err\" shadows declaration at line 41 (govet)",
+      "original_statement": "afterFile, err := os.ReadFile(fixture.path)",
+      "original_scoped_statement_replaced": true,
+      "source_sha256": "2a90cec7d8fc446bec599d8ba786fb7ef099c99c11662a84b58def1cb886a129"
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-be/pkg/session/chat_history_retention_retry_bound_red_test.go",
+      "CI_line": 44,
+      "issue": "shadow: declaration of \"err\" shadows declaration at line 30 (govet)",
+      "original_statement": "if err := os.Chtimes(path, old, old); err != nil {",
+      "original_scoped_statement_replaced": true,
+      "source_sha256": "6c4291f8ada4893833b886dc2ec679b44377c5f99b55d0d7e9aba9b287f5d8b3"
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-be/pkg/session/chat_history_retention_retry_bound_red_test.go",
+      "CI_line": 47,
+      "issue": "shadow: declaration of \"err\" shadows declaration at line 30 (govet)",
+      "original_statement": "removed, err := s.RetentionSweep(90) // real sweep/compaction/generation move, not a forged checkpoint value",
+      "original_scoped_statement_replaced": true,
+      "source_sha256": "6c4291f8ada4893833b886dc2ec679b44377c5f99b55d0d7e9aba9b287f5d8b3"
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-be/pkg/session/chat_history_retirement_release_red_test.go",
+      "CI_line": 116,
+      "issue": "shadow: declaration of \"err\" shadows declaration at line 93 (govet)",
+      "original_statement": "p, err := s.ReadChatHistoryPage(ctx, sid, historyOptions(40))",
+      "original_scoped_statement_replaced": true,
+      "source_sha256": "55e4b954d7e71c22c95ff29481d8312400c18e1fded17aa8923cc4b6ae7db622"
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-be/pkg/gateway/chat_history_cleanup_precedence_red_test.go",
+      "CI_line": 114,
+      "issue": "variable clear has same name as predeclared identifier (predeclared)",
+      "original_statement": "clear, nativeError := r1CleanupHoldRemoveFault(t, f.retired)",
+      "original_scoped_statement_replaced": true,
+      "source_sha256": "2af05ce83a75a144c884e04c6c8af8ffc38cca7f0d84e3409628b3ac4467bc1c"
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-be/pkg/gateway/chat_history_cleanup_remove_fault_unix_test.go",
+      "CI_line": 25,
+      "issue": "variable clear has same name as predeclared identifier (predeclared)",
+      "original_statement": "clear := func() { once.Do(func() { require.NoError(t, os.Chmod(dir, info.Mode().Perm())) }) }",
+      "original_scoped_statement_replaced": true,
+      "source_sha256": "44a176b34ae8e1d8287ef32ccc063ce53416cd9dc341ef5b8f5004a5d61fd569"
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-be/pkg/session/chat_history_retirement_fault_unix_test.go",
+      "CI_line": 25,
+      "issue": "variable clear has same name as predeclared identifier (predeclared)",
+      "original_statement": "clear := func() { once.Do(func() { require.NoError(t, os.Chmod(dir, info.Mode().Perm())) }) }",
+      "original_scoped_statement_replaced": true,
+      "source_sha256": "aeac5eb92f38a3b09fcfe68dd7e283b373ad9b440e411c9bc15ee131ba7fc761"
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-be/pkg/session/chat_history_retirement_release_red_test.go",
+      "CI_line": 60,
+      "issue": "variable clear has same name as predeclared identifier (predeclared)",
+      "original_statement": "clear, nativeError := gate0HoldRetirementRemoveFault(t, path)",
+      "original_scoped_statement_replaced": true,
+      "source_sha256": "55e4b954d7e71c22c95ff29481d8312400c18e1fded17aa8923cc4b6ae7db622"
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-be/pkg/session/chat_history_retirement_release_red_test.go",
+      "CI_line": 140,
+      "issue": "variable clear has same name as predeclared identifier (predeclared)",
+      "original_statement": "clear, nativeError := gate0HoldRetirementRemoveFault(t, path)",
+      "original_scoped_statement_replaced": true,
+      "source_sha256": "55e4b954d7e71c22c95ff29481d8312400c18e1fded17aa8923cc4b6ae7db622"
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-be/cmd/chat-history-index-repair/final_guard_context_test.go",
+      "CI_line": 51,
+      "issue": "QF1008: could remove embedded field \"Context\" from selector (staticcheck)",
+      "original_statement": "case <-c.Context.Done():",
+      "original_scoped_statement_replaced": true,
+      "source_sha256": "b89cdea5c72a370ddf4c789d293dea8b708092554c0d6b94832c52d9e7ab85d3"
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-be/cmd/chat-history-index-repair/guarded_late_context_test.go",
+      "CI_line": 42,
+      "issue": "QF1008: could remove embedded field \"Context\" from selector (staticcheck)",
+      "original_statement": "case <-c.Context.Done():",
+      "original_scoped_statement_replaced": true,
+      "source_sha256": "0cec4fe793f3bf9600e6bd0f8589dedbdf4967bfcce3d0f118296d9cac4886ca"
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-be/cmd/chat-history-index-repair/guarded_late_context_test.go",
+      "CI_line": 109,
+      "issue": "S1039: unnecessary use of fmt.Sprint (staticcheck)",
+      "original_statement": "return repairLateResult{exit: -1, output: fmt.Sprint(\"unjoined\")}",
+      "original_scoped_statement_replaced": true,
+      "source_sha256": "0cec4fe793f3bf9600e6bd0f8589dedbdf4967bfcce3d0f118296d9cac4886ca"
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-be/pkg/gateway/chat_history_cleanup_context_test.go",
+      "CI_line": 47,
+      "issue": "QF1008: could remove embedded field \"Context\" from selector (staticcheck)",
+      "original_statement": "case <-c.Context.Done():",
+      "original_scoped_statement_replaced": true,
+      "source_sha256": "c89f38941d18e69bca4ae1da49f84c43d9d78a4ce41f824cc2768f1f3aabcd15"
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-be/pkg/gateway/chat_history_cleanup_precedence_red_test.go",
+      "CI_line": 126,
+      "issue": "unnecessary conversion (unconvert)",
+      "original_statement": "original := error(session.ErrHistoryPositionNotFound)",
+      "original_scoped_statement_replaced": true,
+      "source_sha256": "2af05ce83a75a144c884e04c6c8af8ffc38cca7f0d84e3409628b3ac4467bc1c"
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-be/pkg/gateway/chat_history_d16_cancel_projection_test.go",
+      "CI_line": 136,
+      "issue": "unnecessary conversion (unconvert)",
+      "original_statement": "assert.Equal(t, \"window_refresh\", string(refresh.PageInfo.Mode))",
+      "original_scoped_statement_replaced": true,
+      "source_sha256": "bd3eaf6cd1027a0552e83adba0b102991bde5b3cea198f2fc0772d33e35da0d2"
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-be/pkg/gateway/sessions_wire_test.go",
+      "CI_line": 63,
+      "issue": "unnecessary conversion (unconvert)",
+      "original_statement": "require.Equal(t, \"available\", string(detail.HistoryState.Status), \"healthy canonical fixture must return a real page, not unavailable metadata\")",
+      "original_scoped_statement_replaced": true,
+      "source_sha256": "eaded2c97cbb7c20e7a32df3e664b518422360be23c7109274b414714efa82e3"
+    }
+  ],
+  "runtime_compile_evidence": "Post-fix actual TestCatchUpFixtures generation/verification and US16 exact runs compiled gateway tests and passed; history_heavy -list compiled session tests and discovered heavy entry. No full local lint run.",
+  "limits": "Full golangci rerun remains UNVERIFIED until candidate CI; no CI/Fly triggered. Mechanical source checks do not assert full lint green.",
+  "instrument_correction": "Initial checker stripped indentation and matched an allowed outer-scope afterFile,err statement; checker corrected to exact scoped line, no code changed to satisfy it. First checker exit1 is not a product/test finding.",
+  "self_check": "Read all20 original diagnostics and exact candidate statements; confirmed each scoped line changed, two new checked payload guards, preserved Err delegation and source-only scope. No assertions/expected values skipped/weakened."
+}

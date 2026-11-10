@@ -362,13 +362,6 @@ func (al *AgentLoop) buildInvestigationLogFromJudgeTranscript(judgeAgentID, chat
 		}
 	}
 	if len(entries) == 0 {
-		if store := al.GetAgentStore(judgeAgentID); store != nil {
-			if e, err := store.ReadTranscript(chatID); err == nil {
-				entries = e
-			}
-		}
-	}
-	if len(entries) == 0 {
 		return nil
 	}
 	out := make([]investigationLogCall, 0, len(entries))

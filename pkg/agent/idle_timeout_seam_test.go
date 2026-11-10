@@ -22,7 +22,8 @@ import (
 
 // TestIdleTimeout_FireSeam_TriggersCloseSession verifies that fireIdleTimeout
 // calls CloseSession("idle") which, when AutoRecapEnabled is true, enqueues the
-// recap goroutine and ultimately produces LAST_SESSION.md + a retro file.
+// recap goroutine and ultimately produces the workspace's carry-forward
+// summary + a retro file.
 //
 // This closes the 0%-behavioral idle-fire gap: previously there was no sub-
 // minute test exercising the timer→close path.
@@ -71,6 +72,7 @@ func TestIdleTimeout_FireSeam_TriggersCloseSession(t *testing.T) {
 		t.Fatalf("NewSession: %v", err)
 	}
 	sessionID := meta.ID
+	wu21ReaimStampWorkspace(t, store, sessionID) // WU-21 re-aim: carry-forward target.
 	if err := store.AppendTranscript(sessionID, session.TranscriptEntry{
 		Role:      "user",
 		Content:   "hello from idle test",
@@ -95,13 +97,15 @@ func TestIdleTimeout_FireSeam_TriggersCloseSession(t *testing.T) {
 		t.Error("claimedCloseSessions must contain sessionID after fireIdleTimeout")
 	}
 
-	// Wait for the recap goroutine to produce LAST_SESSION.md (up to 5 s;
-	// mirrors the polling pattern in session_end_behavioral_test.go).
-	lastSessionPath := filepath.Join(ag.Home, ".omnipus", "last-session.md")
+	// Wait for the recap goroutine to produce the workspace's carry-forward
+	// summary (up to 5 s; mirrors the polling pattern in
+	// session_end_behavioral_test.go). WU-21 re-aim: the (agent, workspace)
+	// pair path replaced the agent-wide last-session.md.
+	carryForwardPath := wu21ReaimPairPath(home, agentID)
 	deadline := time.Now().Add(5 * time.Second)
 	var lastSessionBytes []byte
 	for time.Now().Before(deadline) {
-		data, readErr := os.ReadFile(lastSessionPath)
+		data, readErr := os.ReadFile(carryForwardPath)
 		if readErr == nil {
 			lastSessionBytes = data
 			break
@@ -109,10 +113,10 @@ func TestIdleTimeout_FireSeam_TriggersCloseSession(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	if lastSessionBytes == nil {
-		t.Fatalf("LAST_SESSION.md not produced within 5s after fireIdleTimeout; Chat calls=%d", script.callCount)
+		t.Fatalf("carry-forward summary not produced within 5s after fireIdleTimeout; Chat calls=%d", script.callCount)
 	}
 	if !strings.Contains(string(lastSessionBytes), "idle session ended") {
-		t.Errorf("LAST_SESSION.md missing recap text; got:\n%s", lastSessionBytes)
+		t.Errorf("carry-forward summary missing recap text; got:\n%s", lastSessionBytes)
 	}
 
 	// A retro file must also exist with trigger=idle.

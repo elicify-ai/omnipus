@@ -36,13 +36,12 @@ import (
 func buildMeta(id, agentID string, updatedAt time.Time, stats SessionStats) *UnifiedMeta {
 	return &UnifiedMeta{
 		SessionMeta: SessionMeta{
-			ID:            id,
-			AgentID:       agentID,
-			AgentIDs:      []string{agentID},
-			ActiveAgentID: agentID,
-			UpdatedAt:     updatedAt,
-			Stats:         stats,
-			Title:         "Session " + id,
+			ID:        id,
+			AgentID:   agentID,
+			AgentIDs:  []string{agentID},
+			UpdatedAt: updatedAt,
+			Stats:     stats,
+			Title:     "Session " + id,
 		},
 		Type: SessionTypeChat,
 	}
@@ -1071,7 +1070,7 @@ func TestAggregateUsage_G3_NoPhantoModelBucket(t *testing.T) {
 		SessionMeta: *updatedMeta,
 		Type:        SessionTypeChat,
 	}
-	um.ActiveAgentID = "g3-agent"
+	um.AgentID = "g3-agent"
 
 	report := AggregateUsage([]*UnifiedMeta{um}, UsageOptions{
 		Period:    UsagePeriodAll,

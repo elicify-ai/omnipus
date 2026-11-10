@@ -17,6 +17,7 @@ import type { Task } from '@/lib/api'
 import { STATUS_LABELS as STATUS_LABEL } from '@/lib/statusColors'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
+import { RunningIndicator } from '@/components/ui/RunningIndicator'
 
 /**
  * Status-dot / label tint per child status — a literal `switch` over the
@@ -122,15 +123,19 @@ export function TaskChildren({ parentTaskId, preloaded, onChildClick }: TaskChil
             )}
             aria-label={`Subtask: ${child.title} — ${STATUS_LABEL[child.status]}`}
           >
-            {/* Status dot */}
-            <span
-              className="flex-shrink-0 rounded-full"
-              style={{
-                width: 6,
-                height: 6,
-                backgroundColor: childStatusColorVar(child.status),
-              }}
-            />
+            {/* PI3 applies to the existing compact child rows too. */}
+            {child.status === 'in_progress' ? (
+              <RunningIndicator />
+            ) : (
+              <span
+                className="flex-shrink-0 rounded-full"
+                style={{
+                  width: 6,
+                  height: 6,
+                  backgroundColor: childStatusColorVar(child.status),
+                }}
+              />
+            )}
             <span className="flex-1 truncate leading-tight">{child.title}</span>
             <span
               className="flex-shrink-0 text-[length:var(--type-caption-size)] font-medium"

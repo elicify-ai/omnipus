@@ -561,16 +561,20 @@ describe('LibraryExplorer — unsaved-edit navigation guard', () => {
   // hand (2026-09-21): removing that one `await` failed this test with
   // draft.md open before the dialog even rendered; restoring it fixed it.
   it('opens the discard-unsaved-changes dialog before switching files, stays put on Cancel, and navigates on Discard', async () => {
+    const editedFileName = 'unsaved-cobalt-sparrow.md'
     mockedFetchWorkspaces.mockResolvedValue([])
     mockedFetchEntries.mockResolvedValue([
-      makeEntry({ name: 'report.md', path: 'report.md' }),
+      makeEntry({ name: editedFileName, path: editedFileName }),
       makeEntry({ name: 'draft.md', path: 'draft.md' }),
     ])
+    mockedFetchContent.mockImplementation(async (_workspaceId, path) => ({
+      path, content: '# Report\n', size: 9, is_text: true, too_large: false,
+    }))
 
     renderExplorer('ws-1')
 
-    await waitFor(() => expect(screen.getByTestId('library-row-report.md')).toBeInTheDocument())
-    fireEvent.click(screen.getByTestId('library-row-report.md'))
+    await waitFor(() => expect(screen.getByTestId(`library-row-${editedFileName}`)).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId(`library-row-${editedFileName}`))
     // Wait for the EDITOR itself to be mounted (the View/Edit toggle only
     // renders once useLibraryFileEditor is up), not just the preview
     // pane/title — those render immediately from `selectedEntry` alone,
@@ -588,16 +592,16 @@ describe('LibraryExplorer — unsaved-edit navigation guard', () => {
     // Synchronous assertion, no waitFor: the guard's Promise has not
     // resolved yet, so navigation must not have happened. This is the line
     // that only a real `await` in handleSelectFile keeps true.
-    expect(screen.getByTestId('library-preview-title')).toHaveTextContent('report.md')
+    expect(screen.getByTestId('library-preview-title')).toHaveTextContent(editedFileName)
 
     const dialog = await screen.findByRole('alertdialog')
     expect(dialog).toHaveTextContent('Discard unsaved changes?')
-    expect(dialog).toHaveTextContent('You have unsaved changes in the Library editor.')
+    expect(dialog).toHaveAccessibleDescription(expect.stringContaining(editedFileName))
 
-    // Cancel: stays on report.md, draft.md's content never requested.
+    // Cancel: stays on the edited file, draft.md's content never requested.
     fireEvent.click(within(dialog).getByText('Cancel'))
     await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
-    expect(screen.getByTestId('library-preview-title')).toHaveTextContent('report.md')
+    expect(screen.getByTestId('library-preview-title')).toHaveTextContent(editedFileName)
     expect(mockedFetchContent).not.toHaveBeenCalledWith('ws-1', 'draft.md')
 
     // Still dirty (Cancel does not clear it) — clicking draft.md again

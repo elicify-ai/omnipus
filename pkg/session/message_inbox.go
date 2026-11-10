@@ -33,6 +33,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
@@ -49,8 +50,8 @@ const (
 	DefaultChildSendMaxDepth      = 5              // session_messaging.child_send_depth
 	DefaultInboxUnackedMax        = 200            // session_messaging.inbox_unacked_max
 	DefaultInboxPerTypeCeiling    = 20             // session_messaging.inbox_per_type_ceiling (D15)
-	DefaultSteerRatePerMinute     = 6              // session_messaging.steer_rate
-	DefaultSteerBodyBytes         = 16 * 1024      // session_messaging.steer_body
+	DefaultSteerRatePerMinute     = 60             // session_messaging.steer_rate (C-LIMIT: 60/min/sender+target)
+	DefaultSteerBodyBytes         = 65536          // session_messaging.steer_body (C-LIMIT: 65,536 UTF-8 bytes/item)
 	DefaultNeedsInputTTL          = 24 * time.Hour // session_messaging.needs_input_ttl (INV-5/G-6)
 	DefaultNeedsInputEscalationT1 = 12 * time.Hour // half-TTL escalation point (T1, G-6)
 
@@ -85,6 +86,10 @@ var (
 	ErrInboxRateLimited     = errors.New("session: inbox: child send rate exceeded")
 	ErrInboxPerChildCeiling = errors.New("session: inbox: per-child unacked question+blocker ceiling reached — await answers")
 	ErrInboxSessionFull     = errors.New("session: inbox: session unacked-message cap reached")
+	// ErrInboxUnsequencedEntry is the DEL-14 hard read error for an inbox line
+	// that parses but carries no sequence number (an unsupported pre-current
+	// format). It is not a cap refusal and is never reported as not_delivered.
+	ErrInboxUnsequencedEntry = errors.New("session: inbox: entry has no sequence number (unsupported pre-current format)")
 )
 
 // InboxEntryKind discriminates a persisted inbox JSONL line.
@@ -93,6 +98,10 @@ type InboxEntryKind string
 const (
 	InboxEntryMessage InboxEntryKind = "message"
 	InboxEntryAck     InboxEntryKind = "ack"
+	// InboxEntryAnswer records that a parent answered one of a child's
+	// open correlation ids (delegate respond). It is separate from an ack:
+	// an ack is a delivery cursor, an answer is the parent's reply.
+	InboxEntryAnswer InboxEntryKind = "answer"
 )
 
 // InboxEntry is one line of an owner key's durable inbox file.
@@ -117,15 +126,23 @@ type InboxEntry struct {
 	// every compaction rewrite (see compactLocked), and never depends on the
 	// entry's current position in the file.
 	//
-	// Zero means "predates this field" (real Seq values always start at 1) —
-	// readEntries backfills a zero Seq to the entry's 1-based position
-	// (backfillSeq), which is value-identical to the OLD position-based
-	// cursor scheme for any file that has never been compacted, and becomes
-	// permanent the first time compaction persists it.
+	// Zero means "predates this field" (real Seq values always start at 1).
+	// There is no migration (DEL-14, greenfield): readEntries refuses such a
+	// line with ErrInboxUnsequencedEntry instead of assigning an implied Seq.
 	Seq       int64                     `json:"seq,omitempty"`
 	Message   *generated.SessionMessage `json:"message,omitempty"`
 	AckedIDs  []string                  `json:"acked_message_ids,omitempty"`
+	Answer    *InboxAnswer              `json:"answer,omitempty"`
 	CreatedAt time.Time                 `json:"created_at"`
+}
+
+// InboxAnswer is the durable record that correlationID, raised by
+// childSessionID, was answered.
+//
+// not-wire-format: internal disk record.
+type InboxAnswer struct {
+	SessionID     string `json:"session_id"`
+	CorrelationID string `json:"correlation_id"`
 }
 
 // envelopePeek extracts the common SessionMessage envelope fields without
@@ -182,8 +199,7 @@ func peekEnvelope(msg generated.SessionMessage) (envelopePeek, []byte, error) {
 
 // questionOrBlockerKind reports whether kind counts toward the D15 per-child
 // unacked ceiling ("20 open question+blocker per child" — literal per the
-// ADR/spec wording; decision_request is deliberately NOT counted here,
-// matching the spec's literal "question+blocker" phrasing).
+// ADR/spec wording).
 func questionOrBlockerKind(kind string) bool {
 	return kind == "question" || kind == "blocker"
 }
@@ -191,9 +207,16 @@ func questionOrBlockerKind(kind string) bool {
 // SessionMessageDeliveryClass is the single delivery classifier used by
 // initial upward delivery, inbox admission, and boot recovery.
 type SessionMessageDeliveryClass struct {
-	Kind         string
-	Fatal        bool
+	Kind  string
+	Fatal bool
+	// WakeEligible: an accepted report of this kind wakes an idle non-stopped
+	// parent, joins a live parent's safe boundary, or is retained for a stopped
+	// parent. Progress, checkpoint, artifact and intentional Stop never wake.
 	WakeEligible bool
+	// CapExempt is the PRESERVED rate/unacked-cap exemption (ADR-091 FR-B-010,
+	// I-5), deliberately separate from WakeEligible: widening which kinds wake a
+	// parent must never widen which kinds bypass the caps (FR-012).
+	CapExempt bool
 }
 
 // ClassifySessionMessage derives delivery behavior from the actual generated
@@ -211,8 +234,16 @@ func classifyEnvelope(peek envelopePeek) SessionMessageDeliveryClass {
 	switch peek.Kind {
 	case "handback", "question", "blocker", "goal_status":
 		class.WakeEligible = true
+		class.CapExempt = true
 	case "error":
-		class.WakeEligible = peek.Fatal || isSteeringLifecycleNoticeText(peek.Text)
+		// A stopped_child prefix authenticates neither the cause nor a wake.
+		// Only the landed stop transition can authorize restart/timeout wakes.
+		class.WakeEligible = peek.Fatal || strings.HasPrefix(peek.Text, LifecycleNoticeReasonPrefixToolIterations)
+		// Lifecycle notices retain their admission exemption, independently
+		// of whether this event is allowed to wake (PW-D4 / PW-D13).
+		class.CapExempt = peek.Fatal || isSteeringLifecycleNoticeText(peek.Text)
+	case "progress", "checkpoint", "artifact":
+		// Stored and side-panelled, but neither wake-eligible nor cap-exempt.
 	}
 	return class
 }
@@ -224,6 +255,12 @@ func classifyEnvelope(peek envelopePeek) SessionMessageDeliveryClass {
 // exported so that call site and isSteeringLifecycleNoticeText below share
 // ONE literal instead of two that could silently drift apart.
 const LifecycleNoticeReasonPrefixToolIterations = "max_tool_iterations:"
+
+// LifecycleNoticePrefixStoppedChild marks a machine-authored direct-parent
+// notice that a steered child landed stopped (sub-agent control plane D6).
+// kind stays error and Fatal stays false. The prefix preserves inbox admission
+// only; wake authority comes from the landed cause, not this text.
+const LifecycleNoticePrefixStoppedChild = "stopped_child:"
 
 // steeringLifecycleNoticeTextPrefixes lists every machine-authored
 // failureReason prefix (never user-supplied free text) that marks a
@@ -250,6 +287,7 @@ const LifecycleNoticeReasonPrefixToolIterations = "max_tool_iterations:"
 // matches inside this same generic `error` envelope).
 var steeringLifecycleNoticeTextPrefixes = []string{
 	LifecycleNoticeReasonPrefixToolIterations,
+	LifecycleNoticePrefixStoppedChild,
 }
 
 func isSteeringLifecycleNoticeText(text string) bool {
@@ -275,6 +313,12 @@ type AppendResult struct {
 type MessageInboxStore struct {
 	dir  string
 	lock *lifecycleStripedLock
+
+	// answerReserved holds the (owner, child, correlation) triples whose
+	// answer is being delivered right now (ReserveAnswer) or was delivered
+	// but could not be recorded durably. In-memory by design: it only has to
+	// make check-and-answer atomic inside this process.
+	answerReserved sync.Map
 
 	// Caps — overridable by the caller wiring the real config (session_messaging
 	// section, FR-195); default to the ADR §Contract Surface values.
@@ -368,6 +412,18 @@ func (s *MessageInboxStore) retentionMax() int {
 	return DefaultInboxAckedRetentionMax
 }
 
+// AckedRetention reports how many acked message entries compaction always
+// leaves in an inbox (the effective retention cap). A compaction that purged
+// anything therefore leaves at least this many acked messages behind — the
+// footprint boot final-delivery recovery uses as evidence that an absent
+// message was compacted away rather than lost.
+func (s *MessageInboxStore) AckedRetention() int {
+	if s == nil {
+		return 0
+	}
+	return s.retentionMax()
+}
+
 // compactionTrigger returns the effective compaction trigger threshold,
 // falling back to the default for an unset/invalid override.
 func (s *MessageInboxStore) compactionTrigger() int {
@@ -423,37 +479,24 @@ func (s *MessageInboxStore) readEntries(ownerKey string) ([]InboxEntry, error) {
 		if err := json.Unmarshal([]byte(line), &e); err != nil {
 			continue // skip a torn/corrupt line, mirroring lifecycle.go's tail()
 		}
+		if e.Seq == 0 {
+			// DEL-14: a parseable line with no sequence number can only come
+			// from a pre-current file or a hand edit. Refuse it visibly; never
+			// assign an implied sequence (the Drain cursor would mis-address it).
+			return nil, fmt.Errorf("%w: %q", ErrInboxUnsequencedEntry, ownerKey)
+		}
 		entries = append(entries, e)
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("session: inbox: scan %q: %w", ownerKey, err)
 	}
-	backfillSeq(entries)
 	return entries, nil
 }
 
-// backfillSeq assigns an implied Seq (== 1-based append-order position) to
-// any entry that predates the Seq field (Seq == 0 on disk — a real,
-// persisted Seq is never 0). The backfilled value is exactly what the OLD
-// position-based Drain cursor implicitly assumed, so this is a
-// value-preserving upgrade for a file that has never been compacted, not a
-// behavior change. compactLocked persists whatever Seq value is in memory
-// at rewrite time, so a legacy entry's backfilled value becomes durable —
-// and immune to any FUTURE position shift — the first time compaction
-// touches its file. Mutates entries in place.
-func backfillSeq(entries []InboxEntry) {
-	for i := range entries {
-		if entries[i].Seq == 0 {
-			entries[i].Seq = int64(i + 1)
-		}
-	}
-}
-
 // nextSeqAfter returns the next Seq value to assign given the CURRENT
-// (already Seq-backfilled) entries for an owner key. Entries are always in
+// entries for an owner key. Entries are always in
 // ascending Seq order — real persisted Seq values are assigned only via this
-// function (strictly increasing) and backfilled ones exactly match file
-// order — so the last entry always carries the highest Seq; this is O(1),
+// function (strictly increasing) so the last entry always carries the highest Seq; this is O(1),
 // never a scan.
 func nextSeqAfter(entries []InboxEntry) int64 {
 	if len(entries) == 0 {
@@ -525,12 +568,37 @@ func (s *MessageInboxStore) rateAllow(ownerKey, childSessionID string) bool {
 // (pkg/tools/message_parent.go, or steer.UpwardDeliverer for a turn-outcome
 // event) turns it into a tool error / a real error, never a silent drop.
 //
-// ADR-091 FR-B-010 (I-5): a wake-eligible kind — handback, question,
-// blocker, a FATAL error, or goal_status (classifyEnvelope's
-// WakeEligible verdict, this file) — is always admitted: it bypasses the
+// ADR-091 FR-B-010 (I-5): a cap-exempt kind — handback, question,
+// blocker, a FATAL error or lifecycle notice, or goal_status (classifyEnvelope's
+// CapExempt verdict, this file) — is always admitted: it bypasses the
 // unacked-cap and rate checks (but never the D15 per-type ceiling, which
 // still bounds every kind).
 func (s *MessageInboxStore) Append(ownerKey string, msg generated.SessionMessage) (*AppendResult, error) {
+	return s.appendMessage(ownerKey, msg, false)
+}
+
+// SystemFinalResultMaxChars is the hand-back contract's result_so_far bound
+// (contracts/components/schemas/MessageParentHandback.yaml, maxLength 50000
+// characters) — the size a system-authored final may carry (issue #1306).
+const SystemFinalResultMaxChars = 50000
+
+// AppendSystemFinal is Append for the SYSTEM-authored final hand-back of a
+// finished child (the completion tail's committed final), never for anything
+// a child sends itself. The child-send body cap (ChildSendBodyBytes) bounds
+// what a child may send through message_parent; applied to the completion
+// tail it used to refuse every final answer over ~32 KiB, so a helper whose
+// final was longer lost its whole result (issue #1306, round 4). Here the
+// result text is bounded by the contract instead — at most
+// SystemFinalResultMaxChars characters — while the rest of the message
+// (everything but result_so_far) still fits the child-send cap. Any message
+// that is not a hand-back is checked exactly as Append checks it. Which of
+// the two entry points is used is decided by the caller's code path; the
+// message's id is never trusted to choose.
+func (s *MessageInboxStore) AppendSystemFinal(ownerKey string, msg generated.SessionMessage) (*AppendResult, error) {
+	return s.appendMessage(ownerKey, msg, true)
+}
+
+func (s *MessageInboxStore) appendMessage(ownerKey string, msg generated.SessionMessage, systemFinal bool) (*AppendResult, error) {
 	if strings.TrimSpace(ownerKey) == "" {
 		return nil, ErrInboxEmptyOwnerKey
 	}
@@ -549,8 +617,8 @@ func (s *MessageInboxStore) Append(ownerKey string, msg generated.SessionMessage
 	if bodyCap <= 0 {
 		bodyCap = DefaultChildSendBodyBytes
 	}
-	if len(raw) > bodyCap {
-		return nil, fmt.Errorf("%w: %d bytes exceeds cap %d", ErrInboxBodyTooLarge, len(raw), bodyCap)
+	if bodyErr := checkInboxBody(msg, raw, bodyCap, systemFinal && peek.Kind == "handback"); bodyErr != nil {
+		return nil, bodyErr
 	}
 
 	mu := s.lock.Get(ownerKey)
@@ -620,11 +688,11 @@ func (s *MessageInboxStore) Append(ownerKey string, msg generated.SessionMessage
 		}
 	}
 
-	// A wake-eligible kind bypasses the unacked-cap and rate checks
-	// entirely — it never even consults them, so it also never consumes a
-	// rate-window slot that would otherwise count against an unrelated
-	// later message.
-	if !classifyEnvelope(peek).WakeEligible {
+	// A cap-exempt kind (the preserved FR-B-010 set — NOT every wake-eligible
+	// kind, FR-012) bypasses the unacked-cap and rate checks entirely — it
+	// never even consults them, so it also never consumes a rate-window slot
+	// that would otherwise count against an unrelated later message.
+	if !classifyEnvelope(peek).CapExempt {
 		unackedMax := s.InboxUnackedMax
 		if unackedMax <= 0 {
 			unackedMax = DefaultInboxUnackedMax
@@ -809,7 +877,7 @@ func (s *MessageInboxStore) ackDetailed(ownerKey string, messageIDs []string) (*
 // Seq is written to disk EXACTLY as it appears in the entries argument —
 // never renumbered — so a Drain cursor issued before this compaction stays
 // valid against the rewritten file. Callers MUST pass entries fresh from
-// readEntries (Seq-backfilled), never a hand-built slice.
+// readEntries, never a hand-built slice.
 //
 // Caller must hold ownerKey's striped lock. acked is the caller's own
 // foldAcked(entries) — passed in rather than recomputed, since every caller
@@ -850,7 +918,28 @@ func (s *MessageInboxStore) compactLocked(ownerKey string, entries []InboxEntry,
 	// consolidation below).
 	compacted := make([]InboxEntry, 0, len(entries))
 	var retainedAckedIDs []string
+	// An answer entry is kept exactly while the question it answers is
+	// retained — dropping it earlier would reopen a retained question.
+	retainedQuestion := map[string]bool{}
 	for _, e := range entries {
+		if e.Kind != InboxEntryMessage || e.Message == nil {
+			continue
+		}
+		p, _, perr := peekEnvelope(*e.Message)
+		if perr != nil || (acked[p.MessageID] && !keepAcked[p.MessageID]) {
+			continue
+		}
+		if p.CorrelationID != "" && answerableKind(p.Kind) {
+			retainedQuestion[p.SessionID+"\x00"+p.CorrelationID] = true
+		}
+	}
+	for _, e := range entries {
+		if e.Kind == InboxEntryAnswer && e.Answer != nil {
+			if retainedQuestion[e.Answer.SessionID+"\x00"+e.Answer.CorrelationID] {
+				compacted = append(compacted, e)
+			}
+			continue
+		}
 		if e.Kind != InboxEntryMessage || e.Message == nil {
 			continue
 		}
@@ -930,7 +1019,7 @@ func (s *MessageInboxStore) Drain(ownerKey, childSessionID, sinceCursor string, 
 	// after one runs. Seq is immune to both: it is assigned once at write
 	// time, carried forward verbatim through compaction (see
 	// InboxEntry.Seq's doc comment and compactLocked), and entries are
-	// always in ascending Seq order (backfillSeq/nextSeqAfter), so "resume
+	// always in ascending Seq order (nextSeqAfter), so "resume
 	// after Seq X" is well-defined regardless of what compaction has done to
 	// the entries BEFORE X. candidateSeq[i] records the Seq that produced
 	// candidates[i], letting the truncation cursor resume scanning
@@ -966,6 +1055,162 @@ func (s *MessageInboxStore) Drain(ownerKey, childSessionID, sinceCursor string, 
 	// the loop scans nothing new (an empty/fully-behind-cursor file), so the
 	// cursor does not move backwards.
 	return candidates, strconv.FormatInt(lastScannedSeq, 10), false, nil
+}
+
+// CorrelationState is where a correlation id stands for one child.
+type CorrelationState string
+
+const (
+	CorrelationUnknown  CorrelationState = "unknown"
+	CorrelationOpen     CorrelationState = "open"
+	CorrelationAnswered CorrelationState = "answered"
+	// CorrelationAnswering: an answer is being delivered right now (or was
+	// delivered and not yet durably recorded) — a second answer must not go out.
+	CorrelationAnswering CorrelationState = "answering"
+)
+
+// CorrelationLookup is LookupCorrelation's result. AnsweredAt is set only for
+// CorrelationAnswered; OpenIDs lists every still-open correlation id the child
+// has raised (oldest first), so a refusal can tell the caller what to use.
+type CorrelationLookup struct {
+	State      CorrelationState
+	AnsweredAt time.Time
+	OpenIDs    []string
+}
+
+// answerableKind is a message kind a parent can answer by correlation id.
+func answerableKind(kind string) bool { return kind == "question" || kind == "blocker" }
+
+// LookupCorrelation resolves correlationID against the question/blocker
+// messages childSessionID has raised under ownerKey and the answers recorded
+// for them.
+func (s *MessageInboxStore) LookupCorrelation(ownerKey, childSessionID, correlationID string) (CorrelationLookup, error) {
+	if strings.TrimSpace(ownerKey) == "" {
+		return CorrelationLookup{}, ErrInboxEmptyOwnerKey
+	}
+	mu := s.lock.Get(ownerKey)
+	mu.Lock()
+	defer mu.Unlock()
+	return s.lookupCorrelationLocked(ownerKey, childSessionID, correlationID)
+}
+
+func answerKey(ownerKey, childSessionID, correlationID string) string {
+	return ownerKey + "\x00" + childSessionID + "\x00" + correlationID
+}
+
+// lookupCorrelationLocked is LookupCorrelation's body; the caller holds
+// ownerKey's lock.
+func (s *MessageInboxStore) lookupCorrelationLocked(ownerKey, childSessionID, correlationID string) (CorrelationLookup, error) {
+	entries, err := s.readEntries(ownerKey)
+	if err != nil {
+		return CorrelationLookup{}, err
+	}
+	answeredAt := map[string]time.Time{}
+	for _, e := range entries {
+		if e.Kind == InboxEntryAnswer && e.Answer != nil && e.Answer.SessionID == childSessionID {
+			answeredAt[e.Answer.CorrelationID] = e.CreatedAt
+		}
+	}
+	res := CorrelationLookup{State: CorrelationUnknown}
+	for _, e := range entries {
+		if e.Kind != InboxEntryMessage || e.Message == nil {
+			continue
+		}
+		p, _, perr := peekEnvelope(*e.Message)
+		if perr != nil || p.SessionID != childSessionID || p.CorrelationID == "" || !answerableKind(p.Kind) {
+			continue
+		}
+		at, answered := answeredAt[p.CorrelationID]
+		if !answered {
+			res.OpenIDs = append(res.OpenIDs, p.CorrelationID)
+		}
+		if p.CorrelationID == correlationID {
+			switch {
+			case answered:
+				res.State, res.AnsweredAt = CorrelationAnswered, at
+			default:
+				res.State = CorrelationOpen
+				if _, busy := s.answerReserved.Load(answerKey(ownerKey, childSessionID, correlationID)); busy {
+					res.State = CorrelationAnswering
+				}
+			}
+		}
+	}
+	return res, nil
+}
+
+// ReserveAnswer is the atomic check-and-claim a respond takes BEFORE it
+// delivers: under the owner lock it resolves correlationID and, when the
+// question is open and not already being answered, reserves it, so two
+// concurrent answers cannot both deliver. The caller must then either
+// RecordAnswer (delivered) or ReleaseAnswer (delivery failed). State is
+// CorrelationOpen exactly when the reservation was taken.
+func (s *MessageInboxStore) ReserveAnswer(ownerKey, childSessionID, correlationID string) (CorrelationLookup, error) {
+	if strings.TrimSpace(ownerKey) == "" {
+		return CorrelationLookup{}, ErrInboxEmptyOwnerKey
+	}
+	mu := s.lock.Get(ownerKey)
+	mu.Lock()
+	defer mu.Unlock()
+	res, err := s.lookupCorrelationLocked(ownerKey, childSessionID, correlationID)
+	if err != nil || res.State != CorrelationOpen {
+		return res, err
+	}
+	s.answerReserved.Store(answerKey(ownerKey, childSessionID, correlationID), struct{}{})
+	return res, nil
+}
+
+// ReleaseAnswer drops a reservation whose delivery failed, leaving the
+// question open for a retry.
+func (s *MessageInboxStore) ReleaseAnswer(ownerKey, childSessionID, correlationID string) {
+	s.answerReserved.Delete(answerKey(ownerKey, childSessionID, correlationID))
+}
+
+// RecordAnswer durably records that correlationID of childSessionID was
+// answered. Idempotent: a second record for the same id appends nothing.
+func (s *MessageInboxStore) RecordAnswer(ownerKey, childSessionID, correlationID string) error {
+	if strings.TrimSpace(ownerKey) == "" {
+		return ErrInboxEmptyOwnerKey
+	}
+	mu := s.lock.Get(ownerKey)
+	mu.Lock()
+	defer mu.Unlock()
+	entries, err := s.readEntries(ownerKey)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if e.Kind == InboxEntryAnswer && e.Answer != nil &&
+			e.Answer.SessionID == childSessionID && e.Answer.CorrelationID == correlationID {
+			s.answerReserved.Delete(answerKey(ownerKey, childSessionID, correlationID))
+			return nil
+		}
+	}
+	entry := InboxEntry{
+		Kind: InboxEntryAnswer, Seq: nextSeqAfter(entries), CreatedAt: s.now().UTC(),
+		Answer: &InboxAnswer{SessionID: childSessionID, CorrelationID: correlationID},
+	}
+	if err := fileutil.AppendJSONL(s.path(ownerKey), entry); err != nil {
+		return fmt.Errorf("session: inbox: record answer: %w", err)
+	}
+	s.answerReserved.Delete(answerKey(ownerKey, childSessionID, correlationID))
+	return nil
+}
+
+// Entries returns the owner key's raw durable inbox entries in write order —
+// message lines and ack lines alike, with NO ack filtering. Drain is the
+// parent-facing surface (unacked only, cursor paginated); Entries is the raw
+// stream for callers that must answer "does this entry exist and has it been
+// acknowledged" — boot recovery's unacked scan and regression tests —
+// without re-implementing the on-disk format.
+func (s *MessageInboxStore) Entries(ownerKey string) ([]InboxEntry, error) {
+	if strings.TrimSpace(ownerKey) == "" {
+		return nil, ErrInboxEmptyOwnerKey
+	}
+	mu := s.lock.Get(ownerKey)
+	mu.Lock()
+	defer mu.Unlock()
+	return s.readEntries(ownerKey)
 }
 
 // Latest returns the newest message for childSessionID, including messages
@@ -1081,4 +1326,56 @@ func (s *MessageInboxStore) Peek(ownerKey, childSessionID string) (*PeekSnapshot
 		}
 	}
 	return snap, nil
+}
+
+// ParentNotNotifiedMarker is the fixed phrase publishUpward adds to a cap
+// refusal when the not_delivered record could not be written (FR-013): the
+// child's refusal text then also tells the child the parent could not be told.
+const ParentNotNotifiedMarker = "parent not notified"
+
+// InboxRefusalReason maps an Append error to the not_delivered reason, and
+// reports false for every error that is not one of the four cap refusals
+// (a malformed message, depth, empty owner, I/O or the unsequenced-entry error
+// is an error, not a cap refusal, and is never recorded as not_delivered).
+func InboxRefusalReason(err error) (generated.DelegateNotDeliveredSummaryLastReason, bool) {
+	switch {
+	case errors.Is(err, ErrInboxRateLimited):
+		return generated.DelegateNotDeliveredSummaryLastReasonRateLimited, true
+	case errors.Is(err, ErrInboxBodyTooLarge):
+		return generated.DelegateNotDeliveredSummaryLastReasonBodyTooLarge, true
+	case errors.Is(err, ErrInboxPerChildCeiling):
+		return generated.DelegateNotDeliveredSummaryLastReasonQuestionBlockerCeiling, true
+	case errors.Is(err, ErrInboxSessionFull):
+		return generated.DelegateNotDeliveredSummaryLastReasonUnackedCap, true
+	}
+	return "", false
+}
+
+// checkInboxBody applies the body cap. For a system-authored final
+// hand-back (systemFinalHandback) the result text is bounded by
+// SystemFinalResultMaxChars and only the rest of the message by bodyCap;
+// everything else must fit bodyCap whole.
+func checkInboxBody(msg generated.SessionMessage, raw []byte, bodyCap int, systemFinalHandback bool) error {
+	if !systemFinalHandback {
+		if len(raw) > bodyCap {
+			return fmt.Errorf("%w: %d bytes exceeds cap %d", ErrInboxBodyTooLarge, len(raw), bodyCap)
+		}
+		return nil
+	}
+	handback, err := msg.AsSessionMessageHandback()
+	if err != nil {
+		return fmt.Errorf("session: inbox: decode system final hand-back: %w", err)
+	}
+	if n := utf8.RuneCountInString(handback.ResultSoFar); n > SystemFinalResultMaxChars {
+		return fmt.Errorf("%w: final result has %d characters, exceeds %d", ErrInboxBodyTooLarge, n, SystemFinalResultMaxChars)
+	}
+	handback.ResultSoFar = ""
+	rest, err := json.Marshal(handback)
+	if err != nil {
+		return fmt.Errorf("session: inbox: encode system final hand-back: %w", err)
+	}
+	if len(rest) > bodyCap {
+		return fmt.Errorf("%w: final hand-back without its result is %d bytes, exceeds cap %d", ErrInboxBodyTooLarge, len(rest), bodyCap)
+	}
+	return nil
 }

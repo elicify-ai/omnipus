@@ -18,6 +18,8 @@ package runner
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 )
 
@@ -175,11 +177,18 @@ type RunOptions struct {
 	// Env is the environment variable set for the external process. The driver
 	// merges this with its own required variables and the platform env allowlist.
 	Env []string
-	// TimeoutSeconds is the maximum wall-clock duration for this run.
-	// Zero means the driver's built-in default applies.
+	// TimeoutSeconds is an optional wall-clock bound for this run; zero means
+	// no bound at all. Agent work (delegation, steered sessions, task runs)
+	// always leaves it zero — work has no time limit and ends only when it
+	// finishes or ctx is cancelled by an explicit Stop (issue #1306). The one
+	// caller that sets it is the bounded executor smoke-test probe
+	// (pkg/gateway/rest_executor_smoketest.go), a short config check, not work.
 	TimeoutSeconds int
 	// MaxTurns is the maximum number of agentic turns the external agent may
-	// take. Zero means the driver's built-in default applies.
+	// take — the agent's resolved tool-iteration limit (1-1000), passed by the
+	// dispatch site (#904 D4). It is REQUIRED: there is no built-in default
+	// (FR-004, no hidden default), so Run refuses a value <= 0 with
+	// ErrMaxTurnsRequired instead of silently substituting a cap.
 	MaxTurns int
 
 	// CLIPath is the filesystem path to the CLI binary to exec (MAJ-5 /
@@ -190,6 +199,11 @@ type RunOptions struct {
 	// (MAJ-5 / ExecutorConfig.cli_args). These are passed to execve literally —
 	// the dispatch site tokenises the free-form cli_args string (no shell).
 	CLIArgs []string
+	// PresetArgs are the person's Settings preset parameters for this CLI,
+	// tokenised (r17 §3.7). Each driver appends them after the filtered
+	// CLIArgs and never filters them: the last occurrence of a repeated flag
+	// wins, so a person's value beats an agent flag of the same name.
+	PresetArgs []string
 	// EnvOverrides are additional environment variables merged into Env for the
 	// spawned process (MAJ-5 / ExecutorConfig.env_overrides). Omnipus-internal
 	// keys (OMNIPUS_*) are never overridable — the driver's env builder rejects
@@ -203,6 +217,14 @@ type RunOptions struct {
 	// "provider/model") is simply omitted so the CLI falls back to its own
 	// configured default rather than being passed a garbage flag value.
 	Model string
+
+	// resumeNativeID carries the CLI's own captured native-conversation id into
+	// a resumed invocation (FR-043). It is deliberately UNEXPORTED: only a
+	// driver's own Resume sets it, from the id it captured during a prior Run's
+	// stream — never a caller, and never the fresh-dispatch RunID (which is an
+	// Omnipus identifier the CLI has never seen). Empty means a fresh run.
+	// This is an in-process field only; no wire type is involved.
+	resumeNativeID string
 }
 
 // ConnectionTestResult holds the outcome of an ExternalAgentRunner.Test call.
@@ -231,11 +253,14 @@ type ConnectionTestResult struct {
 //  2. Permission requests (EventKindPermissionRequest) MUST be routed to the
 //     consent layer; the caller uses Decide to route the verdict back.
 //     Deny-by-default when no consent handler is registered.
-//  3. Runs are resumable: if RunOptions.RunID is set and a prior session exists,
-//     the driver SHOULD resume it.
+//  3. Runs are resumable via native-conversation resume: after a Run whose CLI
+//     stream announced its own session/thread id, Resume continues THAT native
+//     conversation. When no such id was captured, Resume refuses visibly rather
+//     than silently starting a fresh conversation (FR-043, BDD-05.6).
 //  4. Cancel terminates the external process and closes the Events channel.
-//  5. Input sends additional text to a running interactive agent (best-effort;
-//     not all CLIs support mid-run input injection).
+//  5. Input delivers text to a running agent only where that is possible; a
+//     driver that cannot deliver (no live conversation, or no mid-run injection
+//     channel) returns a visible error, never a silent success (FR-043, DEL-20).
 //  6. Test validates the runner configuration without running real work.
 //
 // Implementors: the U2 CLI drivers (claude-code, codex, opencode). The FakeRunner
@@ -260,18 +285,60 @@ type ExternalAgentRunner interface {
 	// After Cancel, the Events channel returned by Run is closed.
 	Cancel()
 
-	// Input sends additional user input text to the running agent (best-effort).
-	// Implementations that do not support mid-run input injection return nil without
-	// error (the input is silently discarded).
+	// Input attempts to deliver additional user input text to a running agent.
+	// A driver that cannot deliver the text — because there is no live
+	// conversation to steer, or because the CLI exposes no mid-run injection
+	// channel (true of all three external CLIs: claude -p, codex exec and
+	// opencode run) — MUST return a visible error. It MUST NOT silently discard
+	// the text and return nil (FR-043, BDD-05.6, DEL-20).
 	Input(text string) error
 
-	// Resume starts (or re-attaches to) an existing run by its stable RunID.
-	// If no prior session with that ID exists, the behavior is driver-defined
-	// (most drivers start a fresh run).
-	Resume(ctx context.Context, runID string) (<-chan RunEvent, error)
+	// Resume continues the CLI's own native conversation captured from a prior
+	// Run, identified by the session/thread id the CLI announced on that run's
+	// stream. When no such id was captured the driver refuses with a visible error
+	// — it MUST NOT start a fresh conversation and report success (FR-043,
+	// BDD-05.6). runID is the Omnipus dispatch label for the resumed run, never the
+	// CLI's native id.
+	//
+	// The optional instruction is the new text S to deliver to the resumed
+	// native conversation (FR-043: "the new instruction S reaches that same
+	// conversation"). It reaches the CLI the same way a fresh Run's prompt does
+	// — over the child's stdin, which claude -p / codex exec / opencode run all
+	// consume without a positional prompt — so a delivery resume does NOT
+	// replay the original prompt. It is variadic (rather than a plain string)
+	// so a BARE continuation (`Resume(ctx, runID)`) stays a one-argument call:
+	// existing callers and tests did not have to change. A driver that cannot
+	// deliver the instruction (no live native conversation to resume) refuses
+	// visibly rather than silently dropping it (BDD-05.6, DEL-20).
+	Resume(ctx context.Context, runID string, instruction ...string) (<-chan RunEvent, error)
 
 	// Test validates the runner configuration without running real work.
 	// It checks: (1) the CLI binary is present on PATH; (2) it is authenticated;
 	// (3) a minimal JSON handshake succeeds.
 	Test(ctx context.Context) ConnectionTestResult
+}
+
+// ErrMaxTurnsRequired is returned by a driver's Run when RunOptions.MaxTurns is
+// not a positive turn cap. The dispatch site always passes the agent's resolved
+// tool-iteration limit (#904 D4), so a missing cap is a programming error; the
+// run is refused rather than given a hidden default (#904 FR-004).
+var ErrMaxTurnsRequired = errors.New(
+	"RunOptions.MaxTurns must be a positive turn cap (the agent's resolved tool-iteration limit); there is no built-in default")
+
+// validateMaxTurns rejects a non-positive turn cap for the named driver.
+func validateMaxTurns(driver string, maxTurns int) error {
+	if maxTurns <= 0 {
+		return fmt.Errorf("%s driver: %w (got %d)", driver, ErrMaxTurnsRequired, maxTurns)
+	}
+	return nil
+}
+
+// resumeInstruction resolves the optional instruction carried by a variadic
+// Resume call (see ExternalAgentRunner.Resume). Zero args, or an explicitly
+// empty first arg, is a bare continuation — no new instruction is delivered.
+func resumeInstruction(instruction []string) string {
+	if len(instruction) == 0 {
+		return ""
+	}
+	return instruction[0]
 }

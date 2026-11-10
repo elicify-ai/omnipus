@@ -18,10 +18,12 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
-// dispatchUnroutableMessage is the single-shot dispatcher for a message with
-// no resolvable steering target: processMessage, ADR-051 error translation,
-// and the C8 terminal-frame guarantee, tracked in activeRequests (#265) so
-// shutdown drains it.
+// dispatchUnroutableMessage is the single-shot dispatcher for an admitted
+// message with no resolvable steering target: processMessage, ADR-051 error
+// translation, and the C8 terminal-frame guarantee, tracked in activeRequests
+// (#265) so shutdown drains it. If shutdown has already closed intake,
+// launchUnroutableMessage drops the message before this function starts and no
+// terminal frame is emitted; channels stop first, so that frame is undeliverable.
 func (al *AgentLoop) dispatchUnroutableMessage(runCtx context.Context, msg bus.InboundMessage) {
 	defer al.endActiveRequest()
 
@@ -105,7 +107,7 @@ func (al *AgentLoop) dispatchUnroutableMessage(runCtx context.Context, msg bus.I
 					}()
 					termCtx, termCancel := context.WithTimeout(context.Background(), 5*time.Second)
 					defer termCancel()
-					al.publishResponseIfNeeded(termCtx, ag, msg.Channel, msg.ChatID, response)
+					al.publishResponseIfNeeded(termCtx, ag, msg.Channel, msg.ChatID, response, msg.SessionID)
 				}()
 				published = true
 			}
@@ -125,16 +127,23 @@ func (al *AgentLoop) dispatchUnroutableMessage(runCtx context.Context, msg bus.I
 		// passing the error VALUE keeps the sentinels intact, so a turn
 		// refused for a known reason (agent on no workspace) says so
 		// instead of falling to the "we can't tell why" copy.
-		response = TranslateTurnError(err).Message
+		response = userVisibleTurnError(err)
 	}
 	if response != "" {
-		al.publishResponseIfNeeded(runCtx, ag, msg.Channel, msg.ChatID, response)
+		al.publishResponseIfNeeded(runCtx, ag, msg.Channel, msg.ChatID, response, msg.SessionID)
 		published = true
 	}
 }
 
 func (al *AgentLoop) launchUnroutableMessage(runCtx context.Context, msg bus.InboundMessage) {
 	if !al.beginActiveRequest() {
+		logger.WarnCF("agent", "active request admission refused after intake closed", map[string]any{
+			"site":        "launchUnroutableMessage",
+			"channel":     msg.Channel,
+			"chat_id":     msg.ChatID,
+			"session_id":  msg.SessionID,
+			"session_key": msg.SessionKey,
+		})
 		return
 	}
 	go al.dispatchUnroutableMessage(runCtx, msg)

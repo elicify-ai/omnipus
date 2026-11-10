@@ -9,11 +9,12 @@ on:
     # baseline lands on the first push to the release branch after this
     # change; the first PR scanned before that may still report unbaselined
     # alerts once, then self-correct.
-    branches: [main, 'release/**']
+    branches: [main, release/v0.1.1]
   pull_request:
     # Operator direction (2026-08-06): feature PRs target release/*, not
     # main — without this filter no release PR ever gets a CodeQL scan.
-    branches: [main, 'release/**']
+    branches: [main, release/v0.1.1]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
   schedule:
     # Weekly scan on Sunday 02:17 UTC — odd minute to avoid the top-of-hour scheduler rush
     - cron: '17 2 * * 0'

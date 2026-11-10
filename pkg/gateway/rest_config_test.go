@@ -14,227 +14,98 @@ import (
 	"testing"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
-	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
-	"github.com/elicify-ai/omnipus/pkg/onboarding"
-	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // --- moved from rest.go tests 2026-09-15 ---
 
-// TestRefreshConfigAndRewireServices_RejectsOnCorruptedEnabledChannelCredential
-// pins Task 1: refreshConfigAndRewireServices must reject the in-memory
-// refresh (return an error, do NOT SwapConfig) when an ENABLED channel's
-// credential ref is present in the store but fails to decrypt — a corrupted
-// store entry / wrong-master-key scenario, distinct from (and worse than) a
-// simple missing ref. This is the REST-write-path counterpart to
-// TestExecuteReload_RejectsOnCorruptedEnabledChannelCredential
-// (reload_rollback_test.go) and
-// TestGatewayBoot_CorruptedCredentialForEnabledChannelFailsFast
-// (boot_order_test.go).
-func TestRefreshConfigAndRewireServices_RejectsOnCorruptedEnabledChannelCredential(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("OMNIPUS_MASTER_KEY", fixedHexKey)
-
-	credsPath := filepath.Join(tmpDir, "credentials.json")
-	writeCorruptedCredentialsFile(t, credsPath, "TELEGRAM_TOKEN")
-
-	credStore := credentials.NewStore(credsPath)
-	require.NoError(t, credentials.Unlock(credStore))
-
-	configPath := filepath.Join(tmpDir, "config.json")
-	cfgData := map[string]any{
-		"version": config.CurrentVersion,
-		"agents": map[string]any{
-			"defaults": map[string]any{"model_name": "test-model", "workspace": tmpDir, "max_tokens": 4096},
-			"list":     []any{},
-		},
-		"gateway":   map[string]any{"host": "127.0.0.1", "port": 19989},
-		"providers": []any{},
-		"channels": map[string]any{
-			"telegram": map[string]any{"type": "telegram", "enabled": true, "token_ref": "TELEGRAM_TOKEN"},
-		},
+// #1277 founder decision 2026-10-12: one unreadable channel secret must not reject a Settings refresh.
+func TestRefreshConfigAndRewireServices_UnreadableChannelCredentialApplies(t *testing.T) {
+	f := newIssue1277Fixture(t)
+	require.NoError(t, f.store.Set(issue1277BrokenRef, "qa1277-before-tamper"))
+	cfg, bundle, _ := f.boot(t)
+	api := f.startAPI(t, cfg, bundle)
+	issue1277TamperSingleEntry(t, f, issue1277BrokenRef)
+	f.cfg.Gateway.LogLevel = "debug"
+	require.NoError(t, config.SaveConfig(f.configPath, f.cfg))
+	require.NoError(t, api.refreshConfigAndRewireServices(f.configPath),
+		"single unreadable secret must not reject an unrelated Settings edit")
+	require.Equal(t, "debug", api.agentLoop.GetConfig().Gateway.LogLevel)
+	issue1277RequireHealthyProvider(t, api.agentLoop)
+	_, errs := credentials.ResolveBundle(api.agentLoop.GetConfig(), f.store)
+	var entryErr *credentials.EntryAuthError
+	found := false
+	for _, err := range errs {
+		if errors.As(err, &entryErr) && entryErr.Name == issue1277BrokenRef {
+			found = true
+		}
 	}
-	data, err := json.Marshal(cfgData)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(configPath, data, 0o600))
-
-	baseCfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
-		},
-		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 19989},
-	}
-	msgBus := bus.NewMessageBus()
-	al := mustAgentLoop(t, baseCfg, msgBus, &restMockProvider{})
-
-	api := &restAPI{
-		agentLoop:     al,
-		allowedOrigin: "http://localhost:3000",
-		onboardingMgr: onboarding.NewManager(tmpDir),
-		homePath:      tmpDir,
-		taskStore:     task.New(tmpDir + "/tasks"),
-		credStore:     credStore,
-	}
-
-	err = api.refreshConfigAndRewireServices(configPath)
-	require.Error(t, err,
-		"expected refreshConfigAndRewireServices to reject a corrupted enabled-channel credential")
-	assert.Contains(t, err.Error(), "TELEGRAM_TOKEN")
-	assert.Contains(t, err.Error(), "failed to resolve")
-
-	// The broken config must NOT have been swapped into the live in-memory
-	// pointer — the gateway keeps serving the previous good config even
-	// though config.json on disk was already durably written before this
-	// method ran.
-	assert.Same(t, baseCfg, al.GetConfig(), "in-memory config must not be swapped on rejection")
+	require.True(t, found, "server-side resolution must retain the ref-naming error, never swallow it")
 }
 
-// TestRefreshConfigAndRewireServices_RejectsOnMissingEnabledChannelCredential
-// pins the other half of Task 1: a genuinely missing (NotFoundError)
-// credential ref on an ENABLED channel must also be rejected, not merely the
-// "worse than missing" corrupted case above — this path previously
-// Warn-logged even a flatly missing ref on an enabled channel.
-func TestRefreshConfigAndRewireServices_RejectsOnMissingEnabledChannelCredential(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("OMNIPUS_MASTER_KEY", fixedHexKey)
-
-	credStore := credentials.NewStore(filepath.Join(tmpDir, "credentials.json"))
-	require.NoError(t, credentials.Unlock(credStore))
-	// Deliberately do NOT store "TELEGRAM_TOKEN" — the ref is genuinely absent.
-
-	configPath := filepath.Join(tmpDir, "config.json")
-	cfgData := map[string]any{
-		"version": config.CurrentVersion,
-		"agents": map[string]any{
-			"defaults": map[string]any{"model_name": "test-model", "workspace": tmpDir, "max_tokens": 4096},
-			"list":     []any{},
-		},
-		"gateway":   map[string]any{"host": "127.0.0.1", "port": 19990},
-		"providers": []any{},
-		"channels": map[string]any{
-			"telegram": map[string]any{"type": "telegram", "enabled": true, "token_ref": "TELEGRAM_TOKEN"},
-		},
-	}
-	data, err := json.Marshal(cfgData)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(configPath, data, 0o600))
-
-	baseCfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
-		},
-		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 19990},
-	}
-	msgBus := bus.NewMessageBus()
-	al := mustAgentLoop(t, baseCfg, msgBus, &restMockProvider{})
-
-	api := &restAPI{
-		agentLoop:     al,
-		allowedOrigin: "http://localhost:3000",
-		onboardingMgr: onboarding.NewManager(tmpDir),
-		homePath:      tmpDir,
-		taskStore:     task.New(tmpDir + "/tasks"),
-		credStore:     credStore,
-	}
-
-	err = api.refreshConfigAndRewireServices(configPath)
-	require.Error(t, err,
-		"expected rejection when an enabled channel's credential ref is genuinely missing, not just Warn-logged")
-	assert.Contains(t, err.Error(), "TELEGRAM_TOKEN")
-	assert.Contains(t, err.Error(), "not found in store")
-
-	assert.Same(t, baseCfg, al.GetConfig(), "in-memory config must not be swapped on rejection")
+// #1277 founder decision 2026-10-12: a missing enabled-channel secret must not reject refresh.
+func TestRefreshConfigAndRewireServices_MissingChannelCredentialApplies(t *testing.T) {
+	f := newIssue1277Fixture(t)
+	require.NoError(t, f.store.Set(issue1277BrokenRef, "qa1277-before-delete"))
+	cfg, bundle, _ := f.boot(t)
+	api := f.startAPI(t, cfg, bundle)
+	require.NoError(t, f.store.Delete(issue1277BrokenRef))
+	f.cfg.Gateway.LogLevel = "debug"
+	require.NoError(t, config.SaveConfig(f.configPath, f.cfg))
+	require.NoError(t, api.refreshConfigAndRewireServices(f.configPath),
+		"a deleted integration secret must not reject an unrelated Settings edit")
+	require.Equal(t, "debug", api.agentLoop.GetConfig().Gateway.LogLevel)
+	issue1277RequireHealthyProvider(t, api.agentLoop)
+	_, err := f.store.Get(issue1277BrokenRef)
+	var missing *credentials.NotFoundError
+	require.ErrorAs(t, err, &missing)
+	require.Equal(t, issue1277BrokenRef, missing.Name)
 }
 
-// TestRefreshConfigAndRewireServices_RejectsOnCorruptedEnabledMailboxCredential
-// pins the mailbox gap in buildEnabledRefMap: cfg.Mailboxes[agentID]
-// [workspaceID].PasswordRef is resolved by credentials.ResolveAll via its
-// own dedicated per-(agent,workspace) loop (pkg/credentials/inject.go) — NOT
-// part of the nonChannelRefs slice — so buildEnabledRefMap omitted mailbox
-// refs entirely despite its doc comment's (factually wrong) claim to mirror
-// everything ResolveAll's nonChannelRefs can error on.
-//
-// bootCredentials and executeReload happened to be masked from this gap by
-// their own unconditional InjectFromConfig call, which independently walks
-// cfg.Mailboxes and treats ANY mailbox resolution failure as fatal
-// regardless of Enabled — see InjectFromConfig, pkg/credentials/inject.go.
-// refreshConfigAndRewireServices has no InjectFromConfig call, only the
-// buildEnabledRefMap-gated ResolveBundle check below, so this is the call
-// site the gap was actually unmasked at: a corrupted enabled-mailbox
-// credential ref fell through to a Warn-only log instead of being escalated
-// — the opposite of what this whole credential-escalation cluster
-// guarantees for every other in-use credential category. This is reached in
-// production by setAgentMailbox (rest_mailbox.go) itself, via
-// safeUpdateConfigJSON -> updateConfigJSONLocked ->
-// refreshConfigAndRewireServices.
-func TestRefreshConfigAndRewireServices_RejectsOnCorruptedEnabledMailboxCredential(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("OMNIPUS_MASTER_KEY", fixedHexKey)
-
-	credsPath := filepath.Join(tmpDir, "credentials.json")
-	writeCorruptedCredentialsFile(t, credsPath, "MAILBOX_PW_REF")
-
-	credStore := credentials.NewStore(credsPath)
-	require.NoError(t, credentials.Unlock(credStore))
-
-	configPath := filepath.Join(tmpDir, "config.json")
-	cfgData := map[string]any{
-		"version": config.CurrentVersion,
-		"agents": map[string]any{
-			"defaults": map[string]any{"model_name": "test-model", "workspace": tmpDir, "max_tokens": 4096},
-			"list":     []any{},
-		},
-		"gateway":   map[string]any{"host": "127.0.0.1", "port": 19991},
-		"providers": []any{},
-		"mailboxes": map[string]any{
-			"mia": map[string]any{
-				"default": map[string]any{
-					"enabled":      true,
-					"workspace_id": "default",
-					"password_ref": "MAILBOX_PW_REF",
-				},
-			},
+// #1277 founder decision 2026-10-12: an unreadable mailbox secret is one integration, not the store.
+func TestRefreshConfigAndRewireServices_UnreadableMailboxCredentialApplies(t *testing.T) {
+	f := newIssue1277Fixture(t)
+	require.NoError(t, f.store.Set(issue1277BrokenRef, "qa1277-healthy-line"))
+	const badRef = "QA1277_MAILBOX_UNREADABLE"
+	const healthyRef = "QA1277_MAILBOX_HEALTHY"
+	t.Setenv(badRef, "")
+	t.Setenv(healthyRef, "")
+	require.NoError(t, f.store.Set(badRef, "qa1277-before-tamper"))
+	require.NoError(t, f.store.Set(healthyRef, "qa1277-healthy-mailbox"))
+	f.cfg.Mailboxes = config.MailboxesConfig{
+		"main": {
+			"default": {Enabled: true, WorkspaceID: "default", PasswordRef: badRef, IMAPHost: "127.0.0.1", IMAPPort: 993, SMTPHost: "127.0.0.1", Username: "qa1277-bad@example.invalid"},
+			"healthy": {Enabled: true, WorkspaceID: "healthy", PasswordRef: healthyRef, IMAPHost: "127.0.0.1", IMAPPort: 993, SMTPHost: "127.0.0.1", Username: "qa1277-healthy@example.invalid"},
 		},
 	}
-	data, err := json.Marshal(cfgData)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(configPath, data, 0o600))
-
-	baseCfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
-		},
-		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 19991},
-	}
-	msgBus := bus.NewMessageBus()
-	al := mustAgentLoop(t, baseCfg, msgBus, &restMockProvider{})
-
-	api := &restAPI{
-		agentLoop:     al,
-		allowedOrigin: "http://localhost:3000",
-		onboardingMgr: onboarding.NewManager(tmpDir),
-		homePath:      tmpDir,
-		taskStore:     task.New(tmpDir + "/tasks"),
-		credStore:     credStore,
-	}
-
-	err = api.refreshConfigAndRewireServices(configPath)
-	require.Error(t, err,
-		"expected refreshConfigAndRewireServices to reject a corrupted enabled-mailbox credential")
-	assert.Contains(t, err.Error(), "MAILBOX_PW_REF")
-	assert.Contains(t, err.Error(), "failed to resolve")
-
-	// The broken config must NOT have been swapped into the live in-memory
-	// pointer, same invariant as the enabled-channel counterpart above.
-	assert.Same(t, baseCfg, al.GetConfig(), "in-memory config must not be swapped on rejection")
+	require.NoError(t, config.SaveConfig(f.configPath, f.cfg))
+	cfg, bundle, _ := f.boot(t)
+	api := f.startAPI(t, cfg, bundle)
+	issue1277TamperSingleEntry(t, f, badRef)
+	f.cfg.Gateway.LogLevel = "debug"
+	require.NoError(t, config.SaveConfig(f.configPath, f.cfg))
+	require.NoError(t, api.refreshConfigAndRewireServices(f.configPath),
+		"one unreadable mailbox password must not reject refresh or affect other integrations")
+	require.Equal(t, "debug", api.agentLoop.GetConfig().Gateway.LogLevel)
+	issue1277RequireHealthyProvider(t, api.agentLoop)
+	// Existing mailbox wire contract has no reason field. Pin the real
+	// server-side scoped resolution and runtime exclusion; report the gap.
+	errs := credentials.InjectFromConfig(api.agentLoop.GetConfig(), f.store)
+	require.Len(t, errs, 1)
+	var scoped *credentials.CredentialRefError
+	require.ErrorAs(t, errs[0], &scoped)
+	require.Equal(t, credentials.ScopeMailbox, scoped.Scope)
+	require.Equal(t, "main", scoped.Owner)
+	require.Equal(t, "default", scoped.SubOwner)
+	require.Equal(t, badRef, scoped.Ref)
+	require.Contains(t, scoped.Error(), badRef)
+	ready := buildMailboxes(api.agentLoop.GetConfig(), f.store, nil, nil)
+	require.Len(t, ready, 1, "only the bad mailbox must be excluded from runtime")
+	require.Equal(t, "healthy", ready[0].WorkspaceID)
 }
 
 // TestSanitizeConfigForWire pins the shared wire-sanitizer getConfig (and

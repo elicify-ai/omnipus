@@ -343,7 +343,7 @@ func TestChatGoal_GoalTryLimitBoundsRoundsAtFive(t *testing.T) {
 			t.Fatalf("round %d: a met+evidence claim must record deferred adjudication work", round)
 		}
 		al.dispatchDeferredGoalAdjudication(r.goalDeferredAdjudication)
-		rec := goalRecordForSessionOrNil(sid)
+		rec := goalRecordForSessionOrNil(t, sid)
 		if round < limit {
 			if rec == nil || rec.Round != round {
 				t.Fatalf("round %d (< limit %d): the goal must still be active at round %d, got %+v", round, limit, round, rec)

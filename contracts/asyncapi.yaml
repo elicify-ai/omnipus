@@ -41,14 +41,14 @@ channels:
         $ref: '#/components/messages/MessageFrame'
       CancelFrame:
         $ref: '#/components/messages/CancelFrame'
+      RedirectFrame:
+        $ref: '#/components/messages/RedirectFrame'
       PingFrame:
         $ref: '#/components/messages/PingFrame'
       AttachSessionFrame:
         $ref: '#/components/messages/AttachSessionFrame'
       DevicePairingResponseFrame:
         $ref: '#/components/messages/DevicePairingResponseFrame'
-      SessionCloseFrame:
-        $ref: '#/components/messages/SessionCloseFrame'
       WhatsAppPairingSubscribeFrame:
         $ref: '#/components/messages/WhatsAppPairingSubscribeFrame'
       SessionStartedFrame:
@@ -87,10 +87,18 @@ channels:
         $ref: '#/components/messages/ReplayErrorFrame'
       RateLimitFrame:
         $ref: '#/components/messages/RateLimitFrame'
+      ProviderRetryFrame:
+        $ref: '#/components/messages/ProviderRetryFrame'
+      ProviderStatusFrame:
+        $ref: '#/components/messages/ProviderStatusFrame'
+      ContextWindowNoticeFrame:
+        $ref: '#/components/messages/ContextWindowNoticeFrame'
+      ProviderFallbackFrame:
+        $ref: '#/components/messages/ProviderFallbackFrame'
+      ProviderFallbackNote:
+        $ref: '#/components/messages/ProviderFallbackNote'
       MediaFrame:
         $ref: '#/components/messages/MediaFrame'
-      AgentSwitchedFrame:
-        $ref: '#/components/messages/AgentSwitchedFrame'
       ToolApprovalRequiredFrame:
         $ref: '#/components/messages/ToolApprovalRequiredFrame'
       ToolApprovalResolvedFrame:
@@ -105,8 +113,6 @@ channels:
         $ref: '#/components/messages/CancelStageFrame'
       PongFrame:
         $ref: '#/components/messages/PongFrame'
-      SessionCloseAckFrame:
-        $ref: '#/components/messages/SessionCloseAckFrame'
       SessionModeUpdateFrame:
         $ref: '#/components/messages/SessionModeUpdateFrame'
       SessionModeUpdatedFrame:
@@ -135,14 +141,38 @@ channels:
         $ref: '#/components/messages/BrowserHandoverNoticeFrame'
       GoalOutcomeFrame:
         $ref: '#/components/messages/GoalOutcomeFrame'
+      HelperEventFrame:
+        $ref: '#/components/messages/HelperEventFrame'
       LibraryChangedFrame:
         $ref: '#/components/messages/LibraryChangedFrame'
+      AgentCreatedFrame:
+        $ref: '#/components/messages/AgentCreatedFrame'
       SessionSnapshotFrame:
         $ref: '#/components/messages/SessionSnapshotFrame'
       CatchUpCompleteFrame:
         $ref: '#/components/messages/CatchUpCompleteFrame'
       UserMessageFrame:
         $ref: '#/components/messages/UserMessageFrame'
+      MailPanelObserverFrame:
+        $ref: '#/components/messages/MailPanelObserverFrame'
+      MailPanelObserverAckFrame:
+        $ref: '#/components/messages/MailPanelObserverAckFrame'
+      MailPanelObserverErrorFrame:
+        $ref: '#/components/messages/MailPanelObserverErrorFrame'
+      SecretRequestFrame:
+        $ref: '#/components/messages/SecretRequestFrame'
+      SecretRequestResolvedFrame:
+        $ref: '#/components/messages/SecretRequestResolvedFrame'
+      AttachRoomFrame:
+        $ref: '#/components/messages/AttachRoomFrame'
+      RoomSnapshotFrame:
+        $ref: '#/components/messages/RoomSnapshotFrame'
+      RoomEntryFrame:
+        $ref: '#/components/messages/RoomEntryFrame'
+      RoomMemberStateFrame:
+        $ref: '#/components/messages/RoomMemberStateFrame'
+      RoomMetaFrame:
+        $ref: '#/components/messages/RoomMetaFrame'
   browser:
     address: /api/v1/browser/ws
     description: 'Live interactive browser channel (ADR-038). A dedicated WebSocket, separate from the chat channel, carrying
@@ -244,6 +274,14 @@ operations:
       '
     messages:
     - $ref: '#/channels/chat/messages/CancelFrame'
+  sendRedirect:
+    action: send
+    channel:
+      $ref: '#/channels/chat'
+    summary: 'Redirect a session — the /stop-redirect command''s transport: stop the named session''s own in-progress turn, then continue that same chat (root or helper) with the instruction as its next user message. Sent by the SPA''s client-side interception of the typed command, never as chat text.
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/RedirectFrame'
   sendPing:
     action: send
     channel:
@@ -276,16 +314,6 @@ operations:
       '
     messages:
     - $ref: '#/channels/chat/messages/DevicePairingResponseFrame'
-  sendSessionClose:
-    action: send
-    channel:
-      $ref: '#/channels/chat'
-    summary: 'Explicit session close request. The server unregisters the session, fires CloseSession on the agent loop, and
-      responds with session_close_ack.
-
-      '
-    messages:
-    - $ref: '#/channels/chat/messages/SessionCloseFrame'
   sendWhatsAppPairingSubscribe:
     action: send
     channel:
@@ -297,6 +325,61 @@ operations:
       '
     messages:
     - $ref: '#/channels/chat/messages/WhatsAppPairingSubscribeFrame'
+  sendMailPanelObserver:
+    action: send
+    channel:
+      $ref: '#/channels/chat'
+    messages:
+    - $ref: '#/channels/chat/messages/MailPanelObserverFrame'
+  sendAttachRoom:
+    action: send
+    channel:
+      $ref: '#/channels/chat'
+    summary: Attach to a room and catch up after a cursor (spec K45).
+    messages:
+    - $ref: '#/channels/chat/messages/AttachRoomFrame'
+  receiveSecretRequest:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: Secure secret card request — value-free (server → client).
+    messages:
+    - $ref: '#/channels/chat/messages/SecretRequestFrame'
+  receiveSecretRequestResolved:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: A secret request left the pending state (server → client).
+    messages:
+    - $ref: '#/channels/chat/messages/SecretRequestResolvedFrame'
+  receiveRoomSnapshot:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: Room catch-up answer to attach_room (server → client).
+    messages:
+    - $ref: '#/channels/chat/messages/RoomSnapshotFrame'
+  receiveRoomEntry:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: A new room entry, live (server → client).
+    messages:
+    - $ref: '#/channels/chat/messages/RoomEntryFrame'
+  receiveRoomMemberState:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: A room member's delivery state changed (server → client).
+    messages:
+    - $ref: '#/channels/chat/messages/RoomMemberStateFrame'
+  receiveRoomMeta:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: Room members, mutes, pause, cost or read-only state changed (server → client).
+    messages:
+    - $ref: '#/channels/chat/messages/RoomMetaFrame'
   receiveSessionStarted:
     action: receive
     channel:
@@ -423,7 +506,7 @@ operations:
     summary: >
       ADR-053 §Contract Surface — "Mid-span subagent frames". A mid-span
       typed-message ping (progress/checkpoint/artifact/blocker/question/
-      decision_request/error/handback/steer/respond) riding between the
+      error/handback/steer/respond) riding between the
       subagent_start/subagent_end brackets. Feeds pill/panel/board live;
       full-fidelity data is fetched via delegate.inbox/peek.
     messages:
@@ -510,6 +593,16 @@ operations:
       '
     messages:
     - $ref: '#/channels/chat/messages/RateLimitFrame'
+  receiveContextWindowNotice:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: >
+      Classified context-window diagnostic, live or replayed with its original
+      entry identity and timestamp. Produced and retained independently of the
+      Verbose chat setting; visibility is client-local (ADR-066 MAJ-CW-009).
+    messages:
+    - $ref: '#/channels/chat/messages/ContextWindowNoticeFrame'
   receiveMedia:
     action: receive
     channel:
@@ -519,16 +612,6 @@ operations:
       '
     messages:
     - $ref: '#/channels/chat/messages/MediaFrame'
-  receiveAgentSwitched:
-    action: receive
-    channel:
-      $ref: '#/channels/chat'
-    summary: 'The active agent for a session changed (switch_agent, ADR-071 D4). The SPA updates the active agent in the
-      session store.
-
-      '
-    messages:
-    - $ref: '#/channels/chat/messages/AgentSwitchedFrame'
   receiveLibraryChanged:
     action: receive
     channel:
@@ -541,6 +624,17 @@ operations:
       '
     messages:
     - $ref: '#/channels/chat/messages/LibraryChangedFrame'
+  receiveAgentCreated:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: 'A new agent was durably persisted (REST POST /api/v1/agents, or the create_agent tool). Broadcast to every
+      connected client; the SPA invalidates its cached agent list so the Agent Picker shows the new agent without a reload.
+      This is the same cross-tab-freshness fix as receiveLibraryChanged, for the agent roster instead of the Library tree.
+
+      '
+    messages:
+    - $ref: '#/channels/chat/messages/AgentCreatedFrame'
   receiveToolApprovalRequired:
     action: receive
     channel:
@@ -611,21 +705,11 @@ operations:
       '
     messages:
     - $ref: '#/channels/chat/messages/PongFrame'
-  receiveSessionCloseAck:
-    action: receive
-    channel:
-      $ref: '#/channels/chat'
-    summary: 'Acknowledgement of a session_close client request. The server confirms the session has been closed.
-
-      '
-    messages:
-    - $ref: '#/channels/chat/messages/SessionCloseAckFrame'
   sendSessionModeUpdate:
     action: send
     channel:
       $ref: '#/channels/chat'
-    summary: 'Turn this session''s ADR-092 Auto-approve modifier on or off (or clear it). Unlike the global default and
-      the per-agent override, this may LOOSEN — turn Auto on for this chat even when the resolved agent x global default
+    summary: 'Turn this session''s ADR-092 Auto-approve modifier on or off (or clear it). Unlike the global default, this may LOOSEN — turn Auto on for this chat even when the global default
       has it off — because a human is present in the session.
 
       '
@@ -728,18 +812,30 @@ operations:
     messages:
       - $ref: '#/channels/chat/messages/BrowserHandoverNoticeFrame'
 
+  receiveHelperEvent:
+    action: receive
+    channel:
+      $ref: '#/channels/chat'
+    summary: Immutable helper-event row, saved in the addressed transcript and replayed by subtype.
+    messages:
+      - $ref: '#/channels/chat/messages/HelperEventFrame'
+
   receiveGoalOutcome:
     action: receive
     channel:
       $ref: '#/channels/chat'
     summary: >
       The goal outcome line (founder decision 2026-09-14) — one push per
-      goal ENDING (met, round limit reached, stopped by the user, or any
-      other terminal brake), carrying the structured GoalOutcome.
-      Session-scoped. The same outcome is persisted as a `type: system,
-      system_subtype: goal_outcome` transcript entry and re-emitted as this
-      same frame type on replay. An intermediate unmet Judge round is not
-      an ending and never produces one.
+      goal ENDING (met, round limit reached, explicitly cleared by the
+      user, or any other terminal brake), carrying the structured
+      GoalOutcome. Only natural met/round-exhaustion adjudication and an
+      explicit clear (`/goal clear`, authorized
+      `delegate(action="clear_goal")`) end a goal: a session Stop,
+      timeout, plan stop, restart or failure is NOT an ending and never
+      produces one. Session-scoped. The same outcome is persisted as a
+      `type: system, system_subtype: goal_outcome` transcript entry and
+      re-emitted as this same frame type on replay. An intermediate unmet
+      Judge round is not an ending and never produces one.
     messages:
       - $ref: '#/channels/chat/messages/GoalOutcomeFrame'
 
@@ -992,6 +1088,13 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/CancelFrame'
+    RedirectFrame:
+      name: RedirectFrame
+      title: redirect
+      summary: Redirect a chat — stop its own in-progress turn, then continue that same chat with a new instruction (client → server).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/RedirectFrame'
     PingFrame:
       name: PingFrame
       title: ping
@@ -1013,13 +1116,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/DevicePairingResponseFrame'
-    SessionCloseFrame:
-      name: SessionCloseFrame
-      title: session_close
-      summary: Explicit session close request (client → server).
-      contentType: application/json
-      payload:
-        $ref: '#/components/schemas/SessionCloseFrame'
     WhatsAppPairingSubscribeFrame:
       name: WhatsAppPairingSubscribeFrame
       title: whatsapp_pairing_subscribe
@@ -1139,7 +1235,7 @@ components:
     ReplayMessageFrame:
       name: ReplayMessageFrame
       title: replay_message
-      summary: Replayed transcript entry (server → client).
+      summary: Persisted chat entry, delivered live or replayed (server → client).
       contentType: application/json
       payload:
         $ref: '#/components/schemas/ReplayMessageFrame'
@@ -1162,6 +1258,41 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/RateLimitFrame'
+    ProviderRetryFrame:
+      name: ProviderRetryFrame
+      title: provider_retry
+      summary: Automatic provider rate-limit retry scheduled (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/ProviderRetryFrame'
+    ProviderStatusFrame:
+      name: ProviderStatusFrame
+      title: provider_status
+      summary: Provider-call state of a running turn — waiting, responding again, or recovered after retries (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/ProviderStatusFrame'
+    ContextWindowNoticeFrame:
+      name: ContextWindowNoticeFrame
+      title: context_window_notice
+      summary: Classified context-window diagnostic for Verbose chat (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/ContextWindowNoticeFrame'
+    ProviderFallbackFrame:
+      name: ProviderFallbackFrame
+      title: provider_fallback
+      summary: Turn answered by the fallback model (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/ProviderFallbackFrame'
+    ProviderFallbackNote:
+      name: ProviderFallbackNote
+      title: replay_provider_fallback
+      summary: Replay of a persisted fallback-model note (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/ProviderFallbackNote'
     MediaFrame:
       name: MediaFrame
       title: media
@@ -1169,13 +1300,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/MediaFrame'
-    AgentSwitchedFrame:
-      name: AgentSwitchedFrame
-      title: agent_switched
-      summary: Active agent changed (server → client).
-      contentType: application/json
-      payload:
-        $ref: '#/components/schemas/AgentSwitchedFrame'
     ToolApprovalRequiredFrame:
       name: ToolApprovalRequiredFrame
       title: tool_approval_required
@@ -1239,13 +1363,6 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/PongFrame'
-    SessionCloseAckFrame:
-      name: SessionCloseAckFrame
-      title: session_close_ack
-      summary: Session close acknowledged (server → client).
-      contentType: application/json
-      payload:
-        $ref: '#/components/schemas/SessionCloseAckFrame'
     SessionModeUpdateFrame:
       name: SessionModeUpdateFrame
       title: session_mode_update
@@ -1304,6 +1421,13 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/BrowserHandoverNoticeFrame'
+    HelperEventFrame:
+      name: HelperEventFrame
+      title: helper_event
+      summary: Durable helper-event row (server to client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/HelperEventFrame'
     GoalOutcomeFrame:
       name: GoalOutcomeFrame
       title: goal_outcome
@@ -1480,6 +1604,16 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/LibraryChangedFrame'
+    AgentCreatedFrame:
+      name: AgentCreatedFrame
+      title: agent_created
+      summary: 'A new agent was persisted (server → client). Broadcast so every connected tab can drop its stale agent
+        list and pick up the new agent without a reload.
+
+        '
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/AgentCreatedFrame'
     SessionSnapshotFrame:
       name: SessionSnapshotFrame
       title: session_snapshot
@@ -1501,7 +1635,1037 @@ components:
       contentType: application/json
       payload:
         $ref: '#/components/schemas/UserMessageFrame'
+    MailPanelObserverFrame:
+      name: MailPanelObserverFrame
+      title: mail_panel_observer
+      summary: 'Mail panel presence open/close (client → server, ADR-20261001 "Mail panel presence" row; register row 5 — W0 is the single
+        publisher, w5-integration implements the gateway handlers, w1''s registry is transport-agnostic).
+
+        '
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/MailPanelObserverFrame'
+    MailPanelObserverAckFrame:
+      name: MailPanelObserverAckFrame
+      title: mail_panel_observer_ack
+      summary: Mail panel presence accepted; the observer is bound to this authenticated connection and the authorized workspace (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/MailPanelObserverAckFrame'
+    MailPanelObserverErrorFrame:
+      name: MailPanelObserverErrorFrame
+      title: mail_panel_observer_error
+      summary: Mail panel presence refused — safe closed-class reason (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/MailPanelObserverErrorFrame'
+    SecretRequestFrame:
+      name: SecretRequestFrame
+      title: secret_request
+      summary: Secure secret card request — value-free (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/SecretRequestFrame'
+    SecretRequestResolvedFrame:
+      name: SecretRequestResolvedFrame
+      title: secret_request_resolved
+      summary: A secret request left the pending state (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/SecretRequestResolvedFrame'
+    AttachRoomFrame:
+      name: AttachRoomFrame
+      title: attach_room
+      summary: Attach this connection to a room and catch up after a cursor (client → server).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/AttachRoomFrame'
+    RoomSnapshotFrame:
+      name: RoomSnapshotFrame
+      title: room_snapshot
+      summary: Room catch-up answer to attach_room (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/RoomSnapshotFrame'
+    RoomEntryFrame:
+      name: RoomEntryFrame
+      title: room_entry
+      summary: A new room entry, live (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/RoomEntryFrame'
+    RoomMemberStateFrame:
+      name: RoomMemberStateFrame
+      title: room_member_state
+      summary: A room member's delivery state changed (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/RoomMemberStateFrame'
+    RoomMetaFrame:
+      name: RoomMetaFrame
+      title: room_meta
+      summary: Room members, mutes, pause, cost or read-only state changed (server → client).
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/RoomMetaFrame'
   schemas:
+    HistoryEntryOrigin:
+      title: HistoryEntryOrigin
+      type: object
+      description: >
+        Local ownership of an entry-derived historical replay frame (chat history paging
+        D2/D4). Required by the producer for every frame derived from a selected persisted
+        entry; optional on general frame schemas because live, unsequenced non-history and
+        session-only rehydration copies can have no persisted source. Not a transport cursor,
+        authorization grant or reversible archive address. No frame ordinals or manifest.
+      required:
+        - position
+      additionalProperties: false
+      properties:
+        position:
+          type: string
+          minLength: 47
+          maxLength: 47
+          pattern: '^hp1_[A-Za-z0-9_-]{43}$'
+          description: Same-session occurrence fingerprint; canonical unpadded base64url SHA-256.
+        entry_id:
+          type: string
+          minLength: 1
+          description: Original recorded entry ID when nonempty and valid; otherwise omitted.
+        turn_id:
+          type: string
+          minLength: 1
+          description: >
+            Original recorded turn ID of the persisted source record (its own TranscriptEntry.TurnID) when nonempty; omitted when that record has no recorded turn, which means unknown. Never filled from the active turn, session state, a neighbouring record or any inference (chat-history paging spec, D1 S11d).
+    SessionHistoryState:
+      title: SessionHistoryState
+      type: object
+      description: >
+        Server history readiness, not proof that this client loaded a page (chat history
+        paging D7a/D10). status=available omits reason and message. status=unavailable
+        requires both reason and a fixed sanitized message. Producers and consumers must
+        reject any other combination. No preparing state or successful empty-history
+        fallback. Current authorized live controls and canonical sends remain independent.
+      required:
+        - status
+      additionalProperties: false
+      properties:
+        status:
+          type: string
+          enum:
+            - available
+            - unavailable
+        reason:
+          type: string
+          enum:
+            - index_missing
+            - index_inconsistent
+            - catchup_limit
+            - storage_error
+            - projection_error
+          description: Present only for unavailable history, after the bounded recovery attempt.
+        message:
+          type: string
+          minLength: 1
+          description: >
+            Required only when unavailable. Fixed sanitized copy, never an underlying cause,
+            path, raw position or query. For index_missing/index_inconsistent/catchup_limit:
+            "This conversation's history could not be loaded."
+            Other required storage/projection failures retain the fixed redacted session-storage
+            error behavior in D11. Not a turn-ending ErrorFrame.
+    EffortRecord:
+      title: EffortRecord
+      description: >
+        Effort levels spec (FR-058). The per-turn effort record of the answering
+        candidate. Keep in sync by hand with
+        contracts/components/schemas/EffortRecord.yaml. Never carries reasoning
+        text or signature material.
+      type: object
+      additionalProperties: false
+      properties:
+        chosen:
+          type: string
+          maxLength: 32
+        sent:
+          type: string
+          maxLength: 32
+        reason:
+          type: string
+          enum:
+          - mapped
+          - not_supported
+          - continuation
+          - rejected
+          - rejected_earlier
+          - extra_body
+        provider:
+          type: string
+        model:
+          type: string
+    RoomRef:
+      title: RoomRef
+      description: >
+        Reference from a main-session entry (or an approval) to the room (group
+        chat) it belongs to (spec omnipus-system-agent K7, K33; FR-202, FR-215,
+        FR-251). Display and navigation data only: it never grants access to the
+        room. `role` says whether the entry is the room's request to this agent or
+        this agent's answer into the room; a room pre-admission approval card
+        (FR-251) carries role `request`. Mirrored inline in contracts/asyncapi.yaml
+        (components.schemas.RoomRef) — keep both copies in sync by hand.
+      type: object
+      required:
+        - room_id
+        - room_name
+        - request_id
+        - role
+      additionalProperties: false
+      properties:
+        room_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Id of the room.
+        room_name:
+          type: string
+          minLength: 1
+          maxLength: 80
+          description: Display name of the room at the time the entry was written.
+        request_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: >
+            The room delivery id, which is also the receiver's request id
+            (spec §6.11, FR-216).
+        role:
+          type: string
+          enum:
+            - request
+            - answer
+          description: >
+            `request` — the room's request delivered to this agent;
+            `answer` — this agent's answer appended to the room.
+    WorkflowStart:
+      title: WorkflowStart
+      description: >
+        Optional target data on a MessageFrame that starts an Omnipus workflow
+        from a screen (spec omnipus-system-agent K8; FR-012). Target data only —
+        it names which workflow and which workspace the user picked; it is never
+        an instruction and grants nothing. The server treats it as data for the
+        Omnipus turn (landing 1, WU-10). Mirrored inline in
+        contracts/asyncapi.yaml (components.schemas.WorkflowStart) — keep both
+        copies in sync by hand.
+      type: object
+      required:
+        - workflow
+        - target_workspace_id
+      additionalProperties: false
+      properties:
+        workflow:
+          type: string
+          enum:
+            - W1
+            - W18
+          description: >
+            W1 — create an agent in a workspace; W18 — set up a whole team.
+        target_workspace_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: The workspace the workflow targets.
+    SecretRecipientDisplay:
+      title: SecretRecipientDisplay
+      description: >
+        Server-composed, value-free description of where a secret will be used
+        (spec omnipus-system-agent K2; FR-065). Built by the server from the
+        recorded recipient descriptor; a client never supplies it. `lines` are the
+        display lines for the kind: endpoint (provider_key); transport + command
+        or URL (mcp_env); channel instance + field (channel_credential); hosts +
+        username + mailbox id (mailbox_password); workspace + agent + variable
+        (agent_private); for unbound (a stored value with no recipient
+        recorded) exactly the single fixed line "Stored in Settings; no
+        recipient recorded". Mirrored inline in contracts/asyncapi.yaml
+        (components.schemas.SecretRecipientDisplay) — keep both copies in sync by
+        hand.
+      type: object
+      required:
+        - kind
+        - lines
+      additionalProperties: false
+      properties:
+        kind:
+          type: string
+          enum:
+            - provider_key
+            - mcp_env
+            - channel_credential
+            - mailbox_password
+            - agent_private
+            - unbound
+          description: Recipient kind.
+        lines:
+          type: array
+          minItems: 1
+          maxItems: 8
+          items:
+            type: string
+            minLength: 1
+            maxLength: 500
+          description: Display lines, in order. Never null, never empty.
+    SecretRequestField:
+      title: SecretRequestField
+      description: >
+        One field of a secret card (spec omnipus-system-agent K1; FR-061). The
+        card holds 1–8 fields; the user types one value per field, sent only in
+        the authenticated REST submit (SecretSubmitRequest.values, keyed by
+        `key`). Mirrored inline in contracts/asyncapi.yaml
+        (components.schemas.SecretRequestField) — keep both copies in sync by
+        hand.
+      type: object
+      required:
+        - key
+        - label
+      additionalProperties: false
+      properties:
+        key:
+          type: string
+          pattern: '^[a-z][a-z0-9_]{0,31}$'
+          description: Field key; the submit's `values` map uses exactly these keys.
+        label:
+          type: string
+          minLength: 1
+          maxLength: 80
+          description: Field label shown on the card.
+    SecretRequestFrame:
+      title: SecretRequestFrame
+      description: >
+        Server → client (spec omnipus-system-agent K1; FR-061, FR-078, FR-240).
+        A secure secret card: an agent asks the person to type one or more secret
+        values. The frame is value-free; values travel only in the authenticated
+        REST submit (POST /api/v1/secret-requests/{id}/submit). Every field is
+        server-derived from the request record — the request id is never
+        authority by itself (§6.7). The card renders in the chat whose session id
+        is `root_session_id` (or `session_id` when omitted), the same root-origin
+        rule as approvals (L1-AMENDMENTS-20261013 §1.3, R7). THIS FILE EXISTS for
+        the Constraint #8 5-step process and the pkg/gateway/inboundschemas/ sync
+        — the GENERATING copy is the inline schema in contracts/asyncapi.yaml.
+        Keep both copies in sync by hand. Landing 1, WU-4 produces it.
+      type: object
+      required:
+        - type
+        - request_id
+        - session_id
+        - acting_agent_id
+        - acting_agent_name
+        - purpose
+        - recipient
+        - fields
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: secret_request
+        request_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Server-minted id of the secret request.
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: The acting session that asked for the secret.
+        root_session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: >
+            Server-derived root of the acting session's chain (the chat the card
+            renders in). Omitted when equal to session_id.
+        acting_agent_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: The agent that asked.
+        acting_agent_name:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Display name of the agent that asked.
+        origin_label:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: >
+            Server-derived turn origin label (§6.18), e.g. "for group <name>" when
+            the work came from a room. Omitted for a plain web turn.
+        workspace_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Workspace of the acting session, when it has one.
+        owner:
+          type: object
+          required:
+            - workspace_id
+            - agent_id
+          additionalProperties: false
+          properties:
+            workspace_id:
+              type: string
+              minLength: 1
+              maxLength: 128
+            agent_id:
+              type: string
+              minLength: 1
+              maxLength: 128
+          description: >
+            The owning (workspace, agent) pair — present only for the
+            agent_private kind.
+        purpose:
+          type: string
+          minLength: 1
+          maxLength: 500
+          description: Why the agent needs the secret, in the agent's words.
+        recipient:
+          $ref: '#/components/schemas/SecretRecipientDisplay'
+        fields:
+          type: array
+          minItems: 1
+          maxItems: 8
+          items:
+            $ref: '#/components/schemas/SecretRequestField'
+          description: The fields to fill, in order. Never null, never empty.
+    SecretRequestResolvedFrame:
+      title: SecretRequestResolvedFrame
+      description: >
+        Server → client (spec omnipus-system-agent K3; FR-074). Emitted once to
+        every connected client when a secret request leaves the pending state.
+        Value-free. THIS FILE EXISTS for the Constraint #8 5-step process and the
+        pkg/gateway/inboundschemas/ sync — the GENERATING copy is the inline
+        schema in contracts/asyncapi.yaml. Keep both copies in sync by hand.
+        Landing 1, WU-4 produces it.
+      type: object
+      required:
+        - type
+        - request_id
+        - state
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: secret_request_resolved
+        request_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: The request_id from the secret_request frame this resolves.
+        state:
+          type: string
+          enum:
+            - submitted
+            - cancelled
+            - stopped
+            - interrupted
+            - refused
+          description: The terminal state the request reached.
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: The acting session the request belonged to.
+        root_session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: >
+            Root of the acting session's chain, so the root chat's card clears
+            without a lookup. Omitted when equal to session_id.
+    SessionStateSecretRequest:
+      title: SessionStateSecretRequest
+      description: >
+        One entry of the `secret_requests` list on SessionStateFrame and
+        SessionSnapshotFrame (spec omnipus-system-agent K4; FR-074, FR-079): a
+        pending request, or a recent terminal one (value-free; at most the last
+        32 terminal entries per session, §6.2), so a reloaded card restores its
+        true state. Absence of an entry is never success. Same card fields as
+        SecretRequestFrame plus `state`. Mirrored inline in
+        contracts/asyncapi.yaml (components.schemas.SessionStateSecretRequest) —
+        keep both copies in sync by hand.
+      type: object
+      required:
+        - request_id
+        - session_id
+        - state
+        - acting_agent_id
+        - acting_agent_name
+        - purpose
+        - recipient
+        - fields
+        - updated_at
+      additionalProperties: false
+      properties:
+        request_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+        root_session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: Same value and semantics as SecretRequestFrame.root_session_id.
+        state:
+          type: string
+          enum:
+            - pending
+            - submitted
+            - cancelled
+            - stopped
+            - interrupted
+            - refused
+        continuation_unconfirmed:
+          type: boolean
+          description: >
+            True only when state is `submitted` and the value-free continuation
+            (the reference-only resume message) is not confirmed delivered: the
+            latest ensure-delivery attempt failed or was revoked downstream.
+            Absent once delivery is confirmed, the person stops the continuation,
+            or the request reaches any non-submitted terminal state. Never carries
+            or implies a secret value, cause, stage or reference name. (Train 2
+            M13, T2-SF-02; K4, FR-079.)
+        acting_agent_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        acting_agent_name:
+          type: string
+          minLength: 1
+          maxLength: 128
+        origin_label:
+          type: string
+          minLength: 1
+          maxLength: 200
+        workspace_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        owner:
+          type: object
+          required:
+            - workspace_id
+            - agent_id
+          additionalProperties: false
+          properties:
+            workspace_id:
+              type: string
+              minLength: 1
+              maxLength: 128
+            agent_id:
+              type: string
+              minLength: 1
+              maxLength: 128
+          description: Present only for the agent_private kind.
+        purpose:
+          type: string
+          minLength: 1
+          maxLength: 500
+        recipient:
+          $ref: '#/components/schemas/SecretRecipientDisplay'
+        fields:
+          type: array
+          minItems: 1
+          maxItems: 8
+          items:
+            $ref: '#/components/schemas/SecretRequestField'
+        reference_names:
+          type: array
+          maxItems: 8
+          items:
+            type: string
+            minLength: 1
+            maxLength: 256
+          description: >
+            Reference names the submitted values were stored under. Present only
+            when state is `submitted`.
+        updated_at:
+          type: string
+          format: date-time
+          description: When the request last changed state.
+    RoomEntryAuthor:
+      title: RoomEntryAuthor
+      description: >
+        Author of a room entry (spec omnipus-system-agent K26): the person (kind
+        `user`) or a member agent (kind `agent`, with agent_id). Mirrored inline
+        in contracts/asyncapi.yaml (components.schemas.RoomEntryAuthor) — keep
+        both copies in sync by hand.
+      type: object
+      required:
+        - kind
+      additionalProperties: false
+      properties:
+        kind:
+          type: string
+          enum:
+            - user
+            - agent
+        agent_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Present iff kind is `agent`.
+    RoomDeliveryState:
+      title: RoomDeliveryState
+      description: >
+        State of one (room message, member) delivery (spec omnipus-system-agent
+        K27, §6.11; FR-169, FR-201, FR-213). request_id is the stable delivery id,
+        which is also the receiver's request id. The values are exactly the
+        §6.11 states; the UI labels are in the §6.11 table. Anything the server
+        cannot prove after a restart is `unknown`, never `working`. Mirrored
+        inline in contracts/asyncapi.yaml (components.schemas.RoomDeliveryState)
+        — keep both copies in sync by hand.
+      type: object
+      required:
+        - agent_id
+        - request_id
+        - state
+      additionalProperties: false
+      properties:
+        agent_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: The member agent.
+        request_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        state:
+          type: string
+          enum:
+            - recorded
+            - awaiting_approval
+            - admitted
+            - held
+            - working
+            - waiting_on_user
+            - answered
+            - refused
+            - failed
+            - interrupted
+            - unavailable
+            - cancelled
+            - unknown
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Optional reason, e.g. `rate_limit` or `removed`.
+    MediaPart:
+      title: MediaPart
+      description: One media attachment.
+      type: object
+      required:
+      - type
+      - url
+      - filename
+      - content_type
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          enum:
+          - image
+          - audio
+          - video
+          - file
+        url:
+          type: string
+          minLength: 1
+        filename:
+          type: string
+          minLength: 1
+        content_type:
+          type: string
+          minLength: 1
+        caption:
+          type: string
+    RoomEntry:
+      title: RoomEntry
+      description: >
+        One entry of a room transcript (spec omnipus-system-agent K26; FR-166).
+        Group entries carry the authoring agent and the resolved addressees.
+        Mirrored inline in contracts/asyncapi.yaml (components.schemas.RoomEntry)
+        — keep both copies in sync by hand.
+      type: object
+      required:
+        - id
+        - room_id
+        - seq
+        - author
+        - text
+        - addressees
+        - after_pause
+        - deliveries
+        - timestamp
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        room_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Position in the room transcript; strictly increasing.
+        client_message_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Echo of RoomMessageRequest.client_message_id for a person's entry.
+        author:
+          $ref: '#/components/schemas/RoomEntryAuthor'
+        text:
+          type: string
+          maxLength: 5242880
+          description: >
+            The message text. New messages and agent answers are refused above
+            the group message limit (#1449 D24, D27: at most 65,536 UTF-8 bytes,
+            lowered by session_messaging.steer_body), stated on
+            RoomMessageRequest.text. A stored entry keeps this wider maximum
+            (TD-8): an entry written under an earlier, larger operator setting
+            still opens and shows in full (S-152). May be empty when the entry
+            carries attachments.
+        attachments:
+          type: array
+          maxItems: 16
+          items:
+            $ref: '#/components/schemas/MediaPart'
+          description: >
+            Images and files of the entry (#1449 D3, FR-016, FR-020), in the order
+            they were sent. Each part's url is the workspace media URL
+            (/api/v1/media/workspace/<workspace id>/<id>). Absent means none. A
+            file deleted later in the Library keeps its part here; fetching it then
+            fails and the chat shows the file as unavailable (D26).
+        addressees:
+          type: array
+          items:
+            type: string
+            minLength: 1
+            maxLength: 128
+          description: Resolved addressee agent ids. Never null.
+        after_pause:
+          type: boolean
+          description: >
+            True for an answer to work consumed before a /pause; such an answer
+            never forwards its mentions (§6.11).
+        deliveries:
+          type: array
+          items:
+            $ref: '#/components/schemas/RoomDeliveryState'
+          description: Per-member delivery states for this entry. Never null.
+        timestamp:
+          type: string
+          format: date-time
+    RoomEntryFrame:
+      title: RoomEntryFrame
+      description: >
+        Server → client (spec omnipus-system-agent K26, K45). A new room entry,
+        live, after attach_room. THIS FILE EXISTS for the Constraint #8 5-step
+        process and the pkg/gateway/inboundschemas/ sync — the GENERATING copy is
+        the inline schema in contracts/asyncapi.yaml. Keep both copies in sync by
+        hand. Landing 1, WU-15 produces it.
+      type: object
+      required:
+        - type
+        - room_id
+        - seq
+        - entry
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: room_entry
+        room_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Room stream position of this frame.
+        entry:
+          $ref: '#/components/schemas/RoomEntry'
+    RoomMemberStateFrame:
+      title: RoomMemberStateFrame
+      description: >
+        Server → client (spec omnipus-system-agent K27, K45; FR-201, FR-213). A
+        member's delivery state changed. THIS FILE EXISTS for the Constraint #8
+        5-step process and the pkg/gateway/inboundschemas/ sync — the GENERATING
+        copy is the inline schema in contracts/asyncapi.yaml. Keep both copies in
+        sync by hand. Landing 1, WU-15 produces it.
+      type: object
+      required:
+        - type
+        - room_id
+        - seq
+        - delivery
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: room_member_state
+        room_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+        delivery:
+          $ref: '#/components/schemas/RoomDeliveryState'
+    AttachRoomFrame:
+      title: AttachRoomFrame
+      description: >
+        Client → server (spec omnipus-system-agent K45; FR-201, FR-213, FR-217).
+        Attach this connection to a room and catch up from after_seq. Carried on
+        the existing hub connection without an agent session. The server answers
+        with room_snapshot (entries after the cursor, in order), then live
+        room_entry / room_member_state / room_meta frames, each with seq.
+        Landing 1, WU-15 handles it; until then the server has no handler for
+        this frame type.
+      type: object
+      required:
+        - type
+        - room_id
+        - after_seq
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: attach_room
+        room_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        after_seq:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Highest room seq the client already has; 0 for a first load.
+    RoomSnapshotFrame:
+      title: RoomSnapshotFrame
+      description: >
+        Server → client (spec omnipus-system-agent K45, K26, K27). The answer to
+        attach_room: the room entries after the cursor in seq order (at most the
+        newest 10,000; `has_older` is true when older entries after the cursor
+        were left out), the members, mutes, member states, pause state,
+        generation and allocated cost. THIS FILE EXISTS for the Constraint #8 5-step process and the
+        pkg/gateway/inboundschemas/ sync — the GENERATING copy is the inline
+        schema in contracts/asyncapi.yaml. Keep both copies in sync by hand.
+        Landing 1, WU-15 produces it.
+      type: object
+      required:
+        - type
+        - room_id
+        - seq
+        - entries
+        - members
+        - muted
+        - member_states
+        - paused
+        - generation
+        - allocated_cost_micro_usd
+        - allocated_cost_unpriced
+        - complete
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: room_snapshot
+        room_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        seq:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Room stream position this snapshot is current to.
+        entries:
+          type: array
+          maxItems: 10000
+          items:
+            $ref: '#/components/schemas/RoomEntry'
+          description: Entries after the cursor, in seq order. Never null.
+        members:
+          type: array
+          items:
+            type: string
+            minLength: 1
+            maxLength: 128
+        muted:
+          type: array
+          items:
+            type: string
+            minLength: 1
+            maxLength: 128
+        member_states:
+          type: array
+          items:
+            $ref: '#/components/schemas/RoomDeliveryState'
+          description: >-
+            Every outstanding (non-terminal) delivery state plus the latest terminal
+            state of each member. Never null. Live states are never dropped (ruling
+            Q2), so this array has no fixed upper bound.
+        paused:
+          type: boolean
+        generation:
+          type: integer
+          format: int64
+          minimum: 0
+        read_only_reason:
+          type: string
+          minLength: 1
+          maxLength: 200
+        allocated_cost_micro_usd:
+          type: integer
+          format: int64
+          minimum: 0
+        allocated_cost_unpriced:
+          type: boolean
+        complete:
+          type: boolean
+          description: always true; reserved.
+        has_older:
+          type: boolean
+          description: >
+            True when entries after the cursor older than the ones served were
+            left out (a snapshot carries at most the newest 10,000 entries).
+    RoomMetaFrame:
+      title: RoomMetaFrame
+      description: >
+        Server → client (spec omnipus-system-agent K45). The room's members,
+        mutes, pause state, allocated cost or read-only state changed. THIS FILE
+        EXISTS for the Constraint #8 5-step process and the
+        pkg/gateway/inboundschemas/ sync — the GENERATING copy is the inline
+        schema in contracts/asyncapi.yaml. Keep both copies in sync by hand.
+        Landing 1, WU-15 produces it.
+      type: object
+      required:
+        - type
+        - room_id
+        - seq
+        - members
+        - muted
+        - paused
+        - generation
+        - allocated_cost_micro_usd
+        - allocated_cost_unpriced
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: room_meta
+        room_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+        members:
+          type: array
+          items:
+            type: string
+            minLength: 1
+            maxLength: 128
+        muted:
+          type: array
+          items:
+            type: string
+            minLength: 1
+            maxLength: 128
+        paused:
+          type: boolean
+        generation:
+          type: integer
+          format: int64
+          minimum: 0
+        read_only_reason:
+          type: string
+          minLength: 1
+          maxLength: 200
+        allocated_cost_micro_usd:
+          type: integer
+          format: int64
+          minimum: 0
+        allocated_cost_unpriced:
+          type: boolean
+        invitation_context_status:
+          type: string
+          enum:
+            - generating
+            - ready
+            - unavailable
+          description: >
+            Invitation summary state (#1449 FR-045). The text itself never travels
+            on a frame: on ready, an open Participants panel refetches getRoom.
+    ChatParticipant:
+      title: ChatParticipant
+      description: >
+        Server-made display record of a chat participant (F15). Display only:
+        no ids, no route. Mirrors contracts/components/schemas/ChatParticipant.yaml.
+        `source` is present iff kind=human and `agent` iff kind=agent; they are
+        mutually exclusive. The server enforces this; readers ignore any other
+        combination.
+      type: object
+      readOnly: true
+      required:
+      - kind
+      - display_name
+      additionalProperties: false
+      properties:
+        kind:
+          type: string
+          enum:
+          - human
+          - agent
+        display_name:
+          type: string
+          minLength: 1
+          maxLength: 128
+        source:
+          type: string
+          pattern: '^[a-z][a-z0-9_-]{0,31}$'
+          description: Present iff kind=human; absent when kind=agent.
+        agent:
+          type: object
+          description: Present iff kind=agent; absent when kind=human.
+          required:
+          - workspace_id
+          - agent_id
+          additionalProperties: false
+          properties:
+            workspace_id:
+              type: string
+              minLength: 1
+              maxLength: 128
+            agent_id:
+              type: string
+              minLength: 1
+              maxLength: 128
     WsFrameType:
       title: WsFrameType
       description: Enum of all WebSocket frame type discriminator strings.
@@ -1510,10 +2674,10 @@ components:
       - auth
       - message
       - cancel
+      - redirect
       - ping
       - attach_session
       - device_pairing_response
-      - session_close
       - session_started
       - message_status
       - token
@@ -1530,9 +2694,13 @@ components:
       - task_run_status
       - replay_message
       - replay_error
+      - replay_provider_fallback
       - rate_limit
+      - provider_retry
+      - provider_status
+      - context_window_notice
+      - provider_fallback
       - media
-      - agent_switched
       - tool_approval_required
       - tool_approval_resolved
       - session_state
@@ -1540,7 +2708,6 @@ components:
       - replay_warning
       - cancel_stage
       - pong
-      - session_close_ack
       - session_mode_update
       - session_mode_updated
       - device_pairing_request
@@ -1575,10 +2742,22 @@ components:
       - browser_input_control_ack
       - browser_handover_notice
       - goal_outcome
+      - helper_event
       - library_changed
       - session_snapshot
       - catch_up_complete
       - user_message
+      - agent_created
+      - mail_panel_observer
+      - mail_panel_observer_ack
+      - mail_panel_observer_error
+      - secret_request
+      - secret_request_resolved
+      - attach_room
+      - room_snapshot
+      - room_entry
+      - room_member_state
+      - room_meta
     AuthFrame:
       title: AuthFrame
       description: Client → server authentication frame.
@@ -1623,6 +2802,12 @@ components:
           media:
             minItems: 1
       properties:
+        workflow_start:
+          $ref: '#/components/schemas/WorkflowStart'
+          description: >
+            Spec omnipus-system-agent K8 (FR-012). Optional target data naming the
+            workflow (W1 / W18) and the target workspace the user picked on a
+            screen. Data only, never an instruction.
         type:
           type: string
           const: message
@@ -1639,7 +2824,27 @@ components:
         session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
+        recipient:
+          type: object
+          required:
+          - workspace_id
+          - agent_id
+          additionalProperties: false
+          description: >
+            Optional request to a peer agent: the {workspace_id, agent_id}
+            pair the user @-addressed from the chat named by session_id.
+            Valid only together with session_id; the server refuses it
+            otherwise. Mirrors contracts/components/schemas/AgentAddress.yaml.
+          properties:
+            workspace_id:
+              type: string
+              minLength: 1
+              maxLength: 128
+            agent_id:
+              type: string
+              minLength: 1
+              maxLength: 128
         agent_id:
           type: string
           minLength: 1
@@ -1662,9 +2867,8 @@ components:
           description: 'ADR-092 per-chat Auto-approve choice for the chat this message mints — meaningful only when session_id
             is absent (this frame is minting a new session); ignored when session_id is present, since an existing session''s
             mode is changed exclusively via session_mode_update. Same value space and null semantics as SessionModeUpdateFrame.auto_approve:
-            true loosens Auto-approve on for this one new chat (may loosen past the resolved agent x global default, because
-            a human is present), false tightens it off, null/absent leaves it unset (the chat follows whatever the agent x
-            global default resolves to). Carrying the choice on the minting message itself — instead of a follow-up session_mode_update
+            true loosens Auto-approve on for this one new chat (may loosen past the global default, because
+            a human is present), false tightens it off, null/absent leaves it unset (the chat follows whatever the global default resolves to). Carrying the choice on the minting message itself — instead of a follow-up session_mode_update
             sent after the session_started ack — is what lets the choice gate the new chat''s very first ask-policy tool call:
             a post-ack send can race the agent loop''s own first LLM round trip.
 
@@ -1676,8 +2880,8 @@ components:
           description: 'Optional per-message metadata. Typed keys today: `model_name` (Phase 1, FR-010) — when the user picks
             a model in the chat composer, the picker value is sent as `metadata.model_name` so the server routes this turn
             to the chosen model, falling back to the agent''s `model` config when absent; `workspace_id` — the active workspace
-            this chat belongs to; and `workspace_setup_kickoff` (boolean) — a one-time marker that this message is the workspace
-            setup kickoff for `metadata.workspace_id`.
+            this chat belongs to; and `workspace_setup_kickoff` (boolean) — a retired client kickoff marker that the server
+            refuses (see the property below).
 
             '
           properties:
@@ -1690,6 +2894,25 @@ components:
 
                 '
               example: z-ai/glm-5-turbo
+            provider:
+              type: string
+              minLength: 1
+              maxLength: 64
+              description: 'Effort levels spec (FR-051). Provider id of the chosen (provider, model) pair. When present
+                the turn is routed to the exact pair; when absent today''s name resolution applies. An over-length or
+                wrongly-typed value is dropped on the existing malformed-frame path.
+
+                '
+              example: openrouter
+            reasoning_effort:
+              type: string
+              minLength: 1
+              maxLength: 32
+              description: 'Effort levels spec (FR-051). The chat''s per-conversation effort value, mapped against the
+                pair that serves the turn. No refusal path.
+
+                '
+              example: high
             workspace_id:
               type: string
               minLength: 1
@@ -1704,11 +2927,12 @@ components:
               example: 01JXDEFAULT000000000000001
             workspace_setup_kickoff:
               type: boolean
-              description: 'One-time marker that this message is the workspace-setup kickoff turn for `metadata.workspace_id`.
-                When true, the server treats the frame as the one-time workspace-setup kickoff — the frame''s `content` is
-                ignored and replaced by a server-composed instruction; a system-role entry is recorded; the workspace''s `setup_pending`
-                flag is cleared exactly once (idempotency-guarded); duplicate and malformed kickoffs are rejected with an
-                error frame. Absent/false for ordinary messages.
+              description: 'Retired client kickoff marker (omnipus-system-agent K9, FR-047). The server is the only producer
+                of the workspace-setup offer: right after a workspace is created with an empty team it posts the offer into
+                Omnipus''s existing main chat and clears that workspace''s `setup_pending` exactly once. A client frame with this
+                key set to true is refused with an error frame and has no other effect ("workspace setup is started by the server
+                when a workspace is created; a client kickoff is refused", with session_id echoed only when the frame carried one);
+                a non-boolean value is refused as malformed. Absent or false for ordinary messages.
 
                 '
               example: true
@@ -1727,7 +2951,35 @@ components:
         session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
+        scope:
+          type: string
+          enum:
+          - session
+          - tree
+          default: session
+    RedirectFrame:
+      title: RedirectFrame
+      description: 'Client → server redirect one chat, root or helper: stop its own in-progress turn, then continue that same chat with the instruction as its next user message (D2/D9; founder rule 2026-10-06). The instruction ceiling is 16384 UTF-8 bytes (16 KiB) — JSON maxLength counts characters, not bytes, so the byte ceiling is runtime-enforced server-side.'
+      type: object
+      required:
+      - type
+      - session_id
+      - instruction
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: redirect
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+        instruction:
+          type: string
+          minLength: 1
+          maxLength: 16384
+          pattern: '\S'
     PingFrame:
       title: PingFrame
       description: Client → server heartbeat.
@@ -1756,15 +3008,25 @@ components:
           const: pong
     AttachSessionFrame:
       title: AttachSessionFrame
-      description: >-
-        Client → server request to attach to a session and catch it up to the present.
-        #823 catch-up redesign: since_seq/boot_id replace the retired timestamp cursor
-        (`since`, removed). Keep in sync by hand with
-        contracts/components/schemas/AttachSessionFrame.yaml.
+      description: >
+        Client → server. Requests the server to attach to a session and catch it up to the
+        present. A snapshot replays a bounded latest page; an authorized history-only
+        failure can instead deliver typed history_state=unavailable and live_only control
+        catch-up, never a successful history snapshot. Authenticate and resolve session
+        syntax/access/existence before validating history_limit, then history_min_rows,
+        before bind/wipe. Keep inbound-validation on/off refusal parity. #823 catch-up
+        redesign: since_seq/boot_id replace the retired timestamp cursor
+        (`since`, removed). The server answers with the full servable incremental journal
+        (session_state, journal entries after since_seq, catch_up_complete) or a bounded
+        latest snapshot (session_snapshot, current session_state, selected historical
+        frames, one replay done, uncovered active projection, catch_up_complete). Held
+        live frames follow complete in order; replay done alone never completes attach.
+        SessionSnapshotFrame explains why a snapshot is selected. A historical reader
+        keeps/revalidates its own interval instead of passively jumping to the new tail.
       type: object
       required:
-      - type
-      - session_id
+        - type
+        - session_id
       additionalProperties: false
       properties:
         type:
@@ -1773,21 +3035,82 @@ components:
         session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
+          description: Session ID to attach to and catch up.
+        history_limit:
+          type: integer
+          minimum: 20
+          maximum: 100
+          default: 40
+          description: >
+            Optional snapshot-only drawn-row target; never cuts a servable incremental
+            journal. Validate after session access and before history_min_rows/bind/wipe.
+            Null, wrong type, fraction, overflow or out-of-range values are refused by
+            the session-scoped ErrorFrame message "history_limit must be an integer from
+            20 to 100", with no successful complete, in both inbound validation modes.
+        history_min_rows:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 20
+          description: >
+            Optional snapshot-only advisory two-screen row floor, from 1 to effective
+            history_limit; default 20. Whole groups/floor override soft page bytes.
+            After a valid history_limit, invalid/null/fraction/overflow/wrong-type values
+            get "history_min_rows must be an integer from 1 to history_limit" before
+            bind/wipe, with no catch_up_complete in either inbound validation mode.
         since_seq:
           type: integer
           format: int64
           minimum: 1
           description: >-
-            #823 catch-up redesign. Highest per-session sequence number the SPA has
-            already applied for this session. Omit for a first load or an unknown
-            cursor — the server then answers with a snapshot.
+            #823 catch-up redesign. Highest per-session sequence number the SPA has already
+            applied for this session. The server serves only frames with a strictly greater
+            seq ("from since_seq + 1"), so re-attaching is idempotent and O(missed window)
+            instead of O(full session history). Works for every session the client knows
+            about, including ones that were not open in the UI during the outage — the client
+            keeps one cursor per session. Omit for a first load or whenever the session's
+            cursor is not known: the server then answers with a bounded latest snapshot
+            (reason unknown_position). When the requested position can no longer be served
+            from the retained journal, it likewise answers with session_snapshot (reason
+            retention_exceeded or cursor_ahead). First open/follow-latest replaces its staged
+            history page on complete; a historical reader preserves/revalidates its own
+            bounded interval separately. Neither policy alters transport cursor semantics.
         boot_id:
           type: string
-          description: >-
-            #823 review finding 7. The gateway boot ID the SPA last saw for this
-            session. A mismatch forces a snapshot (reason boot_mismatch) regardless of
-            since_seq.
+          description: >
+            #823 review finding 7 — the gateway boot ID the SPA last saw for this
+            session (from a prior session_state frame's own boot_id), sent back so
+            the server can tell a genuinely-servable since_seq apart from one that
+            only LOOKS servable because a restarted gateway's counter has not yet
+            caught back up past it. Omit when unknown (a first load, or an older
+            SPA build that predates this field): the server then falls back to
+            since_seq alone, same as before this field existed. When present and it
+            does not match the server's current boot_id, the server answers with a
+            session_snapshot (reason boot_mismatch) regardless of what since_seq
+            says — a numeric position from a previous gateway process carries no
+            meaning against the current one's counter. Keep in sync by hand with
+            contracts/asyncapi.yaml's inline AttachSessionFrame.
+        ack_attention:
+          type: boolean
+          default: false
+          description: >
+            Optional. True means this attach is an acknowledgement of what was
+            shown. It does not choose the bound. Defaults to false. A failed,
+            background, or reconnect attach does not write the seen mark.
+            Keep in sync by hand with contracts/asyncapi.yaml's inline
+            AttachSessionFrame.
+        attention_bound:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >
+            Optional integer on the acknowledging attach. The saved outcome/entry
+            order, not a new counter. When an acknowledgement carries this number,
+            the server advances the one shared seen mark to the lesser of this
+            number and the current saved order (never lowering it). Absent means do
+            not write the seen mark and do not substitute the current order. Keep in sync by hand with contracts/asyncapi.yaml's inline
+            AttachSessionFrame.
     DevicePairingResponseFrame:
       title: DevicePairingResponseFrame
       description: Client → server device pairing decision.
@@ -1812,9 +3135,12 @@ components:
     SessionStartedFrame:
       title: SessionStartedFrame
       description: >
-        Server → client new session minted. Session-scoped (registered in
-        SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit
-        (FR-089) — a chat-lifecycle frame, not turn output.
+        Server → client. Acknowledges a session-less message. For an ordinary first
+        user message, emitted only after its transcript entry is durably saved. The
+        SPA stores session_id as activeSessionId. A recovered acknowledgement names
+        an already-saved first message found in this gateway process's retry cache:
+        no new entry or turn is created, and the client must attach without a cursor.
+        Recovery is in-memory only and does not survive a gateway restart.
       type: object
       required:
       - type
@@ -1827,27 +3153,47 @@ components:
         session_id:
           type: string
           minLength: 1
+          description: The newly minted or recovered session ID.
         agent_id:
           type: string
+          description: The agent that will handle this session.
+        client_message_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: The initiating ordinary first message's client-supplied ID.
+        recovered:
+          type: boolean
+          description: >-
+            True only for an already-saved first message found in the process-local
+            retry cache. No new entry or turn is admitted. The client must attach
+            without a cursor; seq and boot_id are absent on this acknowledgement.
+            Absent or false denotes a fresh acknowledgement.
         seq:
           type: integer
           format: int64
           minimum: 1
           description: >-
-            #823 catch-up redesign. The sequence number the newly minted session's hub
-            starts from. Keep in sync by hand with
-            contracts/components/schemas/SessionStartedFrame.yaml.
+            #823 catch-up redesign. The sequence number the newly minted session's per-session
+            hub starts from (its first published frame). Lets the SPA seed the session's cursor
+            at mint time instead of waiting for the first sequenced frame after it.
         boot_id:
           type: string
           description: >-
-            #823 review finding 7. The gateway process that minted this session.
+            #823 review finding 7. The gateway process that minted this session, stored
+            alongside the seeded cursor so a later attach_session can detect a restart the same
+            way it would for any other session — see AttachSessionFrame.boot_id.
     MessageStatusFrame:
       title: MessageStatusFrame
       description: >
         Server → client delivery status for one user message. Session-scoped.
         received follows durable transcript persistence; working follows
         successful turn admission; failed means processing stopped before
-        admission. Emitted only when the client supplied client_message_id.
+        admission; discarded (reason stopped_before_delivery) means Stop discarded
+        the input before delivery (session-core FR-024); held means an @-recipient
+        request was accepted but the recipient is stopped, so it waits until the
+        recipient runs again (not a failure, not terminal). Emitted only when the
+        client supplied client_message_id.
       type: object
       required:
       - type
@@ -1862,7 +3208,7 @@ components:
         session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
         client_message_id:
           type: string
           minLength: 1
@@ -1873,6 +3219,15 @@ components:
           - received
           - working
           - failed
+          - discarded
+          - held
+        reason:
+          type: string
+          enum:
+          - stopped_before_delivery
+          description: >
+            Present only with state=discarded: why the input never reached the
+            agent (session-core FR-024).
         seq:
           type: integer
           format: int64
@@ -1894,18 +3249,33 @@ components:
       - content
       additionalProperties: false
       properties:
+        room_ref:
+          $ref: '#/components/schemas/RoomRef'
+          description: >
+            Spec omnipus-system-agent K33 (FR-202, FR-215). Present when this
+            main-session entry is a room request to this agent or this agent's
+            answer into a room, so live, history and replay render the same
+            collapsed entry.
         type:
           type: string
           const: token
         session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
         content:
           type: string
           maxLength: 65536
         agent_id:
           type: string
+        reply_to_message_id:
+          type: string
+          minLength: 1
+          description: >
+            Present only on a guest reply: the message_id of the admitted
+            request this answer addresses.
+        reply_to_participant:
+          $ref: '#/components/schemas/ChatParticipant'
         turn_id:
           type: string
           description: >-
@@ -1916,6 +3286,15 @@ components:
           description: >-
             #823 catch-up redesign. Identifies the specific assistant message (bubble)
             this token belongs to, stable across reconnect/catch-up.
+        goal_id:
+          type: string
+          description: >-
+            session-core FR-039 / C-GOAL. The goal this producing turn was dispatched
+            under (captured at turn start from the session's active goal record) and
+            stamped onto every token of the turn. Lets the SPA join the bubble to the
+            EXACT keyed goal criteria (goalPills[goal_id]) instead of the latest-goal
+            scalar. Absent means UNKNOWN association (the turn ran under no proven
+            goal); a later goal's frame must never rebind this bubble.
         replace:
           type: boolean
           description: >-
@@ -1931,8 +3310,9 @@ components:
             Keep in sync by hand with contracts/components/schemas/TokenFrame.yaml.
     DoneStats:
       title: DoneStats
-      description: 'Per-turn statistics in a done frame. additionalProperties are allowed for replay extras (frames_emitted,
-        orphan_count, etc.).
+      description: 'Per-turn statistics in a done frame, with an optional absolute session_tokens_total when authoritative
+        usage is available. Omitted session_tokens_total means unknown, never zero. additionalProperties are allowed for
+        replay extras (frames_emitted, orphan_count, etc.).
 
         '
       type: object
@@ -1941,19 +3321,22 @@ components:
         tokens:
           type: number
           minimum: 0
+        session_tokens_total:
+          type: integer
+          minimum: 0
+          readOnly: true
+          description: >
+            Authoritative absolute session-wide consumed-token total, with the same
+            meaning as SessionStats.tokens_total. Present on live turn completion when
+            authoritative usage is available; omitted on replay-terminating done frames.
+            Omitted means unknown, never zero. Not a per-turn delta: tokens remains
+            per-turn usage, and frames_emitted remains replay-only diagnostics.
         cost:
           type: number
           minimum: 0
         duration_ms:
           type: number
           minimum: 0
-        tokens_dropped:
-          type: number
-          minimum: 0
-          deprecated: true
-          description: >-
-            Deprecated (#823 catch-up redesign, Q5): the gateway never drops frames under
-            backpressure now (WS close 4008 + reconnect instead). Never set.
         frames_emitted:
           type: number
           minimum: 0
@@ -1987,6 +3370,21 @@ components:
             frame: narrows why truncated is true — "cancelled" (the user canceled the turn
             mid-stream) or "max_output_tokens" (the provider's output-token limit cut the
             answer off before it finished). Absent on a normal turn.
+        effort:
+          $ref: '#/components/schemas/EffortRecord'
+          description: >
+            Effort levels spec (FR-058). The answering candidate's effort record.
+            Absent when nothing was chosen and nothing was sent. Live-turn field:
+            the replay-terminating done frame omits it.
+        reasoning_tokens:
+          type: integer
+          minimum: 0
+          description: >
+            Effort levels spec (FR-024). Display-only turn sum of the reasoning-token
+            counts reported by this turn's provider calls (a subset of output tokens,
+            never booked into any statistic). Absent = no call reported a count;
+            0 = reported zero. Live-turn field: the replay-terminating done frame
+            omits it.
     DoneFrame:
       title: DoneFrame
       description: >
@@ -1999,6 +3397,13 @@ components:
       - session_id
       additionalProperties: false
       properties:
+        room_ref:
+          $ref: '#/components/schemas/RoomRef'
+          description: >
+            Spec omnipus-system-agent K33 (FR-202, FR-215). Present when this
+            main-session entry is a room request to this agent or this agent's
+            answer into a room, so live, history and replay render the same
+            collapsed entry.
         type:
           type: string
           const: done
@@ -2016,6 +3421,13 @@ components:
           type: string
           description: >-
             #823 catch-up redesign. The id of the turn's last assistant message.
+        goal_id:
+          type: string
+          description: >-
+            session-core FR-039 / C-GOAL. The goal this producing turn was dispatched
+            under (captured at turn start), spread onto the done frame so a no-stream
+            turn's bubble (created from this frame's message_id, not from tokens) still
+            joins to the exact keyed goal criteria. Absent means UNKNOWN association.
         seq:
           type: integer
           format: int64
@@ -2077,9 +3489,27 @@ components:
       # There is deliberately NO blanket "From the model:" prefix: attribution is
       # written into each sentence instead, so the copy stays readable and each
       # message names the real owner of the fault.
+      #
+      # ── Templated provider variants (provider-messages spec §6, OBS-002) ──────────────
+      # An entry MAY carry an optional sibling `provider_message` string: the
+      # templated sentence the agent assembles at the emit site when the failing
+      # attempt's facts (provider/model) are present (C-16); when facts are absent
+      # the plain `message` above is the fallback — never a blank. Slots come from
+      # the CLOSED vocabulary {provider} {model} {attempt} {max} {countdown}
+      # {answered_model} {unavailable_model}; both generators hard-fail on any other
+      # slot and on a template with unbalanced braces. The templates are emitted
+      # into BOTH catalogues (LLMErrorProviderMessages in Go, llmErrorProviderMessages
+      # in TS) — never hand-written in consumer code.
+      # Kept in lockstep with contracts/components/schemas/LLMError.yaml.
       x-user-messages:
         media_unsupported:
           message: "This model can’t use that kind of attachment. Try a different file format, or switch to a model that supports it."
+          attribution: model
+        media_too_large:
+          # Issue #1435/#1483: a provider "image too large / requires N patches" rejection is
+          # its own cause, never relabelled media_unsupported. `model` attribution: the
+          # ceiling belongs to the model; Omnipus has already resized automatically.
+          message: "An image in this conversation is too large for this model’s size limit, even after Omnipus resized it automatically. Try a smaller image, or open Verbose chat for details."
           attribution: model
         provider_rejected:
           message: "The model declined to respond to this request. Try rephrasing it, or switch models."
@@ -2090,9 +3520,25 @@ components:
         provider_auth_failed:
           message: "The model provider rejected our credentials. Check this provider’s API key in Settings."
           attribution: config
+          # provider-messages spec §6: templated variant names the failing attempt's
+          # provider (C-16); the plain message above is the facts-absent fallback.
+          provider_message: "{provider} rejected the API key. Check the key in Settings → Providers."
         rate_limited:
           message: "The model provider is temporarily overloaded. Wait a moment, then retry."
           attribution: provider
+          # provider-messages spec §6 (terminal row): the server-assembled line for the
+          # facts-present turn-end display. The LIVE retry/countdown line is assembled
+          # client-side from the provider_retry frame and is deliberately NOT a server
+          # template (§6 mechanics, C-15).
+          provider_message: "{provider} is busy right now. You can retry the turn."
+        quota_billing:
+          # provider-messages spec §7.1/D15: attribution config is FINAL (no placeholder).
+          # Facts-absent sentence follows the house "The model provider…" pattern; the
+          # templated variant substitutes the failing attempt's provider (C-16). Copy
+          # carries no button, no link (D6).
+          message: "The model provider says your account is out of credit."
+          attribution: config
+          provider_message: "{provider} says your account is out of credit."
         network:
           message: "We couldn’t reach the model provider. Check your internet connection and retry."
           attribution: ambiguous
@@ -2124,6 +3570,15 @@ components:
         model_unavailable:
           message: "The model you picked isn’t available for this turn, so this reply used the previous model. Check the model in Settings."
           attribution: config
+        model_retired:
+          # provider-messages spec D9/D11: a provider retired or refused the configured
+          # model DURING a real call (C-24 trigger). Never shares model_unavailable's
+          # mid-session switch-failure meaning. attribution config (D15) — the
+          # facts-absent sentence replaces {provider} with "its provider" (the exact
+          # text §6 requires the catalogue to carry for facts-absent renders).
+          message: "This model is no longer offered by its provider. Pick a new model in the agent's settings."
+          attribution: config
+          provider_message: "This model is no longer offered by {provider}. Pick a new model in the agent's settings."
         needs_provider:
           # ADR-068 FR-046 (2026-08-23 §8b, T068-32) — kept in lockstep with
           # contracts/components/schemas/LLMError.yaml; see that file's comment.
@@ -2136,29 +3591,51 @@ components:
           message: "This turn was stopped before it finished."
           attribution: user
         turn_timed_out:
-          message: "The model provider didn’t finish this turn in time, so it was stopped. Retry — if it keeps happening, open Verbose chat for details."
+          message: "The model provider didn’t answer this request in time. Retry — if it keeps happening, open Verbose chat for details."
           attribution: provider
+        judge_time_limit:
+          message: "The Judge reached its own check time limit before it finished checking this work. Raise judge.timeout_sec in config.json if checks need longer, then check again."
+          attribution: config
+        judge_conclusion_failed:
+          # Issue #1306 (SFH R2-3): an operational notice, not a turn exit — the
+          # Judge's conclusion could not be fully saved or delivered. It ends no
+          # turn. Not retryable; never a trusted provider message.
+          message: "Omnipus could not fully save or deliver the Judge's conclusion. Check disk space, file permissions and the chat's channel connection, then reload the chat. Open Verbose chat for details."
+          attribution: ambiguous
         delegated_task_limit:
           message: "A delegated task reached its configured limit before finishing. Open its task or session, then adjust the named limit if more work is needed."
           attribution: config
-        context_unrecoverable:
-          message: "We couldn’t fit this turn into the model’s context even after clearing older tool results — that’s a bug on our side, not yours. Start a new session, or open Verbose chat for technical details."
-          attribution: product
         context_window_unknown:
           message: "This endpoint did not report a context length for this model. Set it under Settings → Models → Model overrides → Context length."
           attribution: config
+        bad_model:
+          message: "The model configured for this agent is not offered by its provider (bad_model). Pick a new model in the agent's settings."
+          attribution: config
+          provider_message: "Model {model} is not offered by provider {provider} (bad_model). Pick a new model in the agent's settings."
+        provider_request_rejected:
+          message: "We sent the model provider a request it rejected (HTTP 400: Bad Request; format). Open Verbose chat for technical details."
+          attribution: product
+          provider_message: "Provider {provider} rejected the request for model {model} (HTTP 400: Bad Request; format). Open Verbose chat for technical details."
+        model_route_unavailable:
+          message: "The provider for this model could not be set up from its saved settings, so no request was sent. Check the provider's API key and endpoint settings."
+          attribution: config
+          provider_message: "{provider} cannot serve model {model}: no usable connection could be set up from its saved settings, so no request was sent. Check the provider's API key and endpoint settings."
         unknown:
           message: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model."
           attribution: unknown
       properties:
         code:
           type: string
+          description: >-
+            Error code. `judge_conclusion_failed` is an operational notice that the Judge's conclusion could not be fully saved or delivered; it ends no turn, so a client must not treat it as the end of the chat's running turn (issue #1306).
           enum:
             - media_unsupported
+            - media_too_large
             - provider_rejected
             - request_too_large
             - provider_auth_failed
             - rate_limited
+            - quota_billing
             - network
             - provider_stalled
             - content_policy
@@ -2169,13 +3646,18 @@ components:
             - agent_not_configured
             - workspace_unavailable
             - model_unavailable
+            - model_retired
             - needs_provider
             - model_unassigned
             - turn_canceled
             - turn_timed_out
+            - judge_time_limit
+            - judge_conclusion_failed
             - delegated_task_limit
-            - context_unrecoverable
             - context_window_unknown
+            - bad_model
+            - provider_request_rejected
+            - model_route_unavailable
             - unknown
         message:
           type: string
@@ -2187,6 +3669,43 @@ components:
           type: string
           maxLength: 2048
           description: Live-only technical detail; never persisted or replayed.
+        facts:
+          type: object
+          additionalProperties: false
+          description: >-
+            Structured facts about the FAILING attempt, assembled server-side
+            (provider-messages spec §7.1 item 1). All fields optional — facts absent
+            means the catalogue sentence renders. Deliberately closed to
+            provider/model/request_id ONLY — no retry_after_seconds, no retry_at, no
+            attempts, no max_attempts (OBS-103 — the SPA has no consumer for retry
+            facts on the error frame; retry timing lives on the provider_retry frame,
+            whose consumer is the indicator), no billing_url (D6), no error_id (no
+            fetch path — §5/D1).
+          properties:
+            provider:
+              type: string
+              maxLength: 256
+              description: Catalog display name of the provider of the FAILING attempt (C-16) — never unconditionally the primary.
+            model:
+              type: string
+              maxLength: 256
+              description: Model id of the failing attempt (C-16).
+            request_id:
+              type: string
+              maxLength: 256
+              description: >-
+                Provider request id (x-request-id / request-id / x-amzn-requestid /
+                cf-ray as labelled last resort, OBS-003). VERBOSE-RENDER-ONLY (C-20,
+                PM-2) — renders only under Verbose chat, never to a non-Verbose viewer.
+        provider_message:
+          type: boolean
+          description: >-
+            Server-authored subtype/trust flag (MAJ-104, C-14) — when true, `message`
+            carries the server-assembled provider-message sentence and the SPA renders
+            it; when absent or false, the SPA keeps today's catalogue-copy rendering
+            keyed on `code` (e.g. the own-limiter's internal rate_limited text — RG-2).
+            Set at write time by the agent's assembly path; the replay shape carries
+            the same flag so a reloaded session renders identically.
     LLMErrorReplay:
       title: LLMErrorReplay
       description: Replay-safe translated provider/LLM error with live-only detail omitted.
@@ -2239,9 +3758,28 @@ components:
       # There is deliberately NO blanket "From the model:" prefix: attribution is
       # written into each sentence instead, so the copy stays readable and each
       # message names the real owner of the fault.
+      #
+      # ── Templated provider variants (provider-messages spec §6, OBS-002) ──────────────
+      # An entry MAY carry an optional sibling `provider_message` string: the
+      # templated sentence the agent assembles at the emit site when the failing
+      # attempt's facts (provider/model) are present (C-16); when facts are absent
+      # the plain `message` above is the fallback — never a blank. Slots come from
+      # the CLOSED vocabulary {provider} {model} {attempt} {max} {countdown}
+      # {answered_model} {unavailable_model}; both generators hard-fail on any other
+      # slot and on a template with unbalanced braces. The templates are emitted
+      # into BOTH catalogues (LLMErrorProviderMessages in Go, llmErrorProviderMessages
+      # in TS) — never hand-written in consumer code.
+      # Kept in lockstep with contracts/components/schemas/LLMError.yaml and
+      # contracts/components/schemas/LLMErrorReplay.yaml.
       x-user-messages:
         media_unsupported:
           message: "This model can’t use that kind of attachment. Try a different file format, or switch to a model that supports it."
+          attribution: model
+        media_too_large:
+          # Issue #1435/#1483: a provider "image too large / requires N patches" rejection is
+          # its own cause, never relabelled media_unsupported. `model` attribution: the
+          # ceiling belongs to the model; Omnipus has already resized automatically.
+          message: "An image in this conversation is too large for this model’s size limit, even after Omnipus resized it automatically. Try a smaller image, or open Verbose chat for details."
           attribution: model
         provider_rejected:
           message: "The model declined to respond to this request. Try rephrasing it, or switch models."
@@ -2252,9 +3790,25 @@ components:
         provider_auth_failed:
           message: "The model provider rejected our credentials. Check this provider’s API key in Settings."
           attribution: config
+          # provider-messages spec §6: templated variant names the failing attempt's
+          # provider (C-16); the plain message above is the facts-absent fallback.
+          provider_message: "{provider} rejected the API key. Check the key in Settings → Providers."
         rate_limited:
           message: "The model provider is temporarily overloaded. Wait a moment, then retry."
           attribution: provider
+          # provider-messages spec §6 (terminal row): the server-assembled line for the
+          # facts-present turn-end display. The LIVE retry/countdown line is assembled
+          # client-side from the provider_retry frame and is deliberately NOT a server
+          # template (§6 mechanics, C-15).
+          provider_message: "{provider} is busy right now. You can retry the turn."
+        quota_billing:
+          # provider-messages spec §7.1/D15: attribution config is FINAL (no placeholder).
+          # Facts-absent sentence follows the house "The model provider…" pattern; the
+          # templated variant substitutes the failing attempt's provider (C-16). Copy
+          # carries no button, no link (D6).
+          message: "The model provider says your account is out of credit."
+          attribution: config
+          provider_message: "{provider} says your account is out of credit."
         network:
           message: "We couldn’t reach the model provider. Check your internet connection and retry."
           attribution: ambiguous
@@ -2286,6 +3840,15 @@ components:
         model_unavailable:
           message: "The model you picked isn’t available for this turn, so this reply used the previous model. Check the model in Settings."
           attribution: config
+        model_retired:
+          # provider-messages spec D9/D11: a provider retired or refused the configured
+          # model DURING a real call (C-24 trigger). Never shares model_unavailable's
+          # mid-session switch-failure meaning. attribution config (D15) — the
+          # facts-absent sentence replaces {provider} with "its provider" (the exact
+          # text §6 requires the catalogue to carry for facts-absent renders).
+          message: "This model is no longer offered by its provider. Pick a new model in the agent's settings."
+          attribution: config
+          provider_message: "This model is no longer offered by {provider}. Pick a new model in the agent's settings."
         needs_provider:
           # ADR-068 FR-046 (2026-08-23 §8b, T068-32) — kept in lockstep with
           # contracts/components/schemas/LLMError.yaml; see that file's comment.
@@ -2298,29 +3861,51 @@ components:
           message: "This turn was stopped before it finished."
           attribution: user
         turn_timed_out:
-          message: "The model provider didn’t finish this turn in time, so it was stopped. Retry — if it keeps happening, open Verbose chat for details."
+          message: "The model provider didn’t answer this request in time. Retry — if it keeps happening, open Verbose chat for details."
           attribution: provider
+        judge_time_limit:
+          message: "The Judge reached its own check time limit before it finished checking this work. Raise judge.timeout_sec in config.json if checks need longer, then check again."
+          attribution: config
+        judge_conclusion_failed:
+          # Issue #1306 (SFH R2-3): an operational notice, not a turn exit — the
+          # Judge's conclusion could not be fully saved or delivered. It ends no
+          # turn. Not retryable; never a trusted provider message.
+          message: "Omnipus could not fully save or deliver the Judge's conclusion. Check disk space, file permissions and the chat's channel connection, then reload the chat. Open Verbose chat for details."
+          attribution: ambiguous
         delegated_task_limit:
           message: "A delegated task reached its configured limit before finishing. Open its task or session, then adjust the named limit if more work is needed."
           attribution: config
-        context_unrecoverable:
-          message: "We couldn’t fit this turn into the model’s context even after clearing older tool results — that’s a bug on our side, not yours. Start a new session, or open Verbose chat for technical details."
-          attribution: product
         context_window_unknown:
           message: "This endpoint did not report a context length for this model. Set it under Settings → Models → Model overrides → Context length."
           attribution: config
+        bad_model:
+          message: "The model configured for this agent is not offered by its provider (bad_model). Pick a new model in the agent's settings."
+          attribution: config
+          provider_message: "Model {model} is not offered by provider {provider} (bad_model). Pick a new model in the agent's settings."
+        provider_request_rejected:
+          message: "We sent the model provider a request it rejected (HTTP 400: Bad Request; format). Open Verbose chat for technical details."
+          attribution: product
+          provider_message: "Provider {provider} rejected the request for model {model} (HTTP 400: Bad Request; format). Open Verbose chat for technical details."
+        model_route_unavailable:
+          message: "The provider for this model could not be set up from its saved settings, so no request was sent. Check the provider's API key and endpoint settings."
+          attribution: config
+          provider_message: "{provider} cannot serve model {model}: no usable connection could be set up from its saved settings, so no request was sent. Check the provider's API key and endpoint settings."
         unknown:
           message: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model."
           attribution: unknown
       properties:
         code:
           type: string
+          description: >-
+            Error code. `judge_conclusion_failed` is an operational notice that the Judge's conclusion could not be fully saved or delivered; it ends no turn, so a client must not treat it as the end of the chat's running turn (issue #1306).
           enum:
             - media_unsupported
+            - media_too_large
             - provider_rejected
             - request_too_large
             - provider_auth_failed
             - rate_limited
+            - quota_billing
             - network
             - provider_stalled
             - content_policy
@@ -2331,13 +3916,18 @@ components:
             - agent_not_configured
             - workspace_unavailable
             - model_unavailable
+            - model_retired
             - needs_provider
             - model_unassigned
             - turn_canceled
             - turn_timed_out
+            - judge_time_limit
+            - judge_conclusion_failed
             - delegated_task_limit
-            - context_unrecoverable
             - context_window_unknown
+            - bad_model
+            - provider_request_rejected
+            - model_route_unavailable
             - unknown
         message:
           type: string
@@ -2345,6 +3935,15 @@ components:
           maxLength: 4096
         retryable:
           type: boolean
+        provider_message:
+          type: boolean
+          description: >-
+            Server-authored subtype/trust flag (MAJ-104, C-14), replay twin of the
+            live LLMError flag — when true, `message` carries the persisted
+            provider-message sentence and the SPA renders it after reload; when
+            absent or false, catalogue copy keyed on `code`, byte-identical to today
+            (RG-2). No `facts` object on the replay shape (§7.1 item 3 — the persisted
+            message itself carries the provider naming, C-13).
     ErrorFrame:
       title: ErrorFrame
       description: 'Server → client. Error notification. May be global (no session_id, e.g., auth failure) or session-scoped.
@@ -2356,15 +3955,20 @@ components:
       - type
       - message
       additionalProperties: false
+      dependentRequired:
+        first_message_error:
+        - client_message_id
       properties:
         type:
           type: string
           const: error
         session_id:
           type: string
-          maxLength: 128
+          maxLength: 255
           description: 'Session this error relates to. Optional: global errors (auth, connection) are not tied to a specific
-            session.
+            session. A message-scoped refusal (client_message_id set, no first_message_error) of a message sent
+            into an existing chat carries that chat. A send that names no chat (the first message of a new
+            chat) has none to name, so its errors carry no session_id.
 
             '
         message:
@@ -2372,6 +3976,28 @@ components:
           minLength: 1
           maxLength: 4096
           description: Human-readable error description.
+        client_message_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: >-
+            The client_message_id of the user message this error is about. With first_message_error it is
+            the first-send outcome. Without first_message_error it marks a message-scoped refusal: the
+            named message was refused (for example an @-recipient send) and the error ends no turn, so a
+            client must not treat it as the end of the chat's running turn.
+        first_message_error:
+          type: string
+          enum:
+          - not_saved
+          - delivery_unknown
+          - answer_not_started
+          description: >-
+            Ordinary ID-bearing first-send outcome. Requires client_message_id.
+            not_saved proves no user entry was written; delivery_unknown means bytes
+            may have reached disk but durable delivery cannot be confirmed.
+            answer_not_started means the entry is durably saved but turn admission
+            failed, and requires its confirmed session_id. General errors and
+            workspace-setup kickoffs omit these first-send fields.
         payload:
           # Inline mirror of components.schemas.ErrorPayload
           # (contracts/components/schemas/ErrorPayload.yaml). Kept inline
@@ -2412,13 +4038,15 @@ components:
       - params
       additionalProperties: false
       properties:
+        history_origin:
+          $ref: '#/components/schemas/HistoryEntryOrigin'
         type:
           type: string
           const: tool_call_start
         session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
         tool:
           type: string
           minLength: 1
@@ -2496,6 +4124,35 @@ components:
           minimum: 0
         preview:
           type: string
+    HistoryResultPreview:
+      title: HistoryResultPreview
+      description: >
+        Read-time display marker for a saved tool result whose JSON encoding exceeds
+        51,200 bytes, emitted only on a history-origin tool_call_result frame of a
+        snapshot replay page (chat-history paging spec, "Amendment 2026-10-27
+        (founder, #1452 D2)", A2.2). Distinct from ToolResultRef (`_ref`, live
+        offload store) and TruncatedResult (`_truncated`, not retrievable). The full
+        value is read through REST getSessionHistoryEntry by the frame's
+        history_origin position plus call_id. The UTF-8 length of `preview` is at
+        most 4,096 bytes; that byte rule is enforced at the real server and browser
+        boundaries, maxLength is only the character-count bound. Keep in sync by
+        hand with contracts/components/schemas/HistoryResultPreview.yaml.
+      type: object
+      required:
+      - _history_preview
+      - original_size_bytes
+      - preview
+      additionalProperties: false
+      properties:
+        _history_preview:
+          type: boolean
+          const: true
+        original_size_bytes:
+          type: integer
+          minimum: 51201
+        preview:
+          type: string
+          maxLength: 4096
     DelegationFailure:
       title: DelegationFailure
       description: 'Structured tool-result payload emitted in the `result` field of a tool_call_result frame (status="error")
@@ -2634,6 +4291,19 @@ components:
             essentially every reason; false only for the transient "saturated" approval-queue condition, which may
             succeed on a later retry within the same turn. A filesystem-scope denial is always true — the same path
             against the same effective scope fails identically on retry.
+
+            '
+        code:
+          type: string
+          enum:
+          - protected_internal_file
+          description: 'Optional machine-readable marker, added by #1284 fix round 1. Present with exactly this
+            value when the refusal is Omnipus''s protected-internal-file denial: the path is inside the Omnipus data
+            directory''s protected set (sessions, transcripts, tasks, memory, agent definitions, credentials, the
+            master key, audit and gateway state) and is never grantable in any permission mode — God Mode included —
+            so the consumer can distinguish it from an ordinary workspace-scope denial without parsing the reason
+            text. Absent for every other permission denial. Set by the filesystem-scope producer (ResolvePath''s
+            carve-out refusal) and by bash''s protected-operand command check.
 
             '
     ToolAssemblyDuplicate:
@@ -2807,13 +4477,15 @@ components:
       - status
       additionalProperties: false
       properties:
+        history_origin:
+          $ref: '#/components/schemas/HistoryEntryOrigin'
         type:
           type: string
           const: tool_call_result
         session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
         tool:
           type: string
           minLength: 1
@@ -2822,8 +4494,8 @@ components:
           type: string
           minLength: 1
         result:
-          description: 'Tool return value. Any JSON type or null (null is the contract for error frames). Sentinels TruncatedResult,
-            MarshalErrorResult, and ToolResultRef are alternative shapes.
+          description: 'Tool return value. Any JSON type or null (null is the contract for error frames and cancelled calls
+            with no admitted result). Sentinels TruncatedResult, MarshalErrorResult, and ToolResultRef are alternative shapes.
 
 
             Real oneOf (round-2 hardening, ADR-060 finding F1). The previous revision switched this to `anyOf`
@@ -2838,8 +4510,8 @@ components:
             Fixed here with a real `oneOf`: the single permissive branch is split into (a) an unconditional
             non-object catch-all (array/string/number/boolean/null — the JSON Schema `required` keyword is
             inapplicable to non-object instances, so no exclusion is needed there) and (b) an object catch-all that
-            excludes every reserved discriminator key the nine $refs below use (seven at ADR-060 time; ADR-066 T066-01 added ToolArgumentRefusal and ToolResultRecallMark) — `_truncated`, `_marshal_error`,
-            `_ref`, `error` — via `not: {anyOf: [{required: [...]}, ...]}`. With that split, exactly one branch
+            excludes every reserved discriminator key the ten $refs below use (seven at ADR-060 time; ADR-066 T066-01 added ToolArgumentRefusal and ToolResultRecallMark; #1452 D2 added HistoryResultPreview) — `_truncated`, `_marshal_error`,
+            `_ref`, `_history_preview`, `error` — via `not: {anyOf: [{required: [...]}, ...]}`. With that split, exactly one branch
             matches a plain scalar/array/object and exactly one matches a valid named shape; a payload carrying a
             reserved key but failing its own $ref (e.g. PermissionDenied missing `permanent`) matches none and is
             correctly rejected, rather than silently passing through branch (b). ADR-034''s external-file-$ref
@@ -2884,12 +4556,14 @@ components:
               - required:
                 - _ref
               - required:
+                - _history_preview
+              - required:
                 - error
                 properties:
                   error:
                     type: string
-            description: 'Catch-all for an ordinary object tool result carrying none of the nine $refs'' reserved
-              discriminator keys (_truncated, _marshal_error, _ref, error) below.
+            description: 'Catch-all for an ordinary object tool result carrying none of the ten $refs'' reserved
+              discriminator keys (_truncated, _marshal_error, _ref, _history_preview, error) below.
 
 
               The `error` exclusion is keyed on `error` being a STRING (F13 hardening) — matching the
@@ -2910,6 +4584,7 @@ components:
           - $ref: '#/components/schemas/TruncatedResult'
           - $ref: '#/components/schemas/MarshalErrorResult'
           - $ref: '#/components/schemas/ToolResultRef'
+          - $ref: '#/components/schemas/HistoryResultPreview'
           - $ref: '#/components/schemas/DelegationFailure'
           - $ref: '#/components/schemas/FileExistsRefusal'
           - $ref: '#/components/schemas/PermissionDenied'
@@ -2921,6 +4596,7 @@ components:
           enum:
           - success
           - error
+          - cancelled
         duration_ms:
           type: integer
         error:
@@ -2953,6 +4629,8 @@ components:
       - task_label
       additionalProperties: false
       properties:
+        history_origin:
+          $ref: '#/components/schemas/HistoryEntryOrigin'
         type:
           type: string
           const: subagent_start
@@ -3010,6 +4688,8 @@ components:
       - status
       additionalProperties: false
       properties:
+        history_origin:
+          $ref: '#/components/schemas/HistoryEntryOrigin'
         type:
           type: string
           const: subagent_end
@@ -3074,6 +4754,8 @@ components:
         - created_at
       additionalProperties: false
       properties:
+        history_origin:
+          $ref: '#/components/schemas/HistoryEntryOrigin'
         type:
           type: string
           const: subagent_message
@@ -3101,12 +4783,12 @@ components:
             - artifact
             - blocker
             - question
-            - decision_request
             - error
             - handback
             - steer
             - respond
             - goal_status
+            - not_delivered
         text:
           type: string
         pct:
@@ -3136,8 +4818,14 @@ components:
       description: >
         Server → client (ADR-053 §Contract Surface — "Mid-span subagent
         frames"). A flat projection of SessionLifecycleRecord.state riding
-        between subagent_start/subagent_end, plus an optional steering-
-        receipt. Canonical copy — keep in sync by hand.
+        between subagent_start/subagent_end, plus an optional control-
+        receipt (sub-agent control plane ADR D4/MIN-003; replaces the
+        former steering_receipt — the field is gone, a dev install
+        replaying an old persisted frame that still carries it drops the
+        unknown field rather than failing validation, OBS-003). Canonical
+        copy — keep in sync by hand with
+        contracts/components/schemas/SubagentStateFrame.yaml and
+        contracts/components/schemas/ControlReceipt.yaml.
       type: object
       required:
         - type
@@ -3147,6 +4835,8 @@ components:
         - created_at
       additionalProperties: false
       properties:
+        history_origin:
+          $ref: '#/components/schemas/HistoryEntryOrigin'
         type:
           type: string
           const: subagent_state
@@ -3169,26 +4859,72 @@ components:
             - queued
             - running
             - needs_input
-            - paused
+            - stopped
             - completed
             - failed
-            - cancelled
-            - timed_out
-        steering_receipt:
+        control_receipt:
           type: object
           # Not nullable — see components/schemas/SubagentStateFrame.yaml's
           # own note: this field is emitted via an omitempty Go pointer,
-          # present or absent, never an explicit JSON null.
+          # present or absent, never an explicit JSON null. Train-3 scope
+          # note: only the steer verb is wired today (verb/state are
+          # constants "steer"/"delivered"; seq/accepted_at are documented
+          # stand-ins) — see components/schemas/ControlReceipt.yaml for the
+          # full rationale. Kept in sync by hand with that file.
           required:
-            - correlation_id
-            - applied_at
+            - seq
+            - control_id
+            - verb
+            - state
+            - accepted_at
           additionalProperties: false
           properties:
-            correlation_id:
+            seq:
+              type: integer
+              format: int64
+              minimum: 0
+            control_id:
               type: string
+              minLength: 1
+            verb:
+              type: string
+              enum:
+                - steer
+                - stop
+                - stop_all
+                - redirect
+                - resume
+                - respond
+                - clear_goal
+            state:
+              type: string
+              enum:
+                - queued
+                - delivered
+                - applied
+                - superseded
+            accepted_at:
+              type: string
+              format: date-time
+            delivered_at:
+              type: string
+              format: date-time
             applied_at:
               type: string
               format: date-time
+            superseded_at:
+              type: string
+              format: date-time
+            superseded_by_seq:
+              type: integer
+              format: int64
+              minimum: 0
+            reason:
+              type: string
+            released_control_ids:
+              type: array
+              items:
+                type: string
         created_at:
           type: string
           format: date-time
@@ -3276,9 +5012,17 @@ components:
     ReplayMessageFrame:
       title: ReplayMessageFrame
       description: >
-        Server → client replayed transcript entry. Session-scoped
-        (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the
-        ADR-057 W5 audit (FR-089) — emitted by the gateway replay path.
+        Server → client persisted chat entry, delivered live or during session
+        replay. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); live
+        publication uses the session hub, and transcript/snapshot projections
+        remain unsequenced.
+        A CHAT PROJECTION of the session's single append-only archive, not a
+        provider-message or raw-storage type (session-core C-ARCHIVE / U2;
+        FR-004/FR-005): the archive's private model payload (model_message),
+        its body-free same-session consumption reference (type=model_ref /
+        model_ref), its trusted source/return-route provenance and its
+        disk/byte/view marks are disk-only and are never emitted on this
+        frame, and entries that belong to the model view only are not replayed.
       type: object
       required:
       - type
@@ -3287,6 +5031,15 @@ components:
       - role
       additionalProperties: false
       properties:
+        history_origin:
+          $ref: '#/components/schemas/HistoryEntryOrigin'
+        room_ref:
+          $ref: '#/components/schemas/RoomRef'
+          description: >
+            Spec omnipus-system-agent K33 (FR-202, FR-215). Present when this
+            main-session entry is a room request to this agent or this agent's
+            answer into a room, so live, history and replay render the same
+            collapsed entry.
         type:
           type: string
           const: replay_message
@@ -3295,6 +5048,18 @@ components:
           minLength: 1
         content:
           type: string
+        content_original_size_bytes:
+          type: integer
+          minimum: 65537
+          readOnly: true
+          description: >
+            Present only when `content` is a read-time display preview of an ordinary
+            user/assistant chat message (entry type `message` or omitted) on a
+            history-origin replay page: `content` then holds the first at most 65,536
+            UTF-8 bytes on a character boundary and this is the exact UTF-8 length of
+            the full saved text (chat-history paging spec, "Amendment 2026-10-27
+            (founder, #1452 D2)", A2.2). Unrelated to truncated/truncation_reason.
+            Keep in sync by hand with contracts/components/schemas/ReplayMessageFrame.yaml.
         role:
           type: string
           enum:
@@ -3304,6 +5069,16 @@ components:
           - turn_canceled
         id:
           type: string
+        reply_to_message_id:
+          type: string
+          minLength: 1
+          description: >
+            Present only on a guest reply: the message_id of the admitted
+            request this entry answers.
+        participant:
+          $ref: '#/components/schemas/ChatParticipant'
+        reply_to_participant:
+          $ref: '#/components/schemas/ChatParticipant'
         timestamp:
           type: string
           format: date-time
@@ -3323,6 +5098,14 @@ components:
             entries. Lets the client match a replayed turn_canceled entry to the specific preceding assistant message it cancels,
             without relying on stream adjacency (async delegation can interleave other agents'/turns' frames in between).
             Omitted for legacy entries written before turn-id stamping landed.
+        goal_id:
+          type: string
+          description: >
+            session-core FR-039 / C-GOAL. The goal the replayed entry's producing turn
+            was dispatched under (from TranscriptEntry.GoalID). Live, history, REST and
+            replay must retain the SAME association so the SPA joins each bubble to its
+            own exact keyed goal criteria. Absent means UNKNOWN association; a later
+            goal's frame must never rebind an earlier replayed message.
         truncated:
           type: boolean
           description: >
@@ -3341,14 +5124,79 @@ components:
             why truncated is true: "cancelled" (the user canceled the turn
             mid-stream) or "max_output_tokens" (the provider's output-token limit
             cut the answer off before it finished). Absent on a truncated: true
-            frame means "cancelled" — every entry written before this field
-            existed predates it and was always a cancel.
+            frame means the reason is not recorded: readers do not default it to
+            "cancelled" or to anything else (session-core DEL-F36).
         client_message_id:
           type: string
           description: >-
             #823 catch-up redesign §4.7. Present on a replayed user entry persisted with
             a client-supplied id. Keep in sync by hand with
             contracts/components/schemas/ReplayMessageFrame.yaml.
+        input_disposition:
+          type: object
+          readOnly: true
+          description: >
+            Read-only record that this user input was DISCARDED by Stop before it was
+            delivered into the agent's model input (session-core FR-024). Absent on
+            every delivered message. There is no client action to release or discard
+            it; the archived message bytes are unchanged and this only labels them.
+          required:
+            - message_id
+            - state
+            - reason
+          additionalProperties: false
+          properties:
+            message_id:
+              type: string
+              minLength: 1
+              maxLength: 255
+              description: The original input message id (this entry's id).
+            client_message_id:
+              type: string
+              minLength: 1
+              maxLength: 128
+              description: The sender's client_message_id, when the input carried one.
+            state:
+              type: string
+              enum:
+                - discarded
+            reason:
+              type: string
+              enum:
+                - stopped_before_delivery
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            Hub-assigned per-session sequence number. Present on live publication and
+            its incremental catch-up copies; absent on unsequenced transcript/snapshot
+            projections. Only frames carrying seq advance the session cursor.
+        terminal_outcome:
+          type: boolean
+          description: >
+            Present and true only on an assistant entry that is a turn's distinct
+            terminal outcome sentence (for example the tool-iteration-limit notice)
+            written after the turn's earlier narration was already persisted. Live,
+            the gateway closes the narration bubble with done(<narration id>) before
+            this entry arrives, so it is a separate message; the replay stream has no
+            such boundary, so the SPA must start a new message for this frame instead
+            of merging it into the preceding same-turn assistant entry. Absent on
+            every other frame, including entries written before this field existed.
+        effort:
+          $ref: '#/components/schemas/EffortRecord'
+          description: >
+            Effort levels spec (FR-058). Copied from this entry's own stored effort
+            record (answering assistant entries only). Absent when the entry has none.
+            Keep in sync by hand with contracts/components/schemas/ReplayMessageFrame.yaml.
+        turn_reasoning_tokens:
+          type: integer
+          minimum: 0
+          description: >
+            Effort levels spec (FR-024). The stored display-only snapshot of the
+            turn's reported reasoning-token sum, copied from the answering entry;
+            never summed at read time. Absent = no call of the turn reported a
+            count; 0 = reported zero.
     ReplayErrorFrame:
       title: ReplayErrorFrame
       description: 'Server → client. Replay of a system-error transcript entry (Phase 1B, FR-014). Emitted by the replay path
@@ -3371,6 +5219,8 @@ components:
       - message
       additionalProperties: false
       properties:
+        history_origin:
+          $ref: '#/components/schemas/HistoryEntryOrigin'
         type:
           type: string
           const: replay_error
@@ -3451,7 +5301,7 @@ components:
         session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
         tool_call_id:
           type: string
           minLength: 1
@@ -3532,6 +5382,324 @@ components:
             Per-session sequence number of this frame (#823 catch-up redesign). Optional:
             absent on an unsequenced copy. Keep in sync by hand with
             contracts/components/schemas/RateLimitFrame.yaml.
+    ProviderRetryFrame:
+      title: ProviderRetryFrame
+      description: >
+        Server → client (provider-messages spec §7.1 item 3). Announces an
+        automatic provider rate-limit retry inside the turn's fallback-chain
+        execution — the candidate about to be re-called, when it will be called
+        (retry_at), and which attempt of max_attempts this is (C-8). C-2 (the
+        #711 closure constraint) — built from NAMED FIELDS ONLY, never an
+        `error` field or raw provider text; the countdown is computed from
+        retry_at and sent_at client-side (C-11). Keep in sync by hand with
+        contracts/components/schemas/ProviderRetryFrame.yaml.
+      type: object
+      required:
+      - type
+      - session_id
+      - turn_id
+      - provider
+      - model
+      - retry_at
+      - retry_after_seconds
+      - sent_at
+      - attempt
+      - max_attempts
+      - error_code
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: provider_retry
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+        turn_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        provider:
+          type: string
+          minLength: 1
+          maxLength: 256
+        model:
+          type: string
+          minLength: 1
+          maxLength: 256
+        retry_at:
+          type: string
+          format: date-time
+        retry_after_seconds:
+          type: integer
+          minimum: 1
+        sent_at:
+          type: string
+          format: date-time
+        attempt:
+          type: integer
+          minimum: 2
+        max_attempts:
+          type: integer
+          minimum: 1
+        error_code:
+          type: string
+          maxLength: 64
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            Per-session sequence number of this frame (#823 catch-up redesign). Optional:
+            absent on an unsequenced copy. Keep in sync by hand with
+            contracts/components/schemas/ProviderRetryFrame.yaml.
+    ProviderStatusFrame:
+      title: ProviderStatusFrame
+      description: >
+        Server → client (issues #1478 and #1280). The state of the
+        model-provider call a running turn is waiting on: `waiting` (nothing
+        has arrived since silent_since; the silence limit ends the call at
+        stall_at when known), `responding` (data arrives again, or the call
+        returned, after a `waiting` notice), `recovered` (the call succeeded
+        after `retries` automatic retries). Named fields only, never provider
+        text. Keep in sync by hand with
+        contracts/components/schemas/ProviderStatusFrame.yaml.
+      type: object
+      required:
+      - type
+      - session_id
+      - turn_id
+      - state
+      - sent_at
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: provider_status
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+        turn_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        state:
+          type: string
+          enum:
+          - waiting
+          - responding
+          - recovered
+        sent_at:
+          type: string
+          format: date-time
+        silent_since:
+          type: string
+          format: date-time
+        stall_at:
+          type: string
+          format: date-time
+        retries:
+          type: integer
+          minimum: 1
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            Per-session sequence number of this frame (#823 catch-up redesign). Optional:
+            absent on an unsequenced copy. Keep in sync by hand with
+            contracts/components/schemas/ProviderStatusFrame.yaml.
+    # Shape-equal WS mirror of components/schemas/ContextWindowNotice.yaml.
+    # The distinct name follows GoalOutcomeFrameOutcome: REST and WS Go types
+    # share one package, and the AsyncAPI generators do not resolve file refs.
+    ContextWindowNoticeFrameNotice:
+      title: ContextWindowNoticeFrameNotice
+      description: >
+        Classified context-window diagnostic (ADR-066 MAJ-CW-009). Shared by
+        ContextWindowNoticeFrame.notice and Message.context_window_notice;
+        rendered only when Verbose chat is enabled. Not a model-history message
+        or the transient model-only context notice.
+      type: object
+      required:
+        - kind
+        - message
+      additionalProperties: false
+      properties:
+        kind:
+          type: string
+          enum:
+            - provider_retry
+            - mid_turn
+        message:
+          type: string
+          minLength: 1
+          maxLength: 2048
+    ContextWindowNoticeFrame:
+      title: ContextWindowNoticeFrame
+      description: >
+        Server → client classified context-window diagnostic (ADR-066 MAJ-CW-009).
+        Live and replay use the same frame with the original transcript entry_id
+        and timestamp. Retained independently of the browser's Verbose chat
+        preference; hidden notices still advance the session cursor.
+      type: object
+      required:
+        - type
+        - session_id
+        - turn_id
+        - agent_id
+        - entry_id
+        - timestamp
+        - notice
+      additionalProperties: false
+      properties:
+        history_origin:
+          $ref: '#/components/schemas/HistoryEntryOrigin'
+        type:
+          type: string
+          const: context_window_notice
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+        turn_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        agent_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        entry_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        timestamp:
+          type: string
+          format: date-time
+        notice:
+          $ref: '#/components/schemas/ContextWindowNoticeFrameNotice'
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            Per-session sequence number of this frame (#823 catch-up redesign). Strictly
+            increasing and gap-free within the session, assigned by the gateway's per-session
+            hub as the single chokepoint through which every session-scoped frame is published.
+            Optional: absent on an unsequenced copy of this frame (for example a broadcast
+            delivered to a tab that is not bound to this session) — the client only advances its
+            per-session cursor for frames that carry seq. The client stores the highest seq it
+            has applied per session and sends it back as since_seq on attach_session; frames at
+            or below that cursor are ignored, which makes re-delivery idempotent.
+    ProviderFallbackFrame:
+      title: ProviderFallbackFrame
+      description: >
+        Server → client (provider-messages spec §7.1 item 3). Announces that a
+        turn was answered by the fallback model because another candidate could
+        not answer — the frame itself does NOT distinguish hard provider trouble
+        from a cooldown skip (that distinction lives only in the once-per-pair
+        note rate and the session transcript, C-18/MIN-103). No raw error text
+        and no `reason` field (OBS-103) — unavailable_code is the one field
+        that varies rendered text (D12 hint gate). Keep in sync by hand with
+        contracts/components/schemas/ProviderFallbackFrame.yaml.
+      type: object
+      required:
+      - type
+      - session_id
+      - turn_id
+      - answered_model
+      - unavailable_model
+      - unavailable_code
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: provider_fallback
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+        turn_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        answered_model:
+          type: string
+          minLength: 1
+          maxLength: 256
+        unavailable_model:
+          type: string
+          minLength: 1
+          maxLength: 256
+        unavailable_code:
+          type: string
+          enum:
+          - rate_limited
+          - model_retired
+          - model_not_found
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            Per-session sequence number of this frame (#823 catch-up redesign). Optional:
+            absent on an unsequenced copy. Keep in sync by hand with
+            contracts/components/schemas/ProviderFallbackFrame.yaml.
+    ProviderFallbackNote:
+      title: ProviderFallbackNote
+      description: >
+        Server → client. Replay carrier for a persisted fallback-model note
+        (provider-messages spec §7.1 item 2, MAJ-010/C-17) — the note is
+        persisted to the session transcript after the assistant answer
+        (MIN-103/FB-2) and must not be a live-only orphan; on session reload
+        the replay path emits this frame so the reloaded session renders the
+        same note. The LIVE announcement is the separate provider_fallback
+        frame. No seq (ReplayErrorFrame/ReplayMessageFrame pattern). Keep in
+        sync by hand with contracts/components/schemas/ProviderFallbackNote.yaml.
+      type: object
+      required:
+      - type
+      - session_id
+      - entry_id
+      - timestamp
+      - message
+      additionalProperties: false
+      properties:
+        history_origin:
+          $ref: '#/components/schemas/HistoryEntryOrigin'
+        type:
+          type: string
+          const: replay_provider_fallback
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+        entry_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+        timestamp:
+          type: string
+          format: date-time
+        answered_model:
+          type: string
+          minLength: 1
+          maxLength: 256
+        unavailable_model:
+          type: string
+          minLength: 1
+          maxLength: 256
+        unavailable_code:
+          type: string
+          enum:
+          - rate_limited
+          - model_retired
+          - model_not_found
+        message:
+          type: string
+          minLength: 1
+          maxLength: 4096
     LibraryChangedFrame:
       title: LibraryChangedFrame
       description: >
@@ -3570,35 +5738,6 @@ components:
             Which REST operation emitted the frame (e.g. "delete", "rename",
             "mkdir", "upload", "write"). For debugging surfaces; clients must
             not branch their invalidation on it.
-    MediaPart:
-      title: MediaPart
-      description: One media attachment.
-      type: object
-      required:
-      - type
-      - url
-      - filename
-      - content_type
-      additionalProperties: false
-      properties:
-        type:
-          type: string
-          enum:
-          - image
-          - audio
-          - video
-          - file
-        url:
-          type: string
-          minLength: 1
-        filename:
-          type: string
-          minLength: 1
-        content_type:
-          type: string
-          minLength: 1
-        caption:
-          type: string
     MediaFrame:
       title: MediaFrame
       description: >
@@ -3613,6 +5752,8 @@ components:
       - parts
       additionalProperties: false
       properties:
+        history_origin:
+          $ref: '#/components/schemas/HistoryEntryOrigin'
         type:
           type: string
           const: media
@@ -3633,42 +5774,6 @@ components:
             Per-session sequence number of this frame (#823 catch-up redesign). Optional:
             absent on an unsequenced copy. Keep in sync by hand with
             contracts/components/schemas/MediaFrame.yaml.
-    AgentSwitchedFrame:
-      title: AgentSwitchedFrame
-      description: >
-        Server → client active agent changed. Session-scoped (registered
-        in SESSION_SCOPED_FRAME_TYPES); class not yet assigned by the
-        ADR-057 W5 audit (FR-089).
-      type: object
-      required:
-      - type
-      - session_id
-      additionalProperties: false
-      properties:
-        type:
-          type: string
-          const: agent_switched
-        session_id:
-          type: string
-          minLength: 1
-        agent_id:
-          type: string
-        message:
-          type: string
-        producing_session_id:
-          type: string
-          minLength: 1
-          description: >
-            ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit
-            (FR-089) — see this frame's description.
-        seq:
-          type: integer
-          format: int64
-          minimum: 1
-          description: >-
-            Per-session sequence number of this frame (#823 catch-up redesign). Optional:
-            absent on an unsequenced copy. Keep in sync by hand with
-            contracts/components/schemas/AgentSwitchedFrame.yaml.
     CommandSegmentInfo:
       title: CommandSegmentInfo
       description: >
@@ -3781,6 +5886,35 @@ components:
       - expires_in_ms
       additionalProperties: false
       properties:
+        root_session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: >
+            L1-AMENDMENTS-20261013 §1.3 (#1263). Server-derived root of the acting
+            session's chain (ParentSessionID walk, 16 hops, cycle guard). Identifies
+            the related root chat without prescribing the approval's UI placement.
+            Omitted when equal to session_id.
+        acting_agent_name:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: >
+            L1-AMENDMENTS-20261013 §1.3 (#1263; spec K7). Display name of the
+            agent that made the call, named in the card header.
+        origin_label:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: >
+            Spec K7, §6.18. Server-derived turn origin, e.g. "while answering
+            <person> on <connection>", "for group <name>", "asked by <Agent>".
+            Omitted for a plain web turn.
+        room_ref:
+          $ref: '#/components/schemas/RoomRef'
+          description: >
+            Spec K7, FR-251. Present on a room's pre-admission approval card
+            (request id = delivery id).
         type:
           type: string
           const: tool_approval_required
@@ -3819,10 +5953,9 @@ components:
           minLength: 1
           maxLength: 128
           description: >
-            Workspace the requesting session belongs to (resolved server-side
-            from session meta, walking up to the delegating parent). The SPA
-            shows the approval only while that workspace is active. Omitted
-            when the session belongs to no workspace (shown everywhere).
+            Workspace attribution for the requesting session, resolved server-side
+            from session metadata or its delegating parent when a delegated child
+            has none. Omitted when the session belongs to no workspace.
         segments:
           type: array
           items:
@@ -3853,6 +5986,15 @@ components:
       - state
       additionalProperties: false
       properties:
+        root_session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: >
+            L1-AMENDMENTS-20261013 §1.3 (#1263). Server-derived root of the acting
+            session's chain (ParentSessionID walk, 16 hops, cycle guard): lets the
+            root chat's card clear without a lookup.
+            Omitted when equal to session_id.
         type:
           type: string
           const: tool_approval_resolved
@@ -3901,6 +6043,18 @@ components:
         agent_id:
           type: string
           description: Agent that asked — names the card's "needs your input" header.
+        room_ref:
+          $ref: '#/components/schemas/RoomRef'
+        origin_label:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: >
+            Server-derived origin label captured when the question was created
+            (#1449 C-I6, FR-050), e.g. "for group <name>". Immutable once the card
+            exists. Present together with room_ref when the question was raised by
+            work that answers exactly one group's request (D23, D28); the group
+            then shows the card too. Absent for every other question.
         status:
           type: string
           enum:
@@ -4029,6 +6183,8 @@ components:
         - card
       additionalProperties: false
       properties:
+        history_origin:
+          $ref: '#/components/schemas/HistoryEntryOrigin'
         type:
           type: string
           const: ask_user_question
@@ -4098,8 +6254,64 @@ components:
       - tool_name
       - agent_id
       - expires_in_ms
+      - tool_call_id
+      - turn_id
+      - args
       additionalProperties: false
       properties:
+        tool_call_id:
+          type: string
+          minLength: 1
+          description: >
+            L1-AMENDMENTS-20261013 §1.3 (#1263). Same value as
+            ToolApprovalRequiredFrame.tool_call_id, so a reloaded card is complete
+            and approvable.
+        turn_id:
+          type: string
+          minLength: 1
+          description: >
+            Same value as ToolApprovalRequiredFrame.turn_id.
+        args:
+          type: object
+          additionalProperties: true
+          description: >
+            Same value as ToolApprovalRequiredFrame.args — an object, never null.
+            The snapshot reaches exactly the
+            connections the live frame reaches (same audience rule).
+        segments:
+          type: array
+          items:
+            $ref: '#/components/schemas/CommandSegmentInfo'
+          description: Same value and rules as ToolApprovalRequiredFrame.segments.
+        root_session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: >
+            L1-AMENDMENTS-20261013 §1.3 (#1263). Server-derived root of the acting
+            session's chain (ParentSessionID walk, 16 hops, cycle guard): the chat
+            whose session id equals this value renders the inline approval.
+            Omitted when equal to session_id.
+        acting_agent_name:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: >
+            L1-AMENDMENTS-20261013 §1.3 (#1263; spec K7). Display name of the
+            agent that made the call, named in the card header.
+        origin_label:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: >
+            Spec K7, §6.18. Server-derived turn origin, e.g. "while answering
+            <person> on <connection>", "for group <name>", "asked by <Agent>".
+            Omitted for a plain web turn.
+        room_ref:
+          $ref: '#/components/schemas/RoomRef'
+          description: >
+            Spec K7, FR-251. Present on a room's pre-admission approval card
+            (request id = delivery id).
         approval_id:
           type: string
           minLength: 1
@@ -4156,6 +6368,23 @@ components:
       - emitted_at
       additionalProperties: false
       properties:
+        history_state:
+          $ref: '#/components/schemas/SessionHistoryState'
+          description: >
+            Required on attach's session-scoped emit; absent on the unscoped connection-open
+            emit. Describes server readiness, never proof that the client loaded a page.
+            Unavailable history leaves authorized current controls independent.
+        secret_requests:
+          type: array
+          maxItems: 1000
+          items:
+            $ref: '#/components/schemas/SessionStateSecretRequest'
+          description: >
+            Spec omnipus-system-agent K4 (FR-079). Pending and recent terminal
+            secret requests visible to this connection, so a reloaded secret card
+            restores its true state. Always an array when present, never null;
+            absence of a request is never read as success. Optional: an emit that
+            carries no secret-request state omits it.
         type:
           type: string
           const: session_state
@@ -4183,6 +6412,28 @@ components:
             ADR-082 (review CR3) — the transcript session this snapshot
             describes; absent on the connection-open emit. Keep in sync by
             hand with components/schemas/SessionStateFrame.yaml.
+        session_tokens_total:
+          type: integer
+          minimum: 0
+          readOnly: true
+          description: >
+            Authoritative absolute session-wide consumed-token total, with the same
+            meaning as SessionStats.tokens_total. Present when authoritative usage is
+            available on an authorized session-scoped attach, including live_only;
+            omitted on unscoped connection-open state. Omitted means unknown, never zero.
+            Independent of history readiness; not a per-turn delta.
+        attention_bound:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >
+            Optional. The saved outcome/entry order for this main, echoed so a
+            later acknowledgement can name the same number. Not a new counter.
+            This frame is part of both the incremental catch-up and the full
+            snapshot. 0 when the main has no outcome yet; omitted when this emit
+            is not an attach of a main or the saved order could not be read. An
+            omitted value means unknown, never zero. Keep in sync by hand with
+            components/schemas/SessionStateFrame.yaml.
         auto_approve_modifier:
           type: boolean
           nullable: true
@@ -4194,9 +6445,8 @@ components:
             present (the connection-open emit carries neither). true —
             Auto-approve forced ON for this chat; false — forced OFF for
             this chat; null or absent — no per-chat modifier is set, the
-            chat follows the agent x global resolution
-            (SandboxStatus.auto_approve_effective floored by the agent's
-            auto_approve_disabled). Same value space as
+            chat follows the global default
+            (SandboxStatus.auto_approve_effective). Same value space as
             SessionModeUpdateFrame.auto_approve. The modifier lives in
             server memory only: after a gateway restart it is gone and
             this field reads null/absent, so the UI follows the server.
@@ -4347,32 +6597,6 @@ components:
             Per-session sequence number of this frame (#823 catch-up redesign). Optional:
             absent on an unsequenced copy. Keep in sync by hand with
             contracts/components/schemas/CancelStageFrame.yaml.
-    SessionCloseAckFrame:
-      title: SessionCloseAckFrame
-      description: >
-        Server → client session close acknowledged. Session-scoped
-        (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the
-        ADR-057 W5 audit (FR-089) — a chat-lifecycle frame, not turn output.
-      type: object
-      required:
-      - type
-      - session_id
-      additionalProperties: false
-      properties:
-        type:
-          type: string
-          const: session_close_ack
-        session_id:
-          type: string
-          minLength: 1
-        id:
-          type: string
-        producing_session_id:
-          type: string
-          minLength: 1
-          description: >
-            ADR-057 FR-012/FR-013. Present iff it differs from session_id.
-            Class (b) (FR-089): absent for this frame type.
     SessionModeUpdateFrame:
       title: SessionModeUpdateFrame
       description: >
@@ -4386,10 +6610,9 @@ components:
         SandboxConfig.auto_approve for the full behavioural description).
 
         THE ONE EXCEPTION TO TIGHTEN-ONLY in this contract: unlike the
-        global default (SandboxConfig.auto_approve) and the per-agent
-        override (Agent.auto_approve_disabled, off-only), this frame may
-        LOOSEN — turn Auto ON for this one chat even when the resolved
-        agent x global default has it off — because a human is present in
+        global default (SandboxConfig.auto_approve), this frame may
+        LOOSEN — turn Auto ON for this one chat even when the global
+        default has it off — because a human is present in
         this session to accept that risk. It may also tighten (turn Auto
         off). Turning Auto on for a chat is deliberately a human-only
         action: the agent-facing `set_config` tool must never be able to
@@ -4419,10 +6642,10 @@ components:
           nullable: true
           description: >
             true — turn Auto-approve ON for this chat (may loosen past the
-            resolved agent x global default). false — turn Auto-approve OFF
+            global default). false — turn Auto-approve OFF
             for this chat (tightens, same as every other scope). null —
             clear this session's modifier; the chat reverts to whatever the
-            agent x global default currently resolves to, and will track
+            global default currently resolves to, and will track
             future changes to that default rather than staying pinned.
     SessionModeUpdatedFrame:
       title: SessionModeUpdatedFrame
@@ -4435,8 +6658,7 @@ components:
         the existing, session-scoped ErrorFrame instead. Session-scoped
         (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the
         ADR-057 W5 audit (FR-089) — a chat-lifecycle/settings frame, not
-        turn output, so producing_session_id is absent (FR-013), matching
-        SessionCloseAckFrame's own precedent.
+        turn output, so producing_session_id is absent (FR-013).
       type: object
       required:
       - type
@@ -4499,6 +6721,20 @@ components:
       - status
       additionalProperties: false
       properties:
+        request_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: >
+            Spec omnipus-system-agent K10 (FR-081). Correlates the pairing with
+            the chat request that started it (QR pairing in chat, WU-7).
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: >
+            Spec K10. The chat session the pairing belongs to, when it was
+            started from a chat.
         type:
           type: string
           const: whatsapp_pairing
@@ -4513,29 +6749,15 @@ components:
           - linked
           - timeout
           - error
+          - stopped
         qr:
           type: string
         message:
           type: string
-    SessionCloseFrame:
-      title: SessionCloseFrame
-      description: Client → server explicit session close request.
-      type: object
-      required:
-      - type
-      - session_id
-      additionalProperties: false
-      properties:
-        type:
-          type: string
-          const: session_close
-        session_id:
-          type: string
-          minLength: 1
     WhatsAppPairingSubscribeFrame:
       title: WhatsAppPairingSubscribeFrame
       description: 'Client → server. Registers or clears this connection''s interest in a channel''s whatsapp_pairing frames
-        so the QR is delivered only to the operator viewing that channel''s pairing UI (#283).
+        so the QR is delivered only to the operator viewing that channel''s pairing UI (#283). Subscribing (including the automatic re-subscribe on reconnect) only observes pairing frames: it never restores chat ownership of a pairing and never restarts pairing. A chat Retry claims ownership through PUT /api/v1/channels/{id}/enable with pairing_retry.
 
         '
       type: object
@@ -4545,6 +6767,22 @@ components:
       - active
       additionalProperties: false
       properties:
+        request_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: >
+            Spec omnipus-system-agent K10 (FR-081). Correlation hint naming the
+            chat request that started the pairing (QR pairing in chat, WU-7).
+            It is not authority: subscribing never restores ownership.
+        session_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: >
+            Spec K10. Correlation hint naming the chat session the pairing
+            belongs to, when it was started from a chat. It is not authority:
+            subscribing never restores ownership.
         type:
           type: string
           const: whatsapp_pairing_subscribe
@@ -4578,14 +6816,19 @@ components:
           minLength: 1
         notification_type:
           type: string
-          description: 'The event class. Mirrors Notification.type in openapi.yaml. "knowledge_drift" (ADR-067 FR-038a)
-            means the drift check found a knowledge base''s search index out of step with the folder on disk and the index
-            is being rebuilt; it is never emitted for a healthy check.
-
-            '
+          description: >
+            The event class. Mirrors Notification.type in openapi.yaml.
+            "knowledge_drift" (ADR-067 FR-038a) means the drift check found a
+            knowledge base's search index out of step with the folder on disk
+            and the index is being rebuilt; it is never emitted for a healthy check.
+            "stop_notice" is an operational Stop outcome (already-approved request,
+            partial cleanup, or Stop did not complete). It is a non-terminal
+            header notification and must not be sent as a chat ErrorFrame.
           enum:
           - schedule_failed
           - knowledge_drift
+          - goal_paused
+          - stop_notice
         title:
           type: string
           minLength: 1
@@ -4633,7 +6876,7 @@ components:
         session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
         agent_id:
           type: string
           minLength: 1
@@ -4805,7 +7048,7 @@ components:
           const: browser_detach
         session_id:
           type: string
-          maxLength: 128
+          maxLength: 255
     BrowserStatusFrame:
       title: BrowserStatusFrame
       description: 'Server → client. Lifecycle / control status for the live browser connection. state=controlling means this
@@ -4925,7 +7168,7 @@ components:
           const: browser_tab_action
         session_id:
           type: string
-          maxLength: 128
+          maxLength: 255
         agent_id:
           type: string
           maxLength: 128
@@ -4967,7 +7210,7 @@ components:
           const: browser_tabs
         session_id:
           type: string
-          maxLength: 128
+          maxLength: 255
         active_index:
           type: integer
           minimum: 0
@@ -5032,7 +7275,7 @@ components:
         session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
           description: The client's chat session id. Exactly as in BrowserAttachFrame, it RESOLVES the browsing context under
             ADR-075 FR-017 — the gateway reads this session's own workspace_id server-side and targets that workspace's browser
             and its single capture session. It is still echoed back on browser_webrtc_answer / browser_webrtc_state so the
@@ -5087,7 +7330,7 @@ components:
           const: browser_webrtc_answer
         session_id:
           type: string
-          maxLength: 128
+          maxLength: 255
           description: Echoes the session_id from the triggering browser_webrtc_offer, for client-side correlation only.
         sdp:
           type: string
@@ -5142,7 +7385,7 @@ components:
           const: browser_webrtc_state
         session_id:
           type: string
-          maxLength: 128
+          maxLength: 255
           description: Echoes the session_id from the triggering browser_webrtc_offer / browser_attach, for client-side correlation
             only.
         available:
@@ -5246,7 +7489,7 @@ components:
           const: browser_video_health
         session_id:
           type: string
-          maxLength: 128
+          maxLength: 255
           description: Echoes the chat session_id this viewer attached with, for client-side correlation only.
         state:
           type: string
@@ -5626,7 +7869,6 @@ components:
         state:
           type: string
           enum:
-            - queued
             - active
             - waiting_on_user
             - judge_unavailable
@@ -6013,6 +8255,8 @@ components:
         - judge_agent_id
       additionalProperties: false
       properties:
+        history_origin:
+          $ref: '#/components/schemas/HistoryEntryOrigin'
         type:
           type: string
           const: judge_verdict
@@ -6174,6 +8418,8 @@ components:
         - text
       additionalProperties: false
       properties:
+        history_origin:
+          $ref: '#/components/schemas/HistoryEntryOrigin'
         type:
           type: string
           const: browser_handover_notice
@@ -6196,6 +8442,78 @@ components:
             reason (plain text, truncated to 200 runes) when that is the
             producer.
 
+    HelperEventFrameEvent:
+      title: HelperEventFrameEvent
+      description: Hand-synced WS copy of components/schemas/HelperEvent.yaml. Keep both shapes identical.
+      type: object
+      additionalProperties: false
+      required:
+        - helper_session_id
+        - kind
+        - text
+        - created_at
+      properties:
+        helper_session_id:
+          type: string
+          minLength: 1
+        helper_title:
+          type: string
+          minLength: 1
+        kind:
+          type: string
+          enum:
+            - verdict_unmet
+            - not_verified
+            - stopped
+            - restarted
+            - resume_refused
+            - timed_out
+            - finished
+            - question
+            - blocker
+            - failed
+        text:
+          type: string
+          minLength: 1
+        goal_id:
+          type: string
+          minLength: 1
+        created_at:
+          type: string
+          format: date-time
+
+    HelperEventFrame:
+      title: HelperEventFrame
+      description: >
+        Server to client. Immutable helper-event row addressed to one transcript.
+        Emitted live after save and replayed by the stamped helper_event subtype.
+        Keep components/schemas/HelperEventFrame.yaml in sync.
+      type: object
+      additionalProperties: false
+      required:
+        - type
+        - session_id
+        - message_id
+        - helper_event
+      properties:
+        history_origin:
+          $ref: '#/components/schemas/HistoryEntryOrigin'
+        type:
+          type: string
+          const: helper_event
+        session_id:
+          type: string
+          minLength: 1
+        message_id:
+          type: string
+          minLength: 1
+        helper_event:
+          $ref: '#/components/schemas/HelperEventFrameEvent'
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+
     GoalOutcomeFrameOutcome:
       title: GoalOutcomeFrameOutcome
       description: >
@@ -6204,6 +8522,8 @@ components:
         Named differently because pkg/api/generated holds the OpenAPI and
         AsyncAPI Go types in one package and cannot declare `GoalOutcome`
         twice. Any field edit MUST be mirrored in GoalOutcome.yaml.
+        An ending is stored once per transcript: helper and parent have different
+        message ids but share the goal id, ending, rounds and Judge reason.
       type: object
       required:
         - goal_id
@@ -6227,6 +8547,13 @@ components:
             - rounds_exhausted
             - stopped_by_user
             - other
+          description: >
+            WHY the goal ended (mirror of components/schemas/GoalOutcome.yaml
+            `ending` — edit both together). `stopped_by_user` is an EXPLICIT
+            user ending only: the owning session's `/goal clear` or an
+            authorized parent's `delegate(action="clear_goal")`. NEVER
+            written for a session lifecycle transition — a Stop, timeout,
+            plan stop, restart or failure keeps the goal record active.
         rounds_used:
           type: integer
           minimum: 0
@@ -6266,6 +8593,8 @@ components:
         - outcome
       additionalProperties: false
       properties:
+        history_origin:
+          $ref: '#/components/schemas/HistoryEntryOrigin'
         type:
           type: string
           const: goal_outcome
@@ -6447,7 +8776,7 @@ components:
         session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
         input_epoch:
           type: integer
           minimum: 1
@@ -6488,7 +8817,7 @@ components:
         session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
         input_epoch:
           type: integer
           minimum: 1
@@ -6525,7 +8854,7 @@ components:
         session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
         input_epoch:
           type: integer
           minimum: 1
@@ -6567,7 +8896,7 @@ components:
         session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
         input_epoch:
           type: integer
           minimum: 0
@@ -6590,19 +8919,250 @@ components:
           minimum: 1
           maximum: 9007199254740991
 
+    SessionHistoryContext:
+      title: SessionHistoryContext
+      type: object
+      description: >
+        Bounded public dependencies of selected history groups (chat history paging D4/D10).
+        Resolve only selected/current relevant spans and duplicate identities, never all
+        session spans. Each optional lifecycle payload is the actual recorded generated
+        public frame, not a fabricated start, running state or success. No competing
+        cancellation/disposition value, private archive mark or copied content store.
+      required:
+        - spans
+        - duplicate_ids
+      additionalProperties: false
+      properties:
+        spans:
+          type: array
+          items:
+            type: object
+            required:
+              - span_id
+            additionalProperties: false
+            properties:
+              span_id:
+                type: string
+                minLength: 1
+              start:
+                $ref: '#/components/schemas/SubagentStartFrame'
+                x-go-type: SubagentStartFrame
+              state:
+                $ref: '#/components/schemas/SubagentStateFrame'
+                x-go-type: SubagentStateFrame
+              message:
+                $ref: '#/components/schemas/SubagentMessageFrame'
+                x-go-type: SubagentMessageFrame
+              end:
+                $ref: '#/components/schemas/SubagentEndFrame'
+                x-go-type: SubagentEndFrame
+              has_run:
+                type: boolean
+                description: Present only when proven by actual persisted lifecycle facts.
+          description: Non-null array of relevant actual span facts; empty when none are needed.
+        duplicate_ids:
+          type: array
+          items:
+            type: object
+            required:
+              - kind
+              - id
+              - canonical_position
+              - occurrence_count
+            additionalProperties: false
+            properties:
+              kind:
+                type: string
+                enum:
+                  - message
+                  - tool
+              id:
+                type: string
+                minLength: 1
+              canonical_position:
+                type: string
+                minLength: 47
+                maxLength: 47
+                pattern: '^hp1_[A-Za-z0-9_-]{43}$'
+              occurrence_count:
+                type: integer
+                minimum: 2
+          description: Non-null selected/current relevant duplicate-ID canonical ownership facts.
+    SessionHistoryPageInfo:
+      title: SessionHistoryPageInfo
+      type: object
+      description: >
+        Shared metadata/context for REST messages, bounded latest session detail and the
+        selected replay page of a snapshot (chat history paging D3/D4a/D10). Positions are
+        opaque same-session occurrence selectors, never lexically ordered or live cursors.
+        Cross-field invariants are checked by producers and consumers: min_rows <= limit;
+        source_group_count matches selected groups and is at most 100; first/last positions
+        exist iff nonempty; budget_override exists iff byte_budget_exceeded; a byte_budget
+        stop cannot underfill min_rows, while a byte_ceiling stop can; projected_bytes <=
+        byte_ceiling unless source_group_count is 1. No optional absence is serialized as null.
+      required:
+        - mode
+        - limit
+        - min_rows
+        - row_count
+        - source_group_count
+        - soft_byte_budget
+        - byte_ceiling
+        - projected_bytes
+        - byte_budget_exceeded
+        - stop_reason
+        - retention_generation
+        - context
+      additionalProperties: false
+      properties:
+        mode:
+          type: string
+          enum:
+            - latest
+            - older
+            - newer
+            - window_refresh
+          description: window_refresh continuation describes only the requested closed interval.
+        limit:
+          type: integer
+          minimum: 20
+          maximum: 100
+          description: Effective requested drawn-row target, not a frame count; default 40.
+        min_rows:
+          type: integer
+          minimum: 1
+          maximum: 100
+          description: >
+            Effective advisory two-screen row floor, at most limit; default 20. Whole
+            groups and this floor take precedence over the soft byte budget. Not proof
+            of viewport geometry or a hard defense against large authenticated requests.
+        row_count:
+          type: integer
+          minimum: 0
+          description: Drawn-row weight; a whole atomic group can exceed the row target or 100.
+        source_group_count:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: Number of selected whole source groups, not the number of replay frames.
+        soft_byte_budget:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >
+            Server-owned soft projected-page budget, currently 4194304 bytes (4 MiB).
+            Positive integer, deliberately not a one-value enum or a hard response cap.
+        byte_ceiling:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >
+            Server-owned hard page selection ceiling, currently 8388608 bytes (8 MiB),
+            on the same meter as projected_bytes (chat-history paging spec, "Amendment
+            2026-10-27 (founder, #1452 D2)", A2.3). Before adding any further group,
+            selection stops with stop_reason byte_ceiling if the page with that group
+            would exceed it, even below min_rows. The first group is always returned
+            whole, so projected_bytes <= byte_ceiling holds unless source_group_count
+            is 1. A page selection limit, not a heap or absolute response-size
+            guarantee; not an operator setting.
+        projected_bytes:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >
+            Larger of prepared public REST and historical WS encodings at this cut/context.
+            Excludes diagnostic accounting fields themselves, transport headers and separate
+            live controls/projection. Required projection failure is an error, never an estimate.
+        byte_budget_exceeded:
+          type: boolean
+          description: True iff projected bytes exceed the soft budget; requires budget_override.
+        stop_reason:
+          type: string
+          enum:
+            - row_target
+            - source_cap
+            - clear
+            - end
+            - range_end
+            - byte_budget
+            - byte_ceiling
+          description: >
+            Actual selection boundary. row_target/source_cap take precedence when their
+            boundary coincides with bytes. True end, closed clear/range or source cap may
+            underfill; the soft byte_budget may not cut below min_rows. byte_ceiling is
+            the one byte stop allowed below min_rows, and it is reported when the next
+            group would exceed both the soft budget and the ceiling. No byte stop
+            splits a whole group.
+        budget_override:
+          type: string
+          enum:
+            - height_floor
+            - atomic_group
+          description: Present iff the soft budget was exceeded to keep the floor or an atomic group.
+        first_position:
+          type: string
+          minLength: 47
+          maxLength: 47
+          pattern: '^hp1_[A-Za-z0-9_-]{43}$'
+          description: First selected occurrence in ascending acceptance order; absent iff empty.
+        last_position:
+          type: string
+          minLength: 47
+          maxLength: 47
+          pattern: '^hp1_[A-Za-z0-9_-]{43}$'
+          description: Last selected occurrence in ascending acceptance order; absent iff empty.
+        stopped_at_clear:
+          type: boolean
+          description: >
+            Optional indication that selection reached a protected exact clear marker.
+            Earlier retained groups remain reachable only through explicit clear crossing.
+        latest_clear:
+          type: object
+          required:
+            - entry_id
+            - history_position
+          additionalProperties: false
+          properties:
+            entry_id:
+              type: string
+              minLength: 1
+            history_position:
+              type: string
+              minLength: 47
+              maxLength: 47
+              pattern: '^hp1_[A-Za-z0-9_-]{43}$'
+          description: Actual latest clear identity, even when its marker lies outside this page.
+        retention_generation:
+          type: string
+          minLength: 1
+          description: Opaque retained-set generation; changes on actual expiry, not a failed removal.
+        context:
+          $ref: '#/components/schemas/SessionHistoryContext'
+          x-go-type: SessionHistoryContext
     SessionSnapshotFrame:
       title: SessionSnapshotFrame
-      description: >-
-        Server → client. #823 catch-up redesign. Answers attach_session when since_seq
-        can no longer be served incrementally. The client must replace its history for
-        this session: followed by session_state, a full unsequenced replay, then exactly
-        one catch_up_complete frame whose seq matches this frame's seq. Keep in sync by
-        hand with contracts/components/schemas/SessionSnapshotFrame.yaml.
+      description: >
+        Server to client. Bounded latest-page metadata when attach_session cannot serve
+        the requested live position (chat history paging D7/D10). Read the page before
+        announcing replacement. Follow with current session_state, selected entry-derived
+        history/tool/special/media frames carrying local history_origin, one replay done,
+        uncovered active projection, then catch_up_complete(mode=snapshot) at this seq;
+        held live frames follow in sequence order. No second entries array or manifest.
+        First-open/follow-latest clients stage and commit this page once on completion.
+        A historical reader instead keeps its rows, anchor, focus and measurements, stages
+        the page into its separate bounded tail cache, refreshes authoritative controls,
+        and revalidates only its already-held interval after complete. A reason does not
+        authorize a passive jump to latest. A classified history-only failure sends no
+        snapshot/wipe and may complete live_only controls instead. Partial failed control
+        or socket delivery never acknowledges a successful catch-up.
       type: object
       required:
-      - type
-      - session_id
-      - seq
+        - type
+        - session_id
+        - seq
+        - has_earlier
+        - has_later
+        - page_info
       additionalProperties: false
       properties:
         type:
@@ -6611,41 +9171,84 @@ components:
         session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
+          description: Session whose latest history page and current controls follow.
         seq:
           type: integer
           format: int64
           minimum: 1
-          description: >-
-            The session's high-water sequence number at snapshot time. Mirrored on the
-            terminal catch_up_complete frame.
+          description: >
+            Live high-water W at bind/read cut, mirrored on catch_up_complete. Commit
+            only after the full selected-page/current-control catch-up completes; not a
+            history position. Subsequent held live frames continue at seq greater than W.
         boot_id:
           type: string
-          description: The gateway process that produced this snapshot.
+          description: >
+            Gateway process identity, stored with the successfully completed live cursor;
+            same role as SessionStateFrame.boot_id / AttachSessionFrame.boot_id.
+        has_earlier:
+          type: boolean
+          description: Actual retained earlier groups; a reached closed clear needs explicit crossing.
+        has_later:
+          type: boolean
+          description: Actual eligible retained later groups at this same page cut.
+        next_before:
+          type: string
+          minLength: 47
+          maxLength: 47
+          pattern: '^hp1_[A-Za-z0-9_-]{43}$'
+          description: Present iff has_earlier, equal to page_info.first_position.
+        next_after:
+          type: string
+          minLength: 47
+          maxLength: 47
+          pattern: '^hp1_[A-Za-z0-9_-]{43}$'
+          description: Present iff has_later, equal to page_info.last_position.
+        page_info:
+          $ref: '#/components/schemas/SessionHistoryPageInfo'
+          description: Same latest-mode metadata/context/range as the shared REST reader; no entries array.
         reason:
           type: string
           enum:
-          - cursor_ahead
-          - retention_exceeded
-          - unknown_position
-          - boot_mismatch
-          description: >-
-            Why a snapshot was sent instead of an incremental catch-up. boot_mismatch is
-            checked first and always wins over the other three reasons.
+            - cursor_ahead
+            - retention_exceeded
+            - unknown_position
+            - boot_mismatch
+          description: >
+            Why snapshot replaces incremental catch-up: cursor_ahead is beyond the hub,
+            retention_exceeded is an unservable retained journal range, unknown_position
+            means no known cursor, boot_mismatch is a different gateway process and wins
+            before ordinary servability checks. None forces a historical reader to latest.
+        secret_requests:
+          type: array
+          maxItems: 1000
+          items:
+            $ref: '#/components/schemas/SessionStateSecretRequest'
+          description: >
+            Spec omnipus-system-agent K4 (FR-079). Pending and recent terminal
+            secret requests visible to this connection, so a reloaded secret card
+            restores its true state. Always an array when present, never null;
+            absence of a request is never read as success. Optional: an emit that
+            carries no secret-request state omits it.
     CatchUpCompleteFrame:
       title: CatchUpCompleteFrame
-      description: >-
-        Server → client. #823 catch-up redesign. Terminal frame of an attach_session
-        response, sent once, after every frame the catch-up needed (incremental journal
-        tail, or full snapshot replay plus projection) has been enqueued. Frames
-        published live during the attach are held and flushed only after this frame.
-        Keep in sync by hand with contracts/components/schemas/CatchUpCompleteFrame.yaml.
+      description: >
+        Server → client. #823 catch-up redesign. Terminal frame of an attach_session response,
+        sent exactly once, after every frame the catch-up needed to send (the incremental
+        journal tail, selected snapshot-page replay plus projection, or live-only controls)
+        has already been enqueued to
+        this connection. Frames published live while the attach was in progress are held (never
+        dropped) and are flushed to the connection only after this frame, so they always arrive
+        strictly after catch-up in seq order. The client uses this frame to: set its cursor for
+        the session to seq; stop treating incoming frames as catch-up; and, when mode is
+        snapshot, resolve whether the interrupted answer (if any) should show "couldn't be
+        finished · Generate again" (see mode).
       type: object
       required:
-      - type
-      - session_id
-      - seq
-      - mode
+        - type
+        - session_id
+        - seq
+        - mode
       additionalProperties: false
       properties:
         type:
@@ -6654,21 +9257,40 @@ components:
         session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
+          description: Session this catch-up response was for.
         seq:
           type: integer
           format: int64
           minimum: 1
-          description: The session's high-water sequence number this attach was answered at.
+          description: >
+            The session's high-water sequence number at the moment this attach was answered
+            (the same value as the preceding session_snapshot frame's seq on the snapshot path,
+            or the hub's head at bind time on the incremental path). The client's cursor for
+            this session becomes exactly this value.
         boot_id:
           type: string
-          description: The gateway process that answered this attach.
+          description: >
+            The gateway process that answered this attach — same role as
+            SessionStateFrame.boot_id / AttachSessionFrame.boot_id, stored alongside the seeded
+            seq cursor above.
         mode:
           type: string
           enum:
-          - incremental
-          - snapshot
-          description: Which catch-up path produced this response.
+            - incremental
+            - snapshot
+            - live_only
+          description: >
+            incremental delivers the complete servable journal tail, unaffected by history
+            page limits. snapshot completes the selected bounded history page plus current
+            projection, not lifetime history. live_only completes only authorized current
+            controls/projection and the live cursor after an explicit history-only failure:
+            keep cached history out-of-date, never wipe or claim history reconstruction,
+            replayCompletedForSession, history-loaded/restart/unanswered sweep, successful
+            first-send proof or attention seen acknowledgement. A later incremental catch-up
+            while history_state remains unavailable still is not history-loaded proof.
+            No mode completes if state/projection/socket delivery failed. Held live seq>W
+            follows this frame in order. Replay done is not attach completion.
     UserMessageFrame:
       title: UserMessageFrame
       description: >-
@@ -6684,13 +9306,20 @@ components:
       - timestamp
       additionalProperties: false
       properties:
+        room_ref:
+          $ref: '#/components/schemas/RoomRef'
+          description: >
+            Spec omnipus-system-agent K33 (FR-202, FR-215). Present when this
+            main-session entry is a room request to this agent or this agent's
+            answer into a room, so live, history and replay render the same
+            collapsed entry.
         type:
           type: string
           const: user_message
         session_id:
           type: string
           minLength: 1
-          maxLength: 128
+          maxLength: 255
         id:
           type: string
           minLength: 1
@@ -6736,6 +9365,8 @@ components:
           format: date-time
         agent_id:
           type: string
+        participant:
+          $ref: '#/components/schemas/ChatParticipant'
         seq:
           type: integer
           format: int64
@@ -6743,3 +9374,159 @@ components:
           description: >-
             Per-session sequence number of this frame (#823 catch-up redesign). Optional:
             absent on an unsequenced copy.
+    AgentCreatedFrame:
+      title: AgentCreatedFrame
+      description: >
+        Server → client. Emitted after a new agent is durably persisted (REST
+        POST /api/v1/agents, or the create_agent tool). Scope is deliberately
+        coarse, mirroring LibraryChangedFrame: clients invalidate the whole
+        ['agents'] query and let it refetch. `agent_id` is informational
+        only, never a scoping instruction. Broadcast, not addressed — the
+        originating tab receives it too, where a redundant invalidate is a
+        no-op.
+      type: object
+      required:
+      - type
+      - agent_id
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: agent_created
+        agent_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: >
+            The newly created agent's ID. Informational only — never a
+            scoping instruction. Clients invalidate the entire ['agents']
+            listing query regardless of which agent id triggered the frame.
+    MailPanelObserverFrame:
+      title: MailPanelObserverFrame
+      description: >
+        Client → server Mail panel presence open/close (ADR-20261001 "Mail
+        panel presence" row; mail-live-access-landing-order register row 5
+        — W0 is the single publisher, w5-integration implements the gateway
+        handlers). Opaque per-panel observer IDs: multiple tabs carry
+        distinct observers, and each panel instance mints a fresh one.
+        Connection-scoped, not session-scoped — no session_id, like
+        LibraryChangedFrame. The server binds the observer to THIS
+        authenticated connection and the currently authorized workspace;
+        REST requests can never claim ownership using another socket/user's
+        ID. Explicit close, socket disconnect and logout revoke exactly
+        that connection's observers — independent watcher/tool work is
+        never interrupted. Until presence is acknowledged the panel
+        conservatively assumes request-scoped connections. No new
+        data-refresh heartbeat or cache-push frame exists and none may be
+        added here: the watcher stays the only closed-panel notice surface
+        (founder decision; ADR P1.1).
+      type: object
+      required:
+      - type
+      - action
+      - observer_id
+      - workspace_id
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: mail_panel_observer
+        action:
+          type: string
+          enum:
+          - open
+          - close
+          description: >
+            open = this panel instance is open (its observer may retain
+            pooled panel sockets while it stays open). close = it closed —
+            that observer's idle panel sockets close immediately and its
+            in-flight work is cancelled; active sockets close when the last
+            dependent request completes.
+        observer_id:
+          type: string
+          minLength: 1
+          description: >
+            Opaque per-panel observer identifier — minted fresh per panel
+            instance by the client, meaningless to anything but presence
+            binding. Never reused across tabs, never an authorization
+            credential.
+        workspace_id:
+          type: string
+          minLength: 1
+          description: >
+            Workspace whose Mail panel is open — must be one this
+            authenticated connection is authorized for; the server refuses
+            otherwise with mail_panel_observer_error.
+    MailPanelObserverAckFrame:
+      title: MailPanelObserverAckFrame
+      description: >
+        Server → client: the observer is bound to this authenticated
+        socket/session and the authorized workspace (ADR-20261001 "Mail
+        panel presence" row). Until this ack arrives the panel keeps
+        conservative request-scoped behaviour. Connection-scoped; no
+        session_id, no replay, no persistence — presence dies with the
+        connection.
+      type: object
+      required:
+      - type
+      - action
+      - observer_id
+      - workspace_id
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: mail_panel_observer_ack
+        action:
+          type: string
+          enum:
+          - open
+          - close
+          description: The accepted action this ack confirms.
+        observer_id:
+          type: string
+          minLength: 1
+          description: The bound observer's opaque ID (echo).
+        workspace_id:
+          type: string
+          minLength: 1
+          description: The workspace the observer is now bound to (echo).
+    MailPanelObserverErrorFrame:
+      title: MailPanelObserverErrorFrame
+      description: >
+        Server → client: the presence request was refused with a safe,
+        closed-class reason (ADR-20261001 "Mail panel presence" row). The
+        panel falls back to conservative request-scoped connections — it
+        never retries the open in a loop and never treats the refusal as
+        authorization. Connection-scoped; no session_id.
+      type: object
+      required:
+      - type
+      - code
+      - error
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          const: mail_panel_observer_error
+        observer_id:
+          type: string
+          minLength: 1
+          description: The refused observer's opaque ID (echo).
+        workspace_id:
+          type: string
+          minLength: 1
+          description: The refused workspace (echo).
+        code:
+          type: string
+          enum:
+          - unauthorized_workspace
+          - malformed_frame
+          description: >
+            Closed-class refusal reason. unauthorized_workspace = this
+            authenticated connection is not authorized for that workspace —
+            never a hint about what WOULD be authorized. malformed_frame =
+            the frame failed validation.
+        error:
+          type: string
+          description: Human-readable message, safe to display; no raw error text.

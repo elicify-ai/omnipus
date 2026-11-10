@@ -652,7 +652,7 @@ func TestResolveAgentHome_OMNIPUSHome(t *testing.T) {
 		t.Setenv("OMNIPUS_HOME", tmpHome)
 
 		// Default=true means "routing default" — it must NOT redirect to shared workspace.
-		agentCfg := &config.AgentConfig{ID: "mia", Default: true}
+		agentCfg := &config.AgentConfig{ID: "mia"}
 		got := resolveAgentHome(agentCfg, defaults)
 
 		want := filepath.Join(tmpHome, "agents", "mia")

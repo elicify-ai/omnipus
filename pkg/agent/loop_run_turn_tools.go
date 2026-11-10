@@ -5,6 +5,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -16,7 +17,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/constants"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
-	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -31,8 +31,17 @@ type agentLoopRunTurnToolsExecute struct {
 	setGoalSucceededThisRound bool
 	toolName                  string
 	toolArgs                  map[string]any
-	ledgerToolName            string
-	toctouPolicy              string
+	// recordArgs is the r17 SR-3 record copy of toolArgs (recordToolCalls):
+	// every transcript record, log, event and approval request of this call
+	// uses it. toolArgs stays the execution copy.
+	recordArgs     map[string]any
+	ledgerToolName string
+	toctouPolicy   string
+	// skillWriteKey is the skill key a file-tool write into a skill folder
+	// targets (skills spec r15 §10.1), set by enforceExecutionPolicy's
+	// composition step; it rides the tool's context as the backstop marker
+	// (tools.WithSkillWriteApproval). Reset for every call.
+	skillWriteKey string
 	// shellModePin is the ADR-092 bash mode resolveAskPolicy settled on for
 	// this call; guardAndDispatch pins it on the tool's context so the bash
 	// tool enforces the same decision. Empty for every non-bash call.
@@ -44,7 +53,16 @@ type agentLoopRunTurnToolsExecute struct {
 	// ruleAskSettled is true when this bash call's one upfront prompt also
 	// settled an operator D3 ask rule (§5.7); guardAndDispatch pins it so
 	// the bash tool does not prompt again. Reset for every call.
-	ruleAskSettled    bool
+	ruleAskSettled bool
+	// preApprovalRefusal is the tool's own refusal before any approval card
+	// (tools.PreApprovalChecker); guardAndDispatch records it as the call's
+	// result instead of executing. Reset for every call.
+	preApprovalRefusal *tools.ToolResult
+	// approvalPin is the pin a tools.ApprovalPreparer returned for this call
+	// before its card (Channels Q2-B); guardAndDispatch puts it on the
+	// tool's context (tools.WithApprovalPin), never in the arguments. Reset
+	// for every call.
+	approvalPin       any
 	toolCallID        string
 	asyncCallback     func(_ context.Context, result *tools.ToolResult)
 	asyncCallbackGate *asyncToolCallbackGate
@@ -56,6 +74,7 @@ type agentLoopRunTurnToolsExecute struct {
 	admitted          admittedToolResult
 	toolResultMsg     providers.Message
 	tcRecord          session.ToolCall
+	started           *startedToolOutcome
 	ret0              agentLoopRunTurnToolsFlow
 }
 
@@ -112,6 +131,7 @@ func (rx *agentLoopRunTurnTools) executeToolCalls() agentLoopRunTurnToolsFlow {
 	ex.setGoalSucceededThisRound = false
 agentLoopRunTurnToolsExecuteLoop1:
 	for i, tc := range ex.rx.rr.normalizedToolCalls {
+		ex.started = nil
 		switch ex.validateCall(i, tc) {
 		case agentLoopRunTurnToolsExecuteReturn:
 			return ex.ret0
@@ -204,7 +224,10 @@ agentLoopRunTurnToolsExecuteLoop1:
 
 		ex.deliverToolOutput()
 
-		ex.recordToolResult(tc)
+		if err := ex.recordToolResult(tc); err != nil {
+			ex.contextWindowExit(err)
+			return ex.ret0
+		}
 
 		// RC-5 (ADR-057 UAT root-cause fix): for every OTHER failed tool
 		// call — bash, write_file, async delegate, anything not covered by
@@ -303,10 +326,11 @@ func (ex *agentLoopRunTurnToolsExecute) validateCall(i int, tc providers.ToolCal
 			)
 			// ADR-066 D4: a synthetic skipped result is a builtin-failure
 			// surface result like any other skip (FR-009).
-			skippedMsg := ex.rx.rr.rq.ri.rf.rt.al.admitToolResult(ex.rx.rr.rq.ri.rf.rt.ts, toolResultAdmission{
+			if err := ex.admitAndCheckpoint(toolResultAdmission{
 				Tool: skippedTC.Name, ToolCallID: skippedTC.ID, Content: ctxDoneSkipMessage, IsError: true, ParallelN: len(ex.rx.rr.normalizedToolCalls),
-			}).Message
-			ex.rx.rr.rq.ri.messages = append(ex.rx.rr.rq.ri.messages, skippedMsg)
+			}); err != nil {
+				return ex.contextWindowExit(err)
+			}
 		}
 		res, status, exitErr := ex.rx.rr.rq.ri.rf.rt.al.typedTurnExit(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.rf.rt.iteration, ex.rx.rr.rq.ri.rf.rt.llmModel, ctxErr)
 		ex.rx.rr.rq.ri.turnStatus = status
@@ -320,6 +344,10 @@ func (ex *agentLoopRunTurnToolsExecute) validateCall(i int, tc providers.ToolCal
 	// for Anthropic/Azure API compatibility (e.g., "browser_navigate" → "browser.navigate").
 	ex.toolName = ex.rx.rr.rq.ri.rf.rt.ts.agent.Tools.UnsanitizeToolName(tc.Name)
 	ex.toolArgs = cloneStringAnyMap(tc.Arguments)
+	ex.recordArgs = ex.toolArgs
+	if i < len(ex.rx.rr.recordToolArgs) {
+		ex.recordArgs = cloneStringAnyMap(ex.rx.rr.recordToolArgs[i])
+	}
 
 	// pkg/agent/verifier_budget.go::VerifierBudget (JUDGE-FR-051/
 	// FR-052): once a verifier adjudication's tool-call or byte cap
@@ -350,22 +378,11 @@ func (ex *agentLoopRunTurnToolsExecute) validateCall(i int, tc providers.ToolCal
 			// result exists ONLY because the cap was already
 			// reached — it must not itself count toward that same
 			// cap.
-			refusedMsg := ex.rx.rr.rq.ri.rf.rt.al.admitToolResult(ex.rx.rr.rq.ri.rf.rt.ts, toolResultAdmission{
+			if err := ex.admitAndCheckpoint(toolResultAdmission{
 				Tool: tc.Name, ToolCallID: tc.ID, Content: refusal, IsError: true, ParallelN: len(ex.rx.rr.normalizedToolCalls),
 				SkipVerifierBudgetAccounting: true,
-			}).Message
-			ex.rx.rr.rq.ri.messages = append(ex.rx.rr.rq.ri.messages, refusedMsg)
-			// ADR-066 D6 (T066-13): the window check runs after EVERY
-			// admitted result — empty-only mid-turn, Skip never
-			// moves; a thrash-guard fire ends the turn typed with no
-			// further provider call (FR-032).
-			if ex.rx.rr.rq.ri.messages, ex.rx.midTurnGuardErr = ex.rx.rr.rq.ri.rf.rt.al.midTurnWindowCheck(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.messages, ex.rx.rr.rq.ri.rf.providerToolDefs); ex.rx.midTurnGuardErr != nil {
-				res, status, exitErr := ex.rx.rr.rq.ri.rf.rt.al.typedTurnExit(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.rf.rt.iteration, ex.rx.rr.rq.ri.rf.rt.llmModel, ex.rx.midTurnGuardErr)
-				ex.rx.rr.rq.ri.turnStatus = status
-				ex.rx.ret0 = res
-				ex.rx.ret1 = exitErr
-				ex.ret0 = agentLoopRunTurnToolsReturn
-				return agentLoopRunTurnToolsExecuteReturn
+			}); err != nil {
+				return ex.contextWindowExit(err)
 			}
 			ex.rx.rr.rq.ri.rf.rt.al.emitEvent(
 				EventKindToolExecSkipped,
@@ -398,20 +415,10 @@ func (ex *agentLoopRunTurnToolsExecute) validateCall(i int, tc providers.ToolCal
 				"iteration": ex.rx.rr.rq.ri.rf.rt.iteration,
 				"narrowed":  ex.rx.rr.rq.goalForce.layer1,
 			})
-		refusedMsg := ex.rx.rr.rq.ri.rf.rt.al.admitToolResult(ex.rx.rr.rq.ri.rf.rt.ts, toolResultAdmission{
+		if err := ex.admitAndCheckpoint(toolResultAdmission{
 			Tool: tc.Name, ToolCallID: tc.ID, Content: refusal, IsError: true, ParallelN: len(ex.rx.rr.normalizedToolCalls),
-		}).Message
-		ex.rx.rr.rq.ri.messages = append(ex.rx.rr.rq.ri.messages, refusedMsg)
-		// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
-		// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
-		// ends the turn typed with no further provider call (FR-032).
-		if ex.rx.rr.rq.ri.messages, ex.rx.midTurnGuardErr = ex.rx.rr.rq.ri.rf.rt.al.midTurnWindowCheck(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.messages, ex.rx.rr.rq.ri.rf.providerToolDefs); ex.rx.midTurnGuardErr != nil {
-			res, status, exitErr := ex.rx.rr.rq.ri.rf.rt.al.typedTurnExit(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.rf.rt.iteration, ex.rx.rr.rq.ri.rf.rt.llmModel, ex.rx.midTurnGuardErr)
-			ex.rx.rr.rq.ri.turnStatus = status
-			ex.rx.ret0 = res
-			ex.rx.ret1 = exitErr
-			ex.ret0 = agentLoopRunTurnToolsReturn
-			return agentLoopRunTurnToolsExecuteReturn
+		}); err != nil {
+			return ex.contextWindowExit(err)
 		}
 		ex.rx.rr.rq.ri.rf.rt.al.emitEvent(
 			EventKindToolExecSkipped,
@@ -422,6 +429,10 @@ func (ex *agentLoopRunTurnToolsExecute) validateCall(i int, tc providers.ToolCal
 			},
 		)
 		return agentLoopRunTurnToolsExecuteContinue
+	}
+
+	if i < len(ex.rx.rr.argumentRefusals) && ex.rx.rr.argumentRefusals[i] != nil {
+		return ex.admitPlaintextRefusal(tc, ex.rx.rr.argumentRefusals[i])
 	}
 
 	// UAT B-9 run 4: an AskUserQuestion trailing a SUCCESSFUL set_goal
@@ -448,20 +459,10 @@ func (ex *agentLoopRunTurnToolsExecute) validateCall(i int, tc providers.ToolCal
 				"turn_id":   ex.rx.rr.rq.ri.rf.rt.ts.turnID,
 				"iteration": ex.rx.rr.rq.ri.rf.rt.iteration,
 			})
-		refusedMsg := ex.rx.rr.rq.ri.rf.rt.al.admitToolResult(ex.rx.rr.rq.ri.rf.rt.ts, toolResultAdmission{
+		if err := ex.admitAndCheckpoint(toolResultAdmission{
 			Tool: tc.Name, ToolCallID: tc.ID, Content: askAfterSetGoalRefusal, IsError: true, ParallelN: len(ex.rx.rr.normalizedToolCalls),
-		}).Message
-		ex.rx.rr.rq.ri.messages = append(ex.rx.rr.rq.ri.messages, refusedMsg)
-		// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
-		// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
-		// ends the turn typed with no further provider call (FR-032).
-		if ex.rx.rr.rq.ri.messages, ex.rx.midTurnGuardErr = ex.rx.rr.rq.ri.rf.rt.al.midTurnWindowCheck(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.messages, ex.rx.rr.rq.ri.rf.providerToolDefs); ex.rx.midTurnGuardErr != nil {
-			res, status, exitErr := ex.rx.rr.rq.ri.rf.rt.al.typedTurnExit(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.rf.rt.iteration, ex.rx.rr.rq.ri.rf.rt.llmModel, ex.rx.midTurnGuardErr)
-			ex.rx.rr.rq.ri.turnStatus = status
-			ex.rx.ret0 = res
-			ex.rx.ret1 = exitErr
-			ex.ret0 = agentLoopRunTurnToolsReturn
-			return agentLoopRunTurnToolsExecuteReturn
+		}); err != nil {
+			return ex.contextWindowExit(err)
 		}
 		ex.rx.rr.rq.ri.rf.rt.al.emitEvent(
 			EventKindToolExecSkipped,
@@ -473,7 +474,7 @@ func (ex *agentLoopRunTurnToolsExecute) validateCall(i int, tc providers.ToolCal
 		)
 		return agentLoopRunTurnToolsExecuteContinue
 	}
-	return agentLoopRunTurnToolsExecuteNext
+	return ex.refusePlaintextToolCall(tc)
 }
 
 // applyQuarantineAndHooks applies denial quarantine, control gates, hooks, and the argument bound.
@@ -501,23 +502,13 @@ func (ex *agentLoopRunTurnToolsExecute) applyQuarantineAndHooks(tc providers.Too
 		// handles that "no placeholder" case by appending directly
 		// (the same shape the headless auto-deny site below relies
 		// on for the identical reason).
-		settleAskToolCallTranscript(ex.rx.rr.rq.ri.rf.rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.toolArgs, qReason)
+		settleAskToolCallTranscript(ex.rx.rr.rq.ri.rf.rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.recordArgs, qReason)
 		// ADR-066 D4: denied results enter through the choke point on the
 		// builtin-failure surface (FR-009); it persists the line itself.
-		deniedMsg := ex.rx.rr.rq.ri.rf.rt.al.admitToolResult(ex.rx.rr.rq.ri.rf.rt.ts, toolResultAdmission{
+		if err := ex.admitAndCheckpoint(toolResultAdmission{
 			Tool: tc.Name, ToolCallID: tc.ID, Content: payload, IsError: true, ParallelN: len(ex.rx.rr.normalizedToolCalls),
-		}).Message
-		ex.rx.rr.rq.ri.messages = append(ex.rx.rr.rq.ri.messages, deniedMsg)
-		// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
-		// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
-		// ends the turn typed with no further provider call (FR-032).
-		if ex.rx.rr.rq.ri.messages, ex.rx.midTurnGuardErr = ex.rx.rr.rq.ri.rf.rt.al.midTurnWindowCheck(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.messages, ex.rx.rr.rq.ri.rf.providerToolDefs); ex.rx.midTurnGuardErr != nil {
-			res, status, exitErr := ex.rx.rr.rq.ri.rf.rt.al.typedTurnExit(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.rf.rt.iteration, ex.rx.rr.rq.ri.rf.rt.llmModel, ex.rx.midTurnGuardErr)
-			ex.rx.rr.rq.ri.turnStatus = status
-			ex.rx.ret0 = res
-			ex.rx.ret1 = exitErr
-			ex.ret0 = agentLoopRunTurnToolsReturn
-			return agentLoopRunTurnToolsExecuteReturn
+		}); err != nil {
+			return ex.contextWindowExit(err)
 		}
 		ex.rx.rr.rq.ri.rf.rt.al.emitEvent(
 			EventKindToolExecSkipped,
@@ -555,18 +546,11 @@ func (ex *agentLoopRunTurnToolsExecute) applyQuarantineAndHooks(tc providers.Too
 			},
 		)
 		exhaustedMsg := browserControlGateExhaustedMessage(ex.toolName)
-		settleAskToolCallTranscript(ex.rx.rr.rq.ri.rf.rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.toolArgs, exhaustedMsg)
-		admittedMsg := ex.rx.rr.rq.ri.rf.rt.al.admitToolResult(ex.rx.rr.rq.ri.rf.rt.ts, toolResultAdmission{
+		settleAskToolCallTranscript(ex.rx.rr.rq.ri.rf.rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.recordArgs, exhaustedMsg)
+		if err := ex.admitAndCheckpoint(toolResultAdmission{
 			Tool: tc.Name, ToolCallID: tc.ID, Content: exhaustedMsg, IsError: false, ParallelN: len(ex.rx.rr.normalizedToolCalls),
-		}).Message
-		ex.rx.rr.rq.ri.messages = append(ex.rx.rr.rq.ri.messages, admittedMsg)
-		if ex.rx.rr.rq.ri.messages, ex.rx.midTurnGuardErr = ex.rx.rr.rq.ri.rf.rt.al.midTurnWindowCheck(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.messages, ex.rx.rr.rq.ri.rf.providerToolDefs); ex.rx.midTurnGuardErr != nil {
-			res, status, exitErr := ex.rx.rr.rq.ri.rf.rt.al.typedTurnExit(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.rf.rt.iteration, ex.rx.rr.rq.ri.rf.rt.llmModel, ex.rx.midTurnGuardErr)
-			ex.rx.rr.rq.ri.turnStatus = status
-			ex.rx.ret0 = res
-			ex.rx.ret1 = exitErr
-			ex.ret0 = agentLoopRunTurnToolsReturn
-			return agentLoopRunTurnToolsExecuteReturn
+		}); err != nil {
+			return ex.contextWindowExit(err)
 		}
 		return agentLoopRunTurnToolsExecuteContinue
 	}
@@ -584,6 +568,9 @@ func (ex *agentLoopRunTurnToolsExecute) applyQuarantineAndHooks(tc providers.Too
 			if toolReq != nil {
 				ex.toolName = toolReq.Tool
 				ex.toolArgs = toolReq.Arguments
+				if refusal := ex.recordArgsAfterHook(); refusal != nil {
+					return ex.admitPlaintextRefusal(tc, refusal)
+				}
 			}
 		case HookActionDenyTool:
 			denyContent := hookDeniedToolContent("Tool execution denied by hook", decision.Reason)
@@ -597,20 +584,10 @@ func (ex *agentLoopRunTurnToolsExecute) applyQuarantineAndHooks(tc providers.Too
 			)
 			// ADR-066 D4: denied results enter through the choke point on the
 			// builtin-failure surface (FR-009); it persists the line itself.
-			deniedMsg := ex.rx.rr.rq.ri.rf.rt.al.admitToolResult(ex.rx.rr.rq.ri.rf.rt.ts, toolResultAdmission{
+			if err := ex.admitAndCheckpoint(toolResultAdmission{
 				Tool: tc.Name, ToolCallID: tc.ID, Content: denyContent, IsError: true, ParallelN: len(ex.rx.rr.normalizedToolCalls),
-			}).Message
-			ex.rx.rr.rq.ri.messages = append(ex.rx.rr.rq.ri.messages, deniedMsg)
-			// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
-			// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
-			// ends the turn typed with no further provider call (FR-032).
-			if ex.rx.rr.rq.ri.messages, ex.rx.midTurnGuardErr = ex.rx.rr.rq.ri.rf.rt.al.midTurnWindowCheck(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.messages, ex.rx.rr.rq.ri.rf.providerToolDefs); ex.rx.midTurnGuardErr != nil {
-				res, status, exitErr := ex.rx.rr.rq.ri.rf.rt.al.typedTurnExit(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.rf.rt.iteration, ex.rx.rr.rq.ri.rf.rt.llmModel, ex.rx.midTurnGuardErr)
-				ex.rx.rr.rq.ri.turnStatus = status
-				ex.rx.ret0 = res
-				ex.rx.ret1 = exitErr
-				ex.ret0 = agentLoopRunTurnToolsReturn
-				return agentLoopRunTurnToolsExecuteReturn
+			}); err != nil {
+				return ex.contextWindowExit(err)
 			}
 			// ADR-058 fix: this branch used to `continue` with no
 			// ClassifyDenial, no recordToolDenial and no budget check
@@ -673,20 +650,10 @@ func (ex *agentLoopRunTurnToolsExecute) applyQuarantineAndHooks(tc providers.Too
 				"size_chars": argChars,
 				"cap_chars":  argCap,
 			})
-		refusedMsg := ex.rx.rr.rq.ri.rf.rt.al.admitToolResult(ex.rx.rr.rq.ri.rf.rt.ts, toolResultAdmission{
+		if err := ex.admitAndCheckpoint(toolResultAdmission{
 			Tool: tc.Name, ToolCallID: tc.ID, Content: refusal.ContentForLLM(), IsError: true, ParallelN: len(ex.rx.rr.normalizedToolCalls),
-		}).Message
-		ex.rx.rr.rq.ri.messages = append(ex.rx.rr.rq.ri.messages, refusedMsg)
-		// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
-		// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
-		// ends the turn typed with no further provider call (FR-032).
-		if ex.rx.rr.rq.ri.messages, ex.rx.midTurnGuardErr = ex.rx.rr.rq.ri.rf.rt.al.midTurnWindowCheck(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.messages, ex.rx.rr.rq.ri.rf.providerToolDefs); ex.rx.midTurnGuardErr != nil {
-			res, status, exitErr := ex.rx.rr.rq.ri.rf.rt.al.typedTurnExit(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.rf.rt.iteration, ex.rx.rr.rq.ri.rf.rt.llmModel, ex.rx.midTurnGuardErr)
-			ex.rx.rr.rq.ri.turnStatus = status
-			ex.rx.ret0 = res
-			ex.rx.ret1 = exitErr
-			ex.ret0 = agentLoopRunTurnToolsReturn
-			return agentLoopRunTurnToolsExecuteReturn
+		}); err != nil {
+			return ex.contextWindowExit(err)
 		}
 		ex.rx.rr.rq.ri.rf.rt.al.emitEvent(
 			EventKindToolExecSkipped,
@@ -698,7 +665,9 @@ func (ex *agentLoopRunTurnToolsExecute) applyQuarantineAndHooks(tc providers.Too
 		)
 		return agentLoopRunTurnToolsExecuteContinue
 	}
-	return agentLoopRunTurnToolsExecuteNext
+	// A hook may have rewritten the tool name/arguments. Recheck the same
+	// opt-in refusal before any approval or argument-bearing event.
+	return ex.refusePlaintextToolCall(tc)
 }
 
 // applyApprovalHook applies the optional approval hook.
@@ -741,20 +710,10 @@ func (ex *agentLoopRunTurnToolsExecute) applyApprovalHook(tc providers.ToolCall)
 			)
 			// ADR-066 D4: denied results enter through the choke point on the
 			// builtin-failure surface (FR-009); it persists the line itself.
-			deniedMsg := ex.rx.rr.rq.ri.rf.rt.al.admitToolResult(ex.rx.rr.rq.ri.rf.rt.ts, toolResultAdmission{
+			if err := ex.admitAndCheckpoint(toolResultAdmission{
 				Tool: tc.Name, ToolCallID: tc.ID, Content: denyContent, IsError: true, ParallelN: len(ex.rx.rr.normalizedToolCalls),
-			}).Message
-			ex.rx.rr.rq.ri.messages = append(ex.rx.rr.rq.ri.messages, deniedMsg)
-			// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
-			// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
-			// ends the turn typed with no further provider call (FR-032).
-			if ex.rx.rr.rq.ri.messages, ex.rx.midTurnGuardErr = ex.rx.rr.rq.ri.rf.rt.al.midTurnWindowCheck(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.messages, ex.rx.rr.rq.ri.rf.providerToolDefs); ex.rx.midTurnGuardErr != nil {
-				res, status, exitErr := ex.rx.rr.rq.ri.rf.rt.al.typedTurnExit(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.rf.rt.iteration, ex.rx.rr.rq.ri.rf.rt.llmModel, ex.rx.midTurnGuardErr)
-				ex.rx.rr.rq.ri.turnStatus = status
-				ex.rx.ret0 = res
-				ex.rx.ret1 = exitErr
-				ex.ret0 = agentLoopRunTurnToolsReturn
-				return agentLoopRunTurnToolsExecuteReturn
+			}); err != nil {
+				return ex.contextWindowExit(err)
 			}
 			// ADR-058 fix: same rationale as the HookActionDenyTool
 			// branch above — this hook-deny path used to bypass the
@@ -786,7 +745,19 @@ func (ex *agentLoopRunTurnToolsExecute) applyApprovalHook(tc providers.ToolCall)
 // enforceExecutionPolicy rechecks execution policy and records a policy denial.
 func (ex *agentLoopRunTurnToolsExecute) enforceExecutionPolicy(tc providers.ToolCall) agentLoopRunTurnToolsExecuteFlow {
 	ex.toctouPolicy = ex.rx.rr.rq.ri.rf.rt.al.resolveToolPolicyAtExec(ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, ex.rx.rr.rq.filterTimePolicyMap)
+	ex.skillWriteKey = ""
+	if ex.toctouPolicy != "deny" {
+		if key, ok := ex.composeSkillWritePolicy(tc); ok {
+			ex.skillWriteKey = key
+			if ex.toctouPolicy == "deny" {
+				return ex.denySkillWrite(tc)
+			}
+		}
+	}
 	if ex.toctouPolicy == "deny" {
+		if canonical, retired := tools.RetiredToolCanonical(ex.toolName); retired {
+			return ex.refuseRetiredToolName(tc, canonical)
+		}
 		// Policy flipped to deny between filter-time and exec-time.
 		// ADR-058 site 1: this branch has no approver-supplied
 		// reason at all, so it uses the fixed loop pseudo-reason
@@ -803,20 +774,10 @@ func (ex *agentLoopRunTurnToolsExecute) enforceExecutionPolicy(tc providers.Tool
 		ex.rx.rr.rq.ri.rf.rt.al.emitPolicyDenyAudit(ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, "deny", "mid_turn_policy_change")
 		// ADR-066 D4: denied results enter through the choke point on the
 		// builtin-failure surface (FR-009); it persists the line itself.
-		deniedMsg := ex.rx.rr.rq.ri.rf.rt.al.admitToolResult(ex.rx.rr.rq.ri.rf.rt.ts, toolResultAdmission{
+		if err := ex.admitAndCheckpoint(toolResultAdmission{
 			Tool: tc.Name, ToolCallID: tc.ID, Content: denyMsg, IsError: true, ParallelN: len(ex.rx.rr.normalizedToolCalls),
-		}).Message
-		ex.rx.rr.rq.ri.messages = append(ex.rx.rr.rq.ri.messages, deniedMsg)
-		// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
-		// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
-		// ends the turn typed with no further provider call (FR-032).
-		if ex.rx.rr.rq.ri.messages, ex.rx.midTurnGuardErr = ex.rx.rr.rq.ri.rf.rt.al.midTurnWindowCheck(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.messages, ex.rx.rr.rq.ri.rf.providerToolDefs); ex.rx.midTurnGuardErr != nil {
-			res, status, exitErr := ex.rx.rr.rq.ri.rf.rt.al.typedTurnExit(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.rf.rt.iteration, ex.rx.rr.rq.ri.rf.rt.llmModel, ex.rx.midTurnGuardErr)
-			ex.rx.rr.rq.ri.turnStatus = status
-			ex.rx.ret0 = res
-			ex.rx.ret1 = exitErr
-			ex.ret0 = agentLoopRunTurnToolsReturn
-			return agentLoopRunTurnToolsExecuteReturn
+		}); err != nil {
+			return ex.contextWindowExit(err)
 		}
 		ex.rx.rr.rq.ri.rf.rt.al.emitEvent(
 			EventKindToolExecSkipped,
@@ -865,6 +826,8 @@ func (ex *agentLoopRunTurnToolsExecute) resolveAskPolicy(tc providers.ToolCall) 
 	ex.shellModePin = rt.al.bashShellModeFor(rt.ts, ex.toolName)
 	ex.autoPin = tools.AutoVerdict{}
 	ex.ruleAskSettled = false
+	ex.preApprovalRefusal = nil
+	ex.approvalPin = nil
 	if ex.toctouPolicy != "ask" {
 		return agentLoopRunTurnToolsExecuteNext
 	}
@@ -899,7 +862,7 @@ func (ex *agentLoopRunTurnToolsExecute) resolveAskPolicy(tc providers.ToolCall) 
 	// requestAskApproval ran unconditionally, before its own
 	// CheckGrantOrRequestApproval call ever consulted the grant store).
 	ruleAsk := rules.needsRuleAsk(ex.shellModePin)
-	grantLookupArgs := ex.toolArgs
+	grantLookupArgs := ex.recordArgs
 	if ruleAsk {
 		grantLookupArgs = ruleAskRequestArgs(ex.toolArgs, rules.verdict)
 	}
@@ -947,12 +910,20 @@ func (ex *agentLoopRunTurnToolsExecute) resolveAskPolicy(tc providers.ToolCall) 
 // second time.
 func (ex *agentLoopRunTurnToolsExecute) requestAskApproval(tc providers.ToolCall, rules bashRuleVerdict) agentLoopRunTurnToolsExecuteFlow {
 	rt := ex.rx.rr.rq.ri.rf.rt
-	requestArgs := ex.toolArgs
+	requestArgs := ex.recordArgs
 	decisionKind := "classic_ask"
 	ruleAsk := rules.needsRuleAsk(ex.shellModePin)
 	if ruleAsk {
 		requestArgs = ruleAskRequestArgs(ex.toolArgs, rules.verdict)
 		decisionKind = "rule_ask"
+	}
+	// A tool may refuse before any card, and may show server-derived facts
+	// on its approval card (e.g. remove_secret's consumers, FR-077;
+	// set_channel_outbound's current and new setting, Channels Q2-B); the
+	// call still executes with ex.toolArgs unchanged.
+	requestArgs, refused := ex.prepareApprovalRequest(tc, requestArgs)
+	if refused {
+		return agentLoopRunTurnToolsExecuteNext
 	}
 	// §5.7 fix: re-check the standing grant, with the SAME args
 	// CheckGrantOrRequestApproval below would, BEFORE writing the pending
@@ -980,7 +951,7 @@ func (ex *agentLoopRunTurnToolsExecute) requestAskApproval(tc providers.ToolCall
 	// the tool_approval_required WS frame is live-only and does not survive a
 	// refresh. Reached only now that the standing-grant check above has
 	// already ruled out a grant settling this call without ever asking.
-	recordAskPendingToolCall(rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.toolArgs)
+	recordAskPendingToolCall(rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.recordArgs)
 	// The third return (recordGrant, review finding #5) is consumed only by
 	// pkg/tools' D7/D8 pre-flight escalation call sites, reached through
 	// ShellPermissionGate.RequestShellApproval — this classic ask-policy
@@ -1015,8 +986,13 @@ func (ex *agentLoopRunTurnToolsExecute) autoDenyHeadlessAsk(tc providers.ToolCal
 	// and failed AC-01's "every driven reason must be known"
 	// guard. A headless scheduled run has no operator by
 	// construction, for the whole run, so Permanent: true is
-	// the correct classification (ADR D1 row 9).
-	const denialReason = autoDenyHeadlessReason
+	// the correct classification (ADR D1 row 9). A task or plan
+	// chain (#1263 R4) refuses with its own row instead; the
+	// turn's attendance classification chose which.
+	denialReason := ex.rx.rr.rq.ri.rf.rt.ts.opts.askRefusalReason
+	if denialReason == "" {
+		denialReason = autoDenyHeadlessReason
+	}
 	cls, _ := ClassifyDenial(denialReason)
 	denyMsg := denialPayloadJSON(ex.toolName, denialReason, cls)
 	// Build optional extra Details for the deny.attempted entry so
@@ -1030,11 +1006,25 @@ func (ex *agentLoopRunTurnToolsExecute) autoDenyHeadlessAsk(tc providers.ToolCal
 			"schedule_job_name": jobInfo.JobName,
 		}
 	}
+	if cause := ex.rx.rr.rq.ri.rf.rt.ts.opts.askRefusalCause; cause != "" {
+		// SF-05: an unresolved ancestry keeps its cause in the refusal's
+		// audit context, next to the fixed task/plan reason.
+		if denyExtra == nil {
+			denyExtra = map[string]any{}
+		}
+		denyExtra["attendance_cause"] = cause
+	}
 	ex.rx.rr.rq.ri.rf.rt.al.emitPolicyDenyAudit(ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, "ask", denialReason, denyExtra)
 	// O-3 / F-13 / issue #342: emit the canonical tool.policy.ask.denied
 	// entry via EmitToolPolicyAskDenied (CRIT-6 compliant, INFO severity,
-	// reason=AskDenyReasonScheduled). See emitScheduledAutoDenyAudit.
-	ex.rx.rr.rq.ri.rf.rt.al.emitScheduledAutoDenyAudit(ex.rx.rr.rq.ri.rf.rt.turnCtx, ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, tc.ID)
+	// reason=AskDenyReasonScheduled). See emitScheduledAutoDenyAudit. A
+	// task or plan refusal (#1263 R4) carries AskDenyReasonTaskRun and no
+	// schedule identity.
+	if denialReason == autoDenyTaskPlanReason {
+		ex.rx.rr.rq.ri.rf.rt.al.emitTaskRunAutoDenyAudit(ex.rx.rr.rq.ri.rf.rt.turnCtx, ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName)
+	} else {
+		ex.rx.rr.rq.ri.rf.rt.al.emitScheduledAutoDenyAudit(ex.rx.rr.rq.ri.rf.rt.turnCtx, ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, tc.ID)
+	}
 	// Persist the refusal as a real tool_call entry. This path
 	// never blocks (there is no approver on a headless run), so
 	// there is no pending placeholder to settle — but without
@@ -1043,23 +1033,13 @@ func (ex *agentLoopRunTurnToolsExecute) autoDenyHeadlessAsk(tc providers.ToolCal
 	// the audit log. settleAskToolCallTranscript appends when it
 	// finds no placeholder, which is exactly this case.
 	settleAskToolCallTranscript(
-		ex.rx.rr.rq.ri.rf.rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.toolArgs, denialReason)
+		ex.rx.rr.rq.ri.rf.rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.recordArgs, denialReason)
 	// ADR-066 D4: denied results enter through the choke point on the
 	// builtin-failure surface (FR-009); it persists the line itself.
-	deniedMsg := ex.rx.rr.rq.ri.rf.rt.al.admitToolResult(ex.rx.rr.rq.ri.rf.rt.ts, toolResultAdmission{
+	if err := ex.admitAndCheckpoint(toolResultAdmission{
 		Tool: tc.Name, ToolCallID: tc.ID, Content: denyMsg, IsError: true, ParallelN: len(ex.rx.rr.normalizedToolCalls),
-	}).Message
-	ex.rx.rr.rq.ri.messages = append(ex.rx.rr.rq.ri.messages, deniedMsg)
-	// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
-	// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
-	// ends the turn typed with no further provider call (FR-032).
-	if ex.rx.rr.rq.ri.messages, ex.rx.midTurnGuardErr = ex.rx.rr.rq.ri.rf.rt.al.midTurnWindowCheck(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.messages, ex.rx.rr.rq.ri.rf.providerToolDefs); ex.rx.midTurnGuardErr != nil {
-		res, status, exitErr := ex.rx.rr.rq.ri.rf.rt.al.typedTurnExit(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.rf.rt.iteration, ex.rx.rr.rq.ri.rf.rt.llmModel, ex.rx.midTurnGuardErr)
-		ex.rx.rr.rq.ri.turnStatus = status
-		ex.rx.ret0 = res
-		ex.rx.ret1 = exitErr
-		ex.ret0 = agentLoopRunTurnToolsReturn
-		return agentLoopRunTurnToolsExecuteReturn
+	}); err != nil {
+		return ex.contextWindowExit(err)
 	}
 	ex.rx.rr.rq.ri.rf.rt.al.emitEvent(
 		EventKindToolExecSkipped,
@@ -1085,7 +1065,7 @@ func (ex *agentLoopRunTurnToolsExecute) denyAskedCall(tc providers.ToolCall, den
 	// minutes with nobody watching" are distinguishable in the
 	// thread and on replay.
 	settleAskToolCallTranscript(
-		ex.rx.rr.rq.ri.rf.rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.toolArgs, denialReason)
+		ex.rx.rr.rq.ri.rf.rt.ts, session.ToolCallID(tc.ID), ex.toolName, ex.recordArgs, denialReason)
 	// ADR-058 site 3 — the original defect: denialReason here
 	// is verbatim from CheckGrantOrRequestApproval, so it is
 	// classified for real rather than assumed to be a user
@@ -1114,20 +1094,10 @@ func (ex *agentLoopRunTurnToolsExecute) denyAskedCall(tc providers.ToolCall, den
 	ex.rx.rr.rq.ri.rf.rt.al.emitPolicyDenyAudit(ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, "ask", denialReason)
 	// ADR-066 D4: denied results enter through the choke point on the
 	// builtin-failure surface (FR-009); it persists the line itself.
-	deniedMsg := ex.rx.rr.rq.ri.rf.rt.al.admitToolResult(ex.rx.rr.rq.ri.rf.rt.ts, toolResultAdmission{
+	if err := ex.admitAndCheckpoint(toolResultAdmission{
 		Tool: tc.Name, ToolCallID: tc.ID, Content: denyMsg, IsError: true, ParallelN: len(ex.rx.rr.normalizedToolCalls),
-	}).Message
-	ex.rx.rr.rq.ri.messages = append(ex.rx.rr.rq.ri.messages, deniedMsg)
-	// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
-	// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
-	// ends the turn typed with no further provider call (FR-032).
-	if ex.rx.rr.rq.ri.messages, ex.rx.midTurnGuardErr = ex.rx.rr.rq.ri.rf.rt.al.midTurnWindowCheck(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.messages, ex.rx.rr.rq.ri.rf.providerToolDefs); ex.rx.midTurnGuardErr != nil {
-		res, status, exitErr := ex.rx.rr.rq.ri.rf.rt.al.typedTurnExit(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.rf.rt.iteration, ex.rx.rr.rq.ri.rf.rt.llmModel, ex.rx.midTurnGuardErr)
-		ex.rx.rr.rq.ri.turnStatus = status
-		ex.rx.ret0 = res
-		ex.rx.ret1 = exitErr
-		ex.ret0 = agentLoopRunTurnToolsReturn
-		return agentLoopRunTurnToolsExecuteReturn
+	}); err != nil {
+		return ex.contextWindowExit(err)
 	}
 	ex.rx.rr.rq.ri.rf.rt.al.emitEvent(
 		EventKindToolExecSkipped,
@@ -1158,7 +1128,7 @@ func (ex *agentLoopRunTurnToolsExecute) prepareDispatch(tc providers.ToolCall) a
 		ex.rx.ctx, steer.BoundarySyncToolText, ts,
 	)
 
-	argsJSON, marshalErr := json.Marshal(ex.toolArgs)
+	argsJSON, marshalErr := json.Marshal(ex.recordArgs)
 	if marshalErr != nil {
 		logger.WarnCF("agent", "failed to marshal tool args for preview", map[string]any{"tool": ex.toolName, "error": marshalErr.Error()})
 		argsJSON = []byte("{}")
@@ -1183,7 +1153,7 @@ func (ex *agentLoopRunTurnToolsExecute) prepareDispatch(tc providers.ToolCall) a
 			// tool-producing session's own transcript identity.
 			SessionID:         toolExecSID,
 			Tool:              ex.toolName,
-			Arguments:         cloneEventArguments(ex.toolArgs),
+			Arguments:         cloneEventArguments(ex.recordArgs),
 			ParentSpawnCallID: session.ToolCallID(ex.rx.rr.rq.ri.rf.rt.ts.parentSpawnCallID),
 			AgentID:           ex.rx.rr.rq.ri.rf.rt.ts.resolveActiveAgentID(), // Bug 1: runtime-current agent
 		},
@@ -1196,7 +1166,8 @@ func (ex *agentLoopRunTurnToolsExecute) prepareDispatch(tc providers.ToolCall) a
 	// inline or because the channel has no human recipient.
 	if ex.rx.rr.rq.ri.cfg.Agents.Defaults.IsToolFeedbackEnabled() &&
 		feedbackReachesUser && !ts.opts.SuppressToolFeedback &&
-		isMessagingChannel(ts.channel) {
+		isMessagingChannel(ts.channel) &&
+		!ex.refuseMainConnectorText(tc.Name) {
 		feedbackPreview := utils.Truncate(
 			string(argsJSON),
 			ex.rx.rr.rq.ri.cfg.Agents.Defaults.GetToolFeedbackMaxArgsLength(),
@@ -1264,20 +1235,10 @@ func (ex *agentLoopRunTurnToolsExecute) prepareDispatch(tc providers.ToolCall) a
 				toolRLResult.PolicyRule, toolRLResult.RetryAfterSeconds)
 			// ADR-066 D4: denied results enter through the choke point on the
 			// builtin-failure surface (FR-009); it persists the line itself.
-			deniedMsg := ex.rx.rr.rq.ri.rf.rt.al.admitToolResult(ex.rx.rr.rq.ri.rf.rt.ts, toolResultAdmission{
+			if err := ex.admitAndCheckpoint(toolResultAdmission{
 				Tool: tc.Name, ToolCallID: tc.ID, Content: errMsg, IsError: true, ParallelN: len(ex.rx.rr.normalizedToolCalls),
-			}).Message
-			ex.rx.rr.rq.ri.messages = append(ex.rx.rr.rq.ri.messages, deniedMsg)
-			// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
-			// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
-			// ends the turn typed with no further provider call (FR-032).
-			if ex.rx.rr.rq.ri.messages, ex.rx.midTurnGuardErr = ex.rx.rr.rq.ri.rf.rt.al.midTurnWindowCheck(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.messages, ex.rx.rr.rq.ri.rf.providerToolDefs); ex.rx.midTurnGuardErr != nil {
-				res, status, exitErr := ex.rx.rr.rq.ri.rf.rt.al.typedTurnExit(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.rf.rt.iteration, ex.rx.rr.rq.ri.rf.rt.llmModel, ex.rx.midTurnGuardErr)
-				ex.rx.rr.rq.ri.turnStatus = status
-				ex.rx.ret0 = res
-				ex.rx.ret1 = exitErr
-				ex.ret0 = agentLoopRunTurnToolsReturn
-				return agentLoopRunTurnToolsExecuteReturn
+			}); err != nil {
+				return ex.contextWindowExit(err)
 			}
 			ex.rx.rr.rq.ri.rf.rt.al.emitEvent(
 				EventKindToolExecSkipped,
@@ -1338,7 +1299,7 @@ func (ex *agentLoopRunTurnToolsExecute) handleAsyncResult(
 					AgentID:           ex.rx.rr.rq.ri.rf.rt.ts.resolveActiveAgentID(),
 				},
 			)
-		} else if userContent != "" {
+		} else if userContent != "" && !ex.refuseMainConnectorText(toolName) {
 			outboundSessionID := ""
 			if allowSuppressedErrorFeedback {
 				outboundSessionID = ts.transcriptSessionID
@@ -1394,9 +1355,13 @@ func (ex *agentLoopRunTurnToolsExecute) handleAsyncResult(
 		TranscriptSessionID: ex.rx.rr.rq.ri.rf.rt.ts.transcriptSessionID,
 		SourceKind:          toolName,
 		Content:             content,
+		finishedToolName:    toolName,
+		finishedToolCallID:  session.ToolCallID(toolCallID),
 	}); notifyErr != nil {
-		logger.ErrorCF("agent", "Failed to publish async tool result; result permanently lost",
-			map[string]any{"tool": toolName, "channel": ex.rx.rr.rq.ri.rf.rt.ts.channel, "error": notifyErr.Error()})
+		// Notify owns the safe per-attempt diagnostic and final saved/live/origin
+		// warning. A second raw-cause log here would duplicate that reporting and
+		// wrongly imply the work or any direct ForUser result was erased.
+		return
 	}
 }
 
@@ -1405,17 +1370,10 @@ func (ex *agentLoopRunTurnToolsExecute) guardAndDispatch(tc providers.ToolCall) 
 	ex.toolCBSig = toolCallSignature(ex.toolName, ex.toolArgs)
 	if cbReason, tripped := ex.rx.rr.rq.ri.rf.rt.ts.toolCircuitBreakerTripped(ex.toolCBSig); tripped {
 		errMsg := toolCircuitBreakerDenialMessage(ex.toolName, cbReason)
-		deniedMsg := ex.rx.rr.rq.ri.rf.rt.al.admitToolResult(ex.rx.rr.rq.ri.rf.rt.ts, toolResultAdmission{
+		if err := ex.admitAndCheckpoint(toolResultAdmission{
 			Tool: tc.Name, ToolCallID: tc.ID, Content: errMsg, IsError: true, ParallelN: len(ex.rx.rr.normalizedToolCalls),
-		}).Message
-		ex.rx.rr.rq.ri.messages = append(ex.rx.rr.rq.ri.messages, deniedMsg)
-		if ex.rx.rr.rq.ri.messages, ex.rx.midTurnGuardErr = ex.rx.rr.rq.ri.rf.rt.al.midTurnWindowCheck(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.messages, ex.rx.rr.rq.ri.rf.providerToolDefs); ex.rx.midTurnGuardErr != nil {
-			res, status, exitErr := ex.rx.rr.rq.ri.rf.rt.al.typedTurnExit(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.rf.rt.iteration, ex.rx.rr.rq.ri.rf.rt.llmModel, ex.rx.midTurnGuardErr)
-			ex.rx.rr.rq.ri.turnStatus = status
-			ex.rx.ret0 = res
-			ex.rx.ret1 = exitErr
-			ex.ret0 = agentLoopRunTurnToolsReturn
-			return agentLoopRunTurnToolsExecuteReturn
+		}); err != nil {
+			return ex.contextWindowExit(err)
 		}
 		ex.rx.rr.rq.ri.rf.rt.al.emitEvent(
 			EventKindToolExecSkipped,
@@ -1425,6 +1383,12 @@ func (ex *agentLoopRunTurnToolsExecute) guardAndDispatch(tc providers.ToolCall) 
 				Reason: errMsg,
 			},
 		)
+		// Asked again, in a later round, for a call already refused this
+		// turn: end the turn after this round (finishToolIteration) rather
+		// than pay a provider round per repeat until the iteration cap.
+		if ex.rx.rr.rq.ri.rf.rt.ts.recordBrokenSignatureRefusal(ex.toolCBSig, ex.rx.rr.rq.ri.rf.rt.iteration) {
+			ex.rx.rr.rq.ri.rf.rt.ts.requestToolFailureStop(toolFailureStopNotice(ex.toolName))
+		}
 		return agentLoopRunTurnToolsExecuteContinue
 	}
 
@@ -1457,6 +1421,9 @@ func (ex *agentLoopRunTurnToolsExecute) guardAndDispatch(tc providers.ToolCall) 
 	// minLength:1 on turn_id causes the SPA to silently drop on arrival —
 	// see tools.WithTurnID's doc comment for the full chain.
 	execCtx = tools.WithTurnID(execCtx, ex.rx.rr.rq.ri.rf.rt.ts.turnID)
+	// #1449 C-I6: a question raised now records the turn's origin at
+	// creation (the same origin an approval raised now carries).
+	execCtx = tools.WithApprovalProvenance(execCtx, ex.rx.rr.rq.ri.rf.rt.ts.approvalProvenance)
 	// Carry the turn's EXISTING AutoDenyAsk onto the tool context.
 	// The loop already uses it to auto-deny `ask`-policy calls; a
 	// tool that must refuse one ARGUMENT rather than the whole call
@@ -1465,6 +1432,12 @@ func (ex *agentLoopRunTurnToolsExecute) guardAndDispatch(tc providers.ToolCall) 
 	// field, not a second discriminator: two independently-computed
 	// answers to "is anyone there" would eventually disagree.
 	execCtx = tools.WithAutoDenyAsk(execCtx, ex.rx.rr.rq.ri.rf.rt.ts.opts.AutoDenyAsk)
+	if ex.rx.rr.rq.ri.rf.rt.ts.opts.AutoDenyAsk && ex.rx.rr.rq.ri.rf.rt.ts.opts.askRefusalReason == autoDenyTaskPlanReason {
+		// #1263 R4 / gate round 1 SF-03: a tool that refuses its OWN
+		// escalation (the shell's pre-flights) refuses with the task/plan
+		// reason, and the loop settles it as the canonical refusal below.
+		execCtx = tools.WithAskRefusalReason(execCtx, autoDenyTaskPlanReason)
+	}
 	if ex.shellModePin != "" {
 		execCtx = withPinnedShellMode(execCtx, ex.shellModePin)
 	}
@@ -1476,6 +1449,14 @@ func (ex *agentLoopRunTurnToolsExecute) guardAndDispatch(tc providers.ToolCall) 
 	if flow := ex.enforceExecutionPolicy(tc); flow != agentLoopRunTurnToolsExecuteNext {
 		return flow
 	}
+	// Channels Q2-B: the state a tool checked and showed on its card rides
+	// the context, so the approved arguments are never rewritten (S1).
+	execCtx = tools.WithApprovalPin(execCtx, ex.approvalPin)
+	if ex.skillWriteKey != "" {
+		// Skills spec r15 §10.1 item 7: the composed decision for this
+		// skill key, checked again by PathHandle.WriteFile.
+		execCtx = tools.WithSkillWriteApproval(execCtx, ex.skillWriteKey)
+	}
 	if ex.autoPin.Run && ex.toctouPolicy == "ask" {
 		// ADR-092 D9 §5.3/§5.5: Auto ran this call without a prompt. Pin the
 		// decision so a RUNS-IF tool re-checks its final path against it,
@@ -1483,15 +1464,15 @@ func (ex *agentLoopRunTurnToolsExecute) guardAndDispatch(tc providers.ToolCall) 
 		execCtx = tools.WithAutoApproved(execCtx, tools.AutoPinForVerdict(ex.toolName, ex.autoPin))
 		ex.rx.rr.rq.ri.rf.rt.al.emitToolAutoApprovedAudit(execCtx, ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, ex.autoPin)
 	}
-	ex.toolResult = ex.rx.rr.rq.ri.rf.rt.ts.agent.Tools.ExecuteWithContext(
-		execCtx,
-		ex.toolName,
-		ex.toolArgs,
-		ex.rx.rr.rq.ri.rf.rt.ts.channel,
-		ex.rx.rr.rq.ri.rf.rt.ts.chatID,
-		ex.asyncCallback,
-	)
+	if !ex.beginStartedTool(tc, toolStart) {
+		ex.rx.rr.rq.ri.turnStatus = TurnEndStatusAborted
+		ex.rx.ret0, ex.rx.ret1 = ex.rx.rr.rq.ri.rf.rt.al.abortTurn(ex.rx.rr.rq.ri.rf.rt.ts, "before_tool_exec", hardInterruptAbortReason)
+		ex.ret0 = agentLoopRunTurnToolsReturn
+		return agentLoopRunTurnToolsExecuteReturn
+	}
+	ex.toolResult = ex.executeOrPreRefused(execCtx)
 	ex.toolDuration = time.Since(toolStart)
+	noteGoalExecutedTool(ex.rx.rr.rq.ri.rf.rt.ts, ex.toolName, ex.toolResult)
 
 	if ex.rx.rr.rq.ri.rf.rt.ts.hardAbortRequested() {
 		ex.releaseAsyncCallback()
@@ -1499,6 +1480,15 @@ func (ex *agentLoopRunTurnToolsExecute) guardAndDispatch(tc providers.ToolCall) 
 		ex.rx.ret0, ex.rx.ret1 = ex.rx.rr.rq.ri.rf.rt.al.abortTurn(ex.rx.rr.rq.ri.rf.rt.ts, "after_tool_exec", hardInterruptAbortReason)
 		ex.ret0 = agentLoopRunTurnToolsReturn
 		return agentLoopRunTurnToolsExecuteReturn
+	}
+
+	if ex.toolResult != nil && ex.toolResult.IsError && errors.Is(ex.toolResult.Err, tools.ErrUnattendedAskRefused) {
+		// The tool refused its own escalation because nobody can approve it
+		// in this task or plan chain: settle it exactly like an Ask call the
+		// loop refused (fixed model message, transcript row, audit pair —
+		// #1263 R4, gate round 1 SF-03), not as an ordinary tool error.
+		ex.releaseAsyncCallback()
+		return ex.autoDenyHeadlessAsk(tc)
 	}
 
 	if ex.rx.rr.rq.ri.rf.rt.al.hooks != nil {
@@ -1585,6 +1575,7 @@ func (ex *agentLoopRunTurnToolsExecute) guardAndDispatch(tc providers.ToolCall) 
 		}
 	} else {
 		ex.rx.rr.rq.ri.rf.rt.ts.recordToolSuccess(ex.toolCBSig)
+		ex.rx.rr.rq.ri.rf.rt.ts.noteRoundProgress()
 		// Feeds the same-response ask refusal above: a set_goal that
 		// succeeded in this response makes any trailing AskUserQuestion
 		// in the same batch a refusal, not a park.
@@ -1594,12 +1585,18 @@ func (ex *agentLoopRunTurnToolsExecute) guardAndDispatch(tc providers.ToolCall) 
 		// Identical SUCCESSFUL repetition (tool_failure_circuit_breaker.go):
 		// warn the model, and at the stop threshold end the turn after
 		// this round (the takeToolRepeatStop check after the tool loop).
-		switch run := ex.rx.rr.rq.ri.rf.rt.ts.recordToolSuccessRepeat(ex.toolCBSig); {
-		case run >= toolRepeatStopThreshold:
-			ex.rx.rr.rq.ri.rf.rt.ts.requestToolRepeatStop(toolRepeatStopNotice(ex.toolName, run))
-			ex.toolResult.ForLLM = ex.toolResult.ContentForLLM() + toolRepeatWarnNotice(ex.toolName, run)
-		case run >= toolRepeatWarnThreshold:
-			ex.toolResult.ForLLM = ex.toolResult.ContentForLLM() + toolRepeatWarnNotice(ex.toolName, run)
+		// Delegate status/peek/inbox polling of one child with no new
+		// information shares one run (delegate_poll_guard.go).
+		repeatSig, poll := ex.rx.rr.rq.ri.rf.rt.ts.toolRepeatSignature(ex.toolName, ex.toolArgs, ex.toolCBSig, ex.toolResult.ContentForLLM())
+		if run := ex.rx.rr.rq.ri.rf.rt.ts.recordToolSuccessRepeat(repeatSig); run >= toolRepeatWarnThreshold {
+			warn, stop := toolRepeatWarnNotice(ex.toolName, run), toolRepeatStopNotice(ex.toolName, run)
+			if poll {
+				warn, stop = toolPollRepeatWarnNotice(run), toolPollRepeatStopNotice(run)
+			}
+			if run >= toolRepeatStopThreshold {
+				ex.rx.rr.rq.ri.rf.rt.ts.requestToolRepeatStop(stop)
+			}
+			ex.toolResult.ForLLM = ex.toolResult.ContentForLLM() + warn
 		}
 	}
 	return agentLoopRunTurnToolsExecuteNext
@@ -1670,6 +1667,21 @@ func (ex *agentLoopRunTurnToolsExecute) deliverToolOutput() {
 		if mediaAudience != steer.AudienceUser {
 			logger.DebugCF("agent", "Steered session: media contained (not sent to a channel)",
 				map[string]any{"tool": ex.toolName, "session_id": ex.rx.rr.rq.ri.rf.rt.ts.transcriptSessionID})
+		} else if ts := ex.rx.rr.rq.ri.rf.rt.ts; ex.rx.rr.rq.ri.rf.rt.al.mainConnectorTurn(ts.channel, ts.transcriptSessionID) {
+			// #1507 (FR-070, m-03): a connection-fed main keeps the file in
+			// the conversation. The result stays whole (Media, IsError,
+			// text; ArtifactTags below); the model is told in one line.
+			base := ex.toolResult.ForLLM
+			if base == "" && ex.toolResult.Err != nil {
+				base = ex.toolResult.Err.Error()
+			}
+			note := mainConnectorMediaNote(ts.channel)
+			if base != "" {
+				note = base + "\n" + note
+			}
+			ex.toolResult.ForLLM = note
+			logger.DebugCF("agent", "Main connector turn: media kept in the conversation (not sent)",
+				map[string]any{"tool": ex.toolName, "channel": ts.channel, "session_id": ts.transcriptSessionID})
 		} else if ex.rx.turnChannelManager != nil && ex.rx.rr.rq.ri.rf.rt.ts.channel != "" && !constants.IsInternalChannel(ex.rx.rr.rq.ri.rf.rt.ts.channel) {
 			if err := ex.rx.turnChannelManager.SendMedia(ex.rx.ctx, outboundMedia); err != nil {
 				logger.WarnCF("agent", "Failed to deliver tool media",
@@ -1702,7 +1714,8 @@ func (ex *agentLoopRunTurnToolsExecute) deliverToolOutput() {
 		ex.rx.rr.rq.ri.rf.rt.ts.opts.SendResponse &&
 		ex.rx.rr.rq.ri.rf.rt.al.toolFeedbackReachesUser(
 			ex.rx.ctx, steer.BoundarySyncToolText, ex.rx.rr.rq.ri.rf.rt.ts,
-		) {
+		) &&
+		!ex.refuseMainConnectorText(ex.toolName) {
 		if pubErr := ex.rx.rr.rq.ri.rf.rt.al.bus.PublishOutbound(ex.rx.ctx, bus.OutboundMessage{
 			Channel: ex.rx.rr.rq.ri.rf.rt.ts.channel,
 			ChatID:  ex.rx.rr.rq.ri.rf.rt.ts.chatID,
@@ -1832,7 +1845,7 @@ func (ex *agentLoopRunTurnToolsExecute) sanitizeUntrustedToolResult() {
 	}
 }
 
-func (ex *agentLoopRunTurnToolsExecute) recordToolResult(tc providers.ToolCall) {
+func (ex *agentLoopRunTurnToolsExecute) recordToolResult(tc providers.ToolCall) error {
 	ex.contentForLLM = ex.toolResult.ContentForLLM()
 
 	// SEC-25: Sanitize tool results from untrusted sources (web fetch,
@@ -1870,8 +1883,34 @@ func (ex *agentLoopRunTurnToolsExecute) recordToolResult(tc providers.ToolCall) 
 	// every subsequent turn. attachToolResultMedia owns that
 	// guard; the artifact tag at loop.go:8246 is the path-based
 	// fallback hook for the rare "rasterize failed" case.
+	//
+	// Issue #1435 R1: the fresh image is fitted to the TURN'S SELECTED
+	// provider/model budget — the provider that will actually receive the
+	// next request — not the package default (whose 7680-px edge exceeds
+	// real ceilings like ZAI's 6000).
+	//
+	// Issue #1435 R2: when a universal image cannot be made to fit, the
+	// helper writes its honest explanation into mediaMsg.Content. That text
+	// is merged into the admitted content HERE — the scratch message's
+	// Content has no other consumer, and without this merge the marker
+	// would never reach the model's input, the live tool event or the
+	// persisted tool result.
 	if len(ex.toolResult.Media) > 0 && ex.rx.rr.rq.ri.turnMediaStore != nil {
-		attachToolResultMedia(&mediaMsg, ex.toolResult.Media, ex.rx.rr.rq.ri.turnMediaStore, ex.rx.rr.rq.ri.maxMediaSize)
+		// The turn's resolved selection wins when present (the light tier may
+		// have switched away from the configured primary); the configured
+		// primary pair is the fallback.
+		rt := ex.rx.rr.rq.ri.rf.rt
+		provider, model := "", ""
+		if len(rt.activeCandidates) > 0 {
+			provider, model = rt.activeCandidates[0].Provider, rt.activeCandidates[0].Model
+		} else if rt.ts != nil && rt.ts.agent != nil {
+			provider, model = rt.ts.agent.primaryModelPair()
+		}
+		selectedBudget := resizeBudgetForModel(ex.rx.rr.rq.ri.turnCatalog, provider, model, ex.rx.rr.rq.ri.maxMediaSize)
+		attachToolResultMedia(&mediaMsg, ex.toolResult.Media, ex.rx.rr.rq.ri.turnMediaStore, ex.rx.rr.rq.ri.maxMediaSize, selectedBudget)
+		if mediaMsg.Content != "" {
+			ex.contentForLLM = injectDocumentContent(ex.contentForLLM, []string{mediaMsg.Content})
+		}
 	}
 	// ADR-066 D5.4 (FR-041/FR-042): budget-first recall decision,
 	// BEFORE the choke point so the archive, transcript and events
@@ -1888,6 +1927,9 @@ func (ex *agentLoopRunTurnToolsExecute) recordToolResult(tc providers.ToolCall) 
 		IsError:    ex.toolResult.IsError,
 		ParallelN:  len(ex.rx.rr.normalizedToolCalls),
 	})
+	if ex.admitted.Err != nil {
+		return ex.admitted.Err
+	}
 	// contentForLLM from here on is the FILTERED full content the
 	// archive holds — what the event sinks and the transcript error
 	// field always carried (the gateway tool_results/ store keeps it
@@ -1900,28 +1942,6 @@ func (ex *agentLoopRunTurnToolsExecute) recordToolResult(tc providers.ToolCall) 
 		}
 		ex.rx.rr.rq.ri.rf.rt.inspectionImages[ex.toolCallID] = ex.toolResult.InspectionImages
 	}
-	endSID := u9ToolExecSessionIDs(ex.rx.rr.rq.ri.rf.rt.ts)
-	ex.rx.rr.rq.ri.rf.rt.al.emitEvent(
-		EventKindToolExecEnd,
-		ex.rx.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.tool.end"),
-		ToolExecEndPayload{
-			ToolCallID: session.ToolCallID(ex.toolCallID),
-			ChatID:     ex.rx.rr.rq.ri.rf.rt.ts.chatID,
-			// ADR-057 FR-011/FR-012 (W4/W5d, U9): see the matching
-			// ToolExecStartPayload construction above — identical
-			// contract on the result frame.
-			SessionID:         endSID,
-			Tool:              ex.toolName,
-			Duration:          ex.toolDuration,
-			ForLLMLen:         len(ex.contentForLLM),
-			ForUserLen:        len(ex.toolResult.ForUser),
-			IsError:           ex.toolResult.IsError,
-			Async:             ex.toolResult.Async,
-			Result:            ex.contentForLLM,
-			ParentSpawnCallID: session.ToolCallID(ex.rx.rr.rq.ri.rf.rt.ts.parentSpawnCallID),
-			AgentID:           ex.rx.rr.rq.ri.rf.rt.ts.resolveActiveAgentID(), // Bug 1: runtime-current agent
-		},
-	)
 	tcStatus := "success"
 	switch {
 	case ex.toolResult.ParksTurn:
@@ -1996,7 +2016,7 @@ func (ex *agentLoopRunTurnToolsExecute) recordToolResult(tc providers.ToolCall) 
 		Tool:             ex.toolName,
 		Status:           tcStatus,
 		DurationMS:       ex.toolDuration.Milliseconds(),
-		Parameters:       cloneEventArguments(ex.toolArgs),
+		Parameters:       cloneEventArguments(ex.recordArgs),
 		ParentToolCallID: session.ToolCallID(ex.rx.rr.rq.ri.rf.rt.ts.parentSpawnCallID),
 	}
 	// Persist media descriptors so replay can re-emit the `media`
@@ -2052,53 +2072,32 @@ func (ex *agentLoopRunTurnToolsExecute) recordToolResult(tc providers.ToolCall) 
 		// delegate_result.go.
 		ex.tcRecord.Result = r
 	}
+	return nil
 }
 
 // finishCall persists the call outcome and handles post-call turn control.
 func (ex *agentLoopRunTurnToolsExecute) finishCall(i int) agentLoopRunTurnToolsExecuteFlow {
-	if ex.toolResult.IsError && ex.tcRecord.Result == nil {
-		ex.tcRecord.Error = truncateRunes(ex.contentForLLM, maxFailClosedOutputChars)
+	if ex.admitted.Err != nil {
+		return ex.contextWindowExit(ex.admitted.Err)
 	}
-	// ADR-066 FR-046: the transcript tool_call entry carries the
-	// BOUNDED result the model saw (the window form) so D5.5
-	// hydration (T066-06) rebuilds a window that is not lossy, plus
-	// the projection state for the SPA's content_state. Only when
-	// nothing richer is there already (media descriptors, the sync
-	// delegate shape, or the failure Error text).
-	if ex.tcRecord.Result == nil && ex.tcRecord.Error == "" {
-		if text := strings.TrimSpace(ex.toolResultMsg.Content); text != "" {
-			ex.tcRecord.Result = map[string]any{"text": text}
-		}
+	if err := ex.checkpointRecordedResult(); err != nil {
+		return ex.contextWindowExit(err)
 	}
-	if ex.admitted.Capped {
-		// Always the plain "capped": the SPA-facing content_state
-		// enum (ToolCall.yaml) is full | capped | emptied and does
-		// NOT distinguish the D4 surface. The internal state also
-		// records which cap produced the live bytes
-		// (memory.ProjectionCappedFailure) — that value must never
-		// be written here, it is not on the wire.
-		ex.tcRecord.ContentState = string(memory.ProjectionCapped)
+	ex.projectRecordedResult()
+	projection, err := ex.recordedProjection()
+	if err != nil && !errors.Is(err, ErrNoWindowProjection) {
+		return ex.contextWindowExit(err)
 	}
-	ex.rx.rr.rq.ri.rf.rt.ts.appendToolCallTranscript(ex.tcRecord)
+	if err := ex.recordAdmittedTranscript(); err != nil {
+		return ex.contextWindowExit(err)
+	}
+	ex.emitAdmittedToolResult()
+	if projection != nil {
+		ex.rx.rr.rq.ri.rf.rt.al.emitWindowProjection(ex.rx.rr.rq.ri.rf.rt.ts, *projection)
+	}
 	ex.releaseAsyncCallback()
-	ex.rx.rr.rq.ri.messages = append(ex.rx.rr.rq.ri.messages, ex.toolResultMsg)
-	// ADR-066 D5.4 (FR-041): the recalled text joins the in-memory
-	// slice HERE — the same mutation point every mid-turn request
-	// is built from — so the provider's next call carries it.
-	if ex.recallDecision.inject {
-		ex.rx.rr.rq.ri.messages = ex.rx.rr.rq.ri.rf.rt.al.spliceRecallSpan(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.messages, ex.recallDecision.span)
-	}
-	// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
-	// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
-	// ends the turn typed with no further provider call (FR-032).
-	if ex.rx.rr.rq.ri.messages, ex.rx.midTurnGuardErr = ex.rx.rr.rq.ri.rf.rt.al.midTurnWindowCheck(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.messages, ex.rx.rr.rq.ri.rf.providerToolDefs); ex.rx.midTurnGuardErr != nil {
-		res, status, exitErr := ex.rx.rr.rq.ri.rf.rt.al.typedTurnExit(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.rf.rt.iteration, ex.rx.rr.rq.ri.rf.rt.llmModel, ex.rx.midTurnGuardErr)
-		ex.rx.rr.rq.ri.turnStatus = status
-		ex.rx.ret0 = res
-		ex.rx.ret1 = exitErr
-		ex.ret0 = agentLoopRunTurnToolsReturn
-		return agentLoopRunTurnToolsExecuteReturn
-	}
+	// The checkpoint already installed the candidate before the event or
+	// transcript record. Never append that result a second time.
 
 	// C2 (ADR-057 UAT 2026-08-03): a successful message_parent(kind=
 	// question, wait=true) call parks the CALLING child's own durable
@@ -2138,7 +2137,8 @@ func (ex *agentLoopRunTurnToolsExecute) finishCall(i int) agentLoopRunTurnToolsE
 	// turn, and the parked turn's waiter resolves instead of
 	// dying. ASKUSER-FIX.
 	if !parked {
-		if steerMsgs, steerCorrelationIDs := ex.rx.rr.rq.ri.rf.rt.al.dequeueSteeringMessagesForScope(ex.rx.rr.rq.ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
+		if steerMsgs, steerCorrelationIDs, _ := ex.rx.rr.rq.ri.dequeueSteeringForContinuation(); len(steerMsgs) > 0 {
+			ex.rx.rr.rq.ri.rf.rt.ts.opts.roomCost.addInputs(steerCorrelationIDs, len(steerMsgs))
 			ex.rx.rr.rq.ri.pendingMessages = append(ex.rx.rr.rq.ri.pendingMessages, steerMsgs...)
 			ex.rx.rr.rq.ri.pendingSteeringReceipts = append(ex.rx.rr.rq.ri.pendingSteeringReceipts, steerCorrelationIDs...)
 		}
@@ -2194,10 +2194,11 @@ func (ex *agentLoopRunTurnToolsExecute) finishCall(i int) agentLoopRunTurnToolsE
 				)
 				// ADR-066 D4: the synthetic skipped result is a builtin-failure
 				// surface result like any denial (FR-009).
-				skippedMsg := ex.rx.rr.rq.ri.rf.rt.al.admitToolResult(ex.rx.rr.rq.ri.rf.rt.ts, toolResultAdmission{
+				if err := ex.admitAndCheckpoint(toolResultAdmission{
 					Tool: skippedTC.Name, ToolCallID: skippedTC.ID, Content: skipMessage, IsError: true, ParallelN: len(ex.rx.rr.normalizedToolCalls),
-				}).Message
-				ex.rx.rr.rq.ri.messages = append(ex.rx.rr.rq.ri.messages, skippedMsg)
+				}); err != nil {
+					return ex.contextWindowExit(err)
+				}
 			}
 		}
 		if parked {
@@ -2225,11 +2226,10 @@ func (ex *agentLoopRunTurnToolsExecute) finishCall(i int) agentLoopRunTurnToolsE
 			ex.ret0 = agentLoopRunTurnToolsReturn
 			return agentLoopRunTurnToolsExecuteReturn
 		}
-		// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
-		// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
-		// ends the turn typed with no further provider call (FR-032).
+		// The shared checkpoint also checks the post-interrupt candidate.
+		// Persistence and cancellation errors remain distinct from size estimates.
 		if ex.rx.rr.rq.ri.messages, ex.rx.midTurnGuardErr = ex.rx.rr.rq.ri.rf.rt.al.midTurnWindowCheck(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.messages, ex.rx.rr.rq.ri.rf.providerToolDefs); ex.rx.midTurnGuardErr != nil {
-			res, status, exitErr := ex.rx.rr.rq.ri.rf.rt.al.typedTurnExit(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.rf.rt.iteration, ex.rx.rr.rq.ri.rf.rt.llmModel, ex.rx.midTurnGuardErr)
+			res, status, exitErr := ex.rx.rr.rq.ri.rf.rt.al.contextWindowTurnExit(ex.rx.rr.rq.ri.rf.rt.ts, ex.rx.rr.rq.ri.rf.rt.iteration, ex.rx.rr.rq.ri.rf.rt.llmModel, ex.rx.midTurnGuardErr)
 			ex.rx.rr.rq.ri.turnStatus = status
 			ex.rx.ret0 = res
 			ex.rx.ret1 = exitErr
@@ -2246,10 +2246,17 @@ func (ex *agentLoopRunTurnToolsExecute) finishCall(i int) agentLoopRunTurnToolsE
 			if ok && result != nil && result.ForLLM != "" {
 				content := ex.rx.rr.rq.ri.cfg.FilterSensitiveData(result.ForLLM)
 				msg := providers.Message{Role: "user", Content: fmt.Sprintf("[SubTurn Result] %s", content)}
-				ex.rx.rr.rq.ri.messages = append(ex.rx.rr.rq.ri.messages, msg)
+				// #1178 (amendment §4.2): a failed SubTurn window write ends
+				// the turn through the existing context-window exit — the
+				// result is never installed for the next request, and the
+				// turn is marked failed before the exit reports it.
 				if !ex.rx.rr.rq.ri.rf.rt.ts.opts.NoHistory {
-					ex.rx.rr.rq.ri.rf.rt.ts.agent.Sessions.AddFullMessage(ex.rx.rr.rq.ri.rf.rt.ts.sessionKey, msg)
+					if addErr := ex.rx.rr.rq.ri.rf.rt.ts.agent.Sessions.AddFullMessage(ex.rx.rr.rq.ri.rf.rt.ts.sessionKey, msg); addErr != nil {
+						ex.rx.rr.rq.ri.rf.rt.ts.markTurnFailed()
+						return ex.contextWindowExit(&messageNotSavedError{role: msg.Role, cause: addErr})
+					}
 				}
+				ex.rx.rr.rq.ri.messages = append(ex.rx.rr.rq.ri.messages, msg)
 			}
 		default:
 			// No results available
@@ -2269,6 +2276,7 @@ func (ex *agentLoopRunTurnToolsExecute) releaseAsyncCallback() {
 // finishToolIteration ticks tool state and stops a turn that repeats successful calls without progress.
 func (rx *agentLoopRunTurnTools) finishToolIteration() agentLoopRunTurnToolsFlow {
 	rx.rr.rq.ri.rf.rt.ts.agent.Tools.TickTTL()
+	progressed := rx.rr.rq.ri.rf.rt.ts.takeRoundProgress()
 	logger.DebugCF("agent", "TTL tick after tool execution", map[string]any{
 		"agent_id": rx.rr.rq.ri.rf.rt.ts.agent.ID, "iteration": rx.rr.rq.ri.rf.rt.iteration,
 	})
@@ -2291,9 +2299,28 @@ func (rx *agentLoopRunTurnTools) finishToolIteration() agentLoopRunTurnToolsFlow
 					"threshold": toolRepeatStopThreshold,
 				})
 			rx.finalContent = notice
+			rx.finalIsModelAnswer = false
 			rx.rr.rq.ri.rf.rt.ts.markTurnFailed()
 			return agentLoopRunTurnToolsBreakL1
 		}
+	}
+	// The model asked again for a call the identical-failure breaker had
+	// already refused (tool_failure_circuit_breaker.go). Same exit as the
+	// identical-success stop above. A queued user message is new input, and
+	// a round in which another call succeeded made progress the model can
+	// still use: either lets the turn continue.
+	if notice := rx.rr.rq.ri.rf.rt.ts.takeToolFailureStop(); notice != "" && !progressed && len(rx.rr.rq.ri.pendingMessages) == 0 {
+		logger.WarnCF("agent", "Turn stopped: the model asked again for a tool call the circuit breaker had already refused",
+			map[string]any{
+				"agent_id":  rx.rr.rq.ri.rf.rt.ts.agent.ID,
+				"turn_id":   rx.rr.rq.ri.rf.rt.ts.turnID,
+				"iteration": rx.rr.rq.ri.rf.rt.iteration,
+				"threshold": toolFailureCircuitBreakThreshold,
+			})
+		rx.finalContent = notice
+		rx.finalIsModelAnswer = false
+		rx.rr.rq.ri.rf.rt.ts.markTurnFailed()
+		return agentLoopRunTurnToolsBreakL1
 	}
 	return agentLoopRunTurnToolsNext
 }

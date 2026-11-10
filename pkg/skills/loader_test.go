@@ -119,19 +119,21 @@ func TestExtractFrontmatter(t *testing.T) {
 			frontmatter := sl.extractFrontmatter(tc.content)
 			assert.NotEmpty(t, frontmatter, "Frontmatter should be extracted for %s line endings", tc.lineEndingType)
 
-			// Parse YAML to get name and description (parseSimpleYAML now handles all line ending types)
-			yamlMeta := sl.parseSimpleYAML(frontmatter)
+			// FR-002 removes the old parser helper. Exercise the loader metadata
+			// boundary with the original bytes, retaining every line-ending case.
+			yamlMeta := sl.parseSkillMetadata(filepath.Join("test-skill", "SKILL.md"), []byte(tc.content))
+			require.NotNil(t, yamlMeta)
 			assert.Equal(
 				t,
 				tc.expectedName,
-				yamlMeta["name"],
+				yamlMeta.Name,
 				"Name should be correctly parsed from frontmatter with %s line endings",
 				tc.lineEndingType,
 			)
 			assert.Equal(
 				t,
 				tc.expectedDesc,
-				yamlMeta["description"],
+				yamlMeta.Description,
 				"Description should be correctly parsed from frontmatter with %s line endings",
 				tc.lineEndingType,
 			)
@@ -203,7 +205,7 @@ func TestListSkillsSeparatesIDFromDisplayName(t *testing.T) {
 func TestEmbeddedDefaultsHaveProperDisplayNames(t *testing.T) {
 	tmp := t.TempDir()
 	dest := filepath.Join(tmp, "skills")
-	_, err := SeedDefaults(dest)
+	_, err := SyncBuiltins(dest, nil)
 	require.NoError(t, err)
 
 	sl := NewSkillsLoader(filepath.Join(tmp, "ws"), dest, "")
@@ -212,29 +214,41 @@ func TestEmbeddedDefaultsHaveProperDisplayNames(t *testing.T) {
 		bySlug[s.ID] = s
 	}
 
+	// The WU-9 workflow set (FR-010): the Ava/Admin-era skills are removed
+	// from the embedded set and the W1–W18 workflow skills ship instead,
+	// alongside the four pinned Elicify document packages and the shared
+	// helpers. Labels are each skill's metadata display_name (the Elicify
+	// document packages keep their H1 labels by design).
 	want := map[string]string{
-		"agent-authoring":  "Agent Authoring",
-		"channel-setup":    "Channel Setup",
-		"deep-research":    "Deep Research",
-		"define-goal":      "Define Goal",
-		"delegation-graph": "Delegation Graph",
-		"doctor":           "Doctor",
-		"elicify-docx":     "DOCX",
-		"elicify-pdf":      "PDF",
-		"elicify-pptx":     "PPTX",
-		"elicify-xlsx":     "XLSX",
-		"handoff":          "Handoff",
-		"inbox-triage":     "Inbox Triage",
-		"interview":        "Interview",
-		"mcp-install":      "MCP Install",
-		"orchestrate":      "Orchestrate",
-		"plan":             "Plan",
-		"provider-setup":   "Provider Setup",
-		"skill-authoring":  "Skill Authoring",
-		"skill-mapping":    "Skill Mapping",
-		"tool-mapping":     "Tool Mapping",
-		"verify":           "Verify",
-		"workspace-team":   "Workspace Team",
+		"add-connector":     "Add Connector (W10)",
+		"add-provider":      "Add or Change Provider (W12)",
+		"capability-plan":   "Capability Plan",
+		"change-agent":      "Change Agent (W3)",
+		"connect-channel":   "Connect Channel (W13)",
+		"create-agent":      "Create Agent (W1)",
+		"deep-research":     "Deep Research",
+		"define-goal":       "Define Goal",
+		"dependency-check":  "Dependency Check",
+		"disable-channel":   "Disable Channel (W14)",
+		"doctor-usage":      "Doctor and Usage (W16)",
+		"elicify-docx":      "DOCX",
+		"elicify-pdf":       "PDF",
+		"elicify-pptx":      "PPTX",
+		"elicify-xlsx":      "XLSX",
+		"inbox-triage":      "Inbox Triage",
+		"install-skill":     "Install Skill (W6)",
+		"interview":         "Interview",
+		"orchestrate":       "Orchestrate",
+		"plan":              "Plan",
+		"provider-config":   "Provider Config",
+		"remove-agent":      "Remove or Delete Agent (W4)",
+		"remove-connector":  "Remove Connector (W11)",
+		"shell-diagnosis":   "Shell Diagnosis (W17)",
+		"team-delegation":   "Team and Delegation (W7)",
+		"team-setup":        "Set Up a Team (W18)",
+		"verify":            "Verify",
+		"welcome-workspace": "Welcome a Workspace (W8)",
+		"write-skill":       "Write or Edit Skill (W5)",
 	}
 	for slug, display := range want {
 		got, ok := bySlug[slug]

@@ -14,7 +14,7 @@
  */
 
 import { expect, type Page } from '@playwright/test'
-import { test } from './fixtures/console-errors'
+import { test } from './fixtures/canonical-history'
 import { seedAndOpenSession, openSessionByDeepLink } from './fixtures/session-setup'
 
 // ── Helper: get data-message-id from the ancestor message bubble ──────────────

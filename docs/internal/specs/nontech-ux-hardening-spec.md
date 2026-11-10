@@ -1,5 +1,7 @@
 # Spec — Non-Technical-User UX Hardening of Configuration Surfaces
 
+Status: Draft
+
 **Status:** Revised after `/grill-spec` + live as-is verification (§0) — ready for `/taskify`
 **Date:** 2026-06-03
 **Driver:** 6-reviewer non-technical-user study (Schedules, Settings/Security, Channels) + a 7th agent-config review + an 8th tools/MCP/skills review, with **18 design decisions approved by the product owner as ASCII wireframes**. Stress-tested via two `/grill-spec` passes and re-verified against the live runtime (see §0); the schedule session model follows a Hermes-vs-OpenClaw study (D18).

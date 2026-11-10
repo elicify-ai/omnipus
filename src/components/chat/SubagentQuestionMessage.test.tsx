@@ -18,7 +18,6 @@ function makeQuestion(overrides: Partial<SessionMessageQuestion> = {}): SessionM
     sender_identity: 'ray',
     untrusted_origin: true,
     text: 'Should I overwrite the existing config.json backup?',
-    wait: true,
     correlation_id: 'corr_1',
     ...overrides,
   }

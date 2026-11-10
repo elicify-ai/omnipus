@@ -16,8 +16,9 @@ import (
 // ── ADR-068 own contract files (T068-06, amended 2026-08-23 SS8b/T068-34) ────
 // ── ADR-068 own contract files (T068-06, amended 2026-08-23 §8b/T068-34) ────
 // Traces to:
-//   contracts/openapi.yaml#/components/schemas/SignInStartResponse (FR-008, inline oneOf)
-//   contracts/components/schemas/SignInStartResponseCliLogin.yaml   (FR-008)
+//   contracts/openapi.yaml#/components/schemas/SignInStartResponse (FR-008; a
+//     direct reference to the device-code shape since WU-24 removed the
+//     vendor-CLI variant with the CLI-backed model providers)
 //   contracts/components/schemas/SignInStartResponseDeviceCode.yaml (FR-008/FR-044)
 //   contracts/components/schemas/SignInStatus.yaml                  (FR-009)
 //   contracts/components/schemas/SignInPollRequest.yaml             (FR-044)
@@ -28,47 +29,19 @@ import (
 //   contracts/components/schemas/ProbeProviderResponse.yaml    (FR-036 probed_model)
 //   contracts/components/schemas/Provider.yaml                 (FR-038 / SC-012)
 //
-// SignInStartResponse became a discriminated union (ADR-034 pattern, same as
-// AgentCreateRequest) 2026-08-23: cli_login for codex-cli/github-copilot,
-// device_code for openai-chatgpt (and xai once configured) — there is no
-// longer a flat "SignInStartResponse.yaml" component file to validate
-// against directly; test each variant file instead (mirrors the
-// AgentCreateRequestMain/Subagent/Subagent3p section below). SignInStatus's
-// state enum gained `pending`.
+// SignInStartResponse was a discriminated union (ADR-034 pattern) between
+// the vendor-CLI and device_code shapes from 2026-08-23; WU-24 (founder
+// 2026-10-14) deleted the vendor-CLI variant with the CLI-backed model
+// providers, and the response is now the device-code shape directly. SignInStatus's state enum
+// gained `pending` on 2026-08-23.
 //
 // Generated enum const names (oapi-codegen v2.7.0 drops the type prefix when
 // the value is unique across the spec, and qualifies EVERY sibling of a type
 // once any one value collides elsewhere in the spec — `pending` collides, so
 // all four SignInStatusState members are qualified now, unlike before):
-// CliLogin, DeviceCode, SignInStatusState{NotSignedIn,Pending,SignedIn,Expired}.
-// The union accessors are Discriminator() / AsSignInStartResponseCliLogin() /
-// AsSignInStartResponseDeviceCode() / AsOnboardingProviderApiKey() /
-// AsOnboardingProviderSignIn().
-
-func TestContract_SignInStartResponseCliLogin_Populated(t *testing.T) {
-	mustPassComponent(t, "SignInStartResponseCliLogin", SignInStartResponseCliLogin{
-		Method:       SignInStartResponseCliLoginMethodCliLogin,
-		Command:      "codex login",
-		Instructions: "Run `codex login` in a terminal, then click Check sign-in.",
-	})
-}
-
-func TestContract_SignInStartResponseCliLogin_ZeroValue(t *testing.T) {
-	mustFailComponent(t, "SignInStartResponseCliLogin", SignInStartResponseCliLogin{},
-		"method const, command and instructions are all required and non-empty")
-}
-
-func TestContract_SignInStartResponseCliLogin_OtherMethodRejected(t *testing.T) {
-	raw := []byte(`{"method":"device_code","command":"codex login","instructions":"x"}`)
-	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "SignInStartResponseCliLogin", raw),
-		"the cli_login variant pins method to cli_login")
-}
-
-func TestContract_SignInStartResponseCliLogin_DeviceCodeFieldsRejected(t *testing.T) {
-	raw := []byte(`{"method":"cli_login","command":"codex login","instructions":"x","user_code":"ABCD-EFGH"}`)
-	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "SignInStartResponseCliLogin", raw),
-		"no device-code fields on the cli_login variant — additionalProperties: false")
-}
+// DeviceCode, SignInStatusState{NotSignedIn,Pending,SignedIn,Expired}. The
+// remaining union accessors are on OnboardingCompleteRequest's provider
+// oneOf: AsOnboardingProviderApiKey() / AsOnboardingProviderSignIn().
 
 func deviceCodeFixture() SignInStartResponseDeviceCode {
 	return SignInStartResponseDeviceCode{
@@ -99,39 +72,16 @@ func TestContract_SignInStartResponseDeviceCode_IntervalBounds(t *testing.T) {
 	mustFailComponent(t, "SignInStartResponseDeviceCode", high, "interval_seconds maximum 30 (FR-045)")
 }
 
-func TestContract_SignInStartResponseDeviceCode_CliLoginFieldsRejected(t *testing.T) {
-	raw := []byte(`{"method":"device_code","verification_url":"https://x","user_code":"A","device_auth_id":"d","expires_at":"2026-08-23T12:15:00Z","interval_seconds":5,"command":"codex login"}`)
-	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "SignInStartResponseDeviceCode", raw),
-		"no cli_login fields on the device_code variant — additionalProperties: false")
-}
-
-func TestContract_SignInStartResponseDeviceCode_WrongDiscriminatorRejected(t *testing.T) {
-	raw := []byte(`{"method":"cli_login","verification_url":"https://x.example/device","user_code":"AB-12","device_auth_id":"das_1","expires_at":"2026-08-23T12:15:00Z","interval_seconds":5}`)
-	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "SignInStartResponseDeviceCode", raw),
-		"method is pinned to the device_code literal on this variant")
-}
-
-func TestContract_SignInStartResponse_UnionRoundTrip(t *testing.T) {
-	var u SignInStartResponse
-	require.NoError(t, u.FromSignInStartResponseDeviceCode(deviceCodeFixture()))
-	b, err := json.Marshal(u)
+func TestContract_SignInStartResponse_DeviceCodeRoundTrip(t *testing.T) {
+	// WU-24: one variant left — the response IS the device-code shape (a
+	// plain struct, no union accessors), so the round trip is a plain
+	// marshal/unmarshal.
+	b, err := json.Marshal(deviceCodeFixture())
 	require.NoError(t, err)
 	var back SignInStartResponse
 	require.NoError(t, json.Unmarshal(b, &back))
-	disc, err := back.Discriminator()
-	require.NoError(t, err)
-	assert.Equal(t, "device_code", disc)
-	v, err := back.AsSignInStartResponseDeviceCode()
-	require.NoError(t, err)
-	assert.Equal(t, "das_9f3a2b1c", v.DeviceAuthId)
-
-	var c SignInStartResponse
-	require.NoError(t, c.FromSignInStartResponseCliLogin(SignInStartResponseCliLogin{
-		Method: SignInStartResponseCliLoginMethodCliLogin, Command: "copilot login", Instructions: "x",
-	}))
-	disc, err = c.Discriminator()
-	require.NoError(t, err)
-	assert.Equal(t, "cli_login", disc)
+	assert.Equal(t, "das_9f3a2b1c", back.DeviceAuthId)
+	assert.Equal(t, SignInStartResponseMethodDeviceCode, back.Method)
 }
 
 // SignInPollRequest / SignInPollResponse (FR-044).
@@ -233,13 +183,13 @@ func TestContract_OnboardingProviderSignIn_Populated(t *testing.T) {
 	model := "gpt-5.4"
 	mustPassComponent(t, "OnboardingProviderSignIn", OnboardingProviderSignIn{
 		AuthMethod: OnboardingProviderSignInAuthMethodSignIn,
-		Id:         "codex-cli",
+		Id:         "openai-chatgpt",
 		Model:      &model,
 	})
 }
 
 func TestContract_OnboardingProviderSignIn_ApiKeyRejected(t *testing.T) {
-	raw := []byte(`{"auth_method":"sign_in","id":"codex-cli","api_key":"k"}`)
+	raw := []byte(`{"auth_method":"sign_in","id":"openai-chatgpt","api_key":"k"}`)
 	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "OnboardingProviderSignIn", raw),
 		"api_key not allowed with sign_in")
 }
@@ -259,7 +209,7 @@ func TestContract_OnboardingCompleteRequest_ApiKeyVariantPasses(t *testing.T) {
 }
 
 func TestContract_OnboardingCompleteRequest_SignInVariantPasses(t *testing.T) {
-	raw := []byte(`{"provider":{"auth_method":"sign_in","id":"codex-cli","model":"gpt-5.4"},"preferences":{"name":"Daniel","tone":"direct","detail":"brief"}}`)
+	raw := []byte(`{"provider":{"auth_method":"sign_in","id":"openai-chatgpt","model":"gpt-5.4"},"preferences":{"name":"Daniel","tone":"direct","detail":"brief"}}`)
 	assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "OnboardingCompleteRequest", raw))
 }
 
@@ -284,14 +234,14 @@ func TestContract_OnboardingCompleteRequest_MissingAuthMethodRejected(t *testing
 }
 
 func TestContract_OnboardingCompleteRequest_SignInWithKeyRejected(t *testing.T) {
-	raw := []byte(`{"provider":{"auth_method":"sign_in","id":"codex-cli","api_key":"k"}}`)
+	raw := []byte(`{"provider":{"auth_method":"sign_in","id":"openai-chatgpt","api_key":"k"}}`)
 	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "OnboardingCompleteRequest", raw),
 		"api_key not allowed with sign_in")
 }
 
 func TestContract_OnboardingCompleteRequest_UnionRoundTrip(t *testing.T) {
 	// The generated wrapper must carry the variant through the union accessors.
-	raw := []byte(`{"provider":{"auth_method":"sign_in","id":"codex-cli"}}`)
+	raw := []byte(`{"provider":{"auth_method":"sign_in","id":"openai-chatgpt"}}`)
 	var req OnboardingCompleteRequest
 	require.NoError(t, json.Unmarshal(raw, &req))
 	disc, err := req.Provider.Discriminator()
@@ -299,7 +249,7 @@ func TestContract_OnboardingCompleteRequest_UnionRoundTrip(t *testing.T) {
 	assert.Equal(t, "sign_in", disc)
 	v, err := req.Provider.AsOnboardingProviderSignIn()
 	require.NoError(t, err)
-	assert.Equal(t, "codex-cli", v.Id)
+	assert.Equal(t, "openai-chatgpt", v.Id)
 }
 
 // ProbeProviderResponse.probed_model (FR-036).

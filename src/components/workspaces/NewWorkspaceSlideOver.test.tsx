@@ -192,10 +192,10 @@ describe('NewWorkspaceSlideOver — create flow', () => {
     // targets), so the core-team picker must match the Team tab's AddAgentPicker,
     // which only excludes type:'system'.
     vi.mocked(fetchAgents).mockResolvedValue([
-      { id: 'mia', name: 'Mia', type: 'core', default: false },
-      { id: 'sub-native', name: 'Native Worker', type: 'Subagent', default: false },
-      { id: 'sub-external', name: 'External Worker', type: 'subagent_3p', default: false },
-      { id: 'legacy-sys', name: 'Legacy System Agent', type: 'system', default: false },
+      { figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core', default: false },
+      { figure: 'Omnipus', role: 'general', id: 'sub-native', name: 'Native Worker', type: 'Subagent', default: false },
+      { figure: 'Omnipus', role: 'general', id: 'sub-external', name: 'External Worker', type: 'subagent_3p', default: false },
+      { figure: 'Omnipus', role: 'general', id: 'legacy-sys', name: 'Legacy System Agent', type: 'system', default: false },
     ] as never)
     // jsdom lacks scrollIntoView; Radix Select calls it when opening the listbox.
     Element.prototype.scrollIntoView = vi.fn()

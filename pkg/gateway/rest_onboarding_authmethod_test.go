@@ -178,9 +178,9 @@ func TestOnboardingComplete_ApiKeyVariant_RejectsFieldsOffTheVariant(t *testing.
 //
 // Still-valid coverage kept, now for the real, onboarding-aware gate:
 //   - onboarding incomplete + unauthenticated + no bypass -> reachable
-//     (FR-050's pre-auth allowance; this codepath returns 200 for both
-//     routes under test since codex-cli is a cli_login provider with no
-//     external dependency).
+//     (FR-050's pre-auth allowance; the routes under test are
+//     openai-chatgpt's, whose device-code start/status answer 200 behind
+//     the in-test vendor stub with no external dependency).
 //   - onboarding incomplete OR complete + dev-mode bypass active -> still
 //     503 (RequireNotBypass gates on bypass unconditionally; FR-050 only
 //     ever affects the EARLIER "is a user authenticated" pre-check, never
@@ -193,39 +193,68 @@ func TestOnboardingComplete_ApiKeyVariant_RejectsFieldsOffTheVariant(t *testing.
 //     that one does not, so removing it here would drop that route's
 //     coverage of the same FR-050 requirement.
 func TestProviderSignInRoutes_AuthGating(t *testing.T) {
-	withEdition(t, config.EditionHosted)
 	routes := []struct{ method, path string }{
-		{http.MethodPost, "/api/v1/providers/codex-cli/sign-in"},
-		{http.MethodGet, "/api/v1/providers/codex-cli/sign-in/status"},
+		{http.MethodPost, "/api/v1/providers/openai-chatgpt/sign-in"},
+		{http.MethodGet, "/api/v1/providers/openai-chatgpt/sign-in/status"},
 	}
-	for _, rt := range routes {
-		t.Run(rt.method+" "+rt.path, func(t *testing.T) {
-			api, _ := newAuthMethodOnboardingAPI(t)
+	// FR-050's pre-auth onboarding window exists in local mode (core) only;
+	// platform mode (hosted) closed it, so there an anonymous caller is
+	// refused before onboarding completes as well as after.
+	for _, ed := range []struct {
+		edition         string
+		preOnboardingOK bool
+	}{
+		{config.EditionCore, true},
+		{config.EditionHosted, false},
+	} {
+		for _, rt := range routes {
+			t.Run(ed.edition+" "+rt.method+" "+rt.path, func(t *testing.T) {
+				withEdition(t, ed.edition)
+				api, _ := newAuthMethodOnboardingAPI(t)
+				vendorHits := 0
+				if rt.method == http.MethodPost {
+					// The device-code start talks to the vendor; point it at the
+					// in-test stub so "reachable" cannot depend on the network.
+					state := "pending"
+					mux := deviceCodeVendorMux(t, &state)
+					vendor := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						vendorHits++
+						mux.ServeHTTP(w, r)
+					}))
+					defer vendor.Close()
+					withDeviceCodeVendor(t, vendor)
+				}
 
-			// Onboarding incomplete, unauthenticated, no bypass -> reachable.
-			req := httptest.NewRequest(rt.method, rt.path, nil)
-			ctx := context.WithValue(req.Context(), ctxkey.ConfigContextKey{}, api.agentLoop.GetConfig())
-			w := httptest.NewRecorder()
-			api.HandleProviders(w, isolateRateLimit(t, req.WithContext(ctx)))
-			assert.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+				// Onboarding incomplete, unauthenticated, no bypass.
+				req := httptest.NewRequest(rt.method, rt.path, nil)
+				ctx := context.WithValue(req.Context(), ctxkey.ConfigContextKey{}, api.agentLoop.GetConfig())
+				w := httptest.NewRecorder()
+				api.HandleProviders(w, isolateRateLimit(t, req.WithContext(ctx)))
+				if !ed.preOnboardingOK {
+					assert.Equal(t, http.StatusUnauthorized, w.Code, "body=%s", w.Body.String())
+					assert.Zero(t, vendorHits, "a refused anonymous call must not start a vendor sign-in")
+				} else {
+					assert.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
 
-			// Onboarding still incomplete, dev-mode bypass active -> 503
-			// regardless of the FR-050 pre-auth allowance above.
-			bypassCfg := *api.agentLoop.GetConfig()
-			bypassCfg.Gateway.DevModeBypass = true
-			req = httptest.NewRequest(rt.method, rt.path, nil)
-			ctx = context.WithValue(req.Context(), ctxkey.ConfigContextKey{}, &bypassCfg)
-			w = httptest.NewRecorder()
-			api.HandleProviders(w, isolateRateLimit(t, req.WithContext(ctx)))
-			assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+					// Onboarding still incomplete, dev-mode bypass active -> 503
+					// regardless of the FR-050 pre-auth allowance above.
+					bypassCfg := *api.agentLoop.GetConfig()
+					bypassCfg.Gateway.DevModeBypass = true
+					req = httptest.NewRequest(rt.method, rt.path, nil)
+					ctx = context.WithValue(req.Context(), ctxkey.ConfigContextKey{}, &bypassCfg)
+					w = httptest.NewRecorder()
+					api.HandleProviders(w, isolateRateLimit(t, req.WithContext(ctx)))
+					assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+				}
 
-			// Onboarding complete, unauthenticated -> 401.
-			require.NoError(t, api.onboardingMgr.CompleteOnboarding())
-			req = httptest.NewRequest(rt.method, rt.path, nil)
-			ctx = context.WithValue(req.Context(), ctxkey.ConfigContextKey{}, api.agentLoop.GetConfig())
-			w = httptest.NewRecorder()
-			api.HandleProviders(w, isolateRateLimit(t, req.WithContext(ctx)))
-			assert.Equal(t, http.StatusUnauthorized, w.Code)
-		})
+				// Onboarding complete, unauthenticated -> 401.
+				require.NoError(t, api.onboardingMgr.CompleteOnboarding())
+				req = httptest.NewRequest(rt.method, rt.path, nil)
+				ctx = context.WithValue(req.Context(), ctxkey.ConfigContextKey{}, api.agentLoop.GetConfig())
+				w = httptest.NewRecorder()
+				api.HandleProviders(w, isolateRateLimit(t, req.WithContext(ctx)))
+				assert.Equal(t, http.StatusUnauthorized, w.Code)
+			})
+		}
 	}
 }

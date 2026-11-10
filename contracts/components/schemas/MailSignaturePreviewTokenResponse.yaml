@@ -1,0 +1,39 @@
+title: MailSignaturePreviewTokenResponse
+description: >
+  Minted preview token for the draft signature's live preview. Mirrors the
+  message preview's token hygiene (MC-43): 256-bit crypto/rand token,
+  fail-closed on entropy failure, named TTL, indistinguishable 404s on the
+  serve routes, logout revocation. Signature-token specifics: the TTL is the
+  named 2-minute MailSignaturePreviewTokenTTL (bounds replay; the preview
+  outlives debounce+render), and mints REPLACE — a session holds at most one
+  live signature token (a new mint revokes the session's previous signature
+  token; message-preview tokens keep their separate cap-8-refuses hygiene).
+  The SPA constructs the /mail-preview/html/{token} URL from the token;
+  expiry comes from expires_in_seconds.
+type: object
+additionalProperties: false
+required:
+  - token
+  - expires_in_seconds
+properties:
+  token:
+    type: string
+    minLength: 43
+    maxLength: 43
+    description: >
+      The credential: 32 bytes from a cryptographic random source, encoded
+      base64url without padding — 43 characters (Library token hygiene,
+      MC-43). This string is the entire security of the unauthenticated
+      /mail-preview/ serve routes, so it MUST NOT be logged, put in an audit
+      record, or sent in a Referer header (Referrer-Policy: no-referrer on
+      the served responses).
+    example: "kZ8vQ2mR7xT1yB4nW6cA9pL0sD3fG5hJ8kM2nP4qR6t"
+  expires_in_seconds:
+    type: integer
+    minimum: 1
+    description: >
+      Seconds from the moment this response was produced until the token
+      stops working (named signature TTL: 120 for the 2-minute
+      MailSignaturePreviewTokenTTL — replace-on-mint keeps exactly one live
+      signature token per session).
+    example: 120

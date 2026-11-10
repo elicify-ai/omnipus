@@ -13,6 +13,8 @@ beforeEach(() => {
 // Traces to: wave0-brand-design-spec.md Scenario: Each non-chat screen renders empty state (US-4 AC2, FR-009)
 
 // Mock the API module so queries don't make real network requests
+import { emptyHistoryPage, type HistoryReadPort } from '../../tests/chat-history-paging/legacy-fixtures'
+
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
@@ -23,7 +25,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchSkills: vi.fn().mockResolvedValue([]),
     fetchMcpServers: vi.fn().mockResolvedValue([]),
     fetchProviders: vi.fn().mockResolvedValue([]),
-    fetchSessionMessages: vi.fn().mockResolvedValue([]),
+    fetchSessionMessages: vi.fn<HistoryReadPort>(async (sessionId) => emptyHistoryPage(sessionId)),
   }
 })
 
@@ -139,22 +141,10 @@ function wrapper({ children }: { children: React.ReactNode }) {
   return <QueryClientProvider client={makeClient()}>{children}</QueryClientProvider>
 }
 
-describe('Agents screen — empty state', () => {
-  let AgentsScreen: () => JSX.Element
-
-  beforeAll(async () => {
-    // The agents/ index route now lazy-loads its screen; import the screen module
-    // directly so the test renders real content (not the Suspense fallback).
-    const mod = await import('@/components/screens/AgentListScreen')
-    AgentsScreen = mod.AgentListScreen as () => JSX.Element
-  }, 60_000)
-
-  it('renders "Agents" as h1 heading', async () => {
-    render(<AgentsScreen />, { wrapper })
-    const h1 = await screen.findByRole('heading', { level: 1 })
-    expect(h1).toHaveTextContent('Agents')
-  })
-})
+// The "Agents screen — empty state" describe was removed with the screen
+// itself — omnipus-system-agent FR-108 retires the Agents management screen
+// and routes (WU-11); the branded 404 that replaces it is pinned by
+// src/routes/_app/-wu11-retired-routes.test.tsx.
 
 describe('Skills screen — empty state', () => {
   let SkillsScreen: () => JSX.Element
@@ -221,7 +211,7 @@ describe('Chat screen — empty state', () => {
 
   it('renders prompt to select an agent (no active agent in empty state)', () => {
     // Note: Spec says "Your agents are standing by" but implementation intentionally shows
-    // "Select an agent in the session bar to get started." — more instructional for first-run UX.
+    // "Select an agent in the sidebar list to get started." — the agent list is in the sidebar.
     render(<ChatScreen />, { wrapper })
     expect(screen.getByText(/Select an agent/i)).toBeTruthy()
   })

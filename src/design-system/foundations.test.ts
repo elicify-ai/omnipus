@@ -113,6 +113,15 @@ describe('non-colour foundation token contract', () => {
     }
   })
 
+  it('shares the commissioned agent-motion cycles and readable status-text pulse floor', () => {
+    // Existing commissioned AgentIcon oracles; opacity floor independently
+    // checked at >=4.5:1 against the current generated dark-surface palette.
+    expectValue('motion.agentIcon.thinking.duration', '2600ms')
+    expectValue('motion.agentIcon.working.duration', '1600ms')
+    expectValue('motion.agentIcon.waiting.duration', '3400ms')
+    expectValue('motion.agentStatus.text.minimumOpacity', 0.9)
+  })
+
   it('defines preserved normal motion, reduced motion, and shared loading timing', () => {
     expectValue('motion.duration.fast', '150ms')
     expectValue('motion.duration.normal', '200ms')

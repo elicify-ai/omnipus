@@ -354,6 +354,12 @@ func TestSeatbeltSystemPreamble_MandatoryRootRead(t *testing.T) {
 	assert.Contains(t, seatbeltSystemPreamble, `(allow mach-lookup (global-name "com.apple.mDNSResponder"))`)
 	assert.Contains(t, seatbeltSystemPreamble, `(allow network-outbound (literal "/private/var/run/mDNSResponder"))`)
 
+	// Certificate trust evaluation (finding 5). Go's crypto/x509 on darwin asks
+	// the per-user trust daemon; without this lookup every Go TLS client (gh, ...)
+	// fails with "x509: OSStatus -26276". The real-child proof is
+	// TestSeatbelt_RealChild_PlatformCertificateVerification (darwin only).
+	assert.Contains(t, seatbeltSystemPreamble, `(allow mach-lookup (global-name "com.apple.trustd.agent"))`)
+
 	// The preamble must never grant write access beyond /dev/null, or it would
 	// silently widen every policy rendered on top of it.
 	for _, line := range strings.Split(seatbeltSystemPreamble, "\n") {

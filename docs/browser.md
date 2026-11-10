@@ -12,7 +12,7 @@ The browser belongs to the workspace whose chat opened it. That workspace's team
 
 If the video cannot connect, you get an error with a reason and a Retry button — never a blank frame, never a quieter stand-in picture.
 
-On a fresh install, Jim and Ray have browser tools; Mia and Ava do not. Operators can change this — see [agents](agents.md) and [tools](tools.md).
+On a fresh install, Mia and Jim have browser tools. Omnipus and the shipped workers do not. Operators can change supported capability settings — see [agents](agents.md) and [tools](tools.md).
 
 ## When you would use it
 
@@ -23,11 +23,11 @@ On a fresh install, Jim and Ray have browser tools; Mia and Ava do not. Operator
 
 ## How to open and watch
 
-1. In a chat, click **Open browser** next to the message composer. The panel docks on the right with a blank tab if browsing has not started.
+1. In a workspace chat, click **Open browser** in the top bar. The panel docks on the right with a blank tab if browsing has not started.
 2. Alternatively, click **Watch live** on a browser action in the thread.
-3. Wait for the picture. A spinner shows until the first frame arrives.
+3. Wait for the picture. A spinner shows until the first frame arrives. When the server confirms the same page and capture settings during startup, Omnipus keeps the capture already in progress rather than starting it again. A later recovery request can still restart capture, even if the page and settings have not changed.
 4. Read the status chip in the toolbar: "<Agent> is browsing…" while the agent drives, "Click to drive" when idle, "Also viewing" when someone else has the panel open.
-5. Click **Pop out** for a window of its own, or **Close** to dismiss it. Closing the panel does not stop the agent's run.
+5. Select **Expand Browser panel** in the panel heading. In a normal browser tab, it opens the full-screen Browser in a new tab or switches to a recognised existing tab for that Browser session and agent. In an installed app or standalone Chrome window, it opens full screen in that same window; **Back to chat** returns there with Browser re-docked. Use the heading's **Close** control to dismiss the docked panel; closing it does not stop the agent's run. The full-screen view has **Back to chat**; [panels beside chat](using-omnipus-ui.md#panels-beside-chat) explains how it returns.
 
 ## How to take over from the agent
 
@@ -62,7 +62,7 @@ The panel has two rows of controls above the live picture.
 | Status chip | Who is driving, or the connection state |
 | Annotate | Draw a region and send a comment to the chat |
 | Mute | Turn page sound on or off; shown when the page has sound |
-| Pop out | Move the panel into its own window |
+| Expand Browser panel | Show the full-screen Browser for the current session and agent: a new or recognised tab in a normal browser, or the same window in an installed app |
 | Take over | Shown while the agent works; click to hold the browser |
 | Retry | Shown with an error; starts a fresh video connection |
 
@@ -72,22 +72,24 @@ To annotate, click the button, mark a region, write your comment, and click **Se
 
 Every failure is shown as an error with its reason and a Retry button.
 
+If video capture fails during reconnection, Omnipus restarts the failed video connection. A late failure from a discarded attempt does not interrupt its replacement.
+
 | The panel says | What it means |
 |---|---|
 | Live video is turned off for this installation | An operator disabled it; they can enable it in Settings |
-| Live video isn't supported on this server | The server platform or build cannot capture video; browsing still works |
-| Live video isn't available in this lite build | This install was built without video |
+| Live video is not available because the managed Chrome build cannot capture the browser tab | Run the gateway installer to download a full Chrome build, or set `tools.browser.exec_path` to a local full Chrome binary. See gateway logs for the exact cause |
 | Live video is already in use by another agent | Close that other live view, then Retry |
 | The browser's video capture didn't start in time | Retry; restart the live view if it repeats |
 | Live video connection failed | Retry; reload the page if it repeats |
 
 Other things to watch:
 
-- Live video needs a server that supports it. Linux servers do; on other server platforms the agent can still browse, but the panel cannot show video.
+- Live video can run on Linux and macOS when the installation has a usable full Chrome build and the required capture support. Windows does not pass the current live-video capability gate.
 - On Windows, available memory cannot be measured, so Omnipus permits one browser for the whole host regardless of its physical RAM. Browser support on Windows is degraded and unsupported; there is no setting that raises this browser floor.
 - The operator setting `tools.browser.cache_trim_interval` controls how often closed browser profiles are swept. It does not bound a profile's size. A workspace driven continuously, with no idle gap, keeps growing its cache because Omnipus never trims a live browser.
 - Locked-down networks can block the live media stream. You get the error above, not a lower-quality fallback.
 - Sound starts muted. Click the mute button to hear the page.
+- Before the address bar opens an address, Omnipus checks where it leads, which needs a name lookup. It waits up to about 5 seconds for that check. The page is not opened, and the panel shows the reason as an error, when the lookup takes longer than that, when the address leads to a private or internal network address that an operator has not allowed, or when it is not an `http://` or `https://` address. While that check is running, pressing Enter on a new address replaces the one being checked, and if the browser switches to another tab before the check finishes, the address is not opened on the new tab; enter it again if you still want it there.
 - Your input pauses while the picture is not safe to click on — while the panel reconnects, resizes, or waits for the page to settle. A notice at the bottom says so, and input has its own Retry button when its connection drops.
 - Watching or closing the panel never stops the agent's run. Only the chat Stop button cancels a turn.
 
@@ -95,5 +97,5 @@ Other things to watch:
 
 - [previews](previews.md) — sites an agent serves for you open in this panel
 - [workspaces](workspaces.md) — the browser belongs to a workspace and is shared by its team
-- [agents](agents.md) — who Jim, Ray, Mia and Ava are, and what each one does
+- [agents](agents.md) — the built-in chat colleagues and workers, and what each one does
 - [tools](tools.md) — how Allow, ask and deny govern the browser tools

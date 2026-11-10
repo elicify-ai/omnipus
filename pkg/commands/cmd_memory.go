@@ -84,15 +84,19 @@ func MemoryCommandSteeringPrompt(name, args string) (prompt string, ok bool) {
 	}
 }
 
+// rememberRoomChoice tells the model up front that remember's room is a
+// required choice, so it does not learn that from a refused call.
+const rememberRoomChoice = "Choose room 'shared' (your workspace team can recall it) or 'private' (only you) on the call."
+
 // rememberSteeringPrompt builds the steering prompt for /remember. With
 // arguments, it directs the model to store exactly what the user typed. With
 // no arguments, it asks the model to mine the conversation so far for
 // anything worth keeping.
 func rememberSteeringPrompt(args string) string {
 	if args == "" {
-		return "Review this conversation and use your 'remember' tool to store anything worth keeping (decisions, references, lessons learned)."
+		return "Review this conversation and use your 'remember' tool to store anything worth keeping (decisions, references, lessons learned). " + rememberRoomChoice
 	}
-	return "Use your 'remember' tool to store the following, choosing the most fitting category: " + args
+	return "Use your 'remember' tool to store the following, choosing the most fitting category: " + args + ". " + rememberRoomChoice
 }
 
 // recallSteeringPrompt builds the steering prompt for /recall. With

@@ -186,7 +186,7 @@ func newReloadHarness(t *testing.T) *reloadHarness {
 			case <-h.svc.manualReloadChan:
 				// Mirrors RunContextWithOptions' manualReloadChan arm: the slot
 				// is already claimed by the trigger, so no beginReload here.
-				runReloadCycle(h.al, h.svc, nil, h.exec, h.loadNext)
+				runReloadCycle(h.al, h.svc, nil, 0, h.exec, h.loadNext)
 			}
 		}
 	}()
@@ -540,7 +540,7 @@ func TestReloadCycle_FollowUpConfigLoadFailure_LeavesPendingSetAndMarksDegraded(
 
 	cfg := h.al.GetConfig()
 	h.al.TriggerReload() // errcheck rationale (out of errcheck scope; kept as documentation): sets reloadPending; the slot is already held above
-	runReloadCycle(h.al, h.svc, cfg, exec, failingLoad)
+	runReloadCycle(h.al, h.svc, cfg, 0, exec, failingLoad)
 
 	assert.Equal(t, 2, loadCalls,
 		"the coalesced follow-up must retry the load once (self-heals a transient read race) "+
@@ -598,7 +598,7 @@ func TestReloadCycle_FollowUpConfigLoadFailure_TransientRetrySucceeds(t *testing
 
 	cfg := h.al.GetConfig()
 	h.al.TriggerReload() // errcheck rationale (out of errcheck scope; kept as documentation): sets reloadPending; the slot is already held above
-	runReloadCycle(h.al, h.svc, cfg, exec, flakyLoad)
+	runReloadCycle(h.al, h.svc, cfg, 0, exec, flakyLoad)
 
 	assert.Equal(t, 2, loadCalls, "the retry must have fired exactly once, and it must have succeeded")
 	assert.Equal(t, 2, execCalls, "the coalesced reload must have run exec once the retried load succeeded")

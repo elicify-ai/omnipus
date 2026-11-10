@@ -40,81 +40,50 @@ if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
 
 import { OmnipusComposer } from './ChatScreen'
 
-vi.mock('@assistant-ui/react', () => {
-  return {
-    useThreadViewportStore: () => ({ getState: () => ({ isAtBottom: true }) }),
-    ThreadPrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Viewport: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Messages: () => null,
-    },
-    MessagePrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Parts: () => null,
-    },
-    ComposerPrimitive: {
-      Root: ({ children, className, onSubmit }: { children: React.ReactNode; className?: string; onSubmit?: (e: React.FormEvent) => void }) =>
-        React.createElement('form', { className, onSubmit, 'data-testid': 'composer-form' }, children),
-      Input: ({ disabled, placeholder, className, onChange, onKeyDown, onBlur }: {
-        disabled?: boolean; placeholder?: string; className?: string;
-        onChange?: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
-        onKeyDown?: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
-        onBlur?: () => void;
-      }) =>
-        React.createElement('textarea', {
-          disabled, placeholder, className,
-          onChange, onKeyDown, onBlur,
-          'data-testid': 'composer-input',
+import { MockButton } from '@/test/assistantUiMock'
+vi.mock('@assistant-ui/react', async () => (await import('@/test/assistantUiMock')).createAssistantUiMock({
+  ThreadPrimitive: {
+    Viewport: ({ children, className }: { children: React.ReactNode; className?: string }) =>
+              React.createElement('div', { className }, children),
+  },
+  ComposerPrimitive: {
+    Root: ({ children, className, onSubmit }: { children: React.ReactNode; className?: string; onSubmit?: (e: React.FormEvent) => void }) =>
+              React.createElement('form', { className, onSubmit, 'data-testid': 'composer-form' }, children),
+    Send: ({ disabled, children, className, 'data-testid': testId, 'aria-label': ariaLabel }: {
+              disabled?: boolean; children?: React.ReactNode; className?: string;
+              'data-testid'?: string; 'aria-label'?: string;
+            }) =>
+              React.createElement(MockButton, {
+                type: 'button', disabled, className,
+                'data-testid': testId ?? 'chat-send',
+                'aria-label': ariaLabel, children: children}),
+    AddAttachment: ({ disabled, children, className, 'aria-label': ariaLabel }: {
+              disabled?: boolean; children?: React.ReactNode; className?: string; 'aria-label'?: string
+            }) =>
+              React.createElement(MockButton, { type: 'button', disabled, className, 'aria-label': ariaLabel, 'data-testid': 'add-attachment', children: children}),
+  },
+  AttachmentPrimitive: {
+    Remove: ({ children, className, 'aria-label': ariaLabel }: { children?: React.ReactNode; className?: string; 'aria-label'?: string }) =>
+              React.createElement(MockButton, { type: 'button', className, 'aria-label': ariaLabel, children: children}),
+  },
+  ActionBarPrimitive: {
+    Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
+              React.createElement('div', { className }, children),
+  },
+  useComposerRuntime: vi.fn(() => ({
+          getState: () => ({ text: '' }),
+          setText: vi.fn(),
+          addAttachment: vi.fn(),
+          subscribe: vi.fn(() => vi.fn()),
+          send: vi.fn(),
+        })),
+  useMessage: () => ({
+          id: 'msg_1',
+          role: 'assistant',
+          status: { type: 'complete' },
+          content: [],
         }),
-      Send: ({ disabled, children, className, 'data-testid': testId, 'aria-label': ariaLabel }: {
-        disabled?: boolean; children?: React.ReactNode; className?: string;
-        'data-testid'?: string; 'aria-label'?: string;
-      }) =>
-        React.createElement('button', {
-          type: 'button', disabled, className,
-          'data-testid': testId ?? 'chat-send',
-          'aria-label': ariaLabel,
-        }, children),
-      AddAttachment: ({ disabled, children, className, 'aria-label': ariaLabel }: {
-        disabled?: boolean; children?: React.ReactNode; className?: string; 'aria-label'?: string
-      }) =>
-        React.createElement('button', { type: 'button', disabled, className, 'aria-label': ariaLabel, 'data-testid': 'add-attachment' }, children),
-      Attachments: () => null,
-    },
-    AttachmentPrimitive: {
-      Root: ({ children, className }: { children?: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Name: () => null,
-      Remove: ({ children, className, 'aria-label': ariaLabel }: { children?: React.ReactNode; className?: string; 'aria-label'?: string }) =>
-        React.createElement('button', { type: 'button', className, 'aria-label': ariaLabel }, children),
-      Thumb: () => null,
-    },
-    MessagePartPrimitive: { InProgress: () => null },
-    ActionBarPrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Copy: ({ children }: { children: React.ReactNode }) => React.createElement('span', {}, children),
-    },
-    AuiIf: () => null,
-    useComposerRuntime: vi.fn(() => ({
-      getState: () => ({ text: '' }),
-      setText: vi.fn(),
-      addAttachment: vi.fn(),
-      subscribe: vi.fn(() => vi.fn()),
-      send: vi.fn(),
-    })),
-    useMessage: () => ({
-      id: 'msg_1',
-      role: 'assistant',
-      status: { type: 'complete' },
-      content: [],
-    }),
-    makeAssistantToolUI: () => () => null,
-  }
-})
+}))
 
 // Flipped by each test to simulate `fetchCommands('web')` still being in
 // flight (React Query `isLoading`: first fetch, no data yet) and then landing.
@@ -136,7 +105,7 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
           ? { data: undefined, isError: false, isLoading: true, refetch: vi.fn() }
           : { data: mockCommands, isError: false, isLoading: false, refetch: vi.fn() }
       }
-      return { data: [], isError: false, isLoading: false, refetch: vi.fn() }
+      return { data: queryDataWithEmptyHistory(key), isError: false, isLoading: false, refetch: vi.fn() }
     },
     useMutation: () => ({ mutate: vi.fn(), isPending: false }),
     useQueryClient: () => ({ invalidateQueries: vi.fn(), removeQueries: vi.fn() }),
@@ -149,12 +118,14 @@ vi.mock('@tanstack/react-router', () => ({
   Link: ({ children }: { children: React.ReactNode }) => children,
 }))
 
+import { emptyHistoryPage, queryDataWithEmptyHistory, type HistoryReadPort } from '../../../tests/chat-history-paging/legacy-fixtures'
+
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([]),
-    fetchSessionMessages: vi.fn().mockResolvedValue([]),
+    fetchSessionMessages: vi.fn<HistoryReadPort>(async (sessionId) => emptyHistoryPage(sessionId)),
     fetchCommands: vi.fn().mockResolvedValue([]),
     fetchSkills: vi.fn().mockResolvedValue([]),
     fetchProviders: vi.fn().mockResolvedValue([]),
@@ -166,8 +137,6 @@ vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avata
 vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
 vi.mock('./markdown-text', () => ({ MarkdownText: () => null }))
 vi.mock('./tools/GenericToolCall', () => ({ GenericToolCall: () => null }))
-vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
-vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
 vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 
@@ -209,7 +178,7 @@ async function mockRuntimeWithText(text: string) {
 }
 
 describe('slash command typed before the command list resolves', () => {
-  it('"/new" is never dispatched as a chat message, and runs as the client command once the list lands', async () => {
+  it('"/new" typed while the list loads is refused at once and never sent, before or after the list lands (WC-1)', async () => {
     const { setText, send } = await mockRuntimeWithText('/new')
 
     const { rerender } = render(<OmnipusComposer />)
@@ -221,10 +190,9 @@ describe('slash command typed before the command list resolves', () => {
     let dispatched = true
     act(() => { dispatched = fireEvent.submit(form) })
 
-    // fireEvent returns false when the handler called preventDefault(), i.e.
-    // assistant-ui never got to call composer.send() — "/new" did NOT go out
-    // as a chat message. This is the exact assertion that fails without the
-    // readiness gate.
+    // WC-1 (founder, 2026-10-09): /new is retired. It is refused visibly at
+    // once — not held for the list, not sent as a chat message. fireEvent
+    // returns false because the handler called preventDefault().
     expect(dispatched).toBe(false)
     expect(send).not.toHaveBeenCalled()
     // The session is still the one we started on — nothing has run yet.
@@ -234,11 +202,10 @@ describe('slash command typed before the command list resolves', () => {
     commandsStillLoading = false
     act(() => { rerender(<OmnipusComposer />) })
 
-    // "/new" now does what the user asked: starts a new conversation
-    // (startNewSession clears activeSessionId) and clears the composer...
-    expect(useSessionStore.getState().activeSessionId).toBeNull()
+    // The list landing changes nothing: the refused /new is never sent later,
+    // the composer was cleared by the refusal, and no chat was started.
+    expect(useSessionStore.getState().activeSessionId).toBe('sess_readiness_test')
     expect(setText).toHaveBeenCalledWith('')
-    // ...and it was never sent to the backend at any point.
     expect(send).not.toHaveBeenCalled()
   })
 
@@ -279,7 +246,7 @@ describe('slash command typed before the command list resolves', () => {
     expect(send).not.toHaveBeenCalled()
   })
 
-  it('once the list has loaded, "/new" is handled synchronously (no hold at all)', async () => {
+  it('once the list has loaded, "/new" is still refused and never sent (WC-1)', async () => {
     commandsStillLoading = false
     const { setText, send } = await mockRuntimeWithText('/new')
 
@@ -291,8 +258,10 @@ describe('slash command typed before the command list resolves', () => {
     let dispatched = true
     act(() => { dispatched = fireEvent.submit(form) })
 
+    // WC-1: intercepted and refused visibly — the submit is preventDefault'd,
+    // the composer is cleared, nothing is sent, and no chat is started.
     expect(dispatched).toBe(false)
-    expect(useSessionStore.getState().activeSessionId).toBeNull()
+    expect(useSessionStore.getState().activeSessionId).toBe('sess_readiness_test')
     expect(setText).toHaveBeenCalledWith('')
     expect(send).not.toHaveBeenCalled()
   })

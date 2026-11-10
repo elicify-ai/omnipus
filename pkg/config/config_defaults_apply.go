@@ -178,8 +178,6 @@ func (c SessionConfig) EffectiveStatsFlushInterval() time.Duration {
 const (
 	// DefaultSchedulesMaxConcurrentRuns is the fallback parallel-lane capacity.
 	DefaultSchedulesMaxConcurrentRuns = 8
-	// DefaultSchedulesRunTimeoutSeconds is the fallback per-run deadline.
-	DefaultSchedulesRunTimeoutSeconds = 300
 )
 
 // DefaultSchedulesRetryBackoffMs is the fallback transient-error retry backoff
@@ -192,9 +190,6 @@ var DefaultSchedulesRetryBackoffMs = []int64{60000, 120000, 300000}
 func (s *SchedulesConfig) ApplyDefaults() {
 	if s.MaxConcurrentRuns <= 0 {
 		s.MaxConcurrentRuns = DefaultSchedulesMaxConcurrentRuns
-	}
-	if s.RunTimeoutSeconds <= 0 {
-		s.RunTimeoutSeconds = DefaultSchedulesRunTimeoutSeconds
 	}
 	if len(s.RetryBackoffMs) == 0 {
 		s.RetryBackoffMs = append([]int64(nil), DefaultSchedulesRetryBackoffMs...)
@@ -257,11 +252,12 @@ func (c *BaiduSearchConfig) APIKey() string {
 	return os.Getenv(c.APIKeyRef)
 }
 
-// EffectiveRequireParentAgentID resolves tools.delegate.require_parent_agent_id
-// (R2-MAJ-015). An unset key resolves to TRUE — the fail-closed posture is the
-// default, and an operator must opt OUT of it explicitly.
-func (d DelegateToolConfig) EffectiveRequireParentAgentID() bool {
-	return ResolveBool(d.RequireParentAgentID, true)
+// APIKey returns the resolved Exa API key from the process environment.
+func (c *ExaConfig) APIKey() string {
+	if c.APIKeyRef == "" {
+		return ""
+	}
+	return os.Getenv(c.APIKeyRef)
 }
 
 // defaultControlIdleReleaseSec is FR-031a's shipped default: 900 seconds

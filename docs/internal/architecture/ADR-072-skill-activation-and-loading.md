@@ -2,6 +2,8 @@
 
 > **Release-label note (2026-09-25):** the v0.2 / v0.3 release labels are retired — Omnipus ships a single v0.1.1 line (founder decision 2026-09-25). Version labels below are kept as historical record unless re-pointed at a tracked issue.
 
+> **Amendment 2026-11-01 (skills as folders, skills spec r15).** Parts of this ADR are superseded for the user-owned registry: `create_skill` and `remove_skill` are deleted (create is a `write_file` of `<name>/SKILL.md`, delete is `edit_skill action=delete`); `edit_skill` has four actions only (`copy`, `delete_file`, `delete`, `restore`); `list_skills` no longer takes a skill name and a new `get_skill` (required `fields`) is the one reader; the `Skill` result carries a header with the folder, file list, revision and needs; skill instruction files are readable by agents that may load the skill, so D10's "reads routed through the tool" no longer withholds `SKILL.md` from file tools; built-in skills are read-only and replaced at every start; skill identity ignores letter case. The grant list as the real gate (D4, N1) is unchanged. The skills spec r15 is the authority for these points.
+
 - **Status:** **Accepted** — **revision 5** (2026-09-01, HEAD `f101a9b4`; ratified by the founder —
   see §6 resolutions). All six founder-only questions are closed; §5 records the twenty-three
   resolvable from the code. Two of the six answers added mechanisms rather than merely selecting an
@@ -355,6 +357,8 @@ ample for a trigger sentence, and no schema change is needed.
 **This is the highest-leverage half of the "when does it fire?" problem.** D3 is the smaller half.
 
 ### D3 — The check-the-menu habit is reinforced per task, and it is silent
+
+Superseded 2026-10-21 (founder): agent-folder AGENT.md/AGENTS.md/IDENTITY.md and the per-request skill reminder were removed; see PR #1400.
 
 Three parts, deliberately separated because they live in different places:
 

@@ -82,12 +82,12 @@ func TestReadImage_HistoryAndDeliveryRegression(t *testing.T) {
 	provider := &inspectionBoundaryProvider{toolName: "read_file", toolArgs: map[string]any{"path": imagePath}}
 	msgBus := bus.NewMessageBus()
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	agent.Tools.Register(tools.NewReadFileTool(home, true, tools.MaxReadFileSize))
 	agent.StoreToolPolicy(&tools.ToolPolicyCfg{Policies: map[string]config.ToolPolicy{"read_file": "allow"}})
 
 	msg := bus.InboundMessage{Channel: "telegram", ChatID: "privacy", Sender: bus.SenderInfo{CanonicalID: "owner"}, Content: "inspect this"}
-	if _, _, err := al.processMessage(context.Background(), msg); err != nil {
+	if _, _, err := al.processMessageAsPrimaryForTest(context.Background(), msg); err != nil {
 		t.Fatal(err)
 	}
 	if len(provider.requests) != 2 || !requestHasInspectionMedia(provider.requests[1]) {
@@ -100,7 +100,7 @@ func TestReadImage_HistoryAndDeliveryRegression(t *testing.T) {
 	default:
 	}
 
-	route, _, err := al.resolveMessageRoute(msg)
+	route, _, err := al.resolveMessageRouteAsPrimaryForTest(msg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,11 @@ func TestReadImage_HistoryAndDeliveryRegression(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertInspectionRecordsPrivate(t, archive, imageBytes, imagePath)
-	reloaded, err := session.NewUnifiedStoreWithHome(filepath.Join(agent.Home, "sessions"), home)
+	// DEL-10: there is ONE shared session store — the per-agent stores were
+	// deleted — and it is rooted at the store's own base dir, not at the
+	// agent's home. Reload from the LIVE store's base dir so the reopen really
+	// re-reads the same archive instead of an empty, never-used directory.
+	reloaded, err := session.NewUnifiedStoreWithHome(al.GetSessionStore().BaseDir(), home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +127,7 @@ func TestReadImage_HistoryAndDeliveryRegression(t *testing.T) {
 	}
 	assertInspectionRecordsPrivate(t, reloadedArchive, imageBytes, imagePath)
 
-	if _, _, procErr := al.processMessage(context.Background(), bus.InboundMessage{Channel: "telegram", ChatID: "privacy", Sender: bus.SenderInfo{CanonicalID: "owner"}, Content: "continue"}); procErr != nil {
+	if _, _, procErr := al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{Channel: "telegram", ChatID: "privacy", Sender: bus.SenderInfo{CanonicalID: "owner"}, Content: "continue"}); procErr != nil {
 		t.Fatal(procErr)
 	}
 	if requestHasInspectionMedia(provider.requests[len(provider.requests)-1]) {
@@ -134,7 +138,8 @@ func TestReadImage_HistoryAndDeliveryRegression(t *testing.T) {
 	if _, trimmed := al.windowTrimForce(agent, "", key, true); !trimmed {
 		t.Fatal("forced window trim did not evict the older inspection turn")
 	}
-	compacted, err := session.NewUnifiedStoreWithHome(filepath.Join(agent.Home, "sessions"), home)
+	// DEL-10: one shared session store, rooted at the store's own base dir.
+	compacted, err := session.NewUnifiedStoreWithHome(al.GetSessionStore().BaseDir(), home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +237,7 @@ func TestReadImage_InterruptedTurnDoesNotPersistInspection(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	imageBytes := boundaryPNG(t, 32, 24)
 	al.RegisterTool(&boundaryInspectionTool{image: tools.InspectionImage{Bytes: imageBytes, MIMEType: "image/png", Reauthorize: func(context.Context) error { return nil }}})
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	agent.StoreToolPolicy(&tools.ToolPolicyCfg{Policies: map[string]config.ToolPolicy{"boundary_inspection": "allow"}})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -240,7 +245,7 @@ func TestReadImage_InterruptedTurnDoesNotPersistInspection(t *testing.T) {
 	done := make(chan error, 1)
 	msg := bus.InboundMessage{Channel: "telegram", ChatID: "interrupted", Sender: bus.SenderInfo{CanonicalID: "owner"}, Content: "inspect then stop"}
 	go func() {
-		_, _, err := al.processMessage(ctx, msg)
+		_, _, err := al.processMessageAsPrimaryForTest(ctx, msg)
 		done <- err
 	}()
 	select {
@@ -254,7 +259,7 @@ func TestReadImage_InterruptedTurnDoesNotPersistInspection(t *testing.T) {
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("interrupted turn error = %v, want context.Canceled", err)
 	}
-	route, _, err := al.resolveMessageRoute(msg)
+	route, _, err := al.resolveMessageRouteAsPrimaryForTest(msg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,10 +294,10 @@ func TestReadImage_ProviderImageRejectionStaysIncomplete(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)
 	imageBytes := boundaryPNG(t, 32, 24)
 	al.RegisterTool(&boundaryInspectionTool{image: tools.InspectionImage{Bytes: imageBytes, MIMEType: "image/png", Reauthorize: func(context.Context) error { return nil }}})
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	agent.StoreToolPolicy(&tools.ToolPolicyCfg{Policies: map[string]config.ToolPolicy{"boundary_inspection": "allow"}})
 
-	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{Channel: "telegram", ChatID: "rejected", Sender: bus.SenderInfo{CanonicalID: "owner"}, Content: "inspect this"})
+	response, _, err := al.processMessageAsPrimaryForTest(context.Background(), bus.InboundMessage{Channel: "telegram", ChatID: "rejected", Sender: bus.SenderInfo{CanonicalID: "owner"}, Content: "inspect this"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -386,7 +391,7 @@ func TestReadImage_ProviderFailureAndCandidate(t *testing.T) {
 		{Role: "assistant", ToolCalls: []providers.ToolCall{{ID: "inspect-1", Type: "function", Name: "boundary_inspection"}}},
 		{Role: "tool", ToolCallID: "inspect-1", Content: inspectionMarker},
 	}
-	if _, err := rt.callProvider(canonical, nil); err != nil {
+	if _, err := rt.callProviderOnce(canonical, nil); err != nil {
 		t.Fatal(err)
 	}
 	if rechecks != 2 {
@@ -417,7 +422,7 @@ func TestReadImage_ProviderFailureAndCandidate(t *testing.T) {
 		activeCandidates: []providers.FallbackCandidate{{Provider: "302ai", Model: "chatgpt-4o-latest"}, {Provider: "302ai", Model: "deepseek-chat"}},
 		llmModel:         "chatgpt-4o-latest", inspectionImages: map[string][]tools.InspectionImage{"inspect-1": {{Bytes: imageBytes, MIMEType: "image/png", Reauthorize: func(context.Context) error { nonVisionChecks++; return nil }}}},
 	}
-	if _, err := nonVisionRT.callProvider(canonical, nil); err != nil {
+	if _, err := nonVisionRT.callProviderOnce(canonical, nil); err != nil {
 		t.Fatal(err)
 	}
 	if nonVisionChecks != 1 {
@@ -445,7 +450,7 @@ func TestReadImage_ProviderFailureAndCandidate(t *testing.T) {
 		activeCandidates: []providers.FallbackCandidate{{Provider: "302ai", Model: "chatgpt-4o-latest"}, {Provider: "zai", Model: "glm-4.5v"}},
 		llmModel:         "chatgpt-4o-latest", inspectionImages: map[string][]tools.InspectionImage{"inspect-1": {{Bytes: imageBytes, MIMEType: "image/png", Reauthorize: func(context.Context) error { cancelChecks++; return nil }}}},
 	}
-	if _, err := cancelRT.callProvider(canonical, nil); !errors.Is(err, context.Canceled) {
+	if _, err := cancelRT.callProviderOnce(canonical, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled provider error = %v, want context.Canceled", err)
 	}
 	if cancelChecks != 1 || len(cancelProvider.requests["glm-4.5v"]) != 0 {
@@ -454,6 +459,9 @@ func TestReadImage_ProviderFailureAndCandidate(t *testing.T) {
 
 	unknownProvider := &candidateCaptureProvider{requests: map[string][]providers.Message{}, fail: map[string]error{}}
 	unknownAgent := &AgentInstance{ID: "mia", Provider: unknownProvider}
+	// Unknown capability metadata is not a missing transport: bind this named
+	// fake client so the optimistic, authorized-image attempt remains tested.
+	unknownAgent.StoreProviderPool(map[string]providers.LLMProvider{"future-provider": unknownProvider})
 	unknownChecks := 0
 	unknownRT := &agentLoopRunTurn{
 		al: &AgentLoop{}, ts: newTurnState(unknownAgent, processOptions{}, turnEventScope{}), turnCtx: context.Background(), activeProvider: unknownProvider,
@@ -461,7 +469,7 @@ func TestReadImage_ProviderFailureAndCandidate(t *testing.T) {
 		inspectionImages: map[string][]tools.InspectionImage{"inspect-1": {{Bytes: imageBytes, MIMEType: "image/png", Reauthorize: func(context.Context) error { unknownChecks++; return nil }}}},
 	}
 	unknownRT.al.SetCapabilityCatalog(cat)
-	if _, err := unknownRT.callProvider(canonical, nil); err != nil {
+	if _, err := unknownRT.callProviderOnce(canonical, nil); err != nil {
 		t.Fatal(err)
 	}
 	if unknownChecks != 1 || !requestHasInspectionMedia(unknownProvider.requests["future-model"]) {
@@ -479,7 +487,7 @@ func TestReadImage_ProviderFailureAndCandidate(t *testing.T) {
 		activeCandidates: []providers.FallbackCandidate{{Provider: "302ai", Model: "chatgpt-4o-latest"}, {Provider: "zai", Model: "glm-4.5v"}}, llmModel: "chatgpt-4o-latest",
 		inspectionImages: map[string][]tools.InspectionImage{"inspect-1": {{Bytes: imageBytes, MIMEType: "image/png", Reauthorize: func(context.Context) error { timeoutChecks++; return nil }}}},
 	}
-	if _, err := timeoutRT.callProvider(canonical, nil); err != nil {
+	if _, err := timeoutRT.callProviderOnce(canonical, nil); err != nil {
 		t.Fatal(err)
 	}
 	if timeoutChecks != 2 || !requestHasInspectionMedia(timeoutProvider.requests["glm-4.5v"]) {

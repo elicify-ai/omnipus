@@ -82,6 +82,7 @@
       "file": "tests/design-system/browser.spec.ts",
       "test": "RadioGroup [check:radio-group-browser] browser",
       "story": "Default",
+      "requiredTargets": [{ "selector": "[data-testid=\"radio-top-level\"]", "attribute": "aria-checked", "value": "true" }],
       "applicable": true
     },
     {

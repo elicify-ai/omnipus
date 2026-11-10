@@ -22,6 +22,15 @@ import { useConnectionStore } from '@/store/connection'
 import { GenericToolCall } from './tools/GenericToolCall'
 import { OmnipusRuntimeProvider } from './OmnipusRuntimeProvider'
 
+const { draftLinkModuleLoaded } = vi.hoisted(() => ({
+  draftLinkModuleLoaded: vi.fn(),
+}))
+
+vi.mock('./tools/DraftLink', async (importOriginal) => {
+  draftLinkModuleLoaded()
+  return importOriginal<typeof import('./tools/DraftLink')>()
+})
+
 // WsLifecycle constructs a real WsConnection on mount — stub the transport.
 vi.mock('@/lib/ws', () => ({
   WsConnection: class {
@@ -155,6 +164,23 @@ async function renderLiveThread() {
 }
 
 describe('Live tool-UI registration — ctui-gate fix 3a (sev-8)', () => {
+  it('keeps the draft-link module out of provider import and registers it lazily when mounted', async () => {
+    expect(draftLinkModuleLoaded).not.toHaveBeenCalled()
+    seedLiveMessages(
+      'create_email_draft',
+      { workspace_id: 'ws-1', agent_id: 'mia', subject: 'Quarterly update' },
+      JSON.stringify({ created: true, uid: 7, uidvalidity: 42 }),
+    )
+
+    await renderLiveThread()
+
+    const toggle = await screen.findByTestId('draft-link-toggle')
+    expect(toggle.textContent).toContain('create_email_draft')
+    expect(toggle.textContent).toContain('Quarterly update')
+    expect(draftLinkModuleLoaded).toHaveBeenCalledTimes(1)
+    expect(screen.queryByTestId('tool-call-badge')).toBeNull()
+  })
+
   it('a live search_web part resolves to WebSearchBlock (web-search-toggle), not the generic badge', async () => {
     seedLiveMessages('search_web', { query: 'go embed spa' }, '1. Result one\n   https://example.com\n   a snippet')
     await renderLiveThread()

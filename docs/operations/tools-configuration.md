@@ -53,7 +53,10 @@ General settings for fetching and processing webpage content.
 |---------------|--------|---------|------------------------------------------------------------|
 | `enabled`     | bool   | false   | Enable Brave search                                        |
 | `api_key_ref` | string | -       | Env-var name of the Brave Search credential (see below)    |
+| `base_url`    | string | empty   | Optional API URL. Empty uses `https://api.search.brave.com/res/v1/web/search`. |
 | `max_results` | int    | 5       | Maximum number of results                                  |
+
+Brave and Perplexity accept an optional `base_url` in their `tools.web` configuration section. Leave it empty to use the official endpoint. Ordinary searches and manual connection checks use the same configured endpoint and the same client setup for proxy and private-address protection. Each check creates a fresh HTTP client and does not follow redirects. When `sandbox.ssrf.enabled` is on, the shared protection against private/internal addresses still applies, including its configured exceptions. Use only a trusted API endpoint: Omnipus sends the provider's key there. Environment overrides are `OMNIPUS_TOOLS_WEB_BRAVE_BASE_URL` and `OMNIPUS_TOOLS_WEB_PERPLEXITY_BASE_URL`.
 
 ### DuckDuckGo
 
@@ -93,24 +96,20 @@ Baidu Search uses the [Qianfan AI Search API](https://cloud.baidu.com/doc/qianfa
 |---------------|--------|---------|----------------------------------------------------------|
 | `enabled`     | bool   | false   | Enable Perplexity search                                 |
 | `api_key_ref` | string | -       | Env-var name of the Perplexity credential                |
+| `base_url`    | string | empty   | Optional API URL. Empty uses `https://api.perplexity.ai/chat/completions`. |
 | `max_results` | int    | 5       | Maximum number of results                                |
 
 ### Tavily
 
-| Config        | Type   | Default | Description                                              |
-|---------------|--------|---------|----------------------------------------------------------|
-| `enabled`     | bool   | false   | Enable Tavily search                                     |
-| `api_key_ref` | string | -       | Env-var name of the Tavily credential                    |
-| `base_url`    | string | -       | Custom Tavily API base URL                               |
-| `max_results` | int    | 5       | Maximum number of results                                |
+| Config         | Type   | Default    | Description                                                          |
+|----------------|--------|------------|------------------------------------------------------------------------|
+| `enabled`      | bool   | false      | Enable Tavily search                                                  |
+| `api_key_ref`  | string | -          | Env-var name of the Tavily credential                                 |
+| `base_url`     | string | -          | Custom Tavily API base URL                                            |
+| `search_depth` | string | `advanced` | Depth **cap** for Tavily searches: `ultra-fast` < `fast` < `basic` < `advanced` (cheapest to costliest). See below. |
+| `max_results`  | int    | 5          | Maximum number of results                                             |
 
-### SearXNG
-
-| Config        | Type   | Default                 | Description               |
-|---------------|--------|-------------------------|---------------------------|
-| `enabled`     | bool   | false                   | Enable SearXNG search     |
-| `base_url`    | string | `http://localhost:8888` | SearXNG instance URL      |
-| `max_results` | int    | 5                       | Maximum number of results |
+`search_depth` is a ceiling, not a fixed value. When an agent's `search_web` call asks for a `depth` (`low`/`medium`/`high`, mapped to Tavily's `fast`/`basic`/`advanced`), Omnipus clamps it down to this ceiling if it asks for more — it is never raised above it. When the agent's call carries no `depth` at all, Omnipus searches at this ceiling directly. A brand-new install ships `basic` (Tavily's cheapest tier); if the key is ever missing or empty — including on an install upgrading from before this setting existed — Omnipus falls back to `advanced`, the depth the code used unconditionally before this release, so an existing install's search depth (and its Tavily bill) does not change on upgrade. Deeper searches cost more per call, so this is also the operator's cost ceiling for Tavily. Env var: `OMNIPUS_TOOLS_WEB_TAVILY_SEARCH_DEPTH`.
 
 ### GLM Search
 
@@ -120,7 +119,10 @@ Baidu Search uses the [Qianfan AI Search API](https://cloud.baidu.com/doc/qianfa
 | `api_key_ref`   | string | -                                                 | Env-var name of the GLM API credential   |
 | `base_url`      | string | `https://open.bigmodel.cn/api/paas/v4/web_search` | GLM Search API URL                       |
 | `search_engine` | string | `search_std`                                      | Search engine type                       |
+| `content_size`  | string | `medium`                                          | Depth **cap** for GLM searches: `medium` or `high` (GLM has no `low` value). See below. |
 | `max_results`   | int    | 5                                                 | Maximum number of results                |
+
+`content_size` works the same way as Tavily's `search_depth` above: it is the operator's ceiling on GLM's own `content_size` field. An agent's `search_web` call asking for `depth` `medium` or `high` is clamped down to this ceiling if it asks for more; a call with no `depth` uses the ceiling directly. GLM has no `low` value at all — a `search_web` call asking for `depth: "low"` is refused outright before any request reaches GLM (see the `search_web` parameters below), never silently upgraded to `medium`. Shipped default and the value existing installs are migrated onto are both `medium`, the value the code used unconditionally before this release. Env var: `OMNIPUS_TOOLS_WEB_GLM_CONTENT_SIZE`.
 
 > **Note:** `api_key_ref` stores the name of an environment variable whose value is resolved from the encrypted credential store. The legacy plaintext `api_key` and older `api_keys[]` forms are dropped by the loader. See [providers and models](../providers-and-models.md) for the user-facing provider model.
 
@@ -131,17 +133,35 @@ Baidu Search uses the [Qianfan AI Search API](https://cloud.baidu.com/doc/qianfa
 | `prefer_native`          | bool     | true    | Prefer provider's native search over configured search engines |
 | `private_host_whitelist` | string[] | `[]`    | Private/internal hosts allowed for web fetching                |
 
+### Default and fallback search provider
+
+Omnipus tries one search provider first (the default) and, if that call fails, can try a second (the fallback). In **Settings** → **Integrations**, use **Change** on the **Default search** or **Fallback** card to choose a service; **Fallback** also offers **None**. These choices are stored as `tools.web.default_provider` and `tools.web.fallback_provider` in `config.json`.
+
+Saving a web-search API key in **Settings** → **Integrations** sets that provider's `enabled: true`.
+
+Removing a saved search key deletes its encrypted entry, clears the service's credential reference and loaded environment value, and switches that service off. Your default and fallback choices are retained; removal does not choose a replacement or revoke the key at the provider. A shared key, a custom credential reference, or undecided search roles blocks removal without changing the saved configuration. Removal requires the same password confirmation as saving in local mode. If a later deletion, reload or audit step fails, the operation reports the persisted change instead of claiming success.
+
+A manual connection check makes one potentially chargeable search for `Omnipus` through the addressed service, using its saved key and a minimal result request. It never falls back, rotates keys or retries. The total request deadline is at most 15 seconds, including waits for configuration locks; a shorter provider-client timeout still applies. A disconnected client cancels the check. A check cancelled or timed out before admission makes no search and consumes no server cooldown. Each service admits only one check at a time and one new check every 30 seconds, including admitted attempts that fail. Checks require a saved key and a usable, switched-on service. Results are temporary diagnostics, not saved health or changes to the service's readiness, roles or enabled setting.
+
+The server refuses key removal and connection checks while `gateway.dev_mode_bypass` is active. Disable development authentication bypass and sign in before retrying. Ordinary key saves retain their existing confirmation requirements.
+
 ### `search_web` tool parameters
 
-At runtime, the `search_web` tool accepts the following parameters:
+At runtime, the real tool name is `search_web`. `query`, `count` and `range` are always offered. `depth`, `include_domains` and `exclude_domains` are offered together, only when the provider Omnipus would use for this call honours depth or site filters (at least one of the two); `provider` is offered only when two or more search providers are enabled and usable.
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `query` | string | yes | Search query string |
-| `count` | integer | no | Number of results to return. Default: `10`, max: `10` |
-| `range` | string | no | Optional time filter: `d` (day), `w` (week), `m` (month), `y` (year) |
+| Field              | Type            | Required | Description |
+|---------------------|-----------------|----------|-------------|
+| `query`             | string          | yes      | Search query string |
+| `count`             | integer         | no       | Number of results to return, 1-10. Default: `10`. Out-of-range values are rejected, not clamped. |
+| `range`             | string          | no       | Optional time filter: `d` (day), `w` (week), `m` (month), `y` (year) |
+| `depth`             | string          | no       | Result depth: `low`, `medium` or `high`. Tavily maps these to `fast`/`basic`/`advanced`; Perplexity sets `search_context_size`; GLM refuses `low`. Present only under the condition above. |
+| `include_domains`   | array of string | no       | Restrict results to these domains (max 10). Present only under the condition above; refused (see below) when the provider that would run the call cannot honour it. |
+| `exclude_domains`   | array of string | no       | Domains to avoid (max 10). Present only under the condition above. A soft preference, not a requirement: if the provider that runs the call can't honour it, the search still runs and the result notes the omission — it is never refused for this alone. |
+| `provider`          | string          | no       | Name a specific configured provider to run this call, overriding the operator's Default/Fallback order. Present only when two or more providers are enabled and usable. |
 
 If `range` is omitted, Omnipus performs an unrestricted search.
+
+**When a parameter is refused.** `depth` and `include_domains` are checked before any request is sent to the provider that would run the call. The call is refused outright — naming every other configured provider that does support it — when: the provider has no depth (or site-filter) support at all, or the provider is GLM and the requested `depth` is `low` (GLM has no `low` value). Note the asymmetry with `exclude_domains`, which is never refused this way. A provider that supports only one of depth or site filters still offers all three fields — for example Exa, which honours site filters but not depth — so asking Exa for a `depth` hits this refusal even though `depth` was present in the schema.
 
 ### Example `search_web` call
 
@@ -149,9 +169,24 @@ If `range` is omitted, Omnipus performs an unrestricted search.
 {
   "query": "ai agent news",
   "count": 10,
-  "range": "w"
+  "range": "w",
+  "depth": "high"
 }
 ```
+
+### Example capability refusal
+
+Asking for a `depth` when the provider that would run the call has no depth support at all — for example Brave as the default, with Tavily also configured — is refused before any request is sent:
+
+```
+search failed
+- brave (default): rejected: depth is not supported
+Providers that support depth: tavily
+```
+
+## Agent-facing task and plan tools
+
+`get_task`, `get_plan`, `get_goal`, `update_plan` and `set_agent_permissions` have no `tools.*` switch of their own. They follow the normal `sandbox.tool_policies` ceiling and per-agent overrides, like every other built-in tool. On a fresh install `get_task`, `get_plan`, `get_goal` and `update_plan` are `allow`, and `set_agent_permissions` is `ask`.
 
 ## Browser Tools
 
@@ -190,8 +225,14 @@ When connecting to multiple MCP servers, exposing hundreds of tools simultaneous
 and increase API costs. The **Discovery** feature solves this by keeping MCP tools *hidden* by default.
 
 Instead of loading all tools, the LLM is provided with a lightweight search tool (using BM25 keyword matching or Regex).
-When the LLM needs a specific capability, it searches the hidden library. Matching tools are then temporarily "unlocked"
-and injected into the context for a configured number of turns (`ttl`).
+When the LLM needs a specific capability, it searches the hidden library. A tool loaded for a session stays advertised
+for that session beyond the discovery promotion lifetime (`ttl`). The TTL remains discovery bookkeeping, not a timer
+that removes a session's loaded definition. Another session does not inherit the load.
+
+Current permissions, server/tool assignments and registration still apply. Denying a loaded tool, removing its assignment
+or disconnecting its server removes access. An unrelated configuration reload preserves a still-valid session load.
+Goal-setting requests may temporarily narrow the offered list; ordinary requests resume the session's loaded list.
+Retention does not advertise every allowed tool on the first request.
 
 ### Global Config
 
@@ -206,7 +247,7 @@ and injected into the context for a configured number of turns (`ttl`).
 | Config               | Type | Default | Description                                                                                                                       |
 |----------------------|------|---------|-----------------------------------------------------------------------------------------------------------------------------------|
 | `enabled`            | bool | false   | Global default: if `true`, all MCP tools are hidden and loaded on-demand via search; if `false`, all tools are loaded into context. Individual servers can override this with the per-server `deferred` field. |
-| `ttl`                | int  | 5       | Number of conversational turns a discovered tool remains unlocked                                                                 |
+| `ttl`                | int  | 5       | Discovery promotion lifetime in tool rounds — one round is one pass of tool execution inside an agent's turn, so a turn with several tool steps burns several. A tool a session has loaded stays advertised for that session beyond this lifetime. |
 | `max_search_results` | int  | 5       | Maximum number of tools returned per search query                                                                                 |
 | `use_bm25`           | bool | true    | Let `ToolSearch` match natural-language and keyword queries. **Warning**: consumes more resources than regex search |
 | `use_regex`          | bool | false   | Let `ToolSearch` match regular-expression queries |

@@ -101,6 +101,8 @@ func TestExecuteTask_LifecycleRecord_HappyPathReachesCompleted(t *testing.T) {
 	judgeInst.Provider = &b6ScriptedJudge{metFromCall: 1, reason: "evidenced"}
 
 	ls := session.NewLifecycleStore(filepath.Join(t.TempDir(), "session_lifecycle"))
+	ensureOrdinaryGoalRuntimeForTest(t, al)
+	al.SetSessionMessagingStores(al.GetMessageInboxStore(), ls)
 	al.taskExecutor.SetLifecycleStore(ls)
 
 	tk := &task.Task{
@@ -111,6 +113,7 @@ func TestExecuteTask_LifecycleRecord_HappyPathReachesCompleted(t *testing.T) {
 	if err := al.taskStore.Create(tk); err != nil {
 		t.Fatalf("create task: %v", err)
 	}
+	pairTaskGoalRecordUsingTaskCriteria(t, al, tk.ID)
 
 	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
@@ -171,14 +174,27 @@ func TestExecuteTask_LifecycleRecord_HappyPathReachesCompleted(t *testing.T) {
 //     (FR-118/G-13's own contract), and
 //  2. the OTHER store — session.UnifiedMeta.Status, the field GET
 //     /api/v1/sessions and the SPA actually read — reconciles to
-//     StatusInterrupted too. Before this wave's fix, assertion (1) failed
-//     outright (no LifecycleRecord ever existed to sweep); the fix for (1)
-//     alone would still have left (2) failing forever, which is the
+//     StatusInterrupted (founder rule 2026-10-06: a session does not fail
+//     because of a restart; this supersedes the sub-agent control plane ADR
+//     D4/MAJ-009 retirement of that wire value). Before this wave's fix, assertion (1)
+//     failed outright (no LifecycleRecord ever existed to sweep); the fix
+//     for (1) alone would still have left (2) failing forever, which is the
 //     user-visible half of the gap the parent brief called out explicitly.
 func TestBootSweep_ReconcilesCrashedTaskDispatchSession(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	// S1 M9 (978c232bc) deleted the launcher-less task start path, so
+	// StartTaskNow REFUSES without a launcher ("no session launcher is
+	// installed") and this fixture never reached the crash-sweep it is about.
+	// Install the same start path production wires at boot.
+	installTestSessionLauncher(t, al)
 
 	ls := session.NewLifecycleStore(filepath.Join(t.TempDir(), "session_lifecycle"))
+	// The launcher mints the run's lifecycle record through the LOOP's
+	// session-messaging store, while the executor reads its own. Point both at
+	// the SAME store, or the record the launch wrote is invisible to the
+	// baseline read below and to the sweep this test drives.
+	al.SetSessionMessagingStores(
+		session.NewMessageInboxStore(filepath.Join(t.TempDir(), "session_messages")), ls)
 	al.taskExecutor.SetLifecycleStore(ls)
 
 	started := make(chan struct{})
@@ -220,9 +236,9 @@ func TestBootSweep_ReconcilesCrashedTaskDispatchSession(t *testing.T) {
 		t.Errorf("pre-sweep lifecycle state = %q, want running", preRec.State)
 	}
 
-	sessStore := al.GetAgentStore("native-agent")
+	sessStore := al.GetSessionStore()
 	if sessStore == nil {
-		t.Fatal("GetAgentStore(native-agent) returned nil")
+		t.Fatal("GetSessionStore() returned nil")
 	}
 	preMeta, err := sessStore.GetMeta(sessionID)
 	if err != nil {

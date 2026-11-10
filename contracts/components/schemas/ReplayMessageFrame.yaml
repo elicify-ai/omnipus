@@ -1,8 +1,15 @@
 title: ReplayMessageFrame
 description: >
-  Server → client. One replayed turn entry emitted during a session replay
-  (attach_session). Each entry corresponds to a user, assistant, or system
+  Server → client. One persisted chat entry delivered live or during a session
+  replay (attach_session). Each entry corresponds to a user, assistant, or system
   transcript entry. The SPA reconstructs the conversation from these frames.
+  This is a CHAT PROJECTION of the session's single append-only archive, not
+  a provider-message or raw-storage type (session-core C-ARCHIVE / U2;
+  FR-004/FR-005): the archive's private model payload (model_message), its
+  body-free same-session consumption reference (type=model_ref / model_ref),
+  its trusted source/return-route provenance and its disk/byte/view marks
+  are disk-only and are never emitted on this frame, and entries that belong
+  to the model view only are not replayed.
 type: object
 required:
   - type
@@ -11,6 +18,9 @@ required:
   - role
 additionalProperties: false
 properties:
+  history_origin:
+    $ref: './HistoryEntryOrigin.yaml'
+    x-go-type: HistoryEntryOrigin
   type:
     type: string
     const: replay_message
@@ -20,7 +30,22 @@ properties:
     description: Session being replayed.
   content:
     type: string
-    description: Message text.
+    description: >
+      Message text. On a history-origin replay page this may be a display
+      preview; see content_original_size_bytes.
+  content_original_size_bytes:
+    type: integer
+    minimum: 65537
+    readOnly: true
+    description: >
+      Present only when `content` is a read-time display preview of an ordinary
+      user/assistant chat message (entry type `message` or omitted) whose saved
+      text exceeds 65,536 UTF-8 bytes: `content` then holds its first at most
+      65,536 bytes cut back to a character boundary, and this field is the exact
+      UTF-8 length of the full saved text (chat-history paging spec, "Amendment
+      2026-10-27 (founder, #1452 D2)", A2.1/A2.2). The full text is read through
+      getSessionHistoryEntry. Unrelated to `truncated`/`truncation_reason`,
+      which mean the turn itself was cut short.
   role:
     type: string
     enum:
@@ -49,6 +74,38 @@ properties:
       (matched by this id) against the persisted entry the snapshot just replayed, so a
       message sent from this tab — or drained from the offline queue — is not duplicated
       and is not placed above history.
+  input_disposition:
+    type: object
+    readOnly: true
+    description: >
+      Read-only record that this user input was DISCARDED by Stop before it was
+      delivered into the agent's model input (session-core FR-024). Absent on
+      every delivered message. There is no client action to release or discard
+      it; the archived message bytes are unchanged and this only labels them.
+    required:
+      - message_id
+      - state
+      - reason
+    additionalProperties: false
+    properties:
+      message_id:
+        type: string
+        minLength: 1
+        maxLength: 255
+        description: The original input message id (this entry's id).
+      client_message_id:
+        type: string
+        minLength: 1
+        maxLength: 128
+        description: The sender's client_message_id, when the input carried one.
+      state:
+        type: string
+        enum:
+          - discarded
+      reason:
+        type: string
+        enum:
+          - stopped_before_delivery
   timestamp:
     type: string
     format: date-time
@@ -56,6 +113,16 @@ properties:
   agent_id:
     type: string
     description: Agent that produced this message (assistant messages only).
+  participant:
+    $ref: ./ChatParticipant.yaml
+  reply_to_participant:
+    $ref: ./ChatParticipant.yaml
+  reply_to_message_id:
+    type: string
+    minLength: 1
+    description: >
+      Present only on a guest reply (session-core FR-027): the message_id of
+      the admitted request this entry answers.
   model:
     type: string
     description: >
@@ -75,6 +142,14 @@ properties:
       replay stream (async delegation can interleave other agents'/turns' frames
       in between). Omitted for legacy entries written before turn-id stamping
       landed.
+  goal_id:
+    type: string
+    description: >
+      session-core FR-039 / C-GOAL. The goal the replayed entry's producing turn
+      was dispatched under (from TranscriptEntry.GoalID). Live, history, REST and
+      replay must retain the SAME association so the SPA joins each bubble to its
+      own exact keyed goal criteria. Absent means UNKNOWN association; a later
+      goal's frame must never rebind an earlier replayed message.
   truncated:
     type: boolean
     description: >
@@ -94,6 +169,47 @@ properties:
       why `truncated` is true: "cancelled" (the user canceled the turn
       mid-stream) or "max_output_tokens" (the provider's output-token limit
       cut the answer off before it finished). Absent on a `truncated: true`
-      frame means "cancelled" — every entry written before this field
-      existed predates it and was always a cancel.
+      frame means the reason is not recorded: readers do not default it to
+      "cancelled" or to anything else (session-core DEL-F36).
     example: "max_output_tokens"
+  seq:
+    type: integer
+    format: int64
+    minimum: 1
+    description: >-
+      Hub-assigned per-session sequence number. Present on live publication and
+      its incremental catch-up copies; absent on unsequenced transcript/snapshot
+      projections. Only frames carrying seq advance the session cursor.
+  terminal_outcome:
+    type: boolean
+    description: >
+      Present and true only on an assistant entry that is a turn's distinct
+      terminal outcome sentence (for example the tool-iteration-limit notice)
+      written after the turn's earlier narration was already persisted. Live,
+      the gateway closes the narration bubble with done(<narration id>) before
+      this entry arrives, so it is a separate message; the replay stream has no
+      such boundary, so the SPA must start a new message for this frame instead
+      of merging it into the preceding same-turn assistant entry. Absent on
+      every other frame, including entries written before this field existed.
+    example: true
+  room_ref:
+    $ref: './RoomRef.yaml'
+    description: >
+      Spec omnipus-system-agent K33 (FR-202, FR-215). Present when this
+      main-session entry is a room request to this agent or this agent's
+      answer into a room, so live, history and replay render the same
+      collapsed entry.
+  effort:
+    $ref: './EffortRecord.yaml'
+    description: >
+      Effort levels spec (FR-058). Copied from this entry's own stored effort
+      record (answering assistant entries only). Absent when the entry has none.
+  turn_reasoning_tokens:
+    type: integer
+    minimum: 0
+    description: >
+      Effort levels spec (FR-024). The stored display-only snapshot of the
+      turn's reported reasoning-token sum, copied from the answering entry; never
+      summed at read time. Absent = no call of the turn reported a count; 0 =
+      reported zero.
+    example: 120

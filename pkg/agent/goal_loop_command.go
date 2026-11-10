@@ -112,7 +112,7 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 	gl.sessionID = gl.opts.TranscriptSessionID
 	gl.args = commands.CommandArgs(msg.Content)
 
-	if gl.args == "" {
+	if gl.args == "" || strings.EqualFold(strings.TrimSpace(gl.args), "status") {
 		return true, true, gl.al.goalStatusReply(gl.sessionID, gl.store)
 	}
 	if isGoalClearVerb(gl.args) {
@@ -141,7 +141,11 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 		gl.fc = agentFeasibilityContext{agentInst: gl.agentInst}
 	}
 
-	if activeGoal := activeGoalForSession(gl.sessionID); activeGoal != nil {
+	activeGoal, readErr := activeGoalForSession(gl.sessionID)
+	if readErr != nil {
+		return true, true, gl.al.reportGoalReadError(gl.sessionID, "goal command", readErr)
+	}
+	if activeGoal != nil {
 		// ADR-088 D1/D5 (US-5): an active goal's restate is STEERING, never a
 		// pending amendment awaiting confirm. The GoalID NEVER changes on a
 		// restate (FR-001) — only a fresh activation on a goalless session
@@ -340,7 +344,9 @@ func (gl *agentLoopApplyGoalCommandPrompt) activateMarkerGoal() (bool, bool, str
 	// path's legitimately-empty transient record), so the frame should
 	// carry it (FR-113/FR-019), and a channel-routed marker goal gets its
 	// FR-020 echo exactly like a set_goal-authored one.
-	gl.al.afterGoalRecordWrite(gl.sessionID, criteriaJSON, "")
+	if err := gl.al.afterGoalRecordWrite(gl.sessionID, criteriaJSON, ""); err != nil {
+		return true, true, gl.al.reportGoalReadError(gl.sessionID, "goal record delivery (record saved)", err)
+	}
 
 	// ADR-082 D9 (review CR8): this write never ran the set_goal tool, and
 	// under D9 the record card renders ONLY from a set_goal call's own
@@ -512,18 +518,23 @@ func (al *AgentLoop) applyGoalMarkerRestate(
 	// priorRecordJSON above is the PRIOR record (this function's rec param
 	// was read before the store write above) — same diff-summary shape
 	// set_goal's own update path logs.
-	al.afterGoalRecordWrite(sessionID, criteriaJSON, goalRecordDiffAdapter(priorRecordJSON, criteriaJSON))
+	if err := al.afterGoalRecordWrite(sessionID, criteriaJSON, goalRecordDiffAdapter(priorRecordJSON, criteriaJSON)); err != nil {
+		return al.reportGoalReadError(sessionID, "updated goal record delivery (record saved)", err)
+	}
 	// ADR-082 D9 (review CR8): anchor the amended record as a synthetic
 	// set_goal(mode:update) call at THIS position — the amend card renders
 	// where the amendment happened (D9), exactly as a tool-authored update
 	// does. The chat routing was recorded at activation (recordGoalRouting);
 	// the agent falls back to the session's active agent when the route
 	// carries none.
-	route := goalTriggers().routeFor(sessionID)
+	route, readErr := goalTriggers().routeFor(sessionID)
+	if readErr != nil {
+		return al.reportGoalReadError(sessionID, "updated goal record anchoring (record saved)", readErr)
+	}
 	anchorAgentID := route.agentID
 	if anchorAgentID == "" {
 		if meta, merr := store.GetMeta(sessionID); merr == nil && meta != nil {
-			anchorAgentID = meta.ActiveAgentID
+			anchorAgentID = meta.AgentID
 		}
 	}
 	_, _ = al.anchorGoalRecordInTranscript(goalRecordAnchor{
@@ -541,7 +552,7 @@ func (al *AgentLoop) applyGoalMarkerRestate(
 // goalStatusReply formats `/goal status`'s deterministic reply (FR-069/
 // FR-029): condition, elapsed wall-clock, rounds_used/bound, cumulative
 // token spend (visible-only, NFR-1 — never used to stop the loop), latest
-// judge reason, active loops: N/cap, and — REWRITTEN by ADR-088 (E10/S-39)
+// goal reason, active loops: N/cap, and — REWRITTEN by ADR-088 (E10/S-39)
 // — the record summary (statement + criteria + DoD) once the working agent
 // has registered one via `set_goal`. The old pending-draft/clarification
 // branches are gone (there is no more pending state to report); an
@@ -549,7 +560,10 @@ func (al *AgentLoop) applyGoalMarkerRestate(
 // until its first move registers a record (D3's transient state), so status
 // simply omits the record summary until then.
 func (al *AgentLoop) goalStatusReply(sessionID string, store *session.UnifiedStore) string {
-	rec := activeGoalForSession(sessionID)
+	rec, err := activeGoalForSession(sessionID)
+	if err != nil {
+		return al.reportGoalReadError(sessionID, "goal status", err)
+	}
 	if rec == nil {
 		return "No active goal on this session. Use `/goal <condition>` to start one."
 	}
@@ -560,7 +574,7 @@ func (al *AgentLoop) goalStatusReply(sessionID string, store *session.UnifiedSto
 	}
 	reason := rec.LatestReason
 	if reason == "" {
-		reason = "(no round completed yet)"
+		reason = "(no reason recorded)"
 	}
 	// Token spend stays a SESSION statistic (session.UnifiedMeta.Stats) —
 	// ADR-086 relocated the goal's own fields onto the goal record, not the
@@ -573,7 +587,7 @@ func (al *AgentLoop) goalStatusReply(sessionID string, store *session.UnifiedSto
 	}
 	status := fmt.Sprintf(
 		"Goal: %s\nElapsed: %s\nRounds: %d/%d\nToken spend (session, visible-only): %d tokens ($%.4f)\n"+
-			"Latest judge reason: %s\nActive loops: %d/%d",
+			"Latest goal reason: %s\nActive loops: %d/%d",
 		rec.Prompt, elapsed, rec.Round, rec.MaxRounds,
 		tokensTotal, cost, reason, active, capN,
 	)

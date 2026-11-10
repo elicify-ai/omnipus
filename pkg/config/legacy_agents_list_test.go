@@ -139,15 +139,16 @@ func TestConfigClone_EmptyAgentsList(t *testing.T) {
 }
 
 // adr090SeededRoster is ADR-090 §2.0's stable roster identities, written out
-// here as the spec-derived oracle for the mirror tests below: the four chat
-// colleagues (mia/jim/ava/admin), the three staff (planner/researcher/worker),
+// here as the spec-derived oracle for the mirror tests below: the chat
+// colleagues mia/jim plus the Omnipus system agent (omnipus-system-agent
+// FR-008 retires Ava and Admin), the three staff (planner/researcher/worker),
 // and the two hidden System Agents (judge/plansupervisor). Ray, Max and
 // Explorer are explicitly NOT seeded (ADR-090 §2.0 "Out of the default box").
 // Kept literal — pkg/config cannot import pkg/coreagent (import cycle) — but
 // sourced from the ADR's roster table, NOT copied off coreAgentIDs, so the
 // two can disagree and these tests are what notices.
 var adr090SeededRoster = []string{
-	"mia", "jim", "ava", "admin",
+	"mia", "jim", "omnipus",
 	"planner", "researcher", "worker",
 	"judge", "plansupervisor",
 }
@@ -201,7 +202,8 @@ func TestStripAgentsListOnDisk_ClassifiesEverySeededID(t *testing.T) {
 // Classifying them as core would log the "auto-reseeded moments after boot"
 // WARN, which is false for a retired identity.
 func TestStripAgentsListOnDisk_RetiredIDsAreCustomNotCore(t *testing.T) {
-	retired := []string{"ray", "max", "explorer"}
+	// ava and admin: retired by omnipus-system-agent FR-008.
+	retired := []string{"ray", "max", "explorer", "ava", "admin"}
 	for _, id := range retired {
 		t.Run(id, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "config.json")

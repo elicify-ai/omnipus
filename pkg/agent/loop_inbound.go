@@ -13,15 +13,19 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/constants"
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/routing"
+	"github.com/elicify-ai/omnipus/pkg/secretrequest"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/utils"
+	"github.com/google/uuid"
 )
 
 // gatewayPrincipal returns the WS-authenticated gateway principal that an
@@ -85,6 +89,7 @@ func scheduledJobContextFrom(ctx context.Context) (ScheduledJobInfo, bool) {
 
 type continuationTarget struct {
 	SessionKey string
+	SessionID  string
 	Channel    string
 	ChatID     string
 	// WorkspaceID is the workspace this continuation's turn should run inside
@@ -110,6 +115,7 @@ func (al *AgentLoop) buildContinuationTarget(msg bus.InboundMessage) (*continuat
 
 	return &continuationTarget{
 		SessionKey:  resolveScopeKey(route, msg.SessionKey),
+		SessionID:   msg.SessionID,
 		Channel:     msg.Channel,
 		ChatID:      msg.ChatID,
 		WorkspaceID: al.resolveWorkspaceIDForContinuation(msg),
@@ -342,49 +348,37 @@ func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.Resolv
 		return routing.ResolvedRoute{AgentID: pinned, SessionKey: sk}, agent, nil
 	}
 
-	// Explicit agent_id in message metadata takes top priority. The user
-	// switching the SPA dropdown to a different agent is an authoritative
-	// re-targeting that must win over any prior handoff routing override —
-	// otherwise a Mia → Ray handoff persists silently after the user
-	// explicitly switches back to Jim, and Jim's UI receives Ray's replies.
-	// The override is still consulted below for messages without an
-	// explicit agent_id (e.g. channel inputs that don't track agent state).
-	if explicitID := inboundMetadata(msg, "agent_id"); explicitID != "" {
-		if agent, ok := registry.GetAgent(explicitID); ok {
-			// A worker is a delegation-only labor tier — never a chat target.
-			// An inbound message that explicitly addresses a worker (e.g. a stale
-			// SPA dropdown value or a crafted channel payload) must NOT let the
-			// worker answer as a live persona. Degrade to the normal routing
-			// cascade, which resolves a chat-target default. Do not delete any
-			// handoff pin here — falling through preserves an existing chat-target
-			// override if one is set.
+	// Explicit agent_id in message metadata names the agent for a new chat.
+	// For an existing session it may only name that session's canonical
+	// owner (§6.4): a different agent is refused, naming both, never
+	// re-targeted (CHECK F02).
+	if rawExplicitID := inboundMetadata(msg, "agent_id"); rawExplicitID != "" {
+		// CHECK F01: a case spelling of the system agent is the system agent.
+		explicitID := strings.TrimSpace(rawExplicitID)
+		if strings.EqualFold(explicitID, string(coreagent.IDOmnipus)) {
+			explicitID = string(coreagent.IDOmnipus)
+		}
+		lookupID := explicitID
+		if owner := al.existingSessionOwner(msg); owner != "" {
+			// Only the WU-1 system owner keeps case-fold matching (#1330).
+			omnipusOwner := explicitID == string(coreagent.IDOmnipus) && strings.EqualFold(owner, explicitID)
+			if owner != explicitID && !omnipusOwner {
+				logger.WarnCF("agent", "Explicit agent_id conflicts with the session owner; refused",
+					map[string]any{"agent_id": explicitID, "owner": owner, "session_id": msg.SessionID})
+				return routing.ResolvedRoute{}, nil, fmt.Errorf(
+					"this chat belongs to %s; a message naming %s cannot run in it", owner, explicitID)
+			}
+			// A matching id runs under the owner's stored spelling.
+			explicitID = owner
+		}
+		if agent, ok := registry.GetAgent(lookupID); ok {
+			// A worker is a delegation-only labor tier — never a chat target,
+			// and there is no default agent to fall back to (FR-120): refuse.
 			if agent.IsWorker() {
-				logger.WarnCF(
-					"agent",
-					"Explicit agent_id references a worker (not a chat target); ignoring and falling back to default route",
-					map[string]any{
-						"agent_id":   explicitID,
-						"session_id": msg.SessionID,
-						"reason":     "worker is invoked via delegation, not as a chat target",
-					},
-				)
-				// Fall through to the handoff-override / ResolveRoute cascade below.
+				logger.WarnCF("agent", "Explicit agent_id references a worker (not a chat target); refused",
+					map[string]any{"agent_id": explicitID, "session_id": msg.SessionID})
+				return routing.ResolvedRoute{}, nil, fmt.Errorf("agent %q is a worker and cannot be a chat target", explicitID)
 			} else {
-				// Clear stale handoff override only when the explicit target differs from
-				// the current override. If the user selects the same agent that the handoff
-				// already set, clearing the override would incorrectly reset routing state.
-				curStr, curOK := "", false
-				cur, ok := al.sessionActiveAgent.Load(sessionScopeKey(msg))
-				if ok {
-					curStr, curOK = cur.(string)
-					if !curOK {
-						logger.ErrorCF("agent", "sessionActiveAgent: invariant violated — unexpected value type, clearing stale entry",
-							map[string]any{"session_id": msg.SessionID, "got_type": fmt.Sprintf("%T", cur)})
-					}
-				}
-				if !ok || !curOK || curStr != explicitID {
-					al.sessionActiveAgent.Delete(sessionScopeKey(msg))
-				}
 				logger.InfoCF("agent", "Routed to explicit agent (dropdown)", map[string]any{
 					"agent_id":   explicitID,
 					"session_id": msg.SessionID,
@@ -402,72 +396,21 @@ func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.Resolv
 		}
 	}
 
-	// Check session/chat-scope handoff override. Only reached when the message
-	// carries no explicit agent_id. sessionScopeKey prevents non-webchat
-	// channels without a SessionID from collapsing into a single global bucket.
-	{
-		scopeKey := sessionScopeKey(msg)
-		if activeAgent, ok := al.sessionActiveAgent.Load(scopeKey); ok {
-			agentID, agentIDOK := activeAgent.(string)
-			if !agentIDOK {
-				logger.ErrorCF("agent", "sessionActiveAgent: invariant violated — unexpected value type, clearing stale entry",
-					map[string]any{"session_id": msg.SessionID, "got_type": fmt.Sprintf("%T", activeAgent)})
-				al.sessionActiveAgent.Delete(scopeKey)
-			}
-			if agentIDOK && agentID != "" {
-				if agent, ok := registry.GetAgent(agentID); ok {
-					// A worker must never be a live chat target. A pin that points at
-					// a worker is stale/illegitimate (handoff now rejects worker
-					// targets, but a pin created before this guard, or via another
-					// path, could still exist). Drop the stale pin and fall through
-					// to the normal ResolveRoute cascade so a chat-target default
-					// answers instead of the worker.
-					if agent.IsWorker() {
-						logger.WarnCF(
-							"agent",
-							"Session handoff pin references a worker (not a chat target); clearing stale pin and falling back to default route",
-							map[string]any{
-								"session_id": msg.SessionID,
-								"agent_id":   agentID,
-								"reason":     "worker is invoked via delegation, not as a chat target",
-							},
-						)
-						al.sessionActiveAgent.Delete(scopeKey)
-					} else {
-						logger.InfoCF("agent", "Session handoff override active", map[string]any{
-							"session_id": msg.SessionID,
-							"agent_id":   agentID,
-						})
-						sk := agentSessionKey(agentID, msg)
-						return routing.ResolvedRoute{AgentID: agentID, SessionKey: sk}, agent, nil
-					}
-				} else {
-					// Agent was deleted after the override was set — clean up and fall through.
-					al.sessionActiveAgent.Delete(scopeKey)
-				}
-			}
-		}
+	// §6.4: a message addressed to an existing session runs under that
+	// session's canonical owner — never a default agent.
+	if msg.SessionID != "" && msg.Channel != "system" {
+		return al.routeToSessionOwner(registry, msg)
 	}
 
 	instanceID := inboundInstanceID(msg)
 	identity := al.resolveInboundIdentity(instanceID)
-
-	// ADR-029 FR-012/FR-014: set BoundInstance=true when the instance is
-	// workspace-bound AND carries an agent-kind identity. Both conditions must
-	// hold: a bare identity without a workspace (legacy routing) must not trigger
-	// the drift-drop guard, and a workspace binding without an agent identity
-	// cannot be drift-checked (nothing to validate). The drift guard inside
-	// ResolveRoute then enforces that a workspace-bound instance never falls back
-	// to the global default when its agent is unresolvable.
-	var boundInstance bool
-	if identity != nil && strings.ToLower(strings.TrimSpace(identity.Kind)) == "agent" {
-		if cfg := al.GetConfig(); cfg != nil {
-			if inst, ok := cfg.Channels[instanceID]; ok && inst.WorkspaceID != "" {
-				boundInstance = true
-			}
+	cfg := al.GetConfig()
+	bound := false
+	if identity != nil && strings.ToLower(strings.TrimSpace(identity.Kind)) == "agent" && cfg != nil {
+		if inst, ok := cfg.Channels[instanceID]; ok && strings.TrimSpace(inst.WorkspaceID) != "" {
+			bound = true
 		}
 	}
-
 	route := registry.ResolveRoute(routing.RouteInput{
 		Channel:       msg.Channel,
 		AccountID:     inboundMetadata(msg, metadataKeyAccountID),
@@ -477,50 +420,40 @@ func (al *AgentLoop) resolveMessageRoute(msg bus.InboundMessage) (routing.Resolv
 		TeamID:        inboundMetadata(msg, metadataKeyTeamID),
 		InstanceID:    instanceID,
 		Identity:      identity,
-		BoundInstance: boundInstance,
+		BoundInstance: bound,
 	})
-
-	// ADR-029 FR-012/FR-028: a drift drop means the bound agent is unresolvable.
-	// Do NOT call GetDefaultAgent — enter the FR-015 unroutable path directly.
-	// The counter increment and audit event are emitted ONCE at the processMessage
-	// rejection point (the single true drop site), NOT here.  resolveMessageRoute
-	// is a side-effect-free resolver: multiple call sites (resolveSteeringTarget,
-	// buildContinuationTarget) invoke it on the same message, so any emission here
-	// would fire multiple times per inbound message and corrupt the FR-028/MAJ-003
-	// counter and audit trail.  Return the route with Drop=true so the caller can
-	// detect the drift condition and emit the structured event exactly once.
+	// FR-121: resolveMessageRoute is side-effect-free (several callers resolve
+	// the same message); the drop is logged, audited and shown on the
+	// channel exactly once, at processMessage's rejection point.
+	boundWS, intended := "", ""
+	if bound {
+		boundWS = strings.TrimSpace(cfg.Channels[instanceID].WorkspaceID)
+		intended = strings.TrimSpace(identity.ID)
+	}
+	dropErr := func(reason string) *routeDropError {
+		return &routeDropError{instanceID: instanceID, reason: reason, bound: bound, workspaceID: boundWS, intendedAgent: intended}
+	}
 	if route.Drop {
-		intendedAgent := ""
-		if identity != nil {
-			intendedAgent = strings.TrimSpace(identity.ID)
-		}
-		logger.WarnCF(
-			"agent",
-			"Bound-instance drift drop: configured agent unresolvable; message rejected (ADR-029 FR-012)",
-			map[string]any{
-				"instance_id": instanceID,
-				"channel":     msg.Channel,
-				"chat_id":     msg.ChatID,
-				"matched_by":  route.MatchedBy,
-			},
-		)
-		return route, nil, fmt.Errorf("no agent available for route (agent_id=%s)", intendedAgent)
+		return route, nil, dropErr(routeDropReason(route, identity))
+	}
+	agent, ok := registry.GetAgent(route.AgentID)
+	if !ok || agent == nil {
+		route.Drop = true
+		return route, nil, dropErr(fmt.Sprintf("bound agent %s not found", route.AgentID))
+	}
+	if reason := al.boundMemberRefusal(boundWS, agent.ID); reason != "" {
+		route.Drop = true
+		return route, nil, dropErr(reason)
 	}
 
-	agent, ok := registry.GetAgent(route.AgentID)
-	if !ok {
-		agent = registry.GetDefaultAgent()
-	}
-	if agent == nil {
-		// FR-015: log unroutable message with structured context before rejecting.
-		logger.WarnCF("agent", "Unroutable message rejected — no matching agent and no default",
-			map[string]any{
-				"channel":        msg.Channel,
-				"sender_id":      msg.Sender.CanonicalID,
-				"chat_id":        msg.ChatID,
-				"resolved_agent": route.AgentID,
-			})
-		return routing.ResolvedRoute{}, nil, fmt.Errorf("no agent available for route (agent_id=%s)", route.AgentID)
+	// A message addressed to a concrete chat session runs under that session's
+	// own key, exactly as the pinned, explicit-agent and handoff branches above
+	// already do. The routing cascade's key can be agent-level ("agent:<id>:main"),
+	// which would make two chats of the same agent share one turn-registry slot
+	// and one history bucket; the per-session admission keys on the session id
+	// and relies on the turn registry being per session too.
+	if msg.SessionID != "" {
+		route.SessionKey = agentSessionKey(agent.ID, msg)
 	}
 
 	return route, agent, nil
@@ -531,18 +464,6 @@ func resolveScopeKey(route routing.ResolvedRoute, msgSessionKey string) string {
 		return msgSessionKey
 	}
 	return route.SessionKey
-}
-
-// sessionScopeKey returns a stable bucket key for a message.
-// When SessionID is set, returns "session:<sessionID>".
-// When SessionID is empty, returns "chat:<channel>:<chatID>" so that
-// messages from non-webchat channels that haven't been assigned a session yet
-// do not all collapse into a single "session:" bucket.
-func sessionScopeKey(msg bus.InboundMessage) string {
-	if msg.SessionID != "" {
-		return "session:" + msg.SessionID
-	}
-	return "chat:" + msg.Channel + ":" + msg.ChatID
 }
 
 // agentSessionKey builds the per-agent session key combining agentID with the
@@ -600,7 +521,7 @@ func (al *AgentLoop) processSystemMessage(
 			msg.Channel,
 		)
 	}
-	if msg.AsyncTranscriptSessionID != "" && inboundMetadata(msg, "steer_message_id") != "" {
+	if msg.AsyncTranscriptSessionID != "" && inboundMetadata(msg, "steer_message_id") != "" && !ordinaryGoalFollowUp(msg) {
 		return al.processSteeredSystemWake(ctx, msg)
 	}
 
@@ -690,14 +611,21 @@ func (al *AgentLoop) processSystemMessage(
 	// session's data. Falls back to the unscoped main key only when no
 	// origin session is known (a system message with no AsyncNotifier
 	// origin), matching the pre-fix behavior for that narrower case.
-	sessionKey := routing.BuildAgentMainSessionKey(agent.ID)
-	if transcriptSessionID != "" {
+	//
+	// DEL-10 step 0: a system message with NO origin session no longer borrows an
+	// agent-wide "agent:<id>:main" history bucket (in the one shared store that
+	// name would be a session directory literally called "agent:<id>:main", and
+	// ":" is not a legal Windows file name character). It runs without session
+	// history, under a one-off scope key that is never persisted.
+	noHistory := transcriptSessionID == ""
+	sessionKey := fmt.Sprintf("agent:%s:system:%s", agent.ID, uuid.NewString())
+	if !noHistory {
 		sessionKey = fmt.Sprintf("agent:%s:session:%s", agent.ID, transcriptSessionID)
 	}
 
 	workspaceID := al.resolveSystemMessageWorkspaceID(msg, transcriptStore, transcriptSessionID)
 
-	return al.runAgentLoop(ctx, agent, processOptions{
+	opts := processOptions{
 		SessionKey: sessionKey,
 		Channel:    originChannel,
 		ChatID:     originChatID,
@@ -721,7 +649,12 @@ func (al *AgentLoop) processSystemMessage(
 		TranscriptSessionID:  transcriptSessionID,
 		TranscriptStore:      transcriptStore,
 		WorkspaceID:          workspaceID,
-	})
+		NoHistory:            noHistory,
+	}
+	if ordinaryGoalFollowUp(msg) {
+		return al.runOrdinaryGoalFollowUp(ctx, agent, msg, opts)
+	}
+	return al.runAgentLoop(ctx, agent, opts)
 }
 
 // resolveSystemMessageAgent resolves the TRUE originating agent for a system
@@ -731,12 +664,9 @@ func (al *AgentLoop) processSystemMessage(
 //
 // FIX 5d (#1): resolve the TRUE originating agent when the message carries
 // one (AsyncNotifier.Notify sets AsyncOriginAgentID for an async tool/
-// delegate result) — never guess GetDefaultAgent() when the real producer
-// is known. This is the confirmed, exact cause of a live "Worker vs Jim"
-// speaker-attribution flip: an async result from a non-default agent used
-// to be silently reattributed to whichever agent happens to be default.
-// GetDefaultAgent() remains the fallback ONLY for messages with no async
-// origin at all — a genuine last resort, not the primary path.
+// delegate result). A message with no async origin at all is discarded with
+// an error log and an audit entry (omnipus-system-agent FR-131): there is no
+// default agent to guess.
 //
 // UAT E-3: a NAMED origin that no longer resolves (the agent was deleted)
 // is NOT re-homed onto the default agent any more. That fallback handed a
@@ -749,8 +679,7 @@ func (al *AgentLoop) processSystemMessage(
 //
 // discarded=true means the message was fully handled here (or could not be
 // routed to any agent, but is not itself an error — the caller returns
-// ("", nil) either way); a non-nil error means processSystemMessage must
-// fail outright (no default agent configured at all).
+// ("", nil) either way).
 func (al *AgentLoop) resolveSystemMessageAgent(msg bus.InboundMessage) (agent *AgentInstance, discarded bool, err error) {
 	if msg.AsyncOriginAgentID != "" {
 		named, ok := al.GetRegistry().GetAgent(msg.AsyncOriginAgentID)
@@ -790,12 +719,35 @@ func (al *AgentLoop) resolveSystemMessageAgent(msg bus.InboundMessage) (agent *A
 		agent = named
 	}
 	if agent == nil {
-		agent = al.GetRegistry().GetDefaultAgent()
-	}
-	if agent == nil {
-		return nil, false, fmt.Errorf("no default agent for system message")
+		// FR-131 / §6.4: no addressable origin — discard loudly, never hand
+		// the message to a default agent.
+		al.recordSystemMessageDiscard(msg)
+		return nil, true, nil
 	}
 	return agent, false, nil
+}
+
+// systemMessageNoOriginReason is the visible discard reason for a system
+// message with no addressable originating agent (FR-131).
+const systemMessageNoOriginReason = "system message without an addressable agent"
+
+// recordSystemMessageDiscard logs the discard at error level and audits it once.
+func (al *AgentLoop) recordSystemMessageDiscard(msg bus.InboundMessage) {
+	logger.ErrorCF("agent", "System message discarded: "+systemMessageNoOriginReason, map[string]any{
+		"channel": msg.Channel, "chat_id": msg.ChatID, "sender_id": msg.Sender.CanonicalID,
+		"reason": systemMessageNoOriginReason,
+	})
+	if al.auditLogger == nil {
+		return
+	}
+	if err := al.auditLogger.Log(&audit.Entry{
+		Event:    audit.EventSystemMessageDiscarded,
+		Decision: audit.DecisionDeny,
+		Details:  map[string]any{"channel": msg.Channel, "chat_id": msg.ChatID, "reason": systemMessageNoOriginReason},
+	}); err != nil {
+		logger.ErrorCF("agent", "audit write failed for a discarded system message",
+			map[string]any{"error": err.Error()})
+	}
 }
 
 // resolveSystemMessageTranscript resolves the originating turn's transcript
@@ -873,11 +825,12 @@ func (al *AgentLoop) resolveSystemMessageWorkspaceID(msg bus.InboundMessage, tra
 }
 
 // processSteeredSystemWake reconstructs a durable steering-session turn from
-// its lifecycle record. The consumed marker is the idempotency boundary: a
-// replayed wake is acknowledged without starting another turn.
-func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.InboundMessage) (string, error) {
+// its lifecycle record. Ordinary inbox wakes use their consumed marker;
+// secret-only direct-bus wakes use the mandatory request-id claim instead.
+func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.InboundMessage) (resp string, runErr error) {
 	sessionID := msg.AsyncTranscriptSessionID
 	messageID := inboundMetadata(msg, "steer_message_id")
+	defer al.releaseWakePublication(sessionID, messageID)
 	generation, err := strconv.Atoi(inboundMetadata(msg, "steer_generation"))
 	if err != nil || generation < 0 {
 		return "", fmt.Errorf("steer: wake %q has invalid generation", messageID)
@@ -890,22 +843,53 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 	if err != nil {
 		return "", fmt.Errorf("steer: wake: load %q: %w", sessionID, err)
 	}
+	if al.steering != nil && !rec.Terminal() {
+		al.steering.reopenScopeForGeneration(sessionID, generation)
+	}
 	store := al.ResolveSessionStore(sessionID)
 	if store == nil {
 		return "", fmt.Errorf("steer: wake: transcript store for %q is not available", sessionID)
 	}
-	marker := "consumed " + messageID
+	rec, generation, secretHandled, secretErr := al.prepareSecretSteeredWake(ctx, &msg, rec, generation)
+	if secretErr != nil || secretHandled {
+		return "", secretErr
+	}
+	secretID := inboundMetadata(msg, secretResumeMetadataKey)
+	marker := ""
+	if secretID == "" {
+		marker = "consumed " + messageID
+	}
 	entries, readErr := store.ReadTranscript(sessionID)
 	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
 		return "", fmt.Errorf("steer: wake: read transcript: %w", readErr)
 	}
 	for _, entry := range entries {
-		if entry.Content == marker {
-			if inbox := al.GetMessageInboxStore(); inbox != nil {
-				_ = inbox.Ack(sessionID, []string{messageID})
+		if (secretID == "" && entry.Content == marker) || (secretID != "" && entry.ID == secretrequest.ResumeEntryID(secretID)) {
+			if secretID == "" {
+				if inbox := al.GetMessageInboxStore(); inbox != nil {
+					_ = inbox.Ack(sessionID, []string{messageID})
+				}
 			}
 			return "", nil
 		}
+	}
+
+	saved, consumed, savedErr := al.prepareSavedSystemWake(ctx, sessionID, messageID, rec.AgentID)
+	if savedErr != nil || consumed {
+		return "", savedErr
+	}
+	if held, holdErr := al.savedGoalWakeHeld(msg, sessionID, messageID, saved); held || holdErr != nil {
+		return "", holdErr
+	}
+
+	// D6/D7: a stopped session (landed, or with its current-generation Stop
+	// in flight) does no compute until it is explicitly resumed. The wake
+	// is neither consumed nor acknowledged: an inbox-backed report stays
+	// pending. Goal follow-ups may have no inbox row, so their unretained
+	// content must be operator-visible without logging the body. Steered
+	// records are also refused by the admission reservation below.
+	if rec.SteeredBy == nil && (rec.State == session.LifecycleStopped || lifecycleInFlightStopFence(rec)) {
+		return "", al.logStoppedSystemWake(msg)
 	}
 
 	ts, err := al.reconstructSteeredTurn(rec, &steer.WakeInput{MessageID: messageID, Generation: generation})
@@ -921,7 +905,7 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 	//     RIGHT NOW (D9; founder round 9, "live turns only"). A woken turn
 	//     that never called tryAdmit ran entirely outside the gate, so
 	//     max_parallel_agents counted dispatches rather than work.
-	//   - I-6's reservation: commitSteeredDispatchState re-runs
+	//   - I-6's reservation: commitSteeredExecutionState re-runs
 	//     reserveDispatch against the record's LIVE tail inside one atomic
 	//     read-modify-write. steer_audience.go::Deliver's FR-B-013 check
 	//     reads the recipient's record at SEND time; a Stop landing between
@@ -933,28 +917,106 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 	// a human's own chat, not a delegated worker; it is neither gated nor
 	// state-written by this path.
 	release := func() {}
+	gate := al.steerAdmission()
+	entryLocked := false
+	defer func() {
+		if entryLocked {
+			gate.entryMu.Unlock()
+		}
+	}()
+	var claim executionClaim
 	if rec.SteeredBy != nil {
-		gate := al.steerAdmission()
-		admitted, _, _ := gate.tryAdmit(sessionID, generation)
+		gate.entryMu.Lock()
+		entryLocked = true
+		// Another distinct wake for this queued admission is input, not a new
+		// owner. Keep the queue locked through the claim-bound append so a
+		// promotion cannot consume the pending list before this input lands.
+		gate.mu.Lock()
+		for i := range gate.queue {
+			entry := &gate.queue[i]
+			queuedClaim := entry.executionClaim()
+			if entry.generation == generation && queuedClaim.matches(rec) {
+				appendErr := al.commitQueuedSystemWakeLocked(lifecycle, entry, generation, messageID, msg.Content, rec.AgentID, saved)
+				gate.mu.Unlock()
+				return "", appendErr
+			}
+		}
+		gate.mu.Unlock()
+		if duplicateErr := al.checkNewAdmission(rec); duplicateErr != nil {
+			return "", duplicateErr
+		}
+		// D2 round-4 R4-MAJ-001: this wake is an admission, so it mints its
+		// run identity and stamps it durably BEFORE the gate enqueues it —
+		// the same order dispatchSteeredSessionWithReservation owes. A
+		// promotion validates this wake's SAME durable id; it never invents
+		// a new owner for a queued admission.
+		wakeRunID := freshRunID()
+		wakeBootSeq := al.bootEpochFor()
+		if stampErr := stampAdmissionExecution(lifecycle, sessionID, generation, wakeRunID, wakeBootSeq, rec.ExecutionID); stampErr != nil {
+			return "", fmt.Errorf("steer: wake: %w", stampErr)
+		}
+		if identityErr := ts.setExecutionIdentity(wakeRunID, wakeBootSeq); identityErr != nil {
+			return "", fmt.Errorf("steer: wake: %w", identityErr)
+		}
+		claim = executionClaim{SessionID: sessionID, Generation: generation, RunID: wakeRunID, BootSeq: wakeBootSeq}
+		if inboundMetadata(msg, "goal_reminder") == "true" && msg.Sender.CanonicalID == goalLoopFollowUpSenderID {
+			noteGoalReminderExecution(inboundMetadata(msg, "goal_id"), wakeRunID)
+			noteGoalCheckInExecution(inboundMetadata(msg, "goal_id"), messageID, claim)
+		}
+		admitted, _, _ := gate.tryAdmitRun(sessionID, generation, wakeRunID, wakeBootSeq)
 		if !admitted {
-			// At the cap. The wake entry is deliberately left UNCONSUMED —
-			// no marker, no acknowledgement — so the turn the FIFO promotion
-			// eventually starts (admission.go::drainSteerQueue ->
-			// dispatchSteeredSessionReserved) still finds it pending.
-			if _, commitErr := commitSteeredDispatchState(lifecycle, sessionID, generation, session.LifecycleQueued); commitErr != nil {
-				gate.removeQueued(sessionID, generation)
+			// At the cap. Do not record a consumed marker or acknowledge any
+			// inbox entry yet; this wake must reach the promoted turn. System
+			// wakes need not have an inbox entry, so append their content to
+			// the lifecycle record in the same durable mutation that queues
+			// the session. The promotion consumes the whole ordered list before
+			// starting; otherwise it would replay the launch instruction or
+			// lose an earlier wake when a second one arrives.
+			if commitErr := al.commitQueuedSystemWakeInput(lifecycle, claim, generation, messageID, msg.Content, rec.AgentID, saved); commitErr != nil {
+				gate.removeQueuedExecution(claim)
 				return "", commitErr
 			}
 			return "", nil
 		}
-		release = func() { al.drainSteerQueue(sessionID, generation) }
+		release = func() { al.drainSteerQueue(claim) }
 	}
 
-	ts.opts.UserMessage = msg.Content
-	ts.userMessage = msg.Content
+	// F2: an ordinary root woken by a hand-back runs as an admitted
+	// ordinary execution (fresh identity, running state, its own
+	// disposition), like any other entry, so a Stop selects and lands it. A
+	// finished root starts its next round; a stopped one was held above.
+	var rootExecution *executionDisposition
+	if rec.SteeredBy == nil {
+		d, admitted, admitErr := al.admitOrdinaryRootWake(ctx, msg, ts)
+		if admitErr != nil {
+			return "", admitErr
+		}
+		if admitted {
+			rootExecution = d
+			// The canonical consuming session owns the reminder on both worker
+			// and direct replay entry. Run after release/checked settlement.
+			defer al.remindUnansweredRequests(sessionID)
+			defer func() { runErr = errors.Join(runErr, al.finishRoomTurn(ts.opts.roomCost, runErr)) }()
+			release = func() { al.finishOrdinaryWakeExecution(msg, d) }
+		}
+	}
+
+	applySteeredSystemWakeMessage(ts, msg)
 	if !al.registerTurnIfAbsent(ts) {
 		release()
 		return "", steer.ErrStaleGeneration
+	}
+	if rec.SteeredBy != nil {
+		if attachErr := al.attachSteeredDisposition(ts, claim); attachErr != nil {
+			al.activeTurnStates.CompareAndDelete(sessionID, ts)
+			release()
+			return "", attachErr
+		}
+		release = func() { _ = al.finishExecutionDisposition(ts.opts.executionDisposition) }
+	}
+	if entryLocked {
+		gate.entryMu.Unlock()
+		entryLocked = false
 	}
 	if turnRegisteredTestHook != nil {
 		turnRegisteredTestHook(sessionID, ts)
@@ -967,33 +1029,21 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 		if dispatchStateWriteTestHook != nil {
 			dispatchStateWriteTestHook(sessionID, generation)
 		}
-		running, commitErr := commitSteeredDispatchState(lifecycle, sessionID, generation, session.LifecycleRunning)
+		running, commitErr := commitSteeredExecutionState(lifecycle, claim, session.LifecycleRunning, "")
 		if commitErr != nil {
 			abort()
 			return "", commitErr
 		}
-		// commitSteeredDispatchState returns post-write truth (edge, goal
+		// commitSteeredExecutionState returns post-write truth (edge, goal
 		// reference, created-at) — the same reason runDispatchedSteeredTurn
 		// (steer_launcher.go) uses its own commit's return value rather than
 		// its stale pre-write snapshot for the completion disposition below.
 		rec = running
 	}
 
-	// The consumed marker and the acknowledgement are written only once the
-	// turn is certain to run: a wake refused above must leave its entry
-	// pending for I-6's Revive (FR-B-013), never swallow it.
-	if appendErr := store.AppendTranscriptStrict(sessionID, session.TranscriptEntry{
-		ID: "consumed-" + messageID, Type: session.EntryTypeSystem, Role: "system",
-		Content: marker, AgentID: rec.AgentID, Timestamp: time.Now().UTC(),
-	}); appendErr != nil {
+	if proceed, consumeErr := al.consumeAdmittedWake(ctx, ts, store, sessionID, messageID, secretID, marker, rec.AgentID, saved); consumeErr != nil || !proceed {
 		abort()
-		return "", fmt.Errorf("steer: wake: append consumed marker: %w", appendErr)
-	}
-	if inbox := al.GetMessageInboxStore(); inbox != nil {
-		if ackErr := inbox.Ack(sessionID, []string{messageID}); ackErr != nil {
-			abort()
-			return "", fmt.Errorf("steer: wake: acknowledge %q: %w", messageID, ackErr)
-		}
+		return "", consumeErr
 	}
 	defer release()
 
@@ -1002,16 +1052,115 @@ func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.Inbou
 	// owes the SAME post-turn disposition (completeSteeredTurn/
 	// finishSteeredGoalTurn), or a successfully woken session ends its turn
 	// still marked `running` forever (nothing else ever calls completion for
-	// it), stalling its parent's quiet-subtree check indefinitely. Finding E
-	// (MEDIUM): the same shared helper applies the edge's configured
-	// timeout to THIS re-entry too — D9 scopes it to "the session's lifetime
-	// across re-entries", not just the first dispatch.
-	runCtx, cancel := steeredTurnRunContext(ctx, rec)
-	defer cancel()
-	result, err := al.runTurn(runCtx, ts)
+	// it), stalling its parent's quiet-subtree check indefinitely. No
+	// deadline is applied to this re-entry: a steered session has no time
+	// limit (issue #1306).
+	runCtx := ctx
+	// Same body dispatch as the first-run path: an external-CLI target is
+	// driven through the shared runner on a wake too, never the native loop.
+	result, err := al.runSteeredTurnBody(runCtx, rec, ts)
+	ts, result, err = al.drainSteeredTurn(runCtx, rec, ts, result, err)
 	al.disposeSteeredTurnResult(ts, rec, generation, result, err)
+	rootExecution.recordTurnOutcome(err)
 	return result.finalContent, err
 }
+
+func applySteeredSystemWakeMessage(ts *turnState, msg bus.InboundMessage) {
+	ts.opts.UserMessage = msg.Content
+	ts.userMessage = msg.Content
+	// The goal loop's own follow-up (keeper reminder, deferred steer) keeps
+	// its origin, so the woken turn's claim reaches the goal loop (D1).
+	if msg.Sender.CanonicalID == goalLoopFollowUpSenderID {
+		ts.opts.SenderID = goalLoopFollowUpSenderID
+		if inboundMetadata(msg, "goal_reminder") == "true" {
+			ts.opts.goalReminderGoalID = inboundMetadata(msg, "goal_id")
+		}
+	}
+}
+
+// consumeAdmittedWake is processSteeredSystemWake's consumption step, run
+// only once admission is certain. A secret-only wake has no inbox row: its
+// successful request-id claim is the sole consumption boundary, and redundant
+// writes after it could strand an already-claimed request before the body.
+// Ordinary wakes (and saved wake inputs) still owe their one marker and
+// acknowledgement. proceed=false with a nil error means a secret wake whose
+// claim was already taken: stop without running the turn.
+func (al *AgentLoop) consumeAdmittedWake(ctx context.Context, ts *turnState, store *session.UnifiedStore,
+	sessionID, messageID, secretID, marker, agentID string, saved bool,
+) (proceed bool, err error) {
+	claimed, err := al.claimAdmittedSecretWake(secretID, sessionID, ts)
+	if err != nil || !claimed {
+		return false, err
+	}
+	if secretID != "" {
+		return true, nil
+	}
+	if err := al.consumeSteeredWake(ctx, ts, store, sessionID, messageID, marker, agentID, saved); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// consumeSteeredWake writes the wake's one durable consumption marker and its
+// inbox acknowledgement, only once the turn is certain to run: a wake refused
+// earlier must leave its entry pending for I-6's Revive (FR-B-013), never
+// swallow it. A saved wake input is placed here, and its placement writes
+// that same marker and ack, so one logical event keeps exactly one marker.
+func (al *AgentLoop) consumeSteeredWake(ctx context.Context, ts *turnState, store *session.UnifiedStore,
+	sessionID, messageID, marker, agentID string, saved bool,
+) error {
+	if saved {
+		return al.placeSavedWakeAtEntry(ctx, ts, messageID, saved)
+	}
+	if err := store.AppendTranscriptStrict(sessionID, session.TranscriptEntry{
+		ID: "consumed-" + messageID, Type: session.EntryTypeSystem, Role: "system",
+		Content: marker, AgentID: agentID, Timestamp: time.Now().UTC(),
+	}); err != nil {
+		return fmt.Errorf("steer: wake: append consumed marker: %w", err)
+	}
+	if inbox := al.GetMessageInboxStore(); inbox != nil {
+		if err := inbox.Ack(sessionID, []string{messageID}); err != nil {
+			return fmt.Errorf("steer: wake: acknowledge %q: %w", messageID, err)
+		}
+	}
+	return nil
+}
+
+// admitOrdinaryRootWake admits the wake of an ordinary root as an ordinary
+// execution and binds ts to it (F2). It returns nil when no lifecycle store
+// is wired (admitted false: nothing to admit).
+func (al *AgentLoop) admitOrdinaryRootWake(ctx context.Context, msg bus.InboundMessage, ts *turnState) (d *executionDisposition, admitted bool, err error) {
+	preparation, err := al.prepareOrdinarySessionExecution(ctx, msg.AsyncTranscriptSessionID, ts.opts, &handbackRevivalPrincipal)
+	if err != nil {
+		return nil, false, fmt.Errorf("steer: wake: %w", err)
+	}
+	d = preparation.execution
+	if d == nil {
+		return nil, false, nil
+	}
+	ts.opts.executionDisposition = d
+	ts.opts.roomCost = preparation.roomCost
+	ts.generation = d.claim.Generation
+	if idErr := ts.setExecutionIdentity(d.claim.RunID, d.claim.BootSeq); idErr != nil {
+		al.finishOrdinaryWakeExecution(msg, d)
+		return nil, false, fmt.Errorf("steer: wake: %w", idErr)
+	}
+	return d, true, nil
+}
+
+// finishOrdinaryWakeExecution settles an ordinary root's wake execution and
+// makes a settlement failure visible.
+func (al *AgentLoop) finishOrdinaryWakeExecution(msg bus.InboundMessage, d *executionDisposition) {
+	if err := al.finishExecutionDisposition(d); err != nil {
+		al.reportOrdinarySettlementFailure(msg, err)
+	}
+}
+
+// handbackRevivalPrincipal starts the next round of a finished ordinary root.
+// It never continues a stopped root, including stopped(restart): that authority
+// belongs to a human message or a normal scheduled/heartbeat trigger. Replayed
+// helper reports stay in the inbox for that next turn, not boot-time compute.
+var handbackRevivalPrincipal = steer.Principal{Kind: steer.PrincipalKindAgent, ID: "handback"}
 
 // extractPeer extracts the routing peer from the inbound message's structured Peer field.
 func extractPeer(msg bus.InboundMessage) *routing.RoutePeer {

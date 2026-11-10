@@ -62,6 +62,37 @@ import (
 //     like "the port filter syntax is wrong" and sends you chasing the wrong
 //     bug. Both the mach-lookup and the network-outbound literal are required.
 //
+//  5. Certificate trust. Go's crypto/x509 on darwin verifies against the
+//     system roots by calling Security.framework (SecTrustEvaluateWithError),
+//     which hands the evaluation to the trust daemon over a Mach service. It
+//     does NOT read /private/etc/ssl/cert.pem, so the file allow below does
+//     not help it. Without the lookup every Go TLS client (gh, and any other
+//     Go binary an agent runs) fails with "x509: OSStatus -26276"
+//     (errSecInternalComponent) while curl and Python, which read cert.pem,
+//     work — which reads like a broken network or certificate store.
+//     Measured (macOS 26.5.2, user session): com.apple.trustd.agent ALONE
+//     fixes it; com.apple.trustd alone does not.
+//     Security.framework picks the per-user agent for a process in a user
+//     session (the shipped LaunchAgent deployment) and the system daemon
+//     com.apple.trustd only for root or the launchd System/LoginWindow
+//     session, which no supported deployment uses, so that one is NOT
+//     granted.
+//
+//     What the lookup is for: TLS certificate verification by Go-built tools.
+//     What else it opens: a mach-lookup grants the WHOLE service, not one
+//     call. Per Apple's open-source trustd (trustd.c::trustd_ops,
+//     SecTrustSettingsServer.c), a child can also, without any entitlement,
+//     read trust settings and certificate/trust data (it is NOT shut out of
+//     certificate information), and reset trustd's OCSP and issuer caches
+//     and its revocation database — a performance impact only (re-fetch,
+//     possibly a daemon restart), not a trust change. What stays out of
+//     reach: keychain secrets — com.apple.SecurityServer and secd are not
+//     allowed, and no general keychain-item retrieval was found in trustd's
+//     dispatcher; and persistent trust-settings changes, whose write route
+//     requires an Authorization token carrying the trust-settings right,
+//     which this sandbox grants no way to obtain. These source readings are
+//     NOT verified against the macOS 26 binaries.
+//
 // Everything here is read-only or a well-known sink. The preamble grants no
 // write access outside /dev/null and no execute outside the system binary
 // directories, so it cannot widen a policy's reach over user data.
@@ -88,6 +119,8 @@ const seatbeltSystemPreamble = `;; --- macOS system preamble (empirically derive
 ;; DNS via mDNSResponder. Required for ANY name resolution; see finding 4 above.
 (allow mach-lookup (global-name "com.apple.mDNSResponder"))
 (allow network-outbound (literal "/private/var/run/mDNSResponder"))
+;; Certificate trust evaluation for Security.framework clients (Go's crypto/x509). See finding 5 above.
+(allow mach-lookup (global-name "com.apple.trustd.agent"))
 `
 
 // renderSeatbeltProfileState carries the shared state of renderSeatbeltProfile across its stages.
@@ -260,10 +293,13 @@ func renderSeatbeltProfile(policy SandboxPolicy) (string, error) {
 	// blanket allows too, which the measurements show are harmless — being
 	// stricter than the platform requires costs nothing here, and it removes
 	// the need for a future reader to re-derive which allows are safe.
-	if len(rs.policy.DeniedPaths) > 0 || len(rs.policy.DeniedNodes) > 0 || len(rs.policy.DeniedPathPrefixes) > 0 {
+	if len(rs.policy.DeniedPaths) > 0 || len(rs.policy.DeniedNodes) > 0 || len(rs.policy.DeniedPathPrefixes) > 0 || len(rs.policy.WriteDeniedPaths) > 0 {
 		rs.b.WriteString("\n;; --- Secret set: denied last so no earlier allow can re-open it ---\n")
 	}
 	if err := rs.renderDeniedPaths(); err != nil {
+		return "", err
+	}
+	if err := rs.renderWriteDeniedPaths(); err != nil {
 		return "", err
 	}
 
@@ -330,7 +366,9 @@ func (rs *renderSeatbeltProfileState) renderNetwork() {
 	// --- Network. Under (deny default) all network is already denied; the
 	// explicit (deny network*) is emitted for auditor clarity and to make the
 	// posture assertable in tests. Port allow-lists re-enable only what the
-	// policy enumerates.
+	// policy enumerates. A policy with NetworkUnhandled set (the God Mode
+	// floor, amendment §2 D7) expresses NO network restriction: blanket
+	// outbound + bind allows replace the deny and the port list entirely.
 	//
 	// Ordering was verified empirically rather than assumed: with this
 	// (deny network*) sitting BETWEEN the preamble's resolver allow and the
@@ -338,6 +376,12 @@ func (rs *renderSeatbeltProfileState) renderNetwork() {
 	// both still succeed, and a non-allow-listed port is still refused. The
 	// deny does not revoke the earlier resolver allow, so it is deliberately
 	// NOT re-emitted here.
+	if rs.policy.NetworkUnhandled {
+		rs.b.WriteString("\n;; --- Network (unhandled: the God Mode floor imposes no network restriction) ---\n")
+		rs.b.WriteString("(allow network-outbound)\n")
+		rs.b.WriteString("(allow network-bind)\n")
+		return
+	}
 	rs.b.WriteString("\n;; --- Network (default-deny; explicit port allow-list) ---\n")
 	rs.b.WriteString("(deny network*)\n")
 	for _, r := range rs.policy.BindPortRules {
@@ -413,6 +457,44 @@ func (rs *renderSeatbeltProfileState) renderDeniedPaths() error {
 			// irreversibly without reading anything at all. Both were
 			// executed against a real child before this line was written.
 			fmt.Fprintf(&rs.b, "(deny file-read* (subpath %q))\n", path)
+			fmt.Fprintf(&rs.b, "(deny file-write* (subpath %q))\n", path)
+		}
+	}
+	return nil
+}
+
+// renderWriteDeniedPaths writes the SUBTREE WRITE-ONLY denies for
+// SandboxPolicy.WriteDeniedPaths — readable and, where granted, executable
+// subtrees that must never gain a write (amendment §2 D3's read-only
+// allow-list entries: media, the session-scoped upload dirs, published
+// runtime generations, the document prefix). Write-ONLY: a full read+write
+// deny here would kill the read the entry exists to grant, so these cannot
+// share renderDeniedPaths' loop. Emitted inside the final deny block, so no
+// earlier allow — including $OMNIPUS_HOME's RWX grant — can re-open writes
+// (the same measured precedence rule the subpath denies rely on).
+func (rs *renderSeatbeltProfileState) renderWriteDeniedPaths() error {
+	if len(rs.policy.WriteDeniedPaths) == 0 {
+		return nil
+	}
+	rs.b.WriteString("\n;; --- Read-only branches: write denied last so no earlier allow can re-open it ---\n")
+	emitted := make(map[string]struct{}, len(rs.policy.WriteDeniedPaths)*2)
+	for _, raw := range rs.policy.WriteDeniedPaths {
+		clean, expanded := expandUserPath(raw)
+		if !expanded {
+			return fmt.Errorf("seatbelt: write-denied path %q is not absolute and could not be expanded", raw)
+		}
+		if err := validateSeatbeltPath(clean); err != nil {
+			return fmt.Errorf("seatbelt: write-denied path %q: %w", raw, err)
+		}
+		target, _ := resolveSeatbeltPath(clean)
+		for _, path := range []string{clean, target} {
+			if err := validateSeatbeltPath(path); err != nil {
+				return fmt.Errorf("seatbelt: write-denied path %q resolved to %q: %w", raw, path, err)
+			}
+			if _, dup := emitted[path]; dup {
+				continue
+			}
+			emitted[path] = struct{}{}
 			fmt.Fprintf(&rs.b, "(deny file-write* (subpath %q))\n", path)
 		}
 	}

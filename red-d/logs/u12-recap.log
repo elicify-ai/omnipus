@@ -1,0 +1,17 @@
+2026/10/09 08:57:24 INFO Seatbelt sandbox available backend=seatbelt enforcement="per-child via sandbox-exec"
+[90m08:57:24[0m [32mINF[0m [1m../logger/logger.go:410[0m[36m >[0m [1mSandbox backend selected[0m [36mbackend=[0mseatbelt [36mcomponent=[0magent
+[90m08:57:24[0m [32mINF[0m [1m../logger/logger.go:410[0m[36m >[0m [1mPrompt guard initialized[0m [36mcomponent=[0magent [36mstrictness=[0mmedium
+[90m08:57:24[0m [32mINF[0m [1m../logger/logger.go:410[0m[36m >[0m [1mRate limiter initialized[0m [36mcomponent=[0magent [36mmax_agent_llm_calls_per_hour=[0m0 [36mmax_agent_tool_calls_per_minute=[0m0
+[90m08:57:24[0m [32mINF[0m [1m../logger/logger.go:410[0m[36m >[0m [1mMemory write rate limiter initialized[0m [36mcomponent=[0magent [36mper_agent_per_minute=[0m60 [36mper_caller_per_minute=[0m600
+[90m08:57:24[0m [33mWRN[0m [1m../logger/logger.go:426[0m[36m >[0m [1mContext window unknown for cloud model; using the conservative floor[0m [36magent_id=[0mexplicit-agent [36mcomponent=[0magent [36mfloor=[0m128000 [36mmodel=[0m [36mprovider=[0m
+[90m08:57:24[0m [33mWRN[0m [1m../logger/logger.go:426[0m[36m >[0m [1mContext window unknown for cloud model; using the conservative floor[0m [36magent_id=[0midle-agent [36mcomponent=[0magent [36mfloor=[0m128000 [36mmodel=[0m [36mprovider=[0m
+2026/10/09 08:57:24 INFO session_end: writing LAST_SESSION.md session_id=session_01M4F628DQ4Z8FMPYKYQAE5MRQ agent_id=idle-agent workspace=/var/folders/rw/h_fqz_990kj3pnxsl9qf1v9w0000gn/T/TestSessionCoreU12_ExplicitSessionCloseDoesNotRecap3582808056/001/agents/idle-agent
+2026/10/09 08:57:24 INFO session_end: writing LAST_SESSION.md session_id=session_01M4F628AN8BFBJB6AZFXZ3DWY agent_id=explicit-agent workspace=/var/folders/rw/h_fqz_990kj3pnxsl9qf1v9w0000gn/T/TestSessionCoreU12_ExplicitSessionCloseDoesNotRecap3582808056/001/agents/explicit-agent
+2026/10/09 08:57:24 INFO session_end: recap complete session_id=session_01M4F628DQ4Z8FMPYKYQAE5MRQ agent_id=idle-agent trigger=idle recap_len=13
+2026/10/09 08:57:24 INFO session_end: recap complete session_id=session_01M4F628AN8BFBJB6AZFXZ3DWY agent_id=explicit-agent trigger=explicit recap_len=13
+--- FAIL: TestSessionCoreU12_ExplicitSessionCloseDoesNotRecap (0.61s)
+    sessioncore_u12_idle_recap_test.go:121: FR-036/DEL-08: an explicit session-close must NOT recap; last-session.md was written:
+        session ended
+FAIL
+FAIL	github.com/elicify-ai/omnipus/pkg/agent	3.292s
+FAIL

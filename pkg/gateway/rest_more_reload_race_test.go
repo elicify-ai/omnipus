@@ -135,16 +135,31 @@ func TestProvidersPUT_ReloadCompletesBeforeResponse(t *testing.T) {
 		m["providers"] = []any{map[string]any{"model_name": "mygw", "provider": "mygw", "model": "mygw/a"}}
 		return nil
 	}))
-	wireAsyncReload(t, api, 30*time.Millisecond)
+	// The reload stand-in is deliberately slow, so the handler must actually
+	// WAIT for it. Hoisting the delay into one constant keeps the timing oracle
+	// and the fixture in step.
+	const reloadDelay = 300 * time.Millisecond
+	wireAsyncReload(t, api, reloadDelay)
 
 	body := `{"models":["mygw/a","mygw/b"]}`
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/providers/mygw", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	r.URL.Path = "/api/v1/providers/mygw"
 	w := httptest.NewRecorder()
+	started := time.Now()
 	api.HandleProviders(w, isolateRateLimit(t, r))
+	elapsed := time.Since(started)
+	t.Logf("PUT elapsed=%s reloadDelay=%s", elapsed, reloadDelay)
 
 	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	// Timing half: a handler that returned at once — the defect the provreload
+	// verdict named — would finish far inside the reload delay. Without the
+	// fixture fix (wireAsyncReload never marked the reload pending) this
+	// assertion is what fails; with it, the pending assertion above is what
+	// fails. Either way the test can no longer pass for the wrong reason.
+	assert.GreaterOrEqual(t, elapsed, reloadDelay,
+		"the provider PUT returned in %s, inside the %s reload delay: it did not wait for the reload it triggers",
+		elapsed, reloadDelay)
 	assert.False(t, api.agentLoop.IsReloadPending(),
 		"provider PUT returned 200 while a config reload was still pending — an already-constructed "+
 			"agent instance's cached provider/model client is not guaranteed to be rebuilt yet")

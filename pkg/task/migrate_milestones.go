@@ -26,8 +26,11 @@ import (
 )
 
 // milestoneMigrationSentinelFile is the completion marker (SD-A6),
-// $OMNIPUS_HOME/.milestones_migrated.
-const milestoneMigrationSentinelFile = ".milestones_migrated"
+// $OMNIPUS_HOME/tasks/.milestones_migrated. It lives inside tasks/ — not at
+// the home root — so every top-level entry the gateway creates stays inside
+// the classified protected inventory (#1284 amendment §2 D8/T-INV: an
+// unclassified fresh-home top-level entry is a failed build).
+const milestoneMigrationSentinelFile = "tasks/.milestones_migrated"
 
 // milestoneTagPrefix is prepended to every migrated milestone name.
 const milestoneTagPrefix = "milestone:"

@@ -45,12 +45,17 @@ properties:
       - done
       - failed
       - skipped
+      - missed
     description: >
       Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has
       no producer today; a stuck-run reaper closes abandoned runs to
       `failed`). `skipped` records a scheduled fire that never ran at all
       because the overlap guard found the previous occurrence still
-      `in_progress` — a purely bookkeeping close, not a failure.
+      `in_progress` — a purely bookkeeping close, not a failure. `missed`
+      records a scheduled fire that came due while the server was down and
+      could never run: recorded once at the next boot for the missed
+      instant, never replayed (founder decision 2026-10-29 — a missed
+      Calendar run stays skipped, never replayed).
     example: "done"
   result:
     type: string
@@ -75,6 +80,20 @@ properties:
       - manual
     description: How the run started — an automatic trigger fire, or a user Run-now.
     example: "scheduled"
+  recipient_session_ids:
+    type: array
+    readOnly: true
+    uniqueItems: true
+    maxItems: 2
+    items:
+      type: string
+      minLength: 1
+      maxLength: 255
+    description: >
+      Session ids captured when this run actually started (FR-019): the
+      starting agent's main and the assignee's main, deduplicated. Never the
+      creator. Fixed for the life of the run. Absent when there is no recipient
+      (a skipped run, or a person/scheduler-started worker run).
   started_at:
     type: string
     format: date-time

@@ -6,10 +6,12 @@ import { AUTO_APPROVE_ASK_GROUPS, AUTO_APPROVE_ASK_GROUP_BY_TOOL } from './autoA
 // 2026-09-24) — every entry whose class is `AutoAsks`, i.e. every tool that
 // always asks under Auto-approve. `bash` is deliberately excluded: its own
 // class is `AutoShellMode`, a distinct mechanism (the shell-permission mode
-// UI), not a member of this 28-tool ask-list. This is NOT derived from
+// UI), not a member of this 30-tool ask-list (29 stage-1 plus channels FR-032). This is NOT derived from
 // autoApproveAskGroups.ts — a mistake in that file's grouping (a dropped
 // tool, a duplicate, an extra invented one) must fail against this
 // independent transcription, not just agree with itself.
+// FR-021 stage-1 amendment (2026-10-15): add the permission tool only;
+// reserved connection/secret actions are not part of this stage-1 list.
 const EXPECTED_ASK_LIST_TOOLS = [
   // Files
   'request_mount',
@@ -33,12 +35,16 @@ const EXPECTED_ASK_LIST_TOOLS = [
   'disable_channel',
   'configure_channel',
   'test_channel',
+  // channels-spec-r8 FR-032: the outbound-list writer joins the ask list.
+  'set_channel_outbound',
   // System (MCP)
   'add_mcp_server',
   'remove_mcp_server',
   // System (agents)
   'create_agent',
   'update_agent',
+  // FR-021: set_agent_permissions is AutoAsks on the stage-1 server.
+  'set_agent_permissions',
   'delete_agent',
   // System (workspaces)
   'update_workspace',
@@ -53,9 +59,9 @@ const EXPECTED_ASK_LIST_TOOLS = [
   'browser_upload_file',
 ].sort()
 
-describe('AUTO_APPROVE_ASK_GROUPS — covers every one of the 28 ADR-092 always-ask tools', () => {
-  it('the hand-transcribed reference list has exactly 28 tools', () => {
-    expect(EXPECTED_ASK_LIST_TOOLS).toHaveLength(28)
+describe('AUTO_APPROVE_ASK_GROUPS — covers all 30 ADR-092/FR-021 (+ channels FR-032) always-ask tools', () => {
+  it('the hand-transcribed reference list has exactly 30 tools (FR-021 stage 1 plus channels FR-032)', () => {
+    expect(EXPECTED_ASK_LIST_TOOLS).toHaveLength(30)
   })
 
   it('every group tool is unique to that group — no tool appears in two groups', () => {
@@ -78,7 +84,7 @@ describe('AUTO_APPROVE_ASK_GROUPS — covers every one of the 28 ADR-092 always-
     }
   })
 
-  it('the grouped tools, flattened and sorted, exactly equal the hand-transcribed 28-tool reference list', () => {
+  it('the grouped tools, flattened and sorted, exactly equal the 30-tool reference list (FR-021, channels FR-032)', () => {
     const grouped = AUTO_APPROVE_ASK_GROUPS.flatMap((g) => g.tools).sort()
     expect(grouped).toEqual(EXPECTED_ASK_LIST_TOOLS)
   })
@@ -87,6 +93,27 @@ describe('AUTO_APPROVE_ASK_GROUPS — covers every one of the 28 ADR-092 always-
     for (const tool of EXPECTED_ASK_LIST_TOOLS) {
       expect(AUTO_APPROVE_ASK_GROUP_BY_TOOL[tool], `no group found for "${tool}"`).toBeTruthy()
     }
+  })
+
+  it('FR-021: set_agent_permissions shares the exact settings/agents group with create_agent and update_agent', () => {
+    const label = 'Changing or testing settings, providers, channels, agents or skills'
+    expect(['create_agent', 'update_agent', 'set_agent_permissions'].map(
+      (tool) => AUTO_APPROVE_ASK_GROUP_BY_TOOL[tool],
+    )).toEqual([label, label, label])
+  })
+
+  // #920 founder decision D3 (2026-09-27): under Auto-approve, reading,
+  // listing and searching run outside the workspace without a prompt; only
+  // writing keeps the workspace rule. The request_mount line must say
+  // "writing files outside", never the bare "files outside" that implied
+  // every out-of-workspace file access asks.
+  it('labels the request_mount group as mounting or WRITING outside the workspace, not any file access', () => {
+    expect(AUTO_APPROVE_ASK_GROUP_BY_TOOL['request_mount']).toBe(
+      'Mounting a folder, or writing files outside your workspace',
+    )
+    expect(AUTO_APPROVE_ASK_GROUPS.map((g) => g.label)).not.toContain(
+      'Mounting a folder, or files outside your workspace',
+    )
   })
 
   it('carries no tool that is NOT in the reference list (no invented/stale entries)', () => {

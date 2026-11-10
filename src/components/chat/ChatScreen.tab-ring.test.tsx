@@ -11,11 +11,13 @@
  *
  *   skip-link=1 (AppShell.tsx, see AppShell.test.tsx)
  *   → chat input=2 (this file)
- *   → agent=3 (this file, via the tabIndex prop ChatScreen passes to AgentPicker)
  *   → model=4 (this file, via the tabIndex prop ChatScreen passes to ModelPicker)
  *   → attach=5 (this file)
  *   → send=6 (this file)
  *   → browser=7 (ChatControls.tsx, see ChatControls.test.tsx)
+ *
+ * Slot 3 was the agent picker. That control is gone (FR-007). The remaining
+ * indexes are not renumbered.
  *
  * A well-meaning cleanup (renumbering, dropping a tabIndex, or reordering
  * controls) should fail one of these class/attribute-level assertions rather
@@ -23,12 +25,10 @@
  * repo for structural/positional contracts (see AgentPicker.test.tsx,
  * Sidebar.m5.test.tsx for precedent).
  *
- * AgentPicker/ModelPicker are stubbed here (not their real implementations —
- * their own internal behavior is covered by composer/AgentPicker.test.tsx and
- * composer/ModelPicker.test.tsx) to a thin pass-through that echoes the
- * `tabIndex` prop it was called with, so this test asserts the CONTRACT
- * ("ChatScreen passes tabIndex=3/4 to these components") without dragging in
- * their agents/workspaces query plumbing.
+ * ModelPicker is stubbed here (not its real implementation) to a thin
+ * pass-through that echoes the `tabIndex` prop it was called with, so this
+ * test asserts the CONTRACT ("ChatScreen passes tabIndex=4") without dragging
+ * in its query plumbing. There is no agent picker in the ring.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
@@ -53,81 +53,60 @@ if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
 // ── @assistant-ui/react — same shape as ChatScreen.test.tsx's mock, EXCEPT
 // Input/AddAttachment/Send additionally forward `tabIndex` onto the rendered
 // DOM node, which is exactly the prop this test needs to observe. ──────────
-vi.mock('@assistant-ui/react', () => {
-  return {
-    useThreadViewportStore: () => ({ getState: () => ({ isAtBottom: true }) }),
-    ThreadPrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Viewport: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Messages: () => null,
-    },
-    MessagePrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Parts: () => null,
-    },
-    ComposerPrimitive: {
-      Root: ({ children, className, onSubmit }: { children: React.ReactNode; className?: string; onSubmit?: (e: React.FormEvent) => void }) =>
-        React.createElement('form', { className, onSubmit, 'data-testid': 'composer-form' }, children),
-      Input: ({ disabled, placeholder, className, onChange, onKeyDown, onBlur, tabIndex }: {
-        disabled?: boolean; placeholder?: string; className?: string;
-        onChange?: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
-        onKeyDown?: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
-        onBlur?: () => void; tabIndex?: number;
-      }) =>
-        React.createElement('textarea', {
-          disabled, placeholder, className,
-          onChange, onKeyDown, onBlur, tabIndex,
-          'data-testid': 'chat-input',
+import { MockButton, MockTextarea } from '@/test/assistantUiMock'
+vi.mock('@assistant-ui/react', async () => (await import('@/test/assistantUiMock')).createAssistantUiMock({
+  ThreadPrimitive: {
+    Viewport: ({ children, className }: { children: React.ReactNode; className?: string }) =>
+              React.createElement('div', { className }, children),
+  },
+  ComposerPrimitive: {
+    Root: ({ children, className, onSubmit }: { children: React.ReactNode; className?: string; onSubmit?: (e: React.FormEvent) => void }) =>
+              React.createElement('form', { className, onSubmit, 'data-testid': 'composer-form' }, children),
+    Input: ({ disabled, placeholder, className, onChange, onKeyDown, onBlur, tabIndex }: {
+              disabled?: boolean; placeholder?: string; className?: string;
+              onChange?: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
+              onKeyDown?: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
+              onBlur?: () => void; tabIndex?: number;
+            }) =>
+              React.createElement(MockTextarea, {
+                disabled, placeholder, className,
+                onChange, onKeyDown, onBlur, tabIndex,
+                'data-testid': 'chat-input',}),
+    Send: ({ disabled, children, className, 'data-testid': testId, 'aria-label': ariaLabel, onClick, tabIndex }: {
+              disabled?: boolean; children?: React.ReactNode; className?: string;
+              'data-testid'?: string; 'aria-label'?: string; onClick?: () => void; tabIndex?: number;
+            }) =>
+              React.createElement(MockButton, {
+                type: 'button', disabled, className,
+                onClick, tabIndex,
+                'data-testid': testId ?? 'chat-send',
+                'aria-label': ariaLabel, children: children}),
+    AddAttachment: ({ disabled, children, className, 'aria-label': ariaLabel, tabIndex }: {
+              disabled?: boolean; children?: React.ReactNode; className?: string; 'aria-label'?: string; tabIndex?: number;
+            }) =>
+              React.createElement(MockButton, { type: 'button', disabled, className, tabIndex, 'aria-label': ariaLabel, 'data-testid': 'add-attachment', children: children}),
+  },
+  AttachmentPrimitive: {
+    Remove: ({ children, className, 'aria-label': ariaLabel }: { children?: React.ReactNode; className?: string; 'aria-label'?: string }) =>
+              React.createElement(MockButton, { type: 'button', className, 'aria-label': ariaLabel, children: children}),
+  },
+  ActionBarPrimitive: {
+    Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
+              React.createElement('div', { className }, children),
+  },
+  useComposerRuntime: vi.fn(() => ({
+          getState: () => ({ text: '' }),
+          setText: vi.fn(),
+          addAttachment: vi.fn(),
+          subscribe: vi.fn(() => vi.fn()),
+        })),
+  useMessage: () => ({
+          id: 'msg_1',
+          role: 'assistant',
+          status: { type: 'complete' },
+          content: [],
         }),
-      Send: ({ disabled, children, className, 'data-testid': testId, 'aria-label': ariaLabel, onClick, tabIndex }: {
-        disabled?: boolean; children?: React.ReactNode; className?: string;
-        'data-testid'?: string; 'aria-label'?: string; onClick?: () => void; tabIndex?: number;
-      }) =>
-        React.createElement('button', {
-          type: 'button', disabled, className,
-          onClick, tabIndex,
-          'data-testid': testId ?? 'chat-send',
-          'aria-label': ariaLabel,
-        }, children),
-      AddAttachment: ({ disabled, children, className, 'aria-label': ariaLabel, tabIndex }: {
-        disabled?: boolean; children?: React.ReactNode; className?: string; 'aria-label'?: string; tabIndex?: number;
-      }) =>
-        React.createElement('button', { type: 'button', disabled, className, tabIndex, 'aria-label': ariaLabel, 'data-testid': 'add-attachment' }, children),
-      Attachments: () => null,
-    },
-    AttachmentPrimitive: {
-      Root: ({ children, className }: { children?: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Name: () => null,
-      Remove: ({ children, className, 'aria-label': ariaLabel }: { children?: React.ReactNode; className?: string; 'aria-label'?: string }) =>
-        React.createElement('button', { type: 'button', className, 'aria-label': ariaLabel }, children),
-      Thumb: () => null,
-    },
-    MessagePartPrimitive: { InProgress: () => null },
-    ActionBarPrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Copy: ({ children }: { children: React.ReactNode }) => React.createElement('span', {}, children),
-    },
-    AuiIf: () => null,
-    useComposerRuntime: vi.fn(() => ({
-      getState: () => ({ text: '' }),
-      setText: vi.fn(),
-      addAttachment: vi.fn(),
-      subscribe: vi.fn(() => vi.fn()),
-    })),
-    useMessage: () => ({
-      id: 'msg_1',
-      role: 'assistant',
-      status: { type: 'complete' },
-      content: [],
-    }),
-    makeAssistantToolUI: () => () => null,
-  }
-})
+}))
 
 vi.mock('@tanstack/react-query', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-query')>()
@@ -141,7 +120,7 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
       if (Array.isArray(key) && key[0] === 'skills') {
         return { data: [], isError: false, refetch: vi.fn() }
       }
-      return { data: [], isError: false, refetch: vi.fn() }
+      return { data: queryDataWithEmptyHistory(key), isError: false, refetch: vi.fn() }
     },
     useMutation: () => ({ mutate: vi.fn(), isPending: false }),
     useQueryClient: () => ({ invalidateQueries: vi.fn(), removeQueries: vi.fn() }),
@@ -160,12 +139,14 @@ vi.mock('@tanstack/react-router', () => ({
 // doesn't exercise mentions. The workspaces query stays disabled (no
 // activeWorkspaceId set here), so `fetchWorkspaces` is never actually
 // invoked — this just needs to exist so the module loads.
+import { emptyHistoryPage, queryDataWithEmptyHistory, type HistoryReadPort } from '../../../tests/chat-history-paging/legacy-fixtures'
+
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([]),
-    fetchSessionMessages: vi.fn().mockResolvedValue([]),
+    fetchSessionMessages: vi.fn<HistoryReadPort>(async (sessionId) => emptyHistoryPage(sessionId)),
     fetchCommands: vi.fn().mockResolvedValue([]),
     fetchSkills: vi.fn().mockResolvedValue([]),
     uploadFiles: vi.fn(),
@@ -177,17 +158,10 @@ vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avata
 vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
 vi.mock('./markdown-text', () => ({ MarkdownText: () => null }))
 vi.mock('./tools/GenericToolCall', () => ({ GenericToolCall: () => null }))
-vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 
-// AgentPicker/ModelPicker: thin pass-throughs that echo the `tabIndex` prop
-// ChatScreen calls them with, onto a testid'd node — this is the structural
-// contract under test, not the pickers' own internal behavior (covered
-// elsewhere, see the file header comment).
-vi.mock('./composer/AgentPicker', () => ({
-  AgentPicker: ({ tabIndex }: { tabIndex?: number }) =>
-    React.createElement('div', { 'data-testid': 'agent-picker-mock', tabIndex }),
-}))
+// ModelPicker: thin pass-through that echoes the `tabIndex` prop ChatScreen
+// calls it with, onto a testid'd node.
 vi.mock('./composer/ModelPicker', () => ({
   ModelPicker: ({ tabIndex }: { tabIndex?: number }) =>
     React.createElement('div', { 'data-testid': 'model-picker-mock', tabIndex }),
@@ -227,9 +201,10 @@ describe('OmnipusComposer — composer tab ring (post-renumber structural guard)
     expect(screen.getByTestId('chat-input')).toHaveAttribute('tabindex', '2')
   })
 
-  it('AgentPicker is invoked with tabIndex=3', () => {
+  it('does not mount an agent picker', () => {
     render(<OmnipusComposer />)
-    expect(screen.getByTestId('agent-picker-mock')).toHaveAttribute('tabindex', '3')
+    expect(screen.queryByTestId('agent-picker-trigger')).toBeNull()
+    expect(screen.queryByTestId('agent-picker-mock')).toBeNull()
   })
 
   it('ModelPicker is invoked with tabIndex=4', () => {
@@ -247,15 +222,14 @@ describe('OmnipusComposer — composer tab ring (post-renumber structural guard)
     expect(screen.getByTestId('chat-send')).toHaveAttribute('tabindex', '6')
   })
 
-  it('the ring is strictly ordered 2 < 3 < 4 < 5 < 6 across the five composer controls', () => {
+  it('the ring is ordered 2, 4, 5, 6 across the remaining composer controls', () => {
     render(<OmnipusComposer />)
     const order = [
       Number(screen.getByTestId('chat-input').getAttribute('tabindex')),
-      Number(screen.getByTestId('agent-picker-mock').getAttribute('tabindex')),
       Number(screen.getByTestId('model-picker-mock').getAttribute('tabindex')),
       Number(screen.getByTestId('add-attachment').getAttribute('tabindex')),
       Number(screen.getByTestId('chat-send').getAttribute('tabindex')),
     ]
-    expect(order).toEqual([2, 3, 4, 5, 6])
+    expect(order).toEqual([2, 4, 5, 6])
   })
 })

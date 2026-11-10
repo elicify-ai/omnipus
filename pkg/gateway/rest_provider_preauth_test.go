@@ -119,8 +119,8 @@ func postProbeViaRealMux(
 // The upstream call count is the assertion that matters. This endpoint is not
 // merely informational: with `auth: "sign_in"` it never reads a credential
 // from the request at all, it spends one real, billed vendor completion using
-// the OPERATOR's own saved login (Codex auth.json, or the Copilot CLI's
-// stored token), and on a cli_kind row spawns a subprocess to do it. The
+// the OPERATOR's own stored OAuth credential, and spends one real, billed
+// completion per call. The
 // api_key path exercised here rides the identical gate, so proving zero
 // outbound requests proves the money path is shut too.
 func TestProbeProvider_RealMux_RefusesWhenAuthenticationAuthorityExists(t *testing.T) {

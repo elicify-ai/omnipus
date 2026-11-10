@@ -29,103 +29,85 @@ func declaredObjectProperties(t *testing.T, params map[string]any) map[string]bo
 	return out
 }
 
-// TestAgentCreateTool_NoOrphanedParameters is a regression test for the
-// "declares a parameter, silently never applies it" bug (ADR-037
-// anti-pattern: a caller passing e.g. restrict_to_workspace:true got a
-// success response implying it was applied when nothing happened).
-//
-// It lists every property AgentCreateTool.Parameters() declares and asserts
-// each one is actually read somewhere by feeding it a value and checking
-// for an observable effect (or, for fields whose effect is validation-only
-// like the mandatory ones, that they are at minimum referenced). This is not
-// a generic reflection-based check — it is a literal enumeration of the
-// known-consumed set, so a newly added but unwired property fails this test
-// by omission rather than by a false negative.
+// TestAgentCreateTool_NoOrphanedParameters guards the declared creation
+// surface against the contract, not a transcription of Execute's reads.
+// r17 T-AGENT keeps ordinary fields (AG-02), retires heartbeat/cli_path
+// (AG-06/AG-10), and adds env_overrides/cli_args (AG-12/AG-13).
+// This schema-only guard does not prove that a declared field is consumed;
+// persistence and refusal tests must establish that separate behavior.
 func TestAgentCreateTool_NoOrphanedParameters(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	tool := systools.NewAgentCreateTool(deps)
 
 	declared := declaredObjectProperties(t, tool.Parameters())
-
-	// consumedByExecute is the exhaustive set of AgentCreateTool.Execute's
-	// args[...] reads, transcribed from source (not derived), so this test
-	// fails the moment Parameters() and Execute() drift apart again.
-	consumedByExecute := map[string]bool{
+	contractFields := map[string]bool{
 		"name": true, "description": true, "soul": true, "model": true,
-		"color": true, "icon": true, "agent_type": true, "cli": true,
-		"cli_path": true, "provider": true, "fallback_models": true,
-		"heartbeat": true, "max_tool_iterations": true,
+		"color": true, "agent_type": true, "cli": true,
+		"env_overrides": true, "cli_args": true,
+		"provider": true, "fallback_models": true, "max_tool_iterations": true,
+		"reasoning_effort": true, // effort-levels spec FR-064
+		"figure":           true, "role": true,
 		"skills": true, "mcp_servers": true, "tool_policy_changes": true,
-		"memory_enabled": true, "default": true, "voice": true,
+		"memory_enabled": true, "voice": true,
 		"context_window_override": true, "model_params": true,
+		"workspace_id": true,
 	}
 
 	for name := range declared {
-		if !consumedByExecute[name] {
-			t.Errorf(
-				"create_agent Parameters() declares %q but Execute() never reads it — "+
-					"a caller passing it gets a success response implying it was applied "+
-					"when it silently was not (ADR-037 anti-pattern)", name,
-			)
+		if !contractFields[name] {
+			t.Errorf("create_agent declares %q without a creation-contract coverage entry", name)
 		}
 	}
-	// The reverse direction also catches a stale entry in consumedByExecute
-	// itself (e.g. a field deleted from Execute but left in this set).
-	for name := range consumedByExecute {
+	for name := range contractFields {
 		if !declared[name] {
-			t.Errorf("consumedByExecute lists %q but create_agent Parameters() no longer declares it — stale test fixture", name)
+			t.Errorf("create_agent does not declare contract field %q", name)
 		}
 	}
 
-	// The two fields with no backing config.AgentConfig field anywhere in the
-	// codebase (confirmed: timeout_seconds has no AgentConfig field at all —
-	// see pkg/gateway/rest.go's documented pre-existing gap on the identical
-	// wire field — and restrict_to_workspace is a fully retired concept per
-	// pkg/config/validator.go's fr001RemovedKeysMsg) must be GONE from the
-	// schema entirely, not merely unread.
-	for _, retired := range []string{"timeout_seconds", "restrict_to_workspace"} {
+	// Retained retirement guards plus r17 AG-06/AG-10: absence from Execute
+	// alone is insufficient; an agent must not be invited to send dead input.
+	for _, retired := range []string{"timeout_seconds", "restrict_to_workspace", "heartbeat", "cli_path"} {
 		if declared[retired] {
 			t.Errorf("create_agent Parameters() still declares retired/unbacked field %q", retired)
 		}
 	}
 }
 
-// TestAgentUpdateTool_NoOrphanedParameters mirrors
-// TestAgentCreateTool_NoOrphanedParameters for update_agent.
+// TestAgentUpdateTool_NoOrphanedParameters mirrors the schema-only creation
+// guard. r17 AG-12/AG-13 add runtime inputs; AG-06/AG-07/AG-08/AG-10 forbid
+// heartbeat, permission inputs and CLI selection/path on update. Actual
+// persistence/merge/removal behavior is tested separately, not inferred here.
 func TestAgentUpdateTool_NoOrphanedParameters(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	tool := systools.NewAgentUpdateTool(deps)
 
 	declared := declaredObjectProperties(t, tool.Parameters())
-
-	consumedByExecute := map[string]bool{
+	contractFields := map[string]bool{
 		"id": true, "revision": true, "name": true, "description": true, "soul": true,
 		"model": true, "fallback_models": true, "provider": true,
-		"color": true, "icon": true, "skills": true, "mcp_servers": true,
-		"tool_policy_changes": true,
+		"reasoning_effort": true, // effort-levels spec FR-064
+		"color":            true, "skills": true, "figure": true, "role": true,
 		"max_tool_iterations": true,
-		"memory_enabled":      true, "default": true, "voice": true,
+		"memory_enabled":      true, "voice": true,
 		"context_window_override": true, "model_params": true,
+		"agent_md":      true,
+		"env_overrides": true, "env_overrides_remove": true, "cli_args": true,
 	}
 
 	for name := range declared {
-		if !consumedByExecute[name] {
-			t.Errorf(
-				"update_agent Parameters() declares %q but Execute() never reads it — "+
-					"a caller passing it gets a success response implying it was applied "+
-					"when it silently was not (ADR-037 anti-pattern)", name,
-			)
+		if !contractFields[name] {
+			t.Errorf("update_agent declares %q without an update-contract coverage entry", name)
 		}
 	}
-	for name := range consumedByExecute {
+	for name := range contractFields {
 		if !declared[name] {
-			t.Errorf("consumedByExecute lists %q but update_agent Parameters() no longer declares it — stale test fixture", name)
+			t.Errorf("update_agent does not declare contract field %q", name)
 		}
 	}
 
-	for _, retired := range []string{"timeout_seconds", "restrict_to_workspace"} {
+	for _, retired := range []string{"timeout_seconds", "restrict_to_workspace", "heartbeat", "cli_path", "cli", "tools_cfg", "tool_policy_changes", "mcp_servers"} {
 		if declared[retired] {
-			t.Errorf("update_agent Parameters() still declares retired/unbacked field %q", retired)
+			t.Errorf("update_agent Parameters() still declares retired/forbidden field %q", retired)
 		}
 	}
 }
@@ -134,7 +116,9 @@ func TestAgentUpdateTool_NoOrphanedParameters(t *testing.T) {
 // provider and max_tool_iterations parameters are not just schema-declared
 // but actually persisted onto the entity record.
 func TestAgentCreate_AppliesProviderAndMaxToolIterations(t *testing.T) {
-	deps, _ := newTestDeps()
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
+	deps, _ := newTestDeps(t)
 	tool := systools.NewAgentCreateTool(deps)
 
 	result := tool.Execute(context.Background(), map[string]any{
@@ -142,8 +126,7 @@ func TestAgentCreate_AppliesProviderAndMaxToolIterations(t *testing.T) {
 		"description":         "Tests provider + max_tool_iterations wiring",
 		"soul":                "You are a test bot.",
 		"model":               "test/model",
-		"color":               "#22C55E",
-		"icon":                "robot",
+		"color":               "#6E8BA8",
 		"provider":            "openrouter",
 		"max_tool_iterations": float64(42),
 	})
@@ -167,16 +150,16 @@ func TestAgentCreate_AppliesProviderAndMaxToolIterations(t *testing.T) {
 // path: a negative max_tool_iterations is rejected with INVALID_INPUT, not
 // silently clamped or silently ignored.
 func TestAgentCreate_RejectsNegativeMaxToolIterations(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	tool := systools.NewAgentCreateTool(deps)
 
+	before := wu3DurableInventory(t, deps.Home)
 	result := tool.Execute(context.Background(), map[string]any{
 		"name":                "Bad Bot",
 		"description":         "d",
 		"soul":                "s",
 		"model":               "test/model",
-		"color":               "#22C55E",
-		"icon":                "robot",
+		"color":               "#6E8BA8",
 		"max_tool_iterations": float64(-1),
 	})
 	if !result.IsError {
@@ -187,9 +170,7 @@ func TestAgentCreate_RejectsNegativeMaxToolIterations(t *testing.T) {
 	if errObj["code"] != "INVALID_INPUT" {
 		t.Errorf("error code = %v, want INVALID_INPUT", errObj["code"])
 	}
-	if _, err := agentstore.New(deps.Home).Get("bad-bot"); err == nil {
-		t.Error("agent should not have been created after validation failure")
-	}
+	requireNoDurableChange(t, deps.Home, before, "agent should not have been created after validation failure")
 }
 
 // TestAgentUpdate_AppliesProviderAndMaxToolIterations mirrors the create-side
@@ -197,7 +178,7 @@ func TestAgentCreate_RejectsNegativeMaxToolIterations(t *testing.T) {
 // string (matching REST's updateAgent semantics for the identical wire
 // field — see pkg/gateway/rest.go's req.Provider handling).
 func TestAgentUpdate_AppliesProviderAndMaxToolIterations(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	store := agentstore.New(deps.Home)
 	if err := store.Create("my-agent", &config.AgentConfig{
 		ID:                "my-agent",
@@ -271,10 +252,10 @@ func objectAt(t *testing.T, root map[string]any, keys ...string) map[string]any 
 }
 
 func TestAgentToolNestedParameterSchemasAreTyped(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	for _, tool := range []interface{ Parameters() map[string]any }{
 		systools.NewAgentCreateTool(deps),
-		systools.NewAgentUpdateTool(deps),
+		systools.NewAgentPermissionsTool(deps),
 	} {
 		params := tool.Parameters()
 		props := objectAt(t, params, "properties")
@@ -306,7 +287,12 @@ func TestAgentToolNestedParameterSchemasAreTyped(t *testing.T) {
 		if _, ok := patchProps["remove"]; !ok {
 			t.Error("tool_policy_changes.properties missing remove")
 		}
-
+	}
+	for _, tool := range []interface{ Parameters() map[string]any }{
+		systools.NewAgentCreateTool(deps),
+		systools.NewAgentUpdateTool(deps),
+	} {
+		props := objectAt(t, tool.Parameters(), "properties")
 		model := objectAt(t, props, "model_params")
 		if model["additionalProperties"] != false {
 			t.Errorf("model_params.additionalProperties=%v, want false", model["additionalProperties"])

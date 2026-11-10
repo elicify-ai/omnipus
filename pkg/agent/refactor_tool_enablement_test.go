@@ -73,7 +73,7 @@ func TestAllImplementedToolsRegistered_DefaultConfig(t *testing.T) {
 		// legitimately absent from agent.Tools in this narrow construction path.
 		"find_skills", "install_skill",
 		// Agent orchestration
-		"delegate", "switch_agent",
+		"delegate",
 		// Browser automation — the headline bug being fixed
 		"browser_navigate", "browser_click", "browser_type",
 		"browser_screenshot", "browser_get_text", "browser_wait",

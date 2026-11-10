@@ -70,11 +70,15 @@ func TestEffectiveResolution_InspectSession_JudgeAllow_OthersDeny(t *testing.T) 
 		"(Judge, inspect_session) must resolve allow through the real compositor merge")
 
 	for _, id := range []coreagent.CoreAgentID{
-		coreagent.IDMia, coreagent.IDJim, coreagent.IDAva, coreagent.IDAdmin,
+		coreagent.IDMia, coreagent.IDJim, coreagent.IDOmnipus,
 		coreagent.IDPlanner, coreagent.IDResearcher, coreagent.IDWorker,
 	} {
-		assert.Equalf(t, "deny", resolveFor(t, cfg, string(id), "inspect_session", nil),
-			"(%s, inspect_session) must resolve deny through the real compositor merge", id)
+		// SPEC.md Table + Founder exclusion (2026-10-22): non-system core gains inspection; Omnipus stays unchanged.
+		want := "allow"
+		if id == coreagent.IDOmnipus {
+			want = "deny"
+		}
+		assert.Equalf(t, want, resolveFor(t, cfg, string(id), "inspect_session", nil), "(%s, inspect_session) policy", id)
 	}
 }
 
@@ -109,11 +113,15 @@ func TestEffectiveResolution_PlanExecution_DefaultCeiling_JimAllowOthersAsk(t *t
 				"silently overruling his seeded allow again", tool)
 
 		for _, id := range []coreagent.CoreAgentID{
-			coreagent.IDMia, coreagent.IDAva, coreagent.IDAdmin,
+			coreagent.IDMia, coreagent.IDOmnipus,
 			coreagent.IDPlanner, coreagent.IDResearcher, coreagent.IDWorker,
 		} {
-			assert.Equalf(t, "deny", resolveFor(t, cfg, string(id), tool, nil),
-				"(%s, %s) must resolve deny under ADR-090's shipped role boundaries", id, tool)
+			want := "deny"
+			// SPEC.md Table + Founder exclusion (2026-10-22): Mia gains plan controls; Omnipus and Worker keep their old values.
+			if id == coreagent.IDMia {
+				want = "allow"
+			}
+			assert.Equalf(t, want, resolveFor(t, cfg, string(id), tool, nil), "(%s, %s) default policy", id, tool)
 		}
 	}
 

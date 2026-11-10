@@ -50,12 +50,16 @@ func TestBuildMessages_CaptionlessMediaReachesModel(t *testing.T) {
 	cb := NewContextBuilder(tmpDir)
 	mediaRefs := []string{"media://workspace/ws1/00000000-0000-0000-0000-000000000001"}
 
-	msgs := cb.BuildMessages(nil, "", mediaRefs, "ws1", "webchat", "chat1", "", "", "", nil)
+	msgs := cb.BuildMessages(0, nil, "", mediaRefs, "ws1", "webchat", "chat1", "", "", "", nil)
 
 	require.NotEmpty(t, msgs, "BuildMessages must not return an empty message list")
-	last := msgs[len(msgs)-1]
+	// FR-007, clarified by squad-lead Q1=A: the original media turn is
+	// immediately before the separate volatile tail, not the final message.
+	conversation := requireConversationBeforeVolatileTail(t, msgs)
+	require.Len(t, conversation, 2, "only the pinned system and original media user message precede the tail")
+	last := conversation[len(conversation)-1]
 	assert.Equal(t, "user", last.Role,
-		"the caption-less media turn must still be appended as the final user message")
+		"the caption-less media turn must remain the user message immediately before the volatile tail")
 	assert.Equal(t, mediaRefs, last.Media,
 		"the media refs must survive onto the appended message even though Content is empty")
 	assert.Empty(t, last.Content, "caption stays empty — D1 does not synthesize fake caption text")
@@ -71,9 +75,12 @@ func TestBuildMessages_CaptionAndMediaBothReach(t *testing.T) {
 	cb := NewContextBuilder(tmpDir)
 	mediaRefs := []string{"media://workspace/ws1/00000000-0000-0000-0000-000000000002"}
 
-	msgs := cb.BuildMessages(nil, "what is this?", mediaRefs, "ws1", "webchat", "chat1", "", "", "", nil)
+	msgs := cb.BuildMessages(0, nil, "what is this?", mediaRefs, "ws1", "webchat", "chat1", "", "", "", nil)
 
-	last := msgs[len(msgs)-1]
+	// Q1=A preserves caption and media together, immediately before the tail.
+	conversation := requireConversationBeforeVolatileTail(t, msgs)
+	require.Len(t, conversation, 2, "only the pinned system and original media user message precede the tail")
+	last := conversation[len(conversation)-1]
 	assert.Equal(t, "user", last.Role)
 	assert.Equal(t, "what is this?", last.Content)
 	assert.Equal(t, mediaRefs, last.Media)
@@ -87,8 +94,8 @@ func TestBuildMessages_NoTextNoMedia_NothingAppended(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	cb := NewContextBuilder(tmpDir)
-	before := cb.BuildMessages(nil, "placeholder", nil, "", "webchat", "chat1", "", "", "", nil)
-	after := cb.BuildMessages(nil, "", nil, "", "webchat", "chat1", "", "", "", nil)
+	before := cb.BuildMessages(0, nil, "placeholder", nil, "", "webchat", "chat1", "", "", "", nil)
+	after := cb.BuildMessages(0, nil, "", nil, "", "webchat", "chat1", "", "", "", nil)
 
 	assert.Equal(t, len(before)-1, len(after),
 		"an empty caption with no media must still be dropped — only the media-present case changes")

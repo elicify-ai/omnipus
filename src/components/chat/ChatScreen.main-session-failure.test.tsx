@@ -1,0 +1,292 @@
+// Train 1 UAT Row 4: the dispatch, not the implementation, supplies these oracles.
+// Real screen/composer, entry flow/decision, stores and queries. Only API network
+// calls and the third-party AssistantUI/router environment are stand-ins.
+import type { ReactNode } from 'react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { QueryClientProvider } from '@tanstack/react-query'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { Workspace, WorkspaceMemberConfig } from '@/lib/api/generated/openapi-types'
+import type { WsConnection } from '@/lib/ws'
+import { queryClient } from '@/lib/queryClient'
+import { useChatStore } from '@/store/chat'
+import { useConnectionStore } from '@/store/connection'
+import { useSessionStore } from '@/store/session'
+import { runWorkspaceEntry } from '@/store/session/workspaceEntryFlow'
+import { useUiStore } from '@/store/ui'
+import { useWorkspacesStore } from '@/store/workspacesStore'
+import { JIM, MIA, workspace } from '../../../tests/omnipus-l1-ui-red/fixtures'
+import { ChatScreen } from './ChatScreen'
+import type { ServerFrame } from '@/lib/api/generated/asyncapi-types'
+import { expectValidFrame, expectValidPage, page, snapshot } from '../../../tests/chat-history-paging/fixtures'
+import { emptyHistoryPage, type HistoryReadPort } from '../../../tests/chat-history-paging/legacy-fixtures'
+
+vi.mock('@assistant-ui/react', async () => (await import('@/test/assistantUiMock')).createAssistantUiMock())
+vi.mock('@tanstack/react-router', () => ({
+  useRouter: () => ({ navigate: vi.fn() }),
+  useNavigate: () => vi.fn(),
+  useSearch: () => ({}),
+  Link: ({ children }: { children: ReactNode }) => children,
+}))
+vi.mock('@/lib/api', async (original) => ({
+  ...await original<typeof import('@/lib/api')>(),
+  fetchWorkspace: vi.fn(),
+  fetchWorkspaces: vi.fn().mockResolvedValue([]),
+  fetchSessions: vi.fn().mockResolvedValue([]),
+  fetchAgents: vi.fn().mockResolvedValue([]),
+  fetchSessionMessages: vi.fn<HistoryReadPort>(async sessionId => emptyHistoryPage(sessionId)),
+  fetchCommands: vi.fn().mockResolvedValue([]),
+  fetchSkills: vi.fn().mockResolvedValue([]),
+  fetchProviders: vi.fn().mockResolvedValue([]),
+}))
+import { fetchAgents, fetchSessions, fetchWorkspace } from '@/lib/api'
+
+const WS = 'row4-fault-workspace'
+const MAIN = 'opaque-server-recovered-main'
+const READY = 'Your agent is ready. Start a conversation below.'
+// Exact founder-specified text for the tester's ENOTDIR fault; never synthesized by the UI.
+const FOLDER_ERROR = 'The main chat could not be prepared because session storage has a file where a folder is required. Ask the server operator to fix it, then retry.'
+const sender = { send: vi.fn<WsConnection['send']>().mockReturnValue(true) }
+
+function team(member: WorkspaceMemberConfig, id = WS): Workspace {
+  return workspace(id, {
+    core_team: ['mia', 'jim'],
+    member_configs: {
+      mia: member,
+      jim: { main_session_id: 'opaque-healthy-sibling-main' },
+    },
+  })
+}
+
+beforeEach(() => {
+  vi.stubGlobal('ResizeObserver', undefined)
+  localStorage.clear()
+  queryClient.clear()
+  vi.mocked(fetchAgents).mockReset().mockResolvedValue([MIA, JIM])
+  vi.mocked(fetchSessions).mockReset().mockResolvedValue([])
+  vi.mocked(fetchWorkspace).mockReset().mockResolvedValue(team({ main_session_error: FOLDER_ERROR }))
+  sender.send.mockClear()
+  act(() => {
+    useSessionStore.setState(useSessionStore.getInitialState(), true)
+    useChatStore.setState(useChatStore.getInitialState(), true)
+    useConnectionStore.setState(useConnectionStore.getInitialState(), true)
+    useWorkspacesStore.setState(useWorkspacesStore.getInitialState(), true)
+    useUiStore.setState({ toasts: [] })
+    useWorkspacesStore.setState({ activeWorkspaceId: WS })
+    // Reproduce the stale selection that made the failed main advertise readiness.
+    useSessionStore.setState({ activeAgentId: 'mia' })
+    useConnectionStore.getState().setConnection(sender as unknown as WsConnection)
+    useConnectionStore.getState().setConnected(true)
+  })
+})
+
+afterEach(() => {
+  cleanup()
+  queryClient.clear()
+  vi.unstubAllGlobals()
+})
+
+function showChat() {
+  return render(<QueryClientProvider client={queryClient}><ChatScreen /></QueryClientProvider>)
+}
+
+async function enter(id = WS) {
+  await act(async () => { await runWorkspaceEntry(id) })
+}
+
+function finishReplay() {
+  const history = page([], { sessionId: MAIN })
+  expectValidPage(history, [], 0)
+  const frames: ServerFrame[] = [
+    { ...snapshot(history), seq: 1, boot_id: 'row4-boot' },
+    { type: 'session_state', session_id: MAIN, user_id: 'row4-reader', pending_approvals: [],
+      emitted_at: '2026-10-10T00:00:00Z', history_state: { status: 'available' } },
+    { type: 'done', session_id: MAIN },
+    { type: 'catch_up_complete', session_id: MAIN, seq: 1, boot_id: 'row4-boot', mode: 'snapshot' },
+  ]
+  frames.forEach(expectValidFrame)
+  act(() => frames.forEach(frame => useChatStore.getState().handleFrame(frame)))
+}
+
+describe('Train 1 Row 4 — honest failed member main', () => {
+  it('shows the server storage cause and Retry, never readiness or a sibling main, and disables sending', async () => {
+    await enter()
+    showChat()
+
+    expect(screen.queryByText(READY, { exact: true })).not.toBeInTheDocument()
+    expect(screen.getByText(FOLDER_ERROR, { exact: true })).toBeVisible()
+    expect(screen.getByRole('alert')).toHaveTextContent(FOLDER_ERROR)
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled()
+    expect(screen.getByTestId('composer-input')).toBeDisabled()
+    expect(screen.getByTestId('chat-send')).toBeDisabled()
+    expect(useSessionStore.getState().activeSessionId).toBeNull()
+    expect(sender.send.mock.calls).toEqual([])
+    expect(vi.mocked(fetchWorkspace).mock.calls).toEqual([[WS]])
+  })
+
+  it('preserves a different server-provided cause verbatim instead of hard-coding the folder conflict', async () => {
+    const message = 'The main chat could not be prepared because session storage is unavailable. Ask the server operator to check it, then retry.'
+    vi.mocked(fetchWorkspace).mockResolvedValue(team({ main_session_error: message }))
+    await enter()
+    showChat()
+
+    expect(screen.getByText(message, { exact: true })).toBeVisible()
+    expect(screen.queryByText(FOLDER_ERROR, { exact: true })).not.toBeInTheDocument()
+    expect(screen.getByTestId('composer-input')).toBeDisabled()
+    expect(sender.send.mock.calls).toEqual([])
+  })
+
+  it('Retry refetches the failed workspace once and opens only its newly returned main', async () => {
+    await enter()
+    showChat()
+    expect(screen.getByText(FOLDER_ERROR, { exact: true })).toBeVisible()
+    let release!: (value: Workspace) => void
+    vi.mocked(fetchWorkspace).mockReturnValue(new Promise((resolve) => { release = resolve }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    try {
+      expect(vi.mocked(fetchWorkspace).mock.calls).toEqual([[WS], [WS]])
+      expect(screen.queryByText(READY, { exact: true })).not.toBeInTheDocument()
+      expect(screen.getByTestId('composer-input')).toBeDisabled()
+      expect(screen.getByTestId('chat-send')).toBeDisabled()
+      expect(sender.send.mock.calls).toEqual([])
+    } finally {
+      await act(async () => { release(team({ main_session_id: MAIN })) })
+    }
+    await waitFor(() => expect(useSessionStore.getState().activeSessionId).toBe(MAIN))
+    finishReplay()
+
+    expect(vi.mocked(fetchWorkspace).mock.calls).toEqual([[WS], [WS]])
+    expect(sender.send.mock.calls).toEqual([[{ type: 'attach_session', session_id: MAIN }]])
+    expect(useSessionStore.getState().activeAgentId).toBe('mia')
+    expect(screen.queryByText(FOLDER_ERROR, { exact: true })).not.toBeInTheDocument()
+    expect(screen.queryByTestId('unavailable-chat-notice')).not.toBeInTheDocument()
+    expect(screen.getByText(READY, { exact: true })).toBeVisible()
+    expect(screen.getByTestId('composer-input')).toBeEnabled()
+    expect(screen.getByTestId('chat-send')).toBeEnabled()
+  })
+
+  it('keeps the normal welcome unchanged for a healthy first main and ignores another member error', async () => {
+    vi.mocked(fetchWorkspace).mockResolvedValue({
+      ...team({ main_session_id: MAIN }),
+      member_configs: { mia: { main_session_id: MAIN }, jim: { main_session_error: FOLDER_ERROR } },
+    })
+    await enter()
+    finishReplay()
+    showChat()
+
+    expect(screen.getByText(READY, { exact: true })).toBeVisible()
+    expect(screen.queryByText(FOLDER_ERROR, { exact: true })).not.toBeInTheDocument()
+    expect(screen.queryByTestId('unavailable-chat-notice')).not.toBeInTheDocument()
+    expect(screen.getByTestId('composer-input')).toBeEnabled()
+    expect(screen.getByTestId('chat-send')).toBeEnabled()
+    expect(sender.send.mock.calls).toEqual([[{ type: 'attach_session', session_id: MAIN }]])
+  })
+
+  it('retains the generic Retry notice without a server cause but does not call the unresolved main ready', async () => {
+    vi.mocked(fetchWorkspace).mockResolvedValue(team({}))
+    await enter()
+    showChat()
+
+    expect(screen.queryByText(READY, { exact: true })).not.toBeInTheDocument()
+    expect(screen.getByText('This chat is unavailable right now', { exact: true })).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled()
+    expect(screen.getByTestId('composer-input')).toBeDisabled()
+    expect(screen.getByTestId('chat-send')).toBeDisabled()
+    expect(sender.send.mock.calls).toEqual([])
+  })
+
+  it('does not show the ready welcome or enable the composer while the main is still being resolved', async () => {
+    let release!: (value: Workspace) => void
+    vi.mocked(fetchWorkspace).mockReturnValue(new Promise((resolve) => { release = resolve }))
+    const pending = runWorkspaceEntry(WS)
+    try {
+      showChat()
+      expect(screen.queryByText(READY, { exact: true })).not.toBeInTheDocument()
+      expect(screen.getByTestId('composer-input')).toBeDisabled()
+      expect(screen.getByTestId('chat-send')).toBeDisabled()
+      expect(sender.send.mock.calls).toEqual([])
+    } finally {
+      await act(async () => {
+        release(team({ main_session_id: MAIN }))
+        await pending
+      })
+    }
+  })
+
+  it('does not advertise readiness after a failed restore with a selected agent', () => {
+    act(() => useSessionStore.setState({
+      workspaceEntry: {
+        status: 'failed-attempt', committed: null,
+        attempted: { sessionId: 'remembered-unavailable-chat', sendEnabled: false },
+        acknowledged: false, retry: true, fellBack: false,
+      },
+    }))
+    showChat()
+
+    expect(screen.queryByText(READY, { exact: true })).not.toBeInTheDocument()
+    expect(screen.getByText('Could not restore your last conversation. Retry to try again.', { exact: true })).toBeVisible()
+    expect(screen.getByTestId('composer-input')).toBeDisabled()
+    expect(screen.getByTestId('chat-send')).toBeDisabled()
+  })
+
+  it('does not carry the same member failure into a different healthy workspace', async () => {
+    await enter()
+    showChat()
+    const healthyWorkspace = 'row4-other-workspace'
+    vi.mocked(fetchWorkspace).mockResolvedValue(team({ main_session_id: MAIN }, healthyWorkspace))
+    act(() => useWorkspacesStore.setState({ activeWorkspaceId: healthyWorkspace }))
+    await enter(healthyWorkspace)
+    finishReplay()
+
+    expect(vi.mocked(fetchWorkspace).mock.calls).toEqual([[WS], [healthyWorkspace]])
+    expect(screen.queryByText(FOLDER_ERROR, { exact: true })).not.toBeInTheDocument()
+    expect(screen.getByText(READY, { exact: true })).toBeVisible()
+    expect(screen.getByTestId('composer-input')).toBeEnabled()
+    expect(sender.send.mock.calls).toEqual([[{ type: 'attach_session', session_id: MAIN }]])
+  })
+})
+
+// r19-c: D7 commits a first page only after complete application. D7a says
+// server availability is not proof of loaded history. A resolved main and
+// staged empty page must not advertise an already-ready empty conversation.
+describe('C2 r19 resolved-main history proof boundary', () => {
+  it('r19-c: a resolved healthy main shows no ready welcome before its staged snapshot completes, then keeps the exact normal welcome', async () => {
+    vi.mocked(fetchWorkspace).mockResolvedValue(team({ main_session_id: MAIN }))
+    await enter()
+    showChat()
+    expect(useSessionStore.getState().activeSessionId).toBe(MAIN)
+    expect(useSessionStore.getState().activeAgentId).toBe('mia')
+    expect(sender.send.mock.calls).toStrictEqual([[{ type: 'attach_session', session_id: MAIN }]])
+    expect(useChatStore.getState().sessionsById[MAIN].history.historyLoaded,
+      'instrument: the real healthy main resolved before any page was supplied').toBe(false)
+    expect(screen.queryByText(READY, { exact: true }),
+      'D7/D7a: a known selected main without a loaded page is not successful empty history').not.toBeInTheDocument()
+    expect(screen.getByText('Loading messages…', { exact: true })).toHaveAttribute('role', 'status')
+
+    const history = page([], { sessionId: MAIN })
+    expectValidPage(history, [], 0)
+    const staged: ServerFrame[] = [
+      { ...snapshot(history), seq: 1, boot_id: 'row4-boot' },
+      { type: 'session_state', session_id: MAIN, user_id: 'row4-reader', pending_approvals: [],
+        emitted_at: '2026-10-10T00:00:00Z', history_state: { status: 'available' } },
+      { type: 'done', session_id: MAIN },
+    ]
+    staged.forEach(expectValidFrame)
+    act(() => staged.forEach(frame => useChatStore.getState().handleFrame(frame)))
+    expect(useChatStore.getState().sessionsById[MAIN].history.serverState).toStrictEqual({ status: 'available' })
+    expect(useChatStore.getState().sessionsById[MAIN].history.historyLoaded,
+      'D7: even a valid empty selected page is staged until matching COMPLETE').toBe(false)
+    expect(screen.queryByText(READY, { exact: true })).not.toBeInTheDocument()
+
+    const complete: ServerFrame = { type: 'catch_up_complete', session_id: MAIN, seq: 1, boot_id: 'row4-boot', mode: 'snapshot' }
+    expectValidFrame(complete)
+    act(() => useChatStore.getState().handleFrame(complete))
+    expect(useChatStore.getState().sessionsById[MAIN].history.historyLoaded).toBe(true)
+    expect(useChatStore.getState().sessionsById[MAIN].replayCompletedForSession).toBe(MAIN)
+    expect(screen.getByText(READY, { exact: true })).toBeVisible()
+    expect(screen.getByTestId('composer-input')).toBeEnabled()
+    expect(screen.getByTestId('chat-send')).toBeEnabled()
+    expect(vi.mocked(fetchWorkspace).mock.calls).toStrictEqual([[WS]])
+    expect(sender.send.mock.calls, 'history completion did not resend or reattach the main').toStrictEqual([[{ type: 'attach_session', session_id: MAIN }]])
+  })
+})

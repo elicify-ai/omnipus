@@ -5,6 +5,8 @@
 - **Spec:** 3 of 6 (v0.1.0 Foundation)
 - **Source ADR:** [ADR-019](../architecture/ADR-019-v01-workspaces-foundation.md) — FR-3 + FR-6
 - **Status:** Draft → pending `/grill-spec` (GATE C)
+
+Status: Draft
 - **Cross-spec (Phase 3.5):** consumes Spec-1's `Workspace` key + the renamed `system.workspace.*` tools; the sub-agent **`executor`** field + external runners are **Spec-4** (Spec-3 owns the base roster, delegation policy, the Orchestrator agent, and Max-parallel); the Orchestrator's DAG hook depends on Spec-5's `blocked_by` + the existing `task_status_changed` event.
 - **Lessons pre-applied:** completeness-by-construction (compiler) for the roster re-cast; contract-first for the policy schema; CI-authority for tests; greenfield; new fields fully schema-pinned (NFR-7); no new deps.
 

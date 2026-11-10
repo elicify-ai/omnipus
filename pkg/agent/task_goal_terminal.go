@@ -48,7 +48,6 @@ package agent
 import (
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -239,31 +238,6 @@ func recordTaskGoalVerdict(taskID string, verdict *task.JudgeVerdict, reason str
 	}
 }
 
-// mintLegacyTaskGoal creates the defining-phase goal record a legacy task
-// (created before D-C, GOAL-FR-023) never got, so its run can activate a goal
-// and its worker can claim through goal_claim. Criteria come from the task
-// record (possibly none — the Judge then uses the soft-tier criterion), the
-// Definition of Done is the built-in floor every compiled goal carries
-// (ADR-080 D-DOD layer 3), and the try limit is the live Settings value.
-func (te *TaskExecutor) mintLegacyTaskGoal(t *task.Task) (*goal.Goal, error) {
-	prompt := strings.TrimSpace(t.Prompt)
-	if prompt == "" {
-		prompt = strings.TrimSpace(t.Title)
-	}
-	if prompt == "" {
-		prompt = "task " + t.ID
-	}
-	g, err := goal.New(generated.GoalOwnerKindTask, t.ID, generated.GoalSourceTaskExplicit,
-		prompt, "", t.Criteria, newFloorDoD(), goalTryLimit(te.agentLoop), time.Now().UTC())
-	if err != nil {
-		return nil, fmt.Errorf("build goal record: %w", err)
-	}
-	if err := resolveGoalRecordStore().Create(g); err != nil {
-		return nil, fmt.Errorf("persist goal record: %w", err)
-	}
-	return g, nil
-}
-
 // terminateTaskGoalRecord is this package's entry point to the ONE shared
 // task-terminal -> goal-terminal transition, tools.TerminateTaskGoalRecord.
 //
@@ -274,8 +248,10 @@ func (te *TaskExecutor) mintLegacyTaskGoal(t *task.Task) (*goal.Goal, error) {
 // called this hook even if their authors had wanted to. The implementation
 // moved to pkg/tools — the only package all four writer packages already
 // import that can also see pkg/goal — and this wrapper exists purely so
-// pkg/agent's three call sites (completeTaskWithResult, failTask,
-// PlanEngine.cancelMemberLocked) keep their short, store-free signature.
+// pkg/agent's remaining call sites (completeTaskWithResult, failTask,
+// failTaskBeforeDispatch) keep their short, store-free signature.
+// PlanEngine.cancelMemberLocked no longer calls it: a user Stop keeps the
+// paired goal record active (MAJ-003, GoalStateForTerminalTask).
 // Read tools.TerminateTaskGoalRecord's section header for the full rationale,
 // including why a real store-level chokepoint is impossible here.
 //

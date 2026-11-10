@@ -31,6 +31,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -132,17 +133,21 @@ func acquireWorkspaceRunLockCtx(ctx context.Context, workDir string) (release fu
 
 // runExternalCLISubTurnState carries the shared state of runExternalCLISubTurn across its stages.
 type runExternalCLISubTurnState struct {
-	al          *AgentLoop
-	childTS     *turnState
-	timeout     time.Duration
-	agent       *AgentInstance
-	runID       string
-	timeoutSecs int
-	maxTurns    int
-	agentModel  string
-	childEnv    []string
-	execCfg     *config.ExecutorConfig
-	cliArgs     []string
+	al         *AgentLoop
+	childTS    *turnState
+	agent      *AgentInstance
+	runID      string
+	maxTurns   int
+	agentModel string
+	childEnv   []string
+	execCfg    *config.ExecutorConfig
+	cliArgs    []string
+	// The Settings program and preset for this run (r17 §3.6, §3.7),
+	// filled by resolveRunProgram before anything is dispatched.
+	programEntered  string
+	programResolved string
+	presetText      string
+	presetArgs      []string
 }
 
 // runExternalCLISubTurn executes a delegated sub-agent task through an external
@@ -150,7 +155,8 @@ type runExternalCLISubTurnState struct {
 // shape (ForLLM/ForUser carry the run's aggregated output; Err is set on failure).
 //
 // childTS is the sub-turn's turnState (used for transcript writes + agent ID).
-// task is the delegated input prompt. timeout bounds the whole run.
+// task is the delegated input prompt. There is no run deadline: the CLI runs
+// until it finishes or ctx is cancelled by an explicit Stop (issue #1306).
 //
 // childTS.agent is the resolved DELEGATE's own AgentInstance
 // (steer_reconstruct.go::reconstructSteeredTurn sources it from
@@ -197,9 +203,8 @@ func runExternalCLISubTurn(
 	al *AgentLoop,
 	childTS *turnState,
 	task string,
-	timeout time.Duration,
 ) (*tools.ToolResult, error) {
-	ed := &runExternalCLISubTurnState{al: al, childTS: childTS, timeout: timeout}
+	ed := &runExternalCLISubTurnState{al: al, childTS: childTS}
 
 	ed.agent = ed.childTS.agent
 	if ed.agent == nil || ed.agent.Subagents == nil || ed.agent.Subagents.Executor == nil {
@@ -213,6 +218,11 @@ func runExternalCLISubTurn(
 	ed.runID = ed.childTS.turnID
 	if ed.runID == "" {
 		ed.runID = fmt.Sprintf("ext-%d", time.Now().UnixNano())
+	}
+	// r17 §3.6: no Settings program, or one that fails its checks, refuses
+	// the run before anything is dispatched.
+	if refusal := ed.resolveRunProgram(cli); refusal != nil {
+		return nil, refusal
 	}
 
 	// 1. Resolve the run's working directory: the workspace's dedicated
@@ -263,7 +273,7 @@ func runExternalCLISubTurn(
 	//    AGENT.md (Project Instructions) and the shared memory room (.omnipus/)
 	//    structurally unreachable — os.Root-confined tools cannot open a path
 	//    outside their root, not merely guarded against.
-	workDir, wsErr := resolveTurnWorkDirOrRefuse(ctx, ed.agent.ID, ed.agent.Home, ed.childTS.opts.WorkspaceID)
+	workDir, workWsID, wsErr := resolveTurnWorkDirAndWorkspaceOrRefuse(ctx, ed.agent.ID, ed.agent.Home, ed.childTS.opts.WorkspaceID)
 	if wsErr != nil {
 		return nil, ed.reportWorkspaceRefusal(wsErr)
 	}
@@ -295,10 +305,10 @@ func runExternalCLISubTurn(
 	// inline context.Background() call. ADR-091 fix lane RX-SUBTURN note
 	// (comment-only; code unchanged): today runCtx is built below via
 	// context.WithCancel(ctx), where ctx is this function's own parameter —
-	// tracing its callers (task_executor_run.go's dispatchCtx, itself
-	// derived from the incoming ctx; and, for a delegate-tool dispatch,
-	// ultimately steer_launcher.go::runDispatchedSteeredTurn's
-	// steeredTurnRunContext(context.Background(), rec)) suggests the same
+	// tracing its callers (task_executor_run.go passes the task's own ctx;
+	// and, for a delegate-tool dispatch, ultimately
+	// steer_launcher.go::runDispatchedSteeredTurn's context.Background() —
+	// no deadline since issue #1306) suggests the same
 	// Background()-rooted detachment still holds indirectly, but this was
 	// not re-verified end-to-end for this lane. Worst case, pre-ADR-091: a
 	// SYNCHRONOUS delegate (`delegate(async=false)`) deadlocked the parent
@@ -306,8 +316,8 @@ func runExternalCLISubTurn(
 	// graceful→hard→detached as if cancel worked — ADR-091 D4 deleted the
 	// async=false option outright, so this specific scenario no longer
 	// applies, though the underlying "nothing else can ever cancel runCtx
-	// without this registration" concern is presumably still real for
-	// whatever timeout/cancel path replaced it.
+	// without this registration" concern is presumably still real for the
+	// cancel path that replaced it (there is no run timeout since #1306).
 	//
 	// One cancel func for both slots is the correct behavior here (not a
 	// simplification): runner.ExternalAgentRunner exposes no distinct graceful
@@ -323,50 +333,6 @@ func runExternalCLISubTurn(
 	ed.childTS.setTurnCancel(cancel)
 	ed.childTS.setProviderCancel(cancel)
 
-	// FIX 4 (concurrency, arch #2 warning): serialize external-CLI runs that
-	// share this workspace directory — see workspaceRunLocks' doc comment.
-	// Held for the whole run (driver instantiation through the drain loop
-	// below) since that is the window during which the child process can
-	// touch the workspace tree. A different workspace path is never blocked
-	// by this.
-	//
-	// Cancel-aware acquire (BLOCK finding, layer 2 of the fix): waits for the
-	// token OR runCtx ending, whichever comes first. Because runCtx's cancel
-	// func was registered on childTS immediately above (layer 1), a cancel
-	// that fires while this run is queued behind another same-workspace run
-	// now unblocks this select right away and the run below is skipped
-	// entirely, rather than silently becoming uncancelable until the lock
-	// eventually frees.
-	releaseWorkspaceLock, acquired := acquireWorkspaceRunLockCtx(runCtx, workDir)
-	if !acquired {
-		cancelErr := fmt.Errorf(
-			"external-cli dispatch: canceled while waiting for the workspace lock: %w",
-			runCtx.Err(),
-		)
-		return &tools.ToolResult{
-			Err: cancelErr,
-			ForLLM: fmt.Sprintf(
-				"External CLI run (%s) canceled while waiting for the workspace lock: %v",
-				cli,
-				cancelErr,
-			),
-		}, cancelErr
-	}
-	defer releaseWorkspaceLock()
-
-	// Belt-and-suspenders (BLOCK finding, layer 3 of the fix): a cancel could
-	// in principle race in between acquireWorkspaceRunLockCtx's ctx-check and
-	// the token actually being received. Re-check immediately after
-	// acquiring, before touching the driver at all, so a run that got its
-	// cancel signal during the wait never starts.
-	if runCtx.Err() != nil {
-		cancelErr := fmt.Errorf("external-cli dispatch: canceled before starting: %w", runCtx.Err())
-		return &tools.ToolResult{
-			Err:    cancelErr,
-			ForLLM: fmt.Sprintf("External CLI run (%s) canceled before starting: %v", cli, cancelErr),
-		}, cancelErr
-	}
-
 	// 2. Build the consent handler. External-CLI permission requests are
 	//    auto-approved unconditionally (issue #488) — see policyApproverConsent's
 	//    type doc for why this is a deliberately different posture from native
@@ -376,37 +342,149 @@ func runExternalCLISubTurn(
 		runID:   ed.runID,
 	}
 
-	// 3. Instantiate the driver for the configured CLI. The factory is a package
-	//    var so in-package tests can inject a fake/stub driver without a real CLI.
-	driver, err := newExternalDriver(cli, consent)
-	if err != nil {
-		return nil, fmt.Errorf("external-cli dispatch: %w", err)
-	}
-
 	ed.prepareRunOptions()
 
-	evCh, err := driver.Run(runCtx, runner.RunOptions{
-		RunID:          ed.runID,
-		WorkDir:        workDir,
-		Input:          task,
-		Env:            ed.childEnv,
-		TimeoutSeconds: ed.timeoutSecs,
-		MaxTurns:       ed.maxTurns,
-		CLIPath:        ed.execCfg.CLIPath,
-		CLIArgs:        ed.cliArgs,
-		EnvOverrides:   ed.execCfg.EnvOverrides,
+	// 3. Select the driver and how to start it (FR-043, N5/N7). A CONTINUATION
+	//    that is delivering a queued follow-up instruction Resumes the session's
+	//    existing native CLI conversation; a later entry of a steered session
+	//    that has no retained driver — or any entry of a session that already
+	//    ran — refuses rather than starting a fresh conversation; only a genuine
+	//    first launch Runs fresh. The selection lives in external_run_session.go
+	//    — one place, keyed per child session, so the resume reuses the SAME
+	//    driver (its captured native conversation id + preserved RunOptions:
+	//    runtime/workspace/model/caps) rather than starting a fresh conversation.
+	//    The factory stays a package var so in-package tests can inject a
+	//    fake/stub driver. cancel is the run's own cancel func, retained on the
+	//    holder so a steer delivery interrupts THIS run (N2). resumeOnly is true
+	//    for a steered (non-task) session, whose every post-launch entry must
+	//    resume-or-refuse.
+	sessionKey := externalRunSessionKey(ed.childTS)
+	resumeOnly, resumeOnlyErr := al.externalRunResumeOnly(sessionKey)
+	if resumeOnlyErr != nil {
+		// NEW-3: an unreadable session record refuses before any driver exists;
+		// it must never fall through to a fresh, unmarked run.
+		return nil, fmt.Errorf("external-cli dispatch: %w", resumeOnlyErr)
+	}
+	sess, resume, beginErr := al.beginExternalRun(sessionKey, ed.childTS, cancel, resumeOnly)
+	if beginErr != nil {
+		return nil, fmt.Errorf("external-cli dispatch: %w", beginErr)
+	}
+	defer al.finishExternalRun(sess, sessionKey)
+
+	// 1 (continued). A CONTINUATION must run in — and lock — the SAME workspace
+	//    the native CLI conversation started in (N1): re-resolve the preserved
+	//    workspace and refuse when the agent is no longer eligible for it, so
+	//    this invocation never authorizes one workspace while the retained driver
+	//    executes in another. A first run records the workspace it resolved for
+	//    the continuation's later check.
+	resolvedWorkDir := workDir
+	if resume {
+		preservedWorkDir, preservedWsID := sess.workspaceSnapshot()
+		rw, _, rwErr := resolveTurnWorkDirAndWorkspaceOrRefuse(ctx, ed.agent.ID, ed.agent.Home, preservedWsID)
+		if rwErr != nil {
+			return nil, ed.reportWorkspaceRefusal(rwErr)
+		}
+		if preservedWorkDir == "" || filepath.Clean(rw) != filepath.Clean(preservedWorkDir) {
+			return nil, ed.reportWorkspaceRefusal(fmt.Errorf(
+				"%w: agent %q: start a new delegation", errExternalWorkspaceChanged, ed.agent.ID))
+		}
+		resolvedWorkDir = preservedWorkDir
+	} else {
+		sess.recordWorkspace(workDir, workWsID)
+	}
+
+	// FIX 4 (concurrency, arch #2 warning): serialize external-CLI runs that
+	// share this workspace directory — see workspaceRunLocks' doc comment. Held
+	// for the whole run (driver instantiation through the drain loop below)
+	// since that is the window during which the child process can touch the
+	// workspace tree; a different workspace path is never blocked by this.
+	// Acquired AFTER driver selection so a CONTINUATION locks the workspace the
+	// conversation actually runs in (resolvedWorkDir == the preserved work dir).
+	//
+	// Cancel-aware acquire (BLOCK finding, layer 2 of the fix): waits for the
+	// token OR runCtx ending, whichever comes first. Because runCtx's cancel
+	// func was registered on childTS above (layer 1), a cancel that fires while
+	// this run is queued behind another same-workspace run now unblocks this
+	// select right away and the run below is skipped entirely, rather than
+	// silently becoming uncancelable until the lock eventually frees.
+	releaseWorkspaceLock, canceled, cancelErr := acquireRunSlot(runCtx, cli, resolvedWorkDir)
+	if canceled != nil {
+		return canceled, cancelErr
+	}
+	defer releaseWorkspaceLock()
+
+	// Obtain the driver only now that the pre-start checks have passed: a fresh
+	// Run creates one (recorded for a later continuation to Resume); a Resume
+	// reuses the retained one. A canceled-before-start run therefore never
+	// instantiates a driver (the belt-and-suspenders check above).
+	if !resume && resumeOnly {
+		// N7: durably record that this steered session's first CLI run is
+		// starting, BEFORE any driver exists, so a revive after a restart
+		// resumes-or-refuses instead of starting a fresh conversation.
+		if markErr := al.markExternalRunStarted(sessionKey); markErr != nil {
+			return nil, fmt.Errorf("external-cli dispatch: %w", markErr)
+		}
+	}
+	driver, driverErr := sess.driverForRun(cli, consent, resume)
+	if driverErr != nil {
+		return nil, fmt.Errorf("external-cli dispatch: %w", driverErr)
+	}
+
+	return ed.startAndDrain(runCtx, driver, consent, cli, resolvedWorkDir, task, resume)
+}
+
+// startAndDrain starts (Run) or continues (Resume) the external CLI on driver,
+// routes its events through the consent dispatcher, drains them into the
+// transcript and waits for the process-exit barrier. Extracted from
+// runExternalCLISubTurn unchanged in behaviour.
+func (ed *runExternalCLISubTurnState) startAndDrain(
+	runCtx context.Context,
+	driver runner.ExternalAgentRunner,
+	consent runner.ConsentHandler,
+	cli, resolvedWorkDir, task string,
+	resume bool,
+) (*tools.ToolResult, error) {
+	runOpts := runner.RunOptions{
+		RunID:        ed.runID,
+		WorkDir:      resolvedWorkDir,
+		Input:        task,
+		Env:          ed.childEnv,
+		MaxTurns:     ed.maxTurns,
+		CLIPath:      ed.programResolved,
+		CLIArgs:      ed.cliArgs,
+		PresetArgs:   ed.presetArgs,
+		EnvOverrides: ed.execCfg.EnvOverrides,
 		// Fix C: auto-set the delegate's own configured model on the external
 		// CLI invocation. Each driver's buildArgs guards so an unmapped/empty
 		// model string is simply omitted rather than passed as garbage.
 		Model: ed.agentModel,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("external-cli dispatch: driver start (%s): %w", cli, err)
+	}
+
+	var (
+		evCh <-chan runner.RunEvent
+		err  error
+	)
+	ed.auditRunSpawn(runCtx, cli)
+	if resume {
+		evCh, err = driver.Resume(runCtx, ed.runID, task)
+		if err != nil {
+			// FR-043: a delivery that cannot reach the native conversation —
+			// no captured conversation id, a rejected/crashed resume — is a
+			// VISIBLE failure, never a silent fresh conversation. The driver's
+			// own Resume refusal is the truthful cause and is surfaced here
+			// unchanged (BDD-05.6).
+			return nil, fmt.Errorf("external-cli dispatch: resume native conversation (%s): %w", cli, err)
+		}
+	} else {
+		evCh, err = driver.Run(runCtx, runOpts)
+		if err != nil {
+			return nil, fmt.Errorf("external-cli dispatch: driver start (%s): %w", cli, err)
+		}
 	}
 
 	slog.Info("external-cli dispatch: run started",
-		"run_id", ed.runID, "cli", cli, "work_dir", workDir,
-		"timeout_s", ed.timeoutSecs, "max_turns", ed.maxTurns, "agent_id", ed.childTS.agentID)
+		"run_id", ed.runID, "cli", cli, "work_dir", resolvedWorkDir,
+		"max_turns", ed.maxTurns, "agent_id", ed.childTS.agentID)
 
 	// 5. Route events through the consent dispatcher and drain into the transcript.
 	//    ConsentDispatcher answers permission-requests (Decide) and forwards every
@@ -420,19 +498,69 @@ func runExternalCLISubTurn(
 	}()
 
 	result := drainExternalRun(runCtx, ed.al, ed.childTS, ed.runID, cli, out)
+
+	// N2 process-exit barrier: wait for the driver's OWN event stream to CLOSE.
+	// Each driver's parser goroutine closes that channel only after the child
+	// process has actually exited and its run state has been reset (e.g.
+	// driver_claude.go::Run's deferred d.eventCh = nil / close(ch)). By this
+	// point ConsentDispatcher has stopped reading evCh (it returns on ctx.Done
+	// or evCh close, and drainExternalRun returning means `out` is closed), so
+	// this drain takes evCh to closure — bounded by process exit plus the
+	// existing group-cancel grace. It guarantees a continuation that follows can
+	// call Resume without hitting "Run called while a run is already active",
+	// and the deferred finishExternalRun / releaseWorkspaceLock below release
+	// the driver and the workspace lock only once the process is truly gone.
+	for range evCh {
+	}
 	return result, result.Err
 }
 
-// prepareRunOptions derives the run limits, model, scrubbed environment, and configured CLI arguments.
-func (ed *runExternalCLISubTurnState) prepareRunOptions() {
-	// 4. Bound the run: a per-run timeout + turn cap (FR-5.4).
-	ed.timeoutSecs = int(ed.timeout.Seconds())
-	if ed.timeoutSecs <= 0 {
-		ed.timeoutSecs = int(defaultSubTurnTimeout.Seconds())
+// acquireRunSlot takes the workspace run lock cancel-aware and re-checks the
+// run context right after (layers 2 and 3 of the BLOCK-finding fix): a run that
+// got its cancel signal while queued, or in the instant between the acquire's
+// own check and the token arriving, never starts. On cancellation it returns
+// the canceled ToolResult and its error and no lock is held.
+func acquireRunSlot(runCtx context.Context, cli, workDir string) (release func(), canceled *tools.ToolResult, err error) {
+	releaseWorkspaceLock, acquired := acquireWorkspaceRunLockCtx(runCtx, workDir)
+	if !acquired {
+		cancelErr := fmt.Errorf(
+			"external-cli dispatch: canceled while waiting for the workspace lock: %w",
+			runCtx.Err(),
+		)
+		return nil, &tools.ToolResult{
+			Err: cancelErr,
+			ForLLM: fmt.Sprintf(
+				"External CLI run (%s) canceled while waiting for the workspace lock: %v",
+				cli,
+				cancelErr,
+			),
+		}, cancelErr
 	}
+	if runCtx.Err() != nil {
+		releaseWorkspaceLock()
+		cancelErr := fmt.Errorf("external-cli dispatch: canceled before starting: %w", runCtx.Err())
+		return nil, &tools.ToolResult{
+			Err:    cancelErr,
+			ForLLM: fmt.Sprintf("External CLI run (%s) canceled before starting: %v", cli, cancelErr),
+		}, cancelErr
+	}
+	return releaseWorkspaceLock, nil, nil
+}
+
+// prepareRunOptions derives the turn cap, model, scrubbed environment, and configured CLI arguments.
+func (ed *runExternalCLISubTurnState) prepareRunOptions() {
+	// 4. Bound the run by its turn cap only (FR-5.4). There is no wall-clock
+	// timeout: RunOptions.TimeoutSeconds stays zero, so no driver arms a
+	// kill timer on agent work (issue #1306).
+	// Turn cap = the agent's effective tool-iteration limit (#904 D4/D14),
+	// already resolved onto MaxIterations by NewAgentInstance. An instance
+	// built without that constructor (MaxIterations <= 0) resolves through
+	// the same resolver from the live config, WITH the agent's own stored
+	// value when its record is in the live roster (so an own lower value
+	// still applies) — never a separate literal.
 	ed.maxTurns = ed.agent.MaxIterations
 	if ed.maxTurns <= 0 {
-		ed.maxTurns = DefaultExternalMaxTurns
+		ed.maxTurns = resolveExternalMaxTurns(ed.al.GetConfig(), ed.agent.ID)
 	}
 
 	// FIX 5: hoist the repeated strings.TrimSpace(agent.Model) computation
@@ -466,9 +594,9 @@ func (ed *runExternalCLISubTurnState) prepareRunOptions() {
 	// the workspace FS boundary.
 	ed.childEnv = injectRunnerEgressProxy(ed.childEnv, ed.al.runnerEgressProxyAddr())
 
-	// MAJ-5: consume the agent's ExecutorConfig (cli_path / cli_args /
-	// env_overrides) when spawning the external CLI. cli_path overrides the
-	// driver's default binary (else $PATH); cli_args is tokenised into argv
+	// MAJ-5: consume the agent's ExecutorConfig (cli_args / env_overrides)
+	// when spawning the external CLI. The program comes only from Settings
+	// (resolveRunProgram, r17 §3.6); cli_args is tokenised into argv
 	// (execve, no shell — warn-not-reject on shell-metacharacters); env_overrides
 	// merge into the scrubbed child env (OMNIPUS_* keys are dropped by the driver
 	// env builder, so the master key / agent-identity vars stay protected).
@@ -494,6 +622,9 @@ func drainExternalRun(
 	var sb strings.Builder
 	var runErr error
 	ended := false
+	// unpairedStartID is the generated id of the latest tool call the runner
+	// emitted without a CallID (#492), consumed by the next id-less result.
+	var unpairedStartID string
 
 	for {
 		select {
@@ -557,24 +688,36 @@ func drainExternalRun(
 				}
 			case runner.EventKindToolCall:
 				if ev.ToolCall != nil {
-					recordExternalToolCall(childTS, ev.ToolCall)
+					id := recordExternalToolCall(childTS, ev.ToolCall)
+					if ev.ToolCall.CallID == "" {
+						// The runner gave no call id: remember the generated one so a
+						// later id-less result can still pair with this start live.
+						unpairedStartID = id
+					}
+					emitExternalToolCallStart(al, childTS, id, ev.ToolCall)
 				}
 			case runner.EventKindDiff:
 				if ev.Diff != nil {
-					txt := fmt.Sprintf("diff %s:\n%s", ev.Diff.Path, ev.Diff.Diff)
+					txt := filterExternalString(al, "", fmt.Sprintf("diff %s:\n%s", ev.Diff.Path, ev.Diff.Diff))
 					childTS.appendIntermediateAssistantTranscript(txt, transcriptModelFor(childTS.agent))
 				}
 			case runner.EventKindPermissionRequest:
 				// Already routed to consent by ConsentDispatcher; record for the
 				// transcript so the SPA can show the pending/decided approval.
 				if ev.PermissionRequest != nil {
-					recordExternalPermission(childTS, ev.PermissionRequest)
+					recordExternalPermission(al, childTS, ev.PermissionRequest)
 				}
 			case runner.EventKindToolResult:
 				// Tool result completion from the external runner: mirror it into the
 				// transcript so the run shows the tool's outcome.
 				if ev.ToolResult != nil {
-					recordExternalToolResult(childTS, ev.ToolResult)
+					// Filter ONCE (#1222): the same credential-filtered output
+					// feeds the transcript write and the live event, so neither
+					// sink can carry what the other redacts.
+					filtered := *ev.ToolResult
+					filtered.Output = filterExternalToolOutput(al, filtered.ToolName, filtered.Output)
+					recordExternalToolResult(childTS, &filtered)
+					emitExternalToolCallEnd(al, childTS, &filtered, &unpairedStartID)
 				}
 			case runner.EventKindEnd:
 				ended = true
@@ -651,19 +794,15 @@ done:
 }
 
 // recordExternalToolCall mirrors an external runner tool-call event into the
-// sub-agent session transcript as a tool_call entry.
-func recordExternalToolCall(childTS *turnState, tc *runner.ToolCallEvent) {
+// sub-agent session transcript as a tool_call entry. It returns the call id
+// the entry was recorded under (the runner's own, or a generated one) so the
+// live tool_call_start event carries the SAME id.
+func recordExternalToolCall(childTS *turnState, tc *runner.ToolCallEvent) string {
 	id := tc.CallID
 	if id == "" {
 		id = fmt.Sprintf("ext-tool-%d", time.Now().UnixNano())
 	}
-	var args map[string]any
-	if len(tc.ToolInput) > 0 {
-		if uErr := json.Unmarshal(tc.ToolInput, &args); uErr != nil {
-			slog.Debug("external-cli dispatch: tool-call input is not a JSON object",
-				"tool", tc.ToolName, "call_id", id, "err", uErr)
-		}
-	}
+	args := parseExternalToolInput(tc, id)
 	// The external CLI emits the tool-call event when the call STARTS; Omnipus
 	// consent is post-hoc and we never observe the call's own success/failure from
 	// the stream. Recording "success" would assert an outcome we did not verify.
@@ -675,14 +814,173 @@ func recordExternalToolCall(childTS *turnState, tc *runner.ToolCallEvent) {
 		Status:     "completed",
 		Parameters: args,
 	})
+	return id
+}
+
+// parseExternalToolInput decodes a runner tool-call's raw JSON input into an
+// argument map; a non-object input yields nil (logged at debug).
+func parseExternalToolInput(tc *runner.ToolCallEvent, id string) map[string]any {
+	var args map[string]any
+	if len(tc.ToolInput) > 0 {
+		if uErr := json.Unmarshal(tc.ToolInput, &args); uErr != nil {
+			slog.Debug("external-cli dispatch: tool-call input is not a JSON object",
+				"tool", tc.ToolName, "call_id", id, "err", uErr)
+		}
+	}
+	return args
+}
+
+// emitExternalToolCallStart broadcasts the live tool_call_start for an
+// external-CLI child's tool call (#492), tied to the parent spawn call exactly
+// as the native path does (ParentSpawnCallID), so the SPA's existing
+// SubagentSpan.steps machinery renders it. It only adds a live broadcast
+// alongside the transcript write in recordExternalToolCall; storage is
+// unchanged.
+func emitExternalToolCallStart(al *AgentLoop, childTS *turnState, callID string, tc *runner.ToolCallEvent) {
+	if al == nil || childTS == nil {
+		return
+	}
+	al.emitEvent(
+		EventKindToolExecStart,
+		childTS.eventMeta("drainExternalRun", "turn.tool.start"),
+		ToolExecStartPayload{
+			ToolCallID:        session.ToolCallID(callID),
+			ChatID:            childTS.chatID,
+			SessionID:         u9ToolExecSessionIDs(childTS),
+			Tool:              tc.ToolName,
+			Arguments:         cloneEventArguments(parseExternalToolInput(tc, callID)),
+			ParentSpawnCallID: session.ToolCallID(childTS.parentSpawnCallID),
+			AgentID:           childTS.resolveActiveAgentID(),
+		},
+	)
+}
+
+// emitExternalToolCallEnd broadcasts the live tool_call_result for an
+// external-CLI child's tool result (#492); the counterpart of
+// emitExternalToolCallStart, paired by the runner's CallID. When the runner
+// sent no CallID the result cannot be paired by id: it reuses the start id of
+// the latest id-less call (*unpairedStartID, consumed here) where one is
+// recorded, and logs a warning either way.
+func emitExternalToolCallEnd(al *AgentLoop, childTS *turnState, tr *runner.ToolResultEvent, unpairedStartID *string) {
+	if al == nil || childTS == nil {
+		return
+	}
+	id := tr.CallID
+	if id == "" {
+		if unpairedStartID != nil && *unpairedStartID != "" {
+			id = *unpairedStartID
+			*unpairedStartID = ""
+			slog.Warn("external-cli dispatch: tool result has no call id; pairing with the latest id-less tool call",
+				"tool", tr.ToolName, "paired_call_id", id)
+		} else {
+			id = fmt.Sprintf("ext-tool-result-%d", time.Now().UnixNano())
+			slog.Warn("external-cli dispatch: tool result has no call id and no unpaired start; live result cannot pair",
+				"tool", tr.ToolName, "call_id", id)
+		}
+	}
+	al.emitEvent(
+		EventKindToolExecEnd,
+		childTS.eventMeta("drainExternalRun", "turn.tool.end"),
+		ToolExecEndPayload{
+			ToolCallID:        session.ToolCallID(id),
+			ChatID:            childTS.chatID,
+			SessionID:         u9ToolExecSessionIDs(childTS),
+			Tool:              tr.ToolName,
+			ForLLMLen:         len(tr.Output),
+			IsError:           tr.IsError,
+			Result:            string(tr.Output), // already credential-filtered by the caller (filterExternalToolOutput)
+			ParentSpawnCallID: session.ToolCallID(childTS.parentSpawnCallID),
+			AgentID:           childTS.resolveActiveAgentID(),
+		},
+	)
+}
+
+// filterExternalString gives external-CLI text the treatment the native path
+// applies before it stores or broadcasts tool content: the prompt-guard
+// sanitizer for untrusted tool names first (sanitizeUntrustedToolResult), then
+// credential redaction — in that order, reusing the same guard and the config's
+// own replacer. It honours tools.filter_sensitive_data (IsFilterSensitiveDataEnabled)
+// but deliberately skips FilterSensitiveData's short-content fast path: applied
+// per JSON string leaf that rule would let a short leaf carrying a short secret
+// through where the native whole-content filter would catch it. toolName "" is
+// "not a tool result" (diff, permission text) and skips the prompt guard.
+func filterExternalString(al *AgentLoop, toolName, s string) string {
+	if al == nil || s == "" {
+		return s
+	}
+	if toolName != "" && al.promptGuard != nil && isUntrustedToolResult(toolName) {
+		s = al.promptGuard.Sanitize(s, false)
+	}
+	if cfg := al.GetConfig(); cfg != nil && cfg.Tools.IsFilterSensitiveDataEnabled() {
+		s = cfg.SensitiveDataReplacer().Replace(s)
+	}
+	return s
+}
+
+// filterExternalToolOutput returns an external tool result's output with every
+// credential filtered out, for BOTH the transcript write and the live event
+// (#1222). JSON output is decoded FIRST and each string leaf filtered, because
+// a secret containing a quote or newline appears only in escaped form in the
+// raw bytes and a raw-bytes replace would miss it; non-JSON output is filtered
+// as plain text. Output that needs no change is returned byte-for-byte.
+func filterExternalToolOutput(al *AgentLoop, toolName string, out []byte) []byte {
+	if al == nil || len(out) == 0 {
+		return out
+	}
+	if !json.Valid(out) {
+		return []byte(filterExternalString(al, toolName, string(out)))
+	}
+	dec := json.NewDecoder(bytes.NewReader(out))
+	dec.UseNumber()
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		// json.Valid said yes, so this is unreachable; fail closed to the
+		// text filter rather than pass the bytes through unfiltered.
+		return []byte(filterExternalString(al, toolName, string(out)))
+	}
+	changed := false
+	var walk func(x any) any
+	walk = func(x any) any {
+		switch t := x.(type) {
+		case string:
+			f := filterExternalString(al, toolName, t)
+			if f != t {
+				changed = true
+			}
+			return f
+		case map[string]any:
+			for k, e := range t {
+				t[k] = walk(e)
+			}
+			return t
+		case []any:
+			for i, e := range t {
+				t[i] = walk(e)
+			}
+			return t
+		default:
+			return x
+		}
+	}
+	v = walk(v)
+	if !changed {
+		return out
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return []byte("[FILTERED]") // cannot re-encode: never fall back to the unfiltered bytes
+	}
+	return bytes.TrimRight(buf.Bytes(), "\n")
 }
 
 // recordExternalPermission records a permission-request as a transcript line so the
 // run's gated actions are visible in replay. The decision itself is routed by the
 // ConsentDispatcher; this is observability only.
-func recordExternalPermission(childTS *turnState, pr *runner.PermissionRequestEvent) {
+func recordExternalPermission(al *AgentLoop, childTS *turnState, pr *runner.PermissionRequestEvent) {
 	childTS.appendIntermediateAssistantTranscript(
-		fmt.Sprintf("[external-cli permission] tool=%q: %s", pr.ToolName, pr.Description),
+		filterExternalString(al, "", fmt.Sprintf("[external-cli permission] tool=%q: %s", pr.ToolName, pr.Description)),
 		transcriptModelFor(childTS.agent))
 }
 
@@ -699,7 +997,7 @@ func recordExternalPermission(childTS *turnState, pr *runner.PermissionRequestEv
 //
 // The in-place update reads the transcript JSONL, rewrites the matching line,
 // and writes the file back atomically under an advisory flock. This mirrors the
-// read-modify-rewrite pattern used by UnifiedStore.MarkLastEntryTruncated.
+// read-modify-rewrite pattern used by the unified store's former truncation rewrite.
 // Because the store's AppendTranscript is guarded by an in-process mutex (not
 // flock), a narrow in-process race with a concurrent append from a sibling
 // sub-turn sharing this transcript session remains: in the worst case a
@@ -763,26 +1061,28 @@ func recordExternalToolResultUpdateInPlace(
 	status string,
 	result map[string]any,
 ) bool {
-	return mutateToolCallInTranscript(
-		childTS.transcriptStore,
-		childTS.transcriptSessionID,
-		callID,
-		"completed",
-		func(tc *session.ToolCall) {
-			tc.Status = status
-			tc.Result = result
-		},
-	)
+	return mutateToolCall(childTS, callID, "completed", func(tc *session.ToolCall) {
+		tc.Status = status
+		tc.Result = result
+	})
 }
 
-// DefaultExternalMaxTurns bounds an external run when the agent declares no
-// MaxIterations (FR-5.4 turn cap). Exported (not just package-internal) so
-// pkg/gateway's POST /api/v1/agents/executor-preview endpoint
-// (rest_executor_preview.go) can default its own previewed --max-turns to
-// the IDENTICAL value real dispatch applies when max_tool_iterations is
-// omitted — referencing this constant directly rather than a second
-// hardcoded "50" means the two can never drift apart.
-const DefaultExternalMaxTurns = 50
+// resolveExternalMaxTurns resolves agentID's effective tool-iteration limit
+// from cfg: the global in force (cfg may be nil — the shipped default) and the
+// agent's own value when cfg.Agents.List carries its record.
+func resolveExternalMaxTurns(cfg *config.Config, agentID string) int {
+	if cfg == nil {
+		return config.ResolveMaxToolIterations(nil, nil).Effective
+	}
+	var own *config.AgentConfig
+	for i := range cfg.Agents.List {
+		if cfg.Agents.List[i].ID == agentID {
+			own = &cfg.Agents.List[i]
+			break
+		}
+	}
+	return config.ResolveMaxToolIterations(&cfg.Agents.Defaults, own).Effective
+}
 
 // transcriptModelFor returns the model string to stamp on transcript entries
 // produced by an external-CLI sub-turn. It mirrors the trim applied in

@@ -70,6 +70,8 @@ func TestDispatchReadyMembers_BypassesRedundantPlanGate_EvenWithTaskExecutorPlan
 	p := newPlanGateTestPlan(t, planStore, plan.StateRunning)
 	tk := newPlanGateTestTask(t, al, p.ID)
 
+	seedTaskGoal(t, tk.ID, "the change is verified", "the result is stated")
+
 	dispatched := pe.dispatchReadyMembers(context.Background(), p.ID, []task.Task{*tk})
 	if !dispatched {
 		t.Fatal("dispatchReadyMembers reported no dispatch — the plan-verified bypass must let a " +

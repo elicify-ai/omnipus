@@ -1,13 +1,15 @@
 // Wraps the app with AssistantUI's runtime context and manages the WebSocket lifecycle.
 // Lives in AppShell so the WebSocket stays connected across all screens.
 
-import { useEffect, useRef } from "react";
+import { lazy, Suspense, useEffect, useRef } from "react";
 import { AssistantRuntimeProvider } from "@assistant-ui/react";
 import { useOmnipusRuntime } from "@/lib/omnipus-runtime";
 import { useChatStore } from "@/store/chat";
+import { getPendingFirstSend } from "@/store/chat/first-send";
 import { useConnectionStore } from "@/store/connection";
+import { useUiStore } from "@/store/ui";
 import { startMemoryObserver, addMemoryObserver } from "@/lib/memory-observer";
-import { useSessionStore, attachSessionCursorFields } from "@/store/session";
+import { useSessionStore, attachSessionCursorFields, attachAlreadyInFlight, noteAttachSent } from "@/store/session";
 import { WsConnection } from "@/lib/ws";
 import { queryClient } from "@/lib/queryClient";
 import type { Session, SessionDetail } from "@/lib/api";
@@ -29,6 +31,7 @@ import { WebServeUI } from "./tools/WebServeUI";
 import { ServeWorkspaceUI } from "./tools/ServeWorkspaceUI";
 import { RunInWorkspaceUI } from "./tools/RunInWorkspaceUI";
 import { SetGoalToolUI } from "./tools/SetGoalToolUI";
+import { ConnectChannelToolUI } from "./tools/ConnectChannelToolUI";
 import {
   BrowserClickUI, BrowserClickUnderscoreUI,
   BrowserTypeUI, BrowserTypeUnderscoreUI,
@@ -37,6 +40,15 @@ import {
   BrowserWaitUI, BrowserWaitUnderscoreUI,
   BrowserEvaluateUI, BrowserEvaluateUnderscoreUI,
 } from "./tools/BrowserTool";
+
+// Email draft cards are the only mail-specific code in the always-mounted
+// runtime provider. Keep their registrations live, but load the implementation
+// after the entry graph has rendered so the Mail feature does not inflate the
+// production entry bundle.
+const LazyDraftLinkToolUIs = lazy(async () => {
+  const module = await import("./tools/DraftLink");
+  return { default: module.DraftLinkToolUIs };
+});
 
 // Manages the memory pressure observer lifecycle.
 // Starts the polling loop on mount and wires heap-level transitions into the connection store.
@@ -72,10 +84,9 @@ function MemoryObserverLifecycle() {
 // live value to the creating agent.
 //
 // Resolution order:
-//   1. The LIVE store value when the session matches — it already reflects any
-//      live handover (set by the agent_switched frame). Preferring it first
-//      means a transient reconnect during a live handover can never be clobbered
-//      by a stale session-detail cache.
+//   1. The LIVE store value when the session matches — it already reflects the
+//      attached session's owner. Preferring it first means a transient
+//      reconnect can never be clobbered by a stale session-detail cache.
 //   2. The cached ['session-detail', id] — set fresh by the route loader on a
 //      full reload (the case this fix targets); active_agent_id ?? agent_id.
 //   3. The cached ['sessions'] list entry; active_agent_id ?? agent_id.
@@ -104,7 +115,7 @@ export function resolveLastActiveAgentId(sessionId: string): string | null {
 // send method — so the reattach logic can be unit-tested without a real
 // WebSocket. Pick keeps the signature exactly in sync with WsConnection.send
 // (typed against ClientFrame) so a real connection is assignable.
-export type ReattachSender = Pick<WsConnection, 'send'>;
+export type ReattachSender = Pick<WsConnection, 'send'> & Partial<Pick<WsConnection, 'socketGeneration'>>;
 
 // Re-binds the active session to a freshly-opened WS connection (the onConnected
 // path). Extracted from the inline handler so the failed-reattach branch can be
@@ -123,47 +134,50 @@ export function reattachActiveSession(
   if (!activeSessionId) {
     return false;
   }
-  // Kickoff pending-session hardening: '__pending' is the LOCAL
-  // sentinel for an outstanding sendWorkspaceSetupKickoff / sendMessage
-  // no-session turn — never a real, attachable session id. Sending
-  // `attach_session {session_id: '__pending'}` would be a protocol
-  // violation the gateway would reject, and resetChatBucketForReplay
-  // ('__pending') would wipe the bucket for a replay that can never arrive.
-  // A reconnect mid-kickoff means the connection that would have carried
-  // the kickoff's own ack is gone — there is no ack coming on this new one.
-  // Tear the pending state down directly instead of attaching:
-  // `abandonPendingKickoff` clears `pendingKickoff`, drops the orphaned
-  // '__pending' bucket, and marks the workspace's `kickoffAttemptStatus`
-  // 'failed' (idempotent if clearStreamingState's own disconnect-time
-  // call already ran this); resetting `activeSessionId` back to null here
-  // (deliberately does NOT do this on disconnect — see
-  // clearStreamingState's own comment) returns the composer to a fresh,
-  // unstuck state. Whether the kickoff needs to retry is decided by server
-  // truth: useWorkspaceSetupKickoff's invalidate-on-failure effect re-fires
-  // once the workspaces query refetches and still reports
-  // `setup_pending: true` — nothing here forces that refetch itself.
+  // '__pending' is a local sentinel, never an attachable session ID.
+  // An ordinary first send keeps its user bubble and waits for explicit
+  // delivery Retry; any other stuck '__pending' is reset to "no session".
   if (activeSessionId === "__pending") {
-    useChatStore.getState().abandonPendingKickoff();
+    const chat = useChatStore.getState();
+    if (getPendingFirstSend(chat)) {
+      return false; // Keep the user's bubble; reconnect is not permission to resend.
+    }
     useSessionStore.getState().setActiveSession(null);
     return false;
+  }
+  const chat = useChatStore.getState();
+  if (getPendingFirstSend(chat)?.sessionId === activeSessionId) {
+    // A recovered acknowledgement has no cursor. Reconnect checks that chat;
+    // it never retransmits the first message or restores old permission choices.
+    return chat.reattachFirstSend(conn);
   }
   // Re-seed the header/composer agent from the authoritative last-active agent
   // BEFORE replay starts. After a handover (e.g. Mia → Jim) a full reload must
   // keep the header on Jim (active_agent_id), not revert to the creating agent.
-  const seedAgentId = resolveLastActiveAgentId(activeSessionId);
-  if (seedAgentId) {
-    useSessionStore.getState().setActiveSession(activeSessionId, seedAgentId);
+  //
+  // This re-binds the SAME, already active session; it is not an open
+  // (agent-first navigation spec, "Foreground commitment and bounded read" 2).
+  // So it only fills an owner the store does not know yet. It must not go
+  // through setActiveSession: that clears the attached type and title (a main
+  // chat would lose its participant control) and records the session under the
+  // CURRENT workspace - which, while the user is entering another workspace or
+  // after that entry failed, is not this session's workspace, and would replace
+  // that workspace's remembered chat (#1449). A live owner is already the value
+  // resolveLastActiveAgentId returns, so there is nothing to re-seed then.
+  if (useSessionStore.getState().activeAgentId == null) {
+    const seedAgentId = resolveLastActiveAgentId(activeSessionId);
+    if (seedAgentId) useSessionStore.setState({ activeAgentId: seedAgentId });
   }
-  // The gateway will confirm catch-up completion (or send a session_snapshot)
-  // — mark the session as replaying symmetrically here (same as in
-  // attachToSession) until that lands.
-  useChatStore.setState({ isReplaying: true });
   // #823 catch-up redesign (BE-DESIGN.md §6.1): send this bucket's own
   // numbered cursor (if any) so the gateway can answer with an incremental
   // catch-up instead of a full replay — the same wiring attachToSession uses
   // (src/store/session.ts::attachSessionCursorFields). A first-ever attach
   // (no cursor yet) sends the bare frame, same as before Step 0 removed the
   // legacy `since` field.
+  // One owner of the initial attach: workspace entry may already have sent
+  // this session's attach_session and its replay is in flight — a second one
+  // would replay the whole transcript again.
+  if (attachAlreadyInFlight(activeSessionId, conn)) return true;
   const sent = conn.send({
     type: "attach_session",
     session_id: activeSessionId,
@@ -171,13 +185,18 @@ export function reattachActiveSession(
   });
   if (!sent) {
     // send() returned false — socket closed between onopen and here. Preserve
-    // local state (do not wipe bucket) and surface an error. Clear the replaying
-    // flag we optimistically set above so the composer re-enables instead of
-    // wedging on a replay that will never arrive.
-    useChatStore.setState({ isReplaying: false });
+    // local state (do not wipe bucket) and surface an error. The replaying
+    // flag is only set after a successful send, so there is nothing to roll
+    // back and the composer stays enabled.
     setConnectionError('Failed to reattach session — please reload');
     return false;
   }
+  // The gateway will confirm catch-up completion (or send a session_snapshot)
+  // — mark the session's BUCKET as replaying (same as attachToSession) until
+  // that lands. The bucket flag, not the flat foreground one, is what the
+  // session-list refresh gate and the in-flight check read.
+  noteAttachSent(activeSessionId, conn);
+  useChatStore.getState().setReplaying(true);
   // #823 catch-up redesign (BE-DESIGN.md §6.1): the bucket is NO LONGER
   // wiped here on success either — the cursor just sent carries it across
   // the reattach. Only an explicit `session_snapshot` frame wipes history
@@ -197,10 +216,15 @@ function WsLifecycle() {
 
   useEffect(() => {
     const conn = new WsConnection({
-      onFrame: handleFrame,
+      onFrames: (frames) => {
+        for (const frame of frames) handleFrame(frame)
+      },
       onConnected: async () => {
         setConnected(true);
         setConnectionError(null);
+        // Lifecycle recovery must not wait for replay publication: REST may
+        // finish before a held catch_up_complete, and neither depends on the other.
+        void queryClient.invalidateQueries({ queryKey: ['sessions'] });
         // Re-bind any in-flight session to the freshly-opened WS so the
         // gateway's per-connection sessionID is restored. Without this, a
         // browser-suspended WS that auto-reconnects on focus would cause the
@@ -209,28 +233,18 @@ function WsLifecycle() {
         // bucket handling) lives in reattachActiveSession so it can be unit
         // tested directly.
         //
-        // Kickoff pending-session hardening: reattach BEFORE
-        // draining the outbound queue. `reattachActiveSession` settles
-        // `activeSessionId` first — either sends `attach_session` for a real
-        // session, or (the '__pending' guard) tears down a
-        // dead kickoff's placeholder and resets `activeSessionId` back to
-        // null. Draining first used to risk a race: `outboundQueue` can hold
-        // a message that collided with a kickoff's `pendingKickoff` slot
-        // (the collision guard in sendMessage) while `activeSessionId`
-        // is still the SAME dead '__pending' sentinel from BEFORE the
-        // disconnect — sending that queued message via sendMessage's own
-        // '__pending'-collapse guard would mint a BRAND NEW '__pending'
-        // bucket for it, and a reattach call running AFTER that send would
-        // then see activeSessionId === '__pending' and — unable to tell
-        // that fresh turn apart from the dead kickoff's — tear down the
-        // message that had JUST been sent. Running reattach first
-        // eliminates the ambiguity: by the time any queued message drains,
-        // `activeSessionId` is already resolved to null or a real session id.
+        // Reattach BEFORE draining: settle a dead kickoff before another send
+        // can reuse __pending, or attach a known session before sending into it.
+        // An unconfirmed ordinary first send deliberately remains __pending;
+        // its explicit record keeps that slot occupied and pauses queue draining.
+        // Reconnect alone never retransmits that first message.
         reattachActiveSession(conn, setConnectionError);
         // Drain any messages that were buffered while the connection was down.
         useChatStore.getState().drainOutboundQueue();
       },
       onDisconnected: () => {
+        // A retired effect connection must not overwrite its replacement's state.
+        if (connectionRef.current !== conn) return;
         const chatState = useChatStore.getState();
         useConnectionStore.getState().recordDisconnect(
           chatState.isStreaming ? chatState.lastAssistantMessageId : null,
@@ -244,6 +258,12 @@ function WsLifecycle() {
         useChatStore.getState().clearStreamingState();
       },
       onError: setConnectionError,
+      onReplayNotice: (sessionId, message) => {
+        const ui = useUiStore.getState();
+        // Reopening the same large chat must not stack persistent notices.
+        if (ui.toasts.some(toast => toast.sessionId === sessionId && toast.message === message)) return;
+        ui.addToast({ sessionId, message, variant: 'default', duration: 0 });
+      },
       // Fix 2: wire reconnect phase changes into the connection store so the
       // chat header banner can show live progress (attempt N / gave_up CTA).
       onReconnectStateChange: (phase, attempt) => setReconnectState(phase, attempt),
@@ -313,6 +333,7 @@ export function OmnipusRuntimeProvider({ children }: { children: React.ReactNode
        *   browser_evaluate  → BrowserEvaluateUnderscoreUI (underscore alias)
        *   browser.evaluate  → BrowserEvaluateUI         (registered dotted name)
        *   set_goal          → SetGoalToolUI             (ADR-082 D9: goal record card, anchored at the call)
+       *   connect_channel   → ConnectChannelToolUI      (BDD-8.4: WhatsApp pairing QR in the requesting chat)
        */}
       <BashOutputUI />
       <ExecLegacyUI />
@@ -351,6 +372,10 @@ export function OmnipusRuntimeProvider({ children }: { children: React.ReactNode
       <BrowserEvaluateUI />
       <BrowserEvaluateUnderscoreUI />
       <SetGoalToolUI />
+      <ConnectChannelToolUI />
+      <Suspense fallback={null}>
+        <LazyDraftLinkToolUIs />
+      </Suspense>
       <MemoryObserverLifecycle />
       <WsLifecycle />
       {children}

@@ -11,6 +11,7 @@ type (
 	ToolCall               = protocoltypes.ToolCall
 	FunctionCall           = protocoltypes.FunctionCall
 	LLMResponse            = protocoltypes.LLMResponse
+	ResponseDiagnostics    = protocoltypes.ResponseDiagnostics
 	UsageInfo              = protocoltypes.UsageInfo
 	Message                = protocoltypes.Message
 	ToolDefinition         = protocoltypes.ToolDefinition
@@ -69,13 +70,6 @@ type StreamingProvider interface {
 	) (*LLMResponse, error)
 }
 
-// ThinkingCapable is an optional interface for providers that support
-// extended thinking (e.g. Anthropic). Used by the agent loop to warn
-// when thinking_level is configured but the active provider cannot use it.
-type ThinkingCapable interface {
-	SupportsThinking() bool
-}
-
 // NativeSearchCapable is an optional interface for providers that support
 // built-in web search during LLM inference (e.g. OpenAI web_search_preview,
 // xAI Grok search). When the active provider implements this interface and
@@ -94,6 +88,7 @@ const (
 	FailoverBilling         FailoverReason = "billing"
 	FailoverTimeout         FailoverReason = "timeout"
 	FailoverFormat          FailoverReason = "format"
+	FailoverBadModel        FailoverReason = "bad_model"
 	FailoverContextOverflow FailoverReason = "context_overflow"
 	FailoverOverloaded      FailoverReason = "overloaded"
 	FailoverUnknown         FailoverReason = "unknown"
@@ -118,7 +113,12 @@ func (e *FailoverError) Unwrap() error {
 }
 
 // IsRetriable returns true if this error should trigger fallback to next candidate.
-// Non-retriable: Format errors (bad request structure, image dimension/size).
+// Non-retriable: request format and context overflow. A bad_model — the
+// provider says the model was not found or not offered (founder decision
+// 2026-10-24, Q70) — falls back to the next candidate like any other
+// retriable failure: with a backup configured the backup answers, and with
+// no backup, or when every candidate is rejected this way, the chain stays
+// terminal bad_model.
 func (e *FailoverError) IsRetriable() bool {
 	return e.Reason != FailoverFormat && e.Reason != FailoverContextOverflow
 }

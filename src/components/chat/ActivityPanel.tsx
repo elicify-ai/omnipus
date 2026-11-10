@@ -51,7 +51,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { DisclosureRow } from '@/components/ui/disclosure-row'
 import { ActivityAvatar } from './ActivityAvatar'
-import type { ActivityItem, AgentActivityItem } from '@/hooks/useRunningActivity'
+import type { ActivityItem, AgentActivityItem, TaskRunActivityItem } from '@/hooks/useRunningActivity'
 import { useToolApprovalStore } from '@/store/toolApproval'
 import { cn } from '@/lib/utils'
 import { formatDuration } from '@/lib/formatDuration'
@@ -71,21 +71,26 @@ export interface ActivityPanelProps {
   scrollRequest?: { section: 'commands'; nonce: number } | null
 }
 
-/** Split `running` in arrival order. Queued agents leave "Running now" so the position list is the queue, not a second copy. */
+/** Split open work in arrival order; queued/waiting children are not executing. */
 function partitionRunning(running: ActivityItem[]): {
-  queued: AgentActivityItem[]
+  queued: (AgentActivityItem | TaskRunActivityItem)[]
+  waiting: (AgentActivityItem | TaskRunActivityItem)[]
   active: ActivityItem[]
   commands: ActivityItem[]
 } {
-  const queued: AgentActivityItem[] = []
+  const queued: (AgentActivityItem | TaskRunActivityItem)[] = []
+  const waiting: (AgentActivityItem | TaskRunActivityItem)[] = []
   const active: ActivityItem[] = []
   const commands: ActivityItem[] = []
   for (const item of running) {
     if (item.kind === 'bash') commands.push(item)
     else if (item.kind === 'agent' && item.lifecycleState === 'queued') queued.push(item)
+    else if (item.kind === 'agent' && item.lifecycleState === 'needs_input') waiting.push(item)
+    else if (item.kind === 'task' && item.runState === 'queued') queued.push(item)
+    else if (item.kind === 'task' && item.runState === 'waiting') waiting.push(item)
     else active.push(item)
   }
-  return { queued, active, commands }
+  return { queued, waiting, active, commands }
 }
 
 function ActivitySection({
@@ -109,6 +114,9 @@ function ActivitySection({
   )
 }
 
+/** A task run's queued/waiting state shares the child-session lifecycle vocabulary. */
+const RUN_STATE_LIFECYCLE = { running: 'running', queued: 'queued', waiting: 'needs_input' } as const
+
 function ActivityRow({
   item,
 }: {
@@ -119,15 +127,26 @@ function ActivityRow({
   // JudgeActivityItem carries no durationMs (no wire-level "judge started"
   // moment to measure elapsed time from — see its doc comment).
   const duration = item.kind === 'judge' ? '' : formatDuration(item.durationMs)
-  const label = item.kind === 'bash' ? item.command : item.kind === 'judge' ? `Judge · ${item.scope} round ${item.round}` : item.taskLabel
+  const label = item.kind === 'bash'
+    ? item.command
+    : item.kind === 'judge'
+      ? `Judge · ${item.scope} round ${item.round}`
+      : item.kind === 'not_delivered'
+        ? `Not delivered · ${item.taskLabel}`
+        : item.taskLabel
   const show3pNotice = item.kind === 'agent' && item.agentType === '3p'
   // Fix 2 (2026-07-16): the panel is now the durable surface for the final
   // result / interrupt reason SubagentBlock's (now-deleted) card used to
   // carry — see useRunningActivity.ts's AgentActivityItem.
   const finalResult = item.kind === 'agent' ? item.finalResult : undefined
   const interruptReason = item.kind === 'agent' ? item.interruptReason : undefined
-  const childSessionId = item.kind === 'agent' ? item.childSessionId : undefined
-  const lifecycleState = item.kind === 'agent' ? item.lifecycleState : undefined
+  // The Open target: an agent row's child session, or a task/scheduler run's own session.
+  const childSessionId = item.kind === 'agent' ? item.childSessionId : item.kind === 'task' ? item.sessionId : undefined
+  const lifecycleState = item.kind === 'agent'
+    ? item.lifecycleState
+    : item.kind === 'task'
+      ? RUN_STATE_LIFECYCLE[item.runState ?? 'running']
+      : undefined
   // ADR-091 D7/FR-E-004 (cross-family review finding 21): lifecycleState
   // (the ADR-053 eight-state domain reduced from subagent_state) drives the
   // row's dot AND label whenever it is present — a span's own `status` (the
@@ -136,9 +155,11 @@ function ActivityRow({
   // span with no lifecycleState yet. Previously only the LABEL was
   // overridden, and only for 'queued' — needs_input/paused/completed/
   // failed/cancelled/timed_out all kept showing the running spinner.
-  const config = lifecycleState
-    ? getLifecycleStatusDot(lifecycleState, { size: 12, runningLabel: 'running' })
-    : getSpanStatusDot(item.status, { size: 12, runningLabel: 'running' })
+  const config = item.kind === 'not_delivered'
+    ? { indicator: statusDot('bg-[var(--color-muted)]'), label: 'not delivered' }
+    : lifecycleState
+      ? getLifecycleStatusDot(lifecycleState, { size: 12, runningLabel: 'running' })
+      : getSpanStatusDot(item.status, { size: 12, runningLabel: 'running' })
 
   // FR-E-009: a pending approval for the child's session overrides the
   // status LINE (not the dot label above) with "awaiting approval: <tool>"
@@ -154,9 +175,13 @@ function ActivityRow({
   const fallbackStatusLine = lastUpdateAt
     ? `last update ${formatLastUpdateAge(Date.now() - Date.parse(lastUpdateAt))}`
     : undefined
-  const statusLine = pendingApproval
-    ? `awaiting approval: ${pendingApproval.toolName}`
-    : (rawStatusLine ?? fallbackStatusLine)
+  const statusLine = item.kind === 'not_delivered'
+    ? item.text
+    : item.kind === 'task' && item.stale
+      ? "Couldn't refresh this run. It may already have finished."
+      : pendingApproval
+      ? `awaiting approval: ${pendingApproval.toolName}`
+      : (rawStatusLine ?? fallbackStatusLine)
 
   // ADR-049 D2/D4/US-13: a judge row is ALWAYS expandable — it has no step
   // detail at all (there is no live "judge started" frame, only the
@@ -173,6 +198,7 @@ function ActivityRow({
     <div
       data-testid="activity-row"
       data-status={item.status}
+      data-lifecycle-state={lifecycleState}
       className="text-[length:var(--type-utility-xs-size)]"
     >
       {/* Mirrors GenericToolCall.tsx's `disabled={!hasDetail}` gate: a
@@ -220,6 +246,17 @@ function ActivityRow({
           className="pl-[var(--space-5)] pb-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] font-body truncate"
         >
           {statusLine}
+        </p>
+      )}
+
+      {/* FR-033: provider-run tokens still available. Unknown is shown as
+          unknown, never as zero (BDD-10.3). */}
+      {item.kind === 'task' && (
+        <p
+          data-testid="activity-run-tokens"
+          className="pl-[var(--space-5)] pb-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] font-body"
+        >
+          {item.availableTokens == null ? 'Tokens available: unknown' : `Tokens available: ${item.availableTokens}`}
         </p>
       )}
 
@@ -319,7 +356,8 @@ export function ActivityPanel({
   // which click already scrolled so a later mount still scrolls once, and a
   // 1-second activity refresh does not yank the panel back to the top.
   const scrolledNonce = useRef<number | null>(null)
-  const { queued, active, commands } = partitionRunning(running)
+  const { queued, waiting, active, commands } = partitionRunning(running)
+  const runningCount = active.length + commands.length
   const isEmpty = running.length === 0 && recentlyFinished.length === 0
   // A retained failure keeps the Commands pill up after the command has left
   // "running", so it is not in the commands section. The first such row is
@@ -356,7 +394,7 @@ export function ActivityPanel({
       <SheetContent side="right" className="w-[90vw] sm:w-[22.5rem] p-0 flex flex-col" overlay={false}>
         <SheetHeader>
           <SheetTitle>Activity</SheetTitle>
-          <Badge variant={running.length > 0 ? 'default' : 'muted'}>{running.length} running</Badge>
+          <Badge variant={runningCount > 0 ? 'default' : 'muted'}>{runningCount} running</Badge>
         </SheetHeader>
 
         <div className="flex-1 overflow-y-auto px-[var(--space-2-5)] py-[var(--space-2-5)] space-y-[var(--space-3)]">
@@ -379,6 +417,12 @@ export function ActivityPanel({
                   </div>
                 </div>
               ))}
+            </ActivitySection>
+          )}
+
+          {waiting.length > 0 && (
+            <ActivitySection title="Waiting for answer" testId="activity-section-waiting">
+              {waiting.map((item) => <ActivityRow key={item.key} item={item} />)}
             </ActivitySection>
           )}
 

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/steer"
+	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
 // parseDelegateGoal parses delegate's TOP-LEVEL "criteria"/"dod" arguments
@@ -116,6 +117,17 @@ func parseDelegateCriterion(item map[string]any) (steer.Criterion, error) {
 	case steer.JudgmentBoolean, steer.JudgmentQuantitative, steer.JudgmentArtifact:
 	default:
 		return steer.Criterion{}, fmt.Errorf("judgment must be boolean, quantitative, or artifact")
+	}
+	// Issue #1306 (UAT R1): set_goal's dod shape carries provenance, so a
+	// model reusing it here must not be refused. Optional; when given it must
+	// be a known layer, and it is carried onto the child's goal record.
+	if rawProv, present := item["provenance"]; present && rawProv != nil {
+		prov, ok := rawProv.(string)
+		prov = strings.TrimSpace(prov)
+		if !ok || !task.IsValidCriterionProvenance(task.CriterionProvenance(prov)) {
+			return steer.Criterion{}, fmt.Errorf("provenance must be stated, workspace, floor, or inferred")
+		}
+		criterion.Provenance = prov
 	}
 	return criterion, nil
 }

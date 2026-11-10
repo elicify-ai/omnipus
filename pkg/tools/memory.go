@@ -8,6 +8,7 @@ package tools
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -64,24 +65,22 @@ type MemoryAccess interface {
 }
 
 // RoomMemoryWriter extends MemoryWriter with room-aware write (MIN-002 / FR-7.3).
-// pkg/agent.MemoryStoreAdapter satisfies this via AppendLongTermToRoom +
-// SetWorkspaceID. Tools type-assert to this interface to route by room.
+// pkg/agent.MemoryStoreAdapter satisfies this via AppendLongTermToRoom.
+// Workspace identity is passed on the operation, never set on the shared store.
 // Using a string scope ("private" | "shared" | "both") avoids importing
 // pkg/memrooms into pkg/tools (cycle prevention).
 type RoomMemoryWriter interface {
 	MemoryWriter
 	// AppendLongTermToRoom writes to the room identified by scope string.
 	// Accepted values: "private" | "shared" | "both" (both→ private for writes).
-	AppendLongTermToRoom(content, category, scope string) error
-	// SetWorkspaceID wires the shared room for the current turn.
-	SetWorkspaceID(workspaceID string)
+	AppendLongTermToRoom(content, category, scope, workspaceID string) error
 }
 
 // RoomMemorySearcher extends MemorySearcher with room-aware read (MIN-002 / FR-7.3).
 type RoomMemorySearcher interface {
 	MemorySearcher
 	// SearchEntriesInRoom searches the specified room scope.
-	SearchEntriesInRoom(query string, limit int, scope string) ([]MemoryEntry, error)
+	SearchEntriesInRoom(query string, limit int, scope, workspaceID string) ([]MemoryEntry, error)
 }
 
 // RetroSearcher is an optional read-side extension: a store that can search
@@ -139,14 +138,13 @@ func (t *RememberTool) Category() ToolCategory { return CategoryMemory }
 func (t *RememberTool) Description() string {
 	return "Save something worth keeping for later: a decision, a useful fact or reference, or a " +
 		"lesson learned. Use this whenever you learn something you — or a teammate agent — will " +
-		"likely need again in a future conversation. By DEFAULT the memory is SHARED with your " +
-		"workspace team, so every agent working in this workspace can recall it — but ONLY when this " +
-		"turn is actually running inside a workspace; outside a workspace there is no team room to " +
-		"share into and the note is saved privately no matter what room you ask for. Set room='private' " +
-		"for notes meant just for you. The result text always states which room the note actually " +
-		"landed in, so check it rather than assuming 'shared' succeeded. category must be one of: " +
-		"'key_decision' (a decision that was made), 'reference' (useful reference information), or " +
-		"'lesson_learned' (something to do differently next time)."
+		"likely need again in a future conversation. You MUST choose room on every call — there is " +
+		"no default: room='shared' lets every agent in your workspace team recall the note, " +
+		"room='private' keeps it for you alone. 'shared' only works when this turn is running " +
+		"inside a workspace; outside one there is no team room, so the note is saved privately " +
+		"and the result text says so. category must be one of: 'key_decision' (a decision that " +
+		"was made), 'reference' (useful reference information), or 'lesson_learned' (something to " +
+		"do differently next time)."
 }
 
 func (t *RememberTool) Parameters() map[string]any {
@@ -165,14 +163,12 @@ func (t *RememberTool) Parameters() map[string]any {
 			"room": map[string]any{
 				"type": "string",
 				"enum": []string{"private", "shared"},
-				"description": "Who can see this memory: 'shared' = your whole workspace team (the " +
-					"default — use it whenever a teammate agent might need this), 'private' = only you. " +
-					"Leave unset to use the default (shared) — but sharing only happens when this turn " +
-					"is inside a workspace; with no workspace on the turn, 'shared' silently falls back " +
-					"to a private note (the result text will say so).",
+				"description": "REQUIRED, no default. Who can see this memory: 'shared' = your whole " +
+					"workspace team (use it when a teammate agent might need this), 'private' = only " +
+					"you. 'shared' outside a workspace is saved privately (the result text says so).",
 			},
 		},
-		"required": []string{"content", "category"},
+		"required": []string{"content", "category", "room"},
 	}
 }
 
@@ -196,6 +192,15 @@ func (t *RememberTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult("remember: content exceeds 4096 characters; shorten the entry and try again")
 	}
 
+	// Founder ruling (Gap 10): room is REQUIRED with no default, so the agent
+	// always knows where a note lands. Refused before the rate limiter so a
+	// refused call spends no write budget.
+	if roomParam != "private" && roomParam != "shared" {
+		t.logAudit(agentID, sessionID, "error_invalid", category, content)
+		return ErrorResult("remember: room is required — choose room='shared' (your whole workspace " +
+			"team can recall it) or room='private' (only you), then call remember again")
+	}
+
 	// #155 item 6: rate-limit memory writes.
 	if decision := t.checkRateLimit(ctx, agentID); !decision.Allowed {
 		t.logRateLimited(agentID, sessionID, callerIdentity(ctx), category, content, decision)
@@ -205,12 +210,9 @@ func (t *RememberTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	// Route to the correct room (FR-7.1, MIN-002).
 	// Type-assert to RoomMemoryWriter if the store supports room-aware writes.
 	if rw, ok := t.store.(RoomMemoryWriter); ok {
-		// Wire the workspace ID for this turn so the store can resolve the shared room.
-		rw.SetWorkspaceID(workspaceID)
-
-		// Resolve the scope: explicit param > default (shared if workspace, else private).
+		// room is validated above; resolveRoomScope returns it unchanged.
 		scope := resolveRoomScope(roomParam, workspaceID)
-		if err := rw.AppendLongTermToRoom(content, category, scope); err != nil {
+		if err := rw.AppendLongTermToRoom(content, category, scope, workspaceID); err != nil {
 			t.logAudit(agentID, sessionID, "error_io", category, content)
 			return ErrorResult(fmt.Sprintf("remember: %v", err))
 		}
@@ -342,8 +344,10 @@ func (t *RememberTool) logAudit(agentID, sessionID, outcome, category, content s
 }
 
 // RecallMemoryTool searches long-term memory and retrospectives (past
-// reflections). LAST_SESSION.md is not searched here — it is auto-injected into
-// every session's system prompt, so it is always already in context.
+// reflections). The carry-forward summary (the end-of-chat recap,
+// workspaces/<ws>/.omnipus/carry-forward/<agent>.md) is not searched here — it
+// is auto-injected into the workspace's own session prompts, so it is always
+// already in context there.
 // FR-014: not audited (read-side stays clean).
 //
 // Asks for MemorySearcher only — the narrower of the two interfaces. This is
@@ -424,21 +428,23 @@ func (t *RecallMemoryTool) Execute(ctx context.Context, args map[string]any) *To
 	var entries []MemoryEntry
 	var err error
 	if rs, ok := t.store.(RoomMemorySearcher); ok {
-		// Also wire the workspace ID on the write side if it implements RoomMemoryWriter.
-		if rw, ok2 := t.store.(RoomMemoryWriter); ok2 {
-			rw.SetWorkspaceID(workspaceID)
-		}
 		// Recall default: both rooms (the broader the better for recall).
 		scope := roomParam
 		if scope == "" {
 			scope = "both"
 		}
-		entries, err = rs.SearchEntriesInRoom(query, limit, scope)
+		entries, err = rs.SearchEntriesInRoom(query, limit, scope, workspaceID)
 	} else {
 		// Fallback for plain MemorySearcher (test doubles etc.).
 		entries, err = t.store.SearchEntries(query, limit)
 	}
-	if err != nil {
+	// Structural internal error contract avoids a storage-package dependency.
+	var partial interface {
+		error
+		Partial() bool
+	}
+	partialRead := err != nil && errors.As(err, &partial) && partial.Partial()
+	if err != nil && !partialRead {
 		return ErrorResult(fmt.Sprintf("recall_memory: %v", err))
 	}
 
@@ -465,6 +471,14 @@ func (t *RecallMemoryTool) Execute(ctx context.Context, args map[string]any) *To
 	}
 
 	result := formatRecallResult(entries)
+	if partialRead {
+		if len(entries) == 0 {
+			result.ForLLM = "No readable matches could be returned; this does not establish that no saved notes match."
+		}
+		result.ForLLM = fmt.Sprintf("Warning: partial saved-note results; check file access or format and retry: %v\n\n%s", err, result.ForLLM)
+		result.IsError = true
+		result.Err = err
+	}
 	if retroSearchFailed {
 		// A swallowed retro-search failure must be visible to the caller,
 		// not just the server log — otherwise the LLM reads a normal-looking
@@ -539,8 +553,8 @@ func (t *RetrospectiveTool) Description() string {
 	return "At the end of a productive session, record what went well and what to improve next " +
 		"time — but only after the user has reviewed and confirmed the recap and the two lists below. " +
 		"The retrospective is saved to memory and can be found later with recall_memory. " +
-		"Retrospectives are ALWAYS private, unlike remember (which defaults to shared with your " +
-		"workspace team) — there is no room parameter here and no way to share a retrospective with " +
+		"Retrospectives are ALWAYS private, unlike remember (where you choose private or shared " +
+		"for your workspace team) — there is no room parameter here and no way to share a retrospective with " +
 		"teammates. Writes here share the SAME rate-limit bucket as the remember tool: heavy use of " +
 		"one reduces the budget left for the other."
 }

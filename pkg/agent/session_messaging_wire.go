@@ -39,12 +39,12 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -62,7 +62,9 @@ import (
 func (al *AgentLoop) SetSessionMessagingStores(inbox *session.MessageInboxStore, lifecycle *session.LifecycleStore) {
 	al.mu.Lock()
 	al.messageInboxStore = inbox
+	al.sessionLifecycleMu.Lock()
 	al.sessionLifecycleStoreForTools = lifecycle
+	al.sessionLifecycleMu.Unlock()
 	al.mu.Unlock()
 
 	if inbox == nil {
@@ -85,7 +87,7 @@ func (al *AgentLoop) SetSessionMessagingStores(inbox *session.MessageInboxStore,
 		if !ok || inst == nil {
 			continue
 		}
-		al.wireSessionMessagingForAgent(inst)
+		al.wireSessionMessagingForAgent(inst, al.GetConfig())
 	}
 	logger.InfoCF("agent", "Session-messaging stores installed + tool surface re-wired",
 		map[string]any{"inbox_nil": inbox == nil, "lifecycle_nil": lifecycle == nil})
@@ -104,9 +106,23 @@ func (al *AgentLoop) GetMessageInboxStore() *session.MessageInboxStore {
 // Distinct from the plan engine's own lifecycleStore accessor — both point at
 // the same gateway-constructed instance.
 func (al *AgentLoop) GetSessionLifecycleStore() *session.LifecycleStore {
-	al.mu.RLock()
-	defer al.mu.RUnlock()
+	// This stable service reference is not configuration. Stop must reach its
+	// durable fence and live cancellation while MutateConfig still holds mu.
+	al.sessionLifecycleMu.RLock()
+	defer al.sessionLifecycleMu.RUnlock()
 	return al.sessionLifecycleStoreForTools
+}
+
+// delegateSteeringSink adapts the named EnqueueStatus to the delegate tool's
+// optional int-returning status interface. Embedding preserves the basic
+// enqueue and ReviveStoppedSession capabilities without a tools -> agent import.
+type delegateSteeringSink struct {
+	*AgentLoop
+}
+
+func (s delegateSteeringSink) EnqueueSteeringMessageWithStatus(scope, agentID string, msg providers.Message, correlationID string) (string, int, error) {
+	resolvedID, status, err := s.AgentLoop.EnqueueSteeringMessageWithStatus(scope, agentID, msg, correlationID)
+	return resolvedID, int(status), err
 }
 
 // wireSessionMessagingForAgent wires the ADR-053 session-control hooks onto
@@ -116,23 +132,42 @@ func (al *AgentLoop) GetSessionLifecycleStore() *session.LifecycleStore {
 // discipline). Called by SetSessionMessagingStores (post-boot re-wire) AND by
 // registerSharedTools (per-agent registration, including hot reloads).
 //
+// cfg is the config this pass must wire against. It is a PARAMETER, not a
+// read of al.GetConfig(), because ReloadProviderAndConfig runs
+// registerSharedTools BEFORE it swaps al.cfg (loop_config.go — the new
+// registry and the new config are swapped together under al.mu, deliberately,
+// so readers never see a mismatched pair). A reload therefore reaches this
+// function while al.GetConfig() still returns the PREVIOUS config; reading it
+// here would wire the rebuilt delegate tool with the OLD
+// session_messaging.steer_rate/steer_body, applying an operator's edit only
+// on the NEXT reload cycle. Callers that run OUTSIDE a reload
+// (SetSessionMessagingStores, SetSteerAudienceDeps, SetSteerSessionLauncher —
+// all post-boot, al.cfg already live) pass al.GetConfig(); the reload path
+// (registerSharedTools) passes the cfg it is registering against (rw.cfg),
+// which IS the new config.
+//
 // This wires ONLY the existing substrate hooks — it does not change tool
 // logic. The delegate tool keeps its own action handlers; message_parent
 // keeps its own kind switch. We inject: the inbox + lifecycle stores, the
-// steering sink (= the AgentLoop itself, via EnqueueSteeringMessage), the
+// steering sink (the delegateSteeringSink adapter around the AgentLoop), the
 // cancel hooks (ADR-057 FR-041's collapsed Interrupt / InterruptSessionHard,
 // called with ScopeSubtree per D8/R-13 — see the delegate-tool wiring block
 // below for why), the waker (the process-wide asyncNotifier, which implements
 // tools.MessageParentWaker), and the content-egress filter (the config's
 // SensitiveDataReplacer, N-10).
-func (al *AgentLoop) wireSessionMessagingForAgent(agent *AgentInstance) {
+func (al *AgentLoop) wireSessionMessagingForAgent(agent *AgentInstance, cfg *config.Config) {
+	// FR-010/C-LIMIT: install steer_aggregate_body on the one waiting-message
+	// queue. This function runs at boot and on every hot reload with the config
+	// being registered (see cfg above), so the saved value governs admission.
+	if cfg != nil {
+		al.steering.SetAggregateCap(cfg.SessionMessaging.EffectiveSteerAggregateBody())
+	}
 	if agent == nil || agent.Tools == nil {
 		return
 	}
 	inbox := al.GetMessageInboxStore()
 	lifecycle := al.GetSessionLifecycleStore()
 	egress := al.buildContentEgressFilter()
-	needInputTTL := al.sessionMessagingNeedsInputTTL()
 
 	// Boundary 8 lives in pkg/tools. Re-apply both dependencies here on every
 	// boot/hot-reload wire pass because registerSharedTools replaces the
@@ -144,7 +179,7 @@ func (al *AgentLoop) wireSessionMessagingForAgent(agent *AgentInstance) {
 	}
 
 	// --- delegate tool: inject the S2/S3 stores + the steering sink + cancel
-	// hooks. SetSteeringSink/SetCancelHooks/SetMessageInbox/SetLifecycleStore
+	// hooks. SetSteeringSink/SetStopHook/SetMessageInbox/SetLifecycleStore
 	// are idempotent in-place setters (delegate was registered by
 	// registerSharedTools just above this call with nil stores; this call
 	// re-wires the real stores in place once they exist). ---
@@ -169,7 +204,7 @@ func (al *AgentLoop) wireSessionMessagingForAgent(agent *AgentInstance) {
 			// interface parameter, producing a NON-nil interface wrapping a
 			// nil pointer. Every one of delegate.go's existing
 			// "t.lifecycle == nil" fail-closed checks (executeInbox,
-			// executeSteer, executeRespond, executeCancel, executeFollowUp,
+			// executeSteer, executeRespond, executeStopAll, executeResume,
 			// executePeek — each returning the operator-visible "delegate: no
 			// lifecycle store configured" ErrorResult) would then evaluate
 			// false and the call would panic on a nil-pointer method call
@@ -198,45 +233,46 @@ func (al *AgentLoop) wireSessionMessagingForAgent(agent *AgentInstance) {
 			} else {
 				dt.SetMessageInbox(nil)
 			}
-			// The AgentLoop satisfies tools.DelegateSteeringSink via its
-			// exported EnqueueSteeringMessage wrapper (steering.go) — same sink
-			// a chat steer uses, so a parent->child steer lands at the child's
-			// next tool boundary exactly like a chat interrupt (INV-3).
-			dt.SetSteeringSink(al)
-			// Cancel hooks. Both closures go through ADR-091's DURABLE Stop
-			// cascade (steer_delegate_cancel.go::cancelDelegatedSubtree), the
-			// same one a human's Stop uses over the socket and REST
-			// (pkg/gateway/websocket_cancel.go::cancelSteeredSubtree) — soft
-			// stamps and asks each reached turn to stop cooperatively, hard
-			// stamps and fires each turn's generation-aware abort.
-			//
-			// They used to be closures over the live-turn interrupt pair
-			// (al.Interrupt / al.InterruptSessionHard with ScopeSubtree). That
-			// wiring was correct for ADR-057's sub-turns and became wrong twice
-			// over when ADR-091 made a worker a SESSION:
-			//
-			//   - a queued worker has no live turn, so the interrupt reached
-			//     nothing and the tool reported a success-shaped no-op while the
-			//     worker went on to start;
-			//   - ScopeSubtree walks parentTurnID links between live turns, and
-			//     no steered turn has one, so a cancel on a running child left
-			//     its own grandchildren running — reopening exactly the D8/R-13
-			//     leak that scope was chosen to close.
-			//
-			// The durable parent-child edge closes both. See
-			// cancelDelegatedSubtree's own doc comment before changing this.
-			dt.SetCancelHooks(
-				func(sessionKey string, by steer.Principal, hint string) ([]string, error) {
-					return al.cancelDelegatedSubtree(sessionKey, by, false, hint)
-				},
-				func(sessionKey string, by steer.Principal, hint string) ([]string, error) {
-					return al.cancelDelegatedSubtree(sessionKey, by, true, hint)
-				},
-			)
+			// Adapt the named enqueue status to the delegate tool's optional
+			// int-returning interface; the embedded loop preserves basic enqueue
+			// and revival. Both paths still use the same queue as a chat steer,
+			// so delivery at the child's next tool boundary is unchanged (INV-3).
+			dt.SetSteeringSink(delegateSteeringSink{AgentLoop: al})
+			// The one session Stop (stop_session.go::StopSession), tree scope,
+			// recorded as the calling agent: the same method a person's Stop all
+			// uses over the socket, REST and commands. It walks the durable
+			// parent-child edge, so a queued worker and a running worker's own
+			// grandchildren are both reached (a live-turn interrupt reached
+			// neither).
+			dt.SetStopHook(func(sessionKey string, by steer.Principal, _ string) ([]string, error) {
+				return al.StopDelegatedTree(sessionKey, by)
+			})
+			// D5: a final the parent already read through a delegate poll
+			// is consumed exactly as its hand-back wake would consume it.
+			dt.SetFinalReadHook(al.recordPolledFinalConsumed)
 			// FR-196 kill switch on the SYNC session-messaging-plane actions
 			// (arch-M2): the live closure re-reads config per call, mirroring
 			// the async consumer's per-event read.
 			dt.SetSessionMessagingEnabled(al.sessionMessagingEnabledLive())
+			// FR-011/#1216: wire the live session_messaging.steer_rate/steer_body
+			// limits into the tool that actually enforces them. Before this,
+			// SetSteerCaps had no production caller at all, so an operator's
+			// steer_body/steer_rate edit governed nothing but the saved/displayed
+			// config — the tool kept enforcing its constructor defaults for the
+			// life of the process. This function runs at boot AND on every hot
+			// reload (see its callers), so a config edit now changes the real
+			// admission boundary on the next steer/respond.
+			//
+			// cfg is the caller-supplied wiring config, NOT al.GetConfig(): on a
+			// hot reload registerSharedTools runs before the atomic cfg swap, so
+			// al.GetConfig() is still the PREVIOUS config here and reading it
+			// applied an operator's steer_rate/steer_body edit one cycle late (the
+			// rebuilt tool admitted traffic the new bound meant to refuse, and
+			// refused valid traffic it had just widened). See this function's own
+			// doc comment.
+			if cfg != nil {
+				dt.SetSteerCaps(cfg.SessionMessaging.EffectiveSteerRatePerMinute(), cfg.SessionMessaging.EffectiveSteerBodyBytes())
+			}
 		}
 	}
 
@@ -261,7 +297,6 @@ func (al *AgentLoop) wireSessionMessagingForAgent(agent *AgentInstance) {
 	// fail-closed posture this comment already documents for inbox/lifecycle. ---
 	mp := tools.NewMessageParentTool(al.getUpwardDeliverer(), lifecycle)
 	mp.SetContentEgressFilter(egress)
-	mp.SetNeedsInputTTL(needInputTTL)
 	// FR-196 kill switch on the SYNC tool path (arch-M2): the live closure
 	// re-reads config per call, mirroring the async consumer's per-event read.
 	mp.SetSessionMessagingEnabled(al.sessionMessagingEnabledLive())
@@ -347,16 +382,6 @@ func (al *AgentLoop) sessionMessagingEnabledLive() func() bool {
 	}
 }
 
-// sessionMessagingNeedsInputTTL reads the live needs_input TTL from the
-// session_messaging config (FR-126/G-6). Returns the default when unset.
-func (al *AgentLoop) sessionMessagingNeedsInputTTL() time.Duration {
-	cfg := al.GetConfig()
-	if cfg == nil {
-		return config.DefaultSMNeedsInputTTL
-	}
-	return cfg.SessionMessaging.EffectiveNeedsInputTTL()
-}
-
 // ====================== The SessionMessageChan kind-router consumer ======================
 
 // sessionMessageWakeableConsumerKinds is the closed set of child->parent kinds
@@ -380,14 +405,13 @@ var sessionMessageWakeableConsumerKinds = map[string]bool{ //nolint:gochecknoglo
 // delegated child, and without an entry here it fell to the unknown-kind
 // default (DEBUG log + dropped) instead of reaching the durable inbox.
 var sessionMessageChildToParentKinds = map[string]bool{ //nolint:gochecknoglobals
-	"progress":         true,
-	"checkpoint":       true,
-	"artifact":         true,
-	"blocker":          true,
-	"question":         true,
-	"handback":         true,
-	"decision_request": true,
-	"error":            true,
+	"progress":   true,
+	"checkpoint": true,
+	"artifact":   true,
+	"blocker":    true,
+	"question":   true,
+	"handback":   true,
+	"error":      true,
 }
 
 // StartSessionMessageConsumer launches the kind-router goroutine that drains
@@ -396,7 +420,7 @@ var sessionMessageChildToParentKinds = map[string]bool{ //nolint:gochecknoglobal
 //   - steer/respond (parent->child) → DeliverSessionMessage (inject at the
 //     child's next tool boundary via the steering queue).
 //   - child->parent kinds (progress/checkpoint/artifact/blocker/question/
-//     handback/decision_request) → MessageInboxStore.Append keyed to the
+//     handback) → MessageInboxStore.Append keyed to the
 //     durable owner key (D16) + WakeParent for the wakeable kinds.
 //   - engine/session_to_ui kinds (goal_status/revision_entry) → the matching
 //     WS frame emission.

@@ -1,6 +1,8 @@
 // messages.ts: Message limits, setup content, tool-result guards, selectors, mutation, and event-time ordering
 
 import type { ToolResultRef, TruncatedResult } from '@/lib/api/generated/asyncapi-types'
+import { logDiagnostic } from '@/lib/telemetry'
+import { isHistoryResultPreview } from '@/lib/historyPreview'
 import { evictSpanIndexEntries } from './types'
 import type { ChatMessage, ClientTruncatedResult, SessionChatState } from './types'
 
@@ -8,19 +10,11 @@ import type { ChatMessage, ClientTruncatedResult, SessionChatState } from './typ
 // Older messages are evicted once this limit is exceeded; full transcript is preserved server-side.
 export const MAX_MESSAGES_PER_SESSION = 500
 
-// Kickoff content template for sendWorkspaceSetupKickoff — sent as
-// the (synthetic, never user-visible) first turn of a freshly-created
-// workspace. The backend records the message this content rides on as a
-// SYSTEM-role transcript entry (centered pill on replay), not a user
-// message, so this text is never shown verbatim in the UI — it only
-// instructs Ava what to do; her own reply is what the user actually reads.
-// Exported (module-level constant fn) so tests can assert on the exact
-// content without duplicating the template.
-export const buildWorkspaceSetupKickoffContent = (workspaceName: string): string =>
-  `The workspace "${workspaceName}" was just created. Introduce yourself and interview the user about this workspace's purpose so you can determine which agents and skills its team needs, then set up the team.`
-
-// Maximum byte size of a tool result stored in client state; oversized results become a sentinel.
-const MAX_TOOL_RESULT_BYTES = 50_000
+// Maximum size of a tool result stored in client state, in UTF-8 bytes of its
+// encoding; oversized results become a sentinel. #1452 D2 A2.4: aligned with
+// the server's inline threshold (pkg/session InlineToolResultMaxBytes =
+// 51,200 bytes), so a value the server sent in full is never cut again here.
+const MAX_TOOL_RESULT_BYTES = 51_200
 
 // Preview size for client-side truncated results (4 KiB).
 const CLIENT_TRUNCATION_PREVIEW_BYTES = 4_096
@@ -55,8 +49,8 @@ export function isTruncatedResult(value: unknown): value is TruncatedResult {
 
 /** Clamp a tool result to MAX_TOOL_RESULT_BYTES; pass-through for existing sentinels. */
 export function clampToolResult(result: unknown): unknown {
-  // Pass-through for existing sentinels.
-  if (isToolResultRef(result) || isTruncatedResult(result) || isClientTruncatedResult(result)) {
+  // Pass-through for existing sentinels, including the D2 history preview marker.
+  if (isToolResultRef(result) || isTruncatedResult(result) || isClientTruncatedResult(result) || isHistoryResultPreview(result)) {
     return result
   }
   let serialized: string
@@ -65,11 +59,13 @@ export function clampToolResult(result: unknown): unknown {
   } catch {
     serialized = String(result)
   }
-  if (serialized.length <= MAX_TOOL_RESULT_BYTES) {
+  // UTF-8 bytes, never UTF-16 characters: a character is at least one byte,
+  // so only a string within the limit in characters needs the exact count.
+  const originalSizeBytes = new TextEncoder().encode(serialized).length
+  if (originalSizeBytes <= MAX_TOOL_RESULT_BYTES) {
     return result
   }
   const preview = serialized.slice(0, CLIENT_TRUNCATION_PREVIEW_BYTES)
-  const originalSizeBytes = new TextEncoder().encode(serialized).length
   const sentinel: ClientTruncatedResult = {
     _truncated_client: true,
     original_size_bytes: originalSizeBytes,
@@ -80,12 +76,60 @@ export function clampToolResult(result: unknown): unknown {
 
 /** Return the ordered message array for a bucket. O(N) — call once per reducer, not per frame. */
 export function getMessages(bucket: Pick<SessionChatState, 'messagesById' | 'messageOrder'>): ChatMessage[] {
-  return bucket.messageOrder.map((id) => bucket.messagesById[id]).filter(Boolean)
+  // The single projection every foreground `messages` array passes through
+  // (initial load, live appends, replay, reconnect). assistant-ui throws on a
+  // repeated message id and takes the whole route down, and a persisted
+  // transcript can hold one (a re-queued subagent_state row). Collapse
+  // duplicate ids keeping the LAST occurrence at its position — the later row
+  // is the current one. Walk backwards so the last occurrence is the one seen.
+  const order = bucket.messageOrder
+  const seen = new Set<string>()
+  const out: ChatMessage[] = []
+  let repeats: Map<string, number> | null = null
+  for (let i = order.length - 1; i >= 0; i--) {
+    const id = order[i]
+    if (seen.has(id)) {
+      repeats ??= new Map()
+      repeats.set(id, (repeats.get(id) ?? 1) + 1)
+      continue
+    }
+    seen.add(id)
+    const m = bucket.messagesById[id]
+    if (m) out.push(m)
+  }
+  if (repeats) reportCollapsedDuplicateIds(repeats)
+  return out.reverse()
+}
+
+// The collapse above must not be invisible: a repeated id is a persistence or
+// ordering bug somewhere upstream. This projection runs on every reducer, so
+// each id is reported once (bounded, so a long session cannot grow the set).
+const MAX_REPORTED_DUPLICATE_IDS = 200
+const reportedDuplicateIds = new Set<string>()
+
+function reportCollapsedDuplicateIds(repeats: Map<string, number>): void {
+  for (const [messageId, occurrences] of repeats) {
+    if (reportedDuplicateIds.has(messageId)) continue
+    if (reportedDuplicateIds.size >= MAX_REPORTED_DUPLICATE_IDS) reportedDuplicateIds.clear()
+    reportedDuplicateIds.add(messageId)
+    logDiagnostic('chatDuplicateMessageIdCollapsed', { messageId, occurrences })
+  }
+}
+
+/** #1452 D1 S1a: a saved record whose id an incompatible display row already holds. */
+export function reportDuplicateMessageId(messageId: string): void {
+  reportCollapsedDuplicateIds(new Map([[messageId, 2]]))
+}
+
+/** Test seam: forget which duplicate ids were already reported. */
+export function resetDuplicateIdReports(): void {
+  reportedDuplicateIds.clear()
 }
 
 /**
  * Backward-scan a bucket's message order for the id of the most recent
- * assistant message, returning null when none exists. This is the single
+ * assistant reply, skipping a Judge conclusion-handling notice and returning
+ * null when none exists. This is the single
  * shared implementation of a "find last assistant message" scan that used
  * to be hand-rolled at every WS-frame-handler / cancel / span call site in
  * this store. Takes the two order/lookup fields directly (rather than a
@@ -98,7 +142,8 @@ export function findLastAssistantMessageId(
 ): string | null {
   for (let i = order.length - 1; i >= 0; i--) {
     const id = order[i]
-    if (messagesById[id]?.role === 'assistant') return id
+    const message = messagesById[id]
+    if (message?.role === 'assistant' && message.errorCode !== 'judge_conclusion_failed') return id
   }
   return null
 }
@@ -130,7 +175,7 @@ export function findOpenAssistantMessageId(
 ): string | null {
   const tailId = order[order.length - 1]
   const tail = tailId ? messagesById[tailId] : undefined
-  if (tail?.role === 'assistant') return tailId ?? null
+  if (tail?.role === 'assistant' && tail.errorCode !== 'judge_conclusion_failed') return tailId ?? null
   const candidateId = findLastAssistantMessageId(order, messagesById)
   const candidate = candidateId ? messagesById[candidateId] : undefined
   return candidate?.isStreaming ? candidateId : null
@@ -268,4 +313,57 @@ export function advanceEventTime(current: string | null, incoming: string | null
   if (!cur) return incoming
   if (inc.ms !== cur.ms) return inc.ms > cur.ms ? incoming : current
   return inc.subMs > cur.subMs ? incoming : current
+}
+
+/**
+ * The turn-ended write shared by every terminal path (done, error, Stop):
+ * no announced turn, and no idle-armed tool mark. A mark exists only so a
+ * straggler's own result can release the busy flag; once a turn has ended
+ * (or the user stopped it) a mark whose result never came would later let an
+ * unrelated lone tool result blink Stop off mid-turn (R3-SPA-SFH-04).
+ * The provider-retry line retires with the turn too (6b U3c): it describes a
+ * retry of THIS turn, so a later turn shows it only after its own
+ * provider_retry frame.
+ */
+export function endTurnState(draft: Pick<SessionChatState, 'activeTurnId' | 'activeTurnAgentId' | 'idleArmedToolCalls' | 'providerRetryEvent'>): void {
+  draft.activeTurnId = null
+  draft.activeTurnAgentId = null
+  draft.idleArmedToolCalls = undefined
+  draft.providerRetryEvent = null
+}
+
+/**
+ * True when the bucket's busy flag (`isStreaming`, which draws the composer's
+ * Stop button) has nothing behind it: no message is streaming, no tool call is
+ * running, no turn was announced active, no replay is rebuilding history, and
+ * no steer is waiting for its continuation.
+ * `tool_call_start` sets the flag but carries no turn_id, so a straggler that
+ * lands after a turn already ended (after Stop, after done, after a reconnect)
+ * re-arms it with no later frame to end it - Stop shows while the transcript
+ * shows no activity. Callers release the flag at the points where the evidence
+ * is decided (a tool result, a "no turn in flight" snapshot).
+ */
+export function busyFlagIsUnbacked(
+  b: Pick<SessionChatState, 'isStreaming' | 'isReplaying' | 'activeTurnId' | 'messageOrder' | 'messagesById' | 'toolCalls'>,
+): boolean {
+  if (!b.isStreaming || b.isReplaying || b.activeTurnId) return false
+  if (Object.values(b.toolCalls).some((t) => t.status === 'running')) return false
+  // A mid-turn steer closes the running bubble before the turn's continuation
+  // opens a new one. While the last assistant bubble is that closed-by-steer
+  // one, the turn is still in flight and the flag is backed.
+  for (let i = b.messageOrder.length - 1; i >= 0; i--) {
+    const m = b.messagesById[b.messageOrder[i]]
+    if (m?.role !== 'assistant') continue
+    // A message-scoped refusal notice (frames.ts, the C2 branch) is appended
+    // AFTER the closed-by-steer bubble while that turn keeps running: it is not
+    // the turn's reply, so look past it. A real turn-ending error bubble IS a
+    // reply and is not skipped.
+    if (m.refusalNotice) continue
+    if (m.closedBySteer) return false
+    break
+  }
+  return !b.messageOrder.some((id) => {
+    const m = b.messagesById[id]
+    return !!m && (m.isStreaming || m.status === 'streaming')
+  })
 }

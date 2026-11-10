@@ -12,7 +12,7 @@ import (
 // duration is a time.Duration that JSON-unmarshals from either a human-friendly
 // string ("24h", "5s", "500ms") or a bare number interpreted as SECONDS — so
 // config.json stays readable for the hour/minute/second TTLs FR-195 exposes
-// (needs_input_ttl, cancel_grace, wake_debounce, idle_quiet_window). Marshals
+// (needs_input_ttl, wake_debounce, idle_quiet_window). Marshals
 // back as the canonical string form. A zero value means "unset" (the Effective*
 // resolvers substitute the ADR default).
 type duration time.Duration
@@ -91,12 +91,19 @@ const (
 	DefaultSMInboxUnackedMax     = 200
 	DefaultSMInboxPerTypeCeiling = 20
 
-	// Steer/respond caps (message_inbox.go defaults).
-	DefaultSMSteerRatePerMinute = 6
-	DefaultSMSteerBodyBytes     = 16 * 1024
+	// Steer/respond caps (message_inbox.go defaults). FR-010/C-LIMIT raise the
+	// ordinary defaults to one full model page and one per second: 65,536
+	// UTF-8 bytes per item and 60 admissions/minute per trusted sender+target.
+	DefaultSMSteerRatePerMinute = 60
+	DefaultSMSteerBodyBytes     = 65536
+	// DefaultSMSteerAggregateBodyBytes is C-LIMIT's sole new ordinary-intake
+	// setting (session_messaging.steer_aggregate_body): the summed UTF-8 body
+	// bytes of the ordinary items waiting for one target. It is the stricter
+	// of {per-item count × body} bounds, so it bites before the 200-item
+	// MaxQueueSize cap (200 × 65,536 = 12.9 MiB).
+	DefaultSMSteerAggregateBodyBytes = 1024 * 1024
 
 	// Timing.
-	DefaultSMCancelGrace   = 5 * time.Second
 	DefaultSMNeedsInputTTL = 24 * time.Hour
 
 	// Wake debounce/rate (async_notifier.go constants).
@@ -157,12 +164,15 @@ type SessionMessagingConfig struct {
 	InboxUnackedMax     int `json:"inbox_unacked_max,omitempty"`
 	InboxPerTypeCeiling int `json:"inbox_per_type_ceiling,omitempty"`
 
-	// --- Steer/respond caps (2) ---
+	// --- Steer/respond caps (3) ---
 	SteerRatePerMinute int `json:"steer_rate,omitempty"`
 	SteerBody          int `json:"steer_body,omitempty"`
+	// SteerAggregateBody is C-LIMIT's sole new setting: the aggregate body
+	// bound for ordinary intake. Zero means unset; read it through
+	// EffectiveSteerAggregateBody, never the raw field.
+	SteerAggregateBody int `json:"steer_aggregate_body,omitempty"`
 
-	// --- Timing (2) ---
-	CancelGrace   duration `json:"cancel_grace,omitempty"`
+	// --- Timing (1) ---
 	NeedsInputTTL duration `json:"needs_input_ttl,omitempty"`
 
 	// --- Wake debounce/rate (2) ---
@@ -281,12 +291,16 @@ func (c SessionMessagingConfig) EffectiveSteerBodyBytes() int {
 	return DefaultSMSteerBodyBytes
 }
 
-// EffectiveCancelGrace resolves the cooperative-stop grace window.
-func (c SessionMessagingConfig) EffectiveCancelGrace() time.Duration {
-	if c.CancelGrace > 0 {
-		return time.Duration(c.CancelGrace)
+// EffectiveSteerAggregateBody resolves the ordinary-intake aggregate body cap
+// (session_messaging.steer_aggregate_body, FR-010/C-LIMIT): the summed UTF-8
+// body bytes of the ordinary items waiting for one target. A zero/negative
+// value resolves to the C-LIMIT default 1,048,576 bytes. Read live per event,
+// never cached at boot.
+func (c SessionMessagingConfig) EffectiveSteerAggregateBody() int {
+	if c.SteerAggregateBody >= 1 {
+		return c.SteerAggregateBody
 	}
-	return DefaultSMCancelGrace
+	return DefaultSMSteerAggregateBodyBytes
 }
 
 // EffectiveNeedsInputTTL resolves the needs_input park TTL (G-6).

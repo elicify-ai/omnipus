@@ -1,8 +1,10 @@
 name: PR
 
 on:
+  # Full CI is selected by PR base, including standalone feature branches.
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [main, release/v0.1.1]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
   # ADR-067 step 1: run the SAME checks on a direct push to a release branch
   # or main, not just on pull_request. Before this, pr.yml was
   # pull_request-only, so a commit merged straight to a release branch (no
@@ -12,16 +14,14 @@ on:
   # compare against on a push, so its filter steps are skipped entirely for
   # push, and every gated job's `code`/`go`/`spa` input defaults to 'true'.
   push:
-    branches:
-      - release/**
-      - main
-  # Allow manual runs on feature branches without opening a PR.
-  workflow_dispatch:
+    branches: [main, release/v0.1.1]
 
-# Six playwright e2e shards (llm-chat, llm-agents, llm-light, llm-hot-reload,
-# llm-verifier-eval, llm-conformance) call a real paid LLM (openrouter/deepseek/deepseek-v4.1-flash),
-# so every push to a PR branch spends money. Cancel the superseded run on each new
-# push instead of letting it burn through the full 17-job/9-shard fan-out. For a
+# Paid llm-* shards are opt-in on PRs: add the run-e2e label BEFORE the next
+# push to the PR branch (or reopen the PR). Label changes alone do not trigger CI.
+# Pushes to release/v0.1.1 and main retain the full shard plan. The nightly
+# scheduler is follow-up #1127, not delivered by this workflow change.
+# Cancel the superseded run on each new push instead of letting it spend money
+# on opted-in paid LLM work (model source: tests/e2e/e2e-model.json). For a
 # release-branch/main push (no `pull_request` context), `github.event.pull_request.number`
 # is empty so the group falls back to `github.ref` (e.g. refs/heads/release/v0.1.1) —
 # still one group per branch, so a rapid run of pushes to the same release branch
@@ -74,8 +74,8 @@ jobs:
     # or should be added.
     #
     # Any doubt defaults to running everything: non-pull_request events
-    # (push to release/**|main, or workflow_dispatch — neither has a PR diff
-    # to filter against) always get code=true AND go=true AND spa=true, and
+    # (push to release/v0.1.1|main, with no PR diff to filter against)
+    # always get code=true AND go=true AND spa=true, and
     # if a filter step below doesn't run or doesn't succeed, the fallback in
     # "Decide" still defaults every output to 'true' — fail open, never fail
     # closed into a silent skip. This is also what ADR-067 §4.3 requires for
@@ -97,7 +97,7 @@ jobs:
       - name: Filter changed paths — anything-but-docs (pull_request only)
         # dorny/paths-filter's GitHub-API mode needs no checkout for
         # pull_request events. Non-pull_request events (push to
-        # release/**|main, or workflow_dispatch) have no PR to diff against,
+        # release/v0.1.1|main) have no PR to diff against,
         # so this step is skipped for them and the fail-open default in
         # "Decide" below applies.
         id: filter
@@ -270,7 +270,15 @@ jobs:
     # handful of ~1-minute download+extract steps.
     runs-on: ubuntu-latest
     needs: [changes]
-    if: success() && needs.changes.outputs.code == 'true'
+    # NOT gated on `code`: tool-error-status-lint runs its guard suite on
+    # documentation-only changes too (its two docs guards exist for exactly
+    # those), and its size-budget guard needs this job's node_modules. With a
+    # `code == 'true'` gate here, a docs-only PR skipped setup, which skipped
+    # the guard job, and ci-required accepts a skip — so a docs-only PR that
+    # reintroduced a retired surface went green unchecked (review finding F1
+    # on c7faf3098). Every other consumer of setup keeps its own `code`
+    # gate, so a docs-only PR pays only this one install.
+    if: success()
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -421,7 +429,22 @@ jobs:
     # missing-browser false-RED trap documented in deploy/ci-worker/CLAUDE.md.
     runs-on: ubuntu-latest
     needs: [changes, fast-tier, setup]
-    if: success() && needs.changes.outputs.code == 'true'
+    # NOT a bare `success()`: fast-tier deliberately tolerates its path-skipped
+    # needs (typecheck, lint-spa, design-system-locks when spa==false; lint
+    # when go==false — see the fast-tier job's comment), but a bare success()
+    # here also sees those skipped jobs upstream of fast-tier and skips THIS
+    # job. That silently dropped the real-Chrome tests from every PR touching
+    # only Go or only SPA/tests (PR #1365 runs 39135504058 and 39139789198:
+    # Detect, Install and Fast tier all green, this job skipped). Same shape
+    # as fast-tier: `!cancelled()` drops the implicit success() gate and the
+    # explicit per-need checks below are the only gate, so a real failure or
+    # cancellation of any need still blocks this job.
+    if: >-
+      !cancelled() &&
+      needs.changes.outputs.code == 'true' &&
+      needs.changes.result == 'success' &&
+      needs.fast-tier.result == 'success' &&
+      needs.setup.result == 'success'
     env:
       CGO_ENABLED: "0"
       # Opts past skipIfNoBrowser's CI branch. Set ONLY here.
@@ -436,26 +459,26 @@ jobs:
           go-version-file: go.mod
 
       - name: Install Chrome (declared dependency, not an in-test download)
+        id: chrome
         uses: browser-actions/setup-chrome@v2
         with:
           chrome-version: stable
 
-      - name: Verify Chrome resolves under a name skipIfNoBrowser probes
-        # skipIfNoBrowser (pkg/tools/browser/browser_e2e_test.go) probes
-        # EXACTLY these four names via exec.LookPath. Bare `chrome` is NOT
-        # among them, and setup-chrome can install the executable under that
-        # name — so checking for "some chrome binary" would pass while every
-        # test still skipped. Check the names the code actually looks for.
+      - name: Verify and pin the declared Chrome for measurement gates
+        # One source of truth: setup-chrome's exact chrome-path output.
+        # requireBrowserOrFail reads this pin before any PATH probe and fails
+        # rather than falling back when the declared executable is unusable.
+        env:
+          OMNIPUS_BROWSER_TEST_CHROME: ${{ steps.chrome.outputs.chrome-path }}
         run: |
           set -euo pipefail
-          for n in google-chrome google-chrome-stable chromium chromium-browser; do
-            if command -v "$n" >/dev/null 2>&1; then
-              echo "found $n: $("$n" --version)"; exit 0
-            fi
-          done
-          echo "::error::No Chrome binary under a name skipIfNoBrowser probes" >&2
-          echo "PATH candidates present: $(command -v chrome || true)" >&2
-          exit 1
+          if [[ "$OMNIPUS_BROWSER_TEST_CHROME" != /* || ! -x "$OMNIPUS_BROWSER_TEST_CHROME" ]]; then
+            echo "::error::setup-chrome did not provide an absolute executable chrome-path" >&2
+            exit 1
+          fi
+          "$OMNIPUS_BROWSER_TEST_CHROME" --version
+          echo "Measurement gates pinned to: $OMNIPUS_BROWSER_TEST_CHROME"
+          printf 'OMNIPUS_BROWSER_TEST_CHROME=%s\n' "$OMNIPUS_BROWSER_TEST_CHROME" >> "$GITHUB_ENV"
 
       - name: "G-2 gate: chrome.tabCapture against a SECOND Chrome process"
         # ADR-075 / browser-workspace-ownership-spec FR-045, SC-012a.
@@ -507,6 +530,12 @@ jobs:
             exit 1
           fi
 
+          resolved=$(grep -F 'G-2 spike: resolved Chrome at ' /tmp/g2-second-chrome.log)
+          if [[ "${resolved##*G-2 spike: resolved Chrome at }" != "$OMNIPUS_BROWSER_TEST_CHROME" ]]; then
+            echo "::error::G-2 measured a different Chrome than setup-chrome provided: $resolved" >&2
+            exit 1
+          fi
+
           echo "G-2 PASS: chrome.tabCapture reached a tab in a SECOND Chrome process's default browser context."
 
       - name: Run pkg/tools/browser real-Chrome tests
@@ -535,6 +564,15 @@ jobs:
             exit 1
           fi
 
+          # WU-23's upload matrix is a measurement gate, like G-2: it must
+          # execute HERE with setup-chrome's exact pin, never in -short/arm64.
+          if ! grep -qE -- '^--- PASS: TestWU23_BrowserUploadProtectsInternalFiles \(' /tmp/browser-e2e.log ||
+             ! grep -qE -- '--- PASS: TestWU23_BrowserUploadProtectsInternalFiles/workspace_positive ' /tmp/browser-e2e.log ||
+             grep -qE -- '--- (SKIP|FAIL): TestWU23_BrowserUploadProtectsInternalFiles' /tmp/browser-e2e.log; then
+            echo "::error::WU-23 browser upload protection did not run with its real upload control; a skip or missing test is not coverage." >&2
+            exit 1
+          fi
+
           passes=$(grep -c -- '--- PASS' /tmp/browser-e2e.log || true)
           echo "pkg/tools/browser passing tests: $passes"
           # Ratchet, not a magic number: the real count with a working browser
@@ -547,16 +585,9 @@ jobs:
             exit 1
           fi
 
-      # pkg/gateway/embed.go has //go:embed all:spa and pkg/gateway/spa/ is
-      # gitignored, so the package does not COMPILE without a built SPA. This
-      # job ran Go tests against pkg/gateway without ever building one, and
-      # failed at "pattern all:spa: no matching files found" -> "[setup failed]"
-      # -- a compile error wearing a test failure's clothes. Pre-existing: the
-      # same job fails identically on release/v0.1.1.
-      #
-      # Same three steps every other Go-testing job here already uses
-      # (cgo-gate, lint, vuln_check), so there is one way to provision the SPA
-      # rather than two.
+      # #687: the gateway tests below navigate fixture pages and exercise
+      # browser REST/WebSocket handlers, not the built Omnipus web app.
+      # Keep Node/dependency provisioning; satisfy go:embed with a stub.
       - name: Setup Node
         uses: actions/setup-node@v7
         with:
@@ -570,14 +601,11 @@ jobs:
       - name: Extract node_modules
         run: tar -xf node_modules.tar
 
-      - name: Build SPA for the gateway embed
+      - name: Prepare SPA embed stub (gateway browser tests)
         run: |
-          set -euo pipefail
-          npm run build
-          rm -rf pkg/gateway/spa
-          cp -r dist/spa pkg/gateway/spa
-          # Fail loudly here rather than 200 lines later inside `go test`.
-          test -d pkg/gateway/spa/assets || { echo "::error::SPA sync failed: pkg/gateway/spa/assets missing" >&2; exit 1; }
+          mkdir -p pkg/gateway/spa/assets && echo '<!doctype html>' > pkg/gateway/spa/index.html && touch pkg/gateway/spa/assets/.keep || exit 1
+          # Fail loudly here rather than later inside `go test`.
+          test -d pkg/gateway/spa/assets || { echo "::error::SPA stub failed: pkg/gateway/spa/assets missing" >&2; exit 1; }
 
       - name: Run pkg/gateway real-Chrome tests
         # Same skip-detection + pass-floor pattern as the pkg/tools/browser
@@ -714,7 +742,7 @@ jobs:
           # *.test.ts only, so the sibling *.spec.ts Playwright files are not
           # picked up by this pattern. It ran in NO shard until 2026-08-23.
           - group: lib-store
-            patterns: "src/lib/ src/store/ src/routes/ src/test/ src/design-system/ tests/e2e/fixtures/ tests/design-system/"
+            patterns: "src/main.test.tsx src/lib/ src/store/ src/routes/ src/test/ src/design-system/ tests/e2e/fixtures/ tests/design-system/ tests/wu15-rooms-contract/"
           # Group B: chat components — heaviest component group
           - group: components-chat
             patterns: "src/components/chat/"
@@ -723,7 +751,7 @@ jobs:
             patterns: "src/components/agents/ src/components/settings/ src/components/skills/ src/components/shared/ src/components/ui/"
           # Group D: layout components
           - group: components-layout
-            patterns: "src/components/layout/"
+            patterns: "src/components/layout/ src/components/panel-shell/"
           # Group E: workspaces — the largest single group (v0.3 flagship)
           - group: components-workspaces
             patterns: "src/components/workspaces/"
@@ -733,7 +761,7 @@ jobs:
           # fails the build if that happens, so add new directories HERE (or to
           # a group above) rather than letting them go unexecuted.
           - group: components-misc
-            patterns: "src/components/screens/ src/components/browser/ src/components/calendar/ src/components/library/ src/components/connectors/ src/components/providers/ src/components/search/ src/components/sessions/ src/hooks/ src/assets/ src/styles/ tests/browser-acceptance/"
+            patterns: "src/components/screens/ src/components/browser/ src/components/calendar/ src/components/library/ src/components/connectors/ src/components/providers/ src/components/rooms/ src/components/search/ src/components/sessions/ src/hooks/ src/assets/ src/styles/ tests/browser-acceptance/"
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -755,6 +783,33 @@ jobs:
         # An unmatched test file is silently never run while this job still
         # reports green — see the script header for the 116-file incident.
         run: node scripts/check-vitest-coverage.mjs
+
+      # r15 S-11.19 bridge: src/lib/api/skills-real-responses.test.ts feeds the
+      # REAL gateway responses saved by the Go producer through the generated
+      # schemas and the real SPA adapters. It needs SKILLS_REST_CORPUS, so the
+      # producer runs first, serially, in the one group that owns src/lib/.
+      - name: Setup Go (skills response corpus producer)
+        if: matrix.group == 'lib-store'
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Produce the real skills REST response corpus
+        if: matrix.group == 'lib-store'
+        run: |
+          set -euo pipefail
+          mkdir -p pkg/gateway/spa/assets && echo '<!doctype html>' > pkg/gateway/spa/index.html && touch pkg/gateway/spa/assets/.keep
+          go generate ./...
+          corpus="$RUNNER_TEMP/skills-real-responses.json"
+          log="$RUNNER_TEMP/skills-corpus-producer.log"
+          SKILLS_REST_CORPUS="$corpus" go test -v -tags goolm,stdjson -count=1 -timeout 300s \
+            -run '^TestRestS1119_ResponseCorpus$' ./pkg/gateway 2>&1 | tee "$log"
+          # `go test` exits 0 when the -run filter matches nothing or the test
+          # skips: the producer must have really run and passed.
+          grep -q -- '--- PASS: TestRestS1119_ResponseCorpus' "$log" || { echo "::error::the corpus producer did not run and pass" >&2; exit 1; }
+          if grep -q -- '--- SKIP' "$log"; then echo "::error::the corpus producer skipped" >&2; exit 1; fi
+          test -s "$corpus" || { echo "::error::no corpus written at $corpus" >&2; exit 1; }
+          printf 'SKILLS_REST_CORPUS=%s\n' "$corpus" >> "$GITHUB_ENV"
 
       - name: Run Vitest (${{ matrix.group }})
         env:
@@ -788,7 +843,7 @@ jobs:
             import { readFileSync } from "node:fs";
             const { stats } = JSON.parse(readFileSync("input-fixture-results.json", "utf8"));
             if (stats.expected !== 4 || stats.unexpected !== 0 || stats.skipped !== 0 || stats.flaky !== 0) {
-              throw new Error(`Expected four passing local fixture tests: ${JSON.stringify(stats)}`);
+              throw new Error("Expected four passing local fixture tests: " + JSON.stringify(stats));
             }
           '
 
@@ -843,10 +898,12 @@ jobs:
       # are merged — so both run in the design-system-audit job, not here.
       - run: npm run test:design-system:package
       # Build both revisions on this runner; a macOS baseline is not a Linux budget oracle.
+      # Baseline re-based 2026-11-03 to the release/v0.1.1 tip 3e2dc1ace by founder
+      # decision B1 = A (#1183); it was the frozen 92aeb4d5d (2026-09-17) before.
       - name: Checkout immutable production baseline
         uses: actions/checkout@v7
         with:
-          ref: 92aeb4d5dcb0d545e2370ddd1c57c099a03392ba
+          ref: 3e2dc1ace3da5bf1c035ca9808de18964565182e
           path: dist/design-system-ci-baseline
       - name: Build baseline with its original dependency lock
         working-directory: dist/design-system-ci-baseline
@@ -947,6 +1004,48 @@ jobs:
           path: test-results/design-system-browser-artifacts/screenshot-*
           if-no-files-found: ignore
 
+  design-system-locks:
+    name: Design system lock audit
+    # The policy/lock HALF of the enforcement audit: `lint:design-system-locks`
+    # runs scripts/design-system-locks's policy.mjs + audit.mjs WITHOUT
+    # --coverage, so it needs only node_modules — not the storybook build or
+    # the evidence artifacts the coverage half composes. Running it as a light
+    # job means a lock violation goes red in minutes instead of waiting behind
+    # the design-system/browser/screenshot chain. The coverage half stays in
+    # `design-system-audit` below — both halves write the same report file,
+    # test-results/design-system-audit.json, and both fail the run.
+    #
+    # ADR-067 step 12: skips when no SPA-relevant file changed (see the
+    # `changes` job's `spa` filter and its force-full list). `code` is still
+    # checked too — `spa` narrows on top of it, never replaces it. fast-tier
+    # tolerates this job's 'skipped' result exactly like typecheck/lint-spa's.
+    runs-on: ubuntu-latest
+    needs: [changes, setup]
+    if: success() && needs.changes.outputs.code == 'true' && needs.changes.outputs.spa == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Download node_modules artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: node-modules-${{ github.run_id }}
+
+      - name: Extract node_modules
+        run: tar -xf node_modules.tar
+
+      - name: Run design-system lock audit (no coverage)
+        # The npm script prints only the errors plus one count line and exits
+        # non-zero on failure — no report cat lives here (cat'ing the whole
+        # ~6,000-line report on failure is the failure mode this split exists
+        # to remove; see design-system-audit's run step).
+        run: npm run lint:design-system-locks
+
   design-system-audit:
     name: Design system enforcement audit
     runs-on: ubuntu-latest
@@ -968,9 +1067,26 @@ jobs:
           name: design-system-storybook-build
           path: dist/storybook
       - name: Download all evidence artifacts
+        id: evidence_dl
+        # Retry a transport failure, never a test/audit verdict. outcome retains
+        # the raw failure even though conclusion is success for this attempt.
+        continue-on-error: true
         uses: actions/download-artifact@v7
         with:
           path: /tmp/ci-evidence
+      - name: Retry evidence download once
+        id: evidence_retry
+        if: steps.evidence_dl.outcome == 'failure'
+        uses: actions/download-artifact@v7
+        with:
+          path: /tmp/ci-evidence
+      - name: Fail if both evidence downloads failed
+        # Explicit always() removes the implicit success() that would otherwise
+        # skip this diagnostic after the hard-failing second download.
+        if: always() && steps.evidence_dl.outcome != 'success' && steps.evidence_retry.outcome != 'success'
+        run: |
+          printf '%s\n' '::error::Evidence download did not succeed after at most two attempts.' >&2
+          exit 1
       - name: Merge evidence files and validate audit preconditions
         run: |
           set -e  # fail fast on any error
@@ -1028,19 +1144,89 @@ jobs:
       - name: Run design-system audit
         # The npm script writes its full report to
         # test-results/design-system-audit.json and prints only the error count;
-        # on failure, print the report (folded) so the errors are readable
-        # straight from this log. The audit's own exit code is captured and
-        # re-exited verbatim — the gate stays hard-blocking.
+        # on failure, print ONLY the errors via the shared printer
+        # (scripts/design-system-locks/print-audit-errors.mjs) instead of
+        # cat'ing the whole report — the report is ~6,000 lines and buries the
+        # errors it exists to surface. The printer's exit code is captured
+        # separately and noted, never discarded: it exits 1 when it printed
+        # errors and 2 when the report is missing or malformed. Both are
+        # informational only: this step's verdict is the AUDIT's exit code,
+        # re-exited verbatim below, so the gate stays hard-blocking. If the
+        # audit died before writing its report, say so explicitly rather than
+        # printing nothing at all.
         run: |
           npm run audit:design-system || status=$?
-          if [ "${status:-0}" -ne 0 ] && [ -f test-results/design-system-audit.json ]; then
-            echo "::group::design-system-locks audit report (test-results/design-system-audit.json)"
-            cat test-results/design-system-audit.json
-            echo "::endgroup::"
+          if [ "${status:-0}" -ne 0 ]; then
+            if [ -f test-results/design-system-audit.json ]; then
+              node scripts/design-system-locks/print-audit-errors.mjs test-results/design-system-audit.json || printer_status=$?
+              if [ "${printer_status:-0}" -ne 0 ]; then
+                echo "NOTE: the audit-error printer itself exited ${printer_status} (1 = it printed errors, 2 = report missing/malformed); the step's verdict remains the audit's exit code." >&2
+              fi
+            else
+              echo "ERROR: test-results/design-system-audit.json was not written — the audit failed before producing a report, so no per-error detail is available here. See the audit's own output above and the uploaded design-system-evidence artifacts." >&2
+            fi
           fi
           exit "${status:-0}"
         env:
           CI: "true"
+
+  design-system-audit-summary:
+    name: Design system audit ran
+    # A skipped audit used to read as a pass. Both audit jobs gate on
+    # code=='true' && spa=='true', and `design-system-audit` additionally on
+    # the whole heavy design-system chain succeeding — so ANY upstream failure
+    # skipped the audit, and ci-required's "skipped -> pass" accounting turned
+    # that skip green: enforcement silently off on exactly the PRs (SPA file
+    # changes) it exists to police. docs/internal/false-green-patterns.md
+    # calls this shape out; this job closes it. It always runs (`if: always()`,
+    # no checkout — it reads only its needs' results) and re-derives the
+    # verdict itself:
+    #   * `changes` did not succeed       -> FAIL (every skip below it is
+    #                                        uninterpretable — ci-required's
+    #                                        own rule, applied identically);
+    #   * SPA files changed (code && spa) -> BOTH audit jobs must be
+    #                                        'success'; skipped, cancelled or
+    #                                        failed all FAIL, naming which
+    #                                        job did not run and why that is
+    #                                        not a pass;
+    #   * no SPA files changed            -> the audits legitimately skipped,
+    #                                        PASS.
+    runs-on: ubuntu-latest
+    needs: [changes, design-system-locks, design-system-audit]
+    if: always()
+    steps:
+      - name: Require the design-system audits to have run when SPA files changed
+        run: |
+          set -euo pipefail
+          changes="${{ needs.changes.result }}"
+          code="${{ needs.changes.outputs.code }}"
+          spa="${{ needs.changes.outputs.spa }}"
+          locks="${{ needs.design-system-locks.result }}"
+          audit="${{ needs.design-system-audit.result }}"
+          if [ "$changes" != "success" ]; then
+            echo "FAIL: the 'changes' job did not succeed (result: $changes) — every" >&2
+            echo "design-system-audit skip downstream of it is uninterpretable, and uninterpretable is not a pass." >&2
+            exit 1
+          fi
+          if [ "$code" != "true" ] || [ "$spa" != "true" ]; then
+            echo "OK: design-system audits legitimately skipped (code=$code, spa=$spa)."
+            exit 0
+          fi
+          not_pass=()
+          if [ "$locks" != "success" ]; then
+            not_pass+=("design-system-locks (result: $locks)")
+          fi
+          if [ "$audit" != "success" ]; then
+            not_pass+=("design-system-audit (result: $audit)")
+          fi
+          if [ "${#not_pass[@]}" -gt 0 ]; then
+            echo "FAIL: SPA files changed (code=true, spa=true) but these design-system audit jobs did NOT run to success:" >&2
+            for j in "${not_pass[@]}"; do echo "  - $j" >&2; done
+            echo "A skipped/cancelled/failed audit is NOT a pass — design-system enforcement never" >&2
+            echo "ran on this change. Fix the upstream job that did not run; this PR is not green." >&2
+            exit 1
+          fi
+          echo "OK: both design-system audit jobs ran and passed."
 
   wire-types-lint:
     name: Wire-Types Lint
@@ -1113,7 +1299,15 @@ jobs:
     # docs-only PR reintroducing "Command Center" would have gone green.
     # This also makes the `changes` job's "no job in this workflow reads
     # docs/**" rationale obsolete for this job specifically.
-    if: success()
+    # Explicit result checks, same shape as fast-tier and browser-e2e:
+    # `!cancelled()` drops the implicit success() gate, and the job runs
+    # exactly when both direct needs really succeeded. setup now runs on
+    # docs-only changes too (see its comment), so a docs-only PR reaches
+    # the guards instead of skipping them.
+    if: >-
+      !cancelled() &&
+      needs.changes.result == 'success' &&
+      needs.setup.result == 'success'
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -1199,11 +1393,9 @@ jobs:
     name: Linter
     # ADR-067 step 12: skips when no Go-relevant file changed (see the
     # `changes` job's `go` filter and its force-full list). `code` is still
-    # checked too — `go` narrows on top of it, never replaces it. Still
-    # needs Node/npm to build the SPA embed target below, purely because
-    # go:embed requires it to exist for the Go build to compile — that need
-    # is unconditional whenever this job runs at all, independent of whether
-    # any SPA source itself changed.
+    # checked too — `go` narrows on top of it, never replaces it. The
+    # go:embed directory is still required for compilation, but #687 uses
+    # a backend-only stub rather than building the web app.
     runs-on: ubuntu-latest
     needs: [changes, setup]
     if: success() && needs.changes.outputs.code == 'true' && needs.changes.outputs.go == 'true'
@@ -1214,6 +1406,7 @@ jobs:
       # carry no !cgo build tags (see the cgo-gate job, which builds the module
       # under both CGO_ENABLED=0 and =1).
       CGO_ENABLED: "0"
+      GOLANGCI_LINT_VERSION: v2.15.0
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -1236,24 +1429,40 @@ jobs:
       - name: Extract node_modules
         run: tar -xf node_modules.tar
 
-      - name: Build SPA
-        # pkg/gateway/embed.go has //go:embed all:spa and pkg/gateway/spa/ is
-        # gitignored. Vite builds into dist/spa; we copy it into the embed
-        # target so go vet/build/lint can compile the !cgo gateway files.
+      - name: Prepare SPA embed stub (lint only)
+        # #687: lint needs the go:embed directory, not built web-app assets.
         run: |
-          set -euo pipefail
-          npm run build
-          rm -rf pkg/gateway/spa
-          cp -r dist/spa pkg/gateway/spa
+          mkdir -p pkg/gateway/spa/assets && echo '<!doctype html>' > pkg/gateway/spa/index.html && touch pkg/gateway/spa/assets/.keep
 
       - name: Run go generate
         run: go generate ./...
 
+      # 2026-10-21 SA5011 incident: the old analyzer cache made unchanged
+      # release tests fail. Isolate toolchain, linter, OS, config and modules;
+      # never fall back across those boundaries or delete the old caches.
+      # Investigation and earlier triage:
+      # /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-scratch/l1/ci-tooling-cache-experiment-20261021/REPORT.md
+      # /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-scratch/l1/ci-tooling-lint-triage-20261021/REPORT.md
+      # The v9 action cannot accept this key, so its cache is disabled below.
+      - name: Determine linter cache Go version
+        id: lint-cache
+        run: |
+          go_version=$(go env GOVERSION)
+          printf 'go-version=%s\n' "$go_version" >> "$GITHUB_OUTPUT"
+          printf 'GOLANGCI_LINT_CACHE=%s/golangci-lint\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+
+      - name: Cache golangci-lint analyzers
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.GOLANGCI_LINT_CACHE }}
+          key: golangci-lint-analyzers-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.lint-cache.outputs.go-version }}-${{ env.GOLANGCI_LINT_VERSION }}-${{ hashFiles('.golangci.yaml') }}-${{ hashFiles('go.mod') }}-${{ hashFiles('go.sum') }}
+
       - name: Golangci Lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.10.1
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
           args: --build-tags=goolm,stdjson
+          skip-cache: true
 
   fast-tier:
     name: Fast tier checks passed
@@ -1267,16 +1476,18 @@ jobs:
     # on `needs:`), which cascades the skip down through every SLOW job's
     # own needs on it.
     #
-    # ADR-067 step 12 changes this: `typecheck`, `lint-spa`, and `lint` are
-    # now independently skippable (spa==false or go==false respectively)
-    # even when `code` is true. A skipped need is NOT a success under
-    # GitHub's default `needs` semantics, so a bare `success()` here would
-    # cascade-skip THIS job whenever any one of those three legitimately
+    # ADR-067 step 12 changes this: `typecheck` and `lint-spa` are
+    # independently skippable when spa==false, `lint` when go==false, and
+    # `design-system-locks` (same spa-scoped shape as typecheck/lint-spa)
+    # when spa==false even when `code` is true. A skipped need is NOT a
+    # success under GitHub's default `needs` semantics, so a bare
+    # `success()` here would cascade-skip THIS job whenever any one of
+    # those four legitimately
     # skips — taking every Tier 2/3 job down with it, including ones from
     # the OTHER cohort that still needed to run (e.g. a pure-SPA PR
     # legitimately skipping `lint` (go==false) must not also take `vitest`
     # (spa==true, needs fast-tier) down with it). So this job cannot rely on
-    # bare success(): each of the three conditionally-skippable needs is
+    # bare success(): each of the four conditionally-skippable needs is
     # explicitly allowed to be 'skipped' as well as 'success'; every other
     # need (still gated on `code` alone, unchanged) must be a real
     # 'success' — a genuine failure or cancellation of ANY need still blocks
@@ -1295,13 +1506,14 @@ jobs:
     # which bare `always()` would.
     #
     # `setup` is listed as a need and checked explicitly. It is NOT redundant
-    # bookkeeping: `typecheck`, `lint-spa` and `lint` all consume setup's
-    # node_modules artifact AND are all explicitly tolerated as 'skipped'
-    # above, so a broken `npm ci` skips all three and this job tolerates all
-    # three. The only thing that used to stop a failed setup from clearing the
-    # whole fast tier was `verify-contracts` happening to also consume the
-    # artifact while NOT being tolerant of a skip — one undeclared edge
-    # carrying the entire cascade. Stated directly here instead.
+    # bookkeeping: `typecheck`, `lint-spa`, `design-system-locks` and `lint`
+    # all consume setup's node_modules artifact AND are all explicitly
+    # tolerated as 'skipped' above, so a broken `npm ci` skips all four and
+    # this job tolerates all four. The only thing that used to stop a failed
+    # setup from clearing the whole fast tier was `verify-contracts` happening
+    # to also consume the artifact while NOT being tolerant of a skip — one
+    # undeclared edge carrying the entire cascade. Stated directly here
+    # instead.
     # `setup` is gated on `code == 'true'` exactly like this job, so whenever
     # this job is eligible at all setup has really run: no 'skipped'
     # tolerance is wanted or correct for it. Same shape the `playwright` job
@@ -1314,6 +1526,7 @@ jobs:
       - cli-verb-guard
       - typecheck
       - lint-spa
+      - design-system-locks
       - wire-types-lint
       - tool-error-status-lint
       - verify-contracts
@@ -1327,6 +1540,7 @@ jobs:
       needs.cli-verb-guard.result == 'success' &&
       (needs.typecheck.result == 'success' || needs.typecheck.result == 'skipped') &&
       (needs.lint-spa.result == 'success' || needs.lint-spa.result == 'skipped') &&
+      (needs.design-system-locks.result == 'success' || needs.design-system-locks.result == 'skipped') &&
       needs.wire-types-lint.result == 'success' &&
       needs.tool-error-status-lint.result == 'success' &&
       needs.verify-contracts.result == 'success' &&
@@ -1371,14 +1585,10 @@ jobs:
       - name: Extract node_modules
         run: tar -xf node_modules.tar
 
-      - name: Build SPA
-        # govulncheck runs a build under the hood; the gateway embed target
-        # must exist for that build to succeed.
+      - name: Prepare SPA embed stub (source scan only)
+        # #687: govulncheck builds Go code, not the embedded web app.
         run: |
-          set -euo pipefail
-          npm run build
-          rm -rf pkg/gateway/spa
-          cp -r dist/spa pkg/gateway/spa
+          mkdir -p pkg/gateway/spa/assets && echo '<!doctype html>' > pkg/gateway/spa/index.html && touch pkg/gateway/spa/assets/.keep
 
       - name: Run Govulncheck
         uses: golang/govulncheck-action@v1
@@ -1386,10 +1596,32 @@ jobs:
           go-package: ./...
           # The action runs its OWN setup-go with go-version-input:stable and
           # GOTOOLCHAIN=local, so it ignores both the job's Setup Go step and
-          # go.mod's toolchain. Pin it to the patched stdlib (go1.26.6
-          # clears GO-2026-6218/6090/6089/6088/5972/5026). Keep this
-          # in sync with the `go` directive in go.mod.
-          go-version-input: '1.26.6'
+          # go.mod's toolchain. The 2026-10-08 advisory batch was cleared by three
+          # bumps then, all required together: go1.26.9 cleared the Go-stdlib
+          # advisories — GO-2026-6604 (os), 6605/6609/6613 (net/http), 6607
+          # (crypto/tls), 6608 (mime/multipart); go1.26.10 cleared GO-2026-6809
+          # (crypto/x509); and the golang.org/x/net v0.60.0 bump in go.mod cleared
+          # GO-2026-6603, 6610, 6611, 6612 and 6617, each of which carries an
+          # x/net range as well as a stdlib one. 2026-10-23: the pin moves to
+          # 1.27.3 (current stable line, go.dev); it includes every stdlib fix
+          # above.
+          #
+          # MAINTENANCE HAZARD: this is the ONLY literal Go version in this
+          # workflow — every other Go job reads `go-version-file: go.mod`. A
+          # future stdlib fix that bumps only go.mod would leave this scan
+          # running against an older stdlib than the release ships (a false green
+          # on a security gate). This literal is the one place to keep in sync
+          # with the `go` directive in go.mod.
+          go-version-input: '1.27.3'
+          # The job's own "Setup Go" step above already restored the Go module
+          # cache into $GOMODCACHE. The action bundles its OWN setup-go, which
+          # by default restores a SECOND module cache into that same, already
+          # populated $GOMODCACHE — /usr/bin/tar then fails on every existing
+          # path with "Cannot open: File exists" and logs thousands of
+          # "##[warning]Failed to restore" lines. That restore is redundant
+          # (the job-level cache is already warm) and non-fatal, but it floods
+          # the log and misleads triage, so reuse the job-level cache instead.
+          cache: false
 
   cgo-gate:
     name: CGO_ENABLED=0 Build Gate
@@ -1429,15 +1661,10 @@ jobs:
       - name: Extract node_modules
         run: tar -xf node_modules.tar
 
-      - name: Build SPA
-        # pkg/gateway/embed.go has //go:embed all:spa and pkg/gateway/spa/ is
-        # gitignored. Vite builds into dist/spa; we copy it into the embed
-        # target so the CGO=0 build can resolve the //go:embed directive.
+      - name: Prepare SPA embed stub (Go build/vet only)
+        # #687: both CGO modes need only a valid go:embed directory.
         run: |
-          set -euo pipefail
-          npm run build
-          rm -rf pkg/gateway/spa
-          cp -r dist/spa pkg/gateway/spa
+          mkdir -p pkg/gateway/spa/assets && echo '<!doctype html>' > pkg/gateway/spa/index.html && touch pkg/gateway/spa/assets/.keep
 
       - name: CGO_ENABLED=0 build (all packages)
         # Build every package in the module with CGO disabled. Any package that
@@ -1522,18 +1749,153 @@ jobs:
         run: make build
 
 
-  test:
-    name: Tests
-    # ADR-067 step 12: skips when no Go-relevant file changed (see the
-    # `changes` job's `go` filter and its force-full list). `code` is still
-    # checked too — `go` narrows on top of it, never replaces it. Downstream
-    # `security`/`perf-smoke` (needs: this job) and `e2e-plan`/`playwright`
-    # (needs: this job too, but NOT go-gated — they exercise the full stack
-    # and must still run on an spa-only change) each account for this job's
-    # possible 'skipped' result explicitly — see their own comments.
+  go-test-plan:
+    name: Go Test Shard Plan
     runs-on: ubuntu-latest
-    needs: [changes, setup]
+    needs: [changes]
     if: success() && needs.changes.outputs.code == 'true' && needs.changes.outputs.go == 'true'
+    outputs:
+      shards: ${{ steps.plan.outputs.shards }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Read the shared Go shard matrix
+        id: plan
+        run: |
+          set -euo pipefail
+          shards=$(python3 scripts/go-test-shards.py test matrix)
+          echo "shards=$shards" >> "$GITHUB_OUTPUT"
+
+      - name: Test the sharded-runner partitioner and completeness check
+        # scripts/gateway-test-shards.py is what both sharded runners
+        # (run-gateway-sharded.sh, run-agent-sharded.sh) use to decide which
+        # tests each shard binary runs (`list`) and to prove after the run
+        # that every listed test produced a result (`verify`). A bug there
+        # silently narrows EVERY Go shard at once, so the tool carries its
+        # own unit tests (stdlib-only, ~0.1s) and they run where the shard
+        # matrix is computed.
+        run: python3 scripts/gateway-test-shards_test.py
+
+  chat-history-core:
+    name: Chat history core (${{ matrix.os }})
+    # Product receipts for pkg/session's chat-history semantics, including the
+    # Windows-native retention/read-cut cases that no other workflow runs. The
+    # standalone history-index repair command and its CI were removed by founder
+    # decision 2026-10-27 (greenfield, no upgrade path).
+    # Deliberately unfiltered: session/private-schema/CI-only changes must not
+    # disappear behind Go language filtering. This is a required aggregate gate.
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Test bounded recovery and retention/read-handle semantics
+        run: python3 -I deploy/ci-worker/chat-history-ci.py core
+      - name: Preserve chat history core named-test receipts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: chat-history-core-${{ matrix.os }}-${{ github.run_id }}
+          path: build/tools/history-*.log
+          if-no-files-found: error
+          retention-days: 7
+
+  history-e2e-fixtures:
+    name: Prepare history E2E fixtures and measurement
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: success() && needs.changes.outputs.code == 'true'
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Build official history fixture driver and seed once per candidate
+        run: python3 -I deploy/ci-worker/chat-history-ci.py fixtures
+      - name: Prepare embed stub for isolated history measurement
+        run: |
+          mkdir -p pkg/gateway/spa/assets
+          printf '<!doctype html>' > pkg/gateway/spa/index.html
+          touch pkg/gateway/spa/assets/.keep
+      # The 100k-prefix healthy-cut reads (history_heavy tag) build their own
+      # real 90-day fixtures and overrun group-1's 10m package budget, so they
+      # run here, serially, with the same assertions. A zero-test green is a
+      # failure: both named children must actually PASS.
+      - name: Run 100k-prefix healthy-cut and bounded-read test
+        run: |
+          mkdir -p build/tools
+          log=build/tools/history-index-100k-test.log
+          set +e
+          go test -tags goolm,stdjson,history_heavy -count=1 -v -p 1 -timeout 30m \
+            -run '^TestChatHistoryIndex_HealthyCutAndBoundedReads100K$' ./pkg/session > "$log" 2>&1
+          rc=$?
+          set -e
+          printf 'exit=%s\n' "$rc" >> "$log"
+          cat "$log"
+          if [ "$rc" -ne 0 ]; then exit "$rc"; fi
+          if grep -Eq -- '--- SKIP:' "$log"; then echo "::error::a 100k-prefix case was skipped"; exit 1; fi
+          for name in prefix100000_limit40 prefix100000_limit100; do
+            if ! grep -Eq -- "--- PASS: TestChatHistoryIndex_HealthyCutAndBoundedReads100K/${name} " "$log"; then
+              echo "::error::TestChatHistoryIndex_HealthyCutAndBoundedReads100K/${name} did not run and pass"
+              exit 1
+            fi
+          done
+      - name: Preserve 100k-prefix test log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: history-index-100k-${{ github.run_id }}
+          path: build/tools/history-index-100k-test.log
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+      - name: Capture Section-H history page allocation receipt
+        env:
+          OMNIPUS_CHAT_HISTORY_MEASUREMENT_RECEIPT: ${{ github.workspace }}/build/tools/chat-history-measurements.log
+        run: python3 -I deploy/ci-worker/chat-history-ci.py measurement --receipt "$OMNIPUS_CHAT_HISTORY_MEASUREMENT_RECEIPT"
+      - name: Preserve actual T18 producer log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: history-measurement-${{ github.run_id }}
+          path: build/tools/history-measurement-test.log
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+      - name: Upload candidate history fixture tools
+        uses: actions/upload-artifact@v7
+        with:
+          name: history-e2e-fixtures-${{ github.run_id }}
+          path: build/tools/chat-history-*
+          retention-days: 1
+          overwrite: true
+
+  test-shards:
+    name: Go Tests (${{ matrix.shard }})
+    # #1122 part A: gateway and agent run on their own runners; the two
+    # general shards are timing-balanced by scripts/go-test-shards.py.
+    # Keep ADR-067's code/go filters unchanged. The original `test` id below
+    # aggregates ALL shards, including failed/cancelled ones.
+    runs-on: ubuntu-latest
+    needs: [changes, setup, go-test-plan]
+    if: success() && needs.changes.outputs.code == 'true' && needs.changes.outputs.go == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.go-test-plan.outputs.shards) }}
     env:
       # See comment on the lint job above.
       CGO_ENABLED: "0"
@@ -1563,17 +1925,26 @@ jobs:
       - name: Extract node_modules
         run: tar -xf node_modules.tar
 
-      - name: Build SPA
+      - name: Prepare SPA embed stub (backend tests)
+        # Shell/header tests need HTML; PDF-worker tests supply a fixture FS.
+        # The real SPA remains built by Playwright and hermetic-build.
         run: |
-          set -euo pipefail
-          npm run build
-          rm -rf pkg/gateway/spa
-          cp -r dist/spa pkg/gateway/spa
+          mkdir -p pkg/gateway/spa/assets && echo '<!doctype html>' > pkg/gateway/spa/index.html && touch pkg/gateway/spa/assets/.keep
 
       - name: Run go generate
         run: go generate ./...
 
-      - name: Run go test (excluding pkg/gateway)
+      - name: Check Go test shard coverage
+        run: python3 scripts/go-test-shards.py test check
+
+      - name: Prepare native history fixture tools (gateway tests)
+        if: matrix.shard == 'gateway'
+        run: python3 -I deploy/ci-worker/chat-history-ci.py fixtures
+
+      - name: Run go test (selected non-gateway packages)
+        if: matrix.shard != 'gateway'
+        env:
+          SHARD: ${{ matrix.shard }}
         # Flake filter (mirrors deploy/ci-worker/runci.sh run_gotest): a package
         # that FAILS the full parallel run but PASSES when re-run isolated (-p 1)
         # is a timing flake under GitHub-runner CPU oversubscription, not a real
@@ -1628,15 +1999,106 @@ jobs:
           # failure by design (raise the budget with new evidence, never by
           # tying this step back to pkg/gateway). The per-package ceiling
           # applies uniformly across every non-gateway package.
-          pkgs=$(go list ./...) || { echo "go list ./... failed" >&2; exit 1; }
-          pkgs=$(printf '%s\n' "$pkgs" | grep -v '^github\.com/elicify-ai/omnipus/pkg/gateway$' || true)
-          if [ -z "$pkgs" ]; then
-            echo "ERROR: go list ./... produced an empty package set after excluding pkg/gateway." >&2
-            echo "Refusing to run an untargeted 'go test ./...' — it would test pkg/gateway anyway and break the budget split." >&2
-            exit 1
+          #
+          # Agent-shard exception, -timeout 20m (founder decision 2026-10-28,
+          # new evidence as required above): pkg/agent took 485.165s on the
+          # release run (job 121703770561 @ 75d48f041) and exceeded 10m on
+          # 73b2902e7 (run 40715877890, job 122914104172: "test timed out
+          # after 10m0s" with no hung test). The added time is the documented
+          # ~18s async-notify publish retry (3 attempts x 5s + 1s + 2s waits,
+          # docs/tools.md) that the B3 and gate-fix delivery tests exercise on
+          # a full or closed bus: retry in 47bda1463, tests in 57a7d0280 and
+          # 4fc5692fd. Every other non-gateway shard keeps 10m.
+          #
+          # UPDATE (#1487 part 2): pkg/agent kept growing — 889.116s on run
+          # 40958296852 (job 123755261549), within runner variance of this
+          # 20m ceiling. The shard now compiles once and runs pkg/agent in 4
+          # parallel shard binaries with a 10m PER-SHARD budget (see the
+          # branch below); the primary hang signal therefore fires at 10m.
+          # $go_timeout=20m now applies ONLY to the flake-filter isolated
+          # re-run below, where a serial pkg/agent re-run needs the full
+          # ~11-12 min measured budget — keeping it avoids recreating the
+          # documented "re-run died before it could classify" bug (the
+          # gateway 10m03s evidence above).
+          packages=$(python3 scripts/go-test-shards.py test "$SHARD") || exit 1
+          mapfile -t pkgs <<< "$packages"
+          parallel=()
+          go_timeout=10m
+          if [ "$SHARD" = "agent" ]; then parallel=(-p 1); go_timeout=20m; fi
+          if [ "$SHARD" = "agent" ]; then
+            # Compile-once sharded execution for pkg/agent (#1487, part 2) —
+            # the same mechanism the gateway shard uses (#1487, part 1):
+            # one `go test -c`, N parallel copies with disjoint -run regexes
+            # (scripts/run-agent-sharded.sh, partitioner
+            # scripts/gateway-test-shards.py is package-agnostic).
+            #
+            # Evidence (before this change): pkg/agent measured 889.116s on
+            # run 40958296852 (job 123755261549) with -p 1 — 165s
+            # (run 35432082880) -> 485.165s (job 121703770561) -> 889s, i.e.
+            # the shard was ~5 min from the 20m ceiling and inside runner
+            # variance of it. Measured on pod-team-a: the two B3 async-notify
+            # contract tests alone were 313s of that (projection 240.7s,
+            # producer 72.4s); the projection cost is cut at the source
+            # (bounded caller contexts in the projection subtests, whose
+            # oracles do not include the attempt count — the full-timer
+            # budget stays owned by TestAsyncNotifierB3RetryContract), and
+            # the remaining serial package is divided across 4 shard
+            # binaries.
+            #
+            # --timeout 10m is PER SHARD (the script passes it to each
+            # binary): a hang now surfaces at 10m instead of 20m. Measured
+            # basis (pod-team-a, 4 shard binaries on the pod's SHARED CPUs,
+            # i.e. worse than a GH runner's core-per-shard): shard walls
+            # 449s/380s/358s/338s, max 7.5 min, total wall 486s for all of
+            # pkg/agent — so 10m holds ~1.6-2x headroom on runner hardware
+            # and no limit was raised anywhere.
+            #
+            # go_timeout (20m) below is now ONLY the flake-filter isolated
+            # re-run budget: a serial pkg/agent re-run measured ~11-12 min
+            # after the projection cut (889s CI minus ~215s projection
+            # saving), so a tighter re-run budget would recreate the
+            # documented misclassification bug where the re-run dies before
+            # it can classify (see the gateway 10m03s evidence above).
+            #
+            # The runner script also hardens the path (2026-10-30 run-test
+            # review): each shard runs from pkg/agent itself (`go test` runs
+            # tests with the package dir as cwd — tests read
+            # testdata/todo_rule_q2.txt relative to it), a failed partition
+            # step is FATAL (the old process substitution could yield a
+            # green zero-shard run), and after the run the partitioner's
+            # `verify` completeness check fails the job unless every
+            # runnable listed test produced a --- PASS/FAIL/SKIP result
+            # line. On failure the runner also prints go test's
+            # `FAIL <pkg import path>` summary line — a test binary run ends
+            # in a bare `FAIL` with no package path, which the flake filter
+            # below cannot extract a package from — so the DATA RACE /
+            # --- FAIL carve-outs and the flake filter keep working on this
+            # step's output exactly as they did for the plain go test call.
+            # The race step below reuses the same script with --race
+            # at 2 shards.
+            shard_out=$(bash scripts/run-agent-sharded.sh --shards 4 --timeout 10m --tags goolm,stdjson 2>&1)
+            shard_code=$?
+            rest_out=""
+            rest_code=0
+            other_pkgs=()
+            for p in "${pkgs[@]}"; do
+              if [[ $p != */pkg/agent ]]; then other_pkgs+=("$p"); fi
+            done
+            if [ ${#other_pkgs[@]} -gt 0 ]; then
+              rest_out=$(go test -tags goolm,stdjson -count=1 -timeout 10m -p 1 "${other_pkgs[@]}" 2>&1)
+              rest_code=$?
+            fi
+            out="${shard_out}"
+            if [ ${#other_pkgs[@]} -gt 0 ]; then
+              out="${out}"$'\n''=== agent shard: remaining small packages ==='
+              out="${out}"$'\n'"${rest_out}"
+            fi
+            code=$shard_code
+            if [ $code -eq 0 ]; then code=$rest_code; fi
+          else
+            out=$(go test -tags goolm,stdjson -count=1 -timeout "$go_timeout" "${parallel[@]}" "${pkgs[@]}" 2>&1)
+            code=$?
           fi
-          out=$(go test -tags goolm,stdjson -count=1 -timeout 10m $pkgs 2>&1)
-          code=$?
           echo "$out"
           # DATA RACE is checked BEFORE the exit-code short-circuit on purpose: a
           # race can be reported without flipping the overall `go test` exit code
@@ -1713,7 +2175,7 @@ jobs:
             # race step's pattern: success requires BOTH a clean exit AND no
             # DATA RACE marker in the re-run log; failure prints both kinds of
             # evidence. The two flake-filters stay in lockstep.
-            if go test -tags goolm,stdjson -count=1 -timeout 10m -p 1 "$p" >/tmp/rr.log 2>&1 \
+            if go test -tags goolm,stdjson -count=1 -timeout "$go_timeout" -p 1 "$p" >/tmp/rr.log 2>&1 \
                && ! grep -aq "DATA RACE" /tmp/rr.log; then
               echo "FLAKE (passed isolated): $p"
             else
@@ -1722,7 +2184,8 @@ jobs:
           done
           exit $rc
 
-      - name: Run pkg/gateway tests (dedicated step, evidence-backed 75m budget)
+      - name: Run pkg/gateway tests (dedicated shard, evidence-backed 75m budget)
+        if: matrix.shard == 'gateway'
         # WHY this is a separate step:
         #
         #   pkg/gateway carries ~3,200 tests across 555 test files (CLAUDE.md
@@ -1774,20 +2237,28 @@ jobs:
         #   budget finite: a real hang in pkg/gateway must still surface as
         #   a timeout, not a 90-minute silence.
         #
-        #   ALTERNATIVE considered: sharding pkg/gateway across N parallel
-        #   jobs (repo precedent: scripts/e2e-shards.sh). Not taken here —
-        #   sharding splits one test binary across N regex-matched shards,
-        #   which is the right structural fix long-term (the 3,200 sequential
-        #   tests is the real cause) but adds a new shard plan + matrix + CI
-        #   surface. Out of scope for this targeted fix; tracked for a future
-        #   structural pass.
+        #   #1122 part A shards by PACKAGE, not by test-name regex. The
+        #   gateway binary still runs whole, on its own runner, with -p 1.
+        #   Its 75m budget and all carve-outs/retry rules remain unchanged.
         run: |
           set +e
           # -timeout 75m: pkg/gateway's evidence-backed per-binary budget. See
           # the WHY comment above for the measurement (2702.664s on run
           # 35432082880) and the headroom rationale. Matches this step's
           # flake-filter re-run below.
-          out=$(go test -tags goolm,stdjson -count=1 -timeout 75m ./pkg/gateway/ 2>&1)
+          # Compile-once sharded execution (ADR-067/ADR-076 follow-up, #1487).
+          # One `go test -c` produces a single test binary; N copies run in
+          # parallel, each with a deterministic subset of tests via -run regex.
+          # Partitioning lives in scripts/gateway-test-shards.py (hash % N).
+          # Output is concatenated in shard order for stable flake filter.
+          #
+          # The 75m budget is per-shard here (the script passes it to each
+          # binary). The job still has a 45-minute wall budget in the step
+          # definition; a hang is still bounded.
+          out=$(bash scripts/run-gateway-sharded.sh \
+            --shards 4 \
+            --timeout 75m \
+            --tags goolm,stdjson 2>&1)
           code=$?
           echo "$out"
           # Same DATA RACE carve-out as the previous step. A race that vanishes
@@ -1815,6 +2286,20 @@ jobs:
                 echo "REAL FAILURE (assertion failure detected — never excused): $p"
               done
             fi
+            exit 1
+          fi
+          # GUARD FAILURE is TestMain's hygiene token. It exits 1 with a
+          # package FAIL line and no --- FAIL line, which is the hang shape
+          # this filter exists to excuse. Never retry it.
+          # shellcheck source=scripts/ci-flake-classify.sh
+          source scripts/ci-flake-classify.sh || {
+            echo "REAL FAILURE: cannot load scripts/ci-flake-classify.sh"
+            exit 1
+          }
+          if ci_log_has_guard_failure "$out"; then
+            echo ""
+            echo "=== GUARD FAILURE detected — a test-hygiene guard is never excused by an isolated re-run ==="
+            echo "REAL FAILURE (guard failure detected — never excused)"
             exit 1
           fi
           [ $code -eq 0 ] && exit 0
@@ -1848,9 +2333,11 @@ jobs:
           exit $rc
 
       - name: Run test-tagged approver escape-hatch test
+        if: matrix.shard == 'agent'
         run: CGO_ENABLED=0 go test -tags goolm,stdjson,test -count=1 -p 1 -run '^TestNopApprover_TestApproverInstalled' ./pkg/agent/
 
       - name: Run pkg/sandbox Landlock tests
+        if: matrix.shard == 'group-1'
         # Same skip-detection + pass-floor pattern as browser-e2e's
         # pkg/tools/browser step, applied to a second silent-coverage-loss
         # exposure: every Landlock-backed test in pkg/sandbox degrades to
@@ -1871,8 +2358,9 @@ jobs:
         # Landlock and legitimately skips for unrelated platform reasons; a
         # blanket skip-ban or a whole-package pass-floor guessed without ever
         # running it would be exactly the kind of manufactured-green threshold
-        # this task exists to remove. The floor below (10) is exact and
-        # verified by grep, not estimated — but as with the pkg/gateway step
+        # this task exists to remove. The 18 top-level passes below are exact:
+        # the original 10 plus seven WU-23 probes and its creation-limit probe
+        # (binding L1 amendment §2 D8 T-L). As with the pkg/gateway step
         # above, a future Landlock-gated test needs adding to this list by
         # hand; grep for new "Landlock (backend )?not available|Landlock
         # unavailable|Landlock ABI v4" call sites the next time this is
@@ -1880,7 +2368,7 @@ jobs:
         run: |
           set -euo pipefail
           go test -v -tags goolm,stdjson -count=1 -timeout 300s \
-            -run '^(TestSandboxBackend_LinuxFull|TestSandboxBackend_LandlockFallbackChain|TestApplyOnABI4_EINVAL_HardFails|TestLandlock_ApplySubprocess|TestLandlock_BindBlockedSubprocess|TestLandlock_BindAllowedSubprocess|TestLandlock_WorkspaceReroot_StaysInsideBootGrant|TestRedteam_RawTCP_Egress_Blocked|TestRedteam_MasterKey_Exfil_Blocked|TestRedteam_Credentials_Exfil_Blocked)$' \
+            -run '^(TestSandboxBackend_LinuxFull|TestSandboxBackend_LandlockFallbackChain|TestApplyOnABI4_EINVAL_HardFails|TestLandlock_ApplySubprocess|TestLandlock_BindBlockedSubprocess|TestLandlock_BindAllowedSubprocess|TestLandlock_WorkspaceReroot_StaysInsideBootGrant|TestRedteam_RawTCP_Egress_Blocked|TestRedteam_MasterKey_Exfil_Blocked|TestRedteam_Credentials_Exfil_Blocked|TestWU23_LandlockRuntimeAllowances|TestWU23_LandlockInventory|TestWU23_LandlockAgentHome|TestWU23_LandlockPostSpawnDenied|TestWU23_LandlockGodFloor|TestWU23_KernelDerivationRequiredInputs|TestWU23R1_RuntimeAllowRootsNeverReopenInventory_Landlock|TestWU23_LandlockAgentHomeCreationLimit)$' \
             ./pkg/sandbox 2>&1 | tee /tmp/sandbox-landlock.log
 
           if grep -qE 'Landlock (backend )?not available|Landlock unavailable|Landlock ABI v4' /tmp/sandbox-landlock.log; then
@@ -1889,14 +2377,21 @@ jobs:
             exit 1
           fi
 
-          passes=$(grep -c -- '--- PASS' /tmp/sandbox-landlock.log || true)
-          echo "pkg/sandbox Landlock-backed passing tests: $passes"
-          if [ "$passes" -lt 10 ]; then
-            echo "::error::Only $passes of the 10 known Landlock-backed pkg/sandbox tests passed. Coverage has silently shrunk (or one of the ten was renamed/removed without updating this step)." >&2
+          if grep -q -- '--- SKIP:' /tmp/sandbox-landlock.log; then
+            echo "::error::A selected Landlock probe skipped — this is not kernel evidence." >&2
+            grep -- '--- SKIP:' /tmp/sandbox-landlock.log >&2
+            exit 1
+          fi
+
+          passes=$(grep -Ec '^--- PASS: Test[^/[:space:]]+ \(' /tmp/sandbox-landlock.log || true)
+          echo "pkg/sandbox Landlock-backed top-level passing tests: $passes"
+          if [ "$passes" -ne 18 ]; then
+            echo "::error::Expected exactly 18 named Landlock-backed pkg/sandbox tests; got $passes. Nested subtests do not satisfy this gate." >&2
             exit 1
           fi
 
       - name: Run records_no_sqlite propindexless honesty-contract tests
+        if: matrix.shard == 'gateway'
         # Review finding F7: pkg/gateway/rest_knowledge_find_propindexless_test.go
         # is gated `//go:build records_no_sqlite || mipsle || netbsd || (freebsd &&
         # arm)` — the platform/feature carve-out for a build with no SQLite-backed
@@ -1931,6 +2426,35 @@ jobs:
             exit 1
           fi
 
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    needs: [changes, test-shards]
+    if: always()
+    steps:
+      - name: Require every Go test shard to succeed
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          CODE_CHANGED: ${{ needs.changes.outputs.code }}
+          GO_CHANGED: ${{ needs.changes.outputs.go }}
+          SHARDS_RESULT: ${{ needs.test-shards.result }}
+        run: |
+          set -euo pipefail
+          if [ "$CHANGES_RESULT" != "success" ]; then
+            echo "::error::Changed-path detection did not succeed: $CHANGES_RESULT" >&2
+            exit 1
+          fi
+          case "$CODE_CHANGED:$GO_CHANGED" in
+            true:true) expected=success ;;
+            true:false|false:true|false:false) expected=skipped ;;
+            *) echo "::error::Invalid changed-path outputs" >&2; exit 1 ;;
+          esac
+          if [ "$SHARDS_RESULT" != "$expected" ]; then
+            echo "::error::Go test shards: $SHARDS_RESULT (expected $expected). A failed, cancelled or unexpectedly skipped shard fails Tests." >&2
+            exit 1
+          fi
+          echo "Go test shards: $SHARDS_RESULT (expected $expected)."
+
   # Split out of `test` (ADR-067 parallelism pass). Measured on a real run,
   # the single Tests job spent 355s on `go test` and then a further 648s on
   # `go test -race` — 58% of an 18.7-minute job, running strictly AFTER the
@@ -1939,13 +2463,18 @@ jobs:
   # nothing the unit pass produces, so the two are independent and now run
   # concurrently on separate runners.
   #
-  # This costs an extra checkout, Go cache and SPA build. That is the
-  # deliberate trade: compute for wall clock.
-  test-race:
-    name: Race Tests
+  # #1122 part A: four timing-balanced shards also remove the serial wait
+  # between the shared race pass and gateway. Each keeps its Go cache and
+  # existing timeout/retry logic; #687 replaces the unnecessary SPA build.
+  test-race-shards:
+    name: Go Race Tests (${{ matrix.shard }})
     runs-on: ubuntu-latest
-    needs: [changes, setup]
+    needs: [changes, setup, go-test-plan]
     if: success() && needs.changes.outputs.code == 'true' && needs.changes.outputs.go == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.go-test-plan.outputs.shards) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -1968,17 +2497,24 @@ jobs:
       - name: Extract node_modules
         run: tar -xf node_modules.tar
 
-      - name: Build SPA
+      - name: Prepare SPA embed stub (backend tests)
         run: |
-          set -euo pipefail
-          npm run build
-          rm -rf pkg/gateway/spa
-          cp -r dist/spa pkg/gateway/spa
+          mkdir -p pkg/gateway/spa/assets && echo '<!doctype html>' > pkg/gateway/spa/index.html && touch pkg/gateway/spa/assets/.keep
 
       - name: Run go generate
         run: go generate ./...
 
+      - name: Check Go race shard coverage
+        env:
+          CGO_ENABLED: "1"
+        run: python3 scripts/go-test-shards.py race check
+
+      - name: Prepare native history fixture tools (gateway race tests)
+        if: matrix.shard == 'gateway'
+        run: python3 -I deploy/ci-worker/chat-history-ci.py fixtures
+
       - name: Run go test -race (concurrency-sensitive packages)
+        if: matrix.shard != 'gateway'
         # The PACKAGE LIST itself lives in scripts/race-packages.sh (F5,
         # #615/#617/#618 hardening review) — that is the single source both
         # this step and deploy/ci-worker/runci.sh's run_gorace consume, so
@@ -2116,35 +2652,70 @@ jobs:
         # second chance to "pass isolated".
         env:
           CGO_ENABLED: "1"
+          SHARD: ${{ matrix.shard }}
         run: |
           set +e
-          # race-packages.sh prints one package path per line. Read them into an
-          # array instead of relying on unquoted command-substitution splitting.
-          # The old form carried a suppression comment for SC2046 with an
-          # explanation appended after the rule id on the same line. shellcheck
-          # rejects that as malformed (SC1125) and ignores it, so the
-          # suppression never actually applied — the same trap as a nosec
-          # annotation with trailing prose. An array removes the need for one.
-          # ./pkg/gateway/... is split out into its OWN step below — the
-          # shared step's 2700s budget is enough for every remaining package
-          # but not for pkg/gateway under -race (CI run 35432082880:
-          # pkg/gateway FAILED at 2703.194s, isolated re-run hit 2700s again;
-          # no DATA RACE / no --- FAIL — duration-only). Filter the canonical
-          # list here so the shared step's 2700s is no longer held hostage by
-          # one slow package. `scripts/race-packages.sh` remains the single
-          # source of truth — the shared step just consumes a subset.
-          mapfile -t race_pkgs < <(scripts/race-packages.sh | grep -v '^\./pkg/gateway/')
-          if [ ${#race_pkgs[@]} -eq 0 ]; then
-            echo "ERROR: scripts/race-packages.sh produced no packages." >&2
-            echo "Refusing to run: a bare 'go test -race' with no package list" >&2
-            echo "would report a pass without testing the intended packages." >&2
-            exit 1
+          # Expand the canonical race list and reject an invalid partition
+          # before invoking go test; never run an empty/untargeted shard.
+          packages=$(python3 scripts/go-test-shards.py race "$SHARD") || exit 1
+          mapfile -t race_pkgs <<< "$packages"
+          if [ "$SHARD" = "agent" ]; then
+            # Compile-once sharded -race execution for pkg/agent — the same
+            # mechanism the gateway race step uses
+            # (scripts/run-gateway-sharded.sh --race), now via
+            # scripts/run-agent-sharded.sh --race (CGO_ENABLED=1 + -race).
+            #
+            # Why 2 shards, not the unit path's 4: race-instrumented binaries
+            # are memory-heavy, so two concurrent copies, not four.
+            #
+            # Evidence (run 40958296852, job 123755261446): this job was the
+            # workflow's longest at 28.4 min, and pkg/agent's own execution
+            # was 1434.234s of it (~24 min); the four pkg/agent/* neighbour
+            # packages total ~13s. Two shards halve the pkg/agent execution
+            # wall; checkout/setup/compile are unchanged.
+            #
+            # --timeout 2700s is PER SHARD and UNCHANGED from the plain call
+            # it replaces: `go test -timeout` bounds each package's test
+            # binary, so pkg/agent's race binary had 2700s before and each
+            # shard binary has 2700s now — nothing raised, nothing lowered.
+            # What only CI can confirm: the true 2-shard wall time and the
+            # runner's memory headroom with two concurrent race binaries.
+            #
+            # The step's carve-outs below (DATA RACE / --- FAIL, and the
+            # -p 1 flake-filter re-run at the same 2700s budget) operate on
+            # the merged $out/$code unchanged, exactly as for the plain call
+            # they replace: on failure the runner prints go test's
+            # `FAIL <pkg import path>` summary line (a test binary run ends
+            # in a bare `FAIL`, which the flake filter cannot extract a
+            # package from). The agent steps carry no guard-failure
+            # carve-out: pkg/agent's TestMain emits no GUARD FAILURE token.
+            race_shard_out=$(bash scripts/run-agent-sharded.sh --race --shards 2 --timeout 2700s --tags goolm,stdjson 2>&1)
+            race_shard_code=$?
+            rest_out=""
+            rest_code=0
+            other_pkgs=()
+            for p in "${race_pkgs[@]}"; do
+              if [[ $p != */pkg/agent ]]; then other_pkgs+=("$p"); fi
+            done
+            if [ ${#other_pkgs[@]} -gt 0 ]; then
+              rest_out=$(go test -race -tags goolm,stdjson -count=1 -timeout 2700s -p 1 "${other_pkgs[@]}" 2>&1)
+              rest_code=$?
+            fi
+            out="${race_shard_out}"
+            if [ ${#other_pkgs[@]} -gt 0 ]; then
+              out="${out}"$'\n''=== agent race shard: remaining small packages ==='
+              out="${out}"$'\n'"${rest_out}"
+            fi
+            code=$race_shard_code
+            if [ $code -eq 0 ]; then code=$rest_code; fi
+          else
+            parallel=()
+            # 2700s (45m) per binary: comfortably covers every package here
+            # without the gateway (the slowest remaining was pkg/tools/browser
+            # at 676s on the same run). A finite hang signal is preserved.
+            out=$(go test -race -tags goolm,stdjson -count=1 -timeout 2700s "${parallel[@]}" "${race_pkgs[@]}" 2>&1)
+            code=$?
           fi
-          # 2700s (45m) per binary: comfortably covers every package here
-          # without the gateway (the slowest remaining was pkg/tools/browser
-          # at 676s on the same run). A finite hang signal is preserved.
-          out=$(go test -race -tags goolm,stdjson -count=1 -timeout 2700s "${race_pkgs[@]}" 2>&1)
-          code=$?
           echo "$out"
           # DATA RACE is checked BEFORE the exit-code short-circuit on purpose: a
           # race can be reported without flipping the overall `go test` exit code
@@ -2228,6 +2799,7 @@ jobs:
           exit $rc
 
       - name: Run go test -race ./pkg/gateway/... (extended timeout)
+        if: matrix.shard == 'gateway'
         # Squad H (race-gateway) — pkg/gateway is run in its OWN step here,
         # not as part of the shared race-packages.sh loop above, because
         # under -race it exceeds the shared step's 2700s (45m) per-binary
@@ -2263,45 +2835,60 @@ jobs:
         #     hang signal further — the right move is to fix the duration
         #     driver, not keep widening the budget.
         #
-        # TEMPORARY: when pkg/gateway reliably finishes under -race within
-        # the shared step's 2700s, fold this step back in and delete it.
-        # Candidate duration drivers in pkg/gateway (Squad G's lane, NOT
-        # touched here per the brief): api_e2e_test.go carries 3 full-pipeline
-        # E2E tests (grep -c '^func Test' pkg/gateway/api_e2e_test.go = 3)
-        # covering gateway → agent loop → WebSocket → session — full-pipeline
-        # shape means each test can take significant wall time even at low
-        # test counts, so 3 here is consistent with the observed cost.
-        #
-        # Sequencing: this step runs AFTER the shared race step above.
-        # GitHub Actions steps within a single job are strictly sequential —
-        # there is no parallel-step mechanism inside a job (`needs:` orders
-        # JOBS, not steps). Job wall-clock is therefore shared-step + this
-        # step, not max().
-        #
-        # Honest wall-clock arithmetic (no parallelism):
-        #   * Old path — shared step with all 15 packages, pkg/gateway
-        #     hitting the 2700s budget and triggering the flake-filter
-        #     isolated re-run:
-        #       shared run  ~2700s (timed out on pkg/gateway)
-        #     + re-run     ~2700s (timed out again on pkg/gateway)
-        #                 = up to ~5400s (~90m), and RED
-        #   * New path — shared step with 14 packages (long pole
-        #     pkg/tools/browser at 676s ≈ 11m), then this step:
-        #       shared run  ≤2700s in practice (~11m observed long pole)
-        #     + this step  ≤3600s (60m, the race-instrumentation budget
-        #                     for pkg/gateway with 15m headroom over the
-        #                     observed 2703s failure)
-        #                 = up to ~6300s (~71m worst case), GREEN if this
-        #                   step passes
-        # Net is still an improvement: ~90m RED → ~71m GREEN worst case, and
-        # the flake-filter re-run path (sequential in either world) only
-        # fires if this step itself fails — i.e. usually not at all.
+        # #1122 part A: this step now runs only on the gateway shard,
+        # concurrently with the other three shards, rather than AFTER the
+        # shared race pass. PR #1115 run 36813561528 measured gateway at
+        # 846.828s and the shared pass at ~871s: sharding removes the serial
+        # wait, not the gateway package's own runtime. Keep the 3600s timeout,
+        # -p 1 and the isolated retry's matching timeout/carve-outs.
         env:
           CGO_ENABLED: "1"
         run: |
           set +e
-          out=$(go test -race -tags goolm,stdjson -count=1 -timeout 3600s ./pkg/gateway/... 2>&1)
+          out=$(bash scripts/run-gateway-sharded.sh \
+          --shards 2 \
+          --timeout 3600s \
+          --tags goolm,stdjson \
+          --race 2>&1)
           code=$?
+          # Restore -race coverage for the gateway SUBPACKAGES. The sharded
+          # runner builds ./pkg/gateway/ only, so when this step moved to the
+          # runner (837e0582f) the subpackages the canonical race list assigns
+          # to this shard — pkg/gateway/ctxkey, pkg/gateway/pathredact,
+          # pkg/gateway/inboundschemas (no test files) and
+          # pkg/gateway/middleware (5 test files, 9.958s on run 35432082880)
+          # — silently lost -race coverage. Before 837e0582f this step ran
+          # `-timeout 3600s -p 1 ./pkg/gateway/...`; the restored run keeps
+          # the same per-binary race semantics with two stated deltas: the
+          # budget is the shared race step's 2700s per binary (~270x the
+          # largest measured subpackage, a finite hang signal preserved —
+          # the 3600s figure was sized for the pkg/gateway root's 2703s
+          # timeouts, not these), and -p 1 is dropped (it mattered only
+          # while the multi-hour root package shared the invocation; four
+          # small binaries under go test's default parallelism are how the
+          # shared race step runs its own list). The root package is
+          # filtered out of the SAME canonical list, and the output merges
+          # before the carve-outs so the DATA RACE / --- FAIL rules and the
+          # flake filter below cover the subpackages too (real
+          # `FAIL <pkg>` lines from this plain go test call feed the filter
+          # unchanged; the runner's own synthetic line covers the root).
+          gw_race_pkgs=$(python3 scripts/go-test-shards.py race gateway) || exit 1
+          sub_pkgs=()
+          while IFS= read -r p; do
+            [ -z "$p" ] && continue
+            if [ "$p" != "github.com/elicify-ai/omnipus/pkg/gateway" ]; then sub_pkgs+=("$p"); fi
+          done <<< "$gw_race_pkgs"
+          sub_out=""
+          sub_code=0
+          if [ ${#sub_pkgs[@]} -gt 0 ]; then
+            sub_out=$(go test -race -tags goolm,stdjson -count=1 -timeout 2700s "${sub_pkgs[@]}" 2>&1)
+            sub_code=$?
+          fi
+          if [ ${#sub_pkgs[@]} -gt 0 ]; then
+            out="${out}"$'\n''=== gateway race shard: subpackages ==='
+            out="${out}"$'\n'"${sub_out}"
+          fi
+          if [ $code -eq 0 ]; then code=$sub_code; fi
           echo "$out"
           # Same DATA RACE carve-out as the shared step — a race is never
           # routed through a flake filter (mirrors run_gorace in
@@ -2336,6 +2923,20 @@ jobs:
             fi
             exit 1
           fi
+          # GUARD FAILURE is TestMain's hygiene token. It exits 1 with a
+          # package FAIL line and no --- FAIL line, which is the hang shape
+          # this filter exists to excuse. Never retry it.
+          # shellcheck source=scripts/ci-flake-classify.sh
+          source scripts/ci-flake-classify.sh || {
+            echo "REAL FAILURE: cannot load scripts/ci-flake-classify.sh"
+            exit 1
+          }
+          if ci_log_has_guard_failure "$out"; then
+            echo ""
+            echo "=== GUARD FAILURE detected — a test-hygiene guard is never excused by an isolated re-run ==="
+            echo "REAL FAILURE (guard failure detected — never excused)"
+            exit 1
+          fi
           [ $code -eq 0 ] && exit 0
           # Hang/contention flake filter — same shape as the shared step's,
           # same DATA RACE grep on the isolated re-run's log (so a race
@@ -2354,6 +2955,35 @@ jobs:
             fi
           done
           exit $rc
+
+  test-race:
+    name: Race Tests
+    runs-on: ubuntu-latest
+    needs: [changes, test-race-shards]
+    if: always()
+    steps:
+      - name: Require every Go race shard to succeed
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          CODE_CHANGED: ${{ needs.changes.outputs.code }}
+          GO_CHANGED: ${{ needs.changes.outputs.go }}
+          SHARDS_RESULT: ${{ needs.test-race-shards.result }}
+        run: |
+          set -euo pipefail
+          if [ "$CHANGES_RESULT" != "success" ]; then
+            echo "::error::Changed-path detection did not succeed: $CHANGES_RESULT" >&2
+            exit 1
+          fi
+          case "$CODE_CHANGED:$GO_CHANGED" in
+            true:true) expected=success ;;
+            true:false|false:true|false:false) expected=skipped ;;
+            *) echo "::error::Invalid changed-path outputs" >&2; exit 1 ;;
+          esac
+          if [ "$SHARDS_RESULT" != "$expected" ]; then
+            echo "::error::Go race shards: $SHARDS_RESULT (expected $expected). A failed, cancelled or unexpectedly skipped shard fails Race Tests." >&2
+            exit 1
+          fi
+          echo "Go race shards: $SHARDS_RESULT (expected $expected)."
 
   security:
     name: Security Tests
@@ -2383,11 +3013,9 @@ jobs:
           name: node-modules-${{ github.run_id }}
       - name: Extract node_modules
         run: tar -xf node_modules.tar
-      - name: Build SPA
+      - name: Prepare SPA embed stub (backend security tests)
         run: |
-          npm run build
-          rm -rf pkg/gateway/spa
-          cp -r dist/spa pkg/gateway/spa
+          mkdir -p pkg/gateway/spa/assets && echo '<!doctype html>' > pkg/gateway/spa/index.html && touch pkg/gateway/spa/assets/.keep
       # NOTE: the security test suite runs BEFORE govulncheck/grype on purpose.
       # Previously a govulncheck failure failed this job at an earlier step and the
       # suite never executed — so a dependency CVE silently removed the security
@@ -2460,12 +3088,9 @@ jobs:
       - name: Extract node_modules
         run: tar -xf node_modules.tar
 
-      - name: Build SPA
+      - name: Prepare SPA embed stub (backend performance tests)
         run: |
-          set -euo pipefail
-          npm run build
-          rm -rf pkg/gateway/spa
-          cp -r dist/spa pkg/gateway/spa
+          mkdir -p pkg/gateway/spa/assets && echo '<!doctype html>' > pkg/gateway/spa/index.html && touch pkg/gateway/spa/assets/.keep
 
       - name: Run SLO gates (no 2000-session load)
         # Runs only the *SLO* tests C1 wrote — boot, per-turn, transcript,
@@ -2512,15 +3137,27 @@ jobs:
       needs.changes.result == 'success'
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
+      llm_skipped: ${{ steps.plan.outputs.llm_skipped }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
       - name: Compute shard matrix from tests/e2e/shards.json
         id: plan
+        # Evaluate PR labels at job time, without a labeled trigger.
+        env:
+          RUN_LLM_E2E: >-
+            ${{ github.event_name == 'push' ||
+                (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-e2e')) }}
         run: |
           set -euo pipefail
           scripts/e2e-shards.sh check
-          echo "matrix=$(scripts/e2e-shards.sh matrix)" >> "$GITHUB_OUTPUT"
+          all_matrix=$(scripts/e2e-shards.sh matrix)
+          matrix=$(jq -c --argjson run_llm "$RUN_LLM_E2E" \
+            '.include |= map(select($run_llm or (.group | startswith("llm-") | not)))' <<< "$all_matrix")
+          # Derive exclusions from the actual selected matrix, not a second list.
+          llm_skipped=$(jq -c --argjson selected "$matrix" \
+            '[.include[].group] - [$selected.include[].group]' <<< "$all_matrix")
+          printf 'matrix=%s\nllm_skipped=%s\n' "$matrix" "$llm_skipped" >> "$GITHUB_OUTPUT"
 
   playwright:
     name: E2E — ${{ matrix.group }}
@@ -2538,7 +3175,7 @@ jobs:
     # implicitly ANDs its own `success()` onto this `if:`, which would
     # silently defeat the `(... == 'skipped')` tolerance below.
     runs-on: ubuntu-latest
-    needs: [changes, e2e-plan, setup]
+    needs: [changes, e2e-plan, setup, history-e2e-fixtures]
     if: >-
       !cancelled() &&
       needs.changes.outputs.code == 'true' &&
@@ -2548,15 +3185,20 @@ jobs:
     strategy:
       fail-fast: false
       # Groups, key slots, and spec lists come from tests/e2e/shards.json via the e2e-plan
-      # job — NOT hardcoded here — so pr.yml and deploy/ci-worker/runci.sh cannot drift.
+      # job — NOT hardcoded here. Only the opt-in llm-* selection differs from runci.sh.
+      # The strict expected/skipped/flaky statistics below are per EXECUTED shard;
+      # excluded shards have no test results and are reported separately by ci-required.
       matrix: ${{ fromJSON(needs.e2e-plan.outputs.matrix) }}
     env:
       OMNIPUS_HOME: /tmp/omnipus-e2e
-      # Per-shard LLM keys — runner-agnostic (secrets inject identically on a GitHub-hosted
-      # or an external/self-hosted runner). _B/_C are OPTIONAL: unset ⇒ the "Resolve shard
-      # LLM key" step falls back to key A, so a repo with only OPENROUTER_API_KEY_CI still
-      # runs (every shard uses key A, i.e. today's single-key behavior). Pinning each
-      # concurrent LLM shard to its own key keeps them off one shared rate-limit window.
+      # The PRIMARY model key (tests/e2e/e2e-model.json primary, the MiniMax plan).
+      # There is ONE MiniMax key for every shard.
+      MINIMAX_KEY: ${{ secrets.MINIMAX_API_KEY_CI }}
+      # Per-shard FALLBACK keys (OpenRouter) — runner-agnostic (secrets inject identically
+      # on a GitHub-hosted or an external/self-hosted runner). _B/_C are OPTIONAL: unset ⇒
+      # the "Resolve shard LLM keys" step falls back to key A, so a repo with only
+      # OPENROUTER_API_KEY_CI still runs. Pinning each concurrent LLM shard to its own key
+      # keeps them off one shared rate-limit window when they run on the fallback.
       OPENROUTER_KEY_A: ${{ secrets.OPENROUTER_API_KEY_CI }}
       OPENROUTER_KEY_B: ${{ secrets.OPENROUTER_API_KEY_CI_B }}
       OPENROUTER_KEY_C: ${{ secrets.OPENROUTER_API_KEY_CI_C }}
@@ -2619,6 +3261,22 @@ jobs:
           CGO_ENABLED=0 go build -tags goolm,stdjson -o /tmp/omnipus-ci ./cmd/omnipus/
           cp /tmp/omnipus-ci ./omnipus
 
+      - name: Download candidate history fixture tools
+        uses: actions/download-artifact@v7
+        with:
+          name: history-e2e-fixtures-${{ github.run_id }}
+          path: build/tools
+      - name: Export history fixture executables for every shard
+        run: |
+          set -euo pipefail
+          chmod +x build/tools/chat-history-fixture.test build/tools/chat-history-seed
+          test -s build/tools/chat-history-fixture.test
+          test -s build/tools/chat-history-seed
+          test -s build/tools/chat-history-measurements.log
+          printf 'OMNIPUS_CHAT_HISTORY_MEASUREMENT_RECEIPT=%s/build/tools/chat-history-measurements.log\n' "$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
+          printf 'OMNIPUS_CHAT_HISTORY_FIXTURE_BINARY=%s/build/tools/chat-history-fixture.test\n' "$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
+          printf 'OMNIPUS_CHAT_HISTORY_SEED_BINARY=%s/build/tools/chat-history-seed\n' "$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
+
       - name: Prepare gateway home directory
         # Fresh directory every run — never reuse state between jobs.
         run: |
@@ -2676,26 +3334,59 @@ jobs:
           fi
           echo "Gateway managed Chrome provisioned under $OMNIPUS_HOME/browser/chromium/"
 
-      - name: Resolve shard LLM key
-        # Map this shard's key_slot (from shards.json) to an OpenRouter key and expose it to
-        # every later step as OPENROUTER_API_KEY_CI via $GITHUB_ENV — so the seed/onboard/
-        # verify/test steps below need no per-step secret wiring. Slots b/c fall back to key A
-        # when their secret is unset, so the workflow still runs with only the primary key
-        # configured (every shard on key A = today's single-key behavior). add-mask keeps the
-        # resolved value out of logs (a/b/c are registered secrets and thus already masked).
+      - name: Resolve shard LLM keys
+        # The primary (MiniMax) key is exposed to every later step as MINIMAX_API_KEY_CI.
+        # This shard's key_slot (from shards.json) picks the FALLBACK OpenRouter key, exposed
+        # as OPENROUTER_API_KEY_CI — so the seed/onboard/verify/test steps below need no
+        # per-step secret wiring. Slots b/c fall back to key A when their secret is unset.
+        # add-mask keeps the resolved values out of logs (the secrets are registered and thus
+        # already masked; the re-mask covers the resolved copy).
         run: |
           set -euo pipefail
+          if [ -z "${MINIMAX_KEY:-}" ]; then
+            echo "::error::MINIMAX_API_KEY_CI secret is not set — it is the primary e2e model key (tests/e2e/e2e-model.json)." >&2
+            exit 1
+          fi
+          echo "::add-mask::$MINIMAX_KEY"
+          echo "MINIMAX_API_KEY_CI=$MINIMAX_KEY" >> "$GITHUB_ENV"
           case "${{ matrix.key_slot }}" in
             b) KEY="${OPENROUTER_KEY_B:-$OPENROUTER_KEY_A}" ;;
             c) KEY="${OPENROUTER_KEY_C:-$OPENROUTER_KEY_A}" ;;
             *) KEY="${OPENROUTER_KEY_A}" ;;
           esac
           if [ -z "$KEY" ]; then
-            echo "::error::No OpenRouter key resolved for slot '${{ matrix.key_slot }}'. Set the OPENROUTER_API_KEY_CI secret (and optionally _B / _C)." >&2
+            echo "::error::No OpenRouter (fallback) key resolved for slot '${{ matrix.key_slot }}'. Set the OPENROUTER_API_KEY_CI secret (and optionally _B / _C)." >&2
             exit 1
           fi
           echo "::add-mask::$KEY"
           echo "OPENROUTER_API_KEY_CI=$KEY" >> "$GITHUB_ENV"
+
+      - name: Read central e2e model
+        # One committed source of truth for the real-LLM models (a primary and a fallback
+        # pair). Every model or provider literal in live config is banned
+        # (scripts/check-no-hardcoded-e2e-model.sh); scripts/e2e-model.sh is the one shell
+        # reader and exports E2E_PRIMARY_* / E2E_FALLBACK_* for the steps below.
+        run: |
+          set -euo pipefail
+          bash scripts/e2e-model.sh env >> "$GITHUB_ENV"
+
+      - name: Check the primary LLM (job start)
+        # One 1-token call to the primary (--strict). 429 / 5xx / timeout / no connection ⇒
+        # the WHOLE job runs on the fallback: a ::warning::, a job-summary line, and
+        # OMNIPUS_E2E_PRIMARY_PROVIDER/_MODEL (read by tests/e2e/fixtures/e2e-model.ts) point
+        # at the fallback pair. A rejected key (401/403), a 2xx that is not an Anthropic
+        # message, any other answer, or a missing key fails the step.
+        # Prints only the status and the provider's error type, never the body or the key.
+        run: |
+          set -euo pipefail
+          route=$(bash scripts/e2e-model.sh preflight --strict --route-out "$RUNNER_TEMP/llm-route.json")
+          echo "$route" >> "$GITHUB_ENV"
+          if [ "$route" = "LLM_ROUTE=fallback" ]; then
+            {
+              echo "OMNIPUS_E2E_PRIMARY_PROVIDER=$E2E_FALLBACK_PROVIDER"
+              echo "OMNIPUS_E2E_PRIMARY_MODEL=$E2E_FALLBACK_MODEL"
+            } >> "$GITHUB_ENV"
+          fi
 
       - name: Seed gateway config
         # providers is a flat array of ModelConfig entries (see pkg/config/config.go).
@@ -2718,51 +3409,42 @@ jobs:
         # sandbox.audit_log must be true at BOOT (it is restart-gated) for T26.
         # sandbox.tool_policies.delegate = "allow" is explicit so no migration run can
         # override it (an existing "allow" policy is never downgraded by the migrator).
+        #
+        # The two provider rows (primary + fallback) and default_model come from
+        # scripts/e2e-model.sh seed-config (one template shared with runci.sh); this job
+        # replaces its sandbox.tool_policies with the explicit delegate allow and adds the
+        # disabled whatsapp connector. The channels.whatsapp seed exists because
+        # whatsapp-qr.spec.ts case D enables the connector with an ordinary (bodyless) PUT
+        # /channels/whatsapp/enable, which since the pairing ownership model (151aa3af8)
+        # requires the instance to already exist — an enable never creates a missing or
+        # deleted connector. It is seeded disabled so the test's own precondition
+        # ("initially disabled") holds. After a failed job-start check, --route fallback
+        # makes the fallback pair the default model.
         run: |
           set -euo pipefail
-          cat > /tmp/omnipus-e2e/config.json <<'EOF'
-          {
-            "version": 1,
-            "gateway": {
-              "port": 6060,
-              "dev_mode_bypass": true
-            },
-            "sandbox": {
-              "audit_log": true,
-              "tool_policies": {
-                "delegate": "allow"
-              }
-            },
-            "agents": {
-              "defaults": {
-                "default_model": {
-                  "provider": "openrouter",
-                  "model": "deepseek/deepseek-v4.1-flash"
-                },
-                "auto_recap_enabled": true
-              }
-            },
-            "providers": [
-              {
-                "provider": "openrouter",
-                "model": "deepseek/deepseek-v4.1-flash",
-                "api_base": "https://openrouter.ai/api/v1",
-                "api_key_ref": "OPENROUTER_API_KEY"
-              }
-            ]
-          }
-          EOF
+          : "${LLM_ROUTE:?LLM_ROUTE is not set — the 'Check the primary LLM' step must run first}"
+          bash scripts/e2e-model.sh seed-config 6060 --route "$LLM_ROUTE" \
+            | jq '.sandbox.tool_policies = {delegate: "allow"}
+                  | .channels = {whatsapp: {type: "whatsapp", enabled: false}}' \
+            > /tmp/omnipus-e2e/config.json
 
-      - name: Seed OpenRouter credential
-        # omnipus credentials set writes the key into credentials.json (AES-256-GCM).
-        # The credential name MUST match the provider's api_key_ref in config.json
-        # (OPENROUTER_API_KEY, uppercase — matches the env-var convention documented
-        # in pkg/config/config.go:924-927).
+      - name: Seed LLM credentials
+        # omnipus credentials set writes each key into credentials.json (AES-256-GCM).
+        # The credential names MUST match the provider rows' api_key_ref in config.json —
+        # E2E_PRIMARY_KEYREF / E2E_FALLBACK_KEYREF from tests/e2e/e2e-model.json. The value
+        # of each is the CI secret named <api_key_ref>_CI (MINIMAX_API_KEY_CI,
+        # OPENROUTER_API_KEY_CI), resolved in "Resolve shard LLM keys".
         run: |
           set -euo pipefail
-          ./omnipus credentials set OPENROUTER_API_KEY "${OPENROUTER_API_KEY_CI}"
+          for ref in "$E2E_PRIMARY_KEYREF" "$E2E_FALLBACK_KEYREF"; do
+            var="${ref}_CI"
+            if [ -z "${!var:-}" ]; then
+              echo "::error::$var is not set — needed for the $ref credential." >&2
+              exit 1
+            fi
+            ./omnipus credentials set "$ref" "${!var}"
+          done
         env:
-          # OPENROUTER_API_KEY_CI is set per-shard in "Resolve shard LLM key" via $GITHUB_ENV.
           OMNIPUS_MASTER_KEY: ${{ secrets.OMNIPUS_MASTER_KEY_CI }}
 
       - name: Start gateway
@@ -2811,25 +3493,29 @@ jobs:
         # exact key ADR-067's GetModelConfig matches on — so the onboarding
         # handler updates the existing entry instead of writing a second,
         # divergent one.
+        # After a failed job-start check the job onboards on the fallback pair and seeds no
+        # agent fallback (there is nothing left to fall back to).
         run: |
           set -euo pipefail
+          if [ "$LLM_ROUTE" = "fallback" ]; then
+            prov="$E2E_FALLBACK_PROVIDER" model="$E2E_FALLBACK_MODEL" ref="$E2E_FALLBACK_KEYREF"
+          else
+            prov="$E2E_PRIMARY_PROVIDER" model="$E2E_PRIMARY_MODEL" ref="$E2E_PRIMARY_KEYREF"
+          fi
+          keyvar="${ref}_CI"
           # -sf DISCARDS the server's answer: on any non-2xx, curl exits 22
           # having printed nothing, so the step fails with no reason anywhere in
-          # the log. Every E2E shard has been failing here on this branch and on
-          # release/v0.1.1 alike, and the log says only that a step failed.
-          # A silent failure in the diagnostic path is the worst kind.
-          #
-          # Capture status and body instead, and print the body on failure. The
-          # key is registered with add-mask, so it stays masked in whatever the
-          # server echoes back.
-          body=$(jq -n --arg key "${OPENROUTER_API_KEY_CI}" \
-            '{provider:{id:"openrouter",auth_method:"api_key",api_key:$key,model:"deepseek/deepseek-v4.1-flash"},admin:{username:"admin",password:"admin123"}}' \
+          # the log. Capture status and body instead, and print the body on
+          # failure. The keys are registered with add-mask, so they stay masked
+          # in whatever the server echoes back.
+          code=$(jq -n --arg id "$prov" --arg key "${!keyvar}" --arg model "$model" \
+            '{provider:{id:$id,auth_method:"api_key",api_key:$key,model:$model},admin:{username:"admin",password:"admin123"}}' \
             | curl -s -o /tmp/onboard-body.txt -w '%{http_code}' \
                 -X POST http://localhost:6060/api/v1/onboarding/complete \
                 -H 'Content-Type: application/json' \
                 -d @-)
-          if [ "$body" != "200" ] && [ "$body" != "204" ]; then
-            echo "::error::onboarding/complete returned HTTP $body" >&2
+          if [ "$code" != "200" ] && [ "$code" != "204" ]; then
+            echo "::error::onboarding/complete returned HTTP $code" >&2
             echo "--- response body ---" >&2
             head -c 2000 /tmp/onboard-body.txt >&2 || true
             echo >&2
@@ -2837,22 +3523,34 @@ jobs:
             tail -40 "${OMNIPUS_HOME:-/tmp/omnipus-e2e}/logs/gateway.log" 2>/dev/null >&2 || echo "(no gateway log at ${OMNIPUS_HOME:-/tmp/omnipus-e2e}/logs/gateway.log)" >&2
             exit 1
           fi
-        # OPENROUTER_API_KEY_CI comes from "Resolve shard LLM key" (per-shard, via $GITHUB_ENV).
+          if [ "$LLM_ROUTE" != "fallback" ]; then
+            # The product falls back per agent only (issue #1340): give every agent the
+            # fallback pair in its fallback_models. The fallback provider row and its
+            # credential were seeded above.
+            tok=$(jq -r '.token // empty' /tmp/onboard-body.txt)
+            if [ -n "$tok" ]; then
+              echo "::add-mask::$tok"
+            fi
+            bash scripts/e2e-model.sh seed-agent-fallbacks http://localhost:6060 "${tok:-dev-mode-bypass}"
+          fi
+        # The keys come from "Resolve shard LLM keys" (per-shard, via $GITHUB_ENV).
 
-      # T0.4: Preflight — fail fast if OPENROUTER_API_KEY_CI is unset.
+      # T0.4: Preflight — fail fast if a live-model key is unset.
       # This catches mis-configured CI runs before any Playwright step executes,
       # giving a clear error message instead of per-test LLM timeout failures.
-      - name: Verify OPENROUTER_API_KEY_CI is set
-        # Resolved per-shard in "Resolve shard LLM key" and inherited via $GITHUB_ENV.
+      - name: Verify the live-model keys are set
+        # Resolved per-shard in "Resolve shard LLM keys" and inherited via $GITHUB_ENV.
         run: |
           set -euo pipefail
-          if [ -z "${OPENROUTER_API_KEY_CI:-}" ]; then
-            echo "ERROR: OPENROUTER_API_KEY_CI secret is not set in this repository." >&2
-            echo "This secret is required for the Playwright E2E suite." >&2
-            echo "Add it under Settings > Secrets and variables > Actions." >&2
-            exit 1
-          fi
-          echo "OPENROUTER_API_KEY_CI is set (${#OPENROUTER_API_KEY_CI} chars)."
+          for var in MINIMAX_API_KEY_CI OPENROUTER_API_KEY_CI; do
+            if [ -z "${!var:-}" ]; then
+              echo "ERROR: $var is not set in this repository." >&2
+              echo "It is required for the Playwright E2E suite (primary and fallback model keys)." >&2
+              echo "Add it under Settings > Secrets and variables > Actions." >&2
+              exit 1
+            fi
+            echo "$var is set."
+          done
 
       - name: Install Playwright browsers
         # Install the engines the shard's playwright.config.ts projects
@@ -2921,10 +3619,11 @@ jobs:
           echo "preview-isolation Playwright binaries verified: firefox-1532, webkit-2311"
 
       - name: Run Playwright tests
-        # OPENROUTER_API_KEY_CI is inherited per-shard from $GITHUB_ENV (Resolve shard LLM key).
-        # Mirror it onto OPENROUTER_API_KEY so self-managed gateways
-        # (tests/e2e/setup.ts startGateway → onboardAdmin) send the same live
-        # key instead of sk-test-placeholder, which OpenRouter 400s.
+        # MINIMAX_API_KEY_CI and OPENROUTER_API_KEY_CI are inherited per-shard from
+        # $GITHUB_ENV (Resolve shard LLM keys), as are OMNIPUS_E2E_PRIMARY_* after a failed
+        # job-start check. Mirror the keys onto MINIMAX_API_KEY / OPENROUTER_API_KEY so
+        # self-managed gateways (tests/e2e/setup.ts startGateway → onboardAdmin) find the
+        # same live keys under the local names too.
         #
         # --reporter=html,list,json ADDS the json reporter on top of
         # playwright.config.ts's own `reporter: [['html'], ['list']]` — the
@@ -2942,6 +3641,7 @@ jobs:
         # step, which reads the json reporter's stats block to catch both.
         env:
           OMNIPUS_URL: http://localhost:6060
+          MINIMAX_API_KEY: ${{ env.MINIMAX_API_KEY_CI }}
           OPENROUTER_API_KEY: ${{ env.OPENROUTER_API_KEY_CI }}
           PLAYWRIGHT_JSON_OUTPUT_NAME: /tmp/pw-results.json
         run: |
@@ -3014,9 +3714,9 @@ jobs:
 
       - name: Fail on skipped or flaky Playwright tests
         # Two ways this suite went green without being green:
-        #  * skipped>0 — two tests were silently skipped in the last green
-        #    run. `npx playwright test` does not fail on a skip; it's not a
-        #    Playwright "failure" by definition.
+        #  * skipped>0 — `npx playwright test` does not fail on a skip; each
+        #    skipped spec title must exactly match a non-expired entry in the
+        #    skip manifest. Missing or malformed allowlist data fails closed.
         #  * flaky>0 — retries: 3 (playwright.config.ts) turned a real
         #    failure green last Saturday: a test that fails once and then
         #    passes on retry is reported as "flaky", not "unexpected", and
@@ -3057,14 +3757,52 @@ jobs:
           echo "Playwright stats: expected=$expected skipped=$skipped flaky=$flaky unexpected=$unexpected"
           rc=0
           if [ "$skipped" -gt 0 ]; then
-            echo "::error::$skipped Playwright test(s) were skipped — coverage silently shrank. See docs/internal/false-green-patterns.md." >&2
-            rc=1
+            if ! bash scripts/check-e2e-skip-allowlist.sh /tmp/pw-results.json test-results/skip-manifest.json "$skipped"; then
+              rc=1
+            fi
           fi
           if [ "$flaky" -gt 0 ]; then
             echo "::error::$flaky Playwright test(s) only passed after a retry (flaky) — retries: 3 masked a real failure. See docs/internal/false-green-patterns.md." >&2
             rc=1
           fi
           exit $rc
+
+      # This is raw evidence only. The test/gate steps above remain blocking
+      # and red; only ci-required may classify an exact, issue-tracked exception.
+      - name: Upload raw Playwright report for quarantine accounting
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-quarantine-playwright-${{ matrix.group }}-${{ github.run_attempt }}
+          path: /tmp/pw-results.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
+
+      - name: Count mid-run LLM fallbacks
+        # The job-start check only sees the primary at the start. If it failed DURING the
+        # tests, agents answered from the fallback and the product wrote a transcript note
+        # for each answer. Count them on the shared gateway: any note ⇒ a ::warning::, a
+        # job-summary line, and llm-route.json no longer says "primary"
+        # ("primary_then_fallback", with fallback_notes).
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -f "$RUNNER_TEMP/llm-route.json" ]; then
+            bash scripts/e2e-model.sh note-fallbacks "${OMNIPUS_HOME:-/tmp/omnipus-e2e}/sessions" \
+              --route-out "$RUNNER_TEMP/llm-route.json"
+          fi
+
+      - name: Upload LLM route
+        # One line per shard ({"route","status","error_type"[,"fallback_notes"]}) so the
+        # week-later report can count the jobs that ran on the fallback, at the start or
+        # mid-run.
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: llm-route-${{ matrix.group }}
+          path: ${{ runner.temp }}/llm-route.json
+          if-no-files-found: ignore
 
       - name: Upload Playwright artifacts
         if: failure()
@@ -3115,28 +3853,13 @@ jobs:
             kill "$(cat /tmp/omnipus.pid)" 2>/dev/null || true
           fi
 
-  # ---------------------------------------------------------------------------
-  # The single required check.
-  #
-  # Branch protection currently names JOB IDS (typecheck, lint, test, security,
-  # perf-smoke, playwright, wire-types-lint, verify-contracts). GitHub reports
-  # check runs under a job's DISPLAY NAME, and every one of those jobs sets
-  # `name:` — so the required contexts match nothing that is ever emitted, and
-  # `playwright` is a matrix job that can only ever emit "E2E — <group>". The
-  # practical effect is that no result from this workflow gates any merge.
-  #
-  # Requiring eight name strings that must each stay in sync with a `name:`
-  # field is the kind of duplicated definition that drifts silently. This job
-  # exists so protection can require exactly ONE context that cannot drift:
-  # it depends on every gate and re-derives the verdict from their results.
-  #
-  # Semantics, deliberately:
-  #   failure/cancelled in ANY dependency -> fail. No exceptions, no allowlist.
-  #   skipped                             -> pass. Language scoping means a
-  #                                          Go-only PR legitimately skips the
-  #                                          SPA jobs and vice versa.
-  #   changes must have SUCCEEDED         -> otherwise "everything skipped"
-  #                                          reads as success while nothing ran.
+  # The single required check. Keep every gate in needs: an omitted gate is
+  # invisible to toJSON(needs), even when its raw job fails (hermetic-build).
+  # ci-quarantine.py requires changes to succeed, preserves legitimate path
+  # skips, and blocks every failure except exact, evidenced entries with OPEN
+  # issues in the one tracked quarantine list. Raw leaf jobs are never softened.
+  # The summary reports dependent audits not run after an install timeout as
+  # coverage gaps, not passes; no unlisted failure can ride their exception.
   ci-required:
     name: CI
     if: always()
@@ -3149,7 +3872,9 @@ jobs:
       - design-system
       - design-system-browser
       - design-system-screenshot
+      - design-system-locks
       - design-system-audit
+      - design-system-audit-summary
       - wire-types-lint
       - tool-error-status-lint
       - verify-contracts
@@ -3159,8 +3884,11 @@ jobs:
       - fast-tier
       - vuln_check
       - cgo-gate
+      - hermetic-build
       - test
       - test-race
+      - chat-history-core
+      - history-e2e-fixtures
       - security
       - perf-smoke
       - e2e-plan
@@ -3168,29 +3896,64 @@ jobs:
       - browser-tests-gated
       - browser-e2e
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      issues: read
+      checks: read
     steps:
-      - name: Require every gate to have passed or legitimately skipped
-        env:
-          RESULTS: ${{ toJSON(needs) }}
+      - name: Checkout quarantine classifier and tracked manifest
+        uses: actions/checkout@v7
+      - name: Setup Python for required CI self-tests
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install pinned PyYAML for workflow regression tests
+        run: python3 -I -m pip install --disable-pip-version-check 'PyYAML==6.0.3'
+      - name: Prove the quarantine guard and aggregate reject unlisted failures
         run: |
           set -euo pipefail
-          echo "$RESULTS"
-
-          # `changes` decides what runs. If it did not succeed, every downstream
-          # skip is meaningless and "all skipped" must not read as a pass.
-          changes_result=$(echo "$RESULTS" | python3 -c \
-            'import json,sys; print(json.load(sys.stdin)["changes"]["result"])')
-          if [ "$changes_result" != "success" ]; then
-            echo "FAIL: the 'changes' job did not succeed (result: $changes_result)." >&2
-            echo "Every other job's skip is therefore uninterpretable — refusing to pass." >&2
-            exit 1
+          python3 -I scripts/ci-quarantine.py --self-test
+          python3 -I scripts/ci-gate-wiring.test.py
+          python3 -I scripts/ci-workflow-triggers.test.py
+      - name: Report E2E shard coverage separately from gate results
+        env:
+          E2E_PLAN_RESULT: ${{ needs.e2e-plan.result }}
+          E2E_RESULT: ${{ needs.playwright.result }}
+          E2E_MATRIX: ${{ needs.e2e-plan.outputs.matrix }}
+          LLM_SKIPPED: ${{ needs.e2e-plan.outputs.llm_skipped }}
+        run: |
+          set -euo pipefail
+          printf '## E2E shard coverage\n\n' >> "$GITHUB_STEP_SUMMARY"
+          if [ "$E2E_PLAN_RESULT" != "success" ]; then
+            # Existing path/dependency gates still apply; no plan means no counts.
+            printf 'E2E shard plan: %s; execution: %s. No shard coverage claimed.\n' \
+              "$E2E_PLAN_RESULT" "$E2E_RESULT" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
           fi
+          selected_count=$(jq -e '.include | length' <<< "$E2E_MATRIX")
+          skipped_count=$(jq -e 'length' <<< "$LLM_SKIPPED")
+          {
+            printf '| E2E selection | Count / result |\n| --- | --- |\n'
+            printf '| Shards selected for execution | %s |\n' "$selected_count"
+            printf '| LLM shards excluded (not passed or failed) | %s |\n' "$skipped_count"
+            printf '| Selected shards aggregate job result | %s |\n\n' "$E2E_RESULT"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$skipped_count" -gt 0 ]; then
+            message='LLM e2e not run on this PR (add run-e2e before the next push or reopen)'
 
-          bad=$(echo "$RESULTS" | python3 -c \
-            'import json,sys; d=json.load(sys.stdin); print(" ".join(sorted(k for k,v in d.items() if v["result"] not in ("success","skipped"))))')
-          if [ -n "$bad" ]; then
-            echo "FAIL: these jobs did not pass:" >&2
-            for j in $bad; do echo "  - $j" >&2; done
-            exit 1
+            nightly_status='The nightly full run is planned in #1127; it is not enabled by this change. Full release/main push coverage remains enabled.'
+            printf '%s\nNightly status: %s\n' "$message" "$nightly_status"
+            skipped_rows=$(jq -r '.[] | "| `" + . + "` | Not run — excluded, not passed or failed |"' <<< "$LLM_SKIPPED")
+            {
+              printf '%s\n\n' "$message"
+              printf '**Nightly status:** %s\n\n' "$nightly_status"
+              printf '| Excluded LLM shard | Coverage |\n| --- | --- |\n%s\n' "$skipped_rows"
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
-          echo "OK: every gate passed or was legitimately skipped."
+      - name: Require every gate to pass except evidenced open-issue quarantines
+        if: always()
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -I scripts/ci-quarantine.py aggregate

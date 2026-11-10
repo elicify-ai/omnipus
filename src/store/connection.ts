@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { WsConnection } from '@/lib/ws'
+import { queryClient } from '@/lib/queryClient'
 
 // Review finding 13: reconnectedAt used to be cleared by NOTHING — once set,
 // it stayed non-null forever, so every consumer's `active = !isConnected ||
@@ -64,6 +65,12 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
     const current = get()
     const now = Date.now()
     const justReconnected = connected && current.disconnectedAt !== null
+    // Founder decision 2026-10-06: a tab always has a fresh agent list after
+    // any websocket connect or reconnect. An agent created while the socket
+    // was not yet open (or was down) never produced an agent_created frame
+    // for this tab. This is the single place isConnected becomes true, so the
+    // invalidation does not depend on whether the agent picker is mounted.
+    const becameConnected = connected && !current.isConnected
     set({
       isConnected: connected,
       connectionError: connected ? null : current.connectionError,
@@ -79,6 +86,9 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
         : current.lastDisconnectWasTerminal,
       disconnectedAssistantMessageId: connected ? null : current.disconnectedAssistantMessageId,
     })
+    if (becameConnected) {
+      void queryClient.invalidateQueries({ queryKey: ['agents'] })
+    }
     if (justReconnected) {
       // Review finding 13: without this, reconnectedAt (and therefore the
       // `active` flag every "Up to date"/status consumer derives from it)

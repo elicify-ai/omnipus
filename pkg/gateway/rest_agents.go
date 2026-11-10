@@ -22,6 +22,8 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/skills"
+	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 )
 
 // setAgentModelProvider echoes the agent's explicit primary-model provider (O3
@@ -39,8 +41,169 @@ func setAgentModelProvider(ag *gen.Agent, model *config.AgentModelConfig) {
 
 // --- Agents ---
 
-// HandleAgents handles /api/v1/agents (list + create), /api/v1/agents/{id} (detail),
-// and /api/v1/agents/{id}/sessions (sessions for agent).
+// handleAgentSlotCarveOut serves the static routes that occupy the agentID slot
+// of /api/v1/agents/{id}, reporting whether it handled the request:
+//   - GET  executor-defaults    — static reference data;
+//   - POST executor-preview     — stateless real-command preview
+//     (rest_executor_preview.go), body-driven and agent-agnostic so it works
+//     from the create wizard where no agent id exists yet;
+//   - POST executor-smoke-test  — runs a bounded, real test prompt through an
+//     external-CLI worker (rest_executor_smoketest.go); it spends real tokens
+//     and enforces its own rate limit and in-flight cap inline, since it shares
+//     this route's registration-time auth wrapping.
+//
+// They are matched as if they were the {id} value, so they are carved out of
+// the agent-ID namespace rather than being sub-resource reservations like
+// sessions/runner/tools/mailboxes, which are checked only after agentID has
+// been split off and validated. An agent created with one of these literal IDs
+// would become unreachable via GET /api/v1/agents/{id}; agent IDs are always
+// uuid.New().String(), so the practical risk is low, but do not copy this
+// pattern casually for a future static route under /agents/.
+func (a *restAPI) handleAgentSlotCarveOut(w http.ResponseWriter, r *http.Request, agentID, subPath string) bool {
+	if subPath != "" {
+		return false
+	}
+	var method string
+	var serve func()
+	switch agentID {
+	case "executor-defaults":
+		method, serve = http.MethodGet, func() { a.listExecutorDefaults(w) }
+	case "executor-preview":
+		method, serve = http.MethodPost, func() { a.postAgentsExecutorPreview(w, r) }
+	case "executor-smoke-test":
+		method, serve = http.MethodPost, func() { a.postAgentsExecutorSmokeTest(w, r) }
+	default:
+		return false
+	}
+	if r.Method != method {
+		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return true
+	}
+	serve()
+	return true
+}
+
+// agentSubRoute is one allowed sub-path under /api/v1/agents/{id}/.
+// methods is the exhaustive Allow list for that sub-resource. A route with
+// workspaceSegment set is name + "/" + {workspaceId}; every other route must
+// equal name exactly.
+type agentSubRoute struct {
+	name             string
+	workspaceSegment bool
+	methods          []string
+}
+
+// agentSubRoutes is the explicit list of sub-paths HandleAgents accepts under
+// /api/v1/agents/{id}/, taken from contracts/openapi.yaml. Anything else is
+// 404. A listed sub-path used with a method not in methods is 405 with an
+// Allow header. The bare agent (/api/v1/agents/{id}, no sub-path) is not in
+// this list: only it is updated or deleted as a whole.
+var agentSubRoutes = []agentSubRoute{
+	{name: "sessions", methods: []string{http.MethodGet}},
+	{name: "activity-runs", methods: []string{http.MethodGet}},
+	{name: "runner/test", methods: []string{http.MethodPost}},
+	{name: "tools", methods: []string{http.MethodGet, http.MethodPut}},
+	{name: "mailboxes", workspaceSegment: true, methods: []string{http.MethodGet, http.MethodPut, http.MethodDelete}},
+	{name: "dependencies", methods: []string{http.MethodGet}},
+}
+
+// matchAgentSubRoute returns the allow-list entry for subPath. A
+// workspace-segment route matches its bare name and name + "/" + anything, so
+// a malformed mailbox address keeps its 400 (see agentMailboxWorkspaceID).
+func matchAgentSubRoute(subPath string) (agentSubRoute, bool) {
+	for _, route := range agentSubRoutes {
+		if subPath == route.name {
+			return route, true
+		}
+		if route.workspaceSegment && strings.HasPrefix(subPath, route.name+"/") {
+			return route, true
+		}
+	}
+	return agentSubRoute{}, false
+}
+
+// agentMailboxWorkspaceID extracts {workspaceId} from "mailboxes/{workspaceId}".
+// A missing or extra segment, or an invalid ID, writes 400 and returns false.
+// It runs before the method check, so a malformed mailbox address is 400 for
+// every method.
+func agentMailboxWorkspaceID(w http.ResponseWriter, subPath string) (string, bool) {
+	mbParts := strings.SplitN(subPath, "/", 2)
+	if len(mbParts) != 2 || mbParts[1] == "" || strings.Contains(mbParts[1], "/") {
+		jsonErr(w, http.StatusBadRequest,
+			"mailboxes path requires exactly one workspace ID segment: /agents/{id}/mailboxes/{workspaceId}")
+		return "", false
+	}
+	if err := validateEntityID(mbParts[1]); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid workspace ID")
+		return "", false
+	}
+	return mbParts[1], true
+}
+
+// dispatchAgentSubPath serves /api/v1/agents/{id}/{subPath}.
+// An unknown sub-path is 404. A known sub-path with the wrong method is 405
+// and sets Allow to the methods that sub-resource accepts. This function
+// never updates or deletes the agent itself.
+func (a *restAPI) dispatchAgentSubPath(w http.ResponseWriter, r *http.Request, agentID, subPath string) {
+	route, ok := matchAgentSubRoute(subPath)
+	if !ok {
+		jsonErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	var workspaceID string
+	if route.workspaceSegment {
+		if workspaceID, ok = agentMailboxWorkspaceID(w, subPath); !ok {
+			return
+		}
+	}
+	if !slices.Contains(route.methods, r.Method) {
+		w.Header().Set("Allow", strings.Join(route.methods, ", "))
+		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	switch route.name {
+	case "sessions":
+		a.listAgentSessions(w, agentID)
+	case "activity-runs":
+		// The Activity panel's task and scheduler run rows (session-core FR-033).
+		a.listAgentActivityRuns(w, r, agentID)
+	case "runner/test":
+		// External-CLI runner connection test (Spec-4 FR-4.2).
+		a.testAgentRunner(w, r, agentID)
+	case "tools":
+		// Per-agent tool registry view and update (FR-028, FR-086).
+		if r.Method == http.MethodGet {
+			a.HandleAgentToolsRegistry(w, r, agentID)
+		} else {
+			a.updateAgentTools(w, r, agentID)
+		}
+	case "mailboxes":
+		// One (agent, workspace) email mailbox account (M11, pair-addressed
+		// 2026-07-03: the same agent may hold a different mailbox in each
+		// workspace it belongs to).
+		switch r.Method {
+		case http.MethodGet:
+			a.getAgentMailbox(w, agentID, workspaceID)
+		case http.MethodPut:
+			a.setAgentMailbox(w, r, agentID, workspaceID)
+		default:
+			a.deleteAgentMailbox(w, agentID, workspaceID)
+		}
+	case "dependencies":
+		// getAgentDependencies has no handler yet (#1709). Until it has one,
+		// GET keeps its previous answer, the agent detail; #1707 changes only
+		// the methods this path refuses.
+		a.getAgent(w, agentID)
+	default:
+		// A listed route with no handler must not fall through onto the agent.
+		jsonErr(w, http.StatusNotFound, "not found")
+	}
+}
+
+// HandleAgents handles /api/v1/agents (list + create), /api/v1/agents/{id}
+// (detail, update, delete) and the sub-resources listed in agentSubRoutes.
+// PUT and DELETE apply only to the bare agent. Any sub-path is either a listed
+// sub-resource or 404.
 func (a *restAPI) HandleAgents(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(r.URL.Path, "/")
 	remainder := strings.TrimPrefix(path, "/api/v1/agents")
@@ -56,64 +219,9 @@ func (a *restAPI) HandleAgents(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// GET /api/v1/agents/executor-defaults — static reference data (agent-system-
-	// fixes-2 ghost-text bug fix). This reservation is structurally different
-	// from the "sessions"/"runner"/"tools"/"mailboxes" sub-path guards below:
-	// those reserve a VERB-SUFFIX position that is only checked AFTER agentID
-	// has already been split off and validated (so they can never collide with
-	// a real agent ID, only with a same-named sub-resource segment). This guard
-	// instead claims the agentID SLOT ITSELF — "executor-defaults" is matched
-	// as if it were the {id} value before any agent lookup happens, so it is a
-	// static path segment carved out of the agent-ID namespace, not a
-	// sub-resource reservation. createAgent/updateAgent do not reject this
-	// literal ID, so if an agent were ever created with it, that agent would
-	// become permanently unreachable via GET /api/v1/agents/{id} (shadowed by
-	// this branch). Practical risk is low — agent IDs are always
-	// uuid.New().String(), never operator-chosen — but this is a narrower,
-	// more fragile precedent than the sub-path guards below and should not be
-	// copied casually for a future static route under /agents/.
-	if agentID == "executor-defaults" && subPath == "" {
-		if r.Method != http.MethodGet {
-			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		a.listExecutorDefaults(w)
-		return
-	}
-
-	// POST /api/v1/agents/executor-preview — stateless real-command preview
-	// (rest_executor_preview.go). Same agentID-SLOT carve-out pattern as
-	// executor-defaults immediately above (see that block's comment for why
-	// this is structurally different from the sessions/runner/tools/mailboxes
-	// sub-path guards below). Body-driven and agent-agnostic — mirrors POST
-	// /system/cli-validate — so it works both from the create wizard, where no
-	// agent id exists yet, and from an existing agent's edit form.
-	if agentID == "executor-preview" && subPath == "" {
-		if r.Method != http.MethodPost {
-			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		a.postAgentsExecutorPreview(w, r)
-		return
-	}
-
-	// POST /api/v1/agents/executor-smoke-test — actually RUN a bounded, real
-	// test prompt through an external-CLI worker's real dispatch path
-	// (rest_executor_smoketest.go). Same agentID-SLOT carve-out pattern as
-	// executor-preview/executor-defaults immediately above. Unlike those two
-	// (stateless computation only, no spawn), this endpoint DOES spend real
-	// model tokens and DOES run a real, authenticated subprocess — it
-	// enforces its own dedicated rate limit (smokeTestLimiter) and per-caller
-	// in-flight cap (smokeTestInflight) inline, since it shares this route's
-	// registration-time auth wrapping (api.withAuth(api.HandleAgents), same
-	// create-parity as executor-preview) rather than getting its own
-	// dedicated top-level route like /system/cli-validate does.
-	if agentID == "executor-smoke-test" && subPath == "" {
-		if r.Method != http.MethodPost {
-			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		a.postAgentsExecutorSmokeTest(w, r)
+	// Static routes that claim the agentID slot itself are served before any
+	// agent lookup (see handleAgentSlotCarveOut).
+	if a.handleAgentSlotCarveOut(w, r, agentID, subPath) {
 		return
 	}
 
@@ -125,64 +233,11 @@ func (a *restAPI) HandleAgents(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// GET /api/v1/agents/{id}/sessions
-	if r.Method == http.MethodGet && agentID != "" && subPath == "sessions" {
-		a.listAgentSessions(w, agentID)
-		return
-	}
-
-	// POST /api/v1/agents/{id}/runner/test — external-CLI runner connection test (Spec-4 FR-4.2)
-	if agentID != "" && subPath == "runner/test" {
-		if r.Method != http.MethodPost {
-			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-		a.testAgentRunner(w, r, agentID)
-		return
-	}
-
-	// GET/PUT /api/v1/agents/{id}/tools — per-agent tool registry view (FR-028, FR-086)
-	if agentID != "" && subPath == "tools" {
-		switch r.Method {
-		case http.MethodGet:
-			a.HandleAgentToolsRegistry(w, r, agentID)
-		case http.MethodPut:
-			a.updateAgentTools(w, r, agentID)
-		default:
-			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
-		}
-		return
-	}
-
-	// GET/PUT/DELETE /api/v1/agents/{id}/mailboxes/{workspaceId} — one
-	// (agent, workspace) email mailbox account (M11, pair-addressed
-	// 2026-07-03: the same agent may hold a different mailbox in each
-	// workspace it belongs to). Match both the bare "mailboxes" prefix (so a
-	// missing workspace segment gets a proper 400 instead of silently
-	// falling through to the generic agent-CRUD switch below) and
-	// "mailboxes/<workspaceId>".
-	if agentID != "" && (subPath == "mailboxes" || strings.HasPrefix(subPath, "mailboxes/")) {
-		mbParts := strings.SplitN(subPath, "/", 2)
-		if len(mbParts) != 2 || mbParts[1] == "" || strings.Contains(mbParts[1], "/") {
-			jsonErr(w, http.StatusBadRequest,
-				"mailboxes path requires exactly one workspace ID segment: /agents/{id}/mailboxes/{workspaceId}")
-			return
-		}
-		workspaceID := mbParts[1]
-		if err := validateEntityID(workspaceID); err != nil {
-			jsonErr(w, http.StatusBadRequest, "invalid workspace ID")
-			return
-		}
-		switch r.Method {
-		case http.MethodGet:
-			a.getAgentMailbox(w, agentID, workspaceID)
-		case http.MethodPut:
-			a.setAgentMailbox(w, r, agentID, workspaceID)
-		case http.MethodDelete:
-			a.deleteAgentMailbox(w, agentID, workspaceID)
-		default:
-			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
-		}
+	// A sub-path is never the agent itself. Refuse it here so the method
+	// switch below cannot update or delete the agent, and cannot return the
+	// agent detail for an address it does not recognise (#1707).
+	if agentID != "" && subPath != "" {
+		a.dispatchAgentSubPath(w, r, agentID, subPath)
 		return
 	}
 
@@ -296,9 +351,9 @@ func (a *restAPI) listExecutorDefaults(w http.ResponseWriter) {
 				"--no-chrome",
 				"--model <configured model> (only when a model is configured)",
 				"--dangerously-skip-permissions",
-				"--max-turns <configured max turns> (only when a turn cap is configured)",
+				"--max-turns <the agent's tool-iteration limit> (always passed; a run without a turn cap is refused)",
 			},
-			Notes: "The prompt is delivered via stdin, with no positional prompt argument at all — never via a --prompt flag. --resume/--session-id are never passed; every run starts a fresh claude session. --dangerously-skip-permissions is passed unconditionally (operator decision, issue #488, reversing the original FR-5.3/US-5 stance of using --permission-mode acceptEdits instead) — this matches codex/opencode, which already ran permission-bypassed; see the tracked issue for the sandbox-boundary follow-up this reversal implies for claude specifically. Operator cli_args are appended after this list; a redundant --dangerously-skip-permissions or an attempt to change --output-format away from stream-json is dropped with a WARN (see argsafety.go) — the latter because the driver's own NDJSON stream parser requires stream-json output.",
+			Notes: "The prompt is delivered via stdin, with no positional prompt argument at all — never via a --prompt flag. A FRESH run starts a new claude session (no --resume); a native-conversation RESUME passes --resume <the session id claude itself announced on the prior run> (FR-043) — never the freshly generated dispatch RunID. --session-id is never passed. --dangerously-skip-permissions is passed unconditionally (operator decision, issue #488, reversing the original FR-5.3/US-5 stance of using --permission-mode acceptEdits instead) — this matches codex/opencode, which already ran permission-bypassed; see the tracked issue for the sandbox-boundary follow-up this reversal implies for claude specifically. Operator cli_args are appended after this list; a redundant --dangerously-skip-permissions or an attempt to change --output-format away from stream-json is dropped with a WARN (see argsafety.go) — the latter because the driver's own NDJSON stream parser requires stream-json output.",
 		},
 		{
 			Cli: gen.ExternalCliToolCodex,
@@ -312,7 +367,7 @@ func (a *restAPI) listExecutorDefaults(w http.ResponseWriter) {
 				"-m <configured model> (only when a model is configured)",
 				"-C <agent working directory> (only when a working directory is set — always populated for a real dispatched run)",
 			},
-			Notes: "--ask-for-approval is a GLOBAL codex flag and must precede the exec subcommand (codex errors if it follows exec); --sandbox is an exec-subcommand flag and is placed after exec instead. The prompt is delivered via stdin — a trailing \"-\" argument — never via a --prompt flag. Operator cli_args are appended after this list; --dangerously-bypass-approvals-and-sandbox, --sandbox danger-full-access, any --ask-for-approval override, and any --json override (bare or \"=false\"-shaped) are dropped with a WARN (see argsafety.go) — the last one because the driver's own NDJSON stream parser requires --json output.",
+			Notes: "--ask-for-approval is a GLOBAL codex flag and must precede the exec subcommand (codex errors if it follows exec); --sandbox is an exec-subcommand flag and is placed after exec instead. The prompt is delivered via stdin — a trailing \"-\" argument — never via a --prompt flag. A native-conversation RESUME uses the `codex exec resume <the thread id codex announced on the prior run>` subcommand (FR-043), which accepts a NARROWER flag set than a fresh `codex exec`: it rejects --sandbox, --color and -C, so those three appear only on a fresh run (the working directory reaches the child via the process cwd). Operator cli_args are appended after this list; --dangerously-bypass-approvals-and-sandbox, --sandbox danger-full-access, any --ask-for-approval override, and any --json override (bare or \"=false\"-shaped) are dropped with a WARN (see argsafety.go) — the last one because the driver's own NDJSON stream parser requires --json output.",
 		},
 		{
 			Cli: gen.ExternalCliToolOpencode,
@@ -323,30 +378,18 @@ func (a *restAPI) listExecutorDefaults(w http.ResponseWriter) {
 				"--dangerously-skip-permissions",
 				"--",
 			},
-			Notes: "opencode's `run` command has no --prompt flag; the prompt is delivered as the POSITIONAL argument placed LAST, after the literal \"--\" end-of-options separator, so opencode's yargs-based argument parser never mistakes prompt text beginning with \"--\" for a flag. It is never sent via stdin (stdin is always an empty reader for opencode runs). --dangerously-skip-permissions is opencode's only non-interactive auto-approve posture in this CLI version (no middle-ground \"auto-accept edits\" flag exists) — Omnipus's own consent routing for opencode remains best-effort/post-hoc regardless of this flag. Operator cli_args are appended before the trailing \"--\"; a redundant --dangerously-skip-permissions or an attempt to change --format away from json is dropped with a WARN (see argsafety.go) — the latter because the driver's own NDJSON stream parser requires --format json output.",
+			Notes: "opencode's `run` command has no --prompt flag; the prompt is delivered as the POSITIONAL argument placed LAST, after the literal \"--\" end-of-options separator, so opencode's yargs-based argument parser never mistakes prompt text beginning with \"--\" for a flag. It is never sent via stdin (stdin is always an empty reader for opencode runs). A native-conversation RESUME adds -s/--session <the session id opencode announced on the prior run> (FR-043) to continue that session — never the freshly generated dispatch RunID, which opencode has never seen. --dangerously-skip-permissions is opencode's only non-interactive auto-approve posture in this CLI version (no middle-ground \"auto-accept edits\" flag exists) — Omnipus's own consent routing for opencode remains best-effort/post-hoc regardless of this flag. Operator cli_args are appended before the trailing \"--\"; a redundant --dangerously-skip-permissions or an attempt to change --format away from json is dropped with a WARN (see argsafety.go) — the latter because the driver's own NDJSON stream parser requires --format json output.",
 		},
 	})
 }
 
-// listAgentSessions returns the union of an agent's sessions from both
-// session stores, deduplicated by session ID. Ordinary chat sessions moved
-// to the shared store (AgentLoop.GetSessionStore — "the shared store for new
-// sessions") some time ago; AgentLoop.GetAgentStore's own doc marks it "kept
-// for legacy per-agent session access". This endpoint used to read
-// GetAgentStore exclusively, so it silently omitted every session minted
-// after that move.
-//
-// This does not call AgentLoop.ListAllSessions: that helper merges the
-// shared store with EVERY registered agent's legacy store to build a
-// cross-agent list, which would mean opening and reading every OTHER
-// agent's session directory off disk just to filter the result back down to
-// this one agent — needless I/O for a single-agent-scoped endpoint. Instead
-// this inlines the same shared-primary/per-agent-secondary merge idiom
-// ListAllSessions and createSessionHTTP already use, scoped to just the two
-// stores that can hold this agent's sessions.
+// listAgentSessions returns an agent's sessions from the one shared session
+// store, filtered by membership (AgentIDs). It does not call
+// AgentLoop.ListAllSessions: that helper builds the cross-agent list, which
+// would read every other agent's sessions just to filter the result back down
+// to this one agent.
 func (a *restAPI) listAgentSessions(w http.ResponseWriter, agentID string) {
 	// agentID is already validated by HandleAgents before reaching here.
-	seen := make(map[string]bool)
 	var metas []*session.UnifiedMeta
 	var errs []error
 
@@ -375,24 +418,12 @@ func (a *restAPI) listAgentSessions(w http.ResponseWriter, agentID string) {
 			// AgentIDs (PostLoad-backfilled from the legacy single AgentID
 			// field on every read, so this is never empty for a real session).
 			if slices.Contains(m.AgentIDs, agentID) {
+				// Final-gate M4: a main the pair is no longer entitled to is
+				// hidden here exactly as in the session list.
+				if !a.mainSessionVisible(m) {
+					continue
+				}
 				metas = append(metas, m)
-				seen[m.ID] = true
-			}
-		}
-	}
-
-	if legacy := a.agentLoop.GetAgentStore(agentID); legacy != nil {
-		legacyMetas, err := legacy.ListSessions()
-		if err != nil {
-			logsafeWarn("rest: list agent sessions: legacy store", "agent_id", agentID, "error", err)
-			errs = append(errs, fmt.Errorf("legacy: %w", err))
-		}
-		for _, m := range legacyMetas {
-			// A session can exist in both stores (a pre-fix duplicate-mint bug
-			// produced exactly that) — the shared-store copy wins.
-			if !seen[m.ID] {
-				metas = append(metas, m)
-				seen[m.ID] = true
 			}
 		}
 	}
@@ -413,7 +444,7 @@ func (a *restAPI) listAgentSessions(w http.ResponseWriter, agentID string) {
 	// a coordinated SPA update, not a decision to make unilaterally here.
 	if len(errs) > 0 {
 		logsafeError("rest: list agent sessions: store read failed", "agent_id", agentID, "errors", errs)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not list sessions: %v", errors.Join(errs...)))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not list sessions", errors.Join(errs...))
 		return
 	}
 
@@ -423,9 +454,21 @@ func (a *restAPI) listAgentSessions(w http.ResponseWriter, agentID string) {
 
 	// Route every session through unifiedMetaToGenSession so required arrays
 	// (Partitions) marshal as [] not null — Zod requires type:array on the SPA.
+	lifecycleStore := a.agentLoop.GetSessionLifecycleStore()
 	genSessions := make([]gen.Session, 0, len(metas))
+	approvals := a.withPendingSecretCards(a.pendingApprovalMains())
 	for _, m := range metas {
-		genSessions = append(genSessions, unifiedMetaToGenSession(m))
+		s := unifiedMetaToGenSession(a.withDisplayTitle(m))
+		stampNeedsAttention(&s, m, approvals)
+		// Sub-agent control plane ADR D4/MAJ-009: lifecycle_state/stop_note,
+		// absent when this session has no LifecycleRecord — same producer
+		// listSessions/getSession use (computeSessionLifecycle, rest_sessions.go).
+		if err := attachSessionRuntimeFields(&s, lifecycleStore, m.ID, a.agentLoop.CurrentBootEpoch()); err != nil {
+			logsafeError("rest: list agent sessions: lifecycle read failed", "session_id", m.ID, "error", err)
+			jsonErr(w, http.StatusInternalServerError, "session lifecycle unavailable")
+			return
+		}
+		genSessions = append(genSessions, s)
 	}
 	jsonOK(w, genSessions)
 }
@@ -571,13 +614,29 @@ func computeAgentStatus(agentID string, activeIDs map[string]bool, soul string, 
 	return "idle"
 }
 
-// applyAgentOverrides copies per-agent execution overrides onto a
-// defaults-seeded wire Agent. MaxToolIterations: per-agent value wins when
-// set (>0); 0 means "inherit" and leaves the effective default in place.
-func applyAgentOverrides(ag *gen.Agent, ac *config.AgentConfig) {
-	if ac.MaxToolIterations > 0 {
-		ag.MaxToolIterations = ac.MaxToolIterations
+// applyAgentMaxToolIterations sets the four #904 tool-iteration fields of a
+// wire Agent from the single resolver (config.ResolveMaxToolIterations):
+// the effective value, its source, the agent's own stored value (absent when
+// it has none) and whether that own value is ignored because it is above the
+// global (D1). ac may be nil (no own value). Every Agent response path
+// (list/get/create/update) funnels through here — no handler re-derives it.
+func applyAgentMaxToolIterations(ag *gen.Agent, defaults *config.AgentDefaults, ac *config.AgentConfig) {
+	r := config.ResolveMaxToolIterations(defaults, ac)
+	ag.MaxToolIterations = r.Effective
+	ag.MaxToolIterationsSource = gen.MaxToolIterationsSource(r.Source)
+	ag.MaxToolIterationsOverrideIgnored = r.OverrideIgnored
+	ag.MaxToolIterationsOverride = nil
+	if r.HasOverride {
+		override := r.Override
+		ag.MaxToolIterationsOverride = &override
 	}
+}
+
+// applyAgentOverrides copies per-agent execution overrides onto a
+// defaults-seeded wire Agent. The tool-iteration limit is resolved against
+// defaults (the global) through applyAgentMaxToolIterations.
+func applyAgentOverrides(ag *gen.Agent, defaults *config.AgentDefaults, ac *config.AgentConfig) {
+	applyAgentMaxToolIterations(ag, defaults, ac)
 	// memory_enabled (ADR-052 FR-039): every response path (list/get/create/
 	// update) funnels through this function, so populating it here once
 	// covers all of them. Previously never set here — the wire field is
@@ -594,14 +653,6 @@ func applyAgentOverrides(ag *gen.Agent, ac *config.AgentConfig) {
 	if v := strings.TrimSpace(ac.Voice); v != "" {
 		ag.Voice = &v
 	}
-	// auto_approve_disabled (ADR-092 D1): echo the persisted per-agent
-	// override of the global Auto-approve default. Off-only by construction
-	// (see AutoApproveDisabled's own doc comment on config.go) — always
-	// echo the actual stored value (false is a meaningful "inherits the
-	// global default", not merely "unset"), matching memory_enabled's
-	// pattern above rather than voice's non-empty-string gate.
-	autoApproveDisabled := ac.AutoApproveDisabled
-	ag.AutoApproveDisabled = &autoApproveDisabled
 	// fallback_models: P-F2 — this was persisted correctly (createAgent/updateAgent
 	// both write ac.FallbackModels to config.json) but never echoed back on ANY
 	// response path (list/get/update all built gen.Agent without ever touching
@@ -614,9 +665,14 @@ func applyAgentOverrides(ag *gen.Agent, ac *config.AgentConfig) {
 	if len(ac.FallbackModels) > 0 {
 		fm := make([]gen.FallbackModel, len(ac.FallbackModels))
 		for i, m := range ac.FallbackModels {
-			fm[i] = gen.FallbackModel{Model: m.Model, Provider: &m.Provider}
+			fm[i] = gen.FallbackModel{Model: m.Model, Provider: &m.Provider, ReasoningEffort: wireEffort(m.ReasoningEffort)}
 		}
 		ag.FallbackModels = &fm
+	}
+	// reasoning_effort: the primary model's stored effort (FR-029), absent
+	// when Not set and for an external-CLI worker (S-77).
+	if !ac.IsExternalCLIWorker() {
+		ag.ReasoningEffort = wireEffort(ac.ReasoningEffort)
 	}
 	// model_params: echo the persisted per-agent sampling-parameter override
 	// (Q1 fix). Previously config.AgentConfig had no ModelParams field at
@@ -639,28 +695,29 @@ func applyAgentOverrides(ag *gen.Agent, ac *config.AgentConfig) {
 }
 
 // buildAgentDefaults populates the execution-related fields from config defaults.
+// applyStoredAgentIdentity copies figure, role, and colour onto the wire
+// agent. Empty or non-enum stored values emit the defaults and are not written.
+func applyStoredAgentIdentity(ag *gen.Agent, ac config.AgentConfig) {
+	fig, role, color := coreagent.WireIdentity(ac.Figure, ac.Role, ac.Color)
+	ag.Figure = fig
+	ag.Role = role
+	ag.Color = &color
+}
+
 func buildAgentDefaults(cfg *config.Config) gen.Agent {
-	// Effective per-turn tool-round cap: mirror the runtime resolution
-	// (pkg/agent/instance.go) — defaults value when set, else 200 — so the
-	// wire never reports a meaningless 0 (a zeroed default was the visible
-	// half of the 2026-07-03 P0: the UI showed and re-persisted 0s).
-	maxIter := cfg.Agents.Defaults.MaxToolIterations
-	if maxIter <= 0 {
-		maxIter = 200
-	}
-	return gen.Agent{
-		TimeoutSeconds:    cfg.Agents.Defaults.TimeoutSeconds,
-		MaxToolIterations: maxIter,
+	ag := gen.Agent{
 		// Required string fields — initialized to empty (overwritten per-agent).
 		Soul: "",
 	}
+	// Tool-iteration limit (#904): seeded as "no own value" from the single
+	// resolver so the required fields are always set; applyAgentOverrides
+	// re-resolves with the agent's own value.
+	applyAgentMaxToolIterations(&ag, &cfg.Agents.Defaults, nil)
+	return ag
 }
 
 func applyAgentEditableFields(agent *gen.Agent, cfg config.AgentConfig) {
-	// The operator view: operator-only safety switches (ADR-092
-	// auto_approve_disabled) are editable here, unlike in the sysagent
-	// read tool's agent view.
-	descriptors := agentmutation.OperatorFieldDescriptors(cfg)
+	descriptors := agentmutation.FieldDescriptors(cfg)
 	wire := make([]gen.AgentFieldDescriptor, 0, len(descriptors))
 	for _, descriptor := range descriptors {
 		row := gen.AgentFieldDescriptor{Editable: descriptor.Editable, Name: descriptor.Name}
@@ -705,16 +762,12 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 		if ac.Description != "" {
 			ag.Description = &ac.Description
 		}
-		if ac.Color != "" {
-			ag.Color = &ac.Color
-		}
-		if ac.Icon != "" {
-			ag.Icon = &ac.Icon
-		}
+		applyStoredAgentIdentity(&ag, ac)
+
 		ag.Type = coreagent.ToWireType(ac)
 		ag.Locked = ac.Locked
 		applyAgentEditableFields(&ag, ac)
-		applyAgentOverrides(&ag, &ac)
+		applyAgentOverrides(&ag, &cfg.Agents.Defaults, &ac)
 		// ADR-066 D2/D9: the persisted rung-1 override plus the three derived
 		// read-only window fields the Advanced panel renders.
 		applyAgentContextWindow(&ag, cfg, &ac)
@@ -722,14 +775,6 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 		setAgentModelProvider(&ag, ac.Model)
 		ag.Status = gen.AgentStatus(computeAgentStatus(ac.ID, activeIDs, soul, ac.Locked))
 		ag.Soul = soul
-		// The wire `default` is DERIVED from the settings singleton
-		// (cfg.Agents.Defaults.DefaultAgentID), never read from the per-entity
-		// ac.Default bool — see updateAgent's singleton-write block for why:
-		// nothing (routing, registry.GetDefaultAgent) has consulted the
-		// per-entity flag since ADR-054 D6.4, so echoing it back here would
-		// silently disagree with which agent actually receives inbound
-		// messages with no more-specific routing rule.
-		ag.Default = boolPtr(ac.ID == cfg.Agents.Defaults.DefaultAgentID)
 		// ADR-068 FR-014 (T068-08): needs_model is derived, never stored.
 		ag.NeedsModel = agentNeedsModel(cfg, &ac)
 		// ADR-067 FR-016/FR-031 (T067-09): degraded_reason is derived too,
@@ -738,11 +783,11 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 		// concern) and they stay separate fields on the wire.
 		ag.DegradedReason = agentDegradedReason(a.providerCatalog, cfg, &ac)
 		if len(ac.Skills) > 0 {
-			skills := make([]string, len(ac.Skills))
-			copy(skills, ac.Skills)
-			ag.Skills = &skills
+			grantedSkills := make([]string, len(ac.Skills))
+			copy(grantedSkills, ac.Skills)
+			ag.Skills = &grantedSkills
 		}
-		setAgentExecutorResponse(&ag, ac.Subagents)
+		setAgentExecutorResponse(&ag, ac.Subagents, cfg, a.homePath)
 		if ac.UpdatedAt != nil {
 			ag.UpdatedAt = ac.UpdatedAt
 		}
@@ -785,42 +830,45 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 			if ac.Description != "" {
 				ag.Description = &ac.Description
 			}
-			if ac.Color != "" {
-				ag.Color = &ac.Color
-			}
-			if ac.Icon != "" {
-				ag.Icon = &ac.Icon
-			}
+			applyStoredAgentIdentity(&ag, ac)
+
 			ag.Type = coreagent.ToWireType(ac)
 			ag.Locked = ac.Locked
 			applyAgentEditableFields(&ag, ac)
-			applyAgentOverrides(&ag, &ac)
+			applyAgentOverrides(&ag, &cfg.Agents.Defaults, &ac)
 			// ADR-066 D2/D9 — see listAgents.
 			applyAgentContextWindow(&ag, cfg, &ac)
 			ag.Model = &model
 			setAgentModelProvider(&ag, ac.Model)
 			ag.Status = gen.AgentStatus(computeAgentStatus(ac.ID, activeIDs, soul, ac.Locked))
 			ag.Soul = soul
-			// Derived from the settings singleton — see listAgents' comment on
-			// the same line shape for the full rationale.
-			ag.Default = boolPtr(ac.ID == cfg.Agents.Defaults.DefaultAgentID)
 			// ADR-068 FR-014 (T068-08): needs_model is derived, never stored.
 			ag.NeedsModel = agentNeedsModel(cfg, &ac)
 			// ADR-067 FR-016/FR-031 (T067-09) — see listAgents.
 			ag.DegradedReason = agentDegradedReason(a.providerCatalog, cfg, &ac)
 			if len(ac.Skills) > 0 {
-				skills := make([]string, len(ac.Skills))
-				copy(skills, ac.Skills)
-				ag.Skills = &skills
+				grantedSkills := make([]string, len(ac.Skills))
+				copy(grantedSkills, ac.Skills)
+				ag.Skills = &grantedSkills
 			}
-			setAgentExecutorResponse(&ag, ac.Subagents)
+			// UAT-1 F-9: the granted names activation would refuse with
+			// SKILL_GRANT_STALE, so the Skills tab can mark them.
+			stale, staleErr := skills.StaleGrants(filepath.Join(a.homePath, "skills"), ac.Skills, ac.SkillGrants)
+			if staleErr != nil {
+				jsonServerFailure(w, http.StatusInternalServerError, "could not check the agent's skill grants", staleErr)
+				return
+			}
+			if len(stale) > 0 {
+				ag.StaleSkillGrants = &stale
+			}
+			setAgentExecutorResponse(&ag, ac.Subagents, cfg, a.homePath)
 			if ac.UpdatedAt != nil {
 				ag.UpdatedAt = ac.UpdatedAt
 			}
 			if state, stateErr := agentstore.New(a.homePath).ReadState(ac.ID); stateErr == nil {
 				ag.Revision = state.Revision
 			} else {
-				jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read agent revision: %v", stateErr))
+				jsonServerFailure(w, http.StatusInternalServerError, "could not read agent revision", stateErr)
 				return
 			}
 			jsonOK(w, ag)
@@ -922,7 +970,7 @@ func (a *restAPI) withToolPolicyCoverageGuard(
 		cfg := a.agentLoop.GetConfig()
 		gaps, err := a.validateCandidateToolPolicyCoverage(cfg, mutate)
 		if err != nil {
-			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("tool policy coverage check: %v", err))
+			jsonServerFailure(w, http.StatusInternalServerError, "tool policy coverage check", err)
 			return false
 		}
 		if len(gaps) > 0 {
@@ -947,12 +995,38 @@ func (a *restAPI) withToolPolicyCoverageGuard(
 			jsonErr(w, http.StatusNotFound, err.Error())
 			return false
 		}
+		var refusal *requestRefusalError
+		if errors.As(err, &refusal) {
+			if refusal.field != "" {
+				jsonErrField(w, http.StatusBadRequest, refusal.msg, refusal.field)
+			} else {
+				jsonErr(w, http.StatusBadRequest, refusal.msg)
+			}
+			return false
+		}
 		logsafeError(persistErrLogMsg, "error_type", fmt.Sprintf("%T", err))
 		jsonErr(w, http.StatusInternalServerError, "could not save config")
 		return false
 	}
 	return true
 }
+
+// requestRefusalError is returned from a persist closure when a check that
+// must run under a.configMu (so it sees the config in force at write time)
+// refuses the request; withToolPolicyCoverageGuard maps it to 400 with msg.
+// Used by the #904 per-agent tool-iteration D10 check (above the global).
+// field, when set, is sent as ErrorResponse.field (the request field the
+// refusal is about).
+type requestRefusalError struct {
+	msg   string
+	field string
+}
+
+// maxToolIterationsFieldName is ErrorResponse.field on every per-agent
+// tool-iteration refusal (#904): the SPA attributes the error by it.
+const maxToolIterationsFieldName = "max_tool_iterations"
+
+func (e *requestRefusalError) Error() string { return e.msg }
 
 type configurationMutationError struct {
 	Result agentstore.MutationResult
@@ -961,6 +1035,31 @@ type configurationMutationError struct {
 
 func (e *configurationMutationError) Error() string { return e.Err.Error() }
 func (e *configurationMutationError) Unwrap() error { return e.Err }
+
+// writeAgentDeletePartial writes the FR-037/C-DELETE partly-deleted failure
+// state for the REST DELETE handler: an owned-data cleanup step failed, so the
+// agent's entity record was deliberately left visible and the same Delete
+// retries idempotently with its current revision. Mirrors the delete_agent
+// tool's partlyDeletedResult (persistence_status: partial) so the SPA's
+// DeleteAgentControl sees the same honest signal on both entry points: a
+// `partial` here always means the record still exists.
+func writeAgentDeletePartial(w http.ResponseWriter, id, errorStage string, warnings []string) {
+	logsafeError("rest: deleteAgent: partly deleted - owned-data cleanup failed",
+		"agent_id", id, "error_stage", errorStage, "warnings", warnings)
+	message := fmt.Sprintf(
+		"agent %q is partly deleted (%s failed); its record remains visible and the same delete retries with its current revision",
+		id, errorStage)
+	if len(warnings) > 0 {
+		message = message + ": " + strings.Join(warnings, "; ")
+	}
+	writeJSON(w, http.StatusInternalServerError, gen.ConfigurationMutationFailureState{
+		PersistenceStatus: gen.ConfigurationMutationFailureStatePersistenceStatusPartial,
+		ActivationStatus:  gen.ConfigurationMutationFailureStateActivationStatusNotAttempted,
+		ChangedFields:     []string{},
+		ErrorStage:        errorStage,
+		Message:           message,
+	})
+}
 
 func writeConfigurationMutationFailure(w http.ResponseWriter, result agentstore.MutationResult) {
 	logsafeError("configuration mutation persistence failed", "stage", result.ErrorStage, "error", result.Message)
@@ -1104,6 +1203,15 @@ func mergeAgentModelParams(existing *config.AgentModelParams, in *agentModelPara
 // deleteAgent handles DELETE /api/v1/agents/{id}.
 // Removes the agent from config.json and reloads the live config.
 // Core (locked) agents cannot be deleted (403).
+// deleteCascadeStore is the live shared session store as the cascade's narrow
+// interface - a true nil interface when there is none (never a typed-nil).
+func (a *restAPI) deleteCascadeStore() systools.AgentSessionStore {
+	if s := a.agentLoop.GetSessionStore(); s != nil {
+		return s
+	}
+	return nil
+}
+
 func (a *restAPI) deleteAgent(w http.ResponseWriter, r *http.Request, id string) {
 	cfg := a.agentLoop.GetConfig()
 	var found *config.AgentConfig
@@ -1171,15 +1279,79 @@ func (a *restAPI) deleteAgent(w http.ResponseWriter, r *http.Request, id string)
 	// runs before the reload returns.
 	deletedName := found.Name
 	deletedType := string(found.Type)
-	// ADR-054 D2/D6 rule 5/§11 checklist item 2: remove the agent's entity
-	// record (entities/agents/<id>.json) FIRST — via the agent store, not by
-	// splicing config.json's agents.list — before any best-effort directory
-	// cleanup below. Dangling referrers (bindings, mailboxes, workspace
-	// core_team) are surfaced for repair per D6 rule 2, never silently
-	// pruned here.
+	// w5-integration (US-5.5/B-20): snapshot the agent's mailbox pairs BEFORE
+	// deletion — after the reload below, each pair's private Mail state gets
+	// the same truthful cascade a direct mailbox removal gets.
+	deletedMailboxPairs := make([]string, 0, len(cfg.Mailboxes[id]))
+	if byWorkspace, ok := cfg.Mailboxes[id]; ok {
+		for wsID, mb := range byWorkspace {
+			if mb.Enabled {
+				deletedMailboxPairs = append(deletedMailboxPairs, wsID)
+			}
+		}
+	}
 	revision := r.URL.Query().Get("revision")
-	deletion, err := agentstore.New(a.homePath).DeleteState(id, revision)
-	if err != nil {
+	// FR-037/C-DELETE: refuse a malformed revision BEFORE any destructive
+	// cleanup, so a bad request never removes owned data (mirrors the
+	// delete_agent tool's agentstore.ValidateRevision precondition).
+	if err := agentstore.ValidateRevision(revision); err != nil {
+		jsonErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// Final-gate H1: a stale revision is refused here too, BEFORE the goals are
+	// ended (that is destructive as well) and before the shared cascade runs.
+	if err := systools.CheckAgentDeleteRevision(a.homePath, id, revision); err != nil {
+		if errors.Is(err, agentstore.ErrRevisionConflict) {
+			jsonErr(w, http.StatusConflict, err.Error())
+			return
+		}
+		// A read failure carries a file path: fixed text to the client, the cause
+		// to the server log. Nothing has been destroyed yet.
+		jsonServerFailure(w, http.StatusInternalServerError, "the agent record could not be read before deleting it", err)
+		return
+	}
+	// UAT E-3 / ADR-086 D9: end the active goals this agent was working as an
+	// honest `cleared` transition naming the deleted agent — never leave them
+	// active for the keeper to push at a missing agent (which re-homed them
+	// onto the default agent), and never erase them.
+	//
+	// FR-037/C-DELETE ordering: this MUST run BEFORE the shared cleanup cascade
+	// below, because that cascade deletes the agent's solely-owned sessions and
+	// goal ownership is resolved FROM the session (EndGoalsOfDeletedAgent →
+	// goalWorkingAgentID → session meta). Ending the goals after the sessions
+	// are gone would leave every goal stuck active with no way to name its
+	// owner. Ending them first is idempotent — a retried Delete finds no active
+	// goal left and is a no-op.
+	//
+	// A failure here is logged at Error rather than failing the request; goals
+	// that could not be ended stay active and are named in the error.
+	if ended, gerr := a.agentLoop.EndGoalsOfDeletedAgent(id, deletedName); gerr != nil {
+		logsafeError("rest: deleteAgent: could not end every active goal the deleted agent was working",
+			"agent_id", id, "goals_ended", ended, "error", gerr)
+	} else if ended > 0 {
+		logsafeInfo("rest: deleteAgent: ended the deleted agent's active goals", "agent_id", id, "goals_ended", ended)
+	}
+	// ADR-054 D2/D6 rule 5/§11 checklist item 2 + FR-037/C-DELETE: the agent's
+	// owned data is cleaned FIRST and its entity record (entities/agents/
+	// <id>.json, via the agent store — not by splicing config.json's
+	// agents.list) removed LAST, through the SAME shared cascade the delete_agent
+	// tool runs (pkg/sysagent/tools::RunAgentDeleteCascade) so the two entry
+	// points cannot drift on the order (spec §C-DELETE: "UI/tool/API same
+	// cleanup-first/record-last cascade"). A cleanup failure leaves the record
+	// visible and the same Delete retries idempotently — the honest
+	// partly-deleted result the SPA's DeleteAgentControl consumes. Dangling
+	// referrers (bindings, mailboxes, workspace core_team) are surfaced for
+	// repair per D6 rule 2, never silently pruned here.
+	cascade := systools.RunAgentDeleteCascade(a.homePath, id, revision, a.deleteCascadeStore(),
+		func(sessionID string) string {
+			return a.stopBeforeDeleteFor(r.Context(), sessionID, actorUsername(r))
+		})
+	if cascade.CleanupFailed {
+		writeAgentDeletePartial(w, id, "cleanup", cascade.Warnings)
+		return
+	}
+	deletion := cascade.Deletion
+	if err := cascade.DeletionErr; err != nil {
 		if errors.Is(err, agentstore.ErrInvalidRevision) {
 			jsonErr(w, http.StatusBadRequest, err.Error())
 			return
@@ -1199,21 +1371,6 @@ func (a *restAPI) deleteAgent(w http.ResponseWriter, r *http.Request, id string)
 	// post-delete reload is rejected and the in-memory roster keeps serving
 	// the agent we just deleted from disk.
 	forgetRosterBaseline(a.homePath)
-	// UAT E-3 / ADR-086 D9: end the active goals this agent was working as an
-	// honest `cleared` transition naming the deleted agent — never leave them
-	// active for the keeper to push at a missing agent (which re-homed them
-	// onto the default agent), and never erase them. Done BEFORE the reload so
-	// no keeper tick can see a live goal whose agent has already left the
-	// registry. The entity delete above already succeeded and cannot be rolled
-	// back, so a failure here is logged at Error rather than failing the
-	// request; goals that could not be ended stay active and are named in the
-	// error.
-	if ended, gerr := a.agentLoop.EndGoalsOfDeletedAgent(id, deletedName); gerr != nil {
-		logsafeError("rest: deleteAgent: could not end every active goal the deleted agent was working",
-			"agent_id", id, "goals_ended", ended, "error", gerr)
-	} else if ended > 0 {
-		logsafeInfo("rest: deleteAgent: ended the deleted agent's active goals", "agent_id", id, "goals_ended", ended)
-	}
 	// Reload the live config so the deleted agent is no longer in memory.
 	// triggerReloadAndWait polls until reload completes (or 5s deadline) so the in-memory config is
 	// updated before the state response is sent back to the caller (prevents a
@@ -1229,6 +1386,15 @@ func (a *restAPI) deleteAgent(w http.ResponseWriter, r *http.Request, id string)
 			"deleted agent may still be resolvable in the runtime registry", "agent_id", id)
 		activation = agentstore.ActivationFailed
 		activationMessage = "agent was deleted from storage but runtime activation was not confirmed"
+	}
+	// w5-integration (US-5.5/B-20): cascade every deleted pair's private
+	// Mail state — epoch advance, grant revocation, cache subtree + watcher
+	// state purge. The response shape (ConfigurationMutationState) cannot
+	// carry per-pair mail-cleanup outcomes — a disclosed contract gap in the
+	// wave report: a failed step is logged with its safe code and stays
+	// retryable through the intent it keeps, never logged into a success.
+	for _, wsID := range deletedMailboxPairs {
+		a.runMailboxRemovalCascade(id, wsID)
 	}
 	// Deny every tool approval the deleted agent is still waiting on. Left
 	// pending, each one keeps its turn blocked and its dialog open in every

@@ -65,13 +65,18 @@ func TestBindRaceDoesNotMatchUnrelatedBootErrors(t *testing.T) {
 	}
 }
 
-// TestAllocateEphemeralPortReturnsUsablePort covers the helper the retry loop
-// calls once per attempt: the port it hands back must be bindable at the
+// TestAllocatePrivateWindowPortReturnsUsablePort covers the helper the retry
+// loop calls once per attempt: the port it hands back must be bindable at the
 // moment it returns (the race is about what happens AFTER, not before).
-func TestAllocateEphemeralPortReturnsUsablePort(t *testing.T) {
-	port := allocateEphemeralPort(t)
-	if port <= 0 || port > 65535 {
-		t.Fatalf("allocateEphemeralPort returned %d, want a valid TCP port", port)
+func TestAllocatePrivateWindowPortReturnsUsablePort(t *testing.T) {
+	port := allocatePrivateWindowPort(t)
+	// The draw must stay inside the private below-ephemeral window — the whole
+	// point of the fix for CI 37943454247. A port at or above portRangeHi is in
+	// the kernel's contested ephemeral range and must never be returned.
+	if port < portRangeLo || port >= portRangeHi {
+		t.Fatalf("allocatePrivateWindowPort returned %d, want a port inside the private window [%d, %d) "+
+			"— outside it the kernel's ephemeral allocator can hand the same port to another process",
+			port, portRangeLo, portRangeHi)
 	}
 
 	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
@@ -81,14 +86,14 @@ func TestAllocateEphemeralPortReturnsUsablePort(t *testing.T) {
 	_ = ln.Close()
 }
 
-// TestAllocateEphemeralPortVariesAcrossCalls: the retry loop is pointless if
-// every attempt is handed the same number back.
-func TestAllocateEphemeralPortVariesAcrossCalls(t *testing.T) {
+// TestAllocatePrivateWindowPortVariesAcrossCalls: the retry loop is pointless
+// if every attempt is handed the same number back.
+func TestAllocatePrivateWindowPortVariesAcrossCalls(t *testing.T) {
 	seen := map[int]bool{}
 	for i := 0; i < 8; i++ {
-		seen[allocateEphemeralPort(t)] = true
+		seen[allocatePrivateWindowPort(t)] = true
 	}
 	if len(seen) == 1 {
-		t.Fatal("allocateEphemeralPort returned the same port on all 8 calls — retrying with a 'fresh' port would retry the same collision")
+		t.Fatal("allocatePrivateWindowPort returned the same port on all 8 calls — retrying with a 'fresh' port would retry the same collision")
 	}
 }

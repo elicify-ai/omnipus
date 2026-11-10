@@ -19,6 +19,7 @@ package gateway
 import (
 	"encoding/json"
 	"strconv"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -31,10 +32,16 @@ import (
 // matters. Only event kinds that produce a session-scoped CONVERSATION
 // frame are handled here; every other kind (whatsapp_pairing, notification,
 // task_status_changed, plan_status_changed, task_run_status — the "not
-// sequenced" list, BE-DESIGN.md §1.2) is untouched and stays on the
-// per-connection eventForwarder path.
+// sequenced" list, BE-DESIGN.md §1.2) stays on the per-connection
+// eventForwarder path for DELIVERY. One exception is state, not delivery:
+// whatsapp_pairing also updates the reconnect cache here, so an outcome
+// emitted while no connection is open is not lost (gate r1 SFH T2-SF-06).
 func (h *WSHandler) hubSyncTap(evt agent.Event) {
 	switch evt.Kind {
+	case agent.EventKindTurnStart:
+		if p, ok := evt.Payload.(agent.TurnStartPayload); ok && p.ChatNotice != nil {
+			h.hubPublishFrame(p.ChatNotice.SessionId, string(generated.WsFrameTypeReplayMessage), *p.ChatNotice, nil)
+		}
 	case agent.EventKindTurnEnd:
 		h.hubTurnEnd(evt)
 	case agent.EventKindSubTurnSpawn:
@@ -59,10 +66,22 @@ func (h *WSHandler) hubSyncTap(evt agent.Event) {
 		h.hubGoalStatusChanged(evt)
 	case agent.EventKindGoalOutcome:
 		h.hubGoalOutcome(evt)
+	case agent.EventKindHelperEvent:
+		h.hubHelperEvent(evt)
 	case agent.EventKindJudgeVerdict:
 		h.hubJudgeVerdict(evt)
 	case agent.EventKindLoopStatusChanged:
 		h.hubLoopStatusChanged(evt)
+	case agent.EventKindLLMRetry:
+		h.hubContextWindowNotice(evt)
+	case agent.EventKindProviderRetry:
+		h.hubProviderRetry(evt)
+	case agent.EventKindProviderStatus:
+		h.hubProviderStatus(evt)
+	case agent.EventKindProviderFallback:
+		h.hubProviderFallback(evt)
+	case agent.EventKindWhatsAppPairing:
+		h.hubWhatsAppPairing(evt)
 	}
 }
 
@@ -177,7 +196,7 @@ func (h *WSHandler) hubBroadcastWithSequencedCopy(sessionID, frameType string, f
 }
 
 // ---------------------------------------------------------------------
-// Tool exec start/end + agent_switched
+// Tool exec start/end
 // ---------------------------------------------------------------------
 
 func (h *WSHandler) hubToolExecStart(evt agent.Event) {
@@ -228,7 +247,9 @@ func (h *WSHandler) hubToolExecEnd(evt agent.Event) {
 		return
 	}
 	status := "success"
-	if p.IsError {
+	if p.Cancelled {
+		status = "cancelled"
+	} else if p.IsError {
 		status = "error"
 	}
 	evtSID := p.SessionID
@@ -239,6 +260,9 @@ func (h *WSHandler) hubToolExecEnd(evt agent.Event) {
 		return
 	}
 	var liveResult any = p.Result
+	if p.Cancelled && p.Result == "" {
+		liveResult = nil // No admitted output is an explicit null, not fake text.
+	}
 	var structuredErr string
 	if status == "error" {
 		if obj, reason, isStructured := parseStructuredToolFailure(p.Result); isStructured {
@@ -290,52 +314,6 @@ func (h *WSHandler) hubToolExecEnd(evt agent.Event) {
 	}
 	h.hubPublishMetaAlsoTo(evtSID, string(generated.WsFrameTypeToolCallResult),
 		hubFrameMeta{kind: hubKindToolResult, key: string(p.ToolCallID), turnID: evt.Meta.TurnID}, data, nil)
-
-	if p.Tool == "switch_agent" && status == "success" {
-		h.hubEmitAgentSwitched(evtSID)
-	}
-}
-
-// hubEmitAgentSwitched mirrors the agent_switched construction embedded in
-// the old per-connection onToolExecEnd (websocket_forward.go) verbatim —
-// see that function's history for the ADR-071 §5.2.1/§5.2.2 rationale this
-// reproduces unchanged.
-func (h *WSHandler) hubEmitAgentSwitched(evtSID string) {
-	defaultAgent := h.agentLoop.GetRegistry().GetDefaultAgent()
-	var defaultName string
-	if defaultAgent != nil {
-		defaultName = defaultAgent.Name
-	}
-	activeAgent, activeOk := h.agentLoop.GetSessionActiveAgent(evtSID)
-	toDefault, sawToDefault := h.agentLoop.GetLastSwitchToDefault(evtSID)
-	if !activeOk {
-		logsafeWarn("websocket: switch_agent succeeded but no active agent found for session",
-			"session_id", evtSID)
-	}
-	if !sawToDefault {
-		logsafeWarn("websocket: switch_agent succeeded but no toDefault record found for session; falling back to id comparison",
-			"session_id", evtSID)
-		toDefault = !activeOk || activeAgent == "" || (defaultAgent != nil && activeAgent == defaultAgent.ID)
-	}
-	switchF := generated.AgentSwitchedFrame{
-		Type:      string(generated.WsFrameTypeAgentSwitched),
-		SessionId: evtSID,
-	}
-	if activeOk && activeAgent != "" && !toDefault {
-		agentName, _ := h.agentLoop.GetRegistry().GetAgentName(activeAgent)
-		switchF.AgentId = &activeAgent
-		if agentName != "" {
-			switchF.Message = &agentName
-		}
-	} else if defaultName != "" {
-		switchF.Message = &defaultName
-	}
-	data, err := json.Marshal(switchF)
-	if err != nil {
-		logsafeError("ws: marshal agent_switched for hub failed", "session_id", evtSID, "error", err)
-		return
-	}
-	h.hubPublishAndDeliver(evtSID, string(generated.WsFrameTypeAgentSwitched), data)
 }
 
 // ---------------------------------------------------------------------
@@ -388,6 +366,11 @@ func (h *WSHandler) hubError(evt agent.Event) {
 	if !ok {
 		return
 	}
+	if notice := p.ChatNotice; notice != nil && p.SessionID != "" && notice.SessionId == p.SessionID &&
+		notice.Type == string(generated.WsFrameTypeReplayMessage) && notice.Role == "system" && notice.Id != nil && *notice.Id != "" {
+		h.hubPublishFrame(p.SessionID, string(generated.WsFrameTypeReplayMessage), *notice, nil)
+		return
+	}
 	errSID := p.SessionID
 	if errSID == "" {
 		errSID = h.hubResolveSessionIDForChat(p.ChatID)
@@ -395,29 +378,17 @@ func (h *WSHandler) hubError(evt agent.Event) {
 	if errSID == "" {
 		return
 	}
-	translated := agent.TranslateLLMError(p.ProviderError, p.Message)
-	code := translated.Code
-	message := translated.Message
-	retryable := translated.Retryable
-	detail := translated.Detail
-	if p.Code != "" {
-		code = agent.LLMErrorCode(p.Code)
-		message = p.Message
-		retryable = agent.IsRetryableCode(code)
-		detail = agent.BuildDetail(p.ProviderError, message)
-	}
+	// MAJ-001: the agent assembles sentence + facts + flag at WireLLMError;
+	// the hub is a thin translator and forwards them untouched (D1: the
+	// detail stays the BuildDetail residual).
+	wire := agent.WireLLMError(p)
 	errF := generated.ErrorFrame{
 		Type:      string(generated.WsFrameTypeError),
 		SessionId: &errSID,
-		Message:   message,
+		Message:   wire.Message,
 	}
 	errF.Payload = &generated.ErrorPayload{
-		LlmError: generated.LLMError{
-			Code:      string(code),
-			Message:   message,
-			Retryable: retryable,
-			Detail:    &detail,
-		},
+		LlmError: wire,
 	}
 	data, err := json.Marshal(errF)
 	if err != nil {
@@ -432,6 +403,114 @@ func (h *WSHandler) hubError(evt agent.Event) {
 			turnID: evt.Meta.TurnID,
 		},
 		data, nil)
+}
+
+// hubProviderRetry forwards the fallback chain's per-candidate retry as one
+// provider_retry frame (provider-messages spec §7.4, C-8/MAJ-102). C-2/
+// MAJ-015: built from the payload's NAMED fields only — LLMRetryPayload.Error
+// is log-only and never read here (the sentinel-scan test proves the raw
+// error text reaches no field). Finding 3 (round 0): error_code is set to
+// the ACTUAL classified code — reason "rate_limit" maps to "rate_limited",
+// anything else passes through as-is.
+func (h *WSHandler) hubProviderRetry(evt agent.Event) {
+	p, ok := evt.Payload.(agent.LLMRetryPayload)
+	if !ok {
+		return
+	}
+	sid := p.SessionID
+	if sid == "" {
+		sid = h.hubResolveSessionIDForChat(evt.Meta.SessionKey)
+	}
+	if sid == "" {
+		return
+	}
+	frame := generated.ProviderRetryFrame{
+		Type:      string(generated.WsFrameTypeProviderRetry),
+		SessionId: sid,
+		TurnId:    evt.Meta.TurnID,
+		Provider:  p.Provider,
+		Model:     p.Model,
+		// json.Marshal renders time.Time as RFC3339Nano in the time's own
+		// location — Format(RFC3339Nano) is byte-identical to that, so the
+		// frame strings match what a decoder of the marshaled payload sees.
+		SentAt:            p.SentAt.Format(time.RFC3339Nano),
+		RetryAt:           p.RetryAt.Format(time.RFC3339Nano),
+		RetryAfterSeconds: int(p.RetryAt.Sub(p.SentAt).Seconds()),
+		Attempt:           p.Attempt,
+		MaxAttempts:       p.MaxAttempts,
+		ErrorCode:         providerRetryErrorCode(p.Reason),
+	}
+	data, err := json.Marshal(frame)
+	if err != nil {
+		logsafeError("ws: marshal provider_retry for hub failed", "session_id", sid, "error", err)
+		return
+	}
+	// Gate finding F3 / spec section 2 (MAJ-108): the retry frame registers
+	// as a projection item under a stable per-turn key - a newer retry for
+	// the same turn replaces the item's frame (the rebuild shows only the
+	// pending attempt), and the item leaves with the turn (forgetTurn at
+	// TurnEnd). Empty-meta publishing never registered the retry with the
+	// projection, so a mid-retry snapshot/rebuild showed a turn with no
+	// visible retry.
+	h.hubPublishMetaAlsoTo(sid, string(generated.WsFrameTypeProviderRetry), hubFrameMeta{
+		kind:   hubKindItem,
+		key:    "provider_retry:" + evt.Meta.TurnID,
+		turnID: evt.Meta.TurnID,
+	}, data, nil)
+}
+
+// providerRetryErrorCode maps the retry payload's reason to the frame's
+// error_code (Finding 3): "rate_limit" → "rate_limited"; any other reason
+// passes through unchanged (presence-only oracle — no other mapping pinned).
+func providerRetryErrorCode(reason string) string {
+	if reason == "rate_limit" {
+		return "rate_limited"
+	}
+	return reason
+}
+
+// hubProviderFallback forwards the fallback-answered event as one
+// provider_fallback frame (provider-messages spec §7.4, MIN-102/MIN-103).
+// C-18: the cooldown-skip fallback path emits the same event, so the frame
+// and the transcript note cover both paths.
+func (h *WSHandler) hubProviderFallback(evt agent.Event) {
+	p, ok := evt.Payload.(agent.ProviderFallbackPayload)
+	if !ok {
+		return
+	}
+	sid := p.SessionID
+	if sid == "" {
+		sid = h.hubResolveSessionIDForChat(evt.Meta.SessionKey)
+	}
+	if sid == "" {
+		return
+	}
+	turnID := evt.Meta.TurnID
+	if p.TurnID != "" {
+		turnID = p.TurnID
+	}
+	frame := generated.ProviderFallbackFrame{
+		Type:             string(generated.WsFrameTypeProviderFallback),
+		SessionId:        sid,
+		TurnId:           turnID,
+		AnsweredModel:    p.AnsweredModel,
+		UnavailableModel: p.UnavailableModel,
+		UnavailableCode:  p.UnavailableCode,
+	}
+	data, err := json.Marshal(frame)
+	if err != nil {
+		logsafeError("ws: marshal provider_fallback for hub failed", "session_id", sid, "error", err)
+		return
+	}
+	// Gate finding F3 / spec section 2 (MAJ-108): same registration as the
+	// retry - the fallback frame is a per-turn item under a stable key,
+	// replaced by a newer fallback for the same turn and cleared with the
+	// turn.
+	h.hubPublishMetaAlsoTo(sid, string(generated.WsFrameTypeProviderFallback), hubFrameMeta{
+		kind:   hubKindItem,
+		key:    "provider_fallback:" + turnID,
+		turnID: turnID,
+	}, data, nil)
 }
 
 // ---------------------------------------------------------------------
@@ -481,6 +560,9 @@ func (h *WSHandler) hubGoalStatusChanged(evt agent.Event) {
 	p, ok := evt.Payload.(agent.GoalStatusChangedPayload)
 	if !ok {
 		return
+	}
+	if p.ChatNotice != nil {
+		h.hubPublishFrame(p.ChatNotice.SessionId, string(generated.WsFrameTypeReplayMessage), *p.ChatNotice, nil)
 	}
 	goalF := generated.GoalStatusFrame{
 		Type:         string(generated.WsFrameTypeGoalStatus),

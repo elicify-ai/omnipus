@@ -189,6 +189,24 @@ func triggerReload(t *testing.T, gw *testutil.TestGateway) {
 			delete(cfgMap, k)
 		}
 	}
+	// #904 D21: agents.defaults.max_tool_iterations and its env-import marker
+	// are blocked paths on PUT /api/v1/config (their one write path is
+	// PUT /api/v1/performance). Drop those two leaves like the other blocked
+	// keys; the one-level merge keeps both on disk (preserveProtectedAgentDefaults).
+	if rawAgents, ok := cfgMap["agents"]; ok {
+		var agents map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(rawAgents, &agents), "triggerReload: agents is not an object")
+		if rawDefaults, ok := agents["defaults"]; ok {
+			var defaults map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal(rawDefaults, &defaults), "triggerReload: agents.defaults is not an object")
+			delete(defaults, "max_tool_iterations")
+			delete(defaults, "max_tool_iterations_env_imported")
+			agents["defaults"], err = json.Marshal(defaults)
+			require.NoError(t, err)
+			cfgMap["agents"], err = json.Marshal(agents)
+			require.NoError(t, err)
+		}
+	}
 	require.NotEmpty(t, cfgMap,
 		"triggerReload: nothing left to PUT after stripping blocked keys")
 	data, err = json.Marshal(cfgMap)

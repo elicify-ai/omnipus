@@ -12,10 +12,13 @@ required:
   - name
   - type
   - locked
+  - figure
+  - role
   - status
   - soul
-  - timeout_seconds
   - max_tool_iterations
+  - max_tool_iterations_source
+  - max_tool_iterations_override_ignored
   - needs_model
 properties:
   revision:
@@ -34,6 +37,15 @@ properties:
     type: string
   editable_fields:
     type: array
+    description: >
+      Per-field editability for this agent. For custom subagent_3p agents
+      the executor descriptors are executor.env_overrides,
+      executor.env_overrides_remove and executor.cli_args (editable; other
+      agents get the reason "Only external-CLI workers have a runtime
+      environment."), executor.cli (never: "Locked after create; create a new
+      agent to switch CLIs."), executor.effective_cli_path (never: "Set in
+      Settings -> Third-party agents.") and executor.kind (never: "Derived
+      from the agent type.").
     items:
       $ref: './AgentFieldDescriptor.yaml'
       x-go-type: AgentFieldDescriptor
@@ -72,16 +84,15 @@ properties:
       Judge/Supervisor souls are editable. Use editable_fields for capability
       and runtime-specific editability.
     example: false
+  figure:
+    $ref: './AgentFigure.yaml'
+    x-go-type: AgentFigure
+  role:
+    $ref: './AgentRole.yaml'
+    x-go-type: AgentRole
   color:
-    type: string
-    pattern: '^#[0-9A-Fa-f]{6}$'
-    description: Hex color code for agent avatar display (e.g. "#D4AF37").
-    example: "#D4AF37"
-  icon:
-    type: string
-    maxLength: 50
-    description: Phosphor icon name for agent avatar (e.g. "Robot", "Octopus").
-    example: "Robot"
+    $ref: './AgentColor.yaml'
+    x-go-type: AgentColor
   model:
     type: string
     maxLength: 256
@@ -103,6 +114,15 @@ properties:
       and never infers one. Empty/absent for agents that predate the migration or
       whose model resolves via the default provider.
     example: "openrouter"
+  reasoning_effort:
+    type: string
+    maxLength: 32
+    description: >
+      Stored effort for the primary model (effort-levels spec FR-029):
+      "" clears it (Not set; an agent riding the default model then inherits the
+      default's effort), "provider_default", a catalog level name, "on" or "off".
+      Omitted keeps the stored value. null is refused. Not checked against the
+      catalog (FR-048).
   description:
     type: string
     description: Short description of the agent's purpose.
@@ -133,38 +153,40 @@ properties:
     type: string
     description: Non-fatal advisory (e.g. config reload failed after create/update).
     example: "config reload failed: ..."
-  timeout_seconds:
-    type: integer
-    minimum: 0
-    description: >
-      Maximum seconds a single agent turn may run before being interrupted.
-      Inherited from agents.defaults.timeout_seconds when not overridden per-agent.
-    example: 300
   max_tool_iterations:
     type: integer
-    minimum: 0
+    minimum: 1
+    maximum: 1000
     description: >
-      Maximum number of tool calls allowed per turn.
-      Inherited from agents.defaults.max_tool_iterations when not overridden.
+      The EFFECTIVE maximum number of tool calls allowed per turn (issue #904,
+      tool-iteration-limit spec D1): the global limit
+      (agents.defaults.max_tool_iterations) unless the agent has its own
+      value lower than or equal to it, in which case the own value. An own
+      value above the global never raises the limit — it is ignored (see
+      max_tool_iterations_override_ignored). max_tool_iterations_source says
+      which rule applied.
     example: 50
-  tools_cfg:
-    $ref: './AgentToolsCfg.yaml'
-  auto_approve_disabled:
+  max_tool_iterations_source:
+    $ref: './MaxToolIterationsSource.yaml'
+    x-go-type: MaxToolIterationsSource
+  max_tool_iterations_override:
+    type: integer
+    minimum: 1
+    description: >
+      The agent's own stored tool-iteration limit (issue #904). Absent when
+      the agent has none (it rides the global). No maximum: a hand-edited
+      stored value may exceed 1000 and is shown truthfully.
+    example: 40
+  max_tool_iterations_override_ignored:
     type: boolean
     description: >
-      ADR-092 per-agent override of the global Auto-approve default
-      (SandboxConfig.auto_approve). Off-only, by construction: this field
-      can only ever mean "force Auto off for this agent's ask-policy tool
-      calls" — there is no value meaning "force it on," so a per-agent
-      write can never loosen past the global default (tighten-only,
-      matching every scope except the per-chat session modifier,
-      SessionModeUpdateFrame). false (the default) means this agent
-      inherits the global default unchanged. Distinct from
-      `tools_cfg.builtin.policies`, which is unchanged by ADR-092 and
-      still governs the ordinary allow/deny/ask value per tool — this
-      field only ever narrows what "ask" DOES for this agent's tools,
-      never which tools are allow/deny/ask.
+      True when the agent's own stored value is above the global limit and
+      therefore has no effect (issue #904, tool-iteration-limit spec D1); the
+      effective value is then the global and max_tool_iterations_source is
+      "global". False otherwise, including when the agent has no own value.
     example: false
+  tools_cfg:
+    $ref: './AgentToolsCfg.yaml'
   fallback_models:
     type: array
     maxItems: 2
@@ -184,20 +206,17 @@ properties:
         provider: "anthropic"
   model_params:
     $ref: './AgentModelParams.yaml'
-  rate_limits:
-    $ref: './AgentRateLimits.yaml'
   stats:
     $ref: './AgentStats.yaml'
-  default:
-    type: boolean
+  skill_grants:
+    type: object
+    additionalProperties:
+      type: string
     description: >
-      Whether this agent is the current global default that handles inbound
-      messages with no more-specific routing rule. This is a COMPUTED value —
-      the backend derives it by comparing the agent's id against the single
-      default-agent setting each time it builds a response; it is never
-      stored per-agent. At most one agent is default at a time. Main only —
-      workers never default.
-    example: false
+      Skill key → generation the grant is bound to (SD-30). Written wholesale
+      by the server at every agent create/update from its own observation of
+      the installed skill folders; requests stay name-only. An absent field or
+      entry is unbound and authorizes nothing.
   skills:
     type: array
     uniqueItems: true
@@ -209,6 +228,19 @@ properties:
       is omitted entirely from the response (the backend does not emit an empty
       array). Absence of the field and an empty array are semantically identical
       (opt-in, default none).
+    example:
+      - "web-research"
+  stale_skill_grants:
+    type: array
+    readOnly: true
+    items:
+      type: string
+    description: >
+      Names from `skills` whose skill is installed but whose grant is bound to
+      a previous skill with that name (or to none), so the agent cannot load it
+      (SKILL_GRANT_STALE). Computed by the server on the agent detail read
+      (GET /agents/{id}); saving the agent again re-binds the grant. A name whose skill is not installed is
+      not listed. Omitted when empty.
     example:
       - "web-research"
   updated_at:

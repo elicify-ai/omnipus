@@ -8,21 +8,50 @@ required:
   - type
   - message
 additionalProperties: false
+dependentRequired:
+  first_message_error:
+    - client_message_id
 properties:
   type:
     type: string
     const: error
   session_id:
     type: string
-    maxLength: 128
+    maxLength: 255
     description: >
       Session this error relates to. Optional: global errors (auth, connection)
       are not tied to a specific session.
+      A message-scoped refusal (client_message_id set, no first_message_error)
+      of a message sent into an existing chat carries that chat. A send that
+      names no chat (the first message of a new chat) has none to name, so its
+      errors carry no session_id.
   message:
     type: string
     minLength: 1
     maxLength: 4096
     description: Human-readable error description.
+  client_message_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: >-
+      The client_message_id of the user message this error is about. With first_message_error it is
+      the first-send outcome. Without first_message_error it marks a message-scoped refusal: the
+      named message was refused (for example an @-recipient send) and the error ends no turn, so a
+      client must not treat it as the end of the chat's running turn.
+  first_message_error:
+    type: string
+    enum:
+      - not_saved
+      - delivery_unknown
+      - answer_not_started
+    description: >-
+      Ordinary ID-bearing first-send outcome. Requires client_message_id.
+      not_saved proves no user entry was written; delivery_unknown means bytes
+      may have reached disk but durable delivery cannot be confirmed.
+      answer_not_started means the entry is durably saved but turn admission
+      failed, and requires its confirmed session_id. General errors and
+      refused client workspace-setup kickoffs omit these first-send fields.
   payload:
     $ref: ./ErrorPayload.yaml
 
@@ -35,7 +64,8 @@ properties:
       increasing and gap-free within the session, assigned by the gateway's per-session
       hub as the single chokepoint through which every session-scoped frame is published.
       Optional: absent on an unsequenced copy of this frame (for example a broadcast
-      delivered to a tab that is not bound to this session) — the client only advances its
-      per-session cursor for frames that carry seq. The client stores the highest seq it
-      has applied per session and sends it back as since_seq on attach_session; frames at
+      delivered to a tab that is not bound to this session) — this seq is dedup state, never itself the resume cursor: the client's cursor is
+      committed only by a completed catch-up (catch_up_complete) and is sent back as
+      since_seq on attach_session (2026-10-26, architect ruling arch-q33 — an earlier
+      sentence here described per-frame cursor advance, which was stale). Frames at
       or below that cursor are ignored, which makes re-delivery idempotent.

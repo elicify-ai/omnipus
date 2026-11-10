@@ -62,4 +62,10 @@ type Criterion struct {
 	// Check is set iff Kind == CriterionKindCheck; nil for every other
 	// kind (no mixed shape, SD-A9).
 	Check *CriterionCheck
+	// Provenance is the optional ADR-080 authority-layer tag
+	// ("stated" | "workspace" | "floor" | "inferred"), the same field
+	// set_goal requires on its dod items (issue #1306, UAT R1: a model
+	// copying set_goal's dod shape into delegate was refused). Carried onto
+	// the child's goal record unchanged; empty means unlabeled.
+	Provenance string
 }

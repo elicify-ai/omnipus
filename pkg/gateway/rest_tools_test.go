@@ -245,11 +245,7 @@ func TestUpdateAgentTools_PolicyOnlyUpdatePreservesMCPBindings(t *testing.T) {
 	// The coverage guard (CLAUDE.md constraint 6) requires an explicit,
 	// wildcard-free entry for every builtin, so enumerate the real catalog
 	// rather than hand-listing a few names that would drift.
-	known := buildKnownBuiltinToolNames()
-	policies := make(map[string]string, len(known))
-	for name := range known {
-		policies[name] = "allow"
-	}
+	policies := fullBuiltinPolicyMap("allow")
 	policies["bash"] = "deny"
 	policiesJSON, err := json.Marshal(policies)
 	require.NoError(t, err)
@@ -315,11 +311,7 @@ func TestUpdateAgentTools_ExplicitMCPServersStillReplace(t *testing.T) {
 		},
 	}))
 
-	known := buildKnownBuiltinToolNames()
-	policies := make(map[string]string, len(known))
-	for name := range known {
-		policies[name] = "allow"
-	}
+	policies := fullBuiltinPolicyMap("allow")
 	policies["bash"] = "deny"
 	policiesJSON, err := json.Marshal(policies)
 	require.NoError(t, err)
@@ -435,6 +427,8 @@ func TestUpdateAgentTools_D86_NeitherShapeStillRejected400(t *testing.T) {
 func TestHandleToolsGET(t *testing.T) {
 	api, cleanup := newTestRestAPI(t)
 	defer cleanup()
+	// FR-125: the listing reads the central builtin registry, wired at boot.
+	api.builtinRegistry = tools.NewBuiltinRegistry()
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/tools", nil)
@@ -647,11 +641,7 @@ func TestUpdateAgentTools_Success(t *testing.T) {
 
 	// Build a complete, explicit policies map: every known static builtin
 	// tool denied, except read_file/search_web which are allowed.
-	known := buildKnownBuiltinToolNames()
-	policies := make(map[string]string, len(known))
-	for name := range known {
-		policies[name] = "allow"
-	}
+	policies := fullBuiltinPolicyMap("allow")
 	policies["bash"] = "deny"
 	policiesJSON, err := json.Marshal(policies)
 	require.NoError(t, err)
@@ -821,11 +811,7 @@ func TestUpdateAgentTools_PoliciesWinsOverLegacyModeVisible(t *testing.T) {
 	seedGlobalCeiling(t, api)
 
 	// A complete, real policies map: everything denied except read_file.
-	known := buildKnownBuiltinToolNames()
-	policies := make(map[string]string, len(known))
-	for name := range known {
-		policies[name] = "allow"
-	}
+	policies := fullBuiltinPolicyMap("allow")
 	policies["read_file"] = "deny"
 	policiesJSON, err := json.Marshal(policies)
 	require.NoError(t, err)

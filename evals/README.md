@@ -117,10 +117,33 @@ go run ./evals/cmd/eval-runner \
 Required environment variables:
 
 ```bash
-export OPENROUTER_API_KEY=sk-or-...   # used for both agent and judge models
-export JUDGE_MODEL=anthropic/claude-sonnet-4.6
-export AGENT_MODEL=z-ai/glm-5-turbo
+# Keys are chosen by the provider of each model (evals/cmd/eval-runner, evalKeyEnvs):
+export MINIMAX_API_KEY_CI=...        # the MiniMax primary (or MINIMAX_API_KEY_EVAL)
+export OPENROUTER_API_KEY_EVAL=...   # the OpenRouter fallback
+
+# Optional overrides, each a <provider>/<model> slug. Without them the agent AND
+# the judge use the repo's single source of truth, tests/e2e/e2e-model.json:
+# its primary as the model and its fallback as the fallback (founder decision
+# 2026-09-27); there is no hardcoded model.
+# export AGENT_MODEL=<provider>/<model>
+# export JUDGE_MODEL=<provider>/<model>
+# export AGENT_FALLBACK_MODEL=<provider>/<model>
+# export JUDGE_FALLBACK_MODEL=<provider>/<model>
 ```
+
+How the fallback works:
+
+- **Agent.** After onboarding the primary, the runner adds the fallback provider
+  (`PUT /api/v1/providers/<fallback provider>`) and gives every agent the fallback in
+  its `fallback_models`. The product falls back per agent only, so without this a
+  primary outage would turn every scenario red.
+- **Judge.** The judge speaks the protocol of its provider (Anthropic messages for the
+  MiniMax plan, OpenAI chat completions for OpenRouter). When the primary judge
+  answers 429, 5xx, 401/403 or cannot be reached, the runner asks the fallback judge.
+  Each JSONL result records `judge_model_used`: the model that actually scored it.
+- **Whole run.** The nightly workflow first runs the job-start check
+  (`scripts/e2e-model.sh preflight`); if the primary is unavailable the whole run uses
+  the fallback for both the agent and the judge, with a warning in the job summary.
 
 ---
 
@@ -159,14 +182,20 @@ distinguish intentional behavior changes from score gaming.
 
 ## Cost and model choice
 
-- Agent model: `z-ai/glm-5-turbo` via OpenRouter (cheap, fast, tool-use capable).
-- Judge model: `anthropic/claude-sonnet-4.6` via OpenRouter (stronger reasoning for
-  rubric evaluation).
-- Estimated cost: 15 scenarios x 2 LLM calls x ~1k tokens each = approximately
-  $0.30-$0.80 per nightly run, well under the $1 target budget.
+- Agent model: the ONE central setting in `tests/e2e/e2e-model.json` — its primary,
+  with its fallback seeded on every agent (swap them by editing that one file).
+- Judge model: the same central setting — the judge is no longer a second,
+  separately chosen model (founder decision 2026-09-27).
+- Estimated cost: 15 scenarios x 2 LLM calls x ~1k tokens each; per-run cost
+  depends on the configured model. To reduce cost, run only one category with
+  `--scenarios evals/scenarios/safety` or set a cheaper AGENT_MODEL/JUDGE_MODEL
+  override for a development run.
 
-To reduce cost further, run only one category with `--scenarios evals/scenarios/safety`
-or use a cheaper judge during development.
+Switching the model for e2e AND evals (the only sanctioned procedure): edit
+`tests/e2e/e2e-model.json` (both entries, primary and fallback) AND add every new model
+id and provider id to `PATTERN` in
+`scripts/check-no-hardcoded-e2e-model.sh` — old ids stay banned, so they can
+never scatter back into live config.
 
 ---
 
@@ -177,7 +206,9 @@ It is not gated on pull requests — eval scores are informational signals, not 
 unless a manual review promotes a regression to PR-blocking status.
 
 Secrets required in repo settings:
-- `OPENROUTER_API_KEY_EVAL` — used by the nightly workflow for both agent and judge.
+- `MINIMAX_API_KEY_CI` — the primary model key (shared with CI; there is no separate
+  eval key). Also used by the job-start check.
+- `OPENROUTER_API_KEY_EVAL` — the fallback model key, for both agent and judge.
 
 ---
 

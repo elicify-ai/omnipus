@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils'
 /**
  * TokenCounter — read-only session token usage + streaming spinner.
  *
- * Extracted with logic unchanged from ChatControls. Reads `sessionTokens` / `isStreaming`
+ * Reads recorded `sessionTokens` (undefined until known) / `isStreaming`
  * from the chat store; same testids (`session-token-counter`, `session-token-
  * value`). Status display, not a control.
  */
@@ -18,7 +18,7 @@ export function TokenCounter({ className }: { className?: string }) {
     <div
       className={cn('flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] shrink-0', className)}
       data-testid="session-token-counter"
-      aria-label={`${sessionTokens} tokens used`}
+      aria-label={sessionTokens === undefined ? 'Session token usage unavailable' : `${sessionTokens} tokens used`}
       role="status"
     >
       <ArrowsClockwise
@@ -30,7 +30,7 @@ export function TokenCounter({ className }: { className?: string }) {
         className={cn('font-mono tabular-nums', isStreaming ? 'text-[var(--color-secondary)]' : undefined)}
         data-testid="session-token-value"
       >
-        {formatTokens(sessionTokens)} tokens
+        {sessionTokens === undefined ? 'Usage unavailable' : `${formatTokens(sessionTokens)} tokens`}
       </span>
     </div>
   )

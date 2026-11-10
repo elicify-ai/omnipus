@@ -13,6 +13,13 @@
 // genuinely exercised, not vacuously satisfied by a broken fixture.
 //
 // Run: CGO_ENABLED=0 go test -tags goolm,stdjson -run '^TestCloseSession' -p 1 ./pkg/agent/
+//
+// session-core U12 port: TestCloseSession_SkipsRecapForDelegatedChild_
+// ButRunsForRealChatSession's Part-B positive lower bound ("a REAL chat session
+// closing must still trigger the recap pipeline") originally used the "explicit"
+// trigger. FR-036 / DEL-08 retired it (recap now fires only for
+// idle/bootstrap/joined), so Part B is ported to the still-valid "idle" trigger
+// with every assertion unchanged.
 package agent
 
 import (
@@ -36,7 +43,7 @@ import (
 // either, and AutoRecapEnabled is seeded true on a fresh install, every
 // delegated child fired a real LLM call (scriptedProvider.Chat here stands
 // in for it) that bills spend no session's Stats ever sees and can
-// overwrite the owning agent's ONE last-session.md with a stale micro-task
+// overwrite the owning agent's ONE summary file with a stale micro-task
 // recap.
 //
 // Defect 3 (MAJOR — unbounded leak): the SAME unconditional CloseSession
@@ -85,7 +92,10 @@ func TestCloseSession_SkipsRecapForDelegatedChild_ButRunsForRealChatSession(t *t
 	al.registry.agents[agentID] = ag
 	al.registry.mu.Unlock()
 
-	lastSessionPath := filepath.Join(ag.Home, ".omnipus", "last-session.md")
+	// WU-21 re-aim (#1197): the recap's summary lands at the (agent, workspace)
+	// pair path; the delegate skip below is asserted against that same target —
+	// where a buggy recap WOULD have written.
+	lastSessionPath := wu21ReaimPairPath(home, agentID)
 
 	// ---------------------------------------------------------------
 	// Part A: a DELEGATED CHILD session must NOT trigger a real recap.
@@ -140,11 +150,11 @@ func TestCloseSession_SkipsRecapForDelegatedChild_ButRunsForRealChatSession(t *t
 	script.mu.Unlock()
 	if callsAfterDelegate != 0 {
 		t.Fatalf("Defect 1 violated: closing a delegated child session made %d real recap LLM call(s), want 0 "+
-			"— unbilled spend invisible to any session's Stats, and a race to overwrite the agent's shared last-session.md",
+			"— unbilled spend invisible to any session's Stats, and a race to overwrite the agent's shared summary file",
 			callsAfterDelegate)
 	}
 	if _, statErr := os.Stat(lastSessionPath); statErr == nil {
-		t.Fatal("Defect 1 violated: last-session.md was written after closing a delegated child session — recap ran for a non-chat session")
+		t.Fatal("Defect 1 violated: a carry-forward summary was written after closing a delegated child session — recap ran for a non-chat session")
 	}
 
 	// Defect 3: the delegated child's session id must never even be inserted
@@ -165,6 +175,7 @@ func TestCloseSession_SkipsRecapForDelegatedChild_ButRunsForRealChatSession(t *t
 		t.Fatalf("NewSession(chat): %v", err)
 	}
 	chatSessionID := chatMeta.ID
+	wu21ReaimStampWorkspace(t, store, chatSessionID) // WU-21 re-aim: carry-forward target.
 	if err := store.AppendTranscript(chatSessionID, session.TranscriptEntry{
 		Role:      "user",
 		Content:   "please summarize what we did today",
@@ -174,7 +185,7 @@ func TestCloseSession_SkipsRecapForDelegatedChild_ButRunsForRealChatSession(t *t
 		t.Fatalf("AppendTranscript(chat): %v", err)
 	}
 
-	al.CloseSession(chatSessionID, "explicit")
+	al.CloseSession(chatSessionID, "idle")
 
 	waitDeadline := time.Now().Add(5 * time.Second)
 	var lastSessionBytes []byte
@@ -190,12 +201,12 @@ func TestCloseSession_SkipsRecapForDelegatedChild_ButRunsForRealChatSession(t *t
 		script.mu.Lock()
 		calls := script.callCount
 		script.mu.Unlock()
-		t.Fatalf("positive lower bound failed: closing a REAL chat session did not produce last-session.md within deadline "+
+		t.Fatalf("positive lower bound failed: closing a REAL chat session did not produce its carry-forward summary within deadline "+
 			"(recap LLM calls so far=%d) — if this fails, the fix broke recap outright instead of scoping it to delegate sessions",
 			calls)
 	}
 	if !strings.Contains(string(lastSessionBytes), recapSentinel) {
-		t.Errorf("last-session.md missing expected recap sentinel; got:\n%s", lastSessionBytes)
+		t.Errorf("carry-forward summary missing expected recap sentinel; got:\n%s", lastSessionBytes)
 	}
 
 	script.mu.Lock()

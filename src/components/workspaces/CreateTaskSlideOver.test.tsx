@@ -409,9 +409,9 @@ describe('CreateTaskSlideOver — worker-type agents are offered as assignees', 
   // must list workers alongside base agents, distinguished by a " · Worker"
   // suffix (mirrors AddAgentPicker's " · leaf" convention).
   const agentsWithWorker = [
-    { id: 'mia', name: 'Mia', type: 'core', default: false },
-    { id: 'jim', name: 'Jim', type: 'core', default: false },
-    { id: 'builder', name: 'Builder Worker', type: 'Subagent', default: false },
+    { figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core', default: false },
+    { figure: 'Omnipus', role: 'general', id: 'jim', name: 'Jim', type: 'core', default: false },
+    { figure: 'Omnipus', role: 'general', id: 'builder', name: 'Builder Worker', type: 'Subagent', default: false },
   ]
 
   it('offers a Subagent worker as an assignee option, distinguished from base agents', async () => {
@@ -489,14 +489,14 @@ describe('CreateTaskSlideOver — worker-type agents are offered as assignees', 
     // worker that IS on the team must be offered, distinguished by the same
     // " · Worker" suffix as a native Subagent.
     vi.mocked(fetchAgents).mockResolvedValue([
-      { id: 'mia', name: 'Mia', type: 'core', default: false },
-      { id: 'ext', name: 'External Runner', type: 'subagent_3p', default: false },
+      { figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core', default: false },
+      { figure: 'Omnipus', role: 'general', id: 'ext', name: 'External Runner', type: 'subagent_3p', default: false },
     ] as never)
     vi.mocked(fetchWorkspaceDelegation).mockResolvedValue({
       workspace_id: 'proj-test',
       edges: [],
       team: ['mia', 'ext'],
-      default_depth: 3,
+      default_depth: 10,
     } as never)
     Element.prototype.scrollIntoView = vi.fn()
 
@@ -522,14 +522,14 @@ describe('CreateTaskSlideOver — assignee picker is workspace-team-scoped (Fix 
     // off-team CORE agent must be excluded exactly like an off-team worker
     // would be — mirrors the backend's workspaceTeamSet.
     vi.mocked(fetchAgents).mockResolvedValue([
-      { id: 'mia', name: 'Mia', type: 'core', default: false },
-      { id: 'offteam', name: 'Off Team Agent', type: 'core', default: false },
+      { figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core', default: false },
+      { figure: 'Omnipus', role: 'general', id: 'offteam', name: 'Off Team Agent', type: 'core', default: false },
     ] as never)
     vi.mocked(fetchWorkspaceDelegation).mockResolvedValue({
       workspace_id: 'proj-test',
       edges: [],
       team: ['mia'],
-      default_depth: 3,
+      default_depth: 10,
     } as never)
     Element.prototype.scrollIntoView = vi.fn()
 
@@ -554,8 +554,8 @@ describe('CreateTaskSlideOver — assignee picker is workspace-team-scoped (Fix 
     // list, same as today's behaviour. The backend still enforces team
     // membership server-side, so this is a graceful degrade, not a bypass.
     vi.mocked(fetchAgents).mockResolvedValue([
-      { id: 'mia', name: 'Mia', type: 'core', default: false },
-      { id: 'offteam', name: 'Off Team Agent', type: 'core', default: false },
+      { figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core', default: false },
+      { figure: 'Omnipus', role: 'general', id: 'offteam', name: 'Off Team Agent', type: 'core', default: false },
     ] as never)
     vi.mocked(fetchWorkspaceDelegation).mockRejectedValue(new Error('network down'))
     Element.prototype.scrollIntoView = vi.fn()
@@ -580,7 +580,7 @@ describe('CreateTaskSlideOver — assignee picker is workspace-team-scoped (Fix 
     // renders next to the Agent picker so the degrade is visible, not
     // indistinguishable from a healthy, unrestricted workspace.
     vi.mocked(fetchAgents).mockResolvedValue([
-      { id: 'mia', name: 'Mia', type: 'core', default: false },
+      { figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core', default: false },
     ] as never)
     vi.mocked(fetchWorkspaceDelegation).mockRejectedValue(new Error('network down'))
 
@@ -591,13 +591,13 @@ describe('CreateTaskSlideOver — assignee picker is workspace-team-scoped (Fix 
 
   it('does NOT show the "team unavailable" hint when the workspace-team query succeeds', async () => {
     vi.mocked(fetchAgents).mockResolvedValue([
-      { id: 'mia', name: 'Mia', type: 'core', default: false },
+      { figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core', default: false },
     ] as never)
     vi.mocked(fetchWorkspaceDelegation).mockResolvedValue({
       workspace_id: 'proj-test',
       edges: [],
       team: ['mia'],
-      default_depth: 3,
+      default_depth: 10,
     } as never)
 
     renderSlideOver()
@@ -612,7 +612,7 @@ describe('CreateTaskSlideOver — assignee picker is workspace-team-scoped (Fix 
       new Promise((resolve) => { resolveDelegation = resolve }) as never,
     )
     vi.mocked(fetchAgents).mockResolvedValue([
-      { id: 'mia', name: 'Mia', type: 'core', default: false },
+      { figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core', default: false },
     ] as never)
 
     renderSlideOver()
@@ -626,7 +626,7 @@ describe('CreateTaskSlideOver — assignee picker is workspace-team-scoped (Fix 
     expect(agentTrigger).toBeDisabled()
 
     // Resolve so the pending promise doesn't leak into the next test.
-    resolveDelegation({ workspace_id: 'proj-test', edges: [], team: ['mia'], default_depth: 3 })
+    resolveDelegation({ workspace_id: 'proj-test', edges: [], team: ['mia'], default_depth: 10 })
     await waitFor(() => expect(agentTrigger).not.toBeDisabled())
   })
 })

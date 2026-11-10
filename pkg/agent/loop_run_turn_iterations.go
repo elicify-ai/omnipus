@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/common"
 )
 
@@ -48,8 +49,11 @@ const (
 type agentLoopRunTurnConductorRunIterations struct {
 	rc                      *agentLoopRunTurnConductor
 	orphanToolMarkupRepairs int
-	responseContent         string
-	ret0                    agentLoopRunTurnConductorFlow
+	// emptyToolEnvelopeRetries counts this turn's retries of a tool_calls
+	// response that carried no tool call (loop_empty_tool_envelope.go).
+	emptyToolEnvelopeRetries int
+	responseContent          string
+	ret0                     agentLoopRunTurnConductorFlow
 }
 
 // agentLoopRunTurnConductorRunIterationsFlow reports how a block stage of agentLoopRunTurnConductorRunIterations wants the conductor to proceed.
@@ -115,6 +119,11 @@ turnLoop:
 			break turnLoop
 		}
 
+		if len(er.cn.rc.rx.rr.rq.ri.rf.response.ToolCalls) > 0 {
+			// A response that carried its tool calls ends an empty-envelope blip:
+			// the retry budget is per blip, not per turn (R2-S1-10).
+			er.cn.emptyToolEnvelopeRetries = 0
+		}
 		if len(er.cn.rc.rx.rr.rq.ri.rf.response.ToolCalls) == 0 || er.cn.rc.rx.rr.rq.ri.gracefulTerminal {
 			switch er.cn.handleInitialResponse() {
 			case agentLoopRunTurnConductorRunIterationsReturn:
@@ -134,7 +143,7 @@ turnLoop:
 			// do NOT increment the outer iteration counter (which would consume the agent's
 			// MaxIterations budget for what is purely a provider-level retry).
 		agentLoopRunTurnConductorRunIterationsRetryResponseLoop1:
-			for strings.TrimSpace(er.cn.responseContent) == "" && emptyResponseRetries < maxEmptyResponseRetries {
+			for strings.TrimSpace(er.cn.responseContent) == "" && emptyResponseRetries < maxEmptyResponseRetries && !er.cn.rc.rx.rr.rq.ri.rf.rt.ts.stopRequested.Load() {
 				emptyResponseRetries++
 				logger.WarnCF("agent", "Empty response from LLM, retrying", map[string]any{
 					"agent_id":  er.cn.rc.rx.rr.rq.ri.rf.rt.ts.agent.ID,
@@ -268,7 +277,16 @@ turnLoop:
 	// rather than count as elapsed time against the horizon.
 	er.cn.rc.rx.rr.rq.ri.rf.rt.al.tickSearchPromotionHorizon(er.cn.rc.rx.rr.rq.ri.rf.rt.ts.manifestBucket())
 
-	if steerMsgs, steerCorrelationIDs := er.cn.rc.rx.rr.rq.ri.rf.rt.al.dequeueSteeringMessagesForScope(er.cn.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
+	if hook := naturalExitSteeringPollTestHook; hook != nil {
+		hook()
+	}
+	// #1534 Q1 = A: a stopped turn never continues for steering; input left
+	// in the queue is handled after the turn, not inside it.
+	if er.cn.rc.rx.rr.rq.ri.rf.rt.ts.stopRequested.Load() {
+		return agentLoopRunTurnConductorNext
+	}
+	if steerMsgs, steerCorrelationIDs, steerItems := er.cn.rc.rx.rr.rq.ri.dequeueSteeringForContinuation(); len(steerMsgs) > 0 {
+		er.cn.rc.rx.rr.rq.ri.rf.rt.ts.opts.roomCost.addInputs(steerCorrelationIDs, len(steerMsgs))
 		logger.InfoCF("agent", "Steering arrived after turn completion; continuing turn before finalizing",
 			map[string]any{
 				"agent_id":       er.cn.rc.rx.rr.rq.ri.rf.rt.ts.agent.ID,
@@ -277,11 +295,21 @@ turnLoop:
 			})
 		er.cn.rc.rx.rr.rq.ri.pendingMessages = append(er.cn.rc.rx.rr.rq.ri.pendingMessages, steerMsgs...)
 		er.cn.rc.rx.rr.rq.ri.pendingSteeringReceipts = append(er.cn.rc.rx.rr.rq.ri.pendingSteeringReceipts, steerCorrelationIDs...)
-		er.cn.rc.rx.finalContent = ""
 		// I2: guard against bypassing the hard iteration ceiling via goto.
 		// If the ceiling is exceeded, fall through to finalization rather than
-		// re-entering turnLoop, which would be invalid at this point anyway.
+		// re-entering turnLoop, which would be invalid at this point anyway;
+		// the completed answer then stays the turn's final content.
 		if er.cn.rc.rx.rr.rq.ri.rf.rt.ts.currentIteration() < 2*er.cn.rc.rx.rr.rq.ri.rf.rt.ts.agent.MaxIterations {
+			// Keep the completed or cut-off answer before continuing for the
+			// steering, including a partial answer's truncation mark. A
+			// synthetic stop notice is not an answer: the follow-up
+			// supersedes it, as in finishToolIteration.
+			keepAnswer := er.cn.rc.rx.finalIsModelAnswer || er.cn.rc.rx.rr.rq.ri.rf.rt.ts.getTruncationReason() != ""
+			if keepAnswer && er.cn.keepAnswerBeforeSteering(er.cn.rc.rx.finalContent, false, steerItems) {
+				return er.cn.ret0
+			}
+			er.cn.rc.rx.finalContent = ""
+			er.cn.rc.rx.finalIsModelAnswer = false
 			goto turnLoop
 		}
 	}
@@ -310,11 +338,14 @@ func (er *agentLoopRunTurnConductorRunIterationsRetryResponse) callAndApplyRetry
 			return agentLoopRunTurnConductorRunIterationsRetryResponseBreak
 		}
 	}
+	// #1534 Q1 = A: same rule as the main call site (prepareIteration).
+	if er.cn.rc.rx.rr.rq.ri.rf.rt.ts.stopRequested.Load() {
+		er.cn.endTurnAtStop()
+		return agentLoopRunTurnConductorRunIterationsRetryResponseBreakL2
+	}
 	er.cn.rc.rx.rr.rq.ri.rf.response = retryResp
 	er.cn.responseContent = er.cn.rc.rx.rr.rq.ri.rf.response.Content
-	if er.cn.responseContent == "" && er.cn.rc.rx.rr.rq.ri.rf.response.ReasoningContent != "" {
-		er.cn.responseContent = er.cn.rc.rx.rr.rq.ri.rf.response.ReasoningContent
-	}
+	// Reasoning is never presented as the answer (effort-levels FR-018).
 	// ADR-087 D4/D6/D9: the empty-response retry's own
 	// successful attempt goes through the SAME success-arm
 	// handler as the other two call sites (§7.9).
@@ -325,6 +356,7 @@ func (er *agentLoopRunTurnConductorRunIterationsRetryResponse) callAndApplyRetry
 			return agentLoopRunTurnConductorRunIterationsRetryResponseContinueL2
 		case truncationActionEnd:
 			er.cn.rc.rx.finalContent = verdict.finalContent
+			er.cn.rc.rx.finalIsModelAnswer = false
 			return agentLoopRunTurnConductorRunIterationsRetryResponseBreakL2
 		}
 	}
@@ -348,6 +380,11 @@ func (er *agentLoopRunTurnConductorRunIterationsRetryResponse) callAndApplyRetry
 
 // prepareIteration prepares one provider iteration and records its usage.
 func (cn *agentLoopRunTurnConductorRunIterations) prepareIteration() agentLoopRunTurnConductorRunIterationsFlow {
+	// #1534 Q1 = A: a Stop claimed at a tool boundary (or anywhere between
+	// rounds) ends the turn here — no wrap-up provider round follows it.
+	if cn.rc.rx.rr.rq.ri.rf.rt.ts.stopRequested.Load() {
+		return cn.endTurnAtStop()
+	}
 	switch cn.rc.rx.rr.rq.ri.beginIteration() {
 	case agentLoopRunTurnIterationReturn:
 		cn.rc.ret0 = cn.rc.rx.rr.rq.ri.ret0
@@ -414,6 +451,11 @@ func (cn *agentLoopRunTurnConductorRunIterations) prepareIteration() agentLoopRu
 		cn.ret0 = agentLoopRunTurnConductorReturn
 		return agentLoopRunTurnConductorRunIterationsReturn
 	}
+	// #1534 Q1 = A: a success that returned after the Stop claim is
+	// ignored — its content, narration and tool calls were never shown.
+	if cn.rc.rx.rr.rq.ri.rf.err == nil && cn.rc.rx.rr.rq.ri.rf.rt.ts.stopRequested.Load() {
+		return cn.endTurnAtStop()
+	}
 
 	switch cn.rc.rx.rr.handleProviderResponse() {
 	case agentLoopRunTurnResponseReturn:
@@ -423,30 +465,16 @@ func (cn *agentLoopRunTurnConductorRunIterations) prepareIteration() agentLoopRu
 		return agentLoopRunTurnConductorRunIterationsReturn
 	}
 
-	// Record the provider-reported usage on the turn. debitLLMUsage also
-	// records ts.lastUsage — the write that used to sit ~90 lines above
-	// this block, guarded by its own
-	// turnStateFromContext(turnCtx) lookup that resolves to this very same
-	// ts (withTurnState(turnCtx, ts) is how turnCtx was built). Two copies
-	// of one accounting step is how the ADR-087 D3.9 refused-attempt debit
-	// came to omit SetLastUsage; there is now exactly one.
-	//
-	// ADR-087 D8: the old lastUsage site also called the now-deleted
-	// SetLastFinishReason("for SubTurn truncation detection") — that
-	// consumer was never built (GetLastFinishReason had zero callers); see
-	// §5.1 of the ADR for the recorded gap.
-	if cn.rc.rx.rr.rq.ri.rf.response != nil {
-		cn.rc.rx.rr.rq.ri.rf.rt.al.debitLLMUsage(cn.rc.rx.rr.rq.ri.rf.rt.ts, cn.rc.rx.rr.rq.ri.rf.rt.llmModel, cn.rc.rx.rr.rq.ri.rf.response.Usage)
-	}
+	// Successful usage was captured once at the provider boundary.
+
 	return agentLoopRunTurnConductorRunIterationsNext
 }
 
 // handleInitialResponse handles orphan markup, steering, and truncated success.
 func (cn *agentLoopRunTurnConductorRunIterations) handleInitialResponse() agentLoopRunTurnConductorRunIterationsFlow {
 	cn.responseContent = cn.rc.rx.rr.rq.ri.rf.response.Content
-	if cn.responseContent == "" && cn.rc.rx.rr.rq.ri.rf.response.ReasoningContent != "" {
-		cn.responseContent = cn.rc.rx.rr.rq.ri.rf.response.ReasoningContent
-	}
+	// Reasoning is never presented as the answer (effort-levels FR-018):
+	// an empty answer takes the empty-response retry, then the sentinel.
 
 	// ── Orphan tool-call markup with NO tool call: repair, or fail loudly ──
 	//
@@ -549,12 +577,17 @@ func (cn *agentLoopRunTurnConductorRunIterations) handleInitialResponse() agentL
 		}
 	}
 
+	if flow := cn.handleEmptyToolEnvelope(); flow != agentLoopRunTurnConductorRunIterationsNext {
+		return flow
+	}
+
 	// FR-7.5/NFR-1: scan the assistant's final answer for references to
 	// memories recalled earlier this turn and emit op:cited events.
 	if cn.rc.rx.rr.citationTracker != nil {
 		cn.rc.rx.rr.citationTracker.EmitCitations(cn.responseContent)
 	}
-	if steerMsgs, steerCorrelationIDs := cn.rc.rx.rr.rq.ri.rf.rt.al.dequeueSteeringMessagesForScope(cn.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
+	if steerMsgs, steerCorrelationIDs, steerItems := cn.rc.rx.rr.rq.ri.dequeueSteeringForContinuation(); len(steerMsgs) > 0 {
+		cn.rc.rx.rr.rq.ri.rf.rt.ts.opts.roomCost.addInputs(steerCorrelationIDs, len(steerMsgs))
 		logger.InfoCF("agent", "Steering arrived after direct LLM response; continuing turn",
 			map[string]any{
 				"agent_id":       cn.rc.rx.rr.rq.ri.rf.rt.ts.agent.ID,
@@ -563,6 +596,11 @@ func (cn *agentLoopRunTurnConductorRunIterations) handleInitialResponse() agentL
 			})
 		cn.rc.rx.rr.rq.ri.pendingMessages = append(cn.rc.rx.rr.rq.ri.pendingMessages, steerMsgs...)
 		cn.rc.rx.rr.rq.ri.pendingSteeringReceipts = append(cn.rc.rx.rr.rq.ri.pendingSteeringReceipts, steerCorrelationIDs...)
+		// The response just completed is a real answer: keep it before the
+		// turn continues for the steering (UAT-A, bundle #1370 at 1380a6d66).
+		if cn.keepAnswerBeforeSteering(cn.rc.rx.rr.rq.ri.rf.response.Content, true, steerItems) {
+			return agentLoopRunTurnConductorRunIterationsReturn
+		}
 		return agentLoopRunTurnConductorRunIterationsContinue
 	}
 	// ADR-087 D4/D6/D9: the one success-arm truncation handler,
@@ -584,6 +622,7 @@ func (cn *agentLoopRunTurnConductorRunIterations) handleInitialResponse() agentL
 			return agentLoopRunTurnConductorRunIterationsContinueL1
 		case truncationActionEnd:
 			cn.rc.rx.finalContent = verdict.finalContent
+			cn.rc.rx.finalIsModelAnswer = false
 			return agentLoopRunTurnConductorRunIterationsBreakL1
 		}
 	}
@@ -620,16 +659,17 @@ func (cn *agentLoopRunTurnConductorRunIterations) surfaceEmptyRetryOutcome() age
 		if outcomeRelabelApplies(llm.Code, cn.rc.rx.rr.rq.ri.rf.rt.ts.outcomeRelabel) {
 			llm.Code = cn.rc.rx.rr.rq.ri.rf.rt.ts.outcomeRelabel
 			llm.Message = UserMessageForCode(cn.rc.rx.rr.rq.ri.rf.rt.ts.outcomeRelabel)
+			llm.ProviderMessage = false
 		}
 
 		cn.rc.rx.rr.rq.ri.rf.rt.al.emitEvent(
 			EventKindError,
 			cn.rc.rx.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.error"),
-			ErrorPayload{Stage: "llm_empty_retry", Code: string(llm.Code), Message: llm.Message, ProviderError: pe, ChatID: cn.rc.rx.rr.rq.ri.rf.rt.ts.opts.ChatID, SessionID: string(cn.rc.rx.rr.rq.ri.rf.rt.ts.routingSessionID)},
+			ErrorPayload{Stage: "llm_empty_retry", Code: string(llm.Code), Message: llm.Message, Detail: llm.Detail, ProviderError: pe, ChatID: cn.rc.rx.rr.rq.ri.rf.rt.ts.opts.ChatID, SessionID: string(cn.rc.rx.rr.rq.ri.rf.rt.ts.routingSessionID)},
 		)
-		// FR-002: persist this provider error to the transcript (write
-		// choke point).
-		cn.rc.rx.rr.rq.ri.rf.rt.ts.appendClassifiedError(EventKindError.String(), "runTurn", llm)
+		// Already translated provider failures use the same trusted write
+		// seam as the main call, preserving the live sentence on replay.
+		cn.rc.rx.rr.rq.ri.rf.rt.ts.appendClassifiedError(EventKindError.String(), "provider", llm)
 		// ADR-087 D6.8: no further provider call follows this error
 		// either — runTurn's deferred preserveTruncatedAccumulator
 		// keeps a D6 continuation left unresolved by a prior round.
@@ -644,11 +684,16 @@ func (cn *agentLoopRunTurnConductorRunIterations) surfaceEmptyRetryOutcome() age
 // finishTextResponse finishes a text response or releases a repaired tool call for dispatch.
 func (cn *agentLoopRunTurnConductorRunIterations) finishTextResponse() agentLoopRunTurnConductorRunIterationsFlow {
 	if len(cn.rc.rx.rr.rq.ri.rf.response.ToolCalls) == 0 || cn.rc.rx.rr.rq.ri.gracefulTerminal {
-		if strings.TrimSpace(cn.responseContent) == "" {
+		answered := strings.TrimSpace(cn.responseContent) != ""
+		if !answered {
 			cn.responseContent = defaultResponse
 			cn.rc.rx.rr.rq.ri.rf.rt.ts.markTurnFailed()
+			// H5: one line carrying what actually came back (shape only,
+			// no content) so the next empty-answer defect is diagnosable.
+			rt := cn.rc.rx.rr.rq.ri.rf.rt
 			logger.WarnCF("agent", "LLM returned empty response after retry; using fallback message",
-				map[string]any{"agent_id": cn.rc.rx.rr.rq.ri.rf.rt.ts.agent.ID, "iteration": cn.rc.rx.rr.rq.ri.rf.rt.iteration})
+				emptyAnswerLogFields(rt.ts.agent.ID, rt.iteration, rt.ts.lastProducedProvider,
+					rt.ts.lastProducedModel, rt.llmModel, cn.rc.rx.rr.rq.ri.rf.response))
 		}
 		// ADR-087 D6.10: this round did not go through
 		// evaluateTruncatedSuccess (it was not itself truncated, or it
@@ -665,6 +710,7 @@ func (cn *agentLoopRunTurnConductorRunIterations) finishTextResponse() agentLoop
 			cn.rc.rx.rr.rq.ri.rf.rt.ts.resolveContinuation()
 		}
 		cn.rc.rx.finalContent = cn.responseContent
+		cn.rc.rx.finalIsModelAnswer = answered
 		logger.InfoCF("agent", "LLM response without tool calls (direct answer)",
 			map[string]any{
 				"agent_id":      cn.rc.rx.rr.rq.ri.rf.rt.ts.agent.ID,
@@ -684,7 +730,27 @@ func (cn *agentLoopRunTurnConductorRunIterations) finishTextResponse() agentLoop
 
 // dispatchToolCalls records and dispatches the iteration's tool calls.
 func (cn *agentLoopRunTurnConductorRunIterations) dispatchToolCalls() agentLoopRunTurnConductorRunIterationsFlow {
-	cn.rc.rx.rr.recordToolCalls()
+	if err := cn.rc.rx.rr.recordToolCalls(); err != nil {
+		rt := cn.rc.rx.rr.rq.ri.rf.rt
+		// #1178 (amendment §4.2): recordToolCalls already wrapped, marked the
+		// turn failed, emitted the could-not-save notice and classified the
+		// transcript error for a failed continuation flush — running it
+		// through contextWindowTurnExit again would double-report. End the
+		// turn on the handled failure as-is.
+		var notSaved *messageNotSavedError
+		if errors.As(err, &notSaved) {
+			cn.rc.ret0 = turnResult{status: TurnEndStatusError}
+			cn.rc.ret1 = err
+			cn.rc.rx.rr.rq.ri.turnStatus = TurnEndStatusError
+			cn.ret0 = agentLoopRunTurnConductorReturn
+			return agentLoopRunTurnConductorRunIterationsReturn
+		}
+		var status TurnEndStatus
+		cn.rc.ret0, status, cn.rc.ret1 = rt.al.contextWindowTurnExit(rt.ts, rt.iteration, rt.llmModel, err)
+		cn.rc.rx.rr.rq.ri.turnStatus = status
+		cn.ret0 = agentLoopRunTurnConductorReturn
+		return agentLoopRunTurnConductorRunIterationsReturn
+	}
 
 	// setGoalSucceededThisRound tracks whether a set_goal call in THIS
 	// model response already registered (or updated) the goal record — the
@@ -708,4 +774,82 @@ func (cn *agentLoopRunTurnConductorRunIterations) dispatchToolCalls() agentLoopR
 		return agentLoopRunTurnConductorRunIterationsBreakL1
 	}
 	return agentLoopRunTurnConductorRunIterationsNext
+}
+
+// naturalExitSteeringPollTestHook is a test-only seam fired at the turn's
+// natural exit, just before the steering queue is polled there - so a test
+// can queue a follow-up that reaches this poll and not the earlier
+// direct-response one. nil in production.
+var naturalExitSteeringPollTestHook func()
+
+// keepAnswerBeforeSteering records a direct (tool-free) answer the model
+// completed before steering continued the same turn, exactly as a tool-call
+// round records its narration (agentLoopRunTurnResponse.recordToolCalls):
+// into the model window and this turn's working messages, so the next call
+// builds on the answer instead of redrafting it, and as its own chat
+// transcript entry carrying the round's live message id and usage, so a
+// reload still shows it. Without this the continuation dropped the answer
+// (UAT-A on bundle #1370 at 1380a6d66: a follow-up sent into a running reply
+// left only the second reply after a reload, and the model redrafted the
+// first). Reports true when recording failed and the turn has been ended.
+//
+// An auto-continued answer (ADR-087 D6) is kept whole: at the direct-response
+// site the round's content is only the continuation, so the accumulated
+// prefix is folded in (fromDirectResponse); at the natural exit finalContent
+// already holds it. The continuation chain is taken out of the working
+// messages (the model sees the kept answer once) and the accumulator is
+// retired, so a later answer is not prefixed with this one. If saving fails,
+// the original unprocessed ordinary steering items return to the queue before
+// the save error leaves this stage, using Continue's restoration policy.
+func (cn *agentLoopRunTurnConductorRunIterations) keepAnswerBeforeSteering(content string, fromDirectResponse bool, steeringItems []steeringQueueItem) bool {
+	ri := cn.rc.rx.rr.rq.ri
+	ts := ri.rf.rt.ts
+	truncationReason := ts.getTruncationReason()
+	if response := ri.rf.response; fromDirectResponse && response != nil && isTruncatedFinishReason(response.FinishReason) {
+		// Steering wins before the ordinary truncation evaluator runs.
+		// Keep this answer's own cut-off mark without auto-continuing it.
+		truncationReason = truncationReasonMaxOutputTokens
+	}
+	if fromDirectResponse && ts.continuationAccumulated() != "" {
+		content = ts.appendToAccumulator(content)
+	}
+	if chain := cn.rc.rx.rr.continuationChain; len(chain) > 0 {
+		ri.messages = stripContinuationChain(ri.messages, chain)
+		cn.rc.rx.rr.continuationChain = nil
+	}
+	err := func() error {
+		if content != "" {
+			msg := providers.Message{Role: "assistant", Content: content}
+			if resp := ri.rf.response; resp != nil && resp.Content == content {
+				msg.ReasoningContent = resp.ReasoningContent
+				msg.ThinkingBlocks = append([]string(nil), resp.ThinkingBlocks...)
+			}
+			if _, err := ts.appendWindowMessage(msg, windowProducerAssistant); err != nil {
+				return err
+			}
+			ri.messages = append(ri.messages, msg)
+		}
+		ts.appendIntermediateAssistantTranscriptImpl(content, truncationReason)
+		if err := ts.callAccountingError(); err != nil {
+			return err
+		}
+		if content != "" || truncationReason != "" {
+			ts.markLastStreamerTranscriptPersisted()
+		}
+		ts.retireContinuationAccumulator()
+		ts.setTruncationReason("")
+		return nil
+	}()
+	if err == nil {
+		return false
+	}
+	rt := ri.rf.rt
+	var status TurnEndStatus
+	cn.rc.ret0, status, cn.rc.ret1 = rt.al.contextWindowTurnExit(rt.ts, rt.iteration, rt.llmModel, err)
+	ri.turnStatus = status
+	// This batch has not reached injection. Restore original ordinary items,
+	// not flattened copies; consumed wakes follow Continue's existing policy.
+	rt.al.steering.prependItemsScope(ts.sessionKey, restorableSteeringItems(steeringItems))
+	cn.ret0 = agentLoopRunTurnConductorReturn
+	return true
 }

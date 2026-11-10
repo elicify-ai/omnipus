@@ -26,10 +26,13 @@ properties:
       - linked
       - timeout
       - error
+      - stopped
     description: >
       Pairing lifecycle: waiting (connecting to WhatsApp), code (a QR is available to
       scan), linked (device successfully paired), timeout (the displayed QR expired
-      and a fresh one follows), error (pairing failed — see message).
+      and a fresh one follows), error (pairing failed — see message), stopped (the
+      user pressed Stop in the chat that started the pairing; no further codes
+      follow — spec omnipus-system-agent BDD-8.8, FR-081).
   qr:
     type: string
     description: >
@@ -39,3 +42,17 @@ properties:
   message:
     type: string
     description: Optional human-readable detail, e.g. the error reason when status is "error".
+  request_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: >
+      Spec omnipus-system-agent K10 (FR-081). Correlates the pairing with
+      the chat request that started it (QR pairing in chat, WU-7).
+  session_id:
+    type: string
+    minLength: 1
+    maxLength: 255
+    description: >
+      Spec K10. The chat session the pairing belongs to, when it was
+      started from a chat.

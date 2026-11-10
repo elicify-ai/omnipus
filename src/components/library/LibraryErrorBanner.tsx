@@ -1,9 +1,8 @@
 // LibraryErrorBanner — the ONE error-presentation pattern for Library
 // mutations that don't already have a persistent status surface of their own
 // (Rename / Move / Copy / Upload). Deliberately mirrors the app-wide "form
-// mutation failed" banner already used elsewhere (CreateAgentWizard.tsx,
-// ExecutorSelector.tsx's runner-test-request-error, AgentProfile.tsx's
-// locked-banner): a bordered, tinted block with an icon and the server's own
+// mutation failed" banner already used elsewhere (ExecutorSelector.tsx's
+// runner-test-request-error, AgentProfile.tsx's locked-banner): a bordered, tinted block with an icon and the server's own
 // message, `role="alert"` so it's announced immediately — NOT a second,
 // invented error style. A failed action must leave the user with a message
 // they can act on (the server's actual reason where available), never a

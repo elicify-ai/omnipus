@@ -42,6 +42,16 @@ A **view** is a saved query over one record type, or over every note in scope. A
 
 Numbers with units total per unit, never across them: amounts in two currencies report two totals, not one blended figure.
 
+Saved views are stored in `.omnipus-vault/views/`. A view is shown in the folder named by its declared `source`, whether it was imported or authored, when that source is a clean relative path within the knowledge base, outside `.omnipus-vault/`, and its folder still exists. Neither that folder nor any folder between it and the knowledge base’s top folder may be a separate knowledge base. Otherwise, the view is shown in the knowledge base’s top folder. Deleting only the source `.base` file does not move the view.
+
+When an agent lists that folder with `list_directory`, each accepted view placed there adds a line after the folder’s files and folders, for example `VIEW: Outstanding (kind summary, view invoices--outstanding, knowledge base Finance vault)`. The kind part is left out when the view file declares no kind. View lines use the same `offset` and `limit` pages as files and folders; follow `next_offset` to see the rest. Line breaks and other control characters in displayed names and labels are quoted and escaped, for example `\n` for a newline, so each view stays on one line. Agent view lines appear only inside knowledge bases found under the working folder or a folder granted by the agent’s file-access policy; folders outside a knowledge base get no `VIEW:` lines. A knowledge base inside another is not found through the outer one; it can contribute views only if it is found separately under another granted folder.
+
+An agent’s folder listing, the Library’s folder listing and Saved views list, previews of `.base` files, opened views, Library search inside a knowledge base, `knowledge_find` and `knowledge_describe` use the same bounded load to select record types and saved views. This load accepts only ordinary files, not links or other special files. In each of `.omnipus-vault/records/` and `.omnipus-vault/views/`, it considers non-hidden `.yaml` and `.yml` entries in filename order; only the first 128 candidates can be read, and a rejected candidate still uses a place. Each file has a 256 KiB size limit. Record type files are loaded first, followed by view files, using one shared 4 MiB byte budget for that knowledge base’s load. Bytes read from files that are later rejected also use this budget. A rejected record type can also prevent views that depend on it from loading.
+
+A view rejected by this load produces no saved-view row and cannot be opened as a view on these serving paths; its YAML file can still appear as an ordinary file. `knowledge_describe` reports rejected view files when its views section is included. If at least one view loads, the Saved views list shows the rejected-file count and the first rejection reason. If no views load, that notice is hidden; use `knowledge_describe` for the rejection details. Other reads of record type files do not apply these limits and do follow links: `knowledge_read` when it checks a note’s record type, `knowledge_configure` and `knowledge_edit` when they change the knowledge base, and the Library when it reads a record type or opens or creates a record. Opening a view, Library search inside a knowledge base, and `knowledge_find` may also rebuild their record index. That rebuild reads record type files without these limits and follows links to individual record type files. A view rejected by the bounded load remains unavailable on these serving paths.
+
+For this bounded load, any of `.omnipus-vault/`, `.omnipus-vault/records/` and `.omnipus-vault/views/` that exists must be a real folder; missing folders are treated as empty. If either control folder is a link, an agent’s folder listing shows no `VIEW:` lines for that knowledge base, while the Saved views list, previews of `.base` files, opening a view, Library search inside the knowledge base, `knowledge_find` and `knowledge_describe` fail with an error for that knowledge base. The Library’s ordinary folder listing still returns its files and folders, without added saved-view rows. To fix the linked-folder refusal, replace the link with a real folder that holds the files.
+
 ## Reading and searching
 
 Selecting a note opens it in the preview pane as a rendered document, not raw markup, with a side rail listing the outline and the linked mentions. Press **Edit** to see and change the source. Renaming or moving a note rewrites every link that pointed to it, in bodies and properties.
@@ -61,6 +71,8 @@ A note can show things that live elsewhere with the `![[...]]` embed notation. E
 | A fenced ```mermaid block | The rendered diagram |
 | `$x$` or `$$x$$` | Rendered mathematics |
 | `![](https://www.youtube-nocookie.com/...)` | The video, after you press play |
+
+**A saved-view embed needs a real `.base` file.** Omnipus finds saved views whose `source` matches that file, then matches the text after `#` to a view's display label (or its exact saved-view name as a fallback); it does not build the view from the `.base` file's contents. An authored view saved without `source` appears in the knowledge base's **Saved views** list but cannot be embedded. To embed one, give `knowledge_configure`'s `create_view` or `write_view` a collection-relative `source` such as `Projects.base`, then use `![[Projects.base#View label]]`; Omnipus attempts to create a starter file if needed and warns if it cannot. Imported views retain their original `.base` path as `source`: keep that file and embed its path plus the view label, as in the table above.
 
 Embedding one note inside another works one level deep; the transcluded note's own embeds appear as links. An HTML file, a plain-text file, or a diagram file such as `chart.mmd` stays a link rather than rendering inline. A missing target is named in words, and agents reading the note are told the same.
 
@@ -87,6 +99,6 @@ There is no import screen in the app.
 
 - [library](library.md) — the file tree a knowledge base lives in, and the Media tab for binary files.
 - [workspaces](workspaces.md) — where each knowledge base belongs, and who can reach it.
-- [agents](agents.md) — the four base agents and how they take notes on your behalf.
+- [agents](agents.md) — the built-in roster and the agents that take notes on your behalf.
 - [tools](tools.md) — the Allow, ask, and deny settings for each agent's knowledge tools.
 - [memory](memory.md) — what the team remembers; a different store from your knowledge bases.

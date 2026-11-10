@@ -36,3 +36,54 @@ properties:
       US-8 retired). Rejected below 1. Omitted = unchanged (partial
       update).
     example: 20
+  goal_reminder_quiet_seconds:
+    type: integer
+    minimum: 30
+    maximum: 3600
+    description: >
+      New idle-only quiet window in seconds, 30 through 3600. Default 60
+      when absent from configuration, not a PUT default. Omitted = unchanged.
+      No off value. Live on the next fixed 30-second sweep without restart.
+    example: 60
+  goal_stalled_checkin_enabled:
+    type: boolean
+    description: >
+      Enable or disable stalled busy-work check-ins. Omitted = unchanged;
+      explicit false is saved. Disabling does not disable idle reminders
+      or discard goal_stalled_checkin_minutes. Live without restart.
+    example: true
+  goal_stalled_checkin_minutes:
+    type: integer
+    minimum: 5
+    maximum: 1440
+    description: >
+      New busy-work stall threshold in minutes, independent of idle quiet.
+      Omitted = unchanged. Reject out-of-range values even when check-ins are
+      disabled; disabling retains the chosen minutes. Live without restart.
+    example: 30
+  max_tool_iterations:
+    type: integer
+    minimum: 1
+    maximum: 1000
+    description: >
+      New global tool-iteration limit (issue #904). Omitted = unchanged
+      (partial update). When the new value is below some agents' own values,
+      confirmed_lowering must list exactly those agents (see below), or the
+      PUT is refused with 409.
+    example: 200
+  confirmed_lowering:
+    type: array
+    items:
+      $ref: './MaxToolIterationsConfirmedAgent.yaml'
+      x-go-type: MaxToolIterationsConfirmedAgent
+    description: >
+      The exact agent snapshot (id + old value) the admin saw in
+      GET /performance/max-tool-iterations/preview and confirmed (spec D11,
+      D16). Absent = empty. At write time the server recomputes the set of
+      agents whose own value is above the new max_tool_iterations; the PUT
+      succeeds only if that set equals this list compared as a set keyed by
+      agent_id — order-independent (same ids, and for each id the same old
+      value). Naming the same agent_id twice is malformed (400). Any
+      difference — an extra agent, a missing agent, a changed old value, or
+      this field absent while agents would be lowered — is drift: nothing is
+      written and the PUT answers 409 MaxToolIterationsLoweringConflict.

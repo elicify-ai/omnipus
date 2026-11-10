@@ -55,13 +55,14 @@ func seededRosterPolicies(t *testing.T) (map[string]map[string]config.ToolPolicy
 func TestEnvironmentSetup_EffectivePolicyPerRole(t *testing.T) {
 	policies, types, global := seededRosterPolicies(t)
 	want := map[string]string{
-		"mia":            "ask",
-		"worker":         "ask",
-		"admin":          "ask",
-		"jim":            "deny",
-		"ava":            "deny",
-		"planner":        "deny",
-		"researcher":     "deny",
+		"mia":    "ask",
+		"worker": "ask",
+		// WU-2: spec OSA-1 / §6.5 / FR-022 replace Ava/Admin with
+		// Omnipus; it rides the Ask ceiling with no per-agent Ask.
+		"omnipus":        "ask",
+		"jim":            "ask", // SPEC.md Table: environment_setup is Ask for Main.
+		"planner":        "ask", // SPEC.md Table: environment_setup is Ask for Worker.
+		"researcher":     "ask", // SPEC.md Table: environment_setup is Ask for Worker.
 		"judge":          "deny",
 		"plansupervisor": "deny",
 	}
@@ -124,10 +125,15 @@ func TestEnvironmentSetup_CustomStoredAskHoldsUnderCeilingChanges(t *testing.T) 
 func TestEnvironmentSetup_RaisedCeilingLeavesStoredAsk(t *testing.T) {
 	policies, types, _ := seededRosterPolicies(t)
 	allowCeiling := map[string]config.ToolPolicy{"environment_setup": config.ToolPolicyAllow}
-	for _, id := range []string{"mia", "worker", "admin"} {
+	// SPEC.md Table: all five ordinary roles retain their stored setup Ask under a raised ceiling.
+	for _, id := range []string{"mia", "worker", "jim", "planner", "researcher"} {
 		stored, ok := policies[id]
 		if !ok {
 			t.Fatalf("seeded roster missing agent %q", id)
+		}
+		// SPEC.md Table: the setup Ask is per-agent posture, not just an inherited global Ask.
+		if got := stored["environment_setup"]; got != config.ToolPolicyAsk {
+			t.Errorf("%s stored environment_setup = %q, want explicit ask", id, got)
 		}
 		polCfg := &ToolPolicyCfg{Policies: stored, GlobalPolicies: allowCeiling}
 		got := EffectiveToolPolicy(polCfg, ScopeGeneral, types[id], "environment_setup")
@@ -135,7 +141,20 @@ func TestEnvironmentSetup_RaisedCeilingLeavesStoredAsk(t *testing.T) {
 			t.Errorf("%s under a raised allow ceiling = %q, want ask (the stored per-agent ask must hold)", id, got)
 		}
 	}
-	for _, id := range []string{"jim", "ava", "planner", "researcher"} {
+	// Omnipus rides the raised ceiling (spec §6.5 / FR-022), not a
+	// stored Ask. Pin both the stored absence and the resolved value.
+	omnipus, present := policies["omnipus"]
+	if !present {
+		t.Fatal("seeded roster missing Omnipus")
+	}
+	if stored, exists := omnipus["environment_setup"]; exists {
+		t.Fatalf("Omnipus must ride the ceiling, got per-agent environment_setup=%q", stored)
+	}
+	if got := EffectiveToolPolicy(&ToolPolicyCfg{Policies: omnipus, GlobalPolicies: allowCeiling}, ScopeGeneral, types["omnipus"], "environment_setup"); got != "allow" {
+		t.Errorf("Omnipus under a raised ceiling = %q, want allow", got)
+	}
+	// SPEC.md Founder exclusion: hidden system roles retain their stored setup Deny.
+	for _, id := range []string{"judge", "plansupervisor"} {
 		polCfg := &ToolPolicyCfg{Policies: policies[id], GlobalPolicies: allowCeiling}
 		got := EffectiveToolPolicy(polCfg, ScopeGeneral, types[id], "environment_setup")
 		if got != "deny" {

@@ -1,0 +1,10 @@
+=== RUN   TestSessionCoreConv_Del09LegacyRuntimeReaderIsAbsent
+    sessioncore_conv_del09_test.go:48: 
+        	Error Trace:	/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/session-core-red-conv-20261009/pkg/session/sessioncore_conv_del09_test.go:48
+        	Error:      	Should be false
+        	Test:       	TestSessionCoreConv_Del09LegacyRuntimeReaderIsAbsent
+        	Messages:   	DEL-09: UnifiedStore.migrateLegacy must be deleted once CONV is the sole legacy reader
+--- FAIL: TestSessionCoreConv_Del09LegacyRuntimeReaderIsAbsent (0.04s)
+FAIL
+FAIL	github.com/elicify-ai/omnipus/pkg/session	2.365s
+FAIL

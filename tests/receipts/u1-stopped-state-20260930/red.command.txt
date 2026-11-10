@@ -1,0 +1,4 @@
+cwd=/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/u1-stopped-state
+pre_change_head=842574ef9d9e6d5a257ca6646bcc9fb65c9c1da4
+started_at=2026-09-30T17:29:07Z
+command=lockf -t 1800 /tmp/omnipus-gotest.lock env CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -v -p 1 -run ^TestGoal984_GoalEnderRoutesDeferredChildThroughTail$ /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/u1-stopped-state/pkg/agent

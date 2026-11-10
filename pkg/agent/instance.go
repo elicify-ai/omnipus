@@ -2,7 +2,6 @@ package agent
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -15,10 +14,11 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/documentruntime"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
-	"github.com/elicify-ai/omnipus/pkg/memory"
+	"github.com/elicify-ai/omnipus/pkg/modelresolve"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/routing"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
@@ -29,9 +29,14 @@ import (
 // AgentInstance represents a fully configured agent with its own workspace,
 // session manager, context builder, and tool registry.
 type AgentInstance struct {
-	// mu protects Model, Provider, Candidates, and ThinkingLevel which may be
+	// mu protects Model, Provider, and Candidates which may be
 	// written by SwitchModel while runTurn reads them concurrently.
 	mu sync.RWMutex
+
+	// initErr is set when the instance could not be constructed (its session
+	// store did not open). Such an instance carries only ID, Name and this error
+	// and is never registered; the registry reports it through InitErr.
+	initErr error
 
 	ID        string
 	Name      string
@@ -46,9 +51,17 @@ type AgentInstance struct {
 	// slice reaches the agent every entry carries a populated Provider (or an
 	// empty one if no configured provider matched).
 	FallbackModels []config.FallbackModel
-	Home           string
-	MaxIterations  int
-	MaxTokens      int
+	// PrimaryEffort is the primary model's stored effort (effort-levels spec
+	// FR-029/FR-045): the agent's own setting, or — only when the agent rides
+	// the default model and sets none — the default model's. "" = Not set.
+	PrimaryEffort string
+	// PrimaryEffortProvider is the provider the primary model is pinned to
+	// ("" = default-provider resolution); it names the pair in the per-call
+	// effort record when the turn's candidate carries no provider (FR-058).
+	PrimaryEffortProvider string
+	Home                  string
+	MaxIterations         int
+	MaxTokens             int
 	// configuredMaxTokens is the CONFIGURED max_tokens, before the FR-005b
 	// window clamp. MaxTokens is the clamped value the turn actually uses.
 	//
@@ -61,7 +74,6 @@ type AgentInstance struct {
 	// this field, never MaxTokens.
 	configuredMaxTokens int
 	Temperature         float64
-	ThinkingLevel       ThinkingLevel
 	// ContextWindow is the effective window resolved by the ADR-066 D2
 	// ladder (ResolveWindow) at construction and on every model switch. 0
 	// when the provider is exempt (WindowExempt) or the window is unknown
@@ -103,16 +115,21 @@ type AgentInstance struct {
 	// Model + Provider + Candidates + ProviderPool flip so an in-flight turn
 	// never sees a torn (newModel, oldPool) state — the lock ensures the
 	// tuple of fields swaps as one unit.
-	providerPool   atomic.Pointer[map[string]providers.LLMProvider]
-	Sessions       session.SessionStore
-	ContextBuilder *ContextBuilder
-	Tools          *tools.ToolRegistry
-	Subagents      *config.SubagentsConfig
+	providerPool atomic.Pointer[map[string]providers.LLMProvider]
+	// Pair-specific construction results prevent two model rows on one provider
+	// from sharing the wrong endpoint. Published with the model/pool tuple.
+	providerRoutes       atomic.Pointer[map[providers.FallbackCandidate]providers.LLMProvider]
+	providerPoolFailures atomic.Pointer[map[providers.FallbackCandidate]error]
+	Sessions             session.SessionStore
+	ContextBuilder       *ContextBuilder
+	Tools                *tools.ToolRegistry
+	Subagents            *config.SubagentsConfig
 	// SkillsFilter mirrors agentCfg.Skills (the agent's per-agent skill grant
 	// list) for callers that want to inspect the raw configured grant.
 	// ADR-072 D1/D3: this is NOT unioned into a turn's active skills any more
 	// — activeSkillNames (loop.go) only reflects opts.ForcedSkills, populated
-	// by the /<slug> command and delegate's requested_skill. The actual grant
+	// only by the /<slug> command (loop_slash.go::applyExplicitSkillCommand);
+	// delegate's requested_skill no longer writes it. The actual grant
 	// enforcement (which names ARE allowed) lives on
 	// ContextBuilder.skillAllowlist / skillAllowed, installed from this same
 	// source via WithSkillAllowlist — this field is a convenience mirror, not
@@ -120,9 +137,9 @@ type AgentInstance struct {
 	SkillsFilter []string
 	Candidates   []providers.FallbackCandidate
 
-	// TimeoutSeconds is the per-turn hard timeout. 0 = disabled.
-	// Populated from AgentDefaults.TimeoutSeconds; per-agent override if available.
-	TimeoutSeconds int
+	// There is no per-turn timeout: an agent turn runs until it finishes or
+	// is explicitly stopped (issue #1306). Provider HTTP request timeouts
+	// still bound each individual network call.
 
 	// AgentType is the resolved type string ("core", "custom", "system") used by
 	// FilterToolsByPolicy at LLM-call assembly time (FR-003, FR-041). Set once at
@@ -149,6 +166,8 @@ type AgentInstance struct {
 	// LightProvider is the concrete provider instance for the configured light model.
 	// It is only used when routing selects the light tier for a turn.
 	LightProvider providers.LLMProvider
+	// The constructor binds LightProvider to this exact resolved pair.
+	lightProviderPair providers.FallbackCandidate
 	// sourceConfigJSON is the immutable configuration snapshot used to build
 	// this particular registered instance. It proves publication independently
 	// of AgentLoop's mutable config pointer.
@@ -158,6 +177,7 @@ type AgentInstance struct {
 
 // newAgentInstance carries the shared state of NewAgentInstance across its stages.
 type newAgentInstance struct {
+	initErr             error
 	agentCfg            *config.AgentConfig
 	defaults            *config.AgentDefaults
 	cfg                 *config.Config
@@ -180,7 +200,6 @@ type newAgentInstance struct {
 	maxIter             int
 	maxTokens           int
 	temperature         float64
-	thinkingLevel       ThinkingLevel
 	candidates          []providers.FallbackCandidate
 	poolBuild           providerPoolBuild
 	window              WindowResolution
@@ -189,7 +208,7 @@ type newAgentInstance struct {
 	router              *routing.Router
 	lightCandidates     []providers.FallbackCandidate
 	lightProvider       providers.LLMProvider
-	timeoutSeconds      int
+	lightProviderPair   providers.FallbackCandidate
 	documentRuntime     *documentruntime.Layout
 }
 
@@ -207,6 +226,11 @@ func NewAgentInstance(
 	nai.registerTools()
 
 	nai.prepareIdentity()
+	if nai.initErr != nil {
+		// No session store: the instance cannot run. Hand back only the error
+		// (the registry refuses it) instead of panicking mid-construction.
+		return &AgentInstance{ID: nai.agentID, Name: nai.agentName, initErr: nai.initErr}
+	}
 
 	nai.resolveRuntimeLimits()
 
@@ -227,8 +251,8 @@ func (nai *newAgentInstance) prepareWorkspace() {
 	}
 
 	nai.model = resolveAgentModel(nai.agentCfg, nai.defaults)
-	nai.fallbacks = resolveAgentFallbacks(nai.agentCfg, nai.defaults)
-	nai.fallbackModels = resolveAgentFallbackModels(nai.agentCfg, nai.defaults)
+	nai.fallbacks = resolveAgentFallbacks(nai.agentCfg)
+	nai.fallbackModels = resolveAgentFallbackModels(nai.agentCfg)
 
 	nai.restrict = nai.defaults.RestrictToWorkspace
 	nai.readRestrict = nai.restrict && !nai.defaults.AllowReadOutsideWorkspace
@@ -292,7 +316,7 @@ func (nai *newAgentInstance) registerTools() {
 		nai.toolsRegistry.Register(tools.NewEnvironmentSetupTool(tools.EnvironmentSetupToolDeps{
 			Home:            config.OmnipusHomeDir(),
 			AgentWorkDir:    nai.workspace,
-			Admin:           nai.agentCfg != nil && routing.NormalizeAgentID(nai.agentCfg.ID) == "admin",
+			SetupAuthority:  nai.agentCfg != nil && coreagent.HasCrossWorkspaceSetupAuthority(routing.NormalizeAgentID(nai.agentCfg.ID)),
 			GodMode:         GodModeActive(nai.cfg),
 			AuditFailClosed: resolveBoolWithDefault(nai.cfg.Sandbox.PathGuardAuditFailClosed, nai.cfg.Sandbox.AuditLog),
 		}))
@@ -337,10 +361,12 @@ func (nai *newAgentInstance) registerTools() {
 	registerKnowledgeTools(nai.toolsRegistry)
 
 	// grep (ADR-081 / docs/internal/specs/unified-search-and-grep-spec.md
-	// FR-008/FR-019/FR-020): recursive file NAME and TEXT-CONTENT search
-	// over the calling agent's OWN workspace root and its mounts only — no
-	// workspace_id argument exists, so another agent's or workspace's files
-	// are never reachable (FR-020, US-3 AS-7). Registered unconditionally
+	// FR-008/FR-019, as amended by #920 read-boundary-consistency-spec.md):
+	// recursive file NAME and TEXT-CONTENT search. With no `path` it covers
+	// the calling agent's own workspace root and its mounts; a `path` is
+	// admitted or refused by the same single read decision read_file uses
+	// (FR-001), so the secret set — including another agent's or
+	// workspace's files — is never reachable. Registered unconditionally
 	// for EVERY agent, exactly like request_mount/list_mounts and the
 	// knowledge tools directly above, and for the identical Constraint #6
 	// reason: registration is not permission. The founder ruling (spec
@@ -368,8 +394,14 @@ func (nai *newAgentInstance) prepareIdentity() {
 		nai.skillsFilter = nai.agentCfg.Skills
 	}
 
-	sessionsDir := filepath.Join(nai.workspace, "sessions")
-	nai.sessions = initSessionStore(sessionsDir, nai.agentID, omnipusHome())
+	// DEL-10: every agent shares the ONE session store; there is no per-agent
+	// store and no fallback to another kind of store.
+	sharedStore, storeErr := openSharedSessionStore(sessionsHomeFor(nai.cfg))
+	if storeErr != nil {
+		nai.initErr = storeErr
+		return
+	}
+	nai.sessions = sharedStore
 
 	// WithToolDiscovery gates the "Tool Discovery" prompt section on the
 	// 3-tier tool-manifest system (cfg.Tools.Manifest.Compressed, default ON)
@@ -390,6 +422,8 @@ func (nai *newAgentInstance) prepareIdentity() {
 		// is no "unrestricted" state any more: only names present in
 		// agentCfg.Skills resolve or appear in progressive disclosure.
 		nai.contextBuilder.WithSkillAllowlist(nai.agentCfg.Skills)
+		// Skills spec r15 §5.13a SD-30: the identity half of the grant.
+		nai.contextBuilder.WithSkillBindings(nai.agentCfg.SkillGrants)
 		// ADR-052 FR-039: per-agent memory gate (nil = enabled). The Judge
 		// verifier runs memoryless for impartial, reproducible verdicts —
 		// its seed leaves MemoryEnabled=false; every other agent defaults on.
@@ -414,22 +448,14 @@ func (nai *newAgentInstance) prepareIdentity() {
 	nai.toolsRegistry.Register(tools.NewRetrospectiveTool(memAdapter, nil))
 }
 
-// resolveRuntimeLimits resolves iteration, sampling, and thinking-level settings.
+// resolveRuntimeLimits resolves iteration and sampling settings.
 func (nai *newAgentInstance) resolveRuntimeLimits() {
-	// Per-turn tool-round cap: per-agent override wins, then the global
-	// default, then 200. The per-agent field was persisted+displayed but never
-	// applied before 2026-07-03 (P0) — the runtime silently ran everything on
-	// the old emergency fallback of 20.
-	nai.maxIter = 0
-	if nai.agentCfg != nil {
-		nai.maxIter = nai.agentCfg.MaxToolIterations
-	}
-	if nai.maxIter <= 0 {
-		nai.maxIter = nai.defaults.MaxToolIterations
-	}
-	if nai.maxIter <= 0 {
-		nai.maxIter = 200
-	}
+	// Per-turn tool-round cap (#904): the single resolver —
+	// min(global in force, agent's own value), the global when the agent has
+	// none. Snapshotted onto AgentInstance.MaxIterations here; a running turn
+	// keeps the instance it started with, so a reload only affects the next
+	// turn (D18).
+	nai.maxIter = config.ResolveMaxToolIterations(nai.defaults, nai.agentCfg).Effective
 
 	// Sampling params: per-agent override (agentCfg.ModelParams) wins, then
 	// the global default, then the hardcoded fallback — same three-rung
@@ -455,12 +481,6 @@ func (nai *newAgentInstance) resolveRuntimeLimits() {
 	if nai.agentCfg != nil && nai.agentCfg.ModelParams != nil && nai.agentCfg.ModelParams.Temperature != nil {
 		nai.temperature = *nai.agentCfg.ModelParams.Temperature
 	}
-
-	var thinkingLevelStr string
-	if mc, err := nai.cfg.FindModelConfigBySlug(nai.model); err == nil {
-		thinkingLevelStr = mc.ThinkingLevel
-	}
-	nai.thinkingLevel = parseThinkingLevel(thinkingLevelStr)
 }
 
 // resolveCandidates resolves provider candidates, provider pool, and context-window limits.
@@ -475,6 +495,7 @@ func (nai *newAgentInstance) resolveCandidates() {
 	// primary candidate routes through it directly (never inferred). Empty
 	// provider preserves the pre-O3 selection exactly.
 	primaryProvider := resolveAgentPrimaryProvider(nai.agentCfg, nai.defaults)
+	warnUnpairedFallbacks(nai.agentID, nai.fallbackModels)
 	nai.candidates = resolveAgentCandidatesWithPrimaryProvider(
 		nai.cfg, nai.defaults.DefaultModel.Provider, nai.model, primaryProvider, nai.fallbackModels, nai.fallbacks)
 
@@ -507,38 +528,27 @@ func (nai *newAgentInstance) configureRouting() {
 	// to avoid repeated model_list lookups on every incoming message.
 
 	if rc := nai.defaults.Routing; rc != nil && rc.Enabled && rc.LightModel != "" {
-		resolved := resolveModelCandidates(nai.cfg, nai.defaults.DefaultModel.Provider, rc.LightModel, nil)
+		resolved := resolveModelCandidates(nai.cfg, nai.defaults.DefaultModel.Provider, rc.LightModel)
 		if len(resolved) > 0 {
-			lightModelCfg, err := resolvedModelConfig(nai.cfg, rc.LightModel, nai.workspace)
+			// Use the already-resolved pair, rather than resolving the model
+			// again and potentially choosing another provider row/account.
+			lp, err := buildCandidateProvider(nai.cfg, resolved[0], make(map[*config.ModelConfig]providers.LLMProvider))
 			if err != nil {
-				logger.WarnCF("agent", "Routing light model config invalid; routing disabled",
+				logger.WarnCF("agent", "Routing light model provider init failed; routing disabled",
 					map[string]any{"light_model": rc.LightModel, "agent_id": nai.agentID, "error": err.Error()})
 			} else {
-				lp, _, err := providers.CreateProviderFromConfig(lightModelCfg)
-				if err != nil {
-					logger.WarnCF("agent", "Routing light model provider init failed; routing disabled",
-						map[string]any{"light_model": rc.LightModel, "agent_id": nai.agentID, "error": err.Error()})
-				} else {
-					nai.router = routing.New(routing.RouterConfig{
-						LightModel: rc.LightModel,
-						Threshold:  rc.Threshold,
-					})
-					nai.lightCandidates = resolved
-					nai.lightProvider = lp
-				}
+				nai.router = routing.New(routing.RouterConfig{
+					LightModel: rc.LightModel,
+					Threshold:  rc.Threshold,
+				})
+				nai.lightCandidates = resolved
+				nai.lightProvider = lp
+				nai.lightProviderPair = resolved[0]
 			}
 		} else {
 			logger.WarnCF("agent", "Routing light model not found; routing disabled",
 				map[string]any{"light_model": rc.LightModel, "agent_id": nai.agentID})
 		}
-	}
-
-	// Per-turn timeout from agent defaults (0 = disabled).
-	// Clamp negative values to 0 (disabled) — a negative timeout is meaningless
-	// and would cause context.WithTimeout to fire immediately.
-	nai.timeoutSeconds = nai.defaults.TimeoutSeconds
-	if nai.timeoutSeconds < 0 {
-		nai.timeoutSeconds = 0
 	}
 }
 
@@ -557,49 +567,41 @@ func (nai *newAgentInstance) assembleInstance() *AgentInstance {
 			resolvedAgentType = "custom"
 		}
 	}
-	// NOTE (ADR-054 D6.4): this constructor used to also derive an
-	// IsRoutingDefault bool from agentCfg.Default here and store it on the
-	// instance. That field is removed: splitting agents into independent
-	// per-entity files means two concurrent agent writes could each set
-	// Default=true with no shared lock to serialize them (each delta is
-	// individually valid, the composition is not — ADR-054 D6 rule 4). The
-	// single "default agent" pointer now lives exclusively in the settings
-	// singleton (config.Agents.Defaults.DefaultAgentID, already existed) and
-	// is consulted directly by AgentRegistry.GetDefaultAgent /
-	// RouteResolver.resolveDefaultAgentID — see those functions' doc
-	// comments for the current (3-priority) ladder.
+	// There is no default agent (omnipus-system-agent FR-120): an instance
+	// carries no routing-default flag of any kind.
 	inst := &AgentInstance{
-		ID:                  nai.agentID,
-		Name:                nai.agentName,
-		Model:               nai.model,
-		Fallbacks:           nai.fallbacks,
-		FallbackModels:      nai.fallbackModels,
-		Home:                nai.workspace,
-		MaxIterations:       nai.maxIter,
-		MaxTokens:           nai.maxTokens,
-		configuredMaxTokens: nai.configuredMaxTokens,
-		Temperature:         nai.temperature,
-		ThinkingLevel:       nai.thinkingLevel,
-		ContextWindow:       nai.contextWindow,
-		WindowSource:        nai.window.Source,
-		WindowClamped:       nai.window.Clamped,
-		WindowExempt:        nai.window.Exempt,
-		WindowUnknown:       nai.window.Unknown,
-		needsProvider:       nai.poolBuild.primaryUnknown,
-		needsProviderID:     nai.poolBuild.primaryProvider,
-		Provider:            nai.provider,
-		Sessions:            nai.sessions,
-		ContextBuilder:      nai.contextBuilder,
-		Tools:               nai.toolsRegistry,
-		Subagents:           nai.subagents,
-		SkillsFilter:        nai.skillsFilter,
-		Candidates:          nai.candidates,
-		Router:              nai.router,
-		LightCandidates:     nai.lightCandidates,
-		LightProvider:       nai.lightProvider,
-		DocumentRuntime:     nai.documentRuntime,
-		TimeoutSeconds:      nai.timeoutSeconds,
-		AgentType:           resolvedAgentType,
+		ID:                    nai.agentID,
+		Name:                  nai.agentName,
+		Model:                 nai.model,
+		Fallbacks:             nai.fallbacks,
+		FallbackModels:        nai.fallbackModels,
+		PrimaryEffort:         resolveAgentPrimaryEffort(nai.agentCfg, nai.defaults),
+		PrimaryEffortProvider: resolveAgentPrimaryProvider(nai.agentCfg, nai.defaults),
+		Home:                  nai.workspace,
+		MaxIterations:         nai.maxIter,
+		MaxTokens:             nai.maxTokens,
+		configuredMaxTokens:   nai.configuredMaxTokens,
+		Temperature:           nai.temperature,
+		ContextWindow:         nai.contextWindow,
+		WindowSource:          nai.window.Source,
+		WindowClamped:         nai.window.Clamped,
+		WindowExempt:          nai.window.Exempt,
+		WindowUnknown:         nai.window.Unknown,
+		needsProvider:         nai.poolBuild.primaryUnknown,
+		needsProviderID:       nai.poolBuild.primaryProvider,
+		Provider:              nai.provider,
+		Sessions:              nai.sessions,
+		ContextBuilder:        nai.contextBuilder,
+		Tools:                 nai.toolsRegistry,
+		Subagents:             nai.subagents,
+		SkillsFilter:          nai.skillsFilter,
+		Candidates:            nai.candidates,
+		Router:                nai.router,
+		LightCandidates:       nai.lightCandidates,
+		LightProvider:         nai.lightProvider,
+		lightProviderPair:     nai.lightProviderPair,
+		DocumentRuntime:       nai.documentRuntime,
+		AgentType:             resolvedAgentType,
 	}
 	if nai.agentCfg != nil {
 		inst.sourceConfigJSON, _ = json.Marshal(nai.agentCfg)
@@ -607,7 +609,7 @@ func (nai *newAgentInstance) assembleInstance() *AgentInstance {
 	// Publish the eagerly-built pool. StoreProviderPool uses the atomic
 	// pointer; calling it here (vs. direct field assignment) keeps the
 	// publish path identical to the model-switch path in ApplyAgentModel.
-	inst.StoreProviderPool(nai.poolBuild.pool)
+	inst.storeProviderPoolBuild(nai.poolBuild)
 	// O7: thread the global sandbox tool policies into the runtime policy
 	// snapshot so FilterToolsByPolicy enforces global × agent merge at call
 	// time. Build the policy even when the agent has no per-agent tools
@@ -617,6 +619,7 @@ func (nai *newAgentInstance) assembleInstance() *AgentInstance {
 		agentToolsCfg = nai.agentCfg.Tools
 	}
 	inst.toolPolicy.Store(agentToolsCfgToPolicy(nai.cfg, agentToolsCfg))
+	inst.configureSetTodosGuidance()
 	return inst
 }
 
@@ -724,13 +727,15 @@ func (a *AgentInstance) StoreProviderPool(pool map[string]providers.LLMProvider)
 		publish = &buf
 	}
 	a.providerPool.Store(publish)
+	a.providerRoutes.Store(nil)
+	a.providerPoolFailures.Store(nil)
 }
 
 // snapshotForExternalDispatch returns a private copy of a suitable for handing
 // to a long-running dispatch that executes OUTSIDE of a.mu's protection
 // window (e.g. an external-CLI run, which can take minutes) — a itself may be
 // the LIVE registry instance, and SwitchModel/ApplyAgentModel can concurrently
-// rewrite its Model/Provider/Candidates/ThinkingLevel (+ providerPool) tuple
+// rewrite its Model/Provider/Candidates (+ providerPool) tuple
 // while the dispatched run is in flight (see mu's doc comment above).
 //
 // FIX 1 (7-reviewer gate, data race): processTaskDirectExternalCLI used to
@@ -758,7 +763,6 @@ func (a *AgentInstance) snapshotForExternalDispatch() *AgentInstance {
 	model := a.Model
 	provider := a.Provider
 	candidates := a.Candidates
-	thinkingLevel := a.ThinkingLevel
 	contextWindow := a.ContextWindow
 	windowSource := a.WindowSource
 	windowClamped := a.WindowClamped
@@ -767,43 +771,49 @@ func (a *AgentInstance) snapshotForExternalDispatch() *AgentInstance {
 	needsProvider := a.needsProvider
 	needsProviderID := a.needsProviderID
 	pool := a.providerPool.Load()
+	routes := a.providerRoutes.Load()
+	failures := a.providerPoolFailures.Load()
 	a.mu.RUnlock()
 
 	out := &AgentInstance{
-		ID:              a.ID,
-		Name:            a.Name,
-		Model:           model,
-		Fallbacks:       a.Fallbacks,
-		FallbackModels:  a.FallbackModels,
-		Home:            a.Home,
-		MaxIterations:   a.MaxIterations,
-		MaxTokens:       a.MaxTokens,
-		Temperature:     a.Temperature,
-		ThinkingLevel:   thinkingLevel,
-		ContextWindow:   contextWindow,
-		WindowSource:    windowSource,
-		WindowClamped:   windowClamped,
-		WindowExempt:    windowExempt,
-		WindowUnknown:   windowUnknown,
-		needsProvider:   needsProvider,
-		needsProviderID: needsProviderID,
-		Provider:        provider,
-		Sessions:        a.Sessions,
-		ContextBuilder:  a.ContextBuilder,
-		Tools:           a.Tools,
-		Subagents:       a.Subagents,
-		SkillsFilter:    a.SkillsFilter,
-		Candidates:      candidates,
-		TimeoutSeconds:  a.TimeoutSeconds,
-		AgentType:       a.AgentType,
-		Router:          a.Router,
-		LightCandidates: a.LightCandidates,
-		LightProvider:   a.LightProvider,
-		DocumentRuntime: a.DocumentRuntime,
+		ID:                    a.ID,
+		Name:                  a.Name,
+		Model:                 model,
+		Fallbacks:             a.Fallbacks,
+		FallbackModels:        a.FallbackModels,
+		PrimaryEffort:         a.PrimaryEffort,
+		PrimaryEffortProvider: a.PrimaryEffortProvider,
+		Home:                  a.Home,
+		MaxIterations:         a.MaxIterations,
+		MaxTokens:             a.MaxTokens,
+		Temperature:           a.Temperature,
+		ContextWindow:         contextWindow,
+		WindowSource:          windowSource,
+		WindowClamped:         windowClamped,
+		WindowExempt:          windowExempt,
+		WindowUnknown:         windowUnknown,
+		needsProvider:         needsProvider,
+		needsProviderID:       needsProviderID,
+		Provider:              provider,
+		Sessions:              a.Sessions,
+		ContextBuilder:        a.ContextBuilder,
+		Tools:                 a.Tools,
+		Subagents:             a.Subagents,
+		SkillsFilter:          a.SkillsFilter,
+		Candidates:            candidates,
+		AgentType:             a.AgentType,
+		Router:                a.Router,
+		LightCandidates:       a.LightCandidates,
+		LightProvider:         a.LightProvider,
+		lightProviderPair:     a.lightProviderPair,
+		DocumentRuntime:       a.DocumentRuntime,
 	}
 	if pool != nil {
 		out.StoreProviderPool(*pool)
 	}
+	// Published maps are immutable; preserve the exact routing snapshot.
+	out.providerRoutes.Store(routes)
+	out.providerPoolFailures.Store(failures)
 	out.StoreToolPolicy(a.LoadToolPolicy())
 	return out
 }
@@ -816,7 +826,9 @@ func (a *AgentInstance) snapshotForExternalDispatch() *AgentInstance {
 // FALLBACK is not: it is dropped from the pool and the agent runs on the
 // rest (DS-8 rows 3 and 6).
 type providerPoolBuild struct {
-	pool map[string]providers.LLMProvider
+	pool     map[string]providers.LLMProvider
+	routes   map[providers.FallbackCandidate]providers.LLMProvider
+	failures map[providers.FallbackCandidate]error
 	// primaryUnknown and primaryProvider name the FR-016 degrade. The id is
 	// carried so the refusal can name the operator's own spelling — and only
 	// that, never a canonical alternative (SC-010).
@@ -829,10 +841,9 @@ type providerPoolBuild struct {
 // Returns a nil pool when the candidate chain has no explicit providers
 // (every candidate routes through the agent primary — no pool needed).
 //
-// Build failures are non-fatal: a missing entry for a pinned provider name
-// degrades to "use the primary's provider" via GetProviderForCandidate's
-// fallback path. We log at WARN so operators can see the cause of a
-// degraded fallback path at startup.
+// Build failures do not prevent gateway startup, but remain attached to the
+// exact named pair. A turn refuses an unavailable pair; it never substitutes
+// the injected global-default client or a different passthrough provider.
 //
 // ADR-067 FR-016 splits one of those failures out of the generic skip. A
 // candidate whose provider id is UNKNOWN — neither a catalog id nor a
@@ -857,91 +868,39 @@ func buildProviderPool(
 	if cfg == nil || len(candidates) == 0 {
 		return providerPoolBuild{}
 	}
-	// Collect distinct provider names. Empty Provider names share the
-	// primary's provider via the legacy path — no pool entry needed.
-	seen := make(map[string]struct{})
-	for _, c := range candidates {
-		name := strings.TrimSpace(c.Provider)
-		if name == "" {
-			continue
-		}
-		seen[name] = struct{}{}
-	}
-	if len(seen) == 0 {
-		return providerPoolBuild{}
-	}
-	// unknown holds the FR-016 classification for every distinct candidate
-	// provider id. It is computed BEFORE any construction so a decision that
-	// belongs to the catalog is never inferred from a client-build failure
-	// (a missing credential is not an unknown provider).
+	// Resolve each named pair in declared order. Multiple models may use
+	// different rows/endpoints on the same provider; clients are deduplicated
+	// by the actual selected config row, never just by provider id.
 	unknown := make(map[string]struct{})
-	pool := make(map[string]providers.LLMProvider, len(seen))
-	for name := range seen {
-		if providers.IsUnknownProviderID(cfg, name) {
-			unknown[name] = struct{}{}
+	pool := make(map[string]providers.LLMProvider)
+	routes := make(map[providers.FallbackCandidate]providers.LLMProvider)
+	failures := make(map[providers.FallbackCandidate]error)
+	cache := make(map[*config.ModelConfig]providers.LLMProvider)
+	for _, candidate := range candidates {
+		candidate.Provider = strings.TrimSpace(candidate.Provider)
+		if candidate.Provider == "" {
 			continue
 		}
-		mc, err := findModelConfigForProvider(cfg, name)
+		key := candidate // model ids are exact, case-sensitive pair keys
+		if _, ok := routes[key]; ok {
+			continue
+		}
+		if providers.IsUnknownProviderID(cfg, candidate.Provider) {
+			unknown[candidate.Provider] = struct{}{}
+			failures[key] = fmt.Errorf("provider %q is not configured", candidate.Provider)
+			routes[key] = nil
+			continue
+		}
+		p, err := buildCandidateProvider(cfg, candidate, cache)
+		routes[key] = p
 		if err != nil {
-			logger.WarnCF("agent", "buildProviderPool: no ModelConfig for candidate provider; pool entry skipped",
-				map[string]any{"provider": name, "error": err.Error()})
+			failures[key] = err
+			logger.WarnCF("agent", "named provider route unavailable; turns will refuse this pair",
+				map[string]any{"agent_id": agentID, "provider": candidate.Provider, "model": candidate.Model, "error": err.Error()})
 			continue
 		}
-		p, _, err := providers.CreateProviderFromConfig(mc)
-		if err != nil {
-			logger.WarnCF("agent", "buildProviderPool: CreateProviderFromConfig failed; pool entry skipped",
-				map[string]any{"provider": name, "error": err.Error()})
-			continue
-		}
-		pool[name] = p
-	}
-
-	// Defensive fallback: if a candidate's Provider (which may be a vendor
-	// namespace like "zai" or "z-ai" leaked from re-parsing the slash in
-	// mc.Model) doesn't match any configured provider, scan cfg.Providers
-	// for a passthrough entry whose Model matches the candidate's Model.
-	// This is the safety net behind the resolver fix — if any future
-	// change reintroduces the seeded-agent bug, the agent still routes
-	// through the openrouter entry that has the matching model.
-	// The original candidate's name is preserved as the pool key so the
-	// agent's GetProviderForCandidate lookup still works.
-	for _, c := range candidates {
-		name := strings.TrimSpace(c.Provider)
-		if name == "" {
-			continue
-		}
-		if _, ok := pool[name]; ok {
-			continue
-		}
-		if _, bad := unknown[name]; bad {
-			// FR-016: an UNKNOWN id is never rescued through a passthrough.
-			// The net exists for a vendor NAMESPACE that leaked out of a
-			// slash-separated model id (the id is a real catalog provider,
-			// just not a configured row); routing an id the catalog has
-			// never heard of through someone else's credentials would be an
-			// alias, which is exactly what the greenfield rule removed.
-			continue
-		}
-		if mc := findPassthroughForModel(cfg, c.Model); mc != nil {
-			p, _, err := providers.CreateProviderFromConfig(mc)
-			if err != nil {
-				logger.WarnCF(
-					"agent",
-					"buildProviderPool: passthrough fallback CreateProviderFromConfig failed; pool entry skipped",
-					map[string]any{"provider": name, "model": c.Model, "error": err.Error()},
-				)
-				continue
-			}
-			pool[name] = p
-			logger.InfoCF(
-				"agent",
-				"buildProviderPool: candidate provider not configured; routed through passthrough entry with matching model",
-				map[string]any{
-					"candidate_provider":   name,
-					"candidate_model":      c.Model,
-					"passthrough_provider": mc.Provider,
-				},
-			)
+		if pool[candidate.Provider] == nil {
+			pool[candidate.Provider] = p
 		}
 	}
 
@@ -976,40 +935,17 @@ func buildProviderPool(
 	}
 	return providerPoolBuild{
 		pool:            pool,
+		routes:          routes,
+		failures:        failures,
 		primaryUnknown:  primaryUnknown,
 		primaryProvider: primary,
 	}
 }
 
-// findPassthroughForModel scans cfg.Providers for a passthrough entry
-// (openrouter, vivgrid) whose Model field equals or contains the given
-// model string. Returns nil if no passthrough carries the model. Used as a
-// defensive fallback in buildProviderPool when a candidate's Provider
-// (e.g. a vendor namespace) doesn't match any configured provider entry.
-func findPassthroughForModel(cfg *config.Config, model string) *config.ModelConfig {
-	if cfg == nil || strings.TrimSpace(model) == "" {
-		return nil
-	}
-	for _, mc := range cfg.Providers {
-		if mc == nil {
-			continue
-		}
-		if !providers.IsPassthroughProvider(strings.TrimSpace(mc.Provider), mc.APIBase) {
-			continue
-		}
-		// Exact match — e.g. mc.Model = "z-ai/glm-5.2", model = "z-ai/glm-5.2".
-		if strings.EqualFold(strings.TrimSpace(mc.Model), model) {
-			clone := *mc
-			return &clone
-		}
-	}
-	return nil
-}
-
 // findModelConfigForProvider returns a clone of the ModelConfig whose
-// Provider field matches the given provider name. Used by buildProviderPool
-// at agent construction to locate the right ModelConfig for a candidate's
-// pinned provider.
+// Provider field matches the given provider name. This provider-only lookup
+// does not select a runtime client; candidate construction uses the model-aware
+// usable-row selection in buildCandidateProvider.
 func findModelConfigForProvider(cfg *config.Config, providerName string) (*config.ModelConfig, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config is nil")
@@ -1270,13 +1206,22 @@ func resolveAgentHome(agentCfg *config.AgentConfig, defaults *config.AgentDefaul
 // model.primary, else the model half of agents.defaults.default_model
 // (ADR-068 D14.1). Empty when neither is set.
 func resolveAgentModel(agentCfg *config.AgentConfig, defaults *config.AgentDefaults) string {
-	if agentCfg != nil && agentCfg.Model != nil && strings.TrimSpace(agentCfg.Model.Primary) != "" {
-		return strings.TrimSpace(agentCfg.Model.Primary)
+	return modelresolve.AgentPrimaryModel(agentCfg, defaults)
+}
+
+// resolveAgentPrimaryEffort returns the primary model's stored effort: the
+// agent's own reasoning_effort; when the agent has no model of its own and
+// no effort of its own, the default model's effort (FR-045).
+func resolveAgentPrimaryEffort(agentCfg *config.AgentConfig, defaults *config.AgentDefaults) string {
+	own := ""
+	if agentCfg != nil {
+		own = strings.TrimSpace(agentCfg.ReasoningEffort)
 	}
-	if defaults == nil || defaults.DefaultModel.IsZero() {
-		return ""
+	ridesDefault := agentCfg == nil || agentCfg.Model == nil || strings.TrimSpace(agentCfg.Model.Primary) == ""
+	if own != "" || !ridesDefault || defaults == nil {
+		return own
 	}
-	return strings.TrimSpace(defaults.DefaultModel.Model)
+	return strings.TrimSpace(defaults.DefaultModel.ReasoningEffort)
 }
 
 // resolveAgentPrimaryProvider returns the provider the agent's primary model is
@@ -1287,53 +1232,46 @@ func resolveAgentModel(agentCfg *config.AgentConfig, defaults *config.AgentDefau
 // exact pair (ADR-068 D14.1), so it is pinned exactly like an explicit
 // per-agent provider and never inferred from a configured passthrough.
 func resolveAgentPrimaryProvider(agentCfg *config.AgentConfig, defaults *config.AgentDefaults) string {
-	if agentCfg != nil && agentCfg.Model != nil && strings.TrimSpace(agentCfg.Model.Primary) != "" {
-		return strings.TrimSpace(agentCfg.Model.Provider)
-	}
-	if defaults == nil || defaults.DefaultModel.IsZero() {
-		return ""
-	}
-	return strings.TrimSpace(defaults.DefaultModel.Provider)
+	return modelresolve.AgentPrimaryProvider(agentCfg, defaults)
 }
 
-// resolveAgentFallbacks resolves the fallback models for an agent.
-func resolveAgentFallbacks(agentCfg *config.AgentConfig, defaults *config.AgentDefaults) []string {
-	if agentCfg != nil && agentCfg.Model != nil && agentCfg.Model.Fallbacks != nil {
+// warnUnpairedFallbacks reports every configured fallback that does not name
+// BOTH a provider and a model. Such an entry is never routed (founder rule
+// 2026-10-18, issue #1340: provider and model always come in pairs) and must
+// not disappear silently, so each one is named with its agent at load.
+func warnUnpairedFallbacks(agentID string, fallbacks []config.FallbackModel) {
+	for i, fb := range fallbacks {
+		model, provider := strings.TrimSpace(fb.Model), strings.TrimSpace(fb.Provider)
+		if model != "" && provider != "" {
+			continue
+		}
+		if model == "" && provider == "" {
+			continue // an empty slot, not a configured entry
+		}
+		logger.WarnCF("agent",
+			"fallback ignored: a fallback must name both a provider and a model; set the missing half in the agent's fallback settings",
+			map[string]any{"agent_id": agentID, "fallback_index": i, "model": model, "provider": provider})
+	}
+}
+
+// resolveAgentFallbacks returns the agent's own legacy fallback strings. There
+// is no global default fallback list to inherit (agents.defaults.model_fallbacks
+// was removed, issue #1340, founder ruling 2026-10-19).
+func resolveAgentFallbacks(agentCfg *config.AgentConfig) []string {
+	if agentCfg != nil && agentCfg.Model != nil {
 		return agentCfg.Model.Fallbacks
 	}
-	return defaults.ModelFallbacks
+	return nil
 }
 
-// resolveAgentFallbackModels resolves the provider-aware fallback chain for
-// an agent. It prefers the modern AgentConfig.FallbackModels (FR-005) when
-// populated and falls back to deriving one from the legacy sources in order:
-//  1. agentCfg.Model.Fallbacks (the legacy []string on the agent's model block)
-//  2. defaults.ModelFallbacks (the agent-defaults model_fallbacks list)
-//
-// Each returned entry is a config.FallbackModel with Provider populated by
-// config.NormalizeFallbacks (which has already run at config-load time for
-// the AgentConfig path). The defaults path is normalized here so the
-// downstream resolveModelCandidatesFromList can treat every entry uniformly.
-func resolveAgentFallbackModels(agentCfg *config.AgentConfig, defaults *config.AgentDefaults) []config.FallbackModel {
-	if agentCfg != nil && len(agentCfg.FallbackModels) > 0 {
-		// Already normalized at config load — Provider is populated for every
-		// entry that matched a configured provider or passthrough.
-		return agentCfg.FallbackModels
-	}
-	var legacy []string
-	switch {
-	case agentCfg != nil && agentCfg.Model != nil && len(agentCfg.Model.Fallbacks) > 0:
-		legacy = agentCfg.Model.Fallbacks
-	case len(defaults.ModelFallbacks) > 0:
-		legacy = defaults.ModelFallbacks
-	default:
-		return nil
-	}
-	out := make([]config.FallbackModel, len(legacy))
-	for i, s := range legacy {
-		out[i] = config.FallbackModel{Model: s}
-	}
-	return out
+// resolveAgentFallbackModels returns the agent's OWN fallback chain: the
+// modern AgentConfig.FallbackModels (FR-005) when populated, else the agent's
+// legacy agentCfg.Model.Fallbacks strings as model-only entries (unpaired, so
+// reported and never routed). Nothing is inherited from a global default —
+// agents.defaults.model_fallbacks was removed (issue #1340, founder ruling
+// 2026-10-19).
+func resolveAgentFallbackModels(agentCfg *config.AgentConfig) []config.FallbackModel {
+	return modelresolve.AgentFallbackModels(agentCfg)
 }
 
 func compilePatterns(patterns []string) []*regexp.Regexp {
@@ -1371,41 +1309,11 @@ func mediaTempDirPattern() string {
 	return "^" + regexp.QuoteMeta(filepath.Clean(media.TempDir())) + "(?:" + sep + "|$)"
 }
 
-// Close releases resources held by the agent's session store.
+// Close releases the agent's own resources. The session store is shared by every
+// agent and closed once, by the loop that owns it (AgentLoop.Close), never here:
+// a discarded duplicate instance must not close the store live turns are using.
 func (a *AgentInstance) Close() error {
-	if a.Sessions != nil {
-		return a.Sessions.Close()
-	}
 	return nil
-}
-
-// initSessionStore creates the unified session store for an agent.
-// homePath is the ~/.omnipus/ root so that uploads cascade-delete on
-// DeleteSession finds the correct <homePath>/uploads/<sessionID> path
-// regardless of how deep the store's baseDir is in the directory tree (N-B fix).
-// Falls back to the JSONL backend if the unified store cannot be initialized.
-func initSessionStore(dir, agentID, homePath string) session.SessionStore {
-	us, err := session.NewUnifiedStoreWithHome(dir, homePath)
-	if err != nil {
-		logger.ErrorCF("agent", "UnifiedStore init failed; falling back to JSONL backend",
-			map[string]any{"dir": dir, "error": err.Error()})
-		store, storeErr := memory.NewJSONLStore(dir)
-		if storeErr != nil {
-			logger.ErrorCF("agent", "JSONL store fallback also failed; using SessionManager",
-				map[string]any{"error": storeErr.Error()})
-			return session.NewSessionManager(dir)
-		}
-		if n, merr := memory.MigrateFromJSON(context.Background(), dir, store); merr != nil {
-			logger.ErrorCF("agent", "Memory migration failed; falling back to SessionManager",
-				map[string]any{"error": merr.Error()})
-			store.Close()
-			return session.NewSessionManager(dir)
-		} else if n > 0 {
-			logger.InfoCF("agent", "Memory migrated to JSONL", map[string]any{"sessions_migrated": n})
-		}
-		return session.NewJSONLBackend(store)
-	}
-	return us
 }
 
 // omnipusHome returns the Omnipus data directory.

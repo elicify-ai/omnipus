@@ -1,0 +1,67 @@
+title: MailReplyContextResponse
+description: >
+  Reply/quote context for the compose draft (ADR-20261001 "Reply / Reply
+  all context (F5)" row; w3 spec §2.4 — W0 is the single publisher).
+  Produced by the ONE shared recipient rule (BuildReplyRecipients) called
+  by both the gateway and the agent reply adapter — the SPA implements no
+  second recipient algorithm. Prefills user-requested compose state only:
+  not a server draft, not a send. A delayed/stale context response for a
+  different message or mailbox is discarded by the consumer; it never
+  overwrites compose input.
+type: object
+additionalProperties: false
+required:
+  - to
+  - cc
+  - bcc
+  - subject
+  - body_markdown
+  - in_reply_to
+properties:
+  to:
+    type: array
+    description: >
+      Primary recipients — the parsed Reply-To when present, otherwise
+      From. Editable compose state: an invalid/missing eligible recipient
+      is an actionable error or an editable empty set, never a silent
+      replacement or a send to self.
+    items:
+      type: string
+    example: ["dana@example.com"]
+  cc:
+    type: array
+    description: >
+      Cc — empty for plain reply; original To + original Cc minus the
+      mailbox's own address and the primary, deduplicated, for reply_all.
+      Never contains the original Bcc.
+    items:
+      type: string
+    example: ["x@example.com", "y@example.com"]
+  bcc:
+    type: array
+    description: Always empty — Bcc is never copied into an incoming reply.
+    items:
+      type: string
+  subject:
+    type: string
+    description: >
+      Subject for the compose draft — the original subject with the Re:
+      prefix applied exactly once (no duplicate Re:, no signature
+      duplication).
+    example: "Re: Quarterly report"
+  body_markdown:
+    type: string
+    description: >
+      Editable quoted original as a safe text/Markdown projection with
+      escaped attribution (sender/date, or "No date" per F6) — the original
+      text's Markdown/image/embed syntax is escaped so the quote cannot
+      load remote images or workspace embeds inside Compose. Never raw
+      active HTML; never the original's attachments.
+    example: "> On 2026-10-01, Dana wrote: …"
+  in_reply_to:
+    type: string
+    nullable: true
+    description: >
+      The original message's Message-ID for threading (RFC 5322
+      In-Reply-To), or null when the inbound mail carries none.
+    example: "<abc123@example.com>"

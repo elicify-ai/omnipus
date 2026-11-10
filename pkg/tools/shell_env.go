@@ -49,6 +49,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/documentruntime"
 	"github.com/elicify-ai/omnipus/pkg/environmentsetup"
+	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
@@ -119,6 +120,42 @@ func (t *ExecTool) documentEnvTurn(baseDir string) documentEnvLayer {
 		return documentEnvLayer{notice: documentRuntimeBrokenNotice("writable cache unavailable: " + err.Error())}
 	}
 	return documentEnvLayer{layout: layout, ok: true}
+}
+
+// turnAllowRoots resolves the §2 A5/A6 runtime allowances for one run call —
+// the published shared generations and workspace env root (read+execute) and
+// the managed document runtime prefix (read+execute), plus the turn's own
+// document cache (read+write). These ride INTO the kernel denial through
+// TurnPolicyInput.AllowRoots (bash: turnKernelPolicy; the God floor:
+// ResolveLimits; setup: buildSetupLimits) — never appended to a finished
+// denial, which is what left a published runtime unexecutable while its rule
+// existed only post-derivation (amendment §2 D3's rule, fix round 1). The
+// kernel enumeration marks them as internal runtime input and drops any that
+// would reopen protected inventory.
+func turnAllowRoots(rt environmentsetup.RuntimeEnv, doc documentEnvLayer, skillFolders []string) []fspolicy.AllowRoot {
+	roots := make([]fspolicy.AllowRoot, 0, len(rt.ReadExec)+2+len(skillFolders))
+	for _, dir := range rt.ReadExec {
+		if strings.TrimSpace(dir) == "" {
+			continue
+		}
+		roots = append(roots, fspolicy.AllowRoot{Path: filepath.Clean(dir), Writable: false})
+	}
+	if doc.ok {
+		roots = append(roots,
+			fspolicy.AllowRoot{Path: filepath.Clean(doc.layout.Prefix), Writable: false},
+			fspolicy.AllowRoot{Path: filepath.Clean(doc.layout.Cache), Writable: true},
+		)
+	}
+	// Skills spec r15 §6.2 item 1: each loadable skill folder (its real path)
+	// is read+execute for the child, on the ordinary and the God path alike;
+	// the registry root itself is never granted.
+	for _, dir := range skillFolders {
+		if strings.TrimSpace(dir) == "" {
+			continue
+		}
+		roots = append(roots, fspolicy.AllowRoot{Path: filepath.Clean(dir), Writable: false})
+	}
+	return roots
 }
 
 // ensureTurnCache creates the per-turn document cache directory under the

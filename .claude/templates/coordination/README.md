@@ -1,5 +1,7 @@
 # Coordination ledger — templates
 
+Process version: 2026-10-29.1
+
 Templates for the live coordination ledger (design
 `docs/internal/design/dev-team-setup-design-2026-09-25.md` section 5.9,
 "The coordination ledger (G2)"). **These templates are authoring source
@@ -14,6 +16,9 @@ worktree**, so no branch can capture or conflict on it (design 5.9):
 ```
 /Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/
 ```
+
+or `$OMNIPUS_COORDINATION_DIR` (on a pod, the coordination repo checkout
+`/workspace/omnipus-coordination`).
 
 This is a convention, not a hard-coded requirement — the design calls the
 exact path "founder-adjustable" — but it is the default every script in
@@ -36,7 +41,7 @@ coordination/
 ├── LANDING-LOG.md        append-only landed-commit record
 ├── MESSAGES.md           append-only durable record of urgent cross-session calls
 └── squads/
-    └── <squad-id>.md    one file per squad: its row, plus a pending landing
+    └── <squad-id>.md    one file per stream: its row, plus a pending landing
                           announcement when one is in flight
 ```
 
@@ -49,7 +54,7 @@ coordination/
 | `LANDING-LOCK.template` | `LANDING-LOCK` (start absent — do not create it with content; the file's mere existence-with-content is the lock) |
 | `LANDING-LOG.md.template` | `LANDING-LOG.md` (start empty) |
 | `MESSAGES.md.template` | `MESSAGES.md` (start empty) |
-| `squads/SQUAD-ID.md.template` | `squads/<real-squad-id>.md`, one per squad, created when the squad starts |
+| `squads/SQUAD-ID.md.template` | `squads/<real-squad-id>.md`, one per stream, created when the stream starts |
 
 Each template's header comment documents its exact line format and cites
 the design section that specifies its fields. Two of those formats are also
@@ -61,10 +66,19 @@ must land together with a matching code change in the same commit:
 - `squads/*.md` `status=in-flight` field — counted by
   `scripts/dev-machine-capacity.sh` (active-dispatch signal, design 5.6).
 
-## Claims are information, not ownership (design 5.9, C2)
+## Current process (amended 2026-10-28)
 
-Every field in `squads/<squad-id>.md` — including `claim` — is informative:
-it tells other sessions what is in flight, it never blocks anyone. The only
+Root `CLAUDE.md` ("Subagent Workflow") is the authority;
+`.claude/skills/omnipus-planning-orchestration/knowledge/coordination-ledger.md` gives
+the current procedure. Existing row formats stay unchanged: `squads/` also holds
+directly coordinated feature and train rows with `lead=team-lead`; it does not
+require a separate lead role. Put one canonical ledger file per stream here.
+
+## Claims are information, not machine locks (design 5.9, as amended)
+
+Every field in `squads/<squad-id>.md` — including `claim` — is planning information,
+not a machine lock. Check it and resolve duplicate area ownership with the chief
+before dispatch, following the root ownership rule. The only
 two things this repo enforces mechanically are **holds** (`HOLDS.md`) and
 the **landing lock** (`LANDING-LOCK`), both via the pre-push hook. Disputes
 over a claim go to the chief, then the founder (design 5.9); nothing in

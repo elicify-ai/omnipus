@@ -10,16 +10,45 @@ import { useChatStore } from './store'
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { emptySessionState } from './session'
-import type { WsReceiveFrame } from '@/lib/ws'
+import type { ServerFrame } from '@/lib/ws'
+import type { SessionSnapshotFrame, SessionStateFrame } from '@/lib/api/generated/asyncapi-types'
+import type { Message } from '@/lib/api/generated/openapi-types'
+import { entry, expectValidFrame, expectValidPage, page, replay, snapshot } from '../../../tests/chat-history-paging/fixtures'
 
 const SID = 'sess-regress'
 const MSG_ID = 'ad866ee6'
 const TURN_ID = 'turn-regress'
 
-function token(seq: number, content: string, extra: Record<string, unknown> = {}): WsReceiveFrame {
+function token(seq: number, content: string, extra: Record<string, unknown> = {}): ServerFrame {
   return {
     type: 'token', session_id: SID, content, message_id: MSG_ID, turn_id: TURN_ID, agent_id: 'mia', seq, ...extra,
-  } as WsReceiveFrame
+  } as ServerFrame
+}
+
+// Current bounded attach contract for the preserved Round8/9 scenarios.
+// Generated page/origin builders provide inputs, never the behaviour oracle.
+function deliverRestartSnapshot(sessionId: string, options: {
+  reason: SessionSnapshotFrame['reason']; seq: number; bootId: string; sources: Message[]
+  activeTurn?: SessionStateFrame['active_turn']; afterSnapshot?: () => void
+}) {
+  const history = page(options.sources, { sessionId })
+  expectValidPage(history, options.sources.map(source => source.history_position!), options.sources.length)
+  const frames: ServerFrame[] = [
+    { ...snapshot(history, options.reason), seq: options.seq, boot_id: options.bootId },
+    { type: 'session_state', session_id: sessionId, user_id: 'u1', pending_approvals: [], emitted_at: '2026-01-01T00:00:00Z',
+      history_state: { status: 'available' }, ...(options.activeTurn ? { active_turn: options.activeTurn } : {}) },
+    ...options.sources.map(source => replay(source, sessionId)),
+    { type: 'done', session_id: sessionId },
+    { type: 'catch_up_complete', session_id: sessionId, seq: options.seq, boot_id: options.bootId, mode: 'snapshot' },
+  ]
+  frames.forEach(expectValidFrame)
+  useChatStore.getState().handleFrame(frames[0])
+  options.afterSnapshot?.()
+  frames.slice(1).forEach(frame => useChatStore.getState().handleFrame(frame))
+  const bucket = useChatStore.getState().sessionsById[sessionId]!
+  expect(bucket.history.historyLoaded, 'valid history really committed before the preserved restart oracle').toBe(true)
+  expect(bucket.history.readerPositions).toStrictEqual(options.sources.map(source => source.history_position!))
+  expect(bucket.cursor).toStrictEqual({ bootId: options.bootId, seq: options.seq })
 }
 
 function assistantBubbles() {
@@ -64,7 +93,7 @@ describe('BUG 1 — disconnect must not close the bubble (BE-DESIGN.md §6.3)', 
     useChatStore.getState().handleFrame({
       type: 'session_state', session_id: SID, user_id: 'u1', pending_approvals: [],
       active_turn: { turn_id: TURN_ID, agent_id: 'mia', started_at: '2026-09-24T00:00:00Z' }, emitted_at: '2026-09-24T00:00:20Z',
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     // Incremental catch-up tail: t009..t040, seq 333..371 — SAME message_id.
     for (let i = 9; i <= 40; i++) {
@@ -72,7 +101,7 @@ describe('BUG 1 — disconnect must not close the bubble (BE-DESIGN.md §6.3)', 
     }
     useChatStore.getState().handleFrame({
       type: 'catch_up_complete', session_id: SID, seq: 372, boot_id: 'boot-1', mode: 'incremental',
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     // Live tail: t041..t060, seq 373..392 (monotonic — seq is a strictly
     // increasing per-session counter; the orchestrator's report abbreviated
@@ -83,7 +112,7 @@ describe('BUG 1 — disconnect must not close the bubble (BE-DESIGN.md §6.3)', 
     }
     useChatStore.getState().handleFrame({
       type: 'done', session_id: SID, message_id: MSG_ID, turn_id: TURN_ID, seq: 393, stats: { tokens: 60, cost: 0.01 },
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     bubbles = assistantBubbles()
     // ONE bubble — never a second, never stuck at t008.
@@ -120,24 +149,24 @@ describe('BUG 2 — the send-time optimistic placeholder must reconcile with the
     const newSid = 'sess-regress-2'
     useChatStore.getState().handleFrame({
       type: 'session_started', session_id: newSid, agent_id: 'mia', seq: 1, boot_id: 'boot-1',
-    } as WsReceiveFrame)
+    } as ServerFrame)
     useChatStore.getState().handleFrame({
       type: 'user_message', session_id: newSid, id: 'u1', client_message_id: 'whatever', content: 'check my tasks', timestamp: '2026-09-24T00:00:00Z', seq: 2,
-    } as WsReceiveFrame)
+    } as ServerFrame)
     useChatStore.getState().handleFrame({
       type: 'message_status', session_id: newSid, client_message_id: 'whatever', state: 'received', seq: 3,
-    } as WsReceiveFrame)
+    } as ServerFrame)
     useChatStore.getState().handleFrame({
       type: 'message_status', session_id: newSid, client_message_id: 'whatever', state: 'working', seq: 4,
-    } as WsReceiveFrame)
+    } as ServerFrame)
     for (let i = 1; i <= 60; i++) {
       useChatStore.getState().handleFrame({
         type: 'token', session_id: newSid, content: `t${String(i).padStart(3, '0')} `, message_id: 'msg-real', turn_id: 'turn-real', agent_id: 'mia', seq: 4 + i,
-      } as WsReceiveFrame)
+      } as ServerFrame)
     }
     useChatStore.getState().handleFrame({
       type: 'done', session_id: newSid, message_id: 'msg-real', turn_id: 'turn-real', seq: 65, stats: { tokens: 60, cost: 0.01 },
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     const b = useChatStore.getState().sessionsById[newSid]!
     const assistantMsgs = b.messageOrder.map((id) => b.messagesById[id]).filter((m) => m.role === 'assistant')
@@ -162,7 +191,7 @@ describe('BE-DESIGN.md §6.3 — a tool_call_result for a tool already moved int
     useChatStore.getState().handleFrame(token(325, 'checking your tasks... '))
     useChatStore.getState().handleFrame({
       type: 'tool_call_start', session_id: SID, call_id: 'call-1', tool: 'list_tasks', params: {}, turn_id: TURN_ID, seq: 326,
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     // Disconnect while the tool call is still running — §6.3: not cancelled,
     // just moved (baked) into the message.
@@ -175,7 +204,7 @@ describe('BE-DESIGN.md §6.3 — a tool_call_result for a tool already moved int
     // The real result arrives afterward (catch-up, or a late live frame).
     useChatStore.getState().handleFrame({
       type: 'tool_call_result', session_id: SID, call_id: 'call-1', tool: 'list_tasks', result: { tasks: [] }, status: 'success', seq: 327,
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     bucket = useChatStore.getState().sessionsById[SID]!
     msg = bucket.messagesById[MSG_ID]
@@ -204,7 +233,7 @@ describe('BE-DESIGN.md §4.7/founder Q1 — pending tail ordering and replay ded
       sessionsById: {
         ...s.sessionsById,
         [PT_SID]: {
-          ...(s.sessionsById[PT_SID] ?? ({} as never)),
+          ...emptySessionState(),
           messageOrder: ['failed-1'],
           messagesById: {
             'failed-1': { id: 'failed-1', role: 'user', content: 'did this send?', timestamp: '2026-09-24T00:00:00Z', deliveryStatus: 'failed' },
@@ -218,13 +247,13 @@ describe('BE-DESIGN.md §4.7/founder Q1 — pending tail ordering and replay ded
     // it, not after.
     useChatStore.getState().handleFrame({
       type: 'session_snapshot', session_id: PT_SID, seq: 5, boot_id: 'boot-1', reason: 'unknown_position',
-    } as WsReceiveFrame)
+    } as ServerFrame)
     useChatStore.getState().handleFrame({
       type: 'replay_message', session_id: PT_SID, id: 'hist-1', role: 'user', content: 'an earlier message', timestamp: '2026-09-23T23:59:00Z',
-    } as WsReceiveFrame)
+    } as ServerFrame)
     useChatStore.getState().handleFrame({
       type: 'replay_message', session_id: PT_SID, id: 'hist-2', role: 'assistant', content: 'an earlier reply', timestamp: '2026-09-23T23:59:30Z',
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     const bucket = useChatStore.getState().sessionsById[PT_SID]!
     // The failed send is STILL PRESENT (not silently dropped by the wipe)...
@@ -245,7 +274,7 @@ describe('BE-DESIGN.md §4.7/founder Q1 — pending tail ordering and replay ded
       sessionsById: {
         ...s.sessionsById,
         [PT_SID]: {
-          ...(s.sessionsById[PT_SID] ?? ({} as never)),
+          ...emptySessionState(),
           messageOrder: ['client-abc'],
           messagesById: {
             'client-abc': { id: 'client-abc', role: 'user', content: 'check my tasks', timestamp: '2026-09-24T00:00:00Z', deliveryStatus: 'sending' },
@@ -258,7 +287,7 @@ describe('BE-DESIGN.md §4.7/founder Q1 — pending tail ordering and replay ded
     // server's real id and this client_message_id.
     useChatStore.getState().handleFrame({
       type: 'session_snapshot', session_id: PT_SID, seq: 5, boot_id: 'boot-1', reason: 'unknown_position',
-    } as WsReceiveFrame)
+    } as ServerFrame)
     // The snapshot wipe just cleared history but kept the pending 'sending'
     // bubble (client-abc) — restore it for this scenario (session_snapshot
     // itself already preserves it via applySnapshotHistoryWipe; re-seeding
@@ -270,7 +299,7 @@ describe('BE-DESIGN.md §4.7/founder Q1 — pending tail ordering and replay ded
     })
     useChatStore.getState().handleFrame({
       type: 'replay_message', session_id: PT_SID, id: 'server-real-id', client_message_id: 'client-abc', role: 'user', content: 'check my tasks', timestamp: '2026-09-24T00:00:00Z',
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     const bucket = useChatStore.getState().sessionsById[PT_SID]!
     const userMsgs = bucket.messageOrder.map((id) => bucket.messagesById[id]).filter((m) => m.role === 'user')
@@ -323,7 +352,7 @@ describe('BE-DESIGN.md §6.2/§6.3 — frames for a NON-VIEWED session must stil
     seq += 1
     useChatStore.getState().handleFrame({
       type: 'done', session_id: SID, message_id: MSG_ID, turn_id: TURN_ID, seq, stats: { tokens: 59, cost: 0.01 },
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     // These frames must have applied to S's OWN bucket even though S was
     // never the foreground/active session while they arrived.
@@ -341,11 +370,11 @@ describe('BE-DESIGN.md §6.2/§6.3 — frames for a NON-VIEWED session must stil
     useSessionStore.setState({ activeSessionId: SID })
     useChatStore.getState().handleFrame({
       type: 'session_state', session_id: SID, user_id: 'u1', pending_approvals: [], emitted_at: '2026-09-24T00:01:00Z',
-    } as WsReceiveFrame)
+    } as ServerFrame)
     const headSeq = sBucket.cursor?.seq ?? 0
     useChatStore.getState().handleFrame({
       type: 'catch_up_complete', session_id: SID, seq: headSeq, boot_id: sBucket.cursor?.bootId ?? 'boot-1', mode: 'incremental',
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     sBucket = useChatStore.getState().sessionsById[SID]!
     sAsst = sBucket.messageOrder.map((id) => sBucket.messagesById[id]).filter((m) => m.role === 'assistant')
@@ -412,7 +441,7 @@ describe('BE-DESIGN.md §6.3, Opus review round 3 N2 — a bubble closed only by
     }
     useChatStore.getState().handleFrame({
       type: 'done', session_id: SID, message_id: MSG_ID, turn_id: TURN_ID, seq: 385, stats: { tokens: 60, cost: 0.01 },
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     const b = useChatStore.getState().sessionsById[SID]!
     const order = b.messageOrder.map((id) => b.messagesById[id])
@@ -444,28 +473,28 @@ describe('BE-DESIGN.md §6.3, Opus review round 3 N5 — a replayed bubble of th
 
     useChatStore.getState().handleFrame({
       type: 'session_snapshot', session_id: SID, seq: 10, boot_id: 'boot-1', reason: 'unknown_position',
-    } as WsReceiveFrame)
+    } as ServerFrame)
     useChatStore.getState().handleFrame({
       type: 'session_state', session_id: SID, user_id: 'u1', pending_approvals: [],
       active_turn: { turn_id: 'turn-n5', agent_id: 'mia', started_at: '2026-09-24T00:00:00Z' }, emitted_at: '2026-09-24T00:00:01Z',
-    } as WsReceiveFrame)
+    } as ServerFrame)
     // Step one of the turn, fully persisted, replayed as HISTORY.
     useChatStore.getState().handleFrame({
       type: 'replay_message', session_id: SID, id: 'msg-1', role: 'assistant', content: 'step one done.', turn_id: 'turn-n5', agent_id: 'mia', timestamp: '2026-09-24T00:00:02Z',
-    } as WsReceiveFrame)
+    } as ServerFrame)
     // The turn's NEXT step, still in progress — same turn_id, NEW message_id.
     useChatStore.getState().handleFrame({
       type: 'token', session_id: SID, content: 'step two', message_id: 'msg-2', turn_id: 'turn-n5', agent_id: 'mia', seq: 11,
-    } as WsReceiveFrame)
+    } as ServerFrame)
     useChatStore.getState().handleFrame({
       type: 'catch_up_complete', session_id: SID, seq: 11, boot_id: 'boot-1', mode: 'snapshot',
-    } as WsReceiveFrame)
+    } as ServerFrame)
     useChatStore.getState().handleFrame({
       type: 'token', session_id: SID, content: ' finishing.', message_id: 'msg-2', turn_id: 'turn-n5', agent_id: 'mia', seq: 12,
-    } as WsReceiveFrame)
+    } as ServerFrame)
     useChatStore.getState().handleFrame({
       type: 'done', session_id: SID, message_id: 'msg-2', turn_id: 'turn-n5', seq: 13, stats: { tokens: 5, cost: 0.01 },
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     const bubbles = assistantBubbles()
     expect(bubbles).toHaveLength(1)
@@ -497,20 +526,20 @@ describe('BE-DESIGN.md §6.5, Opus review round 6 R-W — a fully finished, repl
     // FULL, complete answer replays as ordinary history.
     useChatStore.getState().handleFrame({
       type: 'session_snapshot', session_id: SID, seq: 10, boot_id: 'boot-1', reason: 'unknown_position',
-    } as WsReceiveFrame)
+    } as ServerFrame)
     useChatStore.getState().handleFrame({
       type: 'session_state', session_id: SID, user_id: 'u1', pending_approvals: [], emitted_at: '2026-09-24T00:00:00Z',
       // No active_turn — the turn already finished.
-    } as WsReceiveFrame)
+    } as ServerFrame)
     useChatStore.getState().handleFrame({
       type: 'replay_message', session_id: SID, id: 'u1', role: 'user', content: 'check my tasks', timestamp: '2026-09-24T00:00:00Z',
-    } as WsReceiveFrame)
+    } as ServerFrame)
     useChatStore.getState().handleFrame({
       type: 'replay_message', session_id: SID, id: MSG_ID, role: 'assistant', content: 'all done, full answer.', turn_id: TURN_ID, agent_id: 'mia', timestamp: '2026-09-24T00:00:01Z',
-    } as WsReceiveFrame)
+    } as ServerFrame)
     useChatStore.getState().handleFrame({
       type: 'catch_up_complete', session_id: SID, seq: 10, boot_id: 'boot-1', mode: 'snapshot',
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     const bubbles = assistantBubbles()
     expect(bubbles).toHaveLength(1)
@@ -566,7 +595,7 @@ describe('BE-DESIGN.md §6.3, Opus review round 6 R-J — a new turn never appen
     const steerFrame = sent[0] as { client_message_id?: string }
     useChatStore.getState().handleFrame({
       type: 'message_status', session_id: SID, client_message_id: steerFrame.client_message_id, state: 'received', seq: 331,
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     // Turn A keeps streaming its own remaining tokens, then genuinely
     // finishes with its OWN done. Tokens 1-6 used seq 325-330; 7-10 use
@@ -576,18 +605,18 @@ describe('BE-DESIGN.md §6.3, Opus review round 6 R-J — a new turn never appen
     }
     useChatStore.getState().handleFrame({
       type: 'done', session_id: SID, message_id: MSG_ID, turn_id: TURN_ID, seq: 336, stats: { tokens: 10, cost: 0.01 },
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     // Turn B: a GENUINELY NEW turn (new turn_id, new message_id) — e.g. the
     // agent's reply to the steer message itself.
     for (let i = 1; i <= 6; i++) {
       useChatStore.getState().handleFrame({
         type: 'token', session_id: SID, content: `B${String(i).padStart(3, '0')} `, message_id: MSG_B, turn_id: TURN_B, agent_id: 'mia', seq: 336 + i,
-      } as WsReceiveFrame)
+      } as ServerFrame)
     }
     useChatStore.getState().handleFrame({
       type: 'done', session_id: SID, message_id: MSG_B, turn_id: TURN_B, seq: 343, stats: { tokens: 6, cost: 0.01 },
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     const b = useChatStore.getState().sessionsById[SID]!
     const order = b.messageOrder.map((id) => b.messagesById[id])
@@ -643,7 +672,7 @@ describe('BE-DESIGN.md §6.3, Opus review round 7 — a user message mid-turn en
       seq += 1
       useChatStore.getState().handleFrame({
         type: 'token', session_id: SID, content: `t${String(i).padStart(3, '0')} `, message_id: MSG_1, turn_id: TURN, agent_id: 'mia', seq,
-      } as WsReceiveFrame)
+      } as ServerFrame)
     }
     useChatStore.setState({ isStreaming: true })
 
@@ -655,15 +684,15 @@ describe('BE-DESIGN.md §6.3, Opus review round 7 — a user message mid-turn en
     seq += 1 // user_message echo, seq 330
     useChatStore.getState().handleFrame({
       type: 'user_message', session_id: SID, id: 'srv-steer-id', client_message_id: steerFrame.client_message_id, content: 'steer', timestamp: '2026-09-24T00:00:00Z', seq,
-    } as WsReceiveFrame)
+    } as ServerFrame)
     seq += 1
     useChatStore.getState().handleFrame({
       type: 'message_status', session_id: SID, client_message_id: steerFrame.client_message_id, state: 'received', seq,
-    } as WsReceiveFrame)
+    } as ServerFrame)
     seq += 1
     useChatStore.getState().handleFrame({
       type: 'message_status', session_id: SID, client_message_id: steerFrame.client_message_id, state: 'working', seq,
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     // Round 1 continues — SAME message_id a382, SAME turn — must keep
     // appending to bubble 1 (N2's reopen-after-steer case, kept).
@@ -671,7 +700,7 @@ describe('BE-DESIGN.md §6.3, Opus review round 7 — a user message mid-turn en
       seq += 1
       useChatStore.getState().handleFrame({
         type: 'token', session_id: SID, content: `t${String(i).padStart(3, '0')} `, message_id: MSG_1, turn_id: TURN, agent_id: 'mia', seq,
-      } as WsReceiveFrame)
+      } as ServerFrame)
     }
 
     // Round 2 — a NEW message_id, SAME turn_id, arriving AFTER the steer.
@@ -680,12 +709,12 @@ describe('BE-DESIGN.md §6.3, Opus review round 7 — a user message mid-turn en
       seq += 1
       useChatStore.getState().handleFrame({
         type: 'token', session_id: SID, content: `t${String(i).padStart(3, '0')} `, message_id: MSG_2, turn_id: TURN, agent_id: 'mia', seq,
-      } as WsReceiveFrame)
+      } as ServerFrame)
     }
     seq += 1
     useChatStore.getState().handleFrame({
       type: 'done', session_id: SID, message_id: MSG_2, turn_id: TURN, seq, stats: { tokens: 60, cost: 0.01 },
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     const b = useChatStore.getState().sessionsById[SID]!
     const order = b.messageOrder.map((id) => b.messagesById[id])
@@ -724,39 +753,39 @@ describe('BE-DESIGN.md §6.3, Opus review round 7 — a user message mid-turn en
     seq += 1
     useChatStore.getState().handleFrame({
       type: 'session_started', session_id: SID, boot_id: 'boot-regress', seq,
-    } as WsReceiveFrame)
+    } as ServerFrame)
     seq += 1
     useChatStore.getState().handleFrame({
       type: 'user_message', session_id: SID, id: 'um-1', content: 'remember this', timestamp: new Date().toISOString(), seq,
-    } as WsReceiveFrame)
+    } as ServerFrame)
     seq += 1
     useChatStore.getState().handleFrame({
       type: 'message_status', session_id: SID, id: 'um-1', client_message_id: 'um-1', state: 'received', seq,
-    } as WsReceiveFrame)
+    } as ServerFrame)
     seq += 1
     useChatStore.getState().handleFrame({
       type: 'message_status', session_id: SID, id: 'um-1', client_message_id: 'um-1', state: 'working', seq,
-    } as WsReceiveFrame)
+    } as ServerFrame)
     // tool_call_start / tool_call_result: NO turn_id, NO message_id on the wire.
     seq += 1
     useChatStore.getState().handleFrame({
       type: 'tool_call_start', session_id: SID, call_id: 'call_1', tool: 'remember', params: {}, agent_id: 'mia', seq,
-    } as WsReceiveFrame)
+    } as ServerFrame)
     seq += 1
     useChatStore.getState().handleFrame({
       type: 'tool_call_result', session_id: SID, call_id: 'call_1', status: 'error', result: 'memory store unavailable', seq,
-    } as WsReceiveFrame)
+    } as ServerFrame)
     // First token: now the turn is named.
     for (let i = 1; i <= 10; i++) {
       seq += 1
       useChatStore.getState().handleFrame({
         type: 'token', session_id: SID, content: `t${String(i).padStart(3, '0')} `, message_id: MSG_ID, turn_id: TURN, agent_id: 'mia', seq,
-      } as WsReceiveFrame)
+      } as ServerFrame)
     }
     seq += 1
     useChatStore.getState().handleFrame({
       type: 'done', session_id: SID, message_id: MSG_ID, turn_id: TURN, seq, stats: { tokens: 10, cost: 0.01 },
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     const b = useChatStore.getState().sessionsById[SID]!
     const order = b.messageOrder.map((id) => b.messagesById[id])
@@ -792,32 +821,32 @@ describe('BE-DESIGN.md §6.3, Opus review round 7 — a user message mid-turn en
 
     useChatStore.getState().handleFrame({
       type: 'session_snapshot', session_id: SID, seq: 20, boot_id: 'boot-fresh', reason: 'unknown_position',
-    } as WsReceiveFrame)
+    } as ServerFrame)
     useChatStore.getState().handleFrame({
       type: 'session_state', session_id: SID, user_id: 'u1', boot_id: 'boot-fresh', pending_approvals: [], emitted_at: '2026-01-01T00:00:00Z',
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     for (let i = 0; i < 10; i++) {
       useChatStore.getState().handleFrame({
         type: 'replay_message', session_id: SID, role: 'user', id: `entry-user-${i}`, content: `Message ${i}`, timestamp: new Date(2026, 0, 1, 0, i).toISOString(),
-      } as WsReceiveFrame)
+      } as ServerFrame)
       useChatStore.getState().handleFrame({
         type: 'replay_message', session_id: SID, role: 'assistant', id: `entry-asst-${i}`, content: `Response to message ${i}`, agent_id: 'mia', timestamp: new Date(2026, 0, 1, 0, i, 30).toISOString(),
-      } as WsReceiveFrame)
+      } as ServerFrame)
       useChatStore.getState().handleFrame({
         type: 'tool_call_start', session_id: SID, call_id: `tc-${i}`, tool: 'shell', params: { cmd: `echo ${i}` }, agent_id: 'mia',
-      } as WsReceiveFrame)
+      } as ServerFrame)
       useChatStore.getState().handleFrame({
         type: 'tool_call_result', session_id: SID, call_id: `tc-${i}`, status: 'success', result: `${i}\n`,
-      } as WsReceiveFrame)
+      } as ServerFrame)
     }
 
     useChatStore.getState().handleFrame({
       type: 'done', session_id: SID, stats: { frames_emitted: 42, orphan_count: 0 },
-    } as WsReceiveFrame)
+    } as ServerFrame)
     useChatStore.getState().handleFrame({
       type: 'catch_up_complete', session_id: SID, seq: 20, boot_id: 'boot-fresh', mode: 'snapshot',
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     const b = useChatStore.getState().sessionsById[SID]!
     expect(b.isStreaming).toBe(false)
@@ -855,28 +884,24 @@ describe('Round 8 — gateway restart mid-stream, real content already streamed'
     // fix clearStreamingState() does NOT close the bubble on a bare disconnect,
     // so it's still isStreaming:true, with its real turn_id, right up until
     // the reconnect's session_snapshot wipes it.
-    useChatStore.getState().handleFrame({
+    const witnessedToken: ServerFrame = {
       type: 'token', session_id: SID, message_id: 'entry-asst-1', turn_id: 'turn-lost-in-crash', agent_id: 'mia', content: 'Partial answer before the crash', seq: 40,
-    } as WsReceiveFrame)
+    }
+    expectValidFrame(witnessedToken)
+    useChatStore.getState().handleFrame(witnessedToken)
 
-    useChatStore.getState().handleFrame({
-      type: 'session_snapshot', session_id: SID, seq: 5, boot_id: 'boot-fresh-after-restart', reason: 'unknown_position',
-    } as WsReceiveFrame)
-    useChatStore.getState().handleFrame({
-      type: 'session_state', session_id: SID, user_id: 'u1', boot_id: 'boot-fresh-after-restart', pending_approvals: [], emitted_at: '2026-01-01T00:00:00Z',
-    } as WsReceiveFrame)
-    useChatStore.getState().handleFrame({
-      type: 'replay_message', session_id: SID, role: 'user', id: 'entry-user-1', content: 'a very long prompt', timestamp: '2026-01-01T00:00:00Z',
-    } as WsReceiveFrame)
-    useChatStore.getState().handleFrame({
-      type: 'replay_message', session_id: SID, role: 'assistant', id: 'entry-asst-1', content: 'Partial answer before the crash', agent_id: 'mia', turn_id: 'turn-lost-in-crash', timestamp: '2026-01-01T00:00:05Z',
-    } as WsReceiveFrame)
-    useChatStore.getState().handleFrame({
-      type: 'done', session_id: SID, stats: { frames_emitted: 2, orphan_count: 0 },
-    } as WsReceiveFrame)
-    useChatStore.getState().handleFrame({
-      type: 'catch_up_complete', session_id: SID, seq: 5, boot_id: 'boot-fresh-after-restart', mode: 'snapshot',
-    } as WsReceiveFrame)
+    deliverRestartSnapshot(SID, {
+      reason: 'unknown_position', seq: 5, bootId: 'boot-fresh-after-restart',
+      sources: [
+        entry(1, { id: 'entry-user-1', role: 'user', content: 'a very long prompt', timestamp: '2026-01-01T00:00:00Z' }),
+        entry(2, { id: 'entry-asst-1', role: 'assistant', content: 'Partial answer before the crash', agent_id: 'mia', turn_id: 'turn-lost-in-crash', timestamp: '2026-01-01T00:00:05Z' }),
+      ],
+      afterSnapshot: () => {
+        const witnessed = useChatStore.getState().sessionsById[SID]!
+        expect(witnessed.wipedOpenTurnIds, 'positive witness: the tab saw this exact turn open before the cut').toStrictEqual(['turn-lost-in-crash'])
+        expect(witnessed.snapshotWasBootMismatch, 'unknown_position must not be changed to boot_mismatch to force green').toBe(false)
+      },
+    })
 
     const b = useChatStore.getState().sessionsById[SID]!
     expect(b.awaitingCatchUp).toBe(false)
@@ -903,18 +928,10 @@ describe('Round 9 — a turn killed before any token streamed leaves no assistan
     const SID = 'sess-regress-i2'
     useSessionStore.setState({ activeSessionId: SID })
 
-    useChatStore.getState().handleFrame({
-      type: 'session_snapshot', session_id: SID, seq: 3, boot_id: 'boot-fresh', reason: 'boot_mismatch',
-    } as WsReceiveFrame)
-    useChatStore.getState().handleFrame({
-      type: 'session_state', session_id: SID, user_id: 'u1', boot_id: 'boot-fresh', pending_approvals: [], emitted_at: '2026-01-01T00:00:00Z',
-    } as WsReceiveFrame)
-    useChatStore.getState().handleFrame({
-      type: 'replay_message', session_id: SID, role: 'user', id: 'entry-user-1', content: 'question before the restart', timestamp: '2026-01-01T00:00:00Z',
-    } as WsReceiveFrame)
-    useChatStore.getState().handleFrame({
-      type: 'catch_up_complete', session_id: SID, seq: 3, boot_id: 'boot-fresh', mode: 'snapshot',
-    } as WsReceiveFrame)
+    deliverRestartSnapshot(SID, {
+      reason: 'boot_mismatch', seq: 3, bootId: 'boot-fresh',
+      sources: [entry(1, { id: 'entry-user-1', role: 'user', content: 'question before the restart', timestamp: '2026-01-01T00:00:00Z' })],
+    })
 
     const b = useChatStore.getState().sessionsById[SID]!
     expect(b.activeTurnId).toBeNull()
@@ -924,21 +941,13 @@ describe('Round 9 — a turn killed before any token streamed leaves no assistan
   it('does NOT flag a normal completed exchange (assistant reply present)', () => {
     const SID = 'sess-regress-i3'
     useSessionStore.setState({ activeSessionId: SID })
-    useChatStore.getState().handleFrame({
-      type: 'session_snapshot', session_id: SID, seq: 4, boot_id: 'boot-fresh', reason: 'boot_mismatch',
-    } as WsReceiveFrame)
-    useChatStore.getState().handleFrame({
-      type: 'session_state', session_id: SID, user_id: 'u1', boot_id: 'boot-fresh', pending_approvals: [], emitted_at: '2026-01-01T00:00:00Z',
-    } as WsReceiveFrame)
-    useChatStore.getState().handleFrame({
-      type: 'replay_message', session_id: SID, role: 'user', id: 'entry-user-1', content: 'a normal question', timestamp: '2026-01-01T00:00:00Z',
-    } as WsReceiveFrame)
-    useChatStore.getState().handleFrame({
-      type: 'replay_message', session_id: SID, role: 'assistant', id: 'entry-asst-1', content: 'a normal, complete answer', agent_id: 'mia', timestamp: '2026-01-01T00:00:05Z',
-    } as WsReceiveFrame)
-    useChatStore.getState().handleFrame({
-      type: 'catch_up_complete', session_id: SID, seq: 4, boot_id: 'boot-fresh', mode: 'snapshot',
-    } as WsReceiveFrame)
+    deliverRestartSnapshot(SID, {
+      reason: 'boot_mismatch', seq: 4, bootId: 'boot-fresh',
+      sources: [
+        entry(1, { id: 'entry-user-1', role: 'user', content: 'a normal question', timestamp: '2026-01-01T00:00:00Z' }),
+        entry(2, { id: 'entry-asst-1', role: 'assistant', content: 'a normal, complete answer', agent_id: 'mia', timestamp: '2026-01-01T00:00:05Z' }),
+      ],
+    })
     const b = useChatStore.getState().sessionsById[SID]!
     expect(b.unansweredLastUserMessageId).toBeNull()
   })
@@ -946,18 +955,10 @@ describe('Round 9 — a turn killed before any token streamed leaves no assistan
   it('does NOT flag when reason is retention_exceeded (old data trimmed, not a crash signal)', () => {
     const SID = 'sess-regress-i4'
     useSessionStore.setState({ activeSessionId: SID })
-    useChatStore.getState().handleFrame({
-      type: 'session_snapshot', session_id: SID, seq: 3, boot_id: 'boot-same', reason: 'retention_exceeded',
-    } as WsReceiveFrame)
-    useChatStore.getState().handleFrame({
-      type: 'session_state', session_id: SID, user_id: 'u1', boot_id: 'boot-same', pending_approvals: [], emitted_at: '2026-01-01T00:00:00Z',
-    } as WsReceiveFrame)
-    useChatStore.getState().handleFrame({
-      type: 'replay_message', session_id: SID, role: 'user', id: 'entry-user-1', content: 'question, older reply pruned by retention', timestamp: '2026-01-01T00:00:00Z',
-    } as WsReceiveFrame)
-    useChatStore.getState().handleFrame({
-      type: 'catch_up_complete', session_id: SID, seq: 3, boot_id: 'boot-same', mode: 'snapshot',
-    } as WsReceiveFrame)
+    deliverRestartSnapshot(SID, {
+      reason: 'retention_exceeded', seq: 3, bootId: 'boot-same',
+      sources: [entry(1, { id: 'entry-user-1', role: 'user', content: 'question, older reply pruned by retention', timestamp: '2026-01-01T00:00:00Z' })],
+    })
     const b = useChatStore.getState().sessionsById[SID]!
     expect(b.unansweredLastUserMessageId).toBeNull()
   })
@@ -965,18 +966,11 @@ describe('Round 9 — a turn killed before any token streamed leaves no assistan
   it('does NOT flag while a turn is still genuinely active', () => {
     const SID = 'sess-regress-i5'
     useSessionStore.setState({ activeSessionId: SID })
-    useChatStore.getState().handleFrame({
-      type: 'session_snapshot', session_id: SID, seq: 3, boot_id: 'boot-fresh', reason: 'boot_mismatch',
-    } as WsReceiveFrame)
-    useChatStore.getState().handleFrame({
-      type: 'session_state', session_id: SID, user_id: 'u1', boot_id: 'boot-fresh', pending_approvals: [], emitted_at: '2026-01-01T00:00:00Z', active_turn: { turn_id: 'turn-live', agent_id: 'mia', started_at: '2026-01-01T00:00:00Z' },
-    } as WsReceiveFrame)
-    useChatStore.getState().handleFrame({
-      type: 'replay_message', session_id: SID, role: 'user', id: 'entry-user-1', content: 'question, turn still running', timestamp: '2026-01-01T00:00:00Z',
-    } as WsReceiveFrame)
-    useChatStore.getState().handleFrame({
-      type: 'catch_up_complete', session_id: SID, seq: 3, boot_id: 'boot-fresh', mode: 'snapshot',
-    } as WsReceiveFrame)
+    deliverRestartSnapshot(SID, {
+      reason: 'boot_mismatch', seq: 3, bootId: 'boot-fresh',
+      activeTurn: { turn_id: 'turn-live', agent_id: 'mia', started_at: '2026-01-01T00:00:00Z' },
+      sources: [entry(1, { id: 'entry-user-1', role: 'user', content: 'question, turn still running', timestamp: '2026-01-01T00:00:00Z' })],
+    })
     const b = useChatStore.getState().sessionsById[SID]!
     expect(b.unansweredLastUserMessageId).toBeNull()
   })

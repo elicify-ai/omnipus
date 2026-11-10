@@ -351,7 +351,9 @@ test.describe("ADR-067 §10.7 — the SPA's Content-Security-Policy, measured", 
       'worker-src must permit the built worker URL',
     ).toEqual([])
   })
+})
 
+test.describe("ADR-067 §10.7 — the SPA's Content-Security-Policy, measured", () => {
   /**
    * A2b — THE ASSUMPTION THE ORIGINAL LIST NEVER MADE, and the defect this
    * audit found.
@@ -422,7 +424,9 @@ test.describe("ADR-067 §10.7 — the SPA's Content-Security-Policy, measured", 
     const rec = record(page)
     await bootApp(page)
     const seen: DocumentViolation[] = []
-    for (const route of ['/', '/#/agents', '/#/settings']) {
+    // WU-11 (FR-108): the retired /#/agents route is replaced by /#/skills in
+    // the sweep — the zero-style-violation rule covers surviving surfaces.
+    for (const route of ['/', '/#/skills', '/#/settings']) {
       await page.goto(route)
       await expect(page.locator('#root')).not.toBeEmpty({ timeout: 30_000 })
       await page.waitForTimeout(2_000)
@@ -480,7 +484,9 @@ test.describe("ADR-067 §10.7 — the SPA's Content-Security-Policy, measured", 
     const violations = await rec.documentViolations()
     expect(violations.filter((v) => v.directive.startsWith('connect-src'))).toEqual([])
   })
+})
 
+test.describe("ADR-067 §10.7 — the SPA's Content-Security-Policy, measured", () => {
   /**
    * A5 — "Shiki needs no WebAssembly". MEASURED FALSE on 2026-09-05 and fixed in
    * the library rather than the policy (`createJavaScriptRegexEngine`). This

@@ -19,6 +19,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -131,9 +132,9 @@ func (al *AgentLoop) clearGoal(sessionID string, store *session.UnifiedStore, no
 }
 
 // clearGoalStatus is clearGoal's full result: the user-facing reply AND
-// whether the goal actually ended. ok is false ONLY when there was an active
-// goal and its durable terminal transition was refused by the store — the
-// deferral case clearGoal's own Fix-B.7 branch describes, where every
+// whether the goal actually ended. ok is false when the goal state could not
+// be read or an active goal's terminal transition was refused by the store —
+// the deferral case clearGoal's own Fix-B.7 branch describes, where every
 // terminal side effect is deliberately skipped and the next turn re-drives
 // the clear. It is true when the transition landed AND when there was no
 // active goal to clear in the first place (nothing is pending in that case,
@@ -156,7 +157,7 @@ type endedGoal struct {
 }
 
 // endActiveGoal is clearGoalStatus's body. It additionally returns the goal it
-// ended — nil when there was no active goal or the transition was refused — so
+// ended — nil on genuine absence, read failure or transition refusal — so
 // clearGoalWithOutcome (goal_outcome.go) can record the ending's outcome line
 // only once the ending itself is saved.
 func (al *AgentLoop) endActiveGoal(sessionID string, store *session.UnifiedStore, note string) (string, *endedGoal, bool) {
@@ -164,7 +165,10 @@ func (al *AgentLoop) endActiveGoal(sessionID string, store *session.UnifiedStore
 	// retires the pending-amendment/pending-compile states this check used to
 	// also cover (GoalPendingJSON/GoalClarificationJSON no longer exist) —
 	// hadGoal is now simply "is there an active goal record to clear".
-	rec := activeGoalForSession(sessionID)
+	rec, err := activeGoalForSession(sessionID)
+	if err != nil {
+		return al.reportGoalReadError(sessionID, "goal clear", err), nil, false
+	}
 	hadGoal := rec != nil
 
 	// ADR-088 D9/FR-028 (E7/S-41): a `/goal clear` must not leave an
@@ -293,7 +297,7 @@ func terminateGoalRecordAt(goalID string, state generated.GoalState, reason stri
 // verifier session (verifierUnitForGoal(sessionID)) — set BEFORE dispatch by
 // the SAME runVerifierAdjudication (verifier_adjudication.go) plan-Stop's
 // fan-out reads — and, if adjudication is currently in flight for this
-// session, cancels it via the SAME RequestCancelForSession chat-cancel
+// session, stops it via the one session Stop (session scope only)
 // primitive every other Stop surface uses (A2, precedent: plan_engine.go's
 // StopPlan/StopTask) — no new cancel machinery — then unregisters the entry.
 // A no-op when no verifier is currently registered for this goal (the common
@@ -306,7 +310,8 @@ func (al *AgentLoop) cancelGoalVerifierIfAny(pe *PlanEngine, sessionID string) {
 	}
 	cancelCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, armed, err := al.RequestCancelForSession(cancelCtx, verifierSessionID, "", "")
+	// The verifier session only (no helper cascade), through the one Stop.
+	_, armed, err := al.requestSweptStop(cancelCtx, verifierSessionID, "", "", false)
 	switch {
 	case err != nil:
 		logger.WarnCF("agent", "goal: could not cancel in-flight goal verifier session",
@@ -317,7 +322,7 @@ func (al *AgentLoop) cancelGoalVerifierIfAny(pe *PlanEngine, sessionID string) {
 		// (cancel_prearm.go) now stands in for this cancel and will fire the
 		// instant that turn registers (within cancelPreArmTTL). Not a
 		// failure, just deferred; Debug (not Warn) because
-		// RequestCancelForSession's own OnLatchExpired hook (cancel.go)
+		// requestSweptStop's own OnLatchExpired hook (cancel.go)
 		// already gives an operator-visible Warn if the latch itself later
 		// expires unconsumed.
 		logger.DebugCF("agent", "goal: clear armed a pre-registration cancel latch for the in-flight goal verifier session",
@@ -352,8 +357,8 @@ func (al *AgentLoop) emitGoalStatusFrame(sessionID, goalID, condition string, ro
 
 // emitGoalStatusFrameWithCriteria is emitGoalStatusFrame plus the compiled
 // criteria breakdown (ADR-074 D5.2 / FR-011): every current call site passes
-// nil (ADR-088 D9 retired the `queued` pending-confirm emission that used to
-// be the one caller passing a populated slice) — wave 2 (ADR-088 FR-019)
+// nil (the retired pending-confirm emission was the one caller that passed a
+// populated slice) — wave 2 (ADR-088 FR-019)
 // wires a `set_goal`-registered/updated record's criteria/DoD through this
 // path on the `active` emission.
 func (al *AgentLoop) emitGoalStatusFrameWithCriteria(sessionID, goalID, condition string, round, maxRounds int, reason, state string, criteria []task.AcceptanceCriterion) {
@@ -370,6 +375,18 @@ func (al *AgentLoop) emitGoalStatusFrameWithCriteriaAndDoD(
 	sessionID, goalID, condition string, round, maxRounds int, reason, state, definition string,
 	criteria, dod []task.AcceptanceCriterion,
 ) {
+	// A person's Stop pauses the goal keeper while the record stays `active`
+	// (keeperPausedByStop). That pause is announced as the contract's typed
+	// `waiting_on_user` pause (GoalStatusFrame.yaml: "needs_input/paused for any
+	// other reason") so the client never has to infer a Stop itself: every
+	// `active` frame — the stopped turn's own completion, a reattach snapshot —
+	// is reported as waiting_on_user for as long as the pause holds.
+	// The worker's own typed GOAL_STATUS: waiting_on_user park (goalIsWaitingOnUser,
+	// keyed by goal id) is the same pause, so a reattach snapshot of a parked
+	// goal reports it instead of `active`.
+	if state == goalPillActive && (al.goalKeeperPausedByStop(sessionID) || (goalID != "" && al.goalIsWaitingOnUser(goalID))) {
+		state = goalPillWaitingOnUser
+	}
 	active, capN := al.activeLoopsSnapshot("goal")
 	al.EmitGoalStatusChanged(GoalStatusChangedPayload{
 		SessionID:    sessionID,
@@ -456,6 +473,23 @@ type goalDeferredAdjudicationWork struct {
 	workspaceID string
 	sessionID   string
 	claimText   string
+	// producer is the admitted execution whose turn made the claim; the
+	// completion tail commits as that execution only (never a same-
+	// generation replacement). Empty for a turn with no admission.
+	producer executionClaim
+	// goalID / goalPrompt identify the goal and definition this claim was
+	// made against, and claimRecordedAt when the claim was put on its record
+	// (issue #1306 R2-2). A re-drive judges and concludes only that goal: a
+	// goal cleared, replaced or restated meanwhile — or a newer claim on it —
+	// is never painted with this claim's conclusion. Empty goalID (a caller
+	// that did not capture it) binds to the first goal the re-drive reads.
+	goalID          string
+	goalPrompt      string
+	claimRecordedAt time.Time
+	// answer is the claiming turn's work result for the parent (all its
+	// assistant text, goal_upward_answer.go). claimText stays what the
+	// Judge judges (JUDGE-FR-094); answer is only what travels upward.
+	answer string
 }
 
 // goalDeferredAdjudicationDoneFn is a TEST SEAM ONLY — production leaves it
@@ -503,7 +537,11 @@ func (al *AgentLoop) dispatchDeferredGoalAdjudication(work *goalDeferredAdjudica
 			map[string]any{"session_id": work.sessionID})
 		return
 	}
-	rec := activeGoalForSession(work.sessionID)
+	rec, err := activeGoalForSession(work.sessionID)
+	if err != nil {
+		al.reportGoalReadError(work.sessionID, "deferred adjudication", err)
+		return
+	}
 	if rec == nil {
 		// The goal cleared (or the session vanished) in the window between
 		// the claim and this dispatch — nothing left to adjudicate against.
@@ -511,12 +549,12 @@ func (al *AgentLoop) dispatchDeferredGoalAdjudication(work *goalDeferredAdjudica
 			map[string]any{"session_id": work.sessionID})
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), goalJudgeRoundTimeout)
-	defer cancel()
-	al.runGoalAdjudication(
-		ctx, work.agentInst, work.workspaceID, work.sessionID, store, rec, work.claimText,
-		al.idleSteerDeliverer(work.sessionID, rec.GoalID, goalClaimDeferredSourceKind),
-	)
+	// (c) #947 defect 1: the single adjudication call became a bounded
+	// re-drive (goal_child_completion.go::redriveGoalAdjudication): the
+	// judge-unavailable arm is retried up to three attempts, each bounded by
+	// goalJudgeRoundTimeout, with a short backoff between; on exhaustion the
+	// child is failed visibly through the completion tail and the pair ends.
+	al.redriveGoalAdjudication(work)
 }
 
 // goalClaimUnparseableResults counts successful goal_claim tool calls whose
@@ -645,6 +683,15 @@ func (al *AgentLoop) checkGoalLoopAfterTurn(
 	opts processOptions,
 	result *turnResult,
 ) {
+	if reminderGoal := goalReminderForTurn(opts, result); reminderGoal != "" {
+		opts.goalReminderGoalID = reminderGoal
+		opts.UserInitiated = false
+		opts.SenderID = goalLoopFollowUpSenderID
+	}
+	if opts.SteeredSessionID != "" {
+		al.resumeGoalRemindersForHuman(opts)
+	}
+	defer al.finishGoalReminderOutcome(opts, result)
 	gl := &agentLoopCheckGoalLoopAfterTurn{al: al, ctx: ctx, agentInst: agentInst, opts: opts, result: result}
 
 	if gl.checkEligibility() {
@@ -668,7 +715,7 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) checkEligibility() bool {
 	if gl.opts.IsTaskRun {
 		return true
 	}
-	if gl.result == nil || gl.opts.TranscriptStore == nil || gl.opts.TranscriptSessionID == "" {
+	if gl.result == nil || gl.result.stopped || gl.opts.TranscriptStore == nil || gl.opts.TranscriptSessionID == "" {
 		return true
 	}
 	// askuserquestion-tool-spec §0.7 (M-R2-5): TurnEndStatusParked is NOT a
@@ -704,7 +751,12 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) checkEligibility() bool {
 	// bound to this session — the direct replacement for the retired
 	// `rec.Prompt != ""` check, and the one lookup that serves a
 	// task-owned goal as well as a chat-owned one (GOAL-FR-013).
-	gl.rec = activeGoalForSession(gl.sessionID)
+	var err error
+	gl.rec, err = activeGoalForSession(gl.sessionID)
+	if err != nil {
+		gl.al.reportGoalReadError(gl.sessionID, "post-turn goal processing", err)
+		return true
+	}
 	if gl.rec == nil {
 		return true // no active goal — fast path
 	}
@@ -811,7 +863,9 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) handleOutcome() {
 		// settlement SUPPRESSED while the pause holds (goalIsWaitingOnUser,
 		// checked in maybeSettleGoalIdle). Explicit Non-Behavior: only this
 		// typed marker counts — never a prose classifier.
-		gl.al.goalSetWaitingOnUser(gl.rec.GoalID, true)
+		if !gl.al.goalSetWaitingOnUser(gl.rec.GoalID, true) {
+			gl.al.notifyGoalPaused(gl.sessionID, gl.rec.GoalID, "waiting_on_user", gl.toolEvidence)
+		}
 		// The claim — its status and the worker's one-line question, when it
 		// gave one — is recorded on the goal record through the one claim
 		// writer a task run uses too (GOAL-FR-013/FR-014).
@@ -821,6 +875,12 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) handleOutcome() {
 		}
 		gl.al.emitGoalStatusFrame(gl.sessionID, gl.rec.GoalID, gl.rec.Prompt, gl.rec.Round,
 			gl.rec.MaxRounds, "waiting on user", goalPillWaitingOnUser)
+		// (d) #947 defect 1: a parked goal-bearing steered child tells its
+		// parent through the one upward path — a wake-eligible question —
+		// instead of leaving the park silent to the one session that could
+		// answer it. The keeper's suppression while the park holds stays.
+		gl.al.deliverGoalParkUpward(gl.sessionID, false,
+			goalParkUpwardText(gl.toolEvidence, gl.result.finalContent))
 		return
 
 	case gl.marker.Present && gl.marker.Status == tools.GoalClaimStatusBlocked:
@@ -831,7 +891,9 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) handleOutcome() {
 		// toolFound branch above). Distinct from waiting_on_user in what it
 		// asks of the operator: "I cannot proceed and it is not something
 		// you can answer directly" rather than "I need an answer".
-		gl.al.goalSetBlocked(gl.rec.GoalID, true)
+		if !gl.al.goalSetBlocked(gl.rec.GoalID, true) {
+			gl.al.notifyGoalPaused(gl.sessionID, gl.rec.GoalID, "blocked", gl.toolEvidence)
+		}
 		// The one-line reason the worker gave (goal_claim carries it as
 		// evidence for blocked) is kept so the operator can see why — through
 		// the one claim writer a task run uses too (GOAL-FR-013).
@@ -841,6 +903,11 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) handleOutcome() {
 		}
 		gl.al.emitGoalStatusFrame(gl.sessionID, gl.rec.GoalID, gl.rec.Prompt, gl.rec.Round,
 			gl.rec.MaxRounds, "blocked", goalPillBlocked)
+		// (d) #947 defect 1: same upward delivery for a blocked park — a
+		// blocker message instead of silence (the claim's own reason travels
+		// as the text).
+		gl.al.deliverGoalParkUpward(gl.sessionID, true,
+			goalParkUpwardText(gl.toolEvidence, gl.result.finalContent))
 		return
 
 	case gl.marker.Present && gl.marker.Status == goalStatusMet && gl.marker.HasEvidence:
@@ -898,10 +965,16 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) handleOutcome() {
 			logger.WarnCF("agent", "goal: could not persist the met claim onto the goal record",
 				map[string]any{"session_id": gl.sessionID, "goal_id": gl.rec.GoalID, "error": cerr.Error()})
 		}
-		gl.result.goalDeferredAdjudication = &goalDeferredAdjudicationWork{
+		work := &goalDeferredAdjudicationWork{
 			agentInst: gl.agentInst, workspaceID: gl.opts.WorkspaceID,
 			sessionID: gl.sessionID, claimText: claimText,
+			goalID: gl.rec.GoalID, goalPrompt: gl.rec.Prompt, claimRecordedAt: time.Now().UTC(),
+			answer: goalTurnAnswer(gl.store, gl.sessionID, gl.result.turnID, gl.result.finalContent),
 		}
+		if d := gl.opts.executionDisposition; d != nil {
+			work.producer = d.claim
+		}
+		gl.result.goalDeferredAdjudication = work
 		return
 
 	case gl.marker.Present && gl.marker.Status == goalStatusMet:
@@ -934,7 +1007,7 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) handleOutcome() {
 		// the working agent skipped its first-move door entirely. Nudge it
 		// right now rather than waiting for the idle keeper's quiet window
 		// (D6c) to notice.
-		gl.al.maybeNudgeUnregisteredGoal(gl.store, gl.sessionID, gl.rec, gl.agentInst, gl.opts)
+		gl.al.maybeNudgeUnregisteredGoal(gl.sessionID, gl.rec, gl.opts)
 	}
 }
 
@@ -963,10 +1036,7 @@ func (gl *agentLoopCheckGoalLoopAfterTurn) handleOutcome() {
 //     the D7 engine fallback takes over, so the guarantee holds either way;
 //     only the FIRST registration attempt is sped up by this function, not
 //     every subsequent retry.
-func (al *AgentLoop) maybeNudgeUnregisteredGoal(
-	store *session.UnifiedStore, sessionID string, rec *goal.Goal,
-	agentInst *AgentInstance, opts processOptions,
-) {
+func (al *AgentLoop) maybeNudgeUnregisteredGoal(sessionID string, rec *goal.Goal, opts processOptions) {
 	// ADR-086: "still recordless" is the goal record's own criteria list
 	// being empty (GOAL-FR-003's typed lists), not the retired session-meta
 	// GoalCriteriaJSON string. This is also what keeps the nudge ladder
@@ -982,15 +1052,9 @@ func (al *AgentLoop) maybeNudgeUnregisteredGoal(
 	if opts.SenderID == goalLoopFollowUpSenderID {
 		return // a goal-loop follow-up that itself failed — let the idle ladder pick it up
 	}
-	meta, merr := store.GetMeta(sessionID)
-	if merr != nil || meta == nil {
-		logger.WarnCF("agent", "goal: could not read session meta for the immediate registration nudge; leaving it to the idle ladder",
-			map[string]any{"component": "goal", "session_id": sessionID, "goal_id": rec.GoalID, "error": errString(merr)})
-		return
-	}
 	logger.InfoCF("agent", "goal: record not registered on the turn; nudging immediately",
 		map[string]any{"component": "goal", "session_id": sessionID, "goal_id": rec.GoalID})
-	al.settleRecordlessGoal(store, meta, rec, agentInst)
+	al.settleRecordlessGoal(sessionID, rec, time.Now().UTC(), 0)
 }
 
 // goalVerdictReasonText builds a human-readable summary of the judge's unmet
@@ -1193,6 +1257,15 @@ func (al *AgentLoop) goalIdleExpirySweep(cfg config.PlanningConfig, now time.Tim
 					map[string]any{"goal_id": g.GoalID, "owner_kind": string(g.OwnerKind), "owner_id": g.OwnerID})
 				continue
 			}
+			// Issue #1306 (no clock ends work): a goal whose session — or any
+			// helper it delegated to — still has a live turn, or whose owning
+			// task is still running, is not idle, however old its last
+			// recorded activity is.
+			if busy, why := al.goalWorkInFlight(g, sessionID); busy {
+				logger.InfoCF("agent", "goal idle sweep: goal past its idle bound but work is in flight — not expiring",
+					map[string]any{"goal_id": g.GoalID, "session_id": sessionID, "work": why})
+				continue
+			}
 			reason := fmt.Sprintf("idle-expired after %d day(s)", maxDays)
 			// ADR-086 parity, same cause as goalQuietWindowSettle's resolution:
 			// a TASK goal's session is minted per-agent by
@@ -1210,7 +1283,7 @@ func (al *AgentLoop) goalIdleExpirySweep(cfg config.PlanningConfig, now time.Tim
 			}
 			agentID := ""
 			if meta, merr := recStore.GetMeta(sessionID); merr == nil && meta != nil {
-				agentID = meta.ActiveAgentID
+				agentID = meta.AgentID
 			}
 			// clearGoalStatus performs the terminal transition itself, by
 			// goal id, which is correct for BOTH owner kinds — the separate
@@ -1247,14 +1320,19 @@ func (al *AgentLoop) goalIdleExpirySweep(cfg config.PlanningConfig, now time.Tim
 					map[string]any{"session_id": sessionID, "goal_id": g.GoalID})
 				continue
 			}
+			// F4 (#984 follow-up): the idle-expiry sweep ends a goal whose
+			// steered child may be deferred at the (a) gate — same shape as
+			// /goal clear. Route it through the completion tail; ordinary
+			// roots are refused by completeSteeredTurn's edge check.
+			al.completeSteeredTurnIfDeferredAtGate(sessionID)
 		}
 	}
 
-	// ADR-053 Phase-2 §1 (FR-102/G-2/G-3): the ~60 s quiet-window idle
-	// settlement — distinct from the multi-DAY calendar brake above — fires
-	// ONE claimless adjudication per goal-id whose quiet window elapsed.
+	// The live idle quiet window and independent busy check-in threshold are
+	// distinct from the multi-DAY calendar brake above. Both use this same
+	// sweep's current planning configuration and clock.
 	// Same tick driver (DoD-11: one periodic driver for all goal sweeps).
-	al.goalQuietWindowSettle(now)
+	al.goalQuietWindowSettle(now, cfg)
 }
 
 // effectiveGoalActivity returns the best available "last real activity"
@@ -1277,9 +1355,50 @@ func effectiveGoalActivity(g *goal.Goal) time.Time {
 	return time.Time{}
 }
 
+// sessionHasLiveTurn reports whether sessionID, or any session it delegated
+// to, has a live registered turn (the same root-or-descendant match the goal
+// keeper uses).
+func (al *AgentLoop) sessionHasLiveTurn(sessionID string) bool {
+	live, _ := al.goalLiveTurnWorkFingerprint(sessionID)
+	return live
+}
+
+// goalWorkInFlight reports whether a goal still has agent work running or
+// waiting to run: anything sessionWorkInFlight finds on its session (its own
+// turn, a delegated descendant's turn, queued work), or — for a task-owned
+// goal — its task still in progress. Work that cannot be read counts as in
+// flight; the sweep must not end a goal it cannot see into.
+func (al *AgentLoop) goalWorkInFlight(g *goal.Goal, sessionID string) (bool, string) {
+	if busy, why := al.sessionWorkInFlight(sessionID); busy {
+		return true, why
+	}
+	if g.OwnerKind == generated.GoalOwnerKindTask && g.OwnerID != "" && al.taskStore != nil {
+		t, err := al.taskStore.Get(g.OwnerID)
+		if err != nil {
+			return true, "its task could not be read: " + err.Error()
+		}
+		if t != nil && t.Status == task.StatusInProgress {
+			return true, "its task is in progress"
+		}
+	}
+	return false, ""
+}
+
 // writeGoalSystemTranscript writes a plain system-entry note (used for the
 // round-bound-reached handover, SD-B9) to the session transcript.
 func (al *AgentLoop) writeGoalSystemTranscript(store *session.UnifiedStore, sessionID, agentID, content string) {
+	if err := al.writeGoalSystemTranscriptErr(store, sessionID, agentID, content); err != nil {
+		logger.WarnCF("agent", "goal loop: handover transcript write failed",
+			map[string]any{"session_id": sessionID, "error": err.Error()})
+	}
+}
+
+// writeGoalSystemTranscriptErr is writeGoalSystemTranscript for a caller that
+// must know whether the entry was saved (the Judge conclusion, SFH F4).
+func (al *AgentLoop) writeGoalSystemTranscriptErr(store *session.UnifiedStore, sessionID, agentID, content string) error {
+	if store == nil {
+		return errors.New("no session store")
+	}
 	if err := store.AppendTranscriptStrict(sessionID, session.TranscriptEntry{
 		ID:        fmt.Sprintf("goal-%s-handover-%d", sessionID, time.Now().UnixNano()),
 		Type:      session.EntryTypeSystem,
@@ -1289,7 +1408,7 @@ func (al *AgentLoop) writeGoalSystemTranscript(store *session.UnifiedStore, sess
 		Timestamp: time.Now().UTC(),
 	}); err != nil {
 		taskGoalTranscriptWriteFailures.Add(1)
-		logger.WarnCF("agent", "goal loop: handover transcript write failed",
-			map[string]any{"session_id": sessionID, "error": err.Error()})
+		return err
 	}
+	return nil
 }

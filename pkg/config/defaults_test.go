@@ -27,14 +27,31 @@ import (
 // config.json) — not resolution-time code logic.
 func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 	cfg := DefaultConfig()
+	for _, retired := range []string{"create_skill", "remove_skill"} {
+		if _, present := cfg.Sandbox.ToolPolicies[retired]; present {
+			t.Errorf("r15 §10: retired tool %q must not have a ceiling entry", retired)
+		}
+	}
 
 	destructive := map[string]bool{
-		"delete_workspace":         true,
-		"delete_task":              true,
-		"delete_task_in_workspace": true,
-		"remove_mcp_server":        true,
-		// remove_skill and delete_agent are ADR-090 proposal-confirmed writes,
-		// so their fresh ceiling is allow rather than a second Ask gate.
+		"delete_workspace":  true,
+		"delete_task":       true,
+		"remove_mcp_server": true,
+	}
+
+	// approvalGated is the omnipus-system-agent ask-list (spec §6.5): FR-020
+	// moves these management tools to "ask" at the shipped ceiling, and
+	// FR-021 ships the five new secret/connection/permission tools "ask".
+	// Skills r15 §10 replaces the retired skill deletion verb with edit_skill Ask.
+	approvalGated := map[string]bool{
+		"delete_agent": true, "edit_skill": true, "configure_provider": true,
+		"enable_channel": true, "configure_channel": true,
+		"connect_channel": true, "set_channel_outbound": true, "connect_mailbox": true, "set_agent_permissions": true,
+		"remove_secret": true, "select_secret_version": true,
+		// install_skill ships Ask (founder decision 2026-11-03).
+		"install_skill": true,
+		// Outbound mail stays Ask; r15 §10 now also makes skill editing globally Ask.
+		"send_email": true, "reply": true,
 	}
 
 	// operatorOnly is a SECOND, distinct exception to the allow-by-default
@@ -55,7 +72,9 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 	// Security -> Tool Policies, or config.json), never a code branch — CLAUDE.md
 	// hard constraint 6.
 	operatorOnly := map[string]string{
-		"add_mcp_server": "allow",
+		// omnipus-system-agent FR-020: add_mcp_server ships "ask" (was
+		// allow) — installing a connector is approval-gated.
+		"add_mcp_server": "ask",
 		// request_mount (ADR-063 FR-7.2) belongs to the same class as
 		// add_mcp_server — an agent widening its OWN boundary — but is seeded
 		// "ask" rather than "deny" because the widening is exactly what the
@@ -100,6 +119,17 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 		}
 		if got != want {
 			t.Errorf("expected seeded policy %q for operator-only tool %q, got %q", want, name, got)
+		}
+	}
+
+	for name := range approvalGated {
+		if got := cfg.Sandbox.ToolPolicies[name]; got != "ask" {
+			t.Errorf("FR-020/FR-021: %q must ship 'ask', got %q", name, got)
+		}
+	}
+	for _, name := range []string{"request_secret", "list_secrets", "get_skill"} {
+		if got := cfg.Sandbox.ToolPolicies[name]; got != "allow" {
+			t.Errorf("FR-021: %q must ship 'allow', got %q", name, got)
 		}
 	}
 
@@ -177,7 +207,7 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 	// the kernel sandbox can positively clear — this is a routing value, not
 	// a return to "always ask".
 	for name, policy := range cfg.Sandbox.ToolPolicies {
-		if destructive[name] {
+		if destructive[name] || approvalGated[name] {
 			continue
 		}
 		if _, isOperatorOnly := operatorOnly[name]; isOperatorOnly {
@@ -186,9 +216,14 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 		if name == "bash" {
 			continue
 		}
+		// SPEC.md Global ceiling changes (2026-10-22): download_email_attachment joins the Allow sweep.
 		if policy != "allow" {
 			t.Errorf("expected non-destructive tool %q to be seeded 'allow', got %q", name, policy)
 		}
+	}
+	// SPEC.md Global ceiling changes (2026-10-22): the received-attachment download ceiling is Allow.
+	if got := cfg.Sandbox.ToolPolicies["download_email_attachment"]; got != "allow" {
+		t.Errorf("download_email_attachment must be seeded allow under the 2026-10-22 founder ruling, got %q", got)
 	}
 	if got := cfg.Sandbox.ToolPolicies["disable_channel"]; got != "allow" {
 		t.Errorf("disable_channel is reversible, not a delete — expected 'allow', got %q", got)

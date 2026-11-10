@@ -185,7 +185,8 @@ func TestWSStreamer_DoneIdenticalOnEveryConnection(t *testing.T) {
 	var done generated.DoneFrame
 	require.NoError(t, json.Unmarshal(rawA, &done))
 	require.NotNil(t, done.Stats)
-	assert.Nil(t, done.Stats.TokensDropped, "tokens_dropped is never set")
+	assert.NotContains(t, string(rawA), "tokens_dropped",
+		"the removed per-connection drop count must never appear on the wire")
 	require.NotNil(t, done.Seq, "the done frame is numbered by the session hub")
 }
 

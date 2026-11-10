@@ -1,5 +1,11 @@
 # Spec — Workspace-scoped heartbeat config + global memory settings UI
 
+## Amended 2026-10-06 — founder decision
+
+The heartbeat continues its pre-created conversation, but **a completed root is not a stopped root**. Each new scheduled/heartbeat run may revive completed/done as the system principal into a new round; it **never revives a stopped root**. Final completion does not archive or hide the conversation or change this spec's separate enabled-session delete protection. Plain Stop ends only that session's current turn, never helpers; Stop all / `/cancel` cascades through its full helper tree. Both use StopSession (3 s force + subsequent 3 s detach). Boot replay does not create a new run. Authority: [The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/a-adr-spec-sync-20261006/docs/internal/architecture/ADR-20260928-sub-agent-control-plane.md)::D-A/B/C and **An open conversation must keep the ability to delegate**::D3/D4.
+
+Status: Draft
+
 - **Source ADR:** `docs/internal/architecture/ADR-027-workspace-scoped-heartbeat-and-global-memory-ui.md` (revised, criticals C-1…C-4 addressed)
 - **Status:** Draft (plan-spec) · gate-confirmed by operator 2026-06-30
 - **Branch target:** TBD (new branch off `main`)

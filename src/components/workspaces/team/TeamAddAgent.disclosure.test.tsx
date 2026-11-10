@@ -133,7 +133,8 @@ describe('FR-047 — adding an agent to a team discloses the browser access it g
     // moment the list is empty — and then reappear, unread, the moment a new
     // agent exists.
     renderPicker({ agents: [JIM] as Agent[], memberIds: new Set(['jim']) })
-    expect(screen.getByText('Every agent is already on this team.')).toBeInTheDocument()
+    // WU-10 §6.3 / FR-112 replaces empty copy; the disclosure oracle remains.
+    expect(screen.getByText('No other agents')).toBeInTheDocument()
     expect(screen.getByTestId('team-add-agent-disclosure')).toBeInTheDocument()
   })
 })

@@ -51,7 +51,7 @@ func ParseUsagePeriod(raw string) (UsagePeriod, bool) {
 type UsageDimension string
 
 const (
-	// UsageDimensionAgent groups by the session's ActiveAgentID.
+	// UsageDimensionAgent groups by the session's owner (agent_id).
 	UsageDimensionAgent UsageDimension = "agent"
 	// UsageDimensionModel groups by model name (iterates sm.Stats.ByModel).
 	UsageDimensionModel UsageDimension = "model"
@@ -96,6 +96,9 @@ type UsageBucket struct {
 	// CacheWrite is tokens written into a new cache entry (Anthropic only).
 	// See CacheRead's comment for its relationship to Total.
 	CacheWrite int
+	// CacheHitRatio is cache reads divided by uncached input plus cache read
+	// plus cache write. Nil when that denominator is 0.
+	CacheHitRatio *float64
 	// Total is the authoritative recorded token total for this bucket
 	// (SessionStats.TokensTotal for agent/session dimensions, ModelTokens.Total
 	// for the model dimension), accumulated independently of In/Out/CacheRead/
@@ -116,7 +119,7 @@ type UsageOptions struct {
 	// Dimension controls the grouping of Buckets.  Defaults to UsageDimensionAgent.
 	Dimension UsageDimension
 	// AgentID, when non-empty, restricts the report to sessions whose
-	// ActiveAgentID matches this value.
+	// the session owner matches this value.
 	AgentID string
 	// SessionID, when non-empty, restricts the report to the single session
 	// with this ID.
@@ -124,7 +127,7 @@ type UsageOptions struct {
 	// NameResolver maps an agentID to a human-readable display name.
 	// Nil-safe — the aggregator skips the call when nil.
 	NameResolver func(agentID string) string
-	// Exclude, when non-nil, is called once per session's ActiveAgentID.
+	// Exclude, when non-nil, is called once per session's owner (agent_id).
 	// Sessions whose agent returns true are skipped entirely (used to exclude
 	// subagent_3p workers that run on a separate engine).
 	Exclude func(agentID string) bool
@@ -149,6 +152,13 @@ type UsageReport struct {
 	// Buckets contains one entry per grouping key, sorted descending by Total
 	// then ascending by Key.
 	Buckets []UsageBucket
+	// ByProvider is the per-catalog-provider breakdown, same cell shape as a
+	// model bucket. Nil until provider totals are summed.
+	ByProvider map[string]UsageBucket
+	// UnpricedTokens sums unpriced portions only, not whole calls.
+	UnpricedTokens int
+	// SubscriptionTokens sums ChatGPT sign-in tokens, which recorded no dollars.
+	SubscriptionTokens int
 }
 
 // periodBounds computes the [start, end) bounds for the requested period,
@@ -194,18 +204,28 @@ func resolveLabel(agentID string, opts UsageOptions) string {
 	return agentID
 }
 
+// CacheHitRatio returns cacheRead / (uncached + cacheRead + cacheWrite), or
+// nil when that denominator is 0.
+func CacheHitRatio(uncached, cacheRead, cacheWrite int) *float64 {
+	denominator := uncached + cacheRead + cacheWrite
+	if denominator <= 0 {
+		return nil
+	}
+	ratio := float64(cacheRead) / float64(denominator)
+	return &ratio
+}
+
 // AggregateUsage aggregates a slice of *UnifiedMeta into a UsageReport.
 //
 // The function is pure (no I/O, no goroutines, no side effects). Callers are
 // responsible for:
-//   - Calling sm.PostLoad() before passing metas (backfills ActiveAgentID from
-//     legacy AgentID; readUnifiedMeta already does this, so ListSessions output
-//     is safe to pass directly).
+//   - Calling sm.PostLoad() before passing metas (backfills AgentIDs from the
+//     owner; readUnifiedMeta already does this, so ListSessions output is safe
+//     to pass directly).
 //   - Passing time.Now().UTC() as opts.Now.
 //
-// Token attribution: tokens are charged to sm.ActiveAgentID (fallback
-// sm.AgentIDs[0]).  Using every entry in AgentIDs would double-count on
-// agent handoffs — the existing HandleTokenStats logic is preserved exactly.
+// Token attribution: tokens are charged to the session's owner, sm.AgentID.
+// Using every entry in AgentIDs would double-count a joined session.
 func AggregateUsage(metas []*UnifiedMeta, opts UsageOptions) UsageReport {
 	if opts.Period == "" {
 		opts.Period = UsagePeriodMonth
@@ -225,6 +245,7 @@ func AggregateUsage(metas []*UnifiedMeta, opts UsageOptions) UsageReport {
 	report := UsageReport{
 		PeriodStart: start,
 		PeriodEnd:   end,
+		ByProvider:  make(map[string]UsageBucket),
 	}
 
 	// accumByKey holds running totals keyed by the grouping key.
@@ -274,10 +295,7 @@ func AggregateUsage(metas []*UnifiedMeta, opts UsageOptions) UsageReport {
 		sm.PostLoad()
 
 		// Resolve the agent responsible for this session.
-		agentID := sm.ActiveAgentID
-		if agentID == "" && len(sm.AgentIDs) > 0 {
-			agentID = sm.AgentIDs[0]
-		}
+		agentID := sm.AgentID
 		// Skip sessions with no owning agent.
 		if agentID == "" {
 			continue
@@ -307,6 +325,18 @@ func AggregateUsage(metas []*UnifiedMeta, opts UsageOptions) UsageReport {
 		}
 
 		s := sm.Stats // local copy for brevity
+		report.UnpricedTokens += s.UnpricedTokens
+		report.SubscriptionTokens += s.SubscriptionTokens
+		for id, mt := range s.ByProvider {
+			cell := report.ByProvider[id]
+			cell.Key, cell.Label = id, id
+			cell.In += mt.In
+			cell.Out += mt.Out
+			cell.CacheRead += mt.CacheRead
+			cell.CacheWrite += mt.CacheWrite
+			cell.Total += mt.Total
+			report.ByProvider[id] = cell
+		}
 
 		// Accumulate grand total.
 		report.Total.In += s.TokensIn
@@ -368,13 +398,14 @@ func AggregateUsage(metas []*UnifiedMeta, opts UsageOptions) UsageReport {
 			label = key
 		}
 		buckets = append(buckets, UsageBucket{
-			Key:        key,
-			Label:      label,
-			In:         e.in,
-			Out:        e.out,
-			CacheRead:  e.cacheRead,
-			CacheWrite: e.cacheWrite,
-			Total:      e.total,
+			Key:           key,
+			Label:         label,
+			In:            e.in,
+			Out:           e.out,
+			CacheRead:     e.cacheRead,
+			CacheWrite:    e.cacheWrite,
+			Total:         e.total,
+			CacheHitRatio: CacheHitRatio(e.in, e.cacheRead, e.cacheWrite),
 		})
 	}
 
@@ -386,6 +417,11 @@ func AggregateUsage(metas []*UnifiedMeta, opts UsageOptions) UsageReport {
 		return strings.Compare(buckets[i].Key, buckets[j].Key) < 0
 	})
 
+	report.Total.CacheHitRatio = CacheHitRatio(report.Total.In, report.Total.CacheRead, report.Total.CacheWrite)
+	for id, cell := range report.ByProvider {
+		cell.CacheHitRatio = CacheHitRatio(cell.In, cell.CacheRead, cell.CacheWrite)
+		report.ByProvider[id] = cell
+	}
 	report.Buckets = buckets
 	return report
 }

@@ -1,18 +1,5 @@
-// Goal-aware thinking indicator — operator-reported UX fix, 2026-09-08
-// (GX-C). Mirrors ChatScreen.thinking-indicator-context.test.tsx's harness
-// exactly ('@assistant-ui/react' left UNMOCKED, ChatScreen mounted inside a
-// real AssistantRuntimeProvider via the real useOmnipusRuntime hook) — see
-// that file's header comment for why every other ChatScreen test file
-// (which mocks ThreadPrimitive.Messages to null) cannot reach this surface.
-//
-// BDD:
-//   Given: a goal is active and its record is still empty, no tool call running
-//   Then:  the indicator reads "Framing your goal" (never the generic pool)
-//   Given: a goal is active, record empty, and `set_goal` is the running step
-//   Then:  the indicator reads "Setting acceptance criteria"
-//   Given: the goal's record has already been populated (criteria present)
-//   Then:  the override does not apply — falls back to the generic pool
-
+// Founder 2026-10-21: goal states retain their motion/records but do not
+// replace active-form-or-fixed-fallback status copy. Real live runtime.
 import { describe, it, expect, vi } from 'vitest'
 import { render, within } from '@testing-library/react'
 import * as React from 'react'
@@ -41,12 +28,14 @@ if (typeof Element !== 'undefined' && !Element.prototype.scrollTo) {
 
 // '@assistant-ui/react' is intentionally NOT mocked in this file — see header.
 
+import { emptyHistoryPage, type HistoryReadPort } from '../../../tests/chat-history-paging/legacy-fixtures'
+
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual,
-    fetchAgents: vi.fn().mockResolvedValue([{ id: 'agent-1', name: 'Mia', color: '#123456', icon: null }]),
-    fetchSessionMessages: vi.fn().mockResolvedValue([]),
+    fetchAgents: vi.fn().mockResolvedValue([{ figure: 'Omnipus', role: 'general', id: 'agent-1', name: 'Mia', color: '#8E9196', icon: null }]),
+    fetchSessionMessages: vi.fn<HistoryReadPort>(async (sessionId) => emptyHistoryPage(sessionId)),
     fetchCommands: vi.fn().mockResolvedValue([]),
     fetchSkills: vi.fn().mockResolvedValue([]),
     uploadFiles: vi.fn(),
@@ -64,8 +53,6 @@ vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avata
 vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
 vi.mock('./ActivityBar', () => ({ ActivityBar: () => null }))
 vi.mock('./tools/GenericToolCall', () => ({ GenericToolCall: () => null }))
-vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
-vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
 vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 vi.mock('./markdown-text', () => ({
@@ -111,14 +98,17 @@ function makeGoalFrame(overrides: Partial<GoalStatusFrame> = {}): GoalStatusFram
 
 /**
  * Seeds a streaming assistant placeholder, optionally with one live tool
- * call, AND a goalStatus frame on both the session bucket and the
+ * call, a keyed `goalPills` map on both the session bucket and the
  * foreground selector (InlineThinkingIndicator reads the foreground field —
- * see chat.ts's bucketToForeground). goalFrame: null means no active goal
- * (control case).
+ * see chat.ts's bucketToForeground), and — when `goalId` is given — that
+ * goal association on the producing message itself (FR-039: the indicator
+ * joins THIS id, carried onto the AssistantUI message via
+ * `metadata.custom.goalId`).
  */
 function seedGoalAwareStreamingAssistant(
   sid: string,
-  goalFrame: GoalStatusFrame | null,
+  goalId: string | null,
+  goalPills: Record<string, GoalStatusFrame>,
   liveCall?: { toolCallId: string; tool: string; params: Record<string, unknown> },
 ): void {
   const userMsg: ChatMessage = {
@@ -135,6 +125,7 @@ function seedGoalAwareStreamingAssistant(
     timestamp: new Date().toISOString(),
     status: 'streaming',
     isStreaming: true,
+    ...(goalId ? { goalId } : {}),
   }
   const allMessages = [userMsg, streamingMsg]
   const bucket = makeBucketMessages(allMessages)
@@ -150,7 +141,9 @@ function seedGoalAwareStreamingAssistant(
       }
     : {}
   const toolCallOrder = liveCall ? [liveCall.toolCallId] : []
-  const frame = goalFrame ? { ...goalFrame, session_id: sid } : null
+  const pills = Object.fromEntries(
+    Object.entries(goalPills).map(([id, f]) => [id, { ...f, session_id: sid }]),
+  )
 
   useChatStore.setState((s) => ({
     ...s,
@@ -171,7 +164,7 @@ function seedGoalAwareStreamingAssistant(
         cancelStage: null,
         lastReceivedEventTime: null,
         trimmedCount: 0,
-        goalStatus: frame,
+        goalPills: pills,
       },
     },
     messages: allMessages,
@@ -181,16 +174,18 @@ function seedGoalAwareStreamingAssistant(
     toolCalls: liveToolCalls,
     toolCallOrder,
     textAtToolCallStart: {},
-    goalStatus: frame,
+    goalPills: pills,
   }))
   useSessionStore.setState({ activeSessionId: sid, activeAgentId: 'agent-1' })
   useConnectionStore.setState({ connection: null, isConnected: true, connectionError: null })
 }
 
 describe('ChatScreen thinking indicator — goal-aware override (operator UX fix, 2026-09-08)', () => {
-  it('shows "Framing your goal" while a goal is active with an empty record and nothing is running yet', async () => {
+  it('uses fallback with an active empty goal and no active form', async () => {
     const sid = 'sess_goal_framing'
-    seedGoalAwareStreamingAssistant(sid, makeGoalFrame())
+    seedGoalAwareStreamingAssistant(sid, 'goal_indicator_test', {
+      goal_indicator_test: makeGoalFrame(),
+    })
 
     let container!: HTMLElement
     await act(async () => {
@@ -203,39 +198,45 @@ describe('ChatScreen thinking indicator — goal-aware override (operator UX fix
     })
 
     const bubble = container.querySelector('[data-testid="assistant-message"]') as HTMLElement
-    expect(within(bubble).getByText('Framing your goal')).toBeInTheDocument()
+    expect(within(bubble).getByTestId('reply-status-fallback')).toHaveTextContent(GENERIC_THINKING_RE)
+    expect(within(bubble).queryByText('Framing your goal')).not.toBeInTheDocument()
   })
 
-  it('shows "Setting acceptance criteria" while set_goal is the running step and the record is still empty', async () => {
+  it('uses fallback while set_goal runs without an active form', async () => {
     const sid = 'sess_goal_setting_criteria'
-    seedGoalAwareStreamingAssistant(sid, makeGoalFrame(), {
-      toolCallId: 'tc_set_goal_1',
-      tool: 'set_goal',
-      params: { mode: 'register', definition: 'Ship the release notes', criteria: [] },
-    })
-
-    let container!: HTMLElement
-    await act(async () => {
-      const result = render(
-        <Providers>
-          <ChatScreen />
-        </Providers>,
-      )
-      container = result.container
-    })
-
-    const bubble = container.querySelector('[data-testid="assistant-message"]') as HTMLElement
-    expect(within(bubble).getByText('Setting acceptance criteria')).toBeInTheDocument()
-  })
-
-  it('falls back to the generic rotating pool once the goal record is populated (criteria present)', async () => {
-    const sid = 'sess_goal_record_populated'
     seedGoalAwareStreamingAssistant(
       sid,
-      makeGoalFrame({
+      'goal_indicator_test',
+      { goal_indicator_test: makeGoalFrame() },
+      {
+        toolCallId: 'tc_set_goal_1',
+        tool: 'set_goal',
+        params: { mode: 'register', definition: 'Ship the release notes', criteria: [] },
+      },
+    )
+
+    let container!: HTMLElement
+    await act(async () => {
+      const result = render(
+        <Providers>
+          <ChatScreen />
+        </Providers>,
+      )
+      container = result.container
+    })
+
+    const bubble = container.querySelector('[data-testid="assistant-message"]') as HTMLElement
+    expect(within(bubble).getByTestId('reply-status-fallback')).toHaveTextContent(GENERIC_THINKING_RE)
+    expect(within(bubble).queryByText('Setting acceptance criteria')).not.toBeInTheDocument()
+  })
+
+  it('falls back to the fixed fallback pool once the goal record is populated (criteria present)', async () => {
+    const sid = 'sess_goal_record_populated'
+    seedGoalAwareStreamingAssistant(sid, 'goal_indicator_test', {
+      goal_indicator_test: makeGoalFrame({
         criteria: [{ id: 'c1', kind: 'prose', text: 'release notes are published', judgment: 'boolean', status: 'pending', author: { kind: 'agent', id: 'tester' } }],
       }),
-    )
+    })
 
     let container!: HTMLElement
     await act(async () => {
@@ -251,9 +252,32 @@ describe('ChatScreen thinking indicator — goal-aware override (operator UX fix
     expect(within(bubble).getByText(GENERIC_THINKING_RE)).toBeInTheDocument()
   })
 
-  it('falls back to the generic rotating pool when there is no active goal at all', async () => {
+  it('falls back to the fixed fallback pool when there is no active goal at all', async () => {
     const sid = 'sess_goal_none'
-    seedGoalAwareStreamingAssistant(sid, null)
+    seedGoalAwareStreamingAssistant(sid, null, {})
+
+    let container!: HTMLElement
+    await act(async () => {
+      const result = render(
+        <Providers>
+          <ChatScreen />
+        </Providers>,
+      )
+      container = result.container
+    })
+
+    const bubble = container.querySelector('[data-testid="assistant-message"]') as HTMLElement
+    expect(within(bubble).getByText(GENERIC_THINKING_RE)).toBeInTheDocument()
+  })
+
+  it('is NEUTRAL for a message with no goal association, even while an OTHER goal is live and record-empty (FR-039)', async () => {
+    // The deleted latest-goal-wins branch would show "Framing your goal" here
+    // because G2 (the only pill) is active and empty. The message belongs to
+    // no goal — unknown is neutral.
+    const sid = 'sess_goal_unknown_assoc'
+    seedGoalAwareStreamingAssistant(sid, null, {
+      goal_other: makeGoalFrame({ goal_id: 'goal_other' }),
+    })
 
     let container!: HTMLElement
     await act(async () => {

@@ -54,9 +54,9 @@ export interface PickerCompanyRow {
    * rather than an accident of the underlying array's order — e.g. the
    * served catalog sorts its `providers[]` alphabetically by id, so a
    * standard-tier sibling whose id happens to sort earlier than the
-   * popular-tier row (OpenAI's `codex-cli` before `openai`) would otherwise
-   * become "primary" for reasons that have nothing to do with which variant
-   * the company's Popular tile is meant to represent.
+   * popular-tier row would otherwise become "primary" for reasons that have
+   * nothing to do with which variant the company's Popular tile is meant to
+   * represent.
    */
   primary: CatalogProvider
   /** True when EVERY variant is `tier: unsupported` — shown, but disabled (FR-025). */

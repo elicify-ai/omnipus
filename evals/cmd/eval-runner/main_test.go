@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -363,5 +364,274 @@ func TestBootFailureDetailSurvivesAMissingLog(t *testing.T) {
 	got := bootFailureDetail(t.TempDir())
 	if got == "" {
 		t.Error("bootFailureDetail() on a home with no panic log returned an empty string; want a stated reason")
+	}
+}
+
+// ── Central e2e model resolution ──────────────────────────────────────────────
+//
+// Rewritten for design.md §4.1 / §7 R1. The source file is primary+fallback,
+// not {"model":...}. centralE2EModelPair is specified in
+// /workspace/ci-minimax/api-contract.md §4. The old openrouter-prefix oracle
+// is the legacy shape, which these tests now reject.
+
+func writeCentralModel(t *testing.T, body string) {
+	t.Helper()
+	root := t.TempDir()
+	dir := filepath.Join(root, "tests", "e2e")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir tests/e2e: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "e2e-model.json"), []byte(body), 0o600); err != nil {
+		t.Fatalf("write e2e-model.json: %v", err)
+	}
+	t.Chdir(root)
+}
+
+const newShapeFixture = `{
+  "primary": { "provider": "minimax-coding-plan", "model": "MiniMax-M3.1-Flash-Preview", "api_key_ref": "MINIMAX_API_KEY" },
+  "fallback": { "provider": "openrouter", "model": "deepseek/deepseek-v4.1-flash", "api_key_ref": "OPENROUTER_API_KEY" }
+}`
+
+// TestCentralE2EModelReadsTheSingleSourceFile: the new shape parses into the
+// primary slug minimax-coding-plan/MiniMax-M3.1-Flash-Preview and the fallback slug
+// openrouter/deepseek/deepseek-v4.1-flash. design.md §4.2.
+func TestCentralE2EModelReadsTheSingleSourceFile(t *testing.T) {
+	writeCentralModel(t, newShapeFixture)
+
+	got, err := centralE2EModelPair()
+	if err != nil {
+		t.Fatalf("centralE2EModelPair() error = %v", err)
+	}
+	if got.Primary.Slug() != "minimax-coding-plan/MiniMax-M3.1-Flash-Preview" {
+		t.Errorf("primary slug = %q, want minimax-coding-plan/MiniMax-M3.1-Flash-Preview", got.Primary.Slug())
+	}
+	if got.Fallback.Slug() != "openrouter/deepseek/deepseek-v4.1-flash" {
+		t.Errorf("fallback slug = %q, want openrouter/deepseek/deepseek-v4.1-flash", got.Fallback.Slug())
+	}
+	if got.Primary.KeyRef != "MINIMAX_API_KEY" || got.Fallback.KeyRef != "OPENROUTER_API_KEY" {
+		t.Errorf("key refs = primary %q fallback %q, want MINIMAX_API_KEY and OPENROUTER_API_KEY", got.Primary.KeyRef, got.Fallback.KeyRef)
+	}
+}
+
+// TestCentralE2EModelPairTrimsEveryField: surrounding whitespace is not part
+// of a provider, model or key ref. design.md §4.1 "non-empty trimmed strings".
+func TestCentralE2EModelPairTrimsEveryField(t *testing.T) {
+	writeCentralModel(t, `{
+	  "primary": { "provider": " minimax-coding-plan ", "model": " MiniMax-M3.1-Flash-Preview ", "api_key_ref": " MINIMAX_API_KEY " },
+	  "fallback": { "provider": " openrouter ", "model": " deepseek/deepseek-v4.1-flash ", "api_key_ref": " OPENROUTER_API_KEY " }
+	}`)
+
+	got, err := centralE2EModelPair()
+	if err != nil {
+		t.Fatalf("centralE2EModelPair() error = %v", err)
+	}
+	if got.Primary != (E2EModelSide{Provider: "minimax-coding-plan", Model: "MiniMax-M3.1-Flash-Preview", KeyRef: "MINIMAX_API_KEY"}) {
+		t.Errorf("primary = %+v, want the trimmed MiniMax side", got.Primary)
+	}
+	if got.Fallback != (E2EModelSide{Provider: "openrouter", Model: "deepseek/deepseek-v4.1-flash", KeyRef: "OPENROUTER_API_KEY"}) {
+		t.Errorf("fallback = %+v, want the trimmed DeepSeek side", got.Fallback)
+	}
+}
+
+// TestCentralE2EModelFailsClosedOnMissingFile: with no flag and no env override,
+// an absent source file must stop the runner loudly instead of silently billing
+// a stale fallback literal.
+func TestCentralE2EModelFailsClosedOnMissingFile(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	_, err := centralE2EModelPair()
+	if err == nil {
+		t.Fatal("centralE2EModelPair() with no tests/e2e/e2e-model.json returned nil error; want a loud failure")
+	}
+	if !strings.Contains(err.Error(), "AGENT_MODEL") || !strings.Contains(err.Error(), "JUDGE_MODEL") {
+		t.Fatalf("error should name the AGENT_MODEL and JUDGE_MODEL overrides, got: %v", err)
+	}
+}
+
+// TestCentralE2EModelRejectsAnEmptyModelField: a whitespace-only primary model
+// is empty after trim and must fail naming .primary.model. design.md §4.1.
+func TestCentralE2EModelRejectsAnEmptyModelField(t *testing.T) {
+	writeCentralModel(t, `{
+	  "primary": { "provider": "minimax-coding-plan", "model": "", "api_key_ref": "MINIMAX_API_KEY" },
+	  "fallback": { "provider": "openrouter", "model": "deepseek/deepseek-v4.1-flash", "api_key_ref": "OPENROUTER_API_KEY" }
+	}`)
+
+	_, err := centralE2EModelPair()
+	if err == nil {
+		t.Fatal("centralE2EModelPair() with an empty primary model returned nil error")
+	}
+	if !strings.Contains(err.Error(), ".primary.model") {
+		t.Fatalf("error = %v, want it to name .primary.model", err)
+	}
+}
+
+// TestCentralE2EModelRejectsWhitespaceOnlyModelField: whitespace-only is the
+// same corruption as empty, after trim. design.md §4.1.
+func TestCentralE2EModelRejectsWhitespaceOnlyModelField(t *testing.T) {
+	writeCentralModel(t, `{
+	  "primary": { "provider": "minimax-coding-plan", "model": "   ", "api_key_ref": "MINIMAX_API_KEY" },
+	  "fallback": { "provider": "openrouter", "model": "deepseek/deepseek-v4.1-flash", "api_key_ref": "OPENROUTER_API_KEY" }
+	}`)
+
+	_, err := centralE2EModelPair()
+	if err == nil {
+		t.Fatal("centralE2EModelPair() with a whitespace-only primary model returned nil error")
+	}
+	if !strings.Contains(err.Error(), ".primary.model") {
+		t.Fatalf("error = %v, want it to name .primary.model", err)
+	}
+}
+
+// TestCentralE2EModelRejectsInvalidJSON: a malformed source file is a loud
+// configuration error, never a silent pass-through.
+func TestCentralE2EModelRejectsInvalidJSON(t *testing.T) {
+	writeCentralModel(t, `{"primary":`)
+
+	if _, err := centralE2EModelPair(); err == nil {
+		t.Fatal("centralE2EModelPair() with malformed JSON returned nil error; want a failure")
+	}
+}
+
+// TestCentralE2EModelPairRejectsTheOldShape: {"model":"..."} is no longer legal.
+// design.md §4.1 and §7 R1.
+func TestCentralE2EModelPairRejectsTheOldShape(t *testing.T) {
+	writeCentralModel(t, `{"model":"deepseek/deepseek-v4.1-flash"}`)
+
+	_, err := centralE2EModelPair()
+	if err == nil {
+		t.Fatal("centralE2EModelPair() accepted the legacy {\"model\":...} shape; want an error")
+	}
+	if !strings.Contains(err.Error(), "old shape") {
+		t.Fatalf("error = %v, want it to contain \"old shape\"", err)
+	}
+}
+
+// TestCentralE2EModelPairRejectsPrimaryEqualFallback: the two pairs must differ.
+// design.md §4.1.
+func TestCentralE2EModelPairRejectsPrimaryEqualFallback(t *testing.T) {
+	writeCentralModel(t, `{
+	  "primary": { "provider": "openrouter", "model": "deepseek/deepseek-v4.1-flash", "api_key_ref": "OPENROUTER_API_KEY" },
+	  "fallback": { "provider": "openrouter", "model": "deepseek/deepseek-v4.1-flash", "api_key_ref": "OPENROUTER_API_KEY" }
+	}`)
+
+	_, err := centralE2EModelPair()
+	if err == nil {
+		t.Fatal("centralE2EModelPair() accepted primary == fallback; want an error")
+	}
+	if !strings.Contains(err.Error(), "same provider/model") {
+		t.Fatalf("error = %v, want it to contain \"same provider/model\"", err)
+	}
+}
+
+// TestCentralE2EModelPairRejectsAMissingFallbackObject. design.md §4.1.
+func TestCentralE2EModelPairRejectsAMissingFallbackObject(t *testing.T) {
+	writeCentralModel(t, `{
+	  "primary": { "provider": "minimax-coding-plan", "model": "MiniMax-M3.1-Flash-Preview", "api_key_ref": "MINIMAX_API_KEY" }
+	}`)
+
+	_, err := centralE2EModelPair()
+	if err == nil {
+		t.Fatal("centralE2EModelPair() accepted a document with no fallback object")
+	}
+	if !strings.Contains(err.Error(), ".fallback") {
+		t.Fatalf("error = %v, want it to name .fallback", err)
+	}
+}
+
+// ── resolveModel — flag > env > file precedence (finding E1) ─────────────────
+
+// TestResolveModelFlagBeatsEnvAndFile: an explicit --agent-model/--judge-model
+// value wins over BOTH the environment override and the central file — and the
+// file loader must never even be consulted.
+func TestResolveModelFlagBeatsEnvAndFile(t *testing.T) {
+	loaderCalled := false
+	loader := func() (string, error) {
+		loaderCalled = true
+		return "openrouter/vendor/from-file", nil
+	}
+	got, source, err := resolveModel("openrouter/vendor/from-flag", "openrouter/vendor/from-env", loader)
+	if err != nil {
+		t.Fatalf("resolveModel() error = %v", err)
+	}
+	if got != "openrouter/vendor/from-flag" {
+		t.Errorf("resolveModel() = %q, want the flag value", got)
+	}
+	if source != "flag" {
+		t.Errorf("source = %q, want %q", source, "flag")
+	}
+	if loaderCalled {
+		t.Error("loader was called even though the flag value was set — the file tier must not be consulted")
+	}
+}
+
+// TestResolveModelEnvBeatsFile: with no flag, AGENT_MODEL/JUDGE_MODEL win over
+// the central file — and a BROKEN file must not matter when the env override
+// decides (the loader is not consulted).
+func TestResolveModelEnvBeatsFile(t *testing.T) {
+	loader := func() (string, error) {
+		return "", errors.New("read tests/e2e/e2e-model.json: should never be called")
+	}
+	got, source, err := resolveModel("", "openrouter/vendor/from-env", loader)
+	if err != nil {
+		t.Fatalf("resolveModel() error = %v", err)
+	}
+	if got != "openrouter/vendor/from-env" {
+		t.Errorf("resolveModel() = %q, want the env value", got)
+	}
+	if source != "env" {
+		t.Errorf("source = %q, want %q", source, "env")
+	}
+}
+
+// TestResolveModelFileWhenBothEmpty: with no flag and no env, the central file
+// decides and the source is reported as "file".
+func TestResolveModelFileWhenBothEmpty(t *testing.T) {
+	loader := func() (string, error) { return "openrouter/vendor/from-file", nil }
+	got, source, err := resolveModel("", "", loader)
+	if err != nil {
+		t.Fatalf("resolveModel() error = %v", err)
+	}
+	if got != "openrouter/vendor/from-file" {
+		t.Errorf("resolveModel() = %q, want the file value", got)
+	}
+	if source != "file" {
+		t.Errorf("source = %q, want %q", source, "file")
+	}
+}
+
+// TestResolveModelAgentAndJudgeResolvedIndependently: the agent knob can come
+// from the flag tier while the judge knob comes from the env tier — the two
+// knobs never share a resolution, which is what lets a development run pick
+// one judge via JUDGE_MODEL while the agent stays central.
+func TestResolveModelAgentAndJudgeResolvedIndependently(t *testing.T) {
+	loader := func() (string, error) { return "openrouter/vendor/from-file", nil }
+
+	gotAgent, srcAgent, err := resolveModel("openrouter/agent/from-flag", "", loader)
+	if err != nil {
+		t.Fatalf("resolveModel(agent) error = %v", err)
+	}
+	if gotAgent != "openrouter/agent/from-flag" || srcAgent != "flag" {
+		t.Errorf("agent knob = (%q, %q), want (flag value, \"flag\")", gotAgent, srcAgent)
+	}
+
+	gotJudge, srcJudge, err := resolveModel("", "openrouter/judge/from-env", loader)
+	if err != nil {
+		t.Fatalf("resolveModel(judge) error = %v", err)
+	}
+	if gotJudge != "openrouter/judge/from-env" || srcJudge != "env" {
+		t.Errorf("judge knob = (%q, %q), want (env value, \"env\")", gotJudge, srcJudge)
+	}
+}
+
+// TestResolveModelPropagatesFileError: with no flag and no env, a loader error
+// aborts loudly — there is no hardcoded fallback model to absorb it.
+func TestResolveModelPropagatesFileError(t *testing.T) {
+	loader := func() (string, error) { return "", errors.New("read tests/e2e/e2e-model.json: no such file") }
+	_, _, err := resolveModel("", "", loader)
+	if err == nil {
+		t.Fatal("resolveModel() with a failing loader returned nil error; want the error propagated")
+	}
+	if !strings.Contains(err.Error(), "no such file") {
+		t.Errorf("error should carry the loader's cause, got: %v", err)
 	}
 }

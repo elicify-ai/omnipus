@@ -1,0 +1,9 @@
+--- FAIL: TestSessionCoreU2_ArchiveIsDayPartitionedNotOneMonolithicFile (0.21s)
+    sessioncore_u2_archive_test.go:104: 
+        	Error Trace:	/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/session-core-red-b-20261009/pkg/session/sessioncore_u2_archive_test.go:104
+        	Error:      	"1" is not greater than or equal to "2"
+        	Test:       	TestSessionCoreU2_ArchiveIsDayPartitionedNotOneMonolithicFile
+        	Messages:   	FR-005: two distinct UTC days must land in day files; found 1 archive data file(s) in /var/folders/rw/h_fqz_990kj3pnxsl9qf1v9w0000gn/T/TestSessionCoreU2_ArchiveIsDayPartitionedNotOneMonolithicFile1423144615/001/session_01M4F5KY7V7GS9MQ7VRQR3W0EB — a single monolithic archive cannot give a bounded cross-day window read
+FAIL
+FAIL	github.com/elicify-ai/omnipus/pkg/session	1.845s
+FAIL

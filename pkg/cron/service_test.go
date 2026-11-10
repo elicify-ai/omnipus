@@ -21,7 +21,7 @@ func TestSaveStore_FilePermissions(t *testing.T) {
 
 	cs := NewCronService(storePath)
 
-	_, err := cs.AddJob("test", CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)}, "hello")
+	_, err := cs.AddJobFull(JobSpec{Name: "test", Schedule: CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)}, Message: "hello", AgentID: "u6-test-owner"})
 	if err != nil {
 		t.Fatalf("AddJob failed: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestCronService_CRUD(t *testing.T) {
 
 	// Test AddJob
 	at := time.Now().Add(time.Hour).UnixMilli()
-	job, err := cs.AddJob("Task1", CronSchedule{Kind: "at", AtMS: &at}, "msg")
+	job, err := cs.AddJobFull(JobSpec{Name: "Task1", Schedule: CronSchedule{Kind: "at", AtMS: &at}, Message: "msg", AgentID: "u6-test-owner"})
 	if err != nil || job.ID == "" {
 		t.Fatalf("AddJob failed: %v", err)
 	}
@@ -202,7 +202,7 @@ func TestCronService_ExecutionFlow(t *testing.T) {
 	// Add a job then runs 100ms from now. The runner enforces the owner-missing
 	// guard, so the job needs an owner to fire.
 	target := time.Now().Add(100 * time.Millisecond).UnixMilli()
-	job, _ := cs.AddJob("FastJob", CronSchedule{Kind: "at", AtMS: &target}, "")
+	job, _ := cs.AddJobFull(JobSpec{Name: "FastJob", Schedule: CronSchedule{Kind: "at", AtMS: &target}, Message: "", AgentID: "u6-test-owner"})
 	job.AgentID = "mia"
 	if err := cs.UpdateJob(job); err != nil {
 		t.Fatalf("UpdateJob failed: %v", err)
@@ -243,7 +243,7 @@ func TestCronService_PersistenceIntegrity(t *testing.T) {
 	// write a job and persist
 	cs1 := NewCronService(tmpFile)
 	at := int64(2000000000000)
-	cs1.AddJob("PersistMe", CronSchedule{Kind: "at", AtMS: &at}, "payload")
+	cs1.AddJobFull(JobSpec{Name: "PersistMe", Schedule: CronSchedule{Kind: "at", AtMS: &at}, Message: "payload", AgentID: "u6-test-owner"})
 
 	// check file exists
 	if _, err := os.Stat(tmpFile); errors.Is(err, os.ErrNotExist) {
@@ -289,7 +289,7 @@ func TestCronService_ConcurrentAccess(t *testing.T) {
 			defer wg.Done()
 			for j := range iterations {
 				at := time.Now().Add(time.Hour).UnixMilli()
-				cs.AddJob(fmt.Sprintf("Job-%d-%d", id, j), CronSchedule{Kind: "at", AtMS: &at}, "")
+				cs.AddJobFull(JobSpec{Name: fmt.Sprintf("Job-%d-%d", id, j), Schedule: CronSchedule{Kind: "at", AtMS: &at}, Message: "", AgentID: "u6-test-owner"})
 				time.Sleep(100 * time.Microsecond)
 			}
 		}(i)

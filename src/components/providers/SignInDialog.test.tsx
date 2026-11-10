@@ -2,7 +2,6 @@
  * SignInDialog.test.tsx — ADR-068 §8b sign-in dialog (T068-33).
  *
  * Covers (per adr-068-providers-ux-spec-tasks.md T068-33 "Tests first"):
- *  - cli_login: renders the command + instructions, "Check sign-in" round trip.
  *  - device_code: renders the verification link (new tab, rel="noopener") and
  *    a copyable user code.
  *  - Polls pollSignIn at interval_seconds via fake timers, never faster than
@@ -12,9 +11,11 @@
  *  - End states signed_in | expired | denied, each with "Try again" restarting
  *    the flow via a fresh startSignIn call.
  *  - aria-live="polite" status announcement.
- *  - FR-047 import link: offered ONLY when the server reports a Codex login
- *    file exists (GET /providers/codex-cli/sign-in/status), never otherwise.
  *  - Escape closes the dialog, and focus is trapped inside it.
+ *
+ * (WU-24, founder 2026-10-14: the terminal-command sign-in shape and the
+ * "use my existing Codex login" import path were deleted outright from the
+ * dialog and from this suite — the WU-24 removal pack covers their absence.)
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -27,27 +28,11 @@ vi.mock('@/lib/api', async (importOriginal) => {
     startSignIn: vi.fn(),
     pollSignIn: vi.fn(),
     fetchSignInStatus: vi.fn(),
-    importCodexLogin: vi.fn(),
   }
 })
 
 import * as api from '@/lib/api'
 import { SignInDialog, isTransientSignInPollError } from './SignInDialog'
-
-const CLI_LOGIN_RESPONSE = {
-  method: 'cli_login' as const,
-  command: 'codex login',
-  instructions: 'Run `codex login` in a terminal, then click Check sign-in.',
-}
-
-// Verbatim from pkg/gateway/rest_signin_copilot.go (copilotSignInCommand /
-// copilotSignInInstructions) — what POST /providers/github-copilot/sign-in sends.
-const COPILOT_CLI_LOGIN_RESPONSE = {
-  method: 'cli_login' as const,
-  command: 'copilot login',
-  instructions:
-    'Run `copilot login` in a terminal on this machine and complete the GitHub sign-in. The Copilot CLI keeps the credential — Omnipus never sees or stores it. Then click Check sign-in.',
-}
 
 const DEVICE_CODE_RESPONSE = {
   method: 'device_code' as const,
@@ -81,78 +66,6 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers()
-})
-
-describe('SignInDialog — cli_login', () => {
-  it('renders the command, instructions, and a Check sign-in button', async () => {
-    vi.mocked(api.startSignIn).mockResolvedValue(CLI_LOGIN_RESPONSE)
-    renderDialog({ providerId: 'codex-cli', providerLabel: 'Codex CLI' })
-
-    await waitFor(() => {
-      expect(screen.getByTestId('cli-login-command')).toHaveTextContent('codex login')
-    })
-    expect(screen.getByText(/Run `codex login`/)).toBeInTheDocument()
-    expect(screen.getByTestId('check-sign-in-btn')).toBeInTheDocument()
-    expect(api.startSignIn).toHaveBeenCalledWith('codex-cli')
-  })
-
-  it('Check sign-in: not-yet-signed-in shows a retry hint, no terminal state', async () => {
-    vi.mocked(api.startSignIn).mockResolvedValue(CLI_LOGIN_RESPONSE)
-    vi.mocked(api.fetchSignInStatus).mockResolvedValue({ state: 'not_signed_in' })
-    renderDialog({ providerId: 'codex-cli', providerLabel: 'Codex CLI' })
-
-    await waitFor(() => screen.getByTestId('check-sign-in-btn'))
-    fireEvent.click(screen.getByTestId('check-sign-in-btn'))
-
-    await waitFor(() => {
-      // The retry hint appears twice in the DOM (the visible warning line and
-      // the sr-only aria-live announcement) — scope to the visible alert.
-      expect(screen.getByRole('alert')).toHaveTextContent(/Not signed in yet/)
-    })
-    expect(screen.getByTestId('check-sign-in-btn')).toBeInTheDocument()
-  })
-
-  it('Check sign-in: signed_in reaches the success state and fires onSignedIn', async () => {
-    vi.mocked(api.startSignIn).mockResolvedValue(CLI_LOGIN_RESPONSE)
-    vi.mocked(api.fetchSignInStatus).mockResolvedValue({ state: 'signed_in', account_label: 'octocat' })
-    const { onSignedIn } = renderDialog({ providerId: 'codex-cli', providerLabel: 'Codex CLI' })
-
-    await waitFor(() => screen.getByTestId('check-sign-in-btn'))
-    fireEvent.click(screen.getByTestId('check-sign-in-btn'))
-
-    await waitFor(() => {
-      expect(screen.getByTestId('sign-in-success')).toHaveTextContent('Signed in as octocat')
-    })
-    expect(onSignedIn).toHaveBeenCalledWith({ state: 'signed_in', account_label: 'octocat' })
-  })
-
-  // Silent-failure review 2026-09-14, finding 7: for a cli_login provider
-  // "expired" means the vendor CLI's EXISTING session was rejected — there is
-  // no code that went unapproved. The device-code sentence is wrong here; the
-  // operator must be told the session is no longer accepted and to run the
-  // CLI login step again (ADR-068 spec: "Run `copilot login` again, then check").
-  it('Check sign-in: a Copilot expired result says the session is no longer accepted and how to sign in again', async () => {
-    vi.mocked(api.startSignIn).mockResolvedValue(COPILOT_CLI_LOGIN_RESPONSE)
-    vi.mocked(api.fetchSignInStatus).mockResolvedValue({ state: 'expired' })
-    renderDialog({ providerId: 'github-copilot', providerLabel: 'GitHub Copilot' })
-
-    await waitFor(() => screen.getByTestId('check-sign-in-btn'))
-    fireEvent.click(screen.getByTestId('check-sign-in-btn'))
-
-    const expected =
-      'Your GitHub Copilot session is no longer accepted. Run `copilot login` again to sign in, then click Check sign-in.'
-    await waitFor(() => {
-      expect(screen.getByTestId('sign-in-status')).toHaveTextContent(expected)
-    })
-    expect(screen.getByTestId('sign-in-status')).toHaveAttribute('aria-live', 'polite')
-    expect(screen.getByRole('alert')).toHaveTextContent(expected)
-    // The way back in is the same CLI login step the dialog already shows.
-    expect(screen.getByTestId('cli-login-command')).toHaveTextContent('copilot login')
-    expect(screen.getByTestId('check-sign-in-btn')).toBeInTheDocument()
-    // Never the device-code wording.
-    expect(screen.queryByText(/before it was approved/i)).not.toBeInTheDocument()
-    expect(api.fetchSignInStatus).toHaveBeenCalledWith('github-copilot')
-  })
 })
 
 describe('SignInDialog — device_code', () => {
@@ -385,49 +298,9 @@ describe('SignInDialog — device_code', () => {
     expect(live).toHaveTextContent(/approve/i)
   })
 
-  it('the openai-chatgpt "Use my existing Codex login" import path succeeds', async () => {
-    vi.mocked(api.startSignIn).mockResolvedValue(DEVICE_CODE_RESPONSE)
-    vi.mocked(api.pollSignIn).mockResolvedValue({ state: 'pending' })
-    // FR-047: the link is offered only because the server reports a Codex
-    // login file (codex-cli status) exists.
-    vi.mocked(api.fetchSignInStatus).mockResolvedValue({ state: 'signed_in', account_label: 'codex-user' })
-    vi.mocked(api.importCodexLogin).mockResolvedValue({ state: 'signed_in', account_label: 'codex-user' })
-    const { onSignedIn } = renderDialog({ providerId: 'openai-chatgpt' })
-
-    await waitFor(() => screen.getByTestId('import-codex-login-btn'))
-    expect(api.fetchSignInStatus).toHaveBeenCalledWith('codex-cli')
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('import-codex-login-btn'))
-    })
-
-    await waitFor(() => {
-      expect(screen.getByTestId('sign-in-success')).toHaveTextContent('Signed in as codex-user')
-    })
-    expect(onSignedIn).toHaveBeenCalledWith({ state: 'signed_in', account_label: 'codex-user' })
-  })
-
-  it('the import link is not offered for a non-openai-chatgpt device_code provider', async () => {
-    vi.mocked(api.startSignIn).mockResolvedValue(DEVICE_CODE_RESPONSE)
-    vi.mocked(api.pollSignIn).mockResolvedValue({ state: 'pending' })
-    vi.mocked(api.fetchSignInStatus).mockResolvedValue({ state: 'signed_in' })
-    renderDialog({ providerId: 'xai', providerLabel: 'xAI' })
-
-    await waitFor(() => screen.getByTestId('user-code'))
-    expect(screen.queryByTestId('import-codex-login-btn')).not.toBeInTheDocument()
-    // A provider that is not openai-chatgpt never even asks about the file.
-    expect(api.fetchSignInStatus).not.toHaveBeenCalledWith('codex-cli')
-  })
-
-  it('FR-047: the import link stays hidden when the server reports no Codex login file', async () => {
-    vi.mocked(api.startSignIn).mockResolvedValue(DEVICE_CODE_RESPONSE)
-    vi.mocked(api.pollSignIn).mockResolvedValue({ state: 'pending' })
-    vi.mocked(api.fetchSignInStatus).mockResolvedValue({ state: 'not_signed_in' })
-    renderDialog({ providerId: 'openai-chatgpt' })
-
-    await waitFor(() => screen.getByTestId('user-code'))
-    await waitFor(() => expect(api.fetchSignInStatus).toHaveBeenCalledWith('codex-cli'))
-    expect(screen.queryByTestId('import-codex-login-btn')).not.toBeInTheDocument()
-  })
+  // (The three FR-047 import-link tests were deleted with the import path
+  // itself — WU-24. The WU-24 removal pack covers its absence: no import
+  // control, and no status query, in the real dialog.)
 })
 
 // ── O9: a single transient poll failure must not kill device-code sign-in
@@ -711,42 +584,5 @@ describe('SignInDialog — start failure', () => {
       expect(screen.getByTestId('sign-in-failure')).toHaveTextContent('provider does not support sign-in')
     })
     expect(screen.getByTestId('try-again-btn')).toBeInTheDocument()
-  })
-})
-
-// SignInStatus.reason (2026-09-14): a not_signed_in whose check could not run
-// shows WHY, instead of advice to run the command — the wrong advice for a
-// machine-level failure (CLI missing, failed to start, timed out).
-describe('SignInDialog — reason on a degraded not_signed_in', () => {
-  it('Check sign-in: a degraded not_signed_in shows the reason', async () => {
-    vi.mocked(api.startSignIn).mockResolvedValue(COPILOT_CLI_LOGIN_RESPONSE)
-    vi.mocked(api.fetchSignInStatus).mockResolvedValue({
-      state: 'not_signed_in',
-      reason: 'the Copilot CLI is not installed on this machine',
-    })
-    renderDialog({ providerId: 'github-copilot', providerLabel: 'GitHub Copilot' })
-
-    await waitFor(() => screen.getByTestId('check-sign-in-btn'))
-    fireEvent.click(screen.getByTestId('check-sign-in-btn'))
-
-    await waitFor(() => {
-      expect(screen.getByRole('alert')).toHaveTextContent(/the Copilot CLI is not installed/)
-    })
-    // The reason replaces the run-the-command advice, it does not follow it.
-    expect(screen.getByRole('alert')).not.toHaveTextContent(/run the command above/)
-  })
-
-  it('Check sign-in: without a reason the run-the-command advice stays', async () => {
-    vi.mocked(api.startSignIn).mockResolvedValue(COPILOT_CLI_LOGIN_RESPONSE)
-    vi.mocked(api.fetchSignInStatus).mockResolvedValue({ state: 'not_signed_in' })
-    renderDialog({ providerId: 'github-copilot', providerLabel: 'GitHub Copilot' })
-
-    await waitFor(() => screen.getByTestId('check-sign-in-btn'))
-    fireEvent.click(screen.getByTestId('check-sign-in-btn'))
-
-    await waitFor(() => {
-      expect(screen.getByRole('alert')).toHaveTextContent(/Not signed in yet/)
-    })
-    expect(screen.getByRole('alert')).toHaveTextContent(/run the command above, then check again/)
   })
 })

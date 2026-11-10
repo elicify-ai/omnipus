@@ -58,7 +58,7 @@ import (
 // collectLiveDescendantTurnStates a real chain to walk.
 func buildU8DelegationTree(t *testing.T, al *AgentLoop) (a, b, c, d *turnState) {
 	t.Helper()
-	agentInst := al.registry.GetDefaultAgent()
+	agentInst := al.registry.primaryChatAgentForTest()
 	if agentInst == nil {
 		t.Fatal("buildU8DelegationTree: expected default agent")
 	}

@@ -8,9 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"time"
 
-	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/utils"
@@ -36,7 +34,11 @@ type InstallSkillTool struct {
 	mu              sync.Mutex
 }
 
-var publishInstalledSkill = skills.PublishStagedSkill
+// publishInstalledSkill is a test-only override of the publication step,
+// kept for the result-rendering tests that inject a fixed outcome. Nil in
+// production: install_skill then publishes through skills.ApplyChange
+// (skills spec r15 §5.6), the one change pipeline.
+var publishInstalledSkill func(skillsDir, slug, stageDir, revision string) (skills.PublishOutcome, error)
 
 // NewInstallSkillTool creates a new InstallSkillTool.
 // registryMgr is the shared registry manager (same instance as FindSkillsTool).
@@ -155,6 +157,10 @@ func (t *InstallSkillTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Required current revision when explicitly replacing an installed skill; omit only for a first install.",
 			},
+			"replace_local_changes": map[string]any{
+				"type":        "boolean",
+				"description": "Confirms replacing an installed skill that has local changes (edits made after it was installed). The local changes stay in the version history.",
+			},
 			"ownerHandle": map[string]any{
 				"type": "string",
 				"description": "Disambiguates slug when it is published by more than one owner on the " +
@@ -166,7 +172,10 @@ func (t *InstallSkillTool) Parameters() map[string]any {
 	}
 }
 
-func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) (res *ToolResult) {
+	// FR-030: every result carries the outcome fields; refusals before the
+	// publish step changed nothing.
+	defer func() { res = FinalizeChangeResult(t.Name(), res) }()
 	// Install lock to prevent concurrent directory operations.
 	// Ideally this should be done at a `slug` level, currently, its at the
 	// (single, global) skills-directory level.
@@ -203,19 +212,32 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *To
 
 	// Check if already installed. skillsDir is the fixed GLOBAL skills
 	// directory (ADR-046 FR-009) — NOT a per-agent workspace path — so an
-	// install from one agent is discoverable by every other agent.
+	// install from one agent is discoverable by every other agent. A target
+	// that matches an installed skill only by letter case is a replacement
+	// of that skill (§5.6).
 	skillsDir := t.globalSkillsDir
-	targetDir := filepath.Join(skillsDir, slug)
-
-	alreadyInstalled := false
-	if _, err := os.Stat(targetDir); err == nil {
-		alreadyInstalled = true
+	// A built-in name is reserved for every install (§5.6): refuse it before
+	// the "already installed" check, which a built-in folder would trip.
+	if refusal := skills.RefuseBuiltinTarget(skills.ChangeRequest{
+		Kind: skills.KindInstall, Slug: slug,
+		Actor: skills.ChangeActor{
+			Kind: "agent", AgentID: ToolAgentID(ctx), SessionID: ToolTranscriptSessionID(ctx),
+			WorkspaceID: ToolWorkspaceID(ctx), Tool: t.Name(),
+		},
+	}); refusal != nil {
+		return ErrorResult(refusal.Error())
 	}
+	onDisk, alreadyInstalled, err := skills.ResolveInstalledSlug(skillsDir, slug)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("could not read the skills directory: %v", err))
+	}
+	targetDir := filepath.Join(skillsDir, onDisk)
 	if alreadyInstalled && revision == "" {
 		return ErrorResult(
-			fmt.Sprintf("skill %q already installed at %s. Read it and provide its revision to replace it.", slug, targetDir),
+			fmt.Sprintf("skill %q already installed at %s. Read it and provide its revision to replace it.", onDisk, targetDir),
 		)
 	}
+	replaceLocal, _ := args["replace_local_changes"].(bool)
 
 	// Resolve which registry to use BEFORE touching anything on disk: a
 	// typo'd registry name (or any other resolution failure) must fail
@@ -227,8 +249,8 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *To
 	}
 
 	// Ensure skills directory exists.
-	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
-		return ErrorResult(fmt.Sprintf("failed to create skills directory: %v", err))
+	if mkErr := os.MkdirAll(skillsDir, 0o755); mkErr != nil {
+		return ErrorResult(fmt.Sprintf("failed to create skills directory: %v", mkErr))
 	}
 
 	// Download to a staging directory and only swap it into place once
@@ -251,8 +273,8 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *To
 	// the same filesystem as skillsDir, so the final os.Rename below remains
 	// an atomic, cheap rename.
 	stagingRoot := filepath.Join(skillsDir, stagingDirName)
-	if err := os.MkdirAll(stagingRoot, 0o755); err != nil {
-		return ErrorResult(fmt.Sprintf("failed to create the staging directory for %q: %v", slug, err))
+	if mkErr := os.MkdirAll(stagingRoot, 0o755); mkErr != nil {
+		return ErrorResult(fmt.Sprintf("failed to create the staging directory for %q: %v", slug, mkErr))
 	}
 	stageDir, err := os.MkdirTemp(stagingRoot, slug+".install-")
 	if err != nil {
@@ -289,46 +311,13 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *To
 		return ErrorResult(fmt.Sprintf("skill %q is flagged as malicious and cannot be installed", slug))
 	}
 
-	// Write origin metadata into the staged copy before it becomes the real one.
-	if metaErr := writeOriginMeta(stageDir, registry.Name(), slug, result.Version); metaErr != nil {
-		logger.ErrorCF("tool", "Failed to write origin metadata",
-			map[string]any{
-				"tool":     "install_skill",
-				"error":    metaErr.Error(),
-				"target":   stageDir,
-				"registry": registry.Name(),
-				"slug":     slug,
-				"version":  result.Version,
-			})
-		// Non-fatal: skill is installed, metadata just won't appear in audits.
-	}
-
-	// Everything above succeeded: only now do we touch the previous install
-	// (if any), and only to swap in the verified replacement.
-	publish, err := publishInstalledSkill(skillsDir, slug, stageDir, revision)
+	// Everything above succeeded: only now is the change pipeline asked to
+	// publish the verified package (§5.6). The precondition is the request's
+	// own expectation — absence for a new install, the given revision for a
+	// replacement — never a session's seen record.
+	publish, err := t.publish(ctx, skillsDir, onDisk, stageDir, revision, alreadyInstalled, replaceLocal)
 	if err != nil {
-		if errors.Is(err, skills.ErrRevisionConflict) {
-			return ErrorResult(fmt.Sprintf("CONFLICT: skill %q changed after review; read it again before replacing it", slug))
-		}
-		logger.ErrorCF("tool", "Failed to publish downloaded skill", map[string]any{"tool": t.Name(), "skill": slug, "error": err.Error()})
-		if publish.PersistenceStatus.Valid() && publish.ActivationStatus.Valid() {
-			payload := map[string]any{
-				"persistence_status": publish.PersistenceStatus,
-				"activation_status":  publish.ActivationStatus,
-				"changed_fields":     publish.ChangedFields,
-				"error_stage":        publish.ErrorStage,
-				"message":            publish.Message,
-			}
-			if publish.Revision != "" {
-				payload["revision"] = publish.Revision
-			}
-			encoded, marshalErr := json.Marshal(payload)
-			if marshalErr != nil {
-				return ErrorResult("skill publication state could not be encoded; inspect installed skill state before retrying")
-			}
-			return ErrorResult(string(encoded))
-		}
-		return ErrorResult(fmt.Sprintf("downloaded %q but could not publish it; read installed skill state before retrying", slug))
+		return installFailure(slug, publish, err)
 	}
 
 	// Build result with moderation warning if suspicious.
@@ -348,7 +337,13 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *To
 		output += "\nWarning: " + publish.Warning
 	}
 
-	payload, marshalErr := json.Marshal(map[string]any{
+	const checkScope = "registry moderation check passed and the skill was published into the skills directory"
+	verdict := ChangeWorking(checkScope, "an agent loading and running the skill")
+	if publish.PersistenceStatus != skills.PersistenceComplete || publish.ActivationStatus != skills.ActivationActive {
+		verdict = ChangePartlySaved(fmt.Sprintf("publication reported persistence %s, activation %s",
+			publish.PersistenceStatus, publish.ActivationStatus), checkScope, []string{"skill activation"})
+	}
+	payload, marshalErr := json.Marshal(verdict.Into(map[string]any{
 		"success":            true,
 		"name":               slug,
 		"revision":           publish.Revision,
@@ -357,36 +352,61 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *To
 		"changed_fields":     publish.ChangedFields,
 		"message":            output,
 		"warning":            publish.Warning,
-	})
+	}))
 	if marshalErr != nil {
 		return ErrorResult(fmt.Sprintf("installed skill but failed to encode mutation state: %v", marshalErr))
 	}
 	return SilentResult(string(payload))
 }
 
-// originMeta tracks which registry a skill was installed from.
-type originMeta struct {
-	Version          int    `json:"version"`
-	Registry         string `json:"registry"`
-	Slug             string `json:"slug"`
-	InstalledVersion string `json:"installed_version"`
-	InstalledAt      int64  `json:"installed_at"`
+// publish runs the publication step through skills.ApplyChange (or the
+// test override).
+func (t *InstallSkillTool) publish(ctx context.Context, skillsDir, slug, stageDir, revision string, replace, replaceLocal bool) (skills.PublishOutcome, error) {
+	if publishInstalledSkill != nil {
+		return publishInstalledSkill(skillsDir, slug, stageDir, revision)
+	}
+	req := skills.ChangeRequest{
+		Kind: skills.KindInstall, Slug: slug, StagedDir: stageDir,
+		Expect:              skills.Expectation{Absent: true},
+		ReplaceLocalChanges: replaceLocal,
+		Actor: skills.ChangeActor{
+			Kind: "agent", AgentID: ToolAgentID(ctx), SessionID: ToolTranscriptSessionID(ctx),
+			WorkspaceID: ToolWorkspaceID(ctx), Tool: t.Name(),
+		},
+	}
+	if replace {
+		req.Kind, req.Expect = skills.KindInstallReplace, skills.Expectation{Revision: revision}
+	}
+	return skills.ApplyChange(skillsDir, req)
 }
 
-func writeOriginMeta(targetDir, registryName, slug, version string) error {
-	meta := originMeta{
-		Version:          1,
-		Registry:         registryName,
-		Slug:             slug,
-		InstalledVersion: version,
-		InstalledAt:      time.Now().UnixMilli(),
+// installFailure renders a refused or partly saved publication. A pipeline
+// refusal carries its code and §5.10 text; a partial save reports the
+// persisted state (FR-030) without the private cause.
+func installFailure(slug string, publish skills.PublishOutcome, err error) *ToolResult {
+	if publish.PersistenceStatus.Valid() && publish.ActivationStatus.Valid() && publish.PersistenceStatus != skills.PersistenceNone {
+		payload := map[string]any{
+			"persistence_status": publish.PersistenceStatus,
+			"activation_status":  publish.ActivationStatus,
+			"changed_fields":     publish.ChangedFields,
+			"error_stage":        publish.ErrorStage,
+			"message":            publish.Message,
+		}
+		if publish.Revision != "" {
+			payload["revision"] = publish.Revision
+		}
+		var ce *skills.ChangeError
+		if errors.As(err, &ce) {
+			payload["message"] = ce.Error()
+		}
+		return ChangeErrorResult(payload, ChangePartlySaved(
+			fmt.Sprintf("the skill was partly published (stage %s)", publish.ErrorStage), "",
+			[]string{"skill publication"}))
 	}
-
-	data, err := json.MarshalIndent(meta, "", "  ")
-	if err != nil {
-		return err
+	var ce *skills.ChangeError
+	if errors.As(err, &ce) {
+		return ErrorResult(ce.Error())
 	}
-
-	// Use unified atomic write utility with explicit sync for flash storage reliability.
-	return fileutil.WriteFileAtomic(filepath.Join(targetDir, ".skill-origin.json"), data, 0o600)
+	logger.ErrorCF("tool", "Failed to publish downloaded skill", map[string]any{"tool": "install_skill", "skill": slug, "error": err.Error()})
+	return ErrorResult(fmt.Sprintf("downloaded %q but could not publish it; read installed skill state before retrying", slug))
 }

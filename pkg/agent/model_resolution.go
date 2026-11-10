@@ -5,135 +5,44 @@ import (
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/modelresolve"
 	"github.com/elicify-ai/omnipus/pkg/providers"
-	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 )
 
 // ── FR-040: how a model reference resolves to a configured row ───────────────
 //
-// A reference is the PAIR (provider, model). There are exactly three rules
-// (ADR-067 FR-040, X-24), and nothing else:
-//
-//  1. An exact pair — a configured row whose Provider and Model both match —
-//     wins outright.
-//  1b. A pair whose provider IS configured and whose model that provider
-//     OFFERS (the catalog's models for a cloud row, the row's own manual
-//     `models[]` for a local one) resolves to that row carrying the
-//     requested model. This is the ordinary case: a provider row is a
-//     credential plus an endpoint, and the agent picks the model.
-//  2. A BARE model id with no provider resolves iff exactly one configured,
-//     non-degraded provider offers it. Two providers offering the same model
-//     is genuinely ambiguous and stays unresolved — guessing between them is
-//     how a turn silently ran on the wrong account.
-//  3. Anything else is unresolved (ADR-068 turns that into `needs_model`).
-//
-// What is GONE, deliberately: the `model_name` display alias (X-25), the
-// `<protocol>/<model>` prefix split (FR-034), and the passthrough fallback
-// that re-prefixed any unmatched slug onto the first aggregator it found.
-// That last one is the reason this rewrite matters: it meant a typo'd or
-// retired model id never failed to resolve — it silently became an
-// OpenRouter request, billed to the operator's OpenRouter key, for a model
-// nobody had chosen.
+// The rules live in pkg/modelresolve (shared with get_agent's model_chain,
+// r17 §7.5 AG-16); these are this package's names for them.
 
-// providerOffers reports whether a configured row can serve a model id:
-// its own pinned Model, an entry in its manual `models[]` (the local-row
-// list), or — for a cloud row — a model the catalog lists under that
-// provider. Comparison is exact after TrimSpace (FR-036).
+// providerOffers: modelresolve.ProviderOffers.
 func providerOffers(mc *config.ModelConfig, model string) bool {
-	if mc == nil {
-		return false
-	}
-	if strings.TrimSpace(mc.Model) == model {
-		return true
-	}
-	for _, m := range mc.Models {
-		if strings.TrimSpace(m) == model {
-			return true
-		}
-	}
-	row, known := providers.CatalogProvider(mc.Provider)
-	if !known || row.Locality == catalog.LocalityLocal {
-		// A local runtime serves whatever the operator pulled; the catalog
-		// carries no model rows for it, so the manual list above is the only
-		// authority. An unknown provider offers nothing.
-		return false
-	}
-	return providers.ProviderCatalog().Resolve(strings.TrimSpace(mc.Provider), model).Found()
+	return modelresolve.ProviderOffers(mc, model)
 }
 
-// providerConfigured reports whether a row's provider id is one the runtime
-// can actually construct: a catalog id, or an operator-typed custom row.
-// A row naming an unknown provider is DEGRADED and never resolves anything
-// (FR-016) — that agent needs a provider, not a silently different one.
-func providerConfigured(mc *config.ModelConfig) bool {
-	if mc == nil {
-		return false
-	}
-	return mc.Custom || providers.IsCatalogProvider(mc.Provider)
-}
-
-// resolveModelPair applies the three rules above and returns a CLONE of the
-// matched row carrying the requested model, or (nil, false).
+// resolveModelPair applies the FR-040 rules (modelresolve.Pair) and returns
+// the matched row carrying the requested model, or (nil, false).
 func resolveModelPair(cfg *config.Config, provider, model string) (*config.ModelConfig, bool) {
-	if cfg == nil {
-		return nil, false
-	}
-	provider = strings.TrimSpace(provider)
-	model = strings.TrimSpace(model)
-	if model == "" {
-		return nil, false
-	}
+	return modelresolve.Pair(cfg, provider, model)
+}
 
-	// Rule 1 — exact pair.
-	for i := range cfg.Providers {
-		mc := cfg.Providers[i]
-		if mc == nil || !providerConfigured(mc) {
-			continue
-		}
-		if strings.TrimSpace(mc.Provider) == provider && strings.TrimSpace(mc.Model) == model {
-			return mc, true
-		}
-	}
+// bareModelOffers: modelresolve.BareModelOffers.
+func bareModelOffers(cfg *config.Config, model string) (*config.ModelConfig, []string) {
+	return modelresolve.BareModelOffers(cfg, model)
+}
 
-	if provider != "" {
-		// Rule 1b — the named provider is configured and offers the model.
-		for i := range cfg.Providers {
-			mc := cfg.Providers[i]
-			if mc == nil || !providerConfigured(mc) {
-				continue
-			}
-			if strings.TrimSpace(mc.Provider) != provider {
-				continue
-			}
-			if providerOffers(mc, model) {
-				return mc, true
-			}
-		}
-		return nil, false
-	}
+// AmbiguousModelError is the FR-040 rule-2 miss for a bare model id that
+// several configured providers offer (provider hotfix H2). It names the
+// providers so the operator can pick one, instead of the old
+// `not found in model_list or providers`, which claimed the model existed
+// nowhere when it actually existed in two places.
+type AmbiguousModelError struct {
+	Model     string
+	Providers []string
+}
 
-	// Rule 2 — a bare model id, offered by exactly one provider.
-	var match *config.ModelConfig
-	matchedProvider := ""
-	for i := range cfg.Providers {
-		mc := cfg.Providers[i]
-		if mc == nil || !providerConfigured(mc) || !providerOffers(mc, model) {
-			continue
-		}
-		id := strings.TrimSpace(mc.Provider)
-		if match != nil && id != matchedProvider {
-			// Two different providers offer it — ambiguous, rule 3.
-			return nil, false
-		}
-		if match == nil {
-			match = mc
-			matchedProvider = id
-		}
-	}
-	if match == nil {
-		return nil, false
-	}
-	return match, true
+func (e *AmbiguousModelError) Error() string {
+	return fmt.Sprintf("model %q is offered by several providers (%s); choose the provider",
+		e.Model, strings.Join(e.Providers, ", "))
 }
 
 // ResolveModelCfg resolves a model reference to a *config.ModelConfig ready
@@ -164,6 +73,11 @@ func ResolveModelPairCfg(
 	}
 	mc, ok := resolveModelPair(cfg, provider, raw)
 	if !ok {
+		if strings.TrimSpace(provider) == "" {
+			if _, offering := bareModelOffers(cfg, raw); len(offering) > 1 {
+				return nil, &AmbiguousModelError{Model: raw, Providers: offering}
+			}
+		}
 		return nil, fmt.Errorf("model %q not found in model_list or providers", raw)
 	}
 	clone := cloneWithWorkspace(mc, workspace)
@@ -220,41 +134,37 @@ func buildModelListResolver(cfg *config.Config) func(raw string) (providers.Reso
 	}
 }
 
+// resolveModelCandidates resolves the PRIMARY only. Legacy plain-string
+// fallbacks name a model without its provider, so they are never routed
+// (founder rule 2026-10-18, issue #1340: provider and model always come in
+// pairs) — the providers-level string-fallback resolution, which would send
+// them through the default provider, is deliberately never fed.
 func resolveModelCandidates(
 	cfg *config.Config,
 	defaultProvider string,
 	primary string,
-	fallbacks []string,
 ) []providers.FallbackCandidate {
 	return providers.ResolveCandidatesWithLookup(
-		providers.ModelConfig{
-			Primary:   primary,
-			Fallbacks: fallbacks,
-		},
+		providers.ModelConfig{Primary: primary},
 		defaultProvider,
 		buildModelListResolver(cfg),
 	)
 }
 
-// resolveModelCandidatesForAgent picks the right candidate resolver based on
-// what the agent has populated. When the agent carries FallbackModels (the
-// modern provider-aware chain — FR-005 / FR-007), it routes each fallback
-// through its own provider via resolveModelCandidatesFromList. Otherwise it
-// falls back to the legacy string-based resolver so configs that predate the
-// new wire shape keep their original behavior.
+// resolveModelCandidatesForAgent resolves the primary followed by the agent's
+// paired fallback chain (FR-005 / FR-007): each fallback routes through its
+// own provider via resolveModelCandidatesFromList. Unpaired entries — and the
+// legacy plain-string field — are never routed (issue #1340).
 func resolveModelCandidatesForAgent(
 	cfg *config.Config,
 	defaultProvider string,
 	primary string,
 	agent *AgentInstance,
 ) []providers.FallbackCandidate {
-	if agent == nil {
-		return resolveModelCandidates(cfg, defaultProvider, primary, nil)
+	if agent == nil || len(agent.FallbackModels) == 0 {
+		return resolveModelCandidates(cfg, defaultProvider, primary)
 	}
-	if len(agent.FallbackModels) > 0 {
-		return resolveModelCandidatesFromList(cfg, defaultProvider, primary, agent.FallbackModels)
-	}
-	return resolveModelCandidates(cfg, defaultProvider, primary, agent.Fallbacks)
+	return resolveModelCandidatesFromList(cfg, defaultProvider, primary, agent.FallbackModels)
 }
 
 // resolveModelCandidatesFromList is the provider-aware variant of
@@ -265,10 +175,9 @@ func resolveModelCandidatesForAgent(
 // form; fallback entries bypass the lookup when Provider is set because the
 // agent has explicitly pinned the route.
 //
-// An entry with Provider == "" falls back to the model_list lookup so legacy
-// [string] entries normalized via config.NormalizeFallbacks continue to work
-// at the agent layer. After lookup, the entry is treated as a bare slug routed
-// through defaultProvider — same behavior as resolveModelCandidates.
+// An entry without BOTH a provider and a model is never routed: a fallback
+// is a (provider, model) pair (founder rule 2026-10-18, issue #1340), so no
+// model_list lookup or defaultProvider passthrough fills in a provider.
 //
 // Order is preserved: primary first, then fallbacks in declared order.
 // Duplicates (same provider+model) are collapsed.
@@ -318,55 +227,24 @@ func resolveModelCandidatesFromList(
 	}
 
 	addFallback := func(fb config.FallbackModel) {
-		candidateRaw := strings.TrimSpace(fb.Model)
-		if candidateRaw == "" {
+		model := strings.TrimSpace(fb.Model)
+		provider := strings.TrimSpace(fb.Provider)
+		// A fallback is a (provider, model) PAIR (founder rule 2026-10-18,
+		// issue #1340): an entry missing either half is never routed — no
+		// configured-row lookup, no default-provider passthrough. The agent
+		// constructor reports such entries (warnUnpairedFallbacks).
+		if model == "" || provider == "" {
 			return
 		}
-		// When the entry has a pinned Provider, use it directly — bypass the
-		// model_list lookup so a non-passthrough provider is honored even when
-		// the configured providers only include a passthrough (FR-007).
-		// NormalizeFallbacks has already populated Provider for legacy string
-		// entries against the configured providers, so an empty Provider here
-		// means "no configured provider matched" — fall back to the chat-side
-		// resolver so the candidate at least surfaces a sensible default.
-		if strings.TrimSpace(fb.Provider) != "" {
-			// The pair is already pinned. Take it verbatim — no prefix split
-			// (FR-034: a `/` inside a model id is data, e.g.
-			// `z-ai/glm-5.2` under `openrouter`).
-			ref := &providers.ModelRef{
-				Provider: strings.TrimSpace(fb.Provider),
-				Model:    candidateRaw,
-			}
-			key := providers.ModelKey(ref.Provider, ref.Model)
-			if seen[key] {
-				return
-			}
-			seen[key] = true
-			out = append(out, providers.FallbackCandidate{Provider: ref.Provider, Model: ref.Model})
-			return
-		}
-		// No pinned provider — use the resolver like the primary does.
-		if resolver != nil {
-			if resolved, ok := resolver(candidateRaw); ok {
-				key := providers.ModelKey(resolved.Provider, resolved.Model)
-				if seen[key] {
-					return
-				}
-				seen[key] = true
-				out = append(out, providers.FallbackCandidate{Provider: resolved.Provider, Model: resolved.Model})
-				return
-			}
-		}
-		ref := providers.ParseModelRef(candidateRaw, defaultProvider)
-		if ref == nil {
-			return
-		}
-		key := providers.ModelKey(ref.Provider, ref.Model)
+		// The pair is pinned. Take it verbatim — no prefix split (FR-034: a
+		// `/` inside a model id is data, e.g. `z-ai/glm-5.2` under
+		// `openrouter`).
+		key := providers.ModelKey(provider, model)
 		if seen[key] {
 			return
 		}
 		seen[key] = true
-		out = append(out, providers.FallbackCandidate{Provider: ref.Provider, Model: ref.Model})
+		out = append(out, providers.FallbackCandidate{Provider: provider, Model: model})
 	}
 
 	addPrimary(primary)
@@ -398,7 +276,7 @@ func resolveAgentCandidatesWithPrimaryProvider(
 	primary string,
 	primaryProvider string,
 	fallbackModels []config.FallbackModel,
-	fallbacks []string,
+	_ []string, // legacy plain-string fallbacks: unpaired, never routed (#1340)
 ) []providers.FallbackCandidate {
 	pinned := strings.TrimSpace(primaryProvider)
 	if pinned == "" {
@@ -406,7 +284,7 @@ func resolveAgentCandidatesWithPrimaryProvider(
 		if len(fallbackModels) > 0 {
 			return resolveModelCandidatesFromList(cfg, defaultProvider, primary, fallbackModels)
 		}
-		return resolveModelCandidates(cfg, defaultProvider, primary, fallbacks)
+		return resolveModelCandidates(cfg, defaultProvider, primary)
 	}
 
 	// Explicit provider: pin the primary candidate to it, verbatim.
@@ -420,16 +298,14 @@ func resolveAgentCandidatesWithPrimaryProvider(
 		out = append(out, providers.FallbackCandidate{Provider: pinned, Model: model})
 	}
 
-	// Append the fallback chain (provider-aware when available), skipping any
-	// candidate that duplicates the pinned primary. The first element returned by
-	// the fallback resolver is the primary re-resolved through the default path —
-	// drop it so the pinned primary above wins.
-	var rest []providers.FallbackCandidate
-	if len(fallbackModels) > 0 {
-		rest = resolveModelCandidatesFromList(cfg, defaultProvider, primary, fallbackModels)
-	} else {
-		rest = resolveModelCandidates(cfg, defaultProvider, primary, fallbacks)
-	}
+	// Append ONLY the configured, paired fallback chain, in configured
+	// order. The primary is not handed to the fallback resolver:
+	// re-resolving a vendor-prefixed pinned id
+	// ("deepseek/m" under openrouter) would yield a different pair
+	// ("deepseek", "m") — a phantom fallback the agent never configured.
+	// The only de-duplication is against the actual pinned primary pair (and
+	// earlier fallbacks), so a configured fallback is never dropped.
+	rest := resolveModelCandidatesFromList(cfg, defaultProvider, "", fallbackModels)
 	for _, c := range rest {
 		key := providers.ModelKey(c.Provider, c.Model)
 		if seen[key] {
@@ -454,14 +330,6 @@ func resolvedCandidateProvider(candidates []providers.FallbackCandidate, fallbac
 		return candidates[0].Provider
 	}
 	return fallback
-}
-
-// resolvedModelConfig resolves a model name to a *config.ModelConfig usable by
-// the chat runtime. After the phase-1 refactor (FR-003) it delegates to the
-// shared ResolveModelCfg so the chat runtime and the UI selector agree on
-// the FR-040 rules.
-func resolvedModelConfig(cfg *config.Config, modelName, workspace string) (*config.ModelConfig, error) {
-	return ResolveModelCfg(cfg, modelName, workspace)
 }
 
 // IsKnownModel reports whether `slug` names a model at least one configured

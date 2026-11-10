@@ -64,17 +64,19 @@ import (
 // reproduces byte-identical JSON when UnifiedMeta is marshalled again
 // (FR-057/AC-21(e)).
 type u5IdentityFile struct {
-	ID          string        `json:"id"`
-	AgentID     string        `json:"agent_id"`
-	Title       string        `json:"title,omitempty"`
-	Status      SessionStatus `json:"status"`
-	CreatedAt   time.Time     `json:"created_at"`
-	UpdatedAt   time.Time     `json:"updated_at"`
-	Model       string        `json:"model,omitempty"`
-	Provider    string        `json:"provider,omitempty"`
-	WorkspaceID string        `json:"workspace_id,omitempty"`
-	TaskID      string        `json:"task_id,omitempty"`
-	Channel     string        `json:"channel"`
+	ID        string        `json:"id"`
+	AgentID   string        `json:"agent_id"`
+	Title     string        `json:"title,omitempty"`
+	Status    SessionStatus `json:"status"`
+	CreatedAt time.Time     `json:"created_at"`
+	UpdatedAt time.Time     `json:"updated_at"`
+	Model     string        `json:"model,omitempty"`
+	Provider  string        `json:"provider,omitempty"`
+	// ReasoningEffort is the conversation effort override (/effort).
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	WorkspaceID     string `json:"workspace_id,omitempty"`
+	TaskID          string `json:"task_id,omitempty"`
+	Channel         string `json:"channel"`
 	// InstanceID is the channel INSTANCE key ("whatsapp.eu"), not the bare
 	// type. Channel alone is not an identity when an install holds many
 	// instances of one platform — see UnifiedMeta.InstanceID.
@@ -84,10 +86,10 @@ type u5IdentityFile struct {
 	LastCompactionSummary string             `json:"last_compaction_summary,omitempty"`
 	Owner                 string             `json:"owner,omitempty"`
 	AgentIDs              []string           `json:"agent_ids,omitempty"`
-	ActiveAgentID         string             `json:"active_agent_id,omitempty"`
 	CompactionSummaries   map[string]string  `json:"compaction_summaries,omitempty"`
 	Type                  UnifiedSessionType `json:"type"`
 	ParentSessionID       string             `json:"parent_session_id,omitempty"`
+	Attention             *AttentionMark     `json:"attention,omitempty"`
 }
 
 // u5StatsFile is stats.json's on-disk shape (FR-053): SessionStats plus its
@@ -95,9 +97,12 @@ type u5IdentityFile struct {
 // (u5LaterOf, below) into the single exposed UnifiedMeta.UpdatedAt field on
 // every read. SessionStats is embedded WITHOUT a json tag so its fields
 // flatten directly into stats.json's top level.
-type u5StatsFile struct {
+type u5StatsFile struct { // not-wire-format: private aggregate/validity codec; public stats use generated DTOs.
 	SessionStats
-	UpdatedAt time.Time `json:"updated_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
+	UsageBaselineKnown *bool     `json:"usage_baseline_known,omitempty"`
+	present            bool
+	baselineKnown      bool
 }
 
 // ADR-086 GOAL-FR-005 (wave S6, "the deletion half"): goal.json and its
@@ -140,6 +145,7 @@ func u5IdentityFromMeta(meta *UnifiedMeta) u5IdentityFile {
 		UpdatedAt:             meta.UpdatedAt,
 		Model:                 meta.Model,
 		Provider:              meta.Provider,
+		ReasoningEffort:       meta.ReasoningEffort,
 		WorkspaceID:           meta.WorkspaceID,
 		TaskID:                meta.TaskID,
 		Channel:               meta.Channel,
@@ -149,15 +155,16 @@ func u5IdentityFromMeta(meta *UnifiedMeta) u5IdentityFile {
 		LastCompactionSummary: meta.LastCompactionSummary,
 		Owner:                 meta.Owner,
 		AgentIDs:              meta.AgentIDs,
-		ActiveAgentID:         meta.ActiveAgentID,
 		CompactionSummaries:   meta.CompactionSummaries,
 		Type:                  meta.Type,
 		ParentSessionID:       meta.ParentSessionID,
+		Attention:             meta.Attention.persisted(),
 	}
 }
 
 func u5StatsFromMeta(meta *UnifiedMeta) u5StatsFile {
-	return u5StatsFile{SessionStats: meta.Stats, UpdatedAt: meta.UpdatedAt}
+	known := meta.usageBaselineKnown
+	return u5StatsFile{SessionStats: meta.Stats, UpdatedAt: meta.UpdatedAt, UsageBaselineKnown: &known}
 }
 
 func u5LoopFromMeta(meta *UnifiedMeta) u5LoopFile {
@@ -200,6 +207,7 @@ func u5ComposeUnifiedMeta(identity u5IdentityFile, stats u5StatsFile, loop u5Loo
 			UpdatedAt:             u5LaterOf(identity.UpdatedAt, stats.UpdatedAt),
 			Model:                 identity.Model,
 			Provider:              identity.Provider,
+			ReasoningEffort:       identity.ReasoningEffort,
 			Stats:                 stats.SessionStats,
 			WorkspaceID:           identity.WorkspaceID,
 			TaskID:                identity.TaskID,
@@ -210,9 +218,9 @@ func u5ComposeUnifiedMeta(identity u5IdentityFile, stats u5StatsFile, loop u5Loo
 			LastCompactionSummary: identity.LastCompactionSummary,
 			Owner:                 identity.Owner,
 			AgentIDs:              identity.AgentIDs,
-			ActiveAgentID:         identity.ActiveAgentID,
 			CompactionSummaries:   identity.CompactionSummaries,
 			ParentSessionID:       identity.ParentSessionID,
+			Attention:             identity.Attention.value(),
 			PendingAskJSON:        pendingAsk.PendingAskJSON,
 			LoopMode:              loop.LoopMode,
 			LoopPrompt:            loop.LoopPrompt,
@@ -224,7 +232,8 @@ func u5ComposeUnifiedMeta(identity u5IdentityFile, stats u5StatsFile, loop u5Loo
 			LoopStartedAt:         loop.LoopStartedAt,
 			LoopLastActivityAt:    loop.LoopLastActivityAt,
 		},
-		Type: identity.Type,
+		Type:               identity.Type,
+		usageBaselineKnown: stats.baselineKnown,
 	}
 }
 
@@ -258,6 +267,18 @@ func u5ReadStatsFile(sessionDir string) (u5StatsFile, error) {
 	if err := json.Unmarshal(data, &f); err != nil {
 		return f, fmt.Errorf("parse %q: %w", filepath.Join(sessionDir, "stats.json"), err)
 	}
+	// Numeric zero cannot distinguish absent/null from a recorded total.
+	// An explicit false validity marker survives later partial accounting.
+	var presence struct { // not-wire-format: private codec presence check only.
+		Total    *int            `json:"tokens_total"`
+		Baseline json.RawMessage `json:"usage_baseline_known"`
+	}
+	if err := json.Unmarshal(data, &presence); err != nil {
+		return f, fmt.Errorf("parse usage authority: %w", err)
+	}
+	f.present = true
+	f.baselineKnown = presence.Total != nil && *presence.Total >= 0 &&
+		(len(presence.Baseline) == 0 || f.UsageBaselineKnown != nil && *f.UsageBaselineKnown)
 	return f, nil
 }
 
@@ -349,6 +370,7 @@ func (us *UnifiedStore) u5WriteIdentityLocked(sessionID string, meta *UnifiedMet
 		cached.CreatedAt = meta.CreatedAt
 		cached.Model = meta.Model
 		cached.Provider = meta.Provider
+		cached.ReasoningEffort = meta.ReasoningEffort
 		cached.WorkspaceID = meta.WorkspaceID
 		cached.TaskID = meta.TaskID
 		cached.Channel = meta.Channel
@@ -358,9 +380,9 @@ func (us *UnifiedStore) u5WriteIdentityLocked(sessionID string, meta *UnifiedMet
 		cached.LastCompactionSummary = meta.LastCompactionSummary
 		cached.Owner = meta.Owner
 		cached.AgentIDs = slices.Clone(meta.AgentIDs)
-		cached.ActiveAgentID = meta.ActiveAgentID
 		cached.CompactionSummaries = maps.Clone(meta.CompactionSummaries)
 		cached.ParentSessionID = meta.ParentSessionID
+		cached.Attention = meta.Attention
 		cached.Type = meta.Type
 		if meta.UpdatedAt.After(cached.UpdatedAt) {
 			cached.UpdatedAt = meta.UpdatedAt
@@ -397,7 +419,9 @@ func (us *UnifiedStore) u5WriteStatsLocked(sessionID string, meta *UnifiedMeta) 
 	us.cacheMu.Lock()
 	if cached, ok := us.metaCache[sessionID]; ok {
 		cached.Stats = meta.Stats
+		cached.usageBaselineKnown = meta.usageBaselineKnown
 		cached.Stats.ByModel = maps.Clone(meta.Stats.ByModel)
+		cached.Stats.ByProvider = maps.Clone(meta.Stats.ByProvider)
 		if meta.UpdatedAt.After(cached.UpdatedAt) {
 			cached.UpdatedAt = meta.UpdatedAt
 		}

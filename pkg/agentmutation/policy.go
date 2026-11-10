@@ -18,48 +18,55 @@ type FieldError struct {
 	Code   ErrorCode
 	Fields []string
 	Reason string
+	// Message, when set, is the complete user-facing sentence the spec pins
+	// for this refusal; Error returns it verbatim instead of the
+	// "<code>: fields <names>: <reason>" form.
+	Message string
 }
 
+// ExternalCLIEffortRefusal is the pinned refusal of reasoning_effort on an
+// external-CLI worker (effort-levels spec S-77): the worker runs its own CLI's
+// model settings, so no Omnipus effort applies.
+const ExternalCLIEffortRefusal = "reasoning_effort does not apply to external-CLI workers; they use their own CLI's model settings."
+
 func (e *FieldError) Error() string {
+	if e.Message != "" {
+		return e.Message
+	}
 	return fmt.Sprintf("%s: fields %s: %s", e.Code, strings.Join(e.Fields, ", "), e.Reason)
 }
 
 var knownFields = map[string]struct{}{
-	"name": {}, "description": {}, "color": {}, "icon": {}, "type": {}, "locked": {}, "soul": {},
+	"name": {}, "description": {}, "figure": {}, "role": {}, "color": {}, "type": {}, "locked": {}, "soul": {},
 	"skills": {}, "mcp_servers": {}, "tools_cfg": {}, "tool_policy_changes": {}, "model": {}, "provider": {},
 	"fallback_models": {}, "context_window_override": {}, "model_params": {}, "max_tool_iterations": {},
-	"memory_enabled": {}, "default": {}, "voice": {}, "executor": {}, "cli_path": {},
-	"auto_approve_disabled": {},
+	"memory_enabled": {}, "default": {}, "voice": {}, "executor": {},
+	"reasoning_effort": {}, // the primary model's effort (effort-levels spec FR-048)
+	// cli_path is not a field (r17 §7.5 AG-10: removed from every
+	// agent-writable surface). The flattened tool arguments env_overrides,
+	// env_overrides_remove and cli_args are validated as "executor".
+	// AGENT.md beside SOUL.md (#1064), written by the update_agent tool; it
+	// follows soul's protection rules.
+	"agent_md": {},
 }
 
-// operatorOnly fields may be written by the operator (REST, the SPA) but
-// never through an agent's own mutation path (sysagent update/create tools,
-// which call ValidateFields). auto_approve_disabled is ADR-092's per-agent
-// "Never auto-approve" safety switch: setting it only tightens, but an agent
-// able to write it could also turn it back off and loosen its own
-// Auto-approve past what the operator chose.
-var operatorOnly = map[string]struct{}{"auto_approve_disabled": {}}
-
-// operatorOnlyReason is the refusal an agent-path write of an operatorOnly
-// field gets, and the reason its agent-view descriptor carries.
-const operatorOnlyReason = "only the operator can change this safety setting; an agent cannot change it for itself or another agent"
-
 var alwaysImmutable = map[string]struct{}{"type": {}, "locked": {}}
-var ordinaryProtected = map[string]struct{}{"name": {}, "description": {}, "color": {}, "icon": {}, "type": {}, "locked": {}, "soul": {}, "executor": {}}
+var ordinaryProtected = map[string]struct{}{"name": {}, "description": {}, "figure": {}, "role": {}, "color": {}, "type": {}, "locked": {}, "soul": {}, "executor": {}, "agent_md": {}}
 var hiddenProtected = map[string]struct{}{
-	"name": {}, "description": {}, "color": {}, "icon": {}, "type": {}, "locked": {}, "skills": {}, "mcp_servers": {},
+	"name": {}, "description": {}, "figure": {}, "role": {}, "color": {}, "type": {}, "locked": {}, "skills": {}, "mcp_servers": {},
 	"tools_cfg": {}, "tool_policy_changes": {}, "memory_enabled": {}, "executor": {}, "default": {}, "voice": {},
 }
 var externalUnsupported = map[string]struct{}{
 	"soul": {}, "skills": {}, "mcp_servers": {}, "tools_cfg": {}, "tool_policy_changes": {}, "memory_enabled": {},
-	"voice": {}, "context_window_override": {}, "model_params": {}, "max_tool_iterations": {}, "fallback_models": {},
-	// An external CLI worker runs its own CLI's tools, never Omnipus's
-	// ask-policy tools, so there is no Auto-approve to switch off.
-	"auto_approve_disabled": {},
+	"voice": {}, "context_window_override": {}, "model_params": {}, "fallback_models": {},
+	"agent_md": {},
+	// max_tool_iterations is supported (#904 D14): an external CLI worker
+	// follows the global tool-iteration limit and may lower it; the
+	// effective value is the CLI's turn cap.
 }
 
 var ordinaryBuiltins = map[string]struct{}{
-	"mia": {}, "jim": {}, "ava": {}, "admin": {}, "planner": {}, "researcher": {}, "worker": {},
+	"mia": {}, "jim": {}, "omnipus": {}, "planner": {}, "researcher": {}, "worker": {},
 }
 
 type FieldDescriptor struct {
@@ -68,19 +75,31 @@ type FieldDescriptor struct {
 	Reason   string
 }
 
-var describedFields = []string{"name", "description", "color", "icon", "soul", "skills", "mcp_servers", "tool_policy_changes", "model", "provider", "fallback_models", "context_window_override", "model_params", "max_tool_iterations", "memory_enabled", "default", "voice", "type", "auto_approve_disabled"}
+var describedFields = []string{"name", "description", "figure", "role", "color", "soul", "skills", "mcp_servers", "tool_policy_changes", "model", "provider", "fallback_models", "reasoning_effort", "context_window_override", "model_params", "max_tool_iterations", "memory_enabled", "voice", "type"}
 
-// FieldDescriptors is the AGENT view of which fields may be changed (the
-// sysagent read tool): operatorOnly fields are listed as not editable.
-func FieldDescriptors(agent config.AgentConfig) []FieldDescriptor {
-	return describeFields(agent, ValidateFields)
+// metadataFileFields are the agent metadata files the update_agent tool writes
+// beside SOUL.md (#1064). They are described separately because the REST
+// agent update does not take them.
+var metadataFileFields = []string{"agent_md"}
+
+// MetadataFileDescriptors reports whether the update_agent tool may write the
+// agent's AGENT.md (same rules as soul).
+func MetadataFileDescriptors(agent config.AgentConfig) []FieldDescriptor {
+	out := make([]FieldDescriptor, 0, len(metadataFileFields))
+	for _, field := range metadataFileFields {
+		err := ValidateFields(agent, []string{field})
+		descriptor := FieldDescriptor{Name: field, Editable: err == nil}
+		if err != nil {
+			descriptor.Reason = err.Error()
+		}
+		out = append(out, descriptor)
+	}
+	return out
 }
 
-// OperatorFieldDescriptors is the OPERATOR view (the REST Agent
-// editable_fields the SPA's buildAgentUpdate checks): operatorOnly fields
-// are editable wherever the agent's runtime supports them.
-func OperatorFieldDescriptors(agent config.AgentConfig) []FieldDescriptor {
-	return describeFields(agent, ValidateOperatorFields)
+// FieldDescriptors reports which fields may be changed on agent.
+func FieldDescriptors(agent config.AgentConfig) []FieldDescriptor {
+	return describeFields(agent, ValidateFields)
 }
 
 func describeFields(agent config.AgentConfig, validate func(config.AgentConfig, []string) error) []FieldDescriptor {
@@ -96,20 +115,19 @@ func describeFields(agent config.AgentConfig, validate func(config.AgentConfig, 
 	return out
 }
 
-// ValidateFields validates a write arriving through an AGENT's own mutation
-// path (sysagent tools): the ADR-090 role matrix, plus a refusal of every
-// operatorOnly field.
+// ValidateFields validates a write to supplied agent fields: the ADR-090
+// role matrix.
 func ValidateFields(agent config.AgentConfig, supplied []string) error {
-	return validateFields(agent, supplied, false)
-}
-
-// ValidateOperatorFields validates a write by the operator (REST PUT
-// /agents/{id}): the same role matrix, with operatorOnly fields allowed.
-func ValidateOperatorFields(agent config.AgentConfig, supplied []string) error {
-	return validateFields(agent, supplied, true)
-}
-
-func validateFields(agent config.AgentConfig, supplied []string, operator bool) error {
+	if agent.IsExternalCLIWorker() {
+		for _, field := range supplied {
+			if field == "reasoning_effort" {
+				return &FieldError{
+					Code: InvalidInput, Fields: []string{field},
+					Reason: ExternalCLIEffortRefusal, Message: ExternalCLIEffortRefusal,
+				}
+			}
+		}
+	}
 	var invalid []string
 	for _, field := range supplied {
 		if _, ok := knownFields[field]; !ok {
@@ -125,18 +143,6 @@ func validateFields(agent config.AgentConfig, supplied []string, operator bool) 
 	if len(invalid) > 0 {
 		return &FieldError{Code: InvalidInput, Fields: invalid, Reason: "field is unknown or unsupported by this runtime"}
 	}
-	if !operator {
-		var reserved []string
-		for _, field := range supplied {
-			if _, ok := operatorOnly[field]; ok {
-				reserved = append(reserved, field)
-			}
-		}
-		if len(reserved) > 0 {
-			return &FieldError{Code: ProtectedField, Fields: reserved, Reason: operatorOnlyReason}
-		}
-	}
-
 	protected := make([]string, 0)
 	_, ordinary := ordinaryBuiltins[agent.ID]
 	for _, field := range supplied {
@@ -160,4 +166,128 @@ func validateFields(agent config.AgentConfig, supplied []string, operator bool) 
 		return &FieldError{Code: ProtectedField, Fields: protected, Reason: "field is protected for this agent"}
 	}
 	return nil
+}
+
+// Table T-AGENT (tool-parity spec r17 §7.1, §7.5): the shared agent field
+// rule rows, REST↔tool mappings and exclusions. Read by REST create and
+// update, create_agent, update_agent, the descriptors above and the parity
+// guard. Paths are canonical (r17 §7.1 rule 1).
+
+// Operation names which write a row applies to (r17 §7.1 rule 4).
+const (
+	OpCreate = "create"
+	OpUpdate = "update"
+	OpBoth   = "both"
+)
+
+// FieldRule is one row of Table T-AGENT.
+type FieldRule struct {
+	Row      string
+	Property string
+	Rule     string
+	Reason   string
+}
+
+// FieldMapping pairs a REST request leaf with a tool parameter leaf.
+type FieldMapping struct {
+	RESTPath string
+	Tool     string
+	ToolPath string
+	Ops      string
+}
+
+// FieldExclusion is a one-sided leaf with its reason.
+type FieldExclusion struct {
+	Side   string
+	Path   string
+	Ops    string
+	Reason string
+}
+
+var agentFieldRules = []FieldRule{
+	{Row: "AG-01", Property: "id, type, locked", Rule: "immutable after create"},
+	{Row: "AG-02", Property: "name … skills (ordinary fields)", Rule: "one rule table: ValidateFields"},
+	{Row: "AG-03", Property: "fallback_models", Rule: "REST create stores the validated entries (#1440)"},
+	{Row: "AG-04", Property: "soul", Rule: "not accepted for subagent_3p on any surface"},
+	{Row: "AG-05", Property: "agent_md", Rule: "update_agent only", Reason: "a file beside the record; no screen edits it"},
+	{Row: "AG-07", Property: "tools_cfg, tool_policy_changes, mcp_servers", Rule: "creation inputs; on existing agents only through set_agent_permissions"},
+	{Row: "AG-08", Property: "executor.cli", Rule: "fixed list; refused on any update"},
+	{Row: "AG-12", Property: "executor.env_overrides (+ _remove)", Rule: "create: map; update: merge + remove list; masked read"},
+	{Row: "AG-13", Property: "executor.cli_args", Rule: "create, update"},
+	{Row: "AG-14", Property: "rate_limits", Rule: "removed", Reason: "no per-agent rate limit exists; global limits in Settings → Security apply"},
+}
+
+// FieldRules returns Table T-AGENT in row order (a copy).
+func FieldRules() []FieldRule {
+	return append([]FieldRule(nil), agentFieldRules...)
+}
+
+// subagent3pForbiddenUpdateFields is every AgentUpdateRequest property a
+// subagent_3p (External CLI) agent refuses on update: the external runner
+// owns these (folded in from gateway/agent_field_rules.go, r17 §7.1). soul is
+// here by r17 AG-04 / FR-110: an external worker has no soul at all.
+var subagent3pForbiddenUpdateFields = []string{"tools_cfg", "skills", "fallback_models", "model_params", "soul"}
+
+// Subagent3pForbiddenUpdateFields returns that list in refusal order (a copy).
+func Subagent3pForbiddenUpdateFields() []string {
+	return append([]string(nil), subagent3pForbiddenUpdateFields...)
+}
+
+// sharedAgentLeaves includes the effort rows (effort-levels spec "Agent-tool
+// parity", FR-064/FR-071): the primary's reasoning_effort and each
+// fallback's own, on both create and update.
+var sharedAgentLeaves = []string{
+	"color", "description", "fallback_models[].model", "fallback_models[].provider", "fallback_models[].reasoning_effort",
+	"figure", "max_tool_iterations", "model", "model_params.max_tokens", "model_params.temperature", "name", "provider",
+	"reasoning_effort", "role", "skills[]", "soul", "voice",
+}
+
+const agentPermissionsReason = "AG-07: on an existing agent these change only through set_agent_permissions; update_agent refuses them"
+
+// MappingRows returns the REST↔tool leaf mappings for agents. Create rows
+// cover all three AgentCreateRequest variants.
+func MappingRows() []FieldMapping {
+	rows := make([]FieldMapping, 0, 2*len(sharedAgentLeaves)+14)
+	for _, leaf := range sharedAgentLeaves {
+		rows = append(rows,
+			FieldMapping{RESTPath: leaf, Tool: "create_agent", ToolPath: leaf, Ops: OpCreate},
+			FieldMapping{RESTPath: leaf, Tool: "update_agent", ToolPath: leaf, Ops: OpUpdate})
+	}
+	for _, leaf := range []string{"mcp_servers[].id", "mcp_servers[].tools[]", "tool_policy_changes.remove[]", "tool_policy_changes.set{}"} {
+		rows = append(rows, FieldMapping{RESTPath: leaf, Tool: "create_agent", ToolPath: leaf, Ops: OpCreate})
+	}
+	for _, leaf := range []string{"context_window_override", "memory_enabled", "revision"} {
+		rows = append(rows, FieldMapping{RESTPath: leaf, Tool: "update_agent", ToolPath: leaf, Ops: OpUpdate})
+	}
+	// Flattened tool parameters (r17 §7.1 rule 4).
+	rows = append(rows,
+		FieldMapping{RESTPath: "type", Tool: "create_agent", ToolPath: "agent_type", Ops: OpCreate},
+		FieldMapping{RESTPath: "executor.cli", Tool: "create_agent", ToolPath: "cli", Ops: OpCreate},
+		FieldMapping{RESTPath: "executor.cli_args", Tool: "create_agent", ToolPath: "cli_args", Ops: OpCreate},
+		FieldMapping{RESTPath: "executor.env_overrides{}", Tool: "create_agent", ToolPath: "env_overrides{}", Ops: OpCreate},
+		FieldMapping{RESTPath: "executor.cli_args", Tool: "update_agent", ToolPath: "cli_args", Ops: OpUpdate},
+		FieldMapping{RESTPath: "executor.env_overrides{}", Tool: "update_agent", ToolPath: "env_overrides{}", Ops: OpUpdate},
+		FieldMapping{RESTPath: "executor.env_overrides_remove[]", Tool: "update_agent", ToolPath: "env_overrides_remove[]", Ops: OpUpdate})
+	return rows
+}
+
+// ExcludedRows returns the agent leaves that deliberately have no counterpart.
+func ExcludedRows() []FieldExclusion {
+	rows := make([]FieldExclusion, 0, 15)
+	rows = append(rows, []FieldExclusion{
+		{Side: "tool", Path: "agent_md", Ops: OpUpdate, Reason: "AG-05: a file beside the record; no screen edits it"},
+		{Side: "tool", Path: "id", Ops: OpUpdate, Reason: "addresses the agent; REST carries it in the path /agents/{id}"},
+		{Side: "tool", Path: "workspace_id", Ops: OpCreate, Reason: "the workspace the new agent joins (FR-040/FR-041); REST create joins no workspace"},
+		{Side: "tool", Path: "context_window_override", Ops: OpCreate, Reason: "REST create has no such field; a person sets it after create through the REST update"},
+		{Side: "tool", Path: "memory_enabled", Ops: OpCreate, Reason: "REST create has no such field; a person sets it after create through the REST update"},
+	}...)
+	for _, leaf := range []string{"tools_cfg.builtin.policies{}", "tools_cfg.mcp.servers[].id", "tools_cfg.mcp.servers[].tools[]"} {
+		rows = append(rows,
+			FieldExclusion{Side: "REST", Path: leaf, Ops: OpCreate, Reason: "AG-07: the tool's creation permission inputs are tool_policy_changes and mcp_servers"},
+			FieldExclusion{Side: "REST", Path: leaf, Ops: OpUpdate, Reason: agentPermissionsReason})
+	}
+	for _, leaf := range []string{"mcp_servers[].id", "mcp_servers[].tools[]", "tool_policy_changes.remove[]", "tool_policy_changes.set{}"} {
+		rows = append(rows, FieldExclusion{Side: "REST", Path: leaf, Ops: OpUpdate, Reason: agentPermissionsReason})
+	}
+	return rows
 }

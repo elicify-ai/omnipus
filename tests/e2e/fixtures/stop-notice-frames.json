@@ -1,0 +1,187 @@
+{
+  "owner_session_id": "stop-notice-owner",
+  "cases": {
+    "approved": [
+      {
+        "body": "Stop did not withdraw 1 already-approved tool request(s). Those actions may already have run.",
+        "created_at_ms": 1792645200000,
+        "id": "approved-a",
+        "notification_type": "stop_notice",
+        "read": false,
+        "session_id": "stop-notice-owner",
+        "severity": "warning",
+        "title": "Some requests were already approved",
+        "type": "notification"
+      }
+    ],
+    "approved_zero": [],
+    "latch_expired": [
+      {
+        "body": "Cancel request did not take effect: no matching operation was found before the request timed out. If something is still running, try Stop again.",
+        "created_at_ms": 1792645200000,
+        "id": "latch_expired-a",
+        "notification_type": "stop_notice",
+        "read": false,
+        "session_id": "stop-notice-owner",
+        "severity": "warning",
+        "title": "Stop did not take effect",
+        "type": "notification"
+      }
+    ],
+    "latch_no_session": [
+      {
+        "body": "Cancel request did not take effect: no matching operation was found before the request timed out. If something is still running, try Stop again.",
+        "created_at_ms": 1792645200000,
+        "id": "latch_no_session-a",
+        "notification_type": "stop_notice",
+        "read": false,
+        "severity": "warning",
+        "title": "Stop did not take effect",
+        "type": "notification"
+      }
+    ],
+    "no_recipient": [],
+    "partial_and_failure": [
+      {
+        "body": "stopped 1 of 2; 1 unreachable",
+        "created_at_ms": 1792645200000,
+        "id": "partial_and_failure-a",
+        "notification_type": "stop_notice",
+        "read": false,
+        "session_id": "stop-notice-owner",
+        "severity": "warning",
+        "title": "Stop was incomplete",
+        "type": "notification"
+      },
+      {
+        "body": "cancel failed: the Stop request could not be completed. Details are in the server log.",
+        "created_at_ms": 1792645200000,
+        "id": "partial_and_failure-b",
+        "notification_type": "stop_notice",
+        "read": false,
+        "session_id": "stop-notice-owner",
+        "severity": "error",
+        "title": "Stop could not be completed",
+        "type": "notification"
+      }
+    ],
+    "real_turn_error_control": [
+      {
+        "message": "A real turn failed.",
+        "session_id": "stop-notice-owner",
+        "type": "error"
+      }
+    ],
+    "settlement_failure": [
+      {
+        "body": "Stop could not finish; required storage or notice publication failed. Retry after storage is repaired.",
+        "created_at_ms": 1792645200000,
+        "id": "settlement_failure-a",
+        "notification_type": "stop_notice",
+        "read": false,
+        "session_id": "stop-notice-owner",
+        "severity": "error",
+        "title": "Stop could not finish",
+        "type": "notification"
+      }
+    ]
+  },
+  "lists": {
+    "approved": {
+      "notifications": [
+        {
+          "body": "Stop did not withdraw 1 already-approved tool request(s). Those actions may already have run.",
+          "created_at_ms": 1792645200000,
+          "id": "approved-a",
+          "read": false,
+          "session_id": "stop-notice-owner",
+          "severity": "warning",
+          "title": "Some requests were already approved",
+          "type": "stop_notice"
+        }
+      ],
+      "unread_count": 1
+    },
+    "approved_zero": {
+      "notifications": [],
+      "unread_count": 0
+    },
+    "latch_expired": {
+      "notifications": [
+        {
+          "body": "Cancel request did not take effect: no matching operation was found before the request timed out. If something is still running, try Stop again.",
+          "created_at_ms": 1792645200000,
+          "id": "latch_expired-a",
+          "read": false,
+          "session_id": "stop-notice-owner",
+          "severity": "warning",
+          "title": "Stop did not take effect",
+          "type": "stop_notice"
+        }
+      ],
+      "unread_count": 1
+    },
+    "latch_no_session": {
+      "notifications": [
+        {
+          "body": "Cancel request did not take effect: no matching operation was found before the request timed out. If something is still running, try Stop again.",
+          "created_at_ms": 1792645200000,
+          "id": "latch_no_session-a",
+          "read": false,
+          "severity": "warning",
+          "title": "Stop did not take effect",
+          "type": "stop_notice"
+        }
+      ],
+      "unread_count": 1
+    },
+    "no_recipient": {
+      "notifications": [],
+      "unread_count": 0
+    },
+    "partial_and_failure": {
+      "notifications": [
+        {
+          "body": "stopped 1 of 2; 1 unreachable",
+          "created_at_ms": 1792645200000,
+          "id": "partial_and_failure-a",
+          "read": false,
+          "session_id": "stop-notice-owner",
+          "severity": "warning",
+          "title": "Stop was incomplete",
+          "type": "stop_notice"
+        },
+        {
+          "body": "cancel failed: the Stop request could not be completed. Details are in the server log.",
+          "created_at_ms": 1792645200000,
+          "id": "partial_and_failure-b",
+          "read": false,
+          "session_id": "stop-notice-owner",
+          "severity": "error",
+          "title": "Stop could not be completed",
+          "type": "stop_notice"
+        }
+      ],
+      "unread_count": 2
+    },
+    "real_turn_error_control": {
+      "notifications": [],
+      "unread_count": 0
+    },
+    "settlement_failure": {
+      "notifications": [
+        {
+          "body": "Stop could not finish; required storage or notice publication failed. Retry after storage is repaired.",
+          "created_at_ms": 1792645200000,
+          "id": "settlement_failure-a",
+          "read": false,
+          "session_id": "stop-notice-owner",
+          "severity": "error",
+          "title": "Stop could not finish",
+          "type": "stop_notice"
+        }
+      ],
+      "unread_count": 1
+    }
+  }
+}

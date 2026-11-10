@@ -1,16 +1,14 @@
 // sessionmode.go: ADR-092 Auto-approve — resolving whether Auto-approve is
-// on for one (agent, chat), and the session-scoped per-chat modifier store.
+// on for one chat, and the session-scoped per-chat modifier store.
 //
-// The founder revision of ADR-092 (2026-09-23, recorded in the contracts —
-// SandboxConfig.auto_approve, Agent.auto_approve_disabled,
-// SessionModeUpdateFrame) replaced the "three shell modes as a presentation of
-// the bash tool policy" framing with a separate Auto-approve setting at three
-// scopes:
+// Auto-approve has two scopes:
 //
 //   - global default: cfg.Sandbox.AutoApprove (re-auth-gated sandbox-config PUT)
-//   - per agent: AgentConfig.AutoApproveDisabled — can only turn Auto OFF
 //   - per chat: SessionModeStore — may turn Auto ON or OFF for that one chat,
-//     because a human is present in it (the one scope allowed to loosen)
+//     because a human is present in it
+//
+// A delegated helper's session inherits its parent's per-chat modifier at
+// spawn (inheritSessionPermissions), so it resolves exactly like its parent.
 //
 // Auto only has meaning for a tool resolved to "ask". The tool policy keeps
 // its ordinary allow/deny/ask value; this file never reads or writes it.
@@ -22,28 +20,19 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
-// ResolveAutoApprove reports whether Auto-approve is on for agentID in a chat
-// whose per-chat modifier is chat (nil = no modifier set).
+// ResolveAutoApprove reports whether Auto-approve is on in a chat whose
+// per-chat modifier is chat (nil = no modifier set).
 //
-// Resolution order: the global default, then the agent's off-switch, then the
-// chat modifier. The chat modifier wins outright, in either direction, when
-// set — SessionModeUpdateFrame documents it as the one scope that may loosen
-// (turn Auto on for this chat even when the agent or global default has it
-// off). The agent scope can only turn Auto off. A nil cfg resolves to off,
-// the safe direction: off means every "ask" call prompts.
-func ResolveAutoApprove(cfg *config.Config, agentID string, chat *bool) bool {
+// The chat modifier wins outright, in either direction, when set —
+// SessionModeUpdateFrame documents it as the one scope that may loosen (turn
+// Auto on for this chat even when the global default has it off). Otherwise
+// the global default decides. A nil cfg resolves to off, the safe direction:
+// off means every "ask" call prompts.
+func ResolveAutoApprove(cfg *config.Config, chat *bool) bool {
 	if chat != nil {
 		return *chat
 	}
-	if cfg == nil || !cfg.Sandbox.AutoApprove {
-		return false
-	}
-	for i := range cfg.Agents.List {
-		if cfg.Agents.List[i].ID == agentID {
-			return !cfg.Agents.List[i].AutoApproveDisabled
-		}
-	}
-	return true
+	return cfg != nil && cfg.Sandbox.AutoApprove
 }
 
 // SessionModeStore is a thread-safe, session-scoped store of the per-chat
@@ -67,7 +56,7 @@ func NewSessionModeStore() *SessionModeStore {
 }
 
 // Get returns sessionID's per-chat modifier, or (false, false) when none is
-// set — the chat then follows the agent and global defaults. An empty
+// set — the chat then follows the global default. An empty
 // sessionID always misses.
 func (s *SessionModeStore) Get(sessionID string) (autoApprove, ok bool) {
 	if s == nil || sessionID == "" {

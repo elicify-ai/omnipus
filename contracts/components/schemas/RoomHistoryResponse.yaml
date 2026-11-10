@@ -1,0 +1,47 @@
+title: RoomHistoryResponse
+description: >
+  One backward page of the complete retained room transcript (#1332). Select
+  the newest entries eligible for the exclusive before_seq cursor and applied
+  limit, then return them in strictly ascending entry seq order. An omitted
+  cursor includes the newest entry. This page does not change the live room
+  stream position or the forward attach subscription.
+
+  has_older is true exactly when another actual eligible entry precedes this
+  page, not merely when the page is full or sequence numbers have gaps.
+  next_before_seq is present if and only if has_older is true and equals the
+  first returned entry's seq. Otherwise omit it, never send null or zero.
+  An empty page is entries: [] with has_older: false and no next_before_seq.
+  These conditional continuation rules are producer/consumer invariants;
+  structural schema validation alone does not prove them.
+type: object
+additionalProperties: false
+required:
+  - entries
+  - has_older
+properties:
+  entries:
+    type: array
+    maxItems: 1000
+    description: >
+      The newest eligible entries, returned oldest to newest in strictly
+      ascending seq order, with at most the applied limit. Always present
+      and non-null, including an empty array at the beginning of history.
+      Every entry belongs to the requested room and includes its existing
+      delivery projection.
+    items:
+      $ref: './RoomEntry.yaml'
+      x-go-type: RoomEntry
+  has_older:
+    type: boolean
+    description: >
+      True exactly when another actual eligible entry precedes the first
+      returned entry. False for an empty page or when the beginning of
+      history has been reached, even if the page is full.
+  next_before_seq:
+    type: integer
+    format: int64
+    minimum: 1
+    description: >
+      Present if and only if has_older is true; exactly the first returned
+      entry's seq, to use as the next exclusive before_seq cursor. Omitted
+      when has_older is false; never null or zero.

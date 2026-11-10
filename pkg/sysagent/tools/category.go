@@ -13,12 +13,10 @@ import "github.com/elicify-ai/omnipus/pkg/tools"
 
 // Agent tools
 
-func (*AgentCreateTool) Category() tools.ToolCategory       { return tools.CategoryAgents }
-func (*AgentGetTool) Category() tools.ToolCategory          { return tools.CategoryAgents }
-func (*AgentGetToolsTool) Category() tools.ToolCategory     { return tools.CategoryAgents }
-func (*AgentUpdateTool) Category() tools.ToolCategory       { return tools.CategoryAgents }
-func (*AgentDeleteTool) Category() tools.ToolCategory       { return tools.CategoryAgents }
-func (*AgentReadMetadataTool) Category() tools.ToolCategory { return tools.CategoryAgents }
+func (*AgentCreateTool) Category() tools.ToolCategory { return tools.CategoryAgents }
+func (*AgentGetTool) Category() tools.ToolCategory    { return tools.CategoryAgents }
+func (*AgentUpdateTool) Category() tools.ToolCategory { return tools.CategoryAgents }
+func (*AgentDeleteTool) Category() tools.ToolCategory { return tools.CategoryAgents }
 
 // Channel tools
 
@@ -44,6 +42,18 @@ func (*MCPAddTool) Category() tools.ToolCategory    { return tools.CategoryMCP }
 func (*MCPRemoveTool) Category() tools.ToolCategory { return tools.CategoryMCP }
 func (*MCPListTool) Category() tools.ToolCategory   { return tools.CategoryMCP }
 
+// The three MCP-management builtins are governed by their tool policy only,
+// never by a per-agent connector assignment (#1063 F1).
+func (*MCPAddTool) IsMCPManagementBuiltin()    {}
+func (*MCPRemoveTool) IsMCPManagementBuiltin() {}
+func (*MCPListTool) IsMCPManagementBuiltin()   {}
+
+var (
+	_ tools.MCPManagementBuiltin = (*MCPAddTool)(nil)
+	_ tools.MCPManagementBuiltin = (*MCPRemoveTool)(nil)
+	_ tools.MCPManagementBuiltin = (*MCPListTool)(nil)
+)
+
 // Workspace tools
 
 func (*WorkspaceCreateTool) Category() tools.ToolCategory { return tools.CategoryWorkspaces }
@@ -61,14 +71,9 @@ func (*ModelsListTool) Category() tools.ToolCategory        { return tools.Categ
 
 // Skill tools
 
-func (*SkillRemoveTool) Category() tools.ToolCategory { return tools.CategorySkills }
-func (*SkillListTool) Category() tools.ToolCategory   { return tools.CategorySkills }
-func (*SkillCreateTool) Category() tools.ToolCategory { return tools.CategorySkills }
-func (*SkillEditTool) Category() tools.ToolCategory   { return tools.CategorySkills }
+func (*SkillListTool) Category() tools.ToolCategory { return tools.CategorySkills }
+func (*SkillEditTool) Category() tools.ToolCategory { return tools.CategorySkills }
 
-// System task tools
-
-func (*TaskCreateTool) Category() tools.ToolCategory { return tools.CategoryTasks }
-func (*TaskUpdateTool) Category() tools.ToolCategory { return tools.CategoryTasks }
-func (*TaskDeleteTool) Category() tools.ToolCategory { return tools.CategoryTasks }
-func (*TaskListTool) Category() tools.ToolCategory   { return tools.CategoryTasks }
+// System task tools: retired by DEL-23 (merged into the canonical pkg/tools
+// task family, which carries CategoryTasks itself). No sysagent task tool
+// remains, so this file has no task-category arm.

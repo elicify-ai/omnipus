@@ -150,7 +150,7 @@ func TestGrepTool_ScopeSingleFile_InMount(t *testing.T) {
 // --- include_globs/exclude_globs compose with a single-file scope (AND) ----
 
 // TestGrepTool_ScopeSingleFile_IncludeGlobsAND documents the chosen
-// semantics (grepRoots' doc comment / resolveScopedRoot's doc comment): a
+// semantics (resolveGrepRoots' doc comment / resolveScopedRoot's doc comment): a
 // single-file scope is a directory walk narrowed to exactly one entry, so
 // include_globs/exclude_globs still apply to that one entry exactly as they
 // would during an ordinary walk — an explicit file scope ANDs with the

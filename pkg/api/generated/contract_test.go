@@ -469,18 +469,6 @@ func TestContract_RateLimitFrame_ZeroValue(t *testing.T) {
 		"zero value has empty required fields")
 }
 
-// ── AgentSwitchedFrame ────────────────────────────────────────────────────────
-// Traces to: contracts/asyncapi.yaml components.schemas.AgentSwitchedFrame
-
-func TestContract_AgentSwitchedFrame_Populated(t *testing.T) {
-	mustPassAsyncAPI(t, "AgentSwitchedFrame", FixtureAgentSwitchedFrame_Populated())
-}
-
-func TestContract_AgentSwitchedFrame_ZeroValue(t *testing.T) {
-	mustFailAsyncAPI(t, "AgentSwitchedFrame", FixtureAgentSwitchedFrame_ZeroValue(),
-		"zero value has empty required type and session_id fields")
-}
-
 // ── TaskStatusChangedFrame ────────────────────────────────────────────────────
 // Traces to: contracts/asyncapi.yaml components.schemas.TaskStatusChangedFrame
 
@@ -527,18 +515,6 @@ func TestContract_ReplayWarningFrame_Populated(t *testing.T) {
 func TestContract_ReplayWarningFrame_ZeroValue(t *testing.T) {
 	mustFailAsyncAPI(t, "ReplayWarningFrame", FixtureReplayWarningFrame_ZeroValue(),
 		"zero value has empty required fields")
-}
-
-// ── SessionCloseAckFrame ──────────────────────────────────────────────────────
-// Traces to: contracts/asyncapi.yaml components.schemas.SessionCloseAckFrame
-
-func TestContract_SessionCloseAckFrame_Populated(t *testing.T) {
-	mustPassAsyncAPI(t, "SessionCloseAckFrame", FixtureSessionCloseAckFrame_Populated())
-}
-
-func TestContract_SessionCloseAckFrame_ZeroValue(t *testing.T) {
-	mustFailAsyncAPI(t, "SessionCloseAckFrame", FixtureSessionCloseAckFrame_ZeroValue(),
-		"zero value has empty required type and session_id fields")
 }
 
 // ── DevicePairingRequestFrame ─────────────────────────────────────────────────
@@ -644,7 +620,7 @@ func TestContract_Session_NilPartitionsRejected(t *testing.T) {
 		UpdatedAt:  time.Date(2026, 5, 17, 10, 1, 0, 0, time.UTC),
 		Channel:    "webchat",
 		Partitions: nil, // THE BUG: nil slice → JSON null → schema violation
-		Type:       &sessionType,
+		Type:       sessionType,
 		// Stats left as its zero value — this test asserts the partitions:null
 		// rejection; the Stats shape is irrelevant here (and is exercised by the
 		// dedicated stats tests).
@@ -716,12 +692,10 @@ func TestContract_AllFrames_TypeFieldPresent(t *testing.T) {
 		{"SubagentEndFrame", FixtureSubagentEndFrame_Populated()},
 		{"ReplayMessageFrame", FixtureReplayMessageFrame_Populated()},
 		{"RateLimitFrame", FixtureRateLimitFrame_Populated()},
-		{"AgentSwitchedFrame", FixtureAgentSwitchedFrame_Populated()},
 		{"TaskStatusChangedFrame", FixtureTaskStatusChangedFrame_Populated()},
 		{"SystemOverloadFrame", FixtureSystemOverloadFrame_Populated()},
 		{"CancelStageFrame", FixtureCancelStageFrame_Populated()},
 		{"ReplayWarningFrame", FixtureReplayWarningFrame_Populated()},
-		{"SessionCloseAckFrame", FixtureSessionCloseAckFrame_Populated()},
 		{"DevicePairingRequestFrame", FixtureDevicePairingRequestFrame_Populated()},
 	}
 
@@ -1847,42 +1821,6 @@ func TestContract_StorageStats_Differentiation(t *testing.T) {
 	mustPassComponent(t, "StorageStats", f2)
 }
 
-// ── SessionCloseFrame ─────────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/SessionCloseFrame.yaml
-
-func TestContract_SessionCloseFrame_Populated(t *testing.T) {
-	// Both required fields set.
-	// Traces to: SessionCloseFrame.yaml — required: [type, session_id]
-	mustPassAsyncAPI(t, "SessionCloseFrame", FixtureSessionCloseFrame_Populated())
-}
-
-func TestContract_SessionCloseFrame_ZeroValue(t *testing.T) {
-	// type="" (const: session_close), session_id="" (minLength: 1).
-	// Traces to: SessionCloseFrame.yaml — type has const constraint; session_id has minLength
-	mustFailAsyncAPI(t, "SessionCloseFrame", FixtureSessionCloseFrame_ZeroValue(),
-		"zero value has empty type (const) and session_id (minLength: 1)")
-}
-
-func TestContract_SessionCloseFrame_Edge(t *testing.T) {
-	// Long session_id (valid per minLength: 1).
-	// Traces to: SessionCloseFrame.yaml
-	mustPassAsyncAPI(t, "SessionCloseFrame", FixtureSessionCloseFrame_Edge())
-}
-
-func TestContract_SessionCloseFrame_Differentiation(t *testing.T) {
-	// Two SessionCloseFrame fixtures with different session IDs produce different JSON.
-	f1 := FixtureSessionCloseFrame_Populated()
-	f2 := FixtureSessionCloseFrame_Edge()
-	raw1, err := json.Marshal(f1)
-	require.NoError(t, err)
-	raw2, err := json.Marshal(f2)
-	require.NoError(t, err)
-	assert.NotEqual(t, string(raw1), string(raw2),
-		"two different SessionCloseFrame fixtures must produce different JSON")
-	mustPassAsyncAPI(t, "SessionCloseFrame", f1)
-	mustPassAsyncAPI(t, "SessionCloseFrame", f2)
-}
-
 // ── AuditLogToggleRequest ─────────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/AuditLogToggleRequest.yaml
 
@@ -2753,40 +2691,8 @@ func TestContract_Session_TooManyPartitions(t *testing.T) {
 		"3651 partitions must fail — maxItems:3650")
 }
 
-// ── SessionDetail messages maxItems:100000 ────────────────────────────────────
-// Traces to: contracts/components/schemas/SessionDetail.yaml (messages: maxItems:100000)
-
-func TestContract_SessionDetail_TooManyMessages(t *testing.T) {
-	// Traces to: SessionDetail.yaml — messages: maxItems: 100000
-	// 100001 messages must fail.
-	messages := make([]any, 100001)
-	for i := range messages {
-		messages[i] = map[string]any{
-			"id": fmt.Sprintf("msg-%d", i), "role": "user",
-			"content": "x", "type": "text", "status": "complete",
-		}
-	}
-	doc := map[string]any{
-		"id":         "session-1",
-		"agent_id":   "jim",
-		"title":      "Test session",
-		"status":     "active",
-		"created_at": "2026-05-17T10:00:00Z",
-		"updated_at": "2026-05-17T10:00:00Z",
-		"channel":    "webchat",
-		"partitions": []string{},
-		"stats": map[string]any{
-			"cost": 0.0, "message_count": 0,
-			"tokens_in": 0, "tokens_out": 0,
-			"tokens_total": 0, "tool_calls": 0,
-		},
-		"messages": messages,
-	}
-	raw, err := json.Marshal(doc)
-	require.NoError(t, err)
-	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "SessionDetail", raw),
-		"100001 messages must fail — maxItems:100000")
-}
+// SessionDetail message-cap coverage is isolated in
+// session_detail_history_cap_test.go; the test name and100001 regression remain.
 
 // ── MediaFrame parts maxItems:32 ─────────────────────────────────────────────
 // Traces to: contracts/components/schemas/MediaFrame.yaml (parts: maxItems:32)
@@ -3365,8 +3271,6 @@ func TestContract_TaskTrigger_AllKinds_Validate(t *testing.T) {
 	}{
 		{"manual", "manual", map[string]any{}},
 		{"once", "once", map[string]any{"at_ms": int64(1781000000000)}},
-		{"every", "every", map[string]any{"every_ms": int64(3600000)}},
-		{"recurring_cron_expr", "recurring", map[string]any{"cron_expr": "0 9 * * MON"}},
 		{"recurring_rrule", "recurring", map[string]any{
 			"rrule":      "FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10",
 			"dtstart_ms": int64(1784624400000),
@@ -3710,6 +3614,21 @@ func TestContract_ChannelRouting_Populated(t *testing.T) {
 // Traces to: ADR-029 MAJ-004, FR-029.
 func TestContract_ChannelRouting_Bound(t *testing.T) {
 	mustPassComponent(t, "ChannelRouting", FixtureChannelRouting_Bound())
+}
+
+// TestContract_ChannelRoutingUpdateRequest_RequiresNonblankPair pins K14's
+// write shape: the bound pair passes; an omitted or empty member fails.
+func TestContract_ChannelRoutingUpdateRequest_RequiresNonblankPair(t *testing.T) {
+	mustPassComponent(t, "ChannelRoutingUpdateRequest", FixtureChannelRoutingUpdateRequest_Bound())
+	for _, raw := range []string{
+		`{"workspace_id":"my-workspace"}`,
+		`{"default_agent_id":"agent-a"}`,
+		`{"workspace_id":"","default_agent_id":"agent-a"}`,
+		`{"workspace_id":"my-workspace","default_agent_id":""}`,
+	} {
+		assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "ChannelRoutingUpdateRequest", []byte(raw)),
+			"K14: %s must fail the write schema", raw)
+	}
 }
 
 // ── ChannelCreateResponse ─────────────────────────────────────────────────────
@@ -4298,54 +4217,52 @@ func TestContract_GodModeStatus_MissingRequiredFieldRejected(t *testing.T) {
 // wave T1 (docs/internal/specs/adr-084-086-joint-delivery-plan.md line 371):
 // GOAL-FR-037, GOAL-FR-042, GOAL-MV-7, GOAL-SC-008, JUDGE-FR-073a, JUDGE-FR-075.
 //
-// FR-073a: every hand-synced copy of every shape this joint delivery touches
-// must agree RECURSIVELY over the full sub-schema — not a top-level
-// property-set diff (C21), which would see "evidence: array" agree across
-// all three per-criterion-verdict copies and stop there, leaving the
-// nested evidence[] item shape (including its `source` field) unguarded in
-// exactly the copy openapi-zod-client reads. The copies-table enumeration
-// (judge spec "Every copy of every changed shape, by path (FR-073, C20)")
-// is the authority for which paths are compared below; $ref rows (4, 9 in
-// that table) are excluded on purpose — they inherit by reference and
-// cannot drift independently of their target. Row 12 of that table (the
-// judge degraded-capability agent-card field) is likewise EXCLUDED:
-// JUDGE-FR-077-FR-080 and judge spec §M ("the mixed state") are retired in
-// full by operator decisions D-F/D-H — building or guarding that field
-// would resurrect a retired surface, not protect one.
-//
-// Each comparison below targets an EXPLICIT (schema, path) pair, never a
-// bare field-name match (C-56): this is what stops the comparator from
-// ever cross-comparing AcceptanceCriterion's authority-layer `provenance`
-// enum ({stated, workspace, floor, inferred}) against CriterionVerdict's
-// evidence-source `provenance` enum ({judge_read, deterministic_check,
-// diff, transcript, session_read, none}) merely because both fields
-// happen to be named "provenance" on unrelated schemas.
+// FR-073a compares full sub-schemas recursively (C21), including evidence[].source,
+// not merely top-level property sets. Compare explicit (schema, path) pairs from
+// the judge copies table (FR-073/C20/C56), never matching bare field names:
+// AcceptanceCriterion provenance {stated, workspace, floor, inferred} differs from
+// CriterionVerdict evidence provenance {judge_read, deterministic_check, diff,
+// transcript, session_read, none}. Ref-only rows 4/9 inherit their targets; row 12's
+// degraded capability (JUDGE-FR-077..080/§M) is retired by D-F/D-H, not restored.
 
-// yamlNoiseKeys are documentation-only YAML keys that legitimately differ in
-// wording between independently hand-synced copies of the same shape
-// (each copy explains its own sync obligation in its own words) without
-// that being a structural drift the comparator should flag.
+// yamlNoiseKeys are schema documentation annotations. Wire property names with
+// these spellings are not annotations and must remain in the comparison.
 var yamlNoiseKeys = map[string]bool{"description": true, "example": true, "title": true}
 
-// stripYAMLNoise returns a deep copy of v with every yamlNoiseKeys entry
-// removed at every nesting level, so only structural schema content
-// survives for comparison: type, enum, required, additionalProperties,
-// properties, items, and bounds such as minLength/maxItems/minimum.
-func stripYAMLNoise(v any) any {
+// stripYAMLNoise deep-copies schemas, omitting only documentation annotations.
+// Property-name maps use "properties" context; enum/default/const and unknown
+// extension data stay literal. Wire members are never documentation by spelling.
+func stripYAMLNoise(v any, schemaContext ...string) any {
+	mode := "schema"
+	if len(schemaContext) > 0 {
+		mode = schemaContext[0]
+	}
 	switch t := v.(type) {
 	case map[string]any:
 		out := make(map[string]any, len(t))
 		for k, val := range t {
-			if yamlNoiseKeys[k] {
+			if mode == "schema" && yamlNoiseKeys[k] {
 				continue
 			}
-			out[k] = stripYAMLNoise(val)
+			next := "literal"
+			switch mode {
+			case "properties":
+				next = "schema"
+			case "schema":
+				switch k {
+				case "properties", "patternProperties", "definitions", "$defs", "dependentSchemas", "dependencies":
+					next = "properties"
+				case "items", "additionalProperties", "additionalItems", "unevaluatedProperties", "unevaluatedItems", "contains", "propertyNames", "not", "if", "then", "else", "allOf", "anyOf", "oneOf", "prefixItems", "contentSchema":
+					next = "schema"
+				}
+			}
+			out[k] = stripYAMLNoise(val, next)
 		}
 		return out
 	case []any:
 		out := make([]any, len(t))
 		for i, val := range t {
-			out[i] = stripYAMLNoise(val)
+			out[i] = stripYAMLNoise(val, mode)
 		}
 		return out
 	default:
@@ -4353,10 +4270,8 @@ func stripYAMLNoise(v any) any {
 	}
 }
 
-// loadYAMLDoc reads and parses a whole YAML file into a generic mapping.
-// Distinct from this file's yamlLoader (which feeds the jsonschema
-// compiler for validation): this one is for direct structural
-// navigation/comparison between two hand-synced copies, not compilation.
+// loadYAMLDoc reads a fresh YAML mapping for structural comparison, not the
+// jsonschema compiler's separate yamlLoader harness.
 func loadYAMLDoc(t *testing.T, absPath string) map[string]any {
 	t.Helper()
 	data, err := os.ReadFile(absPath)
@@ -4424,35 +4339,15 @@ func yamlStringSet(t *testing.T, v any) map[string]bool {
 	return out
 }
 
-// TestContractCopies_AllHandSyncedCopiesAgree_Recursive is FR-073a: every
-// hand-synced copy pair from the judge spec's "Every copy of every changed
-// shape" table (FR-073, C20) agrees structurally, recursively over the
-// full sub-schema. Renamed from a prior "AllThreeContractCopiesAgree"
-// precedent that counted one shape of four (C21) — this covers all four
-// shapes the joint delivery touches: the per-criterion verdict shape
-// (rows 1-3), AcceptanceCriterion's full property set including its status
-// enum (rows 5-8), GoalStatusFrame.state's enum (rows 10-11), and (C-85)
-// the new BrowserHandoverNoticeFrame the joint delivery adds.
-//
-// Manual break test: edit any one hand-synced copy's `type`, `enum`, or
-// nested `properties` (e.g. add an enum value to just the asyncapi.yaml
-// inline copy) and re-run — the corresponding subtest must go red. This
-// comparator caught exactly that drift for real: asyncapi.yaml's inline
-// JudgeVerdictFrame.per_criterion.items.evidence[].source carried a closed
-// `enum` while CriterionVerdict.yaml and JudgeVerdictFrame.yaml's own
-// evidence[].source were both deliberately plain `type: string` (each says so
-// in its own description, "not a closed enum ... a codegen constraint").
-// Left unfixed, the generated zod schema would have rejected — and the SPA
-// silently DROPPED — every judge-verdict frame carrying a per-clause evidence
-// source outside that enum, with `make verify-contracts` green throughout.
-// Resolved by removing the stray enum from the asyncapi.yaml inline copy, so
-// all three copies agree on plain `type: string`; the subtest below is what
-// keeps them that way.
-//
-// Traces to: docs/internal/specs/judge-active-reviewer-spec.md FR-073,
-// FR-073a (lines ~2100-2135) and the copies table (lines ~1341-1372);
-// docs/internal/specs/adr-084-086-joint-delivery-plan.md C-85 (line 315),
-// wave T1 (line 371).
+// TestContractCopies_AllHandSyncedCopiesAgree_Recursive enforces FR-073a across
+// CriterionVerdict (rows 1-3), AcceptanceCriterion incl. status (5-8),
+// GoalStatusFrame.state (10-11), and BrowserHandoverNoticeFrame (C-85), rather
+// than the former one-shape "AllThreeContractCopiesAgree" precedent (C21).
+// Historical control: an inline evidence[].source closed enum once differed
+// from the two deliberately plain-string copies, dropping judge frames in Zod
+// despite green verify-contracts. All three now stay plain string. Automated
+// member-name controls below complement these recursive type/enum/bound checks.
+// Sources: judge-active-reviewer-spec.md FR-073/073a/copies table; joint plan C-85/T1.
 func TestContractCopies_AllHandSyncedCopiesAgree_Recursive(t *testing.T) {
 	t.Run("row 1 vs row 2 — CriterionVerdict.yaml vs JudgeVerdictFrame.yaml per_criterion.items", func(t *testing.T) {
 		canonical := stripYAMLNoise(componentYAMLPath(t, "CriterionVerdict"))
@@ -4486,8 +4381,8 @@ func TestContractCopies_AllHandSyncedCopiesAgree_Recursive(t *testing.T) {
 		canonicalDoc := componentYAMLPath(t, "AcceptanceCriterion")
 		inputDoc := componentYAMLPath(t, "AcceptanceCriterionInput")
 
-		canonicalProps := stripYAMLNoise(yamlPath(t, "AcceptanceCriterion.yaml", canonicalDoc, "properties"))
-		inputProps := stripYAMLNoise(yamlPath(t, "AcceptanceCriterionInput.yaml", inputDoc, "properties"))
+		canonicalProps := stripYAMLNoise(yamlPath(t, "AcceptanceCriterion.yaml", canonicalDoc, "properties"), "properties")
+		inputProps := stripYAMLNoise(yamlPath(t, "AcceptanceCriterionInput.yaml", inputDoc, "properties"), "properties")
 		assert.Equal(t, canonicalProps, inputProps,
 			"AcceptanceCriterion.yaml and AcceptanceCriterionInput.yaml must describe the identical property set/shape — only `required` may legitimately differ between this pair (FR-073a, copies table rows 5-6)")
 
@@ -4515,10 +4410,29 @@ func TestContractCopies_AllHandSyncedCopiesAgree_Recursive(t *testing.T) {
 	})
 
 	t.Run("BrowserHandoverNoticeFrame.yaml vs asyncapi.yaml inline BrowserHandoverNoticeFrame (C-85)", func(t *testing.T) {
-		handSync := stripYAMLNoise(componentYAMLPath(t, "BrowserHandoverNoticeFrame"))
-		canonical := stripYAMLNoise(asyncapiYAMLPath(t, "BrowserHandoverNoticeFrame"))
+		canonical, handSync := c85ResolvedCopies(t)
 		assert.Equal(t, canonical, handSync,
 			"contracts/components/schemas/BrowserHandoverNoticeFrame.yaml and asyncapi.yaml's inline (generating) copy must agree structurally — F1's new comparator row per C-85")
+	})
+}
+
+// Documentation words inside properties are wire names, not annotations.
+// These independent in-memory controls must detect a one-sided optional member
+// without changing any real contract or weakening the six existing copy pairs.
+func TestContractCopies_DocumentationNamedMembersRemainStructural(t *testing.T) {
+	for _, name := range []string{"title", "description", "example"} {
+		t.Run(name, func(t *testing.T) {
+			canonical := map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{}}
+			drift := map[string]any{"type": "object", "additionalProperties": false,
+				"properties": map[string]any{name: map[string]any{"type": "string"}}}
+			require.NotEqual(t, stripYAMLNoise(canonical), stripYAMLNoise(drift), "one-sided optional %s is wire drift", name)
+			require.NotEqual(t, stripYAMLNoise(map[string]any{}, "properties"), stripYAMLNoise(drift["properties"], "properties"), "property-root comparisons retain %s too", name)
+		})
+	}
+	t.Run("schema_annotations_remain_documentation", func(t *testing.T) {
+		left := map[string]any{"type": "string", "title": "left", "description": "old", "example": "before"}
+		right := map[string]any{"type": "string", "title": "right", "description": "new", "example": "after"}
+		require.Equal(t, stripYAMLNoise(left), stripYAMLNoise(right))
 	})
 }
 
@@ -4555,4 +4469,102 @@ func TestCriterionStatusEnumInAllFourContractCopies(t *testing.T) {
 				"%s: status enum must be exactly [pending, met, unmet] — no fourth value (GOAL-FR-042, GOAL-MV-7)", c.label)
 		})
 	}
+}
+
+// TestOnboardingProviderApiKey_ProtocolEnum — WP-1 (#1700) design R20.
+//
+// Specification: /workspace/omnipus-coordination/designs-20261029/onboarding-custom-endpoint-design.md
+// §1.1 (the OnboardingProviderApiKey.yaml protocol property, enum exactly
+// [openai-compatible, anthropic]), §1.2 (the /onboarding/complete path must
+// declare the 422 it can now return) and §1.4 (expected generated output:
+// Go OnboardingProviderApiKey.Protocol *OnboardingProviderApiKeyProtocol).
+// The expected values come from the design, never from generated output.
+//
+// The test reads the artifacts the contract pipeline owns: the generated Go
+// type, the schema copy the gateway actually validates against
+// (pkg/gateway/inboundschemas/, produced by gen-contracts step 5), and the
+// OpenAPI path declaration. `make verify-contracts` (the developer gate)
+// proves no drift; this test proves the shape the design requires is present.
+func TestOnboardingProviderApiKey_ProtocolEnum(t *testing.T) {
+	// 1. The generated Go type carries Protocol as the design's §1.4 expects.
+	typ := reflect.TypeFor[OnboardingProviderApiKey]()
+	field, found := typ.FieldByName("Protocol")
+	if !found {
+		t.Fatalf("BLOCKED: generated OnboardingProviderApiKey has no Protocol field — " +
+			"the OnboardingProviderApiKey.yaml protocol property (design §1.1, issue #1700) " +
+			"has not been added and regenerated yet; edit contracts/components/schemas/OnboardingProviderApiKey.yaml " +
+			"and run scripts/gen-contracts.sh")
+	}
+	require.Equal(t, reflect.Pointer, field.Type.Kind(),
+		"Protocol must be a pointer (optional, omitted by older clients)")
+	require.Equal(t, "OnboardingProviderApiKeyProtocol", field.Type.Elem().Name(),
+		"the enum's named type must be OnboardingProviderApiKeyProtocol (design §1.4)")
+
+	// 2. The wire carries both enum values, through the real JSON round trip.
+	value := reflect.New(typ)
+	protoPtr := reflect.New(field.Type.Elem())
+	protoPtr.Elem().SetString("openai-compatible")
+	value.Elem().FieldByName("Protocol").Set(protoPtr)
+	b, err := json.Marshal(value.Interface())
+	require.NoError(t, err, "marshal must succeed")
+	var wire map[string]any
+	require.NoError(t, json.Unmarshal(b, &wire))
+	assert.Equal(t, "openai-compatible", wire["protocol"],
+		"marshalled JSON must carry protocol=%q, got %v", "openai-compatible", wire["protocol"])
+
+	var back OnboardingProviderApiKey
+	require.NoError(t, json.Unmarshal([]byte(`{"protocol":"anthropic"}`), &back))
+	got := reflect.ValueOf(back).FieldByName("Protocol")
+	require.False(t, got.IsNil(), "protocol=anthropic must decode, not be dropped")
+	assert.Equal(t, "anthropic", got.Elem().String(),
+		"unmarshal must preserve the second enum value")
+
+	// 3. The inbound schema copy the gateway validates against lists the
+	//    enum with EXACTLY the two values (design §1.1, R20 "exactly the two
+	//    values"; the copy is regenerated by gen-contracts step 5).
+	inboundPath := filepath.Join("..", "..", "gateway", "inboundschemas", "OnboardingProviderApiKey.yaml")
+	raw, err := os.ReadFile(inboundPath)
+	require.NoError(t, err, "the inbound schema copy must exist at %s", inboundPath)
+	var inboundSchema struct {
+		Properties map[string]struct {
+			Enum []any `yaml:"enum"`
+		} `yaml:"properties"`
+	}
+	require.NoError(t, yaml.Unmarshal(raw, &inboundSchema), "inbound schema copy must parse")
+	prop, ok := inboundSchema.Properties["protocol"]
+	require.True(t, ok, "the inbound schema copy must carry the protocol property (file=%s)", inboundPath)
+	assert.Equal(t, []any{"openai-compatible", "anthropic"}, prop.Enum,
+		"protocol enum must be exactly [openai-compatible, anthropic] — no third value (design §1.1)")
+
+	// 4. The path declares the 422 it can now return (design §1.2 — the
+	//    handler picked 400 over 422 only because 422 was undeclared).
+	openapiRaw, err := os.ReadFile(filepath.Join(repoRoot(), "contracts", "openapi.yaml"))
+	require.NoError(t, err, "contracts/openapi.yaml must exist")
+	completeBlock := openapiPathBlock(string(openapiRaw), "/onboarding/complete")
+	require.NotEmpty(t, completeBlock, "openapi.yaml must declare the /onboarding/complete path")
+	assert.Contains(t, completeBlock, "422UnprocessableEntity",
+		"POST /onboarding/complete must declare the 422 response (design §1.2)")
+}
+
+// openapiPathBlock returns the YAML block of the given path (from its
+// two-space-indented key to the next path/component key at the same level).
+func openapiPathBlock(doc, path string) string {
+	lines := strings.Split(doc, "\n")
+	start := -1
+	for i, line := range lines {
+		if line == "  "+path+":" {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return ""
+	}
+	for end := start + 1; end < len(lines); end++ {
+		line := lines[end]
+		if strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "    ") {
+			return strings.Join(lines[start:end], "\n")
+		}
+	}
+	return strings.Join(lines[start:], "\n")
 }

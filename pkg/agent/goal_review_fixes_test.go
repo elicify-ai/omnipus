@@ -188,7 +188,7 @@ func TestMetTaskGoalLeavesRealHistoryOnRerun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("createTaskSessionSync: %v", err)
 	}
-	rec := activeGoalForSession(sid)
+	rec := mustActiveGoalForSession(t, sid)
 	if rec == nil {
 		t.Fatal("arrange: the task's goal record must be active on the run's session")
 	}
@@ -210,7 +210,7 @@ func TestMetTaskGoalLeavesRealHistoryOnRerun(t *testing.T) {
 		t.Fatal("goal_claim is not registered on the working agent")
 	}
 	state := &taskRunState{claimWatermark: time.Now().UTC().Add(-time.Second)}
-	b6ClaimMetAndPersist(t, claimTool, al.GetAgentStore(tk.AgentID), sid, "history-claim", "exporter merged")
+	b6ClaimMetAndPersist(t, claimTool, al.GetSessionStore(), sid, "history-claim", "exporter merged")
 	if step, _, _ := al.taskExecutor.finishRunTurn(context.Background(), running, sid, "Exporter merged.", nil, "", nil, state); step != runStepEnded {
 		t.Fatalf("arrange: the upheld claim must end the run, got step %v", step)
 	}
@@ -322,7 +322,7 @@ func TestActivateTaskGoalRecordsRouting(t *testing.T) {
 		if err != nil {
 			t.Fatalf("createTaskSessionSync: %v", err)
 		}
-		rec := activeGoalForSession(sid)
+		rec := mustActiveGoalForSession(t, sid)
 		if rec == nil {
 			t.Fatal("the task's goal record must be active on the run's session")
 		}
@@ -341,7 +341,7 @@ func TestActivateTaskGoalRecordsRouting(t *testing.T) {
 		if err != nil {
 			t.Fatalf("createTaskSessionSync: %v", err)
 		}
-		rec := activeGoalForSession(sid)
+		rec := mustActiveGoalForSession(t, sid)
 		if rec == nil {
 			t.Fatal("the task's goal record must be active on the run's session")
 		}
@@ -392,11 +392,12 @@ func TestKeeperReachesAQuietTaskWithoutTestWiring(t *testing.T) {
 	const condition = "ship the CSV exporter"
 	tk, _ := seedTaskWithJudgeableGoal(t, al, "t-keeper-1", condition, "webchat", "c1")
 
+	prepareKeeperTaskRuntimeForTest(t, al)
 	sid, err := al.taskExecutor.createTaskSessionSync(tk)
 	if err != nil {
 		t.Fatalf("createTaskSessionSync: %v", err)
 	}
-	rec := activeGoalForSession(sid)
+	rec := mustActiveGoalForSession(t, sid)
 	if rec == nil {
 		t.Fatal("the task's goal record must be active on the run's session")
 	}
@@ -525,7 +526,6 @@ func TestClaimScanWatermarkSurvivesATranscriptReadError(t *testing.T) {
 // turn, spending real tokens, every quiet window, forever.
 func TestKeeperDoesNotDispatchAnUncountedPush(t *testing.T) {
 	resetGoalTriggerStateForTest()
-	withShortIdleWindow(t, 2*time.Second)
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	agentInst, _ := al.GetRegistry().GetAgent("native-agent")
 	_, sid := newGoalTestSession(t, al, agentInst.ID)
@@ -773,7 +773,7 @@ func TestTaskGoalActivationFailureIsLoud(t *testing.T) {
 			"The task now runs with NO goal loop and the caller cannot tell")
 	}
 
-	sessStore := al.GetAgentStore(tk.AgentID)
+	sessStore := al.GetSessionStore()
 	if sessStore == nil {
 		t.Fatal("the agent's session store must exist")
 	}

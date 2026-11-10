@@ -22,15 +22,15 @@ import (
 // inbound caller with a reply the user has not yet seen goes through this one
 // path: loop.go's unroutable-message frame, the session worker's turn end and
 // terminal frames, and the revived ordinary-root turn (revive_support.go).
-func (al *AgentLoop) publishResponseIfNeeded(ctx context.Context, ag *AgentInstance, channel, chatID, response string) {
+func (al *AgentLoop) publishResponseIfNeeded(ctx context.Context, ag *AgentInstance, channel, chatID, response, sessionID string) {
 	if response == "" {
 		return
 	}
 
+	// With no producing agent (an unroutable-message reply) there is no
+	// "already sent" tracker to consult: publish, never borrowing another
+	// agent's state (omnipus-system-agent FR-132, §6.4).
 	alreadySent := false
-	if ag == nil {
-		ag = al.GetRegistry().GetDefaultAgent()
-	}
 	if ag != nil {
 		if tool, ok := ag.Tools.Get("send_message"); ok {
 			if mt, ok := tool.(*tools.MessageTool); ok {
@@ -48,10 +48,18 @@ func (al *AgentLoop) publishResponseIfNeeded(ctx context.Context, ag *AgentInsta
 		return
 	}
 
+	// U8 (FR-028): in a main, a connector is reached only by reply_to - the
+	// default send is refused once, visibly, never guessed to a sender.
+	if al.mainConnectorTurn(channel, sessionID) {
+		al.refuseMainConnectorDefaultSend(ctx, channel, sessionID, ag)
+		return
+	}
+
 	if err := al.bus.PublishOutbound(ctx, bus.OutboundMessage{
-		Channel: channel,
-		ChatID:  chatID,
-		Content: response,
+		Channel:   channel,
+		ChatID:    chatID,
+		Content:   response,
+		SessionID: sessionID,
 	}); err != nil {
 		logger.ErrorCF("agent", "Failed to publish outbound response",
 			map[string]any{"channel": channel, "chat_id": chatID, "error": err.Error()})

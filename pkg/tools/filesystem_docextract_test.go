@@ -294,8 +294,10 @@ func TestReadFile_DocumentSymlinkEscape_ClosedWhenReadConfined(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// A real document living OUTSIDE the workspace.
-	secret := filepath.Join(root, "secret.docx")
+	// L1-AMENDMENTS-20261013.md §2 D1 / §2.4: unlisted home files
+	// are protected even unconfined. Keep this ordinary scope control outside
+	// home and pin the protected-home negative below.
+	secret := filepath.Join(t.TempDir(), "secret.docx")
 	if err := os.WriteFile(secret, makeDocxBytes(t, "TOP SECRET"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -347,6 +349,18 @@ func TestReadFile_DocumentSymlinkEscape_ClosedWhenReadConfined(t *testing.T) {
 		}
 		if !strings.Contains(res.ForLLM, "TOP SECRET") {
 			t.Fatalf("expected the real out-of-workspace document content, got:\n%s", res.ForLLM)
+		}
+	})
+
+	t.Run("unlisted home document stays protected even unconfined", func(t *testing.T) {
+		internal := filepath.Join(root, "secret.docx")
+		if err := os.WriteFile(internal, makeDocxBytes(t, "HOME SECRET"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		res := tool.Execute(context.Background(), map[string]any{"path": internal})
+		requireInternalFileRefusal(t, res, "read_file")
+		if strings.Contains(res.ForLLM, "HOME SECRET") {
+			t.Fatal("protected-home document content leaked")
 		}
 	})
 }

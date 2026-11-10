@@ -47,6 +47,20 @@ type OpencodeDriver struct {
 	eventCh chan RunEvent
 	consent ConsentHandler
 	runID   string
+	// runMaxTurns is the turn cap of the most recent Run; Resume reuses it
+	// so a resumed run keeps its original cap (#904 D4). Zero until the
+	// first Run, so a Resume with no prior Run is refused (FR-004).
+	runMaxTurns int
+	// nativeID is the opencode session id announced on the most recent Run's
+	// stream (session.start / session.complete session_id). Resume passes it
+	// via -s/--session so the prior native conversation is actually continued;
+	// an empty id makes Resume refuse visibly instead of starting fresh
+	// (FR-043).
+	nativeID string
+	// lastOpts is the RunOptions of the most recent Run, reused by Resume so a
+	// resumed conversation preserves its runtime/workspace/model/caps (FR-043).
+	// Zero value until the first Run.
+	lastOpts RunOptions
 }
 
 // NewOpencodeDriver creates a driver for the opencode CLI.
@@ -59,10 +73,20 @@ func NewOpencodeDriver(consent ConsentHandler) *OpencodeDriver {
 //
 //nolint:dupl // driver-specific process lifecycle; the parallel exit/stderr handling shares shape with ClaudeDriver.Run but differs in per-CLI log prefixes and error-message text — a shared helper would obscure those per-CLI differences and risk behavior changes
 func (d *OpencodeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEvent, error) {
+	if err := validateMaxTurns("opencode", opts.MaxTurns); err != nil {
+		return nil, err
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.eventCh != nil {
 		return nil, fmt.Errorf("opencode driver: Run called while a run is already active")
+	}
+	d.runMaxTurns = opts.MaxTurns
+	d.lastOpts = opts
+	if opts.resumeNativeID == "" {
+		// A fresh run begins a new native conversation; drop any id captured
+		// from a previous run until this run's stream announces its own.
+		d.nativeID = ""
 	}
 
 	// Detect and pin CLI version (FR-5.6 / N3).
@@ -171,10 +195,9 @@ func (d *OpencodeDriver) Run(ctx context.Context, opts RunOptions) (<-chan RunEv
 			cancelFn()
 		}()
 
+		// Turn cap (FR-5.4): the caller's resolved limit, validated > 0 at the
+		// top of Run — no hidden default (#904 FR-004).
 		maxTurns := opts.MaxTurns
-		if maxTurns <= 0 {
-			maxTurns = defaultMaxTurns
-		}
 		turnCount := 0
 
 		emittedFatal := streamParser(runCtx, pr, runID, func(raw []byte) (RunEvent, bool) {
@@ -277,11 +300,14 @@ func (d *OpencodeDriver) buildArgs(opts RunOptions) []string {
 	// tool.start event is only observed after the tool call has already
 	// begun, whether or not opencode itself was told to auto-approve.
 	args = append(args, "--dangerously-skip-permissions")
-	// NOTE: -s/--session <RunID> is deliberately NOT passed. opencode
-	// documents it as "session id to continue" — it resumes an EXISTING
-	// session, not creates a new one with a caller-chosen ID. opts.RunID here
-	// is always a freshly generated dispatch identifier opencode has never
-	// seen, so passing it would target a non-existent session.
+	// Native-conversation resume (FR-043): -s/--session <id> continues an
+	// EXISTING session by the id opencode announced on the prior stream
+	// (opts.resumeNativeID). It is NEVER passed the fresh-dispatch opts.RunID:
+	// opencode has never seen that identifier, so it would target a
+	// non-existent session. Empty on a fresh run.
+	if id := strings.TrimSpace(opts.resumeNativeID); id != "" {
+		args = append(args, "--session", id)
+	}
 	// Append operator-supplied extra args (ExecutorConfig.cli_args, MAJ-5).
 	// ADR-032 fix M-1: a redundant/conflicting copy of the driver's own
 	// --dangerously-skip-permissions flag is stripped first — see
@@ -290,6 +316,7 @@ func (d *OpencodeDriver) buildArgs(opts RunOptions) []string {
 	kept, dropped := filterDangerousCLIArgs("opencode", opts.CLIArgs)
 	logDroppedCLIArgs("runner/opencode", "opencode", opts.RunID, dropped)
 	args = append(args, kept...)
+	args = append(args, opts.PresetArgs...) // r17 §3.7: unfiltered, after the agent args
 	// ADR-032 fix N-1: the literal "--" end-of-options separator forces
 	// everything after it to be treated as positional message content,
 	// regardless of what it looks like — see the buildArgs doc comment above.
@@ -366,8 +393,19 @@ func (d *OpencodeDriver) parseLine(
 		}
 		return RunEvent{}, false
 
+	case "session.start":
+		// Session bootstrap event — carries the native session id (captured
+		// below); no RunEvent is emitted for it.
+		if sessionID, ok := rawJSONField(raw, "session_id"); ok && sessionID != "" {
+			storeNativeID(&d.mu, &d.nativeID, sessionID)
+		}
+		return RunEvent{}, false
+
 	case "session.complete":
 		if sessionID, _ := rawJSONField(raw, "session_id"); sessionID != "" {
+			// Capture the native session id so Resume continues THIS
+			// conversation via -s/--session rather than starting fresh (FR-043).
+			storeNativeID(&d.mu, &d.nativeID, sessionID)
 			slog.Info("runner/opencode: session complete", "run_id", runID, "session_id", sessionID)
 		}
 		return RunEvent{Kind: EventKindEnd, RunID: runID}, true
@@ -463,14 +501,48 @@ func (d *OpencodeDriver) Cancel() {
 	}
 }
 
-// Input is best-effort for opencode (no mid-run stdin injection).
+// Input attempts to deliver a live steering instruction to a running opencode
+// conversation. `opencode run` exposes no mid-run stdin injection channel, so a
+// live instruction cannot be delivered in-process — delivery is by interrupt
+// plus native-conversation resume (FR-043). Input therefore NEVER silently
+// discards the text: with no live conversation it refuses visibly, and with a
+// live run it returns a visible error directing the caller to interrupt and
+// resume (BDD-05.6, DEL-20).
 func (d *OpencodeDriver) Input(_ string) error {
-	return nil
+	d.mu.Lock()
+	live := d.eventCh != nil
+	d.mu.Unlock()
+	if !live {
+		return fmt.Errorf("opencode driver: no live conversation to steer — instruction not delivered (FR-043)")
+	}
+	return fmt.Errorf("opencode driver: cannot inject a live instruction into a running `opencode run` process (no mid-run stdin channel); interrupt and resume the native conversation instead (FR-043)")
 }
 
-// Resume re-starts opencode with `--session <runID>`.
-func (d *OpencodeDriver) Resume(ctx context.Context, runID string) (<-chan RunEvent, error) {
-	return d.Run(ctx, RunOptions{RunID: runID})
+// Resume continues the opencode native session captured on the prior Run via
+// -s/--session <id> (FR-043). It reuses the prior Run's RunOptions
+// (runtime/workspace/model/caps) so the resumed conversation preserves them, and
+// does NOT re-send the original prompt. When no native session id was captured
+// it refuses VISIBLY rather than starting a fresh conversation (BDD-05.6); with
+// no prior Run at all it defers to Run's ErrMaxTurnsRequired (no hidden default,
+// FR-004).
+func (d *OpencodeDriver) Resume(ctx context.Context, runID string, instruction ...string) (<-chan RunEvent, error) {
+	d.mu.Lock()
+	last := d.lastOpts
+	maxTurns := d.runMaxTurns
+	nativeID := d.nativeID
+	d.mu.Unlock()
+
+	opts := last
+	opts.RunID = runID
+	// A delivery resume carries the new instruction S (stdin); a bare resume
+	// delivers nothing and never replays the original prompt.
+	opts.Input = resumeInstruction(instruction)
+	opts.resumeNativeID = nativeID
+
+	if nativeID == "" && maxTurns > 0 {
+		return nil, fmt.Errorf("opencode driver: cannot resume — no native conversation id was captured from the prior run; refusing rather than starting a fresh conversation (FR-043)")
+	}
+	return d.Run(ctx, opts)
 }
 
 // Test runs the binary-present → handshake → authed health check (FR-4.2) by

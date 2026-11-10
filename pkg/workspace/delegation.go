@@ -46,15 +46,6 @@ func (m DelegationMode) Valid() bool {
 	return m == ModeDirect || m == ModeTask
 }
 
-// legacyModeDirect is the set of pre-collapse mode strings that now map to
-// ModeDirect. UnmarshalJSON uses this to transparently migrate edges persisted
-// under the old 3-value ("await"/"background"/"task") vocabulary the first time
-// they are read, without requiring a rewrite-to-disk migration pass.
-var legacyModeDirect = map[string]bool{
-	"await":      true,
-	"background": true,
-}
-
 // DelegationEdge mirrors a single directed delegation edge stored in the
 // per-workspace delegation store, entities/delegation/<id>.json (NOT in
 // workspaces/<id>.json — see delegationstore.go for why an authorization
@@ -72,13 +63,9 @@ var legacyModeDirect = map[string]bool{
 //     []DelegationMode (a string type), so json:"modes" still
 //     marshals/unmarshals as a plain ["direct",...] string array — the on-disk
 //     workspace JSON and the generated wire type (which stays []string) are
-//     UNCHANGED by the typing. UnmarshalJSON below transparently migrates any
-//     persisted edge still using the legacy 3-value ("await"/"background"/
-//     "task") vocabulary: "await" and "background" both collapse to "direct"
-//     (deduped, so an edge listing both legacy values yields a single "direct"
-//     entry), "task" passes through unchanged. No rewrite-to-disk is forced —
-//     the migration is transparent at every read, and the next explicit write
-//     (PUT or update_workspace tool) persists the new 2-value form.
+//     UNCHANGED by the typing. There is no legacy-mode migration (session-core
+//     DEL-14, greenfield): an edge persisted with any other mode string decodes
+//     as written and is refused by ValidateShape / dropped by the store reader.
 //   - Depth: nil/absent ⇒ inherit the global/per-turn depth cap. A non-nil
 //     value is the per-edge onward-delegation cap. DEPTH INVARIANT (the single
 //     authority, mirrored at the runtime gate in pkg/agent's
@@ -87,9 +74,7 @@ var legacyModeDirect = map[string]bool{
 //     signal and must fail closed); depth > 0 ⇒ onward delegation is capped at
 //     that chain depth.
 //
-// Deliberate mixed receivers below: UnmarshalJSON MUST be a pointer receiver
-// (the json.Unmarshaler contract requires mutating the receiver in place),
-// while Validate is deliberately a VALUE receiver so it can be called
+// Validate is deliberately a VALUE receiver so it can be called
 // directly on composite-literal edges — a pattern used throughout the
 // gateway handlers and tests (e.g. storedDelegationEdge{...}.Validate(team,
 // ceiling)), which would stop compiling if Validate required an addressable
@@ -102,56 +87,6 @@ type DelegationEdge struct {
 	Depth     *int             `json:"depth,omitempty"`
 }
 
-// UnmarshalJSON is the transparent legacy-mode migration point for
-// DelegationEdge. Every reader that decodes a DelegationEdge from JSON — the
-// gateway's PUT handler, ReadDelegation below, and the update_workspace
-// sysagent tool — routes through this single method (they all unmarshal into
-// this same struct, directly or via an embedding/aliasing type), so fixing the
-// migration here covers all three read paths with no other code changes.
-// (ReadDelegation now sources its edges from the delegation store rather than
-// the workspace record; the decode still lands in this same struct, so the
-// migration point is unchanged.)
-//
-// It decodes into a shadow struct with Modes as raw []string, remaps any
-// legacy "await"/"background" value to "direct" (via legacyModeDirect),
-// dedupes (preserving first-seen order so migration is stable and
-// deterministic), and populates the typed Modes []DelegationMode field. All
-// other fields pass through unchanged. Decoding an already-migrated edge
-// (Modes already direct/task) is a no-op pass-through — idempotent.
-func (e *DelegationEdge) UnmarshalJSON(data []byte) error {
-	var shadow struct {
-		FromAgent string   `json:"from_agent"`
-		ToAgent   string   `json:"to_agent"`
-		Modes     []string `json:"modes,omitempty"`
-		Depth     *int     `json:"depth,omitempty"`
-	}
-	if err := json.Unmarshal(data, &shadow); err != nil {
-		return fmt.Errorf("workspace: unmarshal delegation edge: %w", err)
-	}
-	e.FromAgent = shadow.FromAgent
-	e.ToAgent = shadow.ToAgent
-	e.Depth = shadow.Depth
-	if shadow.Modes == nil {
-		e.Modes = nil
-		return nil
-	}
-	seen := make(map[DelegationMode]bool, len(shadow.Modes))
-	migrated := make([]DelegationMode, 0, len(shadow.Modes))
-	for _, raw := range shadow.Modes {
-		mode := DelegationMode(raw)
-		if legacyModeDirect[raw] {
-			mode = ModeDirect
-		}
-		if seen[mode] {
-			continue
-		}
-		seen[mode] = true
-		migrated = append(migrated, mode)
-	}
-	e.Modes = migrated
-	return nil
-}
-
 // Validate enforces the per-edge invariants for a single delegation edge. It is
 // the SHARED authority for edge well-formedness across every write path (the
 // gateway PUT handler AND the update_workspace tool), so no second writer can
@@ -162,10 +97,12 @@ func (e *DelegationEdge) UnmarshalJSON(data []byte) error {
 //
 // Invariants enforced (fail-closed: any violation is a hard error):
 //   - from_agent and to_agent are both non-empty (after trimming)
-//   - self-edges are limited to the built-in Jim and General Purpose identities
 //   - both endpoints are members of team (the workspace team set — core_team ∪
 //     existing-edge endpoints). A nil team treats EVERY endpoint as off-team
-//     (deny-by-default): callers MUST pass the real team set.
+//     (deny-by-default): callers MUST pass the real team set. A same-agent row
+//     (from_agent == to_agent) is an ORDINARY row and passes this check like any
+//     other — session-core C-DELEGATE (FR-014) deletes the former identity-
+//     specific self-edge rule (jim/worker only); there is no self-ID predicate.
 //   - every mode (when Modes is non-empty) ∈ {direct, task}
 //   - Depth, when non-nil, is >= 0 and <= ceiling
 //
@@ -181,9 +118,6 @@ func (e DelegationEdge) Validate(team map[string]bool, ceiling int) error {
 	to := strings.TrimSpace(e.ToAgent)
 	if from == "" || to == "" {
 		return errors.New("delegation edge from_agent and to_agent must not be empty")
-	}
-	if from == to && !PermittedSelfDelegationID(from) {
-		return fmt.Errorf("delegation edge cannot be a self-edge (from_agent == to_agent: %s)", from)
 	}
 	if !team[from] {
 		return fmt.Errorf("delegation edge from_agent %s is not a member of the workspace team", from)
@@ -205,12 +139,6 @@ func (e DelegationEdge) Validate(team map[string]bool, ceiling int) error {
 		}
 	}
 	return nil
-}
-
-// PermittedSelfDelegationID identifies the two stable built-ins that may fork
-// bounded helpers through an explicit workspace edge.
-func PermittedSelfDelegationID(id string) bool {
-	return id == "jim" || id == "worker"
 }
 
 // TeamSet computes the workspace team-membership set against which a delegation
@@ -320,8 +248,8 @@ func ReadDelegation(home, workspaceID string) ([]DelegationEdge, error) {
 }
 
 // ValidateShape checks the invariants of a single edge that hold with NO
-// workspace context — non-empty endpoints, no self-edge, known modes, and a
-// non-negative depth.
+// workspace context — non-empty endpoints, known modes, and a non-negative
+// depth.
 //
 // It exists because the delegation STORE (delegationstore.go) validates edges
 // at load and save time, where the team roster and the depth ceiling are not
@@ -336,6 +264,9 @@ func ReadDelegation(home, workspaceID string) ([]DelegationEdge, error) {
 // hand-edited store injecting a structurally impossible edge; it is a
 // data-integrity guard, not the authorization boundary.
 //
+// A same-agent row is structurally valid and passes here like any other edge:
+// session-core C-DELEGATE (FR-014) deleted the identity-specific self-edge rule.
+//
 // The depth CEILING is intentionally not checked here for the same reason: an
 // edge whose depth exceeds a ceiling that has since been lowered is stale
 // configuration to be re-evaluated against the live ceiling by Validate, not
@@ -345,9 +276,6 @@ func (e DelegationEdge) ValidateShape() error {
 	to := strings.TrimSpace(e.ToAgent)
 	if from == "" || to == "" {
 		return errors.New("delegation edge from_agent and to_agent must not be empty")
-	}
-	if from == to && !PermittedSelfDelegationID(from) {
-		return fmt.Errorf("delegation edge cannot be a self-edge (from_agent == to_agent: %s)", from)
 	}
 	for _, m := range e.Modes {
 		if !m.Valid() {

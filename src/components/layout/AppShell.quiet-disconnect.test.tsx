@@ -40,13 +40,13 @@ import type { AppState, NotificationList } from '@/lib/api/generated/openapi-typ
 vi.mock('./Sidebar', () => ({ Sidebar: () => null }))
 vi.mock('./NotificationPanel', () => ({ NotificationPanel: () => null }))
 vi.mock('@/components/ui/toast-container', () => ({ ToastContainer: () => null }))
-vi.mock('@/components/agents/ToolApprovalModal', () => ({ ToolApprovalModal: () => null }))
 vi.mock('@/components/chat/MediaLightbox', () => ({ MediaLightbox: () => null }))
 vi.mock('@/components/chat/OmnipusRuntimeProvider', () => ({
   OmnipusRuntimeProvider: ({ children }: { children?: React.ReactNode }) => children ?? null,
 }))
 vi.mock('@/hooks/useVersionCheck', () => ({ useVersionCheck: vi.fn() }))
-vi.mock('@tanstack/react-router', () => ({ Outlet: () => null, useNavigate: () => vi.fn(), useLocation: () => ({ pathname: '/' }), Link: ({ children, to, onClick, className }: { children: React.ReactNode; to: string; onClick?: () => void; className?: string }) => React.createElement('a', { href: to, onClick, className }, children) }))
+const mockRouter = vi.hoisted(() => ({ navigate: vi.fn() }))
+vi.mock('@tanstack/react-router', () => ({ Outlet: () => null, useRouter: () => mockRouter, useNavigate: () => vi.fn(), useLocation: () => ({ pathname: '/' }), Link: ({ children, to, onClick, className }: { children: React.ReactNode; to: string; onClick?: () => void; className?: string }) => React.createElement('a', { href: to, onClick, className }, children) }))
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
@@ -123,7 +123,7 @@ MockWebSocket.CLOSED = 3
 /** Wires a real WsConnection to the real store exactly like WsLifecycle does. */
 function wireProductionCallbacks(): WsConnection {
   return new WsConnection({
-    onFrame: () => {},
+    onFrames: () => {},
     onConnected: () => {
       useConnectionStore.getState().setConnected(true)
       useConnectionStore.getState().setConnectionError(null)

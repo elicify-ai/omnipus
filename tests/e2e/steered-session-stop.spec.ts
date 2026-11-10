@@ -32,30 +32,13 @@
  *      (openSessionByDeepLink) reconstructs the ActivityPanel row from
  *      those persisted frames.
  *
- * ADR-091 fix lane RX-FRONTEND, Defect 2 — two bugs fixed here, both found
- * by re-deriving what the system actually emits/renders instead of trusting
- * this file's own prior assertions:
+ * Current Stop oracle (2026-10-06): ADR-20260928 D2 says Stop is
+ * "non-terminal" and requires "same-generation RESUME". No final hand-back
+ * or end frame is needed for a landed stopped state. Assert the row's
+ * subagent_state lifecycle and visible stopped label before/after reload.
+ * This replaces the old interrupted subagent_end oracle, not the Stop scope.
  *
- * 1. WRONG STATUS VALUE. `ActivityPanel.tsx::ActivityRow` stamps
- *    `data-status` from `item.status` — the SPAN axis (span.status, cleared
- *    only by `subagent_end`) — never from `lifecycleState` (the
- *    `subagent_state` axis). On a Stop, the Go side emits DIFFERENT values on
- *    each axis (verified against source, not assumed):
- *      - `pkg/agent/steer_frames.go::deliverSubagentEnd` maps
- *        `steer.OutcomeInterrupted` -> `SubTurnStatusInterrupted`, i.e.
- *        `subagent_end.status = "interrupted"` — this is `item.status`, i.e.
- *        `data-status`.
- *      - `pkg/agent/steer_audience.go` (~line 182-183) separately maps that
- *        SAME `steer.OutcomeInterrupted` -> `session.LifecycleCancelled`
- *        ("cancelled") for the `subagent_state` frame — this is
- *        `lifecycleState`, rendered as the row's visible status TEXT via
- *        `getLifecycleStatusDot` (`src/lib/subagentStatus.tsx`), never as
- *        `data-status`.
- *    The old assertion (`data-status: 'cancelled'`) read the second value off
- *    the first attribute — a value the system never emits there. Fixed below
- *    to assert `data-status: 'interrupted'` and the visible label "cancelled".
- *
- * 2. UNREACHABLE STOP BUTTON. `ChatScreen.tsx`'s `stop-btn` only renders
+ * Fixture boundary — UNREACHABLE STOP BUTTON. `ChatScreen.tsx`'s `stop-btn` only renders
  *    while `isStreaming` is true for the currently attached session, and
  *    `cancelStream()` (src/store/chat/slices/outbound-lifecycle.ts) ADDITIONALLY
  *    gates its own network send on that same flag — both are populated only
@@ -114,19 +97,20 @@
 import * as fs from 'fs'
 import * as path from 'path'
 import { expect, type Page } from '@playwright/test'
-import { test } from './fixtures/console-errors'
+import { test, canonicalHistoryAuthFile } from './fixtures/canonical-history'
+import { seedCanonicalLegacyTranscript } from './fixtures/chat-history'
 import { chatInput, waitForConnected } from './fixtures/selectors'
 import { openSessionByDeepLink } from './fixtures/session-setup'
 
-const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
-const OMNIPUS_HOME =
-  process.env.OMNIPUS_HOME ||
-  (process.env.HOME ? path.join(process.env.HOME, '.omnipus') : '/tmp/omnipus-e2e-test')
+let BASE_URL: string
+let OMNIPUS_HOME: string
+test.beforeEach(async ({ canonicalGateway }) => {
+  BASE_URL = canonicalGateway.baseURL
+  OMNIPUS_HOME = canonicalGateway.homeDir
+})
 
 function getStoredAuthToken(): string | null {
-  const authFile = process.env.OMNIPUS_AUTH_FILE
-    ? path.resolve(process.env.OMNIPUS_AUTH_FILE)
-    : path.join(path.dirname(new URL(import.meta.url).pathname), 'fixtures/.auth/admin.json')
+  const authFile = canonicalHistoryAuthFile()
   if (!fs.existsSync(authFile)) return null
   try {
     const state = JSON.parse(fs.readFileSync(authFile, 'utf-8')) as {
@@ -203,7 +187,7 @@ function seedSteeredLifecycleRecord(childId: string, rootId: string, callId: str
  * own transcript — see pkg/agent/steer_frames.go's deliverSubagentStart and
  * pkg/session/daypartition.go's TranscriptEntry.Subagent* fields.
  */
-function seedSubagentFramesInParentTranscript(rootId: string, childId: string, callId: string, taskLabel: string): void {
+async function seedSubagentFramesInParentTranscript(rootId: string, childId: string, callId: string, taskLabel: string): Promise<void> {
   const sessionDir = path.join(OMNIPUS_HOME, 'sessions', rootId)
   if (!fs.existsSync(sessionDir)) {
     throw new Error(`Root session directory does not exist: ${sessionDir}. Create it via REST first.`)
@@ -212,6 +196,7 @@ function seedSubagentFramesInParentTranscript(rootId: string, childId: string, c
   const spanId = `span_${callId}`
   const startEntry = {
     id: `${callId}:start`,
+    view_membership: 'chat',
     type: 'system',
     system_subtype: 'subagent_start',
     timestamp: now,
@@ -228,6 +213,7 @@ function seedSubagentFramesInParentTranscript(rootId: string, childId: string, c
   }
   const stateEntry = {
     id: `${callId}:state`,
+    view_membership: 'chat',
     type: 'system',
     system_subtype: 'subagent_state',
     timestamp: now,
@@ -241,9 +227,7 @@ function seedSubagentFramesInParentTranscript(rootId: string, childId: string, c
       created_at: now,
     },
   }
-  const transcriptPath = path.join(sessionDir, 'transcript.jsonl')
-  const lines = [startEntry, stateEntry].map(e => JSON.stringify(e)).join('\n') + '\n'
-  fs.appendFileSync(transcriptPath, lines, { encoding: 'utf-8' })
+  await seedCanonicalLegacyTranscript(rootId, [startEntry, stateEntry], true)
 }
 
 /**
@@ -342,10 +326,11 @@ test(
     const callId = `adr091-stop-spec-${Date.now()}`
     const taskLabel = `steered-session-stop-${Date.now()}`
 
-    seedSteeredLifecycleRecord(childId, rootId, callId)
     // Root's session directory must exist (created by the REST call above)
-    // before its transcript can be appended to.
-    seedSubagentFramesInParentTranscript(rootId, childId, callId, taskLabel)
+    // before its transcript can be appended to canonically. Restore the
+    // intentionally running lifecycle AFTER restart, not before boot sweep.
+    await seedSubagentFramesInParentTranscript(rootId, childId, callId, taskLabel)
+    seedSteeredLifecycleRecord(childId, rootId, callId)
 
     await openSessionByDeepLink(page, rootId)
 
@@ -376,26 +361,15 @@ test(
     await openActivityPanel(page)
     const rowAfterStop = page.locator('[data-testid="activity-row"]', { hasText: taskLabel })
 
-    // `data-status` is `ActivityRow`'s SPAN axis (`item.status`, from
-    // `subagent_end.status`) — a Stop maps to `steer.OutcomeInterrupted`,
-    // which `deliverSubagentEnd` (pkg/agent/steer_frames.go) stamps as
-    // "interrupted", never "cancelled". "cancelled" is the SEPARATE
-    // `lifecycleState` axis (`subagent_state.state`, pkg/agent/
-    // steer_audience.go ~182-183) that never reaches `data-status` — it
-    // only drives the row's visible label (getLifecycleStatusDot,
-    // src/lib/subagentStatus.tsx). Assert both, on their correct axes, and
-    // explicitly rule out the states an interrupted-but-mishandled Stop
-    // most often gets confused with.
-    await expect(rowAfterStop).toHaveAttribute('data-status', 'interrupted', { timeout: 15_000 })
-    // 'cancelled' (not 'failed') is the confusion this rules out: it is a
-    // REAL `ActivityStatus` member that the OTHER axis (lifecycleState) does
-    // carry for this exact Stop, so stamping it on `data-status` is the
-    // plausible mistake. ('failed' is not in the `ActivityStatus` union at
-    // all — src/hooks/useRunningActivity.ts — so asserting its absence was
-    // vacuous.)
+    // ADR-20260928 D2: Stop is "non-terminal" and requires
+    // "same-generation RESUME". A resumable Stop sends subagent_state
+    // stopped, not a successful subagent_end. Assert the current lifecycle,
+    // not the delegation bracket's superseded interrupted-end oracle.
+    await expect(rowAfterStop).toHaveAttribute('data-lifecycle-state', 'stopped', { timeout: 15_000 })
+    await expect(rowAfterStop).not.toHaveAttribute('data-lifecycle-state', 'failed')
     await expect(rowAfterStop).not.toHaveAttribute('data-status', 'cancelled')
     await expect(rowAfterStop).not.toHaveAttribute('data-status', 'running')
-    await expect(rowAfterStop.getByText('cancelled', { exact: true })).toBeVisible()
+    await expect(rowAfterStop.getByText('stopped', { exact: true })).toBeVisible()
 
     // Reload and confirm the stopped state was durably persisted, not just
     // held in the client's in-memory store.
@@ -404,11 +378,11 @@ test(
     await waitForConnected(page, { timeout: 15_000 })
     // A full reload DOES reset ActivityBar's `panelOpen`, so this is the one
     // place the click genuinely has to happen — and the bar only mounts at
-    // all if the stopped child's span came back from replay (ActivityBar's
-    // `hasFailedRecent` gate), which is precisely this assertion's point.
+    // all if the stopped child's lifecycle came back from replay, which
+    // is precisely this assertion's point.
     await openActivityPanel(page)
     const rowAfterReload = page.locator('[data-testid="activity-row"]', { hasText: taskLabel })
-    await expect(rowAfterReload).toHaveAttribute('data-status', 'interrupted', { timeout: 15_000 })
-    await expect(rowAfterReload.getByText('cancelled', { exact: true })).toBeVisible()
+    await expect(rowAfterReload).toHaveAttribute('data-lifecycle-state', 'stopped', { timeout: 15_000 })
+    await expect(rowAfterReload.getByText('stopped', { exact: true })).toBeVisible()
   },
 )

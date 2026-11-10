@@ -124,21 +124,7 @@ func newWebRTCContextInputSinkWithDispatchSampling(validateInbound bool, samplin
 		}
 		var probe *browserInputTiming
 		if timingEnabled {
-			received := time.Now()
-			var queued webrtc.InputQueueTiming
-			if len(enqueued) > 0 {
-				queued = enqueued[0]()
-				if !queued.EnqueuedAt.IsZero() {
-					received = queued.EnqueuedAt
-				}
-			}
-			probe = sampling.begin(frame, received)
-			// The merged wire frame keeps the first reliable sequence. The observer
-			// alone supplies the complete range; it never changes input authorization.
-			if probe != nil && queued.FirstReliableSeq == probe.reliableSeq && queued.LastReliableSeq >= queued.FirstReliableSeq && int64(queued.LastReliableSeq) <= maxBrowserCounter && queued.InputCount == queued.LastReliableSeq-queued.FirstReliableSeq+1 {
-				probe.firstReliableSeq, probe.lastReliableSeq, probe.inputCount = queued.FirstReliableSeq, queued.LastReliableSeq, queued.InputCount
-			}
-			probe.mark("queue_started")
+			probe = startWebRTCInputProbe(sampling, frame, enqueued)
 			defer probe.finish()
 		}
 		in := browserInputFrameToLiveInput(frame)
@@ -185,6 +171,27 @@ func newWebRTCContextInputSinkWithDispatchSampling(validateInbound bool, samplin
 			route.report(ctx, frame.Kind, err)
 		}
 	}
+}
+
+// startWebRTCInputProbe preserves the original queue timing and reliable sequence
+// sampling before a browser input is dispatched.
+func startWebRTCInputProbe(sampling *browserInputTimingSampling, frame generated.BrowserInputFrame, enqueued []func() webrtc.InputQueueTiming) *browserInputTiming {
+	received := time.Now()
+	var queued webrtc.InputQueueTiming
+	if len(enqueued) > 0 {
+		queued = enqueued[0]()
+		if !queued.EnqueuedAt.IsZero() {
+			received = queued.EnqueuedAt
+		}
+	}
+	probe := sampling.begin(frame, received)
+	// The merged wire frame keeps the first reliable sequence. The observer
+	// alone supplies the complete range; it never changes input authorization.
+	if probe != nil && queued.FirstReliableSeq == probe.reliableSeq && queued.LastReliableSeq >= queued.FirstReliableSeq && int64(queued.LastReliableSeq) <= maxBrowserCounter && queued.InputCount == queued.LastReliableSeq-queued.FirstReliableSeq+1 {
+		probe.firstReliableSeq, probe.lastReliableSeq, probe.inputCount = queued.FirstReliableSeq, queued.LastReliableSeq, queued.InputCount
+	}
+	probe.mark("queue_started")
+	return probe
 }
 
 // ctxErrString renders a context's error for the drop log without panicking on

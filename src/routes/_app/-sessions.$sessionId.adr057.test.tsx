@@ -88,10 +88,11 @@ import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { fetchSessionDetail, fetchWorkspaces, ApiError } from '@/lib/api'
 import type { SessionDetail } from '@/lib/api'
+import { availableHistoryDetail } from '../../../tests/chat-history-paging/legacy-fixtures'
 
 function makeDelegateChildSession(overrides?: Partial<SessionDetail['session']>): SessionDetail {
   return {
-    session: {
+    ...availableHistoryDetail({
       id: mockChildSessionId,
       agent_id: 'ava',
       title: 'Delegated: audit the payments module',
@@ -101,11 +102,10 @@ function makeDelegateChildSession(overrides?: Partial<SessionDetail['session']>)
       updated_at: '2026-08-01T00:05:00Z',
       message_count: 4,
       ...overrides,
-    },
-    messages: [
+    }, [
       { id: 'm1', session_id: mockChildSessionId, role: 'user', content: 'Audit the payments module', timestamp: '2026-08-01T00:00:00Z' },
       { id: 'm2', session_id: mockChildSessionId, role: 'assistant', content: 'Found 2 issues.', timestamp: '2026-08-01T00:05:00Z', status: 'done' },
-    ],
+    ]),
     agent_removed: false,
   }
 }
@@ -179,13 +179,15 @@ describe('ADR-057 BDD-71 — drill-down surface reachable and populated for a hi
 
       const loader = (
         (await import('./sessions.$sessionId')).Route as unknown as {
-          loader: (opts: { params: { sessionId: string } }) => Promise<SessionDetail | null>
+          loader: (opts: { params: { sessionId: string }; abortController: AbortController }) => Promise<SessionDetail | null>
         }
       ).loader
 
-      const result = await loader({ params: { sessionId: mockChildSessionId } })
+      const abortController = new AbortController()
+      const result = await loader({ abortController, params: { sessionId: mockChildSessionId } })
 
-      expect(fetchSessionDetail).toHaveBeenCalledExactlyOnceWith(mockChildSessionId)
+      expect(fetchSessionDetail).toHaveBeenCalledExactlyOnceWith(mockChildSessionId, { signal: abortController.signal })
+      expect(vi.mocked(fetchSessionDetail).mock.calls[0][1]?.signal).toBe(abortController.signal)
       expect(result?.session.id).toBe(mockChildSessionId)
       expect(result?.session.type).toBe('delegate')
       expect(result?.session.parent_session_id).toBe('parent-chat-session-001')
@@ -199,11 +201,11 @@ describe('ADR-057 BDD-71 — drill-down surface reachable and populated for a hi
 
       const loader = (
         (await import('./sessions.$sessionId')).Route as unknown as {
-          loader: (opts: { params: { sessionId: string } }) => Promise<SessionDetail | null>
+          loader: (opts: { params: { sessionId: string }; abortController: AbortController }) => Promise<SessionDetail | null>
         }
       ).loader
 
-      const result = await loader({ params: { sessionId: mockChildSessionId } })
+      const result = await loader({ abortController: new AbortController(), params: { sessionId: mockChildSessionId } })
       expect(result).toBeNull()
     },
   )

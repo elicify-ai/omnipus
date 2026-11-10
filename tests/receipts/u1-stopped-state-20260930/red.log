@@ -1,0 +1,14 @@
+# github.com/elicify-ai/omnipus/pkg/agent [github.com/elicify-ai/omnipus/pkg/agent.test]
+pkg/agent/boot_sweep_test.go:227:58: undefined: session.LifecyclePaused
+pkg/agent/boot_sweep_test.go:259:60: undefined: session.LifecyclePaused
+pkg/agent/boot_sweep_test.go:462:56: undefined: session.LifecyclePaused
+pkg/agent/boot_sweep_test.go:483:28: undefined: session.LifecyclePaused
+pkg/agent/conformance_design_test.go:1534:56: undefined: session.LifecyclePaused
+pkg/agent/conformance_design_test.go:1588:28: undefined: session.LifecyclePaused
+pkg/agent/steer_cancel_test.go:383:28: undefined: session.LifecycleCancelled
+pkg/agent/steer_cancel_test.go:496:11: undefined: session.LifecycleCancelled
+pkg/agent/steer_goal_failure_test.go:85:23: undefined: session.LifecycleTimedOut
+pkg/agent/steer_goal_failure_test.go:92:23: undefined: session.LifecycleCancelled
+pkg/agent/steer_goal_failure_test.go:92:23: too many errors
+FAIL	github.com/elicify-ai/omnipus/pkg/agent [build failed]
+FAIL

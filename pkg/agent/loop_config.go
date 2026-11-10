@@ -68,9 +68,10 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 		return fmt.Errorf("context canceled after registry creation: %w", err)
 	}
 
-	// Apply configurable default agent override on the new registry.
-	if cfg.Agents.Defaults.DefaultAgentID != "" {
-		registry.SetDefaultAgentOverride(cfg.Agents.Defaults.DefaultAgentID)
+	// A registry that could not be built whole (no session store, an agent that
+	// would not construct) is never swapped in over the running one.
+	if err := registry.InitErr(); err != nil {
+		return fmt.Errorf("registry creation failed: %w", err)
 	}
 
 	// Ensure shared tools are re-registered on the new registry
@@ -130,6 +131,8 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	// Re-wire per-turn working-directory injectors on the new registry, same
 	// reasoning: a workspace's core_team can change via hot-reload too.
 	wireWorkingDirInjectors(al, registry)
+	wireModeNoteInjectors(al, registry)
+	wireChannelsInjectors(al, registry)
 
 	// Re-wire per-workspace project-shelf resolvers (ADR-072 R1 fix regression,
 	// live UAT 2026-09-02): this was missing here, so a mounted project's
@@ -138,8 +141,15 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	// real install. Mirror the two siblings above.
 	wireProjectShelfResolvers(al, registry)
 
-	// Atomically swap the config and registry under write lock
-	// This ensures readers see a consistent pair
+	// Expensive registry/provider preparation held no channel order. Validate
+	// the original snapshot at the actual publication, before taking al.mu.
+	unlockPairing, err := al.lockPairingConfigPublication(cfg)
+	if err != nil {
+		return err
+	}
+	// r17 SR-2: the reloaded roster's env values join the masking set.
+	al.bindAgentEnvSensitive(cfg)
+	// Atomically swap the config and registry under write lock.
 	al.mu.Lock()
 	oldRegistry := al.registry
 
@@ -158,6 +168,7 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 	)
 
 	al.mu.Unlock()
+	unlockPairing()
 
 	al.hookRuntime.reset(al)
 	configureHookManagerFromConfig(al.hooks, cfg)
@@ -226,6 +237,10 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 // and cfg.RegisterSensitiveValues before SwapConfig — this method only does
 // the atomic pointer swap.
 func (al *AgentLoop) SwapConfig(newCfg *config.Config) {
+	if newCfg != nil {
+		// r17 SR-2: the published roster's env values join the masking set.
+		al.bindAgentEnvSensitive(newCfg)
+	}
 	al.mu.Lock()
 	al.cfg = newCfg
 	// DEFECT 2 fix (concurrency review): bump configGen so a concurrent
@@ -275,6 +290,9 @@ func (al *AgentLoop) MutateConfig(fn func(*config.Config) error) error {
 	if err := fn(clone); err != nil {
 		return err
 	}
+	// r17 SR-2: a roster change adds or removes stored env values from the
+	// masking set before the clone goes live.
+	al.bindAgentEnvSensitive(clone)
 	// Publish via pointer-swap + configGen bump — the SAME shape SwapConfig
 	// (al.cfg replace alone) and ReloadProviderAndConfig (al.cfg + al.registry)
 	// use — so a concurrent UpsertAgentFast sees this change via its configGen
@@ -285,7 +303,7 @@ func (al *AgentLoop) MutateConfig(fn func(*config.Config) error) error {
 }
 
 // ApplyAgentModel switches a live agent instance to a new primary model in
-// place — rebuilding its provider, candidate chain, and thinking level under
+// place — rebuilding its provider and candidate chain under
 // the instance lock WITHOUT recreating the instance. This preserves the agent's
 // in-memory conversation state and avoids a config hot-reload that would drop
 // the WebSocket (#73). The new model must already be persisted to config (the
@@ -293,6 +311,16 @@ func (al *AgentLoop) MutateConfig(fn func(*config.Config) error) error {
 // previous primary model. Shared by the switch_model tool and the
 // PUT /api/v1/agents/{id} model-change path.
 func (al *AgentLoop) ApplyAgentModel(agentID, model string) (string, error) {
+	return al.ApplyAgentModelPair(agentID, "", model)
+}
+
+// ApplyAgentModelPair is ApplyAgentModel for an exact (provider, model) pair
+// (effort-levels S-15): a nonblank provider pins the primary candidate to that
+// configured row instead of resolving the bare model name, so two providers
+// offering the same model name never route to the wrong one. A blank provider
+// is exactly ApplyAgentModel.
+func (al *AgentLoop) ApplyAgentModelPair(agentID, provider, model string) (string, error) {
+	provider = strings.TrimSpace(provider)
 	model = strings.TrimSpace(model)
 	if model == "" {
 		return "", fmt.Errorf("model is required")
@@ -306,7 +334,7 @@ func (al *AgentLoop) ApplyAgentModel(agentID, model string) (string, error) {
 	cfg := al.cfg
 	al.mu.RUnlock()
 
-	modelCfg, err := resolvedModelConfig(cfg, model, agent.Home)
+	modelCfg, err := ResolveModelPairCfg(cfg, provider, model, agent.Home)
 	if err != nil {
 		return "", err
 	}
@@ -314,7 +342,7 @@ func (al *AgentLoop) ApplyAgentModel(agentID, model string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to initialize model %q: %w", model, err)
 	}
-	nextCandidates := resolveModelCandidatesForAgent(cfg, cfg.Agents.Defaults.DefaultModel.Provider, modelCfg.Model, agent)
+	nextCandidates := switchCandidates(cfg, provider, modelCfg.Model, agent)
 	if len(nextCandidates) == 0 {
 		return "", fmt.Errorf("model %q did not resolve to any provider candidates", model)
 	}
@@ -339,7 +367,6 @@ func (al *AgentLoop) ApplyAgentModel(agentID, model string) (string, error) {
 	agent.Model = model
 	agent.Provider = nextProvider
 	agent.Candidates = nextCandidates
-	agent.ThinkingLevel = parseThinkingLevel(modelCfg.ThinkingLevel)
 	agent.applyWindowResolutionLocked(window)
 	// From the CONFIGURED max_tokens, never from the current (possibly
 	// already-clamped) field: the clamp only lowers, so re-feeding its own
@@ -356,7 +383,7 @@ func (al *AgentLoop) ApplyAgentModel(agentID, model string) (string, error) {
 	// while the model field still says OLD. Holding the lock across the
 	// full tuple flip makes (Model, Provider, Candidates, ProviderPool) a
 	// single coherent swap from any reader's perspective.
-	agent.StoreProviderPool(newBuild.pool)
+	agent.storeProviderPoolBuild(newBuild)
 	// ADR-067 FR-016: the degrade is part of the model identity too — a
 	// switch onto a provider the catalog does not know must leave the agent
 	// refusing turns, and a switch OFF one must clear the refusal without a

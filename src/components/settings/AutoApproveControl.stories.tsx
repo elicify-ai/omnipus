@@ -16,7 +16,7 @@ import { AutoApproveControl } from './SecuritySection'
  * Seeds ['sandbox-config'], ['sandbox-status'] and ['app-state'] directly
  * into a react-query cache (`staleTime: Infinity` — a static Storybook
  * build has no backend to refetch from), the same approach
- * ChatModeBadge.stories.tsx uses, rather than mocking `fetch`.
+ * the other Auto-approve stories use, rather than mocking `fetch`.
  */
 
 function sandboxStatus(overrides: Partial<SandboxStatus> = {}): SandboxStatus {

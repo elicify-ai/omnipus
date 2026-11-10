@@ -14,6 +14,7 @@ import { render, screen } from '@testing-library/react'
 import type { BrowserLiveWsCallbacks } from '@/lib/browserLiveWs'
 import { queryClient } from '@/lib/queryClient'
 import type { Agent } from '@/lib/api'
+import { makeAgent } from '@/test/factories'
 
 const { callbacksRef } = vi.hoisted(() => ({
   callbacksRef: { current: null as BrowserLiveWsCallbacks | null },
@@ -52,10 +53,12 @@ import { BrowserLiveView } from './BrowserLiveView'
  * is about: Jim has an icon, Ray has only a colour (exercises the initial
  * fallback). Both are valid concurrent browser-using agents per ADR-043. */
 function seedAgents() {
-  const agents = [
-    { id: 'jim', name: 'Jim', color: '#D4AF37', icon: 'compass' },
-    { id: 'ray', name: 'Ray', color: '#3B82F6', icon: undefined },
-  ] as unknown as Agent[]
+  const agents: Agent[] = [
+    // Agent-first navigation spec DS-I/I03; palette re-coloured by the
+    // founder's 2026-10-11 avatar palette decision (AVATAR-PALETTE-DECISION.md).
+    makeAgent({ id: 'jim', name: 'Jim', color: '#A97142' }),
+    makeAgent({ id: 'ray', name: 'Ray', color: '#6E8BA8' }),
+  ]
   queryClient.setQueryData(['agents'], agents)
 }
 

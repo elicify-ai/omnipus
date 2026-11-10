@@ -9,7 +9,6 @@ import {
   CheckCircle,
   XCircle,
   User,
-  Star,
   ChatCircle,
   Key,
   Eye,
@@ -21,10 +20,12 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { ModelSelector } from '@/components/ui/model-selector'
+import { QuietEffortLine } from '@/components/ui/model-effort-picker'
 import type { ModelCatalogGroup } from '@/lib/providerModelGroups'
-import { probeProvider, completeOnboardingTransaction, fetchAppState, isApiError } from '@/lib/api'
+import { probeProvider, completeOnboardingTransaction } from '@/lib/api'
+import { isApiError } from '@/lib/api-error'
 import { providersCatalogQueryOptions } from '@/lib/providersCatalogQuery'
-import OmnipusAvatar from '@/assets/logo/omnipus-avatar.svg?url'
+import { OMNIPUS_MARK_URL as OmnipusAvatar } from '@/lib/brandAssets'
 import { useUiStore } from '@/store/ui'
 import { useAuthStore, hasStoredSession } from '@/store/auth'
 import { queryClient } from '@/lib/queryClient'
@@ -140,25 +141,6 @@ export const ONBOARDING_MODEL_LABEL = 'Default model'
 // parity, asserted in onboarding-settings-parity.test.tsx). That lookup is
 // `catalogEntryById` in `@/lib/catalogDisplay` — one exact-match helper shared
 // with Settings (ADR-067 FR-011), never a second copy here.
-
-/**
- * The CLI binary name a sign-in row drives (`codex`, `copilot`), used for the
- * FR-036 / §8b hint *"`codex` not found on this machine"*. Undefined for a
- * sign-in row that is not CLI-backed (device-code providers own no binary).
- */
-export function cliBinaryName(entry: CatalogProvider | undefined): string | undefined {
-  return entry?.cli_kind
-}
-
-/**
- * True when a failed sign-in probe failed because the vendor CLI is not on
- * PATH, rather than because nobody is signed in. The gateway reports the two
- * differently in prose; the SPA must not conflate them, because the fix is
- * different (install the CLI vs run its login command).
- */
-export function probeErrorIsMissingCli(message: string): boolean {
-  return /not found|not installed|no such file|executable file not found/i.test(message)
-}
 
 // Lightweight, dependency-free password strength heuristic (LOCAL MODE ONLY —
 // WP5, ADR-0010, restored verbatim from upstream merge base 184d7247 for the
@@ -370,6 +352,9 @@ function OnboardingWizard() {
   // FR-029: no model is pre-selected, ever. This starts empty and only the
   // operator's own pick fills it.
   const [selectedModel, setSelectedModel] = useState('')
+  // Effort levels US-11 AS3 / FR-067: the first default's effort, stored by
+  // the completion transaction itself ('' = Provider default, field omitted).
+  const [selectedEffort, setSelectedEffort] = useState('')
   const [probeStatus, setProbeStatus] = useState<TestStatus>('idle')
   const [probeError, setProbeError] = useState('')
   // The model the LAST successful probe actually exercised (FR-036's
@@ -531,6 +516,8 @@ function OnboardingWizard() {
   // explicit *Check connection* button runs the probe.
   const handleSelectModel = (model: string, autoProbe: boolean) => {
     setSelectedModel(model)
+    // Effort levels FR-067: an effort belongs to the model it was chosen for.
+    setSelectedEffort('')
     resetProbe()
     if (autoProbe && model.trim()) void runProbe(model)
   }
@@ -601,6 +588,7 @@ function OnboardingWizard() {
               auth_method: 'sign_in',
               id: selection.providerId,
               model: selectedModel,
+              ...(selectedEffort ? { reasoning_effort: selectedEffort } : {}),
               ...(selection.apiBase ? { endpoint: selection.apiBase } : {}),
             }
           : {
@@ -608,8 +596,13 @@ function OnboardingWizard() {
               id: selection.providerId,
               api_key: selection.apiKey,
               model: selectedModel,
+              ...(selectedEffort ? { reasoning_effort: selectedEffort } : {}),
               ...(selection.apiBase ? { endpoint: selection.apiBase } : {}),
               ...(selection.awsRegion ? { region: selection.awsRegion } : {}),
+              // #1700: only the Custom endpoint path sets `protocol`; with it the
+              // server saves a custom row. A catalog row never carries one (the
+              // server refuses `protocol` on a catalog id).
+              ...(selection.protocol ? { protocol: selection.protocol } : {}),
             }
       const resp = await completeOnboardingTransaction({
         provider,
@@ -840,6 +833,8 @@ function OnboardingWizard() {
                 onChangeProvider={handleChangeProvider}
                 selectedModel={selectedModel}
                 onSelectModel={handleSelectModel}
+                selectedEffort={selectedEffort}
+                onSelectEffort={setSelectedEffort}
                 probeStatus={probeStatus}
                 probeError={probeError}
                 probedModel={probedModel}
@@ -1359,6 +1354,8 @@ function ProviderStep({
   onChangeProvider,
   selectedModel,
   onSelectModel,
+  selectedEffort,
+  onSelectEffort,
   probeStatus,
   probeError,
   probedModel,
@@ -1380,6 +1377,8 @@ function ProviderStep({
   onChangeProvider: () => void
   selectedModel: string
   onSelectModel: (model: string, autoProbe: boolean) => void
+  selectedEffort: string
+  onSelectEffort: (effort: string) => void
   probeStatus: TestStatus
   probeError: string
   probedModel: string
@@ -1415,10 +1414,6 @@ function ProviderStep({
   const isLocal = entry?.locality === 'local'
   // The connection probe's own state (idle/testing/success/error), not a task status.
   const isProbeError = probeStatus === 'error'
-  const missingCli =
-    signIn && isProbeError && probeErrorIsMissingCli(probeError)
-      ? cliBinaryName(entry)
-      : undefined
 
   // FR-029: Finish needs a model AND a passed probe FOR THAT MODEL.
   const modelChosen = selectedModel.trim() !== ''
@@ -1566,6 +1561,13 @@ function ProviderStep({
                 ? 'Your first agent starts on this model. You can change it later.'
                 : 'Enter the model slug for this provider (e.g. MiniMax-M2.7)'}
             </p>
+            <QuietEffortLine
+              scope="onboarding"
+              catalog={catalog}
+              value={{ provider: selection.providerId, model: selectedModel, effort: selectedEffort }}
+              onChange={onSelectEffort}
+              data-testid="onboarding-effort"
+            />
           </div>
 
           {/* ── The probe of the chosen auth method ──────────────────────── */}
@@ -1607,14 +1609,7 @@ function ProviderStep({
               <div className="min-w-0 space-y-[var(--space-1)]">
                 <span>
                   <span className="sr-only">Error: </span>
-                  {missingCli ? (
-                    <span data-testid="onboarding-cli-missing">
-                      <code>{missingCli}</code> not found on this machine — install it, then check
-                      again.
-                    </span>
-                  ) : (
-                    friendlyProbeError(probeError, providerDisplayName)
-                  )}
+                  {friendlyProbeError(probeError, providerDisplayName)}
                 </span>
                 {probeError && (
                   <details className="text-[length:var(--type-utility-xs-size)]" style={{ color: 'var(--color-muted)' }}>
@@ -1769,17 +1764,11 @@ function MeetAssistantStep({ onStartChatting }: { onStartChatting: () => void })
         animate={{ y: 0, opacity: 1 }}
         transition={{ delay: 0.18, duration: 0.38 }}
       >
-        <div className="flex items-center justify-center gap-[var(--space-2)] mb-[var(--space-2)]">
+        <div className="flex items-center justify-center mb-[var(--space-2)]">
           <h1 className="font-headline text-3xl sm:text-4xl font-bold leading-tight"
             style={{ color: 'var(--color-secondary)' }}>
             Mia — Assistant
           </h1>
-          <Star
-            size={22}
-            weight="fill"
-            style={{ color: 'var(--color-accent)' }}
-            aria-label="Default agent"
-          />
         </div>
         <p className="font-headline text-[length:var(--type-body-compact-size)] font-bold tracking-wide"
           style={{ color: 'var(--color-accent)' }}>
@@ -1816,8 +1805,8 @@ function MeetAssistantStep({ onStartChatting }: { onStartChatting: () => void })
         className="w-full"
       >
         <p className="text-[length:var(--type-body-compact-size)] leading-relaxed mb-[var(--space-4)]" style={{ color: 'var(--color-muted)' }}>
-          Mia is your default agent. She&apos;s bound to My Workspace and knows you
-          across all your workspaces. Start chatting to begin.
+          Mia is on the team of My Workspace, where Start chatting takes you. She
+          knows you across all your workspaces.
         </p>
         <Button
           className="w-full h-11 gap-[var(--space-2)] font-headline font-bold text-base"
@@ -1850,6 +1839,7 @@ export const Route = createFileRoute('/onboarding')({
     // platform server always answers identity.mode: 'platform' (ADR-0010
     // WP1's fail-closed edition stamp), so an unauthenticated platform
     // caller still takes this gate below.
+    const { fetchAppState } = await import('@/lib/api')
     try {
       const state = await fetchAppState()
       const onboardingAuthMode = readOnboardingAuthMode(state)

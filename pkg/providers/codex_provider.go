@@ -4,13 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
+	"github.com/openai/openai-go/v3/shared"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/providers/effortdialect"
 	orc "github.com/elicify-ai/omnipus/pkg/providers/openai_responses_common"
 )
 
@@ -29,11 +32,27 @@ type CodexProvider struct {
 const defaultCodexInstructions = "You are Codex, a coding assistant."
 
 func NewCodexProvider(token, accountID string) *CodexProvider {
+	return newCodexProviderWithBaseURL(token, accountID, "https://chatgpt.com/backend-api/codex")
+}
+
+// newCodexProviderWithBaseURL is the construction seam behind
+// NewCodexProvider: every shared client option lives here — including D13's
+// option.WithMaxRetries(0) — so the retry posture cannot drift between the
+// production constructor and a test pointing the provider at a local
+// request-counting server. apiBase is the Codex backend base URL verbatim.
+func newCodexProviderWithBaseURL(token, accountID, apiBase string) *CodexProvider {
 	opts := []option.RequestOption{
-		option.WithBaseURL("https://chatgpt.com/backend-api/codex"),
+		option.WithBaseURL(apiBase),
 		option.WithAPIKey(token),
 		option.WithHeader("originator", "codex_cli_rs"),
 		option.WithHeader("OpenAI-Beta", "responses=experimental"),
+		// D13: the chain owns every retry decision (§7.4's in-chain
+		// rate-limit loop reads the provider's own retry-after fact). An
+		// SDK-internal retry would double-attack a rate-limited candidate
+		// and hide the boundary error whose headers carry the retry-after
+		// fact — so the SDK's default 2 retries are disabled here and the
+		// boundary error reaches the chain verbatim.
+		option.WithMaxRetries(0),
 	}
 	if accountID != "" {
 		opts = append(opts, option.WithHeader("Chatgpt-Account-Id", accountID))
@@ -102,20 +121,31 @@ func (p *CodexProvider) Chat(
 	// loop passes options["native_search"]=true, so prefer_native=false means no injection.
 	useNativeSearch := p.enableWebSearch && (options["native_search"] == true)
 	params := buildCodexParams(messages, tools, resolvedModel, options, useNativeSearch)
+	// ChatGPT derives cache affinity from session-id, not just the body key:
+	// https://github.com/openai/codex/commit/bc5957eac9e89e66f990ed490d11e625a4a3b02c
+	// Reuse the conversation key, never credentials or message content. Keep it
+	// request-scoped because this client is shared by multiple conversations.
+	if cacheKey := params.PromptCacheKey.Or(""); cacheKey != "" {
+		opts = append(opts, option.WithHeader("session-id", cacheKey))
+	}
 
 	stream := p.client.Responses.NewStreaming(ctx, params, opts...)
 	defer stream.Close()
 
 	var resp *responses.Response
+	var streamed codexStreamedOutput
 	for stream.Next() {
 		evt := stream.Current()
-		if evt.Type == "response.completed" || evt.Type == "response.failed" ||
-			evt.Type == "response.incomplete" {
+		streamed.countEvent(evt.Type)
+		switch evt.Type {
+		case "response.completed", "response.failed", "response.incomplete":
 			evtResp := evt.Response
 			if evtResp.ID != "" {
 				evtRespCopy := evtResp
 				resp = &evtRespCopy
 			}
+		case "response.output_item.done":
+			streamed.addItem(evt.OutputIndex, evt.Item)
 		}
 	}
 	err := stream.Err()
@@ -139,11 +169,11 @@ func (p *CodexProvider) Chat(
 				fields["hint"] = "verify account id header and model compatibility for codex backend"
 			}
 			if apiErr.Response != nil {
-				fields["request_id"] = apiErr.Response.Header.Get("x-request-id")
+				fields["request_id"] = apiErr.Response.Header.Get("X-Request-ID")
 			}
 		}
 		logger.ErrorCF("provider.codex", "Codex API call failed", fields)
-		return nil, fmt.Errorf("codex API call: %w", err)
+		return nil, fmt.Errorf("codex API call: %w", normalizeSDKError(err))
 	}
 	if resp == nil {
 		fields := map[string]any{
@@ -161,7 +191,86 @@ func (p *CodexProvider) Chat(
 		return nil, fmt.Errorf("codex API call: stream ended without completed response")
 	}
 
-	return orc.ParseResponseFromStruct(resp)
+	source := streamed.fillEmptyOutput(resp, resolvedModel)
+	parsed, err := orc.ParseResponseFromStruct(resp)
+	if parsed != nil {
+		parsed.Diagnostics = streamed.diagnostics(resp, source)
+	}
+	return parsed, err
+}
+
+// codexStreamedOutput collects the output items as the stream delivers them
+// (provider hotfix H5). CAPTURED 2026-10-13 from the real
+// chatgpt.com/backend-api/codex stream (gpt-6.1-sol): whenever the request
+// carries tools, the backend closes with a `response.completed` whose
+// `output` is EMPTY, and the answer — a message, or a function_call — exists
+// only in the earlier `response.output_item.done` events. Reading only the
+// completed event dropped the whole answer ("The model returned an empty
+// response"). A no-tools request still carries its output in the completed
+// event, which is why a tiny scratch agent kept working.
+type codexStreamedOutput struct {
+	items   map[int64]responses.ResponseOutputItemUnion
+	ordered []int64
+	events  map[string]int
+}
+
+func (s *codexStreamedOutput) countEvent(eventType string) {
+	if s.events == nil {
+		s.events = make(map[string]int)
+	}
+	s.events[eventType]++
+}
+
+// diagnostics is the content-free shape summary the agent loop logs when an
+// answer comes back empty (provider hotfix H5): event types and counts,
+// output item types, where the output came from, status and incomplete
+// reason. No text, no arguments, no identifiers beyond item TYPES.
+func (s *codexStreamedOutput) diagnostics(resp *responses.Response, source string) *ResponseDiagnostics {
+	d := &ResponseDiagnostics{EventCounts: s.events, OutputSource: source}
+	if resp != nil {
+		for _, item := range resp.Output {
+			d.OutputItemTypes = append(d.OutputItemTypes, item.Type)
+		}
+		d.Status = string(resp.Status)
+		d.IncompleteReason = resp.IncompleteDetails.Reason
+	}
+	return d
+}
+
+func (s *codexStreamedOutput) addItem(index int64, item responses.ResponseOutputItemUnion) {
+	if s.items == nil {
+		s.items = make(map[int64]responses.ResponseOutputItemUnion)
+	}
+	if _, seen := s.items[index]; !seen {
+		s.ordered = append(s.ordered, index)
+	}
+	s.items[index] = item
+}
+
+// fillEmptyOutput gives resp the streamed output items when — and only
+// when — the terminal event carried none. A non-empty terminal output stays
+// authoritative, so nothing is ever counted twice. Items are placed in
+// output_index order.
+//
+// It returns where the response's output now comes from: "completed",
+// "output_item.done", or "none".
+func (s *codexStreamedOutput) fillEmptyOutput(resp *responses.Response, model string) string {
+	if resp == nil {
+		return "none"
+	}
+	if len(resp.Output) > 0 {
+		return "completed"
+	}
+	if len(s.items) > 0 {
+		sort.Slice(s.ordered, func(i, j int) bool { return s.ordered[i] < s.ordered[j] })
+		for _, idx := range s.ordered {
+			resp.Output = append(resp.Output, s.items[idx])
+		}
+		logger.DebugCF("provider.codex", "Completed event carried no output; using streamed output items",
+			map[string]any{"resolved_model": model, "items": len(s.items)})
+		return "output_item.done"
+	}
+	return "none"
 }
 
 func (p *CodexProvider) GetDefaultModel() string {
@@ -249,5 +358,29 @@ func buildCodexParams(
 		params.Tools = orc.TranslateTools(tools, enableWebSearch)
 	}
 
+	// Effort (effort-levels spec S-17, S-89): reasoning {effort} levels only.
+	// No output-token limit is ever sent on this route (TD-2).
+	effortdialect.Report(options, applyCodexEffort(&params, model, effortdialect.Requested(options)))
+
 	return params
+}
+
+// applyCodexEffort places a resolved effort level on the Responses body and
+// returns what was sent. The ChatGPT-login route encodes levels only: a
+// switch value (on/off) is not sendable and nothing is sent (not_supported).
+func applyCodexEffort(params *responses.ResponseNewParams, model, v string) effortdialect.Sent {
+	if v == "" {
+		return effortdialect.Sent{}
+	}
+	r := effortdialect.Route{
+		Protocol:    effortdialect.ProtocolOpenAIResponses,
+		ProviderID:  "openai-chatgpt",
+		ModelFamily: effortdialect.FamilyOf(effortdialect.ProtocolOpenAIResponses, model),
+	}
+	enc, ok := effortdialect.Default().EncodingFor(r)
+	if !ok || !enc.Levels || effortdialect.IsSwitchValue(v) {
+		return effortdialect.Sent{Reason: effortdialect.ReasonNotSupported}
+	}
+	params.Reasoning = shared.ReasoningParam{Effort: shared.ReasoningEffort(v)}
+	return effortdialect.Sent{Value: v}
 }

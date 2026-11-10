@@ -494,6 +494,9 @@ func TestHealthCheck_RunsOnScheduleAndOnlyReportsFailures(t *testing.T) {
 	if err := b4WaitRun(t, runs); err != nil {
 		t.Fatalf("run after the mutation failed: %v", err)
 	}
+	// OnRun precedes Notify. Join the watcher before inspecting notifications
+	// so these assertions observe the completed run, not its earlier signal.
+	h.Stop()
 
 	mu.Lock()
 	defer mu.Unlock()

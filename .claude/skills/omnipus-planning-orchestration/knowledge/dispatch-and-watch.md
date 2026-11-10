@@ -1,0 +1,100 @@
+# Dispatch and watch — keep workers observable and resumable
+
+Last reviewed: 2026-10-29 — controller located in the coordination repo, pod launch notes
+Process version: 2026-10-29.1
+
+Mechanics for the planning loop's "Dispatch and watch" step. Launcher selection stays
+in the personal rules, outside this repo; set `OMNIPUS_WORKER_CLI` from those rules
+explicitly rather than relying on the controller's default.
+
+**Where the controller lives.** The controller is the coordination repo's
+`tools/steerable_worker_current_turn.py` (`$OMNIPUS_COORDINATION_DIR/tools/`; the
+founder's Mac keeps the older copy under its coordination directory). Mac and pod paths
+differ; see root `CLAUDE.md` ("Running CLI agents"). `$CONTROLLER` below stands for the
+resolved absolute path. The coordination repo notes that the controller and slot runner
+still contain Mac paths: inspect it before use on a pod and report BLOCKED if a Mac-only
+path would be used. On a pod, launch with the pod's launchers named in the personal
+rules and run heavy commands through `/usr/local/bin/heavy`.
+
+## Pre-flight before a long run or resume
+
+Read root `CLAUDE.md` ("Feature ownership" under "Subagent Workflow", and "Running CLI
+agents") and `knowledge/capacity-check.md`. Record the named feature/area owner, lane,
+absolute worktree, provider quota/balance receipt and authorized routing choice.
+Keep related scope with its capable owner; contained jobs and UAT lanes use the
+personal-layer routing. Model names and launcher choices stay outside repo assets.
+
+Controller locks, load refusal, local-receipt quota pre-flight and worker-owned
+process-group stop are **implemented** in the controller invoked below. Read its
+`lock_paths`, `acquire_lock`, `quota_refusal` and `main` before changing the launch
+procedure. Every launch keeps its output-base lock; ordinary worktrees also get
+a working-directory lock with live-PID checks. Exactly the shared launch roots (the
+Omnipus checkout root and the coordination repo root) skip that directory lock, not the output-base, load or quota gates. Workers launched there still create
+their own writer worktrees; never use the exemption to edit the shared checkout or
+resume over a live predecessor.
+
+The quota check reads recent local receipts/streams, not a live balance endpoint;
+no known failure is not proof of remaining capacity. Record Unknown when reliable
+quota/balance information is unavailable. Save controller output and its direct
+exit code: 3 means ownership refusal, 4 load refusal, 5 quota refusal. A refusal is
+not a completed worker result. If this installed controller cannot be read or run,
+report BLOCKED rather than substituting manual checks or deleting a live lock.
+
+## Launch with retained control
+
+Use the existing controller with the role, absolute worktree path, brief file and a
+unique, extension-less output base (absolute paths for both files):
+
+```bash
+OMNIPUS_WORKER_CLI="$WORKER_LAUNCHER" python3 -I "$CONTROLLER" "$ROLE" "$WORKTREE" "$BRIEF" "$OUTPUT_BASE"
+```
+
+It retains streamed input/output and writes `.stream.jsonl`, `.control.jsonl` and
+`.receipt.json` beside the output base. Record those paths and the worker's `session_id`
+as soon as the stream emits it. Give the worker no deadline or cap; keep it running
+until done, and intervene through control rather than killing it by the clock.
+
+## Arm the watcher at dispatch, then steer
+
+Use the Monitor tool on that exact `.stream.jsonl` with this watch pattern:
+**current-turn result / error / no output for 15 minutes**. Keep the watcher armed while
+the worker runs; re-arm it if it ends. Inspect recent progress on each alert, then
+review the result or steer drift, hangs or overreach. Fifteen minutes of silence is a
+check-and-steer signal, not a worker deadline. Check the controller's current-turn
+receipt before accepting a result: a resumed stream can replay old results.
+
+Append a newline-terminated user message to that worker's `.control.jsonl` to steer:
+
+```json
+{"type":"user","message":{"role":"user","content":"Stay within the brief; report what is blocking the next step."}}
+```
+
+For Agent-tool workers, observe their progress and use `SendMessage` to the original
+worker for steering and resuming. New work goes directly to specialists; a separate
+team-lead session running an independent stream uses its own foreground goal-loop wait.
+
+## Resume the same session
+
+If unfinished work stops or disconnects, confirm the old process and its children
+have exited and the lane/worktree are free, then run
+the controller with the same role and worktree, a follow-up brief and a fresh output
+base; the **fifth argument is the original session id**:
+
+```bash
+OMNIPUS_WORKER_CLI="$WORKER_LAUNCHER" python3 -I "$CONTROLLER" "$ROLE" "$WORKTREE" "$FOLLOW_UP" "$NEW_OUTPUT_BASE" "$SESSION_ID"
+```
+
+Arm a watcher on the new stream immediately. Resume the worker in its own session with
+its context intact, rather than replacing it with a fresh worker.
+
+On a quota/balance failure, save the provider receipt and follow the personal-layer
+next-tier rule immediately. Carry the original session id when supported, plus the
+latest committed SHA, ledger state, evidence and next unfinished step. If the next
+provider cannot resume that session id, restore that saved state explicitly; do not
+restart the task from zero or discard work. A capability routing exception needs the
+founder, not a silently skipped healthy ladder tier.
+
+On an explicit stop, use the controller's worker-owned process-group stop and verify
+that the parent and children are gone before releasing ownership. Do not apply this
+local-worker rule to shared Fly machines; their stop safety is documented separately
+in `deploy/ci-worker/CLAUDE.md`.

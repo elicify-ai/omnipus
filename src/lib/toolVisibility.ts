@@ -40,6 +40,8 @@
 //     getBoolArg(), whose zero value (missing/non-bool) is `false` — i.e.
 //     bash is foreground-by-default.
 
+import type { Message as WireMessage } from '@/lib/api/generated/openapi-types'
+
 /** Narrow an unknown params bag to a string field, honoring only real strings. */
 function paramString(params: Record<string, unknown> | undefined, key: string): string | undefined {
   const value = params?.[key]
@@ -193,15 +195,6 @@ export function shouldRenderToolCall(
     // stays a readable, exhaustive table — a future reader can see at a
     // glance these were a deliberate inclusion, not an oversight.
 
-    case 'switch_agent':
-      // ADR-071 D4: `hand_off` and `return_to_default` are merged into one
-      // tool, `switch_agent(target, note?)`. Both predecessors were always
-      // visible (no isError exception, no params-based branching) in this
-      // classifier, so the merge needs no reconciliation here — it is a
-      // straight rename of one always-visible case, asserted explicitly
-      // (rather than left to the `default:` fallthrough, which happens to
-      // fail open into the same `true`) per ADR-071 §5.2.2c.
-      return true
     case 'remember':
     case 'get_usage':
     case 'run_doctor':
@@ -239,4 +232,12 @@ export function shouldRenderToolCall(
  */
 export function shouldRenderJudgeVerdictInThread(verboseChatEnabled: boolean): boolean {
   return verboseChatEnabled
+}
+
+/** Q33: retain classified diagnostics in state; hide them only at rendering. */
+export function shouldRenderContextWindowNoticeInThread(
+  messageType: WireMessage['type'],
+  verboseChatEnabled: boolean,
+): boolean {
+  return messageType !== 'context_window_notice' || verboseChatEnabled
 }

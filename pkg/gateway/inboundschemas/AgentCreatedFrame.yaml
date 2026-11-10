@@ -1,0 +1,41 @@
+title: AgentCreatedFrame
+description: >
+  Server → client. Emitted after a new agent is durably persisted (REST
+  POST /api/v1/agents, or the create_agent tool — an agent creating another
+  agent mid-conversation), so every connected tab's Agent Picker can drop its
+  stale agent list without waiting out the query's staleTime or needing a
+  reload. Before this frame existed, `useChatAgents`' `['agents']` query
+  (src/hooks/useChatAgents.ts) inherited the 30s global staleTime
+  (src/lib/queryClient.ts) with no invalidation hook outside the
+  CreateAgentModal's own REST call — the create_agent tool path, and every
+  OTHER open tab regardless of which path created the agent, saw nothing new
+  for up to 30 seconds.
+
+  Scope is deliberately coarse, mirroring D-107's LibraryChangedFrame:
+  clients invalidate the whole `['agents']` query and let it refetch, rather
+  than trying to splice one new row into the cache. `agent_id` is
+  informational (debugging, future refinement) — never a scoping
+  instruction; the Agent Picker has no per-agent view to scope to.
+
+  Broadcast, not addressed: the single-user model fans this out to every
+  connected client, including the tab that performed the create — its own
+  local state (or lack of an invalidation hook, for the create_agent tool
+  path) makes a redundant invalidate a no-op.
+type: object
+required:
+  - type
+  - agent_id
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: agent_created
+  agent_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: >
+      The newly created agent's ID. Informational only — never a scoping
+      instruction (see the frame description); clients invalidate the
+      entire ['agents'] listing query regardless of which agent id
+      triggered the frame.

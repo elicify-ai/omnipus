@@ -22,9 +22,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"golang.org/x/net/http2"
-
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/providers/promptcache"
 	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 )
 
@@ -57,6 +56,29 @@ const DefaultStreamStallTimeout = 5 * time.Minute
 // flows through the normal provider-error classification as a retryable,
 // provider-attributed fault (network-class), never as a turn timeout.
 var ErrStreamStalled = errors.New("provider stream stalled: no data received for the silence limit")
+
+// ErrStreamProviderError is the sentinel for a streaming call whose provider
+// ended the response with an error AFTER the 200 was committed (OpenRouter's
+// mid-stream error chunk: a top-level `error` object plus finish_reason
+// "error"). What had streamed so far - reasoning, a preamble that announces a
+// tool call - is NOT an answer, and the tool call that was coming never
+// arrived. Issue #1278.
+var ErrStreamProviderError = errors.New("provider ended the response with an error")
+
+// StreamProviderError carries the provider's code and message and the usage the
+// failed attempt was billed for. match with errors.Is(err, ErrStreamProviderError).
+type StreamProviderError struct {
+	Code    string
+	Message string
+	Usage   *UsageInfo
+}
+
+func (e *StreamProviderError) Error() string {
+	return fmt.Sprintf("%s (%s: %s)", ErrStreamProviderError.Error(), e.Code, e.Message)
+}
+
+// Unwrap makes errors.Is(err, ErrStreamProviderError) work through every wrap.
+func (e *StreamProviderError) Unwrap() error { return ErrStreamProviderError }
 
 // StallError carries the sentinel together with how long the stream had been
 // silent when the monitor fired, so the operator-facing message can state the
@@ -162,6 +184,12 @@ func WatchStreamStall(ctx context.Context, closeBody func(), silentFor time.Dura
 	timer := time.NewTimer(silentFor)
 	done := make(chan struct{})
 	var fired atomic.Bool
+	// Issue #1478: report the stream start and every consumed event to the
+	// caller's observer, if any (the silence notice; the limit is unchanged).
+	activity := streamActivityFrom(ctx)
+	if activity != nil {
+		activity(silentFor)
+	}
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -183,6 +211,9 @@ func WatchStreamStall(ctx context.Context, closeBody func(), silentFor time.Dura
 				}
 			}
 			timer.Reset(silentFor)
+			if activity != nil {
+				activity(silentFor)
+			}
 		},
 		stop: func() {
 			timer.Stop()
@@ -203,7 +234,7 @@ func WatchStreamStall(ctx context.Context, closeBody func(), silentFor time.Dura
 // connection the server has since GOAWAY'd/closed. Because tokens have already
 // streamed, the agent loop can't safely inline-retry (would duplicate text), so a
 // single reset aborts the whole turn. The fix is to make h2 connection reuse
-// robust: enable health-check PINGs (ReadIdleTimeout) so a dead connection is
+// robust: enable health-check PINGs (SendPingTimeout) so a dead connection is
 // detected and discarded instead of reused, and shorten the idle window so stale
 // connections age out quickly.
 func NewHTTPClient(proxy string) (*http.Client, error) {
@@ -226,13 +257,22 @@ func NewHTTPClient(proxy string) (*http.Client, error) {
 	// Age stale pooled connections out quickly (default is 90s).
 	transport.IdleConnTimeout = 30 * time.Second
 
-	// Configure the HTTP/2 transport with health-check pings: if a pooled
-	// connection is idle for ReadIdleTimeout, send a PING; if no PONG arrives
-	// within PingTimeout, mark the connection dead so it is not reused mid-stream.
-	// This eliminates the "http2: response body closed" resets on reused conns.
-	if h2t, err := http2.ConfigureTransports(transport); err == nil && h2t != nil {
-		h2t.ReadIdleTimeout = 15 * time.Second
-		h2t.PingTimeout = 5 * time.Second
+	// Hosted edition: dial only addresses the provider endpoint guard accepts
+	// (endpoint_guard.go). A no-op on every other edition.
+	GuardTransport(transport)
+
+	// Enable HTTP/1.1 and HTTP/2 explicitly — the modern replacement for the
+	// deprecated http2.ConfigureTransports — and configure HTTP/2 with
+	// health-check pings: if no frame is received on a pooled connection for
+	// SendPingTimeout, send a PING; if no PONG arrives within PingTimeout, mark
+	// the connection dead so it is not reused mid-stream. This eliminates the
+	// "http2: response body closed" resets on reused conns.
+	transport.Protocols = new(http.Protocols)
+	transport.Protocols.SetHTTP1(true)
+	transport.Protocols.SetHTTP2(true)
+	transport.HTTP2 = &http.HTTP2Config{
+		SendPingTimeout: 15 * time.Second,
+		PingTimeout:     5 * time.Second,
 	}
 
 	return &http.Client{
@@ -252,6 +292,8 @@ type openaiMessage struct {
 	ReasoningContent string     `json:"reasoning_content,omitempty"`
 	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
 	ToolCallID       string     `json:"tool_call_id,omitempty"`
+	// ReasoningDetails is set only by SerializeOpenRouterMessages (FR-013).
+	ReasoningDetails []ReasoningDetail `json:"reasoning_details,omitempty"`
 }
 
 // SerializeMessages converts internal Message structs to the OpenAI wire format.
@@ -259,6 +301,18 @@ type openaiMessage struct {
 //   - Converts messages with Media to multipart content format (text + image_url parts)
 //   - Preserves ToolCallID, ToolCalls, and ReasoningContent for all messages
 func SerializeMessages(messages []Message) []any {
+	return serializeMessages(messages, false)
+}
+
+// SerializeOpenRouterMessages is SerializeMessages plus each assistant
+// message's private reasoning_details carrier, unchanged (effort-levels spec
+// FR-013, S-30..S-32). Only the OpenRouter route calls it; every other route
+// uses SerializeMessages, which never emits the carrier (S-33).
+func SerializeOpenRouterMessages(messages []Message) []any {
+	return serializeMessages(messages, true)
+}
+
+func serializeMessages(messages []Message, withDetails bool) []any {
 	out := make([]any, 0, len(messages))
 	var pendingToolImages []any
 	for _, m := range messages {
@@ -279,6 +333,10 @@ func SerializeMessages(messages []Message) []any {
 			}
 			continue
 		}
+		var details []ReasoningDetail
+		if withDetails && m.Role == "assistant" {
+			details = m.ReasoningDetails
+		}
 		if len(m.Media) == 0 {
 			out = append(out, openaiMessage{
 				Role:             m.Role,
@@ -286,6 +344,7 @@ func SerializeMessages(messages []Message) []any {
 				ReasoningContent: m.ReasoningContent,
 				ToolCalls:        m.ToolCalls,
 				ToolCallID:       m.ToolCallID,
+				ReasoningDetails: details,
 			})
 			continue
 		}
@@ -348,6 +407,9 @@ func SerializeMessages(messages []Message) []any {
 		if m.ReasoningContent != "" {
 			msg["reasoning_content"] = m.ReasoningContent
 		}
+		if len(details) > 0 {
+			msg["reasoning_details"] = details
+		}
 		out = append(out, msg)
 	}
 	out = append(out, pendingToolImages...)
@@ -376,51 +438,32 @@ func parseDataAudioURL(mediaURL string) (format, data string, ok bool) {
 
 // --- Response parsing ---
 
-// OpenAINonStreamUsage is the intermediate struct for OpenAI-compatible usage
-// objects (both the non-streaming response's top-level "usage" field and a
-// streaming response's final SSE usage chunk share this shape). It captures
-// prompt_tokens_details.cached_tokens to separate uncached prompt tokens from
-// cached ones before populating UsageInfo. Exported so other providers in this
-// package family (e.g. openai_compat's SSE parser) can decode into it directly
-// instead of duplicating the struct and its conversion logic.
+// OpenAINonStreamUsage carries one chat/SSE usage object to the shared
+// normalizer. Raw bytes are private to decoding and never enter logs or stats.
 type OpenAINonStreamUsage struct {
-	PromptTokens        int `json:"prompt_tokens"`
-	CompletionTokens    int `json:"completion_tokens"`
-	TotalTokens         int `json:"total_tokens"`
-	PromptTokensDetails *struct {
-		CachedTokens int `json:"cached_tokens"`
-	} `json:"prompt_tokens_details,omitempty"`
+	raw json.RawMessage
 }
 
-// ToUsageInfo converts a non-streaming usage chunk to UsageInfo.
-// PromptTokens in the result is uncached input only. CacheReadTokens holds the
-// cached portion. CacheWriteTokens stays 0 (OpenAI does not report cache writes).
-func (u *OpenAINonStreamUsage) ToUsageInfo() *UsageInfo {
-	if u == nil {
-		return nil
+func (u *OpenAINonStreamUsage) UnmarshalJSON(data []byte) error {
+	u.raw = append(u.raw[:0], data...)
+	return nil
+}
+
+// ToUsageInfo normalizes a chat or streaming usage chunk for its catalog host.
+func (u *OpenAINonStreamUsage) ToUsageInfo(providerID ...string) (*UsageInfo, error) {
+	var raw []byte
+	if u != nil {
+		raw = u.raw
 	}
-	cachedTokens := 0
-	if u.PromptTokensDetails != nil {
-		cachedTokens = u.PromptTokensDetails.CachedTokens
+	id := ""
+	if len(providerID) > 0 {
+		id = providerID[0]
 	}
-	promptUncached := u.PromptTokens - cachedTokens
-	if promptUncached < 0 {
-		promptUncached = 0
-	}
-	total := u.TotalTokens
-	if total == 0 {
-		total = promptUncached + cachedTokens + u.CompletionTokens
-	}
-	return &UsageInfo{
-		PromptTokens:     promptUncached,
-		CompletionTokens: u.CompletionTokens,
-		CacheReadTokens:  cachedTokens,
-		TotalTokens:      total,
-	}
+	return promptcache.ParseUsage(id, raw)
 }
 
 // ParseResponse parses a JSON chat completion response body into an LLMResponse.
-func ParseResponse(body io.Reader) (*LLMResponse, error) {
+func ParseResponse(body io.Reader, providerID ...string) (*LLMResponse, error) {
 	var apiResponse struct {
 		Choices []struct {
 			Message struct {
@@ -454,6 +497,10 @@ func ParseResponse(body io.Reader) (*LLMResponse, error) {
 	if len(apiResponse.Choices) == 0 {
 		return nil, fmt.Errorf("API returned 0 choices")
 	}
+	usage, err := apiResponse.Usage.ToUsageInfo(providerID...)
+	if err != nil {
+		return nil, err
+	}
 
 	choice := apiResponse.Choices[0]
 	toolCalls := make([]ToolCall, 0, len(choice.Message.ToolCalls))
@@ -477,7 +524,7 @@ func ParseResponse(body io.Reader) (*LLMResponse, error) {
 				// classifier (and cost accounting) sees real evidence
 				// instead of having to guess from the fragment alone
 				// (ADR-087 D3.9 / D5).
-				return nil, AttachToolArgumentsEvidence(err, choice.FinishReason, apiResponse.Usage.ToUsageInfo())
+				return nil, AttachToolArgumentsEvidence(err, choice.FinishReason, usage)
 			}
 			arguments = decodedArgs
 		}
@@ -507,7 +554,7 @@ func ParseResponse(body io.Reader) (*LLMResponse, error) {
 		ReasoningDetails: choice.Message.ReasoningDetails,
 		ToolCalls:        toolCalls,
 		FinishReason:     normalizeFinishReason(choice.FinishReason),
-		Usage:            apiResponse.Usage.ToUsageInfo(),
+		Usage:            usage,
 	}, nil
 }
 
@@ -579,10 +626,12 @@ func normalizeFinishReason(reason string) string {
 // with different advice. Say "output cap" instead.
 var ErrToolArgumentsUndecodable = errors.New("invalid tool arguments: payload is not decodable JSON")
 
-// maxUndecodableArgumentsQuoted bounds how many bytes of an offending payload
-// an error quotes. The fragment is the diagnostic — it is what tells an
-// operator "this was cut off" rather than "this was malformed" — but a
-// hostile or runaway payload must not flood a log line.
+// maxUndecodableArgumentsQuoted bounds the length of an undecodable-arguments
+// error message. The message is value-free: it never quotes the payload,
+// which can carry a plaintext secret the model put in a credential field and
+// is logged on refusal (Train 2 gate r1 M24, founder ruling 2026-10-20). The
+// "cut off" versus "malformed" diagnostic the quote used to carry is stated
+// instead, from the payload's shape (ToolArgumentsError.Truncated).
 const maxUndecodableArgumentsQuoted = 256
 
 // DecodeToolCallArguments decodes one tool call's `arguments` payload into the
@@ -637,23 +686,43 @@ func DecodeToolCallArguments(raw json.RawMessage, name string) (map[string]any, 
 		// have been cut off; only finish-reason evidence attached later
 		// (AttachToolArgumentsEvidence) can mark it Truncated (ADR-087 D5).
 		return nil, NewToolArgumentsError(name, fmt.Errorf(
-			"%w: tool %q: arguments decoded to %T, want a JSON object: %s",
-			ErrToolArgumentsUndecodable, name, decoded, quoteUndecodableArguments(string(raw)),
+			"%w: tool %q: arguments decoded to %T, want a JSON object (%d bytes)",
+			ErrToolArgumentsUndecodable, name, decoded, len(raw),
 		), false)
 	}
 }
 
 // undecodableArgumentsError builds the error for a payload that would not
-// parse, quoting the fragment so the truncation is visible in the message.
+// parse. Its message is value-free (gate r1 M24): it states the payload's
+// size, where parsing stopped and whether the payload was cut off, never any
+// of its bytes — not even the JSON error's own text, which can quote a
+// character of the payload.
 func undecodableArgumentsError(name, payload string, cause error) error {
-	// Both the sentinel and the underlying JSON cause are wrapped with %w, so
-	// errors.Is matches ErrToolArgumentsUndecodable AND a caller that cares
-	// can still reach the *json.SyntaxError underneath.
-	return NewToolArgumentsError(name, fmt.Errorf(
-		"%w: tool %q: %w: %s",
-		ErrToolArgumentsUndecodable, name, cause, quoteUndecodableArguments(payload),
-	), isEOFShapedToolArgumentsFragment(payload))
+	truncated := isEOFShapedToolArgumentsFragment(payload)
+	where := ""
+	var syntax *json.SyntaxError
+	if errors.As(cause, &syntax) {
+		where = fmt.Sprintf(", parsing stopped at byte %d", syntax.Offset)
+	}
+	shape := "not valid JSON"
+	if truncated {
+		shape = "cut off before the end"
+	}
+	return NewToolArgumentsError(name, &valueFreeArgumentsError{
+		msg:  fmt.Sprintf("%s: tool %q: %s (%d bytes%s)", ErrToolArgumentsUndecodable.Error(), name, shape, len(payload), where),
+		errs: []error{ErrToolArgumentsUndecodable, cause},
+	}, truncated)
 }
+
+// valueFreeArgumentsError keeps the sentinel and the JSON cause reachable
+// through errors.Is/As while its message carries none of the payload.
+type valueFreeArgumentsError struct {
+	msg  string
+	errs []error
+}
+
+func (e *valueFreeArgumentsError) Error() string   { return e.msg }
+func (e *valueFreeArgumentsError) Unwrap() []error { return e.errs }
 
 // ToolArgumentsError reports a tool call whose `arguments` payload was
 // refused by DecodeToolCallArguments, distinguishing genuine truncation
@@ -827,20 +896,6 @@ func AttachToolArgumentsEvidence(err error, finishReason string, usage *UsageInf
 	return err
 }
 
-// quoteUndecodableArguments renders a payload for an error message, capped at
-// maxUndecodableArgumentsQuoted bytes and reporting the true length when it
-// had to cut. Quoting via %q escapes the partial UTF-8 sequence a byte-offset
-// cut can leave behind, so the result is always printable.
-func quoteUndecodableArguments(payload string) string {
-	if len(payload) > maxUndecodableArgumentsQuoted {
-		return fmt.Sprintf(
-			"%q…[%d bytes total]",
-			payload[:maxUndecodableArgumentsQuoted], len(payload),
-		)
-	}
-	return fmt.Sprintf("%q", payload)
-}
-
 // --- HTTP response helpers ---
 
 // handleErrorBodyCap is the upper bound (in bytes) on the response body
@@ -869,7 +924,17 @@ type ProviderError struct {
 	BodyTruncated bool
 	BodyPreview   string
 	ContentType   string
-	Err           error
+	// RetryAfterSeconds is the parsed Retry-After fact (§7.2/MIN-101): a
+	// plain int with 0 == "fact absent, take the backoff schedule". Parsed
+	// by parseRetryAfterSeconds (retry_facts.go); over-ceiling values are
+	// still captured — the ≤120 s auto-retry ceiling is a chain decision,
+	// not a capture decision.
+	RetryAfterSeconds int
+	// RequestID is the provider request id from the first non-empty of
+	// x-request-id, request-id, x-amzn-requestid, cf-ray (OBS-003). Empty
+	// when none of the candidates is present.
+	RequestID string
+	Err       error
 }
 
 func (e *ProviderError) Error() string {
@@ -919,6 +984,12 @@ func (e *ProviderError) Unwrap() error {
 func HandleErrorResponse(resp *http.Response, apiBase string) error {
 	contentType := resp.Header.Get("Content-Type")
 	body, readErr := io.ReadAll(io.LimitReader(resp.Body, handleErrorBodyCap))
+	// §7.2 capture: the retry-after and request-id facts are parsed from the
+	// response headers at the boundary — the one place every error path
+	// (JSON body, HTML body, unreadable body) passes through with the
+	// headers still in hand.
+	retryAfterSeconds := parseRetryAfterSeconds(resp.Header)
+	requestID := parseRequestID(resp.Header)
 	truncated := false
 	if readErr != nil {
 		// Preserve partial bytes on read failure: keep what was read so the
@@ -933,6 +1004,8 @@ func HandleErrorResponse(resp *http.Response, apiBase string) error {
 			ContentType:   contentType,
 			Err:           fmt.Errorf("failed to read response: %w", readErr),
 		}
+		pe.RetryAfterSeconds = retryAfterSeconds
+		pe.RequestID = requestID
 		return pe
 	}
 	// Detect a body that hit the cap exactly — that means the read was
@@ -941,7 +1014,8 @@ func HandleErrorResponse(resp *http.Response, apiBase string) error {
 		truncated = true
 	}
 	if LooksLikeHTML(body, contentType) {
-		return WrapHTMLResponseError(resp.StatusCode, body, contentType, apiBase)
+		return WrapHTMLResponseErrorWithFacts(resp.StatusCode, body, contentType, apiBase,
+			retryAfterSeconds, requestID)
 	}
 	return &ProviderError{
 		Status:        resp.StatusCode,
@@ -951,12 +1025,14 @@ func HandleErrorResponse(resp *http.Response, apiBase string) error {
 		ContentType:   contentType,
 		Err: fmt.Errorf("API request failed: status=%d body=%s",
 			resp.StatusCode, ResponsePreview(body, 512)),
+		RetryAfterSeconds: retryAfterSeconds,
+		RequestID:         requestID,
 	}
 }
 
 // ReadAndParseResponse peeks at the response body to detect HTML errors,
 // then parses the JSON response into an LLMResponse.
-func ReadAndParseResponse(resp *http.Response, apiBase string) (*LLMResponse, error) {
+func ReadAndParseResponse(resp *http.Response, apiBase string, providerID ...string) (*LLMResponse, error) {
 	contentType := resp.Header.Get("Content-Type")
 	reader := bufio.NewReader(resp.Body)
 	prefix, err := reader.Peek(256)
@@ -966,7 +1042,7 @@ func ReadAndParseResponse(resp *http.Response, apiBase string) (*LLMResponse, er
 	if LooksLikeHTML(prefix, contentType) {
 		return nil, WrapHTMLResponseError(resp.StatusCode, prefix, contentType, apiBase)
 	}
-	out, err := ParseResponse(reader)
+	out, err := ParseResponse(reader, providerID...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse JSON response: %w", err)
 	}

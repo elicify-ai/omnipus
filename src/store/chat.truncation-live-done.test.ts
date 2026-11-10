@@ -23,6 +23,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { act } from 'react'
 import { useChatStore, getMessages, makeBucketMessages, type ChatMessage } from './chat'
 import { useSessionStore } from './session'
+import { emptyHistoryFixture } from '../../tests/chat-history-paging/empty-history'
 import { getMessageStatusSuffix, INTERRUPTED_SUFFIX_TEXT, CUT_OFF_SUFFIX_TEXT } from '@/lib/truncation'
 
 const SID = 'truncation-live-done-test'
@@ -71,6 +72,7 @@ function seedBucket(seedMessages: ChatMessage[]): void {
     useChatStore.setState(() => ({
       sessionsById: {
         [SID]: {
+          ...emptyHistoryFixture(),
           ...makeBucketMessages(seedMessages),
           toolCalls: {},
           toolCallOrder: [],

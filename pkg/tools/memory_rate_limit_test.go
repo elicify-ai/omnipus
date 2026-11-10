@@ -264,6 +264,7 @@ func TestRememberTool_WithinBudget_Succeeds(t *testing.T) {
 		result := tool.Execute(ctx, map[string]any{
 			"content":  "fact " + string(rune('A'+i)),
 			"category": "reference",
+			"room":     "private",
 		})
 		require.NotNil(t, result)
 		assert.False(t, result.IsError, "call %d/5 must succeed: %s", i+1, result.ForLLM)
@@ -296,6 +297,7 @@ func TestRememberTool_OverBudget_DeniedWithRateLimitedError(t *testing.T) {
 		r := tool.Execute(ctx, map[string]any{
 			"content":  "fact",
 			"category": "reference",
+			"room":     "private",
 		})
 		require.False(t, r.IsError, "preflight call %d/2 must succeed: %s", i+1, r.ForLLM)
 	}
@@ -304,6 +306,7 @@ func TestRememberTool_OverBudget_DeniedWithRateLimitedError(t *testing.T) {
 	denied := tool.Execute(ctx, map[string]any{
 		"content":  "third fact",
 		"category": "reference",
+		"room":     "private",
 	})
 	require.True(t, denied.IsError, "third call must return IsError=true")
 	require.Contains(t, denied.ForLLM, `error_kind="rate_limited"`,
@@ -353,7 +356,18 @@ func TestRememberTool_RecoveryAfterRetryAfter(t *testing.T) {
 	store := newSimpleMemStore(tmpDir)
 	tool := tools.NewRememberTool(store, nil)
 
-	const window = 200 * time.Millisecond
+	// window was 200ms until PR #1037 CI (2026-09-29) flaked on the setup
+	// proof below: the three synchronous, disk-writing Execute calls
+	// occasionally span more than 200ms on a loaded CI runner, so the
+	// first call's timestamp evicts out of the window before the third
+	// call is evaluated and the bucket wrongly admits it (the setup proof
+	// requires the third call to be REJECTED). 2s gives the setup calls a
+	// wide margin they cannot plausibly outrun while still keeping the
+	// test fast; the recovery half already tolerates timing via
+	// require.Eventually (see its comment below), which is unaffected by
+	// this widening other than needing a backstop comfortably above the
+	// now-larger window.
+	const window = 2 * time.Second
 	limiter := tools.NewMemoryRateLimiter(tools.MemoryRateLimitConfig{
 		PerAgentLimit:  2,
 		PerCallerLimit: 100,
@@ -363,26 +377,29 @@ func TestRememberTool_RecoveryAfterRetryAfter(t *testing.T) {
 
 	ctx := withCallerCtx("agent-A", "rest", "user-1")
 
-	// Exhaust the bucket.
+	// Exhaust the bucket. These three calls must all land inside the same
+	// window for the setup proof below to be meaningful — see the window
+	// comment above for why 2s makes that safe even on a loaded runner.
 	for i := 0; i < 2; i++ {
 		require.False(t,
-			tool.Execute(ctx, map[string]any{"content": "x", "category": "reference"}).IsError,
+			tool.Execute(ctx, map[string]any{"content": "x", "category": "reference", "room": "private"}).IsError,
 			"setup call %d/2 must succeed", i+1)
 	}
 	require.True(t,
-		tool.Execute(ctx, map[string]any{"content": "x", "category": "reference"}).IsError,
+		tool.Execute(ctx, map[string]any{"content": "x", "category": "reference", "room": "private"}).IsError,
 		"setup proof: bucket exhausted, third call rejected")
 
 	// Poll until the sliding window has expired and the bucket is clear again.
-	// A fixed sleep is unreliable on loaded CI runners — the 50 ms margin
+	// A fixed sleep is unreliable on loaded CI runners — the margin
 	// can be swallowed by scheduling jitter. require.Eventually retries
-	// every 10 ms up to 5 s and stops as soon as the first call succeeds,
-	// preserving the spirit of the test (recovery must happen) without being
-	// brittle about *when* exactly the window boundary falls.
+	// every 10 ms up to 10 s (comfortably above the 2s window) and stops as
+	// soon as the first call succeeds, preserving the spirit of the test
+	// (recovery must happen) without being brittle about *when* exactly the
+	// window boundary falls.
 	require.Eventually(t, func() bool {
-		r := tool.Execute(ctx, map[string]any{"content": "after recovery", "category": "reference"})
+		r := tool.Execute(ctx, map[string]any{"content": "after recovery", "category": "reference", "room": "private"})
 		return !r.IsError
-	}, 5*time.Second, 10*time.Millisecond,
+	}, 10*time.Second, 10*time.Millisecond,
 		"rate limiter must recover after the %v window expires (clean recovery)", window)
 }
 
@@ -411,10 +428,10 @@ func TestRememberTool_TwoAgents_ShareCallerIndependentAgent(t *testing.T) {
 	// agent-A exhausts its per-agent bucket.
 	for i := 0; i < 2; i++ {
 		require.False(t,
-			tool.Execute(ctxA, map[string]any{"content": "a", "category": "reference"}).IsError,
+			tool.Execute(ctxA, map[string]any{"content": "a", "category": "reference", "room": "private"}).IsError,
 			"agent-A setup call %d must succeed", i+1)
 	}
-	denied := tool.Execute(ctxA, map[string]any{"content": "a", "category": "reference"})
+	denied := tool.Execute(ctxA, map[string]any{"content": "a", "category": "reference", "room": "private"})
 	require.True(t, denied.IsError, "agent-A third call must be denied (per-agent bucket full)")
 	require.Contains(t, denied.ForLLM, "agent scope")
 
@@ -423,7 +440,7 @@ func TestRememberTool_TwoAgents_ShareCallerIndependentAgent(t *testing.T) {
 	// agent-B's per-agent bucket. The per-caller bucket has used 2
 	// slots so far (out of 10) so caller capacity is also fine.
 	for i := 0; i < 2; i++ {
-		r := tool.Execute(ctxB, map[string]any{"content": "b", "category": "reference"})
+		r := tool.Execute(ctxB, map[string]any{"content": "b", "category": "reference", "room": "private"})
 		assert.False(t, r.IsError,
 			"agent-B call %d/2 under same caller must succeed despite agent-A exhaustion: %s",
 			i+1, r.ForLLM)

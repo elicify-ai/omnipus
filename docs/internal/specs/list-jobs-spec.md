@@ -1,5 +1,7 @@
 # Feature Specification: `list_jobs` — unified background-job visibility for agents
 
+**Superseded 2026-10-10 (founder ruling, delegation policy always applies):** the operator setting `tools.delegate.require_parent_agent_id` no longer exists. Every launch carries an identified calling agent or is refused; no configuration value turns that check off. Every statement in this document that describes the setting, its `false` value, a downgrade-to-log behavior or a rollback procedure for it is void. Authority: session-core spec FR-014/015/016, `docs/internal/specs/session-core-spec.md`.
+
 **Created**: 2026-07-27
 **Revised**: 2026-07-27 (rev 2 — against [the spec review](list-jobs-spec-review.md): 3 CRITICAL / 17 MAJOR / 7 MINOR, plus two operator rulings)
 **Revised**: 2026-07-27 (**rev 3** — against [round-2 review](list-jobs-spec-review-r2.md): 5 CRITICAL / 18 MAJOR / 10 MINOR, [the cross-spec conflict review](cross-spec-conflicts-review.md): 3 CRITICAL / 6 MAJOR, and **two further operator rulings** (3 and 4). Rev 3 is an **interaction pass over the requirements rev 2 added**, not a redesign — see *Rev 3* below.)

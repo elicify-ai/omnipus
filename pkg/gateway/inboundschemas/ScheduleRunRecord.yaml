@@ -19,7 +19,9 @@ properties:
       - error
       - skipped
       - timeout
-    description: ok=succeeded, error=failed, skipped=overlap/cap, timeout=deadline aborted.
+    description: >
+      ok=succeeded, error=failed, skipped=overlap/cap. timeout is historical: a run
+      recorded before scheduled runs lost their time limit (issue #1306); never written now.
   error:
     type: string
     description: Failure reason when status is error or timeout.

@@ -132,11 +132,11 @@ describe('ProviderPicker — Popular tiles and the collapsed list', () => {
     )
   })
 
-  it('shows "All providers (178)" collapsed, with the list hidden', () => {
+  it('shows "All providers (176)" collapsed, with the list hidden', () => {
     renderPicker()
     const toggle = screen.getByTestId('picker-all-toggle')
-    // 190 catalog entries minus the 12 popular ones.
-    expect(toggle).toHaveTextContent('All providers (178)')
+    // 188 catalog entries minus the 12 popular ones (WU-24 removed two).
+    expect(toggle).toHaveTextContent('All providers (176)')
     expect(toggle).toHaveAttribute('aria-expanded', 'false')
     expect(screen.queryAllByTestId(/^picker-row-/)).toHaveLength(0)
   })
@@ -563,5 +563,49 @@ describe('ProviderPicker — nested panel keyboard isolation (O8)', () => {
     await user.keyboard('{Home}')
     const firstTileId = popularIdsInCatalogOrder(PROVIDERS_CATALOG)[0]
     expect(screen.getByTestId(`picker-popular-${firstTileId}`)).toHaveFocus()
+  })
+})
+
+// =====================================================================
+// WP-1 #1700 (design R23, picker half): the loaded catalog's provider ids
+// reach the Custom endpoint panel as takenIds, so the "azure trap" — naming
+// a custom endpoint after a listed provider — is blocked inline, with the
+// design's exact M1 copy, before it can ever reach the server.
+// =====================================================================
+
+describe('ProviderPicker — Custom endpoint cannot reuse a listed provider name (design R23)', () => {
+  const M1_AZURE =
+    '"azure" is the name of a listed provider. Choose a different name for your custom endpoint, for example "my-azure".'
+
+  it('blocks a catalog id as a custom name with M1 and a disabled Add endpoint', async () => {
+    const { onSelect } = renderPicker()
+    fireEvent.click(screen.getByTestId('picker-custom-endpoint'))
+    await screen.findByTestId('custom-endpoint-id')
+
+    fireEvent.change(screen.getByTestId('custom-endpoint-id'), { target: { value: 'azure' } })
+    fireEvent.change(screen.getByTestId('custom-endpoint-api-base'), {
+      target: { value: 'https://azure.example.com/v1' },
+    })
+    fireEvent.change(screen.getByTestId('custom-endpoint-api-key'), { target: { value: 'sk-azure' } })
+
+    expect(screen.getByTestId('custom-endpoint-id-taken')).toHaveTextContent(M1_AZURE)
+    expect(screen.getByTestId('custom-endpoint-submit')).toBeDisabled()
+    fireEvent.click(screen.getByTestId('custom-endpoint-submit'))
+    expect(onSelect).not.toHaveBeenCalled()
+  })
+
+  it('accepts a free name — my-azure passes the same check', async () => {
+    renderPicker()
+    fireEvent.click(screen.getByTestId('picker-custom-endpoint'))
+    await screen.findByTestId('custom-endpoint-id')
+
+    fireEvent.change(screen.getByTestId('custom-endpoint-id'), { target: { value: 'my-azure' } })
+    fireEvent.change(screen.getByTestId('custom-endpoint-api-base'), {
+      target: { value: 'https://azure.example.com/v1' },
+    })
+    fireEvent.change(screen.getByTestId('custom-endpoint-api-key'), { target: { value: 'sk-azure' } })
+
+    expect(screen.queryByTestId('custom-endpoint-id-taken')).not.toBeInTheDocument()
+    expect(screen.getByTestId('custom-endpoint-submit')).not.toBeDisabled()
   })
 })

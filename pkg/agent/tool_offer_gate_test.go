@@ -206,7 +206,7 @@ func TestCompressedRequest_UnloadedLazyToolRefusedUntilToolSearchLoadsIt(t *test
 
 	al := mustNewAgentLoop(t, newE2ECfg(t, workspaceDir), bus.NewMessageBus(), recorder)
 	defer al.Close()
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, defaultAgent)
 	realTool, ok := defaultAgent.Tools.Get(lazyTool)
 	require.True(t, ok, "test precondition: %s must be registered", lazyTool)
@@ -214,7 +214,7 @@ func TestCompressedRequest_UnloadedLazyToolRefusedUntilToolSearchLoadsIt(t *test
 	counter := &countingPassthroughTool{Tool: realTool}
 	al.RegisterTool(counter)
 
-	reply, err := al.ProcessDirectWithChannel(context.Background(), "find some skills", "offer-gate-lazy", "cli", "test")
+	reply, err := al.processDirectWithChannelPrimaryForTest(context.Background(), "find some skills", "offer-gate-lazy", "cli", "test")
 	require.NoError(t, err, "reply=%q", reply)
 	require.Equal(t, 3, recorder.CallCount(), "three scripted provider rounds")
 

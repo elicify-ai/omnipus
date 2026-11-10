@@ -165,7 +165,7 @@ func TestRunTurn_ScriptedToolCall_PolicyDeniesAndAudits(t *testing.T) {
 	// -----------------------------------------------------------------------
 	const sessionKey = "test-session-policy-deny"
 	ctx := context.Background()
-	finalContent, err := al.ProcessDirect(ctx, "please run dangerous_tool for me", sessionKey)
+	finalContent, err := al.processDirectPrimaryForTest(ctx, "please run dangerous_tool for me", sessionKey)
 	require.NoError(
 		t,
 		err,
@@ -227,14 +227,9 @@ func TestRunTurn_ScriptedToolCall_PolicyDeniesAndAudits(t *testing.T) {
 	// Persistence test: write-then-read-back confirms the deny result was
 	// actually injected into history (not just emitted as an event and dropped).
 	//
-	// Note: ProcessDirect uses channel="cli", chatID="direct" with no peer or
-	// session ID. The routing layer resolves this to DMScopeMain (default),
-	// which produces session key "agent:<defaultAgent.ID>:main" via
-	// BuildAgentMainSessionKey. This is the key under which history is
-	// stored — not the caller-supplied key. (":main" here is
-	// routing.DefaultMainKey, the session-key SUFFIX for an agent's
-	// non-peer scope — an unrelated concept that survived the "main"
-	// sentinel's removal; it is not the agent id.)
+	// Note: the direct turn runs as "mia" on channel "cli", chat "direct";
+	// its history lives under that explicit-agent route key
+	// (directTurnHistoryKeyForTest), not the caller-supplied key.
 	//
 	// ADR-058 (tool-denial semantics) strengthening: this denial is emitted by
 	// loop.go's TOCTOU policy-deny site (site 1), which is uniformly rewired
@@ -246,13 +241,10 @@ func TestRunTurn_ScriptedToolCall_PolicyDeniesAndAudits(t *testing.T) {
 	// which would let a broken classifier grade its own homework) proves the
 	// real, honest, classified content reaches persisted history.
 	// -----------------------------------------------------------------------
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, defaultAgent, "default agent must exist after boot")
 
-	// "mia" is the only agent this test's cfg.Agents.List registers, so it is
-	// what GetDefaultAgent() resolves to (no "main" sentinel to fall back to
-	// anymore).
-	const resolvedSessionKey = "agent:mia:main" // BuildAgentMainSessionKey("mia")
+	resolvedSessionKey := directTurnHistoryKeyForTest("mia", "cli", "direct")
 	history := defaultAgent.Sessions.GetHistory(resolvedSessionKey)
 	require.NotEmpty(
 		t,

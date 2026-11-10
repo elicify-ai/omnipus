@@ -5,10 +5,7 @@
 package systools
 
 import (
-	"context"
-	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/skills"
@@ -16,347 +13,55 @@ import (
 	workspacepkg "github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
-// Skill authoring tools — create_skill and edit_skill (Spec-6 U2,
-// FR-9.2). These are the self-improvement / procedural-memory verbs: an agent
-// (typically Ava) authors or refines a skill, and the resulting SKILL.md is
-// written, validated, and versioned.
+// The authoring tools create_skill and remove_skill are retired (skills spec
+// r15 §5.1, FR-025): a new skill is a write_file of <new>/SKILL.md and a
+// deletion is edit_skill action=delete, both through skills.ApplyChange.
+
+// resolveProjectShelfWithCollisions builds the ADR-072 D4.1 project shelf
+// (skill discovery merged over every live mount) for workspace wsID — the
+// call's resolved target (resolveTargetWorkspace), falling back to this
+// installation's default workspace when empty, mirroring
+// pkg/agent/loop_env.go's wireProjectShelfResolvers. It returns no shelf when
+// no workspace resolves or the workspace has no mounts.
 //
-// CONSENT GATING: these tools mutate the skills tree, so they are sensitive. The
-// consent gate is the agent loop's tool-approval hook (HookManager.ApproveTool →
-// the ws_approval WebSocket prompt): an operator policy of "ask" for these tools
-// routes every invocation through that approval prompt BEFORE Execute runs. The
-// tool implementation deliberately does NOT bypass that gate — it never writes
-// without having been dispatched, and dispatch is what the approval hook gates.
-// (RequireNotBypass is a 503 HTTP dev-bypass guard at the wrong layer and is not
-// used here — see Spec-6 §C-1.)
-//
-// SAFETY: every write is path-confined to the skills root (no traversal), the
-// SKILL.md is validated against the loader contract (frontmatter + structure +
-// size), prior versions are snapshotted under .versions/ for rollback, and each
-// create/edit is audit-logged via structured logging.
-
-// ---- create_skill ----
-
-type SkillCreateTool struct{ deps *Deps }
-
-func NewSkillCreateTool(d *Deps) *SkillCreateTool { return &SkillCreateTool{deps: d} }
-func (t *SkillCreateTool) Name() string           { return "create_skill" }
-func (t *SkillCreateTool) Scope() tools.ToolScope { return tools.ScopeCore }
-func (t *SkillCreateTool) Description() string {
-	return fmt.Sprintf(
-		"Author a NEW skill (procedural memory). Writes a SKILL.md to the user skills "+
-			"directory; prior versions are snapshotted for rollback. This call writes the file; it is not a "+
-			"confirmation step. Policy may still Ask at execution; that is not a "+
-			"substitute for the user's confirmation of the proposal, and you must not invent a "+
-			"second confirmation ritual. content must not exceed %d bytes. A name that already exists "+
-			"is refused — use edit_skill to modify it instead. "+
-			"Parameters: name (required, alphanumeric+hyphens), content (required, full SKILL.md "+
-			"including YAML frontmatter with name and description).",
-		skills.MaxSkillMarkdownBytes,
-	)
-}
-
-func (t *SkillCreateTool) Parameters() map[string]any {
-	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"name": map[string]any{"type": "string", "description": "Skill name (alphanumeric with hyphens)."},
-			"content": map[string]any{
-				"type":        "string",
-				"description": "Full SKILL.md content including YAML frontmatter.",
-			},
-		},
-		"required": []string{"name", "content"},
-	}
-}
-
-func (t *SkillCreateTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
-	name, _ := args["name"].(string)
-	content, _ := args["content"].(string)
-	if name == "" {
-		return tools.ErrorResult(errorJSON("INVALID_INPUT", "name is required", ""))
-	}
-	if content == "" {
-		return tools.ErrorResult(
-			errorJSON("INVALID_INPUT", "content is required", "provide the full SKILL.md including frontmatter"),
-		)
-	}
-
-	if t.deps == nil || t.deps.SkillWriter == nil {
-		return tools.ErrorResult(errorJSON("NOT_AVAILABLE",
-			"skill writer not configured", "ensure the gateway is started with a valid workspace"))
-	}
-
-	path, revision, err := t.deps.SkillWriter.CreateSkillReviewed(name, content)
-	if err != nil {
-		return skillAuthoringError("create", name, err)
-	}
-
-	// Audit trail: a skill was authored. The consent decision itself is recorded
-	// by the agent loop's approval hook; this records the resulting write.
-	slog.Info("sysagent: create_skill wrote skill",
-		"event", "skill_authored", "action", "create", "name", name, "path", path)
-
-	return tools.NewToolResult(successJSON(map[string]any{
-		"success":            true,
-		"name":               name,
-		"path":               path,
-		"action":             "created",
-		"revision":           revision,
-		"persistence_status": "complete",
-		"activation_status":  "active",
-		"changed_fields":     []string{"content"},
-	}))
-}
-
-// ---- edit_skill ----
-
-type SkillEditTool struct{ deps *Deps }
-
-func NewSkillEditTool(d *Deps) *SkillEditTool   { return &SkillEditTool{deps: d} }
-func (t *SkillEditTool) Name() string           { return "edit_skill" }
-func (t *SkillEditTool) Scope() tools.ToolScope { return tools.ScopeCore }
-func (t *SkillEditTool) Description() string {
-	return fmt.Sprintf(
-		"Edit / refine an EXISTING skill (self-improvement). Snapshots the prior version "+
-			"for rollback, then writes the new SKILL.md. This call writes the file; it is not a "+
-			"confirmation step. Policy may still Ask at execution; that is not a substitute for "+
-			"the user's confirmation of the proposal, and you must not invent a second "+
-			"confirmation ritual. "+
-			"Editing a built-in creates a user override; the built-in is never mutated in place. "+
-			"content must not exceed %d bytes. "+
-			"Parameters: name, content (full new SKILL.md), and revision from the reviewed skill read are required. A conflict means the skill changed after review; stop, reread, and do not retry the stale write.",
-		skills.MaxSkillMarkdownBytes,
-	)
-}
-
-func (t *SkillEditTool) Parameters() map[string]any {
-	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"name": map[string]any{"type": "string", "description": "Name of the existing skill to edit."},
-			"content": map[string]any{
-				"type":        "string",
-				"description": "Full new SKILL.md content including YAML frontmatter.",
-			},
-			"revision": map[string]any{"type": "string", "description": "Revision returned by the reviewed skill read."},
-		},
-		"required": []string{"name", "content", "revision"},
-	}
-}
-
-func (t *SkillEditTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
-	name, _ := args["name"].(string)
-	content, _ := args["content"].(string)
-	revision, _ := args["revision"].(string)
-	if name == "" {
-		return tools.ErrorResult(errorJSON("INVALID_INPUT", "name is required", ""))
-	}
-	if content == "" {
-		return tools.ErrorResult(
-			errorJSON("INVALID_INPUT", "content is required", "provide the full new SKILL.md including frontmatter"),
-		)
-	}
-	if revision == "" {
-		return tools.ErrorResult(errorJSON("INVALID_INPUT", "revision is required", "read the skill again before editing"))
-	}
-
-	if t.deps == nil || t.deps.SkillWriter == nil {
-		return tools.ErrorResult(errorJSON("NOT_AVAILABLE",
-			"skill writer not configured", "ensure the gateway is started with a valid workspace"))
-	}
-	if t.deps.SkillsLoader == nil {
-		return tools.ErrorResult(errorJSON("NOT_AVAILABLE",
-			"skill loader not configured", "ensure the gateway is started with a valid workspace"))
-	}
-
-	// ADR-072 D6.1: a project skill — one discovered under a mounted
-	// repository's own .claude/skills or .omnipus/skills — is edited
-	// directly in its own mount, never forked into the central registry.
-	// Resolve against the CURRENT TURN's workspace project shelf FIRST; only
-	// a slug absent from that shelf falls through to the ordinary
-	// global-root path below, unchanged.
-	if shelf := resolveProjectShelf(t.deps, ctx); shelf != nil {
-		if projWriter, ps, perr := skills.ResolveProjectSkillWriter(shelf, name); perr == nil {
-			path, _, nextRevision, editErr := projWriter.EditSkillReviewed(name, content, true, revision)
-			if editErr != nil {
-				return skillAuthoringError("edit", name, editErr)
-			}
-			tools.EmitSkillWriteAudit("project", t.Name(),
-				tools.ToolAgentID(ctx), tools.ToolTranscriptSessionID(ctx), tools.ToolWorkspaceID(ctx), path)
-			slog.Info("sysagent: edit_skill wrote project skill",
-				"event", "skill_authored", "action", "edit", "name", name,
-				"path", path, "shelf", "project", "mount", ps.MountName)
-			return tools.NewToolResult(successJSON(map[string]any{
-				"success":            true,
-				"name":               name,
-				"path":               path,
-				"action":             "edited",
-				"shelf":              "project",
-				"mount":              ps.MountName,
-				"revision":           nextRevision,
-				"persistence_status": "complete",
-				"activation_status":  "active",
-				"changed_fields":     []string{"content"},
-			}))
-		} else if !errors.Is(perr, skills.ErrNotFound) {
-			// ErrProjectWriteEscapesMount or another shelf-integrity problem —
-			// not "no such project skill". Surface it rather than silently
-			// falling through to the registry path, which would write
-			// somewhere the operator did not intend.
-			return skillAuthoringError("edit", name, perr)
-		}
-		// ErrNotFound: name is not on this workspace's project shelf — fall
-		// through to the registry/builtin path below, unchanged.
-	}
-
-	// Determine whether a source skill exists anywhere on the load path. If the
-	// skill exists only as a built-in (or in another root), allow EditSkill to
-	// create a user override in the writer's (global) root rather than failing.
-	allowOverride := skillExistsOnLoadPath(t.deps.SkillsLoader, name)
-
-	var path, nextRevision string
-	var createdOverride bool
-	var err error
-	if allowOverride {
-		if _, localErr := t.deps.SkillWriter.SkillRevision(name); errors.Is(localErr, skills.ErrNotFound) {
-			sourcePath := ""
-			for _, info := range t.deps.SkillsLoader.ListSkills() {
-				if strings.EqualFold(info.ID, name) {
-					sourcePath = info.Path
-					break
-				}
-			}
-			path, nextRevision, err = t.deps.SkillWriter.CreateOverrideReviewed(name, content, sourcePath, revision)
-			createdOverride = err == nil
-		} else {
-			path, createdOverride, nextRevision, err = t.deps.SkillWriter.EditSkillReviewed(name, content, allowOverride, revision)
-		}
-	} else {
-		path, createdOverride, nextRevision, err = t.deps.SkillWriter.EditSkillReviewed(name, content, false, revision)
-	}
-	if err != nil {
-		return skillAuthoringError("edit", name, err)
-	}
-
-	slog.Info("sysagent: edit_skill wrote skill",
-		"event", "skill_authored", "action", "edit", "name", name,
-		"path", path, "created_override", createdOverride)
-
-	action := "edited"
-	if createdOverride {
-		action = "override_created"
-	}
-	return tools.NewToolResult(successJSON(map[string]any{
-		"success":            true,
-		"name":               name,
-		"path":               path,
-		"action":             action,
-		"created_override":   createdOverride,
-		"revision":           nextRevision,
-		"persistence_status": "complete",
-		"activation_status":  "active",
-		"changed_fields":     []string{"content"},
-	}))
-}
-
-// resolveProjectShelf builds the ADR-072 D4.1 project shelf (skill.Skill
-// discovery merged over every live mount) for the current tool call's
-// effective workspace — the ctx-carried workspace id (tools.ToolWorkspaceID,
-// the same value the agent loop threads through every turn), falling back to
-// this installation's default workspace when the call carries none, mirroring
-// pkg/agent/loop_env.go's wireDelegationInjectors/wireProjectShelfResolvers
-// fallback exactly. Returns nil (no project shelf) when no workspace
-// resolves, its mount record is unreadable, or it simply has no mounts — the
-// authoring tools' existing global-root SkillWriter/SkillInstaller path is
-// then unaffected, exactly as before this fix (D6: "silent when there is
-// nothing to find").
-//
-// R3 fix (2026-09): shared by SkillEditTool.Execute and SkillRemoveTool.Execute
-// so create_skill/edit_skill/remove_skill can resolve a slug against the
-// current workspace's mounted project skills before falling back to the
-// central registry — the same resolution wireProjectShelfResolvers installs
-// for the agent's own ContextBuilder, computed independently here because
-// sysagent tools have no access to a live ContextBuilder from inside
-// Execute.
-func resolveProjectShelf(deps *Deps, ctx context.Context) skills.ProjectShelf {
-	shelf, _ := resolveProjectShelfWithCollisions(deps, ctx)
-	return shelf
-}
-
-func resolveProjectShelfWithCollisions(deps *Deps, ctx context.Context) (skills.ProjectShelf, []skills.SlugCollision) {
+// An unreadable or partly dropped mount record is NOT "no project shelf"
+// (silent-failure-hunter SF-01): it returns a READ_FAILED refusal, because the
+// workspace may hold a project copy of the slug. A non-empty name inspects
+// that slug in every project; an empty name requires a complete shelf scan.
+func resolveProjectShelfWithCollisions(deps *Deps, wsID, name string) (skills.ProjectShelf, []skills.SlugCollision, *tools.ToolResult) {
 	if deps == nil || strings.TrimSpace(deps.Home) == "" {
-		return nil, nil
+		return nil, nil, nil
 	}
 	home := deps.Home
 
-	wsID := strings.TrimSpace(tools.ToolWorkspaceID(ctx))
+	wsID = strings.TrimSpace(wsID)
 	if wsID == "" {
 		def, err := workspacepkg.ResolveDefaultID(home)
 		if err != nil || def == "" {
-			return nil, nil
+			return nil, nil, nil
 		}
 		wsID = def
 	}
 
-	mounts, ok := workspacepkg.LoadMounts(home, wsID)
-	if !ok || len(mounts) == 0 {
-		return nil, nil
+	mounts, ok, dropped := workspacepkg.LoadMountsWithDropStatus(home, wsID)
+	if !ok || dropped {
+		return nil, nil, tools.ErrorResult(errorJSON("READ_FAILED",
+			fmt.Sprintf("the project folders of workspace %q could not be read completely, so its project skills are unknown", wsID),
+			"Repair the workspace's folders in the app, then read the skill again before retrying"))
+	}
+	if len(mounts) == 0 {
+		return nil, nil, nil
 	}
 
 	pm := make([]skills.ProjectMount, 0, len(mounts))
 	for _, m := range mounts {
 		pm = append(pm, skills.ProjectMount{Name: m.Name, Root: m.HostPath})
 	}
-	return skills.MergeProjectSkills(pm)
-}
-
-// skillExistsOnLoadPath reports whether a skill of the given name is resolvable
-// by the loader anywhere on its search path (workspace/global/builtin). Used by
-// system.skill.edit to decide whether a built-in edit should create a user
-// override.
-func skillExistsOnLoadPath(loader *skills.SkillsLoader, name string) bool {
-	if loader == nil {
-		return false
+	shelf, collisions, err := skills.LookupProjectSkillChecked(pm, name)
+	if err != nil {
+		return nil, nil, tools.ErrorResult(errorJSON("READ_FAILED",
+			fmt.Sprintf("the project skills of workspace %q could not be inspected: %v", wsID, err),
+			"Restore access to the project folder, then read the skill again before retrying"))
 	}
-	_, ok := loader.LoadSkill(name)
-	return ok
-}
-
-// skillAuthoringError maps a SkillWriter error to a structured tool error with
-// the appropriate code and operator suggestion, and logs denials for audit.
-func skillAuthoringError(op, name string, err error) *tools.ToolResult {
-	switch {
-	case errors.Is(err, skills.ErrPathConfinement):
-		slog.Warn("sysagent: skill authoring rejected — path confinement",
-			"event", "skill_write_denied", "action", op, "name", name, "reason", "path_confinement")
-		return tools.ErrorResult(errorJSON(
-			"INVALID_INPUT",
-			"skill name escapes the skills directory",
-			"use a plain skill name (alphanumeric with hyphens, no '/' or '..')",
-		))
-	case errors.Is(err, skills.ErrOversize):
-		slog.Warn("sysagent: skill authoring rejected — oversize",
-			"event", "skill_write_denied", "action", op, "name", name, "reason", "oversize")
-		return tools.ErrorResult(errorJSON("INVALID_INPUT",
-			fmt.Sprintf("SKILL.md exceeds the maximum allowed size (%d bytes)", skills.MaxSkillMarkdownBytes),
-			"trim the skill content"))
-	case errors.Is(err, skills.ErrAlreadyExists):
-		return tools.ErrorResult(errorJSON("ALREADY_EXISTS",
-			fmt.Sprintf("a skill named %q already exists", name), "use edit_skill to modify it"))
-	case errors.Is(err, skills.ErrNotFound):
-		return tools.ErrorResult(errorJSON("NOT_FOUND",
-			fmt.Sprintf("skill %q not found", name), "use create_skill to author a new skill"))
-	case errors.Is(err, skills.ErrRevisionConflict):
-		return tools.ErrorResult(errorJSON("CONFLICT",
-			fmt.Sprintf("skill %q changed after review", name), "read the skill again and submit its current revision"))
-	default:
-		// Validation failures (invalid frontmatter, missing name/description)
-		// and I/O errors land here. Surface the cause for the agent to correct.
-		slog.Warn("sysagent: skill authoring failed",
-			"event", "skill_write_denied", "action", op, "name", name, "error", err)
-		return tools.ErrorResult(errorJSON("INVALID_INPUT",
-			fmt.Sprintf("could not %s skill %q: %v", op, name, err),
-			"check the SKILL.md frontmatter (name + description) and structure"))
-	}
+	return shelf, collisions, nil
 }

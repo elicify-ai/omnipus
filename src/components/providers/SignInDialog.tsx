@@ -4,16 +4,13 @@
 // (routes/onboarding.tsx) — same dialog, same api.ts wrappers, so a future
 // AuthMethodControl (T068-21) can lift it unchanged.
 //
-// Two vendor-determined shapes, discriminated by SignInStartResponse.method:
-//   - `cli_login` (codex-cli, github-copilot): Omnipus never performs or
-//     stores the vendor login itself — shows the exact command to run in a
-//     terminal plus a manual "Check sign-in" button (fetchSignInStatus, no
-//     polling — there is nothing to poll, the operator drives it).
-//   - `device_code` (openai-chatgpt, and xai once its catalog row carries
-//     `sign_in`): Omnipus requests a device code itself; the dialog shows
-//     the verification link + user code and polls pollSignIn at
-//     interval_seconds (never faster; backs off on vendor slow_down) until
-//     signed_in | expired | denied (FR-044/FR-045).
+// One shape (WU-24, founder 2026-10-14 — the CLI model providers, their
+// terminal-command sign-in flow and the "use my existing Codex login" import
+// are deleted outright): `device_code` (openai-chatgpt, and xai once its
+// catalog row carries `sign_in`). Omnipus requests a device code itself; the
+// dialog shows the verification link + user code and polls pollSignIn at
+// interval_seconds (never faster; backs off on vendor slow_down) until
+// signed_in | expired | denied (FR-044/FR-045).
 //
 // Closing the dialog (Escape, overlay click, Cancel, or the Done button)
 // stops any in-flight polling — see the polling effect's cleanup below.
@@ -27,7 +24,6 @@ import {
   CheckCircle,
   Copy,
   SpinnerGap,
-  Warning,
   XCircle,
 } from '@phosphor-icons/react'
 import {
@@ -43,7 +39,6 @@ import {
   startSignIn,
   pollSignIn,
   fetchSignInStatus,
-  importCodexLogin,
   getErrorMessage,
   isApiError,
   ApiSchemaError,
@@ -57,11 +52,9 @@ import type { SignInStatus } from '@/lib/api/generated/openapi-types'
 
 type Phase =
   | { kind: 'starting' }
-  | { kind: 'cli_login'; command: string; instructions: string; checking: boolean; checkResult?: 'not_yet' | 'signed_in' | 'expired'; checkReason?: string }
   | { kind: 'device_code'; verificationUrl: string; userCode: string; deviceAuthId: string; intervalSeconds: number }
   | { kind: 'signed_in'; accountLabel?: string }
-  // device_code only: a code that was never approved in time. A cli_login
-  // "expired" result stays on the cli_login phase (checkResult: 'expired').
+  // device_code only: a code that was never approved in time.
   | { kind: 'expired' }
   | { kind: 'denied' }
   | { kind: 'error'; message: string }
@@ -103,17 +96,6 @@ export function isTransientSignInPollError(err: unknown): boolean {
 }
 
 /**
- * The cli_login "expired" message (silent-failure review 2026-09-14, finding 7).
- * For a CLI-login provider such as GitHub Copilot, "expired" means the vendor
- * CLI's existing session was rejected, so the operator signs in again with the
- * same login command the server already sent (`command`), never a new one.
- * One source for both the aria-live status line and the visible alert.
- */
-function cliSessionRejectedText(providerLabel: string, command: string): string {
-  return `Your ${providerLabel} session is no longer accepted. Run \`${command}\` again to sign in, then click Check sign-in.`
-}
-
-/**
  * Consecutive transient poll failures tolerated before the loop gives up.
  * Bounded so a genuinely dead gateway still surfaces an error instead of
  * polling forever — 5 consecutive failures at the (never-shrinking) poll
@@ -137,16 +119,6 @@ export function SignInDialog({
 }) {
   const [phase, setPhase] = useState<Phase>({ kind: 'starting' })
   const [copied, setCopied] = useState(false)
-  const [importing, setImporting] = useState(false)
-  const [importError, setImportError] = useState('')
-  // FR-047: the *Use my existing Codex login* link is offered "only when the
-  // server reports the file exists". There is no dedicated wire field for
-  // that, and inventing one would put a second source of truth beside the
-  // status route — so we ASK the status route about the CLI provider that
-  // owns the file: GET /providers/codex-cli/sign-in/status reads
-  // ~/.codex/auth.json read-only and answers not_signed_in when it is absent
-  // or unreadable. Anything else means the file is there and yielded a token.
-  const [codexLoginPresent, setCodexLoginPresent] = useState(false)
 
   // Monotonic start id. Close-then-reopen, or *Try again* clicked twice, can
   // leave an older startSignIn() in flight; only the newest one may set state,
@@ -157,21 +129,16 @@ export function SignInDialog({
   const begin = async () => {
     const seq = ++startSeq.current
     setPhase({ kind: 'starting' })
-    setImportError('')
     try {
       const resp = await startSignIn(providerId)
       if (seq !== startSeq.current) return
-      if (resp.method === 'cli_login') {
-        setPhase({ kind: 'cli_login', command: resp.command, instructions: resp.instructions, checking: false })
-      } else {
-        setPhase({
-          kind: 'device_code',
-          verificationUrl: resp.verification_url,
-          userCode: resp.user_code,
-          deviceAuthId: resp.device_auth_id,
-          intervalSeconds: resp.interval_seconds,
-        })
-      }
+      setPhase({
+        kind: 'device_code',
+        verificationUrl: resp.verification_url,
+        userCode: resp.user_code,
+        deviceAuthId: resp.device_auth_id,
+        intervalSeconds: resp.interval_seconds,
+      })
     } catch (err) {
       if (seq !== startSeq.current) return
       setPhase({ kind: 'error', message: getErrorMessage(err, 'Could not start sign-in') })
@@ -188,29 +155,6 @@ export function SignInDialog({
       startSeq.current += 1
       setPhase({ kind: 'starting' })
       setCopied(false)
-      setImporting(false)
-      setImportError('')
-      setCodexLoginPresent(false)
-    }
-  }, [open, providerId])
-
-  // FR-047 availability probe, openai-chatgpt only. Kept out of `begin()` so a
-  // *Try again* does not re-ask, and deliberately fire-and-forget: a failure
-  // here only means the secondary link stays hidden, never that sign-in is
-  // blocked.
-  useEffect(() => {
-    if (!open || providerId !== 'openai-chatgpt') return
-    let cancelled = false
-    void (async () => {
-      try {
-        const status = await fetchSignInStatus('codex-cli')
-        if (!cancelled) setCodexLoginPresent(status?.state === 'signed_in' || status?.state === 'expired')
-      } catch {
-        if (!cancelled) setCodexLoginPresent(false)
-      }
-    })()
-    return () => {
-      cancelled = true
     }
   }, [open, providerId])
 
@@ -284,50 +228,6 @@ export function SignInDialog({
     }
   }, [open, providerId, deviceAuthId, startIntervalSeconds])
 
-  const handleCheckCliSignIn = async () => {
-    if (phase.kind !== 'cli_login') return
-    setPhase({ ...phase, checking: true })
-    try {
-      const status = await fetchSignInStatus(providerId)
-      if (status.state === 'signed_in') {
-        setPhase({ kind: 'signed_in', accountLabel: status.account_label })
-        onSignedIn?.(status)
-      } else if (status.state === 'expired') {
-        // For cli_login, "expired" means the CLI's EXISTING session was
-        // rejected — no code went unapproved, so the device-code `expired`
-        // phase and its wording do not apply. Stay on the command step so the
-        // way back in (run the login command, then Check sign-in) stays on screen.
-        setPhase({ kind: 'cli_login', command: phase.command, instructions: phase.instructions, checking: false, checkResult: 'expired' })
-      } else {
-        // SignInStatus.reason (2026-09-14): present exactly when the check
-        // itself could not run (CLI missing, failed to start, timed out) —
-        // without it the operator reads "not signed in yet" as "run the
-        // command", which is the wrong advice for a machine-level failure.
-        setPhase({ kind: 'cli_login', command: phase.command, instructions: phase.instructions, checking: false, checkResult: 'not_yet', checkReason: status.reason })
-      }
-    } catch (err) {
-      setPhase({ kind: 'error', message: getErrorMessage(err, 'Sign-in check failed') })
-    }
-  }
-
-  const handleImportCodexLogin = async () => {
-    setImporting(true)
-    setImportError('')
-    try {
-      const status = await importCodexLogin()
-      if (status.state === 'signed_in') {
-        setPhase({ kind: 'signed_in', accountLabel: status.account_label })
-        onSignedIn?.(status)
-      } else {
-        setImportError('No existing Codex login found.')
-      }
-    } catch (err) {
-      setImportError(getErrorMessage(err, 'No existing Codex login found.'))
-    } finally {
-      setImporting(false)
-    }
-  }
-
   const handleCopyCode = async () => {
     if (phase.kind !== 'device_code') return
     try {
@@ -346,13 +246,6 @@ export function SignInDialog({
   const statusText = (() => {
     switch (phase.kind) {
       case 'starting': return 'Starting sign-in…'
-      case 'cli_login':
-        if (phase.checkResult === 'not_yet') {
-          if (phase.checkReason) return `Not signed in yet — ${phase.checkReason}.`
-          return 'Not signed in yet — run the command above, then check again.'
-        }
-        if (phase.checkResult === 'expired') return cliSessionRejectedText(providerLabel, phase.command)
-        return 'Waiting for you to sign in.'
       case 'device_code': return 'Waiting for you to approve this sign-in…'
       case 'signed_in': return phase.accountLabel ? `Signed in as ${phase.accountLabel}.` : 'Signed in.'
       case 'expired': return 'Sign-in expired before it was approved.'
@@ -369,8 +262,6 @@ export function SignInDialog({
           <DialogDescription>
             {phase.kind === 'device_code'
               ? 'Approve this sign-in on the vendor’s page, using any device.'
-              : phase.kind === 'cli_login'
-              ? 'Sign in using the vendor’s own command-line tool.'
               : ' '}
           </DialogDescription>
         </DialogHeader>
@@ -389,48 +280,6 @@ export function SignInDialog({
             <div className="flex items-center gap-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]" data-testid="sign-in-starting">
               <SpinnerGap size={14} className="animate-spin" />
               Starting sign-in…
-            </div>
-          )}
-
-          {phase.kind === 'cli_login' && (
-            <div className="space-y-[var(--space-2-5)]">
-              <div>
-                <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-muted)] mb-[var(--space-1)]">Run in a terminal</p>
-                <code
-                  className="block rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-body-compact-size)] font-mono text-[var(--color-secondary)]"
-                  data-testid="cli-login-command"
-                >
-                  {phase.command}
-                </code>
-                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-1)]">{phase.instructions}</p>
-              </div>
-              {phase.checkResult === 'not_yet' && (
-                <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-warning)] flex items-center gap-[var(--space-1)]" role="alert" aria-live="assertive">
-                  <Warning size={13} weight="fill" />{' '}
-                  {phase.checkReason
-                    ? `Not signed in yet — ${phase.checkReason}.`
-                    : 'Not signed in yet — run the command above, then check again.'}
-                </p>
-              )}
-              {phase.checkResult === 'expired' && (
-                <p
-                  className="text-[length:var(--type-body-compact-size)] text-[var(--color-warning)] flex items-start gap-[var(--space-1)]"
-                  role="alert"
-                  aria-live="assertive"
-                  data-testid="cli-login-expired"
-                >
-                  <Warning size={13} weight="fill" className="shrink-0 mt-[var(--space-0-5)]" /> {cliSessionRejectedText(providerLabel, phase.command)}
-                </p>
-              )}
-              <Button
-                onClick={handleCheckCliSignIn}
-                disabled={phase.checking}
-                className="w-full gap-[var(--space-2)]"
-                data-testid="check-sign-in-btn"
-              >
-                {phase.checking ? <SpinnerGap size={14} className="animate-spin" /> : null}
-                Check sign-in
-              </Button>
             </div>
           )}
 
@@ -483,25 +332,6 @@ export function SignInDialog({
                 <SpinnerGap size={13} className="animate-spin" />
                 Waiting for you to approve this sign-in…
               </div>
-              {providerId === 'openai-chatgpt' && codexLoginPresent && (
-                <div className="pt-[var(--space-1)] border-t border-[var(--color-border)]">
-                  <Button
-                    type="button"
-                    variant="link"
-                    onClick={handleImportCodexLogin}
-                    disabled={importing}
-                    className="mt-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-medium"
-                    data-testid="import-codex-login-btn"
-                  >
-                    {importing ? 'Checking…' : 'Use my existing Codex login'}
-                  </Button>
-                  {importError && (
-                    <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] mt-[var(--space-1)]" role="alert" aria-live="assertive">
-                      {importError}
-                    </p>
-                  )}
-                </div>
-              )}
             </div>
           )}
 

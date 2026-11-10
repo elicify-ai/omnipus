@@ -25,8 +25,8 @@ func TestNormalizeAgentID_Valid(t *testing.T) {
 		input, want string
 	}{
 		{"main", "main"},
-		{"Main", "main"},
-		{"SALES", "sales"},
+		{"Main", "Main"},
+		{"SALES", "SALES"},
 		{"support-bot", "support-bot"},
 		{"agent_1", "agent_1"},
 		{"a", "a"},
@@ -43,7 +43,7 @@ func TestNormalizeAgentID_InvalidChars(t *testing.T) {
 	tests := []struct {
 		input, want string
 	}{
-		{"Hello World", "hello-world"},
+		{"Hello World", "Hello-World"},
 		{"agent@123", "agent-123"},
 		{"foo.bar.baz", "foo-bar-baz"},
 		{"--leading", "leading"},

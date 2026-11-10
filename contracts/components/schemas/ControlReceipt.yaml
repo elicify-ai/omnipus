@@ -1,0 +1,117 @@
+type: object
+title: ControlReceipt
+description: >
+  Sub-agent control plane ADR D4/MIN-001/MIN-003. The receipt for one
+  accepted control on a steered session (`steer`, `stop`, `stop_all`,
+  `redirect`, `resume`, `respond`, `clear_goal`). ADR-20261004 ("Steering
+  commands: no person question") withdrew the `escalate` relay verb with
+  the person-question pause. Replaces
+  `SubagentStateFrame.yaml`'s former `steering_receipt` shape
+  (`{correlation_id, applied_at}`, issue #870) with the full control-ledger
+  receipt shape the ADR specifies.
+
+  Train-3 scope note: only the `steer` verb is wired to this shape today,
+  via `pkg/agent/steer_frames.go::deliverSubagentState`. The per-session
+  control ledger that assigns a true monotonic `seq` and tracks a control's
+  own `accepted_at` moment (ADR D4, "Controls") is NOT built in this PR —
+  `seq` and `accepted_at` are stamped as documented stand-ins (the same
+  pattern `pkg/session/lifecycle_edge.go::StopNote.Seq` already uses: the
+  record's own generation substituting for a ledger sequence until the
+  ledger exists). `control_id` reuses the existing correlation id. `verb`
+  and `state` are constants for this call site (`"steer"` / `"delivered"`)
+  until other verbs are wired. Every other field below belongs to the
+  ADR's full future shape and is never populated by this call site.
+additionalProperties: false
+required:
+  - seq
+  - control_id
+  - verb
+  - state
+  - accepted_at
+properties:
+  seq:
+    type: integer
+    format: int64
+    minimum: 0
+    description: >
+      Monotonic per-child control sequence (ADR D4). Stand-in value today —
+      see the schema description above.
+    example: 1
+  control_id:
+    type: string
+    minLength: 1
+    description: >
+      The accepted control's identifier — caller-supplied correlation id,
+      or server-assigned when blank.
+    example: "corr_01J3ZQK8N2H8VXNRP5T7C9M4WL"
+  verb:
+    type: string
+    enum:
+      - steer
+      - stop
+      - stop_all
+      - redirect
+      - resume
+      - respond
+      - clear_goal
+    description: Which control this receipt reports on.
+    example: "steer"
+  state:
+    type: string
+    enum:
+      - queued
+      - delivered
+      - applied
+      - superseded
+    description: >
+      ADR D4's control-receipt state machine. `queued`: accepted, durable,
+      not yet in front of the child. `delivered` (steer only): the
+      instruction is durably present in the child's transcript at its next
+      tool boundary — `steer`'s runtime-final receipt; never a claim of
+      model compliance. `applied`: the runtime enforced the effect (stop,
+      redirect, stop_all, respond, resume, clear_goal). `superseded`:
+      replaced before delivery by a newer control, or made moot.
+    example: "delivered"
+  accepted_at:
+    type: string
+    format: date-time
+    description: >
+      When the control was accepted into the ledger. Stand-in value today
+      (same moment as `delivered_at`/`applied_at` at this call site, since
+      no separate acceptance moment is tracked ahead of the ledger) — see
+      the schema description above.
+    example: "2026-07-22T10:00:30Z"
+  delivered_at:
+    type: string
+    format: date-time
+    description: When a `steer` reached `delivered` (durable transcript injection).
+    example: "2026-07-22T10:00:30Z"
+  applied_at:
+    type: string
+    format: date-time
+    description: When a non-steer control reached `applied` (runtime-enforced effect).
+    example: "2026-07-22T10:00:30Z"
+  superseded_at:
+    type: string
+    format: date-time
+    description: When this control was superseded.
+    example: "2026-07-22T10:00:30Z"
+  superseded_by_seq:
+    type: integer
+    format: int64
+    minimum: 0
+    description: The superseding control's own `seq`, when `state == superseded`.
+    example: 2
+  reason:
+    type: string
+    description: Free-text reason, set for a `superseded` state or a notable transition.
+    example: "superseded by a newer redirect"
+  released_control_ids:
+    type: array
+    items:
+      type: string
+    description: >
+      Control ids released together with this receipt (e.g. a RESUME that
+      releases preserved restart-pending controls in sequence, ADR D4 boot
+      reconciliation).
+    example: []

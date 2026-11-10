@@ -25,6 +25,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/constants"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
@@ -42,11 +43,24 @@ import (
 )
 
 type AgentLoop struct {
+	// routingDrops is the per-channel-instance routing degradation
+	// (omnipus-system-agent FR-121, K15): set when an inbound message is
+	// dropped as unroutable, cleared by a valid binding (FR-129).
+	routingDrops routingDropTracker
+	// connLanes holds the per-chat serial lanes of bound connector input that
+	// is waiting behind a voice note being transcribed (connector_lane.go).
+	connLanes   sync.Mutex
+	connLaneMap map[string]*connectorLane
+	// admitDispatchHook, when set, replaces admitAndDispatch (tests only).
+	admitDispatchHook func(context.Context, bus.InboundMessage)
+
 	// Core dependencies
 	bus      *bus.MessageBus
 	cfg      *config.Config
 	registry *AgentRegistry
 	state    *state.Manager
+	// effortRejected remembers rejected effort pairs until restart (FR-057).
+	effortRejected effortRejections
 
 	// configGen is a monotonic counter bumped every time al.cfg is replaced
 	// with a new pointer, under al.mu.Lock() — currently by SwapConfig and by
@@ -92,8 +106,25 @@ type AgentLoop struct {
 	// recallSpans holds the transient in-memory recall span per session
 	// (FR-019): key sessionKey (string), value *RecallSpan. Never persisted;
 	// set by recall_conversation, read/dropped by windowTrim + assembly.
-	recallSpans      sync.Map // key: sessionKey (string), value: *RecallSpan
-	activeTurnStates sync.Map // key: sessionKey (string), value: *turnState
+	recallSpans sync.Map // key: sessionKey (string), value: *RecallSpan
+	// pairingRevokeHook is a test seam (gate r4 R4-A03): it runs in a Stop
+	// after a not-yet-started pairing was revoked and before its stopped
+	// frame is published. Nil in production.
+	pairingRevokeHook func()
+	// pendingRequests / remindedRequests back the unanswered-request reminder
+	// (request_reminder.go): request id -> receiver session id, and the ids that
+	// already got their one reminder.
+	pendingRequests   sync.Map
+	deliveredRequests sync.Map // request ids a turn has actually been given
+	remindedRequests  sync.Map
+	heldRepublished   sync.Map // request id -> time.Time its wake was last published (see claimWakeSlot)
+	activeTurnStates  sync.Map // key: sessionKey (string), value: *turnState
+	// externalRunSessions holds the live external-CLI driver per child session
+	// (key: the child's transcript session id (string), value: *externalCLIRunSession)
+	// so a follow-up instruction can reach the SAME native CLI conversation via
+	// Resume instead of a fresh Run (FR-043). Lazily created; see
+	// external_run_session.go.
+	externalRunSessions sync.Map
 	// subTurnSpansMu/openSubTurnSpans/subTurnCounter (the sub-turn span
 	// liveness tracker guarded by subTurnSpansMu, and its id counter) were
 	// deleted 2026-09-24 as unreachable ADR-091 leftovers (golangci
@@ -101,29 +132,39 @@ type AgentLoop struct {
 	// already deleted (see websocket_replay.go's replay-derived liveness
 	// comment near streamReplay) — these fields had no reader or writer
 	// left anywhere in the repo.
-	sessionActiveAgent sync.Map // key: "session:"+sessionID (string), value: agentID (string); set by handoff, cleared on agent deletion
-	// lastSwitchToDefault records, per session, whether the most recent
-	// switch_agent call was a return-to-default (tools.HandoffEvent.ToDefault)
-	// rather than a named-agent hand-off. It exists so the WS agent_switched
-	// frame builder (pkg/gateway/websocket.go) can report the tool's own
-	// intent instead of re-deriving "was this a return to default" after the
-	// fact by comparing the resulting active agent id against the configured
-	// default agent id — a comparison that misreports an explicit
-	// switch_agent(target:"<id>") that happens to name the current default
-	// agent as a return-to-default. Populated by onHandoffFrontend
-	// synchronously, before the matching ToolExecEnd event is emitted, so the
-	// WS handler always observes the value it needs; read once via
-	// GetLastSwitchToDefault (LoadAndDelete — one-shot per switch).
-	// key: "session:"+sessionID (string), value: bool.
-	lastSwitchToDefault sync.Map
+	// addressDeps / requestLedger back session-core U8's peer and reply routing
+	// (address_router.go).
+	addressDeps   atomic.Pointer[AddressDeps]
+	requestLedger atomic.Pointer[ledgerHolder]
+	// roomRuntime / roomWriter back group-chat rooms (room_request.go).
+	roomRuntime atomic.Pointer[RoomRuntime]
+	roomWriter  atomic.Pointer[RoomReceiverWriter]
+	roomPricer  atomic.Pointer[RoomCallPricer]
+	// roomRequests maps a room request id to its room id (cost allocation).
+	roomRequests sync.Map
+	// mirrorFailHook is a test seam run just before the connector-reply mirror
+	// append (nil in production).
+	mirrorFailHook func()
+	// policyReadHook is a test seam run with the result of every receiver
+	// send_message policy read (nil in production).
+	policyReadHook func(policy string)
+	// postFinishRevivalMu / postFinishRevival mark a session whose
+	// SPECIFIC generation was JUST created by a post-finish revival
+	// (issue #1020 round-4 correction). The key is the NEW generation
+	// number (rec.Generation+1 at revival time), not the sessionID alone,
+	// so completionMessage for the OLD generation's terminal commit
+	// does NOT consume the stamp — the OLD final carries the pre-late
+	// answer unchanged (round-3 spec item 3's contract). Only the
+	// NEW generation's completionMessage (read-and-clear) adds the
+	// "Follow-up after a late instruction: ..." prefix to its hand-back
+	// — the founder-approved spec's visible signal that the
+	// parent-facing text was triggered by a late steer.
+	postFinishRevivalMu sync.Mutex
+	postFinishRevival   map[string]int
 
 	// Turn tracking
 	turnSeq        atomic.Uint64
 	activeRequests activeRequestTracker
-	// delegatedRateLimitSleep is a per-loop test seam. Production leaves it
-	// nil and callProvider uses sleepWithContext; tests can record the exact
-	// retry delays without a wall-clock assertion or process-global mutation.
-	delegatedRateLimitSleep func(context.Context, time.Duration) error
 
 	// mediaRefsDropped counts media refs that could not be resolved (unknown ref
 	// or file missing on disk). Observable via GetMediaRefsDropped for tests and
@@ -187,14 +228,27 @@ type AgentLoop struct {
 	// inbox/steer/cancel actions return "not configured"). See
 	// session_messaging_wire.go.
 	messageInboxStore *session.MessageInboxStore
-	// sessionLifecycleStoreForTools is the durable S2 session-lifecycle store
-	// (pkg/session/lifecycle.go), threaded to the delegate + message_parent
-	// tools so a child can read/park its own record and a parent can read a
-	// child's record. Distinct name from planEngine's own lifecycleStore
-	// reference to keep the two consumers (boot-sweep vs tool-surface) legible;
-	// both point at the SAME single *session.LifecycleStore instance the
-	// gateway constructs once.
+	// sessionLifecycleStoreForTools is the one gateway-owned durable store
+	// shared by steering, tools and planEngine. Its independent reference
+	// lock keeps Stop available while a configuration transaction holds mu.
+	sessionLifecycleMu            sync.RWMutex
 	sessionLifecycleStoreForTools *session.LifecycleStore
+
+	// clearNotPerformedHook receives a refused or not-performed /clear
+	// (clear_not_performed.go). Set once by the gateway's WS handler.
+	clearNotPerformedHook atomic.Pointer[ClearNotPerformedFunc]
+
+	// clearHeldHook receives a /clear the server holds while it stops the running
+	// reply (clear_held.go). Set once by the gateway's WS handler.
+	clearHeldHook  atomic.Pointer[ClearHeldFunc]
+	goalPausedHook atomic.Pointer[GoalPausedFunc]
+
+	// clearReleasedHook receives a held /clear once the stop has settled and the
+	// /clear is queued (clear_held.go). Set once by the gateway's WS handler.
+	clearReleasedHook atomic.Pointer[ClearReleasedFunc]
+
+	// requestDeliveredHook receives a held request's delivery (request_delivered_hook.go).
+	requestDeliveredHook atomic.Pointer[RequestDeliveredFunc]
 
 	// Security (SEC-15): audit logging.
 	// Initialized in NewAgentLoop when sandbox.audit_log is enabled.
@@ -436,9 +490,9 @@ type AgentLoop struct {
 	sessionLauncher  steer.SessionLauncher
 	steerDepsMu      sync.RWMutex
 
-	// sharedSessionStore is the single UnifiedStore at $OMNIPUS_HOME/sessions/
-	// used for all new sessions (joined session model). Legacy per-agent stores
-	// remain accessible via GetAgentStore for read-only access to old sessions.
+	// sharedSessionStore is the ONE UnifiedStore at $OMNIPUS_HOME/sessions/. Every
+	// session and every agent's model window lives in it; there are no per-agent
+	// stores. Every AgentInstance.Sessions holds this same pointer.
 	sharedSessionStore *session.UnifiedStore
 
 	// askUserRegistry is the gateway-injected AskUserQuestion pending
@@ -449,6 +503,7 @@ type AgentLoop struct {
 	// closed while nil. Guarded by askUserRegistryMu.
 	askUserRegistry   tools.AskUserQuestionRegistry
 	askUserRegistryMu sync.RWMutex
+	secretRequests    secretRequestState
 
 	// toolApprover is the gateway-injected implementation of the human-in-the-loop
 	// approval gate (FR-011, FR-082). Nil until SetToolApprover is called; when nil,
@@ -477,7 +532,7 @@ type AgentLoop struct {
 	claimedCloseSessions sync.Map // sessionID (string) → true
 
 	// Session-end recap drain (#265). Recap goroutines (CloseSession → runRecap)
-	// write LAST_SESSION.md / retro files and emit audit entries in the
+	// write carry-forward summaries / retro files and emit audit entries in the
 	// background. Close() drains them (recapWG.Wait) BEFORE it tears down the
 	// registry, session stores, and audit logger they write through, so the
 	// recaps both complete and finish writing before shutdown returns — leaving
@@ -544,6 +599,15 @@ type AgentLoop struct {
 	// Value: *sessionWorker.
 	// Workers self-remove after workerIdleTimeout; Close() cancels all remaining.
 	sessionWorkers sync.Map
+	// workerSpawnMu guards workerSpawnClosed: Close sets it before draining
+	// the workers and dispatchSessionWorker checks it while spawning, so no
+	// worker can start after Close's drain snapshot (Train 2 gate r1).
+	workerSpawnMu     sync.Mutex
+	workerSpawnClosed bool
+	// workerSnapshotHook is a test seam (gate r2 pr-test C1): when set, it
+	// runs right after stopSessionWorkers takes its worker snapshot, so a test
+	// can hold shutdown at that boundary. Always nil in production.
+	workerSnapshotHook func()
 
 	// admission is the soft-cap gate for concurrent session workers.
 	// Phase 1: gates inbound user-message dispatch only, per unique scope.
@@ -559,14 +623,14 @@ type AgentLoop struct {
 	// manifest optimization (cfg.Tools.Manifest.Compressed) for each
 	// (agent, session) bucket. Key: manifestBucketKey(agentID, transcriptID,
 	// sessionKey) — ADR-071 D3 §4.6 narrowed this from a session-only key so
-	// a switch_agent mid-session no longer lets the incoming agent inherit
-	// the outgoing agent's loaded Tier 3 tools. Value: map[string]bool (tool
+	// the key stays per-agent. Value: map[string]bool (tool
 	// name → loaded). Protected by loadedToolsMu. A new bucket lazily creates
 	// a fresh set on first load; entries are evicted by forgetSession's
 	// suffix sweep on CloseSession (transcript sessions). Only populated when
 	// Compressed is true.
-	loadedTools   map[string]map[string]bool
-	loadedToolsMu sync.Mutex
+	loadedTools         map[string]map[string]bool
+	loadedToolsMu       sync.Mutex
+	promptCacheSessions sync.Map // manifest bucket → sessionPromptCache
 
 	// pendingSearchPromotions is a side table of loadedTools (ADR-071
 	// §4.3.1a): bucket key → tool name → the turn index (bucketTurnCounter
@@ -602,7 +666,7 @@ type AgentLoop struct {
 
 const (
 	defaultResponse           = "The model returned an empty response. This may indicate a provider error or token limit."
-	toolLimitResponse         = "I've reached `max_tool_iterations` without a final response. Increase `max_tool_iterations` in config.json if this task needs more tool steps."
+	toolLimitResponse         = "I've reached this agent's limit of tool steps for one turn without a final response. An admin can raise the limit in Settings → Performance (\"Max tool calls per turn\"), and each agent's own lower limit is on its profile's Advanced tab."
 	sessionKeyAgentPrefix     = "agent:"
 	metadataKeyAccountID      = "account_id"
 	metadataKeyGuildID        = "guild_id"
@@ -611,24 +675,6 @@ const (
 	metadataKeyParentPeerKind = "parent_peer_kind"
 	metadataKeyParentPeerID   = "parent_peer_id"
 )
-
-// debitLLMUsage is the ONE accounting path for a provider call's reported
-// usage: turnState.lastUsage and the turn's own stats — collapsed total +
-// cost, the cache read/write split, and the prompt/completion split.
-//
-// It exists because ADR-087 D3.9 must debit a REFUSED attempt's billed usage
-// (common.ToolArgumentsError.Usage) exactly the way the success arm debits a
-// delivered one, and the first cut of that re-typed the calls by hand and
-// dropped SetLastUsage. Two callers, one body, no drift.
-func (al *AgentLoop) debitLLMUsage(ts *turnState, llmModel string, usage *providers.UsageInfo) {
-	if ts == nil || usage == nil {
-		return
-	}
-	ts.SetLastUsage(usage)
-	ts.AddTurnStats(int64(usage.TotalTokens), estimateLLMCallCost(llmModel, usage))
-	ts.AddTurnCacheStats(usage.CacheReadTokens, usage.CacheWriteTokens)
-	ts.AddTurnIOStats(usage.PromptTokens, usage.CompletionTokens)
-}
 
 // ErrReloadNotConfigured is returned by TriggerReload when no reload function
 // has been registered. This is normal in unit-test environments where the full
@@ -685,6 +731,8 @@ type newAgentLoop struct {
 	registry *AgentRegistry
 	al       *AgentLoop
 	homePath string
+	// sharedStore is the ONE session store, opened by initializeConvertedSessions.
+	sharedStore *session.UnifiedStore
 }
 
 // NewAgentLoop constructs an AgentLoop from the given config, message bus, and LLM provider.
@@ -695,8 +743,30 @@ func NewAgentLoop(
 	provider providers.LLMProvider,
 ) (*AgentLoop, error) {
 	nal := &newAgentLoop{cfg: cfg, msgBus: msgBus, provider: provider}
+	// Parse the provider catalog once at construction: every request's
+	// effort plan reads it, and a first parse inside the recap's one overall
+	// time limit would spend that budget before the first call (S-97).
+	_ = providers.ProviderCatalog()
+
+	// CONV saved-chat cutover boot step (architect Q10/Q11): convert any
+	// pre-cutover saved chat in the shared archive BEFORE registry/per-agent
+	// store construction, and refuse boot on a conversion failure rather than
+	// serving over an incomplete conversion. See
+	// newAgentLoop.initializeConvertedSessions.
+	if err := nal.initializeConvertedSessions(); err != nil {
+		return nil, err
+	}
 
 	nal.initializeCore()
+	if err := nal.registry.InitErr(); err != nil {
+		// An agent that cannot get its session store must not boot as an empty
+		// registry with a log line. This loop owns the store: give it back.
+		if relErr := releaseSharedSessionStore(nal.sharedStore); relErr != nil {
+			logger.ErrorCF("agent", "Failed to close shared session store",
+				map[string]any{"error": relErr.Error()})
+		}
+		return nil, fmt.Errorf("agent registry: %w", err)
+	}
 
 	if r0, stop, r1 := nal.initializeAudit(); stop {
 		return r0, r1
@@ -882,24 +952,43 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 				continue
 			}
 
-			scope, _, ok := al.resolveSteeringTarget(msg)
-			if !ok {
-				// Unroutable — fall through to the original single-shot path so
-				// channels with no configured agent still get an error reply.
-				al.launchUnroutableMessage(runCtx, msg)
-				continue
-			}
-
-			// If a worker already exists for this scope AND is not in the
-			// middle of exiting, enqueue into it; otherwise spawn one under
-			// the admission controller. See dispatchSessionWorker
-			// (session_worker.go) — the same helper #505's system-message
-			// dispatch uses to serialize async-origin turns against the
-			// origin session's worker. On an admission refusal the helper has
-			// already published the capacity reply; nothing further to do.
-			al.dispatchSessionWorker(scope, msg)
+			// Bound connector input is admitted per chat in strict arrival order
+			// (see routeBoundConnectorInput): a voice note is transcribed before
+			// its size gate and any write (U8 r2 F5), which can take seconds, so
+			// it runs off the dispatch loop - and anything the same chat sends
+			// meanwhile waits behind it, while other chats keep flowing.
+			al.routeBoundConnectorInput(runCtx, msg)
 		}
 	}
+}
+
+// admitAndDispatch is the per-message tail of Run: bound-connector admission
+// (U8, FR-028), then routing to the session worker (or the unroutable path).
+func (al *AgentLoop) admitAndDispatch(runCtx context.Context, msg bus.InboundMessage) {
+	if refusal, admitErr := al.admitBoundConnectorInputCtx(runCtx, &msg); refusal != "" || admitErr != nil {
+		if admitErr != nil {
+			logger.WarnCF("agent", "bound connector input refused",
+				map[string]any{"channel": msg.Channel, "chat_id": msg.ChatID, "error": admitErr.Error()})
+		}
+		if refusal != "" {
+			al.refuseConnectorInput(runCtx, msg, refusal)
+		}
+		return
+	}
+
+	scope, _, ok := al.resolveSteeringTarget(msg)
+	if !ok {
+		// Unroutable — fall through to the original single-shot path so
+		// channels with no configured agent still get an error reply.
+		al.launchUnroutableMessage(runCtx, msg)
+		return
+	}
+
+	// If a worker already exists for this scope AND is not in the middle of
+	// exiting, enqueue into it; otherwise spawn one under the admission
+	// controller. See dispatchSessionWorker (session_worker.go). On an
+	// admission refusal the helper has already published the capacity reply.
+	al.dispatchSessionWorker(scope, msg)
 }
 
 // stopSessionWorkers cancels all active session workers and waits for each
@@ -921,6 +1010,9 @@ func (al *AgentLoop) stopSessionWorkers() {
 		workers = append(workers, w)
 		return true
 	})
+	if hook := al.workerSnapshotHook; hook != nil {
+		hook()
+	}
 
 	for _, w := range workers {
 		w.cancel()
@@ -955,7 +1047,8 @@ func (al *AgentLoop) Stop() {
 }
 
 // WaitForActiveRequests closes request intake and blocks until tracked work
-// completes. Shutdown callers needing a deadline use the context variant.
+// completes. Callers that need a bounded wait should use
+// WaitForActiveRequestsContext instead.
 func (al *AgentLoop) WaitForActiveRequests() {
 	done, _ := al.activeRequests.startWait()
 	<-done
@@ -963,6 +1056,7 @@ func (al *AgentLoop) WaitForActiveRequests() {
 
 // Close releases resources held by agent session stores. Call after Stop.
 func (al *AgentLoop) Close() {
+	defer al.closeSecretRequests()
 	al.stopActiveRequestIntake()
 	// Cancel the loop-lifetime context FIRST, so a revived ordinary-root turn
 	// running on it stops writing through the stores the teardown below
@@ -1002,18 +1096,12 @@ func (al *AgentLoop) Close() {
 		al.taskExecutor.Drain(30 * time.Second)
 	}
 
-	// Drain ADR-091's steered-dispatch front for exactly the reason the two
-	// drains above exist: an admitted steered turn runs on a detached
-	// goroutine that writes lifecycle, inbox and transcript files, and so
-	// does the queue promotion it fires on the way out. Neither was joined
-	// by anything, so both outlived Close() and raced a caller's teardown.
-	// See admission.go::goSteeredTurn for the full note.
-	al.drainSteeredTurns(30 * time.Second)
-
 	// Cancel all active session workers and wait for them to drain (5 s budget).
 	// stopSessionWorkers is idempotent — safe to call here even if Run() has
 	// already called it on context-cancellation, because workers cancel their
-	// own context; a double-cancel is a no-op.
+	// own context; a double-cancel is a no-op. New spawns are refused first,
+	// so no worker can start after the drain snapshot and outlive Close.
+	al.closeSessionWorkerSpawns()
 	al.stopSessionWorkers()
 
 	// Drain the detached request goroutines tracked by activeRequests — the
@@ -1025,6 +1113,13 @@ func (al *AgentLoop) Close() {
 	// turn's writes against its own temp-dir removal
 	// (TestAdr093StopDuringRevivedTurn_DelegateRefuses).
 	al.waitActiveRequestsDrain(30 * time.Second)
+
+	// Drain ADR-091's steered turns (detached goroutines writing lifecycle,
+	// inbox and transcript files; admission.go::goSteeredTurn). LAST of the
+	// drains, because the ones above can still dispatch a steered turn —
+	// delegate redirect's resume waiter is an active request that revives
+	// through goSteeredTurn (TestClose_JoinsTheTurnARedirectWaiterDispatchesDuringClose).
+	al.drainSteeredTurns(30 * time.Second)
 
 	// Drop every browser's manager connection (one per browsing key). In ADR-043
 	// shared-Chrome mode this closes each manager's WS connection + detaches
@@ -1139,7 +1234,7 @@ func (al *AgentLoop) Close() {
 	// received its first message. Safe to call even when nil (degraded boot,
 	// loop.go's own error-logged "shared session store unavailable" branch).
 	if al.sharedSessionStore != nil {
-		if err := al.sharedSessionStore.Close(); err != nil {
+		if err := releaseSharedSessionStore(al.sharedSessionStore); err != nil {
 			logger.ErrorCF("agent", "Failed to close shared session store",
 				map[string]any{"error": err.Error()})
 		}
@@ -1242,6 +1337,7 @@ func (al *AgentLoop) waitRecapDrain(budget time.Duration) {
 func (al *AgentLoop) waitActiveRequestsDrain(budget time.Duration) {
 	done, alreadyWaiting := al.activeRequests.startWait()
 	if alreadyWaiting {
+		logger.DebugCF("agent", "Close: active-request drain already attempted; skipping duplicate wait", nil)
 		return
 	}
 	timer := time.NewTimer(budget)
@@ -1294,14 +1390,7 @@ func (al *AgentLoop) writeTurnCancelledRestartForActiveTurns() {
 			`{"type":"turn_canceled_restart","session_key":%q,"reason":"graceful_shutdown"}`,
 			sessionKey,
 		)
-		ts.agent.Sessions.AddMessage(sessionKey, "system", syntheticContent)
-		if err := ts.agent.Sessions.Save(sessionKey); err != nil {
-			logger.WarnCF("agent", "FR-048: failed to persist turn_canceled_restart on shutdown",
-				map[string]any{"session_key": sessionKey, "error": err.Error()})
-		} else {
-			logger.InfoCF("agent", "FR-048: turn_canceled_restart written on graceful shutdown",
-				map[string]any{"session_key": sessionKey})
-		}
+		al.writeTurnCancelledRestartMarker(ts, sessionKey, syntheticContent)
 
 		// Emit audit event (FR-048).
 		// CRIT-6 + typed-Decision/Event migration: route through audit.EmitEntry
@@ -1380,11 +1469,38 @@ func hookDeniedToolContent(prefix, reason string) string {
 	return prefix + ": " + reason
 }
 
-func (al *AgentLoop) ProcessDirect(
+// ProcessDirectAs runs one direct (CLI-style) turn as the named agent. There
+// is no default agent (omnipus-system-agent FR-120): the caller names the
+// agent, which is routed through the same explicit-agent path a web chat
+// frame uses.
+func (al *AgentLoop) ProcessDirectAs(
 	ctx context.Context,
-	content, sessionKey string,
+	agentID, content, sessionKey string,
 ) (string, error) {
-	return al.ProcessDirectWithChannel(ctx, content, sessionKey, "cli", "direct")
+	return al.ProcessDirectWithChannelAs(ctx, agentID, content, sessionKey, "cli", "direct")
+}
+
+// ProcessDirectWithChannelAs is ProcessDirectAs on a given channel and chat.
+func (al *AgentLoop) ProcessDirectWithChannelAs(
+	ctx context.Context,
+	agentID, content, sessionKey, channel, chatID string,
+) (string, error) {
+	if err := al.ensureHooksInitialized(ctx); err != nil {
+		return "", err
+	}
+	if err := al.ensureMCPInitialized(ctx); err != nil {
+		return "", err
+	}
+	msg := bus.InboundMessage{
+		Channel:    channel,
+		Sender:     bus.SenderInfo{CanonicalID: "cron"},
+		ChatID:     chatID,
+		Content:    content,
+		SessionKey: sessionKey,
+		Metadata:   map[string]string{"agent_id": agentID},
+	}
+	resp, _, err := al.processMessage(ctx, msg)
+	return resp, err
 }
 
 func (al *AgentLoop) ProcessDirectWithChannel(
@@ -1418,8 +1534,7 @@ func (al *AgentLoop) ProcessDirectWithChannel(
 // human message path:
 //
 //   - It pins ownerAgentID directly via runAgentLoop — it does NOT consult
-//     routing or the sessionActiveAgent handoff map, so a human switching agents
-//     in this session cannot hijack the scheduled run, and a missing/disabled
+//     routing, so a missing/disabled
 //     owner is a hard error (never a default-agent fallback, the core #264 bug).
 //   - It passes the concrete sessionID as TranscriptSessionID so the turn
 //     registers under it (GetActiveTurnHookForSession matches by
@@ -1456,7 +1571,7 @@ func (al *AgentLoop) ProcessScheduled(
 	}
 
 	// Owner pinning (FR-001): a missing owner is a hard error — NEVER fall back
-	// to GetDefaultAgent.
+	// to another agent (there is no default agent).
 	agent, ok := al.GetRegistry().GetAgent(ownerAgentID)
 	if !ok || agent == nil {
 		return "", fmt.Errorf("owner unavailable: agent %q not found", ownerAgentID)
@@ -1532,7 +1647,7 @@ func (al *AgentLoop) ProcessScheduled(
 		workspaceID = meta.WorkspaceID
 	}
 
-	resp, err := al.runAgentLoop(ctx, agent, processOptions{
+	resp, err := al.runScheduledTurnWithAdmission(ctx, agent, processOptions{
 		SessionKey:          sessionKey,
 		Channel:             channel,
 		ChatID:              chatID,
@@ -1573,234 +1688,9 @@ type agentLoopProcessMessage struct {
 	opts                processOptions
 }
 
-func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage) (string, *AgentInstance, error) {
-	pm := &agentLoopProcessMessage{al: al, ctx: ctx, msg: msg}
-
-	pm.prepareInbound()
-
-	// Route system messages to processSystemMessage
-	if pm.msg.Channel == "system" {
-		resp, err := pm.al.processSystemMessage(pm.ctx, pm.msg)
-		return resp, nil, err
-	}
-
-	// ADR-066 D4 / FR-015: the user-message bound, at the one point where an
-	// inbound message becomes a turn — BEFORE routing mints a channel session,
-	// before the transcript write below, before turn registration. Over the
-	// bound, the reply is returned as this message's ordinary response: the
-	// caller (session worker / unroutable path) publishes it on the
-	// originating channel like any assistant reply — no error frame, no
-	// transcript entry, no turn id. Media refs ride in msg.Media and are not
-	// counted. See user_message_bound.go.
-	if reply, refused := pm.al.refuseOversizedUserMessage(pm.msg); refused {
-		logger.InfoCF("agent", "Refused oversized user message before turn start (ADR-066 D4)",
-			map[string]any{
-				"channel":     pm.msg.Channel,
-				"chat_id":     pm.msg.ChatID,
-				"size_chars":  UserMessageChars(pm.msg.Content),
-				"bound_chars": pm.al.UserMessageBound(),
-			})
-		return reply, nil, nil
-	}
-
-	route, agent, routeErr := pm.al.resolveMessageRoute(pm.msg)
-	if routeErr != nil {
-		// ADR-029 FR-028/MAJ-003: emit the drift-drop counter and audit event
-		// exactly once — here, at the single point where the message is actually
-		// rejected.  resolveMessageRoute returns route.Drop=true only for
-		// workspace-bound instances whose configured agent is unresolvable
-		// (deleted or a worker).  resolveMessageRoute itself is side-effect-free
-		// w.r.t. this counter so that its multiple callers (resolveSteeringTarget,
-		// buildContinuationTarget) do not double-count the same drop.
-		if route.Drop {
-			instanceID := inboundInstanceID(pm.msg)
-			wsID := ""
-			intendedAgent := ""
-			if identity := pm.al.resolveInboundIdentity(instanceID); identity != nil {
-				intendedAgent = strings.TrimSpace(identity.ID)
-			}
-			if cfg := pm.al.GetConfig(); cfg != nil {
-				if inst, ok := cfg.Channels[instanceID]; ok {
-					wsID = inst.WorkspaceID
-				}
-			}
-			pm.al.driftDropped.Add(1)
-			if pm.al.auditLogger != nil {
-				_ = pm.al.auditLogger.Log(&audit.Entry{
-					Event:    audit.EventChannelRoutingDriftDrop,
-					Decision: audit.DecisionDeny,
-					Details: map[string]any{
-						"instance_id":       instanceID,
-						"workspace_id":      wsID,
-						"intended_agent_id": intendedAgent,
-						"chat_id":           pm.msg.ChatID,
-						"reason":            "bound agent unresolvable (deleted or worker — not a chat target)",
-					},
-				})
-			}
-		}
-		return "", nil, routeErr
-	}
-
-	// Reset message-tool state for this round so we don't skip publishing due to a previous round.
-	if tool, ok := agent.Tools.Get("send_message"); ok {
-		if resetter, ok := tool.(interface{ ResetSentInRound() }); ok {
-			resetter.ResetSentInRound()
-		}
-	}
-
-	// Resolve session key from route, while preserving explicit agent-scoped keys.
-	scopeKey := resolveScopeKey(route, pm.msg.SessionKey)
-	pm.sessionKey = scopeKey
-
-	logger.InfoCF("agent", "Routed message",
-		map[string]any{
-			"agent_id":      agent.ID,
-			"scope_key":     scopeKey,
-			"session_key":   pm.sessionKey,
-			"matched_by":    route.MatchedBy,
-			"route_agent":   route.AgentID,
-			"route_channel": route.Channel,
-		})
-
-	// For non-webchat channel messages arriving without a session ID, create or
-	// resume a persistent shared session so they appear in the session history panel.
-	// FR-022 (ADR-029): for a bound channel instance, stamp the session with the
-	// instance's workspace_id so it appears linked to the right workspace.
-	if pm.msg.SessionID == "" && pm.msg.Channel != "webchat" && pm.msg.Channel != "system" && pm.msg.Channel != "" {
-		instanceSessionID := inboundInstanceID(pm.msg)
-		sessionWorkspaceID := ""
-		if instanceSessionID != "" {
-			if sessionCfg := pm.al.GetConfig(); sessionCfg != nil {
-				if instCfg, ok := sessionCfg.Channels[instanceSessionID]; ok {
-					sessionWorkspaceID = instCfg.WorkspaceID
-				}
-			}
-		}
-		if sid := pm.al.resolveOrCreateChannelSession(
-			pm.msg.Channel, instanceSessionID, pm.msg.ChatID, agent.ID, pm.msg.Sender.DisplayName, sessionWorkspaceID,
-		); sid != "" {
-			pm.msg.SessionID = sid
-		}
-	}
-
-	// Resolve transcript store for tool call recording. SessionID is now
-	// authoritative — populated directly by the gateway from frame.SessionID.
-
-	if pm.msg.SessionID != "" {
-		pm.transcriptSessionID = pm.msg.SessionID
-		pm.transcriptStore = pm.al.ResolveSessionStore(pm.msg.SessionID)
-		if pm.transcriptStore == nil {
-			logger.WarnCF(
-				"agent",
-				"session_id present but store not found — tool calls will not be recorded",
-				map[string]any{"session_id": pm.msg.SessionID},
-			)
-		}
-	}
-
-	// Write user message to transcript for channel sessions.
-	// Web-chat user messages are written by the WebSocket handler before the
-	// turn starts (websocket.go); this path covers every other channel
-	// (Telegram, Slack, Discord, etc.) so that replays show the user's prompt
-	// alongside tool calls and assistant responses.
-	channelNeedsTranscript := pm.transcriptStore != nil &&
-		pm.msg.Channel != "webchat" && pm.msg.Channel != "system" &&
-		strings.TrimSpace(pm.msg.Content) != ""
-	if channelNeedsTranscript {
-		entry := session.TranscriptEntry{
-			ID:        fmt.Sprintf("user-%d", time.Now().UnixNano()),
-			Role:      "user",
-			AgentID:   agent.ID,
-			Content:   pm.msg.Content,
-			Timestamp: time.Now().UTC(),
-		}
-		if err := pm.transcriptStore.AppendTranscript(pm.transcriptSessionID, entry); err != nil {
-			logger.WarnCF("agent", "could not record channel user message to transcript",
-				map[string]any{"session_id": pm.transcriptSessionID, "channel": pm.msg.Channel, "error": err.Error()})
-		}
-	}
-
-	pm.resolveWorkspace()
-
-	pm.prepareTurn()
-
-	// FR-025: reset idle ticker on every user turn, using transcript session ID
-	// when available (web-chat sessions). This starts the ticker on the first
-	// turn and resets it on every subsequent turn.
-	if pm.transcriptSessionID != "" {
-		pm.al.resetIdleTicker(pm.transcriptSessionID)
-		// FR-024: track current session per agent for lazy CAS on switch.
-		pm.al.agentCurrentSession.Store(agent.ID, pm.transcriptSessionID)
-
-		// Self-heal: rebuild the agent's per-session history from the shared
-		// transcript when the in-memory copy is missing or stale. We rehydrate
-		// not only when the bucket is empty (handoff, fresh process, etc.) but
-		// also when the bucket has *no* assistant/tool entries while the
-		// transcript carries tool_calls owned by this agent — the symptom of
-		// the prior wsStreamer bug that wrote assistant text with empty AgentID
-		// and left the per-agent bucket stuck on user messages only. Without
-		// this stronger trigger, an old session keeps starting from scratch
-		// every turn because GetHistory returns the broken cached state and
-		// the empty-only check above is satisfied.
-		if agent.Sessions != nil {
-			cur := agent.Sessions.GetHistory(pm.sessionKey)
-			needsHydrate := len(cur) == 0
-			if !needsHydrate && pm.transcriptStore != nil {
-				hasAssistantOrTool := false
-				for _, m := range cur {
-					if m.Role == "assistant" || m.Role == "tool" {
-						hasAssistantOrTool = true
-						break
-					}
-				}
-				if !hasAssistantOrTool {
-					if entries, err := pm.transcriptStore.ReadTranscript(pm.transcriptSessionID); err == nil {
-						for i := range entries {
-							e := &entries[i]
-							if (e.AgentID == agent.ID || e.AgentID == "") &&
-								(e.Type == session.EntryTypeToolCall || e.Role == "assistant") {
-								needsHydrate = true
-								break
-							}
-						}
-					}
-				}
-			}
-			// ADR-066 D5.5 (FR-045): this emptiness condition is unchanged;
-			// hydration itself now refuses to touch an agent archive that
-			// already has lines, so a window that is empty only because Skip
-			// reached the end of a non-empty archive is never rebuilt.
-			if needsHydrate {
-				if err := pm.al.HydrateAgentHistoryFromTranscript(pm.transcriptSessionID); err != nil {
-					logger.WarnCF("agent", "self-heal hydrate failed", map[string]any{
-						"agent_id":   agent.ID,
-						"session_id": pm.transcriptSessionID,
-						"error":      err.Error(),
-					})
-				}
-			}
-		}
-	}
-
-	// context-dependent commands check their own Runtime fields and report
-	// "unavailable" when the required capability is nil.
-	if response, handled := pm.al.handleCommand(pm.ctx, pm.msg, agent, &pm.opts); handled {
-		return response, agent, nil
-	}
-
-	// ADR-088 D1/D9: the ADR-074 D4a pending-goal reply-routing hook
-	// (applyGoalPendingReply) is retired — goals activate instantly now, so
-	// there is no more pending/clarification state for a bare chat message to
-	// resolve against (FR-022: bare "confirm" is ordinary chat, no
-	// interception exists). Nothing stands between handleCommand above and
-	// runAgentLoop below anymore.
-	return pm.al.runInboundTurnWithRevival(pm.ctx, agent, pm.msg, pm.opts)
-}
-
 // runAgentLoop remains the top-level shell that starts a turn and publishes
 // any post-turn work. runTurn owns the full turn lifecycle.
-func (al *AgentLoop) runAgentLoop(
+func (al *AgentLoop) runAgentLoopBody(
 	ctx context.Context,
 	agent *AgentInstance,
 	opts processOptions,
@@ -1817,29 +1707,20 @@ func (al *AgentLoop) runAgentLoop(
 		}
 	}
 
-	ts := newTurnState(agent, opts, al.newTurnEventScope(agent.ID, opts.SessionKey))
-	// Seed the delegation-chain depth for a task run started from within another
-	// task (opts.InitialDelegationDepth > 0). A task run otherwise begins a fresh
-	// root turn at depth 0, which would make currentDelegationDepth read 0 inside
-	// the run and never trip the per-agent await/background depth gate; seeding the
-	// stored generation here restores the bound. Root chat/board turns pass 0.
+	// A user message saved after a Stop lifts the goal keeper's Stop-pause as
+	// its turn STARTS, so the client is told the goal is active again while the
+	// turn runs (not only once it ends). Cheap no-op unless a pause is held.
+	if (opts.UserInitiated || opts.IsTaskRun) && opts.TranscriptStore != nil && opts.TranscriptSessionID != "" {
+		al.prepareGoalKeeperForTurn(opts)
+	}
+
+	ts, admissionErr := al.newTurnStateForAdmission(agent, opts)
+	if admissionErr != nil {
+		return "", admissionErr
+	}
+	// Seed nested task depth; ordinary root turns keep depth zero.
 	if opts.InitialDelegationDepth > 0 {
 		ts.depth = opts.InitialDelegationDepth
-	}
-	// Bug 1 fix: wire a resolver so appendToolCallTranscript (and event payloads)
-	// use the runtime-current active agent rather than the turn's starting agent.
-	// After a handoff, sessionActiveAgent reflects the new agent; tool_call entries
-	// produced in the same turn will carry the correct post-handoff agent_id.
-	if opts.TranscriptSessionID != "" {
-		resolverKey := "session:" + opts.TranscriptSessionID
-		ts.activeAgentResolver = func() string {
-			if v, ok := al.sessionActiveAgent.Load(resolverKey); ok {
-				if id, ok := v.(string); ok && id != "" {
-					return id
-				}
-			}
-			return ""
-		}
 	}
 	result, err := al.runTurn(ctx, ts)
 	// Snapshot the result for test observability (lastTurnResult field).
@@ -1847,16 +1728,14 @@ func (al *AgentLoop) runAgentLoop(
 	al.lastTurnResultMu.Lock()
 	al.lastTurnResult = result
 	al.lastTurnResultMu.Unlock()
-	// MERGE NOTE 2026-09-15: integrate's F2 fix called
-	// al.rearmGoalAfterAbnormalTurn(opts) here (a goal-bearing session whose
-	// turn died on this path never re-armed its idle quiet window and stayed
-	// `active` forever). The helper lived in integrate's goal_triggers.go;
-	// goal logic comes from release (#683) by founder ruling, so the call is
-	// dropped and the fix is recorded as a follow-up candidate.
+	// A failed automatic reminder returns before the natural goal hook below.
+	// Retain its real outcome through the existing abnormal-reminder path.
+	al.rearmAbnormalGoalReminder(ts, &result, err)
 	if err != nil {
 		return "", err
 	}
 	if result.status == TurnEndStatusAborted {
+		settlementErr := al.settleRoomInputs(opts.roomCost, context.Canceled)
 		// Reached only for a case-1 (user-initiated) hard abort — abortTurn
 		// returns a non-nil error for every system-initiated abort (case 2),
 		// which the `if err != nil` branch above already returned from. See
@@ -1872,7 +1751,10 @@ func (al *AgentLoop) runAgentLoop(
 		// stop and an external-CLI worker's cancel. The Judge's turns set
 		// IsTaskRun but not RunningTaskID and keep the silent unwind.
 		if opts.RunningTaskID != "" {
-			return "", fmt.Errorf("%w: %w", ErrTurnCanceled, context.Canceled)
+			return "", errors.Join(fmt.Errorf("%w: %w", ErrTurnCanceled, context.Canceled), settlementErr)
+		}
+		if settlementErr != nil {
+			return "", errors.Join(context.Canceled, settlementErr)
 		}
 		return "", nil
 	}
@@ -1948,63 +1830,6 @@ func (al *AgentLoop) runAgentLoop(
 	return result.finalContent, nil
 }
 
-func (al *AgentLoop) targetReasoningChannelID(channelName string) (chatID string) {
-	cm := al.getChannelManager()
-	if cm == nil {
-		return ""
-	}
-	if ch, ok := cm.GetChannel(channelName); ok {
-		return ch.ReasoningChannelID()
-	}
-	return ""
-}
-
-func (al *AgentLoop) handleReasoning(
-	ctx context.Context,
-	reasoningContent, channelName, channelID string,
-) {
-	if reasoningContent == "" || channelName == "" || channelID == "" {
-		return
-	}
-
-	// Check context cancellation before attempting to publish, since
-	// PublishOutbound's select may race between send and ctx.Done().
-	if reasoningPublishCanceledOnEntry(ctx, channelName) {
-		return
-	}
-
-	// Use a short timeout so the goroutine does not block indefinitely when
-	// the outbound bus is full.  Reasoning output is best-effort; dropping it
-	// is acceptable to avoid goroutine accumulation.
-	pubCtx, pubCancel := context.WithTimeout(ctx, 5*time.Second)
-	defer pubCancel()
-
-	if err := al.bus.PublishOutbound(pubCtx, bus.OutboundMessage{
-		Channel: channelName,
-		ChatID:  channelID,
-		Content: reasoningContent,
-	}); err != nil {
-		// Treat context.DeadlineExceeded / context.Canceled as expected
-		// (bus full under load, or parent canceled).  Check the error
-		// itself rather than ctx.Err(), because pubCtx may time out
-		// (5 s) while the parent ctx is still active.
-		// Also treat ErrBusClosed as expected — it occurs during normal
-		// shutdown when the bus is closed before all goroutines finish.
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) ||
-			errors.Is(err, bus.ErrBusClosed) {
-			logger.DebugCF("agent", "Reasoning publish skipped (timeout/cancel)", map[string]any{
-				"channel": channelName,
-				"error":   err.Error(),
-			})
-		} else {
-			logger.WarnCF("agent", "Failed to publish reasoning (best-effort)", map[string]any{
-				"channel": channelName,
-				"error":   err.Error(),
-			})
-		}
-	}
-}
-
 // isMessagingChannel returns true for external human-messaging channel types.
 // Tool feedback is emitted only on these channels; webchat, system/cli/subagent,
 // cron schedules, and unknown/empty channels remain silent because either the UI
@@ -2048,6 +1873,14 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	}
 
 	defer rz.rc.turnCancel()
+	// SFH-02: a turn that exits with a dequeued batch still uninjected (a rate
+	// limit, an error, a cancel) gives back those saved inputs' claims. Their
+	// saved records stay pending, so the next legitimate fence places them.
+	defer func() {
+		if ri := rz.rc.rx.rr.rq.ri; len(ri.pendingSteeringReceipts) > 0 {
+			al.releaseSavedWakeClaims(ts.transcriptSessionID, ri.pendingSteeringReceipts)
+		}
+	}()
 
 	rz.rc.registerTurnContext()
 
@@ -2077,12 +1910,12 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// between clearActiveTurn and Finish. finalizeStreamer is what calls
 	// wsStreamer.Finalize(), which writes the assistant transcript entry
 	// (FIX 1). Finish's onCancelFinish callback (pkg/agent/cancel.go) is what
-	// writes the turn_canceled entry AND calls MarkLastEntryTruncated to flag
-	// the assistant entry. Both depend on the assistant entry already
-	// existing in transcript.jsonl:
-	//   - MarkLastEntryTruncated's backward-walk finds nothing to flag if the
-	//     assistant entry isn't there yet (silently succeeds as a no-op —
-	//     Truncated never gets set).
+	// writes the turn_canceled entry. The assistant entry carries its own
+	// Truncated flag, written in the same append by the finalizing streamer, so
+	// the cancel entry and the correlation below both depend on that assistant
+	// entry already existing in transcript.jsonl:
+	//   - without it there is no entry to carry Truncated, and the cancel entry
+	//     would describe a message that was never persisted.
 	//   - The frontend's turn_canceled -> assistant-message replay
 	//     correlation (chatTurnCanceledNoMatch) requires the assistant
 	//     ReplayMessageFrame to have already arrived on the wire before the
@@ -2115,6 +1948,12 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// (here, before the turn even starts), not when the deferred call
 	// actually runs at function exit — a bare form would always capture
 	// false and reproduce the exact bug this fixes.
+	// provider-messages §7.4 fallback note (MIN-103/FB-2): registered BEFORE
+	// the Finish and finalizeStreamer defers below, so LIFO runs it AFTER
+	// them — the queued fallback-note entries land in transcript.jsonl after
+	// the assistant answer entry, on the streaming path (finalizeStreamer
+	// writes the answer) and the non-streaming path alike.
+	defer rz.rc.rx.rr.rq.ri.rf.rt.ts.writePendingFallbackNotes()
 	defer func() { rz.rc.rx.rr.rq.ri.rf.rt.ts.Finish(rz.rc.rx.rr.rq.ri.rf.rt.ts.hardAbortRequested()) }()
 	defer rz.rc.rx.rr.rq.ri.rf.rt.ts.finalizeStreamer(rz.rc.rx.ctx)
 	// ADR-087 D6.8, the ONE choke point (see preserveTruncatedAccumulator's
@@ -2155,6 +1994,10 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 			},
 		)
 	}()
+	// #1651: retire the turn BEFORE turn.end on every exit (registered after
+	// the emit, so LIFO runs it first), as finalizeTurn does inline on the
+	// completed path. Its own defer: a panic here cannot skip the emit.
+	defer rz.rc.rx.rr.rq.ri.rf.rt.al.clearActiveTurn(rz.rc.rx.rr.rq.ri.rf.rt.ts)
 
 	// A turn that ended in error must never close by claiming success.
 	//
@@ -2193,6 +2036,37 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	defer func() {
 		if rz.rc.rx.rr.rq.ri.turnStatus == TurnEndStatusError {
 			rz.rc.rx.rr.rq.ri.rf.rt.ts.markTurnFailed()
+		}
+	}()
+
+	// The SYMMETRIC gap in the invariant above: markTurnFailed's doc comment
+	// names four call sites, and only site (4) — the turnStatus==Error defer
+	// just above — keeps turnStatus in step with turnFailed. Sites (2) (the
+	// tool-iteration-limit branch, finalizeTurn in loop_run_turn.go) and (3)
+	// (generic empty-content exhaustion, same function) call markTurnFailed()
+	// directly without ever touching turnStatus, which this function set to
+	// TurnEndStatusCompleted by default above and nothing downstream
+	// reconciles — so a turn that hit the tool-iteration cap closed with
+	// done.stats.turn_failed=true (correct) AND turn.end.status="completed"
+	// (wrong): the exact same-turn contradiction the comment above calls out
+	// for the other direction, just unguarded here. Caught by
+	// TestWS_TerminalOutcome_IterationCap_AgreesAcrossSurfaces
+	// (pkg/gateway/terminal_outcome_acceptance_test.go), which asserts
+	// turn.end.status == TurnEndStatusError whenever the done frame reports
+	// turn_failed. Registered after the Error→markTurnFailed defer so LIFO
+	// runs this one first — ts.turnFailed from sites (2)/(3) is already set
+	// by the time any defer here runs (finalizeTurn returns before runTurn's
+	// own defers fire), so this only ever promotes turnStatus, never races
+	// the other defer's own markTurnFailed() call.
+	defer func() {
+		// Unlocked read, matching this same function's result-construction
+		// read of ts.turnFailed a few lines below (loop_run_turn.go's
+		// finalizeTurn, turnResult{turnFailed: ts.turnFailed, ...}): by the
+		// time any of runTurn's own defers run, finalizeTurn has already
+		// returned, so nothing else in this turn's goroutine still writes
+		// ts.turnFailed.
+		if rz.rc.rx.rr.rq.ri.rf.rt.ts.turnFailed && rz.rc.rx.rr.rq.ri.turnStatus != TurnEndStatusError {
+			rz.rc.rx.rr.rq.ri.turnStatus = TurnEndStatusError
 		}
 	}()
 
@@ -2266,6 +2140,14 @@ const hardInterruptAbortReason = "turn canceled by hard interrupt request"
 // point that keeps an unresolved D6 continuation. The call this function used
 // to make itself was one of the five hand-wired ones the defer replaced.
 func (al *AgentLoop) typedTurnExit(ts *turnState, iteration int, llmModel string, cause error) (turnResult, TurnEndStatus, error) {
+	// Issue #1306: a deadline that came from the Judge's own check time limit
+	// (verifier_adjudication.go::dispatchTurn tags it with ErrJudgeTimeLimit)
+	// is NOT a provider timeout. The provider call only reports
+	// context.DeadlineExceeded; the turn context's Cause says which clock it
+	// was, so the exit is classified honestly as judge_time_limit.
+	if ts != nil {
+		cause = withDeadlineCause(ts.causeCtx, cause)
+	}
 	code, ok := typedExitCode(cause)
 	if !ok {
 		// Not a typed exit — callers only route context errors here; fall
@@ -2278,20 +2160,12 @@ func (al *AgentLoop) typedTurnExit(ts *turnState, iteration int, llmModel string
 		level    = logger.WarnCF
 	)
 	switch code {
-	case CodeTurnTimedOut:
+	case CodeTurnTimedOut, CodeJudgeTimeLimit:
 		sentinel, status = ErrTurnTimedOut, TurnEndStatusError
-	case CodeContextUnrecoverable:
-		sentinel, status, level = ErrContextUnrecoverable, TurnEndStatusError, logger.ErrorCF
 	}
 	llm := typedExitError(code, cause)
 
-	if code == CodeTurnTimedOut && ts.parentTurnState != nil {
-		// The delegation coordinator owns live publication after it settles
-		// timer ownership. Keep the child's private terminal record here.
-		ts.appendClassifiedError(EventKindError.String(), "runTurn", llm)
-	} else {
-		al.emitTurnErrorFrame(ts, ts.eventMeta("runTurn", "turn.error"), "llm", "runTurn", llm)
-	}
+	al.emitTurnErrorFrame(ts, ts.eventMeta("runTurn", "turn.error"), "llm", "runTurn", llm)
 	level("agent", "Turn exited: "+string(code), map[string]any{
 		"agent_id":  ts.agent.ID,
 		"iteration": iteration,
@@ -2537,107 +2411,48 @@ func sleepWithContext(ctx context.Context, d time.Duration) error {
 // wrapping). It is intentionally a superset of connectionDropPatterns so that
 // it catches wrapping layers such as "fallback: unclassified error: ...".
 func isTransientStreamError(err error) bool {
-	if err == nil {
-		return false
-	}
-	lower := strings.ToLower(err.Error())
-	for _, pat := range []string{
-		"streaming read error:",
-		"http2: response body closed",
-		"http2: server sent goaway",
-		"http2: transport received server's graceful shutdown goaway",
-		"stream error:",
-		"connection reset by peer",
-		"unexpected eof",
-		"broken pipe",
-		"use of closed network connection",
-		"server closed idle connection",
-		"connection closed",
-	} {
-		if strings.Contains(lower, pat) {
-			return true
-		}
-	}
-	return false
+	return providers.IsTransportFailure(err)
 }
 
-// formatMessagesForLog formats messages for logging
-func formatMessagesForLog(messages []providers.Message) string {
-	if len(messages) == 0 {
-		return "[]"
-	}
-
-	var sb strings.Builder
-	sb.WriteString("[\n")
-	for i, msg := range messages {
-		fmt.Fprintf(&sb, "  [%d] Role: %s\n", i, msg.Role)
-		if len(msg.ToolCalls) > 0 {
-			sb.WriteString("  ToolCalls:\n")
-			for _, tc := range msg.ToolCalls {
-				fmt.Fprintf(&sb, "    - ID: %s, Type: %s, Name: %s\n", tc.ID, tc.Type, tc.Name)
-				if tc.Function != nil {
-					fmt.Fprintf(
-						&sb,
-						"      Arguments: %s\n",
-						utils.Truncate(tc.Function.Arguments, 200),
-					)
-				}
-			}
-		}
-		if msg.Content != "" {
-			content := utils.Truncate(msg.Content, 200)
-			fmt.Fprintf(&sb, "  Content: %s\n", content)
-		}
-		if msg.ToolCallID != "" {
-			fmt.Fprintf(&sb, "  ToolCallID: %s\n", msg.ToolCallID)
-		}
-		sb.WriteString("\n")
-	}
-	sb.WriteString("]")
-	return sb.String()
-}
-
-// formatToolsForLog formats tool definitions for logging
-func formatToolsForLog(toolDefs []providers.ToolDefinition) string {
-	if len(toolDefs) == 0 {
-		return "[]"
-	}
-
-	var sb strings.Builder
-	sb.WriteString("[\n")
-	for i, tool := range toolDefs {
-		fmt.Fprintf(&sb, "  [%d] Type: %s, Name: %s\n", i, tool.Type, tool.Function.Name)
-		fmt.Fprintf(&sb, "      Description: %s\n", tool.Function.Description)
-		if len(tool.Function.Parameters) > 0 {
-			fmt.Fprintf(
-				&sb,
-				"      Parameters: %s\n",
-				utils.Truncate(fmt.Sprintf("%v", tool.Function.Parameters), 200),
-			)
-		}
-	}
-	sb.WriteString("]")
-	return sb.String()
-}
-
-// clearSessionWindow implements /new (alias /clear): it empties the live
-// window while preserving the archive.
-//
-// It clears with the Skip-advancing primitive, NOT SetHistory. ADR-066 FR-047
-// narrowed SetHistory to a first-fill primitive — an archive-backed store
-// REFUSES it once the archive holds >= 1 line (memory.ErrArchiveNotEmpty) —
-// and because SessionWriter.SetHistory is fire-and-forget the refusal is
-// swallowed into a slog.Error. /clear therefore answered "Chat history
-// cleared!" on CLI and every channel while clearing nothing at all, and the
-// next message was answered with the whole prior conversation still in the
-// window.
-//
-// TruncateHistory(key, 0) sets Skip = Count: the live window is empty, the
-// JSONL archive is untouched (recall by tool_call_id still resolves), and the
-// projection entries below the new Skip are pruned in the same meta write.
+// clearSessionWindow is /clear's window move (clearConversation): it empties
+// the live window while preserving the archive. One compare-and-set metadata
+// commit moves Skip to Count, drops the pinned anchor and prunes the projection
+// rows that addressed the now-evicted slots; no archive byte is touched, so
+// recall by tool_call_id and the [capped]/[emptied] marks keep resolving.
 func clearSessionWindow(sessions session.SessionStore, sessionKey string) error {
-	sessions.TruncateHistory(sessionKey, 0)
-	return sessions.Save(sessionKey)
+	_, err := clearSessionWindowReversible(sessions, sessionKey)
+	return err
+}
+
+// clearSessionWindowReversible is clearSessionWindow that also returns the undo
+// for the move it made, so /clear can put the window back if its divider cannot
+// be recorded (all or nothing).
+func clearSessionWindowReversible(sessions session.SessionStore, sessionKey string) (undo func() error, err error) {
+	store, ok := sessions.(session.ContextWindowStore)
+	if !ok {
+		return nil, fmt.Errorf("session store does not support atomic context checkpoints")
+	}
+	ctx := context.Background()
+	view, err := store.WindowView(ctx, sessionKey)
+	if err != nil {
+		return nil, fmt.Errorf("read window: %w", err)
+	}
+	after := view.State.Clone()
+	after.Skip = after.Count
+	after.ClearFloor = after.Count
+	after.DropExpiryNote = true
+	after.AnchorLine = nil
+	after.Projection.Entries = memory.ProjectionSet{}
+	after.Projection.SourceRunes = map[memory.ProjectionKey]int{}
+	after.Projection.TranscriptAddr = map[memory.ProjectionKey]memory.RecordAddress{}
+	if err := store.CommitWindow(ctx, sessionKey, view.State, after); err != nil {
+		return nil, err
+	}
+	before := view.State.Clone()
+	before.RestoreExpiryNote = view.ExpiryNote
+	moved := after.Clone()
+	moved.DropExpiryNote = false
+	return func() error { return store.RestoreWindow(ctx, sessionKey, moved, before) }, nil
 }
 
 // isNativeSearchProvider reports whether the given LLM provider implements
@@ -2667,12 +2482,8 @@ func extractProvider(registry *AgentRegistry) (providers.LLMProvider, bool) {
 	if registry == nil {
 		return nil, false
 	}
-	// Any agent's provider will do — they all borrow the same one. Ask the
-	// default first because it is the cheapest lookup, then any registered
-	// agent, then the registry's own.
-	if defaultAgent := registry.GetDefaultAgent(); defaultAgent != nil && defaultAgent.Provider != nil {
-		return defaultAgent.Provider, true
-	}
+	// Any agent's provider will do — they all borrow the same one: ask any
+	// registered agent, then the registry's own (§6.4: no default agent).
 	for _, id := range registry.ListAgentIDs() {
 		if ag, ok := registry.GetAgent(id); ok && ag != nil && ag.Provider != nil {
 			return ag.Provider, true
@@ -2690,68 +2501,6 @@ func extractProvider(registry *AgentRegistry) (providers.LLMProvider, bool) {
 		return registry.provider, true
 	}
 	return nil, false
-}
-
-// llmRate holds approximate per-1K-token pricing for a model family.
-type llmRate struct {
-	inputPer1K, outputPer1K float64
-}
-
-// llmRateFallback is used when no prefix in llmRateTable matches. It is
-// deliberately conservative so unknown models over-count rather than silently
-// escape the cost cap.
-var llmRateFallback = llmRate{inputPer1K: 0.003, outputPer1K: 0.015}
-
-// llmRateTable is an ordered prefix lookup — first match wins. Longer/more
-// specific prefixes must appear before shorter ones. Rates are approximations
-// for budgeting only and will not match provider invoices exactly.
-var llmRateTable = []struct {
-	prefix string
-	rate   llmRate
-}{
-	// Anthropic Claude 3.x
-	{"claude-3-5-haiku", llmRate{0.0008, 0.004}},
-	{"claude-3-5-sonnet", llmRate{0.003, 0.015}},
-	{"claude-3-haiku", llmRate{0.00025, 0.00125}},
-	{"claude-3-sonnet", llmRate{0.003, 0.015}},
-	{"claude-3-opus", llmRate{0.015, 0.075}},
-	// Anthropic Claude 4.x
-	{"claude-opus-4", llmRate{0.015, 0.075}},
-	{"claude-sonnet-4", llmRate{0.003, 0.015}},
-	{"claude-haiku-4", llmRate{0.0008, 0.004}},
-	// OpenAI GPT-4 family
-	{"gpt-4o-mini", llmRate{0.00015, 0.0006}},
-	{"gpt-4o", llmRate{0.005, 0.015}},
-	{"gpt-4-turbo", llmRate{0.01, 0.03}},
-	{"gpt-4", llmRate{0.03, 0.06}},
-	{"gpt-3.5-turbo", llmRate{0.0005, 0.0015}},
-	// Google Gemini
-	{"gemini-1.5-flash", llmRate{0.000075, 0.0003}},
-	{"gemini-1.5-pro", llmRate{0.00125, 0.005}},
-	{"gemini-2.0-flash", llmRate{0.0001, 0.0004}},
-	{"gemini-2.5-pro", llmRate{0.00125, 0.01}},
-}
-
-// estimateLLMCallCost returns a conservative cost estimate in USD for a single
-// LLM call given the model name and token usage (SEC-26). Unknown models fall
-// back to llmRateFallback so the cost accumulator never under-counts.
-func estimateLLMCallCost(model string, usage *providers.UsageInfo) float64 {
-	if usage == nil {
-		return 0
-	}
-
-	lowerModel := strings.ToLower(model)
-	rate := llmRateFallback
-	for _, entry := range llmRateTable {
-		if strings.HasPrefix(lowerModel, entry.prefix) {
-			rate = entry.rate
-			break
-		}
-	}
-
-	inputCost := float64(usage.PromptTokens) / 1000.0 * rate.inputPer1K
-	outputCost := float64(usage.CompletionTokens) / 1000.0 * rate.outputPer1K
-	return inputCost + outputCost
 }
 
 // braveKeys returns a []string for use as BraveAPIKeys. Returns nil if the key is empty.
@@ -2853,7 +2602,7 @@ func (al *AgentLoop) buildScratchpadNote(agentID, sessionID string) string {
 		sb.WriteString("- [")
 		sb.WriteString(string(td.Status))
 		sb.WriteString("] ")
-		sb.WriteString(td.Text)
+		sb.WriteString(td.ScratchpadText())
 		sb.WriteByte('\n')
 	}
 	return sb.String()

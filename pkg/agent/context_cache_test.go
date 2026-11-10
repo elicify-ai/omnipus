@@ -37,7 +37,7 @@ func setupWorkspace(t *testing.T, files map[string]string) string {
 // Codex (only reads last system message as instructions).
 func TestSingleSystemMessage(t *testing.T) {
 	tmpDir := setupWorkspace(t, map[string]string{
-		"AGENT.md": "# Agent\nTest agent.",
+		"SOUL.md": "# Agent\nTest agent.",
 	})
 	defer os.RemoveAll(tmpDir)
 
@@ -81,7 +81,7 @@ func TestSingleSystemMessage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			msgs := cb.BuildMessages(tt.history, tt.message, nil, "", "test", "chat1", "", "", "", nil)
+			msgs := cb.BuildMessages(0, tt.history, tt.message, nil, "", "test", "chat1", "", "", "", nil)
 
 			systemCount := 0
 			for _, m := range msgs {
@@ -99,13 +99,16 @@ func TestSingleSystemMessage(t *testing.T) {
 				t.Errorf("last message should be user, got %s", msgs[len(msgs)-1].Role)
 			}
 
-			// System message must contain identity (static) and time (dynamic)
+			// FR-007: identity stays in front; clock/reminder follow history
+			// and the current user message in one trailing user text block.
 			sys := msgs[0].Content
 			if !strings.Contains(sys, "omnipus") {
 				t.Error("system message missing identity")
 			}
-			if !strings.Contains(sys, "Current Time") {
-				t.Error("system message missing dynamic time context")
+			conversation := requireConversationBeforeVolatileTail(t, msgs)
+			current := conversation[len(conversation)-1]
+			if current.Role != "user" || current.Content != tt.message {
+				t.Errorf("current user before volatile tail = %+v, want unchanged %q", current, tt.message)
 			}
 
 			// The legacy summariser is decommissioned: BuildMessages must
@@ -119,7 +122,7 @@ func TestSingleSystemMessage(t *testing.T) {
 
 func TestBuildMessages_CurrentSenderDynamicContext(t *testing.T) {
 	tmpDir := setupWorkspace(t, map[string]string{
-		"IDENTITY.md": "# Identity\nTest agent.",
+		"SOUL.md": "# Identity\nTest agent.",
 	})
 	defer os.RemoveAll(tmpDir)
 
@@ -160,6 +163,7 @@ func TestBuildMessages_CurrentSenderDynamicContext(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			msgs := cb.BuildMessages(
+				0,
 				nil,
 				"hello",
 				nil,
@@ -204,10 +208,10 @@ func TestMtimeAutoInvalidation(t *testing.T) {
 	}{
 		{
 			name:       "bootstrap file change",
-			file:       "AGENT.md",
-			contentV1:  "# Original Agent",
-			contentV2:  "# Updated Agent",
-			checkField: "Updated Agent",
+			file:       "SOUL.md",
+			contentV1:  "# Original Soul",
+			contentV2:  "# Updated Soul",
+			checkField: "Updated Soul",
 		},
 	}
 
@@ -302,7 +306,7 @@ func TestMtimeAutoInvalidation(t *testing.T) {
 // even when source files haven't changed (useful for tests and reload commands).
 func TestExplicitInvalidateCache(t *testing.T) {
 	tmpDir := setupWorkspace(t, map[string]string{
-		"AGENT.md": "# Test Agent",
+		"SOUL.md": "# Test Agent",
 	})
 	defer os.RemoveAll(tmpDir)
 
@@ -329,8 +333,7 @@ func TestExplicitInvalidateCache(t *testing.T) {
 // when no files change (regression test for issue #607).
 func TestCacheStability(t *testing.T) {
 	tmpDir := setupWorkspace(t, map[string]string{
-		"AGENT.md": "# Agent\nContent",
-		"SOUL.md":  "# Soul\nContent",
+		"SOUL.md": "# Soul\nContent",
 	})
 	defer os.RemoveAll(tmpDir)
 
@@ -646,7 +649,6 @@ description: delete-me-v1
 // Run with: go test -race ./pkg/agent/ -run TestConcurrentBuildSystemPromptWithCache
 func TestConcurrentBuildSystemPromptWithCache(t *testing.T) {
 	tmpDir := setupWorkspace(t, map[string]string{
-		"AGENT.md":             "# Agent\nConcurrency test agent.",
 		"SOUL.md":              "# Soul\nBe helpful.",
 		"skills/demo/SKILL.md": "---\nname: demo\ndescription: \"demo skill\"\n---\n# Demo",
 	})
@@ -694,7 +696,7 @@ func TestConcurrentBuildSystemPromptWithCache(t *testing.T) {
 				}
 
 				// Also exercise BuildMessages concurrently
-				msgs := cb.BuildMessages(nil, "hello", nil, "", "test", "chat", "", "", "", nil)
+				msgs := cb.BuildMessages(0, nil, "hello", nil, "", "test", "chat", "", "", "", nil)
 				if len(msgs) < 2 {
 					errs <- "BuildMessages returned fewer than 2 messages"
 					return
@@ -770,7 +772,7 @@ func BenchmarkBuildMessagesWithCache(b *testing.B) {
 
 	os.MkdirAll(filepath.Join(tmpDir, "memory"), 0o755)
 	os.MkdirAll(filepath.Join(tmpDir, "skills"), 0o755)
-	for _, name := range []string{"AGENT.md", "SOUL.md"} {
+	for _, name := range []string{"SOUL.md"} {
 		os.WriteFile(filepath.Join(tmpDir, name), []byte(strings.Repeat("Content.\n", 10)), 0o644)
 	}
 
@@ -782,6 +784,6 @@ func BenchmarkBuildMessagesWithCache(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = cb.BuildMessages(history, "new message", nil, "", "cli", "test", "", "", "", nil)
+		_ = cb.BuildMessages(0, history, "new message", nil, "", "cli", "test", "", "", "", nil)
 	}
 }

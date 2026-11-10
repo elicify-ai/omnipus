@@ -6,7 +6,9 @@ all of them sitting behind a green pipeline.
 
 The standing rule from the operator is short: **"the pipeline must not pass if not true."**
 No baselines, no ratchets, no allowlists that manufacture green, no suppressing a rule to
-reach it. This document is the practical version of that rule — the specific ways green has
+reach it. **2026-10-23 amendment:** root `CLAUDE.md` ("CI quarantine") defines the only
+founder-approved qualified exception and its implementation boundary. It is never
+an unqualified green; the checks below still apply to every claimed passing result. This document is the practical version of that rule — the specific ways green has
 been wrong here, and the cheapest check that exposes each one.
 
 Read the two lists first. Everything after is evidence.

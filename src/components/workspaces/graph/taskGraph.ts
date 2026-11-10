@@ -11,7 +11,7 @@
 
 import dagre from '@dagrejs/dagre'
 import { MarkerType, Position, type Edge, type Node } from '@xyflow/react'
-import type { Task } from '@/lib/api'
+import type { Task, Plan } from '@/lib/api'
 import {
   STATUS_ANIMATED,
   STATUS_COLORS,
@@ -20,6 +20,7 @@ import {
   TASK_CANCELLED_COLOR,
   type TaskStatus as SharedTaskStatus,
 } from '@/lib/statusColors'
+import { isScheduledTrigger } from '../taskFormFields'
 
 export type TaskStatus = Task['status']
 
@@ -100,8 +101,6 @@ export interface TaskNodeData extends Record<string, unknown> {
   agentName?: string
   /** Resolved agent avatar colour (hex). */
   agentColor?: string
-  /** Resolved agent Phosphor icon name. */
-  agentIcon?: string
   /**
    * Keyboard/mouse-activation callback GraphView injects per-node at render
    * time (see GraphView.tsx) — `buildTaskGraph` itself never sets this, only
@@ -115,12 +114,15 @@ export interface TaskNodeData extends Record<string, unknown> {
    * GraphView.test.tsx's keyboard-operability assertions), not by the type.
    */
   onOpen?: (task: Task) => void
+  /** Local caches for the task preview, not additional wire fields. */
+  plans?: Plan[]
+  agents?: AgentLike[]
 }
 
 export type TaskGraphNode = Node<TaskNodeData, 'task'>
 
-// Node box dimensions handed to dagre. Must match the rendered TaskNode so the
-// auto-layout reserves the right footprint and edges land on the handles.
+// Initial node footprint before browser measurement. GraphView supplies actual
+// wrapped-card heights to dagre; pure/model-only callers keep these defaults.
 export const NODE_WIDTH = 248
 export const NODE_HEIGHT = 96
 
@@ -129,7 +131,6 @@ export interface AgentLike {
   id: string
   name?: string
   color?: string
-  icon?: string
 }
 
 /**
@@ -239,6 +240,8 @@ export function buildTaskGraph(
   tasks: Task[],
   agents: AgentLike[] = [],
   options: BuildTaskGraphOptions = {},
+  // Local measured UI geometry, never a wire format. Defaults preserve existing callers.
+  nodeHeights: ReadonlyMap<string, number> = new Map(),
 ): { nodes: TaskGraphNode[]; edges: Edge[]; unlinked: Task[] } {
   // Can't destructure `collapseOrphans` directly alongside `planId` — it
   // only exists on the union's "no planId" branch, so TS needs the
@@ -246,10 +249,16 @@ export function buildTaskGraph(
   const planId = options.planId ?? null
   const collapseOrphans = options.planId == null ? (options.collapseOrphans ?? false) : false
 
-  // Match the Board: only top-level, user-surface tasks are graphable at all.
+  // Match the Board: only top-level, user-surface tasks are graphable, and
+  // schedule-bearing tasks stay calendar-only (operator ruling 2026-08-07;
+  // founder decision 2026-11-07, issue #1682). The same `isScheduledTrigger`
+  // helper Board and List use, applied here so workspace scope, plan scope,
+  // edges and the unlinked list all drop a scheduled task.
   const graphable = tasks.filter(
     (t) =>
-      (t.surface === 'user' || t.surface === undefined) && t.parent_task_id == null,
+      (t.surface === 'user' || t.surface === undefined) &&
+      t.parent_task_id == null &&
+      !isScheduledTrigger(t.trigger),
   )
 
   let visible: Task[]
@@ -290,7 +299,9 @@ export function buildTaskGraph(
   })
 
   for (const task of visible) {
-    g.setNode(task.id, { width: NODE_WIDTH, height: NODE_HEIGHT })
+    const measured = nodeHeights.get(task.id)
+    const height = measured !== undefined && Number.isFinite(measured) ? Math.max(NODE_HEIGHT, measured) : NODE_HEIGHT
+    g.setNode(task.id, { width: NODE_WIDTH, height })
   }
 
   interface PendingEdge {
@@ -322,13 +333,12 @@ export function buildTaskGraph(
         // dagre centres nodes; React Flow positions by top-left corner.
         position: {
           x: (pos?.x ?? 0) - NODE_WIDTH / 2,
-          y: (pos?.y ?? 0) - NODE_HEIGHT / 2,
+          y: (pos?.y ?? 0) - (pos?.height ?? NODE_HEIGHT) / 2,
         },
         data: {
           task,
           agentName: task.agent_name ?? agent?.name ?? task.agent_id,
           agentColor: agent?.color,
-          agentIcon: agent?.icon,
         },
         sourcePosition: Position.Right,
         targetPosition: Position.Left,

@@ -11,19 +11,13 @@
 
 import { expect, type Page } from '@playwright/test'
 import { test } from './fixtures/console-errors'
-import { chatInput, waitForConnected, startNewChat, assistantMessages, userMessages } from './fixtures/selectors'
+import { chatInput, waitForConnected, assistantMessages, userMessages } from './fixtures/selectors'
+import { freshChat } from './fixtures/session-setup'
+import { endTurnDeterministically, pinRootSession, trackServerFrames } from './helpers/endTurn'
 
 const goalEchoCard = (page: Page) => page.locator('[data-testid="goal-echo-card"]')
 const askCard = (page: Page) => page.locator('[data-testid="ask-user-question-card"]')
 const stopButton = (page: Page) => page.locator('[data-testid="stop-btn"]')
-
-async function endTurnDeterministically(page: Page) {
-  const stop = stopButton(page)
-  if (await stop.isVisible().catch(() => false)) {
-    await stop.click().catch(() => {})
-  }
-  await expect(stop).toBeHidden({ timeout: 30_000 })
-}
 
 /** DOM order: card must precede the LAST user message and follow the FIRST one. */
 async function assertCardBetween(page: Page) {
@@ -40,6 +34,9 @@ async function assertCardBetween(page: Page) {
 }
 
 test.beforeEach(async ({ page }) => {
+  // BEFORE goto — Playwright only reports websockets opened after the
+  // listener attaches, and the SPA connects during the load.
+  trackServerFrames(page)
   await page.goto('/')
 })
 
@@ -48,7 +45,10 @@ test('S-15 goal card sits where the goal was set, live and after reload', async 
   const input = chatInput(page)
   await expect(input).toBeVisible({ timeout: 15_000 })
   await waitForConnected(page)
-  await startNewChat(page)
+  // freshChat creates the session over REST, so no session_started frame
+  // ever pins it — pin it from the create response (helpers/endTurn.ts::pinRootSession).
+  const { sessionId } = await freshChat(page)
+  pinRootSession(page, sessionId)
   await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 })
 
   await input.fill('/goal build a tiny single-file page that shows the text HELLO')

@@ -28,80 +28,49 @@ if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
 
 import { OmnipusComposer } from './ChatScreen'
 
-vi.mock('@assistant-ui/react', () => {
-  return {
-    useThreadViewportStore: () => ({ getState: () => ({ isAtBottom: true }) }),
-    ThreadPrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Viewport: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Messages: () => null,
-    },
-    MessagePrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Parts: () => null,
-    },
-    ComposerPrimitive: {
-      Root: ({ children, className, onSubmit }: { children: React.ReactNode; className?: string; onSubmit?: (e: React.FormEvent) => void }) =>
-        React.createElement('form', { className, onSubmit, 'data-testid': 'composer-form' }, children),
-      Input: ({ disabled, placeholder, className, onChange, onKeyDown, onBlur }: {
-        disabled?: boolean; placeholder?: string; className?: string;
-        onChange?: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
-        onKeyDown?: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
-        onBlur?: () => void;
-      }) =>
-        React.createElement('textarea', {
-          disabled, placeholder, className,
-          onChange, onKeyDown, onBlur,
-          'data-testid': 'composer-input',
+import { MockButton } from '@/test/assistantUiMock'
+vi.mock('@assistant-ui/react', async () => (await import('@/test/assistantUiMock')).createAssistantUiMock({
+  ThreadPrimitive: {
+    Viewport: ({ children, className }: { children: React.ReactNode; className?: string }) =>
+              React.createElement('div', { className }, children),
+  },
+  ComposerPrimitive: {
+    Root: ({ children, className, onSubmit }: { children: React.ReactNode; className?: string; onSubmit?: (e: React.FormEvent) => void }) =>
+              React.createElement('form', { className, onSubmit, 'data-testid': 'composer-form' }, children),
+    Send: ({ disabled, children, className, 'data-testid': testId, 'aria-label': ariaLabel }: {
+              disabled?: boolean; children?: React.ReactNode; className?: string;
+              'data-testid'?: string; 'aria-label'?: string;
+            }) =>
+              React.createElement(MockButton, {
+                type: 'button', disabled, className,
+                'data-testid': testId ?? 'chat-send',
+                'aria-label': ariaLabel, children: children}),
+    AddAttachment: ({ disabled, children, className, 'aria-label': ariaLabel }: {
+              disabled?: boolean; children?: React.ReactNode; className?: string; 'aria-label'?: string
+            }) =>
+              React.createElement(MockButton, { type: 'button', disabled, className, 'aria-label': ariaLabel, 'data-testid': 'add-attachment', children: children}),
+  },
+  AttachmentPrimitive: {
+    Remove: ({ children, className, 'aria-label': ariaLabel }: { children?: React.ReactNode; className?: string; 'aria-label'?: string }) =>
+              React.createElement(MockButton, { type: 'button', className, 'aria-label': ariaLabel, children: children}),
+  },
+  ActionBarPrimitive: {
+    Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
+              React.createElement('div', { className }, children),
+  },
+  useComposerRuntime: vi.fn(() => ({
+          getState: () => ({ text: '' }),
+          setText: vi.fn(),
+          addAttachment: vi.fn(),
+          subscribe: vi.fn(() => vi.fn()),
+        })),
+  useMessage: () => ({
+          id: 'msg_1',
+          role: 'assistant',
+          status: { type: 'complete' },
+          content: [],
         }),
-      Send: ({ disabled, children, className, 'data-testid': testId, 'aria-label': ariaLabel }: {
-        disabled?: boolean; children?: React.ReactNode; className?: string;
-        'data-testid'?: string; 'aria-label'?: string;
-      }) =>
-        React.createElement('button', {
-          type: 'button', disabled, className,
-          'data-testid': testId ?? 'chat-send',
-          'aria-label': ariaLabel,
-        }, children),
-      AddAttachment: ({ disabled, children, className, 'aria-label': ariaLabel }: {
-        disabled?: boolean; children?: React.ReactNode; className?: string; 'aria-label'?: string
-      }) =>
-        React.createElement('button', { type: 'button', disabled, className, 'aria-label': ariaLabel, 'data-testid': 'add-attachment' }, children),
-      Attachments: () => null,
-    },
-    AttachmentPrimitive: {
-      Root: ({ children, className }: { children?: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Name: () => null,
-      Remove: ({ children, className, 'aria-label': ariaLabel }: { children?: React.ReactNode; className?: string; 'aria-label'?: string }) =>
-        React.createElement('button', { type: 'button', className, 'aria-label': ariaLabel }, children),
-      Thumb: () => null,
-    },
-    MessagePartPrimitive: { InProgress: () => null },
-    ActionBarPrimitive: {
-      Root: ({ children, className }: { children: React.ReactNode; className?: string }) =>
-        React.createElement('div', { className }, children),
-      Copy: ({ children }: { children: React.ReactNode }) => React.createElement('span', {}, children),
-    },
-    AuiIf: () => null,
-    useComposerRuntime: vi.fn(() => ({
-      getState: () => ({ text: '' }),
-      setText: vi.fn(),
-      addAttachment: vi.fn(),
-      subscribe: vi.fn(() => vi.fn()),
-    })),
-    useMessage: () => ({
-      id: 'msg_1',
-      role: 'assistant',
-      status: { type: 'complete' },
-      content: [],
-    }),
-    makeAssistantToolUI: () => () => null,
-  }
-})
+}))
 
 // Commands query errors; skills query succeeds with one match so we can also
 // prove the error row and a real skill item coexist in the same menu.
@@ -113,7 +82,7 @@ vi.mock('@assistant-ui/react', () => {
 vi.mock('@tanstack/react-query', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@tanstack/react-query')>()
   const mockSkills = [
-    { id: 'web-research', name: 'Web Research', version: '1.0', description: 'Web search and extraction', verified: true, status: 'active' },
+    { has_local_changes: false, id: 'web-research', name: 'Web Research', version: '1.0', description: 'Web search and extraction', verified: true, status: 'active' },
   ]
   // K.3 (bugfixes3 sign-off): `makeAgent` (src/test/factories.ts), not a
   // hand-rolled partial object literal — fills every schema-required Agent
@@ -140,7 +109,7 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
       if (Array.isArray(key) && key[0] === 'agents') {
         return { data: mockAgents, isError: false, refetch: vi.fn() }
       }
-      return { data: [], isError: false, refetch: vi.fn() }
+      return { data: queryDataWithEmptyHistory(key), isError: false, refetch: vi.fn() }
     },
     useMutation: () => ({ mutate: vi.fn(), isPending: false }),
     useQueryClient: () => ({ invalidateQueries: vi.fn(), removeQueries: vi.fn() }),
@@ -159,12 +128,14 @@ vi.mock('@tanstack/react-router', () => ({
 // doesn't exercise mentions. The workspaces query stays disabled (no
 // activeWorkspaceId set here), so `fetchWorkspaces` is never actually
 // invoked — this just needs to exist so the module loads.
+import { emptyHistoryPage, queryDataWithEmptyHistory, type HistoryReadPort } from '../../../tests/chat-history-paging/legacy-fixtures'
+
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([]),
-    fetchSessionMessages: vi.fn().mockResolvedValue([]),
+    fetchSessionMessages: vi.fn<HistoryReadPort>(async (sessionId) => emptyHistoryPage(sessionId)),
     fetchCommands: vi.fn().mockRejectedValue(new Error('network down')),
     fetchSkills: vi.fn().mockResolvedValue([]),
     fetchProviders: vi.fn().mockResolvedValue([]),
@@ -176,8 +147,6 @@ vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avata
 vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
 vi.mock('./markdown-text', () => ({ MarkdownText: () => null }))
 vi.mock('./tools/GenericToolCall', () => ({ GenericToolCall: () => null }))
-vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
-vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
 vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 
@@ -228,10 +197,11 @@ describe('Slash menu — commands query error (LOW S8)', () => {
     expect(status).toHaveAttribute('role', 'status')
     expect(status).toHaveTextContent('Commands unavailable')
 
-    // The synthetic client-only /resume command comes from useSlashMenu
+    // The synthetic client-only /sessions command comes from useSlashMenu
     // itself, not the errored backend list, so it still renders alongside
     // the error row.
-    expect(screen.getByText('/resume')).toBeInTheDocument()
+    expect(screen.getByText('/sessions')).toBeInTheDocument()
+    expect(screen.queryByText('/resume')).not.toBeInTheDocument()
 
     // The skills query is independent and still succeeded.
     expect(screen.getByText('/web-research')).toBeInTheDocument()
@@ -241,7 +211,7 @@ describe('Slash menu — commands query error (LOW S8)', () => {
     render(<OmnipusComposer />)
     const input = screen.getByTestId('composer-input')
 
-    // "/zzz" matches neither the synthetic /resume command nor web-research.
+    // "/zzz" matches neither the synthetic /sessions command nor web-research.
     act(() => { fireEvent.change(input, { target: { value: '/zzz' } }) })
     act(() => { fireEvent.keyDown(input, { key: 'ArrowDown' }) })
 
@@ -260,21 +230,19 @@ describe('Slash menu — commands query error (LOW S8)', () => {
     expect(screen.getByText('/web-research')).toBeInTheDocument()
   })
 
-  // Fix 1 (bugfixes3 review, highest priority): the render gate previously
-  // read `commandsError && !isSkillsFilter` only — missing the
-  // `!isMentionMode` clause useSlashMenu's own shouldShowSlash fallback
-  // already applies. A commands-fetch error has nothing to do with the "@"
-  // agent-mention menu, so the row must never appear there.
-  it('the error row does NOT leak into the "@" agent-mention menu', async () => {
+  // Fix 1 (bugfixes3 review, highest priority), updated by founder decision
+  // 2026-10-11 Q1 B: the "@" agent-mention menu is restored, and the render
+  // gate still reads `commandsError && !isSkillsFilter && !isMentionMode` —
+  // a commands-fetch error has nothing to do with the "@" menu, so the row
+  // must never appear there even while that menu is open.
+  it('typing @ opens the agent menu, and the commands-error row is not shown there', async () => {
     render(<OmnipusComposer />)
     const input = screen.getByTestId('composer-input')
 
     act(() => { fireEvent.change(input, { target: { value: '@' } }) })
 
-    // The "@" menu itself opens (one scoped agent, Mia)...
     expect(screen.getByTestId('slash-menu')).toBeInTheDocument()
-    expect(screen.getByText('@Mia')).toBeInTheDocument()
-    // ...but the commands-error row must not appear alongside it.
+    expect(screen.getByTestId('agent-mention-item')).toBeInTheDocument()
     expect(screen.queryByTestId('slash-commands-error')).not.toBeInTheDocument()
     expect(screen.queryByText('Commands unavailable')).not.toBeInTheDocument()
   })

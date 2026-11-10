@@ -20,6 +20,7 @@ import { act } from 'react'
 import { useChatStore, getMessages, makeBucketMessages } from './chat'
 import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
+import { emptyHistoryFixture } from '../../tests/chat-history-paging/empty-history'
 
 const SID = 'dedup-test-session'
 
@@ -99,6 +100,7 @@ describe('chat.dedup — T1.7: sendMessage merges duplicate tool_call ids', () =
           },
         ]
         const bucket = {
+          ...emptyHistoryFixture(),
           ...makeBucketMessages(seedMsgs),
           toolCalls: {
             // tc1 also still present in the live map (simulating replay re-inject)
@@ -170,6 +172,7 @@ describe('chat.dedup — T1.8: replay_message tail dedup drops identical re-emit
       useChatStore.setState(() => ({
         sessionsById: {
           [SID]: {
+            ...emptyHistoryFixture(),
             ...makeBucketMessages([]),
             toolCalls: {},
             toolCallOrder: [],
@@ -231,6 +234,7 @@ describe('chat.dedup — T1.8: replay_message tail dedup drops identical re-emit
       useChatStore.setState(() => ({
         sessionsById: {
           [SID]: {
+            ...emptyHistoryFixture(),
             ...makeBucketMessages([]),
             toolCalls: {},
             toolCallOrder: [],

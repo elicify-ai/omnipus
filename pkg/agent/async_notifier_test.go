@@ -346,7 +346,7 @@ func TestAsyncNotifier_NotificationGrantsNoCapability(t *testing.T) {
 		})
 	}
 
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, defaultAgent, "default agent must exist after boot")
 
 	// This is the exact call a real bash/delegate producer would make (this

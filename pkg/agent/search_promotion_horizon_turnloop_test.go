@@ -85,7 +85,7 @@ func TestSearchPromotionHorizon_CountsRealTurnsNotToolCallRounds(t *testing.T) {
 
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)
 	defer al.Close()
-	agent := al.registry.GetDefaultAgent()
+	agent := al.registry.primaryChatAgentForTest()
 	if agent == nil {
 		t.Fatal("expected default agent")
 	}

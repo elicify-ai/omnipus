@@ -43,7 +43,7 @@ func newJudgeRosterAPI(t *testing.T) *restAPI {
 			Defaults: config.AgentDefaults{
 				Home: tmpDir, DefaultModel: config.DefaultModel{Model: "test-model"}, MaxTokens: 4096},
 			List: []config.AgentConfig{
-				{ID: "mia", Name: "Mia", Type: config.AgentTypeCore, Default: true},
+				{ID: "mia", Name: "Mia", Type: config.AgentTypeCore},
 				{ID: "jim", Name: "Jim", Type: config.AgentTypeCore},
 				{ID: "ava", Name: "Ava", Type: config.AgentTypeCore},
 				{ID: "ray", Name: "Ray", Type: config.AgentTypeCore},
@@ -172,12 +172,6 @@ func TestSystemAgent_ExcludedFromEnumeration(t *testing.T) {
 	api := newJudgeRosterAPI(t)
 	cfg := api.agentLoop.GetConfig()
 
-	t.Run("default-agent fallback excludes the System Agent", func(t *testing.T) {
-		got := firstChatTargetAgentID(cfg)
-		assert.NotEqual(t, "judge", got, "the Judge must never be the first chat-target fallback")
-		assert.Equal(t, "mia", got, "the first chat target is a base agent, not the Judge")
-	})
-
 	t.Run("workspace team roster excludes the System Agent", func(t *testing.T) {
 		team := defaultWorkspaceTeam(cfg)
 		assert.NotContains(t, team, "judge", "the default workspace team must exclude the Judge")
@@ -195,9 +189,10 @@ func TestSystemAgent_ExcludedFromEnumeration(t *testing.T) {
 	})
 
 	t.Run("routing-binding target write rejects the System Agent (400)", func(t *testing.T) {
+		writeTestWorkspaceJSON(t, api, "judgews", "active", []string{"mia", "judge"}, false)
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest(http.MethodPut, "/api/v1/channels/telegram/routing",
-			strings.NewReader(`{"default_agent_id":"judge"}`))
+			strings.NewReader(`{"workspace_id":"judgews","default_agent_id":"judge"}`))
 		r.Header.Set("Content-Type", "application/json")
 		api.setChannelRouting(w, r, "telegram")
 		require.Equal(t, http.StatusBadRequest, w.Code,

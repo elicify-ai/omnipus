@@ -15,8 +15,9 @@
  * reply already showed must still be rendered after the steer lands (pre-fix
  * they collapsed to 0 within one frame) and at turn end.
  *
- * Real-model spec: needs OPENROUTER_API_KEY_CI (UAT provider/model ruling:
- * openrouter + z-ai/glm-5.3-flash; Omnipus sends tools every request), and is
+ * Real-model spec: needs the live-model keys (the central e2e primary and
+ * fallback — see fixtures/e2e-model.ts and e2e-model-keys.ts; Omnipus sends tools
+ * every request), and is
  * long-running, so it rides the opt-in `e2e` CI gate, not the default map.
  */
 
@@ -24,13 +25,12 @@ import { expect } from '@playwright/test'
 import { test } from './fixtures/console-errors'
 import { restoreAdminSession } from './fixtures/admin-api'
 import { waitForConnected } from './fixtures/selectors'
+import { requireLiveModelKeys } from './fixtures/e2e-model-keys'
 
 const ROWS = '[data-testid="virtualized-message-list"] button[aria-expanded]'
 
 function requireApiKey(): void {
-  if (!process.env.OPENROUTER_API_KEY_CI) {
-    throw new Error('BLOCKED: OPENROUTER_API_KEY_CI is required for steered-midturn-tool-rows')
-  }
+  requireLiveModelKeys('steered-midturn-tool-rows')
 }
 
 test('tool rows of the closing reply survive a mid-turn steer', async ({ page }) => {
@@ -78,6 +78,10 @@ test('tool rows of the closing reply survive a mid-turn steer', async ({ page })
     '(5) run the shell command: sleep 5; echo step-five ; ' +
     '(6) finally reply with a short summary of the outputs. You MUST complete all five tool steps before replying; do not stop early.'
   await page.locator('[data-testid="chat-input"]').fill(PROMPT)
+  // The standing main chat replays its earlier turns on attach, including their
+  // `done` and tool frames. Count only the frames this prompt produces.
+  toolStarts = 0
+  dones = 0
   await page.locator('[data-testid="chat-input"]').press('Enter')
 
   // Wait until at least 3 tool calls have started (the evidence scenario:

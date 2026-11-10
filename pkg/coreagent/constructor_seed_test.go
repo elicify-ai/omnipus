@@ -28,7 +28,7 @@ import (
 //
 // Traces to: pkg/coreagent/core.go — coreAgentSeed (FR-008, FR-010, FR-022).
 func TestBoot_ConstructorSeedDispositionMap(t *testing.T) {
-	for _, id := range []CoreAgentID{IDMia, IDJim, IDAva, IDAdmin, IDPlanner, IDResearcher, IDWorker} {
+	for _, id := range []CoreAgentID{IDMia, IDJim, IDOmnipus, IDPlanner, IDResearcher, IDWorker} {
 		t.Run(string(id), func(t *testing.T) {
 			assert.Equal(t, adr090SparseRolePolicies(id), coreAgentSeed(id),
 				"ordinary role seed must be exactly the sparse ADR-090 delta")
@@ -36,22 +36,24 @@ func TestBoot_ConstructorSeedDispositionMap(t *testing.T) {
 	}
 }
 
-// TestBoot_HasSystemAllowsInConstructorSeed verifies that only Ava returns true
-// from HasSystemAllowsInConstructorSeed.
+// TestBoot_HasSystemAllowsInConstructorSeed verifies that only Omnipus returns
+// true from HasSystemAllowsInConstructorSeed (omnipus-system-agent §6.5: the
+// management family rides the ceiling for Omnipus alone; Ava is retired,
+// FR-008).
 //
 // BDD: Given each core agent ID,
 //
 //	When HasSystemAllowsInConstructorSeed is called,
-//	Then only Ava returns true;
+//	Then only Omnipus returns true;
 //	And all other known core agents return false.
 //
 // Traces to: pkg/coreagent/core.go — HasSystemAllowsInConstructorSeed (FR-062).
 func TestBoot_HasSystemAllowsInConstructorSeed(t *testing.T) {
-	assert.True(t, HasSystemAllowsInConstructorSeed(string(IDAva)),
-		"Ava must return true (she has explicit system.* allows)")
+	assert.True(t, HasSystemAllowsInConstructorSeed(string(IDOmnipus)),
+		"Omnipus must return true (it holds the management tools)")
 
-	nonAvaAgents := []CoreAgentID{IDJim, IDMia, IDAdmin}
-	for _, id := range nonAvaAgents {
+	nonManagementAgents := []CoreAgentID{IDJim, IDMia}
+	for _, id := range nonManagementAgents {
 		assert.False(t, HasSystemAllowsInConstructorSeed(string(id)),
 			"agent %q must return false (no explicit system.* allows)", id)
 	}
@@ -128,18 +130,10 @@ func TestNewCustomAgentToolsCfg_GoalClaimAndBrowserHandoverAreExplicit(t *testin
 	require.True(t, ok, "customs' default allowlist must have an explicit policy for goal_claim")
 	assert.Equal(t, config.ToolPolicyAllow, p, "customs' default allowlist goal_claim must be allow")
 
-	// browser_handover: deny. This value equals the denyAllThenOverride
-	// floor by design (a fresh custom agent holds no browser action set to
-	// stand down from — see the conservative initial allow-list below,
-	// which grants no browser_* tool), so the runtime map cannot itself
-	// distinguish "explicit deny via override" from "floor deny via
-	// absence". The explicitness this test can prove is that the key is
-	// present with the intended value; the override literal itself
-	// (pkg/coreagent/core.go, this function's overrides map) is the
-	// source-level proof R-12 asked for.
+	// SPEC.md Table (2026-10-22): all browser_* tools, including handover, default Allow for Main.
 	p, ok = cfg.Builtin.Policies["browser_handover"]
 	require.True(t, ok, "customs' default allowlist must have an explicit policy for browser_handover")
-	assert.Equal(t, config.ToolPolicyDeny, p, "customs' default allowlist browser_handover must be deny")
+	assert.Equal(t, config.ToolPolicyAllow, p, "customs' default browser_handover must be allow")
 }
 
 // TestAgentConstructor_CoreAgent_SeedsRailPlusAllowances verifies that each core
@@ -155,22 +149,21 @@ func TestAgentConstructor_CoreAgent_SeedsRailPlusAllowances(t *testing.T) {
 	cfg := &config.Config{}
 	SeedConfig(cfg)
 
-	var avaAgent *config.AgentConfig
+	var omnipusAgent *config.AgentConfig
 	for i := range cfg.Agents.List {
-		if cfg.Agents.List[i].ID == string(IDAva) {
-			avaAgent = &cfg.Agents.List[i]
+		if cfg.Agents.List[i].ID == string(IDOmnipus) {
+			omnipusAgent = &cfg.Agents.List[i]
 			break
 		}
 	}
-	require.NotNil(t, avaAgent, "SeedConfig must add Ava to cfg.Agents.List")
-	require.NotNil(t, avaAgent.Tools, "Ava's Tools config must be non-nil after seed")
+	require.NotNil(t, omnipusAgent, "SeedConfig must add Omnipus to cfg.Agents.List")
+	require.NotNil(t, omnipusAgent.Tools, "Omnipus's Tools config must be non-nil after seed")
 
-	// Ava is redesigned: deny-by-default (fully-enumerated explicit map, no
-	// DefaultPolicy field), no legacy "system.*" rail.
-	_, hasRail := avaAgent.Tools.Builtin.Policies["system.*"]
-	assert.False(t, hasRail, "Ava must NOT carry the dead 'system.*' rail after redesign")
+	// No legacy "system.*" rail; the persisted map is exactly the role seed.
+	_, hasRail := omnipusAgent.Tools.Builtin.Policies["system.*"]
+	assert.False(t, hasRail, "Omnipus must NOT carry the dead 'system.*' rail")
 
-	assert.Equal(t, adr090SparseRolePolicies(IDAva), avaAgent.Tools.Builtin.Policies)
+	assert.Equal(t, adr090SparseRolePolicies(IDOmnipus), omnipusAgent.Tools.Builtin.Policies)
 }
 
 // TestJimSeed_DenyDefaultWithExplicitAllows verifies that Jim's constructor seed
@@ -190,7 +183,9 @@ func TestAgentConstructor_CoreAgent_SeedsRailPlusAllowances(t *testing.T) {
 func TestJimSeed_DenyDefaultWithExplicitAllows(t *testing.T) {
 	policies := coreAgentSeed(IDJim)
 
-	for _, toolName := range []string{"bash", "serve_web"} {
+	// SPEC.md Table (2026-10-22): serve_web is Main core Allow; Jim's bash Deny is unchanged.
+	assert.Equal(t, config.ToolPolicyAllow, ADR090RolePolicyInventory(IDJim)["serve_web"])
+	for _, toolName := range []string{"bash"} {
 		p, ok := policies[toolName]
 		require.True(t, ok, "Jim must have explicit policy for %q", toolName)
 		assert.Equal(t, config.ToolPolicyDeny, p,
@@ -212,15 +207,17 @@ func TestJimSeed_DenyDefaultWithExplicitAllows(t *testing.T) {
 // BDD: Given coreAgentSeed(IDJim) is called,
 //
 //	When the policies map is inspected for delete/remove operations,
-//	Then delete_task, delete_task_in_workspace, delete_workspace, remove_mcp_server
+//	Then delete_task, delete_workspace, remove_mcp_server
 //	are all "ask" (standing rule: delete/remove operations require confirmation).
+//	(delete_task_in_workspace was retired by DEL-23 and carries no policy entry.)
 //
 // Traces to: Jim least-privilege redesign — delete/remove standing rule.
 func TestJimSeed_ConsentGatedDeleteTools(t *testing.T) {
 	policies := coreAgentSeed(IDJim)
 
+	// SPEC.md Table (2026-10-22): delete_task is Ask; management deletions remain out of role.
+	assert.Equal(t, config.ToolPolicyAsk, ADR090RolePolicyInventory(IDJim)["delete_task"])
 	for _, toolName := range []string{
-		"delete_task", "delete_task_in_workspace",
 		"delete_workspace", "remove_mcp_server",
 	} {
 		p, ok := policies[toolName]

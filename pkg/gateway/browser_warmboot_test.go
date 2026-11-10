@@ -185,10 +185,10 @@ func newWarmTestCoordinator(t *testing.T) *browser.BrowserCoordinator {
 // took the lexicographic branch and warmed whichever workspace sorted first.
 // Nothing failed, nothing logged; the wrong Chrome simply got warm.
 //
-// The distinguishing setup is the point: the default agent's id and its
-// workspace id are DIFFERENT strings, and a THIRD workspace sorts ahead of
-// both. An implementation that matched on the agent id, or fell back to a
-// sort, lands somewhere other than keyWanted.
+// Since omnipus-system-agent FR-126 the selection is the DEFAULT WORKSPACE.
+// The distinguishing setup is the point: a decoy workspace sorts ahead of the
+// default one. An implementation that fell back to a sort lands somewhere
+// other than keyWanted.
 func TestPickWarmBrowser_UsesResolvedKey(t *testing.T) {
 	home := warmTestHome(t)
 	coord := newWarmTestCoordinator(t)
@@ -201,18 +201,18 @@ func TestPickWarmBrowser_UsesResolvedKey(t *testing.T) {
 		newWarmTestManagerForKey(t, coord, keyWanted),
 	}
 	cfg := config.DefaultConfig()
-	cfg.Agents.Defaults.DefaultAgentID = "mia"
+	markWarmTestDefaultWorkspace(t, home, "zzzzrealworkspace")
 
 	got, reason := pickWarmBrowserManager(cfg, home, mgrs)
 	if reason != "" {
 		t.Fatalf("expected a pick, got skip reason %q", reason)
 	}
 	if got == nil {
-		t.Fatal("expected the default agent's resolved workspace to be warmed, got nothing")
+		t.Fatal("expected the default workspace to be warmed, got nothing")
 	}
 	if got.BrowsingKey() != keyWanted {
-		t.Fatalf("warmed %q, want %q — selection must resolve the default agent to a WORKSPACE, "+
-			"not compare its id against a manager's key", warmedKey(got), keyWanted.String())
+		t.Fatalf("warmed %q, want %q — selection must pick the default WORKSPACE's browser",
+			warmedKey(got), keyWanted.String())
 	}
 	if got.BrowsingKey() == keyFirstBySort {
 		t.Fatal("warmed the sorted-first workspace: the lexicographic fallback is back")

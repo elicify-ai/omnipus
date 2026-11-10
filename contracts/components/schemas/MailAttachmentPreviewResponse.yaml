@@ -1,0 +1,70 @@
+title: MailAttachmentPreviewResponse
+description: >
+  Metadata-only response of one attachment preview mint (ADR-20261001
+  "Temporary preview mint (F1)" row; w3 spec §2.4 and w5 spec §8 step 6 —
+  W0 is the single publisher). Returns authorization/reference metadata for
+  the temporary Library viewer — kind, display subject, the attachment
+  descriptor, the text_readable classification hint, the content source and
+  read-only capability — and NO cached payload: every byte read is a fresh
+  request-scoped fetch through content_source.byte_url. This response is
+  the temporary alternative of the F1 content-source union; it is never a
+  LibraryEntry and carries no path, filesystem identity or stored-file
+  capability.
+type: object
+additionalProperties: false
+required:
+  - kind
+  - preview_id
+  - subject
+  - attachment
+  - text_readable
+  - content_source
+  - read_only
+properties:
+  kind:
+    type: string
+    enum:
+      - mail_attachment
+    description: >
+      Fixed discriminator of the temporary (mail attachment) alternative of
+      the Library content-source union — the SPA branches on it without
+      string matching on any other field.
+    example: "mail_attachment"
+  preview_id:
+    type: string
+    minLength: 1
+    description: >
+      Opaque grant identifier — the revoke and lifecycle key of this
+      preview. Server-issued; never synthesized by the client.
+    example: "at_9f2c1e"
+  subject:
+    type: string
+    description: >
+      Decoded subject of the message the attachment belongs to (RFC 2047
+      decoded) — display metadata for the exact "From mail: <subject> ·
+      Back to mail · Save to Library" context bar (correction I-06).
+    example: "Quarterly report"
+  attachment:
+    $ref: ./MailAttachment.yaml
+  text_readable:
+    type: boolean
+    description: >
+      Classification hint for the Library viewer's text classifier (F1
+      "Renderer adapters" row) — whether the attachment is expected to
+      render as readable text. It never grants editing, and actual
+      text/decode/size is still validated at read time, independently of
+      this hint.
+    example: true
+  content_source:
+    $ref: ./MailAttachmentContentSource.yaml
+  read_only:
+    type: boolean
+    enum:
+      - true
+    description: >
+      Always true — the temporary source is read-only by construction. No
+      stored-file action (Library edit, rename, move/copy/delete, PDF
+      fill/sign, Library download) is available until Save to Library
+      succeeds; capability checks prevent the calls, they do not merely
+      hide buttons.
+    example: true

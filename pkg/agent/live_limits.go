@@ -282,7 +282,7 @@ func (ll *LiveLimits) planLocked(provider, baseURL, model string) (liveTarget, b
 		}
 		locality = catalog.DeriveLocality(provider, t.protocol, true, t.baseURL)
 	}
-	if t.baseURL == "" || t.protocol == catalog.ProtocolCLI {
+	if t.baseURL == "" {
 		return t, false
 	}
 	if liveNeedsCredential(provider, locality) {

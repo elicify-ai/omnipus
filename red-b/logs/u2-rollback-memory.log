@@ -1,0 +1,9 @@
+--- FAIL: TestSessionCoreU2_RollbackNeverRewritesRetainedArchiveBytes (0.53s)
+    sessioncore_u2_archive_test.go:63: 
+        	Error Trace:	/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/session-core-red-b-20261009/pkg/memory/sessioncore_u2_archive_test.go:63
+        	Error:      	Should be true
+        	Test:       	TestSessionCoreU2_RollbackNeverRewritesRetainedArchiveBytes
+        	Messages:   	FR-006: rollback must never rewrite retained archive bytes; before="{\"role\":\"user\",\"content\":\"m1\",\"ts\":1791510602}\n{\"role\":\"assistant\",\"content\":\"m2\",\"ts\":1791510602}\n{\"role\":\"user\",\"content\":\"m3\",\"ts\":1791510602}\n{\"role\":\"assistant\",\"content\":\"m4\",\"ts\":1791510602}\n" after="{\"role\":\"user\",\"content\":\"m1\",\"ts\":1791510602}\n{\"role\":\"assistant\",\"content\":\"m2\",\"ts\":1791510602}\n"
+FAIL
+FAIL	github.com/elicify-ai/omnipus/pkg/memory	2.598s
+FAIL

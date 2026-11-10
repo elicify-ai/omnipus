@@ -28,7 +28,8 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { act } from 'react'
 import { useChatStore, getMessages, __resetFinishedTurnIdsForTests } from '../chat'
 import { useSessionStore } from '../session'
-import type { WsSessionStateFrame, WsReplayMessageFrame, TokenFrame, DoneFrame } from '@/lib/ws'
+import type { SessionStateFrame, ReplayMessageFrame, TokenFrame, DoneFrame } from '@/lib/ws'
+import { makeSnapshotHistory } from '@/test/factories'
 
 const SID = 'reconnect-active-turn-session'
 const AGENT_ID = 'agent-jim'
@@ -66,7 +67,7 @@ function resetStores() {
 
 beforeEach(resetStores)
 
-function sessionStateWithActiveTurn(): WsSessionStateFrame {
+function sessionStateWithActiveTurn(): SessionStateFrame {
   return {
     type: 'session_state',
     user_id: 'user-1',
@@ -80,7 +81,7 @@ function sessionStateWithActiveTurn(): WsSessionStateFrame {
   }
 }
 
-function sessionStateWithoutActiveTurn(): WsSessionStateFrame {
+function sessionStateWithoutActiveTurn(): SessionStateFrame {
   return {
     type: 'session_state',
     user_id: 'user-1',
@@ -89,7 +90,7 @@ function sessionStateWithoutActiveTurn(): WsSessionStateFrame {
   }
 }
 
-function replayMessage(index: number): WsReplayMessageFrame {
+function replayMessage(index: number): ReplayMessageFrame {
   return {
     type: 'replay_message',
     session_id: SID,
@@ -116,7 +117,9 @@ function catchUpOrLiveToken(content: string): TokenFrame {
 
 // The TURN's own completion `done` — carries real token/cost stats.
 function turnDone(): DoneFrame {
-  return { type: 'done', session_id: SID, stats: { tokens: 42, cost: 0.005 } }
+  // D16: the turn delta is not the session-wide counter; this addressed
+  // producer independently supplies the authoritative absolute observation.
+  return { type: 'done', session_id: SID, stats: { tokens: 42, session_tokens_total: 42, cost: 0.005 } }
 }
 
 function bucket() {
@@ -445,6 +448,7 @@ describe('chat.reconnect — turn finishes before catch-up reaches the SPA (#822
     beginAttach()
     act(() => {
       useChatStore.getState().handleFrame({
+        ...makeSnapshotHistory(1),
         type: 'session_snapshot',
         session_id: SID,
         seq: 5,

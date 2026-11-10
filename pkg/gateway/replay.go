@@ -11,6 +11,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -75,6 +76,10 @@ type streamReplayState struct {
 	childSessionBySpan map[string]string
 	// lifecycleCache memoizes Load for one replay, including misses.
 	lifecycleCache map[string]*session.LifecycleRecord
+	// Set only by bounded read-only preparation. Ordinary full replay keeps its
+	// existing result publication behavior and has no historical source origin.
+	historyOrigin   *generated.HistoryEntryOrigin
+	preparedResults map[session.ToolCallID]any
 }
 
 // streamReplayStateFlow reports how a block stage of streamReplayState wants the conductor to proceed.
@@ -155,95 +160,13 @@ func streamReplay(
 		return nil
 	}
 
-	// buildStart returns a generated.ToolCallStartFrame for tc.
-	// Nil params are coerced to an empty map to satisfy the schema contract
-	// (ToolCallStartFrame.yaml: params is required and must be an object, never null).
-	buildStart := func(tc session.ToolCall, agentID, parentCallID string) generated.ToolCallStartFrame {
-		return sr.buildStartFrame(tc, agentID, parentCallID)
-	}
-
-	// buildResult returns a generated.ToolCallResultFrame for tc.
-	buildResult := func(tc session.ToolCall, agentID, parentCallID string) generated.ToolCallResultFrame {
-		return sr.buildResultFrame(tc, agentID, parentCallID)
-	}
-
 	// lastSeenAgentID tracks the most recent non-empty AgentID across entries.
 	// Used as fallback when a spawn entry has an empty AgentID.
 	sr.lastSeenAgentID = ""
 
 	for ei, entry := range sr.entries {
-		switch flow, err2 := sr.dispatchSpecialEntry(entry, emitFrame); flow {
-		case streamReplayStateContinue:
-			continue
-		case streamReplayStateReturn:
+		if err2 := sr.replayEntry(ctx, ei, entry, mediaStore, emitFrame); err2 != nil {
 			return framesEmitted, err2
-		}
-
-		// ADR-087 D2/Codex C8: a truncated assistant entry can have EMPTY
-		// content — D4a persists a zero-content entry stamped
-		// truncated/max_output_tokens when the answer was cut off before any
-		// text was produced. That entry must still replay (with no body) so
-		// the SPA can render the "(cut off at the output limit)" suffix on
-		// reattach/reload; a non-truncated empty entry is unaffected and
-		// continues to be skipped entirely below.
-		truncatedEmptyAssistant := entry.Content == "" && entry.Truncated && entry.Role == "assistant"
-
-		// FR-I-002: emit replay_message for non-empty content (or a
-		// truncated-empty assistant entry, per ADR-087 above).
-		if entry.Content != "" || truncatedEmptyAssistant {
-			// Phase 1B (FR-014): system-error entries (Type=system + Status="error")
-			// are emitted as ReplayErrorFrame so the SPA can render the typed
-			// rate-limit-denial or generic error component. Without this, the
-			// empty Role would fall through to the assistant render path and the
-			// rate-limit text would render as a regular assistant bubble.
-			if entry.Type == session.EntryTypeSystem && entry.Status == "error" {
-				if err2 := emitFrame(buildReplayErrorFrame(sr.sessionID, entry)); err2 != nil {
-					return framesEmitted, err2
-				}
-				continue
-			}
-
-			sr.buildEntryMessage(entry)
-
-			if err2 := emitFrame(sr.msgFrame); err2 != nil {
-				return framesEmitted, err2
-			}
-
-			// Bug 2 fix: for handoff and return_to_default system entries, emit
-			// a typed agent_switched frame so the SPA can render the agent
-			// transition visually rather than treating it as plain chat text.
-			// HandoffTool writes AgentID = target; ReturnToDefaultTool writes
-			// AgentID = returning agent (not target), so we only emit the switch
-			// frame for entries whose content starts with "Handoff:" and where
-			// the entry carries the target agent ID.
-			if entry.Type == session.EntryTypeSystem && entry.AgentID != "" &&
-				strings.HasPrefix(entry.Content, "Handoff:") {
-				switchF := generated.AgentSwitchedFrame{
-					Type:      string(generated.WsFrameTypeAgentSwitched),
-					SessionId: sr.sessionID,
-				}
-				agentIDCopy := entry.AgentID
-				switchF.AgentId = &agentIDCopy
-				if err2 := emitFrame(switchF); err2 != nil {
-					return framesEmitted, err2
-				}
-			}
-		}
-
-		// FR-I-001: emit tool_call_start + tool_call_result for each ToolCall.
-	streamReplayStateLoop1:
-		for ti, tc := range entry.ToolCalls {
-			switch sr.classifyToolCall(ei, entry, ti, tc) {
-			case streamReplayStateContinue:
-				continue streamReplayStateLoop1
-			}
-
-			switch flow, err2 := sr.emitToolCallFrames(tc, mediaStore, buildStart, buildResult, emitFrame); flow {
-			case streamReplayStateContinue:
-				continue streamReplayStateLoop1
-			case streamReplayStateReturn:
-				return framesEmitted, err2
-			}
 		}
 	}
 
@@ -391,6 +314,12 @@ func (sr *streamReplayState) emitSpawnParentToolCall(
 	// The end is emitted before the still-active return so a stopped
 	// generation 1 is closed even while a newer generation is still running.
 	term := sr.spanReplayTerminal(sr.tcID, 1)
+	if term == spanReplayUseToolCall && (tc.Status == "pending" || tc.Status == "running") {
+		// A legacy launch without persisted brackets has only its tool-call
+		// status as evidence. Keep its start, but do not invent a terminal
+		// span or result from a call that has not completed (paging D4).
+		return streamReplayStateContinue, nil
+	}
 	if err2 := sr.emitReplaySpanEnd(tc, term, emitFrame); err2 != nil {
 		return streamReplayStateReturn, err2
 	}
@@ -434,13 +363,16 @@ func (sr *streamReplayState) emitFlatToolCall(
 	if err2 := emitFrame(buildStart(tc, sr.effectiveAgentID, parentForFlat)); err2 != nil {
 		return streamReplayStateReturn, err2
 	}
-	if sr.stillActive {
+	if sr.stillActive || tc.Status == "pending" || tc.Status == "running" {
 		// A spawn/delegate call whose real sub-turn is still running but
 		// has made no (recorded) nested tool calls yet — e.g. a background
 		// delegate reloaded before its first step landed (symptom:
 		// "0 steps working" live, "done 0ms" on reload). Withhold the
 		// result frame; the client sees only tool_call_start, i.e.
 		// genuinely in progress.
+		// D4 likewise: any ordinary call still recorded "pending" or "running" has no
+		// completion yet. A result frame would invent one, and
+		// toolCallResultStatus would even present it as a terminal error.
 		return streamReplayStateContinue, nil
 	}
 	if err2 := emitFrame(buildResult(tc, sr.effectiveAgentID, parentForFlat)); err2 != nil {
@@ -503,6 +435,31 @@ func (sr *streamReplayState) dispatchSpecialEntry(entry session.TranscriptEntry,
 	// The steering wake bookmark stays in the transcript for the wake
 	// path. Replay must not turn it into a chat line.
 	if isSteeringConsumedMarker(entry) {
+		return streamReplayStateContinue, nil
+	}
+
+	// Classified diagnostics replay as the same generated frame sent live,
+	// never as ordinary text, even if the entry also contains Content.
+	if entry.Type == session.EntryTypeContextWindowNotice {
+		frame, err := entry.ContextWindowNoticeFrame(sr.sessionID)
+		if err != nil {
+			return streamReplayStateReturn, err
+		}
+		if err := emitFrame(frame); err != nil {
+			return streamReplayStateReturn, err
+		}
+		return streamReplayStateContinue, nil
+	}
+
+	// provider-messages §7.1 item 2 / MAJ-010/C-17: a persisted fallback
+	// note replays as the SAME carrier the spec names (replay_provider_fallback)
+	// so the reloaded session renders the note — never a live-only orphan.
+	// The live announcement is the separate provider_fallback frame; the
+	// SPA dedups live vs replay on entry_id (FB-2).
+	if entry.Type == session.EntryTypeProviderFallback {
+		if err2 := emitFrame(buildReplayFallbackNote(sr.sessionID, entry)); err2 != nil {
+			return streamReplayStateReturn, err2
+		}
 		return streamReplayStateContinue, nil
 	}
 
@@ -569,6 +526,12 @@ func (sr *streamReplayState) dispatchSpecialEntry(entry session.TranscriptEntry,
 	// entry stamped goal_outcome but carrying no outcome is malformed: it
 	// is logged and falls through to the ordinary rendering below so its
 	// text is not lost.
+	if entry.Type == session.EntryTypeSystem && entry.SystemSubtype == "helper_event" && entry.HelperEvent != nil {
+		if err := emitFrame(agent.HelperEventFrameFor(sr.sessionID, entry.ID, *entry.HelperEvent)); err != nil {
+			return streamReplayStateReturn, err
+		}
+		return streamReplayStateContinue, nil
+	}
 	if entry.Type == session.EntryTypeSystem && entry.SystemSubtype == session.SystemSubtypeGoalOutcome {
 		if entry.GoalOutcome != nil {
 			if err2 := emitFrame(goalOutcomeFrame(sr.sessionID, entry.ID, *entry.GoalOutcome)); err2 != nil {
@@ -620,60 +583,8 @@ func (sr *streamReplayState) dispatchSpecialEntry(entry session.TranscriptEntry,
 	if flow, err2, handled := sr.dispatchPersistedSubagentStart(entry, emitFrame); handled {
 		return flow, err2
 	}
-	if entry.Type == session.EntryTypeSystem && entry.SystemSubtype == session.SystemSubtypeSubagentMessage {
-		if entry.SubagentMessage != nil {
-			// UAT defect 1: stamp SessionId from sr.sessionID (the
-			// transcript this entry was read FROM — persistSubagentEntry
-			// only ever writes these into the PARENT's own transcript)
-			// rather than trusting whatever the stored frame carries, the
-			// same self-healing choice this function already makes for
-			// browser_handover_notice/goal_outcome just above (both built
-			// fresh from sr.sessionID, never from a stored SessionId).
-			// This makes a reload correct even for an entry persisted
-			// BEFORE deliverSubagentMessage's fix (steer_frames.go), whose
-			// stored SessionId is the child's — no separate data migration
-			// needed.
-			frame := *entry.SubagentMessage
-			frame.SessionId = sr.sessionID
-			if err2 := emitFrame(frame); err2 != nil {
-				return streamReplayStateReturn, err2
-			}
-			return streamReplayStateContinue, nil
-		}
-		slog.Warn("replay: subagent_message transcript entry carries no frame — replaying it as a plain entry",
-			"session_id", sr.sessionID, "entry_id", entry.ID)
-	}
-	if entry.Type == session.EntryTypeSystem && entry.SystemSubtype == session.SystemSubtypeSubagentState {
-		if entry.SubagentState != nil {
-			// UAT defect 1: same self-healing stamp as subagent_message
-			// above.
-			frame := *entry.SubagentState
-			frame.SessionId = sr.sessionID
-			if err2 := emitFrame(frame); err2 != nil {
-				return streamReplayStateReturn, err2
-			}
-			return streamReplayStateContinue, nil
-		}
-		slog.Warn("replay: subagent_state transcript entry carries no frame — replaying it as a plain entry",
-			"session_id", sr.sessionID, "entry_id", entry.ID)
-	}
-	if entry.Type == session.EntryTypeSystem && entry.SystemSubtype == session.SystemSubtypeSubagentEnd {
-		if entry.SubagentEnd != nil {
-			// UAT defect 1: same self-healing stamp as subagent_message/
-			// subagent_state above — the entry was written into the
-			// PARENT's own transcript (steer_frames.go's
-			// persistSubagentEntry), so sr.sessionID (the transcript this
-			// entry was read FROM) is always correct regardless of
-			// whatever SessionId the stored frame happens to carry.
-			frame := replayedSubagentEnd(entry)
-			frame.SessionId = sr.sessionID
-			if err2 := emitFrame(frame); err2 != nil {
-				return streamReplayStateReturn, err2
-			}
-			return streamReplayStateContinue, nil
-		}
-		slog.Warn("replay: subagent_end transcript entry carries no frame — replaying it as a plain entry",
-			"session_id", sr.sessionID, "entry_id", entry.ID)
+	if flow, err2, handled := sr.dispatchPersistedSubagentFrames(entry, emitFrame); handled {
+		return flow, err2
 	}
 
 	// Update the running fallback agent ID.
@@ -713,6 +624,68 @@ func (sr *streamReplayState) dispatchSpecialEntry(entry session.TranscriptEntry,
 	}
 
 	return streamReplayStateNext, nil
+}
+
+// dispatchPersistedSubagentFrames emits persisted message, state and end frames in
+// transcript order. Malformed entries fall through to ordinary replay.
+func (sr *streamReplayState) dispatchPersistedSubagentFrames(entry session.TranscriptEntry, emitFrame func(any) error) (streamReplayStateFlow, error, bool) {
+	if entry.Type == session.EntryTypeSystem && entry.SystemSubtype == session.SystemSubtypeSubagentMessage {
+		if entry.SubagentMessage != nil {
+			// UAT defect 1: stamp SessionId from sr.sessionID (the
+			// transcript this entry was read FROM — persistSubagentEntry
+			// only ever writes these into the PARENT's own transcript)
+			// rather than trusting whatever the stored frame carries, the
+			// same self-healing choice this function already makes for
+			// browser_handover_notice/goal_outcome just above (both built
+			// fresh from sr.sessionID, never from a stored SessionId).
+			// This makes a reload correct even for an entry persisted
+			// BEFORE deliverSubagentMessage's fix (steer_frames.go), whose
+			// stored SessionId is the child's — no separate data migration
+			// needed.
+			frame := *entry.SubagentMessage
+			frame.SessionId = sr.sessionID
+			if err2 := emitFrame(frame); err2 != nil {
+				return streamReplayStateReturn, err2, true
+			}
+			return streamReplayStateContinue, nil, true
+		}
+		slog.Warn("replay: subagent_message transcript entry carries no frame — replaying it as a plain entry",
+			"session_id", sr.sessionID, "entry_id", entry.ID)
+	}
+	if entry.Type == session.EntryTypeSystem && entry.SystemSubtype == session.SystemSubtypeSubagentState {
+		if entry.SubagentState != nil {
+			// UAT defect 1: same self-healing stamp as subagent_message
+			// above.
+			frame := *entry.SubagentState
+			frame.SessionId = sr.sessionID
+			if err2 := emitFrame(frame); err2 != nil {
+				return streamReplayStateReturn, err2, true
+			}
+			return streamReplayStateContinue, nil, true
+		}
+		slog.Warn("replay: subagent_state transcript entry carries no frame — replaying it as a plain entry",
+			"session_id", sr.sessionID, "entry_id", entry.ID)
+	}
+	if entry.Type == session.EntryTypeSystem && entry.SystemSubtype == session.SystemSubtypeSubagentEnd {
+		if entry.SubagentEnd != nil {
+			// UAT defect 1: same self-healing stamp as subagent_message/
+			// subagent_state above — the entry was written into the
+			// PARENT's own transcript (steer_frames.go's
+			// persistSubagentEntry), so sr.sessionID (the transcript this
+			// entry was read FROM) is always correct regardless of
+			// whatever SessionId the stored frame happens to carry.
+			frame := replayedSubagentEnd(entry)
+			frame.SessionId = sr.sessionID
+			if err2 := emitFrame(frame); err2 != nil {
+				return streamReplayStateReturn, err2, true
+			}
+			return streamReplayStateContinue, nil, true
+		}
+		slog.Warn("replay: subagent_end transcript entry carries no frame — replaying it as a plain entry",
+			"session_id", sr.sessionID, "entry_id", entry.ID)
+	}
+
+	return streamReplayStateNext, nil, false
 }
 
 // dispatchPersistedSubagentStart handles a persisted subagent_start system
@@ -888,7 +861,12 @@ func (sr *streamReplayState) buildStartFrame(tc session.ToolCall, agentID string
 
 // buildResultFrame builds a persisted tool-call result frame.
 func (sr *streamReplayState) buildResultFrame(tc session.ToolCall, agentID string, parentCallID string) generated.ToolCallResultFrame {
-	resultPayload := truncateResult(sr.sessionID, tc, sr.toolStore)
+	var resultPayload any
+	if sr.preparedResults != nil {
+		resultPayload = sr.preparedResults[tc.ID]
+	} else {
+		resultPayload = truncateResult(sr.sessionID, tc, sr.toolStore)
+	}
 	durationMs := int(tc.DurationMS)
 	f := generated.ToolCallResultFrame{
 		Type:       string(generated.WsFrameTypeToolCallResult),
@@ -917,10 +895,32 @@ func (sr *streamReplayState) buildEntryMessage(entry session.TranscriptEntry) {
 		Role:      entry.Role,
 		Content:   entry.Content,
 	}
+	// A2.1: a history page's shortened ordinary message carries its true size.
+	if n := entry.DisplayContentOriginalSizeBytes(); n > 0 {
+		sr.msgFrame.ContentOriginalSizeBytes = &n
+	}
+	if !entry.Timestamp.IsZero() {
+		timestamp := entry.Timestamp.UTC().Format(time.RFC3339Nano)
+		sr.msgFrame.Timestamp = &timestamp
+	}
 	if entry.AgentID != "" {
 		agentIDCopy := entry.AgentID
 		sr.msgFrame.AgentId = &agentIDCopy
 	}
+	// Effort levels (FR-058, FR-024): the entry's own stored record and turn
+	// reasoning snapshot, copied unchanged (REST Message carries the same).
+	sr.msgFrame.Effort = entry.Effort
+	sr.msgFrame.TurnReasoningTokens = entry.TurnReasoningTokens
+	// FR-027: a guest reply names the admitted request it answers, the same
+	// value the live frames carry.
+	if entry.ReplyToMessageID != "" {
+		replyCopy := entry.ReplyToMessageID
+		sr.msgFrame.ReplyToMessageId = &replyCopy
+	}
+	sr.msgFrame.Participant = entry.Participant
+	sr.msgFrame.ReplyToParticipant = entry.ReplyToParticipant
+	// K33: group-chat traffic replays as the same collapsed entry it was live.
+	sr.msgFrame.RoomRef = entry.RoomRef
 	// #823 catch-up redesign (BE-DESIGN.md §4.2/§6.3): the persisted entry
 	// id is the same id the live frames used (user_message.id; an assistant
 	// round's token/done message_id), so a client can merge a replayed
@@ -937,6 +937,20 @@ func (sr *streamReplayState) buildEntryMessage(entry session.TranscriptEntry) {
 		cidCopy := entry.ClientMessageID
 		sr.msgFrame.ClientMessageId = &cidCopy
 	}
+	// session-core FR-024: a user input Stop discarded before delivery keeps
+	// its archived bytes; the replayed frame carries the read-only label.
+	if d := entry.InputDisposition; d != nil {
+		// The generated frame's input_disposition is an anonymous struct, so it
+		// is filled through its own JSON tags (message_id, client_message_id,
+		// state, reason) instead of a hand-written parallel struct.
+		raw, mErr := json.Marshal(d)
+		if mErr == nil {
+			mErr = json.Unmarshal(raw, &sr.msgFrame.InputDisposition)
+		}
+		if mErr != nil {
+			logsafeError("replay: could not project input_disposition", "session_id", sr.sessionID, "entry_id", entry.ID, "error", mErr)
+		}
+	}
 	// Wave 3 fix 5c/1: surface TranscriptEntry.TurnID — stamped on
 	// every real assistant entry at its three production write sites:
 	// pkg/agent/turn.go's appendIntermediateAssistantTranscript and
@@ -949,6 +963,15 @@ func (sr *streamReplayState) buildEntryMessage(entry session.TranscriptEntry) {
 	if entry.TurnID != "" {
 		turnIDCopy := entry.TurnID
 		sr.msgFrame.TurnId = &turnIDCopy
+	}
+	// session-core FR-039 / C-GOAL: surface the producing turn's goal id on the
+	// replayed entry — the SAME association the live frames and the REST
+	// history carry — so the SPA joins the bubble to its own exact keyed goal
+	// criteria after reload instead of the latest-goal scalar. Empty for
+	// entries written under no proven goal (unknown association).
+	if entry.GoalID != "" {
+		goalIDCopy := entry.GoalID
+		sr.msgFrame.GoalId = &goalIDCopy
 	}
 	// Phase 1B (FR-013/FR-014): surface per-turn model. Populated from
 	// TranscriptEntry.Model on every assistant message written via
@@ -967,6 +990,13 @@ func (sr *streamReplayState) buildEntryMessage(entry session.TranscriptEntry) {
 	// Absent reason on a truncated entry means "cancelled" (legacy —
 	// every entry written before TruncationReason existed was always
 	// a cancel; see TranscriptEntry.TruncationReason's doc comment).
+	// A distinct terminal outcome sentence: the live view shows it as its own
+	// message (done closed the narration bubble first), replay has no such
+	// boundary, so the marker rides the frame for the SPA to split on.
+	if entry.Role == "assistant" && entry.TerminalOutcome {
+		terminalCopy := true
+		sr.msgFrame.TerminalOutcome = &terminalCopy
+	}
 	if entry.Role == "assistant" && entry.Truncated {
 		truncatedCopy := true
 		sr.msgFrame.Truncated = &truncatedCopy
@@ -1073,11 +1103,10 @@ func (sr *streamReplayState) buildSubagentStart(tc session.ToolCall) {
 	// result shape is defined elsewhere; a missing/differently-keyed
 	// result simply leaves ChildSessionId nil (the open control degrades
 	// gracefully, per the field's own "optional" contract).
-	if tc.Result != nil {
-		if sid, ok := tc.Result["session_id"].(string); ok && sid != "" {
-			sidCopy := sid
-			sr.subStart.ChildSessionId = &sidCopy
-		}
+	// A history page's shortened result keeps this fact from its full value.
+	if sid := historyToolCallChildSessionID(tc); sid != "" {
+		sidCopy := sid
+		sr.subStart.ChildSessionId = &sidCopy
 	}
 }
 
@@ -1149,7 +1178,7 @@ func buildMediaFrame(
 	mediaStore media.MediaStore,
 	seenPaths map[string]struct{},
 ) (generated.MediaFrame, bool) {
-	raw, ok := tc.Result["media"]
+	raw, ok := historyToolCallMedia(tc)
 	if !ok {
 		return generated.MediaFrame{}, false
 	}
@@ -1181,7 +1210,15 @@ func buildMediaFrame(
 		// send_file). Replaying both produces a duplicate image in the
 		// SPA. Skip refs whose path was already emitted in this replay.
 		if mediaStore != nil && seenPaths != nil {
-			if path, err := mediaStore.ResolveWithOpts(refStr, media.ResolveOpts{}); err == nil && path != "" {
+			path, err := mediaStore.ResolveWithOpts(refStr, media.ResolveOpts{})
+			if errors.Is(err, media.ErrNotFound) {
+				// The store no longer knows this ref, so its card could only be
+				// dead. Keep the rest of the group and tell the operator.
+				logsafeWarn("replay: skipped file card, media ref unknown to the store",
+					"session_id", sessionID, "ref", refStr)
+				continue
+			}
+			if err == nil && path != "" {
 				if _, dup := seenPaths[path]; dup {
 					continue
 				}
@@ -1452,7 +1489,8 @@ func applyPersistedFailureReason(f *generated.ToolCallResultFrame, tc session.To
 	//
 	// Only fills Result when nothing richer is already there: a call carrying
 	// media descriptors or a sync-delegate payload keeps its own shape.
-	if tc.Result == nil {
+	// A history-page preview replaced a non-nil full result: keep the marker.
+	if _, preview := tc.HistoryDisplayPreview(); tc.Result == nil && !preview {
 		f.Result = obj
 	}
 	if reason != "" {
@@ -1527,24 +1565,12 @@ func resolveStatus(s string) string {
 	return s
 }
 
-// toolCallResultStatus normalises a persisted session.ToolCall.Status onto
-// ToolCallResultFrame's strict wire enum (success/error only —
-// ToolCallResultFrame.yaml has no "interrupted" value; only the richer
-// SubagentEndFrame.status enum does). pkg/agent/loop.go's tcStatus
-// derivation can now persist "interrupted" for a synchronous delegate call
-// canceled by its parent (Finding F / A-I4 round 5, ToolResult.Interrupted),
-// so tc.Status is no longer guaranteed to be one of ToolCallResultFrame's
-// two allowed values — passing it through resolveStatus verbatim, as this
-// function replaces at every ToolCallResultFrame call site, would emit a
-// contract-invalid frame the SPA's isValidFrame() drops. Any non-empty,
-// non-"success" value (error, interrupted, canceled, timeout, ...) reads as
-// "error" here, exactly matching what the LIVE EventKindToolExecEnd handler
-// already does for the same outer call — IsError is a plain bool there too,
-// with no room for a third state — so this clamp changes nothing about the
-// OUTER tool_call_result badge's live/reload parity; only the SPAN's own
-// subagent_end frame (built via resolveStatus, unclamped) is meant to ever
-// show "interrupted".
+// toolCallResultStatus preserves the contracted terminal cancellation. Other
+// richer span-only outcomes still map to error, never an invalid wire value.
 func toolCallResultStatus(s string) string {
+	if s == "cancelled" {
+		return "cancelled"
+	}
 	if s == "" || s == "success" {
 		return resolveStatus(s)
 	}
@@ -1611,15 +1637,52 @@ func buildReplayErrorFrame(sessionID string, entry session.TranscriptEntry) gene
 		frame.AgentId = &agentIDCopy
 	}
 	if entry.ErrorCode != "" {
+		replay := generated.LLMErrorReplay{
+			Code:      entry.ErrorCode,
+			Message:   entry.Content,
+			Retryable: entry.ErrorRetryable,
+			// MAJ-104/C-14: round-trip the persisted assembled-sentence
+			// marker so the SPA renders the reloaded error exactly like
+			// the live frame did.
+			ProviderMessage: llmErrorReplayFlag(entry.ProviderMessage),
+		}
 		frame.Payload = &generated.ReplayErrorPayload{
-			LlmError: generated.LLMErrorReplay{
-				Code:      entry.ErrorCode,
-				Message:   entry.Content,
-				Retryable: entry.ErrorRetryable,
-			},
+			LlmError: replay,
 		}
 	}
 	return frame
+}
+
+// buildReplayFallbackNote constructs the replay_provider_fallback carrier
+// (provider-messages §7.1 item 2, MAJ-010/C-17) from a persisted
+// EntryTypeProviderFallback transcript entry. The SPA dedups it against the
+// live provider_fallback announcement on entry_id (FB-2).
+func buildReplayFallbackNote(sessionID string, entry session.TranscriptEntry) generated.ProviderFallbackNote {
+	note := generated.ProviderFallbackNote{
+		Type:      string(generated.WsFrameTypeReplayProviderFallback),
+		SessionId: sessionID,
+		EntryId:   entry.ID,
+		// Format as RFC 3339 (matches AsyncAPI format: date-time);
+		// TranscriptEntry.Timestamp is a time.Time and JSON-marshals to
+		// RFC 3339 by default.
+		Timestamp:        entry.Timestamp.UTC().Format(time.RFC3339Nano),
+		Message:          entry.Content,
+		AnsweredModel:    strPtr(entry.Model),
+		UnavailableModel: strPtr(entry.UnavailableModel),
+		UnavailableCode:  strPtr(entry.UnavailableCode),
+	}
+	return note
+}
+
+// llmErrorReplayFlag returns nil for false (omitted from the wire) and a
+// pointer to true when the persisted entry carries the provider-messages
+// assembled-sentence marker.
+func llmErrorReplayFlag(v bool) *bool {
+	if !v {
+		return nil
+	}
+	f := true
+	return &f
 }
 
 // toJudgeVerdictFrame converts an internal task.JudgeVerdict into the
@@ -1794,9 +1857,11 @@ func parseRetryAfterSeconds(content string) *float64 {
 
 // resolveTaskLabel extracts the task label from a spawn tool call's parameters.
 // Prefers Parameters["label"]; falls back to Parameters["task"] truncated at 60 chars.
+// A legacy call without either uses its recorded tool name as a display label,
+// not invented task text; generated span starts require a nonempty label.
 func resolveTaskLabel(tc session.ToolCall) string {
 	if tc.Parameters == nil {
-		return ""
+		return tc.Tool
 	}
 	if label, ok := tc.Parameters["label"].(string); ok && label != "" {
 		return label
@@ -1806,9 +1871,11 @@ func resolveTaskLabel(tc session.ToolCall) string {
 		if len(runes) > 60 {
 			return string(runes[:60])
 		}
-		return task
+		if task != "" {
+			return task
+		}
 	}
-	return ""
+	return tc.Tool
 }
 
 // replayStats aggregates metrics from a set of transcript entries for slog.Info.

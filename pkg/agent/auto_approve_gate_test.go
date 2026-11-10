@@ -28,6 +28,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // goldenAutoAskList is the founder file's 28 catalog "asks" entries (§3),
@@ -38,8 +39,8 @@ var goldenAutoAskList = []string{
 	"set_config", "run_doctor", "configure_provider", "test_provider",
 	"enable_channel", "disable_channel", "configure_channel", "test_channel",
 	"add_mcp_server", "remove_mcp_server", "create_agent", "update_agent", "delete_agent",
-	"update_workspace", "delete_workspace", "delete_task_in_workspace",
-	"create_skill", "edit_skill", "remove_skill",
+	"update_workspace", "delete_workspace",
+	"edit_skill", // r15 §10 retires create_skill/remove_skill; editing still asks.
 }
 
 // autoRunsSample is T4's sample of unconditional RUNS tools (§9 T4).
@@ -54,7 +55,7 @@ func runStubTurn(t *testing.T, autoApprove bool, names []string) (*autoRecording
 	stubs := installAutoStubs(t, al, "mia", names)
 	approver := &autoRecordingApprover{approve: true}
 	al.SetToolApprover(approver)
-	_, err := al.ProcessDirect(context.Background(), "use the tools", "auto-gate-turn")
+	_, err := al.processDirectPrimaryForTest(context.Background(), "use the tools", "auto-gate-turn")
 	require.NoError(t, err)
 	return approver, stubs, al
 }
@@ -62,7 +63,7 @@ func runStubTurn(t *testing.T, autoApprove bool, names []string) (*autoRecording
 // T3: every ASKS tool on Ask with Auto on (kernel sandbox enforcing) still
 // prompts, exactly once, and runs only after that approval.
 func TestAutoApprove_T3_AskListToolsStillPrompt(t *testing.T) {
-	require.Len(t, goldenAutoAskList, 28, "the founder file lists 28 catalog asks")
+	require.Len(t, goldenAutoAskList, 25, "28 historical asks minus DEL-23 and r15 §10 retired create_skill/remove_skill")
 	withKernelSandbox(t)
 	approver, stubs, _ := runStubTurn(t, true, goldenAutoAskList)
 	assert.Len(t, approver.requests(), len(goldenAutoAskList))
@@ -87,7 +88,7 @@ func TestAutoApprove_T4_T11_T12_RunsToolsRunWithoutPrompt(t *testing.T) {
 	al.SetToolApprover(approver)
 	readAudit := swapAuditLogger(t, al)
 
-	_, err := al.ProcessDirect(context.Background(), "use the tools", "auto-runs-turn")
+	_, err := al.processDirectPrimaryForTest(context.Background(), "use the tools", "auto-runs-turn")
 	require.NoError(t, err)
 
 	for _, name := range autoRunsSample {
@@ -163,7 +164,7 @@ func TestAutoApprove_T5b_AutoOnNoKernelSandboxStillRuns(t *testing.T) {
 	al.SetToolApprover(approver)
 	readAudit := swapAuditLogger(t, al)
 
-	_, err := al.ProcessDirect(context.Background(), "use the tools", "auto-nosandbox-turn")
+	_, err := al.processDirectPrimaryForTest(context.Background(), "use the tools", "auto-nosandbox-turn")
 	require.NoError(t, err)
 
 	for _, name := range autoRunsSample {
@@ -196,7 +197,7 @@ func writeFileTurn(t *testing.T, autoApprove bool, mutate func(*config.Config), 
 	installAutoStubs(t, al, "mia", nil, "write_file")
 	approver := &autoRecordingApprover{approve: false}
 	al.SetToolApprover(approver)
-	_, err := al.ProcessDirect(context.Background(), "write the files", "auto-write-turn")
+	_, err := al.processDirectPrimaryForTest(context.Background(), "write the files", "auto-write-turn")
 	require.NoError(t, err)
 	return approver, scripted
 }
@@ -278,9 +279,7 @@ func TestAutoApprove_T14_GodModeStillPrompts(t *testing.T) {
 // path the deleted subturn.go used to own) to agent "worker" from a parent
 // chat whose per-chat Auto modifier is ON while the GLOBAL Auto default is
 // OFF. The worker calls knowledge_edit — an unconditional RUNS tool — on
-// Ask. workerAutoApproveDisabled sets the worker's OWN AgentConfig.
-// AutoApproveDisabled: true is T15's "own off-switch wins" case, false is
-// the "ordinary delegate still inherits" control.
+// Ask.
 //
 // This is a functional/reachability proof, not a direct call into
 // inheritSessionPermissions the way inherit_session_permissions_test.go
@@ -289,9 +288,8 @@ func TestAutoApprove_T14_GodModeStillPrompts(t *testing.T) {
 // into steer_launcher.go::SteerLauncher.Launch (inheritDelegatePermissions),
 // not merely reachable in isolation. Before that wiring existed, this
 // helper's parent-chat modifier never reached the child at all — the worker
-// always resolved Auto from its own agent/global defaults only, so the
-// "ordinary delegate inherits" case (workerAutoApproveDisabled=false) would
-// have wrongly prompted every time (global Auto is OFF here) instead of
+// always resolved Auto from the global default only, so the
+// delegate would have wrongly prompted every time (global Auto is OFF here) instead of
 // running the RUNS tool unprompted.
 //
 // MERGE TODO note this replaces (release/v0.1.1 → feat/adr-092-shell-
@@ -305,13 +303,20 @@ func TestAutoApprove_T14_GodModeStillPrompts(t *testing.T) {
 // newTestSteeringSession, waitFor) — Dispatch runs the child's turn on a
 // detached goroutine (admission.go::goSteeredTurn), so the assertions below
 // poll rather than assume synchronous completion.
-func delegateUnderAutoChat(t *testing.T, workerAutoApproveDisabled bool) (*autoRecordingApprover, *autoStubTool) {
+func delegateUnderAutoChat(t *testing.T) (*autoRecordingApprover, *autoStubTool) {
+	t.Helper()
+	return delegateToolUnderAutoChat(t, "knowledge_edit", config.ToolPolicyAsk)
+}
+
+// delegateToolUnderAutoChat is delegateUnderAutoChat for an arbitrary stub
+// tool and the worker's own per-agent policy for it.
+func delegateToolUnderAutoChat(t *testing.T, toolName string, workerPolicy config.ToolPolicy) (*autoRecordingApprover, *autoStubTool) {
 	t.Helper()
 
 	home := filepath.Join(t.TempDir(), "home")
 	require.NoError(t, os.MkdirAll(home, 0o700))
 	provider := testutil.NewScenario().WithToolCalls([]providers.ToolCall{
-		autoToolCall("t15-knowledge-edit", "knowledge_edit", `{}`),
+		autoToolCall("t15-"+toolName, toolName, `{}`),
 	}).WithText("done")
 
 	cfg := &config.Config{
@@ -324,7 +329,7 @@ func delegateUnderAutoChat(t *testing.T, workerAutoApproveDisabled bool) (*autoR
 			},
 			List: []config.AgentConfig{
 				{ID: testDefaultAgentID, Home: home},
-				{ID: "worker", Home: home, AutoApproveDisabled: workerAutoApproveDisabled},
+				{ID: "worker", Home: home},
 			},
 		},
 	}
@@ -335,21 +340,25 @@ func delegateUnderAutoChat(t *testing.T, workerAutoApproveDisabled bool) (*autoR
 	cfg.Sandbox.AutoApprove = false
 
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)
+	// D2 admission requires the genuine current boot epoch before Dispatch.
+	mintGenuineBootEpochForLoop(t, al)
 	t.Cleanup(func() { al.Close() })
 	lifecycle := session.NewLifecycleStore(filepath.Join(home, "session_lifecycle"))
 	inbox := session.NewMessageInboxStore(filepath.Join(home, "session_messages"))
 	al.SetSessionMessagingStores(inbox, lifecycle)
 
-	stubs := installAutoStubs(t, al, "worker", []string{"knowledge_edit"})
-	stub := stubs["knowledge_edit"]
+	stubs := installAutoStubs(t, al, "worker", []string{toolName})
+	stub := stubs[toolName]
+	if inst, ok := al.GetRegistry().GetAgent("worker"); ok {
+		inst.StoreToolPolicy(&tools.ToolPolicyCfg{Policies: map[string]config.ToolPolicy{toolName: workerPolicy}})
+	}
 
 	approver := &autoRecordingApprover{approve: false}
 	al.SetToolApprover(approver)
 
 	parentID := newTestSteeringSession(t, al, "")
-	// A human turned Auto ON for THIS chat only — the parent's own agent
-	// (testDefaultAgentID) never has AutoApproveDisabled set, so this is the
-	// per-chat modifier ResolveAutoApprove documents as "may loosen".
+	// A human turned Auto ON for THIS chat only — the per-chat modifier
+	// ResolveAutoApprove documents as "may loosen".
 	al.SessionModes().Set(parentID, true)
 
 	launcher := NewSteerLauncher(al)
@@ -367,9 +376,9 @@ func delegateUnderAutoChat(t *testing.T, workerAutoApproveDisabled bool) (*autoR
 	// The child's turn runs on a detached goroutine; wait for its one tool
 	// call to either run (stub) or be prompted (approver) — whichever this
 	// case resolves to is the only tool call the scripted turn ever makes.
-	waitFor(t, 10*time.Second, func() bool {
-		return stub.calls.Load() > 0 || approver.countFor("knowledge_edit") > 0
-	})
+	// The scripted turn is one tool call then a text reply, so the second model
+	// request marks the call as resolved (run, prompted or denied alike).
+	waitFor(t, 10*time.Second, func() bool { return provider.CallCount() >= 2 })
 	// Give the turn a moment to finish writing its final text response after
 	// the tool call resolves, so a caller reading stub.pinned right after
 	// this return sees the settled value, not a write still in flight.
@@ -383,30 +392,14 @@ func delegateUnderAutoChat(t *testing.T, workerAutoApproveDisabled bool) (*autoR
 	return approver, stub
 }
 
-// T15: a delegate whose own auto_approve_disabled is set still prompts for a
-// RUNS tool under a parent chat with Auto on; the same delegate without the
-// switch runs it unprompted (the control that proves the instrument sees the
-// difference).
-func TestAutoApprove_T15_DelegateOwnOffSwitchWins(t *testing.T) {
-	t.Run("delegate switched off prompts", func(t *testing.T) {
-		approver, stub := delegateUnderAutoChat(t, true)
-		assert.Equal(t, 1, approver.countFor("knowledge_edit"), "the delegate's own off-switch wins")
-		assert.Zero(t, stub.calls.Load(), "the prompt was denied, so the tool did not run")
-	})
-	t.Run("delegate without the switch inherits Auto", func(t *testing.T) {
-		approver, stub := delegateUnderAutoChat(t, false)
-		assert.Zero(t, approver.countFor("knowledge_edit"))
-		assert.Equal(t, int32(1), stub.calls.Load())
-		assert.True(t, stub.pinned.Load())
-	})
-	t.Run("a modifier on the delegate's own session does not beat its switch", func(t *testing.T) {
-		withKernelSandbox(t)
-		al := newGateTestLoop(t, "ask", false, config.AgentConfig{ID: "worker", AutoApproveDisabled: true})
-		al.SessionModes().Set("child-session", true)
-		assert.False(t, al.autoApproveActive("worker", "child-session", true), "delegated: own switch wins")
-		assert.True(t, al.autoApproveActive("worker", "child-session", false),
-			"a directly attached chat may still loosen past the agent switch (sessionmode.go)")
-	})
+// T15: a helper delegated from a chat with Auto on is auto-approved exactly
+// as its parent: it runs a RUNS tool unprompted although the global default
+// is off (the inherited per-chat modifier is the only source of Auto here).
+func TestAutoApprove_T15_DelegateInheritsParentAuto(t *testing.T) {
+	approver, stub := delegateUnderAutoChat(t)
+	assert.Zero(t, approver.countFor("knowledge_edit"))
+	assert.Equal(t, int32(1), stub.calls.Load())
+	assert.True(t, stub.pinned.Load())
 }
 
 // Reachability through the production wiring: policies come from config (no
@@ -432,7 +425,7 @@ func TestAutoApprove_Reachability_ProductionWiring(t *testing.T) {
 	approver := &autoRecordingApprover{approve: false}
 	al.SetToolApprover(approver)
 
-	_, err := al.ProcessDirect(context.Background(), "write and delete", "auto-reach-turn")
+	_, err := al.processDirectPrimaryForTest(context.Background(), "write and delete", "auto-reach-turn")
 	require.NoError(t, err)
 
 	reqs := approver.requests()
@@ -483,7 +476,7 @@ func TestAutoApprove_RuleC_MidTurnFlipChangesNextToolCall(t *testing.T) {
 	}
 	al.SetToolApprover(approver)
 
-	_, err := al.ProcessDirect(context.Background(), "use the tools", "auto-gate-rule-c-turn")
+	_, err := al.processDirectPrimaryForTest(context.Background(), "use the tools", "auto-gate-rule-c-turn")
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, approver.countFor(names[0]),

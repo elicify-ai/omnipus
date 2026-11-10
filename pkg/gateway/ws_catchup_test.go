@@ -401,8 +401,9 @@ func TestFix_CR6_DoneDivertedWhileConnectionIsReplaying(t *testing.T) {
 // leave the connection bound with an undrained wc.replayDivertCh (which is
 // allocated once and reused across every later attach on the same
 // connection — an undrained buffer here would leak into the NEXT
-// attach_session as stale duplicates), and session_state must already have
-// been delivered (CR1's early emit, ahead of replay).
+// attach_session as stale duplicates). D7a/D10 keeps that buffer invariant and
+// requires actual session_state/history_state plus live_only completion after a
+// storage failure, without the retired generic error/replay-error done pair.
 func TestFix_CR10_ReplayErrorStillEmitsSessionStateAndDrainsDivert(t *testing.T) {
 	handler, _, al := newTestWSHandler(t)
 	t.Cleanup(handler.Wait)
@@ -418,50 +419,14 @@ func TestFix_CR10_ReplayErrorStillEmitsSessionStateAndDrainsDivert(t *testing.T)
 	handler.sessions[chatID] = wc
 	handler.mu.Unlock()
 
-	// A pre-canceled context forces streamReplay's own ctx.Err() check
-	// (reached even for a zero-entry transcript, right before its final
-	// done emit) to fail — deterministic, no timing dependency.
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	handler.handleAttachSession(ctx, chatID, meta.ID, nil, wc)
-
-	var sawSessionState, sawError, sawReplayErrorDone bool
-	deadline := time.After(2 * time.Second)
-collect:
-	for {
-		select {
-		case raw := <-wc.sendCh:
-			var f struct {
-				Type      string  `json:"type"`
-				SessionID *string `json:"session_id"`
-				Stats     *struct {
-					ReplayError *bool `json:"replay_error"`
-				} `json:"stats"`
-			}
-			require.NoError(t, json.Unmarshal(raw, &f))
-			switch f.Type {
-			case "session_state":
-				sawSessionState = true
-				require.NotNil(t, f.SessionID)
-				assert.Equal(t, meta.ID, *f.SessionID)
-			case "error":
-				sawError = true
-			case "done":
-				if f.Stats != nil && f.Stats.ReplayError != nil && *f.Stats.ReplayError {
-					sawReplayErrorDone = true
-					break collect
-				}
-			}
-		case <-deadline:
-			t.Fatalf("timed out; session_state=%v error=%v replayErrorDone=%v",
-				sawSessionState, sawError, sawReplayErrorDone)
-		}
-	}
-
-	assert.True(t, sawSessionState, "session_state must still be delivered even though replay aborted")
-	assert.True(t, sawError, "an error frame must be delivered on replay failure")
-	assert.True(t, sawReplayErrorDone, "a done{replay_error:true} frame must follow")
+	// D7a/D10: force a genuine required-storage failure, not cancellation.
+	// A canceled attach correctly sends no successful current-state completion;
+	// this regression concerns independent controls after failed history.
+	historyMigrationUnreadable(t, store, meta.ID)
+	handler.handleAttachSession(context.Background(), chatID, meta.ID, nil, wc)
+	frames := pagingDrain(t, wc)
+	historyMigrationAssertLiveOnly(t, meta.ID, frames)
+	require.True(t, handler.connBoundToSession(wc, meta.ID), "authorized current state remains bound despite the history error")
 
 	// #823: the divert channel is gone; its successor is hold mode. After a
 	// replay error the hold must still be released (nothing left parked to

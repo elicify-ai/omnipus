@@ -36,10 +36,13 @@ package browser
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -129,6 +132,63 @@ func TestLiveView_RebindWatch_NoFalseDeathBroadcast(t *testing.T) {
 // functions' doc comments in live.go.
 // ---------------------------------------------------------------------------
 
+// liveViewProtocolStub records every protocol command a LiveView's document
+// watch serves through the test stub.
+type liveViewProtocolStub struct {
+	mu     sync.Mutex
+	served []string
+}
+
+func (s *liveViewProtocolStub) record(method string) {
+	s.mu.Lock()
+	s.served = append(s.served, method)
+	s.mu.Unlock()
+}
+
+func (s *liveViewProtocolStub) methods() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.served...)
+}
+
+// stubLiveViewDocumentProtocol replaces lv.runCDP (the existing test seam —
+// runCDPWithTimeout's doc comment, reason 2) with a recorder that executes the
+// actions against a fake protocol executor. Page.getFrameTree — the document
+// watch's frame discovery, the ONLY protocol command the attach → close-active-
+// tab → rebind lifecycle issues (initialize runs it once per watch epoch,
+// unconditionally; attach/rebindWatch/watchForUnexpectedDeath make no CDP call
+// at all) — is answered deterministically from test code; anything else fails
+// loudly, so a new CDP command on the fake-tab path must be stubbed
+// consciously instead of silently reaching for a real browser. Mechanism
+// matches live_document_events_test.go's documentEventFixture. Call BEFORE
+// attach/rebind so no watch epoch ever sees the real runCDPWithTimeout — whose
+// first chromedp.Run on a bare fixture context launches a real browser via
+// chromedp's own binary resolution, the arm64-only red behind issue #1081.
+func stubLiveViewDocumentProtocol(lv *LiveView) *liveViewProtocolStub {
+	stub := &liveViewProtocolStub{}
+	executor := liveInputExecutor(func(_ context.Context, method string, _, result any) error {
+		stub.record(method)
+		switch method {
+		case "Page.getFrameTree":
+			fixtureValue[*page.GetFrameTreeReturns](result).FrameTree = &page.FrameTree{
+				Frame: &cdp.Frame{ID: "fixture-main", LoaderID: "fixture-loader"},
+			}
+		default:
+			return fmt.Errorf("stubLiveViewDocumentProtocol: unexpected protocol command %s on the fake-tab path", method)
+		}
+		return nil
+	})
+	lv.runCDP = func(ctx context.Context, _ time.Duration, actions ...chromedp.Action) error {
+		for _, action := range actions {
+			if err := action.Do(cdp.WithExecutor(ctx, executor)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return stub
+}
+
 // TestLiveView_CloseActiveTab_NoFalseDeathAndRebindsToSurvivor is the
 // regression guard for the live-UAT close-active-tab fix. It attaches a
 // viewer with a StatusSink, opens a second tab, closes the ACTIVE tab, and
@@ -145,6 +205,16 @@ func TestLiveView_CloseActiveTab_NoFalseDeathAndRebindsToSurvivor(t *testing.T) 
 	// This fixture opens fake tabs; host memory is outside its routing contract.
 	m.memoryPressureFn = func(int) (bool, bool) { return false, true }
 	reg := newLiveViewRegistry(m)
+
+	// Fixture isolation (issue #1081): reg is this test's SECOND registry —
+	// newLiveViewRegistry overwrites mgr's tabs-changed callback, so the
+	// fixture's own m.live registry is disconnected and stubbing IT would miss
+	// the actual view. AttachContext resolves the view via view(), which
+	// creates-or-reuses (live.go::view), so pre-creating the view here and
+	// stubbing its runCDP puts the seam on the ACTUAL view the attach-time
+	// document watch uses — before any watch exists to reach the real
+	// transport.
+	protocol := stubLiveViewDocumentProtocol(reg.view(testSessionID))
 
 	_, err := m.Session(testSessionID) // tab 0
 	require.NoError(t, err)
@@ -214,4 +284,40 @@ func TestLiveView_CloseActiveTab_NoFalseDeathAndRebindsToSurvivor(t *testing.T) 
 	assert.Empty(t, got,
 		"closing the ACTIVE tab (with the browser and the surviving tab alive) must never emit a "+
 			"false 'session ended' status to an attached viewer: %v", got)
+
+	// Fixture-isolation oracle (issue #1081): every protocol command this
+	// lifecycle issues must have been served by the test stub — never by the
+	// real transport, whose first chromedp.Run on a bare fixture context
+	// launches a real browser (chromedp's own binary resolution) and whose
+	// launch failure on browser-less arm64 was the red behind this issue.
+	//
+	// WHY >= 1 IS THE DETERMINISTIC BOUND, not "== 2": the post-close rebind
+	// epoch initializes with initializePicture=false, which skips beginLocked
+	// entirely — nothing gates its frame discovery before runCDP — so it
+	// serves exactly one Page.getFrameTree every run. The ATTACH epoch's
+	// discovery, by contrast, legitimately races this test's immediate
+	// CloseTab: if beginLocked's staleness check runs after the close, the
+	// epoch is stale and initialize returns WITHOUT serving — silent,
+	// by-design suppression (ErrStaleCaptureFrame, reportFailure's !active()
+	// gate) of an attach-then-immediately-close sequence, which an oracle must
+	// not pin to either winner.
+	//
+	// This is the deterministic regression detector for the real-browser path:
+	// if the stub ever stops covering the actual view (a recreated view, a
+	// reset runCDP, a regression back to bare fixture contexts on the real
+	// transport), the real runCDPWithTimeout serves this traffic instead — the
+	// recorder stays empty and the bound below fails on EVERY platform,
+	// browser-ful dev machines included, instead of resurfacing as the
+	// arm64-only scheduling race this repair fixed.
+	require.Eventually(t, func() bool {
+		return len(protocol.methods()) >= 1
+	}, 2*time.Second, 5*time.Millisecond,
+		"the rebind epoch's frame discovery must be served through the test protocol stub — "+
+			"an empty recorder means the lifecycle reached the real transport: %v", protocol.methods())
+	served := protocol.methods()
+	for _, method := range served {
+		assert.Equal(t, "Page.getFrameTree", method,
+			"the fake-tab lifecycle must not reach any protocol command beyond the document "+
+				"watch's frame discovery: %v", served)
+	}
 }

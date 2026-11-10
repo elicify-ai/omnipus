@@ -57,14 +57,16 @@ if (typeof Element !== 'undefined' && !Element.prototype.scrollTo) {
 // doesn't exercise mentions. The workspaces query stays disabled (no
 // activeWorkspaceId set here), so `fetchWorkspaces` is never actually
 // invoked — this just needs to exist so the module loads.
+import { emptyHistoryPage, type HistoryReadPort } from '../../../tests/chat-history-paging/legacy-fixtures'
+
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   return {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([
-      { id: 'agent-1', name: 'Mia', color: '#123456', icon: null },
+      { figure: 'Omnipus', role: 'general', id: 'agent-1', name: 'Mia', color: '#8E9196', icon: null },
     ]),
-    fetchSessionMessages: vi.fn().mockResolvedValue([]),
+    fetchSessionMessages: vi.fn<HistoryReadPort>(async (sessionId) => emptyHistoryPage(sessionId)),
     fetchCommands: vi.fn().mockResolvedValue([]),
     fetchSkills: vi.fn().mockResolvedValue([]),
     uploadFiles: vi.fn(),
@@ -85,12 +87,10 @@ vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
 // more), so there is nothing left to mock here.
 vi.mock('./ActivityBar', () => ({ ActivityBar: () => null }))
 vi.mock('./tools/GenericToolCall', () => ({ GenericToolCall: () => null }))
-vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
 // Composer Redesign (variant A1): this file targets the live AssistantMessage()
 // bubble render, not the composer's picker/model/token sub-components — stub
 // them to null so their workspaces/providers query plumbing doesn't need
 // mocking here (this file uses a real, unmocked QueryClient).
-vi.mock('./composer/AgentPicker', () => ({ AgentPicker: () => null }))
 vi.mock('./composer/ModelPicker', () => ({ ModelPicker: () => null }))
 vi.mock('./composer/TokenCounter', () => ({ TokenCounter: () => null }))
 // Real MarkdownText pulls in Shiki/Mermaid/KaTeX — far more than this test needs.

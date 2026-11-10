@@ -70,6 +70,19 @@ func randomWechatUIN() string {
 	return base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%d", uint32Val)))
 }
 
+// weixinHTTPError is a non-2xx answer from the iLink API. Its text is the
+// historical "http <code> <status>: <body>" message; the typed form lets the
+// first poll tell a token rejection (401/403) from other failures.
+type weixinHTTPError struct {
+	status     int
+	statusText string
+	body       string
+}
+
+func (e *weixinHTTPError) Error() string {
+	return fmt.Sprintf("http %d %s: %s", e.status, e.statusText, e.body)
+}
+
 func (c *ApiClient) post(ctx context.Context, endpoint string, body any, responseObj any) error {
 	u, err := url.Parse(c.BaseURL)
 	if err != nil {
@@ -110,7 +123,7 @@ func (c *ApiClient) post(ctx context.Context, endpoint string, body any, respons
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("http %d %s: %s", resp.StatusCode, resp.Status, string(respBody))
+		return &weixinHTTPError{status: resp.StatusCode, statusText: resp.Status, body: string(respBody)}
 	}
 
 	if responseObj != nil {

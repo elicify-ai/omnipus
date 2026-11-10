@@ -18,7 +18,7 @@
 // managed-job session extension was removed with the Engine design it served).
 //
 // Authority (ES-FR-02): the destination is always derived server-side — own
-// current workspace context by default; an explicit `target_workspace` needs
+// current workspace context by default; an explicit `workspace_id` needs
 // strict ID validation plus either an own-workspace match or wiring-time
 // Admin authority over an EXISTING workspace record. A host path from the
 // request is never accepted.
@@ -89,10 +89,11 @@ type EnvironmentSetupToolDeps struct {
 	// when the turn carries no workspace re-rooting and no explicit target.
 	AgentWorkDir string
 
-	// Admin marks this tool instance as holding cross-workspace setup
-	// authority (server-derived). Non-Admin callers may install into their
-	// own current workspace context only.
-	Admin bool
+	// SetupAuthority marks this tool instance as holding the cross-workspace
+	// setup authority (server-derived; only Omnipus —
+	// coreagent.HasCrossWorkspaceSetupAuthority, omnipus-system-agent FR-006).
+	// Other callers may install into their own current workspace context only.
+	SetupAuthority bool
 
 	// GodMode skips child hardening exactly as it does for this agent's bash
 	// children (resolved once at wiring time; never per-call).
@@ -110,19 +111,25 @@ type EnvironmentSetupToolDeps struct {
 	// AuditFailClosed mirrors bash FR-B7: when true, a failed audit write on
 	// the install-start path aborts the install.
 	AuditFailClosed bool
+
+	// PrivateEnv supplies the turn's agent-private variables (FR-076),
+	// appended after the setup layer. Nil = none.
+	PrivateEnv PrivateEnvSource
 }
 
 // EnvironmentSetupTool implements the `environment_setup` builtin tool.
 type EnvironmentSetupTool struct {
 	BaseTool
 
-	home         string
-	agentWorkDir string
-	admin        bool
-	godMode      bool
-	proxy        *sandbox.EgressProxy
+	home           string
+	agentWorkDir   string
+	setupAuthority bool
+	godMode        bool
+	proxy          *sandbox.EgressProxy
 
 	store EnvironmentSetupStore
+
+	privateEnv PrivateEnvSource
 
 	sessionManager *SessionManager
 
@@ -141,10 +148,11 @@ func NewEnvironmentSetupTool(deps EnvironmentSetupToolDeps) *EnvironmentSetupToo
 	return &EnvironmentSetupTool{
 		home:            deps.Home,
 		agentWorkDir:    deps.AgentWorkDir,
-		admin:           deps.Admin,
+		setupAuthority:  deps.SetupAuthority,
 		godMode:         deps.GodMode,
 		proxy:           deps.Proxy,
 		store:           deps.Store,
+		privateEnv:      deps.PrivateEnv,
 		sessionManager:  getSessionManager(),
 		auditFailClosed: deps.AuditFailClosed,
 	}
@@ -191,8 +199,8 @@ func (t *EnvironmentSetupTool) Description() string {
 		"scope and the target workspace; action=poll/read/kill with that session_id check status, " +
 		"read bounded output, or cancel. scope defaults to workspace (<workspace>/.omnipus/env); " +
 		"scope=shared requests the application-managed shared runtime area (explicit in the " +
-		"approval, published read/execute-only on exit 0, unpublished on failure). target_workspace " +
-		"names an authorized workspace; only Admin can target a workspace it does not belong to. " +
+		"approval, published read/execute-only on exit 0, unpublished on failure). workspace_id " +
+		"names an authorized workspace; only Omnipus can target an existing workspace other than its current turn's workspace. " +
 		"Exit 0 reports command success only — verify the installed capability in your own " +
 		"runtime before resuming."
 }
@@ -221,7 +229,7 @@ const (
 )
 
 // environmentSetupWorkspaceIDPattern is the strict shape for an explicit
-// target_workspace: no slashes, dots, whitespace or shell metacharacters —
+// workspace_id: no slashes, dots, whitespace or shell metacharacters —
 // the value can never carry a host-path shape.
 var environmentSetupWorkspaceIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 
@@ -288,7 +296,7 @@ func (t *EnvironmentSetupTool) resolveTarget(ctx context.Context, requested stri
 
 	if !environmentSetupWorkspaceIDPattern.MatchString(requested) {
 		return environmentSetupTarget{}, fmt.Errorf(
-			"target_workspace %q is not a valid workspace identifier (no paths or separators)", requested)
+			"workspace_id %q is not a valid workspace identifier (no paths or separators)", requested)
 	}
 
 	// Own-workspace match: the caller's CURRENT turn workspace. The turn
@@ -298,9 +306,9 @@ func (t *EnvironmentSetupTool) resolveTarget(ctx context.Context, requested stri
 		return environmentSetupTarget{ID: ownID, Root: ownDir}, nil
 	}
 
-	if !t.admin {
+	if !t.setupAuthority {
 		return environmentSetupTarget{}, fmt.Errorf(
-			"target_workspace %q is outside your authorized workspace; only Admin can target another workspace", requested)
+			"workspace_id %q is outside your authorized workspace; only Omnipus can target another workspace", requested)
 	}
 
 	// Admin cross-workspace authority WITHOUT membership (ES-BDD-10): the
@@ -309,7 +317,7 @@ func (t *EnvironmentSetupTool) resolveTarget(ctx context.Context, requested stri
 	record := filepath.Join(t.home, "workspaces", requested+".json")
 	if _, err := os.Stat(record); err != nil {
 		return environmentSetupTarget{}, fmt.Errorf(
-			"target_workspace %q does not exist", requested)
+			"workspace_id %q does not exist", requested)
 	}
 	// The root is the workspace's WORK dir (workspaces/<id>/work/) — where
 	// member turns' tools are actually re-rooted — never the record root
@@ -326,13 +334,13 @@ func (t *EnvironmentSetupTool) resolveTarget(ctx context.Context, requested stri
 	// authorized root to exist). Member turns need nothing here: the loop's
 	// re-rooting ensures the dir every turn.
 	if _, err := workspace.EnsureWorkDir(t.home, requested); err != nil {
-		return environmentSetupTarget{}, fmt.Errorf("target_workspace %q work directory could not be prepared: %w", requested, err)
+		return environmentSetupTarget{}, fmt.Errorf("workspace_id %q work directory could not be prepared: %w", requested, err)
 	}
 	dir, err := workspace.SafeWorkDir(t.home, requested)
 	if err != nil {
 		// SafeWorkDir cannot fail for an ID this strict pattern already
 		// accepted; treated defensively as a refusal, never as a bypass.
-		return environmentSetupTarget{}, fmt.Errorf("target_workspace %q is not a safe workspace identifier", requested)
+		return environmentSetupTarget{}, fmt.Errorf("workspace_id %q is not a safe workspace identifier", requested)
 	}
 	return environmentSetupTarget{ID: requested, Root: dir}, nil
 }
@@ -368,7 +376,14 @@ func (t *EnvironmentSetupTool) execute(ctx context.Context, args map[string]any,
 	}
 	switch action {
 	case "run":
-		return t.startRun(ctx, args, cb)
+		// FR-030 (chief ruling Q3): a run refused before launch is
+		// "failed: nothing saved"; a started run reports its verdict when it
+		// finishes (environmentSetupOutcome).
+		res := t.startRun(ctx, args, cb)
+		if res != nil && res.IsError {
+			return FinalizeChangeResult(t.Name(), res)
+		}
+		return res
 	case "poll":
 		return t.executePoll(ctx, args)
 	case "read":
@@ -424,12 +439,12 @@ func (t *EnvironmentSetupTool) startRun(ctx context.Context, args map[string]any
 	if scope != environmentSetupScopeWorkspace && scope != environmentSetupScopeShared {
 		return t.emitDeny(ctx, args, ErrorResult(fmt.Sprintf("scope must be %q or %q", environmentSetupScopeWorkspace, environmentSetupScopeShared)))
 	}
-	targetRaw, ok := args["target_workspace"].(string)
-	if !ok && args["target_workspace"] != nil {
-		return t.emitDeny(ctx, args, ErrorResult("target_workspace must be a string"))
+	targetRaw, ok := args["workspace_id"].(string)
+	if !ok && args["workspace_id"] != nil {
+		return t.emitDeny(ctx, args, ErrorResult("workspace_id must be a string"))
 	}
 	if scope == environmentSetupScopeShared && strings.TrimSpace(targetRaw) != "" {
-		return t.emitDeny(ctx, args, ErrorResult("target_workspace selects a workspace-scope destination; use scope=workspace with it"))
+		return t.emitDeny(ctx, args, ErrorResult("workspace_id selects a workspace-scope destination; use scope=workspace with it"))
 	}
 
 	if t.store == nil {
@@ -468,7 +483,11 @@ func (t *EnvironmentSetupTool) startRun(ctx context.Context, args map[string]any
 	}
 
 	env := t.setupEnv(lim, area, runtimeEnv)
-	return t.startSession(ctx, startPlan{
+	privateVars, privateNotice := privateEnvFor(ctx, t.privateEnv)
+	for _, private := range privateVars {
+		env = withPrivateVariable(env, private.Name, private.Value)
+	}
+	return appendRuntimeNotice(t.startSession(ctx, startPlan{
 		command:        command,
 		purpose:        purpose,
 		scope:          scope,
@@ -481,7 +500,7 @@ func (t *EnvironmentSetupTool) startRun(ctx context.Context, args map[string]any
 		ownerSessionID: ToolTranscriptSessionID(ctx),
 		agentID:        ToolAgentID(ctx),
 		cb:             cb,
-	})
+	}), privateNotice)
 }
 
 // environmentSetupAuditDenyPreviewBytes bounds every agent-supplied string on
@@ -620,9 +639,9 @@ func (t *EnvironmentSetupTool) Parameters() map[string]any {
 				"enum":        []string{"workspace", "shared"},
 				"description": "Installation scope; defaults to workspace (<workspace>/.omnipus/env). shared requests the application-managed shared runtime area.",
 			},
-			"target_workspace": map[string]any{
+			"workspace_id": map[string]any{
 				"type":        "string",
-				"description": "Authorized workspace to install into (only Admin can target another existing workspace).",
+				"description": "Optional. The workspace to install into; omit it for the workspace of the current conversation. Only Omnipus may name a workspace other than its own.",
 			},
 			"session_id": map[string]any{
 				"type":        "string",

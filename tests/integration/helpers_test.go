@@ -193,6 +193,14 @@ func wsConnect(tb testing.TB, gw *testutil.TestGateway) *websocket.Conn {
 	return conn
 }
 
+// integrationChatAgentID is the chat agent these tests talk to. Since WU-1
+// (omnipus-system-agent FR-122, K16: "A WS frame starting a new session and a
+// REST session create MUST name an agent; otherwise refused visibly") there is
+// no default agent, so every new chat names one. Mia is a seeded chat agent of
+// the harness's default roster; the tests exercise concurrency and replay, not
+// agent selection.
+const integrationChatAgentID = "mia"
+
 // sendMessage sends a "message" frame over conn and returns immediately.
 // When sessionID is non-empty it is included in the frame so the gateway
 // continues an existing session rather than minting a fresh one for each
@@ -222,24 +230,12 @@ func sendMessageErr(conn *websocket.Conn, content string, sessionID ...string) e
 		frame = fmt.Sprintf(`{"type":"message","content":%s,"session_id":%s}`,
 			jsonQuote(content), jsonQuote(sessionID[0]))
 	} else {
-		frame = fmt.Sprintf(`{"type":"message","content":%s}`, jsonQuote(content))
+		// A new chat names its agent (omnipus-system-agent FR-122, K16): there
+		// is no default agent to fall back to.
+		frame = fmt.Sprintf(`{"type":"message","content":%s,"agent_id":%s}`,
+			jsonQuote(content), jsonQuote(integrationChatAgentID))
 	}
 	return conn.WriteMessage(websocket.TextMessage, []byte(frame))
-}
-
-// extractSessionID scans frames for the first session_started frame and
-// returns its session_id. Used by tests that need to thread session_id
-// through subsequent sendMessage calls so they target the SAME session
-// rather than each minting a fresh one.
-func extractSessionID(frames []map[string]any) string {
-	for _, f := range frames {
-		if tp, _ := f["type"].(string); tp == "session_started" {
-			if sid, _ := f["session_id"].(string); sid != "" {
-				return sid
-			}
-		}
-	}
-	return ""
 }
 
 // wsWaitError is the classified failure of waitForFirstTokenErr. Its whole

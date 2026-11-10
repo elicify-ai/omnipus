@@ -25,8 +25,7 @@ Omnipus connects to LINE Official Accounts via the [LINE Messaging API](https://
       "placeholder": {
         "enabled": false,
         "text": []
-      },
-      "reasoning_channel_id": ""
+      }
     }
   }
 }
@@ -42,7 +41,6 @@ Omnipus connects to LINE Official Accounts via the [LINE Messaging API](https://
 | `group_trigger` | object | No | Controls when the bot responds in group/multi-person chats. `mention_only: true` restricts responses to @-mentions; `prefixes` lists trigger prefixes. |
 | `typing` | object | No | `enabled: true` sends a LINE loading animation while the bot is processing. |
 | `placeholder` | object | No | `enabled: true` posts a placeholder message immediately; the bot edits it with the final reply. `text` is a list of placeholder strings (chosen randomly). |
-| `reasoning_channel_id` | string | No | Chat ID where extended reasoning traces are sent separately. |
 
 ## Setup
 
@@ -64,3 +62,7 @@ Omnipus connects to LINE Official Accounts via the [LINE Messaging API](https://
 - **Message length.** LINE caps individual text messages at 5 000 characters; longer responses are automatically split.
 - **HTTPS required.** LINE will not deliver webhooks to plain HTTP endpoints.
 - **Webhook security.** The LINE connector verifies every inbound request using your Channel Secret and the `X-Line-Signature` header. The shared gateway does not perform this check. If you reverse-proxy the webhook path with nginx, Caddy, or Cloudflare, **do not strip the `X-Line-Signature` header** — that breaks verification and inbound delivery will fail.
+
+## Starting messages
+
+Starting messages is not supported yet on this platform; the agent only answers. See [Starting messages](../connectors.md#starting-messages).

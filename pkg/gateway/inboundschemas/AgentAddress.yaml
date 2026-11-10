@@ -1,0 +1,23 @@
+title: AgentAddress
+description: >
+  A {workspace_id, agent_id} pair addressing one agent within one workspace
+  (session-core C-ADDRESS, FR-045). The server resolves the pair to that
+  agent's computed, eligible main session; a client never builds a main
+  session id. Both parts are required and bounded at the existing 128
+  characters.
+type: object
+required:
+  - workspace_id
+  - agent_id
+additionalProperties: false
+properties:
+  workspace_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: Workspace of the addressed agent.
+  agent_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: The addressed (recipient) agent. Never the author.

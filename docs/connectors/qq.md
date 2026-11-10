@@ -20,8 +20,7 @@ Omnipus connects to QQ via the official QQ Bot Open Platform API using a persist
       },
       "max_message_length": 0,
       "max_base64_file_size_mib": 0,
-      "send_markdown": false,
-      "reasoning_channel_id": ""
+      "send_markdown": false
     }
   }
 }
@@ -38,7 +37,6 @@ Omnipus connects to QQ via the official QQ Bot Open Platform API using a persist
 | `max_message_length` | int | No | Maximum outbound message length in characters; `0` uses the channel default |
 | `max_base64_file_size_mib` | int | No | Maximum local file size (MiB) to send as base64 inline media; `0` uses the channel default |
 | `send_markdown` | bool | No | Send outbound text using QQ markdown message format instead of plain text |
-| `reasoning_channel_id` | string | No | Group ID that receives reasoning/thought output from a secondary agent |
 
 ## Setup
 
@@ -56,3 +54,7 @@ Omnipus connects to QQ via the official QQ Bot Open Platform API using a persist
 **Capabilities implemented:** `TypingCapable` (typing status via QQ API), `MediaSender` (image and file upload via base64 inline or URL). The channel registers handlers for both C2C (`handleC2CMessage`) and group @-mention (`handleGroupATMessage`) events. Message deduplication is performed with a time-bounded map (5-minute TTL) to suppress duplicates from QQ's at-least-once delivery.
 
 **Group chats.** The QQ Bot API requires an @-mention in group chats for the bot to receive the message. `group_trigger.mention_only` is therefore the effective default for group interactions regardless of its value; `group_trigger.prefixes` applies to the content after the @-mention is stripped.
+
+## Starting messages
+
+Starting messages is not supported yet on this platform; the agent only answers. See [Starting messages](../connectors.md#starting-messages).

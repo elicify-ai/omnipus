@@ -29,8 +29,6 @@ import (
 //   - the protocol switch gains, loses or renames a case;
 //   - any case is a bare string literal (that is what a vendor case looks
 //     like: `case "z-ai", "zhipu":`);
-//   - the inner `cli` switch dispatches on anything other than a `cli_kind`
-//     constant;
 //   - the literal "custom" reappears as a string anywhere in the file (X-13:
 //     a custom row is a FLAG, never an id).
 func TestFactory_NoVendorCases(t *testing.T) {
@@ -52,25 +50,12 @@ func TestFactory_NoVendorCases(t *testing.T) {
 	want := []string{
 		"catalog.ProtocolAnthropic",
 		"catalog.ProtocolBedrock",
-		"catalog.ProtocolCLI",
 		"catalog.ProtocolGoogle",
 		"catalog.ProtocolOllama",
 		"catalog.ProtocolOpenAICompatible",
 	}
 	if !equalStrings(got, want) {
 		t.Errorf("protocol case set = %v, want exactly %v", got, want)
-	}
-
-	// ── the cli_kind switch ──────────────────────────────────────────────
-	cli := findFunc(t, file, "NewCliProviderForKind")
-	cliSwitches := collectSwitches(cli.Body)
-	if len(cliSwitches) != 1 {
-		t.Fatalf("NewCliProviderForKind contains %d switch statements, want exactly 1", len(cliSwitches))
-	}
-	gotCLI := caseExprs(fset, cliSwitches[0])
-	wantCLI := []string{"catalog.CLIKindCodex", "catalog.CLIKindCopilot"}
-	if !equalStrings(gotCLI, wantCLI) {
-		t.Errorf("cli_kind case set = %v, want exactly %v", gotCLI, wantCLI)
 	}
 
 	// ── no case anywhere in the file is a bare string ────────────────────

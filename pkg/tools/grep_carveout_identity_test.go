@@ -36,7 +36,7 @@ import (
 // why this test asserts on the NAME.
 //
 // The divergence is produced here the way production could produce it: through
-// grepRoots, with a policy whose CarveOuts were built from the REAL home while
+// resolveGrepRoots, with a policy whose CarveOuts were built from the REAL home while
 // the process's config.OmnipusHomeDir() reports a different directory (a
 // re-rooted policy, a test-constructed one, a future multi-home shape). Only
 // the carve-out roots the deny check itself consults may decide this.
@@ -80,13 +80,13 @@ func TestGrepGuard_CarveOutIdentityComesFromTheCarveOutsThemselves(t *testing.T)
 	}
 
 	tool := NewGrepTool(parent, true)
-	roots, closeRoots, _, err := tool.grepRoots(context.Background(), policy, "")
+	set, closeRoots, err := tool.resolveGrepRoots(context.Background(), policy, "")
 	if err != nil {
 		t.Fatalf("build grep roots: %v", err)
 	}
 	defer closeRoots()
 
-	res, err := filegrep.Search(context.Background(), roots, filegrep.Options{
+	res, err := filegrep.Search(context.Background(), set.roots, filegrep.Options{
 		Query:         "master.key",
 		IncludeHidden: true,
 	})
@@ -111,7 +111,7 @@ func TestGrepGuard_CarveOutIdentityComesFromTheCarveOutsThemselves(t *testing.T)
 	// The other secrets are name-matchable through the same unfiltered
 	// listing; assert each one separately so a partial fix cannot pass.
 	for _, secret := range []string{"credentials.json", "cli.token", "auth.json"} {
-		res, err := filegrep.Search(context.Background(), roots, filegrep.Options{
+		res, err := filegrep.Search(context.Background(), set.roots, filegrep.Options{
 			Query:         secret,
 			IncludeHidden: true,
 		})

@@ -66,8 +66,7 @@ func avaSeedCustomAgent(t *testing.T, ctx context.Context, deps *systools.Deps) 
 		"description": "Summarizes field reports",
 		"soul":        "You summarize field reports for the team.",
 		"model":       "test/model",
-		"color":       "#22C55E",
-		"icon":        "robot",
+		"color":       "#6E8BA8",
 	})
 	require.False(t, result.IsError, result.ForLLM)
 	id, _ := parseSuccess(t, result.ForLLM)["id"].(string)
@@ -80,6 +79,8 @@ func avaSeedCustomAgent(t *testing.T, ctx context.Context, deps *systools.Deps) 
 // every execution context — attended (control), delegated, unattended, and
 // missing-session.
 func TestADR090_AvaAgentWritesDoNotRequireOwnerSession(t *testing.T) {
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
 	for _, operation := range []string{"create", "update", "delete"} {
 		for _, mode := range avaWriteModes {
 			t.Run(operation+"/"+mode, func(t *testing.T) {
@@ -111,8 +112,7 @@ func avaAgentCreatePersists(t *testing.T, ctx context.Context, deps *systools.De
 		"description": "Summarizes field reports",
 		"soul":        soul,
 		"model":       "test/model",
-		"color":       "#22C55E",
-		"icon":        "robot",
+		"color":       "#6E8BA8",
 	})
 	require.False(t, result.IsError, result.ForLLM)
 	body := parseSuccess(t, result.ForLLM)
@@ -125,8 +125,7 @@ func avaAgentCreatePersists(t *testing.T, ctx context.Context, deps *systools.De
 	require.NoError(t, err, "create must persist the entity record")
 	require.Equal(t, "Field Analyst", persisted.Name)
 	require.Equal(t, "Summarizes field reports", persisted.Description)
-	require.Equal(t, "#22C55E", persisted.Color)
-	require.Equal(t, "robot", persisted.Icon)
+	require.Equal(t, "#6E8BA8", persisted.Color)
 	require.NotNil(t, persisted.Model)
 	require.Equal(t, "test/model", persisted.Model.Primary)
 
@@ -164,7 +163,7 @@ func avaAgentUpdatePersists(t *testing.T, ctx context.Context, deps *systools.De
 	require.NotNil(t, persisted.Model)
 	require.Equal(t, "openrouter/z-ai/glm-5.3-flash", persisted.Model.Primary)
 	require.Equal(t, "Field Analyst", persisted.Name, "omitted field must be preserved")
-	require.Equal(t, "#22C55E", persisted.Color, "omitted field must be preserved")
+	require.Equal(t, "#6E8BA8", persisted.Color, "omitted field must be preserved")
 
 	after := currentAgentRevision(t, deps, id)
 	require.NotEqual(t, before, after, "a persisted update must advance the revision")
@@ -198,6 +197,8 @@ func avaAgentDeletePersists(t *testing.T, ctx context.Context, deps *systools.De
 // create_workspace, update_workspace and delete_workspace persist real
 // workspace-record writes from Ava in every execution context.
 func TestADR090_AvaWorkspaceWritesDoNotRequireOwnerSession(t *testing.T) {
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
 	for _, operation := range []string{"create", "update", "delete"} {
 		for _, mode := range avaWriteModes {
 			t.Run(operation+"/"+mode, func(t *testing.T) {
@@ -309,6 +310,8 @@ func avaWorkspaceDeletePersists(t *testing.T, ctx context.Context, deps *systool
 // subtest on the SAME record proves the protection is field-scoped, never a
 // blanket deny that would amount to a new approval gate.
 func TestADR090_AvaConfigurationWriteGuardsStillHold(t *testing.T) {
+	// Fixture keyed by the id the name produced before ids became generated UUIDs.
+	systools.UseNameKeyedAgentIDsForTest(t)
 	ctx := avaWriteCtx("delegated")
 	t.Run("protected fields on an ordinary builtin refuse with zero writes", func(t *testing.T) {
 		avaGuardProtectedFieldsRefuseWithZeroWrites(t, ctx)
@@ -327,14 +330,15 @@ func TestADR090_AvaConfigurationWriteGuardsStillHold(t *testing.T) {
 	})
 }
 
-// avaSeedAvaRecord seeds Ava's own ordinary-builtin entity record (with a
-// soul) so a guards subtest can target the exact roster identity the
-// field-protection matrix keys off.
+// avaSeedAvaRecord seeds an ordinary-builtin entity record (with a soul) so a
+// guards subtest can target an exact roster identity the field-protection
+// matrix keys off. Ava is retired (omnipus-system-agent FR-008); Omnipus is
+// the ordinary built-in this matrix now protects in her place.
 func avaSeedAvaRecord(t *testing.T, deps *systools.Deps, soul string) {
 	t.Helper()
-	_, err := agentstore.New(deps.Home).CreateState("ava", &config.AgentConfig{
-		ID:    "ava",
-		Name:  "Ava",
+	_, err := agentstore.New(deps.Home).CreateState("omnipus", &config.AgentConfig{
+		ID:    "omnipus",
+		Name:  "Omnipus",
 		Model: &config.AgentModelConfig{Primary: "test/model"},
 	}, soul)
 	require.NoError(t, err)
@@ -349,14 +353,14 @@ func avaGuardProtectedFieldsRefuseWithZeroWrites(t *testing.T, ctx context.Conte
 	deps, home := newTestDepsWithHome(t)
 	const seededSoul = "Ava's seeded soul."
 	avaSeedAvaRecord(t, deps, seededSoul)
-	entityPath := filepath.Join(home, "entities", "agents", "ava.json")
-	soulPath := filepath.Join(home, "agents", "ava", "SOUL.md")
+	entityPath := filepath.Join(home, "entities", "agents", "omnipus.json")
+	soulPath := filepath.Join(home, "agents", "omnipus", "SOUL.md")
 	entityBefore, err := os.ReadFile(entityPath)
 	require.NoError(t, err)
-	revisionBefore := currentAgentRevision(t, deps, "ava")
+	revisionBefore := currentAgentRevision(t, deps, "omnipus")
 
 	result := systools.NewAgentUpdateTool(deps).Execute(ctx, map[string]any{
-		"id":       "ava",
+		"id":       "omnipus",
 		"revision": revisionBefore,
 		"name":     "Eve",
 		"soul":     "Overridden instructions.",
@@ -375,7 +379,7 @@ func avaGuardProtectedFieldsRefuseWithZeroWrites(t *testing.T, ctx context.Conte
 	require.NoError(t, err)
 	require.Equal(t, seededSoul, string(soulAfter),
 		"a refused field write must leave SOUL.md byte-identical")
-	require.Equal(t, revisionBefore, currentAgentRevision(t, deps, "ava"),
+	require.Equal(t, revisionBefore, currentAgentRevision(t, deps, "omnipus"),
 		"a refused field write must not advance the revision")
 }
 
@@ -389,16 +393,16 @@ func avaGuardEditableFieldOnBuiltinStillSucceeds(t *testing.T, ctx context.Conte
 	avaSeedAvaRecord(t, deps, "Ava's seeded soul.")
 
 	result := systools.NewAgentUpdateTool(deps).Execute(ctx, map[string]any{
-		"id":       "ava",
-		"revision": currentAgentRevision(t, deps, "ava"),
+		"id":       "omnipus",
+		"revision": currentAgentRevision(t, deps, "omnipus"),
 		"model":    "openrouter/z-ai/glm-5.3-flash",
 	})
 	require.False(t, result.IsError, "model is an editable field for an ordinary builtin: %s", result.ForLLM)
-	persisted, err := agentstore.New(deps.Home).Get("ava")
+	persisted, err := agentstore.New(deps.Home).Get("omnipus")
 	require.NoError(t, err)
 	require.NotNil(t, persisted.Model)
 	require.Equal(t, "openrouter/z-ai/glm-5.3-flash", persisted.Model.Primary)
-	require.Equal(t, "Ava", persisted.Name, "the protected name must be untouched by a model-only update")
+	require.Equal(t, "Omnipus", persisted.Name, "the protected name must be untouched by a model-only update")
 }
 
 // avaGuardStaleAgentRevisionRefuses proves the ordinary revision check

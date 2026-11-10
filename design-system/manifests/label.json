@@ -68,6 +68,7 @@
       "file": "tests/design-system/browser.spec.ts",
       "test": "Label [check:label-browser] browser",
       "story": "Default",
+      "requiredTargets": [{ "selector": "label", "attribute": "for", "value": "label-input" }],
       "applicable": true
     },
     {

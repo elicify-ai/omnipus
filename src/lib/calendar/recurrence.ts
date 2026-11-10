@@ -61,10 +61,7 @@ export interface RecurrenceEditorState { // not-wire-format: internal editor vie
 /**
  * The value RecurrenceEditor exchanges with its parent. `'none'` means
  * "Does not repeat" — the caller creates a `once`-trigger task, never an
- * RRULE (US-1 Acceptance Scenario 6). There is deliberately no third
- * "legacy" variant here — reading/offering a fresh rule for a legacy
- * (`cron_expr`/`every_ms`) task is the slide-over's concern (US-5), not this
- * leaf's.
+ * RRULE (US-1 Acceptance Scenario 6).
  */
 export type RecurrenceValue = { kind: 'none' } | { kind: 'rrule'; state: RecurrenceEditorState } // not-wire-format: internal editor union (none vs in-progress rule state); never crosses the gateway boundary
 

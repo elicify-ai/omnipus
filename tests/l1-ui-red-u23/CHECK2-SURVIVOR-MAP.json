@@ -1,0 +1,122 @@
+[
+  {
+    "survivor_id": "B-S2-submit-success",
+    "original_frozen_pattern": "confirmed REST submit clears",
+    "new_test_file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red2/src/components/chat/SecretRequestCard.l1-security.test.tsx",
+    "new_check_pattern": "FR-075: confirmed REST submit clears",
+    "spec": "FR-075 S2",
+    "added_oracle": "Immediate empty held input before deferred success; existing disposal/one-POST/sinks retained",
+    "kill_status": "DEFERRED TO INDEPENDENT CHECK",
+    "healthy_control_head": "eb050d46e9de413d0326a6fc2c90f8de945a5c2b"
+  },
+  {
+    "survivor_id": "B-S2-submit-cancel",
+    "original_frozen_pattern": "cancel sends cancel only",
+    "new_test_file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red2/src/components/chat/SecretRequestCard.l1-security.test.tsx",
+    "new_check_pattern": "cancel sends cancel only",
+    "spec": "FR-075 S2",
+    "added_oracle": "Immediate empty held input before deferred cancel; cancel-only body and terminal checks retained",
+    "kill_status": "DEFERRED TO INDEPENDENT CHECK",
+    "healthy_control_head": "eb050d46e9de413d0326a6fc2c90f8de945a5c2b"
+  },
+  {
+    "survivor_id": "B-S2-submit-failure",
+    "original_frozen_pattern": "explicit 400 rejection is visible",
+    "new_test_file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red2/src/components/chat/SecretRequestCard.l1-state.test.tsx",
+    "new_check_pattern": "explicit 400 rejection is visible",
+    "spec": "FR-075 S2",
+    "added_oracle": "Both held password inputs empty at handoff and after 400; message/live/no-Saved/one-POST retained",
+    "kill_status": "DEFERRED TO INDEPENDENT CHECK",
+    "healthy_control_head": "eb050d46e9de413d0326a6fc2c90f8de945a5c2b"
+  },
+  {
+    "survivor_id": "B-S2-submit-inflight",
+    "original_frozen_pattern": "in-flight submit is disabled",
+    "new_test_file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red2/src/components/chat/SecretRequestCard.l1-security.test.tsx",
+    "new_check_pattern": "in-flight submit is disabled",
+    "spec": "FR-075 S2",
+    "added_oracle": "Immediate empty password input before any response, exact original body, duplicate-disable and real-sink checks",
+    "kill_status": "DEFERRED TO INDEPENDENT CHECK",
+    "healthy_control_head": "eb050d46e9de413d0326a6fc2c90f8de945a5c2b"
+  },
+  {
+    "survivor_id": "B-S2-refusal-branch",
+    "original_frozen_pattern": "explicit 400 rejection is visible",
+    "new_test_file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red2/src/components/chat/SecretRequestCard.l1-state.test.tsx",
+    "new_check_pattern": "HTTP (400|403) refusal clears every field",
+    "spec": "FR-075 S2",
+    "added_oracle": "Refusal matrix holds both fields, checks immediate/post-refusal erasure and blank/partial retry rejection before fresh two-field submit",
+    "kill_status": "DEFERRED TO INDEPENDENT CHECK",
+    "healthy_control_head": "eb050d46e9de413d0326a6fc2c90f8de945a5c2b"
+  },
+  {
+    "survivor_id": "B-S2-refusal-inflight",
+    "original_frozen_pattern": "in-flight submit is disabled",
+    "new_test_file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red2/src/components/chat/SecretRequestCard.l1-state.test.tsx",
+    "new_check_pattern": "HTTP (400|403) refusal clears every field",
+    "spec": "FR-075 S2",
+    "added_oracle": "Two-field values empty synchronously before either unresolved refusal response",
+    "kill_status": "DEFERRED TO INDEPENDENT CHECK",
+    "healthy_control_head": "eb050d46e9de413d0326a6fc2c90f8de945a5c2b"
+  },
+  {
+    "survivor_id": "B-S2-refusal-lost-control",
+    "original_frozen_pattern": "a lost submit response reads",
+    "new_test_file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red2/src/components/chat/SecretRequestCard.l1-state.test.tsx",
+    "new_check_pattern": "refusal then lost-response retry clears fresh fields",
+    "spec": "FR-075/079",
+    "added_oracle": "Sequence adds refused path before explicit fresh retry/transport uncertainty; original one-submit lost-response control stays intact",
+    "kill_status": "DEFERRED TO INDEPENDENT CHECK",
+    "healthy_control_head": "eb050d46e9de413d0326a6fc2c90f8de945a5c2b"
+  },
+  {
+    "survivor_id": "B3-open-run-navigation",
+    "original_frozen_pattern": "names the acting execution",
+    "new_test_file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red2/src/components/agents/u13_approval-acting-run.test.tsx",
+    "new_check_pattern": "clicking Open run navigates",
+    "spec": "L1 \u00a71.2 R6",
+    "added_oracle": "Real in-memory router click must reach acting-session route; public attribute, pending queue and zero-POST guards retained",
+    "kill_status": "DEFERRED TO INDEPENDENT CHECK",
+    "healthy_control_head": "eb050d46e9de413d0326a6fc2c90f8de945a5c2b"
+  },
+  {
+    "survivor_id": "B3-banner-root",
+    "original_frozen_pattern": "Go there opens the owning workspace chat",
+    "new_test_file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red2/src/components/layout/CrossWorkspaceApprovalBanner.test.tsx",
+    "new_check_pattern": "Go there opens the owning workspace chat",
+    "spec": "R6 / BDD-11.3",
+    "added_oracle": "Known helper/root with conflicting metadata removes fallback compensation; exact root identity/workspace/route/attach asserted",
+    "kill_status": "DEFERRED TO INDEPENDENT CHECK",
+    "healthy_control_head": "eb050d46e9de413d0326a6fc2c90f8de945a5c2b"
+  },
+  {
+    "survivor_id": "B3-banner-workspace",
+    "original_frozen_pattern": "Omnipus helper points to /omnipus",
+    "new_test_file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red2/src/components/layout/CrossWorkspaceApprovalBanner.test.tsx",
+    "new_check_pattern": "Omnipus helper points to /omnipus",
+    "spec": "R6; using-omnipus-ui return-to-own-conversation promise",
+    "added_oracle": "Full seeded workspace descriptor map, persisted semantic map and original raw representation unchanged alongside existing active-workspace/root guards",
+    "kill_status": "DEFERRED TO INDEPENDENT CHECK",
+    "healthy_control_head": "eb050d46e9de413d0326a6fc2c90f8de945a5c2b"
+  },
+  {
+    "survivor_id": "B3-banner-label",
+    "original_frozen_pattern": "singular notice labels the target root chat",
+    "new_test_file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red2/src/components/layout/CrossWorkspaceApprovalBanner.test.tsx",
+    "new_check_pattern": "singular notice labels|plural notice counts",
+    "spec": "R6 / BDD-11.3; original known-workspace oracle",
+    "added_oracle": "Both Jim chat AND UAT-T2 required; original count/raw-id absence retained",
+    "kill_status": "DEFERRED TO INDEPENDENT CHECK",
+    "healthy_control_head": "eb050d46e9de413d0326a6fc2c90f8de945a5c2b"
+  },
+  {
+    "survivor_id": "B5-copy",
+    "original_frozen_pattern": "the tool row explains it is never grantable",
+    "new_test_file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red2/src/components/chat/tools/ProtectedFileRefusal.test.tsx",
+    "new_check_pattern": "the tool row explains it is never grantable",
+    "spec": "L1 \u00a72 D6/D7",
+    "added_oracle": "Independent bounded never-grantable meaning, required God-Mode clause, no approval/retry advice/action, and server text; no production constant imported",
+    "kill_status": "DEFERRED TO INDEPENDENT CHECK",
+    "healthy_control_head": "eb050d46e9de413d0326a6fc2c90f8de945a5c2b"
+  }
+]

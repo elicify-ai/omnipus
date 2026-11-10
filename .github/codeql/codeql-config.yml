@@ -24,6 +24,9 @@ queries:
 #  - pkg/gateway/spa/**    — //go:embed sync of dist/spa, regenerated.
 #  - test-results/**       — Playwright traces, never shipped.
 #  - tests/perf/results/** — historical perf trend artefacts, JSON only.
+#  - scripts/**, spikes/**  — developer tooling and throwaway experiments; they
+#                            never ship in the binary or the SPA (CodeQL triage
+#                            2026-10-12, finding F-11: 15 js/* alerts).
 #  - **/*.gen.go,
 #    src/lib/api/generated/**, src/routeTree.gen.ts
 #                          — codegen output, scanned via the source schemas.
@@ -36,6 +39,8 @@ paths-ignore:
   - "**/*.gen.go"
   - src/lib/api/generated
   - src/routeTree.gen.ts
+  - scripts
+  - spikes
 
   # Test files own their own threat model: tempdir creation, TOCTOU patterns,
   # unused-import noise, and "negation always true" are all idiomatic and

@@ -60,6 +60,11 @@ const (
 	SkillLoadNotFound SkillLoadStatus = iota
 	SkillLoadDenied
 	SkillLoadLoaded
+	// SkillLoadRefused: the skill is granted and installed but cannot be
+	// served (skills spec r15 §5.10: SKILL_GRANT_STALE, SKILL_INSTRUCTION_LIMIT,
+	// SKILL_INSTRUCTION_UNRESOLVED, a storage error). Message carries the
+	// coded text the agent reads.
+	SkillLoadRefused
 )
 
 // SkillLoadOutcome is what a SkillTool's injected load resolver hands back
@@ -74,6 +79,13 @@ type SkillLoadOutcome struct {
 	// CanonicalSlug is the resolved slug (case-canonicalised to how it is
 	// actually stored), populated only when Status == SkillLoadLoaded.
 	CanonicalSlug string
+	// Message is the refusal text, populated only when Status ==
+	// SkillLoadRefused.
+	Message string
+	// Folder is the loaded skill's folder (the registry, built-in or project
+	// folder it was served from), populated only when Status ==
+	// SkillLoadLoaded. Document-skill guidance names it (r15 §11).
+	Folder string
 }
 
 // SkillSearchDoc is one entry of the corpus SkillTool's search mode ranks
@@ -90,12 +102,13 @@ type SkillSearchDoc struct {
 }
 
 // SkillTool is the ADR-072 D1 `Skill` tool: load a skill's instructions by
-// slug for the current turn only, or search the installed catalogue by what
-// it does. Both modes resolve strictly against the calling agent's own
-// per-shelf grant (D4/D4.1) via a resolver set through SetResolver —
-// mirroring ToolsTool.SetResolver's contract exactly (tools_tool.go), since
-// this is the same "index in context, content on demand" pattern one layer
-// up (D1).
+// slug into the conversation (the result is an ordinary tool message that
+// stays for later turns until context trim evicts it), or search the
+// installed catalogue by what it does. Both modes resolve strictly against
+// the calling agent's own per-shelf grant (D4/D4.1) via a resolver set
+// through SetResolver — mirroring ToolsTool.SetResolver's contract exactly
+// (tools_tool.go), since this is the same "index in context, content on
+// demand" pattern one layer up (D1).
 type SkillTool struct {
 	BaseTool
 	// maxSearchResults bounds the search mode's match list. ADR-072
@@ -178,10 +191,13 @@ func (t *SkillTool) Category() ToolCategory { return CategorySkills }
 // already have; list_skills enumerates what you have, with no content;
 // find_skills searches the marketplace for skills you do NOT have yet.
 func (t *SkillTool) Description() string {
-	return "Use a skill you already have — loads its full instructions for THIS turn only. " +
+	return "Use a skill you already have — loads its full instructions into the conversation, " +
+		"where they stay for later turns; reload it only if the instructions have left your " +
+		"view (a context notice says older turns were trimmed). " +
 		"Pass 'name' with the skill's exact slug (as listed in the '# Skills' section of your " +
 		"context) to load it; pass 'query' instead to search your installed skills by what they " +
-		"do. This is not list_skills (which enumerates what you have, with no content) and not " +
+		"do. This is not list_skills (which lists assigned skills by default and can return a named " +
+		"skill's sanitized content in management scope for an authorized configuration caller) and not " +
 		"find_skills (which searches the marketplace for skills you do NOT have installed)."
 }
 
@@ -237,11 +253,13 @@ func (t *SkillTool) execLoad(ctx context.Context, name string) *ToolResult {
 	case SkillLoadLoaded:
 		content := outcome.Content
 		if t.documentRuntime != nil && documentruntime.IsDocumentSkill(name) {
-			content = appendDocumentRuntimeGuidance(ctx, content, name, *t.documentRuntime)
+			content = appendDocumentRuntimeGuidance(ctx, content, outcome.Folder, *t.documentRuntime)
 		}
 		return SilentResult(content)
 	case SkillLoadDenied:
 		return skillPermissionDeniedResult(name)
+	case SkillLoadRefused:
+		return ErrorResult(outcome.Message)
 	default: // SkillLoadNotFound
 		return skillNotFoundResult(name)
 	}

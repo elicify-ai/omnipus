@@ -47,37 +47,6 @@
       ]
     },
     {
-      "id": "codex-cli",
-      "name": "Codex CLI",
-      "company": "OpenAI",
-      "api": "https://chatgpt.com/backend-api/codex",
-      "protocol": "cli",
-      "cli_kind": "codex",
-      "env": [],
-      "tier": "standard",
-      "auth_methods": [
-        "sign_in"
-      ],
-      "aliases": [],
-      "resize_limits": {
-        "long_edge_px": 7680,
-        "max_bytes": 10485760
-      },
-      "models": [
-        {
-          "id": "gpt-5.4-codex",
-          "name": "GPT-5.4 Codex",
-          "tool_call": true,
-          "context_window": 272000,
-          "max_output_tokens": 128000,
-          "input_modalities": [
-            "text"
-          ],
-          "status": "active"
-        }
-      ]
-    },
-    {
       "id": "google",
       "name": "Google Gemini",
       "company": "Google",

@@ -12,7 +12,8 @@ import { useAuthStore } from '@/store/auth'
 import { consumeLogoutReason, LOGOUT_REASON_MESSAGE } from '@/lib/authLogout'
 import { resetTokenValidationCache } from './authValidation'
 import { queryClient } from '@/lib/queryClient'
-import OmnipusAvatar from '@/assets/logo/omnipus-avatar.svg?url'
+import { OMNIPUS_MARK_URL as OmnipusAvatar } from '@/lib/brandAssets'
+import { consumeLoginReturn } from './-loginReturn'
 
 function LoginScreen() {
   const navigate = useNavigate()
@@ -85,7 +86,15 @@ function LoginScreen() {
       if (!state.onboarding_complete) {
         navigate({ to: '/onboarding' })
       } else {
-        navigate({ to: '/' })
+        const returnTo = consumeLoginReturn()
+        if (returnTo === null) {
+          navigate({ to: '/' })
+        } else {
+          // consumeLoginReturn has already rejected external and login-loop
+          // destinations. TanStack cannot infer a generated route literal
+          // from that runtime-validated string, so narrow only at this edge.
+          navigate({ to: returnTo as never })
+        }
       }
     } catch (err) {
       setStatus('error')

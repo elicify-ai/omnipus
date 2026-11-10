@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -26,6 +27,8 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/onboarding"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
+	providercommon "github.com/elicify-ai/omnipus/pkg/providers/common"
+	"github.com/elicify-ai/omnipus/pkg/security"
 )
 
 // onboardingOwnerRequiredMsg is the 401 for an unauthenticated
@@ -125,11 +128,23 @@ type onboardingProviderChoice struct {
 	APIKey   string
 	Model    string
 	Endpoint string
+	// ReasoningEffort is the effort for the chosen model (FR-067), stored
+	// on agents.defaults.default_model in the completion's single write,
+	// never on the provider row. "" = absent key (Provider default).
+	ReasoningEffort string
 	// Region is issue #800's own field (Bedrock region contract): the
 	// selected region for a provider whose catalog entry carries `regions`
 	// (catalog.Provider.Regions). Only the api_key variant carries it on
 	// the wire — Bedrock is api_key-only (ADR-053).
 	Region string
+	// Protocol is the api_key variant's optional `protocol` (#1700): present
+	// only when the wizard's Custom endpoint form names an endpoint the
+	// catalog does not carry. Trimmed at decode, like Endpoint.
+	Protocol string
+	// Custom is set by decodeAndValidate, never by the decode: true when the
+	// id is not a catalog id and the request took the custom path (design
+	// §2.4), so the key check and the persisted row treat it as a custom row.
+	Custom bool
 	// Preferences is step 1's name/tone/detail (FR-OB-010..-018), carried in
 	// the same request because onboarding has no per-step persistence.
 	// Optional (WP5, ADR-0010): a body may omit it entirely, in which case
@@ -171,6 +186,11 @@ func decodeOnboardingCompleteBody(
 	}
 	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		jsonErr(w, http.StatusBadRequest, "request body is required")
+		return body, choice, false
+	}
+	// Effort values (null, type, length) are refused before anything of the
+	// completion commits, in both validation modes (FR-067, S-94).
+	if refuseInvalidEffortBody(w, raw) {
 		return body, choice, false
 	}
 
@@ -293,6 +313,9 @@ func decodeOnboardingCompleteBody(
 		if variant.Endpoint != nil {
 			choice.Endpoint = *variant.Endpoint
 		}
+		if variant.ReasoningEffort != nil {
+			choice.ReasoningEffort = *variant.ReasoningEffort
+		}
 		return body, choice, true
 	}
 
@@ -305,8 +328,14 @@ func decodeOnboardingCompleteBody(
 	if variant.Model != nil {
 		choice.Model = *variant.Model
 	}
+	if variant.ReasoningEffort != nil {
+		choice.ReasoningEffort = *variant.ReasoningEffort
+	}
 	if variant.Endpoint != nil {
-		choice.Endpoint = *variant.Endpoint
+		choice.Endpoint = strings.TrimSpace(*variant.Endpoint)
+	}
+	if variant.Protocol != nil {
+		choice.Protocol = strings.TrimSpace(string(*variant.Protocol))
 	}
 	if variant.Region != nil {
 		choice.Region = *variant.Region
@@ -326,6 +355,32 @@ func decodeOnboardingCompleteBody(
 // "onboarding state unknown" or "an authentication authority already
 // exists" — see onboardingWindowGate / preAuthOnboardingWindowGate.
 const onboardingClosedMsg = "onboarding already complete"
+
+// onboardingCatalogEndpointRefusedMsg is the 400 for an endpoint override on
+// a catalog provider id on the hosted edition (see
+// common.CatalogBaseOverrideRefused).
+const onboardingCatalogEndpointRefusedMsg = "This provider's address can't be changed. " +
+	"Leave the address empty to use the provider's own."
+
+// Refusals of the custom-endpoint path of POST /onboarding/complete (#1700,
+// design §2.5). The wizard shows them after "Could not complete setup: ".
+const (
+	// onboardingListedNameMsgFmt (M1) takes the id twice.
+	onboardingListedNameMsgFmt = `"%s" is the name of a listed provider. ` +
+		`Choose a different name for your custom endpoint, for example "my-%s".`
+	onboardingCustomIDShapeMsg          = `Choose a custom endpoint name of up to 64 characters, without "/", "\" or "..".`
+	onboardingCustomBadProtocolMsg      = `The protocol must be "openai-compatible" or "anthropic".`
+	onboardingCustomEndpointRequiredMsg = "Enter the base URL of your custom endpoint, " +
+		"for example https://llm.example.com/v1."
+	onboardingCustomProtocolRequiredMsg = `Choose the protocol your custom endpoint uses: ` +
+		`"openai-compatible" or "anthropic".`
+	onboardingCustomRegionRefusedMsg = "A region can't be set for a custom endpoint. Remove the region and try again."
+	onboardingCustomModelRequiredMsg = "Enter the model name your custom endpoint should use."
+	// onboardingCustomEndpointBlockedMsg (M8) is identical to the hosted
+	// fork's providerEndpointBlockedMsg, so the two code bases converge.
+	onboardingCustomEndpointBlockedMsg = "The provider address points at an internal network, " +
+		"which is not reachable from here. Use the provider's public address."
+)
 
 // probeWindowClosedMsg is POST /onboarding/probe-provider's refusal body. It
 // is the message that route already returned for "onboarding complete", now
@@ -757,19 +812,52 @@ func (ro *restAPIHandleCompleteOnboarding) decodeAndValidate() bool {
 		jsonErrField(ro.w, http.StatusBadRequest, fmt.Sprintf("unknown provider %q", ro.provider.ID), "id")
 		return true
 	}
-	// Reject ids the catalog does not carry at the boundary, so the gateway
-	// never persists a config that fails the post-save rewire and flips to
-	// degraded. The message names the id the caller sent and offers NO
-	// canonical alternative (ADR-067 FR-015, SC-010).
+	// Which path the id takes (#1700, design §2.2).
 	//
-	// Membership only, deliberately: FR-019's tier gate belongs to the two
-	// sites the spec maps it to — PUT /providers/{id} (T067-10) and the
-	// onboarding PROBE below (T067-12). This wizard step must not become the
-	// third, because it would also make the "no endpoint resolved" skip
+	// Catalog ids: membership only, deliberately: FR-019's tier gate belongs
+	// to the two sites the spec maps it to — PUT /providers/{id} (T067-10) and
+	// the onboarding PROBE below (T067-12). This wizard step must not become
+	// the third, because it would also make the "no endpoint resolved" skip
 	// branch below unreachable — every supported catalog row carries a URL,
-	// so the only ids that reach it are the unsupported ones.
-	if !providers.IsCatalogProvider(ro.provider.ID) {
+	// so the only ids that reach it are the unsupported ones. The one new
+	// refusal: only the Custom endpoint form sends `protocol`, so a catalog id
+	// carrying one means the user named their custom endpoint after a listed
+	// provider (the "azure" trap) — say so instead of saving another row.
+	//
+	// Other ids: a sign-in body, or a body with neither `protocol` nor
+	// `endpoint` (every client older than #1700), gets today's field-less
+	// refusal, byte for byte. The message names the id the caller sent and
+	// offers NO canonical alternative (ADR-067 FR-015, SC-010). Anything else
+	// is a custom endpoint, admitted by the same rule the probe and PUT
+	// /providers/{id} apply (ADR-067 §3.2 item 3, clarification 2026-11-08).
+	switch {
+	case providers.IsCatalogProvider(ro.provider.ID):
+		if ro.provider.Protocol != "" {
+			// The catalog lookup trims the id, so name the trimmed one.
+			listed := strings.TrimSpace(ro.provider.ID)
+			jsonErrField(ro.w, http.StatusBadRequest,
+				fmt.Sprintf(onboardingListedNameMsgFmt, listed, listed), "id")
+			return true
+		}
+	case ro.provider.AuthMethod == config.AuthMethodSignIn,
+		ro.provider.Protocol == "" && ro.provider.Endpoint == "":
 		jsonErr(ro.w, http.StatusBadRequest, fmt.Sprintf("unknown provider %q", ro.provider.ID))
+		return true
+	default:
+		if ro.refuseCustomProvider() {
+			return true
+		}
+		ro.provider.Custom = true
+	}
+	// Hosted edition: a catalog id keeps the catalog's endpoint (the PUT
+	// /providers/{id} rule). An endpoint override on one is refused unless
+	// the operator's SSRF allow list names its host. A custom endpoint (the
+	// default branch above) is not a catalog id: it carries its own key and
+	// address, and the SSRF checks on the custom path decide whether the
+	// address is acceptable, exactly as PUT /providers/{id} treats a custom
+	// row (isCustomRow).
+	if !ro.provider.Custom && providercommon.CatalogBaseOverrideRefused(ro.provider.Endpoint) {
+		jsonErrField(ro.w, http.StatusBadRequest, onboardingCatalogEndpointRefusedMsg, "endpoint")
 		return true
 	}
 	// The two variants diverge for the first time here: the api_key variant
@@ -779,14 +867,74 @@ func (ro *restAPIHandleCompleteOnboarding) decodeAndValidate() bool {
 	// refused — that is a catalog gap, not an operator error.
 	if ro.provider.AuthMethod == config.AuthMethodSignIn {
 		row, known := providers.CatalogProvider(ro.provider.ID)
-		if known && len(row.AuthMethods) > 0 &&
-			!catalogOffersAuth(row.AuthMethods, gen.ProbeProviderRequestAuthSignIn) {
-			jsonErrField(ro.w, http.StatusBadRequest, onboardingSignInUnsupportedMsg, "id")
+		if known && len(row.AuthMethods) > 0 && !rowOffersSignIn(row) {
+			// Provider hotfix H1: a declared `sign_in` with no mechanism
+			// (the plain `openai` row) is refused like an undeclared one,
+			// pointing at the row that can sign in when there is one.
+			jsonErrField(ro.w, http.StatusBadRequest, ro.a.signInRefusalMsg(ro.provider.ID), "id")
 			return true
 		}
 	} else if ro.provider.APIKey == "" {
 		jsonErr(ro.w, http.StatusBadRequest, "provider.api_key is required")
 		return true
+	}
+	return false
+}
+
+// refuseCustomProvider runs the custom path's request checks C1-C7 (#1700,
+// design §2.4) in order, writing the refusal and returning true on the first
+// that fails. C8 (api_key present) is decodeAndValidate's shared check, and
+// the address and key checks run later, in validateAndStoreOnboardingKey,
+// after the credential store is known to be ready.
+func (ro *restAPIHandleCompleteOnboarding) refuseCustomProvider() bool {
+	refuse := func(msg, field string) bool {
+		jsonErrField(ro.w, http.StatusBadRequest, msg, field)
+		return true
+	}
+	// The id and model are trimmed once, here, and the trimmed values are what
+	// is checked, probed and saved (review of #1700): config loading trims
+	// both, so an untrimmed value would save a row that no longer loads.
+	ro.provider.ID = strings.TrimSpace(ro.provider.ID)
+	ro.provider.Model = strings.TrimSpace(ro.provider.Model)
+	p := ro.provider
+	// C1: the PUT /providers/{id} id rule — the id becomes a providers[] row
+	// and a "<id>_API_KEY" credential ref, which the runtime publishes as an
+	// environment variable, so it must also be free of "=". validateEntityID
+	// refuses the empty (all-blank) id.
+	if strings.Contains(p.ID, "=") || validateEntityID(p.ID) != nil || len(p.ID) > maxProviderIDLen {
+		return refuse(onboardingCustomIDShapeMsg, "id")
+	}
+	// decodeAndValidate's reserved check ran on the id as sent; repeat it on
+	// the trimmed id. Its catalog check needs no repeat: the catalog lookup
+	// trims the id itself (exact case otherwise), so a padded catalog id never
+	// reaches this path.
+	if isReservedProviderPathSegment(p.ID) {
+		return refuse(fmt.Sprintf("unknown provider %q", p.ID), "id")
+	}
+	// C2: enforced here because inbound schema validation is off by default.
+	if p.Protocol != "" && !providers.IsCustomRowProtocol(p.Protocol) {
+		return refuse(onboardingCustomBadProtocolMsg, "protocol")
+	}
+	if p.Endpoint == "" { // C3
+		return refuse(onboardingCustomEndpointRequiredMsg, "endpoint")
+	}
+	if p.Protocol == "" { // C4
+		return refuse(onboardingCustomProtocolRequiredMsg, "protocol")
+	}
+	// C5: the shared admission rule. C2-C4 make a refusal unreachable while a
+	// catalog is loaded; it stays so the three entry points cannot drift.
+	// With no catalog loaded (E7) Admit admits with custom=false; the row is
+	// still saved as a custom row, since the id is not a catalog id.
+	if _, admitErr := providers.Admit(p.ID, p.Endpoint, p.Protocol); admitErr != nil {
+		return refuse(admitErr.Error(), "id")
+	}
+	if strings.TrimSpace(p.Region) != "" { // C6
+		return refuse(onboardingCustomRegionRefusedMsg, "region")
+	}
+	// C7: without a model the completion default would write a vendor model
+	// (gpt-4o) the custom endpoint may not serve.
+	if p.Model == "" {
+		return refuse(onboardingCustomModelRequiredMsg, "model")
 	}
 	return false
 }
@@ -904,6 +1052,11 @@ func (ro *restAPIHandleCompleteOnboarding) prepareProviderAndCredentials() bool 
 	// catalog row's own base URL (ADR-067 FR-012).
 	if ep := strings.TrimSpace(ro.provider.Endpoint); ep != "" {
 		ro.newProviderEntry["api_base"] = ep
+	}
+	// A custom row (#1700) is saved in exactly the shape Settings writes and
+	// the runtime factory reads: api_base, protocol and custom=true.
+	if ro.provider.Custom {
+		applyProviderIdentity(ro.newProviderEntry, ro.provider.Endpoint, ro.provider.Protocol, "", true)
 	}
 	// Issue #800 (Bedrock region contract): a per-provider-row region
 	// selected during onboarding, persisted verbatim as the row's `region`.
@@ -1048,9 +1201,17 @@ func (ro *restAPIHandleCompleteOnboarding) mutateConfigForCompletion(m map[strin
 			entryMap["auth_method"] = ro.provider.AuthMethod
 			if ep := strings.TrimSpace(ro.provider.Endpoint); ep != "" {
 				entryMap["api_base"] = ep
+			} else if custom, _ := entryMap["custom"].(bool); usableStoredAPIBase(ro.provider.ID, strVal(entryMap, "api_base"), custom) == "" {
+				// Hosted: the owner onboarded this pair without an endpoint, so
+				// a base already on the row (a planted one) must not survive
+				// and receive the owner's key.
+				delete(entryMap, "api_base")
 			}
 			if region := strings.TrimSpace(ro.provider.Region); region != "" {
 				entryMap["region"] = region
+			}
+			if ro.provider.Custom {
+				applyProviderIdentity(entryMap, ro.provider.Endpoint, ro.provider.Protocol, "", true)
 			}
 			providerList[i] = entryMap
 			found = true
@@ -1076,10 +1237,14 @@ func (ro *restAPIHandleCompleteOnboarding) mutateConfigForCompletion(m map[strin
 		defaultsMap = map[string]any{}
 	}
 	delete(defaultsMap, "model_name")
-	defaultsMap["default_model"] = map[string]any{
+	defaultModel := map[string]any{
 		"provider": ro.provider.ID,
 		"model":    ro.providerModel,
 	}
+	if ro.provider.ReasoningEffort != "" {
+		defaultModel["reasoning_effort"] = ro.provider.ReasoningEffort
+	}
+	defaultsMap["default_model"] = defaultModel
 	agentsMap["defaults"] = defaultsMap
 	m["agents"] = agentsMap
 
@@ -1405,7 +1570,15 @@ func (a *restAPI) validateAndStoreOnboardingKey(
 	// why it could not, for the audit trail.
 	probeSkipReason := ""
 	providerDisplayName := providers.DisplayName(provider.ID)
-	if probeBase == "" {
+	if provider.Custom {
+		// A custom row (#1700, design D3): a blocked address is REFUSED with
+		// 422, as the probe and PUT /providers/{id} refuse it — not the
+		// catalog rows' skip-with-warning below, whose reason (a local model
+		// server such as ollama must still finish setup) is about catalog rows.
+		if a.refuseBlockedCustomEndpoint(w, r, provider) {
+			return "", "", false
+		}
+	} else if probeBase == "" {
 		// A known protocol with no vendor default and no operator-supplied
 		// endpoint (azure is the live example — it has no fixed base). There is
 		// nothing to probe against, which is "we could not find out", not "the
@@ -1422,8 +1595,8 @@ func (a *restAPI) validateAndStoreOnboardingKey(
 			"Couldn't verify your %s key: no endpoint is configured for this provider and none was supplied. Continuing with the key as entered.",
 			providerDisplayName,
 		)
-	} else if a.ssrfChecker != nil {
-		if err := a.ssrfChecker.CheckURL(r.Context(), probeBase); err != nil {
+	} else if checker := a.endpointChecker(); checker != nil {
+		if err := checker.CheckURL(r.Context(), probeBase); err != nil {
 			// SEC-24: this endpoint is reachable pre-auth and CSRF-exempt, and
 			// probeBase can come straight from the request body, so the probe
 			// must never be the thing that reaches an internal address. Skipping
@@ -1451,22 +1624,19 @@ func (a *restAPI) validateAndStoreOnboardingKey(
 	}
 
 	if probeSkipReason == "" {
-		// ADR-067 FR-022: NO `GET /models` pre-fetch. provider.ID is gated
-		// above to a catalog id, so ValidateKey resolves its probe candidates
-		// straight from the registry catalog (the first active, tool-calling
-		// text models in document order) and falls through to the next one on
-		// a model_not_found answer, at most three times. The live fetch this
-		// used to make was a round trip whose answer the catalog already
-		// carries — and on a provider whose /models is public it returned a
-		// reassuring 200 that said nothing about the key.
-		//
 		// SEC-16: result.RawDetail is server-debug-only and never leaves this process.
-		result := providers.ValidateKey(r.Context(), providers.ValidateInput{
-			ProviderID:   provider.ID,
-			ProviderName: providerDisplayName,
-			BaseURL:      probeBase,
-			APIKey:       provider.APIKey,
-		}, a.ssrfChk())
+		result, guardRefused := a.checkOnboardingKey(r.Context(), provider, providerDisplayName, probeBase)
+		// A custom row whose address the guard refused DURING the key check
+		// (the host now resolves to a blocked address, or the endpoint
+		// redirected to one) is refused like an address refused up front —
+		// before anything is stored. ValidateKey would report it only as
+		// "unreachable", which for a catalog row stays a warning.
+		if guardRefused {
+			slog.Warn("onboarding: SSRF guard refused a custom endpoint during the key check",
+				"provider", provider.ID, "outcome", result.Outcome, "detail", result.RawDetail)
+			jsonErr(w, http.StatusUnprocessableEntity, onboardingCustomEndpointBlockedMsg)
+			return "", "", false
+		}
 		slog.Debug("onboarding: provider key validation result",
 			"provider", provider.ID, "outcome", result.Outcome, "detail", result.RawDetail)
 
@@ -1477,12 +1647,12 @@ func (a *restAPI) validateAndStoreOnboardingKey(
 			// releases the onboarding reservation so the operator can retry
 			// immediately with a corrected key.
 			//
-			// 400 rather than the PUT path's 422 purely because
-			// /onboarding/complete's contract (contracts/openapi.yaml) declares
-			// 400/409/429/500/503 and not 422, and a rejected api_key is a
-			// rejected request field exactly like the checks above it. The
-			// decision itself — which outcomes reject — is shared with PUT via
-			// Blocks(); only the status code differs.
+			// 400 rather than the PUT path's 422: a rejected api_key is a
+			// rejected request field exactly like the checks above it, and
+			// first-run clients have always received 400 here. (The contract
+			// declares 422 too since #1700, for a custom endpoint's refused
+			// address only.) The decision itself — which outcomes reject — is
+			// shared with PUT via Blocks(); only the status code differs.
 			jsonErr(w, http.StatusBadRequest, result.Message)
 			return "", "", false
 		}
@@ -1538,6 +1708,125 @@ func (a *restAPI) validateAndStoreOnboardingKey(
 
 	return credRefName, keyWarning, true
 }
+
+// refuseBlockedCustomEndpoint is the custom row's address check (#1700, design
+// §2.4): when the address guard refuses the endpoint, the request is refused
+// with 422 before any outbound call and before anything is stored. The guard
+// is a.endpointChecker(), the same checker the key check dials through: the
+// configured one when sandbox.ssrf.enabled is set, else the hosted edition's
+// always-on endpoint guard (design §6, port note step 2), else none — core
+// with sandbox.ssrf off checks nothing here. The refusal text comes from
+// endpointRefusalMessage, as on PUT /providers/{id}: a host that does not
+// resolve is reported as not found, not as an internal address.
+func (a *restAPI) refuseBlockedCustomEndpoint(
+	w http.ResponseWriter, r *http.Request, provider onboardingProviderChoice,
+) bool {
+	checker := a.endpointChecker()
+	if checker == nil {
+		return false
+	}
+	if err := checker.CheckURL(r.Context(), provider.Endpoint); err != nil {
+		slog.Warn("onboarding: SSRF guard refused a custom endpoint",
+			"provider", provider.ID, "error", err)
+		jsonErr(w, http.StatusUnprocessableEntity, endpointRefusalMessage(err))
+		return true
+	}
+	return false
+}
+
+// checkOnboardingKey runs validateAndStoreOnboardingKey's key check and
+// reports whether the address guard refused a custom row's endpoint while it
+// ran (always false for a catalog row, or with the guard off).
+//
+// ADR-067 FR-022: NO `GET /models` pre-fetch. For a catalog id, ValidateKey
+// resolves its probe candidates straight from the registry catalog (the first
+// active, tool-calling text models in document order) and falls through to
+// the next one on a model_not_found answer, at most three times. The live
+// fetch this used to make was a round trip whose answer the catalog already
+// carries — and on a provider whose /models is public it returned a
+// reassuring 200 that said nothing about the key.
+//
+// A custom row has no catalog models, so the key is checked against the model
+// the operator chose (decodeAndValidate requires it), as PUT /providers/{id}
+// does with its request's model. Without it ValidateKey would fall back to a
+// live /models call and a guessed model — wrong where the model is a
+// deployment name.
+func (a *restAPI) checkOnboardingKey(
+	ctx context.Context, provider onboardingProviderChoice, displayName, probeBase string,
+) (providers.ValidationResult, bool) {
+	in := providers.ValidateInput{
+		ProviderID:   provider.ID,
+		ProviderName: displayName,
+		BaseURL:      probeBase,
+		APIKey:       provider.APIKey,
+	}
+	if provider.Custom {
+		in.ProbeModels = []string{provider.Model}
+	}
+	return a.validateKeyNotingRefusal(ctx, in, provider.Custom)
+}
+
+// validateKeyNotingRefusal runs providers.ValidateKey through the effective
+// endpoint checker (ssrfChk). For a custom row it also reports whether that
+// checker refused an address on policy grounds while the check ran — at
+// connect time or on a redirect — which the result alone reports only as
+// "unreachable". The custom onboarding path and PUT /providers/{id} refuse
+// the save on that report; a catalog row keeps its unreachable warning.
+func (a *restAPI) validateKeyNotingRefusal(
+	ctx context.Context, in providers.ValidateInput, custom bool,
+) (providers.ValidationResult, bool) {
+	checker := a.endpointChecker()
+	if !custom || checker == nil {
+		return providers.ValidateKey(ctx, in, a.ssrfChk()), false
+	}
+	refusals := &addressRefusalRecorder{sc: checker}
+	result := providers.ValidateKey(ctx, in, refusals)
+	return result, refusals.refused.Load()
+}
+
+// addressRefusalRecorder is the providers.URLChecker a custom row's key check
+// runs with (review of #1700; onboarding and PUT /providers/{id}). It applies a.endpointChecker() — the same
+// checker ssrfChk hands every other key check — unchanged and records
+// whether the guard refused an address on policy grounds — at connect time
+// (the host now resolves to a blocked address) or on a redirect — which the
+// key check's result alone reports only as "unreachable". It adds no check of
+// its own and is used only for the save-time key check, never at run time.
+type addressRefusalRecorder struct {
+	sc      *security.SSRFChecker
+	refused atomic.Bool
+}
+
+func (g *addressRefusalRecorder) note(err error) error {
+	if security.IsBlockedAddress(err) {
+		g.refused.Store(true)
+	}
+	return err
+}
+
+func (g *addressRefusalRecorder) CheckURL(ctx context.Context, rawURL string) error {
+	return g.note(g.sc.CheckURL(ctx, rawURL))
+}
+
+func (g *addressRefusalRecorder) SafeClient() *http.Client {
+	client := g.sc.SafeClient()
+	// A connect-time refusal comes back from the transport's round trip (the
+	// guarded dialer's error, wrapped at most); a redirect refusal comes from
+	// CheckRedirect, which the client calls outside the round trip.
+	inner := client.Transport
+	client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		resp, err := inner.RoundTrip(req)
+		return resp, g.note(err)
+	})
+	checkRedirect := client.CheckRedirect
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		return g.note(checkRedirect(req, via))
+	}
+	return client
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
 // Wire-format limits from contracts/components/schemas/ProbeProviderRequest.yaml,
 // enforced in the handler as well as the schema because validate_inbound is
@@ -1666,11 +1955,10 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 	// because it mints no authority. It still MUST close, because it spends
 	// the operator's money: with `auth: "sign_in"` the probe never looks at
 	// the request body for a credential at all — it reads the operator's OWN
-	// saved vendor login (Codex auth.json, or the Copilot CLI's stored token)
-	// and spends one real, billed completion per call, and on a cli_kind row
-	// spawns a subprocess to do it. An anonymous caller on a reopened window
-	// can burn Copilot premium requests or ChatGPT quota that is not theirs.
-	// The `auth: "api_key"` path carries the caller's own key, so its cost is
+	// stored OAuth credential and spends one real, billed completion per call.
+	// An anonymous caller on a reopened window can burn ChatGPT quota that is
+	// not theirs. The `auth: "api_key"` path carries the caller's own key, so
+	// its cost is
 	// an outbound request rather than the operator's balance — but it rides
 	// the same gate.
 	//
@@ -1810,6 +2098,13 @@ func (ro *restAPIHandleOnboardingProbeProvider) resolveEndpoint() bool {
 	// later for a reason the operator cannot act on. A custom row is not a
 	// catalog row, so it declares no auth methods and is never refused here.
 	ro.catalogRow, ro.isCatalogRow = providers.CatalogProvider(ro.body.Id)
+	// Hosted edition: the same refusal PUT /providers/{id} applies — an
+	// api_base on a catalog id is refused unless the operator's SSRF allow
+	// list names its host (common.CatalogBaseOverrideRefused).
+	if ro.isCatalogRow && providercommon.CatalogBaseOverrideRefused(reqAPIBase) {
+		jsonErrField(ro.w, http.StatusBadRequest, onboardingCatalogEndpointRefusedMsg, "api_base")
+		return true
+	}
 	if len(ro.catalogRow.AuthMethods) > 0 && !catalogOffersAuth(ro.catalogRow.AuthMethods, ro.body.Auth) {
 		jsonErrField(ro.w, http.StatusBadRequest, probeUnsupportedAuthMsg(ro.body.Auth), "auth")
 		return true
@@ -1861,10 +2156,10 @@ func (ro *restAPIHandleOnboardingProbeProvider) resolveEndpoint() bool {
 	// well-formed and the server REFUSED it — reporting that as "the provider
 	// rejected your key" would send the operator hunting for a credential
 	// problem that does not exist.
-	if ro.a.ssrfChecker != nil {
-		if err := ro.a.ssrfChecker.CheckURL(ro.r.Context(), ro.baseURL); err != nil {
+	if checker := ro.a.endpointChecker(); checker != nil {
+		if err := checker.CheckURL(ro.r.Context(), ro.baseURL); err != nil {
 			slog.Warn("rest: probe-provider: SSRF blocked endpoint", "error", err)
-			jsonErr(ro.w, http.StatusUnprocessableEntity, "provider endpoint not allowed (SSRF guard)")
+			jsonErr(ro.w, http.StatusUnprocessableEntity, endpointRefusalMessage(err))
 			return true
 		}
 	}
@@ -2024,11 +2319,11 @@ func writeProbeResult(
 const probeNotSignedInMsg = "not signed in"
 
 // probeSignInUnavailableMsg answers a row that declares `sign_in` but offers
-// no mechanism this gateway can exercise: no `cli_kind` (a vendor CLI holding
-// the login) and no `token_source` (a saved token Omnipus may read). Today
-// that is the device-code shape (xai) — its stored-OAuth token and the chat
-// client to spend it are separate, unlanded features — and any operator-named
-// custom row, which is not a catalog row and so declares no mechanism at all.
+// no mechanism this gateway can exercise: it is not a first-party OAuth owner
+// (the device-code rows — the only mechanism since the CLI-backed model
+// providers were deleted, WU-24 founder 2026-10-14). That is any operator-
+// named custom row, which is not a catalog row and so declares no mechanism
+// at all, and any catalog row the gate does not own.
 //
 // It is deliberately NOT "not signed in": whether the operator has an account
 // is unknown here, and guessing would send them to sign in again and again
@@ -2036,26 +2331,19 @@ const probeNotSignedInMsg = "not signed in"
 const probeSignInUnavailableMsg = "sign-in cannot be probed for this provider"
 
 // signInProbeTimeout bounds the ONE completion a sign-in probe runs. It is
-// wider than probeCompletion's 15s because the CLI mechanisms spawn a real
-// vendor binary that boots a runtime before it answers.
+// wider than probeCompletion's 15s to absorb a cold first call on a
+// subscription backend.
 const signInProbeTimeout = 90 * time.Second
-
-// signInProbePrompt is the smallest prompt that still forces a real turn.
-const signInProbePrompt = "hi"
 
 // probeSignIn runs the `auth: sign_in` half of POST /onboarding/probe-provider.
 //
-// Which mechanism to use is CATALOG DATA, never a hardcoded id list:
-//
-//   - `cli_kind` (codex | copilot) — a `protocol: cli` row whose vendor binary
-//     holds the login. The probe is one subprocess completion with the chosen
-//     model.
-//   - a first-party OAuth owner — a device-code row whose access token lives in
-//     Omnipus' encrypted credential store. The probe is one ordinary completion
-//     carrying that token, classified by the same providers.ValidateKey the
-//     api_key path uses.
-//   - `token_source: codex-auth-json` — a legacy/read-only row that reuses the
-//     Codex CLI's saved access token against its own base URL.
+// Which rows probe is a fixed structural fact (providers.OAuthEntryOwner),
+// never a hardcoded id list: a first-party OAuth owner — a device-code row
+// whose access token lives in Omnipus' encrypted credential store. The probe
+// is one ordinary completion carrying that token, classified by the same
+// providers.ValidateKey the api_key path uses. The former subprocess and
+// auth.json-reuse mechanisms were deleted with the CLI-backed model
+// providers (WU-24, founder 2026-10-14).
 //
 // Returns (result, refusal). A non-empty refusal is a 400 on field `auth` and
 // the result is meaningless; an empty refusal means a completion ran and its
@@ -2080,9 +2368,6 @@ func (a *restAPI) probeSignIn(
 	defer cancel()
 
 	switch {
-	case row.CLIKind != "":
-		return a.probeSignInCLI(ctx, row, displayName, model)
-
 	case providers.OAuthEntryOwner(providerID):
 		store, err := a.resolveSignInCredStore()
 		if err != nil {
@@ -2123,156 +2408,7 @@ func (a *restAPI) probeSignIn(
 			"probed_model", result.ProbedModel, "detail", result.RawDetail)
 		return result, ""
 
-	case row.TokenSource == catalog.TokenSourceCodexAuthJSON:
-		// FR-007: the file is read, never written, refreshed or proxied.
-		token, _, _, err := providers.ReadCodexCliCredentials()
-		if err != nil {
-			slog.Debug("rest: probe-provider: no saved codex login for a token-source row",
-				"provider", providerID, "error", err)
-			return providers.ValidationResult{}, probeNotSignedInMsg
-		}
-		var probeModels []string
-		if model != "" {
-			probeModels = []string{model}
-		}
-		result := providers.ValidateKey(ctx, providers.ValidateInput{
-			ProviderID:   providerID,
-			ProviderName: displayName,
-			BaseURL:      baseURL,
-			APIKey:       token,
-			ProbeModels:  probeModels,
-		}, a.ssrfChk())
-		slog.Debug("rest: probe-provider: sign-in token probe result",
-			"provider", providerID, "outcome", result.Outcome,
-			"probed_model", result.ProbedModel, "detail", result.RawDetail)
-		return result, ""
-
 	default:
 		return providers.ValidationResult{}, probeSignInUnavailableMsg
 	}
-}
-
-// probeSignInCLI is the `cli_kind` half of probeSignIn: confirm a saved login
-// exists, then spend exactly one subprocess completion on the chosen model.
-//
-// The presence check is per-mechanism and comes FIRST, because the two failure
-// modes must not be conflated: "you have not signed in" is a 400 on field
-// `auth` that tells the operator what to do, while "the vendor answered no to
-// this model" is a 200 with success=false that tells them to pick another one.
-func (a *restAPI) probeSignInCLI(
-	ctx context.Context, row catalog.Provider, displayName, model string,
-) (providers.ValidationResult, string) {
-	switch row.CLIKind {
-	case catalog.CLIKindCodex:
-		// The Codex CLI's login IS its auth.json; no auth.json, no login.
-		if _, _, _, err := providers.ReadCodexCliCredentials(); err != nil {
-			slog.Debug("rest: probe-provider: no saved codex cli login",
-				"provider", row.ID, "error", err)
-			return providers.ValidationResult{}, probeNotSignedInMsg
-		}
-	case catalog.CLIKindCopilot:
-		// The Copilot CLI stores its token in the system credential store and
-		// exposes no status command (see CopilotSignIn's verified-behaviour
-		// note), so the only thing knowable WITHOUT spending a request is
-		// whether the binary exists at all. Its login state is read off the
-		// completion below, via the shared classifier.
-		if !providers.CopilotCLIAvailable("") {
-			return providers.ValidationResult{}, providers.CopilotCLIMissingHint
-		}
-	default:
-		slog.Warn("rest: probe-provider: catalog row carries an unknown cli_kind",
-			"provider", row.ID, "cli_kind", row.CLIKind)
-		return providers.ValidationResult{}, probeSignInUnavailableMsg
-	}
-
-	prov, err := providers.NewCliProviderForKind(row.CLIKind, "", "")
-	if err != nil {
-		slog.Warn("rest: probe-provider: no subprocess driver for cli_kind",
-			"provider", row.ID, "cli_kind", row.CLIKind, "error", err)
-		return providers.ValidationResult{}, probeSignInUnavailableMsg
-	}
-
-	_, chatErr := prov.Chat(ctx,
-		[]providers.Message{{Role: "user", Content: signInProbePrompt}}, nil, model, nil)
-	if chatErr == nil {
-		return providers.ValidationResult{Outcome: providers.OutcomeValid, ProbedModel: model}, ""
-	}
-	slog.Debug("rest: probe-provider: sign-in cli probe failed",
-		"provider", row.ID, "cli_kind", row.CLIKind, "model", model, "error", chatErr)
-
-	// Copilot only reveals "no credential" here, after the run — so report it
-	// as the sign-in refusal it is rather than as a rejected model. Only an
-	// EXPLICIT marker match counts: an unrecognised failure from a CLI that is
-	// installed, after a completion on the operator's chosen model, is far
-	// likelier to be that model or that plan, and answering it with "not
-	// signed in" would send them to re-authenticate against a problem
-	// authentication cannot fix (see MatchCopilotSignInFailure).
-	if row.CLIKind == catalog.CLIKindCopilot {
-		if state, matched := providers.MatchCopilotSignInFailure(chatErr.Error()); matched &&
-			(state == providers.CopilotNotSignedIn || state == providers.CopilotSignInExpired) {
-			return providers.ValidationResult{}, probeNotSignedInMsg
-		}
-	}
-
-	// The vendor still said no. That is the sign-in equivalent of a rejected
-	// key, so it maps to the one outcome that BLOCKS — `success:false`, Finish
-	// stays disabled (FR-029) — carrying a message written for a sign-in row
-	// rather than BuildMessage's key wording. SEC-16: chatErr stays in the
-	// debug log above, never on the wire.
-	//
-	// Only Codex had its saved login CONFIRMED above. For Copilot the only
-	// pre-check was "the binary exists", so its message must not claim a
-	// sign-in; see copilotProbeFailureMsg.
-	message := signInProbeFailureMsg(displayName, model)
-	if row.CLIKind == catalog.CLIKindCopilot {
-		message = copilotProbeFailureMsg(displayName, model)
-	}
-	return providers.ValidationResult{
-		Outcome:     providers.OutcomeInvalidKey,
-		Message:     message,
-		RawDetail:   chatErr.Error(),
-		ProbedModel: model,
-	}, ""
-}
-
-// copilotProbeFailureMsg is the Copilot counterpart of signInProbeFailureMsg
-// (SEC-16: no raw vendor detail).
-//
-// It never says "You're signed in". Nothing about the Copilot login is read
-// before the completion runs: the CLI keeps its token in the OS credential
-// store and has no status command (CopilotSignIn's verified-behaviour note), so
-// probeSignInCLI only confirms the binary exists. A timeout, a network or
-// certificate error, or a crash all land here, including on a machine that has
-// never run `copilot login`.
-//
-// Confirming the login first is not the fix: the only oracle is another prompt
-// run, which spends a second premium request on a probe ADR-068 specifies as
-// one dry-run completion (spec, "Vendor CLI" integration boundary; FR-036), on
-// a route reachable before any admin account exists (the C2 billing concern in
-// rest_signin_copilot.go). So the wording states what is known instead.
-func copilotProbeFailureMsg(displayName, model string) string {
-	if model == "" {
-		return fmt.Sprintf(
-			"The test message to %s failed, and Omnipus could not confirm your sign-in. "+
-				"Run `copilot login` in a terminal on this machine, then retry.",
-			displayName)
-	}
-	return fmt.Sprintf(
-		"The test message to %s failed for %q, and Omnipus could not confirm your sign-in. "+
-			"Check that model is available on your plan, or run `copilot login` again, then retry.",
-		displayName, model)
-}
-
-// signInProbeFailureMsg is the curated, user-facing text for a completion that
-// failed AFTER a saved login was confirmed (SEC-16: no raw vendor detail).
-func signInProbeFailureMsg(displayName, model string) string {
-	if model == "" {
-		return fmt.Sprintf(
-			"You're signed in to %s, but the test message failed. Try signing in again, then retry.",
-			displayName)
-	}
-	return fmt.Sprintf(
-		"You're signed in to %s, but the test message failed for %q. "+
-			"Check that model is available on your plan, or sign in again.",
-		displayName, model)
 }

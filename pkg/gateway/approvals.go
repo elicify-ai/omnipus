@@ -30,6 +30,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
 )
 
 // ApprovalState is the lifecycle state of a single tool-approval request.
@@ -103,31 +105,16 @@ type approvalEntry struct {
 	//
 	// This is a routing-relevant distinction, not a naming preference.
 	//
-	// Doc correction (verified against the actual producer, 2026-08):
-	// the generated ToolApprovalRequiredFrame wire type (pkg/api/generated/
-	// asyncapi_types.gen.go) DOES define a session_id/producing_session_id
-	// split for exactly this class-(a) case ("producing_session_id ...
-	// present iff it differs from session_id ... the child turn's own
-	// session id when this frame crosses the wire from a delegated child"),
-	// but the actual WS frame producer — broadcastToolApprovalRequired,
-	// pkg/gateway/ws_tool_approval.go (NOT this file — read-only from here)
-	// — does NOT follow that split. It sets the frame's SessionId directly
-	// from this field (SessionId: entry.SessionID) and never sets
-	// ProducingSessionId at all. So AS ACTUALLY PRODUCED TODAY, the WS
-	// frame's `session_id` carries the SAME acting/child id this Go field
-	// does — never the chat's routing key — and `producing_session_id` is
-	// always omitted. The two-key design this comment used to describe (wire
-	// session_id = chat, this field = child) is the CONTRACT's intent, not
-	// the producer's current behavior; ws_tool_approval.go needs a fix (wire
-	// SessionId from the chat's routing key, ProducingSessionId from this
-	// field when it differs) to actually realize it. Reported, not fixed
-	// here: ws_tool_approval.go is outside this file's ownership. Impact is
-	// reported as contained (the SPA routes this frame into a global store
-	// and nothing reads its `sessionId`), so this is a doc/contract-fidelity
-	// gap, not a live user-facing bug — unlike Defects 1-4 above.
+	// Wire mapping (corrected 2026-10-13, L1-AMENDMENTS-20261013 §1.3 note 4):
+	// the ToolApprovalRequiredFrame wire type has no producing_session_id.
+	// broadcastToolApprovalRequired (ws_tool_approval.go) sets the frame's
+	// session_id from this field, so the wire `session_id` is the acting
+	// (child) session id, never the chat's. The chat the inline approval
+	// renders in is carried separately by the optional `root_session_id`
+	// (server-derived root of the ParentSessionID chain, omitted when equal
+	// to session_id; ws_tool_approval.go::approvalSessionContext).
 	//
-	// What IS accurate and load-bearing regardless of the wire-frame
-	// mismatch: this field is read in-process (never round-tripped through
+	// What is load-bearing: this field is read in-process (never round-tripped through
 	// the wire frame) by cancelAllPendingForSessions and by the approve/deny
 	// HTTP round trip. Two consequences follow from THAT and both are
 	// load-bearing:
@@ -145,6 +132,21 @@ type approvalEntry struct {
 	CreatedAt time.Time
 	ExpiresAt time.Time
 
+	// RoomRef names the group chat of a room's pre-admission card
+	// (omnipus-system-agent FR-251, K7) or of a member's own approval inside
+	// a room-request turn (FR-169); both are raised in the member's main
+	// chat. OriginLabel is the server-derived turn origin (spec §6.18): "for group
+	// <name>" for both, "asked by <Agent>" for a turn that consumed a peer
+	// request; empty for a plain web turn. Immutable after creation.
+	RoomRef     *generated.RoomRef
+	OriginLabel string
+	// RoomPreAdmission marks a room's pre-admission card (FR-251): the
+	// request is not admitted yet, so /pause, member removal and room
+	// deletion cancel it and approving it awaits the admission. A member's
+	// own approval inside a room-request turn carries RoomRef too, but is
+	// the member's work (FR-169) and is not cancelled by those room events.
+	RoomPreAdmission bool
+
 	// Mutable — protected by the registry's mu.
 	state ApprovalState
 
@@ -154,6 +156,13 @@ type approvalEntry struct {
 
 	// timer fires after the configured timeout and transitions pending→denied_timeout.
 	timer *time.Timer
+}
+
+// approvalExtras are the optional origin fields of a new approval.
+type approvalExtras struct {
+	RoomRef          *generated.RoomRef
+	OriginLabel      string
+	RoomPreAdmission bool
 }
 
 // ApprovalOutcome is the result delivered to the blocked agent loop goroutine.
@@ -177,6 +186,12 @@ type ApprovalOutcome struct {
 	// D7/D8 call sites no way to see which one the human actually clicked,
 	// so they recorded a persistent grant unconditionally on any approval.
 	RecordGrant bool
+
+	// ApproverUserID is the authenticated person who made an explicit
+	// decision (approve, deny, cancel through the decision route); empty for
+	// every system decision (timeout, restart, Stop, saturation, …). Used
+	// only for the consent audit record (channels security S3).
+	ApproverUserID string
 }
 
 // Denial-reason literals emitted by this file (ADR-058 spec §2.2, FR-058-04).
@@ -284,6 +299,11 @@ var allApprovalDenialReasons = []string{
 type approvalRegistryV2 struct {
 	mu      sync.Mutex
 	entries map[string]*approvalEntry // approval_id → entry
+
+	// approvedCalls correlates an approved always-ask call with its approval
+	// for the writer-outcome audit record (channels security S3). It has its
+	// own lock; see approvals_consent.go.
+	approvedCalls approvedCallIndex
 
 	// maxPending is the saturation cap (FR-016).  0 = unlimited (discouraged).
 	// Set once at construction; protected by maxPending atomic for fast reads.
@@ -418,7 +438,12 @@ func (r *approvalRegistryV2) requestApproval(
 	toolCallID, toolName string,
 	args map[string]any,
 	agentID, actingSessionID, turnID string,
+	extras ...approvalExtras,
 ) (*approvalEntry, bool) {
+	var extra approvalExtras
+	if len(extras) > 0 {
+		extra = extras[0]
+	}
 	if turnID == "" {
 		// Defense in depth (D-03, ADR-092, 2026-09-24 UAT tester t5): fail
 		// CLOSED, unlike the actingSessionID=="" branch below, which still
@@ -456,8 +481,9 @@ func (r *approvalRegistryV2) requestApproval(
 			SessionID:  actingSessionID,
 			TurnID:     turnID,
 			CreatedAt:  time.Now(),
-			state:      ApprovalStateDeniedMissingTurnID,
-			resultCh:   make(chan ApprovalOutcome, 1),
+			RoomRef:    extra.RoomRef, OriginLabel: extra.OriginLabel, RoomPreAdmission: extra.RoomPreAdmission,
+			state:    ApprovalStateDeniedMissingTurnID,
+			resultCh: make(chan ApprovalOutcome, 1),
 		}
 		synthetic.resultCh <- ApprovalOutcome{Approved: false, Reason: denialReasonMissingTurnID}
 		return synthetic, false
@@ -495,8 +521,9 @@ func (r *approvalRegistryV2) requestApproval(
 			SessionID:  actingSessionID,
 			TurnID:     turnID,
 			CreatedAt:  time.Now(),
-			state:      ApprovalStateDeniedSaturated,
-			resultCh:   make(chan ApprovalOutcome, 1),
+			RoomRef:    extra.RoomRef, OriginLabel: extra.OriginLabel, RoomPreAdmission: extra.RoomPreAdmission,
+			state:    ApprovalStateDeniedSaturated,
+			resultCh: make(chan ApprovalOutcome, 1),
 		}
 		// Pre-deliver the outcome so the caller can receive without blocking.
 		synthetic.resultCh <- ApprovalOutcome{Approved: false, Reason: denialReasonSaturated}
@@ -515,8 +542,9 @@ func (r *approvalRegistryV2) requestApproval(
 		TurnID:     turnID,
 		CreatedAt:  now,
 		ExpiresAt:  expiresAt,
-		state:      ApprovalStatePending,
-		resultCh:   make(chan ApprovalOutcome, 1),
+		RoomRef:    extra.RoomRef, OriginLabel: extra.OriginLabel, RoomPreAdmission: extra.RoomPreAdmission,
+		state:    ApprovalStatePending,
+		resultCh: make(chan ApprovalOutcome, 1),
 	}
 
 	// Arm the timeout timer (FR-016, SC-006: default gateway.go::defaultToolApprovalTimeout).
@@ -597,6 +625,18 @@ func (r *approvalRegistryV2) resolve(
 	action ApprovalAction,
 	recordGrant bool,
 ) (resolveOK bool, gone bool) {
+	return r.resolveBy(approvalID, action, recordGrant, "")
+}
+
+// resolveBy is resolve with the deciding person's authenticated user id
+// (empty for a system decision), carried on the delivered outcome for the
+// consent audit record (channels security S3).
+func (r *approvalRegistryV2) resolveBy(
+	approvalID string,
+	action ApprovalAction,
+	recordGrant bool,
+	approverUserID string,
+) (resolveOK bool, gone bool) {
 	r.mu.Lock()
 	e, ok := r.entries[approvalID]
 	if !ok {
@@ -635,6 +675,10 @@ func (r *approvalRegistryV2) resolve(
 	listener := r.resolutionListener
 	r.mu.Unlock()
 
+	outcome.ApproverUserID = approverUserID
+	if outcome.Approved {
+		r.approvedCalls.record(e)
+	}
 	e.resultCh <- outcome
 	if listener != nil {
 		listener(e, newState)
@@ -802,9 +846,27 @@ func (r *approvalRegistryV2) cancelAllPendingForAgent(agentID, reason string) in
 // listener once per entry. match runs under r.mu and must not call back into
 // the registry. Returns the number of entries transitioned.
 func (r *approvalRegistryV2) cancelPendingMatching(match func(e *approvalEntry) bool, reason string) int {
+	return r.cancelMatchingApprovals(match, reason, false, nil).Canceled
+}
+
+// cancelMatchingApprovals keeps Stop's already-approved count in the same
+// critical section as pending -> denied_cancel. Legacy callers count only
+// cancellations and never inspect or match terminal entries.
+func (r *approvalRegistryV2) cancelMatchingApprovals(match func(e *approvalEntry) bool, reason string, countApproved bool, selected map[string]*approvalEntry) stopApprovalResult {
 	r.mu.Lock()
+	var result stopApprovalResult
 	var toDeliver []*approvalEntry
-	for _, e := range r.entries {
+	entries := r.entries
+	if countApproved {
+		// Keep selected terminal entries observable even if their registry
+		// retention expires while this Stop is paused. Entry state is still
+		// guarded by this mutex; a replacement has a distinct approval ID.
+		entries = selected
+	}
+	for _, e := range entries {
+		if countApproved && e.state == ApprovalStateApproved && match(e) {
+			result.AlreadyApproved++
+		}
 		if e.state != ApprovalStatePending || !match(e) {
 			continue
 		}
@@ -828,7 +890,8 @@ func (r *approvalRegistryV2) cancelPendingMatching(match func(e *approvalEntry) 
 			listener(e, ApprovalStateDeniedCancel)
 		}
 	}
-	return len(toDeliver)
+	result.Canceled = len(toDeliver)
+	return result
 }
 
 // cancelAllPendingForSession is the single-id convenience form of

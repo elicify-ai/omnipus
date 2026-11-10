@@ -1,0 +1,19 @@
+{
+  "requirement": "G2-iv",
+  "status": "verified test fixture correction, no production defect/fix on this path",
+  "code_input": "7c1a92f80f75e29cf2c89b8de0ba90a76a569ad0",
+  "CI_RED": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squad-1266/ci-7d2d03675/gw.txt::TestUnavailableHistory_US16_CurrentApprovalSendAndEngineStop",
+  "cause": "donor saved inputs belonged to unbound workspace while live message demanded harness workspace; immutable workspace guard correctly refused",
+  "fix": "initial donor workspace binding via real SetMeta before any canonical input; original default donor remains unbound for other callers",
+  "command": "CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -v -p 1 -run '^TestUnavailableHistory_US16_CurrentApprovalSendAndEngineStop$' github.com/elicify-ai/omnipus/pkg/gateway",
+  "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/squads/squad-1266/ci-fix-red-be-20261023/G2-iv-US16-workspace-green.log",
+  "raw_exit": 0,
+  "log_sha256": "28d4ec83d2f280adcb55b651fb8b7fc8f57449246faaf3fdc5585b6bd42cafe4",
+  "source_sha256": {
+    "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-be/pkg/gateway/chat_history_attach_red_test.go": "d755abc93504013c5d4750abbcf41141670cbfb4d0b3f4459d0053f6edccc9b7",
+    "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-be/pkg/gateway/chat_history_us16_harness_test.go": "d83659795856b660b98d023a9335d1d6baaa64357612236af93632b0353f870b",
+    "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-red-be/pkg/gateway/chat_history_us16_controls_test.go": "fc0033d9974a1fc956bdc3e59ed5176996267a788554417eed19ecfa3906687f"
+  },
+  "assertions": "original controls test byte-unchanged; genuine approval/registry/action/builtin file output/resumed provider/socket Stop/engine terminal/no-resend/unavailable history all executed",
+  "self_check": "raw0 named PASS+all3 phase markers checked; creation-before-use legality traced; exact test helper diff and unchanged original assertions/source hashes verified"
+}

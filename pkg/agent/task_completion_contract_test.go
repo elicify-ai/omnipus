@@ -15,9 +15,12 @@ package agent
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	"github.com/elicify-ai/omnipus/pkg/bus"
@@ -121,6 +124,18 @@ func newNativeTaskCompletionTestLoop(t *testing.T, provider providers.LLMProvide
 	cfg.Sandbox.ToolPolicies = map[string]string{"goal_claim": "allow"}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)
 	bindMetSoftTierJudge(t, al)
+	// S1 M9: production starts a task ONLY through the session launcher the
+	// gateway installs at boot — StartTaskNow refuses without one. Install the
+	// real launcher so every test built on this fixture exercises the
+	// production start path instead of the deleted launcher-less one.
+	mintGenuineBootEpochForLoop(t, al)
+	// The launcher's mandatory write needs the session stores (the gateway wires
+	// both at boot); without them the launch fails "session stores not wired".
+	lifecycle := session.NewLifecycleStore(filepath.Join(home, "session_lifecycle"))
+	al.SetSessionMessagingStores(
+		session.NewMessageInboxStore(filepath.Join(home, "session_messages")), lifecycle)
+	al.taskExecutor.SetLifecycleStore(lifecycle)
+	al.taskExecutor.SetSessionLauncher(NewSteerLauncher(al))
 	// al.Close() drains session workers/recaps before t.TempDir()'s own
 	// cleanup runs, so a real tool-call test (e.g. one that exercises
 	// update_task's session-worker writes) can't race an async write against
@@ -161,7 +176,50 @@ func newCompletionContractTask(t *testing.T, al *AgentLoop, agentID, title strin
 	if err := al.taskStore.Create(tk); err != nil {
 		t.Fatalf("create task: %v", err)
 	}
+	pairTaskGoalRecord(t, al, tk)
 	return tk
+}
+
+// pairTaskGoalRecord gives tk the paired goal record that production's
+// fresh-creation path writes (pkg/tools.SyncTaskGoalRecord, called by the
+// create_task tool and the REST create handler).
+//
+// session-core DEL-18 deleted the run-start minting of an unpaired task's goal
+// record: "fresh task creation/edit owns the record". A fixture that creates a
+// task without pairing one therefore starts a run with NO goal loop — the
+// executor logs "task ... has no paired goal record", goal_claim can never
+// complete the run, and the test hangs until its deadline. Pairing here is the
+// fixture doing what the product's own create path does, not a test-only bypass.
+// pairTaskGoalRecordUsingTaskCriteria is pairTaskGoalRecord for tests that
+// bring their OWN acceptance criteria: it never rewrites them (SyncTaskGoalRecord
+// reads the task's persisted criteria as the goal's criteria), it only supplies
+// the Definition of Done a first-time pairing requires.
+func pairTaskGoalRecordUsingTaskCriteria(t *testing.T, al *AgentLoop, taskID string) {
+	t.Helper()
+	stored, err := al.taskStore.Get(taskID)
+	require.NoError(t, err, "fixture: read the task before pairing its goal")
+	require.NoError(t,
+		tools.SyncTaskGoalRecord(
+			resolveGoalRecordStore(), stored, true,
+			[]task.AcceptanceCriterion{planProseCriterion("the work is verified")}, true, nil),
+		"fixture: pair the task's goal record the way fresh creation does")
+}
+
+func pairTaskGoalRecord(t *testing.T, al *AgentLoop, tk *task.Task) {
+	t.Helper()
+	updated, err := al.taskStore.Update(tk.ID, task.Patch{
+		Criteria: &[]task.AcceptanceCriterion{planProseCriterion("the work is done")},
+	})
+	require.NoError(t, err, "fixture: attach the task's own criteria")
+	require.NoError(t,
+		tools.SyncTaskGoalRecord(
+			// The READER's store: the executor resolves the paired record through
+			// resolveGoalRecordStore() (goal.NewStore(config.OmnipusHomeDir())), which
+			// equals tools.GoalStoreForTasks only when the task store sits at
+			// <home>/tasks. Pair where the executor will look.
+			resolveGoalRecordStore(), updated, true,
+			[]task.AcceptanceCriterion{planProseCriterion("the work is verified")}, true, nil),
+		"fixture: pair the task's goal record the way fresh creation does")
 }
 
 // waitForCompletionContractTerminal polls al's task store until taskID
@@ -192,14 +250,30 @@ func waitForCompletionContractTerminal(t *testing.T, al *AgentLoop, taskID strin
 			if got.SessionID == "" {
 				return got
 			}
-			sessStore := al.GetAgentStore(got.AgentID)
+			sessStore := al.GetSessionStore()
 			if sessStore == nil {
 				return got
 			}
-			if meta, merr := sessStore.GetMeta(got.SessionID); merr == nil && meta.Status == session.StatusArchived {
+			// The session's FINAL status is the lifecycle mirror of the task's
+			// outcome (lifecycle_bridge.go::lifecycleToUnifiedStatus, sub-agent
+			// control plane ADR D4/MAJ-009): a completed run mirrors to
+			// StatusArchived, a FAILED run to StatusFailed. completeTaskWithResult
+			// first writes StatusArchived directly and finalizeTaskLifecycle then
+			// mirrors the real outcome over it, so for a failed task "archived" is
+			// only the transient state BEFORE the last write. A fast scheduler
+			// (macOS) happens to poll inside that window; a slower one (the Linux
+			// worker) never does and waited for a status that is never final.
+			// Every fixture wires the lifecycle store like the gateway does at boot,
+			// so this expectation is strict: a failed task's session must end
+			// "failed", never "archived".
+			wantStatus := session.StatusArchived
+			if got.Status == task.StatusFailed {
+				wantStatus = session.StatusFailed
+			}
+			if meta, merr := sessStore.GetMeta(got.SessionID); merr == nil && meta.Status == wantStatus {
 				return got
 			}
-			// Terminal, but the session archive write hasn't landed yet —
+			// Terminal, but the session's final status write hasn't landed yet —
 			// keep polling rather than returning early.
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -310,7 +384,7 @@ func TestTaskCompletionContract_External_FailureMarker_FailedWithAgentWords(t *t
 	defer restore()
 
 	go func() {
-		fr.InjectEvent(runner.RunEvent{
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{
 			Kind: runner.EventKindOutput,
 			Output: &runner.OutputEvent{
 				Text: "Ran into a permissions error partway through.\n" +
@@ -320,8 +394,8 @@ func TestTaskCompletionContract_External_FailureMarker_FailedWithAgentWords(t *t
 					"TASK_STATUS: failure\n" +
 					"TASK_SUMMARY: Blocked by missing write access to the target repo.",
 			},
-		})
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+		}))
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd}))
 		fr.Cancel()
 	}()
 
@@ -366,11 +440,11 @@ func TestTaskCompletionContract_External_NoMarker_FailsClosed_NotAutoDone(t *tes
 	defer restore()
 
 	go func() {
-		fr.InjectEvent(runner.RunEvent{
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{
 			Kind:   runner.EventKindOutput,
 			Output: &runner.OutputEvent{Text: "I did some work but never signaled completion."},
-		})
-		fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd})
+		}))
+		require.NoError(t, fr.InjectEvent(runner.RunEvent{Kind: runner.EventKindEnd}))
 		fr.Cancel()
 	}()
 
@@ -516,9 +590,9 @@ func TestTaskCompletionContract_SessionArchivedOnCompletion(t *testing.T) {
 		t.Fatal("final task has no SessionID — cannot verify session archival")
 	}
 
-	sessStore := al.GetAgentStore("native-agent")
+	sessStore := al.GetSessionStore()
 	if sessStore == nil {
-		t.Fatal("GetAgentStore(\"native-agent\") returned nil")
+		t.Fatal("GetSessionStore() returned nil")
 	}
 	meta, err := sessStore.GetMeta(final.SessionID)
 	if err != nil {

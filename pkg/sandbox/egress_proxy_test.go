@@ -323,7 +323,10 @@ func TestClose_WaitsForTunnels(t *testing.T) {
 
 	// Close must NOT return while tunnel goroutines are still running.
 	select {
-	case <-closeReturned:
+	case closeErr := <-closeReturned:
+		if closeErr != nil {
+			t.Fatalf("Close returned before tunnels drained with error: %v", closeErr)
+		}
 		t.Fatal("Close returned before tunnels drained")
 	case <-time.After(50 * time.Millisecond):
 		// Expected: still waiting.

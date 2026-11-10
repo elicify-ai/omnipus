@@ -49,7 +49,7 @@ export const DEFAULT_EDGE_MODES: readonly DelegationMode[] = ['direct', 'task']
  * `WorkspaceDelegation` response always carries a concrete, server-computed
  * `default_depth`.
  */
-export const DEFAULT_DEPTH_FALLBACK = 3
+export const DEFAULT_DEPTH_FALLBACK = 10
 
 const VALID_MODE = new Set<string>(ALL_MODES)
 
@@ -143,9 +143,8 @@ export interface TeamNodeModel {
   type: NonNullable<Agent['type']>
   /** Role subtitle shown under the name (humanised type, falls back to type). */
   role: string
-  color?: string
-  icon?: string
-  isDefault: boolean
+  /** The backing agent — its avatar is drawn with AgentMark. Undefined for a ghost. */
+  agent?: Agent
   isWorker: boolean
   /** True when no backing agent exists for this id (referenced but deleted). */
   isGhost: boolean
@@ -294,9 +293,7 @@ function implicitSystemNodes(
       name: a.name,
       type: 'system' as NonNullable<Agent['type']>,
       role: roleLabel(a),
-      color: a.color,
-      icon: a.icon,
-      isDefault: false,
+      agent: a,
       isWorker: false,
       isGhost: false,
       isImplicit: true,
@@ -334,9 +331,7 @@ export function buildTeamGraphModel(
         name: id,
         type: 'Subagent' as NonNullable<Agent['type']>,
         role: 'deleted',
-        color: undefined,
-        icon: undefined,
-        isDefault: false,
+        agent: undefined,
         isWorker: false,
         isGhost: true,
         isImplicit: false,
@@ -348,9 +343,7 @@ export function buildTeamGraphModel(
       name: a.name,
       type: (a.type ?? 'Main') as NonNullable<Agent['type']>,
       role: roleLabel(a),
-      color: a.color,
-      icon: a.icon,
-      isDefault: a.default === true,
+      agent: a,
       isWorker: isWorker(a),
       isGhost: false,
       isImplicit: false,
@@ -382,14 +375,25 @@ export function buildTeamGraphModel(
 
 // ── Mutations (immutable) ────────────────────────────────────────────────────
 
-export type ConnectionRejection = 'self-edge' | 'duplicate' | 'not-member' | 'system-target' | 'cycle'
+export type ConnectionRejection = 'duplicate' | 'not-member' | 'system-target' | 'cycle'
 
 /**
  * Validate a candidate edge from → to against the current edit state.
- *   - self-edges only for the two bounded helper identities (jim, worker)
  *   - both endpoints must be team members
  *   - target must not be a System agent (ADR-049 D3/SD-C17)
  *   - no duplicate (from, to) pair
+ *   - no cycle (a self-edge is exempt — see below)
+ *
+ * A SELF-EDGE (from === to) is an ORDINARY edge, valid like any other
+ * (founder ruling DESIGN-RULING-delegation-20261009, U5a): the backend seeds
+ * one for every non-system agent and expresses the judge / plans-coordinator
+ * exclusion in CONFIG, so this validator MUST NOT hard-code an identity
+ * allow/deny for self-delegation — the old "only Jim and General Purpose"
+ * gate went with the rest of that model. The cycle check skips a self-edge
+ * (`from !== to`) because a node trivially reaches itself, and without that
+ * guard every new self-edge would be misreported as a 'cycle'; the duplicate
+ * check above already catches a second identical self-edge, so a self-edge is
+ * bounded exactly like any other edge (membership, modes, depth, policy).
  *
  * Delegation is BOUNDED, not tier-gated: the Sprint-3 backend unlocked onward
  * delegation for any agent (the seed wires Planner, a `Subagent`/worker, →
@@ -415,7 +419,6 @@ export function validateConnection(
   _workerIds?: ReadonlySet<string>,
   isSystemTarget?: boolean,
 ): ConnectionRejection | null {
-  if (from === to && from !== 'jim' && from !== 'worker') return 'self-edge'
   if (!state.members.includes(from) || !state.members.includes(to)) return 'not-member'
   if (isSystemTarget) return 'system-target'
   if (state.edges.some((e) => e.from === from && e.to === to)) return 'duplicate'
@@ -440,7 +443,6 @@ function hasPath(edges: TeamEdgeEdit[], start: string, target: string): boolean 
 
 /** Plain-language, per-repo-copywriting-convention message for each rejection reason. */
 export const REJECTION_MESSAGE: Record<ConnectionRejection, string> = {
-  'self-edge': 'Only Jim and General Purpose can delegate to themselves.',
   duplicate: 'That delegation edge already exists.',
   'not-member': 'Both agents must be on the team first.',
   'system-target': 'System agents cannot be a delegation target.',
@@ -452,11 +454,10 @@ export const REJECTION_MESSAGE: Record<ConnectionRejection, string> = {
  * React Flow `FinalConnectionState`-shaped from/to node ids and validity.
  *
  * React Flow only invokes `onConnect` when `isValidConnection` passed — a
- * rejected drop (self-edge, duplicate, non-member) never reaches `onConnect`
- * at all, so a rejection handler wired there is unreachable dead code. The
- * drag is instead silently swallowed: no edge, no feedback (e.g. dragging a
- * handle back onto its own node produces a silent no-op). The one event
- * React Flow ALWAYS fires, valid or not, is `onConnectEnd` — this helper
+ * rejected drop (duplicate, non-member, cycle, system-target) never reaches
+ * `onConnect` at all, so a rejection handler wired there is unreachable dead
+ * code. The drag is instead silently swallowed: no edge, no feedback. The one
+ * event React Flow ALWAYS fires, valid or not, is `onConnectEnd` — this helper
  * recomputes the same rejection reason from its `FinalConnectionState` so a
  * caller wired to `onConnectEnd` can surface it.
  *
@@ -564,13 +565,13 @@ export function setEdgeDepth(
   }
 }
 
-const NON_TEAM_AGENT_IDS = new Set(['admin', 'judge', 'plansupervisor'])
+const NON_TEAM_AGENT_IDS = new Set(['judge', 'plansupervisor'])
 
 /** Immutably add an agent to the team (node only; no edges). No-op if present. */
 export function addMember(state: TeamEditState, agentId: string): TeamEditState {
   if (state.members.includes(agentId)) return state
-  // ADR-090: Admin is standalone (never a teammate). Hidden Judge / Plan
-  // Supervisor are engine-owned and cannot join a workspace team.
+  // Hidden Judge / Plan Supervisor are engine-owned and cannot join a
+  // workspace team.
   if (NON_TEAM_AGENT_IDS.has(agentId)) return state
   return { ...state, members: [...state.members, agentId] }
 }

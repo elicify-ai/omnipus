@@ -72,7 +72,8 @@
       "applicable": true,
       "file": "tests/design-system/browser.spec.ts",
       "test": "Accordion [check:accordion-browser] browser",
-      "story": "AccordionContract"
+      "story": "AccordionContract",
+      "requiredTargets": [{ "selector": "[data-ds-trigger]", "attribute": "data-ds-trigger", "value": "true" }]
     },
     {
       "id": "accordion-pointer",

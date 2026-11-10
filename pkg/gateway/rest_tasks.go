@@ -17,7 +17,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,6 +29,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/taskwire"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -108,17 +108,10 @@ func frozenTaskDefinitionFields(req *gen.TaskUpdateRequest) []string {
 	if req == nil {
 		return nil
 	}
-	var frozen []string
-	if req.Prompt != nil {
-		frozen = append(frozen, "prompt")
-	}
-	if req.Criteria != nil {
-		frozen = append(frozen, "criteria")
-	}
-	if req.Dod != nil {
-		frozen = append(frozen, "dod")
-	}
-	return frozen
+	// The frozen set is Table T-TASK's (r17 §7.1, pkg/task/fieldrules.go),
+	// shared with update_task; presence is the request's own non-nil fields.
+	sent := map[string]bool{"prompt": req.Prompt != nil, "criteria": req.Criteria != nil, "dod": req.Dod != nil}
+	return task.SentProperties(task.FrozenWhileRunningProperties(), func(property string) bool { return sent[property] })
 }
 
 // runningTaskFrozenFieldMessage is the single refusal wording shared by both
@@ -461,16 +454,16 @@ func (a *restAPI) HandleTaskOccurrences(w http.ResponseWriter, r *http.Request) 
 	// (pkg/agent/task_trigger.go OnTaskUpserted's early skips). Heartbeat
 	// -surface tasks are always omitted (the heartbeat service owns those
 	// fires). A terminal task is omitted UNLESS its trigger REPEATS
-	// (recurring/every): a per-run done/failed status does not end a
+	// (recurring): a per-run done/failed status does not end a
 	// repeating series (see OnTaskUpserted's doc comment) — the scheduler
-	// re-arms a terminal recurring/every task's next occurrence exactly as it
+	// re-arms a terminal recurring task's next occurrence exactly as it
 	// would a non-terminal one, so the calendar must keep rendering it too.
 	// A truly exhausted RRULE series (COUNT/UNTIL) naturally yields zero
 	// occurrences from buildOccurrenceSets below and is omitted that way, not
 	// by this predicate. A terminal `once`/manual task is still omitted here
 	// (task.Trigger.IsRepeating is false for them) — its single occurrence IS
 	// its whole series — and would be omitted a second time regardless by
-	// buildOccurrenceSets' own trigger-FLAVOR filter (recurring/every only).
+	// buildOccurrenceSets' own trigger-FLAVOR filter (recurring only).
 	eligible := make([]task.Task, 0, len(tasks))
 	for _, t := range tasks {
 		if t.EffectiveSurface() == task.SurfaceHeartbeat {
@@ -482,27 +475,13 @@ func (a *restAPI) HandleTaskOccurrences(w http.ResponseWriter, r *http.Request) 
 		eligible = append(eligible, t)
 	}
 
-	// FR-008a: the every_ms projection anchor is the live armed job's
-	// NextRunAtMS, read from the installed TaskTriggerScheduler. Nil-safe —
-	// a nil scheduler (not yet wired / test scaffolding) makes every
-	// `every`-triggered task omit cleanly rather than erroring the request.
-	sched := agent.GetTaskTriggerScheduler(a.agentLoop)
-	everyAnchor := func(taskID string) (int64, bool) {
-		if sched == nil {
-			return 0, false
-		}
-		return sched.NextRunAtMSForTask(taskID)
-	}
-
 	// ADR-050 RD6, task-run-history-spec.md §3.7: the occurrence-run overlay
-	// dependency is wired in here, sourced from the live store. Unlike
-	// everyAnchor above — a required, non-variadic func(taskID string)
-	// (int64, bool) parameter — runsInRange is buildOccurrenceSets' own
+	// dependency is wired in here, sourced from the live store. runsInRange is buildOccurrenceSets' own
 	// trailing VARIADIC parameter (see its doc comment, task_occurrences.go);
 	// that is what lets this single positional call add the dependency
 	// without breaking the pre-existing task_occurrences_test.go call sites
 	// that predate this feature and pass none.
-	sets, err := buildOccurrenceSets(eligible, fromMs, toMs, tz, everyAnchor, a.taskStore.RunsInRange)
+	sets, err := buildOccurrenceSets(eligible, fromMs, toMs, tz, nil, a.taskStore.RunsInRange)
 	if err != nil {
 		// Range/tz were already validated above, so a non-nil error here
 		// indicates a genuine internal failure rather than bad input.
@@ -604,13 +583,7 @@ func ptr[T any](v T) *T { return &v }
 // Fix #5: logs a Warn when a non-empty string fails to parse (empty is normal
 // for an unset optional field and does not warrant a log line).
 func parseTimeOrNow(s string) time.Time {
-	if ts, err := time.Parse(time.RFC3339, s); err == nil {
-		return ts
-	}
-	if s != "" {
-		slog.Warn("rest_tasks: corrupt timestamp, defaulting to now", "value", s)
-	}
-	return time.Now().UTC()
+	return taskwire.ParseTimeOrNow(s)
 }
 
 // --- handlers ---------------------------------------------------------------
@@ -770,12 +743,30 @@ func (a *restAPI) handleTaskSubtasks(w http.ResponseWriter, parentID string) {
 	jsonOK(w, out)
 }
 
+// copyTaskCreateOrderingFields copies the plain optional plan-ordering and
+// labelling fields of a create request (write_set, stream, is_join, tags) onto
+// the new task. They need no validation beyond the wire schema.
+func copyTaskCreateOrderingFields(t *task.Task, req *gen.TaskCreateRequest) {
+	if req.WriteSet != nil {
+		t.WriteSet = *req.WriteSet
+	}
+	if req.Stream != nil {
+		t.Stream = *req.Stream
+	}
+	if req.IsJoin != nil {
+		t.IsJoin = *req.IsJoin
+	}
+	if req.Tags != nil {
+		t.Tags = *req.Tags
+	}
+}
+
 // handleTaskCreate handles POST /api/v1/tasks → 201 Created. The task always
 // lands in `inbox` (Detail #8); status is never a create-time field.
 func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
 	var req gen.TaskCreateRequest
-	if !decodeAndValidate(w, r, "TaskCreateRequest", &req, validateEnabled) {
+	if !decodeTaskTodoBody(w, r, "TaskCreateRequest", &req, validateEnabled) {
 		return
 	}
 
@@ -833,6 +824,9 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 		}
 		t.Priority = *req.Priority
 	}
+	if req.RunIsolated != nil {
+		t.RunIsolated = *req.RunIsolated
+	}
 	if req.AgentId != nil && *req.AgentId != "" {
 		agentID := *req.AgentId
 		if err := validateEntityID(agentID); err != nil {
@@ -857,18 +851,7 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 		}
 		t.PlanID = *req.PlanId
 	}
-	if req.WriteSet != nil {
-		t.WriteSet = *req.WriteSet
-	}
-	if req.Stream != nil {
-		t.Stream = *req.Stream
-	}
-	if req.IsJoin != nil {
-		t.IsJoin = *req.IsJoin
-	}
-	if req.Tags != nil {
-		t.Tags = *req.Tags
-	}
+	copyTaskCreateOrderingFields(t, &req)
 	// GOAL-FR-021/FR-047/GOAL-MV-6/D-C: creating a task through the API or
 	// the interface requires at least one acceptance criterion AND at least
 	// one definition-of-done item — naming explicitly which is missing.
@@ -921,15 +904,17 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Todos != nil {
 		for _, td := range *req.Todos {
-			t.Todos = append(t.Todos, task.Todo{Text: td.Text, Status: task.TodoStatus(td.Status)})
+			t.Todos = append(t.Todos, todoFromWire(td.Text, string(td.Status), td.ActiveForm))
 		}
 	}
 	if req.Trigger != nil {
-		t.Trigger = buildTrigger(
+		if msg := task.LegacyTimingKeysMessage(req.Trigger.Config.AdditionalProperties); msg != "" {
+			jsonErr(w, http.StatusBadRequest, msg)
+			return
+		}
+		t.Trigger = task.BuildTrigger(
 			string(req.Trigger.Type),
 			req.Trigger.Config.AtMs,
-			req.Trigger.Config.EveryMs,
-			req.Trigger.Config.CronExpr,
 			req.Trigger.Config.Rrule,
 			req.Trigger.Config.DtstartMs,
 			req.Trigger.Config.Tz,
@@ -966,17 +951,16 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf(
-			"task %q was created but its Definition of Done could not be persisted: %v", t.ID, gErr))
+			"task %q was created but its Definition of Done could not be persisted. "+
+				"Check disk space and permissions, then retry. Details are in the server log.", t.ID))
 		return
 	}
 
 	a.auditTask("task.create", t.ID)
-	// FR-022: no-op today (a freshly-created task has no prior trigger to
-	// diff against) — see auditTriggerChange's doc comment for why this
-	// call site stays in place regardless.
-	a.auditTriggerChange(t.ID, nil, t.Trigger)
+	// FR-022's trigger audit (tools.AuditTriggerChange) records a CHANGE of an
+	// existing trigger; a freshly created task has none to diff against.
 	a.emitTaskStatus(t)
-	// Register the task's time trigger (once/every/recurring) so it actually
+	// Register the task's time trigger (once/recurring) so it actually
 	// fires; a no-op for manual/heartbeat tasks.
 	if a.agentLoop != nil {
 		a.agentLoop.NotifyTaskUpserted(t)
@@ -1002,6 +986,13 @@ type taskPatch struct {
 	preUpdateStatus       task.Status
 	updated               *task.Task
 	priorForUpdate        *task.Task
+	// goalDefinitionErr and goalPromptErr are the paired-goal
+	// synchronisation failures of the reconciled write (applyUpdate).
+	goalDefinitionErr error
+	goalPromptErr     error
+	// scheduleErr is the scheduler reconciliation failure of the reconciled
+	// write (r17 TK-30 step 3); the trigger was saved.
+	scheduleErr error
 }
 
 // handleTaskPatch handles PATCH /api/v1/tasks/{id}.
@@ -1041,7 +1032,7 @@ func (tp *taskPatch) validate() bool {
 	}
 	validateEnabled := tp.a.agentLoop.GetConfig().Gateway.ValidateInbound
 
-	if !decodeAndValidate(tp.w, tp.r, "TaskUpdateRequest", &tp.req, validateEnabled) {
+	if !decodeTaskTodoBody(tp.w, tp.r, "TaskUpdateRequest", &tp.req, validateEnabled) {
 		return true
 	}
 
@@ -1114,6 +1105,37 @@ func (tp *taskPatch) validate() bool {
 	return false
 }
 
+// buildTimingPatch translates the request's trigger and due-date fields into
+// the patch. It reports true, with the response already written, when the
+// trigger carries a removed key (every_ms, cron_expr).
+func (tp *taskPatch) buildTimingPatch() bool {
+	if tp.req.Trigger != nil {
+		if msg := task.LegacyTimingKeysMessage(tp.req.Trigger.Config.AdditionalProperties); msg != "" {
+			jsonErr(tp.w, http.StatusBadRequest, msg)
+			return true
+		}
+		tr := task.BuildTrigger(
+			string(tp.req.Trigger.Type),
+			tp.req.Trigger.Config.AtMs,
+			tp.req.Trigger.Config.Rrule,
+			tp.req.Trigger.Config.DtstartMs,
+			tp.req.Trigger.Config.Tz,
+		)
+		tp.patch.Trigger = &tr
+	}
+	if tp.req.Due != nil {
+		due := tp.req.Due.UTC().Format(time.RFC3339)
+		tp.patch.Due = &due
+	} else if tp.req.ClearDue != nil && *tp.req.ClearDue {
+		// clear_due unambiguously clears the stored due date. Ignored when `due`
+		// is set to a value (the value wins). The store applies *patch.Due
+		// verbatim, so an empty string clears Task.Due (which omits when empty).
+		empty := ""
+		tp.patch.Due = &empty
+	}
+	return false
+}
+
 // buildPatch translates the request's fields into a task.Patch.
 func (tp *taskPatch) buildPatch() bool {
 	tp.patch = task.Patch{}
@@ -1161,13 +1183,16 @@ func (tp *taskPatch) buildPatch() bool {
 	if tp.req.Priority != nil {
 		tp.patch.Priority = tp.req.Priority
 	}
+	if tp.req.RunIsolated != nil {
+		tp.patch.RunIsolated = tp.req.RunIsolated
+	}
 	if tp.req.BlockedBy != nil {
 		tp.patch.BlockedBy = tp.req.BlockedBy
 	}
 	if tp.req.Todos != nil {
 		todos := make([]task.Todo, 0, len(*tp.req.Todos))
 		for _, td := range *tp.req.Todos {
-			todos = append(todos, task.Todo{Text: td.Text, Status: task.TodoStatus(td.Status)})
+			todos = append(todos, todoFromWire(td.Text, string(td.Status), td.ActiveForm))
 		}
 		tp.patch.Todos = &todos
 	}
@@ -1182,29 +1207,15 @@ func (tp *taskPatch) buildPatch() bool {
 	// reflecting the first call's write even though both calls' own writes
 	// were correctly serialized by the store's per-task lock).
 
-	if tp.req.Trigger != nil {
-		tr := buildTrigger(
-			string(tp.req.Trigger.Type),
-			tp.req.Trigger.Config.AtMs,
-			tp.req.Trigger.Config.EveryMs,
-			tp.req.Trigger.Config.CronExpr,
-			tp.req.Trigger.Config.Rrule,
-			tp.req.Trigger.Config.DtstartMs,
-			tp.req.Trigger.Config.Tz,
-		)
-		tp.patch.Trigger = &tr
-	}
-	if tp.req.Due != nil {
-		due := tp.req.Due.UTC().Format(time.RFC3339)
-		tp.patch.Due = &due
-	} else if tp.req.ClearDue != nil && *tp.req.ClearDue {
-		// clear_due unambiguously clears the stored due date. Ignored when `due`
-		// is set to a value (the value wins). The store applies *patch.Due
-		// verbatim, so an empty string clears Task.Due (which omits when empty).
-		empty := ""
-		tp.patch.Due = &empty
+	if tp.buildTimingPatch() {
+		return true
 	}
 	if tp.req.PlanId != nil {
+		// r17 TK-11: the one plan_id rule REST and update_task share
+		// (tools.PlanMembershipChange). Attach / re-parent (plan A -> plan B,
+		// or standalone -> plan B) needs the same-workspace FK and a draft
+		// plan; DETACH (plan_id -> "") is always allowed.
+		workspaceID := ""
 		if *tp.req.PlanId != "" {
 			// A task's workspace_id is immutable via PATCH (not a
 			// TaskUpdateRequest field) — read the existing task to learn it,
@@ -1219,40 +1230,30 @@ func (tp *taskPatch) buildPatch() bool {
 				jsonErr(tp.w, http.StatusInternalServerError, "could not read task")
 				return true
 			}
-			// Same-workspace FK + draft-only membership, via the one choke
-			// point every attach path shares. This is the RE-PARENT/attach
-			// half of PATCH (plan A -> plan B, or standalone -> plan B); the
-			// DETACH half (plan_id -> "") is the else branch below and is
-			// deliberately not gated — leaving a plan is always allowed.
-			if err := tools.ValidateTaskPlanMembership(
-				tp.a.planStore, *tp.req.PlanId, existingForPlanCheck.WorkspaceID); err != nil {
-				jsonErr(tp.w, http.StatusBadRequest, err.Error())
-				return true
-			}
-		} else if tp.req.Status == nil {
-			// DETACH (plan_id -> ""). Sibling of the plan-delete laundering
-			// hole: detaching a member without touching its status turns a
-			// `next` member of a draft/stopped plan into a STANDALONE `next`
-			// task, which requirePlanExecuting rightly permits (PlanID == ""
-			// means "not a plan member") and CheckQueuedTasks' ~60s drain then
-			// auto-dispatches — running work the Execute gate never approved.
-			// Reachable from the UI today: TaskDetailPanel's Plan dropdown ->
-			// "No plan" sends exactly this patch.
-			//
-			// Mirror detachMemberOnPlanDelete: a detached non-terminal member
-			// returns to triage rather than inheriting a dispatchable resting
-			// state it was never approved for. Applied on the SAME patch as the
-			// plan_id clear, so there is no window where the task is standalone
-			// and still `next`.
-			//
-			// Only when the caller did NOT also set `status` in the same
-			// request (an explicit status wins). Re-parenting plan A -> plan B
-			// is untouched — that takes the non-empty branch above.
-			// detachResetsStatus drives the ErrIllegalTransition retry at the
-			// Update call site: the store refuses this combined patch for
-			// `blocked`/`done`/`failed` (blocked may only leave via the store's
-			// own recompute; done is frozen), and those must still detach
-			// rather than 400 — history is never rewritten.
+			workspaceID = existingForPlanCheck.WorkspaceID
+		}
+		// A detach without a status in the same request returns the task to
+		// inbox (detachToInbox). Sibling of the plan-delete laundering hole: detaching a
+		// member without touching its status turns a `next` member of a
+		// draft/stopped plan into a STANDALONE `next` task, which
+		// requirePlanExecuting rightly permits (PlanID == "" means "not a plan
+		// member") and CheckQueuedTasks' ~60s drain then auto-dispatches —
+		// running work the Execute gate never approved. Reachable from the UI
+		// today: TaskDetailPanel's Plan dropdown -> "No plan" sends exactly
+		// this patch. Mirror detachMemberOnPlanDelete: a detached non-terminal
+		// member returns to triage, on the SAME patch as the plan_id clear, so
+		// there is no window where the task is standalone and still `next`.
+		// An explicit status wins. detachResetsStatus drives the
+		// ErrIllegalTransition retry at the write: the store refuses this
+		// combined patch for `blocked`/`done`/`failed`, and those must still
+		// detach rather than 400 — history is never rewritten.
+		detachToInbox, err := tools.PlanMembershipChange(
+			tp.a.planStore, workspaceID, *tp.req.PlanId, tp.req.Status != nil)
+		if err != nil {
+			jsonErr(tp.w, http.StatusBadRequest, err.Error())
+			return true
+		}
+		if detachToInbox {
 			inbox := task.StatusInbox
 			tp.patch.Status = &inbox
 			tp.detachResetsStatus = true
@@ -1438,9 +1439,13 @@ func (tp *taskPatch) applyUpdate() bool {
 	// snapshot below is captured atomically under the SAME per-task lock as
 	// this write — see priorTriggerForAudit's own doc comment above for the
 	// TOCTOU window a separate pre-patch Get() would have.
-	var err error
-	tp.updated, tp.priorForUpdate, err = tp.a.taskStore.UpdateWithPrior(tp.id, tp.patch)
-	if err != nil && tp.detachResetsStatus && errors.Is(err, task.ErrIllegalTransition) {
+	//
+	// r17 TK-03: the write goes through the shared reconciled write, which
+	// holds the task's coordination lock across the task write and the paired
+	// goal's synchronisation (criteria/dod here, then the prompt), so REST and
+	// update_task writers of one task are strictly ordered.
+	req := tools.TaskWriteRequest{Patch: tp.patch, Prior: true}
+	if tp.detachResetsStatus {
 		// The detach above optimistically added `status: inbox`. A terminal or
 		// `blocked` member legitimately refuses that (done is frozen; blocked
 		// may only leave via the store's own recompute), but the DETACH itself
@@ -1449,8 +1454,27 @@ func (tp *taskPatch) applyUpdate() bool {
 		// close does not apply to them. Retry with the plan_id clear alone and
 		// let recomputeBlockedStateLocked (which runs at the end of every
 		// Update) settle `blocked`.
-		tp.patch.Status = nil
-		tp.updated, tp.priorForUpdate, err = tp.a.taskStore.UpdateWithPrior(tp.id, tp.patch)
+		req.RetryWithoutStatus = tools.DetachStatusRefused
+	}
+	if tp.criteriaProvided || tp.dodProvided {
+		req.SyncGoalDefinition = func(updated *task.Task) error {
+			return tp.a.syncTaskGoalRecord(updated, tp.criteriaProvided, tp.patchDoD, tp.dodProvided)
+		}
+	}
+	if tp.a.agentLoop != nil {
+		// r17 TK-30 step 3: a changed/added/removed trigger or a move to a
+		// terminal status (re)registers or removes the task's job, under the
+		// same lock hold as the write.
+		req.ReconcileSchedule = tp.a.agentLoop.ReconcileTaskScheduleLocked
+	}
+	out, err := tools.WriteTaskReconciled(tp.a.taskStore, tp.id, req)
+	if err == nil {
+		if out.StatusDropped {
+			tp.patch.Status = nil
+		}
+		tp.updated, tp.priorForUpdate = out.Updated, out.Prior
+		tp.goalDefinitionErr, tp.goalPromptErr = out.GoalDefinitionErr, out.GoalPromptErr
+		tp.scheduleErr = out.ScheduleErr
 	}
 	if err != nil {
 		if errors.Is(err, task.ErrNotFound) {
@@ -1494,7 +1518,7 @@ func (tp *taskPatch) syncGoalRecord() bool {
 	// two lists) is a 400 — the client can fix it by sending both. Every
 	// other failure is a storage fault and stays a 500.
 	if tp.criteriaProvided || tp.dodProvided {
-		if gErr := tp.a.syncTaskGoalRecord(tp.updated, tp.criteriaProvided, tp.patchDoD, tp.dodProvided); gErr != nil {
+		if gErr := tp.goalDefinitionErr; gErr != nil {
 			slog.Error("rest: task update: failed to sync paired goal record",
 				"id", tp.id, "error", gErr)
 			if errors.Is(gErr, errGoalRecordNeedsBothLists) {
@@ -1502,15 +1526,36 @@ func (tp *taskPatch) syncGoalRecord() bool {
 				return true
 			}
 			jsonErr(tp.w, http.StatusInternalServerError, fmt.Sprintf(
-				"task %q was updated but its Definition of Done could not be persisted: %v",
-				tp.id, gErr))
+				"task %q was updated but its Definition of Done could not be persisted. "+
+					"Check disk space and permissions, then retry. Details are in the server log.", tp.id))
 			return true
 		}
+	}
+	// r17 TK-03 / §7.11: the paired goal follows the task prompt (or the
+	// title when the prompt is empty); a failure after the task write is a
+	// truthful 500, never a silent 200.
+	if tp.goalPromptErr != nil {
+		slog.Error("rest: task update: failed to sync paired goal prompt",
+			"id", tp.id, "error", tp.goalPromptErr)
+		jsonErr(tp.w, http.StatusInternalServerError, fmt.Sprintf(
+			"task %q was updated but its goal record could not be updated. "+
+				"Check disk space and permissions, then retry. Details are in the server log.", tp.id))
+		return true
+	}
+	// r17 TK-30 / §7.11 schedule_not_armed: the trigger was saved and stays
+	// authoritative; the reconciler already removed any stale job.
+	if tp.scheduleErr != nil {
+		slog.Error("rest: task update: saved task but could not re-arm its schedule",
+			"id", tp.id, "error", tp.scheduleErr)
+		jsonErr(tp.w, http.StatusInternalServerError, fmt.Sprintf(
+			"task %q was saved but its schedule could not be re-armed. The saved trigger stays "+
+				"authoritative; re-save the schedule or restart the gateway. Details are in the server log.", tp.id))
+		return true
 	}
 	return false
 }
 
-// launchIfStarted starts the task run when the update moved it into in_progress, reverting on failure.
+// launchIfStarted starts the task run when the update moved it into in_progress, reverting admission failures.
 func (tp *taskPatch) launchIfStarted() bool {
 	// If the task transitioned INTO in_progress (from a different state) and has
 	// an assigned agent, launch the agent immediately via StartTaskNow. The
@@ -1519,11 +1564,12 @@ func (tp *taskPatch) launchIfStarted() bool {
 	// the response carries the newly-minted session_id.
 	//
 	// On failure the task must NOT be left stranded in in_progress with no agent
-	// running. We revert its status back to the pre-update state so the client
-	// observes the failure and can retry. The HTTP status signals the cause:
-	//   503 — taskExecutor is nil (gateway degraded / not fully initialized)
-	//   409 — dispatch cap exhausted (retryable congestion)
-	//   500 — any other launch error
+	// running. Preserve a Failed disposition the executor already persisted for
+	// this error; otherwise revert to the pre-update state so the client can
+	// retry. The HTTP status signals the cause:
+	//   503 — taskExecutor is nil (gateway degraded) or draining for shutdown
+	//   409 — the task's plan is not executing
+	//   500 — any other launch error (including a plan state that cannot be read)
 	//
 	// The revert also clears StartedAt: the in_progress patch above (via
 	// Store.updateLocked) stamped it on the (failed) transition, so a bare
@@ -1563,16 +1609,36 @@ func (tp *taskPatch) launchIfStarted() bool {
 		}
 		sessID, startErr := tp.a.taskExecutor.StartTaskNow(tp.r.Context(), tp.id)
 		if startErr != nil {
-			// Revert the task to its prior status so it is not left stranded.
-			revertPatch := buildLaunchRevertPatch()
-			if _, rErr := tp.a.taskStore.Update(tp.id, revertPatch); rErr != nil {
-				slog.Error("rest: could not revert task status after StartTaskNow failure",
-					"id", tp.id, "revert_to", tp.preUpdateStatus, "error", rErr)
+			fresh, readErr := tp.a.taskStore.Get(tp.id)
+			if readErr != nil {
+				slog.Error("rest: could not read task status before rollback",
+					"id", tp.id, "start_error", startErr, "error", readErr)
+				jsonErr(tp.w, http.StatusInternalServerError,
+					"the task could not be started and its status could not be checked before rollback: "+
+						"server storage failed. Check disk space and permissions, then retry. Details are in the server log.")
+				return true
+			}
+			// A successful executor failure write stores the same cause it returns.
+			// Preserve only that disposition, not an unrelated or stale failure.
+			failedDisposition := fresh.Status == task.StatusFailed && fresh.Result != "" && fresh.Result == startErr.Error()
+			if !failedDisposition {
+				revertPatch := buildLaunchRevertPatch()
+				if _, rErr := tp.a.taskStore.Update(tp.id, revertPatch); rErr != nil {
+					slog.Error("rest: could not revert task status after StartTaskNow failure",
+						"id", tp.id, "revert_to", tp.preUpdateStatus, "error", rErr)
+					jsonErr(tp.w, http.StatusInternalServerError,
+						"the task could not be started and its status could not be reverted: "+
+							"server storage failed. Check disk space and permissions, then retry. Details are in the server log.")
+					return true
+				}
 			}
 			httpStatus := http.StatusInternalServerError
 			switch {
-			case errors.Is(startErr, agent.ErrDispatchCapReached):
-				httpStatus = http.StatusConflict
+			case errors.Is(startErr, agent.ErrExecutorDraining):
+				// Shutdown, not a fault in the request or the task (architect
+				// ruling R1 #2): the task was reverted above and is startable
+				// after the restart.
+				httpStatus = http.StatusServiceUnavailable
 			case errors.Is(startErr, agent.ErrPlanNotExecuting), errors.Is(startErr, agent.ErrPlanStateUnresolvable):
 				// S1 plan-gate follow-up: a PATCH to in_progress on a plan
 				// member whose parent plan is not (or can no longer be
@@ -1589,9 +1655,27 @@ func (tp *taskPatch) launchIfStarted() bool {
 			// see agent.ErrPlanNotExecuting's own doc comment for why the
 			// SAME error is intentionally logged quieter (Debug) inside
 			// TaskExecutor's periodic/event-driven callers.
-			slog.Warn("rest: StartTaskNow failed; task reverted to prior status",
-				"id", tp.id, "agent_id", tp.updated.AgentID, "prior_status", tp.preUpdateStatus, "error", startErr)
-			jsonErr(tp.w, httpStatus, startErr.Error())
+			slog.Warn("rest: StartTaskNow failed",
+				"id", tp.id, "agent_id", tp.updated.AgentID, "prior_status", tp.preUpdateStatus,
+				"failed_disposition_preserved", failedDisposition, "error", startErr)
+			switch {
+			case errors.Is(startErr, agent.ErrPlanStateUnresolvable):
+				// Not a conflict: the server could not READ the plan's state,
+				// and the wrapped cause carries the plan file's path. Fixed
+				// text, the cause is already logged above.
+				jsonServerFailure(tp.w, http.StatusInternalServerError,
+					"the task's plan state could not be verified", startErr)
+			case httpStatus == http.StatusServiceUnavailable:
+				// Fixed text: the raw executor error is only in the Warn log above.
+				jsonErr(tp.w, httpStatus, "the server is shutting down; start the task again after it restarts")
+			case httpStatus == http.StatusConflict:
+				// The remaining 409 class (plan not executing) is a domain
+				// error built from fixed text, ids and the plan's state.
+				// A full run queue is not a refusal: the launcher queues it.
+				jsonErr(tp.w, httpStatus, startErr.Error())
+			default:
+				jsonErr(tp.w, httpStatus, "the task could not be started. Check the agent and try again; details are in the server log.")
+			}
 			return true
 		}
 		if sessID != "" {
@@ -1645,14 +1729,18 @@ func (tp *taskPatch) finish() {
 		// FR-022: audit a recurrence-trigger change (legacy→RRULE or
 		// RRULE→RRULE) — no-ops on a title-only edit (byte-identical
 		// trigger, FR-024) or a non-recurring new trigger.
-		tp.a.auditTriggerChange(tp.id, tp.priorTriggerForAudit, tp.updated.Trigger)
+		// The shared implementation update_task also uses (r17 TK-30); a
+		// person is the actor here, so no agent id is recorded.
+		priorStatus := tp.preUpdateStatus
+		if tp.priorForUpdate != nil {
+			priorStatus = tp.priorForUpdate.Status
+		}
+		tools.AuditTriggerChange(tp.a.auditor, "", tp.id, tp.priorTriggerForAudit, tp.updated.Trigger,
+			priorStatus, tp.updated.Status)
 	}
 	tp.a.emitTaskStatus(tp.updated)
-	// Re-sync the task's time trigger: a changed/added/removed trigger or a move
-	// to a terminal status (re)registers or removes its cron job.
-	if tp.a.agentLoop != nil {
-		tp.a.agentLoop.NotifyTaskUpserted(tp.updated)
-	}
+	// The task's time trigger was reconciled with the live scheduler inside
+	// the reconciled write (applyUpdate, step 3).
 	tp.a.writeWireTask(tp.w, http.StatusOK, *tp.updated)
 }
 
@@ -1743,12 +1831,12 @@ func (a *restAPI) handleTaskTodos(w http.ResponseWriter, r *http.Request, id str
 		return
 	}
 	var body gen.SetTaskTodosJSONRequestBody
-	if !decodeTaskJSONBody(w, r, &body) {
+	if !decodeTaskTodoBody(w, r, "", &body, false) {
 		return
 	}
 	todos := make([]task.Todo, 0, len(body))
 	for _, td := range body {
-		todos = append(todos, task.Todo{Text: td.Text, Status: task.TodoStatus(td.Status)})
+		todos = append(todos, todoFromWire(td.Text, string(td.Status), td.ActiveForm))
 	}
 	a.applyTaskFieldUpdate(w, id, task.Patch{Todos: &todos}, "todos")
 }
@@ -1925,56 +2013,6 @@ func (a *restAPI) auditTask(event, id string) {
 	}
 }
 
-// auditTriggerChange implements FR-022: every save that CHANGES a task's
-// recurrence trigger to a new `recurring` (RRULE or legacy cron_expr) rule
-// emits an audit entry recording the task id, the prior trigger, and the
-// new trigger — covering both the US-5.3 legacy→RRULE conversion and an
-// RRULE→RRULE rule change (FR-024's "re-anchor" case) alike, so a change
-// that moves every future fire is reconstructible after the fact.
-//
-// Deliberately scoped narrower than "every trigger patch":
-//   - priorTrigger == nil never fires. On task CREATE there is no prior
-//     trigger to diff against — "changes a recurrence trigger" presupposes
-//     one existed. (handleTaskCreate still calls this — with priorTrigger
-//     always nil today — so every trigger-touching write path is
-//     uniformly covered by one hook; the guard makes that call a
-//     documented no-op rather than a spurious audit entry.)
-//   - newTrigger.Type != task.TriggerRecurring never fires — FR-022 is
-//     scoped to recurrence trigger changes, not e.g. a save that flips a
-//     task to `manual`/`once`.
-//   - a byte-identical trigger never fires — this is FR-024's title-only
-//     edit ("Save MUST preserve the trigger byte-identical when no
-//     recurrence or time field was touched"), which must NOT read as a
-//     rule change.
-//
-// Best-effort: log failures are recorded but never surfaced to the caller,
-// matching auditTask's existing behavior.
-func (a *restAPI) auditTriggerChange(taskID string, priorTrigger, newTrigger *task.Trigger) {
-	if priorTrigger == nil || newTrigger == nil {
-		return
-	}
-	if newTrigger.Type != task.TriggerRecurring {
-		return
-	}
-	if reflect.DeepEqual(*priorTrigger, *newTrigger) {
-		return
-	}
-	if a.auditor == nil {
-		return
-	}
-	if err := a.auditor.Log(&audit.Entry{
-		Event:    "task.trigger.recurrence_changed",
-		Decision: audit.DecisionAllow,
-		Details: map[string]any{
-			"task_id":       taskID,
-			"prior_trigger": priorTrigger,
-			"new_trigger":   newTrigger,
-		},
-	}); err != nil {
-		slog.Error("rest: task trigger recurrence-change audit log failed", "task_id", taskID, "error", err)
-	}
-}
-
 // isTaskValidationErr reports whether err is a user-facing validation error
 // (400) rather than an internal failure (500). All store validation errors wrap
 // task.ErrValidation (ErrBlockedByCycle, ErrBlockedBySelfEdge,
@@ -2030,113 +2068,14 @@ var errTaskAgentLoopUnavailable = errors.New("task: agent loop not initialized; 
 // --- boot reconciliation (folded from board_reconcile.go) -------------------
 
 // reconcileStuckTasks resets any task left `in_progress` by a crashed/abandoned
-// previous gateway process to `failed`, so a crash does not strand a task in a
-// running state forever. Idempotent; safe when the tasks dir is absent.
-//
-// ADR-050 RD10 / task-run-history-spec.md §3.5 removed the stuck-run reaper
-// (operator decision 2026-07-20: "a run stays in_progress until closed" — no
-// liveness-aware background sweep). That leaves a gap this boot reconciler
-// must close: a TaskRun opened by the crashed process (task.Store.OpenRun,
-// pkg/task/run_store.go) is never told the task it belongs to was reset here,
-// so — with no reaper — it would stay `in_progress` FOREVER, even across
-// further restarts, diverging from the just-recovered Task. For each task
-// this function resets to failed, it also best-effort closes that task's own
-// open TaskRun(s) to `failed`, bounding the orphaned-run gap to "next
-// restart" (MED-#M2 in the ADR). This does not touch pkg/task's store logic
-// (CloseRun already refuses to double-close or accept a non-terminal
-// status) — it only calls the existing store API, mirroring how this
-// function already only calls taskStore.Update rather than writing task
-// files directly.
+// previous gateway process to `failed` and closes its orphaned runs. The one
+// implementation is agent.ReconcileInterruptedTasks, which the gateway boot
+// calls BEFORE it starts the schedulers (gateway_boot.go startSchedulers), so
+// it can never fail a run this process has already started — for example the
+// owed rerun of a crashed one-time trigger (6b review I2). Kept as a method
+// for the REST tests that drive it directly.
 func (a *restAPI) reconcileStuckTasks() {
-	tasks, err := a.taskStore.List(task.Filter{Status: task.StatusInProgress})
-	if err != nil {
-		slog.Error("rest: reconcile stuck tasks: list failed", "error", err)
-		return
-	}
-	reset := 0
-	for _, t := range tasks {
-		failed := task.StatusFailed
-		result := "interrupted: gateway restarted while task was running"
-		now := time.Now().UTC().Format(time.RFC3339)
-		if _, uErr := a.taskStore.Update(t.ID, task.Patch{
-			Status:      &failed,
-			Result:      &result,
-			CompletedAt: &now,
-		}); uErr != nil {
-			slog.Error("rest: reconcile stuck tasks: reset failed", "id", t.ID, "error", uErr)
-			continue
-		}
-		reset++
-		a.reconcileStuckTaskRuns(t.ID)
-		// GOAL-FR-015/FR-027/FR-028 (review finding C1): this reset is a real
-		// terminal write — every task this loop touches was in_progress a
-		// moment ago and is `failed` now — so its paired goal record must end
-		// with it, exactly as the judged and user-driven endings do. Left
-		// unhooked, a single crash-and-restart was enough to leave every
-		// in-flight task's goal record permanently ACTIVE, which is also the
-		// state that makes the NEXT run of each of those tasks skip
-		// Goal.Reactivate and inherit the dead run's counters and criterion
-		// statuses. CancelReason is empty here (this is not a user Stop), so
-		// the record ends `exhausted`, matching the attempts-exhausted ending.
-		tools.TerminateTaskGoalRecord(
-			tools.GoalStoreForTasks(a.taskStore), t.ID, task.StatusFailed, "", result)
-	}
-	if reset > 0 {
-		slog.Info("rest: reconcile stuck tasks: reset in_progress→failed on boot", "count", reset)
-	}
-}
-
-// reconcileStuckTaskRuns closes every currently-open (in_progress) TaskRun
-// belonging to taskID to `failed`, called immediately after reconcileStuckTasks
-// resets that same task's Task.status. Best-effort and non-fatal: a task with
-// zero runs (pre-ADR-050 history, or a task that was never dispatched through
-// OpenRun) is not an error, and any store failure is logged at Warn rather
-// than aborting the boot reconciliation pass for the remaining stuck tasks.
-func (a *restAPI) reconcileStuckTaskRuns(taskID string) {
-	runs, err := a.taskStore.ListRuns(taskID)
-	if err != nil {
-		slog.Warn(
-			"rest: reconcile stuck tasks: list runs failed, leaving any open run untouched",
-			"task_id",
-			taskID,
-			"error",
-			err,
-		)
-		return
-	}
-	closed := 0
-	for _, run := range runs {
-		if !run.IsOpen() {
-			continue
-		}
-		if cErr := a.taskStore.CloseRun(
-			taskID,
-			run.RunID,
-			task.StatusFailed,
-			"abandoned: gateway restarted mid-execution",
-		); cErr != nil {
-			slog.Warn(
-				"rest: reconcile stuck tasks: close orphaned run failed",
-				"task_id",
-				taskID,
-				"run_id",
-				run.RunID,
-				"error",
-				cErr,
-			)
-			continue
-		}
-		closed++
-	}
-	if closed > 0 {
-		slog.Info(
-			"rest: reconcile stuck tasks: closed orphaned in_progress run(s) on boot",
-			"task_id",
-			taskID,
-			"count",
-			closed,
-		)
-	}
+	agent.ReconcileInterruptedTasks(a.taskStore)
 }
 
 // reconcileOrphanBlockedByEdges drops blocked_by edges that point at missing

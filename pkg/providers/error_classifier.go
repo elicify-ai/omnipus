@@ -3,6 +3,8 @@ package providers
 import (
 	"context"
 	"errors"
+	"io"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -89,15 +91,32 @@ var (
 		substr("use of closed network connection"),
 		substr("server closed idle connection"),
 		substr("read: connection timed out"),
+		// Transport failures with no HTTP status (founder preview 2026-10-12): the
+		// HTTP/2 connection died under the request, DNS or the route to the
+		// provider was down. Transient: a retry is the right first move.
+		substr("http2: client connection lost"),
+		substr("no such host"),
+		substr("connection refused"),
+		substr("network is unreachable"),
+		substr("streaming read error:"),
+		substr("dial tcp"),
+		substr("i/o timeout"),
+		substr("tls handshake"),
 	}
 
+	// C-5 billing vocabulary (dataset D2) — exactly these four phrases.
+	// Deliberately NOT here: `\b402\b` (status detection is classifyByStatus's
+	// job — a "402" substring in unrelated text must not read as billing),
+	// "credit balance" alone (matches rate-limit-adjacent prose), and
+	// "plans & billing" (a substring of OpenAI's rate-limit quota prose:
+	// "check your plan and billing details" is a RATE LIMIT, dataset D2's
+	// B-2 negative row).
 	billingPatterns = []errorPattern{
-		rxp(`\b402\b`),
 		substr("payment required"),
 		substr("insufficient credits"),
-		substr("credit balance"),
-		substr("plans & billing"),
 		substr("insufficient balance"),
+		substr("credit balance is too low"),
+		substr("credit balance too low"),
 	}
 
 	authPatterns = []errorPattern{
@@ -156,9 +175,39 @@ var (
 
 // ClassifyError classifies an error into a FailoverError with reason.
 // Returns nil if the error is not classifiable (unknown errors should not trigger fallback).
+//
+// Identity (C-16/MAJ-110): the returned FailoverError carries the caller's
+// candidate provider/model when they are pinned, and — when a candidate field
+// is empty (a legacy config with no pinned provider name) — the identity from
+// a FailoverError already in err's own chain, because that is the attempt that
+// actually failed. Without this harvest, the rebuilt FailoverError's empty
+// Provider shadows the wrapped error's real identity in every errors.As walk
+// (first match wins), and consumers like
+// pkg/agent/task_run_loop.go::taskOperatorFixReason lose the provider name the
+// operator-fix sentence must name.
 func ClassifyError(err error, provider, model string) *FailoverError {
 	if err == nil {
 		return nil
+	}
+	var route *ModelRouteUnavailableError
+	if errors.As(err, &route) {
+		return nil // pre-request refusal, never a provider failover decision
+	}
+
+	// SDK-backed adapters normally normalize at their boundary; also accept
+	// wrapped SDK errors here so their structured status is never string-parsed.
+	err = normalizeSDKError(err)
+
+	// Harvest the attempt's own identity for any candidate field the caller
+	// left empty. Never overwrites a pinned candidate identity.
+	var innerFE *FailoverError
+	if errors.As(err, &innerFE) {
+		if provider == "" {
+			provider = innerFE.Provider
+		}
+		if model == "" {
+			model = innerFE.Model
+		}
 	}
 
 	// Context cancellation: user abort, never fallback.
@@ -179,11 +228,12 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 	// A refused tool call (ADR-087) is a deterministic content fault, never
 	// a transient provider fault — it must never cool down the candidate or
 	// trigger failover. This MUST run before any substring matching below:
-	// ToolArgumentsError's Error() embeds up to 256 bytes of the refused
-	// argument fragment verbatim (common.maxUndecodableArgumentsQuoted), and
-	// that fragment is attacker/model-controlled text that can coincidentally
-	// contain a classifier keyword ("authentication", "timeout", "rate
-	// limit", "429", "503", "overloaded", …). Classifying by content instead
+	// ToolArgumentsError's Error() no longer quotes the refused argument
+	// fragment (gate r1 M24: it is value-free), but its tool name and wrapped
+	// text are still not a provider-health signal, and the fragment was once
+	// attacker/model-controlled text that could coincidentally contain a
+	// classifier keyword ("authentication", "timeout", "rate limit", "429",
+	// "503", "overloaded", …). Classifying by content instead
 	// of by type would spuriously cool down (or even fail over away from) a
 	// perfectly healthy candidate for a fault that has nothing to do with
 	// its health. Returning nil here makes ClassifyError return "not
@@ -193,6 +243,12 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 	if errors.As(err, &tae) {
 		return nil
 	}
+	if innerFE != nil && innerFE.Reason == FailoverBadModel {
+		return &FailoverError{
+			Reason: FailoverBadModel, Provider: provider, Model: model,
+			Status: innerFE.Status, Wrapped: err,
+		}
+	}
 
 	// A stall-aborted stream (founder decision 2026-09-14) is a transient
 	// transport-class fault: the provider had a live connection and went
@@ -200,12 +256,47 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 	// inline retry (the only reason it retries inline) applies, exactly like
 	// a connection drop. Checked before substring matching because the
 	// sentinel's wording need not contain any classifier keyword.
+	// A provider that ended its response with an error after the 200 was
+	// committed (OpenRouter's mid-stream error chunk, issue #1278) failed
+	// transiently: nothing it streamed is an answer, and no tool ran. Same
+	// class as a dropped connection, so the same inline retry applies.
+	var spe *common.StreamProviderError
+	if errors.As(err, &spe) {
+		reason := FailoverReason("")
+		switch spe.Kind() {
+		case common.StreamErrorTransient:
+			reason = FailoverTimeout
+		case common.StreamErrorRateLimit:
+			reason = FailoverRateLimit
+		case common.StreamErrorBilling:
+			reason = FailoverBilling
+		case common.StreamErrorAuth:
+			reason = FailoverAuth
+		case common.StreamErrorInvalidRequest, common.StreamErrorContentPolicy:
+			reason = FailoverFormat
+		}
+		if reason == "" {
+			return nil // a code nothing knows: not retried blindly
+		}
+		return &FailoverError{Reason: reason, Provider: provider, Model: model, Wrapped: err}
+	}
 	if errors.Is(err, common.ErrStreamStalled) {
 		return &FailoverError{
 			Reason:   FailoverTimeout,
 			Provider: provider,
 			Model:    model,
 			Wrapped:  err,
+		}
+	}
+
+	// A structured wrong-model code is authoritative on400, before any
+	// incidental prose (including a model name containing "expired"/"timeout"
+	// or an attachment phrase). Status-specific auth/quota/5xx paths stay put.
+	var boundary *common.ProviderError
+	if errors.As(err, &boundary) && boundary.Status == 400 && common.StructuredErrorCode(boundary.Body) == "model_not_found" {
+		return &FailoverError{
+			Reason: FailoverBadModel, Provider: provider, Model: model,
+			Status: boundary.Status, Wrapped: err,
 		}
 	}
 
@@ -221,19 +312,54 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 		}
 	}
 
-	// Try HTTP status code extraction first.
+	// §7.3: the routing classifier sees the REAL boundary status + body — a
+	// *common.ProviderError in the chain carries them as FIELDS (dataset D2
+	// drives errors through the real HandleErrorResponse boundary), with the
+	// rendered message's "status=NNN" text as the lossy fallback for errors
+	// that never crossed an HTTP boundary.
+	var status int
+	body := msg
+	var cpe *common.ProviderError
+	if errors.As(err, &cpe) && cpe.Status > 0 {
+		status = cpe.Status
+		body = strings.ToLower(cpe.Body)
+	} else {
+		status = extractHTTPStatus(msg)
+	}
+
+	// Try HTTP status classification.
 	// For status 400, message patterns take priority because 400 can represent
 	// both "bad request format" and "context overflow" depending on the provider.
-	if status := extractHTTPStatus(msg); status > 0 {
+	if status > 0 {
+		// C-5 on the 429 path, BEFORE the rate-limit short-circuit: a
+		// structured insufficient_quota / C-5-phrase quota exhaustion is
+		// BILLING even on a 429 (dataset D2 row "429 structured
+		// insufficient_quota"), while rate-limit quota prose must stay
+		// rate_limit. Never on ≥500.
+		if status == 429 && matchesBilling(body, status) {
+			return &FailoverError{
+				Reason:   FailoverBilling,
+				Provider: provider,
+				Model:    model,
+				Status:   status,
+				Wrapped:  err,
+			}
+		}
 		if status == 400 {
-			// Check message patterns before defaulting to FailoverFormat for 400.
-			if reason := classifyByMessage(msg); reason != "" {
+			// Check message patterns before default to FailoverFormat for 400.
+			if reason := classifyByMessage(body, status); reason != "" {
 				return &FailoverError{
 					Reason:   reason,
 					Provider: provider,
 					Model:    model,
 					Status:   status,
 					Wrapped:  err,
+				}
+			}
+			if IsBadModelError(status, body, model) {
+				return &FailoverError{
+					Reason: FailoverBadModel, Provider: provider, Model: model,
+					Status: status, Wrapped: err,
 				}
 			}
 		}
@@ -249,9 +375,21 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 	}
 
 	// Message pattern matching (priority order from OpenClaw).
-	if reason := classifyByMessage(msg); reason != "" {
+	if reason := classifyByMessage(msg, status); reason != "" {
 		return &FailoverError{
 			Reason:   reason,
+			Provider: provider,
+			Model:    model,
+			Wrapped:  err,
+		}
+	}
+
+	// A dropped connection on the send path (6b U3a): checked by type, after
+	// every message pattern so a fatal phrase still wins. Same class as a
+	// connection reset.
+	if isDroppedSendConnection(err) {
+		return &FailoverError{
+			Reason:   FailoverTimeout,
 			Provider: provider,
 			Model:    model,
 			Wrapped:  err,
@@ -274,6 +412,12 @@ func classifyByStatus(status int) FailoverReason {
 		return FailoverRateLimit
 	case status == 400:
 		return FailoverFormat
+	case status == 404:
+		// D12: a 404 (a retired model, a not-found model) routes FailoverUnknown —
+		// retriable, so the configured Fallback model answers (dataset D2: the
+		// routing side never reads a model_retired verdict; retirement is a
+		// user-side copy concern only).
+		return FailoverUnknown
 	case transientStatusCodes[status]:
 		return FailoverTimeout
 	}
@@ -281,17 +425,31 @@ func classifyByStatus(status int) FailoverReason {
 }
 
 // classifyByMessage matches error messages against patterns.
-// Priority order matters (from OpenClaw classifyFailoverReason).
-func classifyByMessage(msg string) FailoverReason {
+// Priority order matters (from OpenClaw classifyFailoverReason) — and per
+// §7.3 the C-5 billing check precedes the rate-limit patterns: a quota
+// EXHAUSTION must never be misread as a rate limit just because the same
+// sentence also says "quota".
+func classifyByMessage(msg string, status int) FailoverReason {
+	// status threads the real boundary status (0 when the error never
+	// crossed an HTTP boundary) into the C-5 gate — matchesBilling's ≥500
+	// veto is only correct when it sees the TRUE status. Gate finding F4:
+	// the catch-all used to pass 0, so billing vocabulary riding a 504/501
+	// body misclassified as billing; the "never on ≥500" invariant is the
+	// point of the veto.
+	if matchesBilling(msg, status) {
+		return FailoverBilling
+	}
 	if matchesAny(msg, rateLimitPatterns) {
 		return FailoverRateLimit
 	}
 	if matchesAny(msg, overloadedPatterns) {
 		return FailoverRateLimit // Overloaded treated as rate_limit
 	}
-	if matchesAny(msg, billingPatterns) {
-		return FailoverBilling
-	}
+	// NO second billingPatterns check here. It used to sit un-gated after
+	// matchesBilling and re-match the C-5 vocabulary regardless of status —
+	// the exact hole gate finding F4 closed (billing on a 504/501/505 body).
+	// matchesBilling above owns the billing verdict, veto included; the C-5
+	// invariant is billing vocabulary on 4xx only, never 5xx.
 	if matchesAny(msg, timeoutPatterns) {
 		return FailoverTimeout
 	}
@@ -329,6 +487,22 @@ func extractHTTPStatus(msg string) int {
 	return 0
 }
 
+// matchesBilling reports the C-5 billing verdict (dataset D2): an explicit
+// 402 status, the structured insufficient_quota error code, or a C-5
+// vocabulary phrase in the body — 4xx-only, never on a ≥500 status.
+func matchesBilling(body string, status int) bool {
+	if status >= 500 {
+		return false
+	}
+	if status == 402 {
+		return true
+	}
+	if common.StructuredErrorCode(body) == "insufficient_quota" {
+		return true
+	}
+	return matchesAny(body, billingPatterns)
+}
+
 // IsImageDimensionError returns true if the message indicates an image dimension error.
 func IsImageDimensionError(msg string) bool {
 	return matchesAny(msg, imageDimensionPatterns)
@@ -364,4 +538,33 @@ func parseDigits(s string) int {
 		}
 	}
 	return n
+}
+
+// IsTransportFailure reports whether err reads as a transport failure between
+// us and the provider (a dropped or unreachable connection): the ONE vocabulary
+// the classifier's retry decision, the agent loop's inline retry and the
+// translator's wording all share (connectionDropPatterns).
+//
+// It also accepts a dropped connection on the send path by type
+// (isDroppedSendConnection), which no message pattern may match.
+func IsTransportFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	return isDroppedSendConnection(err) ||
+		matchesAny(strings.ToLower(err.Error()), connectionDropPatterns)
+}
+
+// isDroppedSendConnection reports a provider that accepted the connection and
+// closed it before any HTTP response: the HTTP client's *url.Error wrapping
+// io.EOF or io.ErrUnexpectedEOF (rendered as `Post "...": EOF`). The check is
+// typed and scoped to the send error on purpose: a bare "EOF" message pattern
+// would also match a clean io.EOF (normal stream completion) and the letters
+// "eof" inside unrelated words.
+func isDroppedSendConnection(err error) bool {
+	var ue *url.Error
+	if !errors.As(err, &ue) {
+		return false
+	}
+	return errors.Is(ue.Err, io.EOF) || errors.Is(ue.Err, io.ErrUnexpectedEOF)
 }

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -156,7 +157,7 @@ func TestHandleCancel_SecondClickOnAlreadyClaimedTurn_SendsNoAckFrame(t *testing
 	t.Cleanup(func() { _ = conn.Close() })
 	sendWSAuthFrameDevMode(t, conn)
 
-	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "start iron turn"}
+	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "start iron turn", AgentID: "mia"}
 	data, err := json.Marshal(msgFrame)
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
@@ -212,12 +213,44 @@ func TestHandleCancel_SecondClickOnAlreadyClaimedTurn_SendsNoAckFrame(t *testing
 	// Well under the 3s hard-abort timer the FIRST cancel armed, so any
 	// cancel_stage frame observed here is attributable only to the SECOND
 	// click.
-	secondStages := readCancelStageFrames(conn2, 500*time.Millisecond)
-	assert.Empty(t, secondStages,
+	//
+	// The second click's own `detached` is awaited as an EVENT (a blocking read
+	// with a generous deadline that only a broken server reaches), not sampled in
+	// a fixed window a loaded machine can miss. Exactness is kept by a short quiet
+	// window AFTER that event: any further stage still lands in secondStages and
+	// fails the equality below. The wait uses its own single read loop so the
+	// quiet window is the only read that is expected to time out (a conn caches
+	// its first read error, so a timeout may end a connection's reads only once).
+	secondStages := readCancelStagesUntil(t, conn2, "detached", 10*time.Second)
+	secondStages = append(secondStages, readCancelStageFrames(conn2, 300*time.Millisecond)...)
+	// The FIRST click's own cascade publishes its "detached" stage on the HUB
+	// (websocket_cancel.go's sendCancelReportFrame), so conn2 sees that frame
+	// inside this window even though it belongs to the first cancel. The claim
+	// under test is about the second click's ACK — "graceful"/"hard" — so only
+	// those count as a second ack.
+	secondAcks := []string{}
+	for _, stage := range secondStages {
+		if stage == "graceful" || stage == "hard" {
+			secondAcks = append(secondAcks, stage)
+		}
+	}
+	assert.Empty(t, secondAcks,
 		"a second cancel on an already-claimed, still-registered turn is a "+
 			"genuine no-op (Fired:false, Armed:false — a live turn was found, "+
 			"ClaimCancel just lost the race) and must NOT produce another ack "+
-			"frame; doing so would over-signal")
+			"frame; doing so would over-signal (saw stages %v)", secondStages)
+
+	// R2-S5-07 / R3-S5-PTA-03 / R3-QA-04: the ack filter above made a wrongly
+	// emitted extra stage invisible (only graceful/hard were counted). conn2
+	// is not bound to the session, so it gets exactly one unsequenced copy of
+	// the report the SECOND click's own cascade publishes (ADR-091 I-6: every
+	// Stop reports) and nothing from the first click: measured with the second
+	// click removed, conn2 sees no stage at all. The earlier "at most one,
+	// maybe the first click's" bound could not tell this one report from a
+	// second stray frame (count 1 passed either way). Exactly one `detached`,
+	// and nothing else, is the whole expected output.
+	assert.Equal(t, []string{"detached"}, secondStages,
+		"the second click must publish exactly its own one detached report and no ack or other stage")
 
 	cancelCtx()
 }
@@ -241,18 +274,19 @@ func TestHandleCancel_SecondClickOnAlreadyClaimedTurn_SendsNoAckFrame(t *testing
 //     A's now-expired latch and asynchronously invokes A's ORIGINAL
 //     OnLatchExpired hook (captured from THIS SAME connection when A was
 //     canceled in step 1).
-//  4. Assert an ErrorFrame arrives for session A, honestly stating the
+//  4. Assert a non-terminal stop_notice arrives for session A, stating the
 //     cancel did not take effect — never a second "graceful" (which would
 //     claim progress that never happened).
 //
 // This is also this fix's MUTATION TARGET: reverting the OnLatchExpired
 // field in buildCancelHooks (websocket.go) makes step 4 time out (the base
 // agent-level Warn log in notifyLatchExpired still fires, unconditionally,
-// but no ErrorFrame is ever sent because notifyLatchExpired nil-checks the
+// but no stop_notice is sent because notifyLatchExpired nil-checks the
 // hook before calling it) — a clean, real RED, not a panic.
 func TestHandleCancel_LatchExpiredUnfired_SendsHonestErrorFrame(t *testing.T) {
 	// Not t.Parallel(): waits out a real multi-second timer (cancelPreArmTTL).
 	handler, _, al := newTestWSHandler(t)
+	configureStopNoticeTestUser(t, handler)
 	t.Cleanup(handler.Wait)
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
@@ -305,9 +339,8 @@ func TestHandleCancel_LatchExpiredUnfired_SendsHonestErrorFrame(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, dataB))
 
-	// Step 4: find A's honest ErrorFrame among whatever else arrives (B's own
-	// "graceful" ack for its own Armed:true outcome may interleave in either
-	// order — this loop skips anything that isn't the error frame we want).
+	// Step 4: find A's honest notification among whatever else arrives (B's
+	// graceful ack may interleave). The scope and exact body remain asserted.
 	deadline := time.Now().Add(3 * time.Second)
 	var found *genericWSTestFrame
 	for time.Now().Before(deadline) && found == nil {
@@ -320,24 +353,26 @@ func TestHandleCancel_LatchExpiredUnfired_SendsHonestErrorFrame(t *testing.T) {
 		if json.Unmarshal(raw, &f) != nil {
 			continue
 		}
-		if f.Type == "error" && f.SessionID == sessionA {
+		if f.Type == "notification" && f.SessionID == sessionA {
 			found = &f
 		}
 	}
 
 	require.NotNil(t, found,
 		"an expired-unfired pre-registration cancel latch must produce an honest "+
-			"ErrorFrame for the session it stood in for — silence here means the "+
+			"stop_notice for the session it stood in for — silence here means the "+
 			"user was told 'acknowledged' and never told it didn't happen")
-	assert.Contains(t, found.Message, cancelLatchExpiredMessageSubstring,
+	assert.Equal(t, "stop_notice", found.NotificationType)
+	assert.Contains(t, found.Body, cancelLatchExpiredMessageSubstring,
 		"the message must honestly state the cancel did NOT take effect")
+	assert.Equal(t, "Cancel request did not take effect: no matching operation was found before the request timed out. If something is still running, try Stop again.", found.Body)
 }
 
 // TestHandleCancel_FiredImmediately_NoLatchExpiredFalseAlarm is the
 // over-signaling guard: an ordinary cancel that succeeds immediately
 // (Fired:true — a live turn is found on the very first lookup, so
 // RequestCancel never reaches the pre-registration-latch path at all, see
-// cancel.go) must NEVER produce the OnLatchExpired ErrorFrame, no matter how
+// cancel.go) must NEVER produce the OnLatchExpired notice, no matter how
 // long the observer waits. Drives a real blocking turn through the full
 // graceful→hard→detached escalation (the same shape as
 // TestCancel_TwoStageTimer_GracefulThenHard) and asserts across that ENTIRE
@@ -355,7 +390,8 @@ func TestHandleCancel_FiredImmediately_NoLatchExpiredFalseAlarm(t *testing.T) {
 	ip := newIronProvider(20 * time.Second)
 
 	cfg := &config.Config{
-		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 18804, DevModeBypass: true},
+		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 18804, DevModeBypass: true,
+			Users: []config.UserConfig{{Username: "stop-notice-test-user", TokenHash: mustBcryptHash(t, "dev-token")}}},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:         workspaceDir,
@@ -407,7 +443,7 @@ func TestHandleCancel_FiredImmediately_NoLatchExpiredFalseAlarm(t *testing.T) {
 	t.Cleanup(func() { _ = conn.Close() })
 	sendWSAuthFrameDevMode(t, conn)
 
-	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "start iron turn"}
+	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "start iron turn", AgentID: "mia"}
 	data, err := json.Marshal(msgFrame)
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
@@ -440,19 +476,32 @@ func TestHandleCancel_FiredImmediately_NoLatchExpiredFalseAlarm(t *testing.T) {
 		if f.Type == "cancel_stage" && f.Stage == "graceful" {
 			sawGraceful = true
 		}
-		if f.Type == "error" {
-			assert.NotContains(t, f.Message, cancelLatchExpiredMessageSubstring,
-				"a real, immediately-fired cancel (no latch ever armed) must "+
-					"never emit the OnLatchExpired 'did not take effect' message — "+
-					"doing so would be a false alarm on every successful Stop click")
+		if f.Type == "error" || f.Type == "notification" {
+			for _, text := range []string{f.Message, f.Body} {
+				assert.NotContains(t, text, cancelLatchExpiredMessageSubstring,
+					"a real, immediately-fired cancel (no latch ever armed) must "+
+						"never emit the OnLatchExpired 'did not take effect' message — "+
+						"doing so would be a false alarm on every successful Stop click")
+			}
 		}
 	}
 	assert.True(t, sawGraceful,
 		"sanity check: the ordinary Fired:true cancel path must still work")
 }
 
+// collectDescendantsForTest is the walk under test: the one shared collector,
+// with its returned error checked (safe to call from a goroutine).
+func collectDescendantsForTest(t *testing.T, ls *session.LifecycleStore, rootID string) []string {
+	t.Helper()
+	got, err := agent.CollectDescendantSessionIDs(ls, rootID)
+	if err != nil {
+		t.Errorf("CollectDescendantSessionIDs(%q): %v", rootID, err)
+	}
+	return got
+}
+
 // TestU11CollectDescendantSessionIDs_MultiLevelWalk proves
-// u11CollectDescendantSessionIDs walks the FULL subtree — a grandchild two
+// agent.CollectDescendantSessionIDs walks the FULL subtree — a grandchild two
 // delegation levels deep, not just direct children — over a REAL on-disk
 // LifecycleStore. This is the mechanism BDD-19 names ("the parent index
 // makes the walk cost proportional to descendants") and the exact gap FR-032
@@ -472,7 +521,7 @@ func TestU11CollectDescendantSessionIDs_MultiLevelWalk(t *testing.T) {
 	u11PersistLifecycleChild(t, ls, grandchild, child)
 	u11PersistLifecycleChild(t, ls, sibling, other)
 
-	got := u11CollectDescendantSessionIDs(ls, root)
+	got := collectDescendantsForTest(t, ls, root)
 
 	// Positive lower bound (binding rule 4) BEFORE the exclusion check below.
 	if len(got) < 2 {
@@ -511,11 +560,11 @@ func TestU11CollectDescendantSessionIDs_MultiLevelWalk(t *testing.T) {
 // cancelAllPendingForSession's documented single-id behavior instead of
 // crashing a Stop click.
 func TestU11CollectDescendantSessionIDs_NilStoreAndEmptyRoot(t *testing.T) {
-	if got := u11CollectDescendantSessionIDs(nil, "sess_u11_whatever"); len(got) != 0 {
+	if got := collectDescendantsForTest(t, nil, "sess_u11_whatever"); len(got) != 0 {
 		t.Errorf("a nil store must yield zero descendants, got %v", got)
 	}
 	ls := session.NewLifecycleStore(t.TempDir())
-	if got := u11CollectDescendantSessionIDs(ls, ""); len(got) != 0 {
+	if got := collectDescendantsForTest(t, ls, ""); len(got) != 0 {
 		t.Errorf("an empty root id must yield zero descendants, got %v", got)
 	}
 }
@@ -536,7 +585,7 @@ func TestU11CollectDescendantSessionIDs_CyclicParentIndexTerminates(t *testing.T
 	u11PersistLifecycleChild(t, ls, b, a) // b's parent is a — the cycle
 
 	done := make(chan []string, 1)
-	go func() { done <- u11CollectDescendantSessionIDs(ls, a) }()
+	go func() { done <- collectDescendantsForTest(t, ls, a) }()
 	select {
 	case got := <-done:
 		// From a: children-of-a == {b}; from b: children-of-b == {a}, already
@@ -545,6 +594,6 @@ func TestU11CollectDescendantSessionIDs_CyclicParentIndexTerminates(t *testing.T
 			t.Errorf("cyclic walk from %q must terminate with exactly [%q], got %v", a, b, got)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("u11CollectDescendantSessionIDs did not terminate over a cyclic SteeringSessionID chain")
+		t.Fatal("CollectDescendantSessionIDs did not terminate over a cyclic SteeringSessionID chain")
 	}
 }

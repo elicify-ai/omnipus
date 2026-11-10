@@ -101,10 +101,10 @@ function pushHistoryParts(
       // toMessagePartStatus (message-runtime.ts) returns 'incomplete' only
       // for a RESULTLESS part inheriting the enclosing message's status —
       // it never reflects whether THIS tool call actually failed. A
-      // cancelled call has status:'cancelled' here (never 'error'), so
-      // isCancelledStatus's message-level derivation (unchanged) still
-      // renders cancellation correctly downstream.
+      // Cancellation is a per-call fact, independent of the enclosing answer.
+      // The native UI adapter reads it from AssistantUI's UI-only artifact.
       isError: resolved.status === "error",
+      artifact: { omnipusToolStatus: resolved.status },
     });
   }
   if (prevTextEnd < text.length) {
@@ -186,6 +186,7 @@ function buildContentParts(
         result: tc.result,
         // Issue #617 — same derivation as pushHistoryParts above.
         isError: tc.status === "error",
+        artifact: { omnipusToolStatus: tc.status },
       });
     }
 
@@ -239,6 +240,17 @@ export function convertMessage(
     role: msg.role,
     content: buildContentParts(msg, toolCalls, toolCallOrder, textAtToolCallStart, isLastAssistant, toolCallOwnerMessageId),
     ...(msg.role === "assistant" ? { status: buildMessageStatus(msg) } : {}),
+    // FR-039: carry the producing message's goal association onto the
+    // AssistantUI ThreadMessage (`metadata.custom` is AssistantUI's sanctioned
+    // carrier for app-specific per-message data) so the LIVE
+    // InlineThinkingIndicator — which reads the AssistantUI message, not the
+    // store's ChatMessage — can join on the exact keyed criteria
+    // (`isGoalRecordEmpty(message.metadata.custom.goalId)`) instead of the
+    // session's latest-goal scalar. Omitted when the message has no goal
+    // association (unknown → neutral).
+    ...(msg.role === "assistant" && msg.goalId
+      ? { metadata: { custom: { goalId: msg.goalId } } }
+      : {}),
   };
 }
 
@@ -266,6 +278,11 @@ export function useOmnipusRuntime() {
   // sendMessage completes, so the picker auto-derives a fresh default
   // on the next session reopen (per spec §18 Q3).
   const nextModel = useChatStore((s) => s.nextModel);
+  // Effort levels FR-045/FR-055: the exact (provider, model) pair and the
+  // chat's effort ride the message with the model (metadata.provider,
+  // metadata.reasoning_effort). Not set sends no effort field.
+  const nextModelProvider = useChatStore((s) => s.nextModelProvider);
+  const nextEffort = useChatStore((s) => s.nextEffort);
 
   return useExternalStoreRuntime<ChatMessage>({
     messages,
@@ -341,10 +358,13 @@ export function useOmnipusRuntime() {
         return;
       }
 
+      const modelChoice = nextModel
+        ? { model_name: nextModel, ...(nextModelProvider ? { provider: nextModelProvider } : {}), ...(nextEffort ? { reasoning_effort: nextEffort } : {}) }
+        : {};
       if (mediaRefs.length > 0) {
-        sendMessage(text, { mediaRefs, attachments, ...(nextModel ? { model_name: nextModel } : {}) });
+        sendMessage(text, { mediaRefs, attachments, ...modelChoice });
       } else {
-        sendMessage(text, nextModel ? { model_name: nextModel } : undefined);
+        sendMessage(text, nextModel ? modelChoice : undefined);
       }
     },
     onCancel: async () => { cancelStream() },

@@ -9,10 +9,11 @@
  * graph/GraphView and WorkspaceTeamGraph tests.
  */
 
-import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { Agent, Workspace, WorkspaceDelegation } from '@/lib/api'
+import { makeAgent } from '@/test/factories'
 import { useUiStore } from '@/store/ui'
 import type { WorkspaceTeamGraphProps } from './team/WorkspaceTeamGraph'
 
@@ -37,21 +38,18 @@ beforeAll(() => {
 
 // ── Fixtures ────────────────────────────────────────────────────────────────
 function agent(id: string, over: Partial<Agent> = {}): Agent {
-  return {
+  return makeAgent({
     id,
     name: id.charAt(0).toUpperCase() + id.slice(1),
     type: 'Main',
     locked: false,
     status: 'active',
     soul: '',
-    heartbeat: '',
-    instructions: '',
-    timeout_seconds: 60,
     max_tool_iterations: 10,
-    heartbeat_enabled: false,
-    heartbeat_interval: 0,
+    figure: 'Omnipus',
+    role: 'general',
     ...over,
-  } as Agent
+  })
 }
 
 const WORKSPACE: Workspace = {
@@ -68,7 +66,7 @@ const WORKSPACE: Workspace = {
 } as Workspace
 
 const AGENTS: Agent[] = [
-  agent('mia', { name: 'Mia', default: true }),
+  agent('mia', { name: 'Mia' }),
   agent('jim', { name: 'Jim' }),
   agent('planner', { name: 'Planner', type: 'Subagent' }),
   agent('ray', { name: 'Ray' }), // not on the team — should appear in the picker
@@ -85,7 +83,7 @@ const DELEGATION: WorkspaceDelegation = {
   workspace_id: 'ws-1',
   team: ['mia', 'jim', 'planner'],
   edges: [{ from_agent: 'jim', to_agent: 'planner', modes: ['direct', 'task'], depth: 2 }],
-  default_depth: 3,
+  default_depth: 10,
 }
 
 // stubCsrfCookie / restoreCsrfCookie — mirrors the pattern in api.test.ts.
@@ -114,6 +112,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return {
     ...actual,
     fetchAgents: vi.fn(),
+    fetchWorkspaces: vi.fn(),
     fetchWorkspaceDelegation: vi.fn(),
     updateWorkspaceDelegation: vi.fn(),
     updateWorkspace: vi.fn(),
@@ -157,6 +156,7 @@ vi.mock('./team/WorkspaceTeamGraph', async (importOriginal) => {
 
 import {
   fetchAgents,
+  fetchWorkspaces,
   fetchWorkspaceDelegation,
   updateWorkspace,
   updateWorkspaceDelegation,
@@ -165,7 +165,10 @@ import {
 import { useActiveWorkspace } from './WorkspaceTabContainer'
 import { WorkspaceTeamTab } from './WorkspaceTeamTab'
 
-function renderTab(seed?: (client: QueryClient) => void) {
+// WU-10 FR-102 / BDD-12.3: graph-specific regressions select the second view.
+// The original graph/editing assertions stay intact; list-first is covered by
+// WorkspaceTeamTab.omnipus.test.tsx, not silently replaced with graph-first.
+async function renderTab(seed?: (client: QueryClient) => void) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -175,8 +178,12 @@ function renderTab(seed?: (client: QueryClient) => void) {
       <WorkspaceTeamTab workspaceId="ws-1" />
     </QueryClientProvider>,
   )
+  fireEvent.click(await screen.findByRole('radio', { name: /^Graph$/i }))
   return { ...utils, client }
 }
+
+// A test that faked timers and failed must not leave them faked for the next one.
+afterEach(() => { vi.useRealTimers() })
 
 beforeEach(() => {
   // Clear call history from the PREVIOUS test — the vi.mock() factory above
@@ -194,6 +201,7 @@ beforeEach(() => {
   // test's reprogrammed implementation never leaks into a later test.
   vi.mocked(useActiveWorkspace).mockImplementation(() => WORKSPACE)
   vi.mocked(fetchAgents).mockResolvedValue(AGENTS)
+  vi.mocked(fetchWorkspaces).mockResolvedValue([WORKSPACE])
   vi.mocked(fetchWorkspaceDelegation).mockResolvedValue(DELEGATION)
   // Safe defaults so any save path that fires resolves instead of hitting an
   // unconfigured mock (undefined) — individual tests override as needed.
@@ -203,7 +211,7 @@ beforeEach(() => {
 
 describe('WorkspaceTeamTab — rendering and the add-agent picker', () => {
   it('renders a node for each team agent from the fetched delegation graph', async () => {
-    renderTab()
+    await renderTab()
     await waitFor(() => {
       expect(screen.getByTestId('team-node-mia')).toBeInTheDocument()
     })
@@ -214,7 +222,7 @@ describe('WorkspaceTeamTab — rendering and the add-agent picker', () => {
   })
 
   it('mounts the React Flow edge layer for the fetched delegation edges', async () => {
-    const { container } = renderTab()
+    const { container } = await renderTab()
     await waitFor(() => {
       expect(screen.getByTestId('team-graph-canvas')).toBeInTheDocument()
     })
@@ -222,7 +230,7 @@ describe('WorkspaceTeamTab — rendering and the add-agent picker', () => {
   })
 
   it('the [+ Add agent] picker offers global agents not on the team', async () => {
-    renderTab()
+    await renderTab()
     await waitFor(() => {
       expect(screen.getByTestId('team-add-agent')).toBeInTheDocument()
     })
@@ -237,7 +245,7 @@ describe('WorkspaceTeamTab — rendering and the add-agent picker', () => {
   })
 
   it('shows the title cue and an auto-save-capable header', async () => {
-    renderTab()
+    await renderTab()
     await waitFor(() => {
       expect(screen.getByText('Team & delegation')).toBeInTheDocument()
     })
@@ -245,7 +253,7 @@ describe('WorkspaceTeamTab — rendering and the add-agent picker', () => {
 
   it('shows a retry-able error state when the delegation fetch fails', async () => {
     vi.mocked(fetchWorkspaceDelegation).mockRejectedValueOnce(new Error('boom'))
-    renderTab()
+    await renderTab()
     await waitFor(() => {
       expect(
         screen.getByText(/Failed to load this workspace's delegation graph/),
@@ -260,13 +268,13 @@ describe('WorkspaceTeamTab — rendering and the add-agent picker', () => {
       workspace_id: 'ws-1',
       team: [],
       edges: [],
-      default_depth: 3,
+      default_depth: 10,
     } as WorkspaceDelegation)
     // core_team would normally seed members; for this case the workspace mock
     // already supplies core_team, so to get a truly empty graph we also clear
     // it by returning an empty team and no edges — buildTeamEditState seeds from
     // core_team only when team is empty, so assert the picker CTA is present.
-    renderTab()
+    await renderTab()
     await waitFor(() => {
       expect(screen.getByText('Team & delegation')).toBeInTheDocument()
     })
@@ -278,9 +286,12 @@ describe('WorkspaceTeamTab — revision and autosave semantics', () => {
   it('adopts a clean refetch revision for the next edit without saving the refresh itself', async () => {
     vi.mocked(useActiveWorkspace).mockReturnValue({ ...WORKSPACE, core_team: ['mia', 'jim', 'planner'] })
     const refreshedRevision = '3'.repeat(64)
-    const { client } = renderTab()
+    const { client } = await renderTab()
     await waitFor(() => expect(screen.getByTestId('team-node-jim')).toBeInTheDocument())
 
+    // Fake only the timer the 500 ms autosave debounce uses, so the "past the
+    // debounce" window is advanced explicitly instead of slept through.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     act(() => {
       client.setQueryData<WorkspaceDelegation>(
         workspacesQueryKeys.delegation('ws-1'),
@@ -290,9 +301,8 @@ describe('WorkspaceTeamTab — revision and autosave semantics', () => {
 
     // A revision-only server refresh is not a local graph change and must not
     // cause an echo PUT through the autosave debounce.
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 700))
-    })
+    await act(async () => { await vi.advanceTimersByTimeAsync(700) })
+    vi.useRealTimers()
     expect(updateWorkspace).not.toHaveBeenCalled()
     expect(updateWorkspaceDelegation).not.toHaveBeenCalled()
 
@@ -312,8 +322,40 @@ describe('WorkspaceTeamTab — revision and autosave semantics', () => {
     })
   })
 
+  it('a background refetch that CHANGES the roster is adopted without an echo PUT (HF2 recovery)', async () => {
+    // The recovery shape behind the loaded-run Team failures: the server's
+    // own refresh carries a DIFFERENT roster (a teammate joined elsewhere),
+    // the clean-draft editor adopts it — a SERVER-driven change, not a user
+    // edit. The autosave must re-base onto the adopted snapshot; letting the
+    // debounced change-detector see it arms a 500ms PUT of the server's own
+    // state straight back — delegation-flavoured (edges) when workspace and
+    // adoption land together, workspace-flavoured (core_team) when the
+    // adoption's members differ from the workspace context's roster — which
+    // 409s on the stale revision in production and renders a persistent
+    // error alert in the panel.
+    const { client } = await renderTab()
+    await waitFor(() => expect(screen.getByTestId('team-node-mia')).toBeInTheDocument())
+
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    act(() => {
+      client.setQueryData<WorkspaceDelegation>(
+        workspacesQueryKeys.delegation('ws-1'),
+        { ...DELEGATION, revision: '3'.repeat(64), team: ['mia', 'jim', 'planner', 'ray'] },
+      )
+    })
+
+    // Past the 500ms debounce (advanced, not slept): no echo PUT of either
+    // flavour. RTL's waitFor cannot run on faked timers, so advance first and
+    // assert the adopted roster synchronously afterwards.
+    await act(async () => { await vi.advanceTimersByTimeAsync(700) })
+    vi.useRealTimers()
+    expect(screen.getByTestId('team-node-ray')).toBeInTheDocument()
+    expect(updateWorkspace).not.toHaveBeenCalled()
+    expect(updateWorkspaceDelegation).not.toHaveBeenCalled()
+  })
+
   it('keeps the reviewed revision when a refetch arrives over a dirty draft', async () => {
-    const { client } = renderTab()
+    const { client } = await renderTab()
     await waitFor(() => expect(screen.getByTestId('team-add-agent')).toBeInTheDocument())
 
     fireEvent.click(screen.getByTestId('team-add-agent'))
@@ -350,7 +392,7 @@ describe('WorkspaceTeamTab — revision and autosave semantics', () => {
     // silently vanished on the next refetch despite `saveFn` being fully
     // capable of persisting it (it PUTs the whole current member list to
     // core_team, edge or no edge).
-    renderTab()
+    await renderTab()
     await waitFor(() => expect(screen.getByTestId('team-add-agent')).toBeInTheDocument())
     fireEvent.click(screen.getByTestId('team-add-agent'))
     await waitFor(() =>
@@ -397,7 +439,7 @@ describe('WorkspaceTeamTab — revision and autosave semantics', () => {
     // was never actually persisted to core_team.
     vi.mocked(updateWorkspace).mockRejectedValue(new Error('core_team PUT failed'))
 
-    renderTab()
+    await renderTab()
     await waitFor(() => expect(screen.getByTestId('team-add-agent')).toBeInTheDocument())
 
     fireEvent.click(screen.getByTestId('team-add-agent'))
@@ -447,7 +489,7 @@ describe('WorkspaceTeamTab — atomic candidate save ordering (P0/F3)', () => {
         ...(DELEGATION.edges ?? []),
         { from_agent: 'jim', to_agent: 'ray', modes: ['direct', 'task'] },
       ],
-      default_depth: 3,
+      default_depth: 10,
     })
 
     // Seed the status-keyed active AND archived list caches the way
@@ -455,7 +497,7 @@ describe('WorkspaceTeamTab — atomic candidate save ordering (P0/F3)', () => {
     // out above) so we can assert the fix writes BOTH exact keys the saveFn
     // loop iterates over (`for (const status of ['active', 'archived'])`),
     // not just the detail() cache or the active list alone.
-    const { client } = renderTab((c) => {
+    const { client } = await renderTab((c) => {
       c.setQueryData(workspacesQueryKeys.list({ status: 'active' }), [WORKSPACE])
       c.setQueryData(workspacesQueryKeys.list({ status: 'archived' }), [WORKSPACE])
     })
@@ -564,15 +606,19 @@ describe('WorkspaceTeamTab — atomic candidate save ordering (P0/F3)', () => {
     const CSRF_TOKEN = 'f3-test-csrf-token'
     stubCsrfCookie(`__Host-csrf=${CSRF_TOKEN}`)
 
-    renderTab()
+    await renderTab()
     await waitFor(() => expect(screen.getByTestId('team-add-agent')).toBeInTheDocument())
 
     fireEvent.click(screen.getByTestId('team-add-agent'))
     await waitFor(() =>
       expect(screen.getByTestId('team-add-agent-option-ray')).toBeInTheDocument(),
     )
+    // The scenario requires pagehide BEFORE the 500ms autosave. Hold that
+    // clock across the first dirty edit; rendering time must not fire a save.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     fireEvent.click(screen.getByTestId('team-add-agent-option-ray'))
-    await waitFor(() => expect(screen.getByTestId('team-node-ray')).toBeInTheDocument())
+    await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+    expect(screen.getByTestId('team-node-ray')).toBeInTheDocument()
 
     // Draw the delegation edge — same onConnect invocation as the P0 test.
     expect(capturedGraphProps).not.toBeNull()
@@ -580,16 +626,17 @@ describe('WorkspaceTeamTab — atomic candidate save ordering (P0/F3)', () => {
       capturedGraphProps!.onConnect('jim', 'ray')
     })
 
-    // Fire the unload beacon IMMEDIATELY — well inside the 500ms debounce
-    // window, so the debounced saveFn (updateWorkspace/updateWorkspaceDelegation)
-    // has not fired yet. This is exactly the F3 finding's scenario.
+    // Fire the unload beacon before advancing the 500ms debounce, so the
+    // regular saveFn (updateWorkspace/updateWorkspaceDelegation) has not
+    // fired yet. This is exactly the F3 finding's scenario.
     act(() => {
       window.dispatchEvent(new Event('pagehide'))
     })
     expect(updateWorkspace).not.toHaveBeenCalled()
     expect(updateWorkspaceDelegation).not.toHaveBeenCalled()
 
-    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1))
+    // The real pagehide listener invokes fetch synchronously.
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
 
     const [coreTeamCall] = fetchSpy.mock.calls
     expect(coreTeamCall[0]).toBe('/api/v1/workspaces/ws-1')
@@ -628,7 +675,7 @@ describe('WorkspaceTeamTab — node interactions', () => {
     // wait for the nodes to appear, click the edit affordance on Jim's node,
     // and assert the store received (agentId, workspaceId) — NOT bare-store.
     const openSpy = vi.spyOn(useUiStore.getState(), 'openEditAgentSlideOver')
-    renderTab()
+    await renderTab()
     await waitFor(() => expect(screen.getByTestId('team-node-jim')).toBeInTheDocument())
 
     // Click the "Edit Jim" button inside the Jim node. The button is rendered
@@ -652,16 +699,17 @@ describe('WorkspaceTeamTab — node interactions', () => {
     useUiStore.setState({ editAgentId: null, editAgentWorkspaceId: null })
   })
 
-  it('does not offer a remove button on the default agent node (remove-default guard)', async () => {
-    renderTab()
+  it('offers the remove action on every team member node (there is no default-agent guard)', async () => {
+    await renderTab()
     await waitFor(() => expect(screen.getByTestId('team-node-mia')).toBeInTheDocument())
-    // Mia is the default agent — the node must NOT render a "Remove … from team"
-    // action (the guard's UI side; the handler also blocks it defensively).
+    // The default-agent feature is removed (omnipus-system-agent K11/K12,
+    // bundle B1): no member node is shielded from removal any more — every
+    // regular member renders the "Remove … from team" action. Implicit
+    // System nodes (the Judge) are a separate render branch with no actions.
     const miaNode = screen.getByTestId('team-node-mia')
     expect(
       miaNode.querySelector('[aria-label="Remove Mia from team"]'),
-    ).toBeNull()
-    // A non-default member (Jim) DOES get the remove action.
+    ).not.toBeNull()
     const jimNode = screen.getByTestId('team-node-jim')
     expect(
       jimNode.querySelector('[aria-label="Remove Jim from team"]'),
@@ -682,7 +730,7 @@ describe('WorkspaceTeamTab — node interactions', () => {
 // on every workspace.
 describe('WorkspaceTeamTab — implicit Judge row (ADR-049 D3)', () => {
   it('shows the Judge row with the "Verifier — implicit member" badge for a normal workspace', async () => {
-    renderTab()
+    await renderTab()
     await waitFor(() => {
       expect(screen.getByTestId('team-node-judge')).toBeInTheDocument()
     })
@@ -698,16 +746,16 @@ describe('WorkspaceTeamTab — implicit Judge row (ADR-049 D3)', () => {
       workspace_id: 'ws-1',
       team: [],
       edges: [],
-      default_depth: 3,
+      default_depth: 10,
     } as WorkspaceDelegation)
-    renderTab()
+    await renderTab()
     await waitFor(() => {
       expect(screen.getByTestId('team-node-judge')).toBeInTheDocument()
     })
   })
 
   it('the [+ Add agent] picker never offers the Judge — System agents are not team-addable', async () => {
-    renderTab()
+    await renderTab()
     await waitFor(() => expect(screen.getByTestId('team-add-agent')).toBeInTheDocument())
     fireEvent.click(screen.getByTestId('team-add-agent'))
     await waitFor(() =>
@@ -729,10 +777,10 @@ describe('WorkspaceTeamTab — implicit Judge row (ADR-049 D3)', () => {
         ...(DELEGATION.edges ?? []),
         { from_agent: 'jim', to_agent: 'ray', modes: ['direct', 'task'] },
       ],
-      default_depth: 3,
+      default_depth: 10,
     })
 
-    renderTab()
+    await renderTab()
     await waitFor(() => expect(screen.getByTestId('team-add-agent')).toBeInTheDocument())
     // The Judge row is present throughout — proving it renders alongside a
     // normal, in-flight edit session, not just a pristine/empty one.

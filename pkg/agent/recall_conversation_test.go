@@ -18,6 +18,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/memory"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -860,10 +861,9 @@ func countDrops(calls []struct{ key, reason string }, key, reason string) int {
 // lines a scan decoded and how many times the whole-archive ReadArchive path
 // was taken — the two numbers B-31b is about.
 type scanArchive struct {
-	msgs     []memory.ArchivedMessage
-	visited  int
-	reads    int
-	hydrated bool
+	msgs    []memory.ArchivedMessage
+	visited int
+	reads   int
 }
 
 func (s *scanArchive) ReadArchive(_ context.Context, _ string) ([]memory.ArchivedMessage, error) {
@@ -881,10 +881,6 @@ func (s *scanArchive) ScanArchive(
 		}
 	}
 	return nil
-}
-
-func (s *scanArchive) Projection(string) memory.ProjectionMeta {
-	return memory.ProjectionMeta{Hydrated: s.hydrated}
 }
 
 // incidentResult is the DS-6 payload: 1,178,522 characters, the size of the
@@ -1210,18 +1206,50 @@ func TestRecallConversation_ToolCallID_ExemptNotFoundExclusiveStreaming(t *testi
 	}
 }
 
-// TestRecallConversation_ToolCallID_HydratedSessionNotAvailable — B-53b /
-// FR-046. A hydrated archive was rebuilt from the UI transcript, so the
+// convRebuiltArchive is a ConversationArchiveReader that is ALSO a
+// toolResultLocator whose located slot carries model_origin == conv_rebuilt
+// (CONV-P A): the record was converted from a hydrated source, so the original
+// tool-result bytes are not provable and recall refuses them (FR-046). The old
+// ProjectionMeta.Hydrated flag that used to key this refusal is deleted with
+// the model-store surface (DEL-12); the record's own model_origin now decides.
+type convRebuiltArchive struct{ scanArchive }
+
+func (convRebuiltArchive) LocateToolResult(context.Context, string, string, int) (session.ToolResultLocation, error) {
+	return session.ToolResultLocation{Found: true, Ordinal: 2, Issuer: 1, TurnNum: 1}, nil
+}
+
+func (convRebuiltArchive) ReadModelSlots(_ context.Context, _ string, from, to int, fn func(session.ModelSlot, []byte) error) error {
+	for o := from; o <= to; o++ {
+		slot := session.ModelSlot{Ordinal: o}
+		switch o {
+		case 1:
+			slot.Message = providers.Message{Role: "assistant", ToolCalls: []providers.ToolCall{
+				{ID: "call_inc", Function: &providers.FunctionCall{Name: "read_file"}},
+			}}
+		case 2:
+			slot.Message = providers.Message{Role: "tool", ToolCallID: "call_inc", Content: "PAYLOAD"}
+			slot.Origin = session.ModelOriginConvRebuilt
+		}
+		if err := fn(slot, nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// TestRecallConversation_ToolCallID_ConvRebuiltSessionNotAvailable — B-53b /
+// FR-046, ported to the record's own model_origin (CONV-P A). A record
+// converted from a hydrated source was rebuilt from the UI transcript, so the
 // original tool-result bytes are not there to page.
-func TestRecallConversation_ToolCallID_HydratedSessionNotAvailable(t *testing.T) {
+func TestRecallConversation_ToolCallID_ConvRebuiltSessionNotAvailable(t *testing.T) {
 	const id = "call_inc"
-	archive := &scanArchive{msgs: idArchive(id, "read_file", "PAYLOAD"), hydrated: true}
+	archive := &convRebuiltArchive{scanArchive{msgs: idArchive(id, "read_file", "PAYLOAD")}}
 	setter := newStubSpanSetter()
 	tool := makeTool(archive, setter)
 
-	res := tool.Execute(makeCtx("sess-hydrated"), map[string]any{"tool_call_id": id})
+	res := tool.Execute(makeCtx("sess-conv-rebuilt"), map[string]any{"tool_call_id": id})
 	if !res.IsError {
-		t.Fatalf("recall by id on a hydrated session must be a tool error, got %q", res.ForLLM)
+		t.Fatalf("recall by id on a conv_rebuilt session must be a tool error, got %q", res.ForLLM)
 	}
 	if !strings.Contains(res.ForLLM, "not available — session was rebuilt from the transcript") {
 		t.Fatalf("FR-046 answer required, got %q", res.ForLLM)
@@ -1230,7 +1258,7 @@ func TestRecallConversation_ToolCallID_HydratedSessionNotAvailable(t *testing.T)
 		t.Fatalf("the answer must name the id, got %q", res.ForLLM)
 	}
 	if len(setter.spans) != 0 {
-		t.Fatal("no span may be installed for a hydrated session")
+		t.Fatal("no span may be installed for a conv_rebuilt session")
 	}
 }
 

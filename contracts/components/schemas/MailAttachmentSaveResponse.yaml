@@ -1,0 +1,89 @@
+title: MailAttachmentSaveResponse
+description: >
+  Success response of an attachment save to the Library (panel Save and the
+  agent download share this one shape — ADR-20261001 "Save-to-workspace
+  request/response (F2)" and F3 rows; w3 spec §2.4, w4 spec §2.3 — W0 is
+  the single publisher). Returned only for a completed save: the file is
+  fully written under the mail → <mailbox> → <year-month> hierarchy with a
+  sanitized, unique, suffixed name. Refusals are typed errors with no
+  invented path — never a saved=true with a fabricated destination. A lost
+  response resolves through the same-token retry, which returns THIS
+  receipt again for the already-committed save (correction M-02). This is
+  also the "shared Save response/path fields" of the agent
+  download_email_attachment result (F3) — one shape, no second.
+type: object
+additionalProperties: false
+required:
+  - saved
+  - workspace_id
+  - entry
+  - path
+  - absolute_path
+  - size_bytes
+  - audit_status
+  - warning_code
+properties:
+  saved:
+    type: boolean
+    enum:
+      - true
+    description: >
+      Always true on this shape — a response that did not save is a typed
+      error, never a saved=false body. The visible "Save result unknown"
+      state (lost response) resolves to this receipt via the same-token
+      retry.
+    example: true
+  workspace_id:
+    type: string
+    description: Workspace the file was saved into.
+    example: "ws_my_workspace"
+  entry:
+    $ref: ./LibraryEntry.yaml
+  path:
+    type: string
+    minLength: 1
+    description: >
+      Final workspace-relative path of the saved file — includes any
+      numbered collision suffix; identical to entry.path. The actual saved
+      name is entry.name.
+    example: "mail/dana@example.com/2026-10/report-q3.pdf"
+  absolute_path:
+    type: string
+    minLength: 1
+    description: >
+      Separately resolved absolute path of the saved file — the form the
+      agent's normal file/document tools consume. The panel never needs it;
+      the agent result carries it (F3). Server-resolved inside the
+      authorized work root; never client-derived.
+    example: "/Users/example/.omnipus/workspaces/ws_my_workspace/work/mail/dana@example.com/2026-10/report-q3.pdf"
+  size_bytes:
+    type: integer
+    format: int64
+    minimum: 0
+    description: Actual byte count of the committed file.
+    example: 1048576
+  audit_status:
+    type: string
+    enum:
+      - recorded
+      - disabled
+      - failed
+    description: >
+      Truthful audit outcome of the mail.attachment_saved event (ADR F2
+      "Audit" row). recorded = the audit entry was written; disabled = the
+      operator's audit setting is off; failed = the audit write failed
+      AFTER the file landed — the save stands (saved=true with the real
+      path), this field and warning_code carry the visible warning, and no
+      retry is invited (a retry would duplicate the file).
+    example: "recorded"
+  warning_code:
+    type: string
+    nullable: true
+    description: >
+      Closed safe warning code accompanying audit_status, or null. The one
+      Phase-1 warning: audit_write_failed — the file is saved and usable,
+      but its audit event could not be recorded. Never carries raw error
+      text, tokens or credentials.
+    enum:
+      - audit_write_failed
+    example: "audit_write_failed"

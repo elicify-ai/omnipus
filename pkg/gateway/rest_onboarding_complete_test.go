@@ -72,7 +72,7 @@ func TestOnboardingComplete_AuthMethod(t *testing.T) {
 	t.Run("sign_in without a key completes, stores no credential and writes the pair",
 		func(t *testing.T) {
 			api, tmpDir := newAuthMethodOnboardingAPI(t)
-			body := `{"provider":{"auth_method":"sign_in","id":"codex-cli","model":"gpt-5.3-codex"},` +
+			body := `{"provider":{"auth_method":"sign_in","id":"openai-chatgpt","model":"gpt-5"},` +
 				`"preferences":{"name":"Daniel","tone":"direct","detail":"brief"}}`
 
 			w := postOnboardingComplete(api, body)
@@ -89,11 +89,11 @@ func TestOnboardingComplete_AuthMethod(t *testing.T) {
 				"a sign-in completion has no key, so it can carry no key warning")
 
 			// FR-007: nothing reached the credential store under any name.
-			_, err := api.credStore.Get("codex-cli_API_KEY")
+			_, err := api.credStore.Get("openai-chatgpt_API_KEY")
 			assert.Error(t, err, "a sign-in completion must store no credential")
 
 			cfgRaw, loaded := readOnboardedConfig(t, tmpDir)
-			row := providerRow(t, cfgRaw, "codex-cli", "gpt-5.3-codex")
+			row := providerRow(t, cfgRaw, "openai-chatgpt", "gpt-5")
 			assert.Equal(t, "sign_in", row["auth_method"],
 				"the persisted row records HOW it authenticates (FR-003)")
 			_, hasRef := row["api_key_ref"]
@@ -104,15 +104,15 @@ func TestOnboardingComplete_AuthMethod(t *testing.T) {
 			// FR-020: the pair, written once, exactly as picked.
 			defaults, _ := cfgRaw["agents"].(map[string]any)["defaults"].(map[string]any)
 			assert.Equal(t,
-				map[string]any{"provider": "codex-cli", "model": "gpt-5.3-codex"},
+				map[string]any{"provider": "openai-chatgpt", "model": "gpt-5"},
 				defaults["default_model"])
 			_, hasAlias := defaults["model_name"]
 			assert.False(t, hasAlias, "agents.defaults.model_name is gone (CRIT-001)")
 
-			want := config.DefaultModel{Provider: "codex-cli", Model: "gpt-5.3-codex"}
+			want := config.DefaultModel{Provider: "openai-chatgpt", Model: "gpt-5"}
 			require.Equal(t, want, loaded.Agents.Defaults.DefaultModel)
 			// …and the pair resolves EXACTLY to the row onboarding created.
-			mc, err := loaded.GetModelConfig("codex-cli", "gpt-5.3-codex")
+			mc, err := loaded.GetModelConfig("openai-chatgpt", "gpt-5")
 			require.NoError(t, err)
 			assert.Equal(t, config.AuthMethodSignIn, mc.AuthMethod)
 			assert.Empty(t, mc.APIKeyRef)
@@ -131,7 +131,7 @@ func TestOnboardingComplete_AuthMethod(t *testing.T) {
 	t.Run("sign_in with no model falls back to the row's first Recommended model",
 		func(t *testing.T) {
 			api, tmpDir := newAuthMethodOnboardingAPI(t)
-			body := `{"provider":{"auth_method":"sign_in","id":"codex-cli"},` +
+			body := `{"provider":{"auth_method":"sign_in","id":"openai-chatgpt"},` +
 				`"preferences":{"name":"Daniel","tone":"direct","detail":"brief"}}`
 
 			w := postOnboardingComplete(api, body)
@@ -139,14 +139,14 @@ func TestOnboardingComplete_AuthMethod(t *testing.T) {
 
 			cfgRaw, loaded := readOnboardedConfig(t, tmpDir)
 			pair := loaded.Agents.Defaults.DefaultModel
-			assert.Equal(t, "codex-cli", pair.Provider)
+			assert.Equal(t, "openai-chatgpt", pair.Provider)
 			require.NotEmpty(t, pair.Model,
 				"the pair must name a real model, never the api_key branch's gpt-4o guess")
 			assert.NotEqual(t, "gpt-4o", pair.Model,
 				"a sign-in row must not inherit the api_key branch's vendor default")
 
 			// Whatever it picked, the row it points at exists and is a sign-in row.
-			row := providerRow(t, cfgRaw, "codex-cli", pair.Model)
+			row := providerRow(t, cfgRaw, "openai-chatgpt", pair.Model)
 			assert.Equal(t, "sign_in", row["auth_method"])
 			mc, err := loaded.GetModelConfig(pair.Provider, pair.Model)
 			require.NoError(t, err)
@@ -155,7 +155,7 @@ func TestOnboardingComplete_AuthMethod(t *testing.T) {
 
 	t.Run("sign_in carrying an api_key is 400 and persists nothing", func(t *testing.T) {
 		api, tmpDir := newAuthMethodOnboardingAPI(t)
-		body := `{"provider":{"auth_method":"sign_in","id":"codex-cli","model":"gpt-5.3-codex",` +
+		body := `{"provider":{"auth_method":"sign_in","id":"openai-chatgpt","model":"gpt-5",` +
 			`"api_key":"sk-should-not-be-here"},` +
 			`"preferences":{"name":"Daniel","tone":"direct","detail":"brief"}}`
 
@@ -173,7 +173,8 @@ func TestOnboardingComplete_AuthMethod(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotContains(t, string(raw), "sk-should-not-be-here",
 			"a rejected body must never leave its key on disk")
-		assert.NotContains(t, string(raw), "codex-cli")
+		assert.NotContains(t, string(raw), "openai-chatgpt",
+			"a rejected completion must not persist the provider row either")
 	})
 
 	t.Run("api_key without a key is 400", func(t *testing.T) {

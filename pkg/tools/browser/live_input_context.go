@@ -97,17 +97,12 @@ func (lv *LiveView) dispatchInputContext(caller context.Context, viewerID string
 	if err := caller.Err(); err != nil {
 		return realInputError("browser live: input canceled: %w", err)
 	}
-	budget := interactiveInputTimeout
-	if lv.mgr != nil {
-		if configured := lv.mgr.PageTimeout(); configured > 0 && configured < budget {
-			budget = configured
-		}
+	if in, result = lv.preflightNavigate(caller, viewerID, in); result != nil {
+		return result
 	}
-	if deadline, ok := caller.Deadline(); ok {
-		budget = min(budget, time.Until(deadline))
-	}
+	budget := lv.inputBudget(caller)
 	lv.mu.Lock()
-	targetCtx := lv.tabCtx
+	targetCtx := lv.inputTargetLocked(in)
 	state := lv.inputStateLocked()
 	if targetCtx == nil {
 		allowed := lv.allowInputLocked(in.Kind)
@@ -161,7 +156,7 @@ func (lv *LiveView) dispatchInputContext(caller context.Context, viewerID string
 	retired := state.retired[targetCtx] || lv.tabCtx != targetCtx
 	lv.mu.Unlock()
 	if retired {
-		return benignInputError("browser live: input target changed; retry on the current tab")
+		return inputTargetChangedError(in.Kind)
 	}
 	lv.mu.Lock()
 	_, tracked := state.held[heldInputID{target: targetCtx, viewer: viewerID, key: inputHoldKey(in), source: in.SourceContext}]
@@ -251,15 +246,129 @@ func inputRemaining(ctx context.Context) time.Duration {
 	return interactiveInputTimeout
 }
 
+// inputBudget is the interactive dispatch budget: interactiveInputTimeout,
+// lowered to a shorter configured page timeout and to the caller's deadline.
+func (lv *LiveView) inputBudget(caller context.Context) time.Duration {
+	budget := interactiveInputTimeout
+	if lv.mgr != nil {
+		if configured := lv.mgr.PageTimeout(); configured > 0 && configured < budget {
+			budget = configured
+		}
+	}
+	if deadline, ok := caller.Deadline(); ok {
+		budget = min(budget, time.Until(deadline))
+	}
+	return budget
+}
+
+// preflightNavigate validates a navigate's URL before dispatch (see
+// validateNavigateURL); every other kind passes through untouched. A panel
+// with no attached tab keeps dispatch's ordinary "not attached" refusal and
+// costs no lookup. dispatchInputContext calls this first, and
+// dispatchTrackedInput refuses any navigate that skipped it.
+func (lv *LiveView) preflightNavigate(caller context.Context, viewerID string, in LiveInput) (LiveInput, error) {
+	if in.Kind != "navigate" {
+		return in, nil
+	}
+	lv.mu.Lock()
+	target := lv.tabCtx
+	lv.mu.Unlock()
+	if target == nil {
+		return in, nil
+	}
+	return lv.validateNavigateURL(caller, viewerID, target, in)
+}
+
+// inputTargetChangedError refuses input whose tab changed before dispatch.
+// Ordinary input keeps the quiet benign refusal (a stray pointer event after
+// a tab switch is routine). A navigate is one deliberate submission: its
+// refusal is a real error so the gateway shows the user why their address
+// was not opened and what to do (docs/browser.md, "Limits and things to
+// watch"), instead of only logging it.
+func inputTargetChangedError(kind string) error {
+	if kind == "navigate" {
+		return realInputError("browser live: navigation canceled because the active tab changed while the address was being checked; enter the address again on the tab you want")
+	}
+	return benignInputError("browser live: input target changed; retry on the current tab")
+}
+
+// inputTargetLocked is the tab an input is dispatched to. A validated
+// navigate stays bound to the tab it was validated for: if the shared
+// browser moved to another tab meanwhile, dispatch's retirement check then
+// refuses it instead of navigating the newly selected page (browser-input
+// connection spec R3 — Lifetime). Every other input targets the current tab.
+// Must be called with mu held.
+func (lv *LiveView) inputTargetLocked(in LiveInput) context.Context {
+	if in.validatedTarget != nil {
+		return in.validatedTarget
+	}
+	return lv.tabCtx
+}
+
+// validateNavigateURL runs a live navigate's SSRF/scheme pre-check
+// (BrowserManager.ValidateURL, the same gate browser_navigate applies) on the
+// page-load budget, before the interactive input budget and the tab/input
+// gates. The host check resolves DNS; inside the 2s interactive budget —
+// shared with the gate waits — a lookup slower than that refused the user's
+// navigation as "blocked by SSRF policy" (release run 39029558027, UAT-09b).
+// The check stays bounded: by the caller (the gateway's command deadline),
+// the input source, PageTimeout, and the target tab — the pending check is
+// registered as a request on target, so retiring that tab cancels it like
+// any other input bound to it. On success the returned input carries the
+// validated URL and target, which dispatch requires.
+func (lv *LiveView) validateNavigateURL(caller context.Context, viewerID string, target context.Context, in LiveInput) (LiveInput, error) {
+	// Shape first, exactly as dispatch did before the URL gate: a malformed
+	// navigate (empty URL, stray x/y) keeps its own refusal and costs no
+	// lookup.
+	if _, err := buildInputAction(in); err != nil {
+		return in, realInputError("%w", err)
+	}
+	if lv.mgr == nil {
+		return in, realInputError("browser live: navigate blocked: no browser manager to validate the URL")
+	}
+	timeout := lv.mgr.PageTimeout()
+	if timeout <= 0 {
+		timeout = interactiveInputTimeout
+	}
+	ctx, cancel := context.WithTimeout(caller, timeout)
+	defer cancel()
+	if in.SourceContext != nil {
+		stopSource := context.AfterFunc(in.SourceContext, cancel)
+		defer stopSource()
+	}
+	lv.mu.Lock()
+	state := lv.inputStateLocked()
+	request := &liveInputRequest{viewer: viewerID, target: target, cancel: cancel}
+	state.requests[request] = struct{}{}
+	lv.mu.Unlock()
+	defer func() { lv.mu.Lock(); delete(state.requests, request); lv.mu.Unlock() }()
+	err := lv.mgr.ValidateURL(ctx, in.URL)
+	lv.mu.Lock()
+	targetChanged := state.retired[target] || lv.tabCtx != target
+	lv.mu.Unlock()
+	if targetChanged {
+		return in, inputTargetChangedError(in.Kind)
+	}
+	if err != nil {
+		return in, realInputError("browser live: navigate blocked: %w", err)
+	}
+	in.validatedNavigateURL = in.URL
+	in.validatedTarget = target
+	return in, nil
+}
+
 func (lv *LiveView) dispatchTrackedInput(ctx, targetCtx context.Context, viewerID string, in LiveInput) error {
 	action, err := buildInputAction(in)
 	if err != nil {
 		return realInputError("%w", err)
 	}
-	if in.Kind == "navigate" {
-		if validationErr := lv.mgr.ValidateURL(ctx, in.URL); validationErr != nil {
-			return realInputError("browser live: navigate blocked: %w", validationErr)
-		}
+	// The SSRF/scheme gate ran in validateNavigateURL, before the input
+	// budget. A navigate that reaches dispatch without that check (or whose
+	// URL changed after it) is refused here, so no path dispatches an
+	// unvalidated URL. (An empty URL never gets here: buildInputAction above
+	// refuses it, so an empty validated URL can never match.)
+	if in.Kind == "navigate" && in.validatedNavigateURL != in.URL {
+		return realInputError("browser live: navigate blocked: URL was not validated before dispatch")
 	}
 	if canceledErr := ctx.Err(); canceledErr != nil {
 		return realInputError("browser live: input canceled: %w", canceledErr)

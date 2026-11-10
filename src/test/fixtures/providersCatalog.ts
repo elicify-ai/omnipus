@@ -3,17 +3,18 @@
 //
 // ADR-068 T068-18. This REPLACES the 21-entry `providersCatalog.stub.ts` that
 // T068-05 shipped as a placeholder: `providers-catalog.json` next to this file
-// is the 190-entry document every ADR-068 SPA test renders against (spec
+// is the 188-entry document every ADR-068 SPA test renders against (spec
 // §"Development": "a 190-entry JSON fixture under
 // src/test/fixtures/providers-catalog.json generated once from the real
-// snapshot"). The JSON is currently a hand-built stand-in shaped exactly like
-// the real snapshot; when B2-RELEASE exists it is regenerated from the real
-// document and this module is unchanged.
+// snapshot"; WU-24, founder 2026-10-14, removed the two CLI model-provider
+// rows — 190 → 188). The JSON is currently a hand-built stand-in shaped
+// exactly like the real snapshot; when B2-RELEASE exists it is regenerated
+// from the real document and this module is unchanged.
 //
 // Shape guarantees the fixture makes — later tasks may rely on all of these,
 // and `providersCatalog.test.ts` pins every one of them:
 //
-//   • exactly 190 providers, ids unique;
+//   • exactly 188 providers, ids unique;
 //   • exactly 8 `tier: "popular"` providers, each a DISTINCT `company`
 //     (openai, anthropic, google, openrouter, groq, deepseek, xai, zai) —
 //     FR-022's 8 Popular tiles;
@@ -22,14 +23,12 @@
 //   • `zai` / `zai-coding-plan` / `zhipuai` / `zhipuai-coding-plan` share
 //     `company: "Zhipu AI"` and differ by `plan` × `region` — the L1→L2
 //     grouping dataset; aliases include `glm-coding` and `智谱`;
-//   • `openai-chatgpt`, `codex-cli` and `github-copilot` are the only
-//     `auth_methods: ["sign_in"]` rows (`xai` is key-only until registration,
-//     ADR-068 §8b D3); `codex-cli`/`github-copilot` are `protocol: "cli"` with
-//     `cli_kind` `codex`/`copilot`. The OpenAI family is split into three
-//     single-variant companies ("OpenAI", "ChatGPT", "Codex CLI") so the
-//     `openai` API-key row stays a one-click entry; T068-21 may regroup the
-//     pair under one company when the segmented sign-in control lands.
-//     `github-copilot` sits with `github-models` under "GitHub";
+//   • `openai-chatgpt` is the only `auth_methods: ["sign_in"]` row
+//     (`xai` is key-only until registration, ADR-068 §8b D3). The two retired
+//     CLI model-provider rows were removed outright (WU-24, founder
+//     2026-10-14). The OpenAI family is split into
+//     two single-variant companies ("OpenAI", "ChatGPT") so the `openai`
+//     API-key row stays a one-click entry;
 //   • `vllm` and `litellm` are deliberately ABSENT — the provider-migration
 //     dataset uses them as ids that must fall through to Self-hosted / Custom;
 //   • `openrouter.models` carries the "vendor then release date" ordering
@@ -48,8 +47,8 @@
 import type { CatalogProvider, ProvidersCatalog } from '@/lib/api/generated/openapi-types'
 import fixture from './providers-catalog.json'
 
-/** The whole 190-entry catalog document, envelope included. */
+/** The whole 188-entry catalog document, envelope included. */
 export const PROVIDERS_CATALOG = fixture as unknown as ProvidersCatalog
 
-/** Just the 190 provider entries — the array most component tests want. */
+/** Just the 188 provider entries — the array most component tests want. */
 export const CATALOG_PROVIDERS: CatalogProvider[] = PROVIDERS_CATALOG.providers

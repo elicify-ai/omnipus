@@ -106,7 +106,7 @@
   --font-size-code: max(12px, 0.875rem);
   --font-size-display: 3rem;
   --font-size-floor: 12px;
-  --font-size-page-title: 1.875rem;
+  --font-size-page-title: 1.5rem;
   --font-size-section-title: 1.125rem;
   --font-size-utility-xs: max(12px, 0.75rem);
   --font-weight-bold: 700;
@@ -129,6 +129,10 @@
   --icon-weight-default: regular;
   --icon-weight-emphasis: fill;
   --layout-sidebar-width: min(256px, 80vw);
+  --motion-agent-icon-thinking-duration: 2600ms;
+  --motion-agent-icon-waiting-duration: 3400ms;
+  --motion-agent-icon-working-duration: 1600ms;
+  --motion-agent-status-text-minimum-opacity: 0.9;
   --motion-distance-large: 36px;
   --motion-distance-medium: 16px;
   --motion-distance-small: 4px;

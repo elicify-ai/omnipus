@@ -11,7 +11,7 @@ import (
 // ErrNoActiveTurn is returned by CancelActiveTurn when the agent loop reports
 // that no turn is currently running for the given session AND no
 // pre-registration cancel latch was armed in its place (see ErrCancelArmed).
-// Callers should reply with an informational "Nothing to cancel" message
+// Callers should reply with an informational "Nothing to stop." message
 // rather than treating it as a failure.
 var ErrNoActiveTurn = errors.New("no active turn")
 
@@ -27,6 +27,13 @@ var ErrNoActiveTurn = errors.New("no active turn")
 // (nil) and a genuine no-op (ErrNoActiveTurn): acknowledged-and-pending, not
 // "canceled" and not "nothing to cancel".
 var ErrCancelArmed = errors.New("cancel acknowledged, pending turn registration")
+
+// ErrNothingToRedirect is returned by RedirectSessionTurn when the named
+// session's turn has already ended on its own (done/failed): there is no live
+// turn to replace. Callers reply "already finished — use RESUME" instead of
+// an opaque error (the D2 terminal shape the delegate tool refuses the same
+// way).
+var ErrNothingToRedirect = errors.New("nothing to redirect")
 
 // AgentLoopInterface is a minimal interface for the agent-loop methods needed by
 // the commands runtime. Using an interface here avoids a hard import cycle
@@ -64,6 +71,52 @@ type AgentLoopInterface interface {
 	// exact bug this signature was widened to fix: an armed cancel silently
 	// reported as ErrNoActiveTurn.
 	RequestCancelForSession(ctx context.Context, sessionID, userID, channel string) (fired bool, armed bool, err error)
+
+	// StopSessionTurn stops ONLY the named session's current turn — D9 /stop
+	// (scope session, no cascade; non-terminal, goals unchanged). It uses the SAME
+	// StopTurns(subtree=false) chain the gateway Stop press uses — one shared
+	// stop implementation, never a divergent second path. Three-outcome
+	// contract identical to RequestCancelForSession:
+	//   (fired=true, armed=false, nil)  — stop fired.
+	//   (fired=false, armed=true, nil)  — pre-registration latch armed.
+	//   (fired=false, armed=false, nil) — nothing to stop.
+	//   err non-nil                     — real failure, must surface.
+	StopSessionTurn(ctx context.Context, sessionID, userID, channel string) (fired bool, armed bool, err error)
+
+	// RedirectSessionTurn redirects the named session, root chat or helper:
+	// its current turn is stopped (this session only — the subtree keeps
+	// working) and once the stop has landed the session continues with the
+	// instruction as its newest message. Returns the named sentinel
+	// ErrNothingToRedirect (a finished helper — use RESUME) so handlers reply
+	// truthfully instead of one opaque error (mirrors
+	// ErrNoActiveTurn/ErrCancelArmed above).
+	RedirectSessionTurn(ctx context.Context, sessionID, instruction, userID, channel string) error
+}
+
+// ScopedCancelLoop is the D9 scoped Stop entry required by /cancel.
+// Missing this capability is a visible error, never a session-only fallback.
+type ScopedCancelLoop interface {
+	RequestScopedCancelForSession(ctx context.Context, sessionID, userID, channel, scope string) (fired bool, armed bool, err error)
+}
+
+// sessionStopLoop is the /stop capability subset (AgentLoopInterface's
+// StopSessionTurn alone) used to detect whether the wired loop implements the
+// D9 stop seam.
+type sessionStopLoop interface {
+	StopSessionTurn(ctx context.Context, sessionID, userID, channel string) (fired bool, armed bool, err error)
+}
+
+// sessionRedirectLoop is the /stop-redirect capability subset
+// (AgentLoopInterface's RedirectSessionTurn alone).
+type sessionRedirectLoop interface {
+	RedirectSessionTurn(ctx context.Context, sessionID, instruction, userID, channel string) error
+}
+
+// cancelLoop is the minimum control dependency for injection. Individual
+// controls require their own capabilities; this method is never a fallback
+// for the /cancel command's tree-scoped Stop.
+type cancelLoop interface {
+	RequestCancelForSession(ctx context.Context, sessionID, userID, channel string) (fired bool, armed bool, err error)
 }
 
 // Canceller identifies who/what issued a cancel — populated for audit attribution.
@@ -84,21 +137,24 @@ type Runtime struct {
 	GetEnabledChannels func() []string
 	GetActiveTurn      func() any // Returning any to avoid circular dependency with agent package
 	SwitchModel        func(value string) (oldModel string, err error)
-	SwitchChannel      func(value string) error
-	ClearHistory       func() error
-	ReloadConfig       func() error
+	// GetEffortState and SetConversationEffort back /effort: the serving
+	// model's capability and the conversation's own value, written to the
+	// conversation only ("" clears it), never to the agent (FR-023).
+	GetEffortState        func() (EffortState, error)
+	SetConversationEffort func(value string) error
+	SwitchChannel         func(value string) error
+	ClearHistory          func() error
+	ReloadConfig          func() error
 	// SessionID returns the session key for the current request context. Used by
 	// handlers that need to address a specific session (e.g., /cancel).
 	SessionID func() string
-	// agentLoop is the agent loop implementation used by CancelActiveTurn.
-	// Populated by the agent loop via buildCommandsRuntime.
-	agentLoop AgentLoopInterface
+	// Keep injection narrow; each control requires its own capability and
+	// reports a missing capability instead of substituting a different scope.
+	agentLoop cancelLoop
 }
 
-// CancelActiveTurn runs the full cancel state machine (audit, transcript,
-// abuse-detection, 2-stage timer) for the given session via the centralized
-// RequestCancelForSession entry point. The canceller fields are used for audit
-// attribution.
+// CancelActiveTurn requests D9's tree-scoped Stop all for the given session.
+// The canceller fields retain the authenticated transport's audit attribution.
 //
 // Return values:
 //   - nil             — cancel fired.
@@ -110,12 +166,15 @@ type Runtime struct {
 //   - other error     — a real failure that the caller must surface.
 func (rt *Runtime) CancelActiveTurn(ctx context.Context, sessionID string, canceller Canceller) error {
 	if rt == nil || rt.agentLoop == nil {
-		// No agent loop wired — treat as "nothing to cancel".
-		return ErrNoActiveTurn
+		return fmt.Errorf("tree-scoped Stop all is unavailable; nothing was stopped")
 	}
-	fired, armed, err := rt.agentLoop.RequestCancelForSession(ctx, sessionID, canceller.UserID, canceller.Channel)
+	loop, ok := rt.agentLoop.(ScopedCancelLoop)
+	if !ok {
+		return fmt.Errorf("tree-scoped Stop all is unavailable; nothing was stopped")
+	}
+	fired, armed, err := loop.RequestScopedCancelForSession(ctx, sessionID, canceller.UserID, canceller.Channel, "tree")
 	if err != nil {
-		return fmt.Errorf("cancel: %w", err)
+		return err
 	}
 	if fired {
 		return nil
@@ -131,10 +190,43 @@ func (rt *Runtime) CancelActiveTurn(ctx context.Context, sessionID string, cance
 	return ErrNoActiveTurn
 }
 
-// WithAgentLoop returns a shallow copy of rt with agentLoop set. Used by the
-// agent loop's buildCommandsRuntime to inject the loop reference without
-// exporting the field directly.
-func (rt *Runtime) WithAgentLoop(al AgentLoopInterface) *Runtime {
+// StopSessionTurn requests a single-session Stop, never Stop all.
+func (rt *Runtime) StopSessionTurn(ctx context.Context, sessionID string, canceller Canceller) error {
+	if rt == nil || rt.agentLoop == nil {
+		return fmt.Errorf("session Stop is unavailable; nothing was stopped")
+	}
+	loop, ok := rt.agentLoop.(sessionStopLoop)
+	if !ok {
+		return fmt.Errorf("session Stop is unavailable; nothing was stopped")
+	}
+	fired, armed, err := loop.StopSessionTurn(ctx, sessionID, canceller.UserID, canceller.Channel)
+	if err != nil {
+		return err
+	}
+	if fired {
+		return nil
+	}
+	if armed {
+		return ErrCancelArmed
+	}
+	return ErrNoActiveTurn
+}
+
+// RedirectSessionTurn redirects only the named session's current turn.
+func (rt *Runtime) RedirectSessionTurn(ctx context.Context, sessionID, instruction string, canceller Canceller) error {
+	if rt == nil || rt.agentLoop == nil {
+		return fmt.Errorf("redirect is unavailable; no instruction was applied")
+	}
+	loop, ok := rt.agentLoop.(sessionRedirectLoop)
+	if !ok {
+		return fmt.Errorf("redirect is unavailable; no instruction was applied")
+	}
+	return loop.RedirectSessionTurn(ctx, sessionID, instruction, canceller.UserID, canceller.Channel)
+}
+
+// WithAgentLoop returns a shallow copy with the control dependency injected.
+// Each control checks its own capability; none silently substitutes another.
+func (rt *Runtime) WithAgentLoop(al cancelLoop) *Runtime {
 	clone := *rt
 	clone.agentLoop = al
 	return &clone

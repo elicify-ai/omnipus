@@ -14,6 +14,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, render, screen } from '@testing-library/react'
+import { showTaskInfo } from './tasksLayoutFixtures'
 import { TaskCard } from './TaskCard'
 import { TaskActivityChip, taskAwaitingApproval } from './TaskActivityChip'
 import { useToolApprovalStore, type PendingToolApproval } from '@/store/toolApproval'
@@ -86,9 +87,11 @@ describe('TaskActivityChip while an approval is waiting', () => {
   it('the card says the task is waiting for approval, naming the tool, instead of its age', () => {
     useToolApprovalStore.setState({ queue: [approval()] })
     render(<TaskCard task={makeTask()} onClick={() => {}} showActions={false} />)
+    expect(screen.getByRole('img', { name: 'Waiting for your approval to use write_file' })).toBeVisible()
+    showTaskInfo('Build the landing page')
 
     expect(screen.getByTestId('task-awaiting-approval')).toHaveTextContent(
-      'In progress · waiting for your approval to use write_file',
+      'Waiting for your approval to use write_file',
     )
     expect(screen.queryByTestId('task-last-activity')).not.toBeInTheDocument()
   })
@@ -110,6 +113,7 @@ describe('TaskActivityChip while an approval is waiting', () => {
   it('once the approval is answered the chip goes back to the last activity', () => {
     useToolApprovalStore.setState({ queue: [approval()] })
     render(<TaskCard task={makeTask()} onClick={() => {}} showActions={false} />)
+    showTaskInfo('Build the landing page')
     expect(screen.getByTestId('task-awaiting-approval')).toBeInTheDocument()
 
     act(() => {
@@ -117,12 +121,13 @@ describe('TaskActivityChip while an approval is waiting', () => {
     })
 
     expect(screen.queryByTestId('task-awaiting-approval')).not.toBeInTheDocument()
-    expect(screen.getByTestId('task-last-activity')).toHaveTextContent('In progress · last activity 7 min ago')
+    expect(screen.getByTestId('task-last-activity')).toHaveTextContent('Last activity 7 min ago')
   })
 
   it("another session's approval does not mark this task as waiting", () => {
     useToolApprovalStore.setState({ queue: [approval({ sessionId: 'session-chat-9' })] })
     render(<TaskCard task={makeTask()} onClick={() => {}} showActions={false} />)
+    showTaskInfo('Build the landing page')
 
     expect(screen.queryByTestId('task-awaiting-approval')).not.toBeInTheDocument()
     expect(screen.getByTestId('task-last-activity')).toBeInTheDocument()

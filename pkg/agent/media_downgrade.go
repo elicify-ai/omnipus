@@ -92,7 +92,7 @@ type MediaDowngradeResult struct {
 //     policy/context-overflow/tool-args/schema) — those surface verbatim
 //     and the loop breaks out of the retry loop normally.
 func TryMediaDowngrade(ts *turnState, callMessages []providers.Message, pe *ProviderError) MediaDowngradeResult {
-	if ts == nil {
+	if ts == nil || permanentModelProviderError(pe) {
 		return MediaDowngradeResult{}
 	}
 
@@ -204,7 +204,7 @@ func (ts *turnState) applyMediaDowngrade(callMessages []providers.Message) (Medi
 // provider rejection (auth, 413, generic 4xx-with-non-pinned-body)
 // and the outcome fallback must not fire on it.
 func outcomeFallbackEligible(pe *ProviderError, code LLMErrorCode) bool {
-	if pe == nil {
+	if pe == nil || permanentModelProviderError(pe) {
 		return false
 	}
 	if pe.Status < 400 || pe.Status > 499 {

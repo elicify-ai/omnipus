@@ -114,16 +114,11 @@ func GeneralBuiltinMetadata() []Tool {
 
 	// --- Communication / delegation tools (CategoryCommunication / CategoryDelegation) ---
 	out = append(out, NewMessageTool())
-	out = append(out, NewSwitchAgentTool(nil, nil, nil, nil, nil))
+	out = append(out, NewAnswerRequestTool(NewMessageTool()))
 	out = append(out, NewSendFileTool("", false, 0, nil))
 
 	// --- Skill tools (CategorySkills) ---
-	// remove_skill is NOT listed here: it is a ScopeCore management tool
-	// (systools.SkillRemoveTool, pkg/sysagent/tools/skill.go), registered via
-	// systools.AllTools in the central BuiltinRegistry — not a ScopeGeneral
-	// tool from this metadata catalog. A duplicate ScopeGeneral "remove_skill"
-	// registered here would be silently skipped as a name collision (harmless
-	// but dead weight) since systools.AllTools populates the registry first.
+	// create_skill and remove_skill are retired (skills spec r15 §5.1).
 	out = append(out, NewFindSkillsTool(nil, nil))
 	out = append(out, NewInstallSkillTool(nil, ""))
 	// Skill (ADR-072 D1): the on-demand load-by-slug / search-by-query tool
@@ -152,6 +147,8 @@ func GeneralBuiltinMetadata() []Tool {
 	// central registry and the Constraint #6 tool-policy-coverage universe
 	// (buildKnownBuiltinToolNames) see it, mirroring message_parent exactly.
 	out = append(out, NewAskUserQuestionTool(nil))
+	out = append(out, NewRequestSecretTool(nil, nil))
+	out = append(out, NewListSecretsTool(ListSecretsDeps{}))
 
 	// --- set_goal (CategoryTasks) — ADR-088 D2 (work-first-goal-flow-spec
 	// FR-004/FR-005/FR-006): the validated write-path over the goal record
@@ -187,6 +184,10 @@ func GeneralBuiltinMetadata() []Tool {
 	out = append(out, NewTaskCreateTool(nil))
 	out = append(out, NewTaskUpdateTool(nil))
 	out = append(out, NewTaskDeleteTool(nil))
+	// r17 §7.9 read-back tools (TK-31, PL-12, GL-04), with field selection.
+	out = append(out, NewTaskGetTool(nil))
+	out = append(out, NewPlanGetTool(nil, nil))
+	out = append(out, NewGoalGetTool(nil))
 	out = append(out, NewAgentListTool(nil))
 
 	// --- Plan tools (CategoryTasks) — ADR-052 autonomous agent plan
@@ -196,6 +197,7 @@ func GeneralBuiltinMetadata() []Tool {
 	// metadata catalog, at the per-agent tool-dispatch gate. ---
 	out = append(out, NewPlanCreateTool(nil))
 	out = append(out, NewPlanExecuteTool(nil, nil))
+	out = append(out, NewPlanUpdateTool(nil))
 	out = append(out, NewTaskRunTool(nil))
 	// inspect_session: verifier-role-only (ceiling-deny for every ordinary
 	// agent); listed here purely as a capability-reference entry.

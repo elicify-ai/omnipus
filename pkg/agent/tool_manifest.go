@@ -59,9 +59,8 @@ const manifestBucketKeySep = "\x1f"
 
 // manifestBucketKey derives the loaded-tool bucket key for (agentID, session)
 // (ADR-071 D3 §4.6). It NARROWS manifestSessionID's session-only key by
-// prepending the acting agent's id, so a `switch_agent` within one session no
-// longer lets the incoming agent inherit the outgoing agent's loaded Tier 3
-// tools — closing the D3 x D4 interaction §4.6 documents in detail.
+// prepending the acting agent's id, so two agents in one session never share
+// loaded Tier 3 tools.
 //
 // This is a strict narrowing of manifestSessionID's key, never a widening:
 // ADR-057's invariant for manifestSessionID ("derives a bucket from the ids
@@ -190,9 +189,9 @@ func stripInfraToolDefs(in []tools.Tool) []tools.Tool {
 // When cfg.Tools.Manifest.Compressed is false, the caller must use
 // tools.ToolsToProviderDefs directly — this helper is only called on the
 // compressed code-path.
-func (al *AgentLoop) buildCompressedToolDefs(ts *turnState, policyFiltered []tools.Tool) []providers.ToolDefinition {
+func (al *AgentLoop) buildCompressedToolDefs(ts *turnState, policyFiltered []tools.Tool) ([]providers.ToolDefinition, error) {
 	bucket := ts.manifestBucket()
-	loaded := al.sessionLoadedTools(bucket)
+	loaded := al.pruneLoadedTools(bucket, policyFiltered)
 
 	// Track which infra tools are already present in policyFiltered so we don't
 	// double-add them. Build the sent list in one pass.
@@ -225,9 +224,13 @@ func (al *AgentLoop) buildCompressedToolDefs(ts *turnState, policyFiltered []too
 		}
 	}
 
-	sent = al.appendGoalDoorsAfterEscape(ts, policyFiltered, sent)
-
-	return tools.ToolsToProviderDefs(sent)
+	sent, err := al.appendGoalDoorsAfterEscape(ts, policyFiltered, sent)
+	if err != nil {
+		return nil, err
+	}
+	defs := tools.ToolsToProviderDefs(sent)
+	al.retainAdvertisedTools(ts, defs)
+	return defs, nil
 }
 
 // appendGoalDoorsAfterEscape keeps ADR-088 D3's first-move doors callable
@@ -250,13 +253,16 @@ func (al *AgentLoop) buildCompressedToolDefs(ts *turnState, policyFiltered []too
 // policy, unlike the infra force-include above), and only while the D3 base
 // predicate still holds. The ask door follows evaluateGoalForcing's own rule:
 // webchat origin and the per-goal question budget unspent.
-func (al *AgentLoop) appendGoalDoorsAfterEscape(ts *turnState, policyFiltered, sent []tools.Tool) []tools.Tool {
+func (al *AgentLoop) appendGoalDoorsAfterEscape(ts *turnState, policyFiltered, sent []tools.Tool) ([]tools.Tool, error) {
 	if ts == nil || !ts.goalNarrowIsEscaped() {
-		return sent
+		return sent, nil
 	}
-	holds, rec := goalTurnRecordState(al, ts)
+	holds, rec, err := goalTurnRecordState(al, ts)
+	if err != nil {
+		return nil, err
+	}
 	if !holds || rec == nil {
-		return sent
+		return sent, nil
 	}
 	includeAsk := ts.channel == goalForcingWebChannel && rec.QuestionRoundsUsed < 1
 	present := make(map[string]bool, len(sent))
@@ -270,7 +276,7 @@ func (al *AgentLoop) appendGoalDoorsAfterEscape(ts *turnState, policyFiltered, s
 		sent = append(sent, door)
 		present[door.Name()] = true
 	}
-	return sent
+	return sent, nil
 }
 
 // buildToolManifestNote renders the compact "More tools" manifest block for
@@ -297,18 +303,11 @@ func (al *AgentLoop) buildToolManifestNote(ts *turnState, policyFiltered []tools
 	return tools.BuildCompressedManifest(policyFiltered, loaded)
 }
 
-// injectManifestNote inserts note as a "system" role message at index 1 of
-// msgs (immediately after the system prompt at index 0, before conversation
-// history). Returns msgs unchanged when note == "" or len(msgs) == 0.
-// This is a pure helper extracted from the runTurn injection site to allow
-// unit-testing the position and role invariants without driving a full turn.
+// injectManifestNote appends request-only user text. The send seam combines it
+// with the clock, scratchpad and goal note after all completed history groups.
 func injectManifestNote(msgs []providers.Message, note string) []providers.Message {
 	if note == "" || len(msgs) == 0 {
 		return msgs
 	}
-	out := make([]providers.Message, 0, len(msgs)+1)
-	out = append(out, msgs[0])
-	out = append(out, providers.Message{Role: "system", Content: note})
-	out = append(out, msgs[1:]...)
-	return out
+	return appendVolatileNote(msgs, note)
 }

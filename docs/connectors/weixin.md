@@ -26,8 +26,7 @@ channel.
       "base_url": "",
       "cdn_base_url": "",
       "proxy": "",
-      "allow_from": [],
-      "reasoning_channel_id": ""
+      "allow_from": []
     }
   }
 }
@@ -42,7 +41,6 @@ channel.
 | `cdn_base_url` | string | No | iLink CDN base URL for media downloads; defaults to the standard iLink CDN |
 | `proxy` | string | No | HTTP proxy URL for environments where `ilinkai.weixin.qq.com` is not directly reachable (e.g. `http://localhost:7890`) |
 | `allow_from` | array | No | Allowlist of WeChat user IDs; empty allows all senders who can message the connected account |
-| `reasoning_channel_id` | string | No | User ID that receives reasoning/thought output from a secondary agent |
 
 ## Notes
 
@@ -53,3 +51,7 @@ channel.
 **Capabilities implemented:** `TypingCapable` (typing status via iLink API), `MediaSender` (image and file upload/download via CDN). Supports inbound images, voice, and file attachments.
 
 **Rate limits.** Avoid high-frequency automated broadcasts; WeChat anti-spam systems may restrict accounts that send messages at excessive rates.
+
+## Starting messages
+
+Starting messages is not supported yet on this platform; the agent only answers. See [Starting messages](../connectors.md#starting-messages).

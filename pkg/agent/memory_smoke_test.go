@@ -147,67 +147,35 @@ func TestMemoryRetroRoundTrip(t *testing.T) {
 	}
 }
 
-// TestMemoryLastSession verifies WriteLastSession + ReadLastSession.
-func TestMemoryLastSession(t *testing.T) {
-	dir := t.TempDir()
-	home := t.TempDir()
-	ms := NewMemoryStore(dir, home)
-	t.Cleanup(ms.Close)
+// TestMemoryLastSession's retired API roundtrip is replaced by
+// TestWU21_CarryForwardAPIExactLocationScopeAndMode (§3.2(7)). The independent
+// long-term-memory oracle in TestGetMemoryContextIncludes remains live below.
 
-	// ReadLastSession on a fresh workspace returns empty string, no error.
-	content, err := ms.ReadLastSession()
-	if err != nil {
-		t.Fatalf("ReadLastSession on fresh workspace: %v", err)
-	}
-	if content != "" {
-		t.Errorf("expected empty, got %q", content)
-	}
-
-	// Write and read back.
-	const payload = "## Session summary\nWe built the memory store."
-	if writeErr := ms.WriteLastSession(payload); writeErr != nil {
-		t.Fatalf("WriteLastSession: %v", writeErr)
-	}
-	got, err := ms.ReadLastSession()
-	if err != nil {
-		t.Fatalf("ReadLastSession after write: %v", err)
-	}
-	if got != payload {
-		t.Errorf("got %q, want %q", got, payload)
-	}
-}
-
-// TestGetMemoryContextIncludes verifies GetMemoryContext returns last session + memory.
+// TestGetMemoryContextIncludes restores the live half of the mixed-scope
+// retirement: §3.2(4) keeps long-term entries and removes only Last Session.
 func TestGetMemoryContextIncludes(t *testing.T) {
-	dir := t.TempDir()
 	home := t.TempDir()
-	ms := NewMemoryStore(dir, home)
+	t.Setenv("HOME", home)
+	t.Setenv("OMNIPUS_HOME", home)
+	ms := NewMemoryStore(t.TempDir(), home)
 	t.Cleanup(ms.Close)
-
-	// Write LAST_SESSION.md.
-	if err := ms.WriteLastSession("Last session was productive."); err != nil {
-		t.Fatalf("WriteLastSession: %v", err)
-	}
-
-	// Append a few long-term entries.
-	for i := range 3 {
-		if i > 0 {
-			time.Sleep(2 * time.Millisecond)
-		}
-		cat := []string{"key_decision", "reference", "lesson_learned"}[i]
-		if err := ms.AppendLongTerm("entry number "+string(rune('1'+i)), cat); err != nil {
-			t.Fatalf("AppendLongTerm %d: %v", i, err)
+	for i, category := range []string{"key_decision", "reference", "lesson_learned"} {
+		content := "WU21_LONG_TERM_ENTRY_" + string(rune('1'+i))
+		if err := ms.AppendLongTerm(content, category); err != nil {
+			t.Fatalf("long-term control %s could not be saved: %v", category, err)
 		}
 	}
-
-	ctx := ms.GetMemoryContext()
-	if ctx == "" {
-		t.Fatal("GetMemoryContext returned empty string")
+	context := ms.GetMemoryContext()
+	if count := strings.Count(context, "## Long-term memory\n"); count != 1 {
+		t.Errorf("§3.2(4): long-term heading count=%d want 1", count)
 	}
-	if !strings.Contains(ctx, "## Last Session") {
-		t.Error("GetMemoryContext missing ## Last Session header")
+	for i := range 3 { // three independently seeded categories from the original smoke case.
+		content := "WU21_LONG_TERM_ENTRY_" + string(rune('1'+i))
+		if count := strings.Count(context, content); count != 1 {
+			t.Errorf("§3.2(4): saved long-term content %q count=%d want 1", content, count)
+		}
 	}
-	if !strings.Contains(ctx, "## Long-term memory") {
-		t.Error("GetMemoryContext missing ## Long-term memory header")
+	if strings.Contains(context, "## Last Session") {
+		t.Error("§3.2(4): generic memory regained the retired Last Session block")
 	}
 }

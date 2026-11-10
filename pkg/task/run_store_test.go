@@ -55,7 +55,7 @@ func TestOpenRun_IdempotentSameKey(t *testing.T) {
 	s := newStore(t)
 	taskID := "task-1"
 
-	run1, created1, err := s.OpenRun(taskID, nil, RunKindManual, "session-a")
+	run1, created1, err := s.OpenRun(taskID, nil, RunKindManual, "session-a", nil)
 	require.NoError(t, err)
 	assert.True(t, created1)
 	require.NotNil(t, run1)
@@ -64,7 +64,7 @@ func TestOpenRun_IdempotentSameKey(t *testing.T) {
 	assert.Nil(t, run1.OccurrenceMs)
 	assert.Nil(t, run1.EndedAt)
 
-	run2, created2, err := s.OpenRun(taskID, nil, RunKindManual, "session-b")
+	run2, created2, err := s.OpenRun(taskID, nil, RunKindManual, "session-b", nil)
 	require.NoError(t, err)
 	assert.False(t, created2, "second OpenRun for the same key must not create a new run")
 	require.NotNil(t, run2)
@@ -81,17 +81,17 @@ func TestOpenRun_DifferentOccurrenceMsAreDistinctRuns(t *testing.T) {
 	occA := ptr(int64(1000))
 	occB := ptr(int64(2000))
 
-	runA, createdA, err := s.OpenRun(taskID, occA, RunKindScheduled, "session-a")
+	runA, createdA, err := s.OpenRun(taskID, occA, RunKindScheduled, "session-a", nil)
 	require.NoError(t, err)
 	assert.True(t, createdA)
 
-	runB, createdB, err := s.OpenRun(taskID, occB, RunKindScheduled, "session-b")
+	runB, createdB, err := s.OpenRun(taskID, occB, RunKindScheduled, "session-b", nil)
 	require.NoError(t, err)
 	assert.True(t, createdB, "a distinct occurrence_ms must open a distinct run")
 	assert.NotEqual(t, runA.RunID, runB.RunID)
 
 	// Re-opening occA is still idempotent against the first run.
-	runAAgain, createdAAgain, err := s.OpenRun(taskID, occA, RunKindScheduled, "session-a2")
+	runAAgain, createdAAgain, err := s.OpenRun(taskID, occA, RunKindScheduled, "session-a2", nil)
 	require.NoError(t, err)
 	assert.False(t, createdAAgain)
 	assert.Equal(t, runA.RunID, runAAgain.RunID)
@@ -101,12 +101,12 @@ func TestOpenRun_NilVsNonNilOccurrenceAreDistinct(t *testing.T) {
 	s := newStore(t)
 	taskID := "task-1"
 
-	adhoc, created1, err := s.OpenRun(taskID, nil, RunKindManual, "session-adhoc")
+	adhoc, created1, err := s.OpenRun(taskID, nil, RunKindManual, "session-adhoc", nil)
 	require.NoError(t, err)
 	assert.True(t, created1)
 
 	occ := ptr(int64(500))
-	scheduled, created2, err := s.OpenRun(taskID, occ, RunKindScheduled, "session-sched")
+	scheduled, created2, err := s.OpenRun(taskID, occ, RunKindScheduled, "session-sched", nil)
 	require.NoError(t, err)
 	assert.True(t, created2, "occurrence_ms=nil and occurrence_ms=500 must be distinct keys")
 	assert.NotEqual(t, adhoc.RunID, scheduled.RunID)
@@ -116,14 +116,14 @@ func TestOpenRun_ReRunAfterFailureOpensNewRun(t *testing.T) {
 	s := newStore(t)
 	taskID := "task-1"
 
-	run1, created1, err := s.OpenRun(taskID, nil, RunKindManual, "session-1")
+	run1, created1, err := s.OpenRun(taskID, nil, RunKindManual, "session-1", nil)
 	require.NoError(t, err)
 	assert.True(t, created1)
 	require.NoError(t, s.CloseRun(taskID, run1.RunID, StatusFailed, "boom"))
 
 	// The prior run is now closed (failed) — OpenRun(nil) again must open a
 	// GENUINELY NEW run, not idempotently return the closed one (RD7).
-	run2, created2, err := s.OpenRun(taskID, nil, RunKindManual, "session-2")
+	run2, created2, err := s.OpenRun(taskID, nil, RunKindManual, "session-2", nil)
 	require.NoError(t, err)
 	assert.True(t, created2, "re-run after failure must open a new run, not reuse the closed one")
 	assert.NotEqual(t, run1.RunID, run2.RunID)
@@ -136,13 +136,13 @@ func TestOpenRun_ReRunAfterFailureOpensNewRun(t *testing.T) {
 func TestOpenRun_InvalidInputs(t *testing.T) {
 	s := newStore(t)
 
-	_, _, err := s.OpenRun("", nil, RunKindManual, "s")
+	_, _, err := s.OpenRun("", nil, RunKindManual, "s", nil)
 	assert.Error(t, err, "empty task id must be rejected")
 
-	_, _, err = s.OpenRun("../escape", nil, RunKindManual, "s")
+	_, _, err = s.OpenRun("../escape", nil, RunKindManual, "s", nil)
 	assert.Error(t, err, "path-traversal task id must be rejected")
 
-	_, _, err = s.OpenRun("task-1", nil, RunKind("bogus"), "s")
+	_, _, err = s.OpenRun("task-1", nil, RunKind("bogus"), "s", nil)
 	assert.Error(t, err, "invalid run kind must be rejected")
 }
 
@@ -152,7 +152,7 @@ func TestCloseRun_FoldsToTerminalState(t *testing.T) {
 	s := newStore(t)
 	taskID := "task-1"
 
-	run, _, err := s.OpenRun(taskID, ptr(int64(42)), RunKindScheduled, "session-x")
+	run, _, err := s.OpenRun(taskID, ptr(int64(42)), RunKindScheduled, "session-x", nil)
 	require.NoError(t, err)
 
 	require.NoError(t, s.CloseRun(taskID, run.RunID, StatusDone, "all good"))
@@ -184,7 +184,7 @@ func TestCloseRun_NotFound(t *testing.T) {
 func TestCloseRun_AlreadyClosed(t *testing.T) {
 	s := newStore(t)
 	taskID := "task-1"
-	run, _, err := s.OpenRun(taskID, nil, RunKindManual, "s")
+	run, _, err := s.OpenRun(taskID, nil, RunKindManual, "s", nil)
 	require.NoError(t, err)
 	require.NoError(t, s.CloseRun(taskID, run.RunID, StatusDone, "first close"))
 
@@ -195,7 +195,7 @@ func TestCloseRun_AlreadyClosed(t *testing.T) {
 func TestCloseRun_RejectsNonTerminalStatus(t *testing.T) {
 	s := newStore(t)
 	taskID := "task-1"
-	run, _, err := s.OpenRun(taskID, nil, RunKindManual, "s")
+	run, _, err := s.OpenRun(taskID, nil, RunKindManual, "s", nil)
 	require.NoError(t, err)
 
 	err = s.CloseRun(taskID, run.RunID, StatusInProgress, "x")
@@ -210,7 +210,7 @@ func TestCloseRun_RejectsNonTerminalStatus(t *testing.T) {
 func TestCloseRun_TruncatesOversizedResult(t *testing.T) {
 	s := newStore(t)
 	taskID := "task-1"
-	run, _, err := s.OpenRun(taskID, nil, RunKindManual, "s")
+	run, _, err := s.OpenRun(taskID, nil, RunKindManual, "s", nil)
 	require.NoError(t, err)
 
 	oversized := strings.Repeat("x", maxRunResultChars+12345)
@@ -235,7 +235,7 @@ func TestCloseRun_TruncatesOversizedResult(t *testing.T) {
 func TestCloseRun_ResultAtExactCapIsNotTruncated(t *testing.T) {
 	s := newStore(t)
 	taskID := "task-1"
-	run, _, err := s.OpenRun(taskID, nil, RunKindManual, "s")
+	run, _, err := s.OpenRun(taskID, nil, RunKindManual, "s", nil)
 	require.NoError(t, err)
 
 	exact := strings.Repeat("y", maxRunResultChars)
@@ -253,7 +253,7 @@ func TestOpenRun_DayPartitionAssignment(t *testing.T) {
 	s := newStore(t)
 	taskID := "task-1"
 
-	run, _, err := s.OpenRun(taskID, nil, RunKindManual, "s")
+	run, _, err := s.OpenRun(taskID, nil, RunKindManual, "s", nil)
 	require.NoError(t, err)
 
 	wantDay := time.Now().UTC().Format("2006-01-02")
@@ -692,7 +692,7 @@ func TestOpenRun_ConcurrentSameKeyCreatesExactlyOne(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			run, created, err := s.OpenRun(taskID, occ, RunKindScheduled, "session")
+			run, created, err := s.OpenRun(taskID, occ, RunKindScheduled, "session", nil)
 			results[idx] = run
 			createdFlags[idx] = created
 			errs[idx] = err

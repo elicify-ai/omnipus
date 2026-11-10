@@ -2,16 +2,16 @@ package channels
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
-// CancelInterceptor is the subset of the agent loop that Tier B channels need
-// to fire a cancel. Defined here (pkg/channels) to avoid an import cycle with
-// pkg/agent. The agent loop's *AgentLoop implements this interface.
-type CancelInterceptor interface {
+// CancelRequester is the cancellation dependency used by channel injection.
+// Additional controls are separate capabilities and fail visibly if missing.
+type CancelRequester interface {
 	// RequestCancelByChannelChat runs the full cancel state machine for the
 	// turn identified by (channelName, chatID). All parameters are primitives to
 	// avoid importing pkg/agent from pkg/channels (circular dependency).
@@ -24,6 +24,14 @@ type CancelInterceptor interface {
 	// the prior bare-error return made every cancel look like "Canceling..."
 	// regardless of outcome.
 	RequestCancelByChannelChat(ctx context.Context, channelName, chatID, userID string) (fired bool, armed bool, err error)
+}
+
+// CancelInterceptor is the complete D9 control seam, implemented by AgentLoop.
+// The primitive parameters keep channels independent of the agent package.
+type CancelInterceptor interface {
+	CancelRequester
+	RequestStopByChannelChat(ctx context.Context, channelName, chatID, userID string) (fired bool, armed bool, err error)
+	RequestRedirectByChannelChat(ctx context.Context, channelName, chatID, userID, instruction string) error
 }
 
 // IsCancelCommand reports whether msg is exactly the /cancel command per FR-2:
@@ -44,23 +52,23 @@ func IsCancelCommand(msg string) bool {
 // sendFn signature: func(ctx context.Context, chatID, text string) error.
 // A nil sendFn is accepted (ack will be silently skipped).
 //
-// A nil interceptor is accepted (the cancel is a no-op but the function still
-// returns true so the message is consumed, preventing it from reaching the
-// agent loop with text "/cancel").
+// A missing interceptor is reported as unavailable, never as a successful
+// single-session fallback. The command is still consumed rather than forwarded
+// to the model as ordinary text.
 func DispatchCancelIfRecognized(
 	ctx context.Context,
 	msg, channelName, chatID, senderID string,
-	interceptor CancelInterceptor,
+	interceptor CancelRequester,
 	sendFn func(ctx context.Context, chatID, text string) error,
 ) bool {
 	if !IsCancelCommand(msg) {
 		return false
 	}
 
-	// Defect #29: the cancel outcome determines the ack text. A nil
-	// interceptor yields (fired=false, armed=false) → "Nothing to cancel",
-	// matching the honest no-op the nil case actually is.
+	// The actual tree-stop outcome determines the reply; missing wiring and
+	// real failures are visible and cannot be mislabeled as no work.
 	var fired, armed bool
+	cancelErr := fmt.Errorf("tree-scoped Stop all is unavailable; nothing was stopped")
 	if interceptor != nil {
 		// RequestCancelByChannelChat runs the full cancel state machine: audit,
 		// transcript marking, abuse detection, and the 2-stage graceful→hard timer.
@@ -74,10 +82,14 @@ func DispatchCancelIfRecognized(
 		}
 		fired = f
 		armed = a
+		cancelErr = err
 	}
 
 	if sendFn != nil {
 		ack := ackTextForCancelOutcome(fired, armed)
+		if cancelErr != nil {
+			ack = "Cancel request failed: " + cancelErr.Error()
+		}
 		if err := sendFn(ctx, chatID, ack); err != nil {
 			logger.WarnCF("channels", "cancel ack send failed", map[string]any{
 				"channel": channelName,
@@ -98,7 +110,7 @@ func DispatchCancelIfRecognized(
 //   - armed  → "⏸ Cancel acknowledged — nothing is running yet, but it will
 //     stop the instant it starts." (a latch stands in; the next turn to
 //     register will be canceled)
-//   - neither → "Nothing to cancel" (genuine no-op)
+//   - neither → "Nothing to stop." (genuine no-op)
 //
 // armed is NEVER true when fired is true (see CancelOutcome.Armed's contract),
 // so the case order is safe.
@@ -109,7 +121,7 @@ func ackTextForCancelOutcome(fired, armed bool) string {
 	case armed:
 		return "⏸ Cancel acknowledged — nothing is running yet, but it will stop the instant it starts."
 	default:
-		return "Nothing to cancel"
+		return "Nothing to stop."
 	}
 }
 

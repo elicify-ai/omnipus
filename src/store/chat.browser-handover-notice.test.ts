@@ -26,6 +26,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { act } from 'react'
 import { useChatStore, makeBucketMessages, type ChatMessage } from './chat'
 import { useSessionStore } from './session'
+import { emptyHistoryFixture } from '../../tests/chat-history-paging/empty-history'
 import type { BrowserHandoverNoticeFrame } from '@/lib/api/generated/asyncapi-types'
 
 const SID = 'browser-handover-notice-test-sid'
@@ -49,6 +50,7 @@ function seedBucket(seedMessages: ChatMessage[] = []): void {
     useChatStore.setState(() => ({
       sessionsById: {
         [SID]: {
+          ...emptyHistoryFixture(),
           ...makeBucketMessages(seedMessages),
           toolCalls: {},
           toolCallOrder: [],
@@ -185,6 +187,7 @@ describe('browser-handover-notice — insertion (ADR-085 BROWSER-FR-041/042)', (
         sessionsById: {
           ...state.sessionsById,
           [OTHER_SID]: {
+            ...emptyHistoryFixture(),
             ...makeBucketMessages([]),
             toolCalls: {},
             toolCallOrder: [],

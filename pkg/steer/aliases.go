@@ -28,10 +28,14 @@ type (
 	ReportingTarget   = session.ReportingTarget
 	Authorization     = session.Authorization
 	AuthorizationMode = session.AuthorizationMode
-	Limits            = session.Limits
 
 	// Stop — I-1/D8: the durable Stop marker on a session's own record.
 	Stop = session.Stop
+
+	// StopNote — D2/D6: the durable, retained record of who stopped a
+	// session, when, and why.
+	StopNote  = session.StopNote
+	StopCause = session.StopCause
 
 	// IndexReport — I-9: session.LifecycleIndex.Report()'s return shape.
 	IndexReport      = session.IndexReport
@@ -39,10 +43,17 @@ type (
 )
 
 const (
+	StopCauseStop          = session.StopCauseStop
+	StopCauseRedirectPause = session.StopCauseRedirectPause
+	StopCauseCascade       = session.StopCauseCascade
+	StopCauseRestart       = session.StopCauseRestart
+	StopCauseTimeout       = session.StopCauseTimeout
+
 	OriginKindDelegate  = session.OriginKindDelegate
 	OriginKindTask      = session.OriginKindTask
 	OriginKindChat      = session.OriginKindChat
 	OriginKindChannel   = session.OriginKindChannel
+	OriginKindMain      = session.OriginKindMain
 	OriginKindScheduled = session.OriginKindScheduled
 	OriginKindHeartbeat = session.OriginKindHeartbeat
 	OriginKindVerifier  = session.OriginKindVerifier

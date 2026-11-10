@@ -274,7 +274,8 @@ func TestSetTodos_StampsProvenanceOnNewCard(t *testing.T) {
 	ctx := WithWorkspaceID(WithAgentID(context.Background(), "mia"), "ws-1")
 	res := tool.Execute(ctx, map[string]any{
 		"outcome": "ship the thing",
-		"todos":   []any{map[string]any{"text": "step one", "status": "pending"}},
+		// SPEC CHANGE 2026-10-24 (Q74): active_form now required on every item.
+		"todos": []any{map[string]any{"text": "step one", "status": "pending", "active_form": "Doing step one"}},
 	})
 	if res.IsError {
 		t.Fatalf("set_todos failed: %s", res.ForLLM)

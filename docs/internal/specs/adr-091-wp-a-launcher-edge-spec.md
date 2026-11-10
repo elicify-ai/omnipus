@@ -1,5 +1,21 @@
 # ADR-091 WP-A — Launcher, steered-by edge, turn reconstruction, admission
 
+> **Amendment 2026-10-14 — founder order ([PR #1311](https://github.com/elicify-ai/omnipus/pull/1311), [issue #1306](https://github.com/elicify-ai/omnipus/issues/1306)).** No wall-clock limit ends agent work. The Judge retains its timers but must always conclude visibly with the work result. This supersedes only the lifetime/default/boundary prescriptions marked below, not launcher identity, authority, depth, admission or explicit Stop. First dispatch, wake, resume and continuation drain are deadline-free; legacy budget fields decode without affecting execution and disappear from a newly persisted tail. Original test plans and source snapshots retain their dates. Sources: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/pkg/session/lifecycle_edge.go`::SteeredBy; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/pkg/steer/types.go`::LaunchRequest; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/pkg/agent/steer_launcher.go`::runDispatchedSteeredTurn.
+
+**Amended 2026-10-06 (founder):** Stop click 1 / Esc 1 / `/stop` stops **this chat's current turn only** and opens a **3 s window**. A second Stop / Esc / `/stop` within that window stops **this chat and its whole helper tree**; `/cancel` does that immediately. **No separate button or offer.** `/stop-redirect <instruction>` stops this chat's turn and continues **this chat** with the instruction, in **any root or helper chat**. Same semantics on web, CLI and channels. Plain Stop leaves background shells running; a second Stop / Esc within 3 s, or `/cancel`, kills them. Agent delegate `stop` / `stop_all` is unchanged (one helper's turn / its tree). Authority: founder decision, 2026-10-06.
+
+**Qualification, 2026-10-10 (external-CLI helpers):** the native steering and continuation rules in this document do not describe a helper on an external command-line tool. A live external delegation takes an instruction by interrupting its subprocess and resuming the same retained CLI conversation (a live task run too); with no CLI run in flight the request is refused as `not_steerable`. Its chat's `/stop-redirect` returns `not_steerable` while it is running or stopped, and a finished helper has no turn to replace (Resume guidance is shown). Resume, Respond and a typed message continue the same CLI conversation when it started and the gateway still retains it, run it for the first time if it never started, and otherwise refuse visibly; none of them creates a new worker session. External workers have no `message_parent`, and `delegate redirect` and `clear_goal` are refused. See [Agents guide](../../agents.md)::Workers and delegation.
+
+## Amended 2026-10-06 — founder decision
+
+[The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](../architecture/ADR-20260928-sub-agent-control-plane.md) and [Steering commands: no person question](../architecture/ADR-20261004-steering-commands-no-person-question.md) supersede conflicting session-control requirements and old acceptance expectations in this spec. Human and agent triggers use `AgentLoop.StopSession`: polite immediately, forced after 3 s, detach 3 s after force. `cancel_grace`, the agent 5-second grace and public `hard` option are removed.
+
+Landed stopped resumes the same generation with a fresh execution identity; committed done/failed starts the next round. Boot never dispatches from old messages. A finished root is lifecycle completed/done, **not archived/hidden**; human input continues it, and a new scheduled/heartbeat run may revive completed as the system principal, **never stopped**. A helper final is consumed once by poll OR wake; a stopped parent holds it unconsumed until resumed, and the tree-scope stop supersedes queued hand-back wakes without deleting saved results.
+
+Delegated input is delivered only after exact text/identity is durably in the transcript; a failed write stays queued with a visible error. One route/record for all senders (transcript as record), waiting-message restart reconstruction, 256 KiB aggregate cap, ledger compaction and live failed-descendant-stop retry are **deferred to #1198 (founder 2026-10-06)**. F6 is the later post-landing simplification review, not authorization to remove safeguards now. The historical holdout below stays verbatim; conflicting old Stop, generation, person-question and automatic-boot-run oracles are not current acceptance.
+
+Status: Draft
+
 - **Decision record:** [ADR-091](../architecture/ADR-091-steered-sessions-replace-subagents.md) D1, D2, D6 (prerequisites), D9
 - **Landing order:** [adr-091-landing-order.md](adr-091-landing-order.md) — publishes I-1, I-2, I-3, I-8, I-9; consumes I-6, I-7
 - **Owner files:** landing order §3, row A
@@ -59,6 +75,8 @@ Delegate run → launch → dispatch; task start → launch → dispatch; async 
 
 ## User stories and acceptance criteria
 
+**Amended 2026-10-06:** any earlier boot-reconstruction case now verifies no boot dispatch. Completion and admission must distinguish completed-root scheduled/heartbeat system-principal new rounds from stopped roots, where Stop holds. Stopped resumes use a fresh execution identity in the same generation. Only the tree-scope stop is a helper cascade; plain Stop cannot select helper admissions.
+
 ### US-1 — A steered session is created whole (P0)
 
 *As the operator, I want every steered session to be findable and complete from the moment it exists, so that nothing about it depends on which tool created it.*
@@ -101,6 +119,8 @@ Delegate run → launch → dispatch; task start → launch → dispatch; async 
 
 ### US-4 — One limit surface; a launch never blocks (P1)
 
+> **Amended 2026-10-14 — superseded in part (founder; PR #1311 / #1306):** the story's timeout choice and **AS-4's creator-set/non-reset/default lifetime** are retired. AS-5's negative/zero checks apply to surviving depth/concurrency settings, not a retired duration input. Replace lifetime assertions with deadline-free first dispatch, follow-up, resume and wake despite an old saved expired budget. Depth/concurrency precedence, immediate queueing and Stop-at-launch remain required.
+
 *As the operator, I want depth, concurrency and timeout each set in one place, so that I can reason about them; and I never want a delegating agent's turn to stall on a limit.*
 
 **Independent test:** set each limit once; observe it applied to a delegation and to a task; reach the cap.
@@ -120,7 +140,7 @@ Delegate run → launch → dispatch; task start → launch → dispatch; async 
 | Launch with a cycle (target chain leads back to the launcher) | refused; no write |
 | Ancestor record pruned while descendant live | pruning refuses; the ancestor stays |
 | Two re-entries for the same session race | `registerTurnIfAbsent` admits one; the other is dropped with a diagnostic |
-| A launch that lands while a Stop cascade is passing its parent | the launcher reads the parent's record; a marker of the current generation on the parent stamps the child at launch |
+| A launch that lands while a cascade stopping the chat and its helper tree is passing its parent | the launcher reads the parent's record; a marker of the current generation on the parent stamps the child at launch |
 | `StartTaskNow` for a task whose session already exists and is terminal | dispatch is a no-op; no second session |
 | Delayed or recurring task whose creating session no longer exists | launched as an `ordinary_root` |
 | Launch with `Goal` whose criteria fail task-style validation | refused with the same message `create_task` gives |
@@ -180,6 +200,8 @@ Delegate run → launch → dispatch; task start → launch → dispatch; async 
 | Fixture (WP-G) | builds trees through the launcher | I-2, I-7 | n/a |
 
 ## BDD scenarios
+
+> **Amended 2026-10-14 — timeout scenarios superseded (founder; PR #1311 / #1306):** **“Follow-up does not reset the deadline”** and the `timeout_seconds` rows in **“Limit boundaries”** below are historical oracles only. Replace them with deadline-free first run/re-entry despite an old expired saved budget and retained explicit Stop. Keep the depth/concurrency boundary rows. The Symbol table's `DefaultTimeoutMinutes` → `Performance.DelegationTimeoutMinutes` move and Machine-verifiable **“One key each” timeout** clause are likewise retired; neither limit type nor moved default exists now.
 
 ```gherkin
 Feature: Steered session launch, reconstruction and admission
@@ -264,7 +286,7 @@ Feature: Steered session launch, reconstruction and admission
 
   # Error Path — Traces to: US-3 / AS-3
   Scenario: A stamped record refuses re-entry
-    Given Stop on R has stamped B's record for its current generation
+    Given a tree-scope stop on R has stamped B's record for its current generation
     When B's queued re-entry is dispatched
     Then dispatch is refused and no turn starts
 
@@ -392,6 +414,8 @@ Implementers load the `test-driven-development` skill first. Order: unit → int
 
 ### Test datasets
 
+> **Amended 2026-10-14 — A-9/TDD supersession (founder; PR #1311 / #1306):** **A-9's `TimeoutSeconds` 0/negative/positive/default assertions** below are retired. Replace with inert old saved fields (including expired budgets) that preserve parent/root/authority and run without a deadline, plus omission of retired fields on re-persist. Test-plan item 21 and FR-A-008's traceability retain only surviving depth/concurrency single-source boundaries and add that deadline-free oracle. No fixture threads a lifetime field to production.
+
 | ID | Input | Expected | Traces to |
 |---|---|---|---|
 | A-1 | creator ws=W, agent=B | child ws=W | US-1/AS-1 |
@@ -412,6 +436,8 @@ Implementers load the `test-driven-development` skill first. Order: unit → int
 Preserved: every existing target-identity test in `subturn_target_identity_test.go` (a child never inherits agent settings — ADR-032); `delegateSessionID == sessionKey` alignment; owner copy on creation; `resolveEffectiveDelegationDepth`'s precedence when the global value is zero. Existing tests that assert the ring (`newEphemeralSession`, 50-message truncation) are **deleted** under WP-G's classification; tests asserting parent-address inheritance are **updated** to assert the edge; `pkg/agent/async_child_publication_test.go::spawnPublicationTestChild` — which constructs `&ephemeralSessionStore{}` — has its **setup moved** to the persisted-store fixture by this package, with every assertion and control unchanged (WP-G classification: update).
 
 ## Functional requirements
+
+> **Amended 2026-10-14 — FR-A-008 superseded in part (founder; PR #1311 / #1306):** the **default timeout / moved delegation setting / `Limits.TimeoutSeconds` zero-and-negative rules** below are removed, not moved again. Retain the surviving concurrency resolver, depth precedence and deletion of the old concurrency wait. `SteeredBy` and `LaunchRequest` have no lifetime-limit member. Replacement acceptance verifies no work deadline on first dispatch and re-entry, readable old budget fields, and explicit Stop still reaching the selected execution; it does not restore timeout-boundary tests.
 
 | ID | Requirement |
 |---|---|

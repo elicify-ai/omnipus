@@ -1,0 +1,13 @@
+--- FAIL: TestSessionCoreU9_NoInWorkspaceCallablesRemainInCatalog (0.00s)
+    sessioncore_u9_task_family_test.go:39: DEL-23/FR-046/BDD-08.10: retired callable "create_task_in_workspace" must be removed from the catalog
+    sessioncore_u9_task_family_test.go:39: DEL-23/FR-046/BDD-08.10: retired callable "update_task_in_workspace" must be removed from the catalog
+    sessioncore_u9_task_family_test.go:39: DEL-23/FR-046/BDD-08.10: retired callable "delete_task_in_workspace" must be removed from the catalog
+    sessioncore_u9_task_family_test.go:39: DEL-23/FR-046/BDD-08.10: retired callable "list_tasks_in_workspace" must be removed from the catalog
+--- FAIL: TestSessionCoreU9_RetiredInWorkspaceNamesAbsent (0.00s)
+    sessioncore_u9_task_family_test.go:64: DEL-23: retired callable "create_task_in_workspace" must not remain registered
+    sessioncore_u9_task_family_test.go:64: DEL-23: retired callable "update_task_in_workspace" must not remain registered
+    sessioncore_u9_task_family_test.go:64: DEL-23: retired callable "delete_task_in_workspace" must not remain registered
+    sessioncore_u9_task_family_test.go:64: DEL-23: retired callable "list_tasks_in_workspace" must not remain registered
+FAIL
+FAIL	github.com/elicify-ai/omnipus/pkg/sysagent/tools	3.818s
+FAIL

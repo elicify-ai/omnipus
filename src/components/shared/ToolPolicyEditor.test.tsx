@@ -1325,3 +1325,24 @@ describe('ToolPolicyEditor — ADR-092 J14 "Under Auto" marker', () => {
     expect(within(row).getByTestId('auto-approve-marker-send_message')).toHaveTextContent('Auto: runs')
   })
 })
+
+// #920 read-boundary (docs/internal/specs/read-boundary-consistency-spec.md,
+// test 26, S-6.3, FR-027): once the backend classifies read_file and
+// list_directory as "runs" (served by GET /api/v1/tools — asserted in Go by
+// pkg/gateway TestGetTools_ReadToolsServeAutoRuns), the Tools & Permissions
+// marker for either tool on Ask reads exactly "Auto: runs" — never the
+// RUNS-IF text "Auto: runs inside workspace". Exact text, not a substring:
+// "Auto: runs inside workspace" contains "Auto: runs".
+describe('ToolPolicyEditor — #920 read tools marker (S-6.3)', () => {
+  for (const name of ['read_file', 'list_directory']) {
+    it(`shows exactly "Auto: runs" for ${name} on Ask when classified runs`, async () => {
+      const user = userEvent.setup()
+      const tool = makeTool({ name, category: 'file', auto_approve: 'runs' })
+      renderEditor([tool], { policies: { [name]: 'ask' } })
+      await user.click(within(screen.getByTestId('category-grid')).getByRole('button', { name: /file/i }))
+      const row = screen.getByTestId(`tool-row-${name}`)
+      const marker = within(row).getByTestId(`auto-approve-marker-${name}`)
+      expect(marker.textContent?.trim()).toBe('Auto: runs')
+    })
+  }
+})

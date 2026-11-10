@@ -71,25 +71,6 @@ describe('GoalIndicator — active state', () => {
   })
 })
 
-// ADR-088 D5/D9: `queued` is retired — the backend never emits it anymore.
-// Unlike every other non-null state, it renders NOTHING (same as a null
-// goalStatus), defensively, in case a stale/legacy frame ever carries it.
-describe('GoalIndicator — queued state (retired, ADR-088 D5/D9)', () => {
-  it('renders nothing for a queued frame — no summary line, no round line, no indicator container', () => {
-    const { container } = render(<GoalIndicator goalStatus={makeGoal({ state: 'queued' })} />)
-    expect(container).toBeEmptyDOMElement()
-    expect(screen.queryByTestId('goal-indicator')).not.toBeInTheDocument()
-    expect(screen.queryByTestId('goal-indicator-queued')).not.toBeInTheDocument()
-    expect(screen.queryByTestId('goal-indicator-round')).not.toBeInTheDocument()
-  })
-
-  it('still renders the loop status line alongside a queued (suppressed) goal frame', () => {
-    render(<GoalIndicator goalStatus={makeGoal({ state: 'queued' })} loopStatus={makeLoop()} />)
-    expect(screen.getByTestId('loop-status-line')).toBeInTheDocument()
-    expect(screen.queryByTestId('goal-indicator-queued')).not.toBeInTheDocument()
-  })
-})
-
 describe('GoalIndicator — waiting_on_user state', () => {
   it('shows "waiting on you"', () => {
     render(<GoalIndicator goalStatus={makeGoal({ state: 'waiting_on_user' })} />)

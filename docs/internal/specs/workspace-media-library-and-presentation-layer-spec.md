@@ -1,5 +1,7 @@
 # Feature Specification: Workspace Media Library + Capability-Aware Presentation Layer
 
+Status: Implemented
+
 **Created**: 2026-07-22
 **Status**: Final
 **Input**: ADR-051 Rev 4 (operator directive: full scope, `release/v0.1.1`)

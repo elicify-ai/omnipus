@@ -117,7 +117,8 @@ test('(c) dev_mode_bypass = true shows red persistent banner on every route', as
   await expect(banner).toBeVisible({ timeout: 15_000 });
 
   // Banner must persist when navigating to another route
-  await page.goto('/#/agents');
+  // (WU-11 FR-108: the retired /#/agents is swapped for /#/skills).
+  await page.goto('/#/skills');
   await expect(banner).toBeVisible({ timeout: 10_000 });
 
   // Unregister routes to avoid "route in flight" errors during cleanup
@@ -141,9 +142,14 @@ test('(d) sign out clears the omnipus-session cookie server-side', async ({ page
   // not api.ts's logout() directly, so this exercises the actual wiring a
   // regression could break (e.g. a future edit that clears local state first
   // and skips the network call entirely).
-  const hamburger = page.locator('#sidebar-hamburger');
-  await expect(hamburger).toBeVisible({ timeout: 10_000 });
-  await hamburger.click();
+  // A fresh visit is not pinned: the sidebar starts closed, so Sign out is
+  // reached by opening the sidebar first ("Show sidebar", the header's
+  // hamburger). Same pattern as sidebar.spec.ts case (a).
+  const showSidebar = page.getByRole('button', { name: 'Show sidebar' });
+  const nav = page.locator('nav[aria-label="Main navigation"]');
+  await expect(showSidebar).toBeVisible({ timeout: 10_000 });
+  await showSidebar.click();
+  await expect(nav).toBeVisible({ timeout: 5_000 });
 
   const profileTrigger = page.locator('[data-testid="sidebar-profile-trigger"]');
   await expect(profileTrigger).toBeVisible({ timeout: 10_000 });

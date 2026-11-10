@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 const mockNavigate = vi.fn()
@@ -17,11 +17,12 @@ import { DefaultWorkspaceRedirect } from './DefaultWorkspaceRedirect'
 
 function renderRedirect(tab?: 'chat' | 'board' | 'calendar') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(
+  const rendered = render(
     <QueryClientProvider client={client}>
       <DefaultWorkspaceRedirect tab={tab} />
     </QueryClientProvider>,
   )
+  return { ...rendered, client }
 }
 
 const DEFAULT_WS = {
@@ -40,6 +41,7 @@ describe('DefaultWorkspaceRedirect — folded-route redirect map', () => {
     mockNavigate.mockReset()
     mockFetchWorkspaces.mockReset()
     mockFetchWorkspaces.mockResolvedValue([DEFAULT_WS])
+    window.location.hash = ''
   })
 
   it('defaults to the Chat tab (global "/" front door)', async () => {
@@ -73,6 +75,201 @@ describe('DefaultWorkspaceRedirect — folded-route redirect map', () => {
         replace: true,
       })
     })
+  })
+
+  it('does not replace a settings navigation that already changed the hash', async () => {
+    let resolveWorkspaces!: (workspaces: typeof DEFAULT_WS[]) => void
+    mockFetchWorkspaces.mockReturnValue(
+      new Promise((resolve) => {
+        resolveWorkspaces = resolve
+      }),
+    )
+    const { client } = renderRedirect()
+    await waitFor(() => expect(mockFetchWorkspaces).toHaveBeenCalledOnce())
+
+    // Hash history writes the destination before the previous route unmounts.
+    window.location.hash = '#/settings?tab=chat'
+    await act(async () => {
+      resolveWorkspaces([DEFAULT_WS])
+    })
+    await waitFor(() => {
+      expect(client.getQueryState(['workspaces', { status: 'active' }])?.status).toBe('success')
+    })
+
+    expect(mockNavigate).not.toHaveBeenCalled()
+  })
+
+  it('still redirects from the index hash and from a folded route hash', async () => {
+    window.location.hash = '#/'
+    renderRedirect()
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith({
+        to: '/workspaces/$workspaceId/chat',
+        params: { workspaceId: 'ws-default' },
+        replace: true,
+      })
+    })
+
+    mockNavigate.mockClear()
+    window.location.hash = '#/tasks'
+    renderRedirect('board')
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith({
+        to: '/workspaces/$workspaceId/board',
+        params: { workspaceId: 'ws-default' },
+        replace: true,
+      })
+    })
+  })
+
+  it('suppresses a late redirect when workspace data settles after pagehide', async () => {
+    let resolveWorkspaces!: (workspaces: typeof DEFAULT_WS[]) => void
+    mockFetchWorkspaces.mockReturnValue(
+      new Promise((resolve) => {
+        resolveWorkspaces = resolve
+      }),
+    )
+    const { client } = renderRedirect()
+    await waitFor(() => expect(mockFetchWorkspaces).toHaveBeenCalledOnce())
+
+    window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }))
+    await act(async () => {
+      resolveWorkspaces([DEFAULT_WS])
+    })
+    await waitFor(() => {
+      expect(client.getQueryState(['workspaces', { status: 'active' }])?.status).toBe('success')
+    })
+
+    expect(mockNavigate).not.toHaveBeenCalled()
+  })
+
+  it('does not redirect between WebKit beforeunload and pagehide when workspaces settle', async () => {
+    let resolveWorkspaces!: (workspaces: typeof DEFAULT_WS[]) => void
+    mockFetchWorkspaces.mockReturnValue(
+      new Promise((resolve) => {
+        resolveWorkspaces = resolve
+      }),
+    )
+    const { client } = renderRedirect()
+    await waitFor(() => expect(mockFetchWorkspaces).toHaveBeenCalledOnce())
+
+    // WebKit can run microtasks and timers after beforeunload but before
+    // pagehide; the token URL is still navigating during this interval.
+    window.dispatchEvent(new Event('beforeunload'))
+    await act(async () => {
+      resolveWorkspaces([DEFAULT_WS])
+    })
+    await waitFor(() => {
+      expect(client.getQueryState(['workspaces', { status: 'active' }])?.status).toBe('success')
+    })
+    expect(mockNavigate).not.toHaveBeenCalled()
+
+    const originalVisibility = Object.getOwnPropertyDescriptor(document, 'visibilityState')
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+    act(() => document.dispatchEvent(new Event('visibilitychange')))
+    expect(mockNavigate).not.toHaveBeenCalled()
+    if (originalVisibility) Object.defineProperty(document, 'visibilityState', originalVisibility)
+
+    window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }))
+    window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }))
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith({
+      to: '/workspaces/$workspaceId/chat',
+      params: { workspaceId: 'ws-default' },
+      replace: true,
+    }))
+  })
+
+  it('offers a way back when beforeunload is cancelled without pagehide', async () => {
+    let resolveWorkspaces!: (workspaces: typeof DEFAULT_WS[]) => void
+    mockFetchWorkspaces.mockReturnValue(
+      new Promise((resolve) => {
+        resolveWorkspaces = resolve
+      }),
+    )
+    const { client } = renderRedirect()
+    await waitFor(() => expect(mockFetchWorkspaces).toHaveBeenCalledOnce())
+
+    window.dispatchEvent(new Event('beforeunload'))
+    await act(async () => {
+      resolveWorkspaces([DEFAULT_WS])
+    })
+    await waitFor(() => {
+      expect(client.getQueryState(['workspaces', { status: 'active' }])?.status).toBe('success')
+    })
+    expect(mockNavigate).not.toHaveBeenCalled()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue to workspace' }))
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith({
+      to: '/workspaces/$workspaceId/chat',
+      params: { workspaceId: 'ws-default' },
+      replace: true,
+    }))
+  })
+
+  it('redirects after persisted pageshow restores a document whose data settled while hidden', async () => {
+    let resolveWorkspaces!: (workspaces: typeof DEFAULT_WS[]) => void
+    mockFetchWorkspaces.mockReturnValue(
+      new Promise((resolve) => {
+        resolveWorkspaces = resolve
+      }),
+    )
+    const { client } = renderRedirect()
+    await waitFor(() => expect(mockFetchWorkspaces).toHaveBeenCalledOnce())
+
+    window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }))
+    await act(async () => {
+      resolveWorkspaces([DEFAULT_WS])
+    })
+    await waitFor(() => {
+      expect(client.getQueryState(['workspaces', { status: 'active' }])?.status).toBe('success')
+    })
+    expect(mockNavigate).not.toHaveBeenCalled()
+
+    window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }))
+
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith({
+        to: '/workspaces/$workspaceId/chat',
+        params: { workspaceId: 'ws-default' },
+        replace: true,
+      })
+    })
+  })
+
+  it('warns when a settled redirect is suppressed, then retries when the document becomes visible', async () => {
+    let resolveWorkspaces!: (workspaces: typeof DEFAULT_WS[]) => void
+    mockFetchWorkspaces.mockReturnValue(
+      new Promise((resolve) => {
+        resolveWorkspaces = resolve
+      }),
+    )
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const originalVisibility = Object.getOwnPropertyDescriptor(document, 'visibilityState')
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+    const { client } = renderRedirect()
+    await waitFor(() => expect(mockFetchWorkspaces).toHaveBeenCalledOnce())
+
+    window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: false }))
+    await act(async () => {
+      resolveWorkspaces([DEFAULT_WS])
+    })
+    await waitFor(() => {
+      expect(client.getQueryState(['workspaces', { status: 'active' }])?.status).toBe('success')
+    })
+
+    expect(mockNavigate).not.toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledWith(
+      '[workspace redirect] settled redirect skipped while the document is leaving',
+    )
+
+    act(() => document.dispatchEvent(new Event('visibilitychange')))
+
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith({
+      to: '/workspaces/$workspaceId/chat',
+      params: { workspaceId: 'ws-default' },
+      replace: true,
+    }))
+    if (originalVisibility) Object.defineProperty(document, 'visibilityState', originalVisibility)
   })
 })
 

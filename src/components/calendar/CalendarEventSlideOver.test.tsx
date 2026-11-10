@@ -15,8 +15,8 @@
  * notice shown before save, 400 → inline error (not a toast), end-date
  * picker disables dates before the anchor.
  *
- * Legacy replace + TaskDetailPanel defensive guard live in
- * CalendarLegacyReplace.test.tsx (test 21) — not duplicated here.
+ * TaskDetailPanel defensive guard lives in
+ * workspaces/TaskDetailPanel.recurringGuard.test.tsx — not duplicated here.
  */
 
 import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest'
@@ -54,7 +54,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([
-      { id: 'mia', name: 'Mia', type: 'core', locked: true, status: 'idle', soul: '' },
+      { figure: 'Omnipus', role: 'general', id: 'mia', name: 'Mia', type: 'core', locked: true, status: 'idle', soul: '' },
     ]),
     fetchWorkspaceDelegation: vi.fn(),
     createTask: vi.fn(),
@@ -280,8 +280,7 @@ describe('CalendarEventSlideOver — default state (create mode)', () => {
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
     expect(await screen.findByTestId('recurrence-time-label')).toHaveTextContent(tz)
 
-    // No legacy note, no re-anchor notice, no upcoming preview in create mode.
-    expect(screen.queryByTestId('legacy-trigger-note')).not.toBeInTheDocument()
+    // No re-anchor notice, no upcoming preview in create mode.
     expect(screen.queryByTestId('reanchor-notice')).not.toBeInTheDocument()
   })
 })
@@ -644,20 +643,6 @@ describe('CalendarEventSlideOver — end date cannot precede the anchor (US-1 AS
 })
 
 describe('CalendarEventSlideOver — preview query failure (F-SFH2)', () => {
-  it('legacy note shows a distinct error notice on preview fetch failure, never "unavailable"/blank', async () => {
-    mockUseOccurrences.mockReturnValue({ data: undefined, isError: true, isLoading: false })
-    const legacyTask = makeTask({
-      id: 'legacy-cron',
-      trigger: { type: 'recurring', config: { cron_expr: '0 9 * * MON' } },
-    })
-    renderSlideOver({ task: legacyTask })
-
-    const note = await screen.findByTestId('legacy-trigger-note')
-    expect(note).toHaveTextContent(/couldn't load upcoming run times/i)
-    expect(note).not.toHaveTextContent(/next run time unavailable/i)
-    expect(note).not.toHaveTextContent(/next run:/i)
-  })
-
   it('upcoming preview shows a distinct error notice on fetch failure instead of silently disappearing', async () => {
     mockUseOccurrences.mockReturnValue({ data: undefined, isError: true, isLoading: false })
     const task = makeTask({ trigger: RRULE_TRIGGER })
@@ -1130,5 +1115,66 @@ describe('CalendarEventSlideOver — bucket drill-in (selectedBucketDayRange, H2
 
     expect(await screen.findByTestId('task-run-status-badge')).toHaveTextContent('Done')
     expect(await screen.findByText('Series-level result.')).toBeInTheDocument()
+  })
+})
+
+// session-core FR-017: the one scheduling control is a "Run isolated"
+// checkbox (wire field run_isolated). There is no session-mode chooser; the
+// run mode is otherwise derived from who owns the work.
+describe('CalendarEventSlideOver — Run isolated (session-core FR-017)', () => {
+  it('create: offers an unchecked "Run isolated" checkbox and sends run_isolated:false by default', async () => {
+    vi.mocked(createTask).mockResolvedValueOnce(makeTask({ id: 'new' }) as never)
+    renderSlideOver({ task: null, initialDate: ANCHOR })
+
+    const box = await screen.findByRole('checkbox', { name: /run isolated/i })
+    expect(box).not.toBeChecked()
+
+    fireEvent.change(await screen.findByLabelText(/title/i), { target: { value: 'Default mode' } })
+    await selectAgent()
+    fillPrompt('Do the thing.')
+    fillCriteria()
+    fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
+
+    await waitFor(() => expect(vi.mocked(createTask)).toHaveBeenCalledOnce())
+    expect(vi.mocked(createTask).mock.calls[0][0].run_isolated).toBe(false)
+  })
+
+  it('create: checking "Run isolated" sends run_isolated:true', async () => {
+    vi.mocked(createTask).mockResolvedValueOnce(makeTask({ id: 'new' }) as never)
+    renderSlideOver({ task: null, initialDate: ANCHOR })
+
+    fireEvent.click(await screen.findByRole('checkbox', { name: /run isolated/i }))
+    expect(screen.getByRole('checkbox', { name: /run isolated/i })).toBeChecked()
+
+    fireEvent.change(await screen.findByLabelText(/title/i), { target: { value: 'Isolated mode' } })
+    await selectAgent()
+    fillPrompt('Do the thing alone.')
+    fillCriteria()
+    fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
+
+    await waitFor(() => expect(vi.mocked(createTask)).toHaveBeenCalledOnce())
+    expect(vi.mocked(createTask).mock.calls[0][0].run_isolated).toBe(true)
+  })
+
+  it('edit: the checkbox reflects the task and unchecking it sends run_isolated:false', async () => {
+    vi.mocked(updateTask).mockResolvedValueOnce(makeTask() as never)
+    renderSlideOver({ task: makeTask({ trigger: RRULE_TRIGGER, run_isolated: true }) })
+
+    const box = await screen.findByRole('checkbox', { name: /run isolated/i })
+    expect(box).toBeChecked()
+    fireEvent.click(box)
+    await selectAgent()
+    fillPrompt('Summarize this week.')
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+
+    await waitFor(() => expect(vi.mocked(updateTask)).toHaveBeenCalledOnce())
+    expect(vi.mocked(updateTask).mock.calls[0][1].run_isolated).toBe(false)
+  })
+
+  it('shows no session-mode chooser and no legacy-trigger surface', async () => {
+    renderSlideOver({ task: makeTask({ trigger: RRULE_TRIGGER }) })
+    await screen.findByRole('checkbox', { name: /run isolated/i })
+    expect(screen.queryByText(/session mode/i)).not.toBeInTheDocument()
+    expect(screen.queryByTestId('legacy-trigger-note')).not.toBeInTheDocument()
   })
 })

@@ -22,8 +22,7 @@ func skillsCommand() Definition {
 	}
 }
 
-// listSkillsHandler returns the handler shared between /skills and the deprecated
-// /list skills sub-command.
+// listSkillsHandler returns the /skills command handler.
 func listSkillsHandler() Handler {
 	return func(_ context.Context, req Request, rt *Runtime) error {
 		if rt == nil || rt.ListSkillNames == nil {

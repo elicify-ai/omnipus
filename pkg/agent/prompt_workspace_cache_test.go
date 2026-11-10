@@ -67,8 +67,8 @@ func TestTurnAssembly_MenuDiffersPerWorkspace(t *testing.T) {
 		}
 	})
 
-	msgsA := cb.BuildMessages(nil, "hi", nil, "ws-a", "test", "chat1", "", "", "", nil)
-	msgsB := cb.BuildMessages(nil, "hi", nil, "ws-b", "test", "chat1", "", "", "", nil)
+	msgsA := cb.BuildMessages(0, nil, "hi", nil, "ws-a", "test", "chat1", "", "", "", nil)
+	msgsB := cb.BuildMessages(0, nil, "hi", nil, "ws-b", "test", "chat1", "", "", "", nil)
 
 	sysA := msgsA[0].Content
 	sysB := msgsB[0].Content

@@ -8,16 +8,16 @@
 // serves does not exist in the fixture that stood in for it.
 //
 // SCOPE: this checks only `tier: "popular"` fixture ids, not the whole
-// 190-entry document. That is a deliberate, evidence-based boundary, not
+// 188-entry document. That is a deliberate, evidence-based boundary, not
 // laziness: providersCatalog.ts's own header documents the fixture as "a
 // hand-built stand-in shaped exactly like the real snapshot" used to
 // exercise catalog-shape behaviour (grouping, tiers, sign-in variants,
 // letter headers, EU/coding-plan region padding, …), not a mirror of
-// production. A direct count confirms this — 129 of the fixture's 190 ids
+// production. A direct count confirms this — 126 of the fixture's 188 ids
 // (bytedance-ark-cn, mistral-coding-plan, hyperbolic-eu, …) have no real
 // catalog counterpart at all, by design, spread across dozens of vendors'
 // invented -eu/-pro/-coding-plan variants. A guard asserting full-catalog id
-// parity would fail on all 129 and teach nobody to trust it.
+// parity would fail on all 126 and teach nobody to trust it.
 //
 // The 12 `tier: "popular"` ids are different in kind: they are the vendors
 // the onboarding wizard actually surfaces first, and other SPA code keys

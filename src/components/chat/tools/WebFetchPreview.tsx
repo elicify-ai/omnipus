@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { makeAssistantToolUI } from '@assistant-ui/react'
+import { makeAssistantToolUI } from '@/lib/assistant-tool-status'
 import { ArrowSquareOut } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 import { DisclosureRow } from '@/components/ui/disclosure-row'
@@ -82,7 +82,7 @@ export function WebFetchBlock({
   // envelope, an offload/truncation/marshal-error sentinel, or a structured
   // failure renders its dedicated display instead of `String(result)`'s
   // "[object Object]". The preview derives ONLY from a plain-string body.
-  const resolved = resolveToolResult(result)
+  const resolved = resolveToolResult(result, error)
   const content = resolved.kind === 'text' ? resolved.text : ''
   const { preview, truncated } = content ? truncateContent(content) : { preview: '', truncated: false }
   // Only render the "open in new tab" action link for a real http(s)/mailto/tel

@@ -25,21 +25,6 @@ const (
 	UnsupportedWithdrawn     = "withdrawn"
 )
 
-// The cli_kind vocabulary (X-14).
-const (
-	CLIKindCodex   = "codex"
-	CLIKindCopilot = "copilot"
-)
-
-// The token_source vocabulary (X-41). A row names a token_source when its
-// credential is a file some OTHER vendor tool already wrote and Omnipus only
-// reads — never one Omnipus mints, refreshes or owns.
-const (
-	// TokenSourceCodexAuthJSON — the access token in the Codex CLI's own
-	// ~/.codex/auth.json (openai-chatgpt). Read-only to Omnipus (FR-007).
-	TokenSourceCodexAuthJSON = "codex-auth-json"
-)
-
 // --- wire DTOs (the 2.0.0 document as published; never exported) ---
 
 type documentDTO struct {
@@ -54,6 +39,10 @@ type documentDTO struct {
 type resizeLimitsDTO struct {
 	LongEdgePx int   `json:"long_edge_px"`
 	MaxBytes   int64 `json:"max_bytes"`
+	// MaxPatches is optional (issue #1435): absent (0) inherits the parent
+	// default's value so a catalog publisher can raise the patch ceiling
+	// document-wide without touching every provider row.
+	MaxPatches int `json:"max_patches"`
 }
 
 type endpointDTO struct {
@@ -76,8 +65,6 @@ type providerDTO struct {
 	UnsupportedReason string              `json:"unsupported_reason"`
 	AuthMethods       []string            `json:"auth_methods"`
 	Aliases           []string            `json:"aliases"`
-	CLIKind           string              `json:"cli_kind"`
-	TokenSource       string              `json:"token_source"`
 	ResizeLimits      *resizeLimitsDTO    `json:"resize_limits"`
 	Models            []modelDTO          `json:"models"`
 	// locality, if published, is ignored: it is derived on load (FR-039).
@@ -91,16 +78,25 @@ type providerRegionDTO struct {
 }
 
 type modelDTO struct {
-	ID                string   `json:"id"`
-	Name              string   `json:"name"`
-	ReleaseDate       string   `json:"release_date"`
-	ContextWindow     int      `json:"context_window"`
-	MaxOutputTokens   int      `json:"max_output_tokens"`
-	InputModalities   []string `json:"input_modalities"`
-	ToolCall          bool     `json:"tool_call"`
-	Status            string   `json:"status"`
-	Disputed          bool     `json:"disputed"`
-	InferenceProfiles []string `json:"inference_profiles"`
+	ID                string     `json:"id"`
+	Name              string     `json:"name"`
+	ReleaseDate       string     `json:"release_date"`
+	ContextWindow     int        `json:"context_window"`
+	MaxOutputTokens   int        `json:"max_output_tokens"`
+	InputModalities   []string   `json:"input_modalities"`
+	ToolCall          bool       `json:"tool_call"`
+	Status            string     `json:"status"`
+	Disputed          bool       `json:"disputed"`
+	InferenceProfiles []string   `json:"inference_profiles"`
+	Cost              *ModelCost `json:"cost,omitempty"`
+	// Reasoning is the upstream reasoning object; unknown members (such as
+	// budget metadata) are ignored.
+	Reasoning *reasoningDTO `json:"reasoning,omitempty"`
+}
+
+type reasoningDTO struct {
+	Levels []string `json:"levels"`
+	Switch bool     `json:"switch"`
 }
 
 // invalid builds a rejection naming path.
@@ -216,7 +212,17 @@ func parseResizeLimits(path string, dto *resizeLimitsDTO, inherit *ResizeLimits)
 	if dto.MaxBytes <= 0 {
 		return ResizeLimits{}, invalid(path+".max_bytes", "must be positive, got %d", dto.MaxBytes)
 	}
-	return ResizeLimits{LongEdgePx: dto.LongEdgePx, MaxBytes: dto.MaxBytes}, nil
+	if dto.MaxPatches < 0 {
+		return ResizeLimits{}, invalid(path+".max_patches", "must not be negative, got %d", dto.MaxPatches)
+	}
+	// max_patches is optional: absent (0) inherits the parent default so a
+	// document-wide patch ceiling reaches every provider row that does not
+	// name its own. Zero with nothing to inherit means "no patch cap".
+	maxPatches := dto.MaxPatches
+	if maxPatches == 0 && inherit != nil {
+		maxPatches = inherit.MaxPatches
+	}
+	return ResizeLimits{LongEdgePx: dto.LongEdgePx, MaxBytes: dto.MaxBytes, MaxPatches: maxPatches}, nil
 }
 
 // isKnownRegionGroup reports whether s is one of the closed cross-region
@@ -299,7 +305,7 @@ func parseAuthMethods(path string, values []string) ([]AuthMethod, error) {
 
 func parseProtocol(s string) (Protocol, bool) {
 	switch p := Protocol(s); p {
-	case ProtocolOpenAICompatible, ProtocolAnthropic, ProtocolGoogle, ProtocolOllama, ProtocolCLI, ProtocolBedrock:
+	case ProtocolOpenAICompatible, ProtocolAnthropic, ProtocolGoogle, ProtocolOllama, ProtocolBedrock:
 		return p, true
 	}
 	return "", false
@@ -343,25 +349,14 @@ func parseProvider(path string, dto *providerDTO, defaults ResizeLimits) (Provid
 		protocol = p
 	}
 
-	// cli_kind: required iff protocol cli (X-14).
-	if protocol == ProtocolCLI {
-		switch dto.CLIKind {
-		case CLIKindCodex, CLIKindCopilot:
-		default:
-			return Provider{}, invalid(path+".cli_kind", "%q is required on a cli row (codex|copilot)", dto.CLIKind)
-		}
-	} else if dto.CLIKind != "" {
-		return Provider{}, invalid(path+".cli_kind", "only allowed when protocol is cli")
-	}
-
 	// Locality is derived before the URL rule because the rule's exceptions
 	// are "locality = local" (FR-033, FR-039). Published rows are never custom.
 	locality := DeriveLocality(dto.ID, protocol, false, dto.API)
 
-	// api: empty only on unsupported or cli rows (nothing to dial).
+	// api: empty only on unsupported rows (nothing to dial).
 	if dto.API == "" {
-		if tier != TierUnsupported && protocol != ProtocolCLI {
-			return Provider{}, invalid(path+".api", "must be non-empty unless tier is unsupported or protocol is cli")
+		if tier != TierUnsupported {
+			return Provider{}, invalid(path+".api", "must be non-empty unless tier is unsupported")
 		}
 	} else if err := validateAPIURL(path+".api", dto.API, locality); err != nil {
 		return Provider{}, err
@@ -438,8 +433,6 @@ func parseProvider(path string, dto *providerDTO, defaults ResizeLimits) (Provid
 		UnsupportedReason: dto.UnsupportedReason,
 		AuthMethods:       auth,
 		Aliases:           append([]string(nil), dto.Aliases...),
-		CLIKind:           dto.CLIKind,
-		TokenSource:       dto.TokenSource,
 		Locality:          locality,
 		Regions:           regions,
 		ResizeLimits:      limits,
@@ -504,6 +497,13 @@ func parseModel(path string, dto *modelDTO) (Model, error) {
 	if err != nil {
 		return Model{}, err
 	}
+	// A model with no reasoning object does not reason: Reasoning stays nil.
+	var reasoning *ModelReasoning
+	if dto.Reasoning != nil {
+		if reasoning, err = parseReasoning(path+".reasoning", dto.Reasoning); err != nil {
+			return Model{}, err
+		}
+	}
 	return Model{
 		ID:                dto.ID,
 		Name:              dto.Name,
@@ -515,7 +515,32 @@ func parseModel(path string, dto *modelDTO) (Model, error) {
 		Status:            status,
 		Disputed:          dto.Disputed,
 		InferenceProfiles: profiles,
+		Cost:              dto.Cost,
+		Reasoning:         reasoning,
 	}, nil
+}
+
+// parseReasoning validates a model's reasoning object: each level is a
+// non-empty name of at most 32 characters, listed once, kept in published
+// order. The caller handles an absent object (the model does not reason).
+func parseReasoning(path string, dto *reasoningDTO) (*ModelReasoning, error) {
+	levels := make([]string, 0, len(dto.Levels))
+	seen := make(map[string]bool, len(dto.Levels))
+	for i, l := range dto.Levels {
+		p := path + ".levels[" + strconv.Itoa(i) + "]"
+		if l == "" {
+			return nil, invalid(p, "must be non-empty")
+		}
+		if len([]rune(l)) > 32 {
+			return nil, invalid(p, "must be at most 32 characters")
+		}
+		if seen[l] {
+			return nil, invalid(p, "%q is listed twice", l)
+		}
+		seen[l] = true
+		levels = append(levels, l)
+	}
+	return &ModelReasoning{Levels: levels, Switch: dto.Switch}, nil
 }
 
 // validateAPIURL is FR-033: an absolute URL with a non-empty host, no

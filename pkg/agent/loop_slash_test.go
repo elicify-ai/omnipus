@@ -33,7 +33,7 @@ func TestHandleCommand_UseTokenIsNormalMessage(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	provider := &recordingProvider{}
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 
 	// "/use" is no longer a registered command, so it falls through as a normal message.
 	opts := processOptions{}
@@ -55,33 +55,36 @@ func TestHandleCommand_UseTokenIsNormalMessage(t *testing.T) {
 // - "/<skill>" alone   → skill forced, UserMessage unchanged (skill body drives LLM)
 // Replaces the old /use-token tests (TestApplyExplicitSkillCommand_Arms* + _Inline*).
 func TestApplyExplicitSkillCommand_OneShot(t *testing.T) {
-	al, cfg, _, _, cleanup := newTestAgentLoop(t)
+	home := t.TempDir()
+	t.Setenv(config.EnvHome, home)
+	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled // only al+cleanup used here
 	defer cleanup()
 
 	if err := os.MkdirAll(
-		filepath.Join(cfg.Agents.Defaults.Home, "skills", "finance-news"),
+		filepath.Join(home, "skills", "finance-news"),
 		0o755,
 	); err != nil {
 		t.Fatalf("MkdirAll(skill) error = %v", err)
 	}
 	if err := os.WriteFile(
-		filepath.Join(cfg.Agents.Defaults.Home, "skills", "finance-news", "SKILL.md"),
+		filepath.Join(home, "skills", "finance-news", "SKILL.md"),
 		[]byte("# Finance News\n\nUse web tools for current finance updates.\n"),
 		0o644,
 	); err != nil {
 		t.Fatalf("WriteFile(SKILL.md) error = %v", err)
 	}
 
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	if agent == nil {
 		t.Fatal("expected default agent")
 	}
-	// ADR-072 D5: absence of a grant list denies every skill now, so this
-	// test must explicitly grant "finance-news" — it used to resolve under
-	// the old "no allowlist = unrestricted" default.
-	if agent.ContextBuilder != nil {
-		agent.ContextBuilder.WithSkillAllowlist([]string{"finance-news"})
+	// ADR-072 D5 + r15 SD-30: this positive fixture needs both a name and
+	// the real persisted binding. The unstamped-refusal test stays unstamped.
+	granted := persistSkillGrantFixture(t, home, config.AgentConfig{ID: agent.ID, Skills: []string{"finance-news"}})
+	if agent.ContextBuilder == nil {
+		t.Fatal("expected the real agent context builder")
 	}
+	agent.ContextBuilder.WithSkillAllowlist(granted.Skills).WithSkillBindings(granted.SkillGrants)
 
 	t.Run("with_message", func(t *testing.T) {
 		opts := &processOptions{
@@ -298,7 +301,7 @@ func TestApplyMemoryCommandPrompt_Precedence(t *testing.T) {
 	// Install a skill whose slug collides with a memory command name.
 	writeSkillFile(t, cfg.Agents.Defaults.Home, "remember")
 
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	if agent == nil {
 		t.Fatal("expected default agent")
 	}

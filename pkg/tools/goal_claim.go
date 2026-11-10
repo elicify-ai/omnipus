@@ -13,9 +13,9 @@
 // task_completion_signal.go's marker parser.
 //
 // This tool's own job stops at the call boundary: validating the scope
-// preconditions (FR-090) and the status/evidence shape (FR-087, FR-088) and
-// reporting the claim in its result. What the engine DOES with a recorded
-// claim — resolving tool-vs-marker precedence (FR-092), dispatching a
+// preconditions (FR-090), status/evidence shape (FR-087, FR-088), and direct
+// children before reporting the claim in its result. What the engine DOES
+// with a recorded claim — resolving tool-vs-marker precedence (FR-092), dispatching a
 // deferred adjudication after the reply is delivered (D13), refusing a
 // second claim while one is already in flight (FR-101), clearing the
 // bare-claim streak (FR-091) — is pkg/agent's job, reading this tool's
@@ -63,12 +63,23 @@ const (
 )
 
 // GoalClaimAccess is the optional claim-side read a GoalRecordAccess may also
-// implement: the goal BOUND to the session, for either owner kind. goal_claim
-// prefers it over ReadGoalState, whose owner-keyed lookup cannot see a
-// task-owned goal from the task run's session. A seam without it (test
-// doubles) falls back to ReadGoalState.
+// implement: the goal BOUND to the session, for either owner kind, and the
+// session bound to a running task. goal_claim prefers ReadClaimableGoal over
+// ReadGoalState, whose owner-keyed lookup cannot see a task-owned goal from
+// the task run's session. A seam without it (test doubles) falls back to
+// ReadGoalState for depth-zero callers; a task run at depth > 0 must have the
+// bound-session lookup to prove it owns the session it is claiming for.
 type GoalClaimAccess interface {
 	ReadClaimableGoal(sessionID string) (goalID, goalCondition string, err error)
+	ReadTaskSessionID(taskID string) (string, error)
+}
+
+// GoalClaimDirectChildrenAccess is a claim-only read of live direct children.
+// It stays separate from GoalRecordAccess so set_goal and its callers do not
+// gain a lifecycle-store requirement. The production goal access implements
+// it; older in-memory test doubles may omit it.
+type GoalClaimDirectChildrenAccess interface {
+	DirectNonTerminalChildren(sessionID string) ([]string, error)
 }
 
 // GoalClaimTool implements the goal_claim tool (ADR-084 revision 9 §O, D12).
@@ -112,11 +123,13 @@ func (t *GoalClaimTool) Category() ToolCategory { return CategoryTasks }
 // Description implements Tool.
 func (t *GoalClaimTool) Description() string {
 	return "Claim THIS session's active goal as done, blocked, or waiting on the operator (ADR-084). " +
-		"status:met means you believe the goal's acceptance criteria are satisfied: it starts an " +
-		"adjudication that runs AFTER your reply is delivered — the operator sees your response " +
-		"immediately, a verdict arrives later on its own, and it may disagree with your claim. A met " +
-		"claim requires a non-empty evidence argument (your own one-line statement of what you " +
-		"verified) or the call is refused before anything is recorded — no partial credit for trying. " +
+		"status:met means you believe the goal's acceptance criteria are satisfied. If any direct child " +
+		"sub-agent is queued or actively running, the met claim is rejected immediately; wait for them to finish " +
+		"or cancel them, then claim again. With no queued or actively running direct child, a valid met claim " +
+		"proceeds to adjudication after your reply is delivered; adjudication may disagree with your " +
+		"claim. A met claim requires a non-empty evidence argument (your own one-line statement of what you " +
+		"verified) or the call is refused before anything is recorded — if the work is not finished yet, do " +
+		"not claim met: keep working, or claim blocked or waiting_on_user with the reason as evidence. " +
 		"status:waiting_on_user and status:blocked both end the turn without any adjudication: " +
 		"waiting_on_user means you need an answer from the operator to continue; blocked means you " +
 		"cannot proceed and it is not something the operator can answer directly — for either, give the " +
@@ -133,8 +146,10 @@ func (t *GoalClaimTool) Parameters() map[string]any {
 			"status": map[string]any{
 				"type": "string",
 				"enum": []string{GoalClaimStatusMet, GoalClaimStatusBlocked, GoalClaimStatusWaitingOnUser},
-				"description": "met: you believe the goal's acceptance criteria are satisfied — starts a " +
-					"background adjudication after your reply is delivered; requires evidence. blocked: you " +
+				"description": "met: you believe the goal's acceptance criteria are satisfied; requires evidence. " +
+					"If any direct child sub-agent is queued or actively running, the met claim is rejected immediately; " +
+					"wait for them to finish or cancel them, then claim again. With no such direct child, a valid " +
+					"met claim proceeds to adjudication after your reply is delivered. blocked: you " +
 					"cannot proceed and it is not a question the operator can answer — parks the goal, no " +
 					"adjudication. waiting_on_user: you need an answer from the operator to continue — parks " +
 					"the goal, no adjudication. Required — never omit this expecting a default.",
@@ -144,7 +159,8 @@ func (t *GoalClaimTool) Parameters() map[string]any {
 				"description": "Your own one-line statement of what you verified. Required and non-empty " +
 					"when status is met (whitespace-only counts as empty and the call is refused). For " +
 					"blocked and waiting_on_user it is optional: one line saying why you cannot proceed or " +
-					"what you need — it becomes the reason the operator sees.",
+					"what you need — it becomes the reason the operator sees. Example when status is met: " +
+					"\"Wrote the report to report.md and read it back; all three required sections are present.\"",
 			},
 		},
 		"required": []string{"status"},
@@ -178,9 +194,27 @@ func (t *GoalClaimTool) Execute(ctx context.Context, args map[string]any) *ToolR
 	// turn names its running task; its goal is bound to the run's own session,
 	// so the bound-session lookup below still refuses any turn that is not
 	// that session's owner.
-	if depth := ToolDelegationDepth(ctx); depth > 0 && ToolRunningTaskID(ctx) == "" {
-		return ErrorResult("goal_claim is owner-session-only: a delegated sub-turn cannot claim " +
-			"this session's goal (ADR-084 JUDGE-FR-090) — report your findings back to the parent instead")
+	const ownerSessionOnly = "goal_claim is owner-session-only: a delegated sub-turn cannot claim " +
+		"this session's goal (ADR-084 JUDGE-FR-090) — report your findings back to the parent instead"
+	// A steered helper launched with its own goal runs in its own session and
+	// owns that goal: the marker names that session, so the exemption holds only
+	// for a claim on the session the turn runs in.
+	if depth := ToolDelegationDepth(ctx); depth > 0 && ToolOwnGoalSession(ctx) != sessionID {
+		taskID := ToolRunningTaskID(ctx)
+		if taskID == "" {
+			return ErrorResult(ownerSessionOnly)
+		}
+		claimAccess, ok := access.(GoalClaimAccess)
+		if !ok {
+			return ErrorResult("goal_claim: running task's bound-session lookup is not wired on this deployment")
+		}
+		boundSessionID, taskErr := claimAccess.ReadTaskSessionID(taskID)
+		if taskErr != nil {
+			return ErrorResult(fmt.Sprintf("goal_claim: could not read running task %q: %v", taskID, taskErr)).WithError(taskErr)
+		}
+		if boundSessionID != sessionID {
+			return ErrorResult(ownerSessionOnly)
+		}
 	}
 
 	var goalID, goalCondition string
@@ -216,7 +250,27 @@ func (t *GoalClaimTool) Execute(ctx context.Context, args map[string]any) *ToolR
 	// to price a bare claim it can only detect after the turn has ended.
 	if status == GoalClaimStatusMet && evidence == "" {
 		return ErrorResult("goal_claim(status:met) rejected: evidence is required and must be non-empty — " +
-			"state, in one line, what you verified (ADR-084 JUDGE-FR-088)")
+			"nothing was recorded and the goal is unchanged, so retrying without evidence will be refused again. " +
+			"If the work is done and verified, call goal_claim again now with status \"met\" AND evidence — " +
+			"one line saying what you did and how you checked it, e.g. \"Wrote the report to report.md and read " +
+			"it back; all three required sections are present.\" If the work is NOT finished, do not claim met: " +
+			"keep working and claim later. If you cannot proceed or only the operator can unblock you, claim " +
+			"status \"blocked\" or \"waiting_on_user\" instead, with the reason as evidence. " +
+			"(ADR-084 JUDGE-FR-088)")
+	}
+
+	if status == GoalClaimStatusMet {
+		if direct, ok := access.(GoalClaimDirectChildrenAccess); ok {
+			// A child launched at the same instant as this read may publish after
+			// the check. This claim/launch race is accepted; do not add a fence.
+			children, childErr := direct.DirectNonTerminalChildren(sessionID)
+			if childErr != nil {
+				return ErrorResult(fmt.Sprintf("goal_claim: could not check direct sub-agents: %v", childErr)).WithError(childErr)
+			}
+			if len(children) != 0 {
+				return ErrorResult(fmt.Sprintf("%d sub-agents are still running: %s. Wait for them to finish or cancel them, then claim again", len(children), strings.Join(children, ",")))
+			}
+		}
 	}
 
 	logger.InfoCF("goal", "goal_claim call",

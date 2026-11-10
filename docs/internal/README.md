@@ -3,8 +3,8 @@
 
 
 Documentation for people who **build or modify** Omnipus: architecture audits,
-Architecture Decision Records, in-flight specs, forward-looking designs, the
-business requirements that drive the roadmap, and historical working artifacts.
+Architecture Decision Records, in-flight specs, dated designs, and historical
+working artifacts. Current release scope is in the [roadmap](../../ROADMAP.md).
 
 These documents are not written for first-time users. For installing, configuring,
 and operating Omnipus, see the [user documentation](../README.md).
@@ -74,18 +74,14 @@ Forward-looking designs outside the shipped scope:
 - [Settings & notifications](design/settings-notifications-2026-05.md)
 - [Provider refactoring](design/provider-refactoring.md) ([tests](design/provider-refactoring-tests.md))
 
-## Business requirements (intent of record)
+## Original business requirements (historical)
 
-The original product specs. When the code disagrees with the BRD, **the code
-wins** — but the BRD is still load-bearing context for understanding *why* a
-feature exists:
-
-- [Main BRD](BRD/Omnipus%20BRD.md) — 30 security + 36 functional requirements, delivery phases
-- [Appendix A — Windows kernel security](BRD/Omnipus%20Windows%20BRD%20appendic.md)
-- [Appendix B — Feature parity](BRD/Omnipus_BRD_AppendixB_Feature_Parity.md)
-- [Appendix C — UI / UX spec](BRD/Omnipus_BRD_AppendixC_UI_Spec.md)
-- [Appendix D — System agent & system tools](BRD/Omnipus_BRD_AppendixD_System_Agent.md)
-- [Appendix E — File-based data model](BRD/Omnipus_BRD_AppendixE_DataModel.md)
+The original BRD and appendices recorded early product intent; they are not current
+requirements and were removed from the live tree on 2026-09-30. Retrieve them
+through Git history when studying that history (see the [archive index](_archive/README.md)),
+not through live links. For present behaviour, verify the [code](../../pkg/);
+for decisions, consult the [ADRs](#architecture-decision-records-adrs); for
+release scope, use the [roadmap](../../ROADMAP.md).
 
 ## Working artifacts (historical)
 

@@ -1,0 +1,30 @@
+title: ChannelRoutingUpdateRequest
+description: >
+  Body for PUT /channels/{id}/routing. Binds the channel instance to a
+  workspace and names the main agent that answers it. Both fields are
+  required and nonblank (omnipus-system-agent FR-127, K14); the legacy
+  unbound mode is removed, so a request missing either is refused with 400
+  "bind this channel to an agent in a workspace" and changes nothing.
+  Saving a valid binding clears the instance's routing `degraded` status
+  (FR-129).
+type: object
+additionalProperties: false
+required:
+  - workspace_id
+  - default_agent_id
+properties:
+  workspace_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: Workspace to bind the channel instance to. Must exist and be active.
+    example: "my-workspace"
+  default_agent_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: >
+      The bound main agent: a chat-capable member of the workspace's team
+      (never a worker or system agent). Landing 1 keeps the historical key
+      name.
+    example: "mia"

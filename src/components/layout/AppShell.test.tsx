@@ -20,6 +20,15 @@ import React from 'react'
 // tests below are written directly against the implemented behavior.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+
+// (The old cross-workspace-banner oracle was retired with the banner —
+// founder ruling 2026-10-18, bundle B3.)
+// Shipped stage-1 approval reachability is covered by AppShell.stage1.test.tsx.
+vi.mock('@/lib/featureSwitches', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/featureSwitches')>(),
+  INLINE_TOOL_APPROVALS_ENABLED: true,
+}))
+
 import { render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { AppState, NotificationList } from '@/lib/api/generated/openapi-types'
@@ -33,7 +42,6 @@ import type { AppState, NotificationList } from '@/lib/api/generated/openapi-typ
 vi.mock('./Sidebar', () => ({ Sidebar: () => null }))
 vi.mock('./NotificationPanel', () => ({ NotificationPanel: () => null }))
 vi.mock('@/components/ui/toast-container', () => ({ ToastContainer: () => null }))
-vi.mock('@/components/agents/ToolApprovalModal', () => ({ ToolApprovalModal: () => null }))
 vi.mock('@/components/chat/MediaLightbox', () => ({ MediaLightbox: () => null }))
 vi.mock('@/components/chat/OmnipusRuntimeProvider', () => ({
   OmnipusRuntimeProvider: ({ children }: { children?: React.ReactNode }) => children ?? null,
@@ -42,8 +50,10 @@ vi.mock('@/hooks/useVersionCheck', () => ({ useVersionCheck: vi.fn() }))
 // The Link double folds `search` into the href (same pattern as
 // Sidebar.test.tsx) so the God Mode corner-dot test can assert the full
 // /settings?focus=god-mode&tab=gateway target.
+const mockRouter = vi.hoisted(() => ({ navigate: vi.fn() }))
 vi.mock('@tanstack/react-router', () => ({
   Outlet: () => null,
+  useRouter: () => mockRouter,
   useNavigate: () => vi.fn(),
   useLocation: () => ({ pathname: '/' }),
   Link: ({ children, to, search, onClick, className, ...rest }: {
@@ -75,9 +85,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchNotifications: vi.fn(),
     fetchTasks: vi.fn().mockResolvedValue([]),
     fetchAgents: vi.fn().mockResolvedValue([]),
-    // CrossWorkspaceApprovalBanner (rendered for real below, not stubbed —
-    // the coexistence test needs it to actually mount) resolves workspace
-    // names via this call.
     fetchWorkspaces: vi.fn().mockResolvedValue([]),
     // The corner dot (GodModeIndicators.tsx, mounted by AppShell since the
     // banner removal) queries god-mode via useGodModeOn; the banner-removal
@@ -92,8 +99,6 @@ import { ApiError } from '@/lib/api-error'
 import { AppShell } from './AppShell'
 import { useConnectionStore } from '@/store/connection'
 import { useUiStore } from '@/store/ui'
-import { useToolApprovalStore } from '@/store/toolApproval'
-import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useSidebarStore } from '@/store/sidebar'
 
 // ADR-0010 / login-and-onboarding-spec.md §2.2 — `identity` is a required
@@ -530,7 +535,7 @@ describe('AppShell — no connection banner while a transport drop is in progres
 
 // ── <sm docked-browser takeover inerts the collapsed chat region (FW-3, item 6) ──
 //
-// When BrowserLivePanel is docked open on a phone viewport (<640px), the flex
+// When BrowserLivePanel is docked open on a phone viewport (<680px), the flex
 // row gives it the width and the chat region collapses to zero — but its
 // controls stayed in the DOM (and thus the Tab order), so a keyboard user
 // could Tab into invisible stops. `inert` on the main-content wrapper closes
@@ -545,7 +550,7 @@ describe('AppShell — <sm docked-browser takeover inerts collapsed chat control
       configurable: true,
       writable: true,
       value: (query: string) => ({
-        matches: query === '(max-width: 639px)' ? matchesPhoneQuery : false,
+        matches: query === '(max-width: 679px)' ? matchesPhoneQuery : false,
         media: query,
         onchange: null,
         addListener: vi.fn(),
@@ -558,7 +563,7 @@ describe('AppShell — <sm docked-browser takeover inerts collapsed chat control
   }
 
   afterEach(() => {
-    useUiStore.setState({ browserPanel: null })
+    useUiStore.setState({ activePanel: null })
     Object.defineProperty(window, 'matchMedia', {
       configurable: true,
       writable: true,
@@ -566,9 +571,9 @@ describe('AppShell — <sm docked-browser takeover inerts collapsed chat control
     })
   })
 
-  it('is inert when the browser panel is open AND the viewport is a phone (<640px)', async () => {
+  it('is inert when the browser panel is open AND the viewport is a phone (<680px)', async () => {
     stubMatchMedia(true)
-    useUiStore.setState({ browserPanel: { sessionId: 's1', agentId: 'a1' } })
+    useUiStore.setState({ activePanel: { id: 'browser', context: { sessionId: 's1', agentId: 'a1' } } })
     vi.mocked(api.fetchAppState).mockResolvedValue(APP_STATE_OK)
     vi.mocked(api.fetchNotifications).mockResolvedValue(NOTIFICATIONS_EMPTY)
 
@@ -583,7 +588,7 @@ describe('AppShell — <sm docked-browser takeover inerts collapsed chat control
 
   it('is NOT inert when the browser panel is open but the viewport is desktop-width', async () => {
     stubMatchMedia(false)
-    useUiStore.setState({ browserPanel: { sessionId: 's1', agentId: 'a1' } })
+    useUiStore.setState({ activePanel: { id: 'browser', context: { sessionId: 's1', agentId: 'a1' } } })
     vi.mocked(api.fetchAppState).mockResolvedValue(APP_STATE_OK)
     vi.mocked(api.fetchNotifications).mockResolvedValue(NOTIFICATIONS_EMPTY)
 
@@ -595,7 +600,7 @@ describe('AppShell — <sm docked-browser takeover inerts collapsed chat control
 
   it('is NOT inert on a phone viewport when the browser panel is closed — differentiation', async () => {
     stubMatchMedia(true)
-    useUiStore.setState({ browserPanel: null })
+    useUiStore.setState({ activePanel: null })
     vi.mocked(api.fetchAppState).mockResolvedValue(APP_STATE_OK)
     vi.mocked(api.fetchNotifications).mockResolvedValue(NOTIFICATIONS_EMPTY)
 
@@ -606,87 +611,15 @@ describe('AppShell — <sm docked-browser takeover inerts collapsed chat control
   })
 })
 
-// ── Cross-workspace approval banner coexists with the connection-error
-// banner (founder decision 2026-09-14) ─────────────────────────────────────
+// ── Cross-workspace approval banner: RETIRED (founder ruling 2026-10-18) ────
 //
-// CrossWorkspaceApprovalBanner (src/components/layout/CrossWorkspaceApprovalBanner.tsx)
-// is mounted in the same stacked-banner column as connectionError/
-// devModeBypass/appStateError, right above <main>. Both are plain block-level
-// children of a flex column (never `fixed`/`absolute`), so when more than one
-// is visible at once they simply stack — neither can visually cover or
-// replace the other, and <main> (flex-1) still gets whatever height remains.
-// This proves that stacking holds for real, not just by code inspection.
-describe('AppShell — cross-workspace approval banner coexists with other banners', () => {
-  afterEach(() => {
-    useConnectionStore.setState({ connectionError: null })
-    useToolApprovalStore.setState({ queue: [], resolvedIds: [] })
-    useWorkspacesStore.setState({ activeWorkspaceId: null })
-  })
-
-  it('renders both the connection-error banner and the cross-workspace approval banner at once, neither hiding the other', async () => {
-    vi.mocked(api.fetchAppState).mockResolvedValue(APP_STATE_OK)
-    vi.mocked(api.fetchNotifications).mockResolvedValue(NOTIFICATIONS_EMPTY)
-    vi.mocked(api.fetchWorkspaces).mockResolvedValue([
-      {
-        revision: '0'.repeat(64),
-        id: 'ws-other',
-        name: 'UAT-T2',
-        status: 'active',
-        pinned: false,
-        pin_order: 0,
-        task_count: 0,
-        created_at: '2026-09-14T00:00:00Z',
-        updated_at: '2026-09-14T00:00:00Z',
-      },
-    ])
-    useConnectionStore.setState({ connectionError: 'Lost connection to gateway' })
-    useWorkspacesStore.setState({ activeWorkspaceId: 'ws-active' })
-    useToolApprovalStore.getState().enqueue({
-      type: 'tool_approval_required',
-      approval_id: 'appr-cross',
-      tool_call_id: 'call-cross',
-      tool_name: 'write_file',
-      args: {},
-      agent_id: 'agent-x',
-      session_id: 'sess-x',
-      turn_id: 'turn-x',
-      expires_in_ms: 300_000,
-      workspace_id: 'ws-other',
-    })
-
-    renderShell()
-
-    const connectionBanner = await waitFor(() => screen.getByText('Lost connection to gateway'))
-    const approvalBanner = await waitFor(() =>
-      screen.getByText('1 approval waiting in UAT-T2'),
-    )
-    expect(connectionBanner).toBeInTheDocument()
-    expect(approvalBanner).toBeInTheDocument()
-
-    // Stacked siblings, not overlapping: the approval banner's ancestor
-    // button must come AFTER the connection-error alert in document order
-    // (matching source order — connectionError renders first), and the two
-    // must not be the same element or contained one-in-the-other.
-    const approvalButton = screen.getByTestId('cross-workspace-approval-banner')
-    const alertBanner = connectionBanner.closest('[role="alert"]')
-    expect(alertBanner).not.toBeNull()
-    expect(approvalButton).not.toBe(alertBanner)
-    expect(alertBanner?.contains(approvalButton)).toBe(false)
-    expect(approvalButton.contains(alertBanner)).toBe(false)
-    // DOCUMENT_POSITION_FOLLOWING (4): approvalButton comes after alertBanner.
-    expect(
-      alertBanner
-        ? (alertBanner.compareDocumentPosition(approvalButton) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
-        : false,
-    ).toBe(true)
-
-    // <main> is still present and not pushed out of the DOM/collapsed to
-    // nothing — both banners take their natural height in the flex column,
-    // <main> (flex-1) absorbs the rest.
-    const main = screen.getByTestId('app-main-content')
-    expect(main).toBeInTheDocument()
-  })
-})
+// The old "cross-workspace approval banner coexists with other banners"
+// describe is deleted with CrossWorkspaceApprovalBanner itself (bundle B3,
+// commit 8f740826e): the founder ruled the app shows NO "N approvals waiting
+// — Go there" notice — the approval card shows in its parent chat and the
+// attention mechanisms (sidebar halo / count cue) carry cross-chat pending
+// state instead. The connection-error banner's own stacking behaviour is
+// covered by the remaining banner cases in this file.
 
 // ── God-mode banner is gone (founder decision 2026-09-25) ────────────────────
 //
@@ -750,7 +683,8 @@ describe('AppShell — god-mode banner removal (2026-09-25)', () => {
 // other state — off, unknown (fetch error), loading, bypass; no amber variant
 // exists anywhere. Because it mounts from the shell (not from any screen's
 // header), it covers routes with no sidebar button too — Library, the
-// live-browser view, admin chat. In this file Outlet renders null, which is
+// live-browser view, the /admin/chat redirect stub. In this file Outlet
+// renders null, which is
 // exactly that no-screen-chrome shape: asserting the dot here IS the "present
 // on a route without ScreenHeader" case.
 //
@@ -782,7 +716,7 @@ function stubSidebarPinMediaQuery(pinMatches: boolean) {
 
 // Phone-takeover shape: answer BOTH queries AppShell/GodModeIndicators ask
 // — the sidebar pin breakpoint (1024px, false → sidebar never pinned) and
-// AppShell's own <640px phone signal (true → panel takeover active).
+// AppShell's own <680px phone signal (true → panel takeover active).
 function stubPhoneTakeoverMediaQuery() {
   Object.defineProperty(window, 'matchMedia', {
     configurable: true,
@@ -791,7 +725,7 @@ function stubPhoneTakeoverMediaQuery() {
       matches:
         query === '(min-width: 1024px)'
           ? false
-          : query === '(max-width: 639px)'
+          : query === '(max-width: 679px)'
             ? true
             : false,
       media: query,
@@ -847,7 +781,7 @@ function registerCornerDotHooks() {
 
   afterEach(() => {
     useSidebarStore.setState({ isOpen: false, isPinned: false })
-    useUiStore.setState({ browserPanel: null, libraryPanel: null })
+    useUiStore.setState({ activePanel: null })
     restoreWindowMatchMedia()
   })
 }
@@ -855,7 +789,7 @@ function registerCornerDotHooks() {
 describe('AppShell — God Mode corner dot visibility (2026-09-25)', () => {
   registerCornerDotHooks()
 
-  it('shows the corner dot when god-mode is on and the sidebar is hidden (no ScreenHeader — the Library/live-browser/admin-chat shape)', async () => {
+  it('shows the corner dot when god-mode is on and the sidebar is hidden (no ScreenHeader — the Library/live-browser/admin-chat-redirect shape)', async () => {
     mockShellFetches()
     // Default sidebar store state: closed overlay, unpinned → not visible.
     useSidebarStore.setState({ isOpen: false, isPinned: false })
@@ -961,7 +895,7 @@ describe('AppShell — God Mode corner dot visibility (2026-09-25)', () => {
 describe('AppShell — God Mode corner dot placement (2026-09-25)', () => {
   registerCornerDotHooks()
 
-  // Review round 2, finding 3: below 640px the docked BrowserLivePanel /
+  // Review round 2, finding 3: below 680px the docked BrowserLivePanel /
   // LibraryPanel take over the full width, and AppShell collapses <main> to
   // zero width and inerts it. A dot living inside <main> is invisible and
   // unclickable exactly while God Mode is on — the highest-risk state shows
@@ -971,7 +905,7 @@ describe('AppShell — God Mode corner dot placement (2026-09-25)', () => {
     stubPhoneTakeoverMediaQuery()
     mockShellFetches()
     useSidebarStore.setState({ isOpen: false, isPinned: false })
-    useUiStore.setState({ browserPanel: { sessionId: 's1', agentId: 'a1' } })
+    useUiStore.setState({ activePanel: { id: 'browser', context: { sessionId: 's1', agentId: 'a1' } } })
 
     renderShell()
 

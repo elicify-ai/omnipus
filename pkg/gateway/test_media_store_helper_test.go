@@ -11,7 +11,7 @@ import (
 
 type cleanupRegistrar interface {
 	Helper()
-	Cleanup(func())
+	Cleanup(fn func())
 }
 
 // newTestFileMediaStore constructs a media store whose debounced registry

@@ -54,9 +54,8 @@ function userVisibleTasks(tasks: Task[]): Task[] {
 }
 
 describe('isRecurringTrigger (narrower — repeating-specific call sites only)', () => {
-  it('is true for every and recurring trigger types', () => {
-    expect(isRecurringTrigger({ type: 'every', config: { every_ms: 60_000 } })).toBe(true)
-    expect(isRecurringTrigger({ type: 'recurring', config: { cron_expr: '0 9 * * MON' } })).toBe(true)
+  it('is true for the recurring trigger type', () => {
+    expect(isRecurringTrigger({ type: 'recurring', config: { rrule: 'FREQ=WEEKLY;BYDAY=MO', dtstart_ms: 1234, tz: 'UTC' } })).toBe(true)
   })
 
   it('is false for manual, once, undefined, and null triggers', () => {
@@ -68,10 +67,9 @@ describe('isRecurringTrigger (narrower — repeating-specific call sites only)',
 })
 
 describe('isScheduledTrigger (broadened — Board/List visibility boundary)', () => {
-  it('is true for once, every, and recurring trigger types', () => {
+  it('is true for once and recurring trigger types', () => {
     expect(isScheduledTrigger({ type: 'once', config: { at_ms: 1234 } })).toBe(true)
-    expect(isScheduledTrigger({ type: 'every', config: { every_ms: 60_000 } })).toBe(true)
-    expect(isScheduledTrigger({ type: 'recurring', config: { cron_expr: '0 9 * * MON' } })).toBe(true)
+    expect(isScheduledTrigger({ type: 'recurring', config: { rrule: 'FREQ=WEEKLY;BYDAY=MO', dtstart_ms: 1234, tz: 'UTC' } })).toBe(true)
   })
 
   it('is false for manual, undefined, and null triggers', () => {
@@ -82,7 +80,7 @@ describe('isScheduledTrigger (broadened — Board/List visibility boundary)', ()
 })
 
 describe('Board/List schedule exclusion (broadened FR-011/US-3 boundary)', () => {
-  it('excludes once, every, and recurring tasks — keeps ONLY the manual task (positive control)', () => {
+  it('excludes once and recurring tasks — keeps ONLY the manual task (positive control)', () => {
     const manualTask = makeTask({ id: 'manual-1', title: 'Manual task' })
     const noTriggerTask = makeTask({ id: 'no-trigger-1', title: 'No trigger task' })
     const onceTask = makeTask({
@@ -90,22 +88,16 @@ describe('Board/List schedule exclusion (broadened FR-011/US-3 boundary)', () =>
       title: 'Once task',
       trigger: { type: 'once', config: { at_ms: 1000 } },
     })
-    const everyTask = makeTask({
-      id: 'every-1',
-      title: 'Every task',
-      trigger: { type: 'every', config: { every_ms: 60_000 } },
-    })
     const recurringTask = makeTask({
       id: 'recurring-1',
       title: 'Recurring task',
-      trigger: { type: 'recurring', config: { cron_expr: '0 9 * * MON' } },
+      trigger: { type: 'recurring', config: { rrule: 'FREQ=WEEKLY;BYDAY=MO', dtstart_ms: 1234, tz: 'UTC' } },
     })
 
     const visible = userVisibleTasks([
       manualTask,
       noTriggerTask,
       onceTask,
-      everyTask,
       recurringTask,
     ])
 
@@ -124,7 +116,7 @@ describe('Board/List schedule exclusion (broadened FR-011/US-3 boundary)', () =>
     const heartbeatScheduledTask = makeTask({
       id: 'hb-2',
       surface: 'heartbeat',
-      trigger: { type: 'recurring', config: { cron_expr: '0 9 * * MON' } },
+      trigger: { type: 'recurring', config: { rrule: 'FREQ=WEEKLY;BYDAY=MO', dtstart_ms: 1234, tz: 'UTC' } },
     })
     const userManualTask = makeTask({ id: 'user-1' })
     const userOnceTask = makeTask({

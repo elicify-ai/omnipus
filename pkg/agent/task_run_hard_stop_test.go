@@ -116,7 +116,7 @@ func TestTaskRun_HardStopOfANativeWorkerTurn_EndsTheTask(t *testing.T) {
 		t.Errorf("session %q -> %q: the task restarted in a fresh run", running.SessionID, final.SessionID)
 	}
 
-	store := al.GetAgentStore(tk.AgentID)
+	store := al.GetSessionStore()
 	waitForGoalOutcomeEntry(t, store, final.SessionID)
 	rec := taskGoalRecordOf(t, tk.ID)
 	e := requireOneGoalOutcome(t, store, final.SessionID, rec.GoalID)

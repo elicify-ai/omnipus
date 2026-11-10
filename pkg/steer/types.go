@@ -39,8 +39,8 @@ type LaunchRequest struct {
 	// shape create_task validates (pkg/tools/task.go::validateRequest).
 	// Nil means no goal (founder decision, round 3).
 	Goal *GoalSpec
-	// Limits, ToolExclusions are as I-1's SteeredBy fields.
-	Limits         Limits
+	// ToolExclusions is as I-1's SteeredBy field. There is no Limits: a
+	// launched session has no time limit (issue #1306).
 	ToolExclusions []string
 	// RequestedSkill is delegate.run's optional `requested_skill` (ADR-072
 	// D9, spec FR-050/FR-053/FR-054): "a hard request, not a hint". Empty
@@ -50,6 +50,20 @@ type LaunchRequest struct {
 	// not granted it or the slug does not resolve at all, rather than
 	// silently proceeding without it.
 	RequestedSkill string
+	// ContextReferences and ContextNotes are delegate.run's curated context
+	// snapshot (`snapshot.references` / `snapshot.notes`, R§8.5): the
+	// parent-named artifact references and free-text notes the child is
+	// meant to start with. Already validated against the snapshot caps by
+	// the delegate tool; Launch seeds them into the child's first message,
+	// after Task. Both empty means no snapshot.
+	ContextReferences []string
+	ContextNotes      string
+	// Initiator, when non-nil, is the already-authorized agent initiator of a
+	// task run (run_task, execute_plan); Launch copies it onto the child's
+	// LifecycleRecord.InitiatedBy and caps the child's budget by its
+	// Authorization.RemainingDepth. Nil means a person or the scheduler
+	// started the run.
+	Initiator *session.InitiatedBy
 }
 
 // LaunchResult is SessionLauncher.Launch's output (I-2).
@@ -57,6 +71,12 @@ type LaunchResult struct {
 	SessionID string
 	// Generation is 1 at launch.
 	Generation int
+	// Is3P is the runtime classification Launch PERSISTED on the child's
+	// lifecycle record (true: external CLI, false: native). Callers that report
+	// the child's runtime (delegate's is_3p) project this value; they never
+	// re-resolve it, because a later executor change would make a second read
+	// describe a different runtime from the child that was actually created.
+	Is3P bool
 }
 
 // DispatchState is DispatchResult.State's enum (I-2) — the authoritative
@@ -125,10 +145,12 @@ func (c Class) Runnable() bool {
 type Outcome string
 
 const (
-	OutcomeFinalAnswer     Outcome = "final_answer"
-	OutcomeEmptyAnswer     Outcome = "empty_answer"
-	OutcomeParkedQuestion  Outcome = "parked_question"
-	OutcomeInterrupted     Outcome = "interrupted"
+	OutcomeFinalAnswer    Outcome = "final_answer"
+	OutcomeEmptyAnswer    Outcome = "empty_answer"
+	OutcomeParkedQuestion Outcome = "parked_question"
+	OutcomeInterrupted    Outcome = "interrupted"
+	// OutcomeTimedOut is historical: only boot recovery of a record stopped
+	// by the retired lifetime budget (issue #1306) still produces it.
 	OutcomeTimedOut        Outcome = "timed_out"
 	OutcomeFailed          Outcome = "failed"
 	OutcomeWaitingChildren Outcome = "waiting_for_children"
@@ -144,8 +166,33 @@ const (
 // maps onto a kind the inbox already stores and the SPA already renders.
 type UpwardEvent struct {
 	ChildSessionID string
-	Outcome        Outcome
-	Message        generated.SessionMessage
+	// Generation pins a terminal event to the lifecycle generation that its
+	// producer validated. Zero means the deliverer uses the currently loaded
+	// generation, preserving existing non-completion producers.
+	Generation int
+	Outcome    Outcome
+	Message    generated.SessionMessage
+
+	// SuppressWake stores the entry without waking the recipient (the
+	// delivery still runs its frames, and the outcome reports
+	// DeliveryStoredNotWoken). Zero value = the class's own wake-eligibility,
+	// so every existing producer is unchanged. Set ONLY where a wake would
+	// double-re-enter the parent for one logical event: the session-goal
+	// "met" verdict (founder Q1=A, #984 follow-up) — the completion handback
+	// that follows it is the one wake worth the parent's turn, the verdict
+	// stays visible through its side-panel entry, and the entry is
+	// acknowledged at hand-back time (pkg/agent goal path) so boot recovery
+	// never re-wakes it. Never set it on a message the parent must ACT on —
+	// questions, blockers and errors keep their wakes.
+	SuppressWake bool
+
+	// RecipientSessionID, when set, addresses the report to that session's inbox
+	// instead of the child's own steering edge (session-core U6, FR-020: a task
+	// run notifies each captured recipient). The child needs no steering edge for
+	// this; a recipient that is not the child's real parent receives the inbox
+	// entry and the wake only — never the side-panel subagent frames. Empty keeps
+	// every existing producer unchanged.
+	RecipientSessionID string
 }
 
 // DeliveryOutcome is Delivery.Outcome's enum (I-5).
@@ -191,6 +238,20 @@ const (
 type Delivery struct {
 	MessageID string
 	Outcome   DeliveryOutcome
+	// Disposition preserves why no wake was needed. This is internal delivery
+	// control flow, not a gateway/SPA wire format or proof of consumption.
+	Disposition string
+}
+
+// ExpectedNoWake distinguishes a deliberate hold or completed receipt from an
+// unexplained failed wake. Unknown/empty reasons must remain visible failures.
+func (d Delivery) ExpectedNoWake() bool {
+	switch d.Disposition {
+	case "not_eligible", "already_consumed", "suppressed_by_stop", "held_for_question", "already_pending":
+		return true
+	default:
+		return false
+	}
 }
 
 // WakeInput is the inbox entry that woke a session (I-3) — nil for a first
@@ -212,6 +273,11 @@ type WakeInput struct {
 type UnreachableSession struct {
 	ID     string
 	Reason string
+	// HelperTreeUnlisted marks an entry that says nothing about ID's own Stop:
+	// ID itself was stopped, but its durable helper tree could not be listed,
+	// so helpers under it may still be running. Summaries count ID as stopped
+	// and report the unlisted tree separately.
+	HelperTreeUnlisted bool
 }
 
 // CancelReport is Canceller.CancelSubtree's output (I-6). Partial walks are
@@ -222,6 +288,11 @@ type CancelReport struct {
 	// SkippedNewerGeneration lists sessions whose cancel targeted a
 	// generation a concurrent revival had already moved past.
 	SkippedNewerGeneration []string
+	// Superseded is the subset of SkippedNewerGeneration whose accepted
+	// selection was no longer current when its effect ran: it already
+	// landed, or a newer explicit action (Resume, completion) replaced it
+	// (ADR-20260928 D2/D5). The Stop's effect was a no-op for them.
+	Superseded []string
 	// SkippedTerminal lists terminal descendants a Stop wrote nothing for
 	// (terminal records are immutable).
 	SkippedTerminal []string
@@ -279,5 +350,8 @@ type Deps struct {
 	Classifier     RecordClassifier
 	LifecycleStore *session.LifecycleStore
 	SessionStore   *session.UnifiedStore
-	BootHook       BootHook
+	// BootEpoch is the one store this process minted at gateway boot.
+	// Readers use Current. Mint stays the gateway's single call.
+	BootEpoch *session.BootEpochStore
+	BootHook  BootHook
 }

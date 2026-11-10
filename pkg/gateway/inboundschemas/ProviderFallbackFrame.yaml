@@ -1,0 +1,62 @@
+title: ProviderFallbackFrame
+description: >
+  Server → client (provider-messages spec §7.1 item 3). Announces that a turn
+  was answered by the fallback model because another candidate could not answer
+  (hard provider trouble or a rate-limit cooldown skip — the frame itself does
+  NOT distinguish the two; that distinction lives only in the once-per-pair
+  note rate and the session transcript, C-18/MIN-103 — the round-2 `reason`
+  enum was dropped as unused, OBS-103).
+type: object
+required:
+  - type
+  - session_id
+  - turn_id
+  - answered_model
+  - unavailable_model
+  - unavailable_code
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: provider_fallback
+  session_id:
+    type: string
+    minLength: 1
+    maxLength: 255
+    description: Session whose turn fell back.
+  turn_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: Turn that was answered by the fallback model.
+  answered_model:
+    type: string
+    minLength: 1
+    maxLength: 256
+    description: Model id of the fallback candidate that answered. "Fallback model" naming lives in UI copy, not on the wire (D7).
+  unavailable_model:
+    type: string
+    minLength: 1
+    maxLength: 256
+    description: Model id of the unavailable candidate — the PRIMARY (first candidate) in a multi-hop chain (MIN-103).
+  unavailable_code:
+    type: string
+    enum:
+      - rate_limited
+      - model_retired
+      - model_not_found
+    description: The classified provider condition that made the unavailable candidate miss the turn. Gates the D12 pick-a-new-model hint in the persisted note (§6) — the hint still fires only for model_retired. model_not_found (founder decision 2026-10-24, Q70) means the provider reported the model as not found or not offered; the hop falls back to the next candidate instead of stopping the turn.
+  seq:
+    type: integer
+    format: int64
+    minimum: 1
+    description: >-
+      Per-session sequence number of this frame (#823 catch-up redesign). Strictly
+      increasing and gap-free within the session, assigned by the gateway's per-session
+      hub as the single chokepoint through which every session-scoped frame is published.
+      Optional: absent on an unsequenced copy of this frame (for example a broadcast
+      delivered to a tab that is not bound to this session) — this seq is dedup state, never itself the resume cursor: the client's cursor is
+      committed only by a completed catch-up (catch_up_complete) and is sent back as
+      since_seq on attach_session (2026-10-26, architect ruling arch-q33 — an earlier
+      sentence here described per-frame cursor advance, which was stale). Frames at
+      or below that cursor are ignored, which makes re-delivery idempotent.

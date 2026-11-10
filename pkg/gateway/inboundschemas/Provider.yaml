@@ -55,7 +55,6 @@ properties:
       - anthropic
       - google
       - ollama
-      - cli
       - bedrock
     description: >
       Wire protocol this configured row uses (ADR-067 D11/FR-013). Absent →
@@ -87,13 +86,6 @@ properties:
       - cloud
     description: ADR-067 FR-039's single local/cloud predicate, derived by the gateway; the only such classification the UI uses.
     example: "cloud"
-  cli_kind:
-    type: string
-    enum:
-      - codex
-      - copilot
-    description: For protocol "cli" rows, the subprocess driver selected by the catalog row (ADR-067 X-14).
-    example: "codex"
   auth_method:
     type: string
     enum:

@@ -1,5 +1,11 @@
 # Feature Specification: Mid-turn steering — correct message ordering
 
+**Amended 2026-10-06 (founder):** Stop click 1 / Esc 1 / `/stop` stops **this chat's current turn only** and opens a **3 s window**. A second Stop / Esc / `/stop` within that window stops **this chat and its whole helper tree**; `/cancel` does that immediately. **No separate button or offer.** `/stop-redirect <instruction>` stops this chat's turn and continues **this chat** with the instruction, in **any root or helper chat**. Same semantics on web, CLI and channels. Plain Stop leaves background shells running; a second Stop / Esc within 3 s, or `/cancel`, kills them. Agent delegate `stop` / `stop_all` is unchanged (one helper's turn / its tree). Authority: founder decision, 2026-10-06.
+
+## Amended 2026-10-06 — founder decision
+
+References below to Stop / Escape / `/cancel` share reply-segment protection, **not scope**: Both enter StopSession (3 s force + subsequent 3 s detach). A reply segment marked finished is not an archived/hidden chat or the terminal lifecycle commit. Provider answer before that commit is still working; accepted late input continues the same generation. Exact delegated text must be durable before delivered; failed write stays queued with a visible error. Authority: [The sub-agent control plane: stop, redirect, receipts, owner-question relay, restart resume](../architecture/ADR-20260928-sub-agent-control-plane.md)::D-A/B/C/D and R1; presentation decisions/holdout remain unchanged.
+
 **Created**: 2026-08-24
 **Status**: Draft
 **Input**: `docs/internal/architecture/ADR-070-mid-turn-steering-message-ordering.md`

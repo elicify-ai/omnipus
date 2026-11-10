@@ -10,7 +10,10 @@ import (
 
 // activeRequestTracker closes intake before a shutdown waiter observes the
 // active count. Its zero value is ready for use so focused tests that build an
-// AgentLoop literal retain the production shutdown semantics.
+// AgentLoop literal retain the production shutdown semantics. The tracker is
+// terminal once intake closes; construct a new AgentLoop to restart. Every
+// done call must be paired with a successful, begin-gated admission, making
+// done's underflow panic unreachable unless that pairing invariant is broken.
 type activeRequestTracker struct {
 	mu          sync.Mutex
 	active      int
@@ -108,6 +111,18 @@ func (al *AgentLoop) WaitForActiveRequestsContext(ctx context.Context) bool {
 
 func (al *AgentLoop) launchSystemMessage(runCtx context.Context, msg bus.InboundMessage) {
 	if !al.beginActiveRequest() {
+		sessionID := msg.AsyncTranscriptSessionID
+		if sessionID == "" {
+			sessionID = msg.SessionID
+		}
+		logger.WarnCF("agent", "active request admission refused after intake closed", map[string]any{
+			"site":        "launchSystemMessage",
+			"channel":     msg.Channel,
+			"chat_id":     msg.ChatID,
+			"session_id":  sessionID,
+			"session_key": msg.SessionKey,
+			"agent_id":    msg.AsyncOriginAgentID,
+		})
 		return
 	}
 	go func() {

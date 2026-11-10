@@ -13,7 +13,8 @@ import { popularTiles, stubOnboarding, stubProviderSignIn } from './fixtures/onb
 // the fragment is reflected in page.url() instead.
 const ROUTES = [
   '/#/',
-  '/#/agents',
+  // WU-11 (FR-108): '/#/agents' is retired — the a11y route sweep covers the
+  // surviving major routes.
   '/#/skills',
   '/#/settings',
   '/#/settings?tab=about',

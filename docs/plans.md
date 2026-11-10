@@ -12,11 +12,19 @@ A plan lives in a [workspace](workspaces.md) and has three parts:
 
 The engine runs plans on the server: it hands each unblocked task to its assignee, checks the result against that task's acceptance criteria, and judges the DoD once every member has finished.
 
-You see plans in the **Tasks** tab of a workspace, as tiles above the board showing the state badge, a progress count such as "4 of 6 tasks done", the owner, and one action button. Selecting a tile filters the view to that plan's tasks and switches to the Graph view, where the dependency graph is drawn.
+You see plans in the **Tasks** panel of a workspace, as tiles in the collapsible **Plans** band above all three task views showing a coloured status dot and status word, plain progress such as "4/6", the owner, and the eligible actions. Selecting a tile filters the view to that plan's tasks and switches to the Graph view, where the dependency graph is drawn.
+
+The Plans band is open by default when plans exist, and collapsed when there are none. Click **Plans** to fold or unfold its horizontal tile strip. The compact header holds only **Plans**, its fold control and **New Plan**, and stays visible while folded. Space above and below the tiles is compact. Completed plans remain hidden by default; the unchecked **Unhide done plans** checkbox sits at the bottom-left of the tile area, below **All tasks**, when completed plans exist. Checking it reveals their tiles. When more tiles are off-screen, **scroll for more →** signals sideways scrolling, including on a phone. Long plan titles wrap fully within their tile, normally at spaces. A word or URL longer than the available width breaks only as a last resort. The whole title is visible without hovering.
+
+Every plan tile has an **info icon** showing its full title, status, progress (done/total), owner agent and last updated time. Hover over the icon, focus it with the keyboard, or tap it on touch. You can move into the details panel to read it. The panel appears above scroll areas and closes when you move away, press **Escape**, or click/tap outside. It does not select the plan. Selecting the tile's title or body still filters the tasks and opens Graph.
+
+Graph opens at the top of the map, with its first card fully visible. If opening at the top fails, Graph tries once more at the current zoom. If that also fails, the map stays usable and shows **Couldn't open at the top** with **Retry**. You can still pan, zoom and open tasks. Its zoom controls sit below the map rather than on top of cards. Graph task titles use a fixed two-line slot with ellipsis. Task details use the same info-icon hover, keyboard-focus and touch-tap interaction, with full title, status, agent, tags, plan and update time, and **Open task** inside it. Hovering the rest of the task node does not open details. Metadata is plain text rather than pills; eligible actions stay visible without hovering.
+
+A running plan tile shows a spinning arrow without a token count. In the plan's Graph view, each **In Progress** task node uses the same arrow. Board and List running-task indicators also omit token counts; Chat's existing token counter is unchanged. With reduced motion enabled, the arrow stays visible but does not spin.
 
 A plan moves through five states. This table shows what each one means and what you can do from the tile.
 
-| State | Badge | What it means | Your action |
+| State | Status appearance | What it means | Your action |
 |---|---|---|---|
 | Draft | Grey | Authored, not running | Execute |
 | Approved | Blue | Accepted, waiting for a free run slot | Stop |
@@ -45,7 +53,7 @@ Use a plan when several tasks depend on each other and you can state a checkable
 
 ## How to create and run a plan
 
-1. Open your workspace's **Tasks** tab and press **New Plan**. A form opens beside the board.
+1. Open your workspace's **Tasks** panel and press **New Plan**. A form opens beside the board.
 2. Give the plan a title, an optional goal and description, and pick the owner agent from the team. Title and owner are required.
 3. Add Definition of Done items and, if you want different limits, change the Bounds. Save the plan; it appears as a Draft tile.
 4. Add member tasks with the **+ New Task** action: pick the plan, set what the task is blocked by, and give it at least one acceptance criterion. Two fields matter for parallel work — the paths a task creates or edits, and the merge-point marker for a task several parallel tasks feed into.
@@ -53,6 +61,26 @@ Use a plan when several tasks depend on each other and you can state a checkable
 6. Watch the tile: the plan turns Approved, then Running once the engine admits it, with quiet phase chips (dispatching, judging, synthesizing) while it runs.
 
 After Execute, nothing further needs your approval: tasks run, are checked, and are retried on their own.
+
+### Agents reading and changing a plan
+
+An agent can read a plan with `get_plan` and change it with `update_plan`. `get_plan` returns the plan record the web app shows, narrowed to the properties the agent names in `fields` (or `["all"]`); the plan’s id always comes back. A plan read carries no revision — `update_plan` addresses the plan by `plan_id`.
+
+`update_plan` works only for the plan's owner agent or the agent that created it. Only the properties sent change:
+
+| Property | When it can change |
+|---|---|
+| Title, goal (objective), description | In any state |
+| Bounds | In any state |
+| Owner agent, Definition of Done | Only while the plan is a draft |
+
+The plan's state is not a property: agents start and stop plans with `execute_plan` and `stop_plan`, as before. Restart and delete stay with people.
+
+**Bounds** are the four per-plan limits: judge rounds (`plan_judge_max_rounds`), idle-expiry days (`idle_expiry_days`), the supervision turn time (`supervision_turn_timeout_seconds`) and supervision attempts (`supervision_max_attempts`). An agent's change merges field by field, like a change in the web app. An agent can never set a bound above the global value in Settings: if one value in the call is higher, the whole call is refused and nothing changes. A person editing in the web app is not limited this way.
+
+**Leaving a plan.** When a task is taken out of a plan (its plan is cleared) and the same change does not set a status, the task goes back to **Inbox**, so it does not start on its own outside the plan. If the task cannot move to Inbox (for example it is done or blocked), it leaves the plan and keeps its status. A status set in the same change always wins.
+
+When an **agent** runs a plan with `execute_plan`, Omnipus checks the workspace's trust lines from that agent to the assignee of every step before the plan starts; if any is missing the plan stays a draft and the reply names each assignee that was refused. Each step is checked again, against the current lines, when it is about to start, so removing a line while the plan runs makes the affected step fail with a clear reason. A plan you approve or play yourself in the web app needs no such lines.
 
 ## Definition of Done
 
@@ -64,7 +92,8 @@ A plan created in the interface may leave the DoD empty — the work is then jud
 
 Two built-in system agents — not chat colleagues — handle checking and rescue.
 
-- **The Judge** rules each task's criteria met or unmet as the task finishes, and the plan's DoD when all members finish. It works read-only, in its own session.
+- **The Judge** rules each task's criteria met or unmet as the task finishes, and the plan's DoD when all members finish. It works read-only, in its own session. For a plan review, the Judge receives each member's session reference when one exists, so it can inspect that member's work. This does not grant access to unrelated sessions.
+- **When a plan Judge round is abandoned as unavailable, with no verdict to score**, the plan's handover says **Not verified — the check could not complete**, with the reason and the member-result excerpts labelled **The work result, unverified:**. Each non-superseded member's result contributes at most its first 500 bytes; a long combined result may be truncated further. No judge round is used on this unavailable path. Below the consecutive-unavailability bound the engine retries; the third consecutive unavailable round parks the plan as stalled for the supervisor, with the same conclusion. If the members' results could not be read, the conclusion explains that instead. If the plan record cannot be read, the engine also attempts to save the conclusion in the plan owner's conversation. Recovery retries the round only while the retry bound remains; an already-decided park is applied instead. Repeated time-limit failures after real review progress can instead produce a scored **unmet** verdict and consume a judge round.
 - **The Plan Supervisor** is woken when a finished plan's DoD is unmet, or the graph stalls with nothing to dispatch. It applies one correction per wake.
 
 The supervisor can apply four corrections.
@@ -76,23 +105,24 @@ The supervisor can apply four corrections.
 | Targeted retry | Re-runs one failed task |
 | Abandon | Ends the plan, recording that the Definition of Done cannot be reached |
 
-After a correction the plan returns to running; three wakes without a valid correction fail it. The tile shows a warning chip — "Re-planning — awaiting supervision" or "Stalled — needs a correction" — with an explanation underneath. There are no correction buttons for you: the supervisor is the only actor, and **Stop** halts the tasks, the checks, and the supervisor's review alike.
+After a correction the plan returns to running. Append and Supersede also give every failed task another try, and Targeted retry gives its one task another try. If Omnipus shuts down in the middle of a targeted retry, it finishes the retry the same way when it starts again. Such a task goes back to **Next**, except a task whose schedule still has a future occurrence: it goes to **Inbox** and waits there, keeping its schedule, until the occurrence starts it. Pressing **Play** on a stopped plan is different: you asked for the work now, so its failed tasks go to **Next** at once and keep their schedules. The plan fails when its configured supervision-attempt limit is exhausted; the shipped default is three attempts without a valid correction. The tile shows a warning chip — "Re-planning — awaiting supervision" or "Stalled — needs a correction" — with an explanation underneath. There are no correction buttons for you: the supervisor is the only actor, and **Stop** halts the tasks, the checks, and the supervisor's review alike.
 
 ## Limits and things to watch
 
 - **Restart exists only for plans you stopped.** A plan that failed on its own — rounds exhausted, idle too long, DoD unreachable, supervisor unavailable — is closed for good. Write a new plan.
 - **Restart re-runs only unfinished tasks**, each from scratch. Finished tasks and their evidence are kept.
 - **Stop is a hard cancel** — in-flight tasks, checks, and shell commands. A stopped plan never resumes on its own.
-- **Run slots are capped at 16** active loops across the install — plans, conversation goals, and recurring loops together. A plan can wait at Approved and stays stoppable there.
-- **Bounds are per plan** — the judge-round ceiling and idle-expiry days, defaulting to 20 rounds and 7 days. A plan idle that long ends failed.
+- **Run slots follow the install-wide active-loop cap**—16 by default—shared by plans, conversation goals and recurring loops. A plan can wait at Approved and stays stoppable there.
+- **Bounds are per plan** — the judge-round ceiling and idle-expiry days, defaulting to 20 rounds and 7 days; an agent can set a bound only up to the global value in Settings. A plan idle that long ends failed — but only when nothing is running: a member task in progress or waiting to start, a judge round, or an owner or supervisor turn keeps the plan alive however long it takes.
 - **A running plan can pause.** If its owner agent is disabled, the plan pauses and the tile shows the reason.
+- **Plan work has no time limit.** Member tasks and the supervisor's review run until they finish or you press Stop. A supervision attempt is checked against `planning.supervision_turn_timeout_seconds` (600 seconds by default, or the plan's own override), counted from when the supervisor was woken, and only once its turn has ended — a review that is still working is never cut off. A review that runs longer than that interval is judged as soon as it ends; there is no extra waiting time after it finishes.
 - **A running plan cannot be deleted.** The Clear action in a tile's menu works only on plans that are not running.
-- **Agent-driven execution is permission-gated.** By default, Jim starts and stops plans without a prompt; Mia, Ava, and Ray ask first. [Tools](tools.md) explains the per-agent settings.
+- **Agent-driven plan execution is permission-gated.** On a fresh install, Jim is allowed to execute and stop plans. Mia and Omnipus are denied those tools by their shipped role policies. Operators can configure supported per-agent permissions. [Tools](tools.md) explains the per-agent settings.
 
 ## Related pages
 
 - [tasks](tasks.md) — single tasks, their acceptance criteria, and the board they share with plans.
-- [workspaces](workspaces.md) — where the Tasks tab and its plan band live.
+- [workspaces](workspaces.md) — where the Tasks panel and its plan band live.
 - [agents](agents.md) — the owner agent's role, and the Judge and Plan Supervisor as system agents.
 - [goals](goals.md) — the same judging, applied to a goal set in a conversation.
 - [tools](tools.md) — the permission settings that gate plan tools per agent.

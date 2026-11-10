@@ -110,7 +110,7 @@ func TestRunTurn_ToolFailureCircuitBreaker_CapsIdenticalRetries(t *testing.T) {
 	sub := al.SubscribeEvents(64)
 	defer al.UnsubscribeEvents(sub.ID)
 
-	finalContent, err := al.ProcessDirect(
+	finalContent, err := al.processDirectPrimaryForTest(
 		context.Background(),
 		"please run always_failing_tool repeatedly",
 		"test-session-tool-failure-circuit-breaker",

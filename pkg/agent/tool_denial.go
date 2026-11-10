@@ -62,6 +62,15 @@ const DenialMessageUser = "The user denied this tool call. Do not retry it; stop
 // classifies against it can never drift onto two different literals.
 const autoDenyHeadlessReason = "auto-denied: ask-policy tool not allowed in a headless scheduled run"
 
+// autoDenyTaskPlanReason is the fixed refusal reason for an Ask-policy call
+// in a task or plan chain that Auto, an operator rule or a standing grant did
+// not settle (#1263 R4, L1-AMENDMENTS-20261013 §1.2): task and plan runs —
+// whatever started them — never ask a person, so the call is refused at once.
+// Chains whose root cannot be read take the same reason (R1, fail toward the
+// visible refusal). Scheduled, heartbeat and Judge runs keep
+// autoDenyHeadlessReason.
+const autoDenyTaskPlanReason = "auto-denied: ask-policy tool not allowed in a task or plan run"
+
 // DenialClass is the single classification of one tool-call denial reason:
 // whether it is Permanent (never worth retrying within this turn) and the
 // two rendered strings for the model (ModelMessage) and the transcript
@@ -243,6 +252,16 @@ var denialTable = map[string]DenialClass{
 			"ask-policy tools. Do not retry; stop and report the blocker.",
 		TranscriptText: "Not run: this is a headless scheduled run with no operator available " +
 			"to approve ask-policy tools.",
+	},
+	// autoDenyTaskPlanReason (#1263 R4): the model is told to finish what it
+	// can and report what was blocked (the blocked goal_claim then ends the
+	// task, founder Q2 A); the transcript row is the amendment's fixed text.
+	autoDenyTaskPlanReason: {
+		Reason:    autoDenyTaskPlanReason,
+		Permanent: true,
+		ModelMessage: "Task and plan runs never ask a person for approval. This call needed approval " +
+			"and was refused. Do not retry; finish what you can and report what was blocked.",
+		TranscriptText: "Not run: needs approval, and task and plan runs never ask.",
 	},
 	// "" is the empty-reason row askDenialText already handles today. Its
 	// TranscriptText is preserved verbatim (spec N1); reachability of this

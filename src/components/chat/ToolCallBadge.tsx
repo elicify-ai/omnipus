@@ -61,10 +61,9 @@ export function ToolCallBadge({ toolCall }: ToolCallBadgeProps) {
   // fall into shouldRenderToolCall's hide-by-default `set_goal` case and
   // vanish. Route it to the same dedicated UI the top-level thread uses: the
   // record card on success, the quiet "Goal registration failed" line on the
-  // refusal. Verbose chat falls through to this badge's own raw rendering
-  // below (shouldRenderToolCall returns true there), matching
-  // SetGoalCardBlock's own verbose contract.
-  if (toolCall.tool === 'set_goal' && !verboseChatEnabled) {
+  // refusal. Keep this route in both modes: SetGoalCardBlock adds expandable
+  // raw details below the card in verbose chat, matching the main thread.
+  if (toolCall.tool === 'set_goal') {
     return (
       <SetGoalCardBlock
         args={toolCall.params}

@@ -24,6 +24,15 @@ on:
       - 'deploy/macos/**'
       - '.github/workflows/phase3-macos.yml'
 
+# `tsc -b` (npm run build) has outgrown V8's default old-space heap on this
+# runner class (~2 GB effective on the 7 GB macos-latest arm64 machines):
+# the same Build SPA step OOMs near 2040 MB in some runs and passes in
+# others (run 37007406557 core/notarize/audio-spike vs the cross-platform
+# macos-latest matrix job on the same commit). Pin the heap explicitly at
+# 4 GB — inside the runner's physical RAM; the heap only grows if needed.
+env:
+  NODE_OPTIONS: "--max-old-space-size=4096"
+
 jobs:
   # ── Core: the deterministic macOS ACs ────────────────────────────────────
   core:
@@ -62,7 +71,10 @@ jobs:
         shell: bash
         run: |
           go build -tags goolm,stdjson -o omnipus ./cmd/omnipus/
-          ./omnipus version | head -1
+          # Smoke-run directly — `| head -1` races SIGPIPE (exit 141) when
+          # head exits before the binary's second output line under
+          # pipefail (run 37013120988); failures still fail the step.
+          ./omnipus version
 
       - name: Fetch REAL CfT mac-arm64 Chrome + chrome.sha256 — AC-3 producer
         shell: bash

@@ -1,0 +1,137 @@
+{
+  "specification": "accepted team-lead follow-up (h) and six RoomTrafficEntry carrier cases",
+  "production_head": "e4c84116b36637810c59961e90def0f83dee0370",
+  "final_tested_commit": "0da2c2a52d17da9e7ce04c064bff1aa03115171c",
+  "stock_checkout": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1-enabled-controls",
+  "method": "stock unretargeted tests on unchanged production with its real shipped false switches; contrast with assertion-preserving enabled-feature fixture configuration; no production mutation",
+  "total_gated_cases": 15,
+  "expected_stock_failures": 15,
+  "cases": [
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/layout/sidebar/WorkspaceAgentList.rooms.test.tsx",
+      "source_sha256": "b3f25091473471893529cca9a247775c5b4dcc82afd54763122639ac8ed8ed3a",
+      "switch_mocked_on": "ROOMS_ENABLED",
+      "visible_assertions": [
+        "expect(group).toBeVisible()",
+        "expect(other).toBeVisible()"
+      ],
+      "stock_shipped_off": {
+        "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/shipped-off-original-WorkspaceAgentList.rooms.test.tsx.log",
+        "command": "npx vitest run /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1-enabled-controls/src/components/layout/sidebar/WorkspaceAgentList.rooms.test.tsx --root /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1-enabled-controls --reporter=verbose",
+        "exit": 1,
+        "test_summary": "Tests  7 failed | 10 passed (17)",
+        "named_failures": [
+          "FAIL  src/components/layout/sidebar/WorkspaceAgentList.rooms.test.tsx > workspace Group chats section > [FR-174; BDD-17.1/2] sorts team first, squads second, ad-hoc third regardless of HTTP order",
+          "FAIL  src/components/layout/sidebar/WorkspaceAgentList.rooms.test.tsx > workspace Group chats section > [FR-160; BDD-17.20] a hidden team room is not shown or deleted; a visible squad stays listed",
+          "FAIL  src/components/layout/sidebar/WorkspaceAgentList.rooms.test.tsx > workspace Group chats section > [FR-162/174] every workspace has its own section and room rows never leak across workspaces",
+          "FAIL  src/components/layout/sidebar/WorkspaceAgentList.rooms.test.tsx > workspace Group chats section > [FR-174; K23; §6.3] needs_attention produces a marker on that room row",
+          "FAIL  src/components/layout/sidebar/WorkspaceAgentList.rooms.test.tsx > workspace Group chats section > [§6.3] a successfully empty room list says exactly No group chats yet",
+          "FAIL  src/components/layout/sidebar/WorkspaceAgentList.rooms.test.tsx > workspace Group chats section > [§6.3] a failed list shows Error plus Retry, never the true-empty text",
+          "FAIL  src/components/layout/sidebar/WorkspaceAgentList.rooms.test.tsx > workspace Group chats section > [FR-174; test row 119 SPA half] clicking a room opens its workspace room route, not a new agent session"
+        ],
+        "sha256": "16fafde3132f9ee71adf62b41f7912f0ee9809523d64698db41053023c9d6329"
+      },
+      "final_enabled_oracle": {
+        "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/merged-final-WorkspaceAgentList.rooms.test.tsx.log",
+        "command": "npx vitest run src/components/layout/sidebar/WorkspaceAgentList.rooms.test.tsx --reporter=verbose",
+        "exit": 0,
+        "test_summary": "Tests  17 passed (17)",
+        "named_failures": [],
+        "sha256": "6d6d90338d11793a7929c6ba7d678cf7f7f7da2973b0a4fe07d52b3b3456786d"
+      }
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/chat/AddParticipant.test.tsx",
+      "source_sha256": "2de2c1122f5f9e362e878cc5fa54119daedd7fd2d27b003719b6ce94d970a6e8",
+      "switch_mocked_on": "ROOMS_ENABLED",
+      "visible_assertions": [
+        "expect(await screen.findByRole('button', { name: 'Add participant' })).toBeVisible()"
+      ],
+      "stock_shipped_off": {
+        "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/shipped-off-original-AddParticipant.test.tsx.log",
+        "command": "npx vitest run /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1-enabled-controls/src/components/chat/AddParticipant.test.tsx --root /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1-enabled-controls --reporter=verbose",
+        "exit": 1,
+        "test_summary": "Tests  1 failed | 8 passed (9)",
+        "named_failures": [
+          "FAIL  src/components/chat/AddParticipant.test.tsx > Add participant — agents only, one workspace, no main-chat conversion > [FR-207/208; BDD-17.24/25] the real ChatScreen header shows Add participant in a main chat and removes it for Omnipus"
+        ],
+        "sha256": "c1c42782b7c4df129eb0c7b8cc121e784cd8853468311ca4194dad1ed91c5b92"
+      },
+      "final_enabled_oracle": {
+        "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/merged-final-AddParticipant.test.tsx.log",
+        "command": "npx vitest run src/components/chat/AddParticipant.test.tsx --reporter=verbose",
+        "exit": 0,
+        "test_summary": "Tests  9 passed (9)",
+        "named_failures": [],
+        "sha256": "9dc2d8bb52fa9e1b454c5fa376d834a33c9226c07ecaf676855b5e14e9e82d3f"
+      }
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/layout/AppShell.test.tsx",
+      "source_sha256": "3d047c7358be9ebae3c29eac8f3920bb6243a243deba80ccc57c54cee5628275",
+      "switch_mocked_on": "INLINE_TOOL_APPROVALS_ENABLED",
+      "visible_assertions": [
+        "expect(connectionBanner).toBeVisible()",
+        "expect(approvalBanner).toBeVisible()"
+      ],
+      "stock_shipped_off": {
+        "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/shipped-off-original-AppShell.test.tsx.log",
+        "command": "npx vitest run /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1-enabled-controls/src/components/layout/AppShell.test.tsx --root /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1-enabled-controls --reporter=verbose",
+        "exit": 1,
+        "test_summary": "Tests  1 failed | 28 passed (29)",
+        "named_failures": [
+          "FAIL  src/components/layout/AppShell.test.tsx > AppShell — cross-workspace approval banner coexists with other banners > renders both the connection-error banner and the cross-workspace approval banner at once, neither hiding the other"
+        ],
+        "sha256": "d24b1d8d376d75ee9ed8eada82db2824bd84123f766030c88e83675943b1796d"
+      },
+      "final_enabled_oracle": {
+        "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/merged-final-AppShell.test.tsx.log",
+        "command": "npx vitest run src/components/layout/AppShell.test.tsx --reporter=verbose",
+        "exit": 0,
+        "test_summary": "Tests  29 passed (29)",
+        "named_failures": [],
+        "sha256": "03cec9fb81148ec99e7b9b2e897ff95b374647081881b4eda3db146a0480a76e"
+      }
+    },
+    {
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/src/components/chat/RoomTrafficEntry.test.tsx",
+      "source_sha256": "4dc0f8b752980f9c44bfef8ac67e49c50d66b7adcb407f0d77dc8287b7e8c760",
+      "switch_mocked_on": "ROOMS_ENABLED",
+      "visible_assertions": [
+        "expect(toggle).toBeVisible()"
+      ],
+      "stock_shipped_off": {
+        "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/shipped-off-original-RoomTrafficEntry.test.tsx.log",
+        "command": "npx vitest run /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1-enabled-controls/src/components/chat/RoomTrafficEntry.test.tsx --root /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1-enabled-controls --reporter=verbose",
+        "exit": 1,
+        "test_summary": "Tests  6 failed | 3 passed (9)",
+        "named_failures": [
+          "FAIL  src/components/chat/RoomTrafficEntry.test.tsx > K33 carriers go through the real main-chat parser/store/renderer > [FR-202; K33 live UserMessageFrame] live room requests are collapsed, not ordinary user bubbles",
+          "FAIL  src/components/chat/RoomTrafficEntry.test.tsx > K33 carriers go through the real main-chat parser/store/renderer > [FR-202/215; K33 live TokenFrame/DoneFrame] a room answer is mirrored once with the same collapsed form",
+          "FAIL  src/components/chat/RoomTrafficEntry.test.tsx > K33 carriers go through the real main-chat parser/store/renderer > [FR-202/215; K33 REST Message] cold history keeps the request room reference through the real transform",
+          "FAIL  src/components/chat/RoomTrafficEntry.test.tsx > K33 carriers go through the real main-chat parser/store/renderer > [FR-202/215; K33 REST Message] cold history keeps the answer room reference through the real transform",
+          "FAIL  src/components/chat/RoomTrafficEntry.test.tsx > K33 carriers go through the real main-chat parser/store/renderer > [FR-202/215; K33 ReplayMessageFrame; SC-019] replay restores collapsed room traffic and duplicate replay cannot add another copy",
+          "FAIL  src/components/chat/RoomTrafficEntry.test.tsx > K33 carriers go through the real main-chat parser/store/renderer > [FR-202 negative control; K33] ordinary traffic stays ordinary beside a collapsed room request"
+        ],
+        "sha256": "76e36356ba21c15a993e392a3ae0f2e927a2a9e3ab9a19e6d3afcf4666d9c0ca"
+      },
+      "final_enabled_oracle": {
+        "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/merged-final-RoomTrafficEntry.test.tsx.log",
+        "command": "npx vitest run src/components/chat/RoomTrafficEntry.test.tsx --reporter=verbose",
+        "exit": 0,
+        "test_summary": "Tests  9 passed (9)",
+        "named_failures": [],
+        "sha256": "01a92a4104da899d878fcadc6629b2f117bcc2087d69f3a1dcf9a010f03211b5"
+      }
+    }
+  ],
+  "integrity": {
+    "log": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/omnipus-l1-ui-red-s1/tests/.l1-ui-red-stage1-evidence/enabled-controls-integrity.log",
+    "command": null,
+    "exit": 0,
+    "test_summary": null,
+    "named_failures": [],
+    "sha256": "3c696c094e2a1323fa00cf0974a861af0cd6824b1672248c1d12791a70a61e4e"
+  },
+  "other_retargets": "seven session-import completions, two first-send fixtures and one client-frame contract-set repair are not feature-gated UI mounts; no feature-switch mock added to them"
+}

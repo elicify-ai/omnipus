@@ -26,6 +26,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -74,7 +75,7 @@ func TestGoalClaimDefaultsToAllow_EveryAgentCreationPath(t *testing.T) {
 			assert.Equalf(t, "allow", resolveGoalClaim(ac.Tools.Builtin.Policies),
 				"seeded agent %q must resolve goal_claim allow by default", ac.ID)
 		}
-		assert.Equal(t, 7, nonSystem, "Mia, Jim, Ava, Admin, Worker, Planner, Researcher (ADR-090 §2.0)")
+		assert.Equal(t, 6, nonSystem, "Mia, Jim, Omnipus, Worker, Planner, Researcher (ADR-090 §2.0 as amended by omnipus-system-agent FR-001/FR-008)")
 	})
 
 	t.Run("NewCustomAgentToolsCfg", func(t *testing.T) {
@@ -89,7 +90,7 @@ func TestGoalClaimDefaultsToAllow_EveryAgentCreationPath(t *testing.T) {
 	}{
 		{"Main", `{"name":"Default Main","type":"Main","soul":"s"}`},
 		{"Subagent", `{"name":"Default Subagent","type":"Subagent","description":"default policy check","soul":"s"}`},
-		{"subagent_3p", `{"name":"Default External","type":"subagent_3p","description":"default policy check","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"}}`},
+		{"subagent_3p", `{"name":"Default External","type":"subagent_3p","description":"default policy check","executor":{"cli":"codex"}}`},
 	} {
 		t.Run("REST POST /api/v1/agents without tools_cfg: "+tc.kind, func(t *testing.T) {
 			api := buildExecutorTestAPI(t)
@@ -130,12 +131,16 @@ func TestGoalClaimDefaultsToAllow_EveryAgentCreationPath(t *testing.T) {
 			"description": "created by the create_agent tool",
 			"soul":        "You are tool made.",
 			"model":       "test/model",
-			"color":       "#22C55E",
-			"icon":        "robot",
+			"color":       "#6E8BA8",
 		})
 		require.False(t, result.IsError, "create_agent failed: %s", result.ForLLM)
 
-		stored, err := agentstore.New(home).Get("tool-made")
+		// New agents get a generated id (founder decision 2026-10-14, WU-3).
+		var created struct {
+			ID string `json:"id"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(result.ForLLM), &created))
+		stored, err := agentstore.New(home).Get(created.ID)
 		require.NoError(t, err)
 		require.NotNil(t, stored.Tools)
 		assert.Equal(t, config.ToolPolicyAllow, stored.Tools.Builtin.Policies[tools.GoalClaimToolName])

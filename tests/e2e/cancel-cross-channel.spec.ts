@@ -4,10 +4,17 @@
  * Scope: T21–T26 from cancel-cross-channel-spec.md §10 TDD Plan.
  * Traces to: docs/internal/specs/cancel-cross-channel-spec.md US-1, US-4, US-5; T21–T26.
  *
- * Tests T21–T24, T26 drive a real LLM (OPENROUTER_API_KEY_CI required in CI).
- * T25 is partially driven by real LLM; the "Force-stopping..." path requires a
- * stuck goroutine and is documented as manually-verifiable — the test covers
- * the "Stopping..." label only, which fires from React state on click.
+ * T24 drives a real LLM (OPENROUTER_API_KEY_CI required in CI).
+ * T21/T22/T23/T26 and T25 use the existing isolated GatewayProcess
+ * provider-endpoint seam with a controlled, scripted stream
+ * (fixtures/held-stream-provider.ts for T21/T22/T23/T26 — #1661; a dedicated
+ * stop-label stream for T25). The browser, gateway and cancellation stay real;
+ * only the external model is scripted, so the mid-turn window no longer
+ * depends on the model's emission profile (issue #1661: the CI primary
+ * model, see tests/e2e/e2e-model.json, makes answer text visible only at/near
+ * completion). T24 retains
+ * live-model coverage. T25 covers the immediate "Stopping..." label, not
+ * stuck-loop escalation.
  *
  * Architecture note: Tests switch the active agent to Jim, which generates
  * long inline prose rather than handing off to another agent (Mia has strong
@@ -17,66 +24,31 @@
 
 import * as fs from 'fs'
 import * as path from 'path'
-import { expect, type Page } from '@playwright/test'
+import http from 'node:http'
+import { expect, errors, type BrowserContext, type Page, type Locator } from '@playwright/test'
 import { test } from './fixtures/console-errors'
-import { chatInput, agentPicker, selectAgent, waitForConnected } from './fixtures/selectors'
+import { chatInput, closeSidebar, openSidebar, selectAgent, selectedAgentRow, waitForConnected } from './fixtures/selectors'
+import { freshChat } from './fixtures/session-setup'
+import { GatewayProcess } from './fixtures/gateway-process'
+import { E2E_FALLBACK } from './fixtures/e2e-model'
+import {
+  attachHeldStreamEvidence,
+  expectTurnHeldMidStream,
+  startHeldStreamProvider,
+} from './fixtures/held-stream-provider'
+import { expectCancelClosedStream, startHeldTurnHarness } from './fixtures/held-turn-harness'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
-const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
-
 /**
- * OMNIPUS_HOME: gateway workspace directory.
- * Must match the directory the running gateway is using.
+ * OMNIPUS_HOME: gateway workspace directory of the SHARED gateway — used only
+ * by T24's on-disk session/audit discovery. T21/T22/T23/T26 bind their
+ * evidence to their own isolated GatewayProcess homes (fixtures/
+ * held-stream-provider.ts harnesses).
  */
 const OMNIPUS_HOME =
   process.env.OMNIPUS_HOME ||
   (process.env.HOME ? path.join(process.env.HOME, '.omnipus') : '/tmp/omnipus-e2e-test')
-
-// ── Auth helpers (mirrored from handoff.spec.ts) ──────────────────────────────
-
-function getStoredAuthToken(): string | null {
-  const authFile = process.env.OMNIPUS_AUTH_FILE
-    ? path.resolve(process.env.OMNIPUS_AUTH_FILE)
-    : path.join(
-        path.dirname(new URL(import.meta.url).pathname),
-        'fixtures/.auth/admin.json',
-      )
-  if (!fs.existsSync(authFile)) return null
-  try {
-    const raw = fs.readFileSync(authFile, 'utf-8')
-    const state = JSON.parse(raw) as {
-      origins?: Array<{
-        origin: string
-        localStorage?: Array<{ name: string; value: string }>
-      }>
-    }
-    for (const origin of state.origins ?? []) {
-      for (const item of origin.localStorage ?? []) {
-        if (item.name === 'omnipus_auth_token') return item.value
-      }
-    }
-  } catch {
-    // Auth file may not exist on first run
-  }
-  return null
-}
-
-async function getCsrfToken(page: Page): Promise<string | null> {
-  const cookies = await page.context().cookies()
-  const csrfCookie = cookies.find((c) => c.name === '__Host-csrf' || c.name === 'csrf')
-  return csrfCookie?.value ?? null
-}
-
-async function apiHeaders(page: Page): Promise<Record<string, string>> {
-  const authToken = getStoredAuthToken()
-  const csrfToken = await getCsrfToken(page)
-  return {
-    'Content-Type': 'application/json',
-    ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
-    ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
-  }
-}
 
 // NOTE: a `createSession()` REST helper used to live here, used only by T26 to
 // mint a session up-front and then `page.goto('/#/sessions/<id>')` into it. It
@@ -152,30 +124,22 @@ function listSessionDirs(home: string): string[] {
   }
 }
 
-/** Best-effort mtime (ms) of a path; 0 if it cannot be stat'd. */
-function safeMtimeMs(p: string): number {
-  try {
-    return fs.statSync(p).mtimeMs
-  } catch {
-    return 0
-  }
-}
-
 // ── Shared helper: switch to Jim and trigger a long-running turn ──────────────
 
 /**
- * A prompt that reliably produces multi-second, tool-free streaming output.
+ * The prompt for the file's scripted cancellation turns (T25 + the #1661
+ * describe below). Since #1661 the mid-turn runway no longer comes from the
+ * prompt's word count — the scripted provider holds the stream open until a
+ * real cancel lands — but the prompt still matters for two reasons:
  *
  * Forbidding tools and demanding inline prose: on a bare "write 500 words" prompt,
- * gemini-2.5-flash intermittently shortcuts to the write_file TOOL (Jim has an
+ * the earlier pick intermittently shortcuts to the write_file TOOL (Jim has an
  * explicit "allow" policy entry for it), which ends the turn instantly with
  * zero inline stream and no cancellable window. Forcing long inline prose
- * keeps stop-btn live for several seconds so Stop/Escape/cancel land mid-stream.
- * The explicit high word count ("700-word essay ... beginning immediately and
- * continuing without stopping") guarantees hundreds of words of remaining
- * generation budget once a cancel is fired — see waitForActiveStream's doc
- * comment for why that headroom is what makes cancel timing deterministic
- * under load, regardless of how slow the environment is.
+ * keeps stop-btn live so Stop/Escape/cancel land mid-stream.
+ * It is also the substring fixtures/held-stream-provider.ts matches to decide
+ * WHICH streaming request to hold open (promptIncludes), so any change here
+ * must stay in sync with the harnesses' promptIncludes argument.
  */
 const LONG_PROSE_PROMPT =
   'Do not use any tools. Reply only with inline prose, no files. Write a detailed ' +
@@ -203,13 +167,20 @@ const LONG_PROSE_PROMPT =
  *       active" — the whole run just took ~10x longer than in isolation, so
  *       by the time Playwright's click reached the backend the short turn
  *       had already completed).
- * Requiring a substantial (>80 char) chunk of REAL accumulated text proves the
- * turn is genuinely mid-generation right now, and — combined with
- * LONG_PROSE_PROMPT's enforced word count — guarantees hundreds of words of
- * remaining output, so the turn cannot plausibly finish between this check
- * and the cancel click landing server-side, no matter how loaded the shard
- * is. This is a wait-on-condition (page.waitForFunction polls until true, no
- * fixed sleep), not a race against a timer.
+ * Requiring a substantial (>80 char) chunk of REAL accumulated text proves
+ * real streamed text reached the browser through the real gateway mid-turn.
+ * Since #1661 (issue #1661; fixtures/held-stream-provider.ts) this helper
+ * serves only tests whose turn is scripted by the held-stream provider, so
+ * the wait is deterministic (a delta lands every ~150ms) and never depends on
+ * the model's emission profile — the failure that motivated #1661 was exactly
+ * this wait against a model whose answer becomes visible only at completion.
+ * The "the turn cannot plausibly finish before the cancel lands" guarantee is
+ * NO LONGER carried by word-count headroom: it is carried by the provider
+ * evidence (streamsClosed === 0 && released === 0 asserted by
+ * expectTurnHeldMidStream before every cancel action), which proves the
+ * stream is still open at that moment. This is a wait-on-condition
+ * (page.waitForFunction polls until true, no fixed sleep), not a race against
+ * a timer.
  */
 async function waitForActiveStream(page: Page): Promise<void> {
   // Wait for the stop button (request in-flight)…
@@ -217,14 +188,38 @@ async function waitForActiveStream(page: Page): Promise<void> {
   await expect(stopBtn).toBeVisible({ timeout: 30_000 })
 
   // …AND for the assistant to have actually STREAMED real text.
-  await page.waitForFunction(
-    () => {
-      const el = document.querySelector('[data-testid="streaming-message-anchor"]')
-      const text = (el?.textContent ?? '').replace(/\s+/g, ' ').trim()
-      return text.length > 80
-    },
-    { timeout: 30_000 },
-  )
+  //
+  // FAIL FAST (llm-agents shard, run 38112714098): the { timeout } object
+  // below used to be passed as the SECOND argument of waitForFunction — which
+  // is the pageFunction's `arg`, not its options (signature:
+  // waitForFunction(pageFunction, arg, options)) — so the wait was UNBOUNDED:
+  // whenever the turn never streamed >80 chars into the anchor, this poll
+  // rode the locator default (config sets no actionTimeout) out to the whole
+  // test timeout and every T2x attempt burned 4.7-7.3 min in CI. The 30s
+  // bound is now applied (third argument) and expiry is rethrown with the
+  // predicate spelled out, so a dead stream fails in 30s with the reason
+  // named instead of at the spec timeout.
+  try {
+    await page.waitForFunction(
+      () => {
+        const el = document.querySelector('[data-testid="streaming-message-anchor"]')
+        const text = (el?.textContent ?? '').replace(/\s+/g, ' ').trim()
+        return text.length > 80
+      },
+      undefined,
+      { timeout: 30_000 },
+    )
+  } catch (err) {
+    if (!(err instanceof errors.TimeoutError)) throw err
+    throw new Error(
+      'waitForActiveStream: the stop button appeared but the streaming anchor ' +
+        '([data-testid="streaming-message-anchor"]) never accumulated more than 80 chars ' +
+        'of real streamed text within 30s — the turn never produced a live stream, so ' +
+        'no cancel can land mid-turn. The send, the session binding, or the LLM stream ' +
+        'is broken upstream of the cancel behaviour this file tests.',
+      { cause: err },
+    )
+  }
 }
 
 /**
@@ -234,7 +229,7 @@ async function waitForActiveStream(page: Page): Promise<void> {
  * streaming-message anchor is present) — so a subsequent cancel always has an
  * incomplete message to mark interrupted.
  */
-async function triggerLongStreamingTurn(page: Page): Promise<void> {
+async function triggerLongStreamingTurn(page: Page): Promise<string> {
   const input = chatInput(page)
   await expect(input).toBeEnabled({ timeout: 20_000 })
   // toBeEnabled() alone no longer implies "connected" (2fa26e6a, #105 fix —
@@ -245,156 +240,31 @@ async function triggerLongStreamingTurn(page: Page): Promise<void> {
   await waitForConnected(page, { timeout: 20_000 })
 
   // Switch to Jim — long inline generation, multi-second stream window.
-  const picker = agentPicker(page)
-  await expect(picker).toBeVisible({ timeout: 15_000 })
-  await picker.click()
-  await page.getByRole('menuitem', { name: /Jim/i }).click()
-  await expect(picker).toContainText(/Jim/i, { timeout: 5_000 })
+  // Sidebar row click is the only agent switch since the composer AgentPicker
+  // was removed (nav commit e84ac0532; FR-029 no in-chat handover).
+  await selectAgent(page, /Jim/i)
+  // Then start a fresh chat WITH Jim so every caller's turn runs in its OWN
+  // session. The agent-row "New chat" button this used to click is REMOVED
+  // (founder decision D7 — capability stays, UI access point gone;
+  // FR-029/FR-031 still govern, "/new" stays deleted). freshChat creates the
+  // session via the public REST API and deep-links it, and RETURNS its id —
+  // callers that bind on-disk evidence (transcript/audit rows) to the turn
+  // use the exact id instead of inferring it from a sessions-dir diff.
+  const sessionId = (await freshChat(page, /Jim/i)).sessionId
 
   await input.fill(LONG_PROSE_PROMPT)
-  await input.press('Enter')
+  await input.press('Enter', { timeout: 15_000 })
 
   // Wait until the turn is observably active (see waitForActiveStream's doc
   // comment) before returning — a subsequent cancel always has a real,
   // in-flight turn with hundreds of words of runway left.
   await waitForActiveStream(page)
+
+  // Returned LAST: the id is only handed to callers once the turn this
+  // helper exists to start is actually streaming (g1-code-reviewer F2: an
+  // early return here silently skipped the send entirely).
+  return sessionId
 }
-
-// ── T21: Web stop button cancels turn within 5 seconds (US-1.1, SC-1) ─────────
-// Traces to: cancel-cross-channel-spec.md line 600 (T21)
-// BDD: Given a turn is actively streaming
-//      When the user clicks the Stop button
-//      Then within 5 seconds the turn ends and the message shows "(interrupted)"
-//      And chat input is re-enabled.
-
-test(
-  'T21 — web Stop button cancels streaming turn within 5s',
-  async ({ page }) => {
-    // test.slow() triples the 90s timeout. Real-LLM round-trips can take up to 30s.
-    test.slow()
-
-    await page.goto('/')
-
-    await triggerLongStreamingTurn(page)
-
-    const stopBtn = page.locator('[data-testid="stop-btn"]')
-    await stopBtn.click()
-
-    // Within 5s: the stop button disappears (streaming ended).
-    await expect(stopBtn).not.toBeVisible({ timeout: 5_000 })
-
-    // Within 5s: the chat input is re-enabled.
-    await expect(chatInput(page)).toBeEnabled({ timeout: 5_000 })
-
-    // The last assistant message should show the "(interrupted)" label suffix.
-    // MessageItem renders: {message.status === 'interrupted' && <span>(interrupted)</span>}
-    // Allow up to 5s for the message to reflect the cancelled status.
-    const interruptedLabels = page.locator('text=(interrupted)')
-    await expect(interruptedLabels.first()).toBeVisible({ timeout: 5_000 })
-  },
-)
-
-// ── T22: Web slash menu /cancel during streaming (US-1.3, FR-3a) ─────────────
-// Traces to: cancel-cross-channel-spec.md line 601 (T22)
-// BDD: Given a turn is actively streaming
-//      When the user types "/c" into the chat input
-//      Then the slash menu appears with "/cancel" visible (FR-3a)
-//      When the user clicks "/cancel"
-//      Then the same cancel behavior fires as clicking Stop.
-
-test(
-  'T22 — web slash menu /cancel is visible during streaming and cancels turn',
-  async ({ page }) => {
-    test.slow()
-
-    await page.goto('/')
-
-    await triggerLongStreamingTurn(page)
-
-    // Typing "/c" mid-stream: FR-3a requires the slash menu to appear during
-    // streaming for commands tagged availableWhileStreaming: true.
-    // The input is disabled during streaming per MessageInput.tsx, but
-    // ChatScreen.tsx has a second textarea (data-testid="chat-input") that
-    // owns the slash logic. Use that testid for the type interaction.
-    const slashInput = page.locator('[data-testid="chat-input"]')
-    await slashInput.click()
-    await slashInput.type('/c')
-
-    // Assert the slash menu is shown.
-    // ChatScreen renders the dropdown when shouldShowSlash && slashOpen:
-    // the menu contains buttons with font-mono label text.
-    const slashMenu = page.locator('.font-mono').filter({ hasText: '/cancel' })
-    await expect(slashMenu.first()).toBeVisible({ timeout: 5_000 })
-
-    // The entire menu should be visible.
-    // Rows are `role="option"` (not the native implicit "button" role),
-    // per the W3C APG combobox-with-listbox-popup pattern (ChatScreen.tsx —
-    // the listbox container carries `role="listbox"`, rows carry
-    // `role="option"` + `aria-selected`, and the textarea points at the
-    // highlighted row via `aria-activedescendant`). This is a deliberate,
-    // documented a11y redesign, not a regression — `getByRole('button', …)`
-    // predates it and no longer matches anything. Matches the same
-    // `getByRole('option', …)` convention already used for listbox rows
-    // elsewhere in this suite (e.g. channel-routing.spec.ts,
-    // channel-instance-crud.spec.ts).
-    const cancelMenuItem = page.getByRole('option', { name: /\/cancel/ })
-    await expect(cancelMenuItem.first()).toBeVisible({ timeout: 5_000 })
-
-    // Click /cancel.
-    await cancelMenuItem.first().click()
-
-    // Assert cancel behavior: stop button disappears, input re-enabled, (interrupted) shown.
-    const stopBtn = page.locator('[data-testid="stop-btn"]')
-    await expect(stopBtn).not.toBeVisible({ timeout: 5_000 })
-    await expect(chatInput(page)).toBeEnabled({ timeout: 5_000 })
-    const interruptedLabels = page.locator('text=(interrupted)')
-    await expect(interruptedLabels.first()).toBeVisible({ timeout: 5_000 })
-  },
-)
-
-// ── T23: Web Escape key cancels during streaming (US-1.4) ────────────────────
-// Traces to: cancel-cross-channel-spec.md line 602 (T23)
-// BDD: Given a turn is actively streaming
-//      When the user presses Escape with focus in the chat input
-//      Then the same cancel code path fires as the Stop button.
-
-test(
-  'T23 — web Escape key cancels streaming turn',
-  async ({ page }) => {
-    test.slow()
-
-    await page.goto('/')
-
-    await triggerLongStreamingTurn(page)
-
-    // triggerLongStreamingTurn only returns once stop-btn is visible, i.e.
-    // isStreaming is already true and ChatScreen's document-level Escape handler
-    // is armed. Press Escape IMMEDIATELY — do NOT waitForTimeout first: with the
-    // real model a turn can finish within a few hundred ms, and the prior
-    // waitForTimeout(500)+2s re-assert raced that close and failed. Mirror the
-    // immediate stop-action used by the passing T21/T22.
-    const stopBtn = page.locator('[data-testid="stop-btn"]')
-    await expect(stopBtn).toBeVisible({ timeout: 5_000 })
-
-    // ChatScreen registers a document-level 'keydown' listener for Escape.
-    await page.keyboard.press('Escape')
-
-    // Assert cancel behavior.
-    await expect(stopBtn).not.toBeVisible({ timeout: 5_000 })
-    await expect(chatInput(page)).toBeEnabled({ timeout: 5_000 })
-
-    // The interrupted marker (data-testid="interrupted-marker") is rendered per
-    // message INSIDE the virtualized list, so for an off-screen/just-cancelled row
-    // it is present in the DOM but visibility:hidden until the virtualizer scrolls
-    // to it — asserting toBeVisible races that and flakes ("unexpected value
-    // 'hidden'"). The functional cancel is already proven above (stop-btn gone +
-    // input re-enabled); here we assert the message reached the interrupted STATE
-    // by checking the marker is attached to the DOM (it only renders for messages
-    // with status === 'interrupted').
-    const interruptedMarker = page.locator('[data-testid="interrupted-marker"]')
-    await expect(interruptedMarker.first()).toBeAttached({ timeout: 5_000 })
-  },
-)
 
 // ── T24: Cancel cascades to subagent (US-4.1) ────────────────────────────────
 // Traces to: cancel-cross-channel-spec.md line 603 (T24)
@@ -404,40 +274,60 @@ test(
 //      And transcript.jsonl contains a {type: "turn_canceled"} entry
 //      And that entry has a non-empty descendants_canceled array.
 //
-// Both delegation modes were covered — both went through the single, unified
-// `delegate` tool (ADR-036), differentiated only by its `async` argument:
+// T24a/T24b once covered two delegation modes of the single unified `delegate`
+// tool (ADR-036), selected by its `async` argument:
 //   T24a — `delegate` async=true  (background): the descendant streams in the
 //                                   background while the parent turn stays live.
 //   T24b — `delegate` async=false (await):      the parent turn BLOCKS on the
 //                                   descendant's run until it returns (or is
 //                                   cancelled).
-// ADR-091 fix lane RX-SUBTURN finding (comment-only; code unchanged):
-// ADR-091 D4 deleted the async=false/true argument outright — every
-// `delegate` call is now what T24a used to mean (background, non-blocking).
-// T24b's specific "parent turn BLOCKS" mode no longer exists; whether this
-// spec still meaningfully exercises two distinct modes, or should be
-// updated/retired, is a test-content question outside a comment-only lane —
-// flagged for the team. Pre-ADR-091, both routed through spawnSubTurn
-// (pkg/agent/subturn.go, since deleted); today a delegated child registers
-// via turn.go's registerActiveTurn/registerTurnIfAbsent (steer_launcher.go's
+// ADR-091 D4 deleted the async=false/true argument outright — every `delegate`
+// call is now what T24a used to mean (launcher-ack background, non-blocking),
+// and the tool rejects any call still carrying `async`
+// (pkg/tools/delegate_run.go's retired-argument loop → "invalid_argument:
+// async", pinned by pkg/tools/delegate_test.go's "retired async" case).
+// T24b's specific "parent turn BLOCKS" mode no longer exists. Pre-ADR-091,
+// both routed through spawnSubTurn (pkg/agent/subturn.go, since deleted);
+// today a delegated child registers via turn.go's
+// registerActiveTurn/registerTurnIfAbsent (steer_launcher.go's
 // dispatchSteeredSessionWithReservation) — so RequestCancel → InterruptSession
-// cascades to the
-// descendant in BOTH cases (the Go-level proof is TestCancel_SubAgentCascade).
-// This pair is the e2e proof that the cascade holds for background AND await.
+// cascades to the descendant in BOTH cases (the Go-level proof is
+// TestCancel_SubAgentCascade).
+//
+// FAILURE HISTORY (CI run 36327766952, 2026-09-27): the prompt used to
+// instruct the model to pass `async: true`/`async: false` verbatim. The
+// central e2e model (tests/e2e/e2e-model.json — the same model the release
+// branch's picker-first-option onboarding resolves to, so the model did NOT
+// change vs release) sent the instructed retired key in T24b attempt 1, the
+// gateway rejected the whole call with "unexpected property \"async\""
+// (gateway log 15:01:38), no delegation fired, and the activity-bar wait 150s
+// later died with a bare "element(s) not found". The three release llm-agents
+// runs before this stayed green only because deepseek happened to OMIT the
+// retired key there (zero "Tool argument validation failed" lines in their
+// gateway logs) — survivorship, not a model difference. As long as the prompt
+// named the retired argument the pair was flaky by construction: model
+// compliance = guaranteed red, model silence = green.
+//
+// RESOLUTION (this change): the pair now exercises the one surviving
+// launcher-ack path — the prompt never names any argument the current tool
+// schema does not declare, and the two variants differ only in their closer
+// wording (two samples of the same variance-prone LLM-driven cascade,
+// matching the spec's single T24 row). Renaming/retiring the pair stays with
+// the spec owner; the historical names are kept for CI triage continuity.
 
 /**
- * Drive the cancel-cascade scenario for one delegation mode and assert the
- * transcript records turn_canceled with a non-empty descendants_canceled.
+ * Drive the cancel-cascade scenario and assert the transcript records
+ * turn_canceled with a non-empty descendants_canceled.
  *
- * `mode.asyncArg` selects the delegation mode via the `delegate` tool's
- * `async` argument (`"true"` background / `"false"` await); `mode.closer` is
- * the final instruction line that nudges deepseek-v4.1-flash to emit exactly that tool
- * call and nothing else.
+ * `mode.label` names the variant in failure diagnostics; `mode.closer` is the
+ * final instruction line that nudges the central e2e model (tests/e2e/e2e-model.json)
+ * to emit exactly one delegate
+ * tool call and nothing else. The prompt must NEVER name an argument the
+ * current tool schema does not declare: the tool rejects such a call outright
+ * (see the failure-history note above), so model compliance would produce a
+ * guaranteed rejection instead of a delegation.
  */
-async function assertCancelCascadesToSubagent(
-  page: Page,
-  mode: { asyncArg: 'true' | 'false'; closer: string },
-) {
+async function cancelPreamble(page: Page) {
   await page.goto('/')
 
   const input = chatInput(page)
@@ -480,16 +370,18 @@ async function assertCancelCascadesToSubagent(
   //
   // Selecting Jim BEFORE any session exists removes step 4 entirely: there is
   // no session to attach to, so nothing can clobber the selection. It is safe
-  // with respect to `/new` because `runClientCommand('new')` calls
-  // `startNewSession()` with NO arguments, and `startNewSession` preserves the
-  // current agent (`activeAgentId: agentId ?? state.activeAgentId`,
-  // src/store/session.ts) — the switch survives the reset.
+  // with respect to the fresh-chat step below because `startNewSession` (the
+  // store action behind the agent-row "New chat" action, pairExtra.ts
+  // ::beginPairExtra) preserves the current agent
+  // (`activeAgentId: agentId ?? state.activeAgentId`, src/store/session.ts) —
+  // the switch survives the reset.
   //
   // `selectAgent` also doubles as the real readiness gate the old
-  // `toBeEnabled()` was standing in for: it waits for the picker to be
-  // visible, opens the dropdown (which requires `GET /api/v1/agents` to have
-  // resolved) and asserts the label changed. By the time it returns, the
-  // composer is genuinely mounted.
+  // `toBeEnabled()` was standing in for: it opens the sidebar, resolves the
+  // workspace roster (which requires `GET /api/v1/agents` and the workspaces
+  // list to have resolved), clicks Jim's row and asserts the row's
+  // aria-current. By the time it returns, the chat surface is genuinely
+  // mounted.
   //
   // Route to Jim (Planner & Orchestrator), NOT the default agent Mia. An
   // earlier CI investigation (run 27296266639) found Mia's "guide" persona
@@ -500,99 +392,89 @@ async function assertCancelCascadesToSubagent(
   // is irrelevant — only that it delegates.
   await selectAgent(page, /Jim/i)
 
-  // Use the `/new` client-delivery slash command to create a fresh session
-  // and bind the page to it. Empirically createSession + page.goto(/#/sessions/<id>)
-  // does NOT bind the SPA — the input falls back to creating a new session
-  // on first message, leaving us reading the wrong transcript file.
-  //
-  // The header "New Chat" button this test used to click was REMOVED from
-  // the workspace top-bar banner (ChatControls.tsx: "New Chat was removed
-  // from the header — three paths for one action was redundant (Hick's
-  // Law). It lives where the user already is: the sidebar's per-workspace
-  // 'New chat' row and the /new slash command.") — a deliberate, documented
-  // product redesign, not a regression. `/new` drives the exact same
-  // `startNewSession()` store action the old button called (see
-  // useSlashMenu.ts's runClientCommand, name === 'new'), including the same
-  // "only nullifies activeSessionId, does not mint a new session" contract
-  // the comment below still describes — so this swap is behavior-preserving.
-  //
-  // `/new` only nullifies activeSessionId — it does NOT mint a new
-  // session. The SPA creates the session lazily on the first sent message. The
-  // workspace-scoped chat IA keeps the page at /#/workspaces/<id>/chat (no
-  // session id in the URL), so we discover the new session by diffing the
-  // OMNIPUS_HOME/sessions directory before vs. after the turn (below).
-  //
-  // RC6: drive `/new` through the PALETTE, never `fill` + a blind `Enter`.
-  // Typing the text and pressing Enter races the command-list fetch: if
-  // `allCommands` is not yet populated, `interceptClientCommand` falls through
-  // and the literal text "/new" is sent to the backend as chat (see the
-  // ordering note above for the full chain). Selecting the row instead goes
-  // through `executeSlashCommand`, which can only be reached once the command
-  // actually exists in the palette — so the client-side path is guaranteed,
-  // not merely likely. This is also the real user path.
-  //
-  // MUST be real keystrokes, not `fill()`. The palette opens from
-  // `onInputChange` (useSlashMenu.ts: `if (val.startsWith('/')) setSlashOpen(true)`),
-  // which is driven by the composer's own change handler. `fill()` sets the
-  // value in one shot without driving that handler, so the menu never opens —
-  // verified on ci-omnipus-2 at a1d77d58, where a `fill()` version of this
-  // block timed out waiting for the row (31.8s ≈ the 30s gate). T22 above is
-  // the in-repo precedent for the working form: `click()` then type.
-  await input.click()
-  await input.pressSequentially('/new')
-
-  // Palette rows are role="option" buttons whose accessible name starts with
-  // the command label (ChatScreen.tsx renders `item.label` then
-  // `item.description`). Anchored so it can never match a future "/newfoo".
-  // Scoped to the page rather than to [data-testid="slash-menu"], matching
-  // T22's `page.getByRole('option', …)` convention.
-  const newSessionCommand = page.getByRole('option', { name: /^\/new\b/ }).first()
-  await expect(newSessionCommand).toBeVisible({ timeout: 30_000 })
-  await newSessionCommand.click()
-
-  // Proof the CLIENT path ran: `executeSlashCommand` clears the composer via
-  // `composerRuntime.setText('')` before invoking `runClientCommand`. We never
-  // pressed Enter, so an empty composer can only mean the palette handled it —
-  // if `/new` had escaped to the backend this would still hold text.
-  await expect(input).toHaveValue('', { timeout: 10_000 })
+  // Fresh chat via the agent row's "New chat with Jim" icon button — the ONLY
+  // new-chat path since the navigation redesign (session-core-spec FR-029
+  // "only agent-row New chat creates extra MAIN chat"; FR-031, founder WC-1
+  // 2026-10-09, deleted "/new" from the command table AND forbids the SPA
+  // from sending it — typing /new now shows a refusal and sends nothing,
+  // src/hooks/useSlashMenu.ts RETIRED_COMMAND_NAMES). The /new-palette flow
+  // this block used to drive is therefore gone for good. That button itself
+  // is gone too now: founder decision D7 (DECISIONS.md, squad
+  // nav-agent-row-menu-20261011) removed the new-chat UI access point
+  // everywhere — capability stays, button does not. freshChat creates this
+  // turn's session via the public REST API (POST /api/v1/sessions) and
+  // deep-links it through the SPA's own /sessions/<id> route, and RETURNS
+  // the id: the parent session below is KNOWN exactly, not inferred from a
+  // sessions-dir diff (the old lazy-mint flow left no id to bind with). The
+  // selectAgent-first ordering above stays load-bearing — freshChat resolves
+  // /Jim/i through the sidebar row just like the removed button did.
+  const parentSessionId = (await freshChat(page, /Jim/i)).sessionId
   await expect(input).toBeEnabled({ timeout: 20_000 })
 
-  // Snapshot existing session dirs so we can identify the one THIS turn creates
-  // (earlier tests in the same gateway leave their own session dirs behind).
+  // Diagnostics only: dirs present before the turn (earlier tests in the same
+  // gateway leave their own session dirs behind). The turn's session is bound
+  // by the exact id above — this set is no longer the identifier.
   const sessionsBefore = new Set(listSessionDirs(OMNIPUS_HOME))
+  return { input, sessionsBefore, parentSessionId };
+}
 
+async function cancelSendAndStop(
+  page: Page,
+  input: Locator,
+  mode: { label: string; closer: string },
+): Promise<void> {
   // The subagent task must keep the descendant RUNNING for several seconds so a
   // Stop click lands while it's live. A long inline essay streams for several
-  // seconds; an instant-rejected task (e.g. a sandbox-escaping read) finishes in
-  // ~0s before Stop can fire. Explicit single-tool instruction with a hard "no
-  // prose" guardrail so deepseek-v4.1-flash reliably emits the delegation call.
+  // seconds; an instant-rejected tool task (e.g. a sandbox-escaping read)
+  // finishes in ~0s before Stop can fire. Explicit single-tool instruction
+  // with a hard "no prose" guardrail so the central e2e model
+  // (tests/e2e/e2e-model.json) reliably emits the delegation call.
+  //
+  // Do NOT name an argument the delegate schema no longer declares. The tool
+  // rejects any call carrying a retired key ("invalid_argument: async",
+  // pkg/tools/delegate_run.go's retired-argument loop), so a model that obeys
+  // such an instruction produces a guaranteed rejection — no delegation, no
+  // Activity Bar, and a bare "element(s) not found" failure at the wait
+  // deadline (CI run 36327766952, 2026-09-27: deepseek-v4.1-flash sent the
+  // instructed `async: false`; gateway log 15:01:38). Align the prompt with
+  // the CURRENT schema only.
   await input.fill(
     [
       'Call the `delegate` tool exactly once, now, with these arguments:',
       '  label: "cancel cascade test"',
       '  task: "You are a subagent. Do not use any tools. Write a detailed 800-word essay about renewable energy as continuous inline prose, writing without stopping until you reach 800 words."',
-      `  async: ${mode.asyncArg}`,
       mode.closer,
     ].join('\n'),
   )
 
   // RC6 GUARD — re-assert the routed agent at the LAST possible moment before
   // the send. `selectAgent` already asserted this above, but in the failure
-  // this guard was written for the picker silently reverted to Mia AFTERWARDS
+  // this guard was written for the agent silently reverting to Mia AFTERWARDS
   // (a session attach calling `setActiveSession(id, 'mia', …)` clobbered it),
   // and the only symptom was the ActivityBar wait below dying 150s later with
   // a bare "element(s) not found". That error names neither the agent nor the
   // cause. Checking here turns the same defect into an immediate, truthful
   // failure that says which agent the turn was about to run as. Cheap: this is
-  // a rendered-label read with no network round-trip.
+  // a rendered-row read with no network round-trip. (The deleted composer
+  // picker's label was the old read; the selected sidebar row is the current
+  // user-visible signal for the same fact.)
+  // The selected row lives in the sidebar, which is unmounted while closed - and
+  // it IS closed here: selecting a row closes an unpinned sidebar and freshChat's
+  // page.goto reloads the SPA with it closed. Open it the way a user does before
+  // reading the row, or the guard fails "element(s) not found" for a reason that
+  // has nothing to do with the routed agent (T24a/T24b, 6 of 6 runs).
+  await openSidebar(page)
   await expect(
-    agentPicker(page),
+    selectedAgentRow(page),
     'the routed agent must still be Jim at send time — Mia is denied `delegate` ' +
       'by her seeded policy (pkg/coreagent/core.go), so a silent revert to her ' +
       'makes the delegation impossible rather than merely slow (RC6)',
-  ).toContainText(/Jim/i, { timeout: 10_000 })
+  ).toHaveAttribute('aria-label', /Jim/i, { timeout: 10_000 })
+  // Back to the state a user is in while typing: the open sidebar's click-catcher
+  // would otherwise swallow the Stop click later in this test.
+  await closeSidebar(page)
 
-  await input.press('Enter')
+  await input.press('Enter', { timeout: 15_000 })
 
   // Wait for the Activity Bar pill to appear — confirms delegation fired
   // (and that the SPA has minted the session on disk).
@@ -619,8 +501,10 @@ async function assertCancelCascadesToSubagent(
   // Click Stop while the subagent is running.
   const stopBtn = page.locator('[data-testid="stop-btn"]')
   await expect(stopBtn).toBeVisible({ timeout: 10_000 })
-  await stopBtn.click()
+  await stopBtn.click({ timeout: 15_000 })
+}
 
+async function assertCancelInterrupted(page: Page): Promise<void> {
   // Assert the parent message shows "(interrupted)". Budget: RequestCancel's
   // own escalation ladder (pkg/agent/cancel.go) is graceful-immediate → 3s
   // hard-abort → +5s detach, so a hard-abort-bound cancel can legitimately
@@ -645,11 +529,19 @@ async function assertCancelCascadesToSubagent(
   // Left at 10s deliberately: it passes 6/6 including under load, and raising a
   // green timeout on a hunch is how real regressions get masked. But do NOT
   // derive a new budget from the old claim — measure the ladder instead.
+  const stopBtn = page.locator('[data-testid="stop-btn"]')
   await expect(stopBtn).not.toBeVisible({ timeout: 10_000 })
   await expect(chatInput(page)).toBeEnabled({ timeout: 10_000 })
   const interruptedLabels = page.locator('text=(interrupted)')
   await expect(interruptedLabels.first()).toBeVisible({ timeout: 10_000 })
+}
 
+async function assertCancelTranscriptCascade(
+  page: Page,
+  sessionsBefore: Set<string>,
+  parentSessionId: string,
+  mode: { label: string; closer: string },
+): Promise<void> {
   // Assert transcript.jsonl contains {type: "turn_canceled"} entry with a
   // non-empty descendants_canceled array.
   //
@@ -674,12 +566,14 @@ async function assertCancelCascadesToSubagent(
   // too-early read). Poll on a ceiling well past the observed worst case
   // instead of asserting less.
   //
-  // Discover this turn's session by diffing the sessions dir. A delegated
-  // sub-turn can spawn its own ephemeral session dir, so there may be more than
-  // one new dir — scan them (newest first) for the one whose transcript actually
-  // recorded the cancel (the turn_canceled entry lives in the PARENT session).
-  // Sessions are stored at OMNIPUS_HOME/sessions/<id>/<YYYY-MM-DD>.jsonl
-  // (day-partitioned JSONL); the legacy transcript.jsonl name is also tried.
+ // The turn's PARENT session is known exactly — freshChat created it and
+  // returned its id, and the turn_canceled entry lives in the PARENT session
+  // — so the scan reads exactly that one directory. A delegated sub-turn can
+  // spawn its own ephemeral session dir; those stay OUT of the predicate (an
+  // ephemeral dir can never satisfy it) and are listed only in the failure
+  // diagnostics. Sessions are stored at OMNIPUS_HOME/sessions/<id>/… (the
+  // directory NAME is the session id); day-partitioned <YYYY-MM-DD>.jsonl,
+  // with the legacy transcript.jsonl name also tried.
   const today = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
   const sessionsDir = path.join(OMNIPUS_HOME, 'sessions')
 
@@ -691,12 +585,8 @@ async function assertCancelCascadesToSubagent(
   } {
     const sessionsAfter = listSessionDirs(OMNIPUS_HOME)
     const newSessions = sessionsAfter.filter((s) => !sessionsBefore.has(s))
-    // Prefer newly-created dirs; fall back to all sessions if the diff is empty
-    // (e.g. the session dir already existed). Newest mtime first.
-    const scanList = (newSessions.length > 0 ? newSessions : sessionsAfter)
-      .map((s) => ({ s, m: safeMtimeMs(path.join(sessionsDir, s)) }))
-      .sort((a, b) => b.m - a.m)
-      .map((x) => x.s)
+    // Exactly the parent session — the id is known, no inference.
+    const scanList = [parentSessionId]
 
     let entries: TranscriptEntry[] = []
     let chosenSession = ''
@@ -740,7 +630,7 @@ async function assertCancelCascadesToSubagent(
   if (!cancelledEntry) {
     throw new Error(
       'BLOCKED or INCOMPLETE: no session transcript contains a {type:"turn_canceled"} entry ' +
-        `after cancel (mode=delegate async=${mode.asyncArg}). Scanned sessions: ${JSON.stringify(scanList)} ` +
+        `after cancel (mode=${mode.label}). Scanned sessions: ${JSON.stringify(scanList)} ` +
         `(new: ${JSON.stringify(newSessions)}). Chosen: ${chosenSession || '(none)'}. ` +
         `Entries found in chosen: ${JSON.stringify(entries.map((e) => ({ type: e.type, role: e.role })))}. ` +
         'Traces to: cancel-cross-channel-spec.md T24, US-4.1, FR-15.',
@@ -751,19 +641,29 @@ async function assertCancelCascadesToSubagent(
   expect(
     Array.isArray(cancelledEntry.descendants_canceled) &&
       (cancelledEntry.descendants_canceled as string[]).length > 0,
-    `turn_canceled entry must have a non-empty descendants_canceled array (cascade wired per FR-6a, mode=delegate async=${mode.asyncArg})`,
+    `turn_canceled entry must have a non-empty descendants_canceled array (cascade wired per FR-6a, mode=${mode.label})`,
   ).toBe(true)
+}
+
+async function assertCancelCascadesToSubagent(
+  page: Page,
+  mode: { label: string; closer: string },
+) {
+  const { input, sessionsBefore, parentSessionId } = await cancelPreamble(page)
+  await cancelSendAndStop(page, input, mode)
+  await assertCancelInterrupted(page)
+  await assertCancelTranscriptCascade(page, sessionsBefore, parentSessionId, mode)
 }
 
 test(
   'T24a — cancel cascades to background subagent (delegate async=true): transcript records turn_canceled with descendants',
   async ({ page }) => {
-    // deepseek-v4.1-flash (the standard e2e model) is reliable but slower than the old gemini
-    // pick — the delegation turn + the subagent's inline essay + cancel can exceed
+    // The central e2e model (tests/e2e/e2e-model.json) is reliable but slower than the
+    // earlier pick — the delegation turn + the subagent's inline essay + cancel can exceed
     // the 270s test.slow() ceiling under suite load. Use an explicit higher budget.
     test.setTimeout(360_000)
     await assertCancelCascadesToSubagent(page, {
-      asyncArg: 'true',
+      label: 'delegate launcher-ack (ADR-091; historical name async=true)',
       closer: 'Do not reply in prose. Call the delegate tool immediately.',
     })
   },
@@ -773,68 +673,198 @@ test(
   'T24b — cancel cascades to awaited subagent (delegate async=false): transcript records turn_canceled with descendants',
   async ({ page }) => {
     // Await mode blocks the parent turn on the descendant's full run, so under
-    // deepseek-v4.1-flash's slower streaming this needs more headroom than the background variant.
+    // the central e2e model's (tests/e2e/e2e-model.json) slower streaming this needs
+    // more headroom than the background variant.
     test.setTimeout(420_000)
     await assertCancelCascadesToSubagent(page, {
-      asyncArg: 'false',
-      closer: 'Do not reply in prose. Do not call any other tool. Call delegate now with async set to false.',
+      label: 'delegate launcher-ack (ADR-091; historical name async=false)',
+      closer: 'No prose reply. No other tool. Call delegate now.',
     })
   },
 )
 
 // ── T25: Stop button UI progression (EC-15, FR-21) ──────────────────────────
-// Traces to: cancel-cross-channel-spec.md line 604 (T25)
-// BDD: Given a cancel is fired on a streaming turn
-//      When the user clicks Stop
-//      Then the button label is "Stopping..." (or shows a spinner) within 100ms.
+// Traces to: cancel-cross-channel-spec.md §8 Flow G, §10 T25, FR-21.
+// The spec calls for immediate (<100ms) feedback; retain the original browser
+// assertion's 500ms bound, without making it depend on a vendor's first token.
+// Stuck-loop force (3s) and detach (6s) progression are not exercised here and
+// were not asserted by the original T25. No manual verification is claimed.
+
+/** Script only the external provider, using the same apiBase seam as agent-grep. */
+async function startStopLabelProvider() {
+  const evidence = { streamRequests: 0, chunksSent: 0, streamsClosed: 0, errors: [] as string[] }
+  // External OpenAI-compatible protocol, not a gateway/SPA wire format.
+  const chunk = (content: string) => 'data: ' + JSON.stringify({
+    id: 'stop-label-stream', object: 'chat.completion.chunk', model: E2E_FALLBACK.model,
+    created: Math.floor(Date.now() / 1000),
+    choices: [{ index: 0, delta: { role: 'assistant', content }, finish_reason: null }],
+  }) + '\n\n'
+  const server = http.createServer((req, res) => {
+    const chunks: Buffer[] = []
+    req.on('data', (data: Buffer) => chunks.push(data))
+    req.on('error', (error) => evidence.errors.push(`provider request: ${error.message}`))
+    const fail = (message: string) => {
+      evidence.errors.push(message)
+      res.writeHead(500, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: { message } }))
+    }
+    req.on('end', () => {
+      if (req.method === 'GET' && req.url?.includes('/models')) {
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ object: 'list', data: [{ id: E2E_FALLBACK.model, object: 'model' }] }))
+        return
+      }
+      if (req.method !== 'POST' || !req.url?.includes('/chat/completions')) {
+        fail(`unexpected provider route: ${req.method} ${req.url}`)
+        return
+      }
+      let body: Record<string, unknown>
+      try {
+        body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>
+      } catch (error) {
+        fail(`invalid provider request JSON: ${String(error)}`)
+        return
+      }
+      if (body.stream !== true) {
+        // Onboarding/key validation does not start the acceptance stream.
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({
+          id: 'stop-label-validation', object: 'chat.completion', model: E2E_FALLBACK.model,
+          choices: [{ index: 0, message: { role: 'assistant', content: 'probe ok' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
+        }))
+        return
+      }
+      const messages = Array.isArray(body.messages) ? body.messages as Record<string, unknown>[] : []
+      // The gateway can append a current-time user message after the person's
+      // message. Require the original prompt, not a position in that history.
+      const hasPrompt = messages.some((message) => {
+        if (message.role !== 'user') return false
+        const content = message.content
+        const text = typeof content === 'string' ? content : Array.isArray(content) ?
+          content.map((part: Record<string, unknown>) => part.type === 'text' ? part.text : '').join('') : ''
+        return text.includes(LONG_PROSE_PROMPT)
+      })
+      if (!hasPrompt || evidence.streamRequests !== 0) {
+        fail('expected exactly one streaming request for the original long-prose prompt')
+        return
+      }
+      evidence.streamRequests += 1
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+      const sendToken = () => {
+        res.write(chunk('Solar and wind power sustain this controlled stream. '))
+        evidence.chunksSent += 1
+      }
+      // Two chunks exceed the unchanged >80-character readiness gate. Keep
+      // streaming every 250ms until the REAL gateway cancels its HTTP request;
+      // never emit a finish chunk or [DONE], so natural completion cannot pass.
+      const timer = setInterval(sendToken, 250)
+      res.once('close', () => {
+        clearInterval(timer)
+        evidence.streamsClosed += 1
+      })
+      res.on('error', (error) => evidence.errors.push(`provider response: ${error.message}`))
+      sendToken()
+    })
+  })
+  const url = await new Promise<string>((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      if (!address || typeof address === 'string') return reject(new Error('Stop-label provider: no port'))
+      resolve(`http://127.0.0.1:${address.port}`)
+    })
+  })
+  return { url, evidence, close: () => new Promise<void>((resolve, reject) => {
+    server.close((error) => error ? reject(error) : resolve())
+    server.closeAllConnections()
+  }) }
+}
+
+test.describe(() => {
+  // Scope zero retries to this deterministic acceptance, not its live-model siblings.
+  test.describe.configure({ retries: 0 })
+  test(
+    'T25 — stop button morphs to "Stopping..." immediately on click (EC-15, FR-21)',
+    async ({ browser }, info) => {
+      test.slow()
+      const provider = await startStopLabelProvider()
+      let gateway: GatewayProcess | undefined
+      let context: BrowserContext | undefined
+      try {
+        gateway = await GatewayProcess.start({ apiBase: provider.url, model: E2E_FALLBACK.model })
+        context = await browser.newContext({
+          baseURL: gateway.baseURL, storageState: await gateway.browserStorageState(),
+        })
+        const page = await context.newPage()
+        await page.goto('/')
+        // Preserve Stop visibility AND >80 genuinely delivered characters.
+        await triggerLongStreamingTurn(page)
+        expect(provider.evidence.streamRequests, 'the real turn reached the scripted provider once').toBe(1)
+        expect(provider.evidence.streamsClosed, 'the provider stream is still open before Stop').toBe(0)
+
+        const stopBtn = page.locator('[data-testid="stop-btn"]')
+        await stopBtn.click({ timeout: 15_000 })
+
+        // Original label and settlement assertions, with unchanged deadlines.
+        await expect(stopBtn).toContainText('Stopping...', { timeout: 500 })
+        await expect(stopBtn).not.toBeVisible({ timeout: 10_000 })
+        await expect(chatInput(page)).toBeEnabled({ timeout: 5_000 })
+
+        // Check before teardown: closing our context/provider must not supply
+        // the abort that only the real Stop action is allowed to demonstrate.
+        await expect.poll(() => provider.evidence.streamsClosed, {
+          timeout: 5_000, message: 'Stop must close the actual in-flight provider stream',
+        }).toBe(1)
+        expect(provider.evidence.errors, 'no unexpected or failed scripted-provider request').toEqual([])
+      } finally {
+        try {
+          await info.attach('stop-label-provider-evidence', {
+            body: JSON.stringify(provider.evidence, null, 2), contentType: 'application/json',
+          })
+          console.log(`[T25] provider evidence: ${JSON.stringify(provider.evidence)}`)
+        } finally {
+          try { await context?.close() } finally {
+            try { await gateway?.stop() } finally { await provider.close() }
+          }
+        }
+      }
+    },
+  )
+})
+
+// ── T21/T22/T23/T26 — deterministic held-stream versions (#1661) ─────────────
+// The same four tests, moved out of the live-model set (issue #1661; see
+// planning-20261106/LLM-AGENTS-RED-TRIAGE.md group A). On the CI primary
+// model (see tests/e2e/e2e-model.json) answer text only becomes visible
+// at/near completion, so the ">80 chars while still running" wait never opened a
+// mid-turn window and these four failed every attempt — while the gateway's
+// streaming itself was correct. Titles, BDD scenarios and every original
+// assertion are unchanged; what changed is WHERE the mid-turn proof comes
+// from.
 //
-// Note: "Force-stopping..." requires a stuck loop (t=3s) and "Cancelled" requires
-// detach (t=8s). These stages need a goroutine that ignores context cancellation,
-// which cannot be reliably induced via E2E. Those stages are documented as
-// manually-verifiable. This test asserts only the t=0 "Stopping..." label.
-
-test(
-  'T25 — stop button morphs to "Stopping..." immediately on click (EC-15, FR-21)',
-  async ({ page }) => {
-    test.slow()
-
-    await page.goto('/')
-
-    await triggerLongStreamingTurn(page)
-
-    const stopBtn = page.locator('[data-testid="stop-btn"]')
-
-    // Capture the moment of click — the label should change within 100ms.
-    // We click and immediately check for the "Stopping..." text.
-    await stopBtn.click()
-
-    // Within 500ms (generous for flaky environments): button text is "Stopping..."
-    // MessageInput.tsx: handleCancel calls setStopLabel('stopping') synchronously
-    // before cancelStream(), so this fires as local React state with no network RTT.
-    await expect(stopBtn).toContainText('Stopping...', { timeout: 500 })
-
-    // Allow the test to settle — the stop button disappears when streaming ends.
-    await expect(stopBtn).not.toBeVisible({ timeout: 10_000 })
-    await expect(chatInput(page)).toBeEnabled({ timeout: 5_000 })
-
-    // SKIP ASSERTION — "Force-stopping..." state (t=3s):
-    // Requires the agent goroutine to ignore context.Cancel() for 3s. In normal
-    // operation the LLM stream aborts quickly via providerCancel(). This stage
-    // is not reliably inducible in E2E. Verified manually per EC-15.
-    //
-    // SKIP ASSERTION — "Cancelled" state (t=8s detach):
-    // Same reason as above. Verified manually.
-  },
-)
-
-// ── T26: Audit entries exist after cancel (US-5.1, US-5.2) ──────────────────
-// Traces to: cancel-cross-channel-spec.md line 605 (T26)
-// BDD: Given any cancel request lands at the gateway
-//      When the audit log is queried
-//      Then exactly one turn_cancel_attempt entry exists with was_fired: true
-//      And exactly one turn_canceled entry exists
-//      And their session_id values match.
+// OLD mid-turn signal: >80 characters of live-model answer text visible in
+// the streaming anchor within 30s (waitForActiveStream). That signal is
+// model-profile-dependent: a burst-emitting model satisfies it only at
+// completion, i.e. exactly when it is no longer proof of a mid-turn state.
 //
+// NEW mid-turn signal: fixtures/held-stream-provider.ts evidence —
+//   streamRequests === 1  the real turn reached the scripted provider;
+//   chunksSent    >= 2    real deltas flowed through the real gateway into the UI;
+//   streamsClosed === 0   the provider stream is STILL OPEN, so the turn cannot
+//                         have completed — the one thing the character count
+//                         could never prove on a burst-emitting model;
+//   released     === 0    the fixture did not end the turn either.
+// waitForActiveStream still runs (inside triggerLongStreamingTurn) and still
+// requires >80 genuinely delivered characters — under the scripted emission
+// cadence that is deterministic instead of model-dependent.
+//
+// Cancel machinery stays fully real: browser, gateway, agent loop, WS frames,
+// audit. A cancel that does nothing leaves the provider stream open forever
+// (the stop button never clears — the original assertions fail) and never
+// produces the post-cancel stream closure this describe additionally pins.
+// Historical defect record for T26 (moved out of the describe for the
+// 240-line function budget, scripts/check-function-budget.sh — text verbatim):
 // ─── 2026-07-28: two independent defects fixed, both of which made this test
 // fail 3/3 deterministically (verified on the CI worker at both branch HEAD and
 // the epic base 0da704cb — pre-existing, not an epic regression):
@@ -896,200 +926,467 @@ test(
 // late snapshot, run 0 passed and runs 1 and 2 failed, and run 0 passed only
 // because the gateway was cold and the mint happened to land ~1s AFTER the
 // snapshot. A sub-second accidental pass is not coverage.
+//
+// ─── 2026-10-11: the diff-based session binding is SUPERSEDED. Founder
+// decision D7 (DECISIONS.md, squad nav-agent-row-menu-20261011) removed the
+// agent-row "New chat" button, and triggerLongStreamingTurn now creates the
+// turn's session via freshChat (public REST POST /api/v1/sessions + the SPA's
+// own /sessions/<id> deep-link route) — which RETURNS the session id. The
+// audit rows below are bound to THAT exact id (was_fired attempt and
+// turn.cancelled must both carry it), which is strictly stronger than the old
+// "session_id ∈ dirs that appeared since the snapshot" set membership: the
+// __pending sentinel still cannot satisfy it, a neighbouring turn's id still
+// cannot either, and the whole eager-mint/snapshot-timing hazard this header
+// documents is gone because nothing is inferred from directory diffs anymore.
+// The snapshot stays only as failure diagnostics — now against the ISOLATED
+// GatewayProcess home, so the diagnostics describe exactly this test's own
+// gateway and no one else's.
 
-test(
-  'T26 — audit log contains turn_cancel_attempt and turn_canceled entries after cancel',
-  async ({ page }) => {
-    test.slow()
+test.describe('deterministic held-stream cancellations (#1661)', () => {
+  // Scope zero retries to these deterministic acceptances, not the file's
+  // live-model siblings — the same reasoning as T25's describe below: a
+  // broken cancel is a property no retry establishes, and burning 3 retries
+  // on a deterministic acceptance only delays its red.
+  test.describe.configure({ retries: 0 })
 
-    // Baselines FIRST — before anything can mount a route and mint a session.
-    // See the "note on WHERE the before snapshot is taken" in this test's header
-    // comment: the session directory is created eagerly on route mount, so any
-    // snapshot taken after page.goto('/') already contains this test's own
-    // session and the newSessions diff silently comes out empty.
-    const auditPath = path.join(OMNIPUS_HOME, 'system', 'audit.jsonl')
-    const sessionsBefore = new Set(listSessionDirs(OMNIPUS_HOME))
-    const entriesBefore = readJsonl<AuditEntry>(auditPath).length
+  // ── T21: Web stop button cancels turn within 5 seconds (US-1.1, SC-1) ───────
+  // Traces to: cancel-cross-channel-spec.md line 600 (T21)
+  // BDD: Given a turn is actively streaming
+  //      When the user clicks the Stop button
+  //      Then within 5 seconds the turn ends and the message shows "(interrupted)"
+  //      And chat input is re-enabled.
 
-    await page.goto('/')
+  test(
+    'T21 — web Stop button cancels streaming turn within 5s',
+    async ({ browser }, info) => {
+      // test.slow() triples the 90s timeout — kept from the live version as
+      // headroom for gateway boot + onboarding, not model latency.
+      test.slow()
 
-    // Precondition: the audit subsystem must be live on this gateway process.
-    // sandbox.audit_log is restart-gated (pkg/gateway/rest_pending_restart.go) —
-    // toggling it via REST persists the flag but does NOT activate it on the
-    // running process. The audit subsystem creates ~/.omnipus/system/audit.jsonl
-    // at boot when cfg.Sandbox.AuditLog=true (pkg/agent/loop.go:346). We check
-    // file existence directly because the /security/audit-log REST endpoint is
-    // guarded by RequireNotBypass and returns 503 in dev-mode-bypass test runs.
-    //
-    // If audit isn't live, attempt the REST PUT so a future restart picks it up,
-    // then fail loudly with an actionable message.
-    if (!fs.existsSync(auditPath)) {
-      // Best-effort PUT to persist the flag for the next gateway restart. Ignore
-      // result — endpoint may be 503-guarded in dev-mode-bypass.
-      await page.request
-        .put(`${BASE_URL}/api/v1/security/audit-log`, {
-          headers: await apiHeaders(page),
-          data: { enabled: true },
-        })
-        .catch(() => undefined)
-      throw new Error(
-        'T26 precondition: audit.jsonl is absent from $OMNIPUS_HOME/system. ' +
-          'sandbox.audit_log must be enabled when the gateway BOOTS — it is restart-gated, ' +
-          'so toggling via REST mid-run does not activate it. Start the gateway with ' +
-          'sandbox.audit_log:true in config.json (the CI workflow seeds this; for local runs ' +
-          'add it to $OMNIPUS_HOME/config.json before launching the gateway).',
-      )
-    }
+      const provider = await startHeldStreamProvider({ promptIncludes: LONG_PROSE_PROMPT })
+      let gateway: GatewayProcess | undefined
+      let context: BrowserContext | undefined
+      try {
+        const harness = await startHeldTurnHarness(browser, provider)
+        gateway = harness.gateway
+        context = harness.context
+        const { page } = harness
 
-    // Start from a clean session. `/new` is intercepted client-side
-    // (useSlashMenu.ts runClientCommand 'new' → startNewSession()) and only
-    // NULLIFIES activeSessionId — it does not mint a session; the SPA creates one
-    // lazily on the first sent message. That is exactly what we want: the session
-    // dir that appears on disk after this point is unambiguously THIS turn's.
-    const input = chatInput(page)
-    await expect(input).toBeEnabled({ timeout: 20_000 })
-    await input.fill('/new')
-    await input.press('Enter')
-    await expect(input).toBeEnabled({ timeout: 20_000 })
+        await page.goto('/')
 
-    // Send, and — critically — do not proceed until the assistant has actually
-    // STREAMED text back. See defect (1) in this test's header comment: waiting on
-    // `stop-btn` alone returns before the gateway has a cancellable turn, so the
-    // cancel no-ops with was_fired:false and this test's central assertion becomes
-    // unfalsifiable. `triggerLongStreamingTurn` also switches to Jim and asks for a
-    // 700-word tool-free essay, so the stream stays live for seconds after this
-    // returns and the Stop click lands comfortably mid-turn.
-    await triggerLongStreamingTurn(page)
+        await triggerLongStreamingTurn(page)
+        await expectTurnHeldMidStream(provider, 'T21')
 
-    // Cancel the turn.
-    const stopBtn = page.locator('[data-testid="stop-btn"]')
-    await stopBtn.click()
+        const stopBtn = page.locator('[data-testid="stop-btn"]')
+        await stopBtn.click({ timeout: 15_000 })
 
-    // Wait for cancel to complete. Under suite load the stop button can stay
-    // on aria-label="Stopping..." after the turn has actually ended (composer
-    // re-enables first). Poll until the composer is enabled OR the stop
-    // button clears — either means cancel finished. Budget 90s (test.slow()).
-    const cancelDeadline = Date.now() + 90_000
-    let cancelDone = false
-    while (Date.now() < cancelDeadline) {
-      const inputEnabled = await chatInput(page).isEnabled().catch(() => false)
-      const stopGone = !(await stopBtn.isVisible().catch(() => true))
-      if (inputEnabled || stopGone) {
-        cancelDone = true
-        break
+        // Within 5s: the stop button disappears (streaming ended).
+        await expect(stopBtn).not.toBeVisible({ timeout: 5_000 })
+
+        // Within 5s: the chat input is re-enabled.
+        await expect(chatInput(page)).toBeEnabled({ timeout: 5_000 })
+
+        // The last assistant message should show the "(interrupted)" label suffix.
+        // MessageItem renders: {message.status === 'interrupted' && <span>(interrupted)</span>}
+        // Allow up to 5s for the message to reflect the cancelled status.
+        const interruptedLabels = page.locator('text=(interrupted)')
+        await expect(interruptedLabels.first()).toBeVisible({ timeout: 5_000 })
+
+        await expectCancelClosedStream(provider, 'T21')
+        expect(provider.evidence.errors, 'T21: no unexpected scripted-provider request').toEqual([])
+      } finally {
+        try {
+          await attachHeldStreamEvidence(info, 'T21', provider)
+        } finally {
+          try { await context?.close() } finally {
+            try { await gateway?.stop() } finally { await provider.close() }
+          }
+        }
       }
-      await page.waitForTimeout(500)
-    }
-    expect(cancelDone, 'cancel must complete within 90s (composer enabled or stop-btn gone)').toBe(
-      true,
-    )
-    await expect(chatInput(page)).toBeEnabled({ timeout: 15_000 })
+    },
+  )
 
-    // Both lookups below are scoped to a session THIS test created (i.e. a
-    // directory that appeared under OMNIPUS_HOME/sessions since the snapshot taken
-    // at the very top of the test). Sessions live at OMNIPUS_HOME/sessions/<id>/,
-    // so the directory NAME is the session id — the same id the gateway stamps
-    // into the audit rows (pkg/agent/cancel.go:245-250). Two reasons to scope:
-    //
-    //  a) It is the anti-sentinel guard. Mutual session_id equality between the
-    //     two rows is satisfiable by two rows that are both wrong in the SAME way
-    //     — exactly what the pre-2026-07-28 version of this test produced, with
-    //     both cancel requests carrying the literal `__pending` sentinel. Binding
-    //     the id to a real on-disk session directory is what makes the assertion
-    //     falsifiable.
-    //  b) It keeps a neighbouring turn's cancel from being mistaken for ours.
-    //     Playwright runs this shard with workers:1 (playwright.config.ts), so no
-    //     sibling TEST interleaves — but a leaked turn from an EARLIER test that
-    //     gets canceled by some other means still writes a perfectly well-formed
-    //     turn.cancel.attempt{was_fired:true} for someone else's session, which
-    //     an unscoped `.find()` would happily accept as proof that OUR cancel
-    //     fired.
-    //
-    // POLLED rather than read once after a fixed sleep: the audit rows and the
-    // transcript flush land a beat after the UI reports the cancel complete, and
-    // the gap stretches under CI load (this suite shares its worker). A bounded
-    // poll converges as soon as the evidence is on disk and cannot be tuned wrong
-    // in the way a fixed `waitForTimeout` can. Nothing is weakened — the same
-    // predicates must hold, we just stop reading too early.
-    let attemptEntry: AuditEntry | undefined
-    let cancelledEntry: AuditEntry | undefined
-    let newSessions: string[] = []
-    let cancelRowSummary: string
-    const auditDeadline = Date.now() + 30_000
-    for (;;) {
-      newSessions = listSessionDirs(OMNIPUS_HOME).filter((s) => !sessionsBefore.has(s))
-      const newEntries = readJsonl<AuditEntry>(auditPath).slice(entriesBefore)
+  // ── T22: Web slash menu /cancel during streaming (US-1.3, FR-3a) ────────────
+  // Traces to: cancel-cross-channel-spec.md line 601 (T22)
+  // BDD: Given a turn is actively streaming
+  //      When the user types "/c" into the chat input
+  //      Then the slash menu appears with "/cancel" visible (FR-3a)
+  //      When the user clicks "/cancel"
+  //      Then the same cancel behavior fires as clicking Stop.
 
-      const isThisTurn = (e: AuditEntry) => {
-        const sid = e.fields?.session_id
-        return typeof sid === 'string' && newSessions.includes(sid)
+  test(
+    'T22 — web slash menu /cancel is visible during streaming and cancels turn',
+    async ({ browser }, info) => {
+      test.slow()
+
+      const provider = await startHeldStreamProvider({ promptIncludes: LONG_PROSE_PROMPT })
+      let gateway: GatewayProcess | undefined
+      let context: BrowserContext | undefined
+      try {
+        const harness = await startHeldTurnHarness(browser, provider)
+        gateway = harness.gateway
+        context = harness.context
+        const { page } = harness
+
+        await page.goto('/')
+
+        await triggerLongStreamingTurn(page)
+        await expectTurnHeldMidStream(provider, 'T22')
+
+        // Typing "/c" mid-stream: FR-3a requires the slash menu to appear during
+        // streaming for commands tagged availableWhileStreaming: true. The held
+        // stream keeps the turn mid-stream indefinitely, so this window no
+        // longer races the model finishing.
+        // The input is disabled during streaming per MessageInput.tsx, but
+        // ChatScreen.tsx has a second textarea (data-testid="chat-input") that
+        // owns the slash logic. Use that testid for the type interaction.
+        const slashInput = page.locator('[data-testid="chat-input"]')
+        await slashInput.click({ timeout: 15_000 })
+        await slashInput.type('/c', { timeout: 15_000 })
+
+        // Assert the slash menu is shown.
+        // ChatScreen renders the dropdown when shouldShowSlash && slashOpen:
+        // the menu contains buttons with font-mono label text.
+        const slashMenu = page.locator('.font-mono').filter({ hasText: '/cancel' })
+        await expect(slashMenu.first()).toBeVisible({ timeout: 5_000 })
+
+        // The entire menu should be visible.
+        // Rows are `role="option"` (not the native implicit "button" role),
+        // per the W3C APG combobox-with-listbox-popup pattern (ChatScreen.tsx —
+        // the listbox container carries `role="listbox"`, rows carry
+        // `role="option"` + `aria-selected`, and the textarea points at the
+        // highlighted row via `aria-activedescendant`). This is a deliberate,
+        // documented a11y redesign, not a regression — `getByRole('button', …)`
+        // predates it and no longer matches anything. Matches the same
+        // `getByRole('option', …)` convention already used for listbox rows
+        // elsewhere in this suite (e.g. channel-routing.spec.ts,
+        // channel-instance-crud.spec.ts).
+        const cancelMenuItem = page.getByRole('option', { name: /\/cancel/ })
+        await expect(cancelMenuItem.first()).toBeVisible({ timeout: 5_000 })
+
+        // Click /cancel.
+        await cancelMenuItem.first().click({ timeout: 10_000 })
+
+        // Assert cancel behavior: stop button disappears, input re-enabled, (interrupted) shown.
+        const stopBtn = page.locator('[data-testid="stop-btn"]')
+        await expect(stopBtn).not.toBeVisible({ timeout: 5_000 })
+        await expect(chatInput(page)).toBeEnabled({ timeout: 5_000 })
+        const interruptedLabels = page.locator('text=(interrupted)')
+        await expect(interruptedLabels.first()).toBeVisible({ timeout: 5_000 })
+
+        await expectCancelClosedStream(provider, 'T22')
+        expect(provider.evidence.errors, 'T22: no unexpected scripted-provider request').toEqual([])
+      } finally {
+        try {
+          await attachHeldStreamEvidence(info, 'T22', provider)
+        } finally {
+          try { await context?.close() } finally {
+            try { await gateway?.stop() } finally { await provider.close() }
+          }
+        }
       }
+    },
+  )
 
-      // Dumped on failure so a no-op cancel (was_fired:false) or a sentinel
-      // session_id is immediately legible instead of just "not found".
-      cancelRowSummary = JSON.stringify(
-        newEntries
-          .filter((e) => typeof e.event === 'string' && e.event.startsWith('turn.cancel'))
-          .map((e) => ({
-            event: e.event,
-            session_id: e.fields?.session_id,
-            was_fired: e.fields?.was_fired,
-          })),
-      )
+})
 
-      // turn_cancel_attempt with was_fired:true, for THIS test's session.
-      // events.go: EventTurnCancelAttempt = "turn.cancel.attempt"; tag json:"event".
-      // Audit entries nest their payload under "fields" (pkg/audit/audit.go Emit).
-      // was_fired:true is the load-bearing bit — it is set only when
-      // GetActiveTurnHookForSession found a live turn AND ClaimCancel won it
-      // (pkg/agent/cancel.go:240-250). A cancel that arrives before the gateway has
-      // registered the turn emits was_fired:false and changes nothing; without this
-      // predicate the test cannot tell the two apart.
-      attemptEntry = newEntries.find(
-        (e) => e.event === 'turn.cancel.attempt' && e.fields?.was_fired === true && isThisTurn(e),
-      )
-      // events.go: EventTurnCancelled = "turn.cancelled"; tag json:"event".
-      cancelledEntry = newEntries.find((e) => e.event === 'turn.cancelled' && isThisTurn(e))
+// Same deterministic describe, split per test only for the 240-line function
+// budget (scripts/check-function-budget.sh): the identical title keeps every
+// full test name byte-identical, and the zero-retry scope carries over — a
+// broken cancel is a property no retry establishes.
+test.describe('deterministic held-stream cancellations (#1661)', () => {
+  test.describe.configure({ retries: 0 })
 
-      if (attemptEntry && cancelledEntry) break
-      if (Date.now() > auditDeadline) break
-      await page.waitForTimeout(500)
-    }
+  // ── T23: Web Escape key cancels during streaming (US-1.4) ───────────────────
+  // Traces to: cancel-cross-channel-spec.md line 602 (T23)
+  // BDD: Given a turn is actively streaming
+  //      When the user presses Escape with focus in the chat input
+  //      Then the same cancel code path fires as the Stop button.
 
-    // Shared diagnostic tail — every failure below needs the same three facts, and
-    // omitting the session lists once already cost a full CI round-trip to explain
-    // an "it just says none appeared" failure.
-    const diag =
-      `Sessions that appeared during this test: ${JSON.stringify(newSessions)}. ` +
-      `Sessions already present at test start: ${sessionsBefore.size}. ` +
-      `turn.cancel* rows written since test start: ${cancelRowSummary}.`
+  test(
+    'T23 — web Escape key cancels streaming turn',
+    async ({ browser }, info) => {
+      test.slow()
 
-    if (!attemptEntry) {
-      throw new Error(
-        'INCOMPLETE: audit log has no turn.cancel.attempt{was_fired:true} for a session this ' +
-          `test created. ${diag} ` +
-          'was_fired:false means the cancel reached the gateway but found no registered turn ' +
-          'to claim (a no-op — the exact pre-2026-07-28 failure); an empty session list means ' +
-          'the SPA never persisted a new session; a session_id outside the list means the turn ' +
-          'ran somewhere else. Traces to: cancel-cross-channel-spec.md T26, US-5.1, FR-18.',
-      )
-    }
+      const provider = await startHeldStreamProvider({ promptIncludes: LONG_PROSE_PROMPT })
+      let gateway: GatewayProcess | undefined
+      let context: BrowserContext | undefined
+      try {
+        const harness = await startHeldTurnHarness(browser, provider)
+        gateway = harness.gateway
+        context = harness.context
+        const { page } = harness
 
-    if (!cancelledEntry) {
-      throw new Error(
-        'INCOMPLETE: audit log has no turn.cancelled entry for a session this test created. ' +
-          `${diag} Traces to: cancel-cross-channel-spec.md T26, US-5.2, FR-19.`,
-      )
-    }
+        await page.goto('/')
 
-    // Assert: session_id matches between the two entries (US-5 — the attempt and
-    // the completion must describe the same turn). Not implied by the scoping
-    // above: `isThisTurn` only requires membership in newSessions, which can hold
-    // more than one directory (a delegated sub-turn gets its own), so this still
-    // rules out an attempt on one session paired with a cancellation of another.
-    // session_id is nested under fields (pkg/audit/audit.go Emit structure).
-    expect(attemptEntry.fields?.session_id).toBeTruthy()
-    expect(cancelledEntry.fields?.session_id).toBeTruthy()
-    expect(attemptEntry.fields?.session_id).toEqual(cancelledEntry.fields?.session_id)
-  },
-)
+        await triggerLongStreamingTurn(page)
+        await expectTurnHeldMidStream(provider, 'T23')
+
+        // triggerLongStreamingTurn only returns once stop-btn is visible, i.e.
+        // isStreaming is already true and ChatScreen's document-level Escape
+        // handler is armed. Press Escape immediately, with no waitForTimeout
+        // before it. The historical reason stands (never sleep before a
+        // keyboard action); the race it guarded against is gone: the held
+        // stream cannot finish on its own, so Escape always lands mid-turn.
+        const stopBtn = page.locator('[data-testid="stop-btn"]')
+        await expect(stopBtn).toBeVisible({ timeout: 5_000 })
+
+        // ChatScreen registers a document-level 'keydown' listener for Escape.
+        await page.keyboard.press('Escape')
+
+        // Assert cancel behavior.
+        await expect(stopBtn).not.toBeVisible({ timeout: 5_000 })
+        await expect(chatInput(page)).toBeEnabled({ timeout: 5_000 })
+
+        // U6: assert the interruption suffix inside an actual message row, not
+        // the old conversation-level duplicate. Preserve the attached-state
+        // oracle for the virtualized thread; Stop/input behavior is pinned above.
+        const interruptedMarker = page.locator('[data-testid="assistant-message"]').getByText('(interrupted)', { exact: true })
+        await expect(interruptedMarker.first()).toBeAttached({ timeout: 5_000 })
+
+        await expectCancelClosedStream(provider, 'T23')
+        expect(provider.evidence.errors, 'T23: no unexpected scripted-provider request').toEqual([])
+      } finally {
+        try {
+          await attachHeldStreamEvidence(info, 'T23', provider)
+        } finally {
+          try { await context?.close() } finally {
+            try { await gateway?.stop() } finally { await provider.close() }
+          }
+        }
+      }
+    },
+  )
+
+})
+
+// Same deterministic describe, split at T26 only for the 240-line function
+// budget: identical title (full test names unchanged), zero retries carried
+// over.
+test.describe('deterministic held-stream cancellations (#1661)', () => {
+  test.describe.configure({ retries: 0 })
+
+  // ── T26: Audit entries exist after cancel (US-5.1, US-5.2) ──────────────────
+  // Traces to: cancel-cross-channel-spec.md line 605 (T26)
+  // BDD: Given any cancel request lands at the gateway
+  //      When the audit log is queried
+  //      Then exactly one turn_cancel_attempt entry exists with was_fired: true
+  //      And exactly one turn_canceled entry exists
+  //      And their session_id values match.
+  //
+  // Since #1661 the precondition turn is scripted by the held-stream provider,
+  // so the turn is PROVABLY live when Stop is clicked (expectTurnHeldMidStream)
+  // and was_fired:true below can no longer be lost to a model that finished
+  // before the click landed.
+  //
+
+  test(
+    'T26 — audit log contains turn_cancel_attempt and turn_canceled entries after cancel',
+    async ({ browser }, info) => {
+      test.slow()
+
+      const provider = await startHeldStreamProvider({ promptIncludes: LONG_PROSE_PROMPT })
+      let gateway: GatewayProcess | undefined
+      let context: BrowserContext | undefined
+      try {
+        const harness = await startHeldTurnHarness(browser, provider)
+        gateway = harness.gateway
+        context = harness.context
+        const page = harness.page
+
+        // sessionsBefore is DIAGNOSTICS now (printed on failure): the turn's
+        // session is bound by the exact id freshChat returns below, so nothing
+        // depends on when a directory minted. The audit-entry cursor below is
+        // still a real baseline — it scopes "rows written since test start" —
+        // and both read THIS test's own isolated gateway home.
+        const auditPath = path.join(harness.gateway.homeDir, 'system', 'audit.jsonl')
+        const sessionsBefore = new Set(listSessionDirs(harness.gateway.homeDir))
+        const entriesBefore = readJsonl<AuditEntry>(auditPath).length
+
+        await page.goto('/')
+
+        // Precondition: the audit subsystem must be live in THIS test's own
+        // gateway process. Audit logging is ON by default on a fresh install
+        // (SEC-15, the 2026-09-11 founder decision — verified by
+        // pkg/config/audit_log_default_test.go), and the audit subsystem
+        // creates <home>/system/audit.jsonl at boot (pkg/agent/
+        // loop_construct.go initializeAudit). The isolated GatewayProcess home
+        // boots from the fixture's minimal config, so a missing file here means
+        // the booted binary degraded audit at startup — restart-gated, nothing
+        // a mid-run REST toggle could repair — and every assertion below would
+        // only produce confusing no-evidence failures. Fail loudly instead.
+        if (!fs.existsSync(auditPath)) {
+          throw new Error(
+            'T26 precondition: audit.jsonl is absent from the isolated gateway home ' +
+              `(${harness.gateway.homeDir}/system). sandbox.audit_log defaults to true on ` +
+              'a fresh install and the audit subsystem creates the file at boot; if it is ' +
+              'missing, the gateway degraded audit logging at startup. Check the gateway ' +
+              'boot output (GatewayProcess captures stdout/stderr) before trusting any ' +
+              'cancel-assertion result.',
+          )
+        }
+
+        // Start from a clean session — provided by `triggerLongStreamingTurn`
+        // itself, which now creates it via freshChat (the agent-row "New chat"
+        // button is removed by founder decision D7; the `/new` slash command
+        // stays deleted too — typing it shows a refusal and sends nothing) and
+        // RETURNS the session id. Binding below uses THAT exact id, so the
+        // assertion no longer depends on when (or whether) a directory appeared.
+        const input = chatInput(page)
+        await expect(input).toBeEnabled({ timeout: 20_000 })
+
+        // Send, and — critically — do not proceed until the assistant has actually
+        // STREAMED text back. See defect (1) in this test's header comment: waiting on
+        // `stop-btn` alone returns before the gateway has a cancellable turn, so the
+        // cancel no-ops with was_fired:false and this test's central assertion becomes
+        // unfalsifiable. `triggerLongStreamingTurn` also switches to Jim and asks for a
+        // 700-word tool-free essay; since #1661 the stream itself is scripted by the
+        // held-stream provider, and expectTurnHeldMidStream additionally proves the
+        // stream is still open when the Stop click below fires.
+        const turnSessionId = await triggerLongStreamingTurn(page)
+        await expectTurnHeldMidStream(provider, 'T26')
+
+        // Cancel the turn.
+        const stopBtn = page.locator('[data-testid="stop-btn"]')
+        await stopBtn.click({ timeout: 15_000 })
+
+        // Wait for cancel to complete. Under suite load the stop button can stay
+        // on aria-label="Stopping..." after the turn has actually ended (composer
+        // re-enables first). Poll until the composer is enabled OR the stop
+        // button clears — either means cancel finished. Budget 90s (test.slow()).
+        const cancelDeadline = Date.now() + 90_000
+        let cancelDone = false
+        while (Date.now() < cancelDeadline) {
+          const inputEnabled = await chatInput(page).isEnabled().catch(() => false)
+          const stopGone = !(await stopBtn.isVisible().catch(() => true))
+          if (inputEnabled || stopGone) {
+            cancelDone = true
+            break
+          }
+          await page.waitForTimeout(500)
+        }
+        expect(cancelDone, 'cancel must complete within 90s (composer enabled or stop-btn gone)').toBe(
+          true,
+        )
+        await expect(chatInput(page)).toBeEnabled({ timeout: 15_000 })
+
+        // Both lookups below are scoped to THIS test's own turn session — the id
+        // freshChat created and returned (Sessions live at
+        // OMNIPUS_HOME/sessions/<id>/; the same id the gateway stamps into the
+        // audit rows, pkg/agent/cancel.go:245-250). Two reasons to scope:
+        //
+        //  a) It is the anti-sentinel guard. Mutual session_id equality between the
+        //     two rows is satisfiable by two rows that are both wrong in the SAME way
+        //     — exactly what the pre-2026-07-28 version of this test produced, with
+        //     both cancel requests carrying the literal `__pending` sentinel. Binding
+        //     the id to the exact session this test created is what makes the
+        //     assertion falsifiable (equality with turnSessionId — the sentinel can
+        //     never satisfy it).
+        //  b) It keeps a neighbouring turn's cancel from being mistaken for ours.
+        //     Playwright runs this shard with workers:1 (playwright.config.ts), so no
+        //     sibling TEST interleaves — but a leaked turn from an EARLIER test that
+        //     gets canceled by some other means still writes a perfectly well-formed
+        //     turn.cancel.attempt{was_fired:true} for someone else's session, which
+        //     an unscoped `.find()` would happily accept as proof that OUR cancel
+        //     fired.
+        //
+        // POLLED rather than read once after a fixed sleep: the audit rows and the
+        // transcript flush land a beat after the UI reports the cancel complete, and
+        // the gap stretches under CI load (this suite shares its worker). A bounded
+        // poll converges as soon as the evidence is on disk and cannot be tuned wrong
+        // in the way a fixed `waitForTimeout` can. Nothing is weakened — the same
+        // predicates must hold, we just stop reading too early.
+        let attemptEntry: AuditEntry | undefined
+        let cancelledEntry: AuditEntry | undefined
+        let cancelRowSummary: string
+        const auditDeadline = Date.now() + 30_000
+        for (;;) {
+          const newEntries = readJsonl<AuditEntry>(auditPath).slice(entriesBefore)
+
+          const isThisTurn = (e: AuditEntry) => e.fields?.session_id === turnSessionId
+
+          // Dumped on failure so a no-op cancel (was_fired:false) or a sentinel
+          // session_id is immediately legible instead of just "not found".
+          cancelRowSummary = JSON.stringify(
+            newEntries
+              .filter((e) => typeof e.event === 'string' && e.event.startsWith('turn.cancel'))
+              .map((e) => ({
+                event: e.event,
+                session_id: e.fields?.session_id,
+                was_fired: e.fields?.was_fired,
+              })),
+          )
+
+          // turn_cancel_attempt with was_fired:true, for THIS test's session.
+          // events.go: EventTurnCancelAttempt = "turn.cancel.attempt"; tag json:"event".
+          // Audit entries nest their payload under "fields" (pkg/audit/audit.go Emit).
+          // was_fired:true is the load-bearing bit — it is set only when
+          // GetActiveTurnHookForSession found a live turn AND ClaimCancel won it
+          // (pkg/agent/cancel.go:240-250). A cancel that arrives before the gateway has
+          // registered the turn emits was_fired:false and changes nothing; without this
+          // predicate the test cannot tell the two apart.
+          attemptEntry = newEntries.find(
+            (e) => e.event === 'turn.cancel.attempt' && e.fields?.was_fired === true && isThisTurn(e),
+          )
+          // events.go: EventTurnCancelled = "turn.cancelled"; tag json:"event".
+          cancelledEntry = newEntries.find((e) => e.event === 'turn.cancelled' && isThisTurn(e))
+
+          if (attemptEntry && cancelledEntry) break
+          if (Date.now() > auditDeadline) break
+          await page.waitForTimeout(500)
+        }
+
+        // Shared diagnostic tail — every failure below needs the same facts, and
+        // omitting the session lists once already cost a full CI round-trip to explain
+        // an "it just says none appeared" failure.
+        const diag =
+          `This test's turn session id: ${turnSessionId}. ` +
+          `Sessions already present at test start: ${sessionsBefore.size} ` +
+          `(${JSON.stringify([...sessionsBefore])}). ` +
+          `turn.cancel* rows written since test start: ${cancelRowSummary}.`
+
+        if (!attemptEntry) {
+          throw new Error(
+            'INCOMPLETE: audit log has no turn.cancel.attempt{was_fired:true} for this test\'s ' +
+              `turn session. ${diag} ` +
+              'was_fired:false means the cancel reached the gateway but found no registered turn ' +
+              'to claim (a no-op — the exact pre-2026-07-28 failure); a session_id other than the ' +
+              "test's own means the turn ran somewhere else. Traces to: " +
+              'cancel-cross-channel-spec.md T26, US-5.1, FR-18.',
+          )
+        }
+
+        if (!cancelledEntry) {
+          throw new Error(
+            'INCOMPLETE: audit log has no turn.cancelled entry for a session this test created. ' +
+              `${diag} Traces to: cancel-cross-channel-spec.md T26, US-5.2, FR-19.`,
+          )
+        }
+
+        // Assert: session_id matches between the two entries (US-5 — the attempt and
+        // the completion must describe the same turn). Both rows already carry THIS
+        // test's exact turnSessionId (the scoping above), so this equality also
+        // rules out an attempt on one session paired with a cancellation of another.
+        // session_id is nested under fields (pkg/audit/audit.go Emit structure).
+        expect(attemptEntry.fields?.session_id).toBeTruthy()
+        expect(cancelledEntry.fields?.session_id).toBeTruthy()
+        expect(attemptEntry.fields?.session_id).toEqual(cancelledEntry.fields?.session_id)
+
+        // The audited cancel must be the one that actually aborted the in-flight
+        // provider request — the same load-bearing was_fired:true above, pinned
+        // at the stream level. A cancel that only rewrote UI state would leave
+        // the held stream open and this evidence would never reach 1.
+        await expectCancelClosedStream(provider, 'T26')
+        expect(provider.evidence.errors, 'T26: no unexpected scripted-provider request').toEqual([])
+      } finally {
+        try {
+          await attachHeldStreamEvidence(info, 'T26', provider)
+        } finally {
+          try { await context?.close() } finally {
+            try { await gateway?.stop() } finally { await provider.close() }
+          }
+        }
+      }
+    },
+  )
+})

@@ -5,7 +5,7 @@
 // FIX-6 (parallel fix wave, feature/plan-swimlane-board) — regression
 // coverage for three defects found by review in pkg/tools/delegate.go:
 //
-//   - Defect 1 (BLOCKER): executeCancel reported unconditional success even
+//   - Defect 1 (BLOCKER): the stop action reported unconditional success even
 //     when killChildBackgroundShells found a real kill failure — both
 //     counts were discarded after a log line. Fixed by returning
 //     (killed, failed) from killChildBackgroundShells and folding a real
@@ -139,11 +139,11 @@ func TestKillChildBackgroundShells_ReturnsRealOutcome(t *testing.T) {
 }
 
 // TestDelegateCancel_SurfacesBackgroundShellKillFailure is the end-to-end
-// proof for the BLOCKER: a delegate action="cancel" call whose turn-level
-// cancel succeeds but whose background-shell kill genuinely fails must NOT
-// return the same unconditional success text as a clean cancel.
+// proof for the BLOCKER: a delegate action="stop_all" call whose turn-level
+// stop succeeds but whose background-shell kill genuinely fails must NOT
+// return the same unconditional success text as a clean stop.
 func TestDelegateCancel_SurfacesBackgroundShellKillFailure(t *testing.T) {
-	t.Run("hard cancel: turn cancel succeeds, shell kill fails -> result carries the warning", func(t *testing.T) {
+	t.Run("turn stop succeeds, shell kill fails -> single reply text plus the warning", func(t *testing.T) {
 		origKillFn := killProcessGroupFn
 		t.Cleanup(func() { killProcessGroupFn = origKillFn })
 		wantErr := errors.New("fix6: forced kill failure for test")
@@ -164,75 +164,29 @@ func TestDelegateCancel_SurfacesBackgroundShellKillFailure(t *testing.T) {
 		if err := lc.Persist(fix6NewLifecycleRecord(childID, "fix6-cancel-parent-fail")); err != nil {
 			t.Fatalf("seed lifecycle record failed: %v", err)
 		}
-		tool.SetCancelHooks(
-			func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
-				return []string{sessionID}, nil
-			},
-			func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
-				return []string{sessionID}, nil
-			},
-		)
-
-		callerCtx := WithTranscriptSessionID(context.Background(), "fix6-cancel-parent-fail")
-		result := tool.Execute(callerCtx, map[string]any{"action": "cancel", "session_id": childID, "hard": true})
-		if result.IsError {
-			t.Fatalf("expected the turn-level hard cancel itself to still succeed (independent of the "+
-				"shell-kill failure), got error result: %s", result.ForLLM)
-		}
-		if !strings.Contains(result.ForLLM, "hard-cancelled immediately") {
-			t.Errorf("expected the turn-cancel success text to still be present, got: %s", result.ForLLM)
-		}
-		if !strings.Contains(result.ForLLM, "could not be killed") {
-			t.Errorf("BLOCKER (defect 1): expected the cancel result to surface the background-shell kill "+
-				"failure instead of reporting unconditional success, got: %s", result.ForLLM)
-		}
-	})
-
-	t.Run("soft cancel: shell kill fails -> result carries the warning", func(t *testing.T) {
-		origKillFn := killProcessGroupFn
-		t.Cleanup(func() { killProcessGroupFn = origKillFn })
-		wantErr := errors.New("fix6: forced kill failure for test")
-		killProcessGroupFn = func(pid int) error { return wantErr }
-
-		sm := NewSessionManager()
-		const childID = "fix6-cancel-child-fail-soft"
-		sm.Add(&ProcessSession{
-			ID: "fix6-shell-4", OwnerSessionID: childID, Status: StatusRunning,
-			PID: fakeUnusedPIDBase + 904, StartTime: time.Now().Unix(),
+		// TARGET API: one stop hook (SetCancelHooks is gone).
+		tool.SetStopHook(func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
+			return []string{sessionID}, nil
 		})
 
-		tool := NewDelegateTool("test-model", 0, 0)
-		tool.SetSessionMessagingEnabled(func() bool { return true })
-		tool.SetSessionManager(sm)
-		lc := session.NewLifecycleStore(t.TempDir())
-		tool.SetLifecycleStore(lc)
-		if err := lc.Persist(fix6NewLifecycleRecord(childID, "fix6-cancel-parent-fail-soft")); err != nil {
-			t.Fatalf("seed lifecycle record failed: %v", err)
-		}
-		tool.SetCancelHooks(
-			func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
-				return []string{sessionID}, nil
-			},
-			func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
-				return []string{sessionID}, nil
-			},
-		)
-
-		callerCtx := WithTranscriptSessionID(context.Background(), "fix6-cancel-parent-fail-soft")
-		result := tool.Execute(callerCtx, map[string]any{"action": "cancel", "session_id": childID, "hard": false})
+		callerCtx := WithTranscriptSessionID(context.Background(), "fix6-cancel-parent-fail")
+		result := tool.Execute(callerCtx, map[string]any{"action": "stop_all", "session_id": childID})
 		if result.IsError {
-			t.Fatalf("expected the turn-level soft cancel itself to still succeed, got error result: %s", result.ForLLM)
+			t.Fatalf("expected the turn-level stop itself to still succeed (independent of the "+
+				"shell-kill failure), got error result: %s", result.ForLLM)
 		}
-		if !strings.Contains(result.ForLLM, "cooperatively cancelled") {
-			t.Errorf("expected the turn-cancel success text to still be present, got: %s", result.ForLLM)
-		}
-		if !strings.Contains(result.ForLLM, "could not be killed") {
-			t.Errorf("BLOCKER (defect 1): expected the cancel result to surface the background-shell kill "+
-				"failure instead of reporting unconditional success, got: %s", result.ForLLM)
+		// Founder one-stop decision: ONE reply text, then the existing
+		// background-shell warning suffix when it applies.
+		want := "Stop requested for session " + childID + " and its helpers; " +
+			"they will show as stopped once their running work has shut down." +
+			" WARNING: 1 of that session's background shell(s) could not be killed and may still be running."
+		if result.ForLLM != want {
+			t.Errorf("BLOCKER (defect 1): stop_all reply = %q, want exactly %q (the single reply text plus the "+
+				"kill-failure warning, never unconditional success)", result.ForLLM, want)
 		}
 	})
 
-	// Positive control (Rule 4): the two subtests above prove the warning
+	// Positive control (Rule 4): the subtest above proves the warning
 	// fires on a real failure; this proves it does NOT fire when there is
 	// nothing to kill — otherwise the warning could be an unconditional
 	// suffix that happens to look conditional.
@@ -248,22 +202,18 @@ func TestDelegateCancel_SurfacesBackgroundShellKillFailure(t *testing.T) {
 		if err := lc.Persist(fix6NewLifecycleRecord(childID, "fix6-cancel-parent-clean")); err != nil {
 			t.Fatalf("seed lifecycle record failed: %v", err)
 		}
-		tool.SetCancelHooks(
-			func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
-				return []string{sessionID}, nil
-			},
-			func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
-				return []string{sessionID}, nil
-			},
-		)
+		tool.SetStopHook(func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
+			return []string{sessionID}, nil
+		})
 
 		callerCtx := WithTranscriptSessionID(context.Background(), "fix6-cancel-parent-clean")
-		result := tool.Execute(callerCtx, map[string]any{"action": "cancel", "session_id": childID, "hard": true})
+		result := tool.Execute(callerCtx, map[string]any{"action": "stop_all", "session_id": childID})
 		if result.IsError {
 			t.Fatalf("expected success, got error result: %s", result.ForLLM)
 		}
-		if strings.Contains(result.ForLLM, "could not be killed") {
-			t.Errorf("must NOT add a kill-failure warning when there was nothing to kill, got: %s", result.ForLLM)
+		if want := "Stop requested for session " + childID + " and its helpers; " +
+			"they will show as stopped once their running work has shut down."; result.ForLLM != want {
+			t.Errorf("clean stop reply = %q, want exactly %q (no warning suffix when there was nothing to kill)", result.ForLLM, want)
 		}
 	})
 }

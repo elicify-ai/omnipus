@@ -193,7 +193,7 @@ export interface paths {
         };
         /**
          * List configurable search and voice-input integration providers
-         * @description Returns every configurable non-LLM integration provider — web-search engines (SearchProvider) and voice-input transcribers (Transcriber) — plus which provider is active for each kind (FR-12.1). API keys are never returned; configured reflects whether a key is present. Requires authentication.
+         * @description Returns every configurable non-LLM integration provider — web-search engines (SearchProvider) and voice-input transcribers (Transcriber) — plus which provider is active for each kind (FR-12.1). API keys are never returned; configured reflects whether a key is present. ADR-096: the response also carries the resolved web-search roles (default_search, fallback_search) and each search row reports usable and its fallback flags, built from post-reload state. Requires authentication.
          */
         get: operations["getIntegrationProviders"];
         put?: never;
@@ -214,10 +214,30 @@ export interface paths {
         get?: never;
         /**
          * Configure a search or voice-input integration provider
-         * @description Sets the API key and/or selects a provider as active for its kind (FR-12.1). Keys are stored encrypted (AES-256-GCM) in credentials.json; only the credential reference is written to config.json. This is a sensitive settings change: in local mode the caller must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid, unexpired token are rejected 403; in platform mode there is no local password to re-type, so the authenticated session is the guard and the SPA confirms the change with the operator before sending (ADR-0008 ruling 6). Requires authentication.
+         * @description Stores an API key, removes a saved search key with clear_api_key:true, and/or assigns the provider its role (FR-12.1). Removal switches only that service off and preserves the raw default, fallback and migration marker. It rejects any api_key, active or fallback field, voice/keyless services, undecided roles and shared/custom credential references before writes; ownership conflicts return 409. Success requires deletion, runtime disabling, confirmed reload and audit recording. Partial failures return a non-success error describing what persisted. Removal does not revoke the upstream key. ADR-096: storing a key is separable from assigning a role — an api_key alone changes no role; on search providers active assigns the default (and switches the provider on), fallback true assigns the fallback, fallback false sets the fallback to none ("No fallback"), an explicit false on active is rejected 400, and active plus fallback naming the same provider is rejected 400. The write is made live in the same request — a config reload runs before the response, so the response is built from post-reload state (ADR-096 FR-033) — and a default whose key still does not resolve after that reload is rejected 400 ("needs an API key"). Keys are stored encrypted (AES-256-GCM) in credentials.json; only the credential reference is written to config.json. This is a sensitive settings change: in local mode the caller must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid, unexpired token are rejected 403; in platform mode there is no local password to re-type, so the authenticated session is the guard and the SPA confirms the change with the operator before sending (ADR-0008 ruling 6). Requires authentication.
          */
         put: operations["updateIntegrationProvider"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/integrations/providers/{id}/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check a saved web-search connection
+         * @description Runs one real, potentially chargeable search for "Omnipus" through the addressed keyed search client with its saved key, one result where supported, and the cheapest supported depth within the saved cap. Requires authenticated administrator access, but no password step-up: this neither reveals nor changes a secret. A saved key and runtime-usable service are required. No fallback, key rotation, retry, discovery, result fetch or cached success. A 15-second total context deadline cancels on disconnect and does not lengthen a shorter client deadline. Per instance and service, one check may be in flight and at most one check is admitted every 30 seconds, including failures. Local limiting returns 429 with Retry-After and performs no outbound call. Completed upstream outcomes, including valid empty results and upstream failures, return 200 with normalized categories and no upstream payload or key. Gateway/internal failures remain non-2xx. If the service's key or configuration generation changes after admission and before completion, the server discards the upstream outcome and returns 409 with the fixed error "The key changed while checking. Check again." No key identity, fingerprint or generation is returned. Configuration and roles are unchanged; clients refresh readiness separately.
+         */
+        post: operations["checkSearchProviderConnection"];
         delete?: never;
         options?: never;
         head?: never;
@@ -275,7 +295,7 @@ export interface paths {
         put?: never;
         /**
          * Finalize first-run onboarding
-         * @description AUTHENTICATED. Onboarding runs AFTER sign-in (ADR-0008 rulings 1 and 2): the caller already holds the session the platform issued, so this endpoint requires it and returns 401 without it. It mints no credential of any kind — no account is created, no password is hashed, no bearer token and no cookie is issued, and the request body carries no `admin` block (a body that still carries one is rejected 400 by the strict decode). Two-phase commit: probes the submitted provider API key against the real provider (a billable upstream call, same validator as PUT /providers/{id}), then writes the LLM provider config and the default model to config.json atomically, then marks onboarding complete in state.json. Returns 400 when the provider confirms the key is wrong (invalid_key) — nothing is persisted and the request may be retried with a corrected key. A key the provider could not verify for any other reason (unreachable, no credit, regionally restricted, or no endpoint to probe) does NOT block: onboarding still completes and the response's `warning` field explains what could not be checked, because a flaky network must not make the product unusable on first run. Returns 409 when onboarding is already complete — the instance is set up and providers are managed through PUT /providers/{id} from then on. The owner recorded in the audit record (onboarding.admin_created) is the authenticated account, never a value from the body. Rate-limited: 3 requests per IP per minute — a probe can take up to ~25s (model-catalog fetch + completion probe), so a mistyped key costs real wall-clock time before the caller can retry.
+         * @description AUTHENTICATED. Onboarding runs AFTER sign-in (ADR-0008 rulings 1 and 2): the caller already holds the session the platform issued, so this endpoint requires it and returns 401 without it. It mints no credential of any kind — no account is created, no password is hashed, no bearer token and no cookie is issued, and the request body carries no `admin` block (a body that still carries one is rejected 400 by the strict decode). Two-phase commit: probes the submitted provider API key against the real provider (a billable upstream call, same validator as PUT /providers/{id}), then writes the LLM provider config and the default model to config.json atomically, then marks onboarding complete in state.json. Returns 400 when the provider confirms the key is wrong (invalid_key) — nothing is persisted and the request may be retried with a corrected key. A key the provider could not verify for any other reason (unreachable, no credit, regionally restricted, or no endpoint to probe) does NOT block: onboarding still completes and the response's `warning` field explains what could not be checked, because a flaky network must not make the product unusable on first run. Returns 409 when onboarding is already complete — the instance is set up and providers are managed through PUT /providers/{id} from then on. The owner recorded in the audit record (onboarding.admin_created) is the authenticated account, never a value from the body. Rate-limited: 3 requests per IP per minute — a probe can take up to ~25s (model-catalog fetch + completion probe), so a mistyped key costs real wall-clock time before the caller can retry. Returns 422 when a custom endpoint's base URL is refused by the address (SSRF) guard.
          */
         post: operations["completeOnboarding"];
         delete?: never;
@@ -313,7 +333,7 @@ export interface paths {
         };
         /**
          * List sessions across all agents
-         * @description Returns root sessions (parent_session_id == "") visible to the authenticated user, paged, each carrying a child_count (ADR-057 US-19/FR-091). Subordinate ("delegate") sessions are reached a page at a time via the parent_session_id filter, or all at once (roots and subordinates together) via flat=true (FR-104). Supports optional filtering by agent_id and type. When some agents fail to list their sessions (e.g. filesystem error), the page still returns its healthy rows plus a populated partial_errors and a valid next_cursor (FR-098). Verifier-role sessions (type "verifier", ADR-052 FR-036) are excluded by default regardless of the type filter unless include_verifier=true is passed, and are never counted in child_count unless it is passed.
+         * @description Returns root sessions (parent_session_id == "") visible to the authenticated user, paged, each carrying a child_count (ADR-057 US-19/FR-091). Subordinate ("delegate") sessions are reached a page at a time via the parent_session_id filter, or all at once (roots and subordinates together) via flat=true (FR-104). Supports optional filtering by agent_id and type. When an agent store fails to enumerate sessions, or a session lifecycle journal unexpectedly fails to load, the page still returns its available rows plus distinguishable sanitized partial_errors and a valid next_cursor (FR-098; NAV-WAVE1 SF-2). An unreadable journal keeps its row with lifecycle_state, stop_note, and execution omitted, never null. A missing lifecycle record is normal and adds no token. Verifier-role sessions (type "verifier", ADR-052 FR-036) are excluded by default regardless of the type filter unless include_verifier=true is passed, and are never counted in child_count unless it is passed.
          */
         get: operations["listSessions"];
         put?: never;
@@ -336,19 +356,19 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get session detail including full transcript
-         * @description Returns the session metadata and complete ordered transcript. Used by the SPA to render the chat history.
+         * Get session metadata and bounded latest history
+         * @description Returns authorized session metadata and required history_state. When history is available, messages and canonical page_info/continuation describe the bounded latest page (limit 40, min_rows 20), never the complete lifetime. This endpoint accepts no paging selectors. When history is unavailable after the bounded known-prefix recovery attempt, return metadata-only SessionDetail with history_state.status=unavailable, omitting messages, page_info and every continuation field. This is not successful empty history or a missing session; routing and authorized live attach remain usable. Authentication, session-ID syntax and addressed-session eligibility/existence precede history access. No lifetime rebuild, preparation state or 503 path. Session detail, rename (PUT) and delete (DELETE) apply only to the bare /sessions/{id} address, with no sub-path. Unknown sub-paths return 404, never session detail. Known sub-paths are messages and tool-results, including their descendants; non-GET methods (OPTIONS preflight aside) return 405 with Allow: GET without renaming or deleting the session. GET messages/{history_position} is getSessionHistoryEntry, which validates the position itself.
          */
         get: operations["getSession"];
         /**
          * Rename a session
-         * @description Updates the session title. Returns the updated session metadata.
+         * @description Updates the session title. Returns the updated session metadata. Rename applies only to PUT /sessions/{id}, with no sub-path. PUT on a known sub-path (messages or tool-results, including descendants) returns 405 with Allow: GET; an unknown sub-path returns 404. Neither refusal renames or deletes the session.
          */
         put: operations["renameSession"];
         post?: never;
         /**
          * Delete a session and all its data
-         * @description Permanently removes the session directory including transcript and context. Returns {"success": true} on success.
+         * @description Permanently removes the session directory including transcript and context. Returns {"success": true} on success. Delete applies only to DELETE /sessions/{id}, with no sub-path. DELETE on a known sub-path (messages or tool-results, including descendants) returns 405 with Allow: GET; an unknown sub-path returns 404. Neither refusal renames or deletes the session.
          */
         delete: operations["deleteSession"];
         options?: never;
@@ -364,10 +384,30 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get session transcript messages
-         * @description Returns the ordered transcript entries for a session without the metadata wrapper. Lighter than GET /sessions/{id} when only the message list is needed.
+         * Get a bounded session-history page
+         * @description Returns SessionHistoryResponse, not a bare array. Select nearest whole source groups and emit ascending acceptance order. With no selectors, read the latest segment since the newest exact /clear marker. before/after are exclusive same-session history positions, not message IDs or live sequence cursors. Older reads stop at the first clear marker; before that marker explicitly crosses into one preceding segment without changing model context. Paired window_start/window_end delimit a closed already-displayed interval for window_refresh; optional before continues backward inside it, never from the current live tail. No message-neighborhood or ID-based lookup is provided. Authenticate, validate session-ID syntax and resolve addressed-session eligibility/existence/access first; then validate limit, min_rows, selector syntax/combinations; then resolve positions/range in that same session; then read the index/page. Unknown/foreign well-formed positions return 404 before range order checks. Known expired positions remain valid order boundaries. Parse raw query encoding and multiplicity: malformed percent escapes, repeated values, blanks and null-like values are errors, never silently dropped or trimmed. Numeric inputs are one digits-only decimal integer (leading zeroes permitted), never clamped; signs, whitespace, fractions, exponents and overflow reject. Unknown keys enable no additional mode. has_earlier/has_later and next_before/next_after reflect actual eligible retained lookahead in the read domain (only the closed interval for window_refresh). Cursors exist iff the respective flag is true and equal the first/last selected position. Empty and exactly-full terminal pages have no phantom continuation. Page metadata replaces X-Has-Earlier-Messages as the paging authority. The shared projector meters the larger prepared REST/history-WS encoding under a server-owned 4194304-byte soft budget; whole groups and advisory min_rows take precedence. At least one whole eligible group remains. True end, clear, range or 100-source-group cap can underfill; the soft budget alone cannot underfill the floor. An individual group's drawn weight may exceed the row target or 100. A hard 8388608-byte page selection ceiling (page_info.byte_ceiling, stop_reason byte_ceiling) may stop below min_rows; the first group is always whole. Tool results over 51,200 encoded bytes are shown as a HistoryResultPreview and ordinary message text over 65,536 UTF-8 bytes as a preview with content_original_size_bytes; getSessionHistoryEntry returns the full occurrence (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)"). No lifetime read/rebuild, 503/preparing state or full-history fallback. This sub-path accepts GET only. Other methods (OPTIONS preflight aside) return 405 with Allow: GET without renaming or deleting the session; those operations require the bare /sessions/{id} address. Nested messages/... paths are the getSessionHistoryEntry address: GET there validates the position, and other methods (OPTIONS preflight aside) return 405 with Allow: GET.
          */
         get: operations["getSessionMessages"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/sessions/{id}/messages/{history_position}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read one saved history occurrence in full
+         * @description Returns the full public projection of exactly one saved history occurrence, addressed by the same opaque same-session history_position a history page carries (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)", A2.1/A2.2). It is the same reduction as the page reader after tool-call effects, cancellation and disposition, with display shortening off, at the server's current read cut: the response never carries a HistoryResultPreview marker and never carries content_original_size_bytes. It never returns the private archive envelope or a pre-correction value, and the read writes nothing (archive, positions, index, tool_results/ and model context are unchanged). It is a position-addressed read, not a UI navigation destination, an around selector or a message-ID resolver. Authorization is identical to getSessionMessages and is applied in the same order before any position work: the registered auth wrapper (valid cookie, configured user bearer or CLI bearer; invalid or revoked credentials refused), session-ID syntax, main-session eligibility, then session existence/metadata. No new per-user ownership rule is introduced. Refusal checks run in this precedence order: 401, 400 invalid session ID, 404 "session not found", 400 "invalid history position", 404 "history position not found", 410 "history entry expired". This order does not override the storage-primary rule shared with getSessionMessages: a cleanup storage failure combined with cancellation, an unknown position or any selector error is the sanitized storage 500, never 404 or 410. This sub-path accepts GET only. Other methods (OPTIONS preflight aside) return 405 with Allow: GET without renaming or deleting the session; those operations require the bare /sessions/{id} address.
+         */
+        get: operations["getSessionHistoryEntry"];
         put?: never;
         post?: never;
         delete?: never;
@@ -385,7 +425,7 @@ export interface paths {
         };
         /**
          * Fetch a previously-stored tool result body
-         * @description Returns the full JSON body of a tool result that was emitted as a ToolResultRef sentinel on the WebSocket. The result is scoped to the session that produced it — a ref from session A cannot be fetched under session B's path. The SPA fetches this lazily when the user expands a clamped tool call, keeping main-thread memory bounded during high-volume agent activity.
+         * @description Returns the full JSON body of a tool result that was emitted as a ToolResultRef sentinel on the WebSocket. The result is scoped to the session that produced it — a ref from session A cannot be fetched under session B's path. The SPA fetches this lazily when the user expands a clamped tool call, keeping main-thread memory bounded during high-volume agent activity. This sub-path accepts GET only. Other methods (OPTIONS preflight aside) return 405 with Allow: GET without renaming or deleting the session; those operations require the bare /sessions/{id} address. The tool-results prefix and its descendants are known sub-paths; the read handler still validates the path and ref and answers 400 for a malformed one (for example a missing ref), so a known prefix alone does not guarantee a successful GET.
          */
         get: operations["getToolResult"];
         put?: never;
@@ -429,18 +469,18 @@ export interface paths {
         };
         /**
          * Get a single agent configuration
-         * @description Returns the full agent configuration including soul and heartbeat. Core (locked) agents return empty soul (compiled-in prompt not exposed).
+         * @description Returns the full agent configuration including soul and heartbeat. Core (locked) agents return empty soul (compiled-in prompt not exposed). Update (PUT) and delete (DELETE) apply only to the bare /agents/{id} address, with no sub-path. Unknown sub-paths, including undeclared descendants of known ones (a malformed mailboxes address is the exception, below), return 404, never agent detail. Known sub-paths are sessions, activity-runs, runner/test, tools, mailboxes/{workspaceId} and dependencies; a method a sub-path does not serve (OPTIONS preflight aside) returns 405 with an Allow header listing the methods it serves, without updating or deleting the agent. A malformed mailboxes address returns 400 for every method (OPTIONS preflight aside).
          */
         get: operations["getAgent"];
         /**
          * Update agent configuration
-         * @description Applies changed editable fields with a required revision. Protected or invalid fields and stale revisions reject without writes. Successful saves report live activation separately; partial storage failures report actual state.
+         * @description Applies changed editable fields with a required revision. Protected or invalid fields and stale revisions reject without writes. Successful saves report live activation separately; partial storage failures report actual state. Update applies only to PUT /agents/{id}, with no sub-path. PUT on a known sub-path that does not serve PUT returns 405 with an Allow header; an unknown sub-path returns 404. Neither refusal updates or deletes the agent.
          */
         put: operations["updateAgent"];
         post?: never;
         /**
          * Delete a custom agent
-         * @description Removes a custom (non-core, non-system) agent from config.json and reloads the live config. Built-in core/system agents (locked) and the `omnipus-system` agent CANNOT be deleted (403, code `agent_locked`). Deleting an agent removes its entity and applicable SOUL bytes but preserves unrelated files in the agent home. Audited (severity INFO, event `agent.delete`).
+         * @description Removes a custom (non-core, non-system) agent from config.json and reloads the live config. Built-in core/system agents (locked) and the `omnipus-system` agent CANNOT be deleted (403, code `agent_locked`). Deleting an agent removes its entity and applicable SOUL bytes but preserves unrelated files in the agent home. Audited (severity INFO, event `agent.delete`). Delete applies only to DELETE /agents/{id}, with no sub-path. DELETE on a known sub-path that does not serve DELETE returns 405 with an Allow header; an unknown sub-path returns 404. Neither refusal updates or deletes the agent.
          */
         delete: operations["deleteAgent"];
         options?: never;
@@ -460,6 +500,26 @@ export interface paths {
          * @description Returns all sessions owned by the specified agent. Returns an empty array when the agent has no session store.
          */
         get: operations["listAgentSessions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/agents/{id}/activity-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the open task and scheduler runs an agent should see in Activity
+         * @description Returns the OPEN task/scheduler runs where the agent is the assignee or one of the run's captured recipients (session-core FR-033), newest first. Each run carries its own session id for the Open control. An agent with no open run gets an empty array.
+         */
+        get: operations["listAgentActivityRuns"];
         put?: never;
         post?: never;
         delete?: never;
@@ -605,7 +665,7 @@ export interface paths {
         };
         /**
          * Health check
-         * @description Returns HTTP 200 with status "ok" when the gateway is serving, and HTTP 503 with status "degraded" plus a reason on a gateway-fatal condition (agent loop dead, config reload failed, default agent unloadable). The audit_* and catalog fields describe a degraded SUBSYSTEM while the gateway itself is still serving and never change the status code — a stale provider catalog (ADR-067 FR-037) makes the model picker less accurate, it does not take the process out of rotation. No authentication required.
+         * @description Returns HTTP 200 with status "ok" when the gateway is serving, and HTTP 503 with status "degraded" plus a reason on a gateway-fatal condition (agent loop dead, config reload failed). The audit_* and catalog fields describe a degraded SUBSYSTEM while the gateway itself is still serving and never change the status code — a stale provider catalog (ADR-067 FR-037) makes the model picker less accurate, it does not take the process out of rotation. No authentication required.
          */
         get: operations["getHealth"];
         put?: never;
@@ -707,7 +767,7 @@ export interface paths {
         put?: never;
         /**
          * Resolve a pending tool approval (FR-011, FR-082)
-         * @description Approve, deny, or cancel a pending tool call approval.
+         * @description Approve, deny, or cancel a pending tool call approval. For an always-ask tool (today exactly set_channel_outbound; channels spec FR-038, T-10 row 15) the action allow (approve and record a grant) is refused with 400 "set_channel_outbound always asks for approval; it can be set to ask or deny, not allow" and nothing is recorded; only allow_once, deny and cancel are accepted, and no approval of such a tool is ever remembered. Every other tool is unchanged.
          */
         post: operations["postToolApproval"];
         delete?: never;
@@ -730,7 +790,7 @@ export interface paths {
         get: operations["getGlobalToolPolicies"];
         /**
          * Update global tool policies
-         * @description Persists new global tool policies to config.json under the sandbox key. Changes are audit-logged (SEC-15).
+         * @description Persists new global tool policies to config.json under the sandbox key and waits until the running-agent reload has finished. Changes are audit-logged (SEC-15). HTTP 200 means the policies were saved and the reload completed and was confirmed, so running agents are enforcing the saved policies. A reload that fails, or that does not confirm, does not roll the save back and is not HTTP 200: the response is 503 with ErrorResponse. This operation is not the dev_mode_bypass guard.
          */
         put: operations["updateGlobalToolPolicies"];
         post?: never;
@@ -973,14 +1033,35 @@ export interface paths {
         };
         /**
          * Get agent concurrency settings
-         * @description Returns the max-parallel-agents cap and the effective (resolved, auto-detected or explicit) value currently in use.
+         * @description Returns the max-parallel-agents cap and the effective (resolved, auto-detected or explicit) value currently in use. pending_apply is present while saved settings are not in force yet (see PerformancePendingApply).
          */
         get: operations["getPerformanceSettings"];
         /**
          * Update agent concurrency settings
          * @description Updates max_parallel_agents. An explicit value is honored exactly as given — there is no ceiling, only a floor of 1; a value is never silently lowered. Set to 0 to restore the auto-detected default (available memory / ~3.5 MB per agent, floored at 2, physically bounded around 2000). Requires a gateway restart to take effect (requires_restart: false — the semaphore is resized in-memory on PUT).
+         *     Also updates max_tool_iterations, the global tool-iteration limit (issue #904, 1–1000; out of range → 400). Only a LOWERING — a new value below the global currently in force — can rewrite agents (D20): a raise, or the current value, rewrites no agent and needs no confirmation; agents whose stored value is above the global keep it (capped and flagged). A lowering below some agents' own values lowers those agents too, but only with consent (D11): confirmed_lowering must equal — as a set keyed by agent_id, order-independent — the agents whose own value is above the new global at write time. Any difference (extra, missing or changed agent, confirmed_lowering absent while agents would be lowered, or a NON-EMPTY list on a raise — an empty or absent one on a raise is fine) is drift (D16): nothing is written and the response is 409 MaxToolIterationsLoweringConflict carrying the fresh preview. The same 409 is returned when an agent record changes (revision conflict) between the deciding check and its lowering write — the agents already lowered are rolled back first. A failure part-way through the writes rolls back the agents already lowered and leaves the global unchanged (500 ErrorResponse, code max_tool_iterations_lowering_failed, or max_tool_iterations_rollback_incomplete if a rollback also failed, with the original failure in details.cause). A failure to read the agent store while computing or checking the affected set is 500 code max_tool_iterations_agents_read_failed, nothing written. Setting the global also ends the retired environment-variable import for good (D6). A successful change reloads the agent registry so every agent's next turn uses the new limit; the response lists the lowered agents in max_tool_iterations_lowered_agents. If the save is committed but the in-memory refresh or that reload fails, the response is 500 code performance_reload_failed with a PerformanceReloadFailedError body: the settings ARE saved on disk and nothing is rolled back, but they are not in force yet. details.stage tells how far the apply got — refresh: the in-memory configuration was NOT swapped, so GET /performance still shows the OLD values until the next configuration reload or restart; reload: the in-memory configuration was updated (GET /performance shows the NEW values) but the agent registry reload failed, so agents' next turns keep the old limits until the next reload or restart. details.changed_fields lists the settings this request changed and details.lowered_agents the agents it lowered (GET /performance does not carry them). A registry reload whose rebuild itself fails (not only one that cannot start or times out) is the reload stage too. After any performance_reload_failed answer, GET /performance (and every later PUT response) carries pending_apply until a later refresh AND registry reload both succeed; while it is set, a later PUT always reloads the agent registry, whatever fields it changes.
          */
         put: operations["updatePerformanceSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/performance/max-tool-iterations/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Preview which agents a lower global tool-iteration limit would lower
+         * @description Read-only (issue #904, tool-iteration-limit spec D11). Lists the agents whose own tool-iteration limit is strictly above `value` and would therefore be lowered to it if the global limit were set to `value`. A `value` at or above the global limit currently in force is a raise, which never rewrites an agent (D20): the list is empty. Nothing is written and no step-up token is needed (the PUT /performance that applies the change consumes it). Same access gate as GET /performance.
+         */
+        get: operations["previewMaxToolIterationsLowering"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -1021,14 +1102,38 @@ export interface paths {
         };
         /**
          * Get the global context-budget settings (ADR-066 D9)
-         * @description Returns the per-surface tool-result caps, the absolute trigger, the ingest bound, the global default context window and the per-(provider, model) window overrides. User-facing location: Settings → Models. Readable by any authenticated user (withAuth, the /settings/memory precedent — not RequireNotBypass).
+         * @description Returns the per-surface tool-result caps, tool_result_share_fraction (finite fraction of the resolved model window W, 0 < f ≤ 1, default 0.5), the ingest bound, the global default context window and the per-(provider, model) window overrides. User-facing location: Settings → Models; Tool-result share limit displays a percentage. Readable by any authenticated user (withAuth, the /settings/memory precedent — not RequireNotBypass).
          */
         get: operations["getContextSettings"];
         /**
          * Update the global context-budget settings (ADR-066 D9)
-         * @description Partial update — an omitted field is unchanged; model_overrides, when present, replaces the whole list; default_context_window null clears it. 400 naming the field and the limit on: any cap > 150,000 or < 1; absolute_trigger_chars < 1; ingest_bound_bytes ≥ 8,388,608 or < 1; model_overrides[].context_window < 1. Every 200 write triggers a registry reload so the next turn uses the new values without a restart; overrides whose provider no longer exists are pruned on write. Writable by any authenticated user (withAuth).
+         * @description Partial update — an omitted field is unchanged; model_overrides, when present, replaces the whole list; default_context_window null clears it. 400 ErrorResponse naming the field and valid interval on: any cap > 150,000 or < 1; tool_result_share_fraction must be a finite JSON number with 0 < f ≤ 1 (numeric 1 is allowed; null, strings, booleans, zero, negatives and values > 1 are invalid); ingest_bound_bytes ≥ 8,388,608 or < 1; model_overrides[].context_window < 1. Malformed/nonfinite JSON and unknown fields are rejected with 400. The wire carries a fraction, not a percentage; 12.5% is 0.125. Every 200 write triggers a registry reload so the next turn uses the new values without a restart; overrides whose provider no longer exists are pruned on write. Writable by any authenticated user (withAuth).
          */
         put: operations["updateContextSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/settings/third-party-agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the Settings -> Third-party agents section (program path and standard parameters per CLI)
+         * @description Returns the saved program path and standard parameters for each external CLI (claude-code, codex, opencode); all three rows are always present ("" when nothing is saved), each with a live detection result that is never stored. Signed-in person only (RequirePersonSession): no session 401, an agent or tool token 403; no password step.
+         */
+        get: operations["getThirdPartyAgentSettings"];
+        /**
+         * Replace the Settings -> Third-party agents section
+         * @description Replaces the whole section in one call (a CLI key absent from `clis` is saved as {path: "", preset_args: ""}). Every row is validated before anything is written, in the order claude-code, codex, opencode, path before preset_args; the first failing row and field is returned as 400 (code cli_path_invalid or cli_preset_invalid, field clis.<cli>.path or clis.<cli>.preset_args, details.cli, details.check, details.at for paths) and nothing is written, valid rows included. An unknown CLI key or field gets the request-schema 400. No revision and no 409: the last save wins. Signed-in person only (RequirePersonSession): no session 401, an agent or tool token 403; no password step.
+         */
+        put: operations["updateThirdPartyAgentSettings"];
         post?: never;
         delete?: never;
         options?: never;
@@ -1094,7 +1199,7 @@ export interface paths {
         get?: never;
         /**
          * Enable a channel
-         * @description Sets the channel's enabled flag to true in config.
+         * @description Sets the channel's enabled flag to true in config. An absent body or {} is an ordinary enable that grants no chat ownership. A pairing_retry body is an explicit chat Retry of a WhatsApp QR pairing (spec omnipus-system-agent FR-081 / K10, BDD-8.8): the caller must own the session and the request/session pair must be the channel's recorded pairing owner; the next pairing attempt is claimed for that chat before the channel is enabled. A refused Retry enables nothing and changes no ownership; a disable that already succeeded is not rolled back, so the channel stays disabled.
          */
         put: operations["enableChannel"];
         post?: never;
@@ -1134,9 +1239,33 @@ export interface paths {
         get?: never;
         /**
          * Configure a channel
-         * @description Merges request body fields into the channel's config section. Fields absent from the request body are not touched (merge, not replace). The "enabled" field is reserved and ignored if sent. Returns the updated config with credential fields redacted.
+         * @description Merges request body fields into the channel's config section. Fields absent from the request body are not touched (merge, not replace). The "enabled" field is reserved and ignored if sent. `outbound`, `workspace_id` and `identity` cannot be set here, in any letter case: 400 (the outbound setting is changed only with PUT /api/v1/channels/{id}/outbound; the binding only with the routing route). `apply_outcome`, `apply_reason` and `apply_note` are stripped from the body. When the save changes an access field or stores a credential, or the connection is not current, the one connection is restarted and the response reports the outcome in `apply_outcome` (channels spec T-6, FR-050). Returns the updated config with credential fields redacted.
          */
         put: operations["configureChannel"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/channels/{id}/outbound": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a connection's outbound (start messages) setting
+         * @description Returns whether the agent bound to this connection may start messages and to whom, the live revision token, whether the connection is running and whether its platform can start messages (channels spec FR-021). Read from one live configuration snapshot.
+         */
+        get: operations["getChannelOutbound"];
+        /**
+         * Set a connection's outbound (start messages) setting
+         * @description Replaces the connection's outbound policy and target list (channels spec FR-020, FR-022). Targets are canonicalized and de-duplicated; added Discord targets are looked up through the running connection outside the settings lock, each call bounded by a 5-second deadline that covers the rate-limit wait. The revision is re-checked under the settings lock before saving. A permission-extending write needs the saved and running configurations of the connection to correspond; switching to reply_only or removing targets always works, in any connection state. This is the only way to change the setting; every other save path keeps it as stored. Admin only.
+         */
+        put: operations["setChannelOutbound"];
         post?: never;
         delete?: never;
         options?: never;
@@ -1173,12 +1302,12 @@ export interface paths {
         };
         /**
          * Get channel routing configuration
-         * @description Returns the routing configuration for the specified channel, including which agent handles its inbound messages.
+         * @description Returns the routing configuration for the specified channel: its workspace binding and main agent, or — for an instance that is not yet bound — `bound: false` with empty ids (FR-128). Never an invented or legacy destination.
          */
         get: operations["getChannelRouting"];
         /**
          * Set channel routing configuration
-         * @description Sets the routing configuration for the specified channel. The default_agent_id field controls which agent handles inbound messages arriving on this channel. Omit it or leave it empty to fall back to the global default agent.
+         * @description Binds the channel instance to a workspace and names its main agent. Both workspace_id and default_agent_id are required and nonblank (omnipus-system-agent FR-127, K14); there is no unbound mode and no global default agent. A missing or blank value is refused with 400 "bind this channel to an agent in a workspace" and changes nothing. Saving a valid binding clears the channel's routing degradation (FR-129).
          */
         put: operations["setChannelRouting"];
         post?: never;
@@ -1208,7 +1337,7 @@ export interface paths {
         post?: never;
         /**
          * Remove one (agent, workspace) email mailbox account (M11)
-         * @description Removes the mailbox the agent holds in the given workspace from config and deletes its stored password from the credential store. The agent's email tools for this workspace are de-registered on the next reload; mailboxes the agent holds in OTHER workspaces are untouched.
+         * @description Removes the mailbox the agent holds in the given workspace from config and deletes its stored password from the credential store. The agent's email tools for this workspace are de-registered on the next reload; mailboxes the agent holds in OTHER workspaces are untouched. The response is the truthful removal discrimination (MailboxRemovalResult: removed versus removed_cleanup_pending with an opaque cleanup intent and the separately authorized Retry-cleanup operation, ADR-20261001 "Removal with incomplete cleanup" row): the pair is always disabled and removed from config first — a removed_cleanup_pending outcome never serves residual files — and a failed cache/watcher-state cleanup step is NEVER reported as a completed purge.
          */
         delete: operations["deleteAgentMailbox"];
         options?: never;
@@ -1230,6 +1359,26 @@ export interface paths {
         get: operations["listMailboxes"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/mailboxes/cleanup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retry the pending cleanup of a removed mailbox (removal cascade)
+         * @description Separately authorized Retry-cleanup operation for a mailbox removal that ended removed_cleanup_pending (ADR-20261001 "Removal with incomplete cleanup" row; mail-live-access-landing-order register rows 5/22 — W0 is the single publisher). Keyed ONLY by the opaque cleanup_intent — it keeps working after the mailbox's config row is gone, because the intent is the sole address of the pending cleanup. Never reports success for a logged unlink failure: the truthful outcome discrimination (removed versus removed_cleanup_pending) returns again. An unknown, expired or already-completed intent is 404. The pair stays disabled and acquires nothing until this returns removed.
+         */
+        post: operations["retryMailboxCleanup"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1515,8 +1664,8 @@ export interface paths {
         put?: never;
         post?: never;
         /**
-         * Delete all sessions for all agents
-         * @description Removes all session directories across all agent stores. Returns the count of removed sessions and any per-agent warnings.
+         * Delete all chats except main chats
+         * @description Deletes every ordinary chat. Main chats are never deleted (a main chat is deleted only together with its agent), and neither are the helper sessions that belong to a main chat. Each chat is stopped before it is deleted; a chat that will not stop, or whose data cannot be read or removed, is kept. Returns the count of deleted chats and fixed-text warnings that count the chats that were kept and the main chats that were left alone.
          */
         delete: operations["clearAllSessions"];
         options?: never;
@@ -1669,12 +1818,12 @@ export interface paths {
         put?: never;
         /**
          * Start a vendor sign-in for a provider (ADR-068 FR-008, amended 2026-08-23 §8b)
-         * @description For `codex-cli` / `github-copilot`: Omnipus never performs or stores the vendor login itself — returns the one instruction the operator needs, the vendor CLI's own login command, so the SPA can show it beside a *Check sign-in* button (`method: cli_login`). For `openai-chatgpt` (and `xai` once its catalog row carries `sign_in`): Omnipus requests a device code from the vendor itself and returns the verification link, user code, and an opaque `device_auth_id` to poll (`method: device_code`, FR-044) — the vendor's device code and any PKCE verifier never leave the gateway. Returns 400 `{"error":"provider does not support sign-in"}` when the provider's catalog row does not list `sign_in` in `auth_methods`, and for `xai` specifically when no client id is configured. Rate-limited like the auth endpoints. Requires authentication — except inside ADR-068 FR-050's pre-auth window: while onboarding is incomplete AND this instance has no authentication authority yet (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller is admitted past the authentication check too, because onboarding step 3 needs a working sign-in flow before any admin account exists to authenticate as. That window fails CLOSED — an unreadable or unparseable onboarding state counts as complete, not as a fresh install. Outside the window an unauthenticated caller gets 401 unconditionally. The route's own authorization layer (requireAdminAuthz) enforces ONLY the dev-mode-bypass guard, not authentication, so any caller who reaches it — authenticated, or anonymous inside the pre-auth window — gets 503 under dev-mode bypass and otherwise proceeds: inside the window an anonymous caller can mint a real device code or trigger a vendor CLI login prompt exactly as an authenticated caller could.
+         * @description Omnipus requests a device code from the vendor itself and returns the verification link, user code, and an opaque `device_auth_id` to poll (`method: device_code`, FR-044) — the vendor's device code and any PKCE verifier never leave the gateway. (The former vendor-CLI sign-in variant was deleted with the CLI-backed providers — WU-24, founder 2026-10-14.) Returns 400 `{"error":"provider does not support sign-in"}` when the provider's catalog row does not list `sign_in` in `auth_methods`, and for `xai` specifically when no client id is configured. Rate-limited like the auth endpoints. Requires authentication — except inside ADR-068 FR-050's pre-auth window: while onboarding is incomplete AND this instance has no authentication authority yet (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller is admitted past the authentication check too, because onboarding step 3 needs a working sign-in flow before any admin account exists to authenticate as. That window fails CLOSED — an unreadable or unparseable onboarding state counts as complete, not as a fresh install. Outside the window an unauthenticated caller gets 401 unconditionally. The route's own authorization layer (requireAdminAuthz) enforces ONLY the dev-mode-bypass guard, not authentication, so any caller who reaches it — authenticated, or anonymous inside the pre-auth window — gets 503 under dev-mode bypass and otherwise proceeds: inside the window an anonymous caller can mint a real device code exactly as an authenticated caller could.
          */
         post: operations["startProviderSignIn"];
         /**
          * Sign out a provider's device-code session (ADR-068 FR-048, added 2026-08-23 §8b)
-         * @description Deletes the `<id>_OAUTH` encrypted credential entry (a missing entry is success), emits audit event `provider.signed_out`, and the row returns to `not_signed_in`. Only meaningful for `device_code` providers — `cli_login` providers hold no Omnipus-side credential to delete and this is a no-op success for them too. Requires authentication — except inside ADR-068 FR-050's pre-auth window: while onboarding is incomplete AND this instance has no authentication authority yet (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller is admitted past the authentication check too, for the same reason its POST sibling is (onboarding step 3 needs a working sign-in flow before any admin account exists to authenticate as). That window fails CLOSED — an unreadable or unparseable onboarding state counts as complete, not as a fresh install. Outside the window an unauthenticated caller gets 401 unconditionally. The route's own authorization layer (requireAdminAuthz) enforces ONLY the dev-mode-bypass guard, not authentication, so any caller who reaches it — authenticated, or anonymous inside the pre-auth window — gets 503 under dev-mode bypass and otherwise proceeds: inside the window an anonymous caller can revoke another account's vendor sign-in before any admin account exists.
+         * @description Deletes the `<id>_OAUTH` encrypted credential entry (a missing entry is success), emits audit event `provider.signed_out`, and the row returns to `not_signed_in`. Only meaningful for `device_code` providers; any other id is a no-op success. Requires authentication — except inside ADR-068 FR-050's pre-auth window: while onboarding is incomplete AND this instance has no authentication authority yet (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller is admitted past the authentication check too, for the same reason its POST sibling is (onboarding step 3 needs a working sign-in flow before any admin account exists to authenticate as). That window fails CLOSED — an unreadable or unparseable onboarding state counts as complete, not as a fresh install. Outside the window an unauthenticated caller gets 401 unconditionally. The route's own authorization layer (requireAdminAuthz) enforces ONLY the dev-mode-bypass guard, not authentication, so any caller who reaches it — authenticated, or anonymous inside the pre-auth window — gets 503 under dev-mode bypass and otherwise proceeds: inside the window an anonymous caller can revoke another account's vendor sign-in before any admin account exists.
          */
         delete: operations["signOutProvider"];
         options?: never;
@@ -1691,7 +1840,7 @@ export interface paths {
         };
         /**
          * Read a provider's vendor sign-in state (ADR-068 FR-009, amended 2026-08-23 §8b)
-         * @description For `cli_login` providers (codex-cli, github-copilot): reads the vendor CLI's saved login (codex `auth.json` — only `tokens.access_token` for the unverified `exp` claim and `tokens.account_id` for the label; the Copilot CLI's own auth-status) — the file is never modified and no refresh request is ever made (FR-007). For `device_code` providers (openai-chatgpt, and xai once its catalog row carries `sign_in`): reads the stored `<id>_OAUTH` entry in Omnipus's own encrypted credential store; `expired` means the access token is past `exp` AND a refresh attempt failed or no refresh token is available (FR-046). Maps to `not_signed_in | pending | signed_in | expired`; `pending` only while an open device-code session awaits approval. A missing CLI binary is reported on the Provider row as `disconnected`, not here. Returns 400 `{"error":"provider does not support sign-in"}` for providers without `sign_in`. Requires authentication — except inside ADR-068 FR-050's pre-auth window: while onboarding is incomplete AND this instance has no authentication authority yet (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller is admitted past the authentication check too, for the same reason its sibling sign-in routes are (onboarding step 3 needs a working sign-in flow before any admin account exists to authenticate as). That window fails CLOSED — an unreadable or unparseable onboarding state counts as complete, not as a fresh install. Outside the window an unauthenticated caller gets 401 unconditionally. The route's own authorization layer (requireAdminAuthz) enforces ONLY the dev-mode-bypass guard, not authentication, so any caller who reaches it — authenticated, or anonymous inside the pre-auth window — gets 503 under dev-mode bypass and otherwise proceeds.
+         * @description Reads the stored `<id>_OAUTH` entry in Omnipus's own encrypted credential store (device_code providers: openai-chatgpt, and xai once its catalog row carries `sign_in`); `expired` means the access token is past `exp` AND a refresh attempt failed or no refresh token is available (FR-046). Maps to `not_signed_in | pending | signed_in | expired`; `pending` only while an open device-code session awaits approval. (The former vendor-CLI-file status reads were deleted with the CLI-backed model providers — WU-24, founder 2026-10-14.) Returns 400 `{"error":"provider does not support sign-in"}` for providers without a sign-in mechanism. Requires authentication — except inside ADR-068 FR-050's pre-auth window: while onboarding is incomplete AND this instance has no authentication authority yet (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller is admitted past the authentication check too, for the same reason its sibling sign-in routes are (onboarding step 3 needs a working sign-in flow before any admin account exists to authenticate as). That window fails CLOSED — an unreadable or unparseable onboarding state counts as complete, not as a fresh install. Outside the window an unauthenticated caller gets 401 unconditionally. The route's own authorization layer (requireAdminAuthz) enforces ONLY the dev-mode-bypass guard, not authentication, so any caller who reaches it — authenticated, or anonymous inside the pre-auth window — gets 503 under dev-mode bypass and otherwise proceeds.
          */
         get: operations["getProviderSignInStatus"];
         put?: never;
@@ -1716,26 +1865,6 @@ export interface paths {
          * @description Performs at most ONE vendor poll per call for the device-code session named by `device_auth_id` (returned by a prior POST /providers/{id}/sign-in). On `signed_in` the gateway has already stored the `<id>_OAUTH` credential entry before responding. A device-code session expires server-side at the vendor's `expires_at` (ceiling 15 minutes) and is single-use — an unknown or already-resolved `device_auth_id` returns 404. Never returns the vendor's device code. Rate-limited like the auth endpoints. Requires authentication — except inside ADR-068 FR-050's pre-auth window: while onboarding is incomplete AND this instance has no authentication authority yet (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller is admitted past the authentication check too, for the same reason its sibling sign-in routes are (onboarding step 3 needs a working sign-in flow before any admin account exists to authenticate as). That window fails CLOSED — an unreadable or unparseable onboarding state counts as complete, not as a fresh install. Outside the window an unauthenticated caller gets 401 unconditionally. The route's own authorization layer (requireAdminAuthz) enforces ONLY the dev-mode-bypass guard, not authentication, so any caller who reaches it — authenticated, or anonymous inside the pre-auth window — gets 503 under dev-mode bypass and otherwise proceeds: inside the window an anonymous caller can complete another account's device-code sign-in before any admin account exists.
          */
         post: operations["pollProviderSignIn"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/providers/openai-chatgpt/sign-in/import": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Import an existing Codex CLI login for openai-chatgpt (ADR-068 FR-047, added 2026-08-23 §8b)
-         * @description Copies `tokens.access_token` + `tokens.account_id` from `~/.codex/auth.json` into the `openai_OAUTH` encrypted credential entry. No refresh token is imported — a session started this way ends at the copied token's `exp` with no further refresh. The source file's bytes and mtime are left unchanged (read-only, FR-007). Returns 404 `{"error":"no codex login found"}` when the file is absent or unreadable. Requires authentication — except inside ADR-068 FR-050's pre-auth window: while onboarding is incomplete AND this instance has no authentication authority yet (no configured users, no OMNIPUS_BEARER_TOKEN), an anonymous caller is admitted past the authentication check too, for the same reason its sibling sign-in routes are (onboarding step 3 needs a working sign-in flow before any admin account exists to authenticate as). That window fails CLOSED — an unreadable or unparseable onboarding state counts as complete, not as a fresh install. Outside the window an unauthenticated caller gets 401 unconditionally. The route's own authorization layer (requireAdminAuthz) enforces ONLY the dev-mode-bypass guard, not authentication, so any caller who reaches it — authenticated, or anonymous inside the pre-auth window — gets 503 under dev-mode bypass and otherwise proceeds: inside the window an anonymous caller can write a live vendor credential into the encrypted store before any admin account exists.
-         */
-        post: operations["importCodexSignIn"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1862,6 +1991,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/skills/{name}/copy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Copy an installed or built-in skill to a new user-owned skill
+         * @description Creates a new user-owned skill from the named skill; the copy's frontmatter name is rewritten to new_id. The copy starts ungranted.
+         */
+        post: operations["copySkill"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/skills/{name}": {
         parameters: {
             query?: never;
@@ -1874,29 +2023,9 @@ export interface paths {
         post?: never;
         /**
          * Delete an installed skill
-         * @description Removes an installed skill from the local skills directory. The skill must not be the default skill, in use by any agent, or required by a seeded dependency. On success the gateway removes the skill directory and returns 204 No Content.
+         * @description Deletes an installed user-owned skill through the change pipeline (a delete_skill version is recorded; history is kept until retention). revision is the caller's expected revision; a mismatch is 409 SKILL_CHANGED. Built-in skills are refused with 403.
          */
         delete: operations["deleteSkill"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/chat": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Send a chat message via SSE
-         * @description Sends a user message to the agent and streams the response via Server-Sent Events. The connection stays open until the agent finishes responding or the client disconnects.
-         */
-        post: operations["postChat"];
-        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -1933,11 +2062,10 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Upload files for a session
-         * @description Streams multipart file uploads to disk under ~/.omnipus/uploads/{session_id}/.
-         *     Max file size per part: 100 MB. Data is streamed directly to disk; the full file is never buffered in memory.
-         *     session_id may be supplied as a query parameter or as a form field before the file parts.
-         *     Returns HTTP 201 on success.
+         * Upload files for a session or into a workspace library
+         * @description Streams multipart file uploads. Max file size per part: 100 MB. Data is streamed directly to disk; the full file is never buffered in memory. Returns HTTP 201 on success.
+         *
+         *     Two destinations. With workspace_id (query parameter, or a form field before the file parts) each file is stored in that workspace's media library exactly like a normal chat upload (ADR-051 Rev 4, #1449 D25, FR-016): the chat copy in workspaces/<id>/media/ (returned as a media://workspace/<id>/<uuid> ref) and the Library file under the workspace's .library folder; no session is used or created. When both workspace_id and session_id are given, workspace_id routes to the library and session_id is ignored. When the workspace library is unavailable the request fails with 503 and never falls back to the session path. Without workspace_id, session_id (query parameter or form field) is required and files go to ~/.omnipus/uploads/{session_id}/ (legacy path).
          */
         post: operations["uploadFiles"];
         delete?: never;
@@ -2071,7 +2199,7 @@ export interface paths {
         };
         /**
          * Expand recurring task occurrences in a date range
-         * @description Server-side occurrence expansion for the workspace calendar (Calendar Recurrence Redesign). Expands every recurring-capable trigger the scheduler would actually arm — non-terminal AND not `surface: heartbeat`, the same predicate `OnTaskUpserted` applies before registering a job — covering `rrule` (rrule-go, normalized per the Timezone Semantics DST policy), legacy `cron_expr` (gronx, expanded in the server's local zone, display-only per D8), and `every_ms` (a forward-only projection off the live job's next-run instant, FR-008a). `tz` is the viewer's IANA zone and is the day-boundary authority for bucketing — the >3-occurrences-per-day threshold and `day_start_ms` are evaluated on days in this zone for every trigger flavor, regardless of each rule's own `tz`. Range is half-open `[from_ms, to_ms)`. Responses are bucketed: spans ≤ 8×24h return raw instants for every day (Week/Day views); spans > 8×24h return one `DayBucket` per query-tz day with more than 3 occurrences, raw instants for days with 3 or fewer (Month/overview views, D6). Capped at 500 instants per task per request plus a 10,000-computed- occurrence total iteration budget per task per request (arithmetic derivation, not iteration, for provably regular triggers); `truncated` signals either cap was hit. Tasks with zero occurrences in range are omitted; the result is `[]`, never null. Read-only; no state change. Rate-limited by a dedicated `taskReadLimiter` (240 requests/min), distinct from `configLimiter` and from the unthrottled task CRUD routes.
+         * @description Server-side occurrence expansion for the workspace calendar (Calendar Recurrence Redesign). Expands every recurring-capable trigger the scheduler would actually arm — non-terminal AND not `surface: heartbeat`, the same predicate `OnTaskUpserted` applies before registering a job — covering `rrule` (rrule-go, normalized per the Timezone Semantics DST policy). `tz` is the viewer's IANA zone and is the day-boundary authority for bucketing — the >3-occurrences-per-day threshold and `day_start_ms` are evaluated on days in this zone for every trigger flavor, regardless of each rule's own `tz`. Range is half-open `[from_ms, to_ms)`. Responses are bucketed: spans ≤ 8×24h return raw instants for every day (Week/Day views); spans > 8×24h return one `DayBucket` per query-tz day with more than 3 occurrences, raw instants for days with 3 or fewer (Month/overview views, D6). Capped at 500 instants per task per request plus a 10,000-computed- occurrence total iteration budget per task per request (arithmetic derivation, not iteration, for provably regular triggers); `truncated` signals either cap was hit. Tasks with zero occurrences in range are omitted; the result is `[]`, never null. Read-only; no state change. Rate-limited by a dedicated `taskReadLimiter` (240 requests/min), distinct from `configLimiter` and from the unthrottled task CRUD routes.
          */
         get: operations["listTaskOccurrences"];
         put?: never;
@@ -2616,7 +2744,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get a workspace by ID */
+        /**
+         * Get a workspace by ID
+         * @description Reads the workspace and makes one idempotent main-chat preparation attempt for each currently eligible member. A preparation failure does not undo saved membership or fail the workspace read: that member has main_session_error instead of main_session_id. Repeating this read retries preparation after storage is repaired; unreadable or mismatched saved identities are never replaced.
+         */
         get: operations["getWorkspace"];
         /** Update a workspace (partial update — absent fields unchanged) */
         put: operations["updateWorkspace"];
@@ -2720,7 +2851,7 @@ export interface paths {
         put?: never;
         /**
          * Move a file or directory, optionally across two workspaces
-         * @description Moves the entry at from_path (inside from_workspace_id's work tree) to to_path (inside to_workspace_id's work tree). Not scoped under {workspace_id} like the other Library operations because source and destination can be different workspaces — see LibraryTransferRequest. A same-workspace move (from_workspace_id == to_workspace_id) is exactly what POST /library/{workspace_id}/rename does as same-workspace sugar over this operation. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace's work tree (enforced server-side). Returns 403 if either path resolves outside its workspace's work tree; 404 if from_workspace_id/to_workspace_id does not exist, nothing exists at from_path, OR to_path's parent directory does not exist yet — this operation deliberately does NOT auto-create missing destination directories (matching `mv` semantics), but the 404 message names the specific missing directory rather than a bare "not found"; create it first with POST /library/{workspace_id}/mkdir. 409 if an entry already exists at to_path.
+         * @description Moves the entry at from_path (inside from_workspace_id's work tree) to to_path (inside to_workspace_id's work tree). Not scoped under {workspace_id} like the other Library operations because source and destination can be different workspaces — see LibraryTransferRequest. A same-workspace move (from_workspace_id == to_workspace_id) is exactly what POST /library/{workspace_id}/rename does as same-workspace sugar over this operation. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace's work tree (enforced server-side). Returns 403 if either path resolves outside its workspace's work tree; 404 if from_workspace_id/to_workspace_id does not exist, nothing exists at from_path, OR to_path's parent directory does not exist yet — this operation deliberately does NOT auto-create missing destination directories (matching `mv` semantics), but the 404 message names the specific missing directory rather than a bare "not found"; create it first with POST /library/{workspace_id}/mkdir. 409 if an entry already exists at to_path. Chat copies (#1449 D26): a move inside one workspace keeps a file's chat-copy association (the media entry's library_path follows the file). A move to another workspace drops it: the moved file becomes an ordinary file there and its chat copy stays in the original workspace.
          */
         post: operations["moveLibraryEntry"];
         delete?: never;
@@ -2740,7 +2871,7 @@ export interface paths {
         put?: never;
         /**
          * Copy a file or directory, optionally across two workspaces
-         * @description Copies the entry at from_path (inside from_workspace_id's work tree) to to_path (inside to_workspace_id's work tree), leaving the source in place. Directory copies are recursive. Not scoped under {workspace_id} for the same reason as /library/move — see LibraryTransferRequest. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace's work tree (enforced server-side). Returns 403 if either path resolves outside its workspace's work tree; 404 if from_workspace_id/to_workspace_id does not exist, nothing exists at from_path, OR to_path's parent directory does not exist yet — this operation deliberately does NOT auto-create missing destination directories (matching `cp` semantics), but the 404 message names the specific missing directory rather than a bare "not found"; create it first with POST /library/{workspace_id}/mkdir. 409 if an entry already exists at to_path.
+         * @description Copies the entry at from_path (inside from_workspace_id's work tree) to to_path (inside to_workspace_id's work tree), leaving the source in place. Directory copies are recursive. Not scoped under {workspace_id} for the same reason as /library/move — see LibraryTransferRequest. Cross-workspace transfer is permitted for the authenticated UI/CLI user only — never for an agent tool; agents stay confined to their own workspace's work tree (enforced server-side). Returns 403 if either path resolves outside its workspace's work tree; 404 if from_workspace_id/to_workspace_id does not exist, nothing exists at from_path, OR to_path's parent directory does not exist yet — this operation deliberately does NOT auto-create missing destination directories (matching `cp` semantics), but the 404 message names the specific missing directory rather than a bare "not found"; create it first with POST /library/{workspace_id}/mkdir. 409 if an entry already exists at to_path. A copy is a new file with no chat-copy association (#1449 D26): deleting the copy removes only the copy.
          */
         post: operations["copyLibraryEntry"];
         delete?: never;
@@ -2766,6 +2897,8 @@ export interface paths {
         /**
          * Delete a file or directory from a workspace's work tree
          * @description Deletes the file or directory at the given workspace-relative path. Deleting a directory removes it and everything under it. Returns 403 if path resolves outside the workspace's work tree; 404 if nothing exists at path.
+         *
+         *     Chat copies (#1449 D26, FR-086): deleting a file that has an associated chat copy (LibraryEntry.chat_copy; the media entry whose library_path names this file, in the same workspace) also deletes that chat copy, bytes and media entry. Deleting a directory does so for every associated file inside it. Retention owners (session reference counts, group retention) never block an explicit deletion, and nothing recreates a deleted copy. Order: chat copy first, Library file last, so a failure leaves the entry listed and a repeat completes the work; a chat copy that is already gone counts as removed. 204 when both are removed; 500 ErrorResponse "could not delete <name> completely" when either removal failed (the Library file is then still present). Every chat that showed the file then shows it as unavailable. Deleting a group never deletes files (D19).
          */
         delete: operations["deleteLibraryEntry"];
         options?: never;
@@ -2888,7 +3021,7 @@ export interface paths {
         put?: never;
         /**
          * Rename or move a file or directory within one workspace
-         * @description Renames or moves the entry at "from" to "to" within this single workspace's work tree (library-spec.md D-2). "to" may name a different parent directory than "from", so this operation doubles as an in-workspace move. This is same-workspace sugar over POST /library/move (equivalent to calling it with from_workspace_id == to_workspace_id == {workspace_id}) — kept as a dedicated operation, alongside /library/move, so a caller doing only in-workspace renames never needs to know its own workspace id twice. Returns 400 if "to" begins with a ".." segment anywhere in the path (rejected outright as a sanity check — such a name isn't a traversal, but this package's hidden-entry heuristic also matches it, so it would otherwise succeed and immediately vanish from the default listing); 403 if either path resolves outside the workspace's work tree; 404 if nothing exists at "from" OR "to"'s parent directory does not exist yet (this operation deliberately does NOT auto-create missing destination directories — the message names the specific missing directory; create it first with POST /library/{workspace_id}/mkdir); 409 if an entry already exists at "to".
+         * @description Renames or moves the entry at "from" to "to" within this single workspace's work tree (library-spec.md D-2). "to" may name a different parent directory than "from", so this operation doubles as an in-workspace move. This is same-workspace sugar over POST /library/move (equivalent to calling it with from_workspace_id == to_workspace_id == {workspace_id}) — kept as a dedicated operation, alongside /library/move, so a caller doing only in-workspace renames never needs to know its own workspace id twice. Returns 400 if "to" begins with a ".." segment anywhere in the path (rejected outright as a sanity check — such a name isn't a traversal, but this package's hidden-entry heuristic also matches it, so it would otherwise succeed and immediately vanish from the default listing); 403 if either path resolves outside the workspace's work tree; 404 if nothing exists at "from" OR "to"'s parent directory does not exist yet (this operation deliberately does NOT auto-create missing destination directories — the message names the specific missing directory; create it first with POST /library/{workspace_id}/mkdir); 409 if an entry already exists at "to". A rename keeps a file's chat-copy association (#1449 D26): the media entry's library_path follows the file.
          */
         post: operations["renameLibraryEntry"];
         delete?: never;
@@ -3149,6 +3282,8 @@ export interface paths {
          *     Each entry carries the slug it is actually addressed by (pass it VERBATIM to GET .../knowledge/view), its display label, its kind, whether it can be served, and — for an imported view — the `.base` it came from. Base previews and dashboard embeds keep listing by source; this is the collection's own list.
          *
          *     A collection_id outside this workspace's scope returns the same empty-but-complete shape as an unknown collection (FR-052/FR-053) — never a 403 or 404, which would confirm the collection exists. View files the loader rejected are counted in unloadable_count and named in unloadable, never silently dropped.
+         *
+         *     The loader is the one the Library listing uses (include_views on GET .../entries): it reads only regular files inside the knowledge base (never a link), at most 256 KiB per file, 128 files per folder and 4 MiB per load. A view file it does not read is not listed, cannot be opened through GET .../knowledge/view, and is named in unloadable.
          */
         get: operations["listKnowledgeViews"];
         put?: never;
@@ -3277,6 +3412,314 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/workspaces/{id}/mail/{agentId}/folders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the three mail folders of one mailbox with live counts
+         * @description Returns Inbox, Sent and Drafts (D5) for the (agent, workspace) mailbox with live IMAP counts (email-mail-view-spec §2.3). One IMAP session per request (round-1 MAJ-012); automatic panel refreshes never dial while the watcher is backing off — they return the saved error class plus next_attempt_at immediately (D29/R2-9). Identical concurrent refreshes coalesce so N tabs cost one IMAP login per tick. 502 carries a sanitized error class from the closed enum timeout|dns|connect_refused|auth_failed|tls|folder_missing|server_error in the body's code field (MC-8); raw upstream text is logged server-side only.
+         */
+        get: operations["listMailFolders"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{id}/mail/{agentId}/folders/{folder}/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List one page of message envelopes for one folder
+         * @description Envelope page for the folder (email-mail-view-spec §2.3). Messages are addressed folder-scoped (round-1 MAJ-005, D21); listings exclude \Deleted messages (round-2 MIN-005). Fetches never change flags (BODY.PEEK / EXAMINE — round-2 MAJ-003): nothing in the list path marks anything read. The round-1 unseen_only query parameter was dropped (round-2 OBS-001) — the watcher's unseen_total is the only unread surface.
+         */
+        get: operations["listMailMessages"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{id}/mail/{agentId}/folders/{folder}/messages/{ref}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fetch one full message by folder-scoped ref
+         * @description Full message for the Mail panel read path (email-mail-view-spec §2.3). Never writes flags — the fetch is BODY.PEEK (round-2 MAJ-003). The ref is folder-scoped (round-1 MAJ-005, D21): uid form is always resolvable from a list row; mid form searches only the addressed folder, among non-\Deleted messages only (round-2 MIN-005 — a no-UIDPLUS server keeps the old copy of an edited draft in the folder with \Deleted and the same Message-ID), resolving multiple hits to the highest UID — never by INTERNALDATE (round-2 MIN-005). Draft actions resolve only inside drafts (MC-13).
+         */
+        get: operations["getMailMessage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{id}/mail/{agentId}/folders/{folder}/messages/{ref}/seen": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mark one message seen (the panel calls this once on open)
+         * @description Marks exactly the addressed message \Seen (FR-020, email-mail-view-spec §2.3). A GET of folders/messages never writes flags, so the flag write is its own endpoint (round-2 MAJ-003). Idempotent: an already-seen message is a no-op 204. This endpoint and agent read_message (D38) are the ONLY \Seen writers in the product; the watcher never writes flags (FR-023).
+         */
+        post: operations["markMailMessageSeen"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{id}/mail/{agentId}/folders/{folder}/messages/{ref}/attachments/{partIndex}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download one attachment part of one message (browser-Download byte path)
+         * @description Streams one MIME attachment part (D28, email-mail-view-spec §2.3). Served with Content-Disposition: attachment always — an .html attachment is never inline (MC-42) — plus X-Content-Type-Options: nosniff, an extension-derived content type (extension decides, never the bytes nor the MIME part's self-declared type), and the RFC 6266 dual-encoded filename from the sanitized MailAttachment.filename. No CSP on attachment responses (Library MV-13 second half). The download never changes flags.
+         *     This operation is the BROWSER-DOWNLOAD byte path only (mail-live-access-landing-order register rows 5/8; ADR correction I-05): attachment disposition, its existing filename/destination behaviour, and a streaming role that serves larger-than-preview files to the browser without ever becoming a preview source. The temporary viewer's bytes come from the SEPARATE preview-purpose resource carried by MailAttachmentPreviewResponse.content_source.byte_url — token-bound to the minted grant, inline-disposition, no-store, capped at 25 MiB actual decoded bytes. One unlimited path shared by both purposes is forbidden: this endpoint must never serve as the preview source, and the preview endpoint must never serve as a browser download.
+         */
+        get: operations["getMailAttachment"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{id}/mail/{agentId}/folders/{folder}/messages/{ref}/attachments/{partIndex}/save-to-library": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Save one attachment part into the workspace Library (F2)
+         * @description Explicit user-directed export of one attachment part into the workspace Library hierarchy mail → <mailbox> → <year-month> (ADR-20261001 "Save-to-workspace request/response (F2)" row; register rows 8/22 — W0 is the single publisher; correction M-02 reconciliation). The mailbox component, sanitized unique leaf name and save-time UTC month are SERVER-selected — no arbitrary save path and no overwrite switch; an existing name gets a numbered suffix, never an overwrite. This is NOT an attachment cache exception: the save is a normal Library write audited as mail.attachment_saved. The same save path serves the agent's download_email_attachment result (F3) under its normal tool permission. The save mutation is never coalesced or replayed; a lost response resolves ONLY via the explicit same-token retry, which returns the prior receipt for an already-committed save — exactly one file (correction M-02). Refusals are typed errors with a safe reason and no invented path: missing mailbox/workspace authority, permission refusal (effective deny or declined ask), stale/deleted message or part (typed 409), over-cap bytes (413), filesystem policy, unsafe path, missing/broken root, parent-file conflict, exhausted names, disk full or failed transfer. Browser Download is a separate action and never a synonym for Save.
+         */
+        post: operations["saveMailAttachmentToLibrary"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{id}/mail/{agentId}/folders/{folder}/messages/{ref}/reply-context": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Assemble the reply/quote context for one message (F5)
+         * @description Session-authenticated message subresource assembling reply/recipients and the quoted original (ADR-20261001 "Reply / Reply all context (F5)" row; register row 8 — W0 is the single publisher). Gateway and agent adapter call the ONE shared recipient rule (BuildReplyRecipients); the SPA consumes the result and implements no second recipient algorithm. reply = sender/Reply-To only; reply_all = To plus Cc (original To + Cc minus own address and primary, deduplicated, never the original Bcc). Produces current-compose state ONLY — never a server draft, never a body cache, never a send; the existing generated send payload remains the final human-reviewed recipient/body source. A stale response for a different message/mailbox is discarded by the consumer.
+         */
+        post: operations["getMailReplyContext"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{id}/mail/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Watcher-driven badge summary for the workspace's mailboxes
+         * @description Per-mailbox watcher badge state (MailSummaryList) served from the watcher's saved state files — this endpoint never dials IMAP (D29/R2-5, FR-033). Refreshed by the SPA every 60 s from this saved state (round-2 R2-5). A mailbox in error/backoff reports its class and next_attempt_at so the badge can say "retrying at hh:mm" (D29/R2-8); watcher_state ok never lies (round-2 MAJ-019).
+         */
+        get: operations["getWorkspaceMailSummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{id}/mail/{agentId}/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send mail manually from the Mail panel compose (D9)
+         * @description Human manual send (email-mail-view-spec §2.3): renders Markdown to sanitized multipart/alternative, appends the mailbox signature, sends via SMTP and APPENDs the Sent copy (D7/D18). Audit event + dedicated mailMutationLimiter rate limit (MC-20). Recipient cap 50 across To/Cc/Bcc after de-dup (MC-27); body bound 1 MiB (MC-22); attachments ≤ 10 files / ≤ 25 MiB total, checked pre-dial (MC-32). 429 with Retry-After when rate-limited.
+         */
+        post: operations["sendMailMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{id}/mail/{agentId}/folders/drafts/messages/{ref}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Edit a draft from the approval panel (D12/D23)
+         * @description Panel edit (email-mail-view-spec §2.3): APPENDs the updated draft with the same Message-ID (round-1 MIN-004) and \Deleted-flags the old copy (FR-032). The body carries the viewed draft's uidvalidity/uid; when the path ref is a uid: ref, body and path must agree — mismatch is 400, never silently accepted (round-2 MAJ-008.1/.6). Stale precondition (draft moved/renumbered) is 409 with body code stale_draft (MC-16). Attachment carry-over is by part reference (FR-035); keep_attachment_parts is required full-replace (D28). Audit event + rate limit (MC-20).
+         */
+        put: operations["updateMailDraft"];
+        post?: never;
+        /**
+         * Discard a draft from the approval panel (D12)
+         * @description Panel discard: \Deleted-flags the draft; with UIDPLUS a UID EXPUNGE removes exactly the target UID, without UIDPLUS only \Deleted is stored (deferred expunge — FR-032, MC-17). A non-UID EXPUNGE is never issued by Omnipus. Audit event + rate limit (MC-20). Idempotency is not promised: an already-discarded draft is 404.
+         */
+        delete: operations["discardMailDraft"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{id}/mail/{agentId}/folders/drafts/messages/{ref}/send": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Panel send — the approval (D12)
+         * @description Panel send IS the approval (email-mail-view-spec §2.3): transmits the request's content (never re-reads the draft as truth — round-1 MAJ-002), APPENDs to Sent (D18) and \Deleted-flags the draft (FR-032). Idempotent per draft Message-ID (round-2 MAJ-009, FR-021, MC-28): a repeat submit after a completed send returns the recorded first outcome — never a second transmission. Stale precondition is 409 stale_draft; an already-sent repeat whose recorded outcome is unavailable is also 409. Audit event + rate limit (MC-20).
+         */
+        post: operations["sendMailDraft"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/mail/html-preview-token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mint a short-lived token for one message's HTML body (D13/D17)
+         * @description Mints the mail HTML-preview credential (email-mail-view-spec §2.3, security sign-off C1) — session-authenticated and STAYS in the API namespace; the serve routes moved to the token-only non-API /mail-preview/ prefix (§2.3a) and are deliberately NOT in this document (Library serving-prefix precedent): /mail-preview/html/{token} serves the sanitized sandboxed HTML body with the MC-10 normative header set; /mail-preview/part/{token}/{index} serves one inline cid: image part within the same token scope; /mail-preview/img/{token}/{index} is the "Load images" proxy (D17/MC-10(6)) — https-only, private/ loopback refused at dial time, zero redirects, ≤ 5 MiB, image/* only, store-recorded URLs only (MC-41). Serve routes answer 404 only — expired/unknown/revoked deliberately indistinguishable, no frame-ancestors, no X-Frame-Options (MC-43/MC-45); the no-redirect tripwire covers the whole prefix (MC-10(1), T62).
+         *
+         *     This mint is the ONE live-IMAP fetch of the preview flow: the message is fetched once (BODY.PEEK), sanitized, and its body plus inline parts and the load_remote remote-image URL list are held in the in-memory token store for the TTL — the serve routes never dial IMAP (round-2 MAJ-008.3). Sanitize → store → serve ordering (MC-10(5)). 256 KB served-body cap (MC-10(7)). Rate-limited by a dedicated per-IP limiter (MC-44) — 10 req/min, 429 with Retry-After, zero IMAP dials for the refused call.
+         */
+        post: operations["mintMailHtmlPreviewToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/mail/attachment-preview-token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mint a metadata-only preview grant for one attachment part (F1)
+         * @description Mints the temporary attachment-preview credential (ADR-20261001 "Temporary preview mint (F1)" row; mail-live-access-landing-order register rows 5/8 — the preview-versus-download wire split, correction I-05). Session-authenticated and STAYS in the API namespace, like the HTML preview mint; the byte serving route is the token-only non-API preview-purpose endpoint named by the response's content_source.byte_url (the serving-prefix family is deliberately not enumerated as operations in this document — §2.3a, Library serving-prefix precedent). Minting is metadata-only: it creates no file, retains no bytes and writes nothing to disk — the grant holds authorization/reference metadata only, and every byte read is a fresh request-scoped fetch through the preview-purpose endpoint (inline disposition, Cache-Control: no-store, the 25 MiB actual-decoded-byte cap enforced BEFORE any success state is committed; a mid-transfer size or decode failure aborts with a visible typed error, so a truncated stream can never render as a completed preview). This is the ONE live-IMAP fetch of the Open flow: only the selected part is fetched (part-specific PEEK — flags unchanged), never the whole message or an unrelated part. The grant dies on view exit, expiry, revoke and panel close. This mint is NEVER the browser-Download path — that remains getMailAttachment's exclusive role.
+         */
+        post: operations["mintMailAttachmentPreview"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/mail/attachment-preview-token/{previewId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Revoke one attachment preview grant (F1 ownership lifecycle)
+         * @description Revokes one metadata-only preview grant (ADR-20261001 F1 lifecycle table: "Back, Close, another attachment/message, workspace navigation, Mail/Library panel close or logout — revoke its source token"). After a successful revoke the preview-purpose byte endpoint answers 404 only — expired/unknown/revoked are deliberately indistinguishable (MC-43/MC-45 convention). Revoking an unknown or already-expired grant is 404, not an error the client must distinguish; bounded token expiry remains the backstop when a close could not be delivered. The SPA calls this on every temporary-view exit path; a late mint's grant is discarded and revoked, never rendered.
+         */
+        delete: operations["revokeMailAttachmentPreview"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/mail/signature-preview-token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mint a short-lived token for the draft signature's live preview
+         * @description Mints the signature live-preview credential (email-mail-view-spec §16 Signature editor row, security sign-off MC-10 posture) — session-authenticated and STAYS in the API namespace; the SPA frames the served result through the existing token-only non-API /mail-preview/ prefix: /mail-preview/html/{token} serves the sanitized sandboxed signature HTML with the MC-10 normative header set (zero new serve surface; /mail-preview/img/{token}/{index} proxies the signature's https images under the same MC-41 rules).
+         *     Unlike the message HTML-preview mint, this mint NEVER dials IMAP — the request carries no workspace/agent/folder/ref, only the signature HTML itself. The HTML is sanitized AT MINT (MC-10(5) named-sanitizer discipline: strip meta/base/forms/scripts/event handlers, harden anchors; the signature policy keeps inline style, tables and https+data images per FR-003). The mint NEVER PERSISTS: the sanitized HTML lives only in the in-memory token store for the TTL and dies with the token (logout revocation or expiry). Storage sanitization stays the draft PUT's job. Token hygiene: 2-minute named MailSignaturePreviewTokenTTL, REPLACE-ON-MINT — a session holds at most one live signature token (a new mint revokes the session's previous signature token; message-preview tokens keep their separate cap-8-refuses hygiene). Rate-limited by a dedicated per-IP limiter (MC-44) — 60 req/min, 429 with Retry-After.
+         */
+        post: operations["mintMailSignaturePreviewToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/workspaces/{id}/delegation": {
         parameters: {
             query?: never;
@@ -3291,7 +3734,7 @@ export interface paths {
         get: operations["getWorkspaceDelegation"];
         /**
          * Replace a workspace's delegation graph
-         * @description Replaces the workspace's delegation edge set wholesale (full replace). Validates that every from_agent / to_agent resolves to a known agent, rejects self-edges, and rejects depths above the global subturn ceiling. Returns the updated graph.
+         * @description Replaces the workspace's delegation edge set wholesale (full replace). Validates that every from_agent / to_agent resolves to a known agent, rejects multi-hop cycles (a self-edge is an ordinary edge and is permitted), and rejects depths above the global subturn ceiling. Returns the updated graph.
          */
         put: operations["updateWorkspaceDelegation"];
         post?: never;
@@ -3559,6 +4002,201 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/secret-requests/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the value-free state of a secret request
+         * @description Spec K5 (FR-079). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-4. Value-free: returns the state and, when submitted, the reference names. A request that is unknown or not accessible to the caller's account is 404.
+         */
+        get: operations["getSecretRequest"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/secret-requests/{id}/submit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Submit (or cancel) a secret card
+         * @description Spec K5, §6.2, §6.7 (FR-062, FR-063). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-4. Authenticated web user only. Body is exactly one of `values` or `cancel: true`. All trust and payload checks run before the atomic store publication; a refusal or failed save writes no values. After publication, a metadata or continuation-dispatch failure returns 503 with state submitted and the committed references. The submission IS saved; boot or chat attach retries an undelivered continuation. If the request service or its saved state is unavailable before this attempt reaches publication, 503 instead carries an ErrorResponse: this attempt stored no values and returns no authoritative state. It does not prove that no request or earlier submission exists; read the state, or retry the same request id once available, and never resend values automatically. A repeated submit is idempotent and returns 409 with the same committed state, without storing another version. Malformed bodies (both values and cancel, missing or extra field, null, value outside limits, NUL) are 400 with a value-free message; a body over 65,536 bytes is 413; a request not pending is 409 with its current state.
+         */
+        post: operations["submitSecretRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/secrets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List stored secret names
+         * @description Spec K6 (FR-073, FR-086, FR-241). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-6. Names and metadata only, never a value.
+         */
+        get: operations["listSecrets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/secrets/{reference}/options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change a private secret's options
+         * @description Spec K49 (FR-241). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-5. Private kind only (another kind is 422); authenticated web user only; audited.
+         */
+        patch: operations["updateSecretOptions"];
+        trace?: never;
+    };
+    "/agents/{id}/dependencies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List what depends on an agent
+         * @description Spec K50, §6.19 (FR-243, FR-244). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-20. Connections it answers as main agent, mailboxes, private secrets and rooms per workspace (People rows from landing 2).
+         */
+        get: operations["getAgentDependencies"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/workspaces/{id}/rooms": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List a workspace's rooms
+         * @description Spec K23 (FR-199). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md). A storage or read failure is an explicit 500 with the error body, never 200 with an empty list (#1314).
+         */
+        get: operations["listWorkspaceRooms"];
+        put?: never;
+        /**
+         * Create a squad or an ad-hoc room
+         * @description Spec K24 (FR-161, FR-172). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-15. The team room is never created through this route.
+         */
+        post: operations["createRoom"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/rooms/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a room
+         * @description Spec K23. Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-15.
+         */
+        get: operations["getRoom"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a squad or an ad-hoc room
+         * @description Spec K24 (FR-207). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-15. The team room is not deletable (422).
+         */
+        delete: operations["deleteRoom"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/rooms/{id}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Add, remove, mute or unmute room members
+         * @description Spec K24 (FR-204, FR-207). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-15. The team room accepts only mute and unmute (other actions 422).
+         */
+        patch: operations["updateRoomMembers"];
+        trace?: never;
+    };
+    "/rooms/{id}/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read a backward page of room history
+         * @description #1332. Read the complete retained transcript, including entries older than the newest 10,000 returned by attach. With before_seq omitted, select the newest page including the newest entry. Otherwise select only entries with seq strictly less than before_seq. Return the newest limit eligible entries in strictly ascending seq order. A cursor need not equal an entry sequence; gaps do not prove that older entries exist.
+         *     The newest entry sequence is the greatest actual entry seq in the room at the locked read, or 0 for an empty room, not the room stream's high-water sequence. A cursor greater than that entry sequence is a 400, never clamped. Select entries, continuation and delivery projections from the same room-locked view. Paging does not change entries, membership, the live stream cursor or the forward attach subscription.
+         *     Uses exactly the existing authenticated room-read access and room-open path. Authenticate first, validate limit, validate before_seq syntax, open the room, then check the cursor's room-dependent upper bound. Query rules apply with inbound validation enabled or disabled. Missing, invalid or deleted rooms and missing workspaces return the existing 404 ErrorResponse with error "no such group chat". Paused, read-only and hidden-but-not-deleted rooms remain readable while the room and workspace exist. Storage/recovery failures remain errors, normally 500, never successful empty pages. No new reader-membership model or 403.
+         *     Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 400 {"error":"limit must be an integer from 1 to 1000"}. Invalid, empty, duplicated, overflowing or non-positive before_seq returns exactly 400 {"error":"before_seq must be a positive int64 integer"}. A valid positive cursor beyond the newest entry sequence returns exactly 400 {"error":"before_seq must not be greater than the newest entry seq"}. These use the existing ErrorResponse with no additional error fields.
+         */
+        get: operations["getRoomHistory"];
+        put?: never;
+        /**
+         * Post a message into a room
+         * @description Spec K26 (FR-166). Landing 1 of the Omnipus system agent spec (omnipus-system-agent-spec.md); handler arrives with WU-15. Accepted for recording; the recorded entry arrives over the WebSocket as room_entry with the same client_message_id.
+         */
+        post: operations["postRoomMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -3618,7 +4256,7 @@ export interface components {
              */
             error: string;
             /**
-             * @description Machine-readable error code for programmatic branching (e.g. "csrf_missing", "rate_limited").
+             * @description Machine-readable error code for programmatic branching (e.g. "csrf_missing", "rate_limited"). PUT /settings/third-party-agents uses "cli_path_invalid" (field clis.<cli>.path; details.cli, details.check one of not_absolute, not_found, not_regular_file, not_executable, agent_writable_location, writable_by_others, windows_extension, windows_short_name, windows_stream; details.at the path element that failed) and "cli_preset_invalid" (field clis.<cli>.preset_args; details.cli, details.check one of too_long, contains_nul, contains_line_break).
              * @example csrf_missing
              */
             code?: string;
@@ -3627,7 +4265,7 @@ export interface components {
              * @example provider
              */
             field?: string;
-            /** @description Optional structured details about the error. */
+            /** @description Optional structured details about the error. For cli_path_invalid and cli_preset_invalid: `cli` (claude-code, codex or opencode), `check` (the failed check's name) and, for cli_path_invalid, `at` (the path element that failed: the link or the final file). */
             details?: {
                 [key: string]: unknown;
             };
@@ -3791,7 +4429,7 @@ export interface components {
              */
             auth_method: "api_key";
             /**
-             * @description Provider id (e.g. "anthropic", "openai", "openrouter", "gemini"). Must be a known protocol; unknown values are rejected with 400.
+             * @description Provider id (e.g. "anthropic", "openai", "openrouter", "gemini"). A catalog provider id, or — together with `endpoint` and `protocol` — the name of a custom endpoint. Anything else is rejected with 400.
              * @example anthropic
              */
             id: string;
@@ -3805,11 +4443,19 @@ export interface components {
              * @example claude-sonnet-4-6
              */
             model?: string;
+            /** @description Effort for the chosen model (effort-levels spec FR-067), persisted as agents.defaults.default_model.reasoning_effort in the completion's single configuration write, never on the provider row. null is refused. */
+            reasoning_effort?: string;
             /**
-             * @description Optional custom API base URL, persisted as the provider entry's api_base. Required for providers that have no fixed default endpoint (e.g. azure, azure-openai — a per-resource host); also usable to override the regional default. When omitted, the provider's built-in default base is used.
-             * @example https://my-resource.openai.azure.com/openai/deployments/gpt-4o
+             * @description Base URL, persisted as the provider entry's api_base. For a catalog provider: optional override of its base URL. For a custom endpoint (see `protocol`): required, the endpoint's base URL.
+             * @example https://llm.example.com/v1
              */
             endpoint?: string;
+            /**
+             * @description Wire protocol of an operator-named custom endpoint (ADR-067 §3.2 item 3, clarification 2026-11-08, #1700). Send it only when `id` is NOT a catalog provider id: then `id`, `endpoint` (the base URL) and `protocol` together create a custom row, saved with custom=true, this protocol and endpoint as api_base; `model` is then required and `region` is refused. Must be absent for a catalog provider id (400 on field `id`). Omitted by older clients: the request then behaves exactly as before this field existed.
+             * @example openai-compatible
+             * @enum {string}
+             */
+            protocol?: "openai-compatible" | "anthropic";
             /**
              * @description Issue #800 (Bedrock region contract): the selected region for a provider whose catalog entry carries `regions` (CatalogProvider.regions), persisted as the provider entry's `region`. Ignored for a provider whose catalog entry carries no `regions`.
              * @example eu-central-1
@@ -3824,8 +4470,8 @@ export interface components {
              */
             auth_method: "sign_in";
             /**
-             * @description Provider id whose catalog row declares `sign_in` in auth_methods (e.g. "codex-cli", "openai-chatgpt", "github-copilot"); any other id is rejected with 400 "provider does not support sign-in".
-             * @example codex-cli
+             * @description Provider id whose catalog row declares `sign_in` in auth_methods (e.g. "openai-chatgpt"); any other id is rejected with 400 "provider does not support sign-in".
+             * @example openai-chatgpt
              */
             id: string;
             /**
@@ -3833,36 +4479,21 @@ export interface components {
              * @example gpt-5.4
              */
             model?: string;
+            /** @description Effort for the chosen model (effort-levels spec FR-067), persisted as agents.defaults.default_model.reasoning_effort in the completion's single configuration write, never on the provider row. null is refused. */
+            reasoning_effort?: string;
             /**
              * @description Optional custom API base URL, persisted as the provider entry's api_base.
              * @example https://api.example.com/v1
              */
             endpoint?: string;
         };
-        /** @description Response from POST /providers/{id}/sign-in (ADR-068 FR-008, amended 2026-08-23 §8b). `cli_login` for codex-cli / github-copilot: the vendor CLI's own login command, run by the operator in a terminal. `device_code` for openai-chatgpt (and xai once its catalog row carries sign_in): Omnipus requests a device code itself and the SPA shows the verification link and user code. Discriminated by `method`. */
-        SignInStartResponse: components["schemas"]["SignInStartResponseCliLogin"] | components["schemas"]["SignInStartResponseDeviceCode"];
-        /** @description The `cli_login` variant of SignInStartResponse (ADR-068 FR-008, amended 2026-08-23 §8b). For `codex-cli` and `github-copilot`: Omnipus never performs or stores the vendor login itself — this returns the one instruction the operator needs, the vendor CLI's own login command, so the SPA can show it beside a *Check sign-in* button. */
-        SignInStartResponseCliLogin: {
-            /**
-             * @description Discriminator — run the vendor CLI's login command. (enum property replaced by openapi-typescript)
-             * @enum {string}
-             */
-            method: "cli_login";
-            /**
-             * @description The exact command the operator runs in a terminal (e.g. "codex login", "copilot login").
-             * @example codex login
-             */
-            command: string;
-            /**
-             * @description Human-readable guidance shown beside the command, ending with the prompt to click Check sign-in.
-             * @example Run `codex login` in a terminal, then click Check sign-in.
-             */
-            instructions: string;
-        };
+        /** @description Response from POST /providers/{id}/sign-in (ADR-068 FR-008, amended 2026-08-23 §8b): Omnipus requests a device code itself and the SPA shows the verification link and user code. */
+        SignInStartResponse: components["schemas"]["SignInStartResponseDeviceCode"];
         /** @description The `device_code` variant of SignInStartResponse (ADR-068 FR-008/FR-044, added 2026-08-23 §8b). For `openai-chatgpt` (and `xai` once its catalog row carries `sign_in`): Omnipus requests a device code from the vendor itself and the SPA renders the verification link and user code for the operator to approve on any device. `device_auth_id` is an opaque server-side handle for POST /providers/{id}/sign-in/poll — the vendor's own device code and any PKCE verifier are held only by the gateway and never appear on the wire. */
         SignInStartResponseDeviceCode: {
             /**
-             * @description Discriminator — a device-code session was started; poll for completion. (enum property replaced by openapi-typescript)
+             * @description Discriminator — a device-code session was started; poll for completion.
+             * @example device_code
              * @enum {string}
              */
             method: "device_code";
@@ -3894,16 +4525,16 @@ export interface components {
              */
             interval_seconds: number;
         };
-        /** @description Response from GET /providers/{id}/sign-in/status (ADR-068 FR-009, amended 2026-08-23 §8b). For `cli_login` providers (codex-cli, github-copilot): read from the vendor CLI's saved login only — Omnipus never refreshes that file — `expired` follows the access token's JWT `exp` (decoded unverified, display only) when decodable, else the saved login file being older than one hour. For `device_code` providers (openai-chatgpt, and xai once its catalog row carries `sign_in`): the state comes from the stored `<id>_OAUTH` entry in Omnipus's own encrypted credential store — `expired` means the access token is past `exp` AND a refresh attempt failed or no refresh token is available. `pending` is returned only while a device-code session started by POST /sign-in is open and not yet approved. */
+        /** @description Response from GET /providers/{id}/sign-in/status (ADR-068 FR-009, amended 2026-08-23 §8b). The state comes from the stored `<id>_OAUTH` entry in Omnipus's own encrypted credential store (device_code providers: openai-chatgpt, and xai once its catalog row carries `sign_in`) — `expired` means the access token is past `exp` AND a refresh attempt failed or no refresh token is available. `pending` is returned only while a device-code session started by POST /sign-in is open and not yet approved. (The former vendor-CLI-file reads were deleted with the CLI-backed model providers — WU-24, founder 2026-10-14.) */
         SignInStatus: {
             /**
-             * @description not_signed_in when no saved login / stored OAuth entry exists (or it is unreadable / malformed — logged as a warning); pending while an open device-code session awaits approval; signed_in when a usable login or OAuth entry exists; expired per the per-method rule above.
+             * @description not_signed_in when no stored OAuth entry exists (or it is unreadable / malformed — logged as a warning); pending while an open device-code session awaits approval; signed_in when a usable OAuth entry exists; expired when it is past exp and cannot refresh.
              * @example signed_in
              * @enum {string}
              */
             state: "not_signed_in" | "pending" | "signed_in" | "expired";
             /**
-             * @description Opaque account identifier — `tokens.account_id` for codex-cli, the GitHub login for Copilot when the CLI reports one, or the stored OAuth entry's account_id for device_code providers. Present only when known; never an e-mail.
+             * @description Opaque account identifier — the stored OAuth entry's account_id. Present only when known; never an e-mail.
              * @example user_abc123
              */
             account_label?: string;
@@ -4026,21 +4657,26 @@ export interface components {
         /** @description Session metadata object (maps to session.UnifiedMeta + session.SessionMeta). Returned in list and detail endpoints. The SPA maps this through rawToSession() which reads stats.message_count, stats.tokens_total, and stats.cost. */
         Session: {
             /**
-             * @description Unique session identifier (UUID).
+             * @description Unique session identifier. A main session's id is the server-computed main session id (format decided later). Other sessions keep their existing ids.
              * @example 550e8400-e29b-41d4-a716-446655440000
              */
             id: string;
             /**
-             * @description Session classification. Legacy sessions without a type field are treated as "chat" by the SPA via rawToSession(). Defaults to "chat" on creation. "scheduled" tags a session created by a fired schedule / heartbeat run (issue #264, FR-005); it must be accepted here or GET /api/v1/sessions fails SPA schema validation once any scheduled/heartbeat session exists. "heartbeat" tags the eager standing session created when a workspace-scoped heartbeat is enabled (FR-010, A1/F-02); the cron job continues this session rather than starting a fresh one. "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand. "delegate" (ADR-057 FR-008) is the subordinate type a child session gains when minted by a delegation — it always carries a non-empty `parent_session_id`. Like "scheduled"/"heartbeat"/"verifier", it is server-minted only: intentionally absent from SessionCreateRequest.yaml's narrower create-time enum (a client cannot POST /sessions directly into this type).
+             * @description Session classification. Required on a stored session; a missing type is invalid and is not defaulted to "chat". "main" is the one standing session for an eligible (workspace, agent) pair, and for Admin in the default workspace. Its id is the server-computed main session id (format decided later). Server-created only: "main" is absent from SessionCreateRequest's create-time enum, so a client cannot POST /sessions into this type. "scheduled" tags a session created by a fired schedule run (issue #264, FR-005). "verifier" (ADR-052 FR-036) tags a session created for a verifier-role adjudication (the Judge, or a future custom verifier) — persisted with normal 90-day retention but hidden by default from GET /api/v1/sessions (see `include_verifier`); Sidebar and SearchModal always exclude it, UsageScreen includes it (verifier LLM spend is visible there), and the ActivityPanel / verdict drill-down surface it on demand. "delegate" (ADR-057 FR-008) is the subordinate type a child session gains when minted by a delegation — it always carries a non-empty `parent_session_id`. Like "scheduled"/"main"/"verifier", it is server-minted only and absent from the client-create enum.
              * @example chat
              * @enum {string}
              */
-            type?: "chat" | "task" | "channel" | "scheduled" | "heartbeat" | "verifier" | "delegate";
+            type: "chat" | "task" | "channel" | "scheduled" | "main" | "verifier" | "delegate";
             /**
-             * @description Computed field: true while the heartbeat member whose session_id matches this session's id has heartbeat.enabled = true in its workspace member_configs. NOT a stored flag — derived server-side from member_configs on each GET /sessions response. When true, the SPA pins the session to the top of the Session panel and hides the delete (trash) button; DELETE /sessions/{id} returns 409. (FR-021, FR-028, A2/G-01)
+             * @description Computed, not stored. True for a main session whether or not that member's heartbeat is enabled. When true, the SPA pins the session to the top of the Session panel and hides the delete (trash) button; DELETE /sessions/{id} returns 409.
              * @example false
              */
             protected?: boolean;
+            /**
+             * @description Present as true or false on a valid main, including the default-workspace Admin main. Omitted on every other session, and on a main whose attention sources could not be read. An omitted value means unknown (the client shows unknown, never false). True for a pending structured question, a pending tool approval on the main or one of its helpers, or a finished or failed goal outcome not yet seen; never for a goal the user stopped.
+             * @example false
+             */
+            readonly needs_attention?: boolean;
             /**
              * @description ID of the primary agent that owns this session.
              * @example jim
@@ -4052,11 +4688,30 @@ export interface components {
              */
             title: string;
             /**
-             * @description Current lifecycle status of the session.
+             * @description Coarse chat-transcript-metadata status. `archived` means completed; `failed` mirrors a genuine landed lifecycle `failed`; `interrupted` is a session whose turn a gateway restart cut off (the boot sweep writes it — founder rule 2026-10-06: a session does not fail because of a restart; it supersedes the sub-agent control plane ADR D4/MAJ-009 retirement of this value); `active` covers a session that is working, waiting for an answer, or stopped — see `lifecycle_state` for the exact distinction. An explicit RESUME of a `done`/`failed`/`interrupted` session resets this metadata back to `active`.
              * @example active
              * @enum {string}
              */
-            status: "active" | "archived" | "interrupted";
+            status: "active" | "archived" | "failed" | "interrupted";
+            /**
+             * @description Exact helper-state display (sub-agent control plane ADR D4/MAJ-009), populated from the session's authoritative `SessionLifecycleRecord` when one exists; absent for a session with no lifecycle record. Not a straight re-export of `SessionLifecycleRecord.state`'s 6-value enum — `queued`/`running` both collapse to `working`, `needs_input` maps to `waiting_for_answer`, and `completed` maps to `done`. A `failed` lifecycle record whose `failed_reason` is `interrupted` (a session a gateway restart cut off — the boot sweep) maps to `interrupted`, not `failed` (founder ruling 2026-10-06: a session does not fail because of a restart; this adds a sixth value to F0929-2's five). The canonical current-boot lifecycle projection is restart-aware: a prior-boot root with raw `queued` or `running` state can display `interrupted` without a recovery write; this suppresses `execution`. Interrupted describes the session's current interruption, not permanent history: once the session is re-adopted or explicitly resumed with a fresh current-boot execution identity, its current record determines the display. A resumed `running` record projects to `working` and publishes `execution: running`, rather than retaining a stale Interrupted display. Gateway availability alone does not mean an old execution has resumed. A genuinely failed record still maps to `failed`. A stopped helper has `status: active`, `lifecycle_state: stopped`.
+             * @example working
+             * @enum {string}
+             */
+            lifecycle_state?: "working" | "waiting_for_answer" | "done" | "failed" | "stopped" | "interrupted";
+            /** @description Present only when `lifecycle_state == stopped` (or the session's current generation last landed `stopped`) — the durable, lasting reason for the stop (who/when/why). Absent for every other `lifecycle_state`, and for a session with no lifecycle record. */
+            stop_note?: components["schemas"]["StopNote"];
+            /**
+             * @description Projected queued/running classification for the session's current lifecycle display. Present only when the same loaded lifecycle record, evaluated through the canonical current-boot lifecycle projection, produces `lifecycle_state: working`: `queued` for a queued record and `running` for a running record. Omitted for any other projected display state, including Interrupted after a prior-boot root execution, and when no usable lifecycle record is available. Not a raw lifecycle-state export. The Sessions Running filter matches `running`; queued does not match. A nonmatching parent may still be included as hierarchy context.
+             * @example running
+             * @enum {string}
+             */
+            execution?: "queued" | "running";
+            /**
+             * @description How many background shell commands this session itself owns right now. Omitted when the process table is not available (unknown, not zero). Zero means the table was checked and this session owns none. Not a roll-up of child sessions.
+             * @example 2
+             */
+            background_command_count?: number;
             /**
              * Format: date-time
              * @description RFC3339 timestamp when the session was created.
@@ -4115,11 +4770,6 @@ export interface components {
              *     ]
              */
             agent_ids?: string[];
-            /**
-             * @description The agent ID currently handling this session (multi-agent sessions only).
-             * @example jim
-             */
-            active_agent_id?: string;
             /** @description Per-agent compaction summaries (multi-agent sessions only). */
             compaction_summaries?: {
                 [key: string]: string;
@@ -4134,6 +4784,47 @@ export interface components {
              * @example 3
              */
             child_count?: number;
+        };
+        /**
+         * AgentActivityRun
+         * @description One task or scheduler run shown as a row in the Activity panel for an agent (session-core FR-033). It exists even when the current chat spawned nothing: the agent is either the run's assignee or one of its captured recipients (FR-019). Only OPEN runs are listed. Provider-run token availability is not carried (descoped); a client must treat a missing figure as unknown, never zero.
+         */
+        AgentActivityRun: {
+            /** @description The TaskRun id. */
+            run_id: string;
+            /** @description The task this run belongs to. */
+            task_id: string;
+            /** @description The task title, for the row label. */
+            task_title: string;
+            /**
+             * @description How the run started - a person or agent starting the task (`task`), or a scheduled fire (`scheduled`).
+             * @enum {string}
+             */
+            kind: "task" | "scheduled";
+            /**
+             * @description `main` when the run is a fresh child of the assignee's main (FR-017) - the client shows it as the one MAIN row for that run, not as a task row plus a child row; `isolated` for an independent chat.
+             * @enum {string}
+             */
+            mode: "main" | "isolated";
+            /**
+             * @description The run's session lifecycle - running, queued for a slot, or waiting on input.
+             * @enum {string}
+             */
+            state: "running" | "queued" | "waiting";
+            /**
+             * @description Why the agent sees this run - it is the assignee, or its main is one of the run's captured recipients.
+             * @enum {string}
+             */
+            role: "assignee" | "recipient";
+            /** @description The task's assignee agent. */
+            agent_id: string;
+            /** @description The run's own session - the target of the row's Open control. Absent when the run has no session yet. */
+            session_id?: string;
+            /**
+             * Format: date-time
+             * @description When the run opened.
+             */
+            started_at: string;
         };
         /** @description Aggregated statistics for a session transcript. */
         SessionStats: {
@@ -4154,7 +4845,7 @@ export interface components {
             tokens_total: number;
             /**
              * Format: double
-             * @description Total USD cost for this session (based on provider pricing).
+             * @description Total USD cost for this session: the sum of priced portions only. A cost of zero together with unpriced_tokens greater than zero means the session is unpriced, not free. subscription_tokens are excluded from cost; those tokens recorded no dollars.
              * @example 0.0023
              */
             cost: number;
@@ -4182,12 +4873,36 @@ export interface components {
             by_model?: {
                 [key: string]: components["schemas"]["ModelTokens"];
             };
+            /** @description Per-provider token breakdown. Same cell shape as by_model. Keys are catalog provider ids. Summed from the stored per-call provider id, including after reload. Absent for legacy sessions. */
+            by_provider?: {
+                [key: string]: components["schemas"]["ModelTokens"];
+            };
+            /**
+             * @description Unpriced token portions in this session. Counts only the unpriced portion of each call, not the whole call. A session with cost 0 and unpriced_tokens greater than 0 is unpriced, not free.
+             * @example 0
+             */
+            unpriced_tokens?: number;
+            /**
+             * @description Tokens from ChatGPT sign-in calls. Those tokens recorded no dollars and are excluded from cost.
+             * @example 0
+             */
+            subscription_tokens?: number;
         };
-        /** @description Full session detail as returned by GET /sessions/{id}. Contains the session metadata plus the complete ordered transcript. */
+        /** @description Authorized session metadata and explicit history readiness (chat history paging D7a/D10). No paging selectors: available history is the same bounded latest page as GET /sessions/{id}/messages with defaults 40/20. When history_state.status is available, messages, page_info, has_earlier and has_later are required; cursor presence follows the same iff/first/last rules as SessionHistoryResponse. When unavailable, omit messages, page_info, both flags and both cursors, never synthesize messages:[]. session and optional agent_removed remain usable for routing/attach. Generated shape plus producer/consumer semantic checks enforce these mutually exclusive field sets. Absence is not successful empty history; no optional nulls. */
         SessionDetail: {
             session: components["schemas"]["Session"];
-            /** @description Ordered list of transcript entries for this session. Capped at 100000 messages to bound response payload size. */
-            messages: components["schemas"]["Message"][];
+            history_state: components["schemas"]["SessionHistoryState"];
+            /** @description Required non-null bounded latest entries iff history is available; omitted when unavailable. Every paged occurrence carries history_position. */
+            messages?: components["schemas"]["Message"][];
+            page_info?: components["schemas"]["SessionHistoryPageInfo"];
+            /** @description Required iff available; actual retained earlier groups, including across a closed clear. */
+            has_earlier?: boolean;
+            /** @description Required iff available; actual eligible retained later groups. */
+            has_later?: boolean;
+            /** @description Present iff available and has_earlier; equals the first selected history_position. */
+            next_before?: string;
+            /** @description Present iff available and has_later; equals the last selected history_position. */
+            next_after?: string;
             /**
              * @description True when the agent that owned this session has been deleted from the config. Used by the SPA to display a banner informing the user that the original agent no longer exists. Absent (or false) in the common case.
              * @example false
@@ -4195,8 +4910,26 @@ export interface components {
             agent_removed?: boolean;
         };
         /**
+         * SessionHistoryResponse
+         * @description Bounded public session-history page (chat history paging D3/D10), selected nearest the requested boundary and returned in ascending acceptance order. has_earlier and has_later mean actual eligible retained groups in the read domain: the closed window for window_refresh, otherwise the retained archive. They are not inferred from fullness, sequence gaps or a detached live tail. next_before/next_after exist iff the respective flag is true and equal the first/last selected position. An empty page has both flags false and no cursors; an exactly-full terminal page also has no continuation. Producers/consumers validate these cross-field rules. No manifest, header side channel or duplicate entry-reference list.
+         */
+        SessionHistoryResponse: {
+            session_id: string;
+            /** @description Authoritative absolute session-wide consumed-token total, with the same meaning as SessionStats.tokens_total, independent of the selected history range. Present when authoritative usage is available; omitted means unknown, never zero. Not a sum of this page's entries or a per-turn delta. */
+            readonly session_tokens_total?: number;
+            /** @description Non-null public entries, one per whole selected source group. Every paged occurrence has history_position and preserves its recorded id. An individual group's drawn-row weight can exceed 100; its start/result are never split. */
+            entries: components["schemas"]["Message"][];
+            has_earlier: boolean;
+            has_later: boolean;
+            /** @description Present iff has_earlier, equal to the first selected history_position. */
+            next_before?: string;
+            /** @description Present iff has_later, equal to the last selected history_position. */
+            next_after?: string;
+            page_info: components["schemas"]["SessionHistoryPageInfo"];
+        };
+        /**
          * SessionPage
-         * @description Paged envelope for GET /sessions (ADR-057 US-19/FR-091/FR-098). `sessions` is this page's rows: root sessions by default, that node's direct children when parent_session_id is supplied, or every session (roots and subordinates) when flat=true (FR-104). `partial_errors` composes with paging: a page whose merge hit a failing legacy per-agent store still returns its healthy rows, still returns next_cursor, and populates partial_errors — a failing store contributes zero rows and does not halt the page or invalidate the cursor (FR-098).
+         * @description Paged envelope for GET /sessions (ADR-057 US-19/FR-091/FR-098). `sessions` is this page's rows: root sessions by default, that node's direct children when parent_session_id is supplied, or every session (roots and subordinates) when flat=true (FR-104). `partial_errors` composes with paging: a page whose merge hit a failing legacy per-agent store still returns its healthy rows, still returns next_cursor, and populates partial_errors — a failing store contributes zero rows and does not halt the page or invalidate the cursor (FR-098). This is also the page's general degradation channel: an unexpected per-session lifecycle-journal read failure keeps the row, omits lifecycle_state, stop_note, and execution (never null), and appends a sanitized session-scoped token. A missing lifecycle record is normal and contributes no token.
          */
         SessionPage: {
             sessions: components["schemas"]["Session"][];
@@ -4205,18 +4938,18 @@ export interface components {
              * @example 20
              */
             next_cursor?: string;
-            /** @description Opaque error tokens (agent ID + sanitized reason) from any store that failed during this page's merge. Present only when at least one store failed. */
+            /** @description General page-degradation channel. Distinguishable opaque tokens: agent=<id>: session_list_failed for a store enumeration failure; session=<id>: lifecycle_read_unavailable for an unexpected per-session lifecycle-journal read failure. No filesystem paths or underlying error details are exposed. An unreadable journal keeps its session row but omits lifecycle_state, stop_note, and execution, never sending null or inventing a state. A missing lifecycle record (ErrLifecycleNotFound) is normal, not degradation. Present only when at least one degradation occurred; omitted when empty. Rows and next_cursor remain valid, so clients can warn that the list or runtime state is incomplete and offer Retry. */
             partial_errors?: string[];
         };
         /** @description Body for POST /sessions. Creates a new session for an agent. */
         SessionCreateRequest: {
             /**
-             * @description Agent ID that will own this session. Defaults to "main" when omitted. Must reference an existing agent (400 if not found).
+             * @description Agent ID that will own this session. Required and nonblank — there is no default agent (omnipus-system-agent FR-122, K16); a missing or blank value is refused with 400 "an agent must be named". Must reference an existing chat-target agent (400 if not found). Omnipus has exactly one conversation, so naming Omnipus is refused with 409 carrying its main session id (FR-005).
              * @example jim
              */
-            agent_id?: string;
+            agent_id: string;
             /**
-             * @description Session type. Defaults to "chat" when omitted.
+             * @description Session type. Defaults to "chat" when omitted. "main" is absent.
              * @example chat
              * @enum {string}
              */
@@ -4237,24 +4970,43 @@ export interface components {
              */
             title: string;
         };
-        /** @description A single transcript entry (session.TranscriptEntry on the Go side). Maps to the Message interface in src/lib/api.ts. The SPA reads this from GET /sessions/{id}/messages. */
+        /** @description The public CHAT PROJECTION of one entry of a session's single append-only archive, served by GET /sessions/{id}/messages and mapped to the Message interface in src/lib/api.ts. This is a projection of the canonical disk archive (session.TranscriptEntry on the Go side), never the raw private persistence record: the archive's private model payload (model_message), its body-free same-session consumption reference (type=model_ref / model_ref), its trusted source/return-route provenance, and its partition/encoded-byte/entry-id marks are disk-only and MUST NOT appear here (session-core C-ARCHIVE / U2; FR-004/FR-005). The one display-only exception (F15) is participant / reply_to_participant (ChatParticipant): a name, a kind and a source label, never an id or a route. Entries that belong to the model view only (view_membership="model") are excluded from this projection entirely. */
         Message: {
             /**
              * @description Unique message identifier.
              * @example msg_01HXYZ
              */
             id: string;
+            /** @description Same-session occurrence fingerprint (chat history paging D2), present on every paged entry. Preserves the original recorded id separately. Stable across appends/restarts and reconstruction of unchanged final canonical bytes; opaque, not a live sequence, model ordinal, authorization grant or disk address. */
+            readonly history_position?: string;
             /**
              * @description #823 catch-up redesign. Present on a user entry that was persisted with a client-supplied correlation id (mirrors MessageFrame.client_message_id / ReplayMessageFrame.client_message_id). Lets a client reconcile its own pending/sent bubble against this REST-loaded entry by id instead of by content+timestamp matching. Absent on entries written before this field existed and on non-user entries.
              * @example cmid_01HXYZ
              */
             client_message_id?: string;
+            /** @description Read-only record that this user input was DISCARDED by Stop before it was delivered into the agent's model input (session-core FR-024). Absent on every delivered message. There is no client action to release or discard it; the archived message bytes are unchanged and this only labels them. */
+            readonly input_disposition?: {
+                /** @description The original input message id (this entry's id). */
+                message_id: string;
+                /** @description The sender's client_message_id, when the input carried one. */
+                client_message_id?: string;
+                /** @enum {string} */
+                state: "discarded";
+                /** @enum {string} */
+                reason: "stopped_before_delivery";
+            };
             /**
-             * @description Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). The Go-side EntryType constant set is the source of truth (`pkg/session/daypartition.go`).
+             * @description Entry classification. Absent or empty means "message" (backwards compatible). "compaction" entries summarize pruned context; "system" entries are internal markers; "tool_call" entries record tool invocations; "turn_canceled" entries mark a turn that was canceled mid-stream (FR-15); "judge_verdict" entries (ADR-049 D2/D4) record a Judge System Agent adjudication of a task attempt or plan round — written alongside the worker's ADR-043 completion marker so the two cannot silently disagree, and mirrored live by the `JudgeVerdictFrame` WS push (same `verdict` shape). "context_window_notice" entries retain a classified Verbose-only diagnostic (ADR-066 MAJ-CW-009), not a model-history message. Runtime validation requires their `context_window_notice` payload; live and replay carry the same payload as ContextWindowNoticeFrame.notice with the original entry id, timestamp, agent_id and turn_id. "provider_fallback" entries (chat-history paging spec D10 PF=A) are a persisted provider-fallback note written by the real fallback chain after its assistant answer: system-role system information with `content` equal to the saved note text verbatim and the optional `model` / `unavailable_model` / `unavailable_code` facts recorded at the time. The same note replays as a `replay_provider_fallback` ProviderFallbackNote and was announced live by the separate provider_fallback frame; a valid note must never be degraded to the malformed-item placeholder.
              * @example message
              * @enum {string}
              */
-            type?: "message" | "compaction" | "system" | "tool_call" | "turn_canceled" | "judge_verdict";
+            type?: "message" | "compaction" | "system" | "tool_call" | "turn_canceled" | "judge_verdict" | "context_window_notice" | "provider_fallback";
+            /**
+             * @description C-ARCHIVE (session-core FR-004): which view(s) of the single append-only archive this entry belongs to — "chat" (rendered in the conversation), "model" (part of the model context window), or "both". Server-owned (readOnly): the server writes it and emits the entry's effective chat/both membership for included entries; clients never send it. An entry classified "model" is not part of the chat projection and is not returned here. Optional and additive: entries written before this field existed carry no value, and the server treats absent as unknown rather than re-deriving a view. This is a per-entry classification on the one archive, never by itself a second store.
+             * @example both
+             * @enum {string}
+             */
+            readonly view_membership?: "chat" | "model" | "both";
             /**
              * @description Author role. Absent on compaction entries.
              * @example assistant
@@ -4262,10 +5014,12 @@ export interface components {
              */
             role?: "user" | "assistant" | "system";
             /**
-             * @description Raw markdown/text content of the message.
+             * @description Raw markdown/text content of the message. On a history page this may be a display preview; see content_original_size_bytes.
              * @example I can help you with that!
              */
             content?: string;
+            /** @description Present only when `content` is a read-time display preview of an ordinary user/assistant chat message (entry type `message` or omitted) whose saved text exceeds 65,536 UTF-8 bytes: `content` then holds its first at most 65,536 bytes cut back to a character boundary, and this field is the exact UTF-8 length of the full saved text (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)", A2.1/A2.2). The full text is read through getSessionHistoryEntry. Unrelated to `truncated`/`truncation_reason`, which mean the turn itself was cut short. Never present on a getSessionHistoryEntry response, which carries the full content. */
+            readonly content_original_size_bytes?: number;
             /**
              * @description Compaction summary text (present only on type=compaction entries).
              * @example Compacted 120 messages.
@@ -4303,6 +5057,13 @@ export interface components {
              * @example jim
              */
             agent_id: string;
+            participant?: components["schemas"]["ChatParticipant"];
+            reply_to_participant?: components["schemas"]["ChatParticipant"];
+            /**
+             * @description Present only on a guest reply (session-core FR-027): the message_id of the admitted request this entry answers. The guest author is the existing agent_id. Same value live and on replay.
+             * @example msg_01HXYZ
+             */
+            readonly reply_to_message_id?: string;
             /**
              * @description Number of messages compacted (present only on compaction entries).
              * @example 120
@@ -4314,16 +5075,21 @@ export interface components {
              */
             truncated?: boolean;
             /**
-             * @description Narrows why `truncated` is true: "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a `truncated: true` entry means "cancelled" — every entry written before this field existed predates it and was always a cancel (ADR-087 D2).
+             * @description Narrows why `truncated` is true: "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a `truncated: true` entry means the reason is not recorded: readers do not default it to "cancelled" or to anything else (ADR-087 D2; session-core DEL-F36).
              * @example max_output_tokens
              * @enum {string}
              */
             truncation_reason?: "cancelled" | "max_output_tokens";
             /**
-             * @description Turn identifier — present only on type="turn_canceled" entries (FR-15). Identifies the turn that was canceled.
+             * @description Turn identifier — present on type="turn_canceled" entries (FR-15) and type="context_window_notice" diagnostics (ADR-066 MAJ-CW-009). Retains the original turn identity in REST history, live delivery and replay.
              * @example turn-T3
              */
             turn_id?: string;
+            /**
+             * @description session-core FR-039 / C-GOAL. The goal the entry's producing turn was dispatched under (from session.TranscriptEntry.GoalID). REST history, live delivery and replay retain the SAME association so the SPA joins each message to its own exact keyed goal criteria. Absent means UNKNOWN association; a later goal's frame must never rebind an earlier message.
+             * @example goal_01J3ZQK8N2H8VXNRP5T7C9M4WU
+             */
+            goal_id?: string;
             /**
              * @description Username of the actor who triggered the cancel — present only on type="turn_canceled" entries (FR-15).
              * @example admin
@@ -4348,24 +5114,47 @@ export interface components {
              */
             descendants_canceled?: string[];
             /**
-             * @description Identifier of the model that produced this assistant turn (per-turn record). Present on assistant entries only. Absent on legacy turns recorded before the per-turn model field was added — those entries do not display any model info in the UI (no placeholder). Empty string is treated the same as absent for UI display.
+             * @description Identifier of the model that produced this assistant turn (per-turn record). Present on assistant entries, and on a provider_fallback note it is the fallback model that actually answered (ProviderFallbackNote's answered_model). Absent on legacy turns recorded before the per-turn model field was added — those entries do not display any model info in the UI (no placeholder). Empty string is treated the same as absent for UI display.
              * @example z-ai/glm-5.2
              */
             model?: string;
+            /** @description Recorded unavailable primary model on a provider_fallback note; omitted when unknown. */
+            readonly unavailable_model?: string;
+            /**
+             * @description Recorded fallback condition; model_retired controls the existing model-settings hint.
+             * @enum {string}
+             */
+            readonly unavailable_code?: "rate_limited" | "model_retired";
             verdict?: components["schemas"]["JudgeVerdict"];
+            context_window_notice?: components["schemas"]["ContextWindowNotice"];
             /**
              * @description BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not one of the subtypes below. A closed enum so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same frame type on replay as was emitted live: `browser_handover_notice` → `BrowserHandoverNoticeFrame` (BROWSER-FR-043a); `goal_outcome` → `GoalOutcomeFrame` (the goal outcome line, founder decision 2026-09-14 — the entry also carries `goal_outcome`); `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` → the matching `SubagentStartFrame` / `SubagentStateFrame` / `SubagentMessageFrame` / `SubagentEndFrame` (ADR-091 D7/I-4 — steer_frames.go's persisted sub-agent lifecycle frames, carried on this `Message` by the dedicated `subagent_start` / `subagent_state` / `subagent_message` / `subagent_end` fields below, the same stamped-field convention `goal_outcome` already established). Hard Constraint #8: this closes the gap where the gateway served these four subtypes without the generated validator ever having learned them, failing every fetch of a session that delegated (the tester's own run only exercised three of the four — subagent_message persists through the identical path, steer_frames.go's persistSubagentEntry, so this fix covers it too rather than leaving the same defect for the next delegation that happens to emit one).
              * @example browser_handover_notice
              * @enum {string}
              */
-            system_subtype?: "browser_handover_notice" | "goal_outcome" | "subagent_start" | "subagent_state" | "subagent_message" | "subagent_end";
+            system_subtype?: "browser_handover_notice" | "expiry_notice" | "goal_outcome" | "helper_event" | "subagent_start" | "subagent_state" | "subagent_message" | "subagent_end";
             goal_outcome?: components["schemas"]["GoalOutcome"];
+            helper_event?: components["schemas"]["HelperEvent"];
             subagent_start?: components["schemas"]["SubagentStartFrame"];
             subagent_state?: components["schemas"]["SubagentStateFrame"];
             subagent_message?: components["schemas"]["SubagentMessageFrame"];
             subagent_end?: components["schemas"]["SubagentEndFrame"];
+            /**
+             * @description Present and true only on an assistant entry that is a turn's distinct terminal outcome sentence, separate from its preceding narration. Same value as ReplayMessageFrame.terminal_outcome; historical hydration must not merge this entry into the preceding same-turn assistant message. Absent on other entries, including older entries without this recorded field.
+             * @example true
+             */
+            terminal_outcome?: boolean;
+            /** @description Spec omnipus-system-agent K33 (FR-202, FR-215). Present when this main-session entry is a room request to this agent or this agent's answer into a room, so live, history and replay render the same collapsed entry. */
+            room_ref?: components["schemas"]["RoomRef"];
+            /** @description Effort levels spec (FR-058). Copied from this entry's own stored effort record (answering assistant entries only). Absent when the entry has none. */
+            effort?: components["schemas"]["EffortRecord"];
+            /**
+             * @description Effort levels spec (FR-024). The stored display-only snapshot of the turn's reported reasoning-token sum, copied from the answering entry; never summed at read time. Absent = no call of the turn reported a count; 0 = reported zero.
+             * @example 120
+             */
+            turn_reasoning_tokens?: number;
         };
-        /** @description A single tool invocation recorded in a transcript entry. Maps to session.ToolCall on the Go side and ToolCall interface in src/lib/api.ts. */
+        /** @description The DISPLAY/STATUS projection of a single tool invocation in a transcript entry — the {id, tool, status, parameters, result} form the SPA renders. This is NOT providers.ToolCall (the provider wire shape on the Go side): it carries no provider call identity beyond `id`, no thought signature and no raw function-argument string, and it must never be used in place of the provider call shape (session-core C-ARCHIVE / U2; FR-004). Maps to session.ToolCall on the Go side and the ToolCall interface in src/lib/api.ts. */
         ToolCall: {
             /**
              * @description Unique tool call identifier (ToolCallID type on the Go side).
@@ -4378,7 +5167,7 @@ export interface components {
              */
             tool: string;
             /**
-             * @description Outcome of the tool call. "interrupted" is written by the tool-call status derivation in `pkg/agent/loop_run_turn_tools.go` onto a delegate/spawn tool call's own persisted record when the parent turn is canceled/aborted mid-flight while the sub-turn is still in progress (session.UnifiedStore.UpdateToolCallStatus). "parked" (ADR-057 UAT defect C2 fix) is written the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
+             * @description Outcome of the tool call. "interrupted" is recorded on a delegate/spawn tool call's own persisted record when the parent turn is canceled or aborted mid-flight while the sub-turn is still in progress. "parked" (ADR-057 UAT defect C2 fix) is recorded the same way when the child sub-turn instead stopped because a message_parent(kind="question", wait=true) call parked it awaiting the parent's answer. Mirrors SubagentEndFrame.yaml's status enum for the equivalent live-WS case. ToolCall carries no structured "reason" enum (that stays WS-frame-only, via SubTurnEndPayload), but it does carry a free-text "error" field describing why a failed call failed — see below.
              * @example success
              * @enum {string}
              */
@@ -4404,7 +5193,10 @@ export interface components {
             parameters?: {
                 [key: string]: unknown;
             };
-            /** @description Return value from the tool. Shape is tool-specific. */
+            /**
+             * @description Return value from the tool. Shape is tool-specific. This is the PROJECTED content the model saw (see `content_state`); the full admitted provider result bytes live in the canonical session day archive and projection changes never mutate those retained bytes (session-core C-ARCHIVE / U2; FR-004/FR-006).
+             *     `_history_preview` is a reserved key (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)", A2.2): on a history page, session detail or snapshot a saved result over 51,200 encoded bytes is replaced by a HistoryResultPreview marker, and an object carrying `_history_preview` must match HistoryResultPreview exactly. An ordinary result never carries that key. The `not` below expresses this rule ("not: carries the key and fails HistoryResultPreview"); the 4,096-byte UTF-8 limit on `preview` is checked separately at the server and browser boundaries. getSessionHistoryEntry never returns a marker.
+             */
             result?: {
                 [key: string]: unknown;
             };
@@ -4502,6 +5294,11 @@ export interface components {
              * @description RFC3339 UTC timestamp of the latest refcount observation. Required on every entry (Wave 1 TD-M2).
              */
             readonly last_refcount_seen_at?: string;
+            /**
+             * @description Workspace-relative path of this entry's Library file (for example .library/shot.png), with the same path rules as LibraryEntry.path (#1449 D26, FR-086). The durable association between the chat copy and the Library file: written when the file is published, kept across a rename or a move inside the workspace, cleared when the Library file is deleted or moved to another workspace. Absent when the entry has no associated Library file.
+             * @example .library/shot.png
+             */
+            readonly library_path?: string;
             /**
              * @description Server-computed presentation state; never persisted as real entry state (it is derived at read time from the library's internal corruption registry). "stranded" marks an entry whose manifest record still exists but whose raw bytes are unreachable at their normal on-disk location after a prior compound rollback failure — the file is NOT usable and the UI should not offer open/attach/download for it. Only GET .../media (list) annotates a stranded entry this way; the single-entry read/attach/delete endpoints refuse a stranded entry outright (500, "media entry is in an inconsistent state") rather than returning it with this field set, so "stranded" is never observed from those responses — this field is "available" everywhere except a stranded row in the list.
              * @example available
@@ -4647,6 +5444,28 @@ export interface components {
              * @example true
              */
             is_text_editable: boolean;
+            /**
+             * @description True when this entry is a saved view (#1017): a file the knowledge base's view loader accepted from `<knowledge base root>/.omnipus-vault/views/`. Set ONLY by GET .../entries called with include_views=true; there it is true on a view entry and absent on every other entry. On any other response that returns a LibraryEntry (write, rename, move, copy, upload), and on a listing made without include_views, it is absent and states nothing. `view` is present exactly when this is true.
+             * @example true
+             */
+            is_view?: boolean;
+            view?: components["schemas"]["LibraryEntryView"];
+            /**
+             * @description Preview isolation profile for this file (founder Q5=A, recorded 2026-10-02, final; ADR-20261001 "Saved mail-derived HTML profile" row; mail-live-access-landing-order register row 8 — W0 is the single publisher). workspace = the ordinary isolated script-permitting workspace profile. mail_restricted = the file was written by an explicit Save from Mail: original bytes preserved, rendered with scripts OFF by default under the stricter mail-derived policy. The mail-derived marker is written only by explicit Save (never by Open), must survive move, copy, rename and restore-from-backup (provenance survival is a traced, proved implementation obligation), and a missing or corrupt expected marker fails safely rather than silently upgrading a known mail-derived file. Absent on entries that predate this field = ordinary workspace profile.
+             * @example mail_restricted
+             * @enum {string}
+             */
+            preview_profile?: "workspace" | "mail_restricted";
+            /**
+             * @description True when this file has an associated chat copy (the copy chats show, in the workspace media library) that deleting this entry also removes (#1449 D26, FR-086, FR-087). Absent or false means no associated chat copy: deleting the entry removes only this file.
+             * @example true
+             */
+            readonly chat_copy?: boolean;
+            /**
+             * @description The per-file scripts checkbox (founder Q5=A) — true only when the user explicitly allowed scripts for THIS one file, switching only its preview to the ordinary isolated script-permitting profile. Visible, per file, never silent and never global. Meaningful only with preview_profile=mail_restricted; on ordinary workspace files the isolated profile is the default state and this field is absent.
+             * @example false
+             */
+            preview_scripts_allowed?: boolean;
         };
         /**
          * LibraryEntryMount
@@ -4669,6 +5488,52 @@ export interface components {
              * @example false
              */
             broad: boolean;
+        };
+        /**
+         * LibraryEntryView
+         * @description The saved-view facts carried by a LibraryEntry that is a saved view (#1017). Present exactly when the parent entry's `is_view` is true, and only in a GET /library/{workspace_id}/entries response requested with include_views=true.
+         *
+         *     A saved view is the file `<collection root>/.omnipus-vault/views/<slug>.yaml` that the collection's view loader ACCEPTED (the same load GET .../knowledge/views uses: the same parser and record schemas, reading only regular files inside the knowledge base, within the listing's size limits). Every field here is read from that loaded view, never re-derived by the client: the same no-re-derivation rule KnowledgeBaseView states.
+         *
+         *     To show the view's rows, pass `collection_id` and `name` VERBATIM to GET /library/{workspace_id}/knowledge/view (its `collection_id` and `view` query parameters). The entry's own `path` is the saved view FILE; reading it returns the view's YAML definition, not its rows.
+         *
+         *     Every emitted (`collection_id`, `name`) can be opened: GET .../knowledge/views?collection_id=<collection_id> lists `name`, and GET .../knowledge/view with the pair returns the view rather than `unknown_view`. That is why only a knowledge base that is itself a collection of the workspace's knowledge scope carries view entries; a knowledge base nested inside another one carries none (see the include_views parameter of GET .../entries).
+         *
+         *     Grouping a nested group of optional facts behind one presence check follows the `mount` precedent (LibraryEntryMount.yaml).
+         * @example {
+         *       "name": "invoices--outstanding",
+         *       "label": "Outstanding",
+         *       "collection_id": "kb_3d1c9a7e5b2f4806",
+         *       "kind": "summary",
+         *       "source": "CRM/Invoices.base"
+         *     }
+         */
+        LibraryEntryView: {
+            /**
+             * @description The saved view's own name (records.SavedView.Name) — the server's slug and the view's only address. Pass it VERBATIM as the `view` query parameter of GET .../knowledge/view. Never reconstructed by a client, and not the same thing as the entry's `name` (which is the file name, `<slug>.yaml`).
+             * @example projects--active-projects
+             */
+            name: string;
+            /**
+             * @description What to show a reader: the view's declared `label` when it has one, otherwise its `name` (records.SavedView.DisplayLabel, the same value KnowledgeBaseView.label carries).
+             * @example Active projects
+             */
+            label: string;
+            /**
+             * @description The opaque id of the knowledge base that owns this view — the same value KnowledgeBaseInfo.collection_id and KnowledgeCollectionViews.collection_id carry for that knowledge base. Pass it as `collection_id` to GET .../knowledge/view. Never parse a path out of it.
+             * @example kb_3d1c9a7e5b2f4806
+             */
+            collection_id: string;
+            /**
+             * @description The view kind declared in the view file (ViewDef.kind), echoed verbatim — today one of table, list, tiles, board, calendar, summary, trend or breakdown, the values ViewDef.kind allows. Absent when the file declares no kind: views imported from a `.base` file and views written before the kinds existed usually have none, and no kind is ever invented for them. A plain string rather than an enum, like KnowledgeBaseView.kind and ViewResult.kind, so a kind added to ViewDef later can never make this listing fail client-side validation; a client that does not recognise a value shows its generic view icon.
+             * @example summary
+             */
+            kind?: string;
+            /**
+             * @description The `.base` file this view was imported from: the view file's own `source` key (records.SavedView.DeclaredSource), echoed verbatim — a path relative to the knowledge base root, exactly as KnowledgeBaseView.source reports it. Absent for a view authored in place (knowledge_configure create_view / write_view), which belongs to the knowledge base as a whole rather than to any file. It is also what decides which folder lists the view (see the include_views parameter of GET .../entries); it does not imply the `.base` file still exists.
+             * @example CRM/Invoices.base
+             */
+            source?: string;
         };
         /**
          * LibraryContentResponse
@@ -4821,10 +5686,7 @@ export interface components {
              */
             to: string;
         };
-        /**
-         * LibraryUploadResponse
-         * @description Response from POST /api/v1/library/{workspace_id}/upload (HTTP 201). Returns the work-tree entries created by the upload — mirrors UploadFilesResponse's shape for the session-scoped uploader, but with LibraryEntry (path-keyed) items rather than UploadedFile.
-         */
+        /** @description Response from POST /api/v1/library/{workspace_id}/upload (HTTP 201). Returns the work-tree entries created by the upload — mirrors UploadFilesResponse's shape for the session-scoped uploader, but with LibraryEntry (path-keyed) items rather than UploadedFile. */
         LibraryUploadResponse: {
             /** @description Entries created by this upload, in the order the multipart parts were received. */
             entries: components["schemas"]["LibraryEntry"][];
@@ -7908,6 +8770,24 @@ export interface components {
              */
             types?: string[];
         };
+        /**
+         * @description Body of the agent mark. Product words, exact case. Default Omnipus, applied by the server when omitted on create or missing in stored config. Not the art-file keys. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write. Monogram draws the uppercased first letter or digit of the agent's display name as the mark, in the agent's colour; a first character that is not a letter or digit renders ?. The other values draw figure art.
+         * @example Omnipus
+         * @enum {string}
+         */
+        AgentFigure: "Robot" | "Man" | "Woman" | "Omnipus" | "Monogram";
+        /**
+         * @description Curated role slug. The badge shown with the agent's avatar. Labels and the five groups are not on the wire. JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+         * @example general
+         * @enum {string}
+         */
+        AgentRole: "writer" | "designer" | "image" | "video" | "audio" | "social" | "developer" | "data" | "analyst" | "itops" | "automation" | "security" | "quality" | "science" | "orchestrator" | "project" | "product" | "sales" | "marketing" | "finance" | "legal" | "support" | "documents" | "researcher" | "people" | "tutor" | "knowledge" | "translator" | "general" | "personal" | "office";
+        /**
+         * @description Identity colour. Uppercase canonical hex. The ten values are the whole set (the metallic, brand-derived palette: Steel blue, Titanium, Verdigris, Gunmetal, Graphite violet, Rose gold, Bronze, Antique brass, Champagne, Pewter). Gold, warning yellow, semantic green, semantic red and Liquid Silver are not in it; note that Champagne and Antique brass sit near the gold accent, by founder choice. Letter-case of a listed hex is normalized to this form on write. Any other value, including a colour of the removed previous palette, is invalid: rejected on write, and a stored value outside the ten is returned as the default (Pewter) on read (no stored file is rewritten). JSON null is not an identity value. On PUT, omission retains the stored value; an explicit null or any other invalid supplied value rejects the whole update with HTTP 400 before any write.
+         * @example #6E8BA8
+         * @enum {string}
+         */
+        AgentColor: "#6E8BA8" | "#7A8C9E" | "#4F8A80" | "#5E6973" | "#7B7290" | "#B76E79" | "#A97142" | "#9C8A5B" | "#CDBA96" | "#8E9196";
         /** @description An agent configuration object as returned by GET /agents and GET /agents/{id}. Maps to the generated Agent wire type (pkg/api/generated/openapi_types.gen.go and src/lib/api/generated/openapi-types.ts). The generated type is the single source of truth. Core (locked) agents suppress soul in list responses and forbid identity mutations via PUT. */
         Agent: {
             revision: components["schemas"]["ConfigurationRevision"];
@@ -7916,6 +8796,7 @@ export interface components {
             changed_fields?: string[];
             error_stage?: string;
             message?: string;
+            /** @description Per-field editability for this agent. For custom subagent_3p agents the executor descriptors are executor.env_overrides, executor.env_overrides_remove and executor.cli_args (editable; other agents get the reason "Only external-CLI workers have a runtime environment."), executor.cli (never: "Locked after create; create a new agent to switch CLIs."), executor.effective_cli_path (never: "Set in Settings -> Third-party agents.") and executor.kind (never: "Derived from the agent type."). */
             editable_fields?: components["schemas"]["AgentFieldDescriptor"][];
             /**
              * @description Unique agent identifier. UUID for user-created agents; well-known strings for core agents (e.g. "jim").
@@ -7938,16 +8819,9 @@ export interface components {
              * @example false
              */
             locked: boolean;
-            /**
-             * @description Hex color code for agent avatar display (e.g. "#D4AF37").
-             * @example #D4AF37
-             */
-            color?: string;
-            /**
-             * @description Phosphor icon name for agent avatar (e.g. "Robot", "Octopus").
-             * @example Robot
-             */
-            icon?: string;
+            figure: components["schemas"]["AgentFigure"];
+            role: components["schemas"]["AgentRole"];
+            color?: components["schemas"]["AgentColor"];
             /**
              * @description Model slug used for LLM calls (resolved from defaults when not explicitly set on the agent). With the O3 two-field model, this is the bare model slug (e.g. "google/gemini-2.5-flash"); routing is keyed by the explicit `provider` field. A legacy combined slug ("openrouter/google/gemini-2.5-flash") is split into {model, provider} by the config-load migration. Never inferred at call time once `provider` is set.
              * @example google/gemini-2.5-flash
@@ -7958,6 +8832,8 @@ export interface components {
              * @example openrouter
              */
             provider?: string;
+            /** @description Stored effort for the primary model (effort-levels spec FR-029): "" clears it (Not set; an agent riding the default model then inherits the default's effort), "provider_default", a catalog level name, "on" or "off". Omitted keeps the stored value. null is refused. Not checked against the catalog (FR-048). */
+            reasoning_effort?: string;
             /**
              * @description Short description of the agent's purpose.
              * @example General-purpose coding assistant
@@ -7980,21 +8856,22 @@ export interface components {
              */
             warning?: string;
             /**
-             * @description Maximum seconds a single agent turn may run before being interrupted. Inherited from agents.defaults.timeout_seconds when not overridden per-agent.
-             * @example 300
-             */
-            timeout_seconds: number;
-            /**
-             * @description Maximum number of tool calls allowed per turn. Inherited from agents.defaults.max_tool_iterations when not overridden.
+             * @description The EFFECTIVE maximum number of tool calls allowed per turn (issue #904, tool-iteration-limit spec D1): the global limit (agents.defaults.max_tool_iterations) unless the agent has its own value lower than or equal to it, in which case the own value. An own value above the global never raises the limit — it is ignored (see max_tool_iterations_override_ignored). max_tool_iterations_source says which rule applied.
              * @example 50
              */
             max_tool_iterations: number;
-            tools_cfg?: components["schemas"]["AgentToolsCfg"];
+            max_tool_iterations_source: components["schemas"]["MaxToolIterationsSource"];
             /**
-             * @description ADR-092 per-agent override of the global Auto-approve default (SandboxConfig.auto_approve). Off-only, by construction: this field can only ever mean "force Auto off for this agent's ask-policy tool calls" — there is no value meaning "force it on," so a per-agent write can never loosen past the global default (tighten-only, matching every scope except the per-chat session modifier, SessionModeUpdateFrame). false (the default) means this agent inherits the global default unchanged. Distinct from `tools_cfg.builtin.policies`, which is unchanged by ADR-092 and still governs the ordinary allow/deny/ask value per tool — this field only ever narrows what "ask" DOES for this agent's tools, never which tools are allow/deny/ask.
+             * @description The agent's own stored tool-iteration limit (issue #904). Absent when the agent has none (it rides the global). No maximum: a hand-edited stored value may exceed 1000 and is shown truthfully.
+             * @example 40
+             */
+            max_tool_iterations_override?: number;
+            /**
+             * @description True when the agent's own stored value is above the global limit and therefore has no effect (issue #904, tool-iteration-limit spec D1); the effective value is then the global and max_tool_iterations_source is "global". False otherwise, including when the agent has no own value.
              * @example false
              */
-            auto_approve_disabled?: boolean;
+            max_tool_iterations_override_ignored: boolean;
+            tools_cfg?: components["schemas"]["AgentToolsCfg"];
             /**
              * @description Ordered list of fallback model entries tried when the primary model returns an error (Phase 1B / FR-005). Each entry carries its own provider so the fallback can route through a different provider than the primary — useful when the primary's provider is rate-limited (FR-007). Capped at 2 entries. Hidden for subagent_3p.
              *     Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
@@ -8007,13 +8884,11 @@ export interface components {
              */
             fallback_models?: components["schemas"]["FallbackModel"][];
             model_params?: components["schemas"]["AgentModelParams"];
-            rate_limits?: components["schemas"]["AgentRateLimits"];
             stats?: components["schemas"]["AgentStats"];
-            /**
-             * @description Whether this agent is the current global default that handles inbound messages with no more-specific routing rule. This is a COMPUTED value — the backend derives it by comparing the agent's id against the single default-agent setting each time it builds a response; it is never stored per-agent. At most one agent is default at a time. Main only — workers never default.
-             * @example false
-             */
-            default?: boolean;
+            /** @description Skill key → generation the grant is bound to (SD-30). Written wholesale by the server at every agent create/update from its own observation of the installed skill folders; requests stay name-only. An absent field or entry is unbound and authorizes nothing. */
+            skill_grants?: {
+                [key: string]: string;
+            };
             /**
              * @description List of skill IDs granted to this agent. Only skills in this list are available during this agent's runs. When no skills are granted the field is omitted entirely from the response (the backend does not emit an empty array). Absence of the field and an empty array are semantically identical (opt-in, default none).
              * @example [
@@ -8021,6 +8896,13 @@ export interface components {
              *     ]
              */
             skills?: string[];
+            /**
+             * @description Names from `skills` whose skill is installed but whose grant is bound to a previous skill with that name (or to none), so the agent cannot load it (SKILL_GRANT_STALE). Computed by the server on the agent detail read (GET /agents/{id}); saving the agent again re-binds the grant. A name whose skill is not installed is not listed. Omitted when empty.
+             * @example [
+             *       "web-research"
+             *     ]
+             */
+            readonly stale_skill_grants?: string[];
             /**
              * Format: date-time
              * @description ISO 8601 timestamp of the last successful PUT /agents/{id} update. Returned in list and detail responses.
@@ -8085,33 +8967,6 @@ export interface components {
             max_tokens?: number;
         };
         /**
-         * AgentRateLimits
-         * @description Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies and per-agent overrides are ignored.
-         */
-        AgentRateLimits: {
-            /**
-             * @description When true, global rate limits are used and per-agent overrides are ignored.
-             * @example true
-             */
-            use_global_defaults?: boolean;
-            /**
-             * @description Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
-             * @example 100
-             */
-            max_llm_calls_per_hour?: number;
-            /**
-             * @description Maximum tool calls per minute for this agent. Absent = no per-agent cap.
-             * @example 60
-             */
-            max_tool_calls_per_minute?: number;
-            /**
-             * Format: double
-             * @description Maximum USD cost per day for this agent. Absent = no per-agent cap.
-             * @example 5
-             */
-            max_cost_per_day?: number;
-        };
-        /**
          * AgentStats
          * @description Aggregate runtime statistics for an agent. Absent on the Agent object when no sessions have been run.
          */
@@ -8144,7 +8999,7 @@ export interface components {
             /** @description Controls builtin tool visibility for this agent. */
             builtin?: {
                 /**
-                 * @description Policy map. GET tools returns the complete effective catalog while persisted ordinary built-in maps contain sparse overrides. Dedicated replacement requests require every static tool as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
+                 * @description Policy map. GET tools returns the complete effective catalog while persisted ordinary built-in maps contain sparse overrides. Dedicated replacement requests require every implemented static builtin listed by GET /api/v1/tools as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value. Declared future tool names are accepted when supplied but are not required before implementation; omitted existing policies for those names are preserved on replacement, never newly seeded. Wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
                  * @example {
                  *       "bash": "deny",
                  *       "remember": "allow"
@@ -8181,16 +9036,16 @@ export interface components {
         };
         /**
          * AgentToolsUpdateRequest
-         * @description Replace tool settings using a complete effective policies map and explicit sparse override intent. revision and override_names are required. Only keys in override_names are persisted as local overrides; unlisted values must equal the current global ceiling or the request conflicts. Ordinary built-ins are editable; hidden capabilities remain fixed. Connector omission preserves and explicit empty removes assignments. The existing config wrapper is accepted.
+         * @description Replace tool settings using a complete effective policies map and explicit sparse override intent. revision and override_names are required. For supplied tools, only keys in override_names are persisted as local overrides; unlisted values must equal the current global ceiling or the request conflicts. Existing policies for declared future tools omitted from the request are preserved, never newly seeded. Ordinary built-ins are editable; hidden capabilities remain fixed. Connector omission preserves and explicit empty removes assignments. The existing config wrapper is accepted.
          */
         AgentToolsUpdateRequest: {
             revision: components["schemas"]["ConfigurationRevision"];
-            /** @description Stored local override keys; an empty list removes all local overrides. */
+            /** @description Stored local override keys for supplied tools; an empty list removes their local overrides. Existing policies for omitted, declared future tool names are preserved. */
             override_names: string[];
             config?: components["schemas"]["AgentToolsCfg"];
             /** @description Builtin tool policy configuration for this agent. */
             builtin?: {
-                /** @description Complete per-tool policy map. Every static builtin tool name MUST be present as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — this is not a sparse override set with a fallback default, and wildcard keys are not valid for the static builtin catalog. There is no default_policy field. Required on every request that includes builtin. Legacy callers that only have mode/visible available must resolve them to a complete policies map before sending this request; the server still accepts mode/visible alongside policies (ignored) for one release of transitional compatibility but no longer accepts them alone. */
+                /** @description Complete per-tool policy map. Every implemented static builtin tool listed by GET /api/v1/tools MUST be present as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value. Declared future tool names are accepted when supplied but are not required before implementation; omitted existing policies for those names are preserved, never newly seeded. This is not a sparse override set with a fallback default, and wildcard keys are not valid for the static builtin catalog. There is no default_policy field. Required on every request that includes builtin. Legacy callers that only have mode/visible available must resolve them to a complete policies map before sending this request; the server still accepts mode/visible alongside policies (ignored) for one release of transitional compatibility but no longer accepts them alone. */
                 policies: {
                     [key: string]: "allow" | "ask" | "deny";
                 };
@@ -8213,6 +9068,7 @@ export interface components {
         /**
          * AgentCreateRequestMain
          * @description Create a Main agent — a user-defined chat colleague on the Omnipus engine. Field set per docs/internal/architecture/agent-types-field-matrix.md: voice is Main-only; executor is absent (Main never has one).
+         *     Create-input identity normalization (founder ruling 2026-10-09): on this create request only, `figure`, `role`, and `color` are lenient at the boundary — omitted, null, or "" (empty string) each mean "use the default" (Omnipus / general / #8E9196), and a letter-case variant of one of the ten palette hexes is normalized to its uppercase enum value before the strict schema check (gateway.validate_inbound) and again on store. The enum schemas stay exact-case and closed: any other non-empty figure or role value, and any non-palette hex, is rejected 400 with the setting on or off. On PUT (AgentUpdateRequest) an explicit null or empty identity value is rejected instead.
          */
         AgentCreateRequestMain: {
             /** @description Omission preserves assignments; an explicit empty list removes all assignments. Null is rejected. */
@@ -8225,7 +9081,7 @@ export interface components {
              */
             type: "Main";
             /**
-             * @description Display name for the new agent.
+             * @description Display name for the new agent. At most 100 characters, the same limit as Agent.name (#1075).
              * @example My Custom Agent
              */
             name: string;
@@ -8244,22 +9100,12 @@ export interface components {
              * @example openrouter
              */
             provider?: string;
-            /**
-             * @description Hex color code for the agent avatar.
-             * @example #D4AF37
-             */
-            color?: string;
-            /**
-             * @description Phosphor icon name for the agent avatar.
-             * @example ChartBar
-             */
-            icon?: string;
+            /** @description Stored effort for the primary model (effort-levels spec FR-029): "" clears it (Not set; an agent riding the default model then inherits the default's effort), "provider_default", a catalog level name, "on" or "off". Omitted keeps the stored value. null is refused. Not checked against the catalog (FR-048). */
+            reasoning_effort?: string;
+            figure?: components["schemas"]["AgentFigure"];
+            role?: components["schemas"]["AgentRole"];
+            color?: components["schemas"]["AgentColor"];
             tools_cfg?: components["schemas"]["AgentToolsCfg"];
-            /**
-             * @description Initial per-agent override forcing Auto-approve off (ADR-092) for this agent, regardless of the global default (SandboxConfig.auto_approve). Off-only — omit or send false to inherit the global default. Distinct from `tools_cfg`, which is unchanged and still governs allow/deny/ask per tool.
-             * @example false
-             */
-            auto_approve_disabled?: boolean;
             /**
              * @description Ordered list of fallback model entries tried when the primary model returns an error. Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007). Capped at 2 entries.
              *     Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
@@ -8303,7 +9149,7 @@ export interface components {
              */
             voice?: string | null;
             /**
-             * @description Maximum number of tool calls allowed per turn.
+             * @description The new agent's own tool-iteration limit (issue #904). Omitted = the agent rides the global limit. Refused (400) if above the current global limit.
              * @example 50
              */
             max_tool_iterations?: number;
@@ -8311,6 +9157,7 @@ export interface components {
         /**
          * AgentCreateRequestSubagent
          * @description Create a Subagent — a user-defined delegation-only worker on the Omnipus engine. Field set per the agent-types field matrix: no voice (no chat/TTS surface), no executor (native is derived server-side — never sent by the client). Description is enforced non-empty-after-trim by the handler (the orchestrator delegates based on it).
+         *     Create-input identity normalization (founder ruling 2026-10-09): on this create request only, `figure`, `role`, and `color` are lenient at the boundary — omitted, null, or "" (empty string) each mean "use the default" (Omnipus / general / #8E9196), and a letter-case variant of one of the ten palette hexes is normalized to its uppercase enum value before the strict schema check (gateway.validate_inbound) and again on store. The enum schemas stay exact-case and closed: any other non-empty figure or role value, and any non-palette hex, is rejected 400 with the setting on or off. On PUT (AgentUpdateRequest) an explicit null or empty identity value is rejected instead.
          */
         AgentCreateRequestSubagent: {
             /** @description Omission preserves assignments; an explicit empty list removes all assignments. Null is rejected. */
@@ -8323,7 +9170,7 @@ export interface components {
              */
             type: "Subagent";
             /**
-             * @description Display name for the new agent.
+             * @description Display name for the new agent. At most 100 characters, the same limit as Agent.name (#1075).
              * @example My Custom Agent
              */
             name: string;
@@ -8342,22 +9189,12 @@ export interface components {
              * @example openrouter
              */
             provider?: string;
-            /**
-             * @description Hex color code for the agent avatar.
-             * @example #D4AF37
-             */
-            color?: string;
-            /**
-             * @description Phosphor icon name for the agent avatar.
-             * @example ChartBar
-             */
-            icon?: string;
+            /** @description Stored effort for the primary model (effort-levels spec FR-029): "" clears it (Not set; an agent riding the default model then inherits the default's effort), "provider_default", a catalog level name, "on" or "off". Omitted keeps the stored value. null is refused. Not checked against the catalog (FR-048). */
+            reasoning_effort?: string;
+            figure?: components["schemas"]["AgentFigure"];
+            role?: components["schemas"]["AgentRole"];
+            color?: components["schemas"]["AgentColor"];
             tools_cfg?: components["schemas"]["AgentToolsCfg"];
-            /**
-             * @description Initial per-agent override forcing Auto-approve off (ADR-092) for this agent, regardless of the global default (SandboxConfig.auto_approve). Off-only — omit or send false to inherit the global default. Distinct from `tools_cfg`, which is unchanged and still governs allow/deny/ask per tool.
-             * @example false
-             */
-            auto_approve_disabled?: boolean;
             /**
              * @description Ordered list of fallback model entries tried when the primary model returns an error. Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007). Capped at 2 entries.
              *     Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
@@ -8396,14 +9233,15 @@ export interface components {
              */
             soul: string;
             /**
-             * @description Maximum number of tool calls allowed per turn.
+             * @description The new agent's own tool-iteration limit (issue #904). Omitted = the agent rides the global limit. Refused (400) if above the current global limit.
              * @example 50
              */
             max_tool_iterations?: number;
         };
         /**
          * AgentCreateRequestSubagent3p
-         * @description Create a subagent_3p — a delegation-only worker that runs on an external CLI (claude-code / codex / opencode). The runner manages its own isolation, auth, retries, and tool loop, so tools_cfg, skills, fallback_models, model_params, shell_policy, voice, and max_tool_iterations do not exist on this variant (additionalProperties: false rejects them). timeout_seconds stays (process-level kill for a hung CLI). executor is REQUIRED (kind external-cli with cli + cli_path; the handler additionally rejects whitespace-only cli_path).
+         * @description Create a subagent_3p — a delegation-only worker that runs on an external CLI (claude-code / codex / opencode). The runner manages its own isolation, auth, retries, and tool loop, so tools_cfg, skills, fallback_models, model_params, shell_policy, and voice do not exist on this variant (additionalProperties: false rejects them). max_tool_iterations does exist (issue #904, D14): it becomes the CLI's turn cap. There is no time limit: a CLI run ends when it finishes or is explicitly stopped. executor is REQUIRED (ExecutorConfigCreate: cli plus optional env_overrides and cli_args; kind and cli_path are rejected). The program for the chosen CLI is set by a person in Settings -> Third-party agents; creating an agent for a CLI with no usable Settings path succeeds and the echo carries executor.program_warning. There is no soul: a third-party agent has no SOUL.md (soul is rejected as an unknown field).
+         *     Create-input identity normalization (founder ruling 2026-10-09): on this create request only, `figure`, `role`, and `color` are lenient at the boundary — omitted, null, or "" (empty string) each mean "use the default" (Omnipus / general / #8E9196), and a letter-case variant of one of the ten palette hexes is normalized to its uppercase enum value before the strict schema check (gateway.validate_inbound) and again on store. The enum schemas stay exact-case and closed: any other non-empty figure or role value, and any non-palette hex, is rejected 400 with the setting on or off. On PUT (AgentUpdateRequest) an explicit null or empty identity value is rejected instead.
          */
         AgentCreateRequestSubagent3p: {
             /**
@@ -8413,7 +9251,7 @@ export interface components {
              */
             type: "subagent_3p";
             /**
-             * @description Display name for the new agent.
+             * @description Display name for the new agent. At most 100 characters, the same limit as Agent.name (#1075).
              * @example My Custom Agent
              */
             name: string;
@@ -8432,60 +9270,24 @@ export interface components {
              * @example openrouter
              */
             provider?: string;
+            figure?: components["schemas"]["AgentFigure"];
+            role?: components["schemas"]["AgentRole"];
+            color?: components["schemas"]["AgentColor"];
+            executor: components["schemas"]["ExecutorConfigCreate"];
             /**
-             * @description Hex color code for the agent avatar.
-             * @example #D4AF37
+             * @description The new worker's own tool-iteration limit (issue #904, D14), passed to the external CLI as its turn cap. Omitted = the worker rides the global limit. Refused (400) if above the current global limit.
+             * @example 50
              */
-            color?: string;
-            /**
-             * @description Phosphor icon name for the agent avatar.
-             * @example ChartBar
-             */
-            icon?: string;
-            /** @description Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies. */
-            rate_limits?: {
-                /**
-                 * @description When true, global rate limits are used and per-agent overrides are ignored.
-                 * @example true
-                 */
-                use_global_defaults?: boolean;
-                /**
-                 * @description Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
-                 * @example 100
-                 */
-                max_llm_calls_per_hour?: number;
-                /**
-                 * @description Maximum tool calls per minute for this agent. Absent = no per-agent cap.
-                 * @example 60
-                 */
-                max_tool_calls_per_minute?: number;
-                /**
-                 * Format: double
-                 * @description Maximum USD cost per day for this agent. Absent = no per-agent cap.
-                 * @example 5
-                 */
-                max_cost_per_day?: number;
-            };
-            /**
-             * @description Initial SOUL.md content. Required for every user-creatable type — including Subagent (External), where it is passed as part of the CLI prompt at runtime. The CLI never reads a file from disk. Backend trims before length-validation, so whitespace-only is rejected as minLength violation.
-             * @example You are a focused research assistant...
-             */
-            soul: string;
-            executor: components["schemas"]["ExecutorConfig"];
-            /**
-             * @description Maximum seconds a single agent turn may run before being interrupted.
-             * @example 300
-             */
-            timeout_seconds?: number;
+            max_tool_iterations?: number;
         };
-        /** @description Partial agent update. Revision and at least one changed field are required. Ordinary built-in identity and soul are fixed; tool policies, connector assignments and skills are editable. Hidden Judge/Supervisor instructions are editable while their identity and capabilities remain fixed. Runtime applicability is validated before any mutation. Protected same-value echoes are still rejected. */
+        /** @description Partial agent update. Revision and at least one changed field are required. Ordinary built-in identity and soul are fixed; tool policies, connector assignments and skills are editable. Hidden Judge/Supervisor instructions are editable while their identity and capabilities remain fixed. Runtime applicability is validated before any mutation. Protected same-value echoes are still rejected. For figure, role, and color, only omission means unchanged. Explicit null and invalid supplied values are rejected with HTTP 400, and no sibling field, timestamp, or revision is changed. */
         AgentUpdateRequest: {
             revision: components["schemas"]["ConfigurationRevision"];
             /** @description Omission preserves assignments; an explicit empty list removes all assignments. Null is rejected. */
             mcp_servers?: components["schemas"]["AgentMCPBinding"][];
             tool_policy_changes?: components["schemas"]["ToolPolicyChanges"];
             /**
-             * @description New display name. Rejected on locked agents.
+             * @description New display name. Rejected on locked agents. At most 100 characters, the same limit as Agent.name (#1075).
              * @example My Renamed Agent
              */
             name?: string;
@@ -8504,6 +9306,8 @@ export interface components {
              * @example openrouter
              */
             provider?: string;
+            /** @description Stored effort for the primary model (effort-levels spec FR-029): "" clears it (Not set; an agent riding the default model then inherits the default's effort), "provider_default", a catalog level name, "on" or "off". Omitted keeps the stored value. null is refused. Not checked against the catalog (FR-048). */
+            reasoning_effort?: string;
             /**
              * @description Per-agent context-window override in tokens (ADR-066 D2 rung 1, D9). Lower-only — clamped to the model's capability on resolution (a WARN names the agent and the clamp). Send null to clear. Every write triggers a registry reload so the next turn uses the new window.
              * @example 200000
@@ -8515,23 +9319,16 @@ export interface components {
              */
             soul?: string;
             /**
-             * @description New maximum tool calls per turn. Allowed on all agents.
+             * @description The agent's own tool-iteration limit (issue #904, tool-iteration-limit spec D9/D10/D14). Omitted = unchanged; null = clear the own value (the agent rides the global limit — "Use global limit"); a number = set the own value, refused (400) if above the current global limit. Allowed on every agent type, including subagent_3p.
              * @example 100
              */
-            max_tool_iterations?: number;
-            /**
-             * @description Hex color code for agent avatar display (e.g. "#D4AF37").
-             * @example #D4AF37
-             */
-            color?: string;
-            /**
-             * @description Phosphor icon name for agent avatar (e.g. "Robot", "Octopus").
-             * @example Robot
-             */
-            icon?: string;
+            max_tool_iterations?: number | null;
+            figure?: components["schemas"]["AgentFigure"];
+            role?: components["schemas"]["AgentRole"];
+            color?: components["schemas"]["AgentColor"];
             /**
              * @description Replace the agent's fallback model chain (Phase 1B / FR-005). Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007). Capped at 2 entries. Rejected 400 on subagent_3p agents (CLI handles its own retries).
-             *     Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
+             *     Wire format is always the object form `[{model, provider}]`, and every entry must name both: an entry missing its provider or its model is refused 400, naming the entry (issue #1340).
              * @example [
              *       {
              *         "model": "claude-sonnet-4.6",
@@ -8539,7 +9336,7 @@ export interface components {
              *       }
              *     ]
              */
-            fallback_models?: components["schemas"]["FallbackModel"][];
+            fallback_models?: components["schemas"]["FallbackModelPair"][];
             /** @description LLM sampling parameters applied to this agent's requests. Rejected 400 on subagent_3p agents (CLI may not support these flags). */
             model_params?: {
                 /**
@@ -8556,16 +9353,6 @@ export interface components {
             };
             tools_cfg?: components["schemas"]["AgentToolsCfg"];
             /**
-             * @description Force Auto-approve off for this agent (ADR-092), overriding the global default (SandboxConfig.auto_approve) for every tool this agent resolves to "ask". Off-only: true disables Auto for this agent; false (or omitting the field, which leaves the stored value unchanged) does not loosen past the global default — there is no value here that turns Auto on when the global default has it off. Distinct from `tool_policy_changes`, which is unchanged and still governs allow/deny/ask per tool.
-             * @example false
-             */
-            auto_approve_disabled?: boolean;
-            /**
-             * @description Send true to make this agent the global default that handles inbound messages with no more-specific routing rule — replacing whichever agent previously held it. Send false to clear the default, which only has an effect if this agent currently holds it (sending false for an agent that isn't the current default is a no-op). Omitting this field leaves the default unchanged. Chat-capable core and custom Main agents only; workers, hidden and external agents cannot be defaults. This does not change workspace membership.
-             * @example false
-             */
-            default?: boolean;
-            /**
              * @description Replace the agent's skill list. Only the skill IDs in this list will be granted; omitting this field leaves the existing list unchanged. Send an empty array to remove all skills. Rejected 400 on subagent_3p agents (CLI doesn't see Omnipus skills).
              * @example [
              *       "web-research"
@@ -8577,7 +9364,7 @@ export interface components {
              * @example alloy
              */
             voice?: string | null;
-            executor?: components["schemas"]["ExecutorConfig"];
+            executor?: components["schemas"]["ExecutorConfigUpdate"];
             /**
              * @description New value for the memory-injection gate (ADR-052 FR-039). When false, ContextBuilder skips memory injection for this agent's turns. Editable where supported for ordinary/custom agents; fixed false on hidden roles.
              * @example true
@@ -8586,9 +9373,9 @@ export interface components {
         };
         /**
          * @description One entry in an agent's fallback model chain. Carries its own provider so the fallback can route through a different provider than the primary (FR-007 / Phase 1B).
-         *     Wire format: `{ "model": "<model-slug>", "provider": "<provider-key>" }`.
+         *     Wire format: `{ "model": "<model-slug>", "provider": "<provider-key>", "reasoning_effort": "<effort>" }` (reasoning_effort optional).
          *     Order matters — entries are tried in the order they appear in the parent's `fallback_models` array.
-         *     `additionalProperties: false` — the wire type has exactly two fields; unknown keys are rejected (rendered as Zod strict mode). This prevents legacy `[string]` payloads from sneaking through and is the single source of truth for the object-form contract (Q1/Q7 reconciled — see docs/internal/specs/phase-1-chat-model-and-errors.md).
+         *     `additionalProperties: false` — the wire type has exactly these fields; unknown keys are rejected (rendered as Zod strict mode). This prevents legacy `[string]` payloads from sneaking through and is the single source of truth for the object-form contract (Q1/Q7 reconciled — see docs/internal/specs/phase-1-chat-model-and-errors.md).
          */
         FallbackModel: {
             /**
@@ -8601,10 +9388,27 @@ export interface components {
              * @example anthropic
              */
             provider?: string;
+            /** @description Stored effort for this model slot (effort-levels spec FR-029): "" (Not set; on a recap slot, the Off default), "provider_default", a catalog level name, "on" or "off". Omitted keeps the stored value; null is refused. */
+            reasoning_effort?: string;
+        };
+        /** @description One fallback entry written by an agent update: a (provider, model) PAIR. Both fields are required and non-empty — a fallback is never a model alone (issue #1340, founder rule 2026-10-18). The server refuses an update whose chain carries an entry missing its provider or its model, naming the entry. Same wire shape as FallbackModel (`{ "model": "<model-slug>", "provider": "<provider-key>" }`); FallbackModel stays the read shape so a legacy unpaired entry already saved is still visible and can be corrected. */
+        FallbackModelPair: {
+            /**
+             * @description Model id exactly as the provider names it (a `/` inside it is data).
+             * @example claude-sonnet-4.6
+             */
+            model: string;
+            /**
+             * @description Routing key (e.g. "openrouter", "anthropic", "openai"). The fallback uses this provider's connection — independent of the primary's provider.
+             * @example anthropic
+             */
+            provider: string;
+            /** @description Stored effort for this model slot (effort-levels spec FR-029): "" (Not set; on a recap slot, the Off default), "provider_default", a catalog level name, "on" or "off". Omitted keeps the stored value; null is refused. */
+            reasoning_effort?: string;
         };
         ExternalCliTool: components["schemas"]["ExternalCli"];
         /**
-         * @description Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
+         * @description Executor configuration for a sub-agent (READ model: returned by REST GET, the agent list, create and update echoes, and get_agent). Controls which runtime is used to execute the sub-agent's tasks. Write models are ExecutorConfigCreate (create) and ExecutorConfigUpdate (update). There is no per-agent program path: the program for each CLI is set by a person in Settings -> Third-party agents (effective_cli_path, effective_preset_args and program_warning report it here, read-only).
          *     "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
          *     "external-cli" drives an external CLI tool (claude-code, codex, or opencode) as a subprocess. There is no `--prompt` flag on any of the three supported CLIs: claude receives the soul+instructions prompt via stdin with NO positional prompt argument at all (a bare "-" is read by this CLI as a literal one-character prompt string, not a stdin sentinel, so none is appended — claude -p consumes all of stdin automatically when no positional prompt is given); codex also receives it via stdin, but signals that with a trailing "-" positional argument (a real stdin sentinel for this CLI); opencode receives it as a POSITIONAL argument after a literal "--" end-of-options separator (never via stdin). `--model <model>` IS passed as a real flag when a model is configured (opencode additionally requires it to be shaped like "provider/model" or it is omitted). See GET /api/v1/agents/executor-defaults for the full, byte-accurate per-CLI flag list. The CLI's auth, isolation, and retries are managed by the CLI itself (not Omnipus), so fields like shell_policy / tools_cfg / fallback_models / model_params / skills are hidden for subagent_3p agents and rejected 400 on PUT if set.
          *     "cli" (required for subagent_3p agents when kind="external-cli") is locked after create — to switch CLIs, the user must create a new agent. Mutating attempts on PUT return 400 with "executor.cli is locked after create; create a new agent to switch CLIs."
@@ -8621,14 +9425,42 @@ export interface components {
             kind?: "native" | "external-cli" | "remote-a2a";
             cli?: components["schemas"]["ExternalCli"];
             /**
-             * @description Filesystem path to the CLI binary. Required for subagent_3p agents. Mutable on PUT (allows upgrading the CLI binary without re-creating the agent). When empty, the OS $PATH is used (fragile when multiple CLI versions are installed — recommend an absolute path).
-             * @example /usr/local/bin/claude
+             * @description Read-only. The program path saved in Settings -> Third-party agents for this agent's CLI, exactly as the person entered it. Absent when no path is saved for that CLI. A run uses only this Settings path (checked again at spawn, the resolved file is exec'd); there is no per-agent program path, no fallback to an old stored path and no $PATH lookup.
+             * @example /opt/homebrew/bin/claude
              */
-            cli_path?: string;
+            readonly effective_cli_path?: string;
             /**
-             * @description Additional environment variables merged into the spawned CLI process's environment alongside Omnipus's own (OMNIPUS_AGENT_NAME, OMNIPUS_AGENT_TYPE, and the master-key env var are NOT overridable — user-supplied keys take precedence only for non-Omnipus vars).
+             * @description Read-only. The standard parameters saved in Settings -> Third-party agents for this agent's CLI, exactly as typed. Absent when none are saved. Appended after this agent's cli_args at spawn, unfiltered.
+             * @example --max-turns 40
+             */
+            readonly effective_preset_args?: string;
+            /** @description Read-only. The exact text a run of this agent would be refused with right now: "This agent cannot run: no program path is set for <Name>. A person can set it in Settings -> Third-party agents -> <Name>." or "This agent cannot run: the program set for <Name> in Settings -> Third-party agents does not pass its checks (<check> at <at>). A person can fix it there." Absent when a run would start. */
+            readonly program_warning?: string;
+            /**
+             * @description Environment variables merged into the spawned CLI process's environment alongside Omnipus's own (OMNIPUS_* names are reserved and refused). On every read (REST GET, list, create and update echoes, get_agent) each value is replaced by the fixed mask "••••••"; only the names are readable. Written through ExecutorConfigCreate (whole map) and ExecutorConfigUpdate (merge plus env_overrides_remove).
              * @example {
-             *       "ANTHROPIC_API_KEY": "...",
+             *       "ANTHROPIC_API_KEY": "••••••",
+             *       "DEBUG": "••••••"
+             *     }
+             */
+            env_overrides?: {
+                [key: string]: string;
+            };
+            /**
+             * @description Free-form additional CLI arguments as stored, appended to the spawn invocation after the driver's built-in flags. The spawn layer uses execve (no shell interpolation); flags the safety filter would drop are removed at run time.
+             * @example --max-turns 5
+             */
+            cli_args?: string;
+        };
+        /**
+         * ExecutorConfigCreate
+         * @description Executor block of a subagent_3p create request (WRITE model). `kind` is derived from the agent type and `cli_path` does not exist: the program for each CLI is set by a person in Settings -> Third-party agents. Both are rejected as unknown fields. Creating an agent for a CLI with no usable Settings path succeeds; the echo carries `program_warning`.
+         */
+        ExecutorConfigCreate: {
+            cli: components["schemas"]["ExternalCli"];
+            /**
+             * @description Environment variables for the spawned CLI process. Names match ^[A-Za-z_][A-Za-z0-9_]*$ and are at most 128 characters; at most 64 entries; each value at most 8,192 characters. OMNIPUS_* names are reserved and refused, naming the key. A value equal to the read mask "••••••" is refused. Values are never echoed: every read masks them.
+             * @example {
              *       "DEBUG": "1"
              *     }
              */
@@ -8636,10 +9468,231 @@ export interface components {
                 [key: string]: string;
             };
             /**
-             * @description Free-form additional CLI arguments appended to the spawn invocation. The spawn layer uses execve (no shell interpolation), so values are passed safely; warn (but do not reject) on shell-injection chars in the value.
+             * @description Additional CLI arguments, one string, stored as typed. Shell metacharacters warn, never refuse. Flags the safety filter would drop are reported in the tool result's cli_args.dropped_at_run and removed at run time.
              * @example --max-turns 5
              */
             cli_args?: string;
+        };
+        /**
+         * ExecutorConfigUpdate
+         * @description Executor block of an agent update (WRITE model). Editable for custom subagent_3p agents only ("Only external-CLI workers have a runtime environment."). `kind` (derived from the agent type), `cli` (locked after create; create a new agent to switch CLIs) and `cli_path` (the program is set by a person in Settings -> Third-party agents) are rejected as unknown fields.
+         */
+        ExecutorConfigUpdate: {
+            /**
+             * @description MERGE: each supplied name is added or its value replaced; names not supplied are kept; {} is a no-op. The merged result obeys the create limits (at most 64 entries, name pattern ^[A-Za-z_][A-Za-z0-9_]*$ and at most 128 characters, value at most 8,192 characters, OMNIPUS_* refused). A value equal to the read mask "••••••" is refused.
+             * @example {
+             *       "DEBUG": "1"
+             *     }
+             */
+            env_overrides?: {
+                [key: string]: string;
+            };
+            /**
+             * @description Names to remove from the stored environment. A name that is not stored is reported as absent_removed, not refused. A name that is both set in env_overrides and listed here is refused 400.
+             * @example [
+             *       "DEBUG"
+             *     ]
+             */
+            env_overrides_remove?: string[];
+            /**
+             * @description Replacement CLI arguments, one string, stored as typed. Shell metacharacters warn, never refuse.
+             * @example --max-turns 5
+             */
+            cli_args?: string;
+        };
+        /**
+         * AgentDetail
+         * @description Result of the get_agent tool: the agent's stored definition plus its effective model chain. Stored fields stay as stored; model_chain is the resolved view (primary first, then each fallback). Only id and revision are always present: the get_agent `fields` tool parameter filters the result, and the size bound may cut long fields. absent_fields and truncated_fields are result metadata, never selectable through `fields`. A new-agent preview (get_agent with new_agent_type) returns AgentPreview instead. Effort (effort-levels spec FR-071): reasoning_effort is the primary's stored effort, each fallback_models entry carries its own, and each model_chain entry lists effort_options.
+         */
+        AgentDetail: {
+            /** @example 550e8400-e29b-41d4-a716-446655440000 */
+            id: string;
+            /** @example Researcher */
+            name?: string;
+            description?: string;
+            /**
+             * @description Agent type, as in Agent.type.
+             * @enum {string}
+             */
+            type?: "core" | "system" | "Main" | "Subagent" | "subagent_3p";
+            /** @description As Agent.locked — identity is fixed on built-ins. */
+            locked?: boolean;
+            /** @description The stored primary model slug ("" when the agent inherits the default). */
+            model?: string;
+            /** @description The stored primary provider key ("" when not pinned). */
+            provider?: string;
+            /**
+             * @description The primary model's stored effort as written ("high", "provider_default", "on", "off"), never the resolved value. null when Not set (stored "") or when it does not apply (subagent_3p external-CLI workers). Effort-levels spec FR-071, S-76.
+             * @example high
+             */
+            readonly reasoning_effort?: string | null;
+            /** @description The stored fallback entries, as stored. */
+            fallback_models?: components["schemas"]["FallbackModel"][];
+            model_params?: components["schemas"]["AgentModelParams"];
+            /** @description The agent's own stored tool-iteration limit; null when it rides the global limit. */
+            max_tool_iterations?: number | null;
+            /** @description The stored per-agent context-window override; null when none. */
+            context_window_override?: number | null;
+            memory_enabled?: boolean;
+            voice?: string | null;
+            figure?: components["schemas"]["AgentFigure"];
+            role?: components["schemas"]["AgentRole"];
+            color?: components["schemas"]["AgentColor"];
+            skills?: string[];
+            /** @description Names from `skills` whose skill is installed but whose grant is bound to a previous skill with that name (or to none), so the agent cannot load it (SKILL_GRANT_STALE). The same list the REST agent detail returns as `stale_skill_grants`; empty when none is stale. */
+            stale_skill_grants?: string[];
+            /** @description Per-tool effective policy and the agent's own stored override. */
+            tool_permissions?: components["schemas"]["AgentToolPermission"][];
+            /** @description The agent's raw stored per-agent policy map, exactly as stored: MCP wildcards and stale keys included. */
+            stored_overrides?: {
+                [key: string]: "allow" | "ask" | "deny";
+            };
+            /** @description The agent's explicitly assigned connector (MCP server) bindings. */
+            connectors?: components["schemas"]["AgentMCPBinding"][];
+            /** @description SOUL.md content. Absent for subagent_3p agents (third-party agents have no soul). */
+            soul?: string;
+            /** @description AGENT.md content written beside the record ("" when none). */
+            agent_md?: string;
+            revision: components["schemas"]["ConfigurationRevision"];
+            activation_status?: components["schemas"]["ConfigurationActivationStatus"];
+            editable_fields?: components["schemas"]["AgentFieldDescriptor"][];
+            executor?: components["schemas"]["ExecutorConfig"];
+            /** @description True when a run of this agent would start now (no program_warning applies). */
+            runnable?: boolean;
+            /** @description Same text as executor.program_warning: the exact text a run would be refused with right now. Absent when a run would start. */
+            program_warning?: string;
+            /** @description True when the agent has a main chat. */
+            has_main_chat?: boolean;
+            /** @description Result metadata, never selectable: names of fields cut by the result size bound; the cut text ends with "…[cut: 8,000 of <n> characters]". Absent or empty when nothing was cut. */
+            truncated_fields?: string[];
+            /** @description Result metadata, never selectable: requested properties the full object does not carry. Absent or empty when none. */
+            absent_fields?: string[];
+            /** @description The effective model chain: primary first, then each fallback in order, derived through the real resolver; unknown values are null. */
+            model_chain?: components["schemas"]["AgentModelChainEntry"][];
+        };
+        /**
+         * AgentModelChainEntry
+         * @description One entry of an agent's EFFECTIVE model chain as reported by get_agent (AgentDetail.model_chain): the primary first, then each fallback in order. Derived through the real resolver (ResolveModelPairCfg and the agent's fallback selection), never guessed: a value that is not known is null.
+         */
+        AgentModelChainEntry: {
+            /**
+             * @description "primary", or "fallback_<n>" counting from 1 in chain order.
+             * @example fallback_1
+             */
+            position: string;
+            /**
+             * @description The model slug this entry routes to (the resolved default when the agent inherits its primary).
+             * @example deepseek/deepseek-v4.1-flash
+             */
+            model: string;
+            /**
+             * @description The resolved provider key; null when it cannot be resolved.
+             * @example openrouter
+             */
+            provider: string | null;
+            /**
+             * @description True when the provider is configured on this install.
+             * @example true
+             */
+            provider_configured: boolean;
+            /**
+             * @description True when the provider offers the model; null when not known.
+             * @example true
+             */
+            model_offered: boolean | null;
+            /**
+             * @description The resolved model's image-input capability; null when not known.
+             * @example false
+             */
+            accepts_images: boolean | null;
+            /**
+             * @description The effort values update_agent accepts for this entry's pair, in order (effort-levels spec FR-065, D8): "provider_default", then the levels as the catalog publishes them, then "off" and "on" for a switch-only model ("off" only when the model also has levels without "none"). A primary that rides the default model lists "" (Not set) first. ["provider_default"] when the model reasons but nothing can be sent; null when the catalog has no row for the pair, the model does not reason, or the agent is an external-CLI worker.
+             * @example [
+             *       "provider_default",
+             *       "low",
+             *       "high"
+             *     ]
+             */
+            effort_options: string[] | null;
+            /** @description Present when this entry cannot be used as configured, e.g. "fallback 2 has no configured provider — will never be used", "primary model "x" is not offered by provider "y"", or for a legacy model-only fallback "not paired with a provider — reported, never routed". Absent otherwise. */
+            warning?: string;
+        };
+        /**
+         * AgentToolPermission
+         * @description One tool's permission for an agent, as reported by get_agent (AgentDetail.tool_permissions): the effective policy after the global ceiling and the agent's own override (strictest wins), plus the agent's stored override when it has one.
+         */
+        AgentToolPermission: {
+            /**
+             * @description The tool name.
+             * @example web_search
+             */
+            tool: string;
+            /**
+             * @description The policy that applies to this agent's calls of the tool.
+             * @example ask
+             * @enum {string}
+             */
+            effective: "allow" | "ask" | "deny";
+            /**
+             * @description The stored value of this tool's exact key in the agent's per-agent policy map; null when there is none. A value inherited through a stored wildcard shows in `effective` and in AgentDetail.stored_overrides, not here.
+             * @example null
+             * @enum {string|null}
+             */
+            override: "allow" | "ask" | "deny" | null;
+            /**
+             * @description Short description of the tool (at most 40 characters). Omitted when effective is deny.
+             * @example Search the web
+             */
+            description?: string;
+        };
+        /**
+         * AgentPreview
+         * @description Result of the get_agent tool with new_agent_type: a preview of what a new agent of that type would get. The agent does not exist, so there is no id and no revision. absent_fields and truncated_fields are result metadata.
+         */
+        AgentPreview: {
+            /**
+             * @description The agent type being previewed.
+             * @enum {string}
+             */
+            preview_of: "Main" | "Subagent" | "subagent_3p";
+            /** @description Per-tool effective policy a new agent of this type would get. */
+            tool_permissions?: components["schemas"]["AgentToolPermission"][];
+            /** @description Connector (MCP server) bindings a new agent of this type would get. */
+            connectors?: components["schemas"]["AgentMCPBinding"][];
+            /** @description Result metadata: requested properties the preview does not carry. */
+            absent_fields?: string[];
+            /** @description Result metadata: names of fields cut by the result size bound; the cut text ends with "…[cut: 8,000 of <n> characters]". */
+            truncated_fields?: string[];
+        };
+        /**
+         * AgentExecutorSettingsResult
+         * @description Executor-settings block of a create_agent or update_agent tool result, present when executor settings were supplied. Never carries an environment value: only names.
+         */
+        AgentExecutorSettingsResult: {
+            /** @description Environment names by outcome. */
+            env?: {
+                /** @description Names that were not stored before and are now set. */
+                added: string[];
+                /** @description Names whose stored value was replaced. */
+                replaced: string[];
+                /** @description Names removed through env_overrides_remove. */
+                removed: string[];
+                /** @description Names listed in env_overrides_remove that were not stored (reported, not refused). */
+                absent_removed: string[];
+            };
+            cli_args?: {
+                /** @description The stored cli_args after tokenisation, in order. */
+                argv: string[];
+                /** @description Tokens the safety filter will drop at run time, with its reason. */
+                dropped_at_run: {
+                    flag: string;
+                    reason: string;
+                }[];
+            };
+            /** @description create_agent only. True when a run would start now; false when the Settings program path for the agent's CLI is missing or fails its checks (program_warning then carries the text). */
+            runnable?: boolean;
+            /** @description The exact text a run of this agent would be refused with right now (see ExecutorConfig.program_warning). Absent when a run would start. */
+            program_warning?: string;
         };
         /** @description Static reference data describing the CLI arguments Omnipus's external-CLI driver automatically applies when spawning a subagent_3p worker on this CLI (kind="external-cli"), as returned by GET /api/v1/agents/executor-defaults. This is READ-ONLY, computed reference information — it does not reflect any particular agent's configuration and there is nothing to write back. It exists so the Agent Profile UI can show operators the REAL, auto-applied flags (not merely HTML placeholder ghost-text) before they add their own executor.cli_args. The values are sourced directly from each driver's buildArgs() (pkg/agent/runner/driver_claude.go, driver_codex.go, driver_opencode.go) and must be kept byte-accurate to that code — this is reference documentation for a running system, not a design aspiration. */
         ExecutorDefaults: {
@@ -8653,7 +9706,7 @@ export interface components {
              *       "--no-chrome",
              *       "--model <configured model> (only when a model is configured)",
              *       "--dangerously-skip-permissions",
-             *       "--max-turns <configured max turns> (only when a turn cap is configured)"
+             *       "--max-turns <the agent's tool-iteration limit> (always passed; a run without a turn cap is refused)"
              *     ]
              */
             auto_applied_flags: string[];
@@ -8672,7 +9725,7 @@ export interface components {
             cli_path?: string;
             /** @description Free-form additional CLI arguments to preview, same shape and same tokenizer as ExecutorConfig.cli_args. Any token the safety filter would strip at real dispatch time is NOT included in the previewed command — it is reported instead in the response's dropped_args, so the operator sees before saving that an argument they typed will be silently ignored and why. */
             cli_args?: string;
-            /** @description Optional turn cap to preview (mirrors AgentConfig.max_tool_iterations). Omitted or zero previews with the external-CLI dispatch default (50) — the same fallback runExternalCLISubTurn applies when an agent has no explicit cap. */
+            /** @description Optional: the agent's own tool-iteration limit being previewed (mirrors AgentConfig.max_tool_iterations); omit when the agent has none. The server previews the same effective value the runtime uses (issue #904): min(global limit, this value), or the global limit when omitted. */
             max_tool_iterations?: number;
         };
         /** @description The REAL, computed command Omnipus would run for the previewed executor settings — argv sourced from the same buildArgs() each driver uses at real dispatch time, not a hand-maintained description. Purely informational; nothing here is persisted. cli_args tokens the safety filter would strip at real dispatch time are surfaced in dropped_args rather than silently omitted, so the operator can see and fix a mistyped or disallowed argument before saving instead of discovering later (via a server log line they never see) that it was ignored. */
@@ -8974,15 +10027,29 @@ export interface components {
              */
             native_available?: boolean;
             /**
-             * @description True when the channel is enabled in config but failed to construct at runtime (e.g. native WhatsApp requested on a build without it, or an invalid credential). The channel is NOT serving despite enabled=true.
+             * @description True when the channel is enabled in config but failed to construct at runtime (e.g. native WhatsApp requested on a build without it, or an invalid credential) — the channel is NOT serving despite enabled=true — or when it dropped an inbound message it could not route (omnipus-system-agent FR-121, K15: unbound instance, missing or ineligible bound agent). A routing degradation is cleared when a valid binding is saved (FR-129).
              * @example false
              */
             degraded?: boolean;
             /**
-             * @description Human-readable reason the channel is degraded. Present only when degraded is true.
+             * @description Human-readable reason the channel is degraded. Present only when degraded is true. For a routing drop it is the drop reason, e.g. "bind this channel to an agent in a workspace".
              * @example whatsapp native is not compiled into this build
              */
             degraded_reason?: string;
+            /**
+             * Format: date-time
+             * @description When this channel last dropped an inbound message it could not route (K15). Present only while the routing degradation is active.
+             * @example 2026-10-14T09:30:00Z
+             */
+            last_dropped_at?: string;
+            /**
+             * @description The connection's outbound setting, for the row's summary text (channels spec "Contract Changes"). reply_only = "Only answer"; agent_may_start = "Answer and also start messages".
+             * @example reply_only
+             * @enum {string}
+             */
+            outbound_policy?: "reply_only" | "agent_may_start";
+            /** @description Senders the running connection ignored because they are not on its allowed list. Present only when at least one message was ignored (FR-061). */
+            rejected_senders?: components["schemas"]["ChannelRejectedSenders"];
         };
         /**
          * RetentionConfig
@@ -9090,7 +10157,7 @@ export interface components {
             workspace_path_guard_env_override?: boolean;
             /**
              * @description ADR-092's global default for Auto-approve (fresh-install default: true). Auto is NOT a tool-policy value — every tool, including bash, keeps the ordinary three-value policy ("allow" runs unprompted with none of this machinery, "deny" makes the tool invisible to the agent, "ask" is where Auto applies). For every tool currently resolved to "ask", Auto-approve ON auto-approves the cases the pre-flight/rule matcher can positively clear (ADR-092 D3/D7/D8) and still prompts for everything else; Auto-approve OFF means an "ask" tool always prompts. Auto never touches an "allow" or "deny" tool. [2026-09-24, founder decision] Auto no longer additionally requires an enforcing kernel sandbox: it applies to bash and every other tool whether or not a kernel sandbox is confining spawned children (see SandboxStatus.kernel_sandbox_active, now purely informational for this purpose). Without a kernel sandbox, the D7/D8 pre-flights and the surviving text-based guards are the only checks on what a bash command touches — a disguised command can slip past a text-based check where a kernel boundary would have caught it; this is the accepted, founder-approved risk, not an oversight.
-             *     This is the GLOBAL default only. Two narrower scopes layer on top, neither stored here: a per-agent setting (Agent.auto_approve_disabled) that may only turn Auto OFF for that agent, and a per-chat session modifier (SessionModeUpdateFrame, asyncapi.yaml) that may turn Auto ON OR OFF for that one chat — deliberately allowed to loosen, since a human is present in that session; every other scope in this contract is tighten-only.
+             *     This is the GLOBAL default only. One narrower scope layers on top, not stored here: a per-chat session modifier (SessionModeUpdateFrame, asyncapi.yaml) that may turn Auto ON OR OFF for that one chat — deliberately allowed to loosen, since a human is present in that session; every other scope in this contract is tighten-only.
              *     Deliberately named `auto_approve`, not `mode` — this schema's existing `mode` field is the unrelated kernel sandbox enforcement mode (off/permissive/enforce); reusing that key for a different value domain would collide. Hot-reloaded, like the rest of this handler's fields — no restart required.
              * @example true
              */
@@ -9176,7 +10243,7 @@ export interface components {
              */
             kernel_sandbox_active?: boolean;
             /**
-             * @description The gateway-wide Auto-approve DEFAULT: exactly the live SandboxConfig.auto_approve value, reported here so the chat-header badge needs no second request. It is NOT combined with kernel_sandbox_active and NOT resolved for any agent or chat (this endpoint has no agent or session context). Auto actually takes effect for a call when the tool resolves to "ask", the resolved Auto-approve for that chat is on (this default, turned off by the agent's auto_approve_disabled, then overridden either way by the chat's own modifier — SessionModeUpdatedFrame / SessionStateFrame.auto_approve_modifier), and god_mode_active is false. [2026-09-24, founder decision] Auto no longer also requires kernel_sandbox_active — it now means exactly what the agent loop's autoApproveActive predicate computes (God Mode off, Auto resolved on), independent of kernel enforcement. Badge reading, before the per-agent and per-chat layers are folded in: god_mode_active=true shows "God Mode" whatever the other two fields say; else auto_approve_effective=false shows "Ask"; else kernel_sandbox_active= true shows "Auto"; else kernel_sandbox_active=false shows "Auto — no sandbox" with a warning tooltip (Auto is on and DOES clear "ask" calls for every tool except the shell; a shell command now asks first unless it is read-only or fully covered by an operator allow rule — there is no kernel confining what a disguised command can reach either way). There is no more "Auto → Ask" degraded state: Auto never silently becomes Ask for lack of a kernel sandbox. Always present from this gateway.
+             * @description The gateway-wide Auto-approve DEFAULT: exactly the live SandboxConfig.auto_approve value, reported here so the chat-header badge needs no second request. It is NOT combined with kernel_sandbox_active and NOT resolved for any agent or chat (this endpoint has no agent or session context). Auto actually takes effect for a call when the tool resolves to "ask", the resolved Auto-approve for that chat is on (this default, overridden either way by the chat's own modifier — SessionModeUpdatedFrame / SessionStateFrame.auto_approve_modifier), and god_mode_active is false. [2026-09-24, founder decision] Auto no longer also requires kernel_sandbox_active — it now means exactly what the agent loop's autoApproveActive predicate computes (God Mode off, Auto resolved on), independent of kernel enforcement. Badge reading, before the per-agent and per-chat layers are folded in: god_mode_active=true shows "God Mode" whatever the other two fields say; else auto_approve_effective=false shows "Ask"; else kernel_sandbox_active= true shows "Auto"; else kernel_sandbox_active=false shows "Auto — no sandbox" with a warning tooltip (Auto is on and DOES clear "ask" calls for every tool except the shell; a shell command now asks first unless it is read-only or fully covered by an operator allow rule — there is no kernel confining what a disguised command can reach either way). There is no more "Auto → Ask" degraded state: Auto never silently becomes Ask for lack of a kernel sandbox. Always present from this gateway.
              * @example true
              */
             auto_approve_effective?: boolean;
@@ -9533,7 +10600,7 @@ export interface components {
         };
         /**
          * HealthResponse
-         * @description Response from GET /health. HTTP 200 with status "ok" when the gateway is serving; HTTP 503 with status "degraded" and a reason when a gateway-fatal condition holds (agent loop dead, config reload failed, default agent unloadable). The audit_* and catalog objects are FIELDS, not status drivers: they describe a subsystem that is degraded while the gateway itself is still serving, so an operator can see the problem without reading logs and without the process being taken out of a load balancer. No authentication required.
+         * @description Response from GET /health. HTTP 200 with status "ok" when the gateway is serving; HTTP 503 with status "degraded" and a reason when a gateway-fatal condition holds (agent loop dead, config reload failed). The audit_* and catalog objects are FIELDS, not status drivers: they describe a subsystem that is degraded while the gateway itself is still serving, so an operator can see the problem without reading logs and without the process being taken out of a load balancer. No authentication required.
          */
         HealthResponse: {
             /**
@@ -9646,6 +10713,36 @@ export interface components {
              * @example 20
              */
             goal_max_rounds?: number;
+            /**
+             * @description Idle-only quiet window before an automatic goal reminder, in seconds. Default 60; there is no off value. Always resolved in responses. Live changes apply on the next fixed 30-second sweep without restart.
+             * @example 60
+             */
+            goal_reminder_quiet_seconds?: number;
+            /**
+             * @description Whether stalled busy work can receive a check-in. Default true. This is the only stalled-work off switch; it does not disable idle reminders. Always resolved in responses. Live without restart.
+             * @example true
+             */
+            goal_stalled_checkin_enabled?: boolean;
+            /**
+             * @description Busy-work stall threshold in minutes, independent of the idle quiet window. Default 30. Retained while check-ins are disabled; bounds still apply while disabled. Always resolved in responses. Live without restart.
+             * @example 30
+             */
+            goal_stalled_checkin_minutes?: number;
+            /**
+             * @description The global tool-iteration limit IN FORCE ("Max tool calls per turn", issue #904, tool-iteration-limit spec): the ceiling for every agent's turns. An agent's own value may only lower it. When the value saved in config.json is missing or out of range this is the value actually used, not the saved one (see max_tool_iterations_saved_state). Always present in responses.
+             * @example 200
+             */
+            max_tool_iterations?: number;
+            max_tool_iterations_saved_state?: components["schemas"]["MaxToolIterationsSavedState"];
+            /**
+             * @description The global limit exactly as found in config.json. Present only when max_tool_iterations_saved_state is below_min or above_max (spec D13 Settings warning); absent otherwise.
+             * @example 5000
+             */
+            max_tool_iterations_saved_raw?: number;
+            /** @description Agents whose own limit this request lowered to the new global (spec D11). Present only on a PUT response that lowered at least one agent; absent on GET and on every other PUT. */
+            max_tool_iterations_lowered_agents?: components["schemas"]["MaxToolIterationAgentChange"][];
+            /** @description Present only while saved Performance settings are not in force yet (see PerformancePendingApply); absent when everything saved is applied. Returned on GET and on every successful PUT (a successful PUT clears it, so it is then absent). */
+            pending_apply?: components["schemas"]["PerformancePendingApply"];
         };
         /**
          * PerformanceSettingsUpdate
@@ -9667,6 +10764,169 @@ export interface components {
              * @example 20
              */
             goal_max_rounds?: number;
+            /**
+             * @description New idle-only quiet window in seconds, 30 through 3600. Default 60 when absent from configuration, not a PUT default. Omitted = unchanged. No off value. Live on the next fixed 30-second sweep without restart.
+             * @example 60
+             */
+            goal_reminder_quiet_seconds?: number;
+            /**
+             * @description Enable or disable stalled busy-work check-ins. Omitted = unchanged; explicit false is saved. Disabling does not disable idle reminders or discard goal_stalled_checkin_minutes. Live without restart.
+             * @example true
+             */
+            goal_stalled_checkin_enabled?: boolean;
+            /**
+             * @description New busy-work stall threshold in minutes, independent of idle quiet. Omitted = unchanged. Reject out-of-range values even when check-ins are disabled; disabling retains the chosen minutes. Live without restart.
+             * @example 30
+             */
+            goal_stalled_checkin_minutes?: number;
+            /**
+             * @description New global tool-iteration limit (issue #904). Omitted = unchanged (partial update). When the new value is below some agents' own values, confirmed_lowering must list exactly those agents (see below), or the PUT is refused with 409.
+             * @example 200
+             */
+            max_tool_iterations?: number;
+            /** @description The exact agent snapshot (id + old value) the admin saw in GET /performance/max-tool-iterations/preview and confirmed (spec D11, D16). Absent = empty. At write time the server recomputes the set of agents whose own value is above the new max_tool_iterations; the PUT succeeds only if that set equals this list compared as a set keyed by agent_id — order-independent (same ids, and for each id the same old value). Naming the same agent_id twice is malformed (400). Any difference — an extra agent, a missing agent, a changed old value, or this field absent while agents would be lowered — is drift: nothing is written and the PUT answers 409 MaxToolIterationsLoweringConflict. */
+            confirmed_lowering?: components["schemas"]["MaxToolIterationsConfirmedAgent"][];
+        };
+        /**
+         * MaxToolIterationsSource
+         * @description Which rule produced an agent's effective tool-iteration limit (issue #904, tool-iteration-limit spec D1). $ref'd by Agent.max_tool_iterations_source — never an inline enum anywhere else (mirrors ContextWindowSource). "global" = the effective value is the global limit (agents.defaults.max_tool_iterations): the agent has no own value, or its own value is above the global and therefore ignored (Agent.max_tool_iterations_override_ignored is then true). "agent" = the agent's own value, lower than or equal to the global, applies.
+         * @enum {string}
+         */
+        MaxToolIterationsSource: "global" | "agent";
+        /**
+         * MaxToolIterationsSavedState
+         * @description State of the global tool-iteration limit as saved in config.json (agents.defaults.max_tool_iterations), used for the Settings warning (issue #904, tool-iteration-limit spec D13). The file is never rewritten to correct it; the value in force is PerformanceSettings.max_tool_iterations. "ok" = saved value within 1–1000 and in force as saved; "missing" = key absent (the shipped default is in force); "below_min" = saved value below 1 (0 and negative included; the shipped default is in force); "above_max" = saved value above 1000 (1000 is in force).
+         * @enum {string}
+         */
+        MaxToolIterationsSavedState: "ok" | "missing" | "below_min" | "above_max";
+        /**
+         * MaxToolIterationAgentChange
+         * @description One agent whose own tool-iteration limit is (or would be) lowered to a new global limit (issue #904, tool-iteration-limit spec D11). Used by the lowering preview, the 409 drift body and the PUT /performance response.
+         */
+        MaxToolIterationAgentChange: {
+            /**
+             * @description ID of the affected agent.
+             * @example agent-a
+             */
+            agent_id: string;
+            /**
+             * @description Display name of the affected agent.
+             * @example Researcher
+             */
+            agent_name: string;
+            /**
+             * @description The agent's own value before lowering. No upper bound: a hand-edited stored value may exceed 1000 and is shown truthfully.
+             * @example 250
+             */
+            old_value: number;
+            /**
+             * @description The agent's own value after lowering (the new global limit).
+             * @example 200
+             */
+            new_value: number;
+        };
+        /**
+         * MaxToolIterationsLoweringPreview
+         * @description Read-only preview of which agents' own tool-iteration limits would be lowered if the global limit were set to `value` (issue #904, tool-iteration-limit spec D11). Only agents whose own value is strictly above `value` are listed; agents equal to or below it, and agents with no own value, are excluded. Returned by GET /performance/max-tool-iterations/preview and embedded in the 409 MaxToolIterationsLoweringConflict body.
+         */
+        MaxToolIterationsLoweringPreview: {
+            /**
+             * @description The candidate global limit the preview was computed for.
+             * @example 200
+             */
+            value: number;
+            /** @description Agents that would be lowered; empty when nothing would change. */
+            agents: components["schemas"]["MaxToolIterationAgentChange"][];
+        };
+        /**
+         * MaxToolIterationsConfirmedAgent
+         * @description One entry of PerformanceSettingsUpdate.confirmed_lowering: an agent the admin saw in the lowering preview and confirmed (issue #904, tool-iteration-limit spec D11/D16). The new value is implied by the PUT's max_tool_iterations.
+         */
+        MaxToolIterationsConfirmedAgent: {
+            /**
+             * @description ID of the agent whose own value will be lowered.
+             * @example agent-a
+             */
+            agent_id: string;
+            /**
+             * @description The agent's own value as shown in the preview. Must still match the stored value at write time, or the PUT is refused as drift (409).
+             * @example 250
+             */
+            old_value: number;
+        };
+        /**
+         * MaxToolIterationsLoweringConflict
+         * @description 409 body of PUT /performance when the set of agents that the new global tool-iteration limit would lower differs from confirmed_lowering (issue #904, tool-iteration-limit spec D16 drift). Nothing was written. Envelope-compatible with ErrorResponse (error + code) and additionally carries the fresh preview computed at refusal time, so the client can re-open the confirm dialog without a second preview call.
+         */
+        MaxToolIterationsLoweringConflict: {
+            /**
+             * @description Human-readable error message.
+             * @example the agents affected by lowering the limit to 200 changed since the preview; review the updated list and confirm again
+             */
+            error: string;
+            /**
+             * @description Machine-readable error code; always "max_tool_iterations_lowering_drift".
+             * @example max_tool_iterations_lowering_drift
+             */
+            code: string;
+            preview: components["schemas"]["MaxToolIterationsLoweringPreview"];
+        };
+        /**
+         * PerformanceReloadFailedDetails
+         * @description details of the 500 performance_reload_failed answer of PUT /performance (issue #904). Every write of the request is COMMITTED (config.json and any lowered agents are on disk and audited; nothing is rolled back), but the new values are not in force yet. stage says how far the apply got, and so what GET /performance shows until the next reload or restart.
+         */
+        PerformanceReloadFailedDetails: {
+            /**
+             * @description refresh — config.json was written but the in-memory configuration was NOT swapped: GET /performance still shows the OLD values and running agents keep them until the gateway reloads its configuration or restarts. reload — the in-memory configuration was updated (GET /performance shows the NEW values) but the agent registry reload failed: the agents' next turns keep the old limits until the next reload or restart.
+             * @example reload
+             * @enum {string}
+             */
+            stage: "refresh" | "reload";
+            /**
+             * @description The performance settings this request changed, i.e. the fields present in the PUT body. The client names these — and only these — in its "saved, not applied yet" message.
+             * @example [
+             *       "max_tool_iterations"
+             *     ]
+             */
+            changed_fields: ("max_parallel_agents" | "tools_on_demand" | "goal_max_rounds" | "goal_reminder_quiet_seconds" | "goal_stalled_checkin_enabled" | "goal_stalled_checkin_minutes" | "max_tool_iterations")[];
+            /** @description The agents whose own tool-iteration limit this request lowered (spec D11); empty when none. GET /performance does not carry them, so this is the only place the summary survives. */
+            lowered_agents: components["schemas"]["MaxToolIterationAgentChange"][];
+        };
+        /**
+         * PerformanceReloadFailedError
+         * @description 500 body of PUT /performance with code performance_reload_failed (issue #904): the settings are saved but not applied yet. Envelope-compatible with ErrorResponse (error + code + details); details is typed as PerformanceReloadFailedDetails.
+         */
+        PerformanceReloadFailedError: {
+            /**
+             * @description Human-readable message naming only the settings this request changed.
+             * @example performance settings saved but the reload failed; the new tool-iteration limit applies after the next reload or restart
+             */
+            error: string;
+            /**
+             * @description Machine-readable error code; always "performance_reload_failed".
+             * @example performance_reload_failed
+             */
+            code: string;
+            details: components["schemas"]["PerformanceReloadFailedDetails"];
+        };
+        /**
+         * PerformancePendingApply
+         * @description Server-side "saved but not applied yet" state of the Performance settings (issue #904). Set when a PUT /performance ends in a performance_reload_failed answer (its writes are committed on disk but not in force). It survives page reloads and new sessions — it lives in the gateway, not in the client — and is cleared only when a later refresh of the running configuration AND an agent registry reload both succeed: a later successful PUT /performance (which always reloads the agents while this state is set), or a successful manual or automatic configuration reload. A gateway restart applies everything on disk, so a restarted gateway never reports it.
+         */
+        PerformancePendingApply: {
+            /**
+             * @description How far the most recent failed apply got (same meaning as PerformanceReloadFailedDetails.stage). refresh — the running configuration was NOT refreshed: the other fields of this response still show the OLD values. reload — the running configuration shows the NEW values but the agents were not rebuilt: their next turns keep the old limits.
+             * @example reload
+             * @enum {string}
+             */
+            stage: "refresh" | "reload";
+            /**
+             * @description Every Performance setting saved but not yet in force — the union of the changed_fields of each failed PUT since the settings were last fully applied, in contract enum order.
+             * @example [
+             *       "max_tool_iterations"
+             *     ]
+             */
+            changed_fields: ("max_parallel_agents" | "tools_on_demand" | "goal_max_rounds" | "goal_reminder_quiet_seconds" | "goal_stalled_checkin_enabled" | "goal_stalled_checkin_minutes" | "max_tool_iterations")[];
         };
         /** @description A single LLM provider entry as returned by GET /providers and PUT /providers/{id}. Describes the provider's connection status, the resolved model list, and any non-fatal warnings encountered when fetching the upstream model catalogue. */
         Provider: {
@@ -9696,7 +10956,7 @@ export interface components {
              * @example openai-compatible
              * @enum {string}
              */
-            protocol?: "openai-compatible" | "anthropic" | "google" | "ollama" | "cli" | "bedrock";
+            protocol?: "openai-compatible" | "anthropic" | "google" | "ollama" | "bedrock";
             /**
              * @description True iff this row's id is not in the catalog — an operator-named custom endpoint configured with api_base + protocol (ADR-067 FR-035, X-13). Every check keys on this flag, never on a literal id. Absent = false.
              * @example false
@@ -9718,12 +10978,6 @@ export interface components {
              * @enum {string}
              */
             locality?: "local" | "cloud";
-            /**
-             * @description For protocol "cli" rows, the subprocess driver selected by the catalog row (ADR-067 X-14).
-             * @example codex
-             * @enum {string}
-             */
-            cli_kind?: "codex" | "copilot";
             /**
              * @description How this row authenticates (ADR-068; closed set — oauth/token no longer exist). Always present; "api_key" until ADR-068's computation lands.
              * @example api_key
@@ -9836,6 +11090,8 @@ export interface components {
              * @example z-ai/glm-5.2
              */
             model: string;
+            /** @description Stored effort for the default model (effort-levels spec FR-067): "" (Not set), "provider_default", a catalog level name, "on" or "off". Agents riding the default model with no effort of their own use it. Omitted keeps the stored value; null is refused. */
+            reasoning_effort?: string;
             /**
              * @description Effective context window in tokens; 0 for exempt rows.
              * @example 1048576
@@ -9857,6 +11113,8 @@ export interface components {
             provider: string;
             /** @example claude-sonnet-4-6 */
             model: string;
+            /** @description Stored effort for the default model (effort-levels spec FR-067): "" (Not set), "provider_default", a catalog level name, "on" or "off". Agents riding the default model with no effort of their own use it. Omitted keeps the stored value; null is refused. */
+            reasoning_effort?: string;
         };
         /**
          * EntitlementModel
@@ -9969,7 +11227,7 @@ export interface components {
              * @example openai-compatible
              * @enum {string}
              */
-            protocol?: "openai-compatible" | "anthropic" | "google" | "ollama" | "cli" | "bedrock";
+            protocol?: "openai-compatible" | "anthropic" | "google" | "ollama" | "bedrock";
             /** @description Optional secondary protocols a provider offers (e.g. Z.ai's Anthropic endpoint). When present MUST include the primary with the same api; entries unique. A config may select one via ProviderUpdateRequest.protocol. */
             protocols?: components["schemas"]["CatalogProtocol"][];
             /**
@@ -10044,17 +11302,6 @@ export interface components {
              * @enum {string}
              */
             locality: "local" | "cloud";
-            /**
-             * @description Required iff protocol is "cli" — selects the subprocess driver (ADR-067 X-14), never chosen by id.
-             * @example codex
-             * @enum {string}
-             */
-            cli_kind?: "codex" | "copilot";
-            /**
-             * @description Optional token source for sign-in HTTP rows (e.g. "codex-auth-json" for openai-chatgpt, X-41).
-             * @example codex-auth-json
-             */
-            token_source?: string;
             resize_limits?: components["schemas"]["CatalogResizeLimits"];
             /** @description The provider's models. May be empty (e.g. an unknown-provider row or a local endpoint listed live). */
             models: components["schemas"]["CatalogModel"][];
@@ -10127,6 +11374,28 @@ export interface components {
              * @example false
              */
             window_unknown?: boolean;
+            /** @description Effort levels spec (FR-035). Optional served reasoning capability, filtered by the gateway's encoder table (FR-049). Absent when the model does not reason. */
+            reasoning?: components["schemas"]["CatalogModelReasoning"];
+        };
+        /**
+         * CatalogModelReasoning
+         * @description Effort levels spec (effort-levels-spec-r10, FR-035, FR-049). The model's served reasoning capability. Presence of the object means "this model reasons"; an object with no levels and no switch means "reasons, but nothing Omnipus can send" (the UI shows a muted chip). The gateway filters the object by its encoder table for the serving route before it is served, so a level or switch the route cannot encode never appears here.
+         */
+        CatalogModelReasoning: {
+            /**
+             * @description Effort level names, ascending, as published by the provider (may include "none"). Empty when the model offers no sendable levels; never null.
+             * @example [
+             *       "low",
+             *       "medium",
+             *       "high"
+             *     ]
+             */
+            levels: string[];
+            /**
+             * @description True when reasoning can be turned on and off as a switch.
+             * @example false
+             */
+            switch: boolean;
         };
         /**
          * CatalogProtocol
@@ -10137,7 +11406,7 @@ export interface components {
              * @example anthropic
              * @enum {string}
              */
-            protocol: "openai-compatible" | "anthropic" | "google" | "ollama" | "cli" | "bedrock";
+            protocol: "openai-compatible" | "anthropic" | "google" | "ollama" | "bedrock";
             /**
              * @description Absolute https base URL for this protocol (FR-033 URL rule; local rows may use http).
              * @example https://api.z.ai/api/anthropic
@@ -10176,6 +11445,20 @@ export interface components {
              * @example 5242880
              */
             max_bytes: number;
+            /**
+             * @description Optional ceiling on the number of 32x32-pixel tiles a vision provider counts in an image, computed as ceil(width/32) * ceil(height/32) (e.g. OpenAI's 30,000-patch limit). Absent means the provider's patch accounting is unknown and no patch cap is applied for that row; a provider row without the field inherits the document default.
+             * @example 30000
+             */
+            max_patches?: number;
+        };
+        /**
+         * ContextWindowNotice
+         * @description Classified context-window diagnostic (ADR-066 MAJ-CW-009). Shared by ContextWindowNoticeFrame.notice and Message.context_window_notice; rendered only when Verbose chat is enabled. Not a model-history message or the transient model-only context notice.
+         */
+        ContextWindowNotice: {
+            /** @enum {string} */
+            kind: "provider_retry" | "mid_turn";
+            message: string;
         };
         /**
          * ContextWindowSource
@@ -10225,10 +11508,11 @@ export interface components {
              */
             builtin_failure_cap: number;
             /**
-             * @description Absolute tool-result share trigger (chars) for the mid-turn window check (D6); the token share is this ÷ 2.5. Default 400,000.
-             * @example 400000
+             * Format: double
+             * @description Finite fraction of the resolved model window W used for the tool-result share limit (ADR-066 MAJ-CW-007, FR-036): 0 < f ≤ 1. Default 0.5. S = max(1, floor(f × W)); this is a fraction of W, not the total-request budget B. Settings → Models displays it as a percentage (default 50%); the wire carries the dimensionless fraction, so 12.5% is 0.125.
+             * @example 0.5
              */
-            absolute_trigger_chars: number;
+            tool_result_share_fraction: number;
             /**
              * @description Maximum bytes read from any network or subprocess source at ingest (D10). Must be strictly below 8,388,608 (0.8 × the archive line size). Default 8,000,000.
              * @example 8000000
@@ -10244,7 +11528,7 @@ export interface components {
         };
         /**
          * ContextSettingsUpdate
-         * @description Partial update body for PUT /api/v1/settings/context (ADR-066 D9). Every field is optional; an omitted field is unchanged. Validation (400 naming the field and the limit): any cap > 150,000 or < 1; absolute_trigger_chars < 1; ingest_bound_bytes ≥ 8,388,608 or < 1; model_overrides[].context_window < 1. Set default_context_window to null to clear it. model_overrides, when present, replaces the whole list.
+         * @description Partial update body for PUT /api/v1/settings/context (ADR-066 D9). Every field is optional; an omitted field is unchanged. Validation (400 naming the field and the valid interval): any cap > 150,000 or < 1; tool_result_share_fraction must be a finite JSON number with 0 < f ≤ 1 (null, strings, booleans, zero, negatives and values > 1 are invalid); ingest_bound_bytes ≥ 8,388,608 or < 1; model_overrides[].context_window < 1. Malformed/nonfinite JSON and unknown fields are rejected with 400. Set default_context_window to null to clear it. model_overrides, when present, replaces the whole list.
          */
         ContextSettingsUpdate: {
             /** @example 62500 */
@@ -10253,8 +11537,12 @@ export interface components {
             builtin_success_cap?: number;
             /** @example 10000 */
             builtin_failure_cap?: number;
-            /** @example 400000 */
-            absolute_trigger_chars?: number;
+            /**
+             * Format: double
+             * @description Finite fraction of the resolved model window W: 0 < f ≤ 1; numeric 1 is valid. Omitted means unchanged, not reset to the fresh default 0.5. The wire carries a fraction, not a percentage (12.5% is 0.125).
+             * @example 0.5
+             */
+            tool_result_share_fraction?: number;
             /** @example 8000000 */
             ingest_bound_bytes?: number;
             /** @example 128000 */
@@ -10287,13 +11575,14 @@ export interface components {
              */
             expires_in: number;
         };
-        /** @description A single configurable non-LLM integration provider as surfaced in Settings → Integrations (FR-12.1). Covers web-search providers (SearchProvider) and voice-input transcription providers (Transcriber). API keys are stored encrypted in credentials.json (via api_key_ref) — never returned in plaintext; configured is true when a key (or, for keyless providers like DuckDuckGo, the provider itself) is available. */
+        /** @description A single configurable non-LLM integration provider as surfaced in Settings → Integrations (FR-12.1). Covers web-search providers (SearchProvider) and voice-input transcription providers (Transcriber). API keys are stored encrypted in credentials.json (via api_key_ref) — never returned in plaintext; configured is true when a key (or, for keyless providers like DuckDuckGo, the provider itself) is available. ADR-096: search rows additionally carry the provider's resolved web-search roles — default vs fallback — and its usability, and id is an enum derived from the single search-provider catalogue (FR-035). Voice rows keep today's shape: they report active only and leave the search-role fields unset. */
         IntegrationProvider: {
             /**
-             * @description Provider identifier (e.g. "brave", "tavily", "duckduckgo", "elevenlabs").
+             * @description Provider identifier, from the single integration catalogue — not free-form. The search ids (brave, tavily, perplexity, duckduckgo, glm, baidu, exa) derive from the searchProviderCatalogue (ADR-096 FR-035); the voice ids (elevenlabs, groq, audio-model) are listed so voice rows stay valid under this shared schema.
              * @example brave
+             * @enum {string}
              */
-            id: string;
+            id: "brave" | "tavily" | "perplexity" | "duckduckgo" | "glm" | "baidu" | "exa" | "elevenlabs" | "groq" | "audio-model";
             /**
              * @description Whether this provider supplies web search or voice-input transcription.
              * @example search
@@ -10306,7 +11595,7 @@ export interface components {
              */
             display_name: string;
             /**
-             * @description True when this provider is usable — an API key is present (or, for keyless providers such as DuckDuckGo, always true).
+             * @description Search rows: true when this provider's credential entry resolves in the credential store (the vault test, ADR-096 D13) — and, for the keyless search row, when its prerequisite holds (duckduckgo always). It says nothing about runtime usability: a configured provider can still be switched off or fail to have its key reach search. For whether search can use the provider right now, see usable. Voice rows: true when the provider's credential resolves; audio-model when voice.model_name is set.
              * @example true
              */
             configured: boolean;
@@ -10316,19 +11605,39 @@ export interface components {
              */
             requires_key: boolean;
             /**
-             * @description True when this provider is the one currently selected for its kind (the active search engine or the active transcriber).
+             * @description Search rows only; omitted on providers without a depth setting and on voice rows. For Tavily, the effective operator-set search_depth ceiling (advanced when an existing install has no saved depth).
+             * @example basic
+             */
+            readonly search_depth_cap?: string;
+            /**
+             * @description True when this provider is the one currently selected for its kind. Voice rows: unchanged — the active transcriber. Search rows: true only when this row is the web-search default (ADR-096 D13 — no longer "whoever the old priority list picked"); kept so an older client still has the field. The Default/Fallback badges are built from default_search, fallback_search and the row's own usable flag instead.
              * @example true
              */
             active?: boolean;
+            /**
+             * @description Search rows only; unset on voice rows. The tool's usability test (ADR-096 Definitions): switched on and a required key resolves to a non-empty process value — or, for DuckDuckGo, simply switched on. False when the key name is set but the resolved key is empty ("key not reaching search"). This is the badge test; configured (the secret is in the vault) is not it.
+             * @example true
+             */
+            usable?: boolean;
+            /**
+             * @description Search rows only; unset on voice rows. True when this provider is the resolved web-search fallback — the provider tried once when the default fails with a hop-class failure (ADR-096 D4, D17). True does not by itself mean the provider will be called: a known-but-unusable fallback (R4b) keeps the fallback role and is never called — the payload lists it under not called with its reason.
+             * @example false
+             */
+            fallback?: boolean;
+            /**
+             * @description Search rows only; unset on voice rows. True when this row is the fallback because the stored fallback value is absent and the automatic rule (R3) resolved it to DuckDuckGo — not because the operator picked the fallback radio. Set together with fallback: true.
+             * @example false
+             */
+            fallback_automatic?: boolean;
         };
-        /** @description Response from GET /api/v1/integrations/providers. Lists every configurable search and voice-input integration provider (FR-12.1), plus which provider is currently active for each kind. Defined inline so the search/voice arrays reference the shared IntegrationProvider component (a relative file $ref would inline as anonymous structs). */
+        /** @description Response from GET /api/v1/integrations/providers. Lists every configurable search and voice-input integration provider (FR-12.1), plus which provider is currently active for each kind. ADR-096: search rows additionally carry the resolved web-search roles — the default, the resolved fallback, and each row's usability. Defined inline so the search/voice arrays reference the shared IntegrationProvider component (a relative file $ref would inline as anonymous structs). */
         IntegrationProvidersResponse: {
             /** @description Configurable web-search providers. */
             search: components["schemas"]["IntegrationProvider"][];
             /** @description Configurable voice-input transcription providers. */
             voice: components["schemas"]["IntegrationProvider"][];
             /**
-             * @description id of the currently active search provider, when one is selected.
+             * @description id of the currently active search provider, when one is selected. ADR-096: for search rows this mirrors default_search — kept so an older client still has the field.
              * @example brave
              */
             active_search?: string;
@@ -10337,8 +11646,28 @@ export interface components {
              * @example elevenlabs
              */
             active_voice?: string;
+            /**
+             * @description id of the web-search default — the provider tried first (ADR-096 D4). Absent when the roles are not yet decided (the migration has not run, e.g. it deferred on an ambiguous install).
+             * @example tavily
+             */
+            default_search?: string;
+            /**
+             * @description id of the resolved web-search fallback, or null when there is none ("No fallback", or the stored value is absent with no automatic fallback). Absent when the roles are not yet decided.
+             * @example duckduckgo
+             */
+            fallback_search?: string | null;
+            /**
+             * @description Present only when the stored fallback was ignored at resolution time; value `same_as_default` when the stored fallback names the default and the R5 rule healed the file's interpretation without a write (ADR-096 D4 R5).
+             * @example same_as_default
+             */
+            fallback_ignored_reason?: string;
+            /**
+             * @description True when the active model's native search is in effect (prefer_native is set and the active provider reports native search). The search group's role settings are then not deciding who answers, and the UI must state that and name no provider as the answerer (ADR-096 D19, FR-031). WS-CX lane addition: FR-031/test 52 require this state on the payload but the spec's Contract shape section does not define it.
+             * @example false
+             */
+            native_search_in_effect?: boolean;
         };
-        /** @description Body for PUT /api/v1/integrations/providers/{id}. Configures a search or voice-input integration provider (FR-12.1). Setting an api_key stores it encrypted (AES-256-GCM) in credentials.json and writes only the credential reference to config.json. Setting active=true selects this provider as the active one for its kind. Integration edits are sensitive. In the core edition (local auth mode) the request must carry a re-auth consent token in the X-Reauth-Token header — call POST /api/v1/auth/reauth first (Spec-6 FR-12.2); in the desktop and hosted editions (platform auth mode) the SPA confirms the change with the operator before sending and the wire guard is the authenticated session (ADR-0008 ruling 6). */
+        /** @description Body for PUT /api/v1/integrations/providers/{id}. Configures a search or voice-input integration provider (FR-12.1). ADR-096: storing a key is separable from assigning a role — an api_key alone changes no role — and the PUT makes its writes live in the same request by triggering a config reload before it responds; the response is built from post-reload state (FR-033). Integration edits are sensitive. In the core edition (local auth mode) the request must carry a re-auth consent token in the X-Reauth-Token header — call POST /api/v1/auth/reauth first (Spec-6 FR-12.2); in the desktop and hosted editions (platform auth mode) the SPA confirms the change with the operator before sending and the wire guard is the authenticated session (ADR-0008 ruling 6). */
         IntegrationProviderUpdateRequest: {
             /**
              * @description Whether this provider is a search engine or a voice transcriber.
@@ -10347,15 +11676,56 @@ export interface components {
              */
             kind: "search" | "voice";
             /**
-             * @description API key for the provider. Stored encrypted; omit to leave the current key unchanged. Required when first configuring a key-requiring provider.
+             * @description API key for the provider. Stored encrypted; omit to leave the current key unchanged. Required when first configuring a key-requiring provider. Storing a key alone (with no role fields in the same request) changes no role (ADR-096 D18 / AC-15).
              * @example BSA-abc123
              */
             api_key?: string;
             /**
-             * @description When true, select this provider as the active one for its kind.
+             * @description Search-only, keyed providers: true explicitly removes the catalogue-owned saved key and switches this service off without changing the default, fallback or role migration marker. Requires the same consent as saving. When true, api_key, active and fallback must all be absent, including empty or false values. Omitted or false leaves existing update semantics unchanged; an empty api_key never deletes a key. Undecided roles, a custom credential reference or a key shared with another connection return 409 without writes. Removal does not revoke the upstream key. A later-stage failure returns a non-success response describing any persisted change.
+             * @example true
+             */
+            clear_api_key?: boolean;
+            /**
+             * @description Assign the default role. Search: make this provider the web-search default (tried first; it also switches the provider on, and never deletes another provider's key reference — ADR-096 FR-005). Voice: make this provider the active transcriber — behaviour unchanged (ADR-096 D19-neutral voice rule). An explicit false is rejected with 400: roles are moved by setting another provider active, they are not unset (ADR-096 D18 — a silently accepted no-op is how a UI comes to lie).
              * @example true
              */
             active?: boolean;
+            /**
+             * @description Assign the fallback role. Search only; a fallback field on a voice request is rejected with 400. Search, true: make this provider the web-search fallback — the provider tried once when the default fails with a hop-class failure (ADR-096 D4, D17). Rejected with 400 when this id is also the default in the same request, or is the stored default — a provider cannot fall back to itself (ADR-096 FR-006 / R5's save rule). Search, false: set the fallback to none ("No fallback"), regardless of which provider id is addressed — an explicit none is a choice, and is never flipped when the default changes (ADR-096 D4). An explicit false on a voice request is rejected with 400 for the same reason an explicit false active is.
+             * @example true
+             */
+            fallback?: boolean;
+        };
+        /**
+         * @description Body for a manual web-search connection check. The empty object is required; keys, queries, URLs, depth, roles and all other fields are rejected. The gateway supplies a fixed non-personal query and uses the saved key.
+         * @example {}
+         */
+        SearchProviderCheckRequest: Record<string, never>;
+        /** @description Temporary outcome of one real search through the addressed service. Readiness is unchanged: success is not persisted health, and failure does not disable the service or change its roles. Contains no key, results, authorization, upstream payload or free-form upstream error. */
+        SearchProviderCheckResponse: {
+            /**
+             * @description The keyed search catalogue entry that was checked.
+             * @example tavily
+             * @enum {string}
+             */
+            provider_id: "brave" | "tavily" | "perplexity" | "glm" | "baidu" | "exa";
+            /**
+             * @description Normalized diagnostic outcome; a valid empty result is success.
+             * @example success
+             * @enum {string}
+             */
+            status: "success" | "auth_error" | "rate_limited" | "timeout" | "network_error" | "provider_error" | "invalid_response";
+            /**
+             * Format: date-time
+             * @description UTC completion timestamp for this attempt.
+             * @example 2026-09-30T12:00:00Z
+             */
+            checked_at: string;
+            /**
+             * @description Optional upstream retry guidance for rate_limited. No automatic retry is scheduled. Local admission limits instead use HTTP 429 and Retry-After.
+             * @example 61
+             */
+            retry_after_seconds?: number;
         };
         /** @description Response from POST /api/v1/voice/transcribe. Returns the text transcribed from an uploaded audio clip by the active Transcriber (FR-12.1, composer mic). 503 when no transcriber is configured. */
         TranscribeResponse: {
@@ -10377,6 +11747,8 @@ export interface components {
         };
         /** @description A single installed skill as returned by GET /skills. Skills are SKILL.md/package bundles loaded from ~/.omnipus/skills/ that extend agent capabilities. Each skill has an ID, version, and human-readable metadata. */
         Skill: {
+            /** @description true when any of: (a) the newest version's kind is not install or install_replace (a restore of an install version counts as a change); (b) the live folder's current content revision differs from the newest version's revision (an outside change not yet recorded) — evaluated at read time, never by writing history; (c) history is missing or unreadable. Always false for built-ins. */
+            has_local_changes: boolean;
             revision: components["schemas"]["ConfigurationRevision"];
             persistence_status?: components["schemas"]["ConfigurationPersistenceStatus"];
             activation_status?: components["schemas"]["ConfigurationActivationStatus"];
@@ -10477,7 +11849,7 @@ export interface components {
              */
             available_while_streaming?: boolean;
             /**
-             * @description How the web client dispatches the command. "client" = the SPA handles it locally (e.g. /clear, /model) and does NOT send it to the agent. "agent" = the SPA inserts it as text and forwards it via the message frame (e.g. /skill). Only meaningful for web-surfaced commands; defaults to "agent".
+             * @description How the web client dispatches the command. "client" = the SPA handles it locally (e.g. /model, /skills) and does NOT send it to the agent. "agent" = the SPA inserts it as text and forwards it via the message frame, where the server executes it (e.g. /status, /channels). Only meaningful for web-surfaced commands; defaults to "agent".
              * @example client
              * @enum {string}
              */
@@ -10598,7 +11970,7 @@ export interface components {
             };
             /**
              * @description Set the ADR-092 global default for Auto-approve. Auto is a SEPARATE setting from tool policy — it only has meaning for a tool currently resolved to "ask" (see SandboxConfig.auto_approve for the full behavioural description) and applies to every such tool, not only bash. Hot-reloaded — takes effect immediately, no restart required. Deliberately not named `mode` — that key above is the unrelated kernel sandbox enforcement mode (off/permissive/enforce).
-             *     Per-agent and per-chat Auto settings are NOT set here: a per-agent override is `auto_approve_disabled` on PUT /agents/{id} (AgentUpdateRequest) — off-only, tighten-only. A chat's session modifier is the session_mode_update WS frame (asyncapi.yaml, SessionModeUpdateFrame) — the one place in this contract allowed to LOOSEN (turn Auto on for that chat even when the agent or this global default has it off), because a human is present in that session. The per-agent field is tighten-only relative to this global default; this global default has no scope above it to tighten against.
+             *     The per-chat Auto setting is NOT set here: a chat's session modifier is the session_mode_update WS frame (asyncapi.yaml, SessionModeUpdateFrame) — the one place in this contract allowed to LOOSEN (turn Auto on for that chat even when this global default has it off), because a human is present in that session.
              * @example true
              */
             auto_approve?: boolean;
@@ -10662,6 +12034,11 @@ export interface components {
              * @example Jim
              */
             agent_name?: string;
+            /**
+             * @description True forces every run of this work into a fresh independent chat, for either role (session-core FR-017).
+             * @example false
+             */
+            run_isolated?: boolean;
             /**
              * @description Task priority from 1 (highest) to 5 (lowest). Defaults to 3.
              * @default 3
@@ -10888,6 +12265,11 @@ export interface components {
              * @enum {string}
              */
             status: "connected" | "disconnected" | "error";
+            /**
+             * @description Human-readable reason for the current status, safe to display — for example the missing secret reference that keeps an enabled server from starting (#1277). Present only when status is "error"; never contains a secret value.
+             * @example secret reference MCP_NOTION_TOKEN is missing
+             */
+            status_reason?: string;
             /**
              * @description Number of tools exposed by this server.
              * @example 5
@@ -11672,6 +13054,25 @@ export interface components {
             cli_version?: string;
         };
         /**
+         * ChannelEnableRequest
+         * @description Optional body of PUT /api/v1/channels/{id}/enable. An absent body or {} is an ordinary enable and grants no chat ownership of a pairing. pairing_retry is an explicit chat Retry of a WhatsApp QR pairing (spec omnipus-system-agent FR-081 / K10, BDD-8.8): the gateway proves the caller owns session_id and that the request/session pair is the channel's recorded pairing owner, then claims the next pairing attempt for that chat before enabling. A WebSocket subscription never grants this ownership.
+         */
+        ChannelEnableRequest: {
+            /** @description The original connect call and chat of the pairing being retried (not newly minted identifiers). Compared verbatim. A mismatch, a stale owner or a competing attempt is refused with 409 pairing_retry_conflict and nothing is enabled. */
+            pairing_retry?: {
+                /**
+                 * @description The connect_channel tool-call ID that started the pairing.
+                 * @example original-connect-call-id
+                 */
+                request_id: string;
+                /**
+                 * @description The chat session that started the pairing.
+                 * @example requesting-chat-id
+                 */
+                session_id: string;
+            };
+        };
+        /**
          * ChannelEnabledResponse
          * @description Response from PUT /api/v1/channels/{id}/enable and PUT /api/v1/channels/{id}/disable. Returns the channel ID and its new enabled state.
          */
@@ -11704,20 +13105,238 @@ export interface components {
             message: string;
         };
         /**
+         * ChannelOutbound
+         * @description Whether the agent bound to a chat connection may start messages on it, and to whom (channels spec "Contract Changes", FR-010, FR-012). Absent in config.json means {policy: reply_only, targets: []}. Targets are stored in canonical "platform:id" form; their length is counted with the prefix. The longest valid canonical value is 40 characters (telegram:-9223372036854775807/2147483647), so the 64-character bound never refuses a valid id.
+         */
+        ChannelOutbound: {
+            /**
+             * @description reply_only = "Only answer" (the default; the agent never starts a conversation). agent_may_start = "Answer and also start messages", but only to the listed targets; an empty list allows nothing.
+             * @example reply_only
+             * @enum {string}
+             */
+            policy: "reply_only" | "agent_may_start";
+            /**
+             * @description Canonical "platform:id" targets the agent may start messages to: a person's user id (a direct message) or a group's chat id. At most 20, no wildcard, no @name.
+             * @example [
+             *       "telegram:-1001234567890"
+             *     ]
+             */
+            targets: string[];
+        };
+        /**
+         * ChannelAvailability
+         * @description Whether a chat connection's adapter is running right now, read from the channel manager's existing records (channels spec T-7, FR-051). "running" is the adapter's own flag; a network loss does not necessarily clear it.
+         */
+        ChannelAvailability: {
+            /**
+             * @description running = registered and running; not_running = registered but not running (start failed, not started, or it started and later lost its connection, which is being re-established); not_loaded = not registered (for example the adapter could not be constructed).
+             * @example running
+             * @enum {string}
+             */
+            state: "running" | "not_running" | "not_loaded";
+            /**
+             * @description Why the connection is not running. Present only when state is not running: the connection's own reason when it reports one (for example WhatsApp's "the connection to WhatsApp was lost and is being re-established automatically" while it reconnects), else the last start error, the construction failure, "not started" or "not loaded". Never contains a secret.
+             * @example not started
+             */
+            reason?: string;
+        };
+        /**
+         * ChannelOutboundRead
+         * @description Response of GET /api/v1/channels/{id}/outbound (channels spec FR-021), read from one live configuration snapshot.
+         */
+        ChannelOutboundRead: {
+            /** @description The connection's outbound setting. When config.json has none, this is {policy: reply_only, targets: []}. */
+            outbound: components["schemas"]["ChannelOutbound"];
+            /**
+             * @description The channel revision token (FR-088) computed over the live configuration — the same token list_channels returns and the writer compares against expected_revision. "absent" when the connection is not configured.
+             * @example absent
+             */
+            revision: string;
+            /** @description Whether the connection is running right now. */
+            availability: components["schemas"]["ChannelAvailability"];
+            /**
+             * @description True only for platforms that can start messages in this release (Discord and Telegram). Other platforms show "not supported yet".
+             * @example true
+             */
+            start_supported: boolean;
+        };
+        /**
+         * ChannelOutboundUpdateRequest
+         * @description Request body of PUT /api/v1/channels/{id}/outbound (channels spec FR-020, FR-022). The whole target list replaces the stored one. Targets are raw input: the server trims, canonicalizes, removes duplicates and then enforces the limit of 20 (too_many_targets).
+         */
+        ChannelOutboundUpdateRequest: {
+            /**
+             * @description reply_only = "Only answer"; agent_may_start = "Answer and also start messages".
+             * @example agent_may_start
+             * @enum {string}
+             */
+            policy: "reply_only" | "agent_may_start";
+            /**
+             * @description Raw target entries, one per textarea line: a bare id or "platform:id". Rejections refer to an entry by its 0-based index in this array.
+             * @example [
+             *       "-1001234567890"
+             *     ]
+             */
+            targets: string[];
+            /**
+             * @description The revision returned by GET /api/v1/channels/{id}/outbound (or list_channels). A different current revision is refused with 409 stale_revision.
+             * @example absent
+             */
+            expected_revision: string;
+        };
+        /**
+         * ChannelOutboundWriteResponse
+         * @description Response of a successful PUT /api/v1/channels/{id}/outbound (channels spec FR-020, FR-027, T-6b).
+         */
+        ChannelOutboundWriteResponse: {
+            /** @description The saved setting, in canonical form. */
+            outbound: components["schemas"]["ChannelOutbound"];
+            /**
+             * @description The new channel revision token (FR-088) over the live configuration.
+             * @example r1-3f9a
+             */
+            revision: string;
+            /** @description Present only when the file was written but the rest of the running configuration could not be refreshed. The saved list is in force anyway. Text: "Saved and in force for starting messages. Other settings could not be refreshed: <short reason>. Check the server log." */
+            warning?: string;
+        };
+        /**
+         * ChannelOutboundRejection
+         * @description Error body of PUT /api/v1/channels/{id}/outbound for 400, 409, 422 and 502 (channels spec "Contract Changes", FR-020, FR-026, T-9). Nothing was saved.
+         *     Safe-echo set: every string of this schema (error, target_errors[].target, target_errors[].reason) is restricted by its pattern to printable ASCII (0x20-0x7E) except the five characters Go's json.Marshal HTML-escapes (double quote, backslash, <, >, &). The server drops any other character before serializing; it never escapes or substitutes. Each string character therefore serializes to exactly one byte, which keeps the worst-case body at about 2.7 KB, under the SPA error decoder's 4 KiB cap, with no non-printable characters for its binary sniff.
+         */
+        ChannelOutboundRejection: {
+            /**
+             * @description Human-readable reason, in the safe-echo set. For 502 lookup_unavailable it is "Discord could not be reached to check <ids>; nothing was saved; try again", listing unavailable ids in request order until the next id would exceed 500 characters, then "+<N> more".
+             * @example some targets are not valid ids
+             */
+            error: string;
+            /**
+             * @description Machine-readable reason. 400: invalid_targets, too_many_targets. 409: stale_revision, connect_first, saved_live_mismatch. 422: platform_cannot_start, platform_cannot_message_people. 502: lookup_unavailable.
+             * @example invalid_targets
+             * @enum {string}
+             */
+            code: "invalid_targets" | "too_many_targets" | "platform_cannot_start" | "platform_cannot_message_people" | "stale_revision" | "connect_first" | "lookup_unavailable" | "saved_live_mismatch";
+            /** @description Per-target errors: the first 10 invalid entries in request order. */
+            target_errors?: {
+                /**
+                 * @description 0-based position of the entry in the request's targets array (the client shows it on textarea line index + 1). This is the identifier; target is only a hint.
+                 * @example 0
+                 */
+                index: number;
+                /**
+                 * @description A sanitized hint of the entry: its first 20 safe-echo characters after dropping every other character, plus "..." when more than 20 survived.
+                 * @example @alice
+                 */
+                target: string;
+                /**
+                 * @description Why this entry was refused.
+                 * @example username_not_allowed
+                 * @enum {string}
+                 */
+                code: "invalid_id" | "wildcard_not_allowed" | "username_not_allowed" | "wrong_platform" | "not_found" | "unsupported_channel_kind" | "cannot_message_people" | "lookup_unavailable";
+                /**
+                 * @description Fixed catalog text for the code, in the safe-echo set (the longest, unsupported_channel_kind's, is 115 characters).
+                 * @example a message cannot be sent to a name; use the numeric id
+                 */
+                reason?: string;
+            }[];
+            /**
+             * @description Present only when more than 10 entries were invalid: how many invalid entries are not listed in target_errors.
+             * @example 3
+             */
+            omitted_count?: number;
+        };
+        /**
+         * ChannelConfigureError
+         * @description 500 body of PUT /api/v1/channels/{id}/configure (channels spec FR-056, FR-057, T-6b, T-6c). The code says what the request durably changed.
+         */
+        ChannelConfigureError: {
+            /**
+             * @description The normative text for the code. could_not_save: "could not save config". credential_saved_not_saved: "The credential was saved, but the configuration change was not: nothing else was applied. ..." (T-6b). saved_not_refreshed: "settings saved, but the running configuration could not be refreshed; the connection was not restarted".
+             * @example could not save config
+             */
+            error: string;
+            /**
+             * @description could_not_save = nothing durable changed (no credential of this request was stored and the configuration was not written). credential_saved_not_saved = at least one credential of this request was stored, then the write path failed; never reported as "nothing changed". saved_not_refreshed = the file was written but the running configuration could not be refreshed; the connection was not restarted.
+             * @example could_not_save
+             * @enum {string}
+             */
+            code: "could_not_save" | "credential_saved_not_saved" | "saved_not_refreshed";
+            /** @description Short reason, never a secret. */
+            detail?: string;
+        };
+        /**
+         * ChannelConfigureResponse
+         * @description 200 body of PUT /api/v1/channels/{id}/configure: the updated channel configuration with credential fields redacted (structure varies by channel type), plus how the save was applied to the running connection (channels spec T-6, FR-050, FR-052).
+         */
+        ChannelConfigureResponse: {
+            /**
+             * @description applied = reload confirmed and the connection is running. applied_not_running = reload confirmed but the connection is not running (apply_reason says why). unconfirmed = the reload was not confirmed within the wait window. failed = the reload returned an error (apply_reason is a fixed, secret-free phrase, never the raw error text); it does not claim the old settings are still running. no_reload_needed = the instance is disabled, or nothing changed, no credential was stored and the connection is current.
+             * @example applied
+             * @enum {string}
+             */
+            apply_outcome: "applied" | "applied_not_running" | "unconfirmed" | "failed" | "no_reload_needed";
+            /** @description Present for applied_not_running (the availability reason) and failed (a fixed, secret-free phrase, never the raw error text). For failed, use "the configuration reload failed; details are in the server log", or, when the applied/current predicate reaches the pending-disposal leg, "the previous connection did not finish shutting down; the next save retries it". A config-changing save uses the reload phrase because the applied-hash check precedes the disposal check. An identical save with matching applied settings while a disposal remains pending uses the disposal phrase. Error details stay in the server log. Never a secret. */
+            apply_reason?: string;
+            /** @description Present whenever a reload was attempted (every outcome except no_reload_needed): "A connection restart was attempted; other connections and scheduled services may have paused briefly while it ran." */
+            apply_note?: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ChannelRejectedSenders
+         * @description Senders a running connection ignored because they are not on its allowed list (channels spec FR-060, FR-061). Kept on the adapter instance; a rebuilt adapter starts empty.
+         */
+        ChannelRejectedSenders: {
+            /**
+             * @description How many messages were ignored since the adapter started.
+             * @example 2
+             */
+            count: number;
+            /**
+             * @description Canonical sender ids of the latest ignored senders, most recent first.
+             * @example [
+             *       "discord:9"
+             *     ]
+             */
+            recent: string[];
+        };
+        /**
          * ChannelRouting
-         * @description Routing configuration for a single communication channel. Controls which agent handles inbound messages arriving on this channel.
+         * @description Routing configuration for a single communication channel instance, as read back by GET and returned by PUT /channels/{id}/routing. Every channel is bound to a workspace and names that binding's main agent (omnipus-system-agent FR-127, K14); there is no global default agent and no unbound routing mode. An instance that has no binding yet is reported truthfully (FR-128): `bound` is false and both ids are empty strings — never an invented or legacy destination.
          */
         ChannelRouting: {
             /**
-             * @description ID of the agent that handles this channel's inbound messages. Omitted or empty means fall back to the global default agent.
-             * @example 550e8400-e29b-41d4-a716-446655440000
+             * @description ID of the bound main agent that answers this channel's inbound messages. Empty string when `bound` is false. (Landing 1 keeps the historical key name; it no longer means any global-default fallback.)
+             * @example mia
              */
-            default_agent_id?: string;
+            default_agent_id: string;
             /**
-             * @description Workspace this channel instance is bound to. Required (non-empty) for a bound instance; empty/omitted = unbound (legacy default routing).
+             * @description Workspace this channel instance is bound to. Empty string when `bound` is false.
              * @example my-workspace
              */
-            workspace_id?: string;
+            workspace_id: string;
+            /**
+             * @description True when the instance is bound to a workspace and names a main agent. An unbound instance drops every inbound message loudly until bound.
+             * @example true
+             */
+            bound: boolean;
+        };
+        /**
+         * ChannelRoutingUpdateRequest
+         * @description Body for PUT /channels/{id}/routing. Binds the channel instance to a workspace and names the main agent that answers it. Both fields are required and nonblank (omnipus-system-agent FR-127, K14); the legacy unbound mode is removed, so a request missing either is refused with 400 "bind this channel to an agent in a workspace" and changes nothing. Saving a valid binding clears the instance's routing `degraded` status (FR-129).
+         */
+        ChannelRoutingUpdateRequest: {
+            /**
+             * @description Workspace to bind the channel instance to. Must exist and be active.
+             * @example my-workspace
+             */
+            workspace_id: string;
+            /**
+             * @description The bound main agent: a chat-capable member of the workspace's team (never a worker or system agent). Landing 1 keeps the historical key name.
+             * @example mia
+             */
+            default_agent_id: string;
         };
         /**
          * ChannelCreateRequest
@@ -11766,7 +13385,7 @@ export interface components {
              * @example mia
              */
             agent_id: string;
-            /** @description Whether the email tools (read_inbox, search_email, read_message, send_email, reply) are registered for the owning agent. */
+            /** @description Whether the email tools (read_inbox, search_email, read_message, send_email, reply, create_email_draft) are registered for the owning agent. */
             enabled: boolean;
             /**
              * @description ID of the workspace the mailbox surfaces in. Always present: a mailbox is addressed by its (agent, workspace) pair, so the server serializes this from the authoritative pair key — never from mutable state.
@@ -11800,6 +13419,23 @@ export interface components {
             username?: string;
             /** @description True when a mailbox password is present in the credential store (the mailbox can authenticate). The password value itself is never returned. */
             configured: boolean;
+            /**
+             * @description #1277. Whether the mailbox can serve. "degraded" when it is enabled but cannot start — for example its password secret reference is missing; status_reason then names the cause. Optional: omitted by servers that do not report it.
+             * @example ok
+             * @enum {string}
+             */
+            status?: "ok" | "degraded";
+            /**
+             * @description #1277. Human-readable reason for the status, safe to display — for example the missing secret reference. Present only when status is "degraded"; never contains a secret value.
+             * @example secret reference MAIL_MIA_SALES_PASSWORD is missing
+             */
+            status_reason?: string;
+            /** @description Optional per-mailbox HTML signature (D2). Sanitized on save with the dedicated signature policy — operator HTML never ships raw into outbound mail. The plain-text signature part is derived at compose time and never stored. Absent or empty means no signature is applied. This is configuration, not mail content: storing it in config.json does not violate the no-local-mail-store rule (D6). A value longer than 16,384 characters is rejected with HTTP 400 on configure. */
+            signature_html?: string;
+            /** @description Advanced override for the mailbox's Sent folder name. Empty (default) means the folder is auto-resolved by its standard name. */
+            sent_folder_name?: string;
+            /** @description Advanced override for the mailbox's Drafts folder name. Empty (default) means the folder is auto-resolved by its standard name. */
+            drafts_folder_name?: string;
         };
         /**
          * MailboxConfigureRequest
@@ -11835,6 +13471,12 @@ export interface components {
             username: string;
             /** @description Mailbox password (or app password). Routed to the encrypted credential store; never persisted inline. Omit to keep the existing stored password; send an empty string to clear it. */
             password?: string;
+            /** @description Optional per-mailbox HTML signature (D2). Sanitized on save with the dedicated signature policy before it is persisted. A value longer than 16,384 characters is rejected with HTTP 400. The plain-text signature part is derived at compose time, never stored. Absent or empty means no signature is applied. */
+            signature_html?: string;
+            /** @description Advanced override for the mailbox's Sent folder name. Empty (default) means the folder is auto-resolved by its standard name. */
+            sent_folder_name?: string;
+            /** @description Advanced override for the mailbox's Drafts folder name. Empty (default) means the folder is auto-resolved by its standard name. */
+            drafts_folder_name?: string;
         };
         /**
          * MailboxListResponse
@@ -11843,6 +13485,896 @@ export interface components {
         MailboxListResponse: {
             /** @description Every configured mailbox, one entry per (agent, workspace) pair. */
             mailboxes: components["schemas"]["Mailbox"][];
+        };
+        /**
+         * MailFolder
+         * @description One of the three mail folders (D5 — Inbox, Sent, Drafts) for one mailbox, as listed from the mail server (email-mail-view-spec D5; ADR-20261001 "Missing versus unknown folder/count" row; mail-live-access-landing-order register row 3 — W0 is the single publisher, w2's discovery is the only producer of the role fields' values). Counts and freshness are per role: mapping and count metadata are separate objects, and a confirmed-absent Sent/Drafts has total=0 with an explanation while an unknown or failed count has total=null — never an invented zero. Missing INBOX remains an account error, not an unknown folder. The role fields (availability, uidvalidity, mapping_source) and the two metadata objects are optional on the wire until the discovery producer lands — fixtures and builds predating them keep working (the is_knowledge_base precedent); producers emit them always once landed.
+         */
+        MailFolder: {
+            /**
+             * @description The folder slug. Exactly these three values exist (D5, MC-5); any other value is rejected with HTTP 400 on the paths that take a folder parameter.
+             * @example inbox
+             * @enum {string}
+             */
+            slug: "inbox" | "sent" | "drafts";
+            /**
+             * @description The mail server's real folder name for this slug (the per-mailbox sent_folder_name / drafts_folder_name override applies, else the auto-resolved standard name).
+             * @example INBOX
+             */
+            display_name: string;
+            /**
+             * @description Live message count of the folder. A confirmed-absent optional role reports 0 with its explanation (correction M-01; w2 spec §4.1). Deferred nullability (register row 3; acceptance recorded in mail-live-access-landing-order §8, 2026-10-02): this schema cannot yet express an unknown or failed count — total is required and non-nullable here — and the W0 amendment that makes it nullable executes atomically with the Wave C/D consumer PRs. From that amendment on, the value may be absent on responses until the w2 discovery producer supplies it; a consumer must treat an absent total as unknown and never as 0 or false — a fabricated 0 never masquerades as "checked, empty".
+             * @example 42
+             */
+            total: number;
+            /**
+             * @description Live IMAP UNSEEN count. Present for the Inbox only; null for Sent and Drafts (round-1 MIN-005). The watcher's per-mailbox unseen_total is the only other unread surface — the list endpoint never filters by it (round-2 OBS-001 dropped the unseen_only query parameter).
+             * @example 3
+             */
+            unread_count: number | null;
+            /**
+             * @description [Optional on the wire until the discovery producer lands — fixtures and builds predating this field keep working, the is_knowledge_base precedent; producers emit it always once landed.] Discovery outcome for this role (correction M-01). present = a resolved mapping was validated against the server. absent = discovery completed successfully AND every candidate probe returned the server's structural not-found — confirmed absence only; the role is shown empty with the server-folder-absent explanation. unknown = unresolved: discovery commands failed or timed out, an auth/TLS/DNS/ permission error occurred, LIST-EXTENDED was unsupported with no candidate probe succeeding, or the server simply holds an untagged, locally named folder outside the candidate list — from the client's seat that is indistinguishable from absence, so the role renders unresolved with the per-mailbox name setting offered. Absence is never inferred from a finite candidate list failing (w2 spec §4.1).
+             * @example present
+             * @enum {string}
+             */
+            availability?: "present" | "absent" | "unknown";
+            /**
+             * Format: int64
+             * @description IMAP UIDVALIDITY of the resolved folder — the epoch its UIDs (and any paging cursors) are valid in. Null before validation or when the role's mapping is unknown: unknown is represented as null, never a fabricated version (ADR P1.3 "UIDVALIDITY changes" row). A changed uidvalidity discards affected header entries and cursors before new rows are published.
+             * @example 456
+             */
+            uidvalidity?: number | null;
+            /**
+             * @description How this role's folder name was resolved (register row 3 settles the five values; the ADR's four-value proposal is superseded). override = the operator's explicit per-mailbox Sent/Drafts name setting wins. special_use = the server advertised the role (LIST-EXTENDED SPECIAL-USE). fallback = a common-name candidate probe succeeded without special-use support. saved = a still-valid previously saved mapping was reused. none = no recognized role and no successful candidate probe (availability=unknown), or the role is confirmed absent.
+             * @example special_use
+             * @enum {string}
+             */
+            mapping_source?: "override" | "special_use" | "fallback" | "saved" | "none";
+            mapping_metadata?: components["schemas"]["MailReadMetadata"];
+            count_metadata?: components["schemas"]["MailReadMetadata"];
+        };
+        /**
+         * MailFolderList
+         * @description The three mail folders (D5) of one mailbox with counts and freshness — the response of GET /workspaces/{id}/mail/{agentId}/folders (mail-live-access-landing-order register rows 2/3; ADR-20261001 "Freshness metadata" row). The list-level metadata describes THIS read; each folder carries its own mapping and count metadata, because a mapping validation and a count fetch are separate successes with separate timestamps.
+         */
+        MailFolderList: {
+            /** @description Exactly the three D5 folders (Inbox, Sent, Drafts). */
+            folders: components["schemas"]["MailFolder"][];
+            /** @description Optional on the wire until the cache/read producers land (the is_knowledge_base precedent — pre-field fixtures keep working); producers emit it always once landed. Describes THIS read; each folder's mapping/count metadata are separate. */
+            metadata?: components["schemas"]["MailReadMetadata"];
+        };
+        /**
+         * MailMessageSummary
+         * @description Envelope row for one mail message as shown in a Mail panel list result (GET /workspaces/{id}/mail/{agentId}/folders/{folder}/messages). All fields are always serialized; nullable fields are the ones the mail server itself may leave unset (round-1 MIN-003 — types and nullability explicit). Fetches behind this row never change flags (BODY.PEEK / EXAMINE — round-2 MAJ-003).
+         */
+        MailMessageSummary: {
+            /**
+             * @description The Message-ID header value, or null when the inbound mail carries none (some mail does). Mid-style refs cannot address such a message.
+             * @example <abc123@example.com>
+             */
+            message_id: string | null;
+            /**
+             * Format: int64
+             * @description IMAP UID of the message within its folder (valid under uidvalidity).
+             * @example 123
+             */
+            uid: number;
+            /**
+             * Format: int64
+             * @description IMAP UIDVALIDITY of the folder — the epoch the uid is valid in. A changed uidvalidity renumbers uids; the mid: ref form survives that (round-1 MAJ-005, D21).
+             * @example 456
+             */
+            uidvalidity: number;
+            /**
+             * @description The folder slug the message was listed from (MC-5).
+             * @example inbox
+             * @enum {string}
+             */
+            folder: "inbox" | "sent" | "drafts";
+            /**
+             * @description Decoded subject (RFC 2047 decoded).
+             * @example Quarterly report
+             */
+            subject: string;
+            /**
+             * @description The From address (addr-spec).
+             * @example dana@example.com
+             */
+            from: string;
+            /**
+             * @description Display name of the sender when present, else null.
+             * @example Dana Example
+             */
+            from_name: string | null;
+            /** @description To addresses. */
+            to: string[];
+            /** @description Cc addresses (D26 — recipient lists on every mail surface). */
+            cc: string[];
+            /**
+             * Format: date-time
+             * @description Message date (RFC 3339), required-but-nullable — the W0 amendment (register row 8; acceptance recorded in mail-live-access-landing-order §8, 2026-10-02). Null is the founder's #1175 "No date" state: the Date header was missing or unparsable and no internal date exists; a consumer renders it as unknown (no date), never as false or a zero/epoch value (US-6.AC-4). When the effective date (a valid Date header, else the internal date) IS known, producers carry that true value — never blank, never fabricated.
+             * @example 2026-09-26T10:30:00Z
+             */
+            date: string | null;
+            /** @description Whether the message carries the \Seen flag. */
+            seen: boolean;
+            /** @description Whether the message carries the \Draft flag (MC-14). */
+            is_draft: boolean;
+            /** @description Whether the X-Omnipus-Draft header is present (FR-029) — an agent-created draft the approval panel can edit losslessly. */
+            is_omnipus_draft: boolean;
+            /** @description Whether the message's flag list carries the $OmnipusAgentRead keyword (D38, FR-039). Derived from the fetched flag list on every fetch — never stored by Omnipus (D6). When the mail server rejects custom keywords the value is false and nothing errors (MC-36). */
+            read_by_agent: boolean;
+            /**
+             * @description Gateway-issued opaque message reference for this message (mail-live-access-landing-order register row 8; ADR correction I-03) — bound to the authorized pair, folder and configuration generation, carrying its folder epoch. Issued with the result that names the message and consumed unchanged by every follow-up operation (attachment preview, save, reply context, seen) — never a model-synthesized identity, never dependent on the optional Message-ID, and validated against the live folder epoch on the same lease that serves the follow-up. A mismatched epoch, pair or generation is the typed 409 stale-reference refusal, before any fetch or mutation. Optional on the wire until the issuing gateway work lands (the is_knowledge_base precedent); producers emit it always once landed.
+             * @example uid:456:123
+             */
+            message_ref?: string;
+            /**
+             * @description Paperclip indicator (F7, #1174 display half; register row 8) — producers serialize it always once the MIME classifier lands; absent on results predating it means not-yet-computed, and false (once present) is confirmed absence, never an omitted or uncomputed value. Derived from MIME structure/part headers in the bounded list fetch — never by downloading message or attachment bodies. Actual named/attachment parts count; inline CID resources alone and the dedicated Omnipus draft-body marker do not, but a genuine user message.md does. If metadata cannot be classified the read fails visibly rather than fabricating false. The indicator is inside the allowed header-cache field set; attachment bytes and lists are not.
+             * @example true
+             */
+            has_attachments?: boolean;
+        };
+        /**
+         * MailMessagePage
+         * @description One page of mail message envelopes (GET /workspaces/{id}/mail/{agentId}/folders/{folder}/messages). Paging is cursor-based and explicit (ADR-20261001 "Paging and search" row; mail-live-access-landing-order register row 4 — W0 is the single publisher): next_cursor is an opaque string binding the pair/config generation, folder version, query and number delivered in this browse/search sequence; has_more states whether a next page exists; view_limit_reached marks the 200-rows-per-folder-per-view hard ceiling, beyond which the user searches — no next browse cursor is issued at the ceiling. The page never silently drops rows. Legacy numeric paging (truncated / next_before_uid / the before_uid query parameter) is superseded by the cursor fields and is retained only until the panel's consumer migration lands (landing-order Wave C); it is then removed in one atomic contract step.
+         */
+        MailMessagePage: {
+            /** @description The envelopes of this page, newest first. */
+            messages: components["schemas"]["MailMessageSummary"][];
+            /** @description Legacy explicit-truncation flag (email-mail-view-spec §2.3) — superseded by has_more; retained only until the consumer migration lands, then removed. */
+            truncated: boolean;
+            /**
+             * Format: int64
+             * @description Legacy numeric cursor — superseded by next_cursor; retained only until the consumer migration lands, then removed.
+             * @example 87
+             */
+            next_before_uid: number | null;
+            /**
+             * @description Opaque cursor for the next page when has_more is true and the view limit is not reached; null on the last page or at the 200-row ceiling. Binds the pair/config generation, folder version (UIDVALIDITY), the browse/search query and the number of rows already delivered in this sequence. Presenting a stale or mismatched cursor returns the typed 409 stale-cursor result — the client resets the view once, never spins or replays. Optional on the wire until the cursor-issuing producer lands (the is_knowledge_base precedent); producers emit it always once landed.
+             * @example MWI6NDU2OjEyMztCMQ
+             */
+            next_cursor?: string | null;
+            /**
+             * @description Whether more messages exist beyond this page in this sequence. Optional on the wire until the cursor-issuing producer lands; the legacy truncated flag remains authoritative for pre-cursor consumers until the migration removes it.
+             * @example true
+             */
+            has_more?: boolean;
+            /**
+             * @description True when this page delivered up to the 200-rows-per-folder-per-view hard ceiling (ADR P1.1 "Display pagination") — no next browse cursor is issued; the panel offers the reachable folder-scoped search instead ("Search to find older messages"). Older loaded pages remain the active view's working set and are released on view exit; they never enlarge the reusable newest-50 cache. Optional on the wire until the producer lands.
+             * @example false
+             */
+            view_limit_reached?: boolean;
+            /** @description Optional on the wire until the cache/read producers land; producers emit it always once landed. */
+            metadata?: components["schemas"]["MailReadMetadata"];
+        };
+        /**
+         * MailMessage
+         * @description Full message for the Mail panel read path (GET /workspaces/{id}/mail/{agentId}/folders/{folder}/messages/{ref}) and the response of a panel draft edit (PUT .../folders/drafts/messages/{ref}). Carries every MailMessageSummary field plus the read-path extras. Fetching never writes flags (BODY.PEEK — round-2 MAJ-003); the only \Seen writers are the panel's seen endpoint and agent read_message (D38). bcc is returned only on the owner's own copies (drafts and Sent) and is null otherwise (§2.3 note). No message body text is persisted anywhere by Omnipus (D6) — this object is assembled live from the mail server.
+         */
+        MailMessage: {
+            /**
+             * @description The Message-ID header value, or null when the mail carries none.
+             * @example <abc123@example.com>
+             */
+            message_id: string | null;
+            /**
+             * Format: int64
+             * @description IMAP UID of the message within its folder.
+             * @example 123
+             */
+            uid: number;
+            /**
+             * Format: int64
+             * @description IMAP UIDVALIDITY of the folder.
+             * @example 456
+             */
+            uidvalidity: number;
+            /**
+             * @description The folder slug the message lives in (MC-5).
+             * @example drafts
+             * @enum {string}
+             */
+            folder: "inbox" | "sent" | "drafts";
+            /**
+             * @description Decoded subject (RFC 2047 decoded).
+             * @example Quarterly report
+             */
+            subject: string;
+            /**
+             * @description The From address (addr-spec).
+             * @example assistant@example.com
+             */
+            from: string;
+            /** @description Display name of the sender when present, else null. */
+            from_name: string | null;
+            /** @description To addresses. */
+            to: string[];
+            /** @description Cc addresses (D26). */
+            cc: string[];
+            /**
+             * Format: date-time
+             * @description Message date (RFC 3339), required-but-nullable — the W0 amendment (register row 8; acceptance recorded in mail-live-access-landing-order §8, 2026-10-02). Null is the founder's #1175 "No date" state: the Date header was missing or unparsable and no internal date exists; a consumer renders it as unknown (no date), never as false or a zero/epoch value (US-6.AC-4). When the effective date (a valid Date header, else the internal date) IS known, producers carry that true value — never blank, never fabricated.
+             * @example 2026-09-26T10:30:00Z
+             */
+            date: string | null;
+            /** @description Whether the message carries the \Seen flag. */
+            seen: boolean;
+            /** @description Whether the message carries the \Draft flag (MC-14). */
+            is_draft: boolean;
+            /** @description Whether the X-Omnipus-Draft header is present (FR-029). */
+            is_omnipus_draft: boolean;
+            /** @description Whether the flag list carries the $OmnipusAgentRead keyword (D38, FR-039) — derived per fetch, never stored by Omnipus. */
+            read_by_agent: boolean;
+            /** @description Reply-To address when the message carries one, else null. */
+            reply_to: string | null;
+            /** @description In-Reply-To Message-ID when present, else null. */
+            in_reply_to: string | null;
+            /** @description References header (thread chain) when present, else null. */
+            references: string | null;
+            /** @description Decoded plain-text body. */
+            body_text: string;
+            /** @description Whether an HTML body part exists. The HTML itself is never in this object — it is served only through the token-gated mail-preview routes (D13, §2.3a). */
+            has_html: boolean;
+            /** @description Bcc addresses — returned only on the owner's own copies (drafts and Sent); null on every other message (§2.3 note, D29/R2-3). */
+            bcc: string[] | null;
+            /** @description Attachment descriptors (D28) — sanitized names, part indices. */
+            attachments: components["schemas"]["MailAttachment"][];
+            /**
+             * @description Gateway-issued opaque message reference (correction I-03; register row 8) — same shape and rules as MailMessageSummary.message_ref. The detail result's issued reference: every follow-up operation on this message (attachment preview, save, reply context, seen) consumes it unchanged, and the gateway validates its embedded folder epoch, pair and configuration generation on the same lease that serves the follow-up — a mismatch is the typed 409 stale-reference refusal before any fetch or mutation.
+             * @example uid:456:123
+             */
+            message_ref?: string;
+            /**
+             * @description Paperclip indicator (F7) — same derivation and semantics as MailMessageSummary.has_attachments; carried consistently on the detail shape (register row 8). False is confirmed absence.
+             * @example true
+             */
+            has_attachments?: boolean;
+            /** @description The draft's editable Markdown source: the stored text/markdown part of an Omnipus draft whose X-Omnipus-Render-Hash matches the rendered text part; otherwise the server-derived Markdown of a foreign draft (FR-030) with markdown_lossy=true. Null on non-draft messages without an editable source. */
+            body_markdown: string | null;
+            /** @description True when body_markdown was derived rather than read from a stored text/markdown part — editing such a draft may lose formatting (D24; the panel states the loss plainly). */
+            markdown_lossy: boolean;
+            /** @description Set when the OLD draft copy could not be removed after a successful update-APPEND of the new copy (MAJ-009/MC-28 — the panel warns of a possible duplicate draft). Same underlying mechanism as the send path's draft_cleanup_warning (MailSendResponse), triggered by update instead of send. Null when cleanup succeeded, and always null on the read paths (GET message, list messages) — only the update endpoint can set it. */
+            draft_cleanup_warning?: string | null;
+        };
+        /**
+         * MailAttachment
+         * @description Attachment descriptor on MailMessage (D28 — inbound messages, drafts and sent copies). The gateway never returns raw MIME names: filename is sanitized for download (no path separators, edge case 21) and the same sanitized name is what the download endpoint serves.
+         */
+        MailAttachment: {
+            /**
+             * @description Index of the MIME part within the message — the {partIndex} path parameter of the download endpoint (GET /workspaces/{id}/mail/{agentId}/folders/{folder}/messages/{ref}/attachments/{partIndex}).
+             * @example 2
+             */
+            part_index: number;
+            /**
+             * @description Sanitized attachment filename — no path separators, never trusted raw from the MIME part (MC-32; the same sanitized form is served on the download's Content-Disposition per MC-42).
+             * @example report-q3.pdf
+             */
+            filename: string;
+            /**
+             * @description The MIME part's declared content type, as listed. (The download endpoint serves with an extension-derived content type instead — MC-42.)
+             * @example application/pdf
+             */
+            content_type: string;
+            /**
+             * @description Decoded attachment size in bytes (ADR-20261001 "Attachment metadata (F1/F3/F7)" row; register row 8). Metadata-only list/read results establish structure, not a decoded transfer, so a labelled reported_size_bytes may carry the server-reported transfer size instead — the decoded value is never silently substituted by IMAP structure octets (potentially encoded) and never by 0 for unknown. Becomes nullable (unknown honestly) together with its consumer changes per the landing order's Wave C/D sequencing; the actual decoded transfer remains the cap authority.
+             * @example 1048576
+             */
+            size_bytes: number;
+            /**
+             * Format: int64
+             * @description Optional, labelled server-reported transfer size for the part — present only when the server reports one. Distinct from the decoded size_bytes: metadata-only reads may carry this without having decoded the part, and a false or unknown report is caught at actual transfer time (the preview contract aborts on a mid-transfer size or decode failure — correction I-05). Never substituted for size_bytes.
+             * @example 1049600
+             */
+            reported_size_bytes?: number;
+        };
+        /**
+         * MailboxNewMailSummary
+         * @description Watcher-driven badge state for one mailbox (GET /workspaces/{id}/mail/summary). Served from the watcher's saved state file — this response never dials IMAP (D29/R2-5, FR-033); the only reference metadata Omnipus stores for a mailbox is this UID/count/error-class state (D6). watcher_state ok never lies about blindness: last_success_at is null until a cycle has actually succeeded, and last_seen_uid makes UID advance observable (round-2 MAJ-019).
+         */
+        MailboxNewMailSummary: {
+            /**
+             * @description ID of the agent owning the mailbox (the workspace rides the path).
+             * @example mia
+             */
+            agent_id: string;
+            /**
+             * @description The mailbox's live IMAP UNSEEN count as of the watcher's last completed cycle (A11).
+             * @example 3
+             */
+            unseen_total: number;
+            /**
+             * @description The watcher's cycle state: ok (last cycle succeeded), error (last cycle failed, next attempt not yet deferred), backoff (failing repeatedly — next_attempt_at carries the next try).
+             * @example ok
+             * @enum {string}
+             */
+            watcher_state: "ok" | "error" | "backoff";
+            /**
+             * @description Sanitized error class of the last failed cycle, from the closed enum timeout|dns|connect_refused|auth_failed|tls|folder_missing|server_error (MC-8); null when the last cycle succeeded.
+             * @example timeout
+             */
+            last_error_class: string | null;
+            /**
+             * Format: date-time
+             * @description RFC 3339 instant of the last successful watcher cycle; null when no cycle has ever succeeded (round-2 MAJ-019 — ok never lies about blindness).
+             * @example 2026-09-26T10:30:00Z
+             */
+            last_success_at: string | null;
+            /**
+             * Format: int64
+             * @description Highest UID the watcher has seen (MC-31 baselining applies); null before the first state was saved. Makes UID advance observable.
+             */
+            last_seen_uid: number | null;
+            /**
+             * Format: date-time
+             * @description RFC 3339 instant of the watcher's next attempt while backing off (D29/R2-8 — the badge renders "retrying at hh:mm"); null otherwise.
+             * @example 2026-09-26T10:32:00Z
+             */
+            next_attempt_at: string | null;
+        };
+        /**
+         * MailSummaryList
+         * @description Watcher-driven badge summary for every mailbox in a workspace (GET /workspaces/{id}/mail/summary) — one MailboxNewMailSummary per (agent, workspace) mailbox pair. Served from saved watcher state; never dials IMAP.
+         */
+        MailSummaryList: {
+            /** @description One entry per mailbox in the workspace. */
+            items: components["schemas"]["MailboxNewMailSummary"][];
+        };
+        /**
+         * MailAttachmentInput
+         * @description One attachment supplied for an outbound message (D28) — on the human paths (MailSendRequest.attachments, MailDraftUpdateRequest.attachments). The agent path carries no wire schema: agent tool attachments are workspace-file references resolved server-side through pkg/tools/resolvepath.go::ResolvePath under its open-read rule (D33, security sign-off C2; no separate policy or gate — MC-35).
+         */
+        MailAttachmentInput: {
+            /**
+             * @description Attachment filename. Sanitized on serve and on attach (MC-32) — no path separators are ever stored or served.
+             * @example report-q3.pdf
+             */
+            filename: string;
+            /**
+             * @description The attachment's content type as supplied by the composer.
+             * @example application/pdf
+             */
+            content_type: string;
+            /**
+             * Format: byte
+             * @description The attachment bytes, base64-encoded. Across all attachments of one message the decoded total is capped at 25 MiB with at most 10 files (MC-32) — enforced before any SMTP connection or draft APPEND.
+             */
+            data_base64: string;
+        };
+        /**
+         * MailSendRequest
+         * @description Human manual send from the Mail panel compose (D9, POST /workspaces/{id}/mail/{agentId}/messages). Body is Markdown; the backend renders sanitized HTML + plain text (multipart/alternative, MC-3), appends the mailbox signature, sends over SMTP and APPENDs the Sent copy (D7, D18 — always, no provider detection). Audit event + dedicated mailMutationLimiter rate limit (MC-20). The ≤ 50-recipient total cap (D29/R2-6, MC-27) and the attachment caps (≤ 10 files, ≤ 25 MiB total — MC-32) are enforced before any SMTP connection.
+         */
+        MailSendRequest: {
+            /** @description To recipients (de-duplicated, RFC 2047 display names preserved). */
+            to: string[];
+            /** @description Cc recipients. Absent or empty means none. */
+            cc?: string[];
+            /** @description Bcc recipients. Absent or empty means none. */
+            bcc?: string[];
+            /** @description Subject line; CRLF/LF injection is sanitized (MC-4). */
+            subject: string;
+            /** @description Markdown body — rendered server-side to sanitized HTML plus plain text (multipart/alternative, MC-3), signature appended. Bounded at 1 MiB (MC-22). */
+            body_markdown: string;
+            /** @description Message-ID of the message being replied to — set by the panel Reply action (round-2 MIN-009); In-Reply-To/References are carried through to the sent message. Absent or null = standalone compose. */
+            in_reply_to?: string | null;
+            /** @description Files to attach (D28). Decoded total across all files ≤ 25 MiB, at most 10 files (MC-32) — checked pre-dial. */
+            attachments?: components["schemas"]["MailAttachmentInput"][];
+        };
+        /**
+         * MailSendResponse
+         * @description Send outcome for the manual send (POST /workspaces/{id}/mail/{agentId}/messages) and the panel send (POST .../folders/drafts/messages/{ref}/send). The `sent` field was dropped (round-2 MIN-006 — it was always true on a 200). Save failures are never silent (D7): a Sent-APPEND failure after a successful SMTP send sets sent_saved=false plus save_warning. A draft that could not be removed after a successful panel send sets draft_cleanup_warning (MAJ-009/MC-28).
+         */
+        MailSendResponse: {
+            /**
+             * @description The sent message's Message-ID (stable across panel edits).
+             * @example <b7d4@example.com>
+             */
+            message_id: string;
+            /** @description Whether the Sent-folder APPEND (D7) succeeded; false plus a non-empty save_warning when the APPEND failed after a successful SMTP send (MC-9, never silent). */
+            sent_saved: boolean;
+            /** @description Set when the Sent APPEND failed after a successful SMTP send — never silent (D7, MC-9); the tool result carries the same warning. Null when the save succeeded. */
+            save_warning: string | null;
+            /** @description Set when the draft could not be removed after a successful panel send (MAJ-009/MC-28 — the panel warns of a possible duplicate). Null when cleanup succeeded or there was no draft. */
+            draft_cleanup_warning: string | null;
+        };
+        /**
+         * MailDraftUpdateRequest
+         * @description Panel edit of a draft (D12/D23, PUT /workspaces/{id}/mail/{agentId}/folders/drafts/messages/{ref}): the full displayed content plus the staleness precondition (round-2 MAJ-008). The APPEND keeps the draft's Message-ID and \Deleted-flag the old copy (FR-032). Attachment carry-over is by part reference (FR-035): keep_attachment_parts lists the part indices from the current copy's MailMessage.attachments to carry over, and attachments carries new files. Full-replace semantics: keep_attachment_parts is required — the panel lists exactly what will be carried (D28). Audit event + rate limit.
+         */
+        MailDraftUpdateRequest: {
+            /** @description To recipients, replacing the draft's current list (D23 — recipients editable). */
+            to: string[];
+            /** @description Cc recipients replacing the draft's current list. Absent or empty means none. */
+            cc?: string[];
+            /** @description Bcc recipients replacing the draft's current list. Absent or empty means none. */
+            bcc?: string[];
+            /** @description New subject (D23). */
+            subject: string;
+            /** @description New editable Markdown source (D23). For an Omnipus draft it replaces the stored text/markdown part and re-stamps X-Omnipus-Render-Hash (MC-29); for a foreign draft it replaces the derived source, with the formatting-loss statement shown in the panel (D24). */
+            body_markdown: string;
+            /**
+             * Format: int64
+             * @description uidvalidity of the draft as the panel viewed it — staleness precondition (round-2 MAJ-008).
+             */
+            uidvalidity: number;
+            /**
+             * Format: int64
+             * @description uid of the draft as the panel viewed it — staleness precondition (round-2 MAJ-008).
+             */
+            uid: number;
+            /** @description New files added in the panel (D28). */
+            attachments?: components["schemas"]["MailAttachmentInput"][];
+            /** @description Part indices from the current copy's MailMessage.attachments to carry over (FR-035, server-side carry-over by part reference). Each value is the attachment's own stable part_index — the same value the download endpoint's {partIndex} path parameter expects — NOT its position in the listing array. Required — the panel lists exactly what will be carried (D28). */
+            keep_attachment_parts: number[];
+        };
+        /**
+         * MailDraftSendRequest
+         * @description Panel send (D12, POST /workspaces/{id}/mail/{agentId}/folders/drafts/messages/{ref}/send): the panel IS the approval. Transmits exactly the request's content — never re-reads the draft as truth (round-1 MAJ-002) — APPENDs the Sent copy (D18) and \Deleted-flags the draft (FR-032). Idempotent per draft Message-ID (round-2 MAJ-009): a repeat submit after a completed send returns the recorded first outcome, never a second transmission (FR-021). keep_attachment_parts is optional here and defaults to carrying ALL of the current copy's attachments (spec §2.2; the UI lists exactly what will be carried, D28). Audit event + rate limit.
+         */
+        MailDraftSendRequest: {
+            /** @description The displayed/edited To recipients, transmitted as-is (round-1 MAJ-002). */
+            to: string[];
+            /** @description The displayed/edited Cc recipients. Absent or empty means none. */
+            cc?: string[];
+            /** @description The displayed/edited Bcc recipients. Absent or empty means none. */
+            bcc?: string[];
+            /** @description The displayed/edited subject, transmitted as-is. */
+            subject: string;
+            /** @description The displayed/edited Markdown body, rendered at send time (MC-3). */
+            body_markdown: string;
+            /**
+             * Format: int64
+             * @description uidvalidity of the draft as the panel viewed it — staleness precondition (round-2 MAJ-008, MC-16).
+             */
+            uidvalidity: number;
+            /**
+             * Format: int64
+             * @description uid of the draft as the panel viewed it — staleness precondition (round-2 MAJ-008, MC-16).
+             */
+            uid: number;
+            /** @description Part indices from the current copy's MailMessage.attachments to carry onto the sent message. Each value is the attachment's own stable part_index — the same value the download endpoint's {partIndex} path parameter expects — NOT its position in the listing array. Optional — absent or empty-list semantics: absent carries ALL of the current copy's attachments (spec §2.2 default carry all); an explicit list carries exactly those parts. */
+            keep_attachment_parts?: number[];
+        };
+        /**
+         * MailHtmlPreviewTokenRequest
+         * @description Request to mint a short-lived token for one message's HTML body (D13/D17, POST /mail/html-preview-token — session-authenticated, stays in the API namespace, security sign-off C1). This mint is the ONE live-IMAP fetch of the preview flow: the message is fetched once, sanitized, and its body plus inline cid: parts and the load_remote remote-image URL list are held in the in-memory token store for the TTL — the /mail-preview/ serve routes (§2.3a) never dial IMAP. load_remote defaults to false (D17 — remote images blocked by default; "Load images" re-mints with true). Rate-limited by a dedicated per-IP limiter (MC-44).
+         */
+        MailHtmlPreviewTokenRequest: {
+            /**
+             * @description Workspace of the mailbox pair.
+             * @example ws_my_workspace
+             */
+            workspace_id: string;
+            /**
+             * @description ID of the mailbox-owning agent.
+             * @example mia
+             */
+            agent_id: string;
+            /**
+             * @description Folder slug — exactly inbox, sent or drafts (MC-5).
+             * @example inbox
+             * @enum {string}
+             */
+            folder: "inbox" | "sent" | "drafts";
+            /**
+             * @description Folder-scoped message reference: `uid:<uidvalidity>:<uid>` or `mid:<Message-ID>` — the same ref grammar as the read endpoint (§2.3).
+             * @example uid:456:123
+             */
+            message_ref: string;
+            /**
+             * @description Whether the preview may load remote images through the gateway's bounded proxy (D17). Default false — blocked by default; the "Load images" action re-mints with true.
+             * @default false
+             */
+            load_remote: boolean;
+        };
+        /**
+         * MailHtmlPreviewTokenResponse
+         * @description Minted preview token for one message's HTML body (D13/D17). Mirrors the Library token hygiene (MC-43): 256-bit crypto/rand token, fail-closed on entropy failure, named TTL, per-session live-token cap that refuses never evicts, indistinguishable 404s on the serve routes, logout revocation, bound to (pair, folder, ref, load_remote). The SPA constructs the /mail-preview/html/{token} and /mail-preview/part/{token}/{index} URLs from the token; expiry comes from expires_in_seconds.
+         */
+        MailHtmlPreviewTokenResponse: {
+            /**
+             * @description The credential: 32 bytes from a cryptographic random source, encoded base64url without padding — 43 characters (Library token hygiene, MC-43). This string is the entire security of the unauthenticated /mail-preview/ serve routes, so it MUST NOT be logged, put in an audit record, or sent in a Referer header (Referrer-Policy: no-referrer on the served responses).
+             * @example kZ8vQ2mR7xT1yB4nW6cA9pL0sD3fG5hJ8kM2nP4qR6t
+             */
+            token: string;
+            /**
+             * @description Seconds from the moment this response was produced until the token stops working (Library precedent: 900 for the 15-minute PreviewTokenTTL).
+             * @example 900
+             */
+            expires_in_seconds: number;
+        };
+        /**
+         * MailSignaturePreviewTokenRequest
+         * @description Request to mint a short-lived token for the draft signature's live preview (POST /mail/signature-preview-token — session-authenticated, stays in the API namespace). Unlike the message HTML-preview mint, this endpoint NEVER dials IMAP: there is no workspace/agent/folder/ref in the request — the signature HTML is sanitized at mint (strip meta/base/forms/scripts/event handlers, harden anchors; the signature policy keeps inline style, tables and https+data images per FR-003) and held in the in-memory token store for the TTL. Mint never persists: the sanitized HTML lives only in memory and dies with the token (logout revocation or TTL expiry). Rate-limited by a dedicated per-IP limiter (MC-44) — 60 req/min, 429 with Retry-After.
+         */
+        MailSignaturePreviewTokenRequest: {
+            /**
+             * @description The signature editor's current HTML (MC-1 bound: 1..16384 characters). Sanitized at mint before it is ever served into the sandboxed preview frame; storage sanitization stays the draft PUT's job — this mint never writes the signature anywhere.
+             * @example <p style="color:#333">Elicify GmbH — Berlin</p>
+             */
+            signature_html: string;
+        };
+        /**
+         * MailSignaturePreviewTokenResponse
+         * @description Minted preview token for the draft signature's live preview. Mirrors the message preview's token hygiene (MC-43): 256-bit crypto/rand token, fail-closed on entropy failure, named TTL, indistinguishable 404s on the serve routes, logout revocation. Signature-token specifics: the TTL is the named 2-minute MailSignaturePreviewTokenTTL (bounds replay; the preview outlives debounce+render), and mints REPLACE — a session holds at most one live signature token (a new mint revokes the session's previous signature token; message-preview tokens keep their separate cap-8-refuses hygiene). The SPA constructs the /mail-preview/html/{token} URL from the token; expiry comes from expires_in_seconds.
+         */
+        MailSignaturePreviewTokenResponse: {
+            /**
+             * @description The credential: 32 bytes from a cryptographic random source, encoded base64url without padding — 43 characters (Library token hygiene, MC-43). This string is the entire security of the unauthenticated /mail-preview/ serve routes, so it MUST NOT be logged, put in an audit record, or sent in a Referer header (Referrer-Policy: no-referrer on the served responses).
+             * @example kZ8vQ2mR7xT1yB4nW6cA9pL0sD3fG5hJ8kM2nP4qR6t
+             */
+            token: string;
+            /**
+             * @description Seconds from the moment this response was produced until the token stops working (named signature TTL: 120 for the 2-minute MailSignaturePreviewTokenTTL — replace-on-mint keeps exactly one live signature token per session).
+             * @example 120
+             */
+            expires_in_seconds: number;
+        };
+        /**
+         * CreateEmailDraftResult
+         * @description Result of the create_email_draft agent tool (spec §2.4 — the tool returns exactly this shape). Crosses the gateway→SPA boundary: the chat tool-result renderer consumes the generated type (round-2 MIN-013). Property names are exactly as the tool emits them.
+         */
+        CreateEmailDraftResult: {
+            /**
+             * @description Whether the draft was APPENDed (MC-11 asserts created=true).
+             * @example true
+             */
+            created: boolean;
+            /**
+             * @description The draft's Message-ID, generated by the tool itself (<random-128-bit@domain-of-the-mailbox's-From-address>, fallback omnipus.invalid) and kept through panel edits and the final send (round-1 MIN-004).
+             * @example <9f3c...@example.com>
+             */
+            message_id: string;
+            /**
+             * @description IMAP UID of the APPENDed draft in the Drafts folder.
+             * @example 124
+             */
+            uid: number;
+            /**
+             * @description UIDVALIDITY of the Drafts folder.
+             * @example 456
+             */
+            uidvalidity: number;
+            /**
+             * @description Absolute http(s) chat link built from gateway.public_url exactly like serve_web derives its origin — http allowed (round-1 MAJ-013; pkg/tools/web_serve.go precedent). Null when no origin is derivable (unset public_url, wildcard bind) — the tool still succeeds and chat_link_reason carries the stated reason.
+             * @example http://localhost:5000/#/workspaces/ws_my_workspace/mail?mailbox=mia&folder=drafts&message=mid%3A%3C9f3c...%40example.com%3E
+             */
+            chat_link: string | null;
+            /** @description The stated reason when chat_link is null; null otherwise. */
+            chat_link_reason: string | null;
+        };
+        /**
+         * MailUnavailableError
+         * @description Typed 503 body for a mail read that the gateway refused to dial: code=backoff (automatic poll during watcher backoff — carries the saved last error class and next_attempt_at) or code=busy (request queued past the per-mailbox concurrency cap beyond the request deadline — MIN-003). Shares error/code with ErrorResponse so generic handlers work unchanged.
+         */
+        MailUnavailableError: {
+            /**
+             * @description Human-readable message, safe to display.
+             * @example mailbox backing off; retrying at 12:34
+             */
+            error: string;
+            /**
+             * @description Machine-readable discriminator. backoff = the automatic poll hit the watcher's backoff window; busy = the request queued past the per-mailbox concurrency cap beyond the request deadline (MIN-003). A client branches on it without string matching on the message.
+             * @enum {string}
+             */
+            code: "busy" | "backoff";
+            /**
+             * @description Present when code=backoff — the watcher's saved upstream class (same closed enum as the 502 body's code field, MC-8).
+             * @enum {string}
+             */
+            last_error_class?: "timeout" | "dns" | "connect_refused" | "auth_failed" | "tls" | "folder_missing" | "server_error";
+            /**
+             * Format: date-time
+             * @description Present when code=backoff.
+             */
+            next_attempt_at?: string;
+            /**
+             * @description Safe refusal reason (mail-live-access-landing-order register row 7 — W0 is the single publisher; ADR-20261001 "Human Retry and upstream limits" row). pool_busy = the global eight-socket ceiling stayed exhausted past the bounded acquisition wait (distinct from an account-slot refusal — w1 spec §4.6). account_busy = the per-account two-slot work gate (the existing busy code's queue-timeout case). server_connection_limit = the server itself refused further connections and the response structurally established that limit — recognized only from the structural response, never promoted from unknown response text; the refused session is retired and the effective per-mailbox capacity for that server is reduced in-process. backoff = the watcher backoff gate. Present where applicable; absent = no more specific reason than code carries. Retry remains explicit and bounded: a human retry bypasses only backoff, never the semaphore, socket cap, TLS validation or mutation safeguards.
+             * @example pool_busy
+             * @enum {string}
+             */
+            reason?: "pool_busy" | "account_busy" | "server_connection_limit" | "backoff";
+        };
+        /**
+         * MailReadMetadata
+         * @description Freshness metadata carried by a Mail read response (ADR-20261001 "Freshness metadata" row; mail-live-access-landing-order register row 2 — W0 is the single publisher, w2 is the only value producer, w5 attaches and advances in gateway responses). A 200 cache response is not evidence of a live success: the SPA renders "last checked / checking / refresh failed" from these fields, and drops a delayed response whose publication_revision is superseded (correction I-02). A missing last_validated_at means unknown/stale, never just fetched. A mapping, its counts and a page of headers carry SEPARATE metadata objects — a validation of one is not a validation of the others. Metadata describes successful validation, not rendering or access time; timestamps never advance on failure (ADR failure table).
+         */
+        MailReadMetadata: {
+            /**
+             * @description Where the served data came from. live = validated against the mail server in this read; memory = the bounded in-memory working cache; encrypted_disk = the encrypted on-disk snapshot (Phase 1: the folder mapping only — headers never emit encrypted_disk in Phase 1, they are memory-only; w2 §4.1); none = no reusable source served this data (absent/unknown data, or a live read that could not be validated).
+             * @example memory
+             * @enum {string}
+             */
+            source: "live" | "memory" | "encrypted_disk" | "none";
+            /**
+             * Format: date-time
+             * @description RFC 3339 timestamp of the last successful server validation of this data, or null when the data has never been validated (unknown) or the source is live in this request. Null means unknown/stale — never "just fetched". Cache timestamps never advance on a failed refresh.
+             * @example 2026-10-02T09:15:00Z
+             */
+            last_validated_at: string | null;
+            /**
+             * @description True when the served data is older than its freshness threshold (5 minutes for counts and headers, 24 hours for the saved folder mapping — ADR P1.1/P2.2) at the time of this response. Stale rows stay visible and labelled; they are never silently replaced by a skeleton or presented as live.
+             * @example false
+             */
+            stale: boolean;
+            /**
+             * @description True when one eligible live refresh for this data is still owed under the event-driven refresh rules (panel open, folder switch, own successful action, manual Refresh — ADR P1.1). Never true because of a timer; no repeating refresh timer exists (founder decision).
+             * @example false
+             */
+            refresh_needed: boolean;
+            /**
+             * @description Closed-enum safe notice when the reusable cache could not serve or could not be written, so live access was used instead (or had to be). cache_unavailable = the reusable cache is unavailable for this data (exclusion gate refused, byte/row bound exceeded, envelope unreadable) — the read itself may still have succeeded live. Null = no notice. The enum is closed; a new code is a contract change, not a free-form string.
+             * @example cache_unavailable
+             * @enum {string|null}
+             */
+            notice_code: "cache_unavailable" | null;
+            /**
+             * @description Opaque, monotonically advancing publication revision (correction I-02) the served data was produced under, owned by the gateway/cache service. A delayed frontend response carrying a revision older than the newest one it has applied is dropped — never rendered, never published into cache state. Null = no revision attaches to this read (e.g. data with no invalidation events yet). Never parsed by the SPA: compare for equality/recency only, treat as opaque.
+             * @example m1f2-9c4e
+             */
+            publication_revision: string | null;
+        };
+        /**
+         * MailStaleReferenceError
+         * @description Typed 409 body for a stale Mail cursor or reference (mail-live-access-landing-order register row 4 — W0 is the single publisher; ADR-20261001 "Human Retry and upstream limits" row: "Use a typed 409 stale-cursor/reference result to request one view reset; never spin/reset/replay indefinitely"). code=stale_cursor: a paging/search cursor no longer matches the folder epoch (UIDVALIDITY), configuration generation or browse/search sequence it was issued in — the client restarts the list view once. code=stale_reference: a message reference's embedded folder epoch, pair or configuration binding no longer matches the live folder (correction I-03) — the client re-reads the list; the gateway refused the fetch/mutation BEFORE any server work. Never a best-effort result against whatever the folder now holds. Shares the error/code convention with ErrorResponse and MailUnavailableError.
+         */
+        MailStaleReferenceError: {
+            /**
+             * @description Human-readable message, safe to display.
+             * @example This message changed or was deleted. Refresh the list.
+             */
+            error: string;
+            /**
+             * @description Machine-readable discriminator. stale_cursor = the paging/search cursor is stale or mismatched — reset the view once. stale_reference = the message reference failed its epoch/pair/generation validation on the lease that would have served it — refresh the list. A client branches on it without string matching on the message.
+             * @example stale_reference
+             * @enum {string}
+             */
+            code: "stale_cursor" | "stale_reference";
+        };
+        /**
+         * MailAttachmentPreviewRequest
+         * @description Mint request for one attachment's temporary, metadata-only preview grant (ADR-20261001 "Temporary preview mint (F1)" row; w4 spec §2.3 — W0 is the single publisher). Carries no host path, arbitrary URL, destination, upload bytes or new approval: authorization binds to the current session, the exact pair/config/folder generation, the message and the selected part. Minting creates no file, retains no bytes and writes nothing to disk (F1 "No storage" row) — it is the metadata grant the temporary Library viewer consumes. Rate-limited by the existing dedicated preview-token limiter family.
+         */
+        MailAttachmentPreviewRequest: {
+            /**
+             * @description Workspace of the mailbox pair.
+             * @example ws_my_workspace
+             */
+            workspace_id: string;
+            /**
+             * @description ID of the mailbox-owning agent.
+             * @example mia
+             */
+            agent_id: string;
+            /**
+             * @description Folder slug — exactly inbox, sent or drafts (MC-5).
+             * @example inbox
+             * @enum {string}
+             */
+            folder: "inbox" | "sent" | "drafts";
+            /**
+             * @description The gateway-issued message reference from the list/read result that named this attachment (correction I-03) — consumed unchanged, never a model-synthesized identity and never dependent on the optional Message-ID. Bound to the authorized pair, folder and configuration generation; validated on the same lease that serves the preview.
+             * @example uid:456:123
+             */
+            message_ref: string;
+            /**
+             * @description Stable leaf index of the attachment part (MailAttachment.part_index) — resolved against MIME including nested parts, with the Omnipus draft-body marker excluded. Only this part is ever fetched (PEEK — flags unchanged).
+             * @example 2
+             */
+            part_index: number;
+            /**
+             * @description Opaque per-panel observer ID (mail_panel_observer frame) when the mint belongs to an open Mail panel — binds the grant's ownership lifecycle to that observer so panel close revokes it. Absent for non-panel (agent-tool) mints; the grant then lives for its bounded TTL only.
+             * @example obs_5f3a
+             */
+            observer_id?: string;
+        };
+        /**
+         * MailAttachmentPreviewResponse
+         * @description Metadata-only response of one attachment preview mint (ADR-20261001 "Temporary preview mint (F1)" row; w3 spec §2.4 and w5 spec §8 step 6 — W0 is the single publisher). Returns authorization/reference metadata for the temporary Library viewer — kind, display subject, the attachment descriptor, the text_readable classification hint, the content source and read-only capability — and NO cached payload: every byte read is a fresh request-scoped fetch through content_source.byte_url. This response is the temporary alternative of the F1 content-source union; it is never a LibraryEntry and carries no path, filesystem identity or stored-file capability.
+         */
+        MailAttachmentPreviewResponse: {
+            /**
+             * @description Fixed discriminator of the temporary (mail attachment) alternative of the Library content-source union — the SPA branches on it without string matching on any other field.
+             * @example mail_attachment
+             * @enum {string}
+             */
+            kind: "mail_attachment";
+            /**
+             * @description Opaque grant identifier — the revoke and lifecycle key of this preview. Server-issued; never synthesized by the client.
+             * @example at_9f2c1e
+             */
+            preview_id: string;
+            /**
+             * @description Decoded subject of the message the attachment belongs to (RFC 2047 decoded) — display metadata for the exact "From mail: <subject> · Back to mail · Save to Library" context bar (correction I-06).
+             * @example Quarterly report
+             */
+            subject: string;
+            attachment: components["schemas"]["MailAttachment"];
+            /**
+             * @description Classification hint for the Library viewer's text classifier (F1 "Renderer adapters" row) — whether the attachment is expected to render as readable text. It never grants editing, and actual text/decode/size is still validated at read time, independently of this hint.
+             * @example true
+             */
+            text_readable: boolean;
+            content_source: components["schemas"]["MailAttachmentContentSource"];
+            /**
+             * @description Always true — the temporary source is read-only by construction. No stored-file action (Library edit, rename, move/copy/delete, PDF fill/sign, Library download) is available until Save to Library succeeds; capability checks prevent the calls, they do not merely hide buttons.
+             * @example true
+             * @enum {boolean}
+             */
+            read_only: true;
+        };
+        /**
+         * MailAttachmentContentSource
+         * @description The server-issued content source of one metadata-only attachment preview grant (ADR-20261001 "Temporary preview mint (F1)" row, correction I-05; mail-live-access-landing-order register rows 5/8 — W0 is the single publisher). Carries authorization and reference metadata ONLY — never attachment bytes: the grant holds no payload, and every byte read is a fresh, request-scoped fetch through the preview-purpose endpoint. All URLs are server-issued, same-gateway and source-scoped — never caller-selected, never the authenticated download endpoint.
+         */
+        MailAttachmentContentSource: {
+            /**
+             * @description The dedicated preview-purpose byte endpoint for this grant (correction I-05) — token-scoped, bound server-side to the minted preview_id, the selected part_index and the grant's ownership lifecycle (view exit, expiry, revoke and panel close all kill it). Serves INLINE rendering disposition with Cache-Control: no-store, and enforces the 25 MiB actual-decoded-byte cap BEFORE any success state is committed — a size or decode failure discovered mid-transfer aborts the response with a visible typed error, so a truncated stream can never render as a completed preview. This is never the authenticated attachment-download resource.
+             * @example /mail-preview/attachment/at_9f2c1e
+             */
+            byte_url: string;
+            /**
+             * @description The token-scoped scriptless rendering projection of the same preview reader, present only when the attachment is renderable as isolated HTML — served with the Mail isolation policy (script-src 'none', no same-origin permission), never a raw HTML object URL, srcdoc or a Library bundle token. Null for every non-HTML attachment.
+             * @example /mail-preview/attachment/at_9f2c1e/html
+             */
+            isolated_html_url: string | null;
+            /**
+             * @description Opaque, metadata-only grant token — authorization/reference metadata for mint, revoke and byte-fetch binding. Holds no attachment bytes, no body text and no payload of any kind (the retained-payload preview grant shape is retired by the ADR's request-only body rule).
+             * @example at_9f2c1e
+             */
+            token: string;
+            /**
+             * @description Grant lifetime in seconds from mint, mirroring the existing preview token TTL rules (the token store holds authorization/reference metadata only; expiry is the backstop when a close could not be delivered).
+             * @example 900
+             */
+            expires_in_seconds: number;
+        };
+        /**
+         * MailAttachmentSaveRequest
+         * @description Request body of the save-to-library subresource for one attachment part (ADR-20261001 "Save-to-workspace request/response (F2)" row, correction M-02; w5 spec §8 — W0 is the single publisher). Source identity is in the route (pair, folder, message ref, part index); the body carries only the current view's optional observer and the save-operation token. There is no arbitrary save path, destination or overwrite switch: folder, leaf name and month hierarchy are server-selected. The human Save click (or the ask-approved agent download) is the explicit request — never a guarantee the server can write; refusals return typed errors, and a lost response resolves ONLY through the bounded same-token retry path.
+         */
+        MailAttachmentSaveRequest: {
+            /**
+             * @description Opaque per-panel observer ID (mail_panel_observer frame) when the save belongs to an open Mail panel — associates the work with that observer's retention semantics. Absent for agent-tool saves. Never grants access by itself: the route's pair authorization is checked independently.
+             * @example obs_5f3a
+             */
+            observer_id?: string;
+            /**
+             * @description Client-generated opaque token for THIS save attempt (correction M-02) — echoed by the response. An explicit user retry carrying the SAME token is answered with the prior save receipt when that save already committed — exactly one file exists, no second numbered duplicate — and only a genuinely uncommitted operation performs the save. A different token is a new user request. No automatic replay ever carries a token: reconciliation is bounded to this explicit retry path, not a general exactly-once framework.
+             * @example sv_77bd21aa
+             */
+            save_operation_token: string;
+        };
+        /**
+         * MailAttachmentSaveResponse
+         * @description Success response of an attachment save to the Library (panel Save and the agent download share this one shape — ADR-20261001 "Save-to-workspace request/response (F2)" and F3 rows; w3 spec §2.4, w4 spec §2.3 — W0 is the single publisher). Returned only for a completed save: the file is fully written under the mail → <mailbox> → <year-month> hierarchy with a sanitized, unique, suffixed name. Refusals are typed errors with no invented path — never a saved=true with a fabricated destination. A lost response resolves through the same-token retry, which returns THIS receipt again for the already-committed save (correction M-02). This is also the "shared Save response/path fields" of the agent download_email_attachment result (F3) — one shape, no second.
+         */
+        MailAttachmentSaveResponse: {
+            /**
+             * @description Always true on this shape — a response that did not save is a typed error, never a saved=false body. The visible "Save result unknown" state (lost response) resolves to this receipt via the same-token retry.
+             * @example true
+             * @enum {boolean}
+             */
+            saved: true;
+            /**
+             * @description Workspace the file was saved into.
+             * @example ws_my_workspace
+             */
+            workspace_id: string;
+            entry: components["schemas"]["LibraryEntry"];
+            /**
+             * @description Final workspace-relative path of the saved file — includes any numbered collision suffix; identical to entry.path. The actual saved name is entry.name.
+             * @example mail/dana@example.com/2026-10/report-q3.pdf
+             */
+            path: string;
+            /**
+             * @description Separately resolved absolute path of the saved file — the form the agent's normal file/document tools consume. The panel never needs it; the agent result carries it (F3). Server-resolved inside the authorized work root; never client-derived.
+             * @example /Users/example/.omnipus/workspaces/ws_my_workspace/work/mail/dana@example.com/2026-10/report-q3.pdf
+             */
+            absolute_path: string;
+            /**
+             * Format: int64
+             * @description Actual byte count of the committed file.
+             * @example 1048576
+             */
+            size_bytes: number;
+            /**
+             * @description Truthful audit outcome of the mail.attachment_saved event (ADR F2 "Audit" row). recorded = the audit entry was written; disabled = the operator's audit setting is off; failed = the audit write failed AFTER the file landed — the save stands (saved=true with the real path), this field and warning_code carry the visible warning, and no retry is invited (a retry would duplicate the file).
+             * @example recorded
+             * @enum {string}
+             */
+            audit_status: "recorded" | "disabled" | "failed";
+            /**
+             * @description Closed safe warning code accompanying audit_status, or null. The one Phase-1 warning: audit_write_failed — the file is saved and usable, but its audit event could not be recorded. Never carries raw error text, tokens or credentials.
+             * @example audit_write_failed
+             * @enum {string|null}
+             */
+            warning_code: "audit_write_failed" | null;
+        };
+        /**
+         * MailReplyContextRequest
+         * @description Request for one message's reply/quote context (ADR-20261001 "Reply / Reply all context (F5)" row; w3 spec §2.4 — W0 is the single publisher). Session-authenticated message subresource; the source pair/folder/ref is independently authorized. Assembles current-compose state only — never a server draft, never a body cache, never a send.
+         */
+        MailReplyContextRequest: {
+            /**
+             * @description reply = sender/Reply-To only (Cc/Bcc start empty). reply_all = To = eligible primary (Reply-To if present, else From); Cc = original To + original Cc minus the mailbox's own address and the primary, deduplicated. The original Bcc is never copied into a reply.
+             * @example reply_all
+             * @enum {string}
+             */
+            mode: "reply" | "reply_all";
+        };
+        /**
+         * MailReplyContextResponse
+         * @description Reply/quote context for the compose draft (ADR-20261001 "Reply / Reply all context (F5)" row; w3 spec §2.4 — W0 is the single publisher). Produced by the ONE shared recipient rule (BuildReplyRecipients) called by both the gateway and the agent reply adapter — the SPA implements no second recipient algorithm. Prefills user-requested compose state only: not a server draft, not a send. A delayed/stale context response for a different message or mailbox is discarded by the consumer; it never overwrites compose input.
+         */
+        MailReplyContextResponse: {
+            /**
+             * @description Primary recipients — the parsed Reply-To when present, otherwise From. Editable compose state: an invalid/missing eligible recipient is an actionable error or an editable empty set, never a silent replacement or a send to self.
+             * @example [
+             *       "dana@example.com"
+             *     ]
+             */
+            to: string[];
+            /**
+             * @description Cc — empty for plain reply; original To + original Cc minus the mailbox's own address and the primary, deduplicated, for reply_all. Never contains the original Bcc.
+             * @example [
+             *       "x@example.com",
+             *       "y@example.com"
+             *     ]
+             */
+            cc: string[];
+            /** @description Always empty — Bcc is never copied into an incoming reply. */
+            bcc: string[];
+            /**
+             * @description Subject for the compose draft — the original subject with the Re: prefix applied exactly once (no duplicate Re:, no signature duplication).
+             * @example Re: Quarterly report
+             */
+            subject: string;
+            /**
+             * @description Editable quoted original as a safe text/Markdown projection with escaped attribution (sender/date, or "No date" per F6) — the original text's Markdown/image/embed syntax is escaped so the quote cannot load remote images or workspace embeds inside Compose. Never raw active HTML; never the original's attachments.
+             * @example > On 2026-10-01, Dana wrote: …
+             */
+            body_markdown: string;
+            /**
+             * @description The original message's Message-ID for threading (RFC 5322 In-Reply-To), or null when the inbound mail carries none.
+             * @example <abc123@example.com>
+             */
+            in_reply_to: string | null;
+        };
+        /**
+         * MailboxRemovalResult
+         * @description Truthful outcome of a mailbox removal with cleanup (ADR-20261001 "Removal with incomplete cleanup" row; w5 spec §8 step 5 — W0 is the single publisher). Distinguishes a fully removed pair from one whose cleanup did not fully complete, instead of an unconditional success=true over best-effort failures. Marking the pair disabled and preventing new acquisitions always happen FIRST; cleanup_pending never serves residual files. cleanup_intent keys the separately authorized Retry-cleanup operation and keeps working after the config row is gone; it carries no plaintext copy of anything cleaned.
+         */
+        MailboxRemovalResult: {
+            /**
+             * @description removed = the pair is gone and every cleanup step succeeded. removed_cleanup_pending = the pair is disabled, removed from config and acquires nothing, but at least one cleanup step (cache purge, credential deletion, reload) failed and is retried via Retry-cleanup.
+             * @example removed
+             * @enum {string}
+             */
+            outcome: "removed" | "removed_cleanup_pending";
+            /**
+             * @description Opaque retry key for the separately authorized Retry-cleanup operation, present exactly when outcome is removed_cleanup_pending — null when removed. Survives the config row's deletion so the retry path still works afterwards.
+             * @example cln_4b81
+             */
+            cleanup_intent: string | null;
+            /**
+             * @description Safe, closed-class cleanup failure code — present exactly when outcome is removed_cleanup_pending, null otherwise. No raw upstream error text, no paths, no credentials. A logged unlink failure is never reported as a successful purge.
+             * @example cache_cleanup_failed
+             */
+            cleanup_code: string | null;
+        };
+        /**
+         * MailboxCleanupRequest
+         * @description Request of the separately authorized Retry-cleanup operation (ADR-20261001 "Removal with incomplete cleanup" row; w5 spec §8 step 5 — W0 is the single publisher). Keyed by the opaque cleanup_intent returned with a removed_cleanup_pending outcome; deliberately carries nothing else — the intent is the only address, so the retry keeps working after the mailbox's config row is gone.
+         */
+        MailboxCleanupRequest: {
+            /**
+             * @description Opaque cleanup intent from MailboxRemovalResult.cleanup_intent — server-issued, never synthesized. Unknown, expired or already completed intents are refused with 404, not silently treated as success.
+             * @example cln_4b81
+             */
+            cleanup_intent: string;
         };
         /**
          * BackupCreateResponse
@@ -11949,7 +14481,7 @@ export interface components {
         };
         /**
          * ClearAllSessionsResponse
-         * @description Response from DELETE /api/v1/sessions/all (HTTP 200). Reports how many sessions were removed and any non-fatal per-agent errors encountered along the way (partial removal is still possible when warnings are present).
+         * @description Response from DELETE /api/v1/sessions/all (HTTP 200). Reports how many ordinary chats were deleted. Main chats are never deleted (a main chat goes only with its agent), so a "cleared" status does not mean every chat is gone: warnings count the chats that were kept (a turn that would not stop, storage that failed, or data that could not be read) and the main chats left alone.
          */
         ClearAllSessionsResponse: {
             /**
@@ -11957,9 +14489,12 @@ export interface components {
              * @enum {string}
              */
             status: "cleared";
-            /** @example 15 */
+            /**
+             * @description Number of ordinary chats deleted (main chats are not counted).
+             * @example 15
+             */
             count: number;
-            /** @description Per-agent errors (non-fatal — partial removal possible). */
+            /** @description Fixed-text notices, never carrying a session id or path: how many chats were kept because they could not be deleted, and how many main chats were left alone. Absent when every chat was deleted and there are no main chats. */
             warnings?: string[];
         };
         /**
@@ -12065,6 +14600,12 @@ export interface components {
              */
             agent_id?: string;
             /**
+             * @description Optional. True forces every run of this work into a fresh independent chat, for either role (session-core FR-017). Default false: a task whose assignee owns an eligible main runs as a fresh child of that main; a worker runs isolated once or continues its own chat when recurring. There is no other session-mode choice.
+             * @default false
+             * @example false
+             */
+            run_isolated: boolean;
+            /**
              * @description Task priority from 1 (highest) to 5 (lowest). Defaults to 3.
              * @default 3
              * @example 3
@@ -12163,6 +14704,11 @@ export interface components {
              * @example Updated task title
              */
             title?: string;
+            /**
+             * @description Optional. True forces every run of this work into a fresh independent chat, for either role (session-core FR-017); false clears it. Omitted leaves it unchanged.
+             * @example false
+             */
+            run_isolated?: boolean;
             /**
              * @description New free-form description.
              * @example Revised notes.
@@ -12288,6 +14834,11 @@ export interface components {
              */
             text: string;
             /**
+             * @description Optional phrasing for the item while it is in progress.
+             * @example Drafting the summary section
+             */
+            active_form?: string;
+            /**
              * @description Tri-state checklist item status. `pending` = not started, `in_progress` = currently being worked, `completed` = done.
              * @example pending
              * @enum {string}
@@ -12303,17 +14854,13 @@ export interface components {
          *                       `llm` action that runs the assigned agent. `config` is empty.
          *       - `once`      — fire exactly once at an absolute instant. `config.at_ms` is the
          *                       Unix epoch-milliseconds instant (required).
-         *       - `every`     — fire repeatedly on a fixed interval. `config.every_ms` is the
-         *                       interval in milliseconds (required, min 1000). Each fire spawns
-         *                       a FRESH run (fresh session + run history + pause).
-         *       - `recurring` — fire on a repeat rule. `config` carries EXACTLY ONE of:
-         *                       `cron_expr` (legacy, 5/6-field cron expression, still accepted
-         *                       and validated via gronx) or `rrule` (RFC 5545 RRULE body, e.g.
-         *                       `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`) plus its required
-         *                       siblings `dtstart_ms` (anchor instant) and `tz` (IANA zone).
-         *                       Each fire spawns a FRESH run.
+         *       - `recurring` — fire on a repeat rule. `config` carries `rrule` (RFC 5545
+         *                       RRULE body, e.g. `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`)
+         *                       plus its required siblings `dtstart_ms` (anchor instant) and
+         *                       `tz` (IANA zone). Each fire spawns a FRESH run.
          *
-         *     `once`/`every`/`recurring` triggers are executed by the existing per-agent Schedules engine (`pkg/cron`) acting as the trigger executor — a schedule is just a task with a time trigger; a heartbeat is a `recurring` task with `surface: heartbeat` (Main-only). This folds in the legacy `ScheduleTrigger` semantics (`at_ms` / `every_ms` / `cron_expr`); the Task's own trigger is this type rather than `ScheduleTrigger`.
+         *     The legacy `every` trigger type and the `every_ms` and `cron_expr` config keys were removed (session-core DEL-19); the server refuses them with a 400.
+         *     `once`/`recurring` triggers are executed by the existing per-agent Schedules engine (`pkg/cron`) acting as the trigger executor — a schedule is just a task with a time trigger; a heartbeat is a `recurring` task with `surface: heartbeat` (Main-only).
          *     ## Future growth path (design intent — DO NOT build in this release) The discriminated `type` enum grows additively with event kinds: `on_task` (another task reaches a status), `on_agent` (idle/error — idle is the autonomous-loop primitive), `on_message` (channel match), `webhook`, and `on_condition` (threshold). Each new kind carries its own keys inside `config` (e.g. `on_task` → `{task_id, status}`; `on_message` → `{channel, pattern}`; `webhook` → `{secret_ref}`). Boolean composition (AND/OR trigger expressions, not a flat list) will be introduced as an additional optional `expr` field or a `composite` type wrapping child TaskTriggers — additive, leaving the Tier 2 `{type, config}` shape intact. Because every field beyond `type` lives under the open `config` object, none of these additions break the Tier 2 wire shape.
          */
         TaskTrigger: {
@@ -12322,8 +14869,8 @@ export interface components {
              * @example recurring
              * @enum {string}
              */
-            type: "manual" | "once" | "every" | "recurring";
-            /** @description Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `every` → `every_ms`; `recurring` → exactly one of `cron_expr` (legacy) or `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — future event kinds add their own keys here without changing the outer shape. */
+            type: "manual" | "once" | "recurring";
+            /** @description Kind-specific parameters. The relevant subset depends on `type`: `manual` → empty; `once` → `at_ms`; `recurring` → `rrule` (+ required `dtstart_ms` and `tz`). Validated server-side against `type`. This object is the open growth surface — future event kinds add their own keys here without changing the outer shape. */
             config: {
                 /**
                  * Format: int64
@@ -12332,18 +14879,7 @@ export interface components {
                  */
                 at_ms?: number;
                 /**
-                 * Format: int64
-                 * @description Interval in milliseconds between fires. Required when `type = every` (minimum 1000ms); ignored otherwise.
-                 * @example 3600000
-                 */
-                every_ms?: number;
-                /**
-                 * @description Cron expression (5 or 6 fields), legacy path. Valid only when `type = recurring`; ignored otherwise. Exactly one of `cron_expr` / `rrule` is present on a `recurring` trigger — never both.
-                 * @example 0 9 * * MON
-                 */
-                cron_expr?: string;
-                /**
-                 * @description RFC 5545 RRULE body (no `RRULE:` prefix), e.g. `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`. Valid only when `type = recurring`; ignored otherwise. Exactly one of `cron_expr` / `rrule` is present on a `recurring` trigger — never both. Requires the sibling keys `dtstart_ms` and `tz`. Server-validated: input bounds (≤512 chars, no `FREQ=SECONDLY`, no foreign `BYSECOND`), bounded-window minimum-gap scan (≥60s between occurrences), liveness (must produce an occurrence within 5 years of `dtstart_ms`), and `COUNT` ≤ 100000.
+                 * @description RFC 5545 RRULE body (no `RRULE:` prefix), e.g. `FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10`. Valid only when `type = recurring`; ignored otherwise. Requires the sibling keys `dtstart_ms` and `tz`. Server-validated: input bounds (≤512 chars, no `FREQ=SECONDLY`, no foreign `BYSECOND`), bounded-window minimum-gap scan (≥60s between occurrences), liveness (must produce an occurrence within 5 years of `dtstart_ms`), and `COUNT` ≤ 100000.
                  * @example FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;COUNT=10
                  */
                 rrule?: string;
@@ -12364,7 +14900,7 @@ export interface components {
         };
         /**
          * TaskOccurrenceSet
-         * @description The server-expanded occurrence set of one recurring-capable task within the queried range, returned by `GET /api/v1/tasks/occurrences`. Covers all trigger flavors that can recur (`rrule` via rrule-go, legacy `cron_expr` via gronx in the server zone, and `every_ms` as a forward-only projection off the live job's next-run instant — FR-008a). Only tasks the scheduler would actually arm are expanded (non-terminal, non-`heartbeat`-surface); tasks with zero occurrences in range are omitted from the response array entirely — an empty result is `[]`, never null.
+         * @description The server-expanded occurrence set of one recurring-capable task within the queried range, returned by `GET /api/v1/tasks/occurrences`. Covers all trigger flavor that can recur (`rrule` via rrule-go). Only tasks the scheduler would actually arm are expanded (non-terminal, non-`heartbeat`-surface); tasks with zero occurrences in range are omitted from the response array entirely — an empty result is `[]`, never null.
          */
         TaskOccurrenceSet: {
             /**
@@ -12391,11 +14927,11 @@ export interface components {
                  */
                 occurrence_ms: number;
                 /**
-                 * @description The matched run's status.
+                 * @description The matched run's status. `missed` marks a scheduled fire that came due while the server was down — recorded at the next boot for the missed instant, never replayed.
                  * @example done
                  * @enum {string}
                  */
-                status: "in_progress" | "done" | "failed" | "skipped";
+                status: "in_progress" | "done" | "failed" | "skipped" | "missed";
                 /**
                  * @description The matched run's ID (ULID).
                  * @example 01J8Z3K2R9G4S6M0N1P2Q3R4S5
@@ -12413,7 +14949,7 @@ export interface components {
                 has_result: boolean;
             }[];
             /**
-             * @description True when the 500-instant cap or the 10,000-computed-occurrence per-task iteration budget was hit before fully covering the requested range. The client renders a "more occurrences not shown" marker on the last covered day. False for provably regular triggers (fixed-interval `every_ms` or a plain `rrule` with no BY* modifiers), whose bucket counts and positions are derived arithmetically rather than iterated.
+             * @description True when the 500-instant cap or the 10,000-computed-occurrence per-task iteration budget was hit before fully covering the requested range. The client renders a "more occurrences not shown" marker on the last covered day. False for provably regular triggers (a plain `rrule` with no BY* modifiers), whose bucket counts and positions are derived arithmetically rather than iterated.
              * @example false
              */
             truncated: boolean;
@@ -12506,11 +15042,11 @@ export interface components {
              */
             occurrence_ms: number | null;
             /**
-             * @description Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has no producer today; a stuck-run reaper closes abandoned runs to `failed`). `skipped` records a scheduled fire that never ran at all because the overlap guard found the previous occurrence still `in_progress` — a purely bookkeeping close, not a failure.
+             * @description Run status. No `canceled`/`queued` in v1 (RD10 — task cancellation has no producer today; a stuck-run reaper closes abandoned runs to `failed`). `skipped` records a scheduled fire that never ran at all because the overlap guard found the previous occurrence still `in_progress` — a purely bookkeeping close, not a failure. `missed` records a scheduled fire that came due while the server was down and could never run: recorded once at the next boot for the missed instant, never replayed (founder decision 2026-10-29 — a missed Calendar run stays skipped, never replayed).
              * @example done
              * @enum {string}
              */
-            status: "in_progress" | "done" | "failed" | "skipped";
+            status: "in_progress" | "done" | "failed" | "skipped" | "missed";
             /**
              * @description Terminal-run output text. Absent while the run is `in_progress` (mirrors Task.result's own "absent while running" convention).
              * @example Found 3 anomalies in the gateway logs.
@@ -12527,6 +15063,8 @@ export interface components {
              * @enum {string}
              */
             kind: "scheduled" | "manual";
+            /** @description Session ids captured when this run actually started (FR-019): the starting agent's main and the assignee's main, deduplicated. Never the creator. Fixed for the life of the run. Absent when there is no recipient (a skipped run, or a person/scheduler-started worker run). */
+            readonly recipient_session_ids?: string[];
             /**
              * Format: date-time
              * @description RFC 3339 timestamp when the run opened (also the on-disk day-partition key for the open record).
@@ -12554,11 +15092,11 @@ export interface components {
          */
         ProviderUpdateRequest: {
             /**
-             * @description Wire protocol to use (ADR-067 FR-013/FR-014). For a catalog provider: optional; absent → the catalog's primary; a protocol the provider does not offer → 400. For a custom row (id not in the catalog): required and restricted to openai-compatible | anthropic (400 otherwise).
+             * @description Wire protocol to use (ADR-067 FR-013/FR-014; the retired subprocess protocol is no longer accepted — WU-24, founder 2026-10-14). For a catalog provider: optional; absent → the catalog's primary; a protocol the provider does not offer → 400. For a custom row (id not in the catalog): required when creating a custom row; kept from the stored row when omitted. Restricted to openai-compatible | anthropic (400 otherwise).
              * @example openai-compatible
              * @enum {string}
              */
-            protocol?: "openai-compatible" | "anthropic" | "google" | "ollama" | "cli" | "bedrock";
+            protocol?: "openai-compatible" | "anthropic" | "google" | "ollama" | "bedrock";
             /**
              * @description Auth method for this row (ADR-068). Absent → api_key. sign_in is accepted only for providers whose catalog auth_methods include it (400 otherwise) and must not be combined with api_key.
              * @example api_key
@@ -12566,7 +15104,7 @@ export interface components {
              */
             auth_method?: "api_key" | "sign_in";
             /**
-             * @description Explicit base URL. Required for a custom row; optional override for a catalog provider (wins over the catalog row). SSRF-checked. For a provider with a `regions` picker (e.g. amazon-bedrock), this is the optional custom/private endpoint override (e.g. a VPC endpoint) — when set it wins over the region-derived endpoint.
+             * @description Explicit base URL. Required when creating a custom row; kept from the stored row when omitted; optional override for a catalog provider (wins over the catalog row). SSRF-checked. For a provider with a `regions` picker (e.g. amazon-bedrock), this is the optional custom/private endpoint override (e.g. a VPC endpoint) — when set it wins over the region-derived endpoint.
              * @example https://my-proxy.example.com/v1
              */
             api_base?: string;
@@ -12627,6 +15165,8 @@ export interface components {
          * @description Request body for POST /api/v1/skills/install. Exactly one source is required: a marketplace slug, or the opaque media ref returned as UploadedFile.ref for an authorized local .md/.zip upload. Replacing an installed skill requires its revision; an omitted revision requires target absence under the authoritative installation lock. version applies only to marketplace slug installs.
          */
         SkillInstallRequest: {
+            /** @description Required true to replace an installed skill whose has_local_changes is true. Absent means false. */
+            replace_local_changes?: boolean;
             revision?: components["schemas"]["ConfigurationRevision"];
             /**
              * @description Slug of the skill to install from the ClawHub registry.
@@ -12641,6 +15181,79 @@ export interface components {
              */
             version?: string;
         } & (unknown | unknown);
+        /**
+         * SkillCopyRequest
+         * @description Request body for POST /api/v1/skills/{name}/copy: the name of the new user-owned copy. The copy starts ungranted.
+         */
+        SkillCopyRequest: {
+            /**
+             * @description Slug of the new skill (letters, digits and single hyphens).
+             * @example plan-copy
+             */
+            new_id: string;
+        };
+        /**
+         * SkillDetail
+         * @description Tool-only: the complete result envelope of the get_skill agent tool (skills spec §5.2). Not served by any REST route; it exists so the selectable `fields` names are generated and compared, not typed twice.
+         */
+        SkillDetail: {
+            /** @description The skill slug as it is on disk. */
+            id: string;
+            /** @description Content revision; null only for a deleted skill. */
+            revision: string | null;
+            /** @enum {string} */
+            state?: "installed" | "deleted";
+            name?: string;
+            description?: string;
+            /** @enum {string} */
+            shelf?: "builtin" | "registry";
+            folder?: string;
+            files?: {
+                items: {
+                    path: string;
+                    /** Format: int64 */
+                    size: number;
+                    exec: boolean;
+                }[];
+                total: number;
+            };
+            metadata?: {
+                [key: string]: string;
+            };
+            compatibility?: string | null;
+            allowed_tools?: string[];
+            needs?: {
+                program: string;
+                /** @enum {string} */
+                status: "present" | "missing";
+                path?: string;
+            }[];
+            last_change?: {
+                at?: string;
+                actor?: string;
+                tool?: string;
+                paths?: string[];
+                shipped_with?: string;
+                unknown?: boolean;
+            };
+            has_local_changes?: boolean;
+            versions?: {
+                items: {
+                    id: string;
+                    kind: string;
+                    actor: string;
+                    tool?: string;
+                    at: string;
+                    paths: string[];
+                    paths_total: number;
+                }[];
+                total: number;
+                next_before: string | null;
+            };
+            instructions?: string;
+            absent_fields?: string[];
+            truncated_fields?: string[];
+        };
         /**
          * SkillSearchResult
          * @description A single skill returned by GET /api/v1/skills/search — a hit from a skill marketplace registry (e.g. ClawHub). Distinct from Skill, which models an already-installed local skill. A search result is installed by its slug via POST /api/v1/skills/install.
@@ -12708,23 +15321,12 @@ export interface components {
             }[];
         };
         /**
-         * SseChatRequest
-         * @description Request body for POST /api/v1/chat (SSE streaming endpoint). Sends a user message to the agent and streams the response via Server-Sent Events.
-         */
-        SseChatRequest: {
-            /**
-             * @description The user message to send to the agent. Must not be empty.
-             * @example Hello, what can you help me with today?
-             */
-            message: string;
-        };
-        /**
          * ToolApprovalActionRequest
-         * @description Request body for POST /api/v1/tool-approvals/{approval_id}. Resolves a pending tool call approval (ADR-092 D4). Renamed from the 4-value approve|deny|cancel|always set: "approve" -> "allow_once", "always" -> "allow" (greenfield, no upgrade path). `cancel` is retained in the enum with no corresponding UI button — see its own description.
+         * @description Request body for POST /api/v1/tool-approvals/{approval_id}. Resolves a pending tool call approval (ADR-092 D4). Renamed from the 4-value approve|deny|cancel|always set: "approve" -> "allow_once", "always" -> "allow" (greenfield, no upgrade path). `deny` and `cancel` remain distinct non-approval resolution actions.
          */
         ToolApprovalActionRequest: {
             /**
-             * @description Action to take on this approval. deny       — reject this single invocation (also the resolution for Escape/overlay-click/X in the UI, none of which render a Cancel button any more). allow_once — allow this single invocation only, no grant recorded. allow      — allow this invocation AND record a session-scoped grant per `scope` below so future matching calls in the same session auto-approve without re-prompting. cancel     — client-issued resolution for the stuck-approval recovery path only (a lost-server 404), distinct from `deny` (a network failure, which leaves the approval unresolved so a later snapshot can restore it) — ToolApprovalModal.resolution.test.tsx and the headless CLI approval path (pkg/app/internal/run/run.go) both depend on `deny` and `cancel` remaining distinct wire values. Never shown as a button.
+             * @description Action to take on this approval. deny       — reject this single invocation. allow_once — allow this single invocation only, no grant recorded. allow      — allow this invocation AND record a session-scoped grant per `scope` below so future matching calls in the same session auto-approve without re-prompting. Refused with 400 for an always-ask tool (today exactly set_channel_outbound): its approvals are never remembered, so only allow_once, deny and cancel apply (channels spec FR-038). cancel    — dismiss this approval without approving the invocation. It remains a distinct wire value from deny.
              * @example allow_once
              * @enum {string}
              */
@@ -12828,6 +15430,8 @@ export interface components {
             username?: string;
             /** @description Login password for IMAP and SMTP authentication (email channel). Stored encrypted in the credential store — never returned in GET responses. */
             password?: string;
+            /** @description Allowed sender ids for this channel instance ("Allow From"), one id per element. An empty list admits every sender. The server saves a list. For compatibility with older clients the server also accepts one string when inbound schema validation is off; it splits that string on commas (",", full-width "，") and, except on WhatsApp, on whitespace, trims each id and drops empty pieces. WhatsApp ids are account ids (digits@s.whatsapp.net or a group JID), not phone numbers, and split on commas only. A null value is refused with 400 and nothing is saved. */
+            allow_from?: string[];
         } & {
             [key: string]: unknown;
         };
@@ -12851,16 +15455,77 @@ export interface components {
              */
             installed: boolean;
             /**
-             * @description Absolute, symlink-resolved path to the binary. Null when installed=false. This is the exact value the SPA prefills into the executor cli_path field — detection, validation, and the runtime spawn all resolve this same path.
-             * @example /usr/local/bin/claude
+             * @description Absolute, symlink-resolved path to the binary (the final file). Null when installed=false. Not the value to pre-fill into Settings -> Third-party agents: a versioned symlink target would break on the next package update; pre-fill from link_path when present, else this path.
+             * @example /opt/homebrew/Cellar/claude/1.2.3/bin/claude
              */
             path?: string | null;
+            /**
+             * @description The path as found on $PATH or in a well-known install folder, BEFORE symlink resolution (equal to `path` when no symlink is involved). Null when installed=false. The Settings -> Third-party agents screen pre-fills its program path from this value when present, else from `path`.
+             * @example /opt/homebrew/bin/claude
+             */
+            link_path?: string | null;
             /**
              * @description How the binary was located: "path" when found via the gateway process's $PATH (exec.LookPath-equivalent, no shell), "well-known" when found only by scanning the curated per-OS candidate directories. Null when installed=false. $PATH results take precedence over well-known when both are present.
              * @example path
              * @enum {string|null}
              */
             source?: "path" | "well-known" | null;
+        };
+        /**
+         * CliPreset
+         * @description One external CLI's row in Settings -> Third-party agents, as a person saves it (PUT /api/v1/settings/third-party-agents). Set only by a signed-in person; agents have no route, tool parameter or config path that writes it.
+         */
+        CliPreset: {
+            /**
+             * @description Program path exactly as the person typed it ("" = no program saved for this CLI). Stored as entered, never the resolved target. A non-empty value must pass thirdpartycli.ValidateProgramPath on save (absolute; every symlink's folder and the final file and its folder not world-writable and not inside an agent-writable location; the final file a regular, executable file), otherwise the save is refused 400 with code cli_path_invalid. Every run checks it again and execs the resolved file.
+             * @example /opt/homebrew/bin/claude
+             */
+            path: string;
+            /**
+             * @description Standard parameters for this CLI, one line of free text, stored exactly as typed ("" = none). No NUL, no line breaks (refused 400 with code cli_preset_invalid). Any token is allowed: no allow list and no flag filter. At spawn the parameters are appended after the agent's own cli_args (which are filtered) and before the prompt hand-off, so a person's value beats an agent flag of the same name.
+             * @example --max-turns 40
+             */
+            preset_args: string;
+        };
+        /**
+         * CliPresetView
+         * @description One external CLI's row in the Settings -> Third-party agents read model: the saved values plus a live detection result.
+         */
+        CliPresetView: {
+            /**
+             * @description The saved program path exactly as entered; "" when nothing is saved.
+             * @example /opt/homebrew/bin/claude
+             */
+            path: string;
+            /**
+             * @description The saved standard parameters exactly as typed; "" when nothing is saved.
+             * @example --max-turns 40
+             */
+            preset_args: string;
+            detected: components["schemas"]["CliDetectEntry"];
+        };
+        /**
+         * ThirdPartyAgentSettings
+         * @description Request body of PUT /api/v1/settings/third-party-agents. Replaces the whole Settings -> Third-party agents section in one call: a CLI key absent from `clis` is saved as {path: "", preset_args: ""}. Every row is validated before anything is written (order claude-code, codex, opencode; path before preset_args); the first failing row and field is returned and nothing is written, valid rows included. No revision and no 409: the last save wins. Stored in config.json under sandbox.third_party_agents.clis.<cli>.
+         */
+        ThirdPartyAgentSettings: {
+            /** @description One row per external CLI, keyed by the agent `cli` enum values (ExternalCliTool). Only these three keys are accepted. */
+            clis: {
+                "claude-code"?: components["schemas"]["CliPreset"];
+                codex?: components["schemas"]["CliPreset"];
+                opencode?: components["schemas"]["CliPreset"];
+            };
+        };
+        /**
+         * ThirdPartyAgentSettingsView
+         * @description Response of GET and PUT /api/v1/settings/third-party-agents: the saved Settings -> Third-party agents section. All three CLI keys are always present; a CLI with nothing saved has path "" and preset_args "". Each row's `detected` is host detection read live on every request and never stored; the server maps detection key "claude" to "claude-code", so the screen never maps keys itself.
+         */
+        ThirdPartyAgentSettingsView: {
+            clis: {
+                "claude-code": components["schemas"]["CliPresetView"];
+                codex: components["schemas"]["CliPresetView"];
+                opencode: components["schemas"]["CliPresetView"];
+            };
         };
         /**
          * CliValidateRequest
@@ -13009,7 +15674,7 @@ export interface components {
              */
             ran_at_ms: number;
             /**
-             * @description ok=succeeded, error=failed, skipped=overlap/cap, timeout=deadline aborted.
+             * @description ok=succeeded, error=failed, skipped=overlap/cap. timeout is historical: a run recorded before scheduled runs lost their time limit (issue #1306); never written now.
              * @enum {string}
              */
             status: "ok" | "error" | "skipped" | "timeout";
@@ -13038,7 +15703,7 @@ export interface components {
              * @description Unix epoch milliseconds of the most recent run.
              */
             last_run_at_ms?: number;
-            /** @description Status of the most recent run (ok/error/skipped/timeout), empty if never run. */
+            /** @description Status of the most recent run (ok/error/skipped, or the historical timeout), empty if never run. */
             last_status?: string;
             /** @description Error from the most recent failed run. */
             last_error?: string;
@@ -13065,12 +15730,10 @@ export interface components {
             /** @description The instruction the owning agent processes on each run. */
             message: string;
             /**
-             * @description isolated=fresh scheduled session per run; continue=persistent per-schedule session; main=owner's reserved main session.
-             * @enum {string}
+             * @description True when every run is forced into a fresh independent chat (session-core FR-017). The run mode is otherwise derived from the owner; there is no user-facing session-mode choice.
+             * @example false
              */
-            session_mode: "isolated" | "continue" | "main";
-            /** @description Per-run deadline in seconds; 0 means use the global schedules.run_timeout_seconds default. */
-            timeout_seconds: number;
+            run_isolated?: boolean;
             /** @description For continue/main modes, the persistent session id this schedule runs in. */
             session_id?: string;
             state: components["schemas"]["ScheduleState"];
@@ -13091,12 +15754,11 @@ export interface components {
             trigger: components["schemas"]["ScheduleTrigger"];
             message: string;
             /**
-             * @description Default isolated.
-             * @enum {string}
+             * @description Optional. True forces every run of this work into a fresh independent chat, for either role (session-core FR-017). Default false: a task whose assignee owns an eligible main runs as a fresh child of that main; a worker runs isolated once or continues its own chat when recurring. There is no other session-mode choice.
+             * @default false
+             * @example false
              */
-            session_mode?: "isolated" | "continue" | "main";
-            /** @description Per-run deadline; default 0 = use the global default. */
-            timeout_seconds?: number;
+            run_isolated: boolean;
             /** @description Default true. */
             enabled?: boolean;
         };
@@ -13109,9 +15771,12 @@ export interface components {
             owner_agent_id?: string;
             trigger?: components["schemas"]["ScheduleTrigger"];
             message?: string;
-            /** @enum {string} */
-            session_mode?: "isolated" | "continue" | "main";
-            timeout_seconds?: number;
+            /**
+             * @description Optional. True forces every run of this work into a fresh independent chat, for either role (session-core FR-017). Default false: a task whose assignee owns an eligible main runs as a fresh child of that main; a worker runs isolated once or continues its own chat when recurring. There is no other session-mode choice.
+             * @default false
+             * @example false
+             */
+            run_isolated: boolean;
             enabled?: boolean;
         };
         /**
@@ -13138,7 +15803,7 @@ export interface components {
         };
         /**
          * Notification
-         * @description A user-facing notification (#264) surfaced in the header notification center. Raised on scheduled-run failures and on knowledge-base drift repair (ADR-067 FR-038a); the type is open for future sources. Coalesced per source where noted (e.g. one item per schedule, updated).
+         * @description A user-facing notification (#264) surfaced in the header notification center. Raised on scheduled-run failures, knowledge-base drift repair (ADR-067 FR-038a), and operational Stop outcomes; the type is open for future sources. Coalesced per source where noted (e.g. one item per schedule, updated).
          */
         Notification: {
             id: string;
@@ -13146,9 +15811,10 @@ export interface components {
              * @description The event class. Extensible; consumers must tolerate unknown values.
              *
              *     "knowledge_drift" (ADR-067 FR-038a) means the automatic drift check found that a knowledge base's search index no longer matched the folder on disk, and the index is being rebuilt from that folder. It is raised ONLY when something was actually wrong — a healthy check produces no notification — and it never reports a change to the operator's own files.
+             *     "stop_notice" reports an operational Stop outcome: a selected request was already approved, cleanup was partial, or Stop did not complete. It is a non-terminal header notification and must not be sent as a chat ErrorFrame.
              * @enum {string}
              */
-            type: "schedule_failed" | "knowledge_drift";
+            type: "schedule_failed" | "knowledge_drift" | "goal_paused" | "stop_notice";
             title: string;
             /** @description Optional detail (e.g. the failure reason). */
             body?: string;
@@ -13245,7 +15911,7 @@ export interface components {
              */
             is_default?: boolean;
             /**
-             * @description True while this workspace's initial team-setup interview has not yet run. Set server-side at creation when the default (Ava-only) roster was auto-seeded; cleared server-side when the setup kickoff turn is accepted. Absent/false otherwise. Server-set; ignored on input (readOnly).
+             * @description True while this workspace's setup offer is pending. Set server-side when a workspace is created with an empty team; cleared server-side when the server posts the setup offer into Omnipus's main chat (omnipus-system-agent FR-047, K9), and set back to true if posting it fails. Absent/false otherwise. Server-set; ignored on input (readOnly).
              * @example false
              */
             readonly setup_pending?: boolean;
@@ -13267,14 +15933,14 @@ export interface components {
              */
             owner?: string;
             /**
-             * @description Per-member (agentId → config) heartbeat settings for this workspace. Absent when no member has a config (empty map). Keys are agent IDs.
+             * @description Per-member (agentId → config) settings for this workspace, keyed by agent ID. Absent when no member has a config (empty map). Carries heartbeat settings, the display-only hidden_from_sidebar flag (in updates: absent preserves the stored flag; a pure hide/show entry — flag present, heartbeat absent — preserves the stored heartbeat), and the server-computed read-only main_session_id; it does NOT carry a session address for the heartbeat — a heartbeat runs in the member's computed main session, and the retired per-member session_id is no longer part of this shape.
              * @example {
              *       "mia": {
+             *         "main_session_id": "main-session-ws-123+mia",
              *         "heartbeat": {
              *           "enabled": true,
              *           "interval_minutes": 30,
-             *           "body": "Check the project board.",
-             *           "session_id": "550e8400-e29b-41d4-a716-446655440000"
+             *           "body": "Check the project board."
              *         }
              *       }
              *     }
@@ -13282,10 +15948,24 @@ export interface components {
             member_configs?: {
                 [key: string]: components["schemas"]["WorkspaceMemberConfig"];
             };
+            /**
+             * @description Server-computed id of the built-in Admin's main session in this workspace. Present only on the default workspace (is_default true) and only when that main resolves (same validation as WorkspaceMemberConfig.main_session_id). Omitted on every other workspace and whenever the main does not resolve - never a guessed id. Admin is not a workspace member; this is not a membership entry. The main's state (needs_attention, protected, etc.) comes from Session list/detail like any other main. Server-owned and read-only.
+             * @example main-session-ws-123+admin
+             */
+            readonly admin_main_session_id?: string;
         };
         /** @description Per-member config inside a workspace (keyed by agentId). */
         WorkspaceMemberConfig: {
+            /**
+             * @description The member's server-computed main session id (format decided later). Omitted for members who are not eligible for a main (workers, other system agents, and Admin, who is not a workspace member). Server-owned and read-only.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            readonly main_session_id?: string;
+            /** @description Safe, server-classified reason why this eligible member's main chat could not be prepared or resolved. Omitted when main_session_id is present or the member is ineligible. Contains no raw error text, filesystem paths, file names, session IDs or stored identity values. */
+            readonly main_session_error?: string;
             heartbeat?: components["schemas"]["WorkspaceMemberHeartbeat"];
+            /** @description Display-only: when true the sidebar omits this member's row in this workspace, but the member stays a full team member — messageable, delegable, @-addressable; main and work untouched. Merge rules inside an incoming member config: absent => the stored flag is preserved (a heartbeat save never un-hides). Present with heartbeat absent (a pure hide/show) => the stored heartbeat is preserved unchanged. An entry with neither field ({}) keeps the ordinary replace behaviour: the stored heartbeat is cleared and the flag is still preserved by the absent rule. A heartbeat that IS present is always replaced wholesale, never merged field-by-field. Off-team entries are garbage-collected, so removing a member clears the flag and re-adding the agent starts visible. */
+            hidden_from_sidebar?: boolean;
         };
         /** @description Heartbeat settings for this (workspace, agent) pair. */
         WorkspaceMemberHeartbeat: {
@@ -13304,11 +15984,6 @@ export interface components {
              * @example Every 30 minutes, check the project board for new high-priority tasks.
              */
             body?: string;
-            /**
-             * @description Eager standing session id created when the heartbeat is enabled (FR-010). Stamped with workspace_id + agent + type="heartbeat". Stored here so the cron job can continue the pre-created session rather than starting a fresh one. Set server-side at enable time; read-only from the client's perspective.
-             * @example 550e8400-e29b-41d4-a716-446655440000
-             */
-            readonly session_id?: string;
         };
         /** @description Global memory and recap/retention settings. Backed by agents.defaults.* and storage.retention fields in config.json. Readable and writable by any authenticated user (operator decision, A2/G-02). Never exposes secrets — the endpoint reads/writes only the listed fields. */
         MemorySettings: {
@@ -13339,6 +16014,63 @@ export interface components {
             recap_model?: string;
             /** @description Ordered fallback chain for the recap model, tried in order when the primary recap model fails — same shape and behaviour as an agent's fallback_models. Maps to agents.defaults.recap_fallback_models. */
             recap_fallback_models?: components["schemas"]["FallbackModel"][];
+            /**
+             * @description Provider of the recap model (#1291), stored with recap_model so the recap routes through it. Maps to agents.defaults.recap_provider.
+             * @example openrouter
+             */
+            recap_provider?: string;
+            /** @description Effort for the recap model (effort-levels spec FR-072): absent or "" means Off (the recap default); "provider_default", a catalog level name or "on" turn reasoning on. null is refused. */
+            recap_reasoning_effort?: string;
+            /**
+             * @description Most output tokens one recap call may produce. Default 2048. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_max_output_tokens.
+             * @example 2048
+             */
+            recap_max_output_tokens?: number;
+            /**
+             * @description Token budget of the transcript text sent to the recap model. Default 2000. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_input_tokens.
+             * @example 2000
+             */
+            recap_input_tokens?: number;
+            /**
+             * @description Target length of the recap summary, in words. Default 150. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_summary_words.
+             * @example 150
+             */
+            recap_summary_words?: number;
+            /**
+             * @description Most items in each recap list (topics, decisions, open items). Default 5. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_list_items.
+             * @example 5
+             */
+            recap_list_items?: number;
+            /**
+             * @description Characters of recent context kept when no recap model answers. Default 1500. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_fallback_context_chars.
+             * @example 1500
+             */
+            recap_fallback_context_chars?: number;
+            /**
+             * @description Overall time limit for one recap, across every model tried and every retry. Default 60. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_timeout_seconds.
+             * @example 60
+             */
+            recap_timeout_seconds?: number;
+            /**
+             * @description Retries of a recap call whose stream broke. Default 2. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_stream_retries.
+             * @example 2
+             */
+            recap_stream_retries?: number;
+            /**
+             * @description Base pause between recap retries, in milliseconds (try n waits n times this). Default 500. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_retry_pause_ms.
+             * @example 500
+             */
+            recap_retry_pause_ms?: number;
+            /**
+             * @description Characters counted as one token when sizing recap input. Default 4. A stored value outside the range is clamped on use. Maps to agents.defaults.recap_chars_per_token.
+             * @example 4
+             */
+            recap_chars_per_token?: number;
+            /**
+             * @description Least time between two boot-time recaps, in seconds. Default 1. A stored value outside the range is clamped on use. Maps to agents.defaults.bootstrap_recap_min_spacing_seconds.
+             * @example 1
+             */
+            bootstrap_recap_min_spacing_seconds?: number;
             /**
              * @description Number of days to retain session JSONL files before the retention sweep removes them. Maps to storage.retention.session_days.
              * @example 90
@@ -13374,7 +16106,7 @@ export interface components {
             pinned?: boolean;
             pin_order?: number;
             core_team?: string[];
-            /** @description Per-member (agentId → config) heartbeat settings. Merge semantics: when present, replaces the config for each listed agent and garbage-collects entries for agents no longer on the core team. session_id is server-managed (set at heartbeat-enable time) and ignored on input. */
+            /** @description Per-member (agentId → config) settings. Merge semantics: when present, replaces the config for each listed agent and garbage-collects entries for agents no longer on the core team. main_session_id is server-owned and read-only: a value sent here is ignored, and the server always reprojects its own computed main session id. There is no client-supplied session address of any kind. Two display-flag exceptions: hidden_from_sidebar absent => the stored flag is preserved (a heartbeat save never un-hides); hidden_from_sidebar present with heartbeat absent (a pure hide/show) => the stored heartbeat is preserved unchanged. An entry with neither field ({}) keeps the ordinary replace behaviour — the stored heartbeat is cleared. A heartbeat that IS present is always replaced wholesale, never merged field-by-field. */
             member_configs?: {
                 [key: string]: components["schemas"]["WorkspaceMemberConfig"];
             };
@@ -13387,7 +16119,7 @@ export interface components {
              */
             from_agent: string;
             /**
-             * @description Agent ID of the delegate (the target node). Must be a member of the workspace team. Self-edges (from_agent == to_agent) are rejected.
+             * @description Agent ID of the delegate (the target node). Must be a member of the workspace team. A self-edge (from_agent == to_agent) is an ordinary, fully valid edge — the agent forks a new session running itself, and any agent may hold one. Which agents ship a seeded self-edge is a config-level default, not a graph constraint expressed here.
              * @example planner
              */
             to_agent: string;
@@ -13433,11 +16165,11 @@ export interface components {
             team?: string[];
             /**
              * @description The currently-resolved depth ceiling an edge inherits when its own `depth` is unset — the global configured default if set, otherwise the defaultMaxSubTurnDepth backstop. This is a read-only, already-computed value (no new depth logic; see delegationDepthCeiling) exposed purely so the UI can always pre-fill/display a concrete number for any edge instead of an ambiguous blank/"∞" state. It does NOT change per-edge enforcement: an edge with depth unset still dynamically tracks the live global default at enforcement time, this field is a snapshot for display purposes only.
-             * @example 3
+             * @example 10
              */
             default_depth: number;
         };
-        /** @description Request body for PUT /workspaces/{id}/delegation. Replaces the workspace's delegation edge set wholesale (full replace, not a merge) so the Team-tab graph editor can persist the exact graph the operator drew. Every from_agent / to_agent must resolve to an eligible member of the candidate team. Only explicit Jim and General Purpose self-edges are permitted, bounded by the global and edge depth. Revision covers both membership and the authoritative graph. */
+        /** @description Request body for PUT /workspaces/{id}/delegation. Replaces the workspace's delegation edge set wholesale (full replace, not a merge) so the Team-tab graph editor can persist the exact graph the operator drew. Every from_agent / to_agent must resolve to an eligible member of the candidate team. A self-edge is an ordinary edge like any other — any agent may hold one — bounded by the global and edge depth. Revision covers both membership and the authoritative graph. */
         WorkspaceDelegationUpdateRequest: {
             revision: components["schemas"]["ConfigurationRevision"];
             /** @description The complete set of delegation edges for this workspace. An empty array clears all delegation. Deduplicated by (from_agent, to_agent) at write time. */
@@ -13622,7 +16354,7 @@ export interface components {
                  */
                 idle_expiry_days?: number;
                 /**
-                 * @description Override of FR-021's supervision observation deadline — how long the PlanSupervisor waits on an armed supervision wake before that attempt counts as spent (global default `planning.supervision_turn_timeout_seconds`, 600 s).
+                 * @description Override of FR-021's supervision observation deadline — how long the PlanSupervisor waits on an armed supervision wake before that attempt counts as spent (global default `planning.supervision_turn_timeout_seconds`, 600 s). It is a minimum observation interval counted from the wake (wake_at), and it is never evaluated while that supervision turn is still in flight — so it never stops a running review. A review that runs longer than the interval is judged as soon as it ends; there is no extra grace after it settles.
                  * @example 600
                  */
                 supervision_turn_timeout_seconds?: number;
@@ -13743,7 +16475,7 @@ export interface components {
                 /** @example 7 */
                 idle_expiry_days?: number;
                 /**
-                 * @description Override of FR-021's supervision observation deadline (global default `planning.supervision_turn_timeout_seconds`, 600 s).
+                 * @description Override of FR-021's supervision observation deadline (global default `planning.supervision_turn_timeout_seconds`, 600 s). It is a minimum observation interval counted from the wake (wake_at), and it is never evaluated while that supervision turn is still in flight — so it never stops a running review. A review that runs longer than the interval is judged as soon as it ends; there is no extra grace after it settles.
                  * @example 600
                  */
                 supervision_turn_timeout_seconds?: number;
@@ -13800,7 +16532,7 @@ export interface components {
                 /** @example 7 */
                 idle_expiry_days?: number;
                 /**
-                 * @description Override of FR-021's supervision observation deadline (global default `planning.supervision_turn_timeout_seconds`, 600 s).
+                 * @description Override of FR-021's supervision observation deadline (global default `planning.supervision_turn_timeout_seconds`, 600 s). It is a minimum observation interval counted from the wake (wake_at), and it is never evaluated while that supervision turn is still in flight — so it never stops a running review. A review that runs longer than the interval is judged as soon as it ends; there is no extra grace after it settles.
                  * @example 600
                  */
                 supervision_turn_timeout_seconds?: number;
@@ -14202,7 +16934,7 @@ export interface components {
         };
         /**
          * GoalOutcome
-         * @description How a goal ENDED — the single durable, structured record behind the always-visible goal outcome line in the chat thread (founder decision 2026-09-14: a goal's ending must leave a clear, lasting line in the chat, not only a pill that hides 4 seconds after turning terminal, and not only the Verbose-chat-gated `judge_verdict` card). Written EXACTLY ONCE per goal ending, by the same terminal transition that ends the goal record (`pkg/agent/goal_loop.go::clearGoalStatus` — every ending kind flows through it). An intermediate UNMET Judge round with rounds remaining is NOT an ending (the worker is steered and keeps going) and never produces one of these. Two carriers share this exact shape so they cannot silently disagree (the `JudgeVerdict` precedent): (a) the persisted transcript entry `Message.type: system`, `Message.system_subtype: goal_outcome`, `Message.goal_outcome: <this>` (cold REST load), and (b) the `GoalOutcomeFrame` WS push, emitted live at the ending AND re-emitted by `pkg/gateway/replay.go` from the persisted entry (discriminating on the stamped `system_subtype`, never on `content`). The WS copy is the hand-synced duplicate `GoalOutcomeFrameOutcome` in `contracts/asyncapi.yaml` (AsyncAPI codegen does not resolve cross-file `$ref`, and the Go package cannot hold two types named `GoalOutcome`) — any field edit here MUST be mirrored there.
+         * @description How a goal ENDED — the single durable, structured record behind the always-visible goal outcome line in the chat thread (founder decision 2026-09-14: a goal's ending must leave a clear, lasting line in the chat, not only a pill that hides 4 seconds after turning terminal, and not only the Verbose-chat-gated `judge_verdict` card). Written once per goal ending on the helper transcript and, when a parent exists, once on the parent transcript, with different message ids but the same goal id, ending, rounds and Judge reason. Written by the same terminal transition that ends the goal record (`pkg/agent/goal_loop.go::clearGoalStatus` — every ending kind flows through it). An intermediate UNMET Judge round with rounds remaining is NOT an ending (the worker is steered and keeps going) and never produces one of these. Two carriers share this exact shape so they cannot silently disagree (the `JudgeVerdict` precedent): (a) the persisted transcript entry `Message.type: system`, `Message.system_subtype: goal_outcome`, `Message.goal_outcome: <this>` (cold REST load), and (b) the `GoalOutcomeFrame` WS push, emitted live at the ending AND re-emitted by `pkg/gateway/replay.go` from the persisted entry (discriminating on the stamped `system_subtype`, never on `content`). The WS copy is the hand-synced duplicate `GoalOutcomeFrameOutcome` in `contracts/asyncapi.yaml` (AsyncAPI codegen does not resolve cross-file `$ref`, and the Go package cannot hold two types named `GoalOutcome`) — any field edit here MUST be mirrored there.
          */
         GoalOutcome: {
             /**
@@ -14216,7 +16948,7 @@ export interface components {
              */
             goal_text: string;
             /**
-             * @description WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — a deliberate `/goal clear|stop|off|reset|cancel| none` (Goal.state `cleared`, terminal note "cleared by user"). `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
+             * @description WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — an EXPLICIT user ending only: the owning session's `/goal clear` (aliases `stop|off|reset|cancel|none`) or an authorized parent's `delegate(action="clear_goal")` (Goal.state `cleared`, terminal note "cleared by user"). NEVER written for a session lifecycle transition — a Stop, timeout, plan stop, restart or failure keeps the goal record active; only natural met / round-exhaustion adjudication and these explicit clears end a goal. `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
              * @example rounds_exhausted
              * @enum {string}
              */
@@ -14299,6 +17031,12 @@ export interface components {
              * @example 500
              */
             tokens_cache_write?: number;
+            /**
+             * Format: double
+             * @description Cache-hit ratio for this agent: tokens_cache_read / (tokens_in + tokens_cache_read + tokens_cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. tokens_in is uncached input.
+             * @example 0.8
+             */
+            cache_hit_ratio?: number | null;
             /** @description Per-model breakdown for this agent. Absent when no model data is available. */
             by_model?: {
                 [key: string]: components["schemas"]["ModelTokens"];
@@ -14333,6 +17071,20 @@ export interface components {
             by_model?: {
                 [key: string]: components["schemas"]["ModelTokens"];
             };
+            /** @description Per-provider token breakdown for the period. Same cell shape as by_model. Keys are catalog provider ids. Absent when no provider data is available. */
+            by_provider?: {
+                [key: string]: components["schemas"]["ModelTokens"];
+            };
+            /**
+             * @description Sum of unpriced token portions in the period. Counts only the unpriced portion of each call, not the whole call. A period with no priced cost and unpriced_tokens greater than zero is unpriced, not free.
+             * @example 0
+             */
+            unpriced_tokens?: number;
+            /**
+             * @description Sum of tokens from ChatGPT sign-in calls in the period. Those tokens recorded no dollars and are excluded from any priced cost.
+             * @example 0
+             */
+            subscription_tokens?: number;
             /**
              * @description True when one or more session stores failed to load during aggregation, so the totals may under-count. Clients should surface a "some sessions could not be read" indicator rather than presenting the number as authoritative. Absent (or false) when every store loaded cleanly.
              * @example false
@@ -14367,13 +17119,24 @@ export interface components {
              */
             cache_write?: number;
             /**
+             * Format: double
+             * @description Cache-hit ratio for this cell: cache_read / (in + cache_read + cache_write) when that denominator is greater than zero. Null when the denominator is 0, which is not the same as a ratio of zero. A number from 0 to 1 inclusive. in is uncached input.
+             * @example 0.8
+             */
+            cache_hit_ratio?: number | null;
+            /**
+             * @description Effort levels spec (FR-024). Reasoning tokens reported by the provider for this cell: the sum of the per-call counts of the entries that reported one. A subset of out, never added to total. Absent when no entry reported a count.
+             * @example 120
+             */
+            reasoning?: number;
+            /**
              * @description Authoritative total tokens recorded for this model, as reported by the provider. Additive: total = in + out + cache_read + cache_write once the provider's input/output split has been recorded on an entry (a non-zero in and/or out). Entries predating that split carry 0 in both in and out while total still reflects the full turn (out was not yet split from cache/completion), so always read total directly rather than reconstructing it from the other fields.
              * @example 1000
              */
             total: number;
         };
-        /** @description The typed, schema-validated envelope carried over the existing pkg/bus MessageBus (no new transport) that derives every control/visibility surface of the session-control plane (ADR-053 S6/US-6). Discriminated by `kind` — 12 variants covering child->parent reporting (progress/checkpoint/artifact/blocker/ question/decision_request/error/handback), engine-emitted control (revision_entry), session->UI propagation (goal_status), and parent->child control (steer/respond). `direction` is one of `child_to_parent | parent_to_child | session_to_ui | engine` — the historical `human` value is dropped (M8); every kind variant maps to exactly one of the four. Every field/kind/direction pairing is the ratified shape from the spec's Contract Surface table — see the individual variant files for full per-kind documentation and caps (10 msgs/min, 32 KiB, depth <=5 for child sends; 6/min, 16 KiB for steer; per-child unacked ceiling 20 open question+blocker, D15). */
-        SessionMessage: components["schemas"]["SessionMessageProgress"] | components["schemas"]["SessionMessageCheckpoint"] | components["schemas"]["SessionMessageArtifact"] | components["schemas"]["SessionMessageBlocker"] | components["schemas"]["SessionMessageQuestion"] | components["schemas"]["SessionMessageDecisionRequest"] | components["schemas"]["SessionMessageError"] | components["schemas"]["SessionMessageHandback"] | components["schemas"]["SessionMessageRevisionEntry"] | components["schemas"]["SessionMessageGoalStatus"] | components["schemas"]["SessionMessageSteer"] | components["schemas"]["SessionMessageRespond"];
+        /** @description The typed, schema-validated envelope carried over the existing pkg/bus MessageBus (no new transport) that derives every control/visibility surface of the session-control plane (ADR-053 S6/US-6). Discriminated by `kind` — 11 variants covering child->parent reporting (progress/checkpoint/artifact/blocker/ question/error/handback), engine-emitted control (revision_entry), session->UI propagation (goal_status), and parent->child control (steer/respond). `direction` is one of `child_to_parent | parent_to_child | session_to_ui | engine` — the historical `human` value is dropped (M8); every kind variant maps to exactly one of the four. Every field/kind/direction pairing is the ratified shape from the spec's Contract Surface table — see the individual variant files for full per-kind documentation and caps (10 msgs/min, 32 KiB, depth <=5 for child sends; 6/min, 16 KiB for steer; per-child unacked ceiling 20 open question+blocker, D15). */
+        SessionMessage: components["schemas"]["SessionMessageProgress"] | components["schemas"]["SessionMessageCheckpoint"] | components["schemas"]["SessionMessageArtifact"] | components["schemas"]["SessionMessageBlocker"] | components["schemas"]["SessionMessageQuestion"] | components["schemas"]["SessionMessageError"] | components["schemas"]["SessionMessageHandback"] | components["schemas"]["SessionMessageRevisionEntry"] | components["schemas"]["SessionMessageGoalStatus"] | components["schemas"]["SessionMessageSteer"] | components["schemas"]["SessionMessageRespond"];
         /**
          * SessionMessageProgress
          * @description SessionMessage `oneOf` variant, `kind: progress` (ADR-053 §Contract Surface — SessionMessage). Child -> parent. A lightweight in-flight narration line; never a claim, never a checkpoint. Envelope fields are duplicated inline on every variant (ADR-034 precedent — oapi-codegen inlines `oneOf` members that are direct component refs into named `As*`/`From*` accessors; a shared base composed via `allOf` across files does not receive the same treatment, so each variant is flat, matching `AgentCreateRequestMain`/`AgentCreateRequestSubagent`).
@@ -14411,7 +17174,7 @@ export interface components {
              */
             kind: "progress";
             /**
-             * @description Message-hop cap (m7) — how many parent<->child hops this message has traversed. Distinct from and independent of the spawn-nesting delegation-depth backstop (`defaultMaxSubTurnDepth`, default 3, `pkg/agent/delegation_runtime.go`) — one caps message forwarding, the other caps spawn nesting (m-5).
+             * @description Message-hop cap (m7) — how many parent<->child hops this message has traversed. Distinct from and independent of the spawn-nesting delegation-depth backstop (`defaultMaxSubTurnDepth`, default 10, `pkg/agent/delegation_runtime.go`) — one caps message forwarding, the other caps spawn nesting (m-5).
              * @example 0
              */
             depth: number;
@@ -14592,7 +17355,7 @@ export interface components {
         };
         /**
          * SessionMessageQuestion
-         * @description SessionMessage `oneOf` variant, `kind: question` (ADR-053 §Contract Surface, R§8.2). Child -> parent. `wait: true` parks the child in `needs_input` (native-only; 3P children never advertise this kind, D5). `authority` is child-authored but NEVER trusted at face value — the runtime's `deriveQuestionAuthority(q)` re-derives the effective authority server-side (fail-closed default `owner_required` on omission; a child can only be UPGRADED to `owner_required`, never downgraded to `self_ok`). Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
+         * @description SessionMessage `oneOf` variant, `kind: question` (ADR-053 §Contract Surface). Child -> parent. An ordinary upward message — ADR-20261004 ("Steering commands: no person question", locked decision 6) removed the person-question pause: a question parks nothing and carries no `wait`/`authority` fields; the parent answers through ordinary steering (`respond`/`steer`), and C1's message/state table applies to any resume effect. Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
          */
         SessionMessageQuestion: {
             /** @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WK */
@@ -14630,80 +17393,10 @@ export interface components {
              */
             text: string;
             /**
-             * @description True parks the child in `needs_input` awaiting a `respond` (native only). False is a fire-and-forget question the child does not block on.
-             * @example true
-             */
-            wait: boolean;
-            /**
              * @description Routes the eventual `respond`/`inbox_ack` back to this question. Out-of-order answers are safe (V-3/M-3).
              * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
              */
             correlation_id: string;
-            /**
-             * @description Child-authored authority tag. Untrusted (M3) — the runtime's `deriveQuestionAuthority(q)` is the authoritative determination; an omitted tag is treated as `owner_required` server-side (fail-closed default is NOT a schema `default:` — it is applied at the handler, per the project convention of never mixing `required` semantics with a JSON-Schema `default` on a field the server overrides).
-             * @example self_ok
-             * @enum {string}
-             */
-            authority?: "self_ok" | "owner_required";
-        };
-        /**
-         * SessionMessageDecisionRequest
-         * @description SessionMessage `oneOf` variant, `kind: decision_request` (ADR-053 §Contract Surface, R§8.2). Child -> parent. Like `question` but enumerates discrete `options[]`; the answering `respond.text` names the chosen option. Same untrusted-authority handling as `question` (M3). Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
-         */
-        SessionMessageDecisionRequest: {
-            /** @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WM */
-            message_id: string;
-            /** @example 550e8400-e29b-41d4-a716-446655440000 */
-            session_id: string;
-            /** @example 660e8400-e29b-41d4-a716-446655440000 */
-            parent_session_id?: string | null;
-            /** @example 0 */
-            generation?: number;
-            /**
-             * @example child_to_parent
-             * @enum {string}
-             */
-            direction: "child_to_parent";
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "decision_request";
-            /** @example 0 */
-            depth: number;
-            /**
-             * Format: date-time
-             * @example 2026-07-22T10:00:00Z
-             */
-            created_at: string;
-            /** @example ray */
-            sender_identity: string;
-            /** @example true */
-            untrusted_origin: boolean;
-            /**
-             * @description Untrusted decision prompt.
-             * @example Which lint profile should the plan-lint gate use?
-             */
-            text: string;
-            /**
-             * @description The enumerated choices. The answering `respond.text` names the chosen option verbatim.
-             * @example [
-             *       "strict",
-             *       "soft"
-             *     ]
-             */
-            options: string[];
-            /**
-             * @description Routes the eventual `respond` back to this decision request.
-             * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WN
-             */
-            correlation_id: string;
-            /**
-             * @description Child-authored authority tag, untrusted (M3) — see SessionMessageQuestion.authority for the identical fail-closed derivation rule.
-             * @example owner_required
-             * @enum {string}
-             */
-            authority?: "self_ok" | "owner_required";
         };
         /**
          * SessionMessageError
@@ -14926,7 +17619,7 @@ export interface components {
         };
         /**
          * SessionMessageSteer
-         * @description SessionMessage `oneOf` variant, `kind: steer` (ADR-053 §Contract Surface). Parent -> child. Mid-run injection applied at the child's next tool boundary (skip-remaining-batch semantics identical to chat steering, INV-3) — never mid-tool, never interleaved with an in-flight verdict write. Rate-capped 6/min, 16 KiB body (session_messaging. steer_rate/steer_body). Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
+         * @description SessionMessage `oneOf` variant, `kind: steer` (ADR-053 §Contract Surface). Parent -> child. Mid-run injection applied at the child's next tool boundary (skip-remaining-batch semantics identical to chat steering, INV-3) — never mid-tool, never interleaved with an in-flight verdict write. Rate-capped (default 60/min) and body-capped (default 65,536 UTF-8 bytes) by session_messaging.steer_rate/steer_body. Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
          */
         SessionMessageSteer: {
             /** @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WV */
@@ -14968,7 +17661,7 @@ export interface components {
              */
             untrusted_origin: boolean;
             /**
-             * @description Steering instruction injected at the child's next tool boundary.
+             * @description Steering instruction injected at the child's next tool boundary. The maximum length is the server's steer_body byte limit (configurable, default 65,536 UTF-8 bytes); the server enforces it.
              * @example Skip the xlsx shard for now, prioritize the CSV export.
              */
             text: string;
@@ -14980,7 +17673,7 @@ export interface components {
         };
         /**
          * SessionMessageRespond
-         * @description SessionMessage `oneOf` variant, `kind: respond` (ADR-053 §Contract Surface). Parent -> child. Answers a `question`/`decision_request` by `correlation_id`; out-of-order answers are safe (INV-4/V-3/M-3). The runtime validator REJECTS a `respond` whose target question's derived authority is `owner_required` (R§8.2) — that rejection is a runtime business rule, not schema-expressible; this schema only shapes the request. Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
+         * @description SessionMessage `oneOf` variant, `kind: respond` (ADR-053 §Contract Surface). Parent -> child. Answers a `question` by `correlation_id`; out-of-order answers are safe (INV-4/V-3/M-3). The text is delivered as an ordinary steering message; the recipient's state decides the effect (ADR-20261004 C1). The former owner-answer authority rejection was withdrawn with the person-question pause (ADR-20261004, locked decision 7). Envelope fields are duplicated inline (ADR-034 precedent, see SessionMessageProgress for the rationale).
          */
         SessionMessageRespond: {
             /** @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WW */
@@ -15022,12 +17715,12 @@ export interface components {
              */
             untrusted_origin: boolean;
             /**
-             * @description The answer. For a `decision_request`, names the chosen option verbatim from its `options[]`.
+             * @description The answer to the child's question. The maximum length is the server's steer_body byte limit (configurable, default 65,536 UTF-8 bytes); the server enforces it.
              * @example Yes, overwrite it — the backup is stale.
              */
             text: string;
             /**
-             * @description The `correlation_id` of the `question`/`decision_request` being answered.
+             * @description The `correlation_id` of the `question` being answered.
              * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
              */
             correlation_id: string;
@@ -15105,7 +17798,7 @@ export interface components {
         };
         /**
          * SessionLifecycleRecord
-         * @description The durable, per-entity-JSONL 8-state session-lifecycle record (ADR-053 §Contract Surface, S2). Distinct from `Session.status` (active/archived/ interrupted — the older chat-transcript-metadata status) and from `Plan.state` (the 5-state draft/approved/running/done/failed plan state machine) — do not conflate the three. This record is the durable authority the boot sweep (§5), idle settlement, `blocked_by`, and the S4 interlock state machine all read from. The immutable-terminal invariant (L-3) holds: a terminal record (`completed`/`failed`/ `cancelled`/`timed_out`) is never mutated in place — `follow_up`/Play mint a NEW record with a new `generation`, linked back via `resumed_from`.
+         * @description The durable, per-entity-JSONL 6-state session-lifecycle record (ADR-053 §Contract Surface, S2; state consolidated per F0929-2). Distinct from `Session.status` (active/archived/failed — the coarse chat-transcript- metadata status; see `Session.lifecycle_state` for the exact 5-state display projection of this record) and from `Plan.state` (the 5-state draft/approved/running/ done/failed plan state machine) — do not conflate the three. This record is the durable authority the boot sweep (§5), idle settlement, `blocked_by`, and the S4 interlock state machine all read from. The immutable-terminal invariant (L-3) holds: a terminal record (`completed`/`failed`) is never mutated in place — `follow_up`/Play mint a NEW record with a new `generation`, linked back via `resumed_from`.
          */
         SessionLifecycleRecord: {
             /**
@@ -15124,13 +17817,13 @@ export interface components {
              */
             resumed_from?: string | null;
             /**
-             * @description The durable 8-state lifecycle (S2, the S4 interlock state machine's authority). `paused` covers BOTH cooperative cancel-soft grace AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a 9th state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
+             * @description The durable 6-state lifecycle (S2, the S4 interlock state machine's authority). `stopped` replaces the former `cancelled`/`timed_out`/ `paused` states as one non-terminal state (session alive, continuable) — it covers cancellation, timeout, AND a plan-owner session idling while its plan is durably `plan_phase=awaiting_supervision` (that condition itself lives on the Plan record, not as a separate state here — see `Plan.plan_phase` and R§8.10's lifecycle-to-pill crosswalk).
              * @example running
              * @enum {string}
              */
-            state: "queued" | "running" | "needs_input" | "paused" | "completed" | "failed" | "cancelled" | "timed_out";
+            state: "queued" | "running" | "needs_input" | "stopped" | "completed" | "failed";
             /**
-             * @description Server-derived: true iff `state` is one of `completed`/`failed`/ `cancelled`/`timed_out`.
+             * @description Server-derived: true iff `state` is one of `completed`/`failed`.
              * @example false
              */
             readonly terminal: boolean;
@@ -15146,7 +17839,7 @@ export interface components {
              */
             owner_scope_id?: string;
             /**
-             * @description Set when THIS session is a plan's OWNER session — the reciprocal of `Plan.owner_session_id` (m-3/FR-147). Lets the boot sweep exempt a `paused` owner session whose `owner_scope_kind == human` but which is legitimately idle awaiting an owner correction on the named plan.
+             * @description Set when THIS session is a plan's OWNER session — the reciprocal of `Plan.owner_session_id` (m-3/FR-147). Lets the boot sweep exempt a `stopped` owner session whose `owner_scope_kind == human` but which is legitimately idle awaiting an owner correction on the named plan.
              * @example 01J3ZQK8N2H8VXNRP5T7C9M4WE
              */
             owns_plan_id?: string;
@@ -15183,7 +17876,7 @@ export interface components {
             /** @description Present iff `state == needs_input`; absent otherwise (no schema `nullable: true` — an optional-object field paired with `nullable` generates a `T | null | undefined` Zod type against an openapi-typescript TS type that only ever emits `T | undefined` for a nullable, non-required, non-scalar property, a real codegen mismatch between the two generators for this shape; plain optional-only is unambiguous and matches how every other optional nested object in this contract set is expressed). `reconstructable` is a PARK-TIME HINT ONLY (m5) — the authoritative determination is `isNeedsInputReconstructable(rec)` re-evaluated AT BOOT (R§8.6), never this stored value. */
             needs_input?: {
                 /**
-                 * @description The open question/decision_request this session is parked on.
+                 * @description The open question this session is parked on.
                  * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
                  */
                 correlation_id: string;
@@ -15219,11 +17912,11 @@ export interface components {
             /** @description Every record carries its origin: how and where this session was launched (ADR-091 I-1). Kind discriminates the launch path. */
             origin?: {
                 /**
-                 * @description The launch path that created this session. Root kinds (chat/channel/scheduled/heartbeat/verifier/plan/human) and derived kinds (delegate/task) — the kind's own definition.
+                 * @description The launch path that created this session. Root kinds (chat/channel/main/scheduled/heartbeat/verifier/plan/human) and derived kinds (delegate/task) — the kind's own definition.
                  * @example delegate
                  * @enum {string}
                  */
-                kind: "delegate" | "task" | "chat" | "channel" | "scheduled" | "heartbeat" | "verifier" | "plan" | "human";
+                kind: "delegate" | "task" | "chat" | "channel" | "main" | "scheduled" | "heartbeat" | "verifier" | "plan" | "human";
                 /**
                  * @description For delegate/task-origin sessions, the tool-call id (span key) of the originating delegate or create_task call. Absent for other kinds.
                  * @example span_01J3ZQK8N2H8VXNRP5T7C9M4WE
@@ -15269,14 +17962,6 @@ export interface components {
                      * @example 2
                      */
                     remaining_depth: number;
-                };
-                /** @description Creator-set session limits. */
-                limits?: {
-                    /**
-                     * @description Maximum seconds before this delegation is force-cancelled. 0 = the configured default. Scope is the session's lifetime across re-entries (ADR-091 I-1).
-                     * @example 300
-                     */
-                    timeout_seconds?: number;
                 };
                 /**
                  * @description Tool names excluded for this steered session (e.g., switch_agent). Applied at launch.
@@ -15476,6 +18161,21 @@ export interface components {
             route_chat_id?: string;
         };
         /**
+         * HelperEvent
+         * @description An immutable helper event shown in the addressed chat independently of the model's reply. Source-event identity plus destination transcript determines the message id. Live, replay and cold load carry the same filtered payload.
+         */
+        HelperEvent: {
+            helper_session_id: string;
+            helper_title?: string;
+            /** @enum {string} */
+            kind: "verdict_unmet" | "not_verified" | "stopped" | "restarted" | "resume_refused" | "timed_out" | "finished" | "question" | "blocker" | "failed";
+            /** @description Sensitive-data-filtered sentence saved before live publication. */
+            text: string;
+            goal_id?: string;
+            /** Format: date-time */
+            created_at: string;
+        };
+        /**
          * PlanRestartResponse
          * @description ADR-053 §Contract Surface — "Cancel / restart". The Play route mints a new owner-session generation via `resumed_from` (cancelled -> approved edge) rather than mutating the terminal owner session in place; done members are preserved, failed/cancelled members resume from the last git boundary commit (no-commit -> fresh attempt, D13), and JudgeRounds reset to 0.
          *     NOT YET WIRED (flagged for review, Phase-0 scope): this schema is authored and added to `components.schemas` for codegen per the 5-step process, but the EXISTING `POST /plans/{id}/restart` path's 200 response is left unchanged (`$ref: '#/components/schemas/Plan'`) in this contracts-only pass — that endpoint already ships and is consumed by live Go/TS code (ADR-052 FR-026); swapping its response shape is Phase-1/2 consuming-code work, not Phase-0 contract authoring. Phase 1 wires this schema onto that path (or a `generation`-aware successor) alongside the owner-loop implementation.
@@ -15498,11 +18198,11 @@ export interface components {
              */
             resumed_from?: string | null;
         };
-        /** @description The `delegate` tool call's argument shape, discriminated by `action` — the corrected 9-action set (ADR-053 §5.1) replacing the legacy `run | status` pair. `run` spawns a new child; `status`/`inbox`/`inbox_ack`/`peek` are read/ack surfaces; `steer`/`respond`/`cancel`/`follow_up` are control surfaces. Steering is always available for a direct delegation (see ADR-053 Amendment). */
-        DelegateActionRequest: components["schemas"]["DelegateRunAction"] | components["schemas"]["DelegateStatusAction"] | components["schemas"]["DelegateInboxAction"] | components["schemas"]["DelegateInboxAckAction"] | components["schemas"]["DelegateSteerAction"] | components["schemas"]["DelegateRespondAction"] | components["schemas"]["DelegateCancelAction"] | components["schemas"]["DelegateFollowUpAction"] | components["schemas"]["DelegatePeekAction"];
+        /** @description The `delegate` tool call's argument shape, discriminated by `action` — the ADR-053 §5.1 action set plus `clear_goal`, replacing the legacy `run | status` pair. `run` spawns a new child; `status`/`inbox`/`inbox_ack`/`peek` are read/ack surfaces; `steer`/`respond`/`stop_all`/`clear_goal`/`resume`/`redirect` are control surfaces (ADR-20261004: `cancel` is renamed `stop_all` and `follow_up` is renamed `resume`, no alias path; `redirect` and `resume` are new actions). Steering is always available for a direct delegation (see ADR-053 Amendment). */
+        DelegateActionRequest: components["schemas"]["DelegateRunAction"] | components["schemas"]["DelegateStatusAction"] | components["schemas"]["DelegateInboxAction"] | components["schemas"]["DelegateInboxAckAction"] | components["schemas"]["DelegateSteerAction"] | components["schemas"]["DelegateRespondAction"] | components["schemas"]["DelegateStopAllAction"] | components["schemas"]["DelegateClearGoalAction"] | components["schemas"]["DelegateResumeAction"] | components["schemas"]["DelegateRedirectAction"] | components["schemas"]["DelegatePeekAction"];
         /**
          * DelegateRunAction
-         * @description `delegate` tool call, `action: run` (ADR-053 §5.1/§Contract Surface). Spawns a new child session. `snapshot` carries ONLY the DISCRETIONARY portion of the curated context snapshot (R§8.5) — parent-named artifact references + optional notes. The MANDATORY core (task prompt + compiled criteria + engine-injected child identity from the target agent, ADR-032) is assembled server-side and is EXEMPT from `snapshot_max_bytes` (m4); only `snapshot` here is subject to `snapshot_max_bytes`/ `snapshot_max_refs`. Steering is always available for a direct delegation — there is no longer a launch-profile choice gating it (see ADR-053 Amendment).
+         * @description `delegate` tool call, `action: run` (ADR-053 §5.1/§Contract Surface). Spawns a new child session. `snapshot` carries ONLY the DISCRETIONARY portion of the curated context snapshot (R§8.5) — parent-named artifact references + optional notes. The MANDATORY core (task prompt + compiled criteria + engine-injected child identity from the target agent, ADR-032) is assembled server-side and is EXEMPT from `snapshot_max_bytes` (m4); only `snapshot` here is subject to `snapshot_max_bytes`/ `snapshot_max_refs`. A native child can always be steered at its next tool boundary — there is no launch-profile choice gating it (see ADR-053 Amendment). An external-CLI child is steered by interrupting its subprocess and resuming the same CLI conversation, and only while a CLI run is in flight; otherwise steering is refused as not_steerable.
          */
         DelegateRunAction: {
             /**
@@ -15530,11 +18230,6 @@ export interface components {
              * @example false
              */
             critical?: boolean;
-            /**
-             * @description Maximum seconds before this delegation is force-cancelled. 0 = default (30 min).
-             * @example 300
-             */
-            timeout_seconds?: number;
             /** @description The DISCRETIONARY portion of the curated context snapshot (R§8.5). Deny-by-default — nothing beyond this + the mandatory core reaches the child. Over-cap is rejected with a narrow-the-snapshot tool error, never silently truncated. */
             snapshot?: {
                 /**
@@ -15568,15 +18263,10 @@ export interface components {
              * @example 550e8400-e29b-41d4-a716-446655440000
              */
             session_id: string;
-            /**
-             * @description DEPRECATED compat alias for `session_id` (pre-ADR-053 callers). When both are present, `session_id` wins.
-             * @example task-456
-             */
-            task_id?: string;
         };
         /**
          * DelegateInboxAction
-         * @description `delegate` tool call, `action: inbox` (ADR-053 §5.1). Drains the child->parent typed inbox (progress/checkpoint/artifact/blocker/ question/decision_request/error/handback), durable and keyed to the parent's chat/plan id (D16).
+         * @description `delegate` tool call, `action: inbox` (ADR-053 §5.1). Drains the child->parent typed inbox (progress/checkpoint/artifact/blocker/ question/error/handback), durable and keyed to the parent's chat/plan id (D16).
          */
         DelegateInboxAction: {
             /**
@@ -15625,7 +18315,7 @@ export interface components {
         };
         /**
          * DelegateSteerAction
-         * @description `delegate` tool call, `action: steer` (ADR-053 §5.1). Mid-run injection at the child's next tool boundary (skip-remaining-batch semantics identical to chat steering). Rate-capped 6/min, 16 KiB body.
+         * @description `delegate` tool call, `action: steer` (ADR-053 §5.1). Mid-run injection at the child's next tool boundary (skip-remaining-batch semantics identical to chat steering). Rate-capped (default 60/min) and body-capped (default 65,536 UTF-8 bytes) by session_messaging.steer_rate/steer_body.
          */
         DelegateSteerAction: {
             /**
@@ -15639,7 +18329,7 @@ export interface components {
              */
             session_id: string;
             /**
-             * @description Steering instruction.
+             * @description Steering instruction. The maximum length is the server's steer_body byte limit (configurable, default 65,536 UTF-8 bytes); the server enforces it.
              * @example Skip the xlsx shard for now, prioritize the CSV export.
              */
             text: string;
@@ -15651,7 +18341,7 @@ export interface components {
         };
         /**
          * DelegateRespondAction
-         * @description `delegate` tool call, `action: respond` (ADR-053 §5.1). Answers a `question`/`decision_request` by `correlation_id`; out-of-order answers are safe. Native: warm-resumes the SAME child session generation. 3P (external CLI): spawns a NEW corrective session (original prompt + answer folded in, D5) — never an in-place warm resume, since external CLIs have no warm-resume primitive. The runtime REJECTS a `respond` targeting a question whose derived authority is `owner_required` (R§8.2) — a business rule enforced at the handler, not schema- expressible.
+         * @description `delegate` tool call, `action: respond` (ADR-053 §5.1; ADR-20261004 locked decisions 6–7). The parent's reply to one of the child's messages, referenced by `correlation_id`; the text is delivered downward as an ordinary message, and the recipient's state decides the effect (working: into the current turn; stopped: same-generation resume; done/failed: next round). Native: warm-resumes the SAME child session generation when a resume applies. 3P (external CLI): spawns a NEW corrective session (original prompt + answer folded in, D5) — never an in-place warm resume, since external CLIs have no warm-resume primitive. The former owner-answer authority check was withdrawn with the person-question pause (ADR-20261004); a respond is an ordinary steering message, not an authenticated owner answer.
          */
         DelegateRespondAction: {
             /**
@@ -15665,57 +18355,89 @@ export interface components {
              */
             session_id: string;
             /**
-             * @description The answer. For a `decision_request`, names the chosen option verbatim.
+             * @description The answer to the child's question. The maximum length is the server's steer_body byte limit (configurable, default 65,536 UTF-8 bytes); the server enforces it.
              * @example Yes, overwrite it — the backup is stale.
              */
             text: string;
             /**
-             * @description The `correlation_id` of the question/decision_request being answered.
+             * @description The `correlation_id` of the question being answered.
              * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
              */
             correlation_id: string;
         };
         /**
-         * DelegateCancelAction
-         * @description `delegate` tool call, `action: cancel` (ADR-053 §5.1). `hard: false` (default) is the SOFT cooperative stop — a tool-boundary checkpoint flush inside `session_messaging.cancel_grace`. `hard: true` is the backstop `RequestCancel` fired after grace elapses (or immediately, at the parent's discretion).
+         * DelegateStopAllAction
+         * @description `delegate` tool call, `action: stop_all` (ADR-20261004, locked decision 2 — renamed from `cancel` with no alias path). Stops that helper and every helper under it through the same session Stop a person uses: each running turn is asked to stop, then stopped forcibly after 3 seconds. Each reached session lands `stopped`, never failed, once its running work has shut down, and its parent sees a stop notice.
          */
-        DelegateCancelAction: {
+        DelegateStopAllAction: {
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
              */
-            action: "cancel";
+            action: "stop_all";
             /**
-             * @description The child session to cancel.
+             * @description The child session whose whole subtree stops.
              * @example 550e8400-e29b-41d4-a716-446655440000
              */
             session_id: string;
-            /**
-             * @description False (default) — cooperative soft cancel with grace. True — immediate hard cancel, bypassing the grace window.
-             * @example false
-             */
-            hard?: boolean;
         };
         /**
-         * DelegateFollowUpAction
-         * @description `delegate` tool call, `action: follow_up` (ADR-053 §5.1). Native: warm resume of the SAME session with retained context. 3P: cold — spawns a new session carrying the prior result. A terminal record is never mutated in place; this always mints a new `generation` via `resumed_from` (immutable-terminal invariant, L-3/MAJ-1/N-7).
+         * DelegateClearGoalAction
+         * @description `delegate` tool call, `action: clear_goal`. Clears the selected helper's goal without cascading to its descendants.
          */
-        DelegateFollowUpAction: {
+        DelegateClearGoalAction: {
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
              */
-            action: "follow_up";
+            action: "clear_goal";
             /**
-             * @description The (terminal) child session to follow up on.
+             * @description The child session whose goal to clear.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            session_id: string;
+        };
+        /**
+         * DelegateResumeAction
+         * @description `delegate` tool call, `action: resume` (ADR-20261004, locked decision 4 — renamed from `follow_up` with no alias path). Continues a stopped helper on the same conversation and the same generation, or starts the next round when the helper is done or failed. Native: warm resume of the SAME session; a terminal continuation mints a new `generation` via `resumed_from` (immutable-terminal invariant, L-3/MAJ-1/N-7). 3P: cold — spawns a new session carrying the prior result (external CLIs have no warm-resume primitive).
+         */
+        DelegateResumeAction: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            action: "resume";
+            /**
+             * @description The stopped or finished child session to resume.
              * @example 550e8400-e29b-41d4-a716-446655440000
              */
             session_id: string;
             /**
-             * @description Optional additional instructions for the resumed/new session.
+             * @description Optional additional instructions for the resumed/next round.
              * @example Also cross-check the anomalies against last month's baseline.
              */
-            task?: string;
+            text?: string;
+        };
+        /**
+         * DelegateRedirectAction
+         * @description `delegate` tool call, `action: redirect` (ADR-20260928 D2, retained by ADR-20260929 ruling 8; ADR-20261004 locked decision 3). Replaces the helper's current turn with the new instruction: the running turn is stopped (single session — never a cascade; descendants keep going) and the replacement turn runs with `text`. On an already-stopped helper it resumes it with the instruction; on a done/failed helper it starts nothing — use `resume`.
+         */
+        DelegateRedirectAction: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            action: "redirect";
+            /**
+             * @description The child session whose current turn is replaced.
+             * @example 550e8400-e29b-41d4-a716-446655440000
+             */
+            session_id: string;
+            /**
+             * @description The replacement instruction the new turn runs with.
+             * @example Stop refactoring — ship the current state and report back.
+             */
+            text: string;
         };
         /**
          * DelegatePeekAction
@@ -15735,11 +18457,11 @@ export interface components {
         };
         /**
          * DelegateSessionResponse
-         * @description Response shape shared by `delegate` actions that spawn or resume a child session — `run`, `follow_up` (native warm resume or 3P cold respawn), and a 3P `respond` (which spawns a new corrective session, D5). Reused rather than duplicated across those three actions (DoD-11).
+         * @description Response shape for a `delegate` action that publishes a child session (`run`). No action creates a replacement session for an existing child: resume and respond continue the same child (an external-CLI child continues the same CLI conversation or the action is refused).
          */
         DelegateSessionResponse: {
             /**
-             * @description The child session id. For a native `follow_up`, equals the input `session_id` (warm resume, same session, new generation). For a 3P `follow_up`/`respond`, a NEW session id (cold respawn, D5).
+             * @description The id of the newly published child session.
              * @example 550e8400-e29b-41d4-a716-446655440000
              */
             session_id: string;
@@ -15759,7 +18481,7 @@ export interface components {
              */
             resumed_from?: string | null;
             /**
-             * @description True when this session dispatches via an external CLI runner.
+             * @description True when this session dispatches via an external CLI runner. Taken from the classification persisted at launch, not re-read from a mutable registry.
              * @example false
              */
             is_3p: boolean;
@@ -15768,7 +18490,7 @@ export interface components {
              * @example queued
              * @enum {string}
              */
-            state: "queued" | "running" | "needs_input" | "paused" | "completed" | "failed" | "cancelled" | "timed_out";
+            state: "queued" | "running" | "needs_input" | "stopped" | "completed" | "failed";
         };
         /**
          * DelegateStatusResponse
@@ -15822,10 +18544,40 @@ export interface components {
              * @example sm_01J3ZQK8N2H8VXNRP5T7C9M4WF
              */
             next_cursor?: string;
+            /** @description Present only when at least one report from this child was refused at an inbox cap and not saved (FR-013). Absent when nothing was ever refused. Counts only; refused content is never kept. */
+            not_delivered?: components["schemas"]["DelegateNotDeliveredSummary"];
+        };
+        /**
+         * DelegateNotDeliveredSummary
+         * @description Reports from this helper that were refused at an inbox cap and NOT saved (FR-013, #1211). Counts and the last refusal only; refused content is never kept.
+         */
+        DelegateNotDeliveredSummary: {
+            /**
+             * Format: int64
+             * @description Cumulative number of refused reports for this child session; never reset.
+             * @example 3
+             */
+            count: number;
+            /**
+             * @description Why the most recent report was refused.
+             * @example rate_limited
+             * @enum {string}
+             */
+            last_reason: "rate_limited" | "body_too_large" | "question_blocker_ceiling" | "unacked_cap";
+            /**
+             * @description SessionMessage kind of the last refused report.
+             * @example progress
+             */
+            last_kind: string;
+            /**
+             * Format: date-time
+             * @description When the last refusal happened.
+             */
+            last_at: string;
         };
         /**
          * DelegateRespondResponse
-         * @description Response to `delegate` `action: respond` (ADR-053 §5.1). Native: acknowledgement only (the answer routes into the child's warm-resumed turn). 3P: a new corrective session was spawned (D5) — see `corrective_session` for its identity.
+         * @description Response to `delegate` `action: respond` (ADR-053 §5.1): acknowledgement only. A native answer routes into the child's turn; an external-CLI answer reaches the same CLI conversation by interrupt and resume, or is refused. No session is created or replaced by a respond.
          */
         DelegateRespondResponse: {
             /**
@@ -15833,7 +18585,6 @@ export interface components {
              * @example true
              */
             acknowledged: boolean;
-            corrective_session?: components["schemas"]["DelegateSessionResponse"];
         };
         /**
          * DelegatePeekResponse
@@ -15843,10 +18594,11 @@ export interface components {
             /** @example 550e8400-e29b-41d4-a716-446655440000 */
             session_id: string;
             /**
+             * @description `interrupted` is a helper session a gateway restart cut off (a lifecycle `failed` record whose failed_reason is `interrupted`; founder rule 2026-10-06: a session does not fail because of a restart). `failed` is a genuine failure only.
              * @example running
              * @enum {string}
              */
-            state: "queued" | "running" | "needs_input" | "paused" | "completed" | "failed" | "cancelled" | "timed_out";
+            state: "queued" | "running" | "needs_input" | "stopped" | "completed" | "failed" | "interrupted";
             /**
              * @description The most recent checkpoint summary, if any.
              * @example Wrote the write-set-scoped diff extractor; tests pending.
@@ -15863,7 +18615,7 @@ export interface components {
              */
             latest_progress_pct?: number;
         };
-        /** @description The first-class child-side `message_parent` tool's argument shape, discriminated by `kind` (ADR-053 §5.1). A child uses this exactly ONE tool to push a typed message into its parent's inbox — `progress | checkpoint | artifact | blocker | question | handback`. `decision_request`/`error`/`revision_entry`/ `goal_status`/`steer`/`respond` are SessionMessage kinds the child tool does NOT expose (decision_request is reserved for future use; the other four are engine/parent-only or session- internal). */
+        /** @description The first-class child-side `message_parent` tool's argument shape, discriminated by `kind` (ADR-053 §5.1). A child uses this exactly ONE tool to push a typed message into its parent's inbox — `progress | checkpoint | artifact | blocker | question | handback`. `error`/`revision_entry`/`goal_status`/`steer`/ `respond` are SessionMessage kinds the child tool does NOT expose (they are engine/parent-only or session-internal). */
         MessageParentRequest: components["schemas"]["MessageParentProgress"] | components["schemas"]["MessageParentCheckpoint"] | components["schemas"]["MessageParentArtifact"] | components["schemas"]["MessageParentBlocker"] | components["schemas"]["MessageParentQuestion"] | components["schemas"]["MessageParentHandback"];
         /**
          * MessageParentProgress
@@ -15979,7 +18731,7 @@ export interface components {
         };
         /**
          * MessageParentQuestion
-         * @description `message_parent` child tool call, `kind: question` (ADR-053 §5.1, R§8.2). `wait: true` parks the CALLING child in `needs_input` (native only — a 3P child never calls this kind, D5). `authority` is child-authored and NEVER trusted at face value — the runtime's `deriveQuestionAuthority(q)` re-derives the effective authority server-side (fail-closed default `owner_required` on omission; a child can only be UPGRADED to `owner_required`, never downgraded). Counts toward the per-child unacked ceiling (D15, max 20 open question+blocker) — payload-only, see `MessageParentProgress` for the request/record split rationale.
+         * @description `message_parent` child tool call, `kind: question` (ADR-053 §5.1). An ordinary upward message: ADR-20261004 ("Steering commands: no person question", locked decision 6) removed the person-question pause — there is no `wait`/`authority`, the calling child is never parked, and no answer expiry exists. Counts toward the per-child unacked ceiling (D15, max 20 open question+blocker) — payload-only, see `MessageParentProgress` for the request/record split rationale.
          */
         MessageParentQuestion: {
             /**
@@ -15997,17 +18749,6 @@ export interface components {
              * @example Should I overwrite the existing config.json backup?
              */
             text: string;
-            /**
-             * @description True parks the calling child in `needs_input` awaiting a `respond`.
-             * @example true
-             */
-            wait: boolean;
-            /**
-             * @description Child-authored authority tag. Untrusted (M3) — see `SessionMessageQuestion.authority` for the identical fail-closed derivation rule.
-             * @example self_ok
-             * @enum {string}
-             */
-            authority?: "self_ok" | "owner_required";
             /**
              * @description Optional child-supplied correlation id (server-generated when absent) that a subsequent `respond` will reference.
              * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
@@ -16082,10 +18823,314 @@ export interface components {
             error?: string;
         };
         /**
+         * SecretSubmitRequest
+         * @description Body of POST /api/v1/secret-requests/{id}/submit (spec omnipus-system-agent K5; FR-062, FR-063). Exactly one of `values` or `cancel: true`. The only place secret values ever travel. Semantic rules enforced by the handler with inbound validation on AND off (§7.2): the keys of `values` must equal the request's field keys; each value is 4–16,384 bytes of UTF-8 without NUL; the whole body is at most 65,536 bytes (413). The schema's character limits are deliberately no stricter than those byte rules. Errors never echo a value.
+         */
+        SecretSubmitRequest: {
+            /** @description Field key → typed value. Keys are the card's field keys (`^[a-z][a-z0-9_]{0,31}$`); the handler refuses any other key. */
+            values?: {
+                [key: string]: string;
+            };
+            /**
+             * @description The person cancelled the card; nothing is stored.
+             * @enum {boolean}
+             */
+            cancel?: true;
+        } & (unknown | unknown);
+        /**
+         * SecretRequestState
+         * @description Value-free state of one secret request (spec omnipus-system-agent K5; FR-079). Returned by GET /api/v1/secret-requests/{id}, by a successful submit, and as the body of a 409 (request not pending) so the client learns the true current state. Also returned with HTTP 503 when the submission is committed but post-commit metadata or continuation dispatch is not confirmed; state is submitted and reference_names are the committed names. Boot or chat attach retries an undelivered continuation. A repeated submit returns 409 with that same submitted state, never another write. Absence is never read as success.
+         */
+        SecretRequestState: {
+            request_id: string;
+            /** @enum {string} */
+            state: "pending" | "submitted" | "cancelled" | "stopped" | "interrupted" | "refused";
+            /** @description Reference names the values were stored under. Present only when state is `submitted`. */
+            reference_names?: string[];
+            /** Format: date-time */
+            updated_at: string;
+        };
+        /**
+         * SecretNameEntry
+         * @description One stored secret version as listed by GET /api/v1/secrets (spec omnipus-system-agent K6; FR-073, FR-086, FR-241). Names and metadata only — never a value.
+         */
+        SecretNameEntry: {
+            /** @description Reference name of this version. */
+            reference: string;
+            /**
+             * @description Recorded recipient kind. `unbound` is a stored value with no recipient recorded (stored via Settings or boot configuration); it never carries `owner` or `available_in_channel_turns`, its version is 1, and where it is used is stated only by `consumers`. Not the retired unbound-channel routing mode.
+             * @enum {string}
+             */
+            kind: "provider_key" | "mcp_env" | "channel_credential" | "mailbox_password" | "agent_private" | "unbound";
+            /** Format: int64 */
+            version: number;
+            recipient: components["schemas"]["SecretRecipientDisplay"];
+            /** @description The owning (workspace, agent) pair — agent_private kind only. */
+            owner?: components["schemas"]["AgentAddress"];
+            /** @description What uses this version (display labels). Never null. */
+            consumers: string[];
+            /** @enum {string} */
+            state: "stored" | "selected" | "superseded";
+            /** @description agent_private kind only (FR-241): whether the variable is injected into turns triggered by a channel person. Default false. */
+            available_in_channel_turns?: boolean;
+        };
+        /**
+         * SecretOptionsUpdateRequest
+         * @description Body of PATCH /api/v1/secrets/{reference}/options (spec omnipus-system-agent K49; FR-241). Private kind only; authenticated web user only; audited.
+         */
+        SecretOptionsUpdateRequest: {
+            /** @description Inject this private variable into channel-triggered turns. */
+            available_in_channel_turns: boolean;
+        };
+        /**
+         * Room
+         * @description A group chat (spec omnipus-system-agent K23, K35 folded in; FR-158, FR-171, FR-199, FR-217). Rooms are not Sessions: ordinary sessions keep their required agent_id. Members work in their own main sessions (GC-8). Served by GET /api/v1/workspaces/{id}/rooms and GET /api/v1/rooms/{id}. invitation_context_status is present on every room the server returns (#1449 FR-041): only an ad-hoc group started with Add participant from a main chat ever has a summary, every other group reports unavailable. invitation_context (with the text) is returned by GET /api/v1/rooms/{id} only.
+         */
+        Room: {
+            id: string;
+            workspace_id: string;
+            /** @enum {string} */
+            kind: "team" | "squad" | "adhoc";
+            name: string;
+            /** @description Member agent ids. Never null. */
+            members: string[];
+            /** @description Muted member agent ids (all room kinds). Never null. */
+            muted: string[];
+            paused: boolean;
+            /**
+             * Format: int64
+             * @description Durable pause generation; /pause increments it (§6.11).
+             */
+            generation: number;
+            /** @description The main chat the room was started from, when any. */
+            origin_session_id?: string;
+            /** @description Present when the room is read-only, with the reason. */
+            read_only_reason?: string;
+            /** @description Team room below two conversation agents: hidden, history kept. */
+            hidden: boolean;
+            /**
+             * Format: int64
+             * @description Allocated cost in micro-dollars (§6.14).
+             */
+            allocated_cost_micro_usd: number;
+            /** @description True when at least one counted turn had an unknown price ("plus unpriced turns"). */
+            allocated_cost_unpriced: boolean;
+            /** @description Derived: true while any member state is awaiting_approval or waiting_on_user. */
+            needs_attention: boolean;
+            invitation_context_status?: components["schemas"]["RoomInvitationStatus"];
+            invitation_context?: components["schemas"]["RoomInvitationContext"];
+        };
+        /**
+         * RoomInvitationContext
+         * @description The invitation context of an ad-hoc group started with Add participant from an agent's main chat (#1449 D10, D18, D20; FR-039 to FR-046). A short background summary written with the starting agent's model and sent once, as quoted background, with each other member's first request. It is never posted into the group or any chat. The text is returned only by GET /api/v1/rooms/{id} (getRoom); lists and live frames carry the status only. Best-effort filters remove registered secret values and known credential shapes; a password written in plain prose may not be caught (D18, #1467).
+         */
+        RoomInvitationContext: {
+            status: components["schemas"]["RoomInvitationStatus"];
+            /** @description The summary text. Present only when status is ready. */
+            text?: string;
+            /** @description The starting agent, whose model wrote the summary. */
+            author_agent_id: string;
+            /**
+             * Format: date-time
+             * @description When the summary became ready.
+             */
+            generated_at?: string;
+            /**
+             * Format: int64
+             * @description Cost of the summary call in micro-dollars, counted once into the group's cost. Absent when no call ran.
+             */
+            cost_micro_usd?: number;
+            /** @description True when the summary call ran but reported no price. */
+            cost_unpriced?: boolean;
+        };
+        /**
+         * RoomInvitationStatus
+         * @description State of the invitation summary of a group (#1449 D10, D20, FR-041): generating while it is being written; ready when it is stored; unavailable when it could not be produced (provider error, quota, the 45-second limit, a restart while generating, the group deleted or the starting agent removed, or nothing to summarise).
+         * @enum {string}
+         */
+        RoomInvitationStatus: "generating" | "ready" | "unavailable";
+        /**
+         * RoomCreateRequest
+         * @description Body of POST /api/v1/workspaces/{id}/rooms (spec omnipus-system-agent K24; FR-161, FR-172). Creates a squad or an ad-hoc room; the team room is never created through this route. Semantic rules enforced by the handler with inbound validation on and off: a squad needs a name; at least two distinct agents, all members of the workspace.
+         */
+        RoomCreateRequest: {
+            /** @enum {string} */
+            kind: "squad" | "adhoc";
+            /** @description Required for a squad. */
+            name?: string;
+            agent_ids: string[];
+            /** @description The main chat the room is started from, when any. */
+            origin_session_id?: string;
+        };
+        /**
+         * RoomMembersUpdateRequest
+         * @description Body of PATCH /api/v1/rooms/{id}/members (spec omnipus-system-agent K24; FR-204, FR-207). The team room accepts only mute and unmute; removing a member below two agents follows the two-agent rule (FR-204).
+         */
+        RoomMembersUpdateRequest: {
+            /** @enum {string} */
+            action: "add" | "remove" | "mute" | "unmute";
+            agent_ids: string[];
+        };
+        /**
+         * RoomMessageRequest
+         * @description Body of POST /api/v1/rooms/{id}/messages (spec omnipus-system-agent K26; FR-166, §6.13). `mentions` come from the picker and are authoritative; typed text resolves only by §6.13's exact-name rule. The recorded entry arrives over the WebSocket as room_entry, carrying the same client_message_id.
+         */
+        RoomMessageRequest: {
+            client_message_id: string;
+            /** @description The message text: at most 65,536 UTF-8 bytes (counted in bytes, not characters); an operator can lower this limit with session_messaging.steer_body, never raise it (#1449 D24, D27). The server enforces the limit in force in UTF-8 bytes before any schema check, with inbound validation on and off, and answers 422 naming the size and the limit; maxLength states the same 65,536 maximum (a byte count is never less than the character count, so the server check always answers first). Text may be empty only when media is not empty: a message with neither non-blank text nor media is refused with 422. */
+            text: string;
+            /** @description Files attached to the message (#1449 D3, FR-018): each a media://workspace/<this room's workspace id>/<id> reference returned by POST /upload with workspace_id. Every reference is resolved before anything is recorded; a reference that is not a file of this room's workspace, is missing or is stranded refuses the whole message with 422 and nothing is posted. More than 16 is a 400. The same reference listed twice is kept as listed. Attachments never count toward the text size limit. */
+            media?: string[];
+            /** @description Agent ids picked in the @-picker, or the reserved value `all`. */
+            mentions: string[];
+        };
+        /**
+         * RoomHistoryResponse
+         * @description One backward page of the complete retained room transcript (#1332). Select the newest entries eligible for the exclusive before_seq cursor and applied limit, then return them in strictly ascending entry seq order. An omitted cursor includes the newest entry. This page does not change the live room stream position or the forward attach subscription.
+         *     has_older is true exactly when another actual eligible entry precedes this page, not merely when the page is full or sequence numbers have gaps. next_before_seq is present if and only if has_older is true and equals the first returned entry's seq. Otherwise omit it, never send null or zero. An empty page is entries: [] with has_older: false and no next_before_seq. These conditional continuation rules are producer/consumer invariants; structural schema validation alone does not prove them.
+         */
+        RoomHistoryResponse: {
+            /** @description The newest eligible entries, returned oldest to newest in strictly ascending seq order, with at most the applied limit. Always present and non-null, including an empty array at the beginning of history. Every entry belongs to the requested room and includes its existing delivery projection. */
+            entries: components["schemas"]["RoomEntry"][];
+            /** @description True exactly when another actual eligible entry precedes the first returned entry. False for an empty page or when the beginning of history has been reached, even if the page is full. */
+            has_older: boolean;
+            /**
+             * Format: int64
+             * @description Present if and only if has_older is true; exactly the first returned entry's seq, to use as the next exclusive before_seq cursor. Omitted when has_older is false; never null or zero.
+             */
+            next_before_seq?: number;
+        };
+        /**
+         * AgentDependency
+         * @description One thing that depends on an agent in one workspace (spec omnipus-system-agent K50, §6.19; FR-243). Landing 1 kinds: a channel connection whose main agent it is, a mailbox, a private secret, a room; `people_row` is filled from landing 2 (WU-14).
+         */
+        AgentDependency: {
+            workspace_id: string;
+            /** @enum {string} */
+            kind: "channel_main_agent" | "people_row" | "mailbox" | "private_secret" | "room";
+            /** @description Id of the dependent item (connection id, mailbox id, reference name, room id). */
+            id: string;
+            /** @description Display label. */
+            label: string;
+        };
+        /**
+         * AgentDependencyList
+         * @description Everything that depends on an agent (spec omnipus-system-agent K50, §6.19; FR-243, FR-244). Returned by GET /api/v1/agents/{id}/dependencies, and as the 409 body when a delete is refused because the list is non-empty and `delete_everything` was not true.
+         */
+        AgentDependencyList: {
+            agent_id: string;
+            /** @description Never null; empty when nothing depends on the agent. */
+            dependencies: components["schemas"]["AgentDependency"][];
+        };
+        /**
+         * StopNote
+         * @description The durable, LASTING record of who stopped a session, when, and why (sub-agent control plane ADR D2/D6; `pkg/session/lifecycle_edge.go::StopNote`). Distinct from the in-flight dispatch fence (`LifecycleRecord.stop` / `SessionLifecycleRecord.yaml::stop`), which is cleared the instant the stop it names is carried out — this note is RETAINED on the landed `stopped` record so a direct parent's stopped-child notice, and any later observer, can read who/why/when. Exposed on `Session.yaml::stop_note` only when the session's authoritative lifecycle record has landed `stopped` for its current generation; absent otherwise.
+         */
+        StopNote: {
+            /**
+             * Format: date-time
+             * @description RFC3339 timestamp when this stop note was written.
+             * @example 2026-07-22T10:05:00Z
+             */
+            at: string;
+            /**
+             * @description Who or what initiated the stop, formatted "human:<id>" / "agent:<id>", "system" for a cause with no human/agent principal behind it (a goal-loop attempt supersession, or a historical lifetime-budget timeout), or the literal "restart" for a boot-recovery restart (sub-agent control plane ADR D8.3) — see `pkg/session/lifecycle_edge.go::StopActorFromPrincipal` / `::StopActorSystem` / `::StopActorRestart`.
+             * @example human:user-123
+             */
+            by: string;
+            /**
+             * Format: int64
+             * @description Stamped from the record's own generation at the moment of write — a documented stand-in until the per-session control ledger (sub-agent control plane ADR D4, "Controls") exists and can supply a true per-control monotonic sequence (`pkg/session/lifecycle_edge.go::StopNote` doc comment).
+             * @example 1
+             */
+            seq: number;
+            /**
+             * @description The closed vocabulary naming WHY the session last landed `stopped` (`pkg/session/lifecycle_edge.go::StopCause`). `timeout` is historical: it is only read from records written before delegated work lost its time limit (issue #1306) and is never written any more.
+             * @example stop
+             * @enum {string}
+             */
+            cause: "stop" | "redirect_pause" | "cascade" | "restart" | "timeout";
+            /**
+             * Format: int64
+             * @description Boot epoch of the writer — the monotonic boot counter, persisted in the data dir, of the boot that wrote this note. Present only for physical boot-restart notes — those whose `by` is the literal "restart" (sub-agent control plane ADR D8.3); absent otherwise. A non-boot goal-loop supersession is written by:"system" and carries no boot_seq.
+             * @example 1
+             */
+            boot_seq?: number;
+        };
+        /**
+         * SessionHistoryState
+         * @description Server history readiness, not proof that this client loaded a page (chat history paging D7a/D10). status=available omits reason and message. status=unavailable requires both reason and a fixed sanitized message. Producers and consumers must reject any other combination. No preparing state or successful empty-history fallback. Current authorized live controls and canonical sends remain independent.
+         */
+        SessionHistoryState: {
+            /** @enum {string} */
+            status: "available" | "unavailable";
+            /**
+             * @description Present only for unavailable history, after the bounded recovery attempt.
+             * @enum {string}
+             */
+            reason?: "index_missing" | "index_inconsistent" | "catchup_limit" | "storage_error" | "projection_error";
+            /** @description Required only when unavailable. Fixed sanitized copy, never an underlying cause, path, raw position or query. For index_missing/index_inconsistent/catchup_limit: "This conversation's history could not be loaded." Other required storage/projection failures retain the fixed redacted session-storage error behavior in D11. Not a turn-ending ErrorFrame. */
+            message?: string;
+        };
+        /**
+         * HistoryResultPreview
+         * @description Read-time display marker for a saved tool result whose JSON encoding exceeds 51,200 bytes (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)", A2.1/A2.2). Emitted only by the session-history readers (REST messages page, bounded session detail and the history-origin replay page of a snapshot) in place of the result value; the saved archive, the model context and the live tool frames are unchanged.
+         *     Distinct from ToolResultRef (`_ref`, live offload store fetched through /sessions/{session_id}/tool-results/{ref}), TruncatedResult (`_truncated`, not retrievable) and the browser-only `_truncated_client`. The full value is addressed by the enclosing entry's history_position plus ToolCall.id / ToolCallResultFrame.call_id and is read through getSessionHistoryEntry (GET /sessions/{id}/messages/{history_position}).
+         *     `_history_preview` is a reserved key: an object carrying it must match this schema, and an ordinary tool result never carries it. Byte rule, enforced at the real server and browser boundaries rather than by this schema: the UTF-8 length of `preview` is at most 4,096 bytes. `maxLength` below is only the character-count upper bound JSON Schema can express.
+         */
+        HistoryResultPreview: {
+            /**
+             * @description Discriminator distinguishing this marker from ToolResultRef and TruncatedResult.
+             * @enum {boolean}
+             */
+            _history_preview: true;
+            /** @description Exact JSON-encoded size in bytes of the full (unshortened) result. */
+            original_size_bytes: number;
+            /** @description The first at most 4,096 bytes of the full result's JSON encoding, cut back to a UTF-8 character boundary. maxLength is a character-count bound only; the 4,096-byte rule is checked separately at the server and browser boundaries. */
+            preview: string;
+        };
+        /**
+         * AgentAddress
+         * @description A {workspace_id, agent_id} pair addressing one agent within one workspace (session-core C-ADDRESS, FR-045). The server resolves the pair to that agent's computed, eligible main session; a client never builds a main session id. Both parts are required and bounded at the existing 128 characters.
+         */
+        AgentAddress: {
+            /** @description Workspace of the addressed agent. */
+            workspace_id: string;
+            /** @description The addressed (recipient) agent. Never the author. */
+            agent_id: string;
+        };
+        /**
+         * ChatParticipant
+         * @description A server-made display record of one participant in a chat (session-core F15): who wrote a user-role entry (Message.participant) or who a reply went to (Message.reply_to_participant). It is a display label, not identity and not authorization: it carries no principal, platform or canonical id, no instance, chat, thread or message id, and no route. Assistant authorship stays agent_id. Stamped only by the server, from the authenticated connection or the server-held request capture — never from model or tool input.
+         *     Field rule (one flat schema; the server enforces it, the wire type does not): `source` and `agent` are mutually exclusive and keyed on `kind`. kind=human carries `source` and never `agent`; kind=agent carries `agent` and never `source`. A sender that names an agent is always kind=agent, even if it also carries a platform or principal. Readers must treat any other combination as invalid and ignore the unexpected field. `agent` (an AgentAddress) is present iff kind=agent.
+         */
+        ChatParticipant: {
+            /** @enum {string} */
+            kind: "human" | "agent";
+            /** @description Plain text. The server strips control characters before stamping. */
+            display_name: string;
+            /** @description Present iff kind=human; absent when kind=agent. "web" for the web UI, otherwise the connector's platform (telegram, slack, google-chat, ...). Never an instance id. */
+            source?: string;
+            agent?: components["schemas"]["AgentAddress"];
+        };
+        /**
+         * HistoryEntryOrigin
+         * @description Local ownership of an entry-derived historical replay frame (chat history paging D2/D4). Required by the producer for every frame derived from a selected persisted entry; optional on general frame schemas because live, unsequenced non-history and session-only rehydration copies can have no persisted source. Not a transport cursor, authorization grant or reversible archive address. No frame ordinals or manifest.
+         */
+        HistoryEntryOrigin: {
+            /** @description Same-session occurrence fingerprint; canonical unpadded base64url SHA-256. */
+            position: string;
+            /** @description Original recorded entry ID when nonempty and valid; otherwise omitted. */
+            entry_id?: string;
+            /** @description Original recorded turn ID of the persisted source record (its own TranscriptEntry.TurnID) when nonempty; omitted when that record has no recorded turn, which means unknown. Never filled from the active turn, session state, a neighbouring record or any inference (chat-history paging spec, D1 S11d). */
+            turn_id?: string;
+        };
+        /**
          * SubagentStartFrame
          * @description Server → client (FR-H-004). Opening bracket of a subagent span. Emitted when the agent loop spawns a sub-turn. The SPA uses span_id to group subsequent nested tool_call_start / tool_call_result frames under a collapsible span UI.
          */
         SubagentStartFrame: {
+            history_origin?: components["schemas"]["HistoryEntryOrigin"];
             /** @enum {string} */
             type: "subagent_start";
             /** @description Session in which this sub-turn is running. */
@@ -16105,15 +19150,86 @@ export interface components {
             child_session_id?: string;
             /**
              * Format: int64
-             * @description Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+             * @description Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — this seq is dedup state, never itself the resume cursor: the client's cursor is committed only by a completed catch-up (catch_up_complete) and is sent back as since_seq on attach_session (2026-10-26, architect ruling arch-q33 — an earlier sentence here described per-frame cursor advance, which was stale). Frames at or below that cursor are ignored, which makes re-delivery idempotent.
              */
             seq?: number;
         };
         /**
+         * ControlReceipt
+         * @description Sub-agent control plane ADR D4/MIN-001/MIN-003. The receipt for one accepted control on a steered session (`steer`, `stop`, `stop_all`, `redirect`, `resume`, `respond`, `clear_goal`). ADR-20261004 ("Steering commands: no person question") withdrew the `escalate` relay verb with the person-question pause. Replaces `SubagentStateFrame.yaml`'s former `steering_receipt` shape (`{correlation_id, applied_at}`, issue #870) with the full control-ledger receipt shape the ADR specifies.
+         *     Train-3 scope note: only the `steer` verb is wired to this shape today, via `pkg/agent/steer_frames.go::deliverSubagentState`. The per-session control ledger that assigns a true monotonic `seq` and tracks a control's own `accepted_at` moment (ADR D4, "Controls") is NOT built in this PR — `seq` and `accepted_at` are stamped as documented stand-ins (the same pattern `pkg/session/lifecycle_edge.go::StopNote.Seq` already uses: the record's own generation substituting for a ledger sequence until the ledger exists). `control_id` reuses the existing correlation id. `verb` and `state` are constants for this call site (`"steer"` / `"delivered"`) until other verbs are wired. Every other field below belongs to the ADR's full future shape and is never populated by this call site.
+         */
+        ControlReceipt: {
+            /**
+             * Format: int64
+             * @description Monotonic per-child control sequence (ADR D4). Stand-in value today — see the schema description above.
+             * @example 1
+             */
+            seq: number;
+            /**
+             * @description The accepted control's identifier — caller-supplied correlation id, or server-assigned when blank.
+             * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
+             */
+            control_id: string;
+            /**
+             * @description Which control this receipt reports on.
+             * @example steer
+             * @enum {string}
+             */
+            verb: "steer" | "stop" | "stop_all" | "redirect" | "resume" | "respond" | "clear_goal";
+            /**
+             * @description ADR D4's control-receipt state machine. `queued`: accepted, durable, not yet in front of the child. `delivered` (steer only): the instruction is durably present in the child's transcript at its next tool boundary — `steer`'s runtime-final receipt; never a claim of model compliance. `applied`: the runtime enforced the effect (stop, redirect, stop_all, respond, resume, clear_goal). `superseded`: replaced before delivery by a newer control, or made moot.
+             * @example delivered
+             * @enum {string}
+             */
+            state: "queued" | "delivered" | "applied" | "superseded";
+            /**
+             * Format: date-time
+             * @description When the control was accepted into the ledger. Stand-in value today (same moment as `delivered_at`/`applied_at` at this call site, since no separate acceptance moment is tracked ahead of the ledger) — see the schema description above.
+             * @example 2026-07-22T10:00:30Z
+             */
+            accepted_at: string;
+            /**
+             * Format: date-time
+             * @description When a `steer` reached `delivered` (durable transcript injection).
+             * @example 2026-07-22T10:00:30Z
+             */
+            delivered_at?: string;
+            /**
+             * Format: date-time
+             * @description When a non-steer control reached `applied` (runtime-enforced effect).
+             * @example 2026-07-22T10:00:30Z
+             */
+            applied_at?: string;
+            /**
+             * Format: date-time
+             * @description When this control was superseded.
+             * @example 2026-07-22T10:00:30Z
+             */
+            superseded_at?: string;
+            /**
+             * Format: int64
+             * @description The superseding control's own `seq`, when `state == superseded`.
+             * @example 2
+             */
+            superseded_by_seq?: number;
+            /**
+             * @description Free-text reason, set for a `superseded` state or a notable transition.
+             * @example superseded by a newer redirect
+             */
+            reason?: string;
+            /**
+             * @description Control ids released together with this receipt (e.g. a RESUME that releases preserved restart-pending controls in sequence, ADR D4 boot reconciliation).
+             * @example []
+             */
+            released_control_ids?: string[];
+        };
+        /**
          * SubagentStateFrame
-         * @description Server -> client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A mid-span live lifecycle ping riding between the existing `subagent_start`/`subagent_end` brackets — a flat projection of the child's `SessionLifecycleRecord.state` (see `SubagentMessageFrame` for the same flat-projection-over-full-record shape decision and its rationale) plus an optional steering-receipt acknowledgement.
+         * @description Server -> client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A mid-span live lifecycle ping riding between the existing `subagent_start`/`subagent_end` brackets — a flat projection of the child's `SessionLifecycleRecord.state` (see `SubagentMessageFrame` for the same flat-projection-over-full-record shape decision and its rationale) plus an optional control-receipt acknowledgement (sub-agent control plane ADR D4/MIN-003; `control_receipt` replaces the former `steering_receipt`, see `ControlReceipt.yaml`). A dev install replaying an old persisted frame that still carries `steering_receipt` drops that unknown field rather than failing validation (ADR OBS-003) — the field is gone from this schema and Go's default lenient JSON decode on the replay path (`pkg/gateway/replay.go`) already does not reject it.
          */
         SubagentStateFrame: {
+            history_origin?: components["schemas"]["HistoryEntryOrigin"];
             /** @enum {string} */
             type: "subagent_state";
             /** @description Session in which the parent's span is running. */
@@ -16130,20 +19246,9 @@ export interface components {
              * @example running
              * @enum {string}
              */
-            state: "queued" | "running" | "needs_input" | "paused" | "completed" | "failed" | "cancelled" | "timed_out";
-            /** @description Present when this state ping is reporting that a prior `steer`/`respond` was applied at the child's next tool boundary (INV-3). */
-            steering_receipt?: {
-                /**
-                 * @description The `correlation_id` of the applied steer/respond, when one was supplied; otherwise a server-assigned reference.
-                 * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
-                 */
-                correlation_id: string;
-                /**
-                 * Format: date-time
-                 * @example 2026-07-22T10:00:30Z
-                 */
-                applied_at: string;
-            };
+            state: "queued" | "running" | "needs_input" | "stopped" | "completed" | "failed";
+            /** @description Present when this state ping is reporting that a prior control (`steer`/`respond`/...) reached a receipt-worthy state (INV-3). */
+            control_receipt?: components["schemas"]["ControlReceipt"];
             /**
              * Format: date-time
              * @description RFC3339 timestamp this state ping was emitted.
@@ -16152,7 +19257,7 @@ export interface components {
             created_at: string;
             /**
              * Format: int64
-             * @description Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a replayed transcript entry) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+             * @description Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a replayed transcript entry) — this seq is dedup state, never itself the resume cursor: the client's cursor is committed only by a completed catch-up (catch_up_complete) and is sent back as since_seq on attach_session (2026-10-26, architect ruling arch-q33 — an earlier sentence here described per-frame cursor advance, which was stale). Frames at or below that cursor are ignored, which makes re-delivery idempotent.
              */
             seq?: number;
         };
@@ -16162,6 +19267,7 @@ export interface components {
          *     SHAPE DECISION (flagged for review): this is a FLAT, UI-facing PROJECTION of the underlying `SessionMessage` — it does not embed the full 12-variant `SessionMessage` discriminated union. Reasons: (1) the full union is hosted INLINE in `openapi.yaml` per ADR-034 specifically because oapi-codegen needs internal component refs inside a `oneOf` — embedding it inside an asyncapi frame would require a second, hand-duplicated copy of all 12 variants inside `asyncapi.yaml` (which does not resolve cross-file `$ref` for its own codegen, per the existing `GoalStatusFrame.yaml` note), multiplying maintenance burden for a live UI ping that only ever needs a handful of display fields; (2) this mirrors the established precedent of `GoalStatusFrame` itself being a flat projection of goal state rather than embedding a full Goal record. Full-fidelity SessionMessage data (every typed field, for every kind) is available via `delegate.inbox`/`delegate.peek` (`DelegateInboxResponse`/`DelegatePeekResponse`) — this frame is a live nudge, not the source of truth.
          */
         SubagentMessageFrame: {
+            history_origin?: components["schemas"]["HistoryEntryOrigin"];
             /** @enum {string} */
             type: "subagent_message";
             /** @description Session in which the parent's span is running. */
@@ -16179,11 +19285,11 @@ export interface components {
              */
             message_id: string;
             /**
-             * @description The underlying SessionMessage kind. `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
+             * @description The underlying SessionMessage kind, or `not_delivered` (FR-013): a server-authored line saying a child's report was refused at an inbox cap and not saved (`untrusted_origin` is false; `text` never carries the refused body). `revision_entry` is excluded — it rides its own existing plan-scoped frame family, not the span-scoped mid-span channel. `goal_status` (ADR-091 I-5) rides this span-scoped frame for child-to-parent verdicts.
              * @example progress
              * @enum {string}
              */
-            kind: "progress" | "checkpoint" | "artifact" | "blocker" | "question" | "decision_request" | "error" | "handback" | "steer" | "respond" | "goal_status";
+            kind: "progress" | "checkpoint" | "artifact" | "blocker" | "question" | "error" | "handback" | "steer" | "respond" | "goal_status" | "not_delivered";
             /**
              * @description Flattened display text (progress.text / checkpoint.summary / blocker.text / question.text / error.text / steer.text / respond.text), when the kind carries one.
              * @example Scanning pkg/plan for the write-set boundary...
@@ -16195,7 +19301,7 @@ export interface components {
              */
             pct?: number;
             /**
-             * @description Present for `question`/`decision_request`/`steer`/`respond` — lets the SPA thread a live reply.
+             * @description Present for `question`/`steer`/`respond` — lets the SPA thread a live reply.
              * @example corr_01J3ZQK8N2H8VXNRP5T7C9M4WL
              */
             correlation_id?: string;
@@ -16217,7 +19323,7 @@ export interface components {
             created_at: string;
             /**
              * Format: int64
-             * @description Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a replayed transcript entry) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+             * @description Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a replayed transcript entry) — this seq is dedup state, never itself the resume cursor: the client's cursor is committed only by a completed catch-up (catch_up_complete) and is sent back as since_seq on attach_session (2026-10-26, architect ruling arch-q33 — an earlier sentence here described per-frame cursor advance, which was stale). Frames at or below that cursor are ignored, which makes re-delivery idempotent.
              */
             seq?: number;
         };
@@ -16226,6 +19332,7 @@ export interface components {
          * @description Server → client (FR-H-004). Closing bracket of a subagent span. Emitted when the sub-turn finishes. The SPA transitions the span from "running" to a terminal status and records duration and optional result. NOTE: status MUST be validated — the SPA's generated Zod schema (src/lib/api/generated/schemas.ts, built from this enum) rejects any status string not in this set; such frames are dropped.
          */
         SubagentEndFrame: {
+            history_origin?: components["schemas"]["HistoryEntryOrigin"];
             /** @enum {string} */
             type: "subagent_end";
             /** @description Session in which this sub-turn ran. */
@@ -16254,9 +19361,142 @@ export interface components {
             message?: string;
             /**
              * Format: int64
-             * @description Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — the client only advances its per-session cursor for frames that carry seq. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent.
+             * @description Per-session sequence number of this frame (#823 catch-up redesign). Strictly increasing and gap-free within the session, assigned by the gateway's per-session hub as the single chokepoint through which every session-scoped frame is published. Optional: absent on an unsequenced copy of this frame (for example a broadcast delivered to a tab that is not bound to this session) — this seq is dedup state, never itself the resume cursor: the client's cursor is committed only by a completed catch-up (catch_up_complete) and is sent back as since_seq on attach_session (2026-10-26, architect ruling arch-q33 — an earlier sentence here described per-frame cursor advance, which was stale). Frames at or below that cursor are ignored, which makes re-delivery idempotent.
              */
             seq?: number;
+        };
+        /**
+         * RoomRef
+         * @description Reference from a main-session entry (or an approval) to the room (group chat) it belongs to (spec omnipus-system-agent K7, K33; FR-202, FR-215, FR-251). Display and navigation data only: it never grants access to the room. `role` says whether the entry is the room's request to this agent or this agent's answer into the room; a room pre-admission approval card (FR-251) carries role `request`. Mirrored inline in contracts/asyncapi.yaml (components.schemas.RoomRef) — keep both copies in sync by hand.
+         */
+        RoomRef: {
+            /** @description Id of the room. */
+            room_id: string;
+            /** @description Display name of the room at the time the entry was written. */
+            room_name: string;
+            /** @description The room delivery id, which is also the receiver's request id (spec §6.11, FR-216). */
+            request_id: string;
+            /**
+             * @description `request` — the room's request delivered to this agent; `answer` — this agent's answer appended to the room.
+             * @enum {string}
+             */
+            role: "request" | "answer";
+        };
+        /**
+         * EffortRecord
+         * @description Effort levels spec (effort-levels-spec-r10, FR-058). The per-turn effort record of the answering candidate: what was chosen, what the final request body actually carried, and why the two differ. One record per answering candidate, on the live done frame and on the answering transcript entry; both history transports project the stored record unchanged. A note is shown only when `sent` differs from `chosen`. Never carries reasoning text or signature material (FR-043).
+         */
+        EffortRecord: {
+            /**
+             * @description The resolved setting for the answering candidate, as stored (for example "high", "off", "on", "provider_default"). Absent when nothing was chosen.
+             * @example medium
+             */
+            chosen?: string;
+            /**
+             * @description The effort value actually present in the final serialised request body, after mapping, guards and extra_body. Absent when nothing was sent.
+             * @example low
+             */
+            sent?: string;
+            /**
+             * @description Why `sent` differs from `chosen`. Absent when the chosen value was sent as chosen.
+             * @example mapped
+             * @enum {string}
+             */
+            reason?: "mapped" | "not_supported" | "continuation" | "rejected" | "rejected_earlier" | "extra_body";
+            /**
+             * @description The answering candidate's provider id.
+             * @example openrouter
+             */
+            provider?: string;
+            /**
+             * @description The answering candidate's model id.
+             * @example deepseek/deepseek-v4.1-flash
+             */
+            model?: string;
+        };
+        /**
+         * SessionHistoryContext
+         * @description Bounded public dependencies of selected history groups (chat history paging D4/D10). Resolve only selected/current relevant spans and duplicate identities, never all session spans. Each optional lifecycle payload is the actual recorded generated public frame, not a fabricated start, running state or success. No competing cancellation/disposition value, private archive mark or copied content store.
+         */
+        SessionHistoryContext: {
+            /** @description Non-null array of relevant actual span facts; empty when none are needed. */
+            spans: {
+                span_id: string;
+                start?: components["schemas"]["SubagentStartFrame"];
+                state?: components["schemas"]["SubagentStateFrame"];
+                message?: components["schemas"]["SubagentMessageFrame"];
+                end?: components["schemas"]["SubagentEndFrame"];
+                /** @description Present only when proven by actual persisted lifecycle facts. */
+                has_run?: boolean;
+            }[];
+            /** @description Non-null selected/current relevant duplicate-ID canonical ownership facts. */
+            duplicate_ids: {
+                /** @enum {string} */
+                kind: "message" | "tool";
+                id: string;
+                canonical_position: string;
+                occurrence_count: number;
+            }[];
+        };
+        /**
+         * SessionHistoryPageInfo
+         * @description Shared metadata/context for REST messages, bounded latest session detail and the selected replay page of a snapshot (chat history paging D3/D4a/D10). Positions are opaque same-session occurrence selectors, never lexically ordered or live cursors. Cross-field invariants are checked by producers and consumers: min_rows <= limit; source_group_count matches selected groups and is at most 100; first/last positions exist iff nonempty; budget_override exists iff byte_budget_exceeded; a byte_budget stop cannot underfill min_rows, while a byte_ceiling stop can; projected_bytes <= byte_ceiling unless source_group_count is 1. No optional absence is serialized as null.
+         */
+        SessionHistoryPageInfo: {
+            /**
+             * @description window_refresh continuation describes only the requested closed interval.
+             * @enum {string}
+             */
+            mode: "latest" | "older" | "newer" | "window_refresh";
+            /** @description Effective requested drawn-row target, not a frame count; default 40. */
+            limit: number;
+            /** @description Effective advisory two-screen row floor, at most limit; default 20. Whole groups and this floor take precedence over the soft byte budget. Not proof of viewport geometry or a hard defense against large authenticated requests. */
+            min_rows: number;
+            /** @description Drawn-row weight; a whole atomic group can exceed the row target or 100. */
+            row_count: number;
+            /** @description Number of selected whole source groups, not the number of replay frames. */
+            source_group_count: number;
+            /**
+             * Format: int64
+             * @description Server-owned soft projected-page budget, currently 4194304 bytes (4 MiB). Positive integer, deliberately not a one-value enum or a hard response cap.
+             */
+            soft_byte_budget: number;
+            /**
+             * Format: int64
+             * @description Server-owned hard page selection ceiling, currently 8388608 bytes (8 MiB), on the same meter as projected_bytes (chat-history paging spec, "Amendment 2026-10-27 (founder, #1452 D2)", A2.3). Before adding any further group, selection stops with stop_reason byte_ceiling if the page with that group would exceed it, even below min_rows. The first group is always returned whole, so projected_bytes <= byte_ceiling holds unless source_group_count is 1. A page selection limit, not a heap or absolute response-size guarantee; not an operator setting.
+             */
+            byte_ceiling: number;
+            /**
+             * Format: int64
+             * @description Larger of prepared public REST and historical WS encodings at this cut/context. Excludes diagnostic accounting fields themselves, transport headers and separate live controls/projection. Required projection failure is an error, never an estimate.
+             */
+            projected_bytes: number;
+            /** @description True iff projected bytes exceed the soft budget; requires budget_override. */
+            byte_budget_exceeded: boolean;
+            /**
+             * @description Actual selection boundary. row_target/source_cap take precedence when their boundary coincides with bytes. True end, closed clear/range or source cap may underfill; the soft byte_budget may not cut below min_rows. byte_ceiling is the one byte stop allowed below min_rows, and it is reported when the next group would exceed both the soft budget and the ceiling. No byte stop splits a whole group.
+             * @enum {string}
+             */
+            stop_reason: "row_target" | "source_cap" | "clear" | "end" | "range_end" | "byte_budget" | "byte_ceiling";
+            /**
+             * @description Present iff the soft budget was exceeded to keep the floor or an atomic group.
+             * @enum {string}
+             */
+            budget_override?: "height_floor" | "atomic_group";
+            /** @description First selected occurrence in ascending acceptance order; absent iff empty. */
+            first_position?: string;
+            /** @description Last selected occurrence in ascending acceptance order; absent iff empty. */
+            last_position?: string;
+            /** @description Optional indication that selection reached a protected exact clear marker. Earlier retained groups remain reachable only through explicit clear crossing. */
+            stopped_at_clear?: boolean;
+            /** @description Actual latest clear identity, even when its marker lies outside this page. */
+            latest_clear?: {
+                entry_id: string;
+                history_position: string;
+            };
+            /** @description Opaque retained-set generation; changes on actual expiry, not a failed removal. */
+            retention_generation: string;
+            context: components["schemas"]["SessionHistoryContext"];
         };
         /**
          * ExternalCliTool
@@ -16283,6 +19523,89 @@ export interface components {
              * @enum {string}
              */
             readonly status?: "ok" | "broken";
+        };
+        /**
+         * SecretRecipientDisplay
+         * @description Server-composed, value-free description of where a secret will be used (spec omnipus-system-agent K2; FR-065). Built by the server from the recorded recipient descriptor; a client never supplies it. `lines` are the display lines for the kind: endpoint (provider_key); transport + command or URL (mcp_env); channel instance + field (channel_credential); hosts + username + mailbox id (mailbox_password); workspace + agent + variable (agent_private); for unbound (a stored value with no recipient recorded) exactly the single fixed line "Stored in Settings; no recipient recorded". Mirrored inline in contracts/asyncapi.yaml (components.schemas.SecretRecipientDisplay) — keep both copies in sync by hand.
+         */
+        SecretRecipientDisplay: {
+            /**
+             * @description Recipient kind.
+             * @enum {string}
+             */
+            kind: "provider_key" | "mcp_env" | "channel_credential" | "mailbox_password" | "agent_private" | "unbound";
+            /** @description Display lines, in order. Never null, never empty. */
+            lines: string[];
+        };
+        /**
+         * RoomEntryAuthor
+         * @description Author of a room entry (spec omnipus-system-agent K26): the person (kind `user`) or a member agent (kind `agent`, with agent_id). Mirrored inline in contracts/asyncapi.yaml (components.schemas.RoomEntryAuthor) — keep both copies in sync by hand.
+         */
+        RoomEntryAuthor: {
+            /** @enum {string} */
+            kind: "user" | "agent";
+            /** @description Present iff kind is `agent`. */
+            agent_id?: string;
+        };
+        /**
+         * MediaPart
+         * @description One media attachment within a MediaFrame. Each part maps to a single file stored in the media registry and accessible via /api/v1/media/{ref}.
+         */
+        MediaPart: {
+            /**
+             * @description Media category.
+             * @enum {string}
+             */
+            type: "image" | "audio" | "video" | "file";
+            /** @description Relative URL of the form /api/v1/media/{ref}. The SPA prefixes this with the gateway origin to construct the full URL for <img>, <video>, etc. */
+            url: string;
+            /** @description Original filename as stored in the media registry. */
+            filename: string;
+            /** @description MIME type of the file (e.g., "image/png"). */
+            content_type: string;
+            /** @description Optional human-readable caption for display below the media. */
+            caption?: string;
+        };
+        /**
+         * RoomDeliveryState
+         * @description State of one (room message, member) delivery (spec omnipus-system-agent K27, §6.11; FR-169, FR-201, FR-213). request_id is the stable delivery id, which is also the receiver's request id. The values are exactly the §6.11 states; the UI labels are in the §6.11 table. Anything the server cannot prove after a restart is `unknown`, never `working`. Mirrored inline in contracts/asyncapi.yaml (components.schemas.RoomDeliveryState) — keep both copies in sync by hand.
+         */
+        RoomDeliveryState: {
+            /** @description The member agent. */
+            agent_id: string;
+            request_id: string;
+            /** @enum {string} */
+            state: "recorded" | "awaiting_approval" | "admitted" | "held" | "working" | "waiting_on_user" | "answered" | "refused" | "failed" | "interrupted" | "unavailable" | "cancelled" | "unknown";
+            /** @description Optional reason, e.g. `rate_limit` or `removed`. */
+            reason?: string;
+        };
+        /**
+         * RoomEntry
+         * @description One entry of a room transcript (spec omnipus-system-agent K26; FR-166). Group entries carry the authoring agent and the resolved addressees. Mirrored inline in contracts/asyncapi.yaml (components.schemas.RoomEntry) — keep both copies in sync by hand.
+         */
+        RoomEntry: {
+            id: string;
+            room_id: string;
+            /**
+             * Format: int64
+             * @description Position in the room transcript; strictly increasing.
+             */
+            seq: number;
+            /** @description Echo of RoomMessageRequest.client_message_id for a person's entry. */
+            client_message_id?: string;
+            author: components["schemas"]["RoomEntryAuthor"];
+            /** @description The message text. New messages and agent answers are refused above the group message limit (#1449 D24, D27: at most 65,536 UTF-8 bytes, lowered by session_messaging.steer_body), stated on RoomMessageRequest.text. A stored entry keeps this wider maximum (TD-8): an entry written under an earlier, larger operator setting still opens and shows in full (S-152). May be empty when the entry carries attachments. */
+            text: string;
+            /** @description Images and files of the entry (#1449 D3, FR-016, FR-020), in the order they were sent. Each part's url is the workspace media URL (/api/v1/media/workspace/<workspace id>/<id>). Absent means none. A file deleted later in the Library keeps its part here; fetching it then fails and the chat shows the file as unavailable (D26). */
+            attachments?: components["schemas"]["MediaPart"][];
+            /** @description Resolved addressee agent ids. Never null. */
+            addressees: string[];
+            /** @description True for an answer to work consumed before a /pause; such an answer never forwards its mentions (§6.11). */
+            after_pause: boolean;
+            /** @description Per-member delivery states for this entry. Never null. */
+            deliveries: components["schemas"]["RoomDeliveryState"][];
+            /** Format: date-time */
+            timestamp: string;
         };
     };
     responses: {
@@ -16692,7 +20015,52 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             403: components["responses"]["403Forbidden"];
+            409: components["responses"]["409Conflict"];
             500: components["responses"]["500InternalServerError"];
+            503: components["responses"]["503ServiceUnavailable"];
+        };
+    };
+    checkSearchProviderConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Keyed search catalogue ID (brave, tavily, perplexity, glm, baidu or exa). */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SearchProviderCheckRequest"];
+            };
+        };
+        responses: {
+            /** @description Completed diagnostic outcome; no health or configuration change is persisted. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchProviderCheckResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+            404: components["responses"]["404NotFound"];
+            /** @description The saved connection is not ready, or its key/configuration changed while checking. A changed generation discards the provider outcome and returns "The key changed while checking. Check again." */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["429TooManyRequests"];
+            500: components["responses"]["500InternalServerError"];
+            503: components["responses"]["503ServiceUnavailable"];
         };
     };
     transcribeAudio: {
@@ -16777,6 +20145,7 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             409: components["responses"]["409Conflict"];
+            422: components["responses"]["422UnprocessableEntity"];
             429: components["responses"]["429TooManyRequests"];
             500: components["responses"]["500InternalServerError"];
             503: components["responses"]["503ServiceUnavailable"];
@@ -16821,7 +20190,7 @@ export interface operations {
                  * @description Filter by session type.
                  * @example chat
                  */
-                type?: "chat" | "task" | "channel" | "scheduled" | "verifier" | "delegate";
+                type?: "chat" | "task" | "channel" | "scheduled" | "main" | "verifier" | "delegate";
                 /**
                  * @description When true, includes sessions of type "verifier" in the response (ADR-052 FR-036). Defaults to false so verifier-role adjudication sessions stay hidden from the general session list (Sidebar, SearchModal); UsageScreen passes true to surface verifier LLM spend.
                  * @example false
@@ -16854,7 +20223,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description A page of sessions (ADR-057 FR-091/FR-098, grill2 M2-10). Default: root sessions only, each carrying child_count. With parent_session_id: that node's direct children only. With flat=true: every session, roots and subordinates. partial_errors is present only when at least one store failed during the merge; the page's rows and next_cursor stay valid regardless (FR-098). */
+            /** @description A page of sessions (ADR-057 FR-091/FR-098, grill2 M2-10). Default: root sessions only, each carrying child_count. With parent_session_id: that node's direct children only. With flat=true: every session, roots and subordinates. partial_errors is present only when at least one degradation occurred: a store enumeration failure or an unexpected per-session lifecycle-journal read failure. These use agent-scoped session_list_failed and session-scoped lifecycle_read_unavailable tokens respectively. Unreadable-journal rows remain, with lifecycle_state, stop_note, and execution omitted, never null; a missing record adds no token. The page's rows and next_cursor stay valid regardless (FR-098; NAV-WAVE1 SF-2). */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -16910,7 +20279,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Session detail with transcript. */
+            /** @description Session metadata with bounded available history, or explicit metadata-only unavailable history. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -17001,29 +20370,150 @@ export interface operations {
     };
     getSessionMessages: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Drawn-row target. Exactly one digits-only decimal value from 20 to 100; leading zeroes allowed. Omitted means 40, never unlimited. Invalid or duplicate values return 400 with "limit must be an integer from 20 to 100". */
+                limit?: number;
+                /** @description Advisory estimated two-screen row floor, one digits-only decimal value from 1 to the effective limit. Omitted means 20. Validate only after a valid limit; invalid/duplicate values return 400 with "min_rows must be an integer from 1 to limit". Not proof of geometry or a hard byte defense. */
+                min_rows?: number;
+                /** @description Exclusive older boundary. Mutually exclusive with after. In window_refresh, must resolve inside or at the interval's upper boundary, and remains exclusive. */
+                before?: string;
+                /** @description Exclusive newer boundary; forbidden with before or any window-refresh range. */
+                after?: string;
+                /** @description Inclusive lower occurrence boundary of an already-displayed closed range; requires window_end from the same authorized session in acceptance order. */
+                window_start?: string;
+                /** @description Inclusive upper boundary; requires window_start. Known expired bounds remain usable. */
+                window_end?: string;
+            };
             header?: never;
             path: {
-                /** @description Session ID. */
+                /** @description Addressed session ID; access refusal precedes paging validation or lookup. */
                 id: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Ordered list of transcript entries. */
+            /** @description Bounded public entries with atomic canonical page metadata and retained-domain continuation. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Message"][];
+                    "application/json": components["schemas"]["SessionHistoryResponse"];
                 };
             };
-            400: components["responses"]["400BadRequest"];
+            /** @description Invalid paging input after session access. ErrorResponse.error is exactly "limit must be an integer from 20 to 100", "min_rows must be an integer from 1 to limit", "invalid history position" (malformed, duplicate, blank, badly encoded, wrong-version or non-47-character selector), or "invalid history page range" (before+after, unpaired/reversed endpoints, after with a range, or before outside it). Unknown/foreign well-formed positions resolve to 404 before range order checks. No latest-page substitution. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             401: components["responses"]["401Unauthorized"];
-            404: components["responses"]["404NotFound"];
-            500: components["responses"]["500InternalServerError"];
+            /** @description Existing access/missing-session refusal "session not found" precedes paging. Otherwise an unknown/foreign well-formed position gives exactly "history position not found"; no foreign lookup, parent fallback or reset. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description This sub-path accepts GET only. Any other method returns 405 with response header Allow: GET, except OPTIONS, the browser preflight request, which the gateway answers before the sessions handler runs. The session is not renamed or deleted. */
+            405: {
+                headers: {
+                    /** @description Methods this sub-path accepts. For messages this is GET. */
+                    Allow?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Required index unavailable after the bounded reconciliation check: ErrorResponse.error is exactly "This conversation's history could not be loaded." A valid known prefix with at most 64 combined pending archive/disposition/confirmed rolled-expiry mutations can reconcile once; a missing/incompatible baseline, inconsistency or 65+ gap cannot seed a partial index or batch-walk history. Other required storage/projection failures retain the fixed redacted session-storage error. Prior view and authorized live controls remain usable; no success/empty partial history, 503 or preparing progress. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getSessionHistoryEntry: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Addressed session ID; access refusal precedes position validation or lookup. */
+                id: string;
+                /** @description Opaque same-session history position of the occurrence, exactly as a history page, session detail or snapshot replay page carried it. The full tool result of a HistoryResultPreview is addressed by this position plus ToolCall.id. */
+                history_position: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The full public projection of that one occurrence, with history_position set. Never a HistoryResultPreview marker in any tool result and never content_original_size_bytes. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Message"];
+                };
+            };
+            /** @description ErrorResponse.error is exactly "invalid session ID" for a malformed session ID (checked before any session lookup), or exactly "invalid history position" for a malformed, blank, badly encoded, wrong-version or non-47-character position (checked only after the session refusals below). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description ErrorResponse.error is exactly "session not found" for a missing session store, session metadata that does not exist, or a main session the caller is not eligible to read, checked before any position work (also when the position is malformed). Otherwise exactly "history position not found" for an unknown or foreign well-formed position; there is no foreign lookup, and a foreign session's expired position is also unknown here. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description This sub-path accepts GET only. Any other method returns 405 with response header Allow: GET, except OPTIONS, the browser preflight request, which the gateway answers before the sessions handler runs. The session is not renamed or deleted. */
+            405: {
+                headers: {
+                    /** @description Methods this sub-path accepts. For a history entry this is GET. */
+                    Allow?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description ErrorResponse.error is exactly "history entry expired": a same-session position proven expired by its retention tombstone, including a sweep during the read. No content and no other metadata. A corrupt or missing index is never reported as expiry; it is the 500 below. */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The existing sanitized errors, all recoverable by retry: session metadata that exists but cannot be read (corruption, permission or I/O) and an unreadable workspace record during the main-session eligibility check use the fixed redacted session-storage error; a required index that is unavailable after the bounded reconciliation check uses exactly "Session history is unavailable. Retry after the operator restores its index."; other required storage/projection failures, including a cleanup storage failure combined with cancellation, an unknown position or a selector error, use the fixed redacted session-storage error. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
         };
     };
     getToolResult: {
@@ -17051,6 +20541,17 @@ export interface operations {
             };
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
+            /** @description This sub-path accepts GET only. Any other method returns 405 with response header Allow: GET, except OPTIONS, the browser preflight request, which the gateway answers before the sessions handler runs. The session is not renamed or deleted. */
+            405: {
+                headers: {
+                    /** @description Methods this sub-path accepts. For tool-results this is GET. */
+                    Allow?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             500: components["responses"]["500InternalServerError"];
         };
     };
@@ -17161,7 +20662,15 @@ export interface operations {
                     "application/json": components["schemas"]["Agent"];
                 };
             };
-            400: components["responses"]["400BadRequest"];
+            /** @description Bad request — missing or invalid field. Also refused, nothing saved: a tool policy of allow for an always-ask tool — "set_channel_outbound always asks for approval; it can be set to ask or deny, not allow" (channels spec FR-037, T-10 rows 15-16). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             401: components["responses"]["401Unauthorized"];
             403: components["responses"]["403Forbidden"];
             404: components["responses"]["404NotFound"];
@@ -17171,6 +20680,15 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Spec omnipus-system-agent K12, §6.2 (FR-022; landing 1, WU-2): a per-agent tool policy of `ask` for Omnipus is refused — "Omnipus takes no per-agent Ask; set Ask globally or use Deny". `deny` is accepted. No writes occurred. To return Omnipus to an always-ask tool such as set_channel_outbound, clear the per-agent entry: inheritance restores always-ask only while the global policy is not deny (with a global deny the tool stays off; channels spec FR-037, T-10 rows 8-9). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
             /** @description Storage failed; reports actual saved state. */
             500: {
@@ -17187,6 +20705,8 @@ export interface operations {
         parameters: {
             query: {
                 revision: components["schemas"]["ConfigurationRevision"];
+                /** @description Spec omnipus-system-agent K50, §6.19 (FR-243; landing 1, WU-20). Explicit, audited opt-in to delete the agent together with its dependencies (AgentDependencyList). Without it, a non-empty dependency list refuses the delete with 409. */
+                delete_everything?: boolean;
             };
             header?: never;
             path: {
@@ -17213,12 +20733,14 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             403: components["responses"]["403Forbidden"];
             404: components["responses"]["404NotFound"];
-            /** @description Revision or inherited global policy changed; no writes occurred. */
+            /** @description Revision or inherited global policy changed; no writes occurred (no body). Or, spec omnipus-system-agent K50 (FR-243; landing 1, WU-20): the agent has dependencies and `delete_everything` was not true — nothing was deleted and the body is the full dependency list. */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["AgentDependencyList"];
+                };
             };
             /** @description Storage failed; reports actual saved state. */
             500: {
@@ -17257,6 +20779,60 @@ export interface operations {
             };
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
+            /** @description This sub-path accepts GET only. Any other method returns 405 with response header Allow: GET, except OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted. */
+            405: {
+                headers: {
+                    /** @description Methods this sub-path accepts. For sessions this is GET. */
+                    Allow?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    listAgentActivityRuns: {
+        parameters: {
+            query?: {
+                /** @description Restrict to runs of tasks in this workspace. */
+                workspace_id?: string;
+            };
+            header?: never;
+            path: {
+                /**
+                 * @description Agent ID.
+                 * @example jim
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Open runs for this agent. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentActivityRun"][];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            /** @description This sub-path accepts GET only. Any other method returns 405 with response header Allow: GET, except OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted. */
+            405: {
+                headers: {
+                    /** @description Methods this sub-path accepts. For activity-runs this is GET. */
+                    Allow?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             500: components["responses"]["500InternalServerError"];
         };
     };
@@ -17287,6 +20863,17 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
+            /** @description This sub-path accepts GET and PUT only. Any other method returns 405 with response header Allow: GET, PUT. The exception is OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted. */
+            405: {
+                headers: {
+                    /** @description Methods this sub-path accepts. For tools this is GET, PUT. */
+                    Allow?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             500: components["responses"]["500InternalServerError"];
         };
     };
@@ -17318,16 +20905,44 @@ export interface operations {
                     "application/json": components["schemas"]["AgentToolsResponse"];
                 };
             };
-            400: components["responses"]["400BadRequest"];
+            /** @description Bad request — missing or invalid field. Also refused, nothing saved: a tool policy of allow for an always-ask tool — "set_channel_outbound always asks for approval; it can be set to ask or deny, not allow" (channels spec FR-037, T-10 rows 15-16). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             401: components["responses"]["401Unauthorized"];
             403: components["responses"]["403Forbidden"];
             404: components["responses"]["404NotFound"];
+            /** @description This sub-path accepts GET and PUT only. Any other method returns 405 with response header Allow: GET, PUT. The exception is OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted. */
+            405: {
+                headers: {
+                    /** @description Methods this sub-path accepts. For tools this is GET, PUT. */
+                    Allow?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description Revision or inherited global policy changed; no writes occurred. */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Spec omnipus-system-agent K13, §6.2 (FR-022; landing 1, WU-2): a per-agent tool policy of `ask` for Omnipus is refused — "Omnipus takes no per-agent Ask; set Ask globally or use Deny". `deny` is accepted. No writes occurred. To return Omnipus to an always-ask tool such as set_channel_outbound, clear the per-agent entry: inheritance restores always-ask only while the global policy is not deny (with a global deny the tool stays off; channels spec FR-037, T-10 rows 8-9). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
             /** @description Storage failed; reports actual saved state. */
             500: {
@@ -17367,6 +20982,17 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
+            /** @description This sub-path accepts POST only. Any other method returns 405 with response header Allow: POST, except OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted. */
+            405: {
+                headers: {
+                    /** @description Methods this sub-path accepts. For runner/test this is POST. */
+                    Allow?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             500: components["responses"]["500InternalServerError"];
         };
     };
@@ -17677,7 +21303,7 @@ export interface operations {
                     "application/json": components["schemas"]["ToolApprovalResponse"];
                 };
             };
-            /** @description Malformed body or unknown action. */
+            /** @description Malformed body or unknown action, or action allow for an always-ask tool ("set_channel_outbound always asks for approval; it can be set to ask or deny, not allow"; nothing recorded). */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -17757,7 +21383,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Updated global tool policies. */
+            /** @description The policies were saved and the in-memory reload completed and was confirmed. Running agents are enforcing the returned policies. This status is not used when the save succeeded but the reload failed or did not confirm. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -17766,7 +21392,7 @@ export interface operations {
                     "application/json": components["schemas"]["GlobalToolPolicies"];
                 };
             };
-            /** @description Invalid policy values. */
+            /** @description Invalid policy values. Also refused, nothing saved: storing allow for an always-ask tool — "set_channel_outbound always asks for approval; it can be set to ask or deny, not allow" (channels spec FR-037, T-10 row 15). */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -17776,7 +21402,20 @@ export interface operations {
                 };
             };
             401: components["responses"]["401Unauthorized"];
-            503: components["responses"]["503BypassActive"];
+            /** @description The policies were saved and were not rolled back, but they could not be applied to running agents because the reload failed or did not confirm. Retrying the same update, or restarting Omnipus, is the recovery. This 503 is not 503BypassActive and does not mean dev_mode_bypass refused the write. The error field is exactly "The settings were saved, but could not be applied to running agents. Retry applying the change, or restart Omnipus." No other field is required. The response must not say the write was undone. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example {
+                     *       "error": "The settings were saved, but could not be applied to running agents. Retry applying the change, or restart Omnipus."
+                     *     }
+                     */
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
         };
     };
     getExecProxyStatus: {
@@ -18372,6 +22011,75 @@ export interface operations {
                 };
             };
             401: components["responses"]["401Unauthorized"];
+            /** @description Lowering drift (issue #904, D16) — the agents the new global limit would lower differ from confirmed_lowering, or an agent record changed mid-write (revision conflict; agents already lowered were rolled back). Nothing was written; the body carries the fresh preview. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaxToolIterationsLoweringConflict"];
+                };
+            };
+            /** @description Server-side failure. code tells them apart: max_tool_iterations_agents_read_failed (the agent store could not be read; nothing written), max_tool_iterations_lowering_failed (a write failed; everything rolled back, nothing changed), max_tool_iterations_rollback_incomplete (a write failed and some agents could not be restored — the error names them; details.cause carries the original failure; the global is unchanged), performance_reload_failed (the settings ARE saved — config.json and any lowered agents are written, nothing is rolled back — but not in force yet; the body is a PerformanceReloadFailedError whose details carry stage (refresh: in-memory config not swapped, GET still shows the old values; reload: in-memory config updated, registry reload failed), changed_fields and lowered_agents). Any other failure to write config.json carries no code. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            503: components["responses"]["503BypassActive"];
+        };
+    };
+    previewMaxToolIterationsLowering: {
+        parameters: {
+            query: {
+                /** @description Candidate global tool-iteration limit (1–1000). */
+                value: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The agents that would be lowered (empty when none). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaxToolIterationsLoweringPreview"];
+                };
+            };
+            /** @description Missing, non-integer or out-of-range value. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Missing or invalid bearer token. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The agent store could not be read (code max_tool_iterations_agents_read_failed). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             503: components["responses"]["503BypassActive"];
         };
     };
@@ -18475,6 +22183,63 @@ export interface operations {
             };
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
+        };
+    };
+    getThirdPartyAgentSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The saved section. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThirdPartyAgentSettingsView"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
+        };
+    };
+    updateThirdPartyAgentSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ThirdPartyAgentSettings"];
+            };
+        };
+        responses: {
+            /** @description The saved section after the update. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThirdPartyAgentSettingsView"];
+                };
+            };
+            /** @description A row failed validation, or the body does not match the schema. Nothing was written. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
         };
     };
     listChannels: {
@@ -18662,9 +22427,13 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ChannelEnableRequest"];
+            };
+        };
         responses: {
-            /** @description Channel enable state updated. */
+            /** @description Channel enable state updated. For a Retry this confirms ownership admission and enable acceptance only, not QR readiness, linking or message delivery. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -18673,7 +22442,9 @@ export interface operations {
                     "application/json": components["schemas"]["ChannelEnabledResponse"];
                 };
             };
+            400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
+            403: components["responses"]["403Forbidden"];
             /** @description Channel ID not found. */
             404: {
                 headers: {
@@ -18683,6 +22454,25 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description code pairing_retry_conflict: this chat can no longer retry this pairing (missing, stale or mismatched ownership, or a competing attempt). Nothing was enabled and no ownership changed. code pairing_in_progress: an ordinary enable of a WhatsApp connector while another of its pairings is starting, running or stopping. Nothing was changed. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The enable could not be completed. The error text says which state is saved: the configuration could not be saved or reloaded; the connection is enabled but its restart could not be confirmed yet (a Retry's pairing keeps its chat and can still start); or the connection is enabled but its reserved pairing was cancelled before it started (nothing else starts). Never a refusal before effects, which is 404 or 409. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            503: components["responses"]["503ServiceUnavailable"];
         };
     };
     disableChannel: {
@@ -18743,18 +22533,16 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Updated channel configuration (credentials redacted). */
+            /** @description Updated channel configuration (credentials redacted) plus apply_outcome, and apply_reason / apply_note where T-6 says. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["ChannelConfigureResponse"];
                 };
             };
-            /** @description Invalid JSON body. */
+            /** @description Invalid JSON body, or a field that cannot be set here. Texts: "outbound cannot be set via configure; use PUT /api/v1/channels/{id}/outbound"; the existing workspace_id and identity refusals (set the binding with PUT /api/v1/channels/{id}/routing). Matched in any spelling encoding/json would bind to those fields. Nothing was changed. */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -18773,6 +22561,147 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description The save did not complete; code says what durably changed: could_not_save (nothing), credential_saved_not_saved (a credential of this request was stored, the configuration was not), or saved_not_refreshed (the file was written, the running configuration was not refreshed and the connection was not restarted). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelConfigureError"];
+                };
+            };
+            503: components["responses"]["503BypassActive"];
+        };
+    };
+    getChannelOutbound: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Channel instance ID.
+                 * @example telegram
+                 */
+                id: components["schemas"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The outbound setting. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelOutboundRead"];
+                };
+            };
+            /** @description Malformed channel id. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Unknown channel type. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    setChannelOutbound: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Channel instance ID.
+                 * @example telegram
+                 */
+                id: components["schemas"]["ChannelId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChannelOutboundUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Saved and in force. warning is present only when the file was written but the rest of the running configuration could not be refreshed (the saved list is in force anyway, T-6b). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelOutboundWriteResponse"];
+                };
+            };
+            /** @description invalid_targets (per-target errors in target_errors) or too_many_targets (more than 20 after de-duplication). Nothing was saved. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelOutboundRejection"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Unknown channel. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description stale_revision (the setting changed since it was read; reload and retry), connect_first (adding a Discord target needs the connection running), or saved_live_mismatch (the saved and running configurations differ because an earlier change did not finish applying; a permission-extending write waits until they correspond again). Nothing was saved. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelOutboundRejection"];
+                };
+            };
+            /** @description platform_cannot_start ("starting messages is not supported yet on <Platform>") or platform_cannot_message_people ("this platform can only answer, not start a direct message"). Nothing was saved. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelOutboundRejection"];
+                };
+            };
+            /** @description "could not save the setting; nothing was changed" — the failure happened before the file was written (no credential is involved on this route). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description lookup_unavailable: Discord could not be reached or timed out while checking an added target, including a rate-limit wait past the deadline. Nothing was saved; try again. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelOutboundRejection"];
+                };
+            };
+            503: components["responses"]["503BypassActive"];
         };
     };
     testChannel: {
@@ -18863,7 +22792,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ChannelRouting"];
+                "application/json": components["schemas"]["ChannelRoutingUpdateRequest"];
             };
         };
         responses: {
@@ -18929,6 +22858,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description This address accepts GET, PUT and DELETE only. Any other method returns 405 with response header Allow: GET, PUT, DELETE. The exception is OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted. */
+            405: {
+                headers: {
+                    /** @description Methods this address accepts. */
+                    Allow?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             500: components["responses"]["500InternalServerError"];
         };
     };
@@ -18984,6 +22924,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description This address accepts GET, PUT and DELETE only. Any other method returns 405 with response header Allow: GET, PUT, DELETE. The exception is OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted. */
+            405: {
+                headers: {
+                    /** @description Methods this address accepts. */
+                    Allow?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             500: components["responses"]["500InternalServerError"];
         };
     };
@@ -19007,19 +22958,30 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Mailbox removed. */
+            /** @description Mailbox removed, or removed with cleanup pending — the truthful outcome discrimination with the opaque retry intent. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["OperationResult"];
+                    "application/json": components["schemas"]["MailboxRemovalResult"];
                 };
             };
             401: components["responses"]["401Unauthorized"];
             /** @description Agent not found, or no mailbox configured for the agent in this workspace. */
             404: {
                 headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description This address accepts GET, PUT and DELETE only. Any other method returns 405 with response header Allow: GET, PUT, DELETE. The exception is OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted. */
+            405: {
+                headers: {
+                    /** @description Methods this address accepts. */
+                    Allow?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -19048,6 +23010,50 @@ export interface operations {
                 };
             };
             401: components["responses"]["401Unauthorized"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    retryMailboxCleanup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MailboxCleanupRequest"];
+            };
+        };
+        responses: {
+            /** @description Truthful cleanup outcome — removed when every pending step has now succeeded; removed_cleanup_pending again (with the same intent) when a step still failed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailboxRemovalResult"];
+                };
+            };
+            /** @description Malformed body. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Unknown, expired or already-completed cleanup intent. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             500: components["responses"]["500InternalServerError"];
         };
     };
@@ -20049,8 +24055,8 @@ export interface operations {
             header?: never;
             path: {
                 /**
-                 * @description Provider id whose catalog row declares sign_in (e.g. "codex-cli", "openai-chatgpt", "github-copilot").
-                 * @example codex-cli
+                 * @description Provider id whose catalog row declares sign_in (e.g. "openai-chatgpt").
+                 * @example openai-chatgpt
                  */
                 id: string;
             };
@@ -20064,7 +24070,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SignInStartResponse"];
+                    "application/json": components["schemas"]["SignInStartResponseDeviceCode"];
                 };
             };
             400: components["responses"]["400BadRequest"];
@@ -20108,7 +24114,7 @@ export interface operations {
             path: {
                 /**
                  * @description Provider id whose catalog row declares sign_in.
-                 * @example codex-cli
+                 * @example openai-chatgpt
                  */
                 id: string;
             };
@@ -20127,10 +24133,8 @@ export interface operations {
             };
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
-            /** @description Another Copilot sign-in check is already running (one premium vendor request at a time); Retry-After names the wait. Uses the shared 429 response body. */
+            /** @description The per-IP status ceiling is spent; Retry-After names the wait. Uses the shared 429 response body. */
             429: components["responses"]["429TooManyRequests"];
-            /** @description The sign-in check returned a state this gateway does not recognise; no sign-in state is answered. */
-            500: components["responses"]["500InternalServerError"];
             503: components["responses"]["503BypassActive"];
         };
     };
@@ -20166,29 +24170,6 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
             429: components["responses"]["429TooManyRequests"];
-            503: components["responses"]["503BypassActive"];
-        };
-    };
-    importCodexSignIn: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description The resulting sign-in state after import. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SignInStatus"];
-                };
-            };
-            401: components["responses"]["401Unauthorized"];
-            404: components["responses"]["404NotFound"];
             503: components["responses"]["503BypassActive"];
         };
     };
@@ -20371,8 +24352,73 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
-            409: components["responses"]["409Conflict"];
+            /** @description Conflict. Codes: BUILTIN_NAME_RESERVED (the target name is a built-in skill), LOCAL_CHANGES_CONFIRMATION_REQUIRED (the installed skill has local changes; resend with replace_local_changes: true), SKILL_CHANGED (revision is the caller's expected revision and the skill changed since it was read). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Storage failure, before publication (error_stage names the failed stage) or after publication (a partial save; message names the undo). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigurationMutationFailureState"];
+                };
+            };
             502: components["responses"]["502BadGateway"];
+        };
+    };
+    copySkill: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Source skill slug. */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SkillCopyRequest"];
+            };
+        };
+        responses: {
+            /** @description Copy created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Skill"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            /** @description Conflict (SKILL_EXISTS, BUILTIN_NAME_RESERVED). A copy refused by the save check (SAVE_CHECK_FAILED) answers 400. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Storage failure, before publication or after publication (partial save). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigurationMutationFailureState"];
+                };
+            };
         };
     };
     deleteSkill: {
@@ -20390,43 +24436,37 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Skill removed. */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            400: components["responses"]["400BadRequest"];
-            401: components["responses"]["401Unauthorized"];
-            404: components["responses"]["404NotFound"];
-            409: components["responses"]["409Conflict"];
-        };
-    };
-    postChat: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SseChatRequest"];
-            };
-        };
-        responses: {
-            /** @description SSE stream of agent response frames. */
+            /** @description Skill deleted. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "text/event-stream": string;
+                    "application/json": components["schemas"]["ConfigurationMutationState"];
                 };
             };
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
+            /** @description The skill is a built-in skill and is read-only (BUILTIN_READ_ONLY). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            404: components["responses"]["404NotFound"];
+            409: components["responses"]["409Conflict"];
+            /** @description Storage failure, before publication or after publication (partial deletion). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigurationMutationFailureState"];
+                };
+            };
         };
     };
     getActivity: {
@@ -20463,10 +24503,12 @@ export interface operations {
         parameters: {
             query?: {
                 /**
-                 * @description Session ID to associate the uploaded files with. May also be supplied as a multipart form field.
+                 * @description Session ID to associate the uploaded files with. May also be supplied as a multipart form field. Ignored when workspace_id is given.
                  * @example 550e8400-e29b-41d4-a716-446655440000
                  */
                 session_id?: string;
+                /** @description Workspace whose media library receives the files (#1449 C-I1). May also be supplied as a multipart form field before the file parts. Takes precedence over session_id. */
+                workspace_id?: string;
             };
             header?: never;
             path?: never;
@@ -20477,6 +24519,8 @@ export interface operations {
                 "multipart/form-data": {
                     /** @description Session ID (alternative to query parameter). */
                     session_id?: string;
+                    /** @description Workspace ID (alternative to the query parameter); must precede the file parts. */
+                    workspace_id?: string;
                     /** @description One or more files to upload. */
                     files?: string[];
                 };
@@ -20496,6 +24540,15 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             /** @description Method not allowed. */
             405: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The workspace media library is unavailable (workspace_id given). Nothing was stored and no session path was used instead. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -21838,7 +25891,7 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
-            /** @description Workspace membership or graph revision changed; no writes occurred. */
+            /** @description Workspace membership or graph revision changed; or a built-in roster member was removed from the default workspace (the next boot would re-add it) — that refusal carries the machine-readable code builtin_roster_default with the message "Built-in agents can't be removed from this workspace" and no writes occurred (workspace record, delegation and plan pause state all unchanged). A stale-revision conflict is the same status with NO code, so the two are distinguishable. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -22104,6 +26157,23 @@ export interface operations {
                  * @example false
                  */
                 include_hidden?: boolean;
+                /**
+                 * @description When true, the knowledge base's saved views are listed in the folder they belong to, as ordinary rows with is_view=true and a `view` object (LibraryEntryView; #1017). Defaults to false, and with false the response is exactly what it was before this parameter existed (no view rows, no is_view, no view object), so a client that does not ask is unaffected.
+                 *
+                 *     WHICH VIEWS. Only views of the knowledge base that most closely encloses the listed directory (the deepest one, when knowledge bases are nested), and only when that knowledge base is itself one of the collections of this workspace's knowledge scope. The set is the `views` GET .../knowledge/views returns for that knowledge base: same parser, same record schemas, and every emitted (view.collection_id, view.name) is listed by GET .../knowledge/views?collection_id=<that id> and opens through GET .../knowledge/view. A view file that failed to load is not listed here; that endpoint's `unloadable` list remains where it is reported. The listing, like that endpoint, reads only regular files inside the knowledge base (never a link), at most 256 KiB per file, 128 files per folder and 4 MiB per listing; a view file beyond those limits is left out and the listing still succeeds.
+                 *
+                 *     NESTED KNOWLEDGE BASES. A knowledge base that is not itself a collection of the workspace's knowledge scope (for example, one nested inside another knowledge base) contributes no view rows. No folder at or below its root lists one, including its own `.omnipus-vault/views` reached with include_hidden=true. Views of the enclosing collection are still placed by the folder rule below, which never places them inside the nested knowledge base.
+                 *
+                 *     WHICH FOLDER. A view whose `source` is a clean relative path (no ".." segment, not absolute, not inside `.omnipus-vault/`) whose parent folder exists as a directory of the same knowledge base, and not inside a deeper nested knowledge base, is listed in that parent folder — next to its `.base` file, whether or not that file still exists. Every other view (no `source`, or a `source` that fails any of those conditions) is listed at the knowledge base root.
+                 *
+                 *     WHAT A VIEW ROW LOOKS LIKE. It describes the saved view file itself: `path` is that file's real workspace-relative path (`<knowledge base root>/.omnipus-vault/views/<slug>.yaml`), `name` is its file name, and size, modified_at, mime and is_text_editable are that file's own. A view row is therefore the one kind of row whose `path` is NOT inside the listed directory. It is a file row and sorts with the files by `name`, like every other row. Its is_hidden follows the usual dot rule on `name`, and include_hidden applies to it as to any row.
+                 *
+                 *     THE STORAGE FOLDER. When `.omnipus-vault/views/` itself is listed (include_hidden is needed to reach it), each file there that is a loaded view also carries is_view=true and the same `view` object, so a path is described the same way wherever it is listed.
+                 *
+                 *     FAILURE. If the views cannot be read (unreadable folder, schema load error), the listing still succeeds without view rows and the server logs a warning; a views failure never fails the listing.
+                 * @example true
+                 */
+                include_views?: boolean;
             };
             header?: never;
             path: {
@@ -23021,6 +27091,1168 @@ export interface operations {
             500: components["responses"]["500InternalServerError"];
         };
     };
+    listMailFolders: {
+        parameters: {
+            query?: {
+                /** @description Human-initiated fetch marker (D29/R2-9, MC-33). Absent/false = automatic panel poll: while the mailbox watcher is in backoff this request does NOT dial — it returns 503 immediately with code=backoff, the watcher's last error class and next_attempt_at. true = human-initiated (mount, folder switch, Retry click, open message): bypasses the backoff gate for this one request; the concurrency cap and coalescing still apply. Retry never bypasses capacity, security checks or mutation safeguards, and an automatic refresh never sets it (ADR-20261001 failure table). */
+                retry?: boolean;
+                /** @description Cache-first versus live read (ADR-20261001 "Cached read versus genuine refresh" row; register rows 2/6). Omitted or live = today's live read. cache_first = serve the labelled cached mapping/counts immediately without dialing; a cache hit consumes no A8 work slot and opens no socket. A cache-first response is metadata-labelled (MailFolderList.metadata) and is never evidence of a live success; on one eligible stale/dirty event the panel makes at most one separate mode=live request, which either returns validated data or a visible error — it can never return the same stale page as a successful refresh. A cache miss falls through once to live under the normal budget. Requests without valid panel presence may execute live request-scoped work but cannot start detached panel refreshes or retain sockets. */
+                mode?: "cache_first" | "live";
+                /** @description Force the folder-mapping validation on this read (ADR-20261001 cached-read row: "For the rail, add refresh_mapping Boolean"). false/absent = a normal live count refresh reuses a valid mapping. true = this read also validates the mapping — the panel-open with a missing/>24-hour mapping case, the manual Refresh click, and the one permitted rediscovery after a missing-folder failure or observed folder-version change set it explicitly. It is never turned on by the 5-minute count refresh. */
+                refresh_mapping?: boolean;
+                /**
+                 * @description Opaque per-panel observer ID (mail-live-access-landing-order register row 6; ADR-20261001 "Mail panel presence" row) from the mail_panel_observer WebSocket frame — the read opts into panel semantics when the ID is bound to this authenticated connection/workspace: the read may retain pooled sockets while that observer remains open, and its cache reads ride the panel's retention. Absent or unknown observer = conservative request-scoped work; REST can never claim another socket/user's observer. Never grants authorization by itself — the pair scope is checked independently.
+                 * @example obs_5f3a
+                 */
+                observer_id?: string;
+            };
+            header?: never;
+            path: {
+                /**
+                 * @description Workspace ID.
+                 * @example ws_my_workspace
+                 */
+                id: string;
+                /**
+                 * @description ID of the mailbox-owning agent.
+                 * @example mia
+                 */
+                agentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The mailbox's three folders with counts and freshness metadata. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailFolderList"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Workspace, agent, or mailbox pair not found (getAgentMailbox precedent). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Stale reference/cursor — the typed MailStaleReferenceError body (code=stale_reference); the client refreshes the list view once. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailStaleReferenceError"];
+                };
+            };
+            500: components["responses"]["500InternalServerError"];
+            /** @description Mail server unreachable — the body's code field carries a sanitized error class from the closed enum (MC-8). */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not dialed: code=backoff (automatic poll during backoff — body carries last_error_class + next_attempt_at, D29/R2-9) or code=busy (cap-overflow queue timeout, MIN-003). The upstream enum in the 502 description is unchanged; busy/backoff are gateway-availability codes, not mail-server failure classes. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailUnavailableError"];
+                };
+            };
+        };
+    };
+    listMailMessages: {
+        parameters: {
+            query?: {
+                /** @description Page size. Zero, negative or absent means the default 20; values above 100 are clamped to 100 (MC-6, mirrors clampLimit in pkg/email/transport.go). A non-integer value is rejected 400. These 20/100 bounds are the pre-ADR-20261001 state and stay the operative bounds until the consumer-timed W0 amendment raises list paging to the ADR's 25-row page and 200-row view limits (register row 4; lands in the same step as the cursor switch in w3's consumer work) — the search parameter's "same 25-row page" statement on this operation describes that amended state, not this one. */
+                limit?: number;
+                /** @description Cursor — list envelopes with uid lower than this value (from MailMessagePage.next_before_uid of the previous page). */
+                before_uid?: number;
+                /** @description Human-initiated fetch marker (D29/R2-9, MC-33). Absent/false = automatic panel poll: while the mailbox watcher is in backoff this request does NOT dial — it returns 503 immediately with code=backoff, the watcher's last error class and next_attempt_at. true = human-initiated (mount, folder switch, Retry click, open message): bypasses the backoff gate for this one request; the concurrency cap and coalescing still apply. Retry never bypasses capacity, security checks or mutation safeguards, and an automatic refresh never sets it (ADR-20261001 failure table). */
+                retry?: boolean;
+                /** @description Cache-first versus live read (ADR-20261001 "Cached read versus genuine refresh" row; register rows 2/6). Omitted or live = today's live read. cache_first = serve the labelled cached newest page immediately without dialing; a cache hit consumes no A8 work slot and opens no socket, and the response's MailMessagePage.metadata states its source and age. A cache-first response is never evidence of a live success; on one eligible stale/dirty event the panel makes at most one separate mode=live request. Search sequences and pages beyond the cached newest window always run live. */
+                mode?: "cache_first" | "live";
+                /** @description Force the folder-mapping validation on this read (register rows 2/6; the list rides the same flag so a folder switch with its list can validate the mapping in one event). false/absent = a normal live refresh reuses a valid mapping. */
+                refresh_mapping?: boolean;
+                /**
+                 * @description Opaque per-panel observer ID (register row 6; ADR-20261001 "Mail panel presence" row) — the read opts into panel semantics when the ID is bound to this authenticated connection/workspace. Absent or unknown observer = conservative request-scoped work.
+                 * @example obs_5f3a
+                 */
+                observer_id?: string;
+                /** @description Folder-scoped server-side search query (ADR-20261001 "Paging and search" row; register row 4). Starts a bounded search sequence under the same 25-row page and 200-row view limits, matched server-side — no local index, no full-text/offline search, and never a whole-mailbox fetch. Matching fields and bounds are founder-settled (decision Q-D answered 2026-10-02, option A): subject plus sender/recipient substring matching, server-side header search, the same 25/200 bounds; the mail-live-access W2/W3 specs fix the exact search semantics within that decision. Presenting search and cursor together is rejected 400. */
+                search?: string;
+                /**
+                 * @description Opaque continuation cursor from MailMessagePage.next_cursor (register row 4) — continues the browse or search sequence it was issued in. A stale or mismatched cursor (folder epoch changed, configuration generation changed, sequence mismatch) is refused with the typed 409 stale-cursor result — the client resets the view once. Supersedes before_uid, which is retained only until the panel consumer migration lands.
+                 * @example MWI6NDU2OjEyMztCMQ
+                 */
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                /**
+                 * @description Workspace ID.
+                 * @example ws_my_workspace
+                 */
+                id: string;
+                /**
+                 * @description ID of the mailbox-owning agent.
+                 * @example mia
+                 */
+                agentId: string;
+                /** @description Folder slug — exactly inbox, sent or drafts (MC-5). */
+                folder: "inbox" | "sent" | "drafts";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One explicit page of envelopes with cursor paging and freshness metadata. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailMessagePage"];
+                };
+            };
+            /** @description Unknown folder slug, malformed limit, or search+cursor together. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Workspace, agent, or mailbox pair not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Stale cursor/reference — the typed MailStaleReferenceError body; code=stale_cursor restarts the list view once. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailStaleReferenceError"];
+                };
+            };
+            500: components["responses"]["500InternalServerError"];
+            /** @description Mail server failure — sanitized error class in the body's code field (MC-8). */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not dialed: code=backoff (automatic poll during backoff — body carries last_error_class + next_attempt_at, D29/R2-9) or code=busy (cap-overflow queue timeout, MIN-003). The upstream enum in the 502 description is unchanged; busy/backoff are gateway-availability codes, not mail-server failure classes. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailUnavailableError"];
+                };
+            };
+        };
+    };
+    getMailMessage: {
+        parameters: {
+            query?: {
+                /** @description Human-initiated fetch marker (D29/R2-9, MC-33). Absent/false = automatic panel poll: while the mailbox watcher is in backoff this request does NOT dial — it returns 503 immediately with code=backoff, the watcher's last error class and next_attempt_at. true = human-initiated (mount, folder switch, Retry click, open message): bypasses the backoff gate for this one request; the concurrency cap and coalescing still apply. */
+                retry?: boolean;
+            };
+            header?: never;
+            path: {
+                /**
+                 * @description Workspace ID.
+                 * @example ws_my_workspace
+                 */
+                id: string;
+                /**
+                 * @description ID of the mailbox-owning agent.
+                 * @example mia
+                 */
+                agentId: string;
+                /** @description Folder slug — exactly inbox, sent or drafts (MC-5). */
+                folder: "inbox" | "sent" | "drafts";
+                /**
+                 * @description Folder-scoped message reference: `uid:<uidvalidity>:<uid>` (what every list row carries) or `mid:<Message-ID>` (what chat links carry — stable across UID renumbering). Message-ID validation for the mid form: `<...@...>` shape, max 998 bytes, no CR/LF (the value feeds an IMAP SEARCH string; percent-encoded in the URL).
+                 * @example uid:456:123
+                 */
+                ref: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The full message. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailMessage"];
+                };
+            };
+            /** @description Malformed ref or failed Message-ID validation. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Message not found in the addressed folder (includes a pair with no mailbox; MC-13 — no body or folder leakage). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Stale reference — the typed MailStaleReferenceError body (code=stale_reference): the ref's embedded folder epoch, pair or configuration generation no longer matches the live folder, refused on the same lease that would have served the fetch (correction I-03). The client refreshes the list once; the response never serves whatever the folder now holds under the old identity. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailStaleReferenceError"];
+                };
+            };
+            500: components["responses"]["500InternalServerError"];
+            /** @description Mail server failure — sanitized error class in the body's code field (MC-8). */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not dialed: code=backoff (automatic poll during backoff — body carries last_error_class + next_attempt_at, D29/R2-9) or code=busy (cap-overflow queue timeout, MIN-003). The upstream enum in the 502 description is unchanged; busy/backoff are gateway-availability codes, not mail-server failure classes. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailUnavailableError"];
+                };
+            };
+        };
+    };
+    markMailMessageSeen: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Workspace ID.
+                 * @example ws_my_workspace
+                 */
+                id: string;
+                /**
+                 * @description ID of the mailbox-owning agent.
+                 * @example mia
+                 */
+                agentId: string;
+                /** @description Folder slug — exactly inbox, sent or drafts (MC-5). */
+                folder: "inbox" | "sent" | "drafts";
+                /**
+                 * @description Folder-scoped message reference: `uid:<uidvalidity>:<uid>` or `mid:<Message-ID>` (same rules as the read endpoint).
+                 * @example uid:456:123
+                 */
+                ref: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The message is marked seen (or already was). No response body. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Malformed ref. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Message not found in the addressed folder. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Stale reference — the typed MailStaleReferenceError body (code=stale_reference): the ref failed its epoch/pair/generation validation on the same lease that would have performed the flag write (correction I-03 — the flag write never lands against a recreated folder under an old identity). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailStaleReferenceError"];
+                };
+            };
+            500: components["responses"]["500InternalServerError"];
+            /** @description Mail server failure — sanitized error class in the body's code field (MC-8). */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    getMailAttachment: {
+        parameters: {
+            query?: {
+                /** @description Human-initiated fetch marker (D29/R2-9, MC-33). Absent/false = automatic panel poll: while the mailbox watcher is in backoff this request does NOT dial — it returns 503 immediately with code=backoff, the watcher's last error class and next_attempt_at. true = human-initiated (mount, folder switch, Retry click, open message): bypasses the backoff gate for this one request; the concurrency cap and coalescing still apply. */
+                retry?: boolean;
+            };
+            header?: never;
+            path: {
+                /**
+                 * @description Workspace ID.
+                 * @example ws_my_workspace
+                 */
+                id: string;
+                /**
+                 * @description ID of the mailbox-owning agent.
+                 * @example mia
+                 */
+                agentId: string;
+                /** @description Folder slug — exactly inbox, sent or drafts (MC-5). */
+                folder: "inbox" | "sent" | "drafts";
+                /**
+                 * @description Folder-scoped message reference: `uid:<uidvalidity>:<uid>` or `mid:<Message-ID>` (same rules as the read endpoint).
+                 * @example uid:456:123
+                 */
+                ref: string;
+                /** @description MIME part index from MailAttachment.part_index. */
+                partIndex: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The part's bytes. Content type is extension-derived (MC-42); the document's application/octet-stream is the generic fallback — the response's actual Content-Type header decides. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            /** @description Malformed ref or part index. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Message or attachment part absent. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Stale reference — the typed MailStaleReferenceError body (code=stale_reference): the ref failed its epoch/pair/generation validation on the same lease that would have streamed the part (correction I-03). No bytes are served against a recreated folder under an old identity. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailStaleReferenceError"];
+                };
+            };
+            500: components["responses"]["500InternalServerError"];
+            /** @description Mail server failure — sanitized error class in the body's code field (MC-8). */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not dialed: code=backoff (automatic poll during backoff — body carries last_error_class + next_attempt_at, D29/R2-9) or code=busy (cap-overflow queue timeout, MIN-003). The upstream enum in the 502 description is unchanged; busy/backoff are gateway-availability codes, not mail-server failure classes. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailUnavailableError"];
+                };
+            };
+        };
+    };
+    saveMailAttachmentToLibrary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Workspace ID.
+                 * @example ws_my_workspace
+                 */
+                id: string;
+                /**
+                 * @description ID of the mailbox-owning agent.
+                 * @example mia
+                 */
+                agentId: string;
+                /** @description Folder slug — exactly inbox, sent or drafts (MC-5). */
+                folder: "inbox" | "sent" | "drafts";
+                /**
+                 * @description Folder-scoped message reference — the gateway-issued MailMessageSummary.message_ref (correction I-03), validated on the same lease that performs the save.
+                 * @example uid:456:123
+                 */
+                ref: string;
+                /** @description Stable MIME leaf index from MailAttachment.part_index. */
+                partIndex: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MailAttachmentSaveRequest"];
+            };
+        };
+        responses: {
+            /** @description Saved. The real Library entry, final path, actual size and truthful audit status; only this success enables Open in Library. The retry of an already-committed save returns this same receipt (correction M-02). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailAttachmentSaveResponse"];
+                };
+            };
+            /** @description Malformed ref, part index or body. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Permission refusal — effective tool deny, declined/unattended ask, or missing workspace authority. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Message or attachment part absent, or workspace root missing/broken. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Stale reference — the typed MailStaleReferenceError body (code=stale_reference): the ref failed its epoch/pair/generation validation on the lease that would perform the save. Nothing is written against a recreated folder under an old identity. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailStaleReferenceError"];
+                };
+            };
+            /** @description The part exceeds the 25 MiB decoded-byte cap — larger files are browser Download only. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Write/cleanup failure on the destination — no partial file is reported as saved; a cleanup failure after a refused write is surfaced, never logged away. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Mail server failure while refetching the part — sanitized error class in the body's code field (MC-8). A failed transfer leaves no partial file. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not dialed: code=backoff or code=busy (same semantics as the read paths), with the optional typed reason field. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailUnavailableError"];
+                };
+            };
+        };
+    };
+    getMailReplyContext: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Workspace ID.
+                 * @example ws_my_workspace
+                 */
+                id: string;
+                /**
+                 * @description ID of the mailbox-owning agent.
+                 * @example mia
+                 */
+                agentId: string;
+                /** @description Folder slug — exactly inbox, sent or drafts (MC-5). */
+                folder: "inbox" | "sent" | "drafts";
+                /**
+                 * @description Folder-scoped message reference — the gateway-issued MailMessageSummary.message_ref (correction I-03), validated on the same lease that assembles the context.
+                 * @example uid:456:123
+                 */
+                ref: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MailReplyContextRequest"];
+            };
+        };
+        responses: {
+            /** @description Recipients, subject and editable quoted context. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailReplyContextResponse"];
+                };
+            };
+            /** @description Malformed ref, unknown mode, or failed Message-ID validation. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Message not found in the addressed folder (no body or folder leakage). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Stale reference — the typed MailStaleReferenceError body (code=stale_reference): the ref failed its epoch/pair/generation validation on the lease that would assemble the context. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailStaleReferenceError"];
+                };
+            };
+            500: components["responses"]["500InternalServerError"];
+            /** @description Mail server failure while reading the message — sanitized error class in the body's code field (MC-8). */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not dialed: code=backoff or code=busy (same semantics as the read paths), with the optional typed reason field. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailUnavailableError"];
+                };
+            };
+        };
+    };
+    getWorkspaceMailSummary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Workspace ID.
+                 * @example ws_my_workspace
+                 */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One summary entry per mailbox in the workspace. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailSummaryList"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Workspace not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    sendMailMessage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Workspace ID.
+                 * @example ws_my_workspace
+                 */
+                id: string;
+                /**
+                 * @description ID of the mailbox-owning agent.
+                 * @example mia
+                 */
+                agentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MailSendRequest"];
+            };
+        };
+        responses: {
+            /** @description Sent. The Sent APPEND result is reported in the body (sent_saved / save_warning — MC-9). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailSendResponse"];
+                };
+            };
+            /** @description Validation failure — recipients, body bound, attachment caps, header injection. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Workspace, agent, or mailbox pair not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["429TooManyRequests"];
+            500: components["responses"]["500InternalServerError"];
+            /** @description SMTP/IMAP upstream failure — sanitized error class in the body's code field (MC-8); nothing transmitted on IMAP-side failure without a send. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    updateMailDraft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Workspace ID.
+                 * @example ws_my_workspace
+                 */
+                id: string;
+                /**
+                 * @description ID of the mailbox-owning agent.
+                 * @example mia
+                 */
+                agentId: string;
+                /**
+                 * @description Folder-scoped reference of the draft in drafts (MC-13 — draft actions resolve only inside drafts): `uid:<uidvalidity>:<uid>` or `mid:<Message-ID>`.
+                 * @example uid:456:124
+                 */
+                ref: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MailDraftUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description The updated draft (MailMessage). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailMessage"];
+                };
+            };
+            /** @description Validation failure, or body uidvalidity/uid disagree with a uid-form path ref (round-2 MAJ-008.1/.6). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Draft gone (deleted elsewhere) or pair has no mailbox. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Stale precondition — the viewed draft no longer matches uidvalidity:uid; body code stale_draft; nothing mutated (MC-16). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["429TooManyRequests"];
+            500: components["responses"]["500InternalServerError"];
+            /** @description Mail server failure — sanitized error class in the body's code field (MC-8). */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    discardMailDraft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Workspace ID.
+                 * @example ws_my_workspace
+                 */
+                id: string;
+                /**
+                 * @description ID of the mailbox-owning agent.
+                 * @example mia
+                 */
+                agentId: string;
+                /**
+                 * @description Folder-scoped reference of the draft in drafts (MC-13): `uid:<uidvalidity>:<uid>` or `mid:<Message-ID>`.
+                 * @example uid:456:124
+                 */
+                ref: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The draft is discarded (or expunged under UIDPLUS). No response body. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Draft gone or pair has no mailbox. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["429TooManyRequests"];
+            500: components["responses"]["500InternalServerError"];
+            /** @description Mail server failure — sanitized error class in the body's code field (MC-8). */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    sendMailDraft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Workspace ID.
+                 * @example ws_my_workspace
+                 */
+                id: string;
+                /**
+                 * @description ID of the mailbox-owning agent.
+                 * @example mia
+                 */
+                agentId: string;
+                /**
+                 * @description Folder-scoped reference of the draft in drafts (MC-13): `uid:<uidvalidity>:<uid>` or `mid:<Message-ID>`.
+                 * @example uid:456:124
+                 */
+                ref: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MailDraftSendRequest"];
+            };
+        };
+        responses: {
+            /** @description Transmitted (first send or recorded idempotent outcome). Sent APPEND result and draft-cleanup warnings in the body (MC-9/MC-28). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailSendResponse"];
+                };
+            };
+            /** @description Validation failure — recipients, body bound, attachment caps, header injection, precondition disagreement. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Draft gone or pair has no mailbox. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Stale precondition (stale_draft, MC-16), or an already-sent repeat whose recorded outcome is unavailable (round-2 MAJ-009). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["429TooManyRequests"];
+            500: components["responses"]["500InternalServerError"];
+            /** @description Mail server failure — sanitized error class in the body's code field (MC-8). */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    mintMailHtmlPreviewToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MailHtmlPreviewTokenRequest"];
+            };
+        };
+        responses: {
+            /** @description Token minted; the SPA points the sandboxed iframe at /mail-preview/html/{token}. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailHtmlPreviewTokenResponse"];
+                };
+            };
+            /** @description Validation failure — unknown folder slug or malformed message_ref. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Workspace, agent, mailbox pair, or message not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["429TooManyRequests"];
+            /** @description Upstream mail failure during the mint's one IMAP fetch — sanitized error class in the body's code field (MC-8). */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    mintMailAttachmentPreview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MailAttachmentPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Grant minted; the temporary Library viewer renders through content_source.byte_url. Metadata only — no payload. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailAttachmentPreviewResponse"];
+                };
+            };
+            /** @description Validation failure — unknown folder slug, malformed message_ref or part index. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Workspace, agent, mailbox pair, message, or attachment part not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Stale reference — the typed MailStaleReferenceError body (code=stale_reference): the message_ref failed its epoch/pair/generation validation on the lease that would serve the preview fetch (correction I-03). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailStaleReferenceError"];
+                };
+            };
+            /** @description The part exceeds the 25 MiB actual-decoded-byte preview cap — the larger-file path is the browser Download (getMailAttachment), never a truncated preview. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["429TooManyRequests"];
+            500: components["responses"]["500InternalServerError"];
+            /** @description Upstream mail failure during the mint's one part fetch — sanitized error class in the body's code field (MC-8). */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not dialed: code=backoff or code=busy (same semantics as the read paths), with the optional typed reason field. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailUnavailableError"];
+                };
+            };
+        };
+    };
+    revokeMailAttachmentPreview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Opaque grant identifier from MailAttachmentPreviewResponse.preview_id.
+                 * @example at_9f2c1e
+                 */
+                previewId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Grant revoked (or already gone). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationResult"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            /** @description Unknown or expired grant identifier. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    mintMailSignaturePreviewToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MailSignaturePreviewTokenRequest"];
+            };
+        };
+        responses: {
+            /** @description Token minted; the SPA points the sandboxed signature-preview iframe at /mail-preview/html/{token}. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MailSignaturePreviewTokenResponse"];
+                };
+            };
+            /** @description Validation failure — the signature HTML is outside its MC-1 bound (empty, or over the 16384-character maximum). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            429: components["responses"]["429TooManyRequests"];
+        };
+    };
     getWorkspaceDelegation: {
         parameters: {
             query?: never;
@@ -23586,6 +28818,407 @@ export interface operations {
             429: components["responses"]["429TooManyRequests"];
         };
     };
+    getSecretRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Secret request id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current request state. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretRequestState"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            /** @description Saved request state is unavailable (the service is not ready, or saved state could not be read or reconciled). This is not absence and not success; retrying this read is safe. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    submitSecretRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Secret request id. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SecretSubmitRequest"];
+            };
+        };
+        responses: {
+            /** @description Stored (or cancelled). Returns the resulting state. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretRequestState"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            /** @description The request is not pending (including a duplicate submit); body is its current state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretRequestState"];
+                };
+            };
+            /** @description Body larger than 65,536 bytes. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The save failed before publication. No submitted values were stored; the request remains pending. The error is value-free. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description One of two bodies. A SecretRequestState body means the submission IS committed, but post-commit metadata or continuation dispatch is not confirmed: it has state submitted and the committed reference_names. Boot or chat attach retries an undelivered continuation; re-submitting returns 409 with the same state and never stores another version. An ErrorResponse body means the service or saved request state was unavailable before this attempt reached publication: this attempt committed no values and no authoritative state is returned. A pending or earlier submitted request may still exist; retry the same request id once available and never resend values automatically. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretRequestState"] | components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    listSecrets: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Stored secret versions. Never null. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretNameEntry"][];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            503: components["responses"]["503ServiceUnavailable"];
+        };
+    };
+    updateSecretOptions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Reference name of the secret version. */
+                reference: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SecretOptionsUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated entry. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretNameEntry"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            422: components["responses"]["422UnprocessableEntity"];
+            503: components["responses"]["503ServiceUnavailable"];
+        };
+    };
+    getAgentDependencies: {
+        parameters: {
+            query?: {
+                /** @description Limit the list to one workspace. */
+                workspace_id?: string;
+            };
+            header?: never;
+            path: {
+                /** @description Agent ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Dependency list. Never null. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentDependencyList"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            /** @description This sub-path accepts GET only. Any other method returns 405 with response header Allow: GET, except OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted. */
+            405: {
+                headers: {
+                    /** @description Methods this sub-path accepts. For dependencies this is GET. */
+                    Allow?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    listWorkspaceRooms: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Rooms of the workspace. Never null. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Room"][];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    createRoom: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoomCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Room created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Room"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            422: components["responses"]["422UnprocessableEntity"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    getRoom: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Room ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The room. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Room"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    deleteRoom: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Room ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Room deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            422: components["responses"]["422UnprocessableEntity"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    updateRoomMembers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Room ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoomMembersUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated room. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Room"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            422: components["responses"]["422UnprocessableEntity"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    getRoomHistory: {
+        parameters: {
+            query?: {
+                /** @description Exclusive entry-sequence boundary, with no default. Omit for the newest page. Only decimal digits are accepted; leading zeroes may parse normally. Empty values, signs, whitespace, decimal points, exponents, non-numeric text, signed int64 overflow and repeated occurrences (even identical ones) are rejected with the exact before_seq syntax 400 documented above. Must not exceed the newest actual entry seq, not the live stream high-water sequence; a cursor beyond that bound returns the distinct cursor-ahead 400 above. Positive values within the bound need not identify an existing entry, including values before the first entry. */
+                before_seq?: number;
+                /** @description Maximum number of entries to return. Omitted means 100; present empty does not mean default. Only decimal digits are accepted; leading zeroes may parse normally. Empty values, signs, whitespace, decimal points, exponents, non-numeric text, overflow, values outside 1 to 1000 and repeated occurrences (even identical ones) return exactly 400 {"error":"limit must be an integer from 1 to 1000"}. Never clamp an invalid value. */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Room ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The newest eligible page in ascending entry seq order. entries is always an array, never null. has_older is required; next_before_seq is present if and only if has_older is true and equals the first returned entry's seq. An empty or terminal page has has_older false and omits next_before_seq, even when the terminal page is full. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoomHistoryResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    postRoomMessage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Room ID. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoomMessageRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted for recording. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            422: components["responses"]["422UnprocessableEntity"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
 }
 
 // ── Named type re-exports from components.schemas ────────────────────────────
@@ -23615,7 +29248,6 @@ export type OnboardingPreferences = components["schemas"]["OnboardingPreferences
 export type OnboardingProviderApiKey = components["schemas"]["OnboardingProviderApiKey"];
 export type OnboardingProviderSignIn = components["schemas"]["OnboardingProviderSignIn"];
 export type SignInStartResponse = components["schemas"]["SignInStartResponse"];
-export type SignInStartResponseCliLogin = components["schemas"]["SignInStartResponseCliLogin"];
 export type SignInStartResponseDeviceCode = components["schemas"]["SignInStartResponseDeviceCode"];
 export type SignInStatus = components["schemas"]["SignInStatus"];
 export type SignInPollRequest = components["schemas"]["SignInPollRequest"];
@@ -23624,8 +29256,10 @@ export type OnboardingCompleteResponse = components["schemas"]["OnboardingComple
 export type ProbeProviderRequest = components["schemas"]["ProbeProviderRequest"];
 export type ProbeProviderResponse = components["schemas"]["ProbeProviderResponse"];
 export type Session = components["schemas"]["Session"];
+export type AgentActivityRun = components["schemas"]["AgentActivityRun"];
 export type SessionStats = components["schemas"]["SessionStats"];
 export type SessionDetail = components["schemas"]["SessionDetail"];
+export type SessionHistoryResponse = components["schemas"]["SessionHistoryResponse"];
 export type SessionPage = components["schemas"]["SessionPage"];
 export type SessionCreateRequest = components["schemas"]["SessionCreateRequest"];
 export type SessionRenameRequest = components["schemas"]["SessionRenameRequest"];
@@ -23639,6 +29273,7 @@ export type HostFolderListing = components["schemas"]["HostFolderListing"];
 export type HostFolderEntry = components["schemas"]["HostFolderEntry"];
 export type LibraryEntry = components["schemas"]["LibraryEntry"];
 export type LibraryEntryMount = components["schemas"]["LibraryEntryMount"];
+export type LibraryEntryView = components["schemas"]["LibraryEntryView"];
 export type LibraryContentResponse = components["schemas"]["LibraryContentResponse"];
 export type LibraryContentRequest = components["schemas"]["LibraryContentRequest"];
 export type LibraryBinaryContentRequest = components["schemas"]["LibraryBinaryContentRequest"];
@@ -23727,9 +29362,11 @@ export type VaultSearchNoteHit = components["schemas"]["VaultSearchNoteHit"];
 export type VaultSearchRecordHit = components["schemas"]["VaultSearchRecordHit"];
 export type VaultSearchViewHit = components["schemas"]["VaultSearchViewHit"];
 export type ValidationReport = components["schemas"]["ValidationReport"];
+export type AgentFigure = components["schemas"]["AgentFigure"];
+export type AgentRole = components["schemas"]["AgentRole"];
+export type AgentColor = components["schemas"]["AgentColor"];
 export type Agent = components["schemas"]["Agent"];
 export type AgentModelParams = components["schemas"]["AgentModelParams"];
-export type AgentRateLimits = components["schemas"]["AgentRateLimits"];
 export type AgentStats = components["schemas"]["AgentStats"];
 export type AgentToolsCfg = components["schemas"]["AgentToolsCfg"];
 export type AgentToolsMcpServerBinding = components["schemas"]["AgentToolsMcpServerBinding"];
@@ -23740,8 +29377,16 @@ export type AgentCreateRequestSubagent = components["schemas"]["AgentCreateReque
 export type AgentCreateRequestSubagent3p = components["schemas"]["AgentCreateRequestSubagent3p"];
 export type AgentUpdateRequest = components["schemas"]["AgentUpdateRequest"];
 export type FallbackModel = components["schemas"]["FallbackModel"];
+export type FallbackModelPair = components["schemas"]["FallbackModelPair"];
 export type ExternalCliTool = components["schemas"]["ExternalCliTool"];
 export type ExecutorConfig = components["schemas"]["ExecutorConfig"];
+export type ExecutorConfigCreate = components["schemas"]["ExecutorConfigCreate"];
+export type ExecutorConfigUpdate = components["schemas"]["ExecutorConfigUpdate"];
+export type AgentDetail = components["schemas"]["AgentDetail"];
+export type AgentModelChainEntry = components["schemas"]["AgentModelChainEntry"];
+export type AgentToolPermission = components["schemas"]["AgentToolPermission"];
+export type AgentPreview = components["schemas"]["AgentPreview"];
+export type AgentExecutorSettingsResult = components["schemas"]["AgentExecutorSettingsResult"];
 export type ExecutorDefaults = components["schemas"]["ExecutorDefaults"];
 export type ExecutorCommandPreviewRequest = components["schemas"]["ExecutorCommandPreviewRequest"];
 export type ExecutorCommandPreviewResponse = components["schemas"]["ExecutorCommandPreviewResponse"];
@@ -23779,6 +29424,15 @@ export type HealthResponse = components["schemas"]["HealthResponse"];
 export type GatewayStatus = components["schemas"]["GatewayStatus"];
 export type PerformanceSettings = components["schemas"]["PerformanceSettings"];
 export type PerformanceSettingsUpdate = components["schemas"]["PerformanceSettingsUpdate"];
+export type MaxToolIterationsSource = components["schemas"]["MaxToolIterationsSource"];
+export type MaxToolIterationsSavedState = components["schemas"]["MaxToolIterationsSavedState"];
+export type MaxToolIterationAgentChange = components["schemas"]["MaxToolIterationAgentChange"];
+export type MaxToolIterationsLoweringPreview = components["schemas"]["MaxToolIterationsLoweringPreview"];
+export type MaxToolIterationsConfirmedAgent = components["schemas"]["MaxToolIterationsConfirmedAgent"];
+export type MaxToolIterationsLoweringConflict = components["schemas"]["MaxToolIterationsLoweringConflict"];
+export type PerformanceReloadFailedDetails = components["schemas"]["PerformanceReloadFailedDetails"];
+export type PerformanceReloadFailedError = components["schemas"]["PerformanceReloadFailedError"];
+export type PerformancePendingApply = components["schemas"]["PerformancePendingApply"];
 export type Provider = components["schemas"]["Provider"];
 export type ProviderDependent = components["schemas"]["ProviderDependent"];
 export type ProviderDeleteRequest = components["schemas"]["ProviderDeleteRequest"];
@@ -23790,9 +29444,11 @@ export type EntitlementResponse = components["schemas"]["EntitlementResponse"];
 export type ProvidersCatalog = components["schemas"]["ProvidersCatalog"];
 export type CatalogProvider = components["schemas"]["CatalogProvider"];
 export type CatalogModel = components["schemas"]["CatalogModel"];
+export type CatalogModelReasoning = components["schemas"]["CatalogModelReasoning"];
 export type CatalogProtocol = components["schemas"]["CatalogProtocol"];
 export type CatalogProviderRegion = components["schemas"]["CatalogProviderRegion"];
 export type CatalogResizeLimits = components["schemas"]["CatalogResizeLimits"];
+export type ContextWindowNotice = components["schemas"]["ContextWindowNotice"];
 export type ContextWindowSource = components["schemas"]["ContextWindowSource"];
 export type ContextModelOverride = components["schemas"]["ContextModelOverride"];
 export type ContextSettings = components["schemas"]["ContextSettings"];
@@ -23802,6 +29458,8 @@ export type ReAuthResponse = components["schemas"]["ReAuthResponse"];
 export type IntegrationProvider = components["schemas"]["IntegrationProvider"];
 export type IntegrationProvidersResponse = components["schemas"]["IntegrationProvidersResponse"];
 export type IntegrationProviderUpdateRequest = components["schemas"]["IntegrationProviderUpdateRequest"];
+export type SearchProviderCheckRequest = components["schemas"]["SearchProviderCheckRequest"];
+export type SearchProviderCheckResponse = components["schemas"]["SearchProviderCheckResponse"];
 export type TranscribeResponse = components["schemas"]["TranscribeResponse"];
 export type Skill = components["schemas"]["Skill"];
 export type SlashCommand = components["schemas"]["SlashCommand"];
@@ -23838,14 +29496,55 @@ export type SessionScopeUpdateResponse = components["schemas"]["SessionScopeUpda
 export type RetentionUpdateResponse = components["schemas"]["RetentionUpdateResponse"];
 export type AgentToolsResponse = components["schemas"]["AgentToolsResponse"];
 export type RunnerTestResponse = components["schemas"]["RunnerTestResponse"];
+export type ChannelEnableRequest = components["schemas"]["ChannelEnableRequest"];
 export type ChannelEnabledResponse = components["schemas"]["ChannelEnabledResponse"];
 export type ChannelTestResponse = components["schemas"]["ChannelTestResponse"];
+export type ChannelOutbound = components["schemas"]["ChannelOutbound"];
+export type ChannelAvailability = components["schemas"]["ChannelAvailability"];
+export type ChannelOutboundRead = components["schemas"]["ChannelOutboundRead"];
+export type ChannelOutboundUpdateRequest = components["schemas"]["ChannelOutboundUpdateRequest"];
+export type ChannelOutboundWriteResponse = components["schemas"]["ChannelOutboundWriteResponse"];
+export type ChannelOutboundRejection = components["schemas"]["ChannelOutboundRejection"];
+export type ChannelConfigureError = components["schemas"]["ChannelConfigureError"];
+export type ChannelConfigureResponse = components["schemas"]["ChannelConfigureResponse"];
+export type ChannelRejectedSenders = components["schemas"]["ChannelRejectedSenders"];
 export type ChannelRouting = components["schemas"]["ChannelRouting"];
+export type ChannelRoutingUpdateRequest = components["schemas"]["ChannelRoutingUpdateRequest"];
 export type ChannelCreateRequest = components["schemas"]["ChannelCreateRequest"];
 export type ChannelCreateResponse = components["schemas"]["ChannelCreateResponse"];
 export type Mailbox = components["schemas"]["Mailbox"];
 export type MailboxConfigureRequest = components["schemas"]["MailboxConfigureRequest"];
 export type MailboxListResponse = components["schemas"]["MailboxListResponse"];
+export type MailFolder = components["schemas"]["MailFolder"];
+export type MailFolderList = components["schemas"]["MailFolderList"];
+export type MailMessageSummary = components["schemas"]["MailMessageSummary"];
+export type MailMessagePage = components["schemas"]["MailMessagePage"];
+export type MailMessage = components["schemas"]["MailMessage"];
+export type MailAttachment = components["schemas"]["MailAttachment"];
+export type MailboxNewMailSummary = components["schemas"]["MailboxNewMailSummary"];
+export type MailSummaryList = components["schemas"]["MailSummaryList"];
+export type MailAttachmentInput = components["schemas"]["MailAttachmentInput"];
+export type MailSendRequest = components["schemas"]["MailSendRequest"];
+export type MailSendResponse = components["schemas"]["MailSendResponse"];
+export type MailDraftUpdateRequest = components["schemas"]["MailDraftUpdateRequest"];
+export type MailDraftSendRequest = components["schemas"]["MailDraftSendRequest"];
+export type MailHtmlPreviewTokenRequest = components["schemas"]["MailHtmlPreviewTokenRequest"];
+export type MailHtmlPreviewTokenResponse = components["schemas"]["MailHtmlPreviewTokenResponse"];
+export type MailSignaturePreviewTokenRequest = components["schemas"]["MailSignaturePreviewTokenRequest"];
+export type MailSignaturePreviewTokenResponse = components["schemas"]["MailSignaturePreviewTokenResponse"];
+export type CreateEmailDraftResult = components["schemas"]["CreateEmailDraftResult"];
+export type MailUnavailableError = components["schemas"]["MailUnavailableError"];
+export type MailReadMetadata = components["schemas"]["MailReadMetadata"];
+export type MailStaleReferenceError = components["schemas"]["MailStaleReferenceError"];
+export type MailAttachmentPreviewRequest = components["schemas"]["MailAttachmentPreviewRequest"];
+export type MailAttachmentPreviewResponse = components["schemas"]["MailAttachmentPreviewResponse"];
+export type MailAttachmentContentSource = components["schemas"]["MailAttachmentContentSource"];
+export type MailAttachmentSaveRequest = components["schemas"]["MailAttachmentSaveRequest"];
+export type MailAttachmentSaveResponse = components["schemas"]["MailAttachmentSaveResponse"];
+export type MailReplyContextRequest = components["schemas"]["MailReplyContextRequest"];
+export type MailReplyContextResponse = components["schemas"]["MailReplyContextResponse"];
+export type MailboxRemovalResult = components["schemas"]["MailboxRemovalResult"];
+export type MailboxCleanupRequest = components["schemas"]["MailboxCleanupRequest"];
 export type BackupCreateResponse = components["schemas"]["BackupCreateResponse"];
 export type OnboardingStatusResponse = components["schemas"]["OnboardingStatusResponse"];
 export type OperationResult = components["schemas"]["OperationResult"];
@@ -23871,9 +29570,10 @@ export type ProviderUpdateRequest = components["schemas"]["ProviderUpdateRequest
 export type ProviderValidation = components["schemas"]["ProviderValidation"];
 export type AppStatePatchRequest = components["schemas"]["AppStatePatchRequest"];
 export type SkillInstallRequest = components["schemas"]["SkillInstallRequest"];
+export type SkillCopyRequest = components["schemas"]["SkillCopyRequest"];
+export type SkillDetail = components["schemas"]["SkillDetail"];
 export type SkillSearchResult = components["schemas"]["SkillSearchResult"];
 export type SkillMarketplaceStatus = components["schemas"]["SkillMarketplaceStatus"];
-export type SseChatRequest = components["schemas"]["SseChatRequest"];
 export type ToolApprovalActionRequest = components["schemas"]["ToolApprovalActionRequest"];
 export type CredentialSetRequest = components["schemas"]["CredentialSetRequest"];
 export type CredentialRotateRequest = components["schemas"]["CredentialRotateRequest"];
@@ -23882,6 +29582,10 @@ export type BearerToken = components["schemas"]["BearerToken"];
 export type ChannelConfigureRequest = components["schemas"]["ChannelConfigureRequest"];
 export type CliDetect = components["schemas"]["CliDetect"];
 export type CliDetectEntry = components["schemas"]["CliDetectEntry"];
+export type CliPreset = components["schemas"]["CliPreset"];
+export type CliPresetView = components["schemas"]["CliPresetView"];
+export type ThirdPartyAgentSettings = components["schemas"]["ThirdPartyAgentSettings"];
+export type ThirdPartyAgentSettingsView = components["schemas"]["ThirdPartyAgentSettingsView"];
 export type CliValidateRequest = components["schemas"]["CliValidateRequest"];
 export type CliValidateResponse = components["schemas"]["CliValidateResponse"];
 export type RetentionUpdateRequest = components["schemas"]["RetentionUpdateRequest"];
@@ -23929,7 +29633,6 @@ export type SessionMessageCheckpoint = components["schemas"]["SessionMessageChec
 export type SessionMessageArtifact = components["schemas"]["SessionMessageArtifact"];
 export type SessionMessageBlocker = components["schemas"]["SessionMessageBlocker"];
 export type SessionMessageQuestion = components["schemas"]["SessionMessageQuestion"];
-export type SessionMessageDecisionRequest = components["schemas"]["SessionMessageDecisionRequest"];
 export type SessionMessageError = components["schemas"]["SessionMessageError"];
 export type SessionMessageHandback = components["schemas"]["SessionMessageHandback"];
 export type SessionMessageRevisionEntry = components["schemas"]["SessionMessageRevisionEntry"];
@@ -23939,6 +29642,7 @@ export type SessionMessageRespond = components["schemas"]["SessionMessageRespond
 export type RevisionEntry = components["schemas"]["RevisionEntry"];
 export type SessionLifecycleRecord = components["schemas"]["SessionLifecycleRecord"];
 export type Goal = components["schemas"]["Goal"];
+export type HelperEvent = components["schemas"]["HelperEvent"];
 export type PlanRestartResponse = components["schemas"]["PlanRestartResponse"];
 export type DelegateActionRequest = components["schemas"]["DelegateActionRequest"];
 export type DelegateRunAction = components["schemas"]["DelegateRunAction"];
@@ -23947,12 +29651,15 @@ export type DelegateInboxAction = components["schemas"]["DelegateInboxAction"];
 export type DelegateInboxAckAction = components["schemas"]["DelegateInboxAckAction"];
 export type DelegateSteerAction = components["schemas"]["DelegateSteerAction"];
 export type DelegateRespondAction = components["schemas"]["DelegateRespondAction"];
-export type DelegateCancelAction = components["schemas"]["DelegateCancelAction"];
-export type DelegateFollowUpAction = components["schemas"]["DelegateFollowUpAction"];
+export type DelegateStopAllAction = components["schemas"]["DelegateStopAllAction"];
+export type DelegateClearGoalAction = components["schemas"]["DelegateClearGoalAction"];
+export type DelegateResumeAction = components["schemas"]["DelegateResumeAction"];
+export type DelegateRedirectAction = components["schemas"]["DelegateRedirectAction"];
 export type DelegatePeekAction = components["schemas"]["DelegatePeekAction"];
 export type DelegateSessionResponse = components["schemas"]["DelegateSessionResponse"];
 export type DelegateStatusResponse = components["schemas"]["DelegateStatusResponse"];
 export type DelegateInboxResponse = components["schemas"]["DelegateInboxResponse"];
+export type DelegateNotDeliveredSummary = components["schemas"]["DelegateNotDeliveredSummary"];
 export type DelegateRespondResponse = components["schemas"]["DelegateRespondResponse"];
 export type DelegatePeekResponse = components["schemas"]["DelegatePeekResponse"];
 export type MessageParentRequest = components["schemas"]["MessageParentRequest"];
@@ -23963,3 +29670,16 @@ export type MessageParentBlocker = components["schemas"]["MessageParentBlocker"]
 export type MessageParentQuestion = components["schemas"]["MessageParentQuestion"];
 export type MessageParentHandback = components["schemas"]["MessageParentHandback"];
 export type MessageParentResponse = components["schemas"]["MessageParentResponse"];
+export type SecretSubmitRequest = components["schemas"]["SecretSubmitRequest"];
+export type SecretRequestState = components["schemas"]["SecretRequestState"];
+export type SecretNameEntry = components["schemas"]["SecretNameEntry"];
+export type SecretOptionsUpdateRequest = components["schemas"]["SecretOptionsUpdateRequest"];
+export type Room = components["schemas"]["Room"];
+export type RoomInvitationContext = components["schemas"]["RoomInvitationContext"];
+export type RoomInvitationStatus = components["schemas"]["RoomInvitationStatus"];
+export type RoomCreateRequest = components["schemas"]["RoomCreateRequest"];
+export type RoomMembersUpdateRequest = components["schemas"]["RoomMembersUpdateRequest"];
+export type RoomMessageRequest = components["schemas"]["RoomMessageRequest"];
+export type RoomHistoryResponse = components["schemas"]["RoomHistoryResponse"];
+export type AgentDependency = components["schemas"]["AgentDependency"];
+export type AgentDependencyList = components["schemas"]["AgentDependencyList"];

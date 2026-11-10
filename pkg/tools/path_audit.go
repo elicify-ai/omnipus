@@ -236,3 +236,37 @@ func lastWriterForPath(auditLog *audit.Logger, canonicalPath, callerAgentID stri
 	}
 	return agentID, true
 }
+
+// PathSearchRootsEvent is the event name of the one audit row an agent
+// `grep` call writes when its search ran (#920,
+// read-boundary-consistency-spec.md FR-021, MV-3; ADR-081 D4 gate 5(b)). A
+// sibling of PathAccessDeniedEvent, registered in pkg/audit's
+// validEventNames.
+const PathSearchRootsEvent = "path.search_roots"
+
+// emitGrepSearchRoots writes the path.search_roots row: decision allow,
+// details exactly {roots, path_arg} — the realpaths of the roots handed to
+// the engine in walk order (a root lost mid-call still listed) and the raw
+// `path` argument ("" when omitted). One row per call, never one per
+// matched file (FR-022), and never the search term or any file content
+// (SL-8). nil logger = best-effort no-op, like emitPathAccessDenied.
+func emitGrepSearchRoots(ctx context.Context, auditLog *audit.Logger, toolName string, roots []string, pathArg string) {
+	if auditLog == nil {
+		return
+	}
+	entry := &audit.Entry{
+		Timestamp: time.Now().UTC(),
+		Event:     PathSearchRootsEvent,
+		Decision:  audit.DecisionAllow,
+		AgentID:   ToolAgentID(ctx),
+		SessionID: ToolTranscriptSessionID(ctx),
+		Tool:      toolName,
+		Details: map[string]any{
+			"roots":    append([]string{}, roots...),
+			"path_arg": pathArg,
+		},
+	}
+	if err := auditLog.Log(entry); err != nil {
+		slog.Error("path_audit: search roots log write failed", "error", err, "session_id", entry.SessionID)
+	}
+}

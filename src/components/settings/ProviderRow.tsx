@@ -33,14 +33,15 @@ import { catalogLogoSlug, catalogSubtitle } from '@/lib/catalogDisplay'
 
 // ADR-068 FR-005/FR-045: a row whose catalog entry declares `sign_in` in
 // `auth_methods` renders a Sign in / Signed-in-as / Manage control
-// (SignInDialog, T068-33; Manage/re-sign-in, T068-26) INSTEAD of the API-key
+// (SignInDialog, T068-33; Manage, T068-26) INSTEAD of the API-key
 // Configure button. Gated primarily on `entry.auth_methods` (the literal
 // FR-005 signal — the registry-fed CatalogProvider, `GET /providers/catalog`);
 // falls back to the configured Provider row's own `auth_method` field
 // (Provider.yaml, always present) for the rare case a row's `entry` failed to
 // resolve (e.g. a catalog refresh gap) but the row itself already carries a
-// sign_in config. The served catalog carries three such rows today —
-// `openai-chatgpt`, `codex-cli` and `github-copilot`; `xai` stays key-only
+// sign_in config. The served catalog carries one such row today —
+// `openai-chatgpt` (WU-24, founder 2026-10-14: the CLI model providers and
+// their sign-in flow are deleted outright); `xai` stays key-only
 // until its row carries `sign_in` (FR-049), and Anthropic/Google never gain
 // it (ADR-068 §8b decision 4).
 function isSignInCapable(provider: Provider, entry?: CatalogProvider): boolean {
@@ -48,31 +49,14 @@ function isSignInCapable(provider: Provider, entry?: CatalogProvider): boolean {
   return provider.auth_method === 'sign_in'
 }
 
-// cliKindOf resolves the `cli_login` subprocess driver for a sign-in row —
-// the catalog entry first (ADR-067 X-14), falling back to the configured
-// row's own `cli_kind` for the same "entry failed to resolve" gap
-// `isSignInCapable` guards against. `undefined` means this is a
-// `device_code` row (openai-chatgpt / xai) rather than `cli_login`
-// (codex-cli / github-copilot) — the distinction the Manage action needs to
-// pick a re-sign-in surface (T068-26): `cli_login` rows never need Omnipus
-// to refresh anything (FR-007), so an expired session re-checks the vendor
-// CLI's own saved login file (ReSignInDialog); `device_code` rows genuinely
-// need a fresh device-code approval (SignInDialog) once expired.
-function cliKindOf(provider: Provider, entry?: CatalogProvider): 'codex' | 'copilot' | undefined {
-  return entry?.cli_kind ?? provider.cli_kind
-}
-
 // ADR-068 FR-031: "Check with my account" makes ONE live listing call with
-// the provider's own key. The gateway 409s for protocol "cli" (codex-cli,
-// github-copilot — there is no key to list with, only a subprocess) and for
-// custom rows (no catalog entry to intersect against), so the control is
-// never offered for either — clicking a button that is guaranteed to 409
-// would just trade one dead end for another. Anything else that can serve a
-// turn right now (connected or signed_in, ADR-068 FR-019's usable set) is
-// offered the control.
+// the provider's own key. The gateway 409s for custom rows (no catalog entry
+// to intersect against), so the control is never offered there — clicking a
+// button that is guaranteed to 409 would just trade one dead end for
+// another. Anything else that can serve a turn right now (connected or
+// signed_in, ADR-068 FR-019's usable set) is offered the control.
 export function isEntitlementEligible(provider: Provider): boolean {
   if (provider.custom) return false
-  if (provider.protocol === 'cli') return false
   return isProviderUsable(provider.status)
 }
 
@@ -291,7 +275,8 @@ function statusBadge(
 // (FR-034): "Sign in" for a row that has never connected (or errored) and
 // "Manage" for one that has — signed in, or previously signed in and now
 // expired. Non-sign-in rows never reach this function (they use
-// Edit/Configure, computed inline below).
+// Edit/Configure, computed inline below); an `unknown-provider` row reaches
+// no action at all (see the render gate below).
 function signInActionLabel(status: ProviderStatus): 'Sign in' | 'Manage' {
   switch (status) {
     case 'signed_in':
@@ -300,9 +285,10 @@ function signInActionLabel(status: ProviderStatus): 'Sign in' | 'Manage' {
     case 'disconnected':
     case 'error':
       return 'Sign in'
-    // A sign-in row is never `connected`/`unknown-provider` in practice —
-    // those statuses belong to API-key rows — but the switch must stay
-    // exhaustive over all six wire values (FR-038 DoD).
+    // WU-24 made `unknown-provider` reachable for a sign-in row (a removed
+    // provider id left configured), but such a row renders no action — this
+    // case exists only so the switch stays exhaustive over all six wire
+    // values (FR-038 DoD). `connected` remains an API-key-row status.
     case 'connected':
     case 'unknown-provider':
       return 'Manage'
@@ -325,10 +311,10 @@ export interface ProviderRowProps {
   onSignIn?: () => void
   /**
    * ADR-068 FR-034: opens the Manage surface for a sign-in-capable row that
-   * has connected at least once — the account/sign-out view for `signed_in`,
-   * or the re-sign-in flow for `expired` (the caller picks ManageSignInDialog
-   * vs. ReSignInDialog vs. the fresh SignInDialog based on `provider.status`
-   * and `cli_kind` — see ProvidersSection.tsx's `handleManage`).
+   * has connected at least once — the account/sign-out view for `signed_in`
+   * (ManageSignInDialog), or a fresh device-code sign-in for `expired`
+   * (the caller picks per `provider.status` — see ProvidersSection.tsx's
+   * `handleManage`).
    */
   onManage?: () => void
   /** True while the SignInDialog is open/polling for this row's provider id. */
@@ -494,7 +480,12 @@ export function ProviderRow({
               Set as default model…
             </Button>
           )}
-          {signInCapable ? (
+          {/* WU-24 (founder 2026-10-14): a sign-in row whose id the server no
+              longer recognises (a removed provider left configured) keeps its
+              loud "Unknown provider" badge and error text but offers NO
+              sign-in/Manage action — there is no removed provider left to
+              sign into. */}
+          {signInCapable && provider.status !== 'unknown-provider' ? (
             <Button
               size="sm"
               variant={signInActionLabel(provider.status) === 'Manage' ? 'outline' : 'default'}
@@ -509,7 +500,7 @@ export function ProviderRow({
             >
               {signInActionLabel(provider.status)}
             </Button>
-          ) : (
+          ) : !signInCapable ? (
             <Button
               size="sm"
               onClick={onConfigure}
@@ -520,7 +511,7 @@ export function ProviderRow({
                 <><CaretRight size={11} /> Configure</>
               )}
             </Button>
-          )}
+          ) : null}
         </div>
       </div>
 
@@ -561,4 +552,4 @@ export function ProviderRow({
   )
 }
 
-export { isSignInCapable, cliKindOf }
+export { isSignInCapable }

@@ -1,0 +1,32 @@
+title: MailAttachmentInput
+description: >
+  One attachment supplied for an outbound message (D28) — on the human paths
+  (MailSendRequest.attachments, MailDraftUpdateRequest.attachments). The
+  agent path carries no wire schema: agent tool attachments are
+  workspace-file references resolved server-side through
+  pkg/tools/resolvepath.go::ResolvePath under its open-read rule (D33,
+  security sign-off C2; no separate policy or gate — MC-35).
+type: object
+additionalProperties: false
+required:
+  - filename
+  - content_type
+  - data_base64
+properties:
+  filename:
+    type: string
+    description: >
+      Attachment filename. Sanitized on serve and on attach (MC-32) — no
+      path separators are ever stored or served.
+    example: "report-q3.pdf"
+  content_type:
+    type: string
+    description: The attachment's content type as supplied by the composer.
+    example: "application/pdf"
+  data_base64:
+    type: string
+    format: byte
+    description: >
+      The attachment bytes, base64-encoded. Across all attachments of one
+      message the decoded total is capped at 25 MiB with at most 10 files
+      (MC-32) — enforced before any SMTP connection or draft APPEND.

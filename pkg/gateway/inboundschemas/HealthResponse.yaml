@@ -2,8 +2,7 @@ title: HealthResponse
 description: >
   Response from GET /health. HTTP 200 with status "ok" when the gateway is
   serving; HTTP 503 with status "degraded" and a reason when a gateway-fatal
-  condition holds (agent loop dead, config reload failed, default agent
-  unloadable). The audit_* and catalog objects are FIELDS, not status
+  condition holds (agent loop dead, config reload failed). The audit_* and catalog objects are FIELDS, not status
   drivers: they describe a subsystem that is degraded while the gateway
   itself is still serving, so an operator can see the problem without
   reading logs and without the process being taken out of a load balancer.

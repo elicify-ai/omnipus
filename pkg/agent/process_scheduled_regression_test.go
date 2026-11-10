@@ -38,7 +38,7 @@ import (
 // Traces to: pkg/agent/loop.go appendUserTranscript path — #412
 func TestProcessScheduled_UserMessageCount(t *testing.T) {
 	al, home := schedTestLoop(t)
-	registerAgent(t, al, home, "mia", testutil.NewScenario().WithText("done"), false)
+	registerAgent(t, al, home, "mia", testutil.NewScenario().WithText("done"))
 
 	meta, err := al.GetSessionStore().NewScheduledSession("mia")
 	require.NoError(t, err)
@@ -70,7 +70,7 @@ func TestProcessScheduled_UserMessageCount(t *testing.T) {
 // Traces to: pkg/agent/loop.go ProcessScheduled session validation — #412
 func TestProcessScheduled_NonExistentSession_ReturnsError(t *testing.T) {
 	al, home := schedTestLoop(t)
-	registerAgent(t, al, home, "mia", testutil.NewScenario().WithText("ok"), false)
+	registerAgent(t, al, home, "mia", testutil.NewScenario().WithText("ok"))
 
 	// Use a syntactically valid but non-existent session ID.
 	nonExistentID := "session_01JXDOESNOTEXIST00000001"
@@ -92,7 +92,7 @@ func TestProcessScheduled_NonExistentSession_ReturnsError(t *testing.T) {
 func TestProcessScheduled_MessageCountSums(t *testing.T) {
 	al, home := schedTestLoop(t)
 	registerAgent(t, al, home, "mia",
-		testutil.NewScenario().WithText("first").WithText("second"), false)
+		testutil.NewScenario().WithText("first").WithText("second"))
 
 	meta1, err := al.GetSessionStore().NewScheduledSession("mia")
 	require.NoError(t, err)

@@ -90,14 +90,13 @@ describe('BoardView — independent per-lane vertical scroll (UAT Finding 3)', (
     }
   })
 
-  it('the outer container no longer shares ONE vertical scroller across all lanes (overflow-y-hidden, horizontal-only)', () => {
-    const { container } = renderBoard([baseTask()])
-    // The scroll wrapper is the direct parent of the `min-w-max` row wrapper.
-    const rowWrapper = container.querySelector('.min-w-max')
+  it('T4 outer frame shares neither vertical nor horizontal scrolling across lanes', () => {
+    renderBoard([baseTask()])
+    const rowWrapper = screen.getAllByLabelText(/column$/i)[0].parentElement?.parentElement
     const scrollContainer = rowWrapper?.parentElement
     expect(scrollContainer).not.toBeNull()
-    expect(scrollContainer).toHaveClass('overflow-x-auto')
-    expect(scrollContainer).toHaveClass('overflow-y-hidden')
+    expect(scrollContainer).toHaveClass('overflow-hidden')
+    expect(scrollContainer).not.toHaveClass('overflow-auto', 'overflow-x-auto', 'overflow-y-auto')
   })
 
   it('a lane with many cards does not blank out its sibling lanes — every column renders its own tasks independently', () => {
@@ -138,7 +137,7 @@ describe('BoardView — bounded-height chain (min-h-0 propagates row -> column, 
 
     // :287 — horizontal-scroll wrapper: bounded by the root's min-h-0, so it
     // never grows to the row wrapper's content height.
-    const rowWrapperEl = container.querySelector('.min-w-max')
+    const rowWrapperEl = screen.getAllByLabelText(/column$/i)[0].parentElement?.parentElement
     const scrollContainer = rowWrapperEl?.parentElement
     expect(scrollContainer).not.toBeNull()
     expect(scrollContainer).toHaveClass('flex-1')

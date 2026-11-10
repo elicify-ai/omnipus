@@ -20,14 +20,18 @@ package agent
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
 // ---------------------------------------------------------------------------
@@ -69,7 +73,7 @@ func u15RegisterActiveTurn(t *testing.T, al *AgentLoop, sessionID, turnID string
 // parentTurnID chain collectLiveDescendantTurnStates walks for ScopeSubtree.
 // Stored under its own turnID as the map key (mirrors
 // orphan_watch_test.go's existing convention for a non-root turn).
-func u15RegisterChildTurn(t *testing.T, al *AgentLoop, rootSessionID, childTranscriptSessionID, turnID, parentTurnID string, depth int, critical bool) *turnState {
+func u15RegisterChildTurn(t *testing.T, al *AgentLoop, rootSessionID, childTranscriptSessionID, turnID, parentTurnID string, depth int) *turnState {
 	t.Helper()
 	require.NotEqual(t, rootSessionID, childTranscriptSessionID,
 		"fixture must use distinct parent/child session ids (spec's distinct-ids-everywhere corollary)")
@@ -79,7 +83,6 @@ func u15RegisterChildTurn(t *testing.T, al *AgentLoop, rootSessionID, childTrans
 		routingSessionID:    session.RoutingSessionID(rootSessionID),
 		depth:               depth,
 		parentTurnID:        parentTurnID,
-		critical:            critical,
 		finishedChan:        make(chan struct{}),
 	}
 	al.activeTurnStates.Store(turnID, ts)
@@ -150,7 +153,7 @@ func TestU15Cancel_ScopeSubtreeReachesDelegateChild_ScopeSelfOnlyWouldNot(t *tes
 	// --- RED: ScopeSelfOnly, called directly ---
 	u15RegisterActiveTurn(t, al, rootID, "turn-u15-scope-selfonly-root", 0, "")
 	u15RegisterChildTurn(t, al, rootID, fmt.Sprintf("u15-scope-child-selfonly-%d", nonce),
-		"turn-u15-scope-selfonly-child", "turn-u15-scope-selfonly-root", 1, false)
+		"turn-u15-scope-selfonly-child", "turn-u15-scope-selfonly-root", 1)
 
 	selfOnlyReached, err := al.Interrupt(rootID, ScopeSelfOnly, "u15-test-self-only")
 	require.NoError(t, err)
@@ -167,7 +170,7 @@ func TestU15Cancel_ScopeSubtreeReachesDelegateChild_ScopeSelfOnlyWouldNot(t *tes
 	// --- GREEN: RequestCancel, which hardcodes ScopeSubtree ---
 	u15RegisterActiveTurn(t, al, rootID, "turn-u15-scope-subtree-root", 0, "")
 	u15RegisterChildTurn(t, al, rootID, fmt.Sprintf("u15-scope-child-subtree-%d", nonce),
-		"turn-u15-scope-subtree-child", "turn-u15-scope-subtree-root", 1, false)
+		"turn-u15-scope-subtree-child", "turn-u15-scope-subtree-root", 1)
 
 	outcome, err := al.RequestCancel(
 		context.Background(),
@@ -263,7 +266,7 @@ func TestU15PreArmLatch_KeysSetAndClearedMatch(t *testing.T) {
 
 // TestU15Cancel_PhaseB_HardAbortsLiveChild covers BDD-23: a registered root
 // turn that finishes gracefully almost immediately, plus a registered
-// Critical:true child turn that does NOT finish, must still be hard-aborted
+// child turn that does NOT finish, must still be hard-aborted
 // by PHASE B's 3s timer — proving PHASE B threads the PHASE-A-computed
 // descendant set (al.liveTurnStatesAmong(descendants)) rather than gating
 // solely on activeTurn.IsAlive() (which would already be false for the
@@ -278,9 +281,9 @@ func TestU15Cancel_PhaseB_HardAbortsLiveChild(t *testing.T) {
 
 	rootTS := u15RegisterActiveTurn(t, al, rootSessionID, "turn-u15-phaseb-root", 0, "")
 	childTS := u15RegisterChildTurn(t, al, rootSessionID, childTranscriptID,
-		"turn-u15-phaseb-child", "turn-u15-phaseb-root", 1, true)
+		"turn-u15-phaseb-child", "turn-u15-phaseb-root", 1)
 
-	require.True(t, childTS.IsAlive(), "precondition: the Critical child must be alive before the Stop")
+	require.True(t, childTS.IsAlive(), "precondition: the child must be alive before the Stop")
 	require.False(t, childTS.hardAbortRequested(), "precondition: no hard-abort has been requested yet")
 
 	outcome, err := al.RequestCancel(
@@ -293,18 +296,18 @@ func TestU15Cancel_PhaseB_HardAbortsLiveChild(t *testing.T) {
 	require.True(t, outcome.Fired)
 
 	// BDD-23's Given: the root finishes gracefully (almost immediately) while
-	// the Critical child keeps running — mirrors the existing package's
+	// the child keeps running — mirrors the existing package's
 	// fixture pattern (cancel_subagent_cascade_test.go) for simulating a
 	// finished turn without a real turn-processing goroutine.
 	rootTS.isFinished.Store(true)
 
 	require.Eventually(t, childTS.hardAbortRequested, 4*time.Second, 50*time.Millisecond,
-		"FR-024: PHASE B must hard-abort the still-live Critical child via the PHASE-A-computed "+
+		"FR-024: PHASE B must hard-abort the still-live child via the PHASE-A-computed "+
 			"descendant set, even though the root already finished gracefully")
 }
 
 // TestU15Cancel_PhaseC_DetachesSurvivingChild covers BDD-24: the SAME tree as
-// BDD-23, but the Critical child survives past PHASE B's hard-abort signal
+// BDD-23, but the child survives past PHASE B's hard-abort signal
 // (it never actually terminates — a stuck goroutine) — PHASE C's 5s-after-
 // hard timer must detach it (MarkAbandoned), again threading the SAME
 // PHASE-A-computed descendant set rather than re-scanning.
@@ -318,7 +321,7 @@ func TestU15Cancel_PhaseC_DetachesSurvivingChild(t *testing.T) {
 
 	rootTS := u15RegisterActiveTurn(t, al, rootSessionID, "turn-u15-phasec-root", 0, "")
 	childTS := u15RegisterChildTurn(t, al, rootSessionID, childTranscriptID,
-		"turn-u15-phasec-child", "turn-u15-phasec-root", 1, true)
+		"turn-u15-phasec-child", "turn-u15-phasec-root", 1)
 
 	outcome, err := al.RequestCancel(
 		context.Background(),
@@ -360,7 +363,7 @@ func TestU15Cancel_AuditNamesDescendants(t *testing.T) {
 
 	rootTS := u15RegisterActiveTurn(t, al, rootSessionID, "turn-u15-audit-root", 0, "")
 	u15RegisterChildTurn(t, al, rootSessionID, childTranscriptID,
-		"turn-u15-audit-child", "turn-u15-audit-root", 1, false)
+		"turn-u15-audit-child", "turn-u15-audit-root", 1)
 
 	outcome, err := al.RequestCancel(
 		context.Background(),
@@ -406,9 +409,9 @@ func TestU15Cancel_AuditNamesEveryDescendantAtDepth3(t *testing.T) {
 	rootID := fmt.Sprintf("u15-depth3-root-%d", nonce)
 
 	rootTS := u15RegisterActiveTurn(t, al, rootID, "turn-u15-d0", 0, "")
-	u15RegisterChildTurn(t, al, rootID, fmt.Sprintf("u15-depth3-d1-%d", nonce), "turn-u15-d1", "turn-u15-d0", 1, false)
-	u15RegisterChildTurn(t, al, rootID, fmt.Sprintf("u15-depth3-d2-%d", nonce), "turn-u15-d2", "turn-u15-d1", 2, false)
-	u15RegisterChildTurn(t, al, rootID, fmt.Sprintf("u15-depth3-d3-%d", nonce), "turn-u15-d3", "turn-u15-d2", 3, false)
+	u15RegisterChildTurn(t, al, rootID, fmt.Sprintf("u15-depth3-d1-%d", nonce), "turn-u15-d1", "turn-u15-d0", 1)
+	u15RegisterChildTurn(t, al, rootID, fmt.Sprintf("u15-depth3-d2-%d", nonce), "turn-u15-d2", "turn-u15-d1", 2)
+	u15RegisterChildTurn(t, al, rootID, fmt.Sprintf("u15-depth3-d3-%d", nonce), "turn-u15-d3", "turn-u15-d2", 3)
 
 	wantTurnIDs := []string{"turn-u15-d0", "turn-u15-d1", "turn-u15-d2", "turn-u15-d3"}
 
@@ -450,55 +453,119 @@ func TestU15Cancel_AuditNamesEveryDescendantAtDepth3(t *testing.T) {
 // Durable descendant lifecycle-record walk (FR-025/FR-026) — BDD-30 / #45
 // ---------------------------------------------------------------------------
 
-// TestU15Cancel_TransitionsEveryDescendantLifecycleRecord_Depth3 covers
-// BDD-30: a chat with children at DURABLE depths 1, 2 and 3 (persisted
-// LifecycleRecords chained via SteeringSessionID, independent of any
-// in-memory turnState) must have EVERY descendant's persisted record
-// transitioned to cancelled by RequestCancel's own-goroutine durable walk
-// (cancelDurableDescendantLifecycleRecords), not just the root's.
-func TestU15Cancel_TransitionsEveryDescendantLifecycleRecord_Depth3(t *testing.T) {
-	t.Parallel()
-	al := newCancelTestAgentLoop(t)
-	lifecycleStore := session.NewLifecycleStore(t.TempDir())
-	al.SetSessionMessagingStores(nil, lifecycleStore)
+// u15OwnerTailProvider assigns one uncooperative external request to each
+// real admitted execution. Only provider I/O is held; no lifecycle writer or
+// execution identity is mocked. Launches await entry serially, fixing call order.
+type u15OwnerTailProvider struct {
+	mu    sync.Mutex
+	gates []*originalGraceProvider
+	next  int
+}
 
-	nonce := time.Now().UnixNano()
-	rootID := fmt.Sprintf("u15-lc-root-%d", nonce)
-	d1 := fmt.Sprintf("u15-lc-d1-%d", nonce)
-	d2 := fmt.Sprintf("u15-lc-d2-%d", nonce)
-	d3 := fmt.Sprintf("u15-lc-d3-%d", nonce)
+func (p *u15OwnerTailProvider) Chat(ctx context.Context, messages []providers.Message, definitions []providers.ToolDefinition, model string, options map[string]any) (*providers.LLMResponse, error) {
+	p.mu.Lock()
+	if p.next >= len(p.gates) {
+		p.mu.Unlock()
+		return nil, fmt.Errorf("owner-tail fixture received an unexpected extra provider call")
+	}
+	gate := p.gates[p.next]
+	p.next++
+	p.mu.Unlock()
+	return gate.Chat(ctx, messages, definitions, model, options)
+}
 
-	u15PersistLifecycleRecord(t, lifecycleStore, d1, rootID, rootID, session.LifecycleRunning)
-	u15PersistLifecycleRecord(t, lifecycleStore, d2, d1, rootID, session.LifecycleRunning)
-	u15PersistLifecycleRecord(t, lifecycleStore, d3, d2, rootID, session.LifecycleRunning)
+func (*u15OwnerTailProvider) GetDefaultModel() string { return "u15-real-owner-tails" }
 
-	// Positive lower bound (Rule 4's spirit): prove the fixture's own walk is
-	// live before asserting the post-cancel state — all three records must
-	// exist and read "running" before RequestCancel runs.
-	for _, id := range []string{d1, d2, d3} {
-		rec, err := lifecycleStore.Load(id)
-		require.NoError(t, err)
-		require.Equal(t, session.LifecycleRunning, rec.State, "precondition: %s must start running", id)
+// TestU15StopSession_EveryDescendantOwnerLandsStoppedAfterTail_Depth3 replaces
+// the deleted unowned RequestCancel durable writer. Frozen D2/D7 and the
+// one-stop decision: every selected owner in root -> d1 -> d2 -> d3 lands its
+// own stopped record after its tail, never while its external request is held.
+func TestU15StopSession_EveryDescendantOwnerLandsStoppedAfterTail_Depth3(t *testing.T) {
+	t.Setenv("OMNIPUS_HOME", t.TempDir())
+	al, _ := newSteerAL(t)
+	wireSteerCompletionDeps(t, al)
+	// The required depth-three input has four simultaneously live owners.
+	al.GetConfig().Performance.MaxParallelAgents = 4
+	al.GetConfig().Performance.MaxDelegationDepth = 3
+	provider := &u15OwnerTailProvider{}
+	for i := 0; i < 4; i++ {
+		gate := &originalGraceProvider{
+			entered: make(chan struct{}), softCancelled: make(chan struct{}), release: make(chan struct{}),
+		}
+		provider.gates = append(provider.gates, gate)
+		t.Cleanup(gate.open)
+	}
+	instance, ok := al.GetRegistry().GetAgent(testDefaultAgentID)
+	require.True(t, ok, "fixture's actual agent must be registered")
+	instance.Provider = provider
+	root := rootLaunchWithGoal(t, al)
+	dispatchChild(t, al, root.SessionID, root.Generation, true)
+	records := []*session.LifecycleRecord{root}
+	for i, gate := range provider.gates {
+		if i > 0 {
+			records = append(records, launchGoalBearingChild(t, al, records[i-1].SessionID,
+				fmt.Sprintf("u15-owner-depth-%d", i), goalChildLaunchOptions{live: true}))
+		}
+		select {
+		case <-gate.entered:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("depth %d's real admitted owner never entered its provider", i)
+		}
+		records[i] = rootReopenedRecord(t, al, records[i].SessionID)
+		require.Equal(t, session.LifecycleRunning, records[i].State, "depth %d must start genuinely running", i)
+		handle := al.getActiveTurnState(records[i].SessionID)
+		require.NotNil(t, handle, "depth %d must have a real immutable owner handle", i)
+		require.Equal(t, al.executionClaimFor(records[i]), al.tsExecutionClaim(handle, records[i].SessionID))
+		if i > 0 {
+			require.Equal(t, records[i-1].SessionID, records[i].SteeringSessionID(), "the real edge must form the required depth-three chain")
+		}
 	}
 
-	u15RegisterActiveTurn(t, al, rootID, "turn-u15-lc-root", 0, "")
-
-	outcome, err := al.RequestCancel(
-		context.Background(),
-		CancelScope{SessionID: rootID},
-		CancelCanceller{UserID: "alice", Channel: "web"},
-		CancelHooks{},
-	)
+	res, err := al.StopSession(context.Background(), StopRequest{
+		SessionID: root.SessionID, Tree: true, Channel: "web",
+		By: steer.Principal{Kind: steer.PrincipalKindHuman, ID: "alice"},
+	})
 	require.NoError(t, err)
-	require.True(t, outcome.Fired)
-
-	// The durable walk runs on its own goroutine (FR-025) — poll until all
-	// three depths have transitioned.
-	for _, id := range []string{d1, d2, d3} {
-		require.Eventually(t, func() bool {
-			rec, err := lifecycleStore.Load(id)
-			return err == nil && rec.State == session.LifecycleCancelled
-		}, 3*time.Second, 20*time.Millisecond,
-			"FR-025/FR-026: depth-3 descendant %s's persisted lifecycle record must transition to cancelled", id)
+	require.NoError(t, res.RootErr)
+	require.True(t, res.Durable)
+	require.True(t, res.Fired)
+	require.Empty(t, res.StillRunning(), "no depth may fail to accept its selected Stop")
+	ids := make([]string, len(records))
+	notes := make([]session.StopNote, len(records))
+	for i, before := range records {
+		ids[i] = before.SessionID
+		select {
+		case <-provider.gates[i].softCancelled:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("Stop did not reach depth %d's own provider cancellation boundary", i)
+		}
+		held := rootReopenedRecord(t, al, before.SessionID)
+		require.Equal(t, session.LifecycleRunning, held.State, "D2: depth %d must not land before its owner tail", i)
+		require.NotNil(t, held.Stop, "depth %d must retain its current in-flight fence", i)
+		require.Equal(t, before.Generation, held.Stop.Generation)
+		require.Equal(t, before.ExecutionID, held.ExecutionID, "Stop must target the real admitted identity, never a replacement")
+		require.NotNil(t, held.StopNote)
+		cause := session.StopCauseCascade
+		if i == 0 {
+			cause = session.StopCauseStop
+		}
+		require.Equal(t, cause, held.StopNote.Cause)
+		require.Equal(t, "human:alice", held.StopNote.By)
+		notes[i] = *held.StopNote
+	}
+	require.ElementsMatch(t, ids, res.Report.Reached, "D7: every selected depth, including the root, must be reached exactly once")
+	for _, gate := range provider.gates {
+		gate.open()
+	}
+	joinGoalFixtureRuns(t, al)
+	for i, before := range records {
+		landed := rootReopenedRecord(t, al, before.SessionID)
+		require.Equal(t, session.LifecycleStopped, landed.State, "depth %d's own joined tail must land stopped", i)
+		require.False(t, landed.Terminal(), "D7: every depth remains resumable")
+		require.Equal(t, before.Generation, landed.Generation)
+		require.Nil(t, landed.Stop, "D2: depth %d's owner clears its own in-flight fence", i)
+		require.NotNil(t, landed.StopNote)
+		assert.Equal(t, notes[i], *landed.StopNote, "D2: depth %d retains the original accepted note", i)
+		assert.Equal(t, generated.GoalStateActive, mustGoalRecord(t, before.GoalRef).State, "D6/D7: Stop never ends depth %d's goal", i)
 	}
 }

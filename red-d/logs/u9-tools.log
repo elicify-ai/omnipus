@@ -1,0 +1,13 @@
+--- FAIL: TestSessionCoreU9_CreateTaskExposesOptionalWorkspaceID (0.10s)
+    sessioncore_u9_canonical_workspace_test.go:66: FR-046/C-TASK-TOOLS: create_task must expose an optional workspace_id parameter; got properties [stream title prompt due is_join blocked_by criteria dod agent_id priority parent_task_id plan_id write_set]
+--- FAIL: TestSessionCoreU9_UpdateTaskExposesOptionalWorkspaceID (0.08s)
+    sessioncore_u9_canonical_workspace_test.go:79: FR-046/C-TASK-TOOLS: update_task must expose an optional workspace_id parameter; got properties [result title due agent_id write_set task_id artifacts priority blocked_by stream is_join criteria dod status]
+--- FAIL: TestSessionCoreU9_ListTasksExposesOptionalWorkspaceID (0.10s)
+    sessioncore_u9_canonical_workspace_test.go:88: FR-046/C-TASK-TOOLS: list_tasks must expose an optional workspace_id parameter; got properties [role status]
+--- FAIL: TestSessionCoreU9_ForeignCreateLandsInboxInTargetWorkspace (0.10s)
+    sessioncore_u9_canonical_workspace_test.go:119: FR-048: foreign create_task must succeed as delivery, got error: agent_id is required
+--- FAIL: TestSessionCoreU9_ForeignRunRefusedBeforeAnyWrite (0.18s)
+    sessioncore_u9_canonical_workspace_test.go:157: FR-048/BDD-08.6: running a task in a foreign workspace must be REFUSED, got: &{ForLLM:{"task_id":"d696e923-5733-4f37-9b89-ffaaabeeec9c","status":"in_progress","session_id":"session-1"} ForUser: Silent:false IsError:false Async:false Err:<nil> Media:[] InspectionImages:[] ArtifactTags:[] Interrupted:false ParksTurn:false ExitCode:<nil> TimedOut:false Deferred:<nil>}
+FAIL
+FAIL	github.com/elicify-ai/omnipus/pkg/tools	3.038s
+FAIL

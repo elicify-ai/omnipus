@@ -166,6 +166,29 @@ func aliasesSecretDirectory(candidate string, policy FSPolicy) bool {
 			return true
 		}
 	}
+
+	// #1284 home guard: the protected set is no longer only the directory-
+	// shaped carve-out roots. A hard link parked inside the caller's own tree
+	// must not re-admit ANY protected home entry — sessions, transcripts,
+	// another agent's memory — so the home itself becomes a scan root, with
+	// the same own-tree skip. The budget (and its fail-closed exhaustion)
+	// applies unchanged: an unscannable home denies, never admits.
+	if home := policy.HomeGuard.Home; home != "" {
+		cleanHome := filepath.Clean(home)
+		if homeInfo, statErr := os.Stat(cleanHome); statErr == nil && homeInfo.IsDir() {
+			if homeDev, haveHomeDev := deviceID(homeInfo); haveDev && haveHomeDev && homeDev != candidateDev {
+				return false
+			}
+			skip := cleanWorkDir
+			if !isProperDescendant(cleanWorkDir, cleanHome) {
+				skip = ""
+			}
+			found, decided := scanForSameFile(cleanHome, skip, info, &budget)
+			if !decided || found {
+				return true
+			}
+		}
+	}
 	return false
 }
 

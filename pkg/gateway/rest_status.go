@@ -17,12 +17,24 @@ import (
 	"unicode/utf8"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
 // --- Doctor / Diagnostics ---
+
+// channelManagerForDoctor returns the live channel manager for the doctor's
+// degraded-connection check, or nil when none is wired (unit tests that build
+// a bare restAPI). Indirected so runDiagnosticChecks stays testable without a
+// full runtime.
+func (a *restAPI) channelManagerForDoctor() *channels.Manager {
+	if a == nil || a.agentLoop == nil {
+		return nil
+	}
+	return a.agentLoop.GetChannelManager()
+}
 
 // HandleDoctor handles GET/POST /api/v1/doctor.
 func (a *restAPI) HandleDoctor(w http.ResponseWriter, r *http.Request) {
@@ -76,10 +88,8 @@ func (a *restAPI) HandleDoctor(w http.ResponseWriter, r *http.Request) {
 				"info":   info,
 			},
 			"session_store": func() map[string]any {
-				for _, id := range a.agentLoop.GetRegistry().ListAgentIDs() {
-					if store := a.agentLoop.GetAgentStore(id); store != nil {
-						return map[string]any{"status": "ok", "available": true}
-					}
+				if a.agentLoop.GetSessionStore() != nil {
+					return map[string]any{"status": "ok", "available": true}
 				}
 				return map[string]any{"status": "degraded", "available": false}
 			}(),
@@ -173,6 +183,29 @@ func (a *restAPI) runDiagnosticChecks(cfg *config.Config) []map[string]any {
 		})
 	}
 
+	// #1277 (founder decision 2026-10-12): an integration whose credential is
+	// missing or unreadable no longer aborts boot/reload — it degrades, and
+	// doctor must say so: which connection failed and which secret reference
+	// to fix. The manager's failure record already carries the factory error,
+	// which names the configured ref.
+	if mgr := a.channelManagerForDoctor(); mgr != nil {
+		for _, f := range mgr.FailedChannels() {
+			displayName := f.Channel
+			if displayName == "" {
+				displayName = f.Name
+			}
+			issues = append(issues, map[string]any{
+				"id":             "channel-degraded-" + f.Name,
+				"severity":       "medium",
+				"title":          fmt.Sprintf("Connection %q is degraded", displayName),
+				"description":    fmt.Sprintf("The %q connection is enabled but not running: %s", displayName, f.Err.Error()),
+				"recommendation": "Open Settings → Connectors, select this connection, and re-enter its credential.",
+				"action_link":    "/settings?tab=connectors",
+				"action_label":   "Open connectors",
+			})
+		}
+	}
+
 	return issues
 }
 
@@ -197,7 +230,7 @@ func (a *restAPI) getUserContext(w http.ResponseWriter) {
 	_, content, err := config.ReadUserProfile()
 	if err != nil {
 		slog.Error("rest: read USER.md", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read USER.md: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not read the user profile", err)
 		return
 	}
 	jsonOK(w, gen.UserContextResponse{Content: content})
@@ -214,12 +247,12 @@ func (a *restAPI) putUserContext(w http.ResponseWriter, r *http.Request) {
 	userMDPath := config.UserProfilePath()
 	if err := os.MkdirAll(filepath.Dir(userMDPath), 0o700); err != nil {
 		slog.Error("rest: create USER.md parent", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not write USER.md: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not save the user profile", err)
 		return
 	}
 	if err := fileutil.WriteFileAtomic(userMDPath, []byte(req.Content), 0o600); err != nil {
 		slog.Error("rest: write USER.md", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not write USER.md: %v", err))
+		jsonServerFailure(w, http.StatusInternalServerError, "could not save the user profile", err)
 		return
 	}
 	jsonOK(w, gen.UserContextResponse(req))
@@ -373,7 +406,7 @@ func (a *restAPI) HandleState(w http.ResponseWriter, r *http.Request) {
 		if a.onboardingMgr != nil {
 			if err := a.onboardingMgr.CompleteOnboarding(); err != nil {
 				slog.Error("rest: could not persist onboarding completion", "error", err)
-				jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save onboarding state: %v", err))
+				jsonServerFailure(w, http.StatusInternalServerError, "could not save onboarding state", err)
 				return
 			}
 		}
@@ -545,7 +578,9 @@ func (a *restAPI) HandleActivity(w http.ResponseWriter, r *http.Request) {
 		{
 			for _, m := range metas {
 				if m.CreatedAt.After(cutoff) {
-					summary := m.Title
+					// A main's title is derived on read, like every other
+					// surface; its stored title is empty.
+					summary := a.withDisplayTitle(m).Title
 					if summary == "" {
 						summary = "New session"
 					}
@@ -690,7 +725,7 @@ func (a *restAPI) HandleStorageStats(w http.ResponseWriter, r *http.Request) {
 		return nil
 	}); err != nil {
 		slog.Warn("rest: storage stats: walk failed", "error", err)
-		warnings = append(warnings, fmt.Sprintf("workspace size unavailable: %v", err))
+		warnings = append(warnings, "workspace size unavailable: the workspace could not be read; details are in the server log")
 	}
 
 	resp := map[string]any{

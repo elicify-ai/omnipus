@@ -9,12 +9,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useChatStore } from './store'
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
+import { useUiStore } from '@/store/ui'
 import { emptySessionState } from './session'
-import { inFlightReattachSids, replayErrorRetryAttempts, replayErrorRetryTimers } from './runtime-state'
+import { gapReattachRetryAttempts, gapReattachRetryTimers, inFlightReattachSids, replayErrorRetryAttempts, replayErrorRetryTimers } from './runtime-state'
 import type { ChatMessage } from './types'
-import type { WsReceiveFrame } from '@/lib/ws'
+import type { ServerFrame } from '@/lib/ws'
+import { loadFixtureHistory } from '../../../tests/chat-history-paging/load-fixture-history'
+import { entry, expectValidFrame, expectValidPage, page, pos, replay, snapshot } from '../../../tests/chat-history-paging/fixtures'
 
 const SID = 'session-catchup-1'
+
+afterEach(() => vi.unstubAllGlobals())
 
 beforeEach(() => {
   useSessionStore.setState({ activeSessionId: SID })
@@ -32,6 +37,11 @@ beforeEach(() => {
   // for the same reason as inFlightReattachSids just above.
   for (const sid of Object.keys(replayErrorRetryAttempts)) delete replayErrorRetryAttempts[sid]
   for (const sid of Object.keys(replayErrorRetryTimers)) { clearTimeout(replayErrorRetryTimers[sid]); delete replayErrorRetryTimers[sid] }
+  // Safety hardening (subagent-control-plane stream): gapReattachRetryAttempts/
+  // Timers are module-scoped too — same leak risk as replayErrorRetryAttempts/
+  // Timers just above.
+  for (const sid of Object.keys(gapReattachRetryAttempts)) delete gapReattachRetryAttempts[sid]
+  for (const sid of Object.keys(gapReattachRetryTimers)) { clearTimeout(gapReattachRetryTimers[sid]); delete gapReattachRetryTimers[sid] }
 })
 
 function bucket() {
@@ -39,7 +49,7 @@ function bucket() {
 }
 
 describe('session_snapshot (§6.2/§4.6)', () => {
-  it('D1: wipes history but preserves the pending tail and out-of-band state', () => {
+  it('D1: stages history until COMPLETE, then replaces it while preserving pending tail and current controls', () => {
     // Seed a bucket with one acknowledged assistant reply, one queued
     // (unsent) user message, and an active-turn announcement — mirrors
     // §4.6's "the wipe never erases pendingAsk/activeTurn/goal status".
@@ -58,17 +68,15 @@ describe('session_snapshot (§6.2/§4.6)', () => {
       },
     } as never)
 
-    useChatStore.getState().handleFrame({
-      type: 'session_snapshot',
-      session_id: SID,
-      seq: 42,
-      boot_id: 'boot-A',
-      reason: 'unknown_position',
-    } as WsReceiveFrame)
+    const selected = page([], { sessionId: SID })
+    expectValidPage(selected, [], 0)
+    const announced: ServerFrame = { ...snapshot(selected), seq: 42, boot_id: 'boot-A' }
+    expectValidFrame(announced)
+    useChatStore.getState().handleFrame(announced)
 
-    const b = bucket()
-    expect(b.messageOrder).toEqual(['u2'])
-    expect(b.messagesById.a1).toBeUndefined()
+    let b = bucket()
+    expect(b.messageOrder, 'D7: announcement stages a replacement, never prematurely wipes the old reader').toEqual(['a1', 'u2'])
+    expect(b.messagesById.a1, 'D7: the published old reply survives until successful complete application').toStrictEqual({ id: 'a1', role: 'assistant', content: 'old reply', timestamp: 't', status: 'done' })
     expect(b.messagesById.u2?.deliveryStatus).toBe('sending')
     expect(b.activeTurnId).toBe('turn-live')
     expect(b.activeTurnAgentId).toBe('agent-1')
@@ -83,6 +91,24 @@ describe('session_snapshot (§6.2/§4.6)', () => {
     // catch_up_complete (see that describe block below) is now the sole
     // cursor-setter, firing only once the rebuild genuinely succeeded.
     expect(b.cursor).toBeNull()
+
+    const completed: ServerFrame[] = [
+      { type: 'session_state', session_id: SID, user_id: 'c10-reader', pending_approvals: [], emitted_at: '2026-10-26T09:00:00Z',
+        history_state: { status: 'available' }, active_turn: { turn_id: 'turn-live', agent_id: 'agent-1', started_at: '2026-10-26T08:59:00Z' } },
+      { type: 'done', session_id: SID, stats: { frames_emitted: 0 } },
+      { type: 'catch_up_complete', session_id: SID, seq: 42, boot_id: 'boot-A', mode: 'snapshot' },
+    ]
+    completed.forEach(expectValidFrame)
+    completed.forEach(frame => useChatStore.getState().handleFrame(frame))
+    b = bucket()
+    // D7 moves these exact original replacement oracles to the commit point.
+    expect(b.messageOrder).toEqual(['u2'])
+    expect(b.messagesById.a1).toBeUndefined()
+    expect(b.messagesById.u2?.deliveryStatus).toBe('sending')
+    expect(b.activeTurnId).toBe('turn-live')
+    expect(b.activeTurnAgentId).toBe('agent-1')
+    expect(b.history.historyLoaded).toBe(true)
+    expect(b.cursor).toStrictEqual({ bootId: 'boot-A', seq: 42 })
   })
 
   it('N4: a session that already HAD a cursor keeps it through the wipe (unchanged, not advanced) — catch_up_complete alone decides where it lands next', () => {
@@ -92,12 +118,54 @@ describe('session_snapshot (§6.2/§4.6)', () => {
       },
     } as never)
 
-    useChatStore.getState().handleFrame({
-      type: 'session_snapshot', session_id: SID, seq: 99, boot_id: 'boot-new', reason: 'boot_mismatch',
-    } as WsReceiveFrame)
+    const selected = page([], { sessionId: SID })
+    expectValidPage(selected, [], 0)
+    const announced: ServerFrame = { ...snapshot(selected, 'boot_mismatch'), seq: 99, boot_id: 'boot-new' }
+    expectValidFrame(announced)
+    useChatStore.getState().handleFrame(announced)
 
     // Still the OLD cursor — not the snapshot's own seq:99/boot_id:'boot-new'.
     expect(bucket().cursor).toEqual({ bootId: 'boot-prior', seq: 7 })
+  })
+
+  it('D1-failure: contradictory staged row accounting cannot replace old history, cursor, pending input or active controls', () => {
+    const feed = (incoming: ServerFrame[]) => {
+      incoming.forEach(expectValidFrame)
+      incoming.forEach(frame => useChatStore.getState().handleFrame(frame))
+    }
+    const current: ServerFrame = { type: 'session_state', session_id: SID, user_id: 'c10-reader', pending_approvals: [],
+      emitted_at: '2026-10-26T09:00:00Z', history_state: { status: 'available' },
+      active_turn: { turn_id: 'turn-live', agent_id: 'agent-1', started_at: '2026-10-26T08:59:00Z' } }
+    const old = entry(1, { id: 'c10-old-reply', role: 'assistant', content: 'Previously committed reply.', agent_id: 'agent-1' })
+    const initial = page([old], { sessionId: SID })
+    expectValidPage(initial, [pos(1)], 1)
+    feed([
+      { ...snapshot(initial), seq: 7, boot_id: 'boot-prior' }, current, replay(old, SID),
+      { type: 'done', session_id: SID, stats: { frames_emitted: 1 } },
+      { type: 'catch_up_complete', session_id: SID, seq: 7, boot_id: 'boot-prior', mode: 'snapshot' },
+    ])
+    useChatStore.getState().appendMessage({ id: 'c10-pending', role: 'user', content: 'Pending input stays.',
+      timestamp: '2026-10-26T09:01:00Z', deliveryStatus: 'failed' })
+    expect(bucket().history.historyLoaded, 'instrument: real valid prior page loaded before the rejected replacement').toBe(true)
+    const before = structuredClone(bucket())
+    const replacement = entry(2, { id: 'c10-replacement', role: 'assistant', content: 'Must never publish.', agent_id: 'agent-1' })
+    // Intentional semantic contradiction: one narration source actually draws
+    // one row, but the generated-shaped metadata promises two. Do not repair.
+    const contradictory = page([replacement], { sessionId: SID, rows: 2 })
+    feed([
+      { ...snapshot(contradictory), seq: 42, boot_id: 'boot-new' }, current, replay(replacement, SID),
+      { type: 'done', session_id: SID, stats: { frames_emitted: 1 } },
+      { type: 'catch_up_complete', session_id: SID, seq: 42, boot_id: 'boot-new', mode: 'snapshot' },
+    ])
+    expect(bucket().messageOrder, 'D7: a failed replacement retains the exact prior published reader and pending tail').toStrictEqual(before.messageOrder)
+    expect(bucket().messagesById['c10-old-reply']).toStrictEqual(before.messagesById['c10-old-reply'])
+    expect(bucket().messagesById['c10-pending']).toStrictEqual(before.messagesById['c10-pending'])
+    expect(bucket().messagesById['c10-replacement']).toBeUndefined()
+    expect(bucket().activeTurnId).toBe('turn-live')
+    expect(bucket().activeTurnAgentId).toBe('agent-1')
+    expect(bucket().history.requests.latest.status, 'the contradictory snapshot is a named history failure, not an empty success').toBe('error')
+    expect(bucket().history.historyLoaded).toBe(false)
+    expect(bucket().cursor, 'failed replay cannot claim the new cut').toStrictEqual({ bootId: 'boot-prior', seq: 7 })
   })
 })
 
@@ -113,12 +181,12 @@ describe('catch_up_complete (§4.1/§6.2)', () => {
   it('D2b: is NOT dropped by the seq gate when its own seq equals the cursor already established by a prior frame', () => {
     useChatStore.getState().handleFrame({
       type: 'token', session_id: SID, content: 'x', turn_id: 't1', message_id: 'm1', seq: 18,
-    } as WsReceiveFrame)
+    } as ServerFrame)
     expect(bucket().cursor).toEqual({ bootId: '', seq: 18 })
 
     useChatStore.getState().handleFrame({
       type: 'catch_up_complete', session_id: SID, seq: 18, boot_id: 'boot-X', mode: 'incremental',
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     // If this were dropped by the seq gate, awaitingCatchUp would stay at
     // its emptySessionState() default (false) and cursor.bootId would still
@@ -127,12 +195,20 @@ describe('catch_up_complete (§4.1/§6.2)', () => {
     expect(bucket().isReplaying).toBe(false)
   })
 
-  it('D2: sets the cursor, clears isReplaying and awaitingCatchUp', () => {
+  it('D2: sets the cursor, clears isReplaying and awaitingCatchUp', async () => {
+    await loadFixtureHistory(useChatStore, SID)
+    const loaded = bucket()
     useChatStore.setState({
       sessionsById: {
-        [SID]: { ...emptySessionState(), isReplaying: true, awaitingCatchUp: true },
+        [SID]: { ...loaded, isReplaying: true, awaitingCatchUp: true, replayCompletedForSession: null },
       },
-    } as never)
+    })
+    const current: ServerFrame = { type: 'session_state', session_id: SID, user_id: 'catchup-reader', pending_approvals: [],
+      emitted_at: '2026-10-10T00:00:00Z', history_state: { status: 'available' } }
+    expectValidFrame(current)
+    useChatStore.getState().handleFrame(current)
+    expect(bucket().history.historyLoaded, 'D7/D7a: the incremental attach starts with a genuinely loaded page').toBe(true)
+    expect(bucket().replayCompletedForSession, 'the tested COMPLETE must still establish readiness').toBeNull()
 
     useChatStore.getState().handleFrame({
       type: 'catch_up_complete',
@@ -140,7 +216,7 @@ describe('catch_up_complete (§4.1/§6.2)', () => {
       seq: 50,
       boot_id: 'boot-A',
       mode: 'incremental',
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     const b = bucket()
     expect(b.cursor).toEqual({ bootId: 'boot-A', seq: 50 })
@@ -167,7 +243,7 @@ describe('user_message (§1.2/§4.7, founder decision Q1)', () => {
       content: 'hello from tab 2',
       timestamp: '2026-09-23T00:00:00Z',
       seq: 10,
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     const b = bucket()
     expect(b.messageOrder).toEqual(['server-msg-1'])
@@ -198,7 +274,7 @@ describe('user_message (§1.2/§4.7, founder decision Q1)', () => {
       content: 'hi',
       timestamp: '2026-09-23T00:00:01Z',
       seq: 11,
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     const b = bucket()
     expect(b.messageOrder).toEqual(['my-client-id'])
@@ -208,10 +284,10 @@ describe('user_message (§1.2/§4.7, founder decision Q1)', () => {
   it('D5: idempotent — a duplicate user_message (same server id) is not inserted twice', () => {
     useChatStore.getState().handleFrame({
       type: 'user_message', session_id: SID, id: 'server-msg-3', content: 'x', timestamp: 't', seq: 12,
-    } as WsReceiveFrame)
+    } as ServerFrame)
     useChatStore.getState().handleFrame({
       type: 'user_message', session_id: SID, id: 'server-msg-3', content: 'x', timestamp: 't', seq: 12,
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     const b = bucket()
     expect(b.messageOrder).toEqual(['server-msg-3'])
@@ -222,10 +298,10 @@ describe('token{replace:true} (§4.4 projection replay)', () => {
   it('D7: replace:true OVERWRITES an existing bubble\'s content instead of appending', () => {
     useChatStore.getState().handleFrame({
       type: 'token', session_id: SID, content: 'partial answer so far', turn_id: 't1', message_id: 'm1', seq: 1,
-    } as WsReceiveFrame)
+    } as ServerFrame)
     useChatStore.getState().handleFrame({
       type: 'token', session_id: SID, content: ' more', turn_id: 't1', message_id: 'm1', seq: 2,
-    } as WsReceiveFrame)
+    } as ServerFrame)
     let b = bucket()
     expect(b.messagesById.m1.content).toBe('partial answer so far more')
 
@@ -234,7 +310,7 @@ describe('token{replace:true} (§4.4 projection replay)', () => {
     // not a delta. Must overwrite, not append.
     useChatStore.getState().handleFrame({
       type: 'token', session_id: SID, content: 'partial answer so far more', turn_id: 't1', message_id: 'm1', replace: true, seq: 3,
-    } as WsReceiveFrame)
+    } as ServerFrame)
     b = bucket()
     expect(b.messagesById.m1.content).toBe('partial answer so far more')
 
@@ -242,7 +318,7 @@ describe('token{replace:true} (§4.4 projection replay)', () => {
     // matching — a real append would have doubled it.
     useChatStore.getState().handleFrame({
       type: 'token', session_id: SID, content: 'entirely different replayed text', turn_id: 't1', message_id: 'm1', replace: true, seq: 4,
-    } as WsReceiveFrame)
+    } as ServerFrame)
     b = bucket()
     expect(b.messagesById.m1.content).toBe('entirely different replayed text')
   })
@@ -250,8 +326,8 @@ describe('token{replace:true} (§4.4 projection replay)', () => {
 
 describe('applySeqGate wiring (§6.2) — a frame TYPE with no id-based dedup of its own', () => {
   it('D6: a duplicate-seq `token` frame is applied exactly once, proving the seq gate (not a per-case dedup) is what stops it', () => {
-    const tokenFrame = (): WsReceiveFrame =>
-      ({ type: 'token', session_id: SID, content: 'hi', turn_id: 't1', message_id: 'm1', seq: 7 } as WsReceiveFrame)
+    const tokenFrame = (): ServerFrame =>
+      ({ type: 'token', session_id: SID, content: 'hi', turn_id: 't1', message_id: 'm1', seq: 7 } as ServerFrame)
     useChatStore.getState().handleFrame(tokenFrame())
     useChatStore.getState().handleFrame(tokenFrame())
 
@@ -277,13 +353,13 @@ describe('applySeqGate gap recovery (§6.2 "gap" row) — the re-attach SIDE EFF
     // Establish a cursor at seq 5.
     useChatStore.getState().handleFrame({
       type: 'token', session_id: SID, content: 'a', turn_id: 't1', message_id: 'm1', seq: 5, boot_id: 'boot-gap',
-    } as WsReceiveFrame)
+    } as ServerFrame)
     expect(bucket().cursor).toEqual({ bootId: 'boot-gap', seq: 5 })
 
     // A frame arrives at seq 9 — a genuine gap (expected 6).
     useChatStore.getState().handleFrame({
       type: 'token', session_id: SID, content: 'GAP', turn_id: 't1', message_id: 'm2', seq: 9,
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     // The cursor is untouched by the gap frame (still at 5) — proving it
     // was never applied, only the re-attach fired.
@@ -306,7 +382,7 @@ describe('applySeqGate gap recovery (§6.2 "gap" row) — the re-attach SIDE EFF
 
     useChatStore.getState().handleFrame({
       type: 'token', session_id: SID, content: 'a', turn_id: 't1', message_id: 'm1', seq: 5, boot_id: 'boot-gap',
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     // Three more gapped frames arrive in a row, all still ahead of the same
     // unresolved gap (cursor never advances past 5) — only the FIRST should
@@ -314,7 +390,7 @@ describe('applySeqGate gap recovery (§6.2 "gap" row) — the re-attach SIDE EFF
     for (const seq of [9, 10, 11]) {
       useChatStore.getState().handleFrame({
         type: 'token', session_id: SID, content: 'GAP', turn_id: 't1', message_id: 'm2', seq,
-      } as WsReceiveFrame)
+      } as ServerFrame)
     }
     expect(sent).toHaveLength(1)
 
@@ -322,10 +398,10 @@ describe('applySeqGate gap recovery (§6.2 "gap" row) — the re-attach SIDE EFF
     // clears — a LATER, genuinely new gap sends again.
     useChatStore.getState().handleFrame({
       type: 'catch_up_complete', session_id: SID, seq: 5, boot_id: 'boot-gap', mode: 'incremental',
-    } as WsReceiveFrame)
+    } as ServerFrame)
     useChatStore.getState().handleFrame({
       type: 'token', session_id: SID, content: 'GAP2', turn_id: 't1', message_id: 'm3', seq: 20,
-    } as WsReceiveFrame)
+    } as ServerFrame)
     expect(sent).toHaveLength(2)
   })
 
@@ -335,12 +411,147 @@ describe('applySeqGate gap recovery (§6.2 "gap" row) — the re-attach SIDE EFF
 
     useChatStore.getState().handleFrame({
       type: 'token', session_id: SID, content: 'a', turn_id: 't1', message_id: 'm1', seq: 1, boot_id: 'boot-ok',
-    } as WsReceiveFrame)
+    } as ServerFrame)
     useChatStore.getState().handleFrame({
       type: 'token', session_id: SID, content: 'b', turn_id: 't1', message_id: 'm1', seq: 2,
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     expect(send).not.toHaveBeenCalled()
+  })
+})
+
+describe('safety hardening (subagent-control-plane stream) — gap re-attach retries with backoff when its response is lost', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('re-sends attach_session{since_seq, boot_id} after the base delay if nothing resolved the gap, and backs off further on a second miss', () => {
+    const sent: unknown[] = []
+    useConnectionStore.setState({
+      connection: { send: (f: unknown) => { sent.push(f); return true } },
+    } as never)
+
+    // Establish a cursor at seq 5, then a genuine gap at seq 9 — mirrors D8.
+    useChatStore.getState().handleFrame({
+      type: 'token', session_id: SID, content: 'a', turn_id: 't1', message_id: 'm1', seq: 5, boot_id: 'boot-gap',
+    } as ServerFrame)
+    useChatStore.getState().handleFrame({
+      type: 'token', session_id: SID, content: 'GAP', turn_id: 't1', message_id: 'm2', seq: 9,
+    } as ServerFrame)
+    expect(sent).toHaveLength(1) // the original fire-once send (D8)
+
+    // Nothing ever answers this attach_session (its response is lost, e.g.
+    // raced against a concurrent attach_session for a different session on
+    // the same shared connection) — before the fix this left the session
+    // stuck forever. Not sent yet — backoff hasn't elapsed.
+    vi.advanceTimersByTime(999)
+    expect(sent).toHaveLength(1)
+    vi.advanceTimersByTime(1)
+    expect(sent).toHaveLength(2)
+    expect(sent[1]).toEqual({ type: 'attach_session', session_id: SID, since_seq: 5, boot_id: 'boot-gap' })
+
+    // Still no response — the SECOND retry backs off longer (2x base), not
+    // the same delay again.
+    vi.advanceTimersByTime(1999)
+    expect(sent).toHaveLength(2)
+    vi.advanceTimersByTime(1)
+    expect(sent).toHaveLength(3)
+    expect(sent[2]).toEqual({ type: 'attach_session', session_id: SID, since_seq: 5, boot_id: 'boot-gap' })
+  })
+
+  it('stops retrying once the gap genuinely resolves (a cursor-minting frame arrives)', () => {
+    const sent: unknown[] = []
+    useConnectionStore.setState({
+      connection: { send: (f: unknown) => { sent.push(f); return true } },
+    } as never)
+
+    useChatStore.getState().handleFrame({
+      type: 'token', session_id: SID, content: 'a', turn_id: 't1', message_id: 'm1', seq: 5, boot_id: 'boot-gap',
+    } as ServerFrame)
+    useChatStore.getState().handleFrame({
+      type: 'token', session_id: SID, content: 'GAP', turn_id: 't1', message_id: 'm2', seq: 9,
+    } as ServerFrame)
+    expect(sent).toHaveLength(1)
+
+    // The server's response finally lands, resolving the gap — BEFORE the
+    // first retry timer fires.
+    useChatStore.getState().handleFrame({
+      type: 'catch_up_complete', session_id: SID, seq: 5, boot_id: 'boot-gap', mode: 'incremental',
+    } as ServerFrame)
+
+    // The pending retry must not fire now that the gap is resolved.
+    vi.advanceTimersByTime(60_000)
+    expect(sent).toHaveLength(1)
+  })
+
+  // Silent-failure fix (8-reviewer gate finding): a stuck session used to
+  // retry forever with NO user-facing signal — only console.warn and a
+  // diagnostic no ordinary user sees. The toast fires ONCE per stuck
+  // episode, at the 5th unanswered attempt (~31s of backoff: 1+2+4+8+16s),
+  // and retries themselves continue.
+  it('toasts the user exactly once per stuck episode once the re-attach keeps failing, while retries continue', () => {
+    const sent: unknown[] = []
+    useConnectionStore.setState({
+      connection: { send: (f: unknown) => { sent.push(f); return true } },
+    } as never)
+    // Replace the toast action in the real ui store (zustand actions are
+    // state properties) rather than vi.mock-ing the module — this test
+    // deliberately drives the real chat store, and a property swap survives
+    // the store's internal set() replacing the state object identity.
+    const addToast = vi.fn()
+    const originalAddToast = useUiStore.getState().addToast
+    useUiStore.setState({ addToast } as never)
+
+    try {
+      // Establish a cursor at seq 5, then a genuine gap at seq 9 — mirrors D8.
+      useChatStore.getState().handleFrame({
+        type: 'token', session_id: SID, content: 'a', turn_id: 't1', message_id: 'm1', seq: 5, boot_id: 'boot-gap',
+      } as ServerFrame)
+      useChatStore.getState().handleFrame({
+        type: 'token', session_id: SID, content: 'GAP', turn_id: 't1', message_id: 'm2', seq: 9,
+      } as ServerFrame)
+      expect(sent).toHaveLength(1)
+
+      // Attempts 1-4 fire at 1s/2s/4s/8s (cumulative 15s) — ordinary backoff
+      // territory for a re-attach that may still land; NO warning yet.
+      vi.advanceTimersByTime(15_000)
+      expect(sent).toHaveLength(5)
+      expect(addToast).not.toHaveBeenCalled()
+
+      // Attempt 5 fires at cumulative ~31s — the gap has now survived every
+      // retry, so the user is told the session may be out of sync and to
+      // refresh. Exactly ONE toast, still 'warning' like the unknown-frame one.
+      vi.advanceTimersByTime(16_000)
+      expect(sent).toHaveLength(6)
+      expect(addToast).toHaveBeenCalledTimes(1)
+      expect(addToast.mock.calls[0][0]).toMatchObject({ variant: 'warning' })
+      expect(String((addToast.mock.calls[0][0] as { message?: string }).message)).toMatch(/refresh/i)
+
+      // Retries CONTINUE after the toast (30s-capped backoff: attempts 6 and
+      // 7 land by t=91s) — this fix added visibility, not a retry cap —
+      // and the toast is NOT repeated on those later attempts.
+      vi.advanceTimersByTime(60_000)
+      expect(sent).toHaveLength(8)
+      expect(addToast).toHaveBeenCalledTimes(1)
+
+      // Once per EPISODE, not once ever: resolving the gap resets the
+      // attempt counter, so a LATER stuck episode warns the user again.
+      useChatStore.getState().handleFrame({
+        type: 'catch_up_complete', session_id: SID, seq: 5, boot_id: 'boot-gap', mode: 'incremental',
+      } as ServerFrame)
+      useChatStore.getState().handleFrame({
+        type: 'token', session_id: SID, content: 'GAP2', turn_id: 't1', message_id: 'm3', seq: 20,
+      } as ServerFrame)
+      expect(sent).toHaveLength(9) // the fresh episode's first re-attach
+      vi.advanceTimersByTime(31_000) // episode 2's attempts 1-5
+      expect(sent).toHaveLength(14)
+      expect(addToast).toHaveBeenCalledTimes(2)
+    } finally {
+      useUiStore.setState({ addToast: originalAddToast } as never)
+    }
   })
 })
 
@@ -361,7 +572,7 @@ describe('Opus review round 3 N4 — done{replay_error} re-attaches WITHOUT sinc
 
     useChatStore.getState().handleFrame({
       type: 'done', session_id: SID, stats: { replay_error: true },
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     // Not sent yet — backoff hasn't elapsed.
     expect(sent).toHaveLength(0)
@@ -373,7 +584,7 @@ describe('Opus review round 3 N4 — done{replay_error} re-attaches WITHOUT sinc
     // A SECOND failure backs off longer (2x base), not the same delay again.
     useChatStore.getState().handleFrame({
       type: 'done', session_id: SID, stats: { replay_error: true },
-    } as WsReceiveFrame)
+    } as ServerFrame)
     vi.advanceTimersByTime(1999)
     expect(sent).toHaveLength(1) // still not sent — needs 2000ms this time
     vi.advanceTimersByTime(1)
@@ -388,18 +599,18 @@ describe('Opus review round 3 N4 — done{replay_error} re-attaches WITHOUT sinc
     } as never)
     useChatStore.setState({ sessionsById: { [SID]: emptySessionState() } } as never)
 
-    useChatStore.getState().handleFrame({ type: 'done', session_id: SID, stats: { replay_error: true } } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({ type: 'done', session_id: SID, stats: { replay_error: true } } as ServerFrame)
     vi.advanceTimersByTime(1_000)
     expect(sent).toHaveLength(1)
 
     // Rebuild genuinely succeeds this time.
     useChatStore.getState().handleFrame({
       type: 'catch_up_complete', session_id: SID, seq: 10, boot_id: 'boot-1', mode: 'snapshot',
-    } as WsReceiveFrame)
+    } as ServerFrame)
 
     // A LATER, unrelated failure — should back off from the BASE delay
     // again (1000ms), not continue counting from the earlier incident.
-    useChatStore.getState().handleFrame({ type: 'done', session_id: SID, stats: { replay_error: true } } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({ type: 'done', session_id: SID, stats: { replay_error: true } } as ServerFrame)
     vi.advanceTimersByTime(999)
     expect(sent).toHaveLength(1)
     vi.advanceTimersByTime(1)

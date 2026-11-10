@@ -4,7 +4,7 @@ Omnipus is a single static Go binary. Most Go cross-compile targets will build, 
 
 Omnipus supports three operating systems: **Linux, macOS, and Windows**. What "supported" means differs per platform, and the differences are stated below rather than averaged away. The BSD family (FreeBSD, OpenBSD, NetBSD) is **not supported**: no CI leg builds it, no release artifact ships for it, and nothing is tested there. A binary you cross-compile for a BSD target yourself is untested and unsupported.
 
-The minimum supported Go toolchain is `go 1.26.4` (`go.mod:3`). All listed platforms build with `CGO_ENABLED=0` and the standard release build tags `goolm,stdjson`.
+The minimum supported Go toolchain is `go 1.27.3` (`go.mod:3`). All listed platforms build with `CGO_ENABLED=0` and the standard release build tags `goolm,stdjson`.
 
 ## Officially supported in v0.1 (CI-tested)
 
@@ -18,27 +18,74 @@ The `cross-platform.yml` workflow is a required PR gate and runs on every push t
 
 Source of truth: `.github/workflows/cross-platform.yml:24-34`. Each job runs `go build`, `go test -short`, and a smoke boot of `omnipus start` that hits `/health`. Signed release binaries are produced for these same three targets by `.goreleaser.yaml:52-64`.
 
+## Test-only candidate binaries
+
+A candidate binary is published by a successful **build** GitHub Actions run as
+an artifact named `candidate-binaries-<built-commit-sha>-<run-id>-<run-attempt>`,
+retained for seven days. That build runs in exactly two situations: a pull
+request targets `release/v0.1.1` or `main` — in practice, a train or
+standalone-candidate PR — or a push lands on `release/v0.1.1` or `main`. A push
+to an ordinary work branch publishes nothing; candidates exist only where a
+change is being integrated for release or has landed. These are **test-only
+binaries**, not signed release packages, installers, or evidence that a platform
+has passed runtime acceptance tests. This does not change the release matrix
+above.
+
+| Candidate filename | Platform | Release status |
+|---|---|---|
+| `omnipus-linux-amd64` | Linux x86_64 | Candidate; release platform unchanged |
+| `omnipus-linux-arm64` | Linux arm64 | Candidate; release platform unchanged |
+| `omnipus-darwin-arm64` | macOS Apple Silicon | Candidate; release platform unchanged |
+| `omnipus-darwin-amd64` | macOS Intel | Test-only; not currently released |
+| `omnipus-windows-amd64.exe` | Windows x86_64 | Test-only; not currently released |
+
+The artifact contains exactly these five binaries and `manifest.json`, with no
+configuration, home directories, credentials, source files, dependencies, or
+build logs. Publication fails if any binary is missing, empty, nonregular,
+symlinked, older than the current build, or accompanied by an unlisted entry.
+A failed build or validation step does not publish an artifact.
+
+The JSON manifest records `built_commit_sha` from the actual checkout, the
+`goolm,stdjson` build tags, `CGO_ENABLED=0`, each platform, byte size and SHA256
+checksum, and the artifact's creation time and GitHub run context. For a pull
+request, `creation_context.pull_request_head_sha` records the submitted head
+separately; `checkout_differs_from_pull_request_head` tells you whether it
+matches the built checkout. A default pull-request checkout can build GitHub's
+synthetic merge commit instead of the submitted head. Do not treat the head
+SHA or `creation_context.event_commit_sha` as the built commit without checking
+`built_commit_sha`.
+
+Open the successful **build** run on GitHub's Actions page and select its named
+candidate artifact. GitHub requires you to be logged in to use the artifact
+link, and the artifact expires after seven days. Check the downloaded binaries
+against the manifest's SHA256 checksums before use. GitHub's zipped artifact
+transfer does not preserve executable permissions; restore the executable bit
+on Linux/macOS binaries before running them. Windows keeps the explicit `.exe`
+filename. No release or installer is created by downloading a candidate.
+
 ## Planned but not in v0.1
 
 Each of these targets is deferred from v0.1; the linked tracking issue (where one exists) captures the work required to add it to CI and to the release matrix.
 
 ### macOS amd64 (Intel)
 
-The cross-compile path works (`GOOS=darwin GOARCH=amd64 go build ./cmd/omnipus`) and is explicitly excluded from `.goreleaser.yaml:60-64`. Adding a `macos-13` smoke runner to `cross-platform.yml` is a v0.1.1 task. The sandbox behaves as on arm64: Seatbelt confines spawned children, and the gateway process itself is not confined.
+The cross-compile path works (`GOOS=darwin GOARCH=amd64 go build -tags goolm,stdjson ./cmd/omnipus`) and is explicitly excluded from `.goreleaser.yaml`'s `builds.ignore` (the `goos: darwin` / `goarch: amd64` entry). Adding a `macos-13` smoke runner to `cross-platform.yml` is a v0.1.1 task. The sandbox behaves as on arm64: Seatbelt confines spawned children, and the gateway process itself is not confined.
 
 ### Windows amd64
 
-Tracked as [#113](https://github.com/elicify-ai/omnipus/issues/113). Roughly 15 unit tests assume POSIX semantics (file mode bits, advisory `flock`, fork-time signals), so the full suite does not run on Windows yet. CI does cover Windows in two ways today: the `windows-compile` job cross-compiles the production code for `windows/amd64` on every PR, and the `windows-daemon-tests` job runs the daemon package's tests on a real Windows runner.
+Tracked as [#113](https://github.com/elicify-ai/omnipus/issues/113). Roughly 15 unit tests assume POSIX semantics (file mode bits, advisory `flock`, fork-time signals), so the full suite does not run on Windows yet. CI does cover Windows in three ways today: the `windows-compile` job cross-compiles the production code for `windows/amd64` on every PR, the `windows-daemon-tests` job runs the daemon package's tests on a real Windows runner, and the `windows-tools-tests` job runs the file-tool path tests for Windows path forms (drive letters such as `C:\`, forward-slash drive paths, network `\\server\share` paths, backslash-relative paths and a drive root) on a real Windows runner. That last job runs only those eight path tests, not the rest of the tools package.
 
 There is no kernel sandbox on Windows: `selectBackendPlatform` returns the application-level fallback everywhere Windows runs. Job Objects are used, but only to cap a child's memory and to kill children when the gateway dies — not for confinement. A real confinement design exists (a low-integrity token plus deny rules on secrets, no admin rights needed) and is deliberately deferred; #113 tracks Windows test coverage, not the sandbox backend.
 
 Windows also has no available-memory reader. Agent concurrency therefore stays at its unmeasurable-host floor unless you set `performance.max_parallel_agents` explicitly, and the browser pool permits one browser for the whole host. No amount of physical RAM raises those automatic floors. Windows support is degraded and unsupported for these memory-governed features.
 
+The boot counter in the data directory (`boot_epoch.json`) is flushed and then renamed with write-through. Windows cannot flush a directory without privileges Omnipus does not ask for, so a power cut can still lose that rename. The gateway logs this once at startup. Two copies of Omnipus started at the same moment on one data directory can also pick the same boot number, because Windows does not provide the file lock used on Linux and macOS. That shared-number case is accepted; other recovery guarantees are not relaxed with it.
+
 This differs from Linux with an unreadable `/proc/meminfo`, such as a gVisor, distroless, or hardened-seccomp deployment. That remains a supported deployment, but Omnipus cannot measure its available memory and therefore applies the same conservative floors. Restore a readable procfs or set the agent limit explicitly when the deployment can support more concurrency.
 
 ### Linux riscv64, loong64, armv7, mipsle
 
-Go has cross-compile targets but there are no GitHub Actions runners and no smoke tests. Build with `GOOS=linux GOARCH=<arch> go build -tags goolm,stdjson ./cmd/omnipus`. The seccomp BPF emitter is currently architecture-gated to amd64 and arm64 (`pkg/sandbox/seccomp_linux_amd64.go`, `pkg/sandbox/seccomp_linux_arm64.go`); on other architectures the gateway should fall back gracefully but the path is not exercised.
+Go has cross-compile targets but there are no GitHub Actions runners and no smoke tests. Build with `GOOS=linux GOARCH=<arch> go build -tags goolm,stdjson ./cmd/omnipus`. The seccomp BPF emitter (`pkg/sandbox/seccomp_linux.go::assembleBPFMode`) carries per-arch constants for six architectures — amd64, arm64, arm, mipsle, riscv64 and loong64, one `seccomp_linux_<arch>.go` file each — and arms on all of them; only amd64 and arm64 are exercised by CI, so on these targets the kernel sandbox compiles in and arms but has never been smoke-tested.
 
 ## Building for an unsupported platform
 

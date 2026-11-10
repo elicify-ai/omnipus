@@ -115,7 +115,11 @@ func (t *ExecTool) runBackground(
 
 	var startErr error
 	if t.godMode {
-		startErr = cmd.Start()
+		var startAbort *ToolResult
+		startAbort, startErr = startGodFloorChild(cmd, lim)
+		if startAbort != nil {
+			return startAbort
+		}
 	} else {
 		// CRIT-1 (ADR-090 security review): the background path must carry the
 		// DERIVED PER-TURN kernel policy — the same one sandbox.Run applies on
@@ -140,16 +144,7 @@ func (t *ExecTool) runBackground(
 		for {
 			n, readErr := r.Read(buf)
 			if n > 0 {
-				session.mu.Lock()
-				if session.outputBuffer.Len() >= maxOutputBufferSize {
-					if !session.outputTruncated {
-						session.outputBuffer.WriteString(outputTruncateMarker)
-						session.outputTruncated = true
-					}
-				} else {
-					session.outputBuffer.Write(buf[:n])
-				}
-				session.mu.Unlock()
+				session.appendOutput(buf[:n])
 			}
 			if readErr != nil {
 				return
@@ -245,6 +240,8 @@ func (t *ExecTool) runBackground(
 			}
 			session.Status = StatusDone
 		}
+		// cmd.Wait has completed even if a kill/timeout already chose the label.
+		session.recordActivityLocked()
 		finalStatus := session.Status
 		finalExitCode := session.ExitCode
 		// Peek (non-destructive) at whatever output has accumulated so the
@@ -426,9 +423,9 @@ func backgroundCompletionResult(sessionID string, status SessionStatus, exitCode
 		summary = fmt.Sprintf("Background session %s finished (exit code %d).\n\n%s", sessionID, exitCode, output)
 		isError = false
 	default:
-		// Unexpected status reaching this switch (e.g. StatusRunning/
-		// StatusExited, which should never be the FINAL status a completion
-		// goroutine observes) — keep the same generic-failure fallback the
+		// Unexpected status reaching this switch (e.g. StatusRunning, which
+		// should never be the FINAL status a completion goroutine observes) —
+		// keep the same generic-failure fallback the
 		// pre-existing default case used, so an unforeseen future status
 		// still produces a safe (loud, not silently-successful) result.
 		summary = fmt.Sprintf("Background session %s finished (exit code %d).\n\n%s", sessionID, exitCode, output)
@@ -564,4 +561,19 @@ func (t *ExecTool) sessionActionResult(sessionID string, session *ProcessSession
 		ForUser: fmt.Sprintf("Session %s %s", sessionID, status),
 		IsError: marshalErr != nil,
 	}
+}
+
+// startGodFloorChild starts a GOD MODE background child under the floor
+// (amendment §2 D7): macOS renders the floor into the child's Seatbelt
+// profile, Linux applies it to the spawning thread before the fork. A nil
+// policy (sandbox off, degraded backend, nogodmode build) reproduces the
+// pre-floor god path exactly. On a floor-application failure it returns a
+// ready ErrorResult; otherwise it returns the child start error.
+func startGodFloorChild(cmd *exec.Cmd, lim sandbox.Limits) (*ToolResult, error) {
+	if lim.KernelPolicy != nil {
+		if err := sandbox.ApplyChildKernelPolicy(cmd, lim.KernelPolicy); err != nil {
+			return ErrorResult(fmt.Sprintf("sandbox floor failed: %v", err)), nil
+		}
+	}
+	return nil, sandbox.StartLockedWithPolicy(cmd, lim.KernelPolicy)
 }

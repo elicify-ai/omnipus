@@ -216,7 +216,26 @@ func TestCascade_SecondPassStampsLateChild(t *testing.T) {
 	}
 }
 
-func TestRevive_NewGeneration_OldMarkerInert(t *testing.T) {
+// TestRevive_LiveFenceSuperseded_SameGenerationQueued supersedes the retired
+// generation-bumping oracle TestRevive_NewGeneration_OldMarkerInert.
+//
+// Setup classification versus ADR-20260928 D2 (asset cd20cf8b): a RUNNING
+// record carrying a CURRENT-GENERATION Stop fence is a stopped record in the
+// IN-FLIGHT shape — LifecycleRecord.Stopped() (pkg/session/lifecycle_edge.go)
+// covers both the landed state and the live fence. It is NOT the LANDED
+// stopped shape and NOT terminal, so D2 CRIT-001 applies: an explicit RESUME
+// supersedes the in-flight stop (D5's precedence table — RESUME on a stopped
+// child resumes), clears the fence and any note atomically, and queues at
+// the SAME generation. Only done/failed mints G+1
+// (TestRevive_TerminalFollowUpMintsGeneration, unchanged).
+//
+// The old oracle's intent is preserved and still asserted: the pre-existing
+// marker must not block the revived dispatch — reserveDispatch must admit
+// the same generation the fence used to fence. What changed is the
+// mechanism D2 prescribes: the fence is cleared atomically with the resume,
+// not retained as inert history (retaining the durable who/why is the stop
+// NOTE's job, and the ledger's).
+func TestRevive_LiveFenceSuperseded_SameGenerationQueued(t *testing.T) {
 	store := session.NewLifecycleStore(t.TempDir())
 	rec := testSteerLifecycleRecord("child", "root", session.LifecycleRunning, 2)
 	rec.Stop = &session.Stop{
@@ -232,8 +251,8 @@ func TestRevive_NewGeneration_OldMarkerInert(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if persisted.Generation != generation || persisted.State != session.LifecycleRunning {
-			return errors.New("revival state was emitted before the durable running write")
+		if persisted.Generation != generation || persisted.State != session.LifecycleQueued {
+			return errors.New("revival state was emitted before the durable queued write")
 		}
 		emittedGeneration = generation
 		return nil
@@ -243,21 +262,24 @@ func TestRevive_NewGeneration_OldMarkerInert(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Revive: %v", err)
 	}
-	if generation != 3 || emittedGeneration != 3 {
-		t.Fatalf("generation = %d, emitted = %d, want 3", generation, emittedGeneration)
+	if generation != 2 || emittedGeneration != 2 {
+		t.Fatalf("generation = %d, emitted = %d, want 2 — the RESUME supersedes the in-flight stop on the SAME generation (D2 CRIT-001)", generation, emittedGeneration)
 	}
 	revived, err := store.Load("child")
 	if err != nil {
 		t.Fatalf("load revived child: %v", err)
 	}
-	if revived.State != session.LifecycleRunning || revived.Generation != 3 {
-		t.Fatalf("revived record = state %q generation %d", revived.State, revived.Generation)
+	if revived.State != session.LifecycleQueued || revived.Generation != 2 {
+		t.Fatalf("revived record = state %q generation %d, want queued at generation 2", revived.State, revived.Generation)
 	}
-	if revived.Stop == nil || revived.Stop.Generation != 2 {
-		t.Fatalf("old Stop marker = %#v, want generation 2 retained as inert history", revived.Stop)
+	if revived.Stop != nil && revived.Stop.Generation == revived.Generation {
+		t.Fatalf("current-generation Stop fence = %#v, want cleared atomically with the resume (D2 CRIT-001)", revived.Stop)
 	}
-	if ok, reason := reserveDispatch(revived, 3); !ok {
-		t.Fatalf("new generation refused by old marker: %s", reason)
+	if revived.StopNote != nil {
+		t.Fatalf("stop note = %+v, want cleared with the resume", revived.StopNote)
+	}
+	if ok, reason := reserveDispatch(revived, 2); !ok {
+		t.Fatalf("the same generation the fence was fencing is refused after the resume: %s", reason)
 	}
 }
 
@@ -288,13 +310,36 @@ func TestRevive_TerminalFollowUpMintsGeneration(t *testing.T) {
 	}
 }
 
+// TestStopRevive_OrderUnderLock is the same-generation migration of the
+// retired TestStopRevive_OrderUnderLock oracle (which expected generation 2
+// after the race). Setup classification versus ADR-20260928 D2: a RUNNING
+// record with a current-generation fence is the IN-FLIGHT stopped shape, so
+// neither concurrent operation may mint a generation — the stamp refreshes
+// the fence/note at the same generation (or no-ops as already-stamped) and
+// the RESUME supersedes it at the same generation. Only done/failed mints
+// G+1. The race/lock property itself is unchanged and still asserted: 100
+// concurrent stamp/Revive pairs must serialize under the record lock and
+// always leave a coherent record. The two legal end shapes, both at
+// generation 1:
+//   - stamp won the lock first (already-stamped no-op), Revive superseded:
+//     queued, no fence, no note;
+//   - Revive won first, the stamp landed a fresh stop of the resumed
+//     session: queued, current fence, note present (D2's same-mutation
+//     fence+note rule).
 func TestStopRevive_OrderUnderLock(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		store := session.NewLifecycleStore(t.TempDir())
 		rec := testSteerLifecycleRecord("child", "root", session.LifecycleRunning, 1)
-		rec.Stop = &session.Stop{Generation: 1}
 		persistSteerLifecycle(t, store, rec)
 		canceller := NewSteerCanceller(store)
+		// Build the in-flight shape through the REAL stop path, never by
+		// forging rec.Stop: D2 writes the fence, the stop note and the
+		// stop_effect in ONE mutation, and a hand-forged fence without them is
+		// an invalid record (the ledger refuses it as "no consistent
+		// execution/control pair").
+		if _, outcome, err := canceller.stampStop("child", time.Now().UTC(), steer.Principal{Kind: steer.PrincipalKindHuman, ID: "first-stop"}, session.StopCauseStop); err != nil || outcome != stopStamped {
+			t.Fatalf("iteration %d: SETUP real stop did not stamp the in-flight fence: outcome=%v err=%v", i, outcome, err)
+		}
 
 		start := make(chan struct{})
 		errs := make(chan error, 2)
@@ -303,7 +348,12 @@ func TestStopRevive_OrderUnderLock(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			_, _, err := canceller.stampStop("child", time.Now().UTC(), steer.Principal{Kind: steer.PrincipalKindHuman, ID: "stop"})
+			// cause=stop: this call names "child" directly (not reached via
+			// cascade's process() sweep of a descendant list), matching
+			// steer_cancel.go::cascade's own split — direct target gets
+			// StopCauseStop, only a swept descendant gets StopCauseCascade
+			// (commit 57c1a20ba, steer_cancel.go stampStop/cascade).
+			_, _, err := canceller.stampStop("child", time.Now().UTC(), steer.Principal{Kind: steer.PrincipalKindHuman, ID: "stop"}, session.StopCauseStop)
 			errs <- err
 		}()
 		go func() {
@@ -325,11 +375,15 @@ func TestStopRevive_OrderUnderLock(t *testing.T) {
 		if err != nil {
 			t.Fatalf("iteration %d load: %v", i, err)
 		}
-		if got.Generation != 2 {
-			t.Fatalf("iteration %d generation = %d, want 2", i, got.Generation)
+		if got.Generation != 1 {
+			t.Fatalf("iteration %d generation = %d, want 1 — neither a stamp nor an explicit RESUME of the in-flight shape mints a generation (D2 CRIT-001; only done/failed does)", i, got.Generation)
 		}
-		if got.State != session.LifecycleRunning || got.Stop == nil || (got.Stop.Generation != 1 && got.Stop.Generation != 2) {
-			t.Fatalf("iteration %d has torn Stop/Revive state: %+v", i, got)
+		if got.State != session.LifecycleQueued {
+			t.Fatalf("iteration %d state = %q, want queued — Revive queues the same generation and a fresh stamp of a resumed session leaves it queued", i, got.State)
+		}
+		fenced := got.Stop != nil && got.Stop.Generation == 1
+		if fenced != (got.StopNote != nil) || fenced != (got.StopEffect != nil) {
+			t.Fatalf("iteration %d has torn Stop/Revive state: fence=%v note=%v effect=%v — D2 writes the fence, the note and the stop effect in the same mutation, and the resume clears all of them", i, got.Stop, got.StopNote, got.StopEffect)
 		}
 	}
 }
@@ -380,7 +434,7 @@ func TestSteerGenerationCancel_NeverRanChildUnblocksParent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load(queued after stop): %v", err)
 	}
-	if after.State != session.LifecycleCancelled {
+	if after.State != session.LifecycleStopped {
 		t.Fatalf("state after stop = %q, want cancelled — a queued child that never ran must still be terminalised by its own Stop", after.State)
 	}
 
@@ -444,15 +498,12 @@ func wireTerminalReportDeliverer(al *AgentLoop, deliverer steer.UpwardDeliverer)
 	)
 }
 
-// TestReportSteeredSessionTerminalUpward_FailedDeliveryLeavesRecordRunnable
-// is DEFECT 1 (CRITICAL). reportSteeredSessionTerminalUpward's own doc
-// comment promises it "Refuses ... whenever the record ... is already
-// terminal, OR THE UPWARD DELIVERY ITSELF FAILS — never overwrites state it
-// cannot also report." The code logged a WARN on a failed Deliver and then
-// fell straight through to the terminal write, so the child landed terminal
-// with NO inbox entry: nothing left to recover from in process, and the
-// parent never told that a descendant went away.
-func TestReportSteeredSessionTerminalUpward_FailedDeliveryLeavesRecordRunnable(t *testing.T) {
+// TestReportSteeredSessionTerminalUpward_FailedDeliveryRetainsCommittedFailureAndOutbox
+// preserves the real failure scenario. Frozen control-plane ADR D2 CRIT-001
+// replaces its former deliver-first/runnable oracle: failure and exact outbox
+// commit together BEFORE publication; a failed append leaves that final pending.
+func TestReportSteeredSessionTerminalUpward_FailedDeliveryRetainsCommittedFailureAndOutbox(t *testing.T) {
+	readLog := captureLogFile(t, logger.ERROR)
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
 	lifecycle := al.GetSessionLifecycleStore()
@@ -460,10 +511,13 @@ func TestReportSteeredSessionTerminalUpward_FailedDeliveryLeavesRecordRunnable(t
 	wireTerminalReportDeliverer(al, deliverer)
 	parentID := newTestSteeringSession(t, al, "ws-1")
 	childID, childGen := launchSteeredChild(t, al, parentID, "call-undeliverable", "work nobody will ever hear about")
+	admitted := admitSteeringRepairExecution(t, al, childID, childGen)
+	const reason = "dispatch_failed: disk I/O error"
 
-	al.reportSteeredSessionTerminalUpward(context.Background(), childID, childGen,
-		session.LifecycleFailed, steer.OutcomeFailed, "dispatch_failed: disk I/O error")
-
+	if err := al.reportSteeredSessionTerminalUpward(context.Background(), childID, childGen,
+		session.LifecycleFailed, steer.OutcomeFailed, reason); err != nil {
+		t.Fatalf("report genuine failure: %v", err)
+	}
 	if deliverer.calls() != 1 {
 		t.Fatalf("Deliver called %d times, want exactly 1", deliverer.calls())
 	}
@@ -471,111 +525,128 @@ func TestReportSteeredSessionTerminalUpward_FailedDeliveryLeavesRecordRunnable(t
 	if err != nil {
 		t.Fatalf("Load(child): %v", err)
 	}
-	if rec.Terminal() {
-		t.Fatalf("state = %q: the record was written TERMINAL after the upward report failed — "+
-			"the parent will never learn this child died and nothing in process can repair it", rec.State)
+	if rec.State != session.LifecycleFailed || rec.FailedReason != reason || rec.Generation != childGen {
+		t.Fatalf("committed failure = state %q / reason %q / generation %d, want failed / %q / %d despite failed publication (D2)", rec.State, rec.FailedReason, rec.Generation, reason, childGen)
 	}
-	if rec.FailedReason != "" {
-		t.Fatalf("FailedReason = %q, want empty — no terminal disposition may be recorded for an undelivered report", rec.FailedReason)
+	commit := rec.FinalDelivery
+	if commit == nil || commit.CommitID != admitted.ExecutionID.RunID || commit.Generation != childGen || commit.MessageID != childID+":1:final" || commit.Outcome != string(steer.OutcomeFailed) || commit.ParentSessionID != parentID {
+		t.Fatalf("failed publication did not retain the selected run's protected failure outbox: %+v (D2 CRIT-001)", commit)
+	}
+	progress, revision, retired, err := lifecycle.FinalDeliveryState(childID, childGen, commit.CommitID)
+	if err != nil {
+		t.Fatalf("FinalDeliveryState: %v", err)
+	}
+	if progress != (session.FinalDeliveryProgress{}) || revision != 0 || retired {
+		t.Fatalf("failed append recorded false delivery facts: progress=%+v revision=%d retired=%v, want all pending / 0 / false (D2)", progress, revision, retired)
+	}
+	pending, err := lifecycle.ListPendingFinalDeliveries()
+	if err != nil {
+		t.Fatalf("ListPendingFinalDeliveries: %v", err)
+	}
+	if len(pending) != 1 || pending[0].SessionID != childID || pending[0].Commit.CommitID != commit.CommitID || string(pending[0].Commit.Payload) != string(commit.Payload) || len(commit.Payload) == 0 {
+		t.Fatalf("failed final is not discoverable with its exact committed payload: %+v (D2 all-generation recovery)", pending)
+	}
+	captured := readLog()
+	for _, want := range []string{`"level":"error"`, childID, commit.MessageID, commit.CommitID, "disk full"} {
+		if !strings.Contains(captured, want) {
+			t.Errorf("pending final publication was not visibly reported with %q; log:\n%s", want, captured)
+		}
 	}
 }
 
-// TestReportSteeredSessionTerminalUpward_NoDelivererLeavesRecordRunnable is
-// DEFECT 1's second undelivered branch: with no upward deliverer wired there
-// is no inbox entry at all, so the terminal write must be refused for exactly
-// the same reason.
-func TestReportSteeredSessionTerminalUpward_NoDelivererLeavesRecordRunnable(t *testing.T) {
+// Frozen D2 CRIT-001/T11: a stopped landing is durable even with NO upward
+// deliverer. D6 independently tells the direct parent through its stop notice.
+// The retired deliver-first expectation must not keep a stopped child working.
+func TestReportSteeredSessionTerminalUpward_NoDelivererStillLandsStoppedAndNotifiesParent(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
-	lifecycle := al.GetSessionLifecycleStore()
 	parentID := newTestSteeringSession(t, al, "ws-1")
-	childID, childGen := launchSteeredChild(t, al, parentID, "call-no-deliverer", "work nobody will ever hear about")
-
-	// Deliberately NOT wiring an upward deliverer.
-	al.reportSteeredSessionTerminalUpward(context.Background(), childID, childGen,
-		session.LifecycleCancelled, steer.OutcomeInterrupted, "interrupted: the session was cancelled")
-
-	rec, err := lifecycle.Load(childID)
-	if err != nil {
-		t.Fatalf("Load(child): %v", err)
+	childID, childGen := launchSteeredChild(t, al, parentID, "call-no-deliverer", "stop without a final publisher")
+	admitSteeringRepairExecution(t, al, childID, childGen)
+	// Deliberately do not wire an UpwardDeliverer: a stop is not a final.
+	result, err := al.StopSession(context.Background(), StopRequest{
+		SessionID: childID, By: steer.Principal{Kind: steer.PrincipalKindHuman, ID: "operator"},
+	})
+	if err != nil || result.RootErr != nil || len(result.Report.Unreachable) != 0 {
+		t.Fatalf("StopSession without final deliverer = %+v, %v", result, err)
 	}
-	if rec.Terminal() {
-		t.Fatalf("state = %q: the record was written TERMINAL with no upward deliverer wired — "+
-			"no inbox entry exists and the parent will wait for ever", rec.State)
-	}
+	stopped := awaitSteeringRepairStopped(t, al, childID, childGen)
+	awaitSteeringRepairStopTail(t, al)
+	assertSteeringRepairStopNotice(t, al, parentID, stopped)
 }
 
-// TestReportSteeredSessionTerminalUpward_StopLandingDuringDeliveryIsNotErased
-// is DEFECT 2 (CRITICAL) — the stale read-then-write shape fix lane 1 already
-// replaced with LifecycleStore.Mutate in completeSteeredTurn (Finding D) and
-// steer_launcher.go::commitSteeredDispatchState. The function did
-// Load -> Deliver (real I/O) -> mutate the PRE-Deliver snapshot -> Persist,
-// so a Stop pressed while Deliver was running was silently erased: the
-// snapshot's Stop == nil was written straight back over it.
-func TestReportSteeredSessionTerminalUpward_StopLandingDuringDeliveryIsNotErased(t *testing.T) {
+// TestReportSteeredSessionTerminalUpward_CommittedFailureWinsStopDuringDelivery
+// preserves the genuine failure/late-Stop race. Frozen D2 CRIT-001/T11 moves
+// the winner boundary BEFORE Deliver: a Stop arriving during publication sees
+// the committed failed turn and cannot stamp a fence/note or replace the final.
+func TestReportSteeredSessionTerminalUpward_CommittedFailureWinsStopDuringDelivery(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
 	lifecycle := al.GetSessionLifecycleStore()
 	parentID := newTestSteeringSession(t, al, "ws-1")
 	childID, childGen := launchSteeredChild(t, al, parentID, "call-stop-race", "work interrupted mid-report")
-
-	stopAt := time.Now().UTC()
+	admitted := admitSteeringRepairExecution(t, al, childID, childGen)
+	const reason = "dispatch_failed: disk I/O error"
 	deliverer := &recordingUpwardDeliverer{
 		delivery: steer.Delivery{MessageID: childID + ":1:final", Outcome: steer.DeliveryWoke},
 	}
 	deliverer.duringDeliver = func() {
-		// A human presses Stop while Deliver is still doing its I/O.
-		if err := lifecycle.Mutate(childID, func(cur *session.LifecycleRecord) error {
-			cur.Stop = &session.Stop{
-				At:         stopAt,
-				Generation: cur.Generation,
-				By:         steer.Principal{Kind: steer.PrincipalKindHuman, ID: "operator"},
-			}
-			return nil
-		}); err != nil {
-			t.Errorf("stamp Stop during Deliver: %v", err)
+		committed, err := lifecycle.Load(childID)
+		if err != nil {
+			t.Errorf("Load(at publication boundary): %v", err)
+			return
+		}
+		if committed.State != session.LifecycleFailed || committed.FailedReason != reason || committed.FinalDelivery == nil {
+			t.Errorf("Deliver ran before its failure/outbox commit: %+v (D2 CRIT-001)", committed)
+		}
+		if _, stopErr := al.StopSession(context.Background(), StopRequest{
+			SessionID: childID, By: steer.Principal{Kind: steer.PrincipalKindHuman, ID: "operator"},
+		}); stopErr != nil {
+			t.Errorf("late StopSession: %v", stopErr)
 		}
 	}
 	wireTerminalReportDeliverer(al, deliverer)
-
-	al.reportSteeredSessionTerminalUpward(context.Background(), childID, childGen,
-		session.LifecycleFailed, steer.OutcomeFailed, "dispatch_failed: disk I/O error")
-
+	if err := al.reportSteeredSessionTerminalUpward(context.Background(), childID, childGen,
+		session.LifecycleFailed, steer.OutcomeFailed, reason); err != nil {
+		t.Fatalf("report genuine failure: %v", err)
+	}
+	if deliverer.calls() != 1 {
+		t.Fatalf("Deliver called %d times, want exactly one committed failure publication", deliverer.calls())
+	}
 	rec, err := lifecycle.Load(childID)
 	if err != nil {
 		t.Fatalf("Load(child): %v", err)
 	}
-	if rec.Stop == nil {
-		t.Fatal("the Stop pressed during Deliver was ERASED: the durable record that Stop was ever pressed is gone")
+	if rec.State != session.LifecycleFailed || rec.FailedReason != reason || rec.Generation != childGen || rec.Stop != nil || rec.StopNote != nil {
+		t.Fatalf("late Stop changed the winning failure: state=%q reason=%q generation=%d fence=%+v note=%+v (D2/T11)", rec.State, rec.FailedReason, rec.Generation, rec.Stop, rec.StopNote)
 	}
-	if rec.Stop.Generation != childGen || !rec.Stop.At.Equal(stopAt) {
-		t.Fatalf("Stop = %#v, want the marker stamped during delivery at generation %d", rec.Stop, childGen)
-	}
-	if rec.State == session.LifecycleFailed {
-		t.Fatalf("state = %q: the pre-Deliver snapshot was written back over a record a Stop had just landed on", rec.State)
+	if rec.FinalDelivery == nil || rec.FinalDelivery.CommitID != admitted.ExecutionID.RunID || rec.FinalDelivery.MessageID != childID+":1:final" || rec.FinalDelivery.Outcome != string(steer.OutcomeFailed) {
+		t.Fatalf("late Stop replaced the winning run's final identity: %+v (D2)", rec.FinalDelivery)
 	}
 }
 
-// TestReportSteeredSessionTerminalUpward_StoredNotWokenLoggedAtError is
-// DEFECT 3 (HIGH). steer.Delivery.Outcome carries the one fact that
-// distinguishes "the parent knows" (DeliveryWoke) from "the parent will never
-// know" (DeliveryStoredNotWoken), and every caller in the codebase discarded
-// it with `_, err := deliverer.Deliver(...)`. On a TERMINAL report that is a
-// parent stalled indefinitely, and it was completely invisible.
+// A stored final whose required wake failed must remain visible as an error.
+// This is a genuine failure scenario, not a STOPPED publication expectation.
+// Frozen D2 Publish only a committed outbox: wake errors stay retryable/visible.
 func TestReportSteeredSessionTerminalUpward_StoredNotWokenLoggedAtError(t *testing.T) {
 	readLog := captureLogFile(t, logger.ERROR)
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
 	parentID := newTestSteeringSession(t, al, "ws-1")
 	childID, childGen := launchSteeredChild(t, al, parentID, "call-stored-not-woken", "work whose parent is never woken")
+	admitSteeringRepairExecution(t, al, childID, childGen)
 	messageID := childID + ":1:final"
-	wireTerminalReportDeliverer(al, &recordingUpwardDeliverer{
+	deliverer := &recordingUpwardDeliverer{
 		delivery: steer.Delivery{MessageID: messageID, Outcome: steer.DeliveryStoredNotWoken},
-	})
-
-	al.reportSteeredSessionTerminalUpward(context.Background(), childID, childGen,
-		session.LifecycleFailed, steer.OutcomeFailed, "dispatch_failed: disk I/O error")
-
+	}
+	wireTerminalReportDeliverer(al, deliverer)
+	if err := al.reportSteeredSessionTerminalUpward(context.Background(), childID, childGen,
+		session.LifecycleFailed, steer.OutcomeFailed, "dispatch_failed: disk I/O error"); err != nil {
+		t.Fatalf("report genuine failure: %v", err)
+	}
+	if deliverer.calls() != 1 {
+		t.Fatalf("Deliver called %d times, want exactly 1", deliverer.calls())
+	}
 	captured := readLog()
 	if !strings.Contains(captured, `"level":"error"`) {
 		t.Fatalf("a terminal report the parent was never woken for produced no ERROR line; captured log:\n%s", captured)
@@ -590,22 +661,26 @@ func TestReportSteeredSessionTerminalUpward_StoredNotWokenLoggedAtError(t *testi
 	}
 }
 
-// TestReportSteeredSessionTerminalUpward_WokenDeliveryStaysQuiet is the
-// negative half of DEFECT 3: a report the parent was actually woken for must
-// produce no ERROR line at all, so the new signal stays worth reading.
+// Success control for D2's publication-error signal: a committed genuine
+// failure whose parent was woken remains failed and produces no ERROR line.
 func TestReportSteeredSessionTerminalUpward_WokenDeliveryStaysQuiet(t *testing.T) {
 	readLog := captureLogFile(t, logger.ERROR)
 	al, cleanup := newSteerAL(t)
 	defer cleanup()
 	parentID := newTestSteeringSession(t, al, "ws-1")
 	childID, childGen := launchSteeredChild(t, al, parentID, "call-woken", "work whose parent is woken")
-	wireTerminalReportDeliverer(al, &recordingUpwardDeliverer{
+	admitSteeringRepairExecution(t, al, childID, childGen)
+	deliverer := &recordingUpwardDeliverer{
 		delivery: steer.Delivery{MessageID: childID + ":1:final", Outcome: steer.DeliveryWoke},
-	})
-
-	al.reportSteeredSessionTerminalUpward(context.Background(), childID, childGen,
-		session.LifecycleFailed, steer.OutcomeFailed, "dispatch_failed: disk I/O error")
-
+	}
+	wireTerminalReportDeliverer(al, deliverer)
+	if err := al.reportSteeredSessionTerminalUpward(context.Background(), childID, childGen,
+		session.LifecycleFailed, steer.OutcomeFailed, "dispatch_failed: disk I/O error"); err != nil {
+		t.Fatalf("report genuine failure: %v", err)
+	}
+	if deliverer.calls() != 1 {
+		t.Fatalf("Deliver called %d times, want exactly 1", deliverer.calls())
+	}
 	if captured := readLog(); strings.Contains(captured, `"level":"error"`) {
 		t.Fatalf("a delivered-and-woken terminal report logged at ERROR; captured log:\n%s", captured)
 	}
@@ -614,7 +689,6 @@ func TestReportSteeredSessionTerminalUpward_WokenDeliveryStaysQuiet(t *testing.T
 		t.Fatalf("Load(child): %v", err)
 	}
 	if rec.State != session.LifecycleFailed || rec.FailedReason != "dispatch_failed: disk I/O error" {
-		t.Fatalf("state = %q / FailedReason = %q, want failed with the dispatch reason — "+
-			"a successfully delivered report must still land terminal", rec.State, rec.FailedReason)
+		t.Fatalf("state = %q / FailedReason = %q, want failed with the dispatch reason — a successfully delivered report must still land terminal", rec.State, rec.FailedReason)
 	}
 }

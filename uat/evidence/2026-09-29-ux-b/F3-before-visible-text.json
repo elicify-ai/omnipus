@@ -1,0 +1,7 @@
+{
+  "url": "http://127.0.0.1:63073/#/workspaces/01M3NH6Y281K64JRAFJVTY5EXG/chat?panel=mail&agent=mia",
+  "mailText": "Mail\nMia · mia-outage@example.test\nCompose\n\nconnect_refused\n\nRetry\n\nSelect a message to read",
+  "mailAlerts": [
+    "connect_refused\n\nRetry"
+  ]
+}

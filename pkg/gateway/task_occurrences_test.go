@@ -4,21 +4,20 @@
 
 package gateway
 
-// task_occurrences_test.go — tests 7 and 8 of the Calendar Recurrence
-// Redesign TDD plan (docs/internal/specs/calendar-recurrence-redesign-spec.md,
-// "Test Implementation Order"): TestOccurrences_LegacyCronAndEveryMs and
-// TestOccurrences_BucketingAndCaps. Both exercise buildOccurrenceSets
-// directly — a pure function of ([]task.Task, range, tz, everyAnchor) — so
-// they never link the full gateway test binary (project rule: never run the
-// full pkg/gateway suite locally, OOM risk in the devpod).
+// task_occurrences_test.go — Calendar Recurrence Redesign coverage
+// (docs/internal/specs/calendar-recurrence-redesign-spec.md): the RRULE
+// bucketing/caps and spec-dataset rows. DEL-19 (session-core) deleted the
+// legacy every_ms / cron_expr projections, so those cases are gone; the
+// remaining cases exercise buildOccurrenceSets directly — a pure function of
+// ([]task.Task, range, tz, everyAnchor) — so they never link the full gateway
+// test binary (project rule: never run the full pkg/gateway suite locally,
+// OOM risk in the devpod).
 
 import (
 	"encoding/json"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/adhocore/gronx"
 
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
@@ -34,152 +33,6 @@ func mustLoc(t *testing.T, name string) *time.Location {
 		t.Fatalf("time.LoadLocation(%q): %v", name, err)
 	}
 	return loc
-}
-
-// --- Test 7: legacy cron_expr + every_ms -----------------------------------
-
-func TestOccurrences_LegacyCronAndEveryMs(t *testing.T) {
-	t.Run("cron_expr detail-mode expansion matches the scheduler's own fire computation", func(t *testing.T) {
-		// pkg/cron/service.go's computeNextRun computes a "cron"-kind job's
-		// next fire via gronx.NextTickAfter(schedule.Expr,
-		// time.UnixMilli(nowMS), false) — the exact same primitive
-		// expandCronServerZone (task_occurrences.go) walks. This test
-		// independently re-derives the expected instant sequence with that
-		// same primitive and asserts buildOccurrenceSets agrees exactly —
-		// "the engines can never disagree" (Timezone Semantics §2/§4).
-		const expr = "0 9 * * MON" // every Monday 09:00, server-local zone
-		from := time.Date(2026, 7, 1, 0, 0, 0, 0, time.Local)
-		to := from.AddDate(0, 0, 7) // 7-day span: DETAIL mode (<= 8*24h)
-		fromMs, toMs := from.UnixMilli(), to.UnixMilli()
-
-		tasks := []task.Task{{
-			ID: "cron-task",
-			Trigger: &task.Trigger{
-				Type:   task.TriggerRecurring,
-				Config: task.TriggerConfig{CronExpr: ptr(expr)},
-			},
-		}}
-		sets, err := buildOccurrenceSets(tasks, fromMs, toMs, "UTC", noEveryAnchor)
-		if err != nil {
-			t.Fatalf("buildOccurrenceSets: %v", err)
-		}
-		if len(sets) != 1 {
-			t.Fatalf("got %d occurrence sets, want 1", len(sets))
-		}
-		if sets[0].Truncated {
-			t.Errorf("truncated = true, want false (well under the 500 cap)")
-		}
-		if len(sets[0].DayBuckets) != 0 {
-			t.Errorf("DayBuckets = %v, want none (detail mode)", sets[0].DayBuckets)
-		}
-
-		var want []int64
-		cur := time.UnixMilli(fromMs - 1)
-		for {
-			next, tickErr := gronx.NextTickAfter(expr, cur, false)
-			if tickErr != nil {
-				break
-			}
-			ms := next.UnixMilli()
-			if ms >= toMs {
-				break
-			}
-			want = append(want, ms)
-			cur = next
-		}
-		if len(want) == 0 {
-			t.Fatalf("test setup produced no reference instants — widen the range")
-		}
-		if !int64SlicesEqual(sets[0].OccurrencesMs, want) {
-			t.Errorf("cron expansion mismatch:\n got  %v\n want %v", sets[0].OccurrencesMs, want)
-		}
-	})
-
-	t.Run("every_ms projection: first entry equals the armed NextRunAtMS, then +k*interval", func(t *testing.T) {
-		const everyMs = int64(60 * 60 * 1000) // 1 hour
-		armedNextRun := time.Date(2026, 7, 10, 9, 0, 0, 0, time.UTC).UnixMilli()
-		anchor := func(taskID string) (int64, bool) {
-			if taskID == "every-task" {
-				return armedNextRun, true
-			}
-			return 0, false
-		}
-		tasks := []task.Task{{
-			ID: "every-task",
-			Trigger: &task.Trigger{
-				Type:   task.TriggerEvery,
-				Config: task.TriggerConfig{EveryMs: ptr(everyMs)},
-			},
-		}}
-		// Range straddles the armed instant (starts before it) to prove the
-		// projection never extrapolates backward from armedNextRun.
-		fromMs := armedNextRun - 3*60*60*1000
-		toMs := armedNextRun + 5*60*60*1000
-
-		sets, err := buildOccurrenceSets(tasks, fromMs, toMs, "UTC", anchor)
-		if err != nil {
-			t.Fatalf("buildOccurrenceSets: %v", err)
-		}
-		if len(sets) != 1 {
-			t.Fatalf("got %d occurrence sets, want 1", len(sets))
-		}
-		got := sets[0].OccurrencesMs
-		if len(got) == 0 {
-			t.Fatalf("got no occurrences")
-		}
-		if got[0] != armedNextRun {
-			t.Errorf("first occurrence = %d, want the armed NextRunAtMS %d (engine-agreement assertion)",
-				got[0], armedNextRun)
-		}
-		for i, ms := range got {
-			want := armedNextRun + int64(i)*everyMs
-			if ms != want {
-				t.Errorf("occurrence[%d] = %d, want %d (armedNextRun + %d*everyMs)", i, ms, want, i)
-			}
-		}
-	})
-
-	t.Run("every_ms is forward-only: a range fully in the past omits the task", func(t *testing.T) {
-		armedNextRun := time.Date(2026, 7, 10, 9, 0, 0, 0, time.UTC).UnixMilli()
-		anchor := func(string) (int64, bool) { return armedNextRun, true }
-		tasks := []task.Task{{
-			ID: "every-task",
-			Trigger: &task.Trigger{
-				Type:   task.TriggerEvery,
-				Config: task.TriggerConfig{EveryMs: ptr(int64(60000))},
-			},
-		}}
-		fromMs := armedNextRun - 10*60*60*1000
-		toMs := armedNextRun - 5*60*60*1000 // entirely before the armed instant
-
-		sets, err := buildOccurrenceSets(tasks, fromMs, toMs, "UTC", anchor)
-		if err != nil {
-			t.Fatalf("buildOccurrenceSets: %v", err)
-		}
-		if len(sets) != 0 {
-			t.Errorf(
-				"got %d occurrence sets for a range fully in the past, want 0 (task omitted, no backward extrapolation)",
-				len(sets),
-			)
-		}
-	})
-
-	t.Run("every_ms with no live armed job (everyAnchor ok=false) omits the task", func(t *testing.T) {
-		tasks := []task.Task{{
-			ID: "orphan-every-task",
-			Trigger: &task.Trigger{
-				Type:   task.TriggerEvery,
-				Config: task.TriggerConfig{EveryMs: ptr(int64(60000))},
-			},
-		}}
-		sets, err := buildOccurrenceSets(tasks, 0, 60*60*1000, "UTC", noEveryAnchor)
-		if err != nil {
-			t.Fatalf("buildOccurrenceSets: %v", err)
-		}
-		if len(sets) != 0 {
-			t.Errorf("got %d occurrence sets with no armed anchor, want 0", len(sets))
-		}
-	})
 }
 
 // --- Test 8: bucketing, caps, and the iteration budget ----------------------
@@ -283,34 +136,6 @@ func TestOccurrences_BucketingAndCaps(t *testing.T) {
 		}
 		if got, want := len(sets[0].OccurrencesMs), 169; got != want {
 			t.Errorf("len(OccurrencesMs) = %d, want %d (169 hourly instants, one per hour)", got, want)
-		}
-	})
-
-	t.Run("500-instant cap: legacy every_ms=60000 over a 7-day detail-mode range truncates at 500", func(t *testing.T) {
-		// Dataset row 10: every_ms=60000 (1/min), 7-day range (10,080
-		// potential instants) -> per-task cap of 500 stops iteration.
-		armedNextRun := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
-		anchor := func(string) (int64, bool) { return armedNextRun, true }
-		tasks := []task.Task{{
-			ID: "fast-every-task",
-			Trigger: &task.Trigger{
-				Type:   task.TriggerEvery,
-				Config: task.TriggerConfig{EveryMs: ptr(int64(60000))},
-			},
-		}}
-		toMs := armedNextRun + 7*24*60*60*1000
-		sets, err := buildOccurrenceSets(tasks, armedNextRun, toMs, "UTC", anchor)
-		if err != nil {
-			t.Fatalf("buildOccurrenceSets: %v", err)
-		}
-		if len(sets) != 1 {
-			t.Fatalf("got %d occurrence sets, want 1", len(sets))
-		}
-		if !sets[0].Truncated {
-			t.Errorf("truncated = false, want true (10,080 potential instants > 500 cap)")
-		}
-		if len(sets[0].OccurrencesMs) != perTaskInstantCap {
-			t.Errorf("len(OccurrencesMs) = %d, want the cap (%d)", len(sets[0].OccurrencesMs), perTaskInstantCap)
 		}
 	})
 
@@ -579,18 +404,6 @@ func TestOccurrences_BucketingAndCaps(t *testing.T) {
 			t.Errorf("got %d occurrence sets, want 0", len(sets))
 		}
 	})
-}
-
-func int64SlicesEqual(a, b []int64) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 // --- Byte-level wire regression: nil slices must never marshal to null ------
@@ -869,91 +682,6 @@ func TestOccurrences_SpecDatasetRows(t *testing.T) {
 				t.Errorf("occurrence[%d] time-of-day = %02d:%02d:%02d, want 09:00:00 (rule tz, UTC here)",
 					i, got.Hour(), got.Minute(), got.Second())
 			}
-		}
-	})
-
-	t.Run("row 8: every_ms=1800000 over a 42-day range -> one 48-count DayBucket per calendar day", func(t *testing.T) {
-		const everyMs = int64(1800000) // 30 min
-		anchorMs := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
-		anchor := func(string) (int64, bool) { return anchorMs, true }
-		fromMs := anchorMs
-		toMs := anchorMs + 42*24*60*60*1000 // exactly 42 days -> overview mode
-
-		tasks := []task.Task{{
-			ID: "every-30min-task",
-			Trigger: &task.Trigger{
-				Type:   task.TriggerEvery,
-				Config: task.TriggerConfig{EveryMs: ptr(everyMs)},
-			},
-		}}
-		sets, err := buildOccurrenceSets(tasks, fromMs, toMs, "UTC", anchor)
-		if err != nil {
-			t.Fatalf("buildOccurrenceSets: %v", err)
-		}
-		if len(sets) != 1 {
-			t.Fatalf("got %d occurrence sets, want 1", len(sets))
-		}
-		set := sets[0]
-		if len(set.OccurrencesMs) != 0 {
-			t.Errorf(
-				"OccurrencesMs = %v, want none (every day is dense enough to bucket, per spec dataset row 8's note)",
-				set.OccurrencesMs,
-			)
-		}
-		if len(set.DayBuckets) != 42 {
-			t.Fatalf(
-				"got %d day buckets, want exactly 42 (spec dataset row 8: one DayBucket per calendar day)",
-				len(set.DayBuckets),
-			)
-		}
-		for i, b := range set.DayBuckets {
-			if b.Count != 48 {
-				t.Errorf("bucket[%d].Count = %d, want 48 (30-min interval over a full day: 1440/30)", i, b.Count)
-			}
-			if b.IntervalMs == nil || *b.IntervalMs != everyMs {
-				t.Errorf(
-					"bucket[%d].IntervalMs = %v, want %d (spec dataset row 8: interval_ms set)",
-					i,
-					b.IntervalMs,
-					everyMs,
-				)
-			}
-		}
-	})
-
-	t.Run("row 9: every_ms=1800000 over a 1-day range -> 48 raw instants (detail mode)", func(t *testing.T) {
-		const everyMs = int64(1800000) // 30 min
-		anchorMs := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
-		anchor := func(string) (int64, bool) { return anchorMs, true }
-		fromMs := anchorMs
-		toMs := anchorMs + 24*60*60*1000 // 1 day -> detail mode
-
-		tasks := []task.Task{{
-			ID: "every-30min-task",
-			Trigger: &task.Trigger{
-				Type:   task.TriggerEvery,
-				Config: task.TriggerConfig{EveryMs: ptr(everyMs)},
-			},
-		}}
-		sets, err := buildOccurrenceSets(tasks, fromMs, toMs, "UTC", anchor)
-		if err != nil {
-			t.Fatalf("buildOccurrenceSets: %v", err)
-		}
-		if len(sets) != 1 {
-			t.Fatalf("got %d occurrence sets, want 1", len(sets))
-		}
-		set := sets[0]
-		if len(set.DayBuckets) != 0 {
-			t.Errorf("DayBuckets = %v, want none (detail mode never buckets)", set.DayBuckets)
-		}
-		if len(set.OccurrencesMs) != 48 {
-			t.Fatalf(
-				"got %d occurrences, want exactly 48 (spec dataset row 9: 24h / 30min = 48)",
-				len(set.OccurrencesMs),
-			)
-		}
-		if set.Truncated {
-			t.Errorf("truncated = true, want false (48 well under the 500 cap)")
 		}
 	})
 }

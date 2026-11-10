@@ -87,7 +87,7 @@ func TestWS_UserMessageBound_NoTranscriptEntryNoErrorFrame(t *testing.T) {
 	bound := al.UserMessageBound()
 	require.Equal(t, config.DefaultBuiltinSuccessCap, bound, "the bound tracks the builtin-success cap")
 
-	data, err := json.Marshal(wsClientFrameTestHelper{Type: "message", Content: strings.Repeat("x", bound+1)})
+	data, err := json.Marshal(wsClientFrameTestHelper{Type: "message", Content: strings.Repeat("x", bound+1), AgentID: "mia"})
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
 

@@ -12,7 +12,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
-	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
+	"github.com/elicify-ai/omnipus/pkg/providers/effortdialect"
 	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -32,6 +32,7 @@ type agentLoopRunTurnToolsFlow int
 
 // finalizeTurn chooses final content, persists it, and completes the turn result.
 func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
+	iterationLimitNotice := false
 	if rz.rc.rx.rr.rq.ri.rf.rt.ts.hardAbortRequested() {
 		rz.rc.rx.rr.rq.ri.turnStatus = TurnEndStatusAborted
 		return rz.rc.rx.rr.rq.ri.rf.rt.al.abortTurn(rz.rc.rx.rr.rq.ri.rf.rt.ts, "turn_finalize", hardInterruptAbortReason)
@@ -43,12 +44,17 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 			// — a truncated turn that produced literally no content. No
 			// retry, no fallback substitution, no markTurnFailed; finalContent
 			// stays "" and the write choke points below persist a zero-content
-			// entry for MarkLastEntryTruncated to find.
+			// entry for the former post-hoc truncation rewrite to find.
+		} else if rz.rc.rx.rr.rq.ri.rf.rt.ts.stopRequested.Load() {
+			// #1534 Q1 = A: a turn the user stopped before anything new was
+			// shown has nothing more to say — no fallback text, not failed.
 		} else if rz.rc.rx.rr.rq.ri.rf.rt.ts.currentIteration() >= rz.rc.rx.rr.rq.ri.rf.rt.ts.agent.MaxIterations && rz.rc.rx.rr.rq.ri.rf.rt.ts.agent.MaxIterations > 0 {
 			// Genuine failure: tool-iteration ceiling hit without a final response.
 			// markTurnFailed so DoneStats.TurnFailed=true reaches the done frame.
 			rz.rc.rx.finalContent = toolLimitResponse
+			iterationLimitNotice = true
 			rz.rc.rx.rr.rq.ri.rf.rt.ts.markTurnFailed()
+			rz.rc.rx.rr.rq.ri.deferUnansweredSteering()
 		} else {
 			// The engine fell through without an LLM response and uses the
 			// caller-supplied DefaultResponse as the content.  Only mark as
@@ -65,9 +71,24 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 
 	rz.rc.rx.rr.rq.ri.rf.rt.ts.setPhase(TurnPhaseFinalizing)
 	rz.rc.rx.rr.rq.ri.rf.rt.ts.setFinalContent(rz.rc.rx.finalContent)
-	if !rz.rc.rx.rr.rq.ri.rf.rt.ts.opts.NoHistory {
+	// Harness notices are chat-only. A hidden system-role model slot would be
+	// sanitized away and break later archive-address mapping and context relief.
+	// #1534: a stopped turn with nothing new to say adds no empty answer.
+	stoppedSilent := rz.rc.rx.finalContent == "" && rz.rc.rx.rr.rq.ri.rf.rt.ts.stopRequested.Load()
+	if !rz.rc.rx.rr.rq.ri.rf.rt.ts.opts.NoHistory && !iterationLimitNotice {
 		finalMsg := providers.Message{Role: "assistant", Content: rz.rc.rx.finalContent}
-		rz.rc.rx.rr.rq.ri.rf.rt.ts.agent.Sessions.AddMessage(rz.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey, finalMsg.Role, finalMsg.Content)
+		// #1178 (amendment §4.2): a failed final write is a failed turn,
+		// never a false success. Wrap with the existing assistant
+		// save-error wrapper, run the session_save error path below and
+		// markTurnFailed — DoneStats.TurnFailed must be true.
+		if stoppedSilent {
+			// Nothing to append; the session is still saved below.
+		} else if addErr := rz.rc.rx.rr.rq.ri.rf.rt.ts.appendFinalModelResponse(finalMsg.Content, rz.rc.rx.rr.rq.ri.rf.response); addErr != nil {
+			notSaved := &messageNotSavedError{role: finalMsg.Role, cause: addErr}
+			rz.rc.rx.rr.rq.ri.rf.rt.al.reportSessionSaveFailure(rz.rc.rx.rr.rq.ri.rf.rt.ts, notSaved)
+			rz.rc.rx.rr.rq.ri.turnStatus = TurnEndStatusError
+			return turnResult{}, notSaved
+		}
 		if err := rz.rc.rx.rr.rq.ri.rf.rt.ts.agent.Sessions.Save(rz.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey); err != nil {
 			rz.rc.rx.rr.rq.ri.turnStatus = TurnEndStatusError
 			// Wave 1: never surface raw err.Error() (session-save is a
@@ -100,16 +121,34 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 	// empty and Finalize would skip the write. We hand finalContent to the
 	// streamer via SetFinalContent so it can fall back to that text.
 	rz.rc.rx.rr.rq.ri.rf.rt.ts.SetFinalContent(rz.rc.rx.finalContent)
+	if !iterationLimitNotice {
+		if streamErr := rz.rc.rx.rr.rq.ri.rf.rt.ts.ensureFinalWebchatStreamer(rz.rc.rx.rr.rq.ri.rf.rt.al.bus, rz.rc.rx.rr.rq.ri.rf.rt.streamerLookupDeclined); streamErr != nil {
+			notSaved := &messageNotSavedError{role: "assistant", cause: streamErr}
+			rz.rc.rx.rr.rq.ri.rf.rt.al.reportSessionSaveFailure(rz.rc.rx.rr.rq.ri.rf.rt.ts, notSaved)
+			rz.rc.rx.rr.rq.ri.turnStatus = TurnEndStatusError
+			return turnResult{}, notSaved
+		}
+	}
 	rz.rc.rx.rr.rq.ri.rf.rt.ts.mu.RLock()
 	hasActiveStreamer := rz.rc.rx.rr.rq.ri.rf.rt.ts.lastStreamer != nil
 	rz.rc.rx.rr.rq.ri.rf.rt.ts.mu.RUnlock()
 	truncReason := rz.rc.rx.rr.rq.ri.rf.rt.ts.getTruncationReason()
-	if !hasActiveStreamer {
+	if iterationLimitNotice {
+		if noticeErr := rz.rc.rx.rr.rq.ri.rf.rt.ts.recordIterationLimitNotice(rz.rc.rx.finalContent, rz.rc.rx.rr.rq.ri.rf.rt.al.bus); noticeErr != nil {
+			// The strict chat-only write failed. Do not offer its synthetic
+			// prose to the deferred assistant finalizer; keep real narration.
+			rz.rc.rx.rr.rq.ri.rf.rt.ts.SetFinalContent("")
+			notSaved := &messageNotSavedError{role: "system", cause: noticeErr}
+			rz.rc.rx.rr.rq.ri.rf.rt.al.reportSessionSaveFailure(rz.rc.rx.rr.rq.ri.rf.rt.ts, notSaved)
+			rz.rc.rx.rr.rq.ri.turnStatus = TurnEndStatusError
+			return turnResult{}, notSaved
+		}
+	} else if !hasActiveStreamer {
 		// ADR-087 D4a/D4b: this is the non-streaming write choke point.
 		// When the turn was truncated, stamp Truncated/TruncationReason in
 		// the SAME write as the content — see
 		// appendAssistantTranscriptTruncated's doc comment for why this
-		// replaces the former append-then-MarkLastEntryTruncated two-step
+		// replaces the former append-then-the former post-hoc truncation rewrite two-step
 		// (for the streaming case, finalizeStreamer's own deferred call
 		// does the single-write equivalent after wsStreamer.Finalize
 		// persists its entry).
@@ -120,12 +159,47 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 		}
 	}
 
+	rz.rc.rx.rr.rq.ri.rf.rt.ts.autoTitleAfterFirstReply(rz.rc.rx.finalContent)
+
+	// #1178 (amendment §4.1, re-CHECK F01 engine boundary): the streamed
+	// turn's late transcript write and done frame happen inside the
+	// streamer's Finalize. Run it HERE — before the completed result is built
+	// and before runTurn's defers emit turn.end — so a failed late write
+	// becomes the turn's real outcome: markTurnFailed, TurnEndStatusError and
+	// the gateway's error returned to the caller instead of a false success.
+	// The gateway's own could-not-save notice already went out exactly once,
+	// so nothing is emitted here; finalizeStreamer's WARN stays as operator
+	// detail. runTurn's deferred finalizeStreamer call is a no-op after this
+	// (ts.lastStreamer is nil once it has run); on a non-streamed turn the
+	// call is a no-op too (no streamer).
+	//
+	// Re-CHECK R2-F01 (round 3): because this inline call publishes done, the
+	// turn must already be RETIRED when done goes out — done must never
+	// advertise or leave a cancellable, snapshot-visible active turn. Run the
+	// same pre-finalize sequence runTurn's LIFO defers executed before this
+	// inline call existed: clearActiveTurn (registered after
+	// finalizeStreamer → fired before it; the ordering active_turn_info.go's
+	// IsAlive gate documents) then preserveTruncatedAccumulator (same LIFO
+	// position), THEN the finalize that publishes. Both are idempotent and
+	// runTurn's own defers re-run them harmlessly.
+	rz.rc.rx.rr.rq.ri.rf.rt.al.clearActiveTurn(rz.rc.rx.rr.rq.ri.rf.rt.ts)
+	rz.rc.rx.rr.rq.ri.rf.rt.al.preserveTruncatedAccumulator(rz.rc.rx.rr.rq.ri.rf.rt.ts)
+	if finErr := rz.rc.rx.rr.rq.ri.rf.rt.ts.finalizeStreamer(rz.rc.rx.ctx); finErr != nil {
+		notSaved := &messageNotSavedError{role: "assistant", cause: finErr}
+		rz.rc.rx.rr.rq.ri.rf.rt.ts.markTurnFailed()
+		rz.rc.rx.rr.rq.ri.turnStatus = TurnEndStatusError
+		return turnResult{status: TurnEndStatusError, turnFailed: true}, notSaved
+	}
+
 	rz.rc.rx.rr.rq.ri.rf.rt.ts.setPhase(TurnPhaseCompleted)
 	return turnResult{
 		finalContent: rz.rc.rx.finalContent,
 		status:       rz.rc.rx.rr.rq.ri.turnStatus,
 		followUps:    append([]bus.InboundMessage(nil), rz.rc.rx.rr.rq.ri.rf.rt.ts.followUps...),
 		turnFailed:   rz.rc.rx.rr.rq.ri.rf.rt.ts.turnFailed,
+		stopped:      rz.rc.rx.rr.rq.ri.rf.rt.ts.stopRequested.Load(),
+		turnID:       rz.rc.rx.rr.rq.ri.rf.rt.ts.turnID,
+		goalID:       rz.rc.rx.rr.rq.ri.rf.rt.ts.goalID,
 	}, nil
 }
 
@@ -150,12 +224,10 @@ func (rc *agentLoopRunTurnConductor) createTurnContext() agentLoopRunTurnConduct
 	rc.rx.rr.rq.ri.turnCatalog = rc.rx.rr.rq.ri.rf.rt.al.getCapabilityCatalog()
 	rc.rx.rr.rq.ri.turnRefcounter = rc.rx.rr.rq.ri.rf.rt.al.getTurnRefcounter(rc.rx.rr.rq.ri.rf.rt.ts.opts.WorkspaceID, rc.rx.rr.rq.ri.rf.rt.ts.transcriptSessionID)
 
-	turnTimeout := time.Duration(rc.rx.rr.rq.ri.rf.rt.ts.agent.TimeoutSeconds) * time.Second
-	if turnTimeout > 0 {
-		rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.turnCancel = context.WithTimeout(rc.rx.ctx, turnTimeout)
-	} else {
-		rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.turnCancel = context.WithCancel(rc.rx.ctx)
-	}
+	// No turn deadline (issue #1306): the turn context is cancel-only, so a
+	// turn ends when it finishes or an explicit Stop/cancel fires turnCancel.
+	rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.turnCancel = context.WithCancel(rc.rx.ctx)
+	rc.rx.rr.rq.ri.rf.rt.ts.causeCtx = rc.rx.rr.rq.ri.rf.rt.turnCtx
 	return agentLoopRunTurnConductorNext
 }
 
@@ -172,13 +244,23 @@ func (rc *agentLoopRunTurnConductor) registerTurnContext() {
 	rc.rx.rr.rq.ri.rf.rt.turnCtx = withTurnState(rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.rx.rr.rq.ri.rf.rt.ts)
 	// SEC-15: Inject agent ID so audit entries carry the agent identity.
 	rc.rx.rr.rq.ri.rf.rt.turnCtx = tools.WithAgentID(rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.rx.rr.rq.ri.rf.rt.ts.agent.ID)
-	// Inject session key so switch_agent can address the session.
+	// §6.18 / FR-240: the turn's origin starts with its triggering input;
+	// steering inputs consumed later are added (recordConsumedInputOrigins).
+	if rc.rx.rr.rq.ri.rf.rt.ts.origin == nil {
+		rc.rx.rr.rq.ri.rf.rt.ts.origin = tools.NewTurnOrigin()
+	}
+	rc.rx.rr.rq.ri.rf.rt.ts.opts.InputOrigin.recordInto(rc.rx.rr.rq.ri.rf.rt.al, rc.rx.rr.rq.ri.rf.rt.ts.origin)
+	for _, consumed := range rc.rx.rr.rq.ri.rf.rt.ts.opts.ConsumedInputOrigins {
+		consumed.recordInto(rc.rx.rr.rq.ri.rf.rt.al, rc.rx.rr.rq.ri.rf.rt.ts.origin)
+	}
+	rc.rx.rr.rq.ri.rf.rt.turnCtx = tools.WithTurnOrigin(rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.rx.rr.rq.ri.rf.rt.ts.origin)
+	// Inject the session key so tools can address the session.
 	if rc.rx.rr.rq.ri.rf.rt.ts.sessionKey == "" {
-		logger.WarnCF("agent", "runTurn: sessionKey is empty — switch_agent tool will not work",
+		logger.WarnCF("agent", "runTurn: sessionKey is empty — session-addressed tools will not work",
 			map[string]any{"agent_id": rc.rx.rr.rq.ri.rf.rt.ts.agentID, "chat_id": rc.rx.rr.rq.ri.rf.rt.ts.chatID})
 	}
 	rc.rx.rr.rq.ri.rf.rt.turnCtx = tools.WithSessionKey(rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.rx.rr.rq.ri.rf.rt.ts.sessionKey)
-	// Inject the actual session ID (directory name) for the switch_agent tool.
+	// Inject the actual session ID (directory name) for session-addressed tools.
 	// The session key is a routing key; the transcript session ID is the
 	// real session directory (e.g., "session_01KP30THP63YFESKGECYYHYQWY").
 	rc.rx.rr.rq.ri.rf.rt.turnCtx = tools.WithTranscriptSessionID(rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.rx.rr.rq.ri.rf.rt.ts.opts.TranscriptSessionID)
@@ -315,7 +397,7 @@ func (rc *agentLoopRunTurnConductor) registerTurnContext() {
 	// report surfaced memories and the loop can emit op:cited counter events
 	// when the LLM references them by ID/title. Nil for the main gateway agent
 	// (no memory store); WithCitationTracker is a no-op in that case.
-	rc.rx.rr.citationTracker = newCitationTracker(rc.rx.rr.rq.ri.rf.rt.ts.agent.ContextBuilder.Memory())
+	rc.rx.rr.citationTracker = newCitationTracker(rc.rx.rr.rq.ri.rf.rt.ts.agent.ContextBuilder.Memory(), rc.rx.rr.rq.ri.rf.rt.ts.opts.WorkspaceID)
 	rc.rx.rr.rq.ri.rf.rt.turnCtx = tools.WithCitationTracker(rc.rx.rr.rq.ri.rf.rt.turnCtx, rc.rx.rr.citationTracker)
 
 	rc.rx.rr.rq.ri.rf.rt.al.registerActiveTurn(rc.rx.rr.rq.ri.rf.rt.ts)
@@ -349,6 +431,7 @@ func (rp *agentLoopRunTurnPrepare) resolveWorkspaceAndModel() (agentLoopRunTurnC
 		EventKindTurnStart,
 		rp.rc.rx.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.start"),
 		TurnStartPayload{
+			ChatNotice:  rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.goalReminderFrame,
 			Channel:     rp.rc.rx.rr.rq.ri.rf.rt.ts.channel,
 			ChatID:      rp.rc.rx.rr.rq.ri.rf.rt.ts.chatID,
 			UserMessage: rp.rc.rx.rr.rq.ri.rf.rt.ts.userMessage,
@@ -386,18 +469,30 @@ func (rp *agentLoopRunTurnPrepare) resolveWorkspaceAndModel() (agentLoopRunTurnC
 		return agentLoopRunTurnConductorReturn, true
 	}
 	rp.rc.rx.rr.rq.ri.rf.rt.turnCtx = tools.WithTurnWorkspaceDir(rp.rc.rx.rr.rq.ri.rf.rt.turnCtx, rp.rc.rx.rr.rq.ri.wsDir)
+	// Skills `needs` (r15 §5.7) checks the PATH this agent's bash child gets.
+	turnTools := rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.Tools
+	rp.rc.rx.rr.rq.ri.rf.rt.turnCtx = tools.WithAgentBashPATH(rp.rc.rx.rr.rq.ri.rf.rt.turnCtx, func(ctx context.Context) string {
+		return tools.BashChildPATH(ctx, turnTools)
+	})
 
 	// FR-011, FR-012: detect a per-thread model switch via the inbound message
 	// metadata. When the user-selected model differs from the agent's currently
 	// loaded model, run handleModelSwitch BEFORE the first LLM call so the next
 	// request sees the compressed, annotated history. handleModelSwitch is a
 	// no-op when no switch is requested.
-	if requested := strings.TrimSpace(
+	requested := strings.TrimSpace(
 		inboundMetadata(bus.InboundMessage{Metadata: rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.Metadata}, "model_name"),
-	); requested != "" {
-		// Skip when the requested model is the same as the agent's currently
-		// loaded one — this is the no-op case in spec §11 Dataset 3 row 1.
-		if requested != rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.Model {
+	)
+	// S-15: a frame naming only the provider asks for the loaded model on
+	// that provider.
+	pairProvider := frameProvider(rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.Metadata)
+	if requested == "" && pairProvider != "" {
+		requested = rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.Model
+	}
+	if requested != "" {
+		// Skip when the requested pair is the one currently loaded — this
+		// is the no-op case in spec §11 Dataset 3 row 1.
+		if pairSwitchNeeded(rp.rc.rx.rr.rq.ri.rf.rt.ts.agent, pairProvider, requested) {
 			switchedAgent, switchErr := rp.rc.rx.rr.rq.ri.rf.rt.al.handleModelSwitch(
 				rp.rc.rx.ctx,
 				rp.rc.rx.rr.rq.ri.rf.rt.ts.agent,
@@ -406,6 +501,12 @@ func (rp *agentLoopRunTurnPrepare) resolveWorkspaceAndModel() (agentLoopRunTurnC
 				requested,
 				bus.InboundMessage{Metadata: rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.Metadata},
 			)
+			if switchErr != nil && pairProvider != "" {
+				// D5 row 8: an explicit pair that does not resolve is refused
+				// on the error path; the turn never borrows another
+				// configured provider (S-15).
+				return rp.refuseUnresolvedPair(pairProvider, requested, switchErr)
+			}
 			if switchErr != nil {
 				logger.WarnCF("agent", "switch-time compress failed; continuing with current model",
 					map[string]any{
@@ -677,7 +778,15 @@ func (rp *agentLoopRunTurnPrepare) selectTurnProvider() agentLoopRunTurnConducto
 		if isOverContextBudgetTokens(agentContextBudget(rp.rc.rx.rr.rq.ri.rf.rt.ts.agent), rp.rc.rx.rr.rq.ri.messages, nonMessageTokens) {
 			logger.WarnCF("agent", "Proactive window trim: context budget exceeded before LLM call",
 				map[string]any{"session_key": rp.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey})
-			if compression, ok := rp.rc.rx.rr.rq.ri.rf.rt.al.windowTrim(rp.rc.rx.rr.rq.ri.rf.rt.ts.agent, rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.TranscriptSessionID, rp.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey); ok {
+			compression, ok := rp.rc.rx.rr.rq.ri.rf.rt.al.windowTrim(rp.rc.rx.rr.rq.ri.rf.rt.ts.agent, rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.TranscriptSessionID, rp.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey)
+			if compression.Err != nil {
+				rt := rp.rc.rx.rr.rq.ri.rf.rt
+				var status TurnEndStatus
+				rp.rc.ret0, status, rp.rc.ret1 = rt.al.contextWindowTurnExit(rt.ts, rt.iteration, rt.llmModel, compression.Err)
+				rp.rc.rx.rr.rq.ri.turnStatus = status
+				return agentLoopRunTurnConductorReturn
+			}
+			if ok {
 				rp.rc.rx.rr.rq.ri.rf.rt.al.emitEvent(
 					EventKindContextCompress,
 					rp.rc.rx.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.context.compress"),
@@ -708,16 +817,18 @@ func (rp *agentLoopRunTurnPrepare) selectTurnProvider() agentLoopRunTurnConducto
 	}
 
 	// Save user message to session
-	if !rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.NoHistory && (strings.TrimSpace(rp.rc.rx.rr.rq.ri.rf.rt.ts.userMessage) != "" || len(rp.rc.rx.rr.rq.ri.rf.rt.ts.media) > 0) {
+	if !rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.NoHistory && !rp.rc.rx.rr.rq.ri.rf.rt.ts.userInputInWindow && (strings.TrimSpace(rp.rc.rx.rr.rq.ri.rf.rt.ts.userMessage) != "" || len(rp.rc.rx.rr.rq.ri.rf.rt.ts.media) > 0) {
 		rootMsg := providers.Message{
 			Role:    "user",
 			Content: rp.rc.rx.rr.rq.ri.rf.rt.ts.userMessage,
 			Media:   append([]string(nil), rp.rc.rx.rr.rq.ri.rf.rt.ts.media...),
 		}
-		if len(rootMsg.Media) > 0 {
-			rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.Sessions.AddFullMessage(rp.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey, rootMsg)
-		} else {
-			rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.Sessions.AddMessage(rp.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey, rootMsg.Role, rootMsg.Content)
+		if _, err := rp.rc.rx.rr.rq.ri.rf.rt.ts.appendWindowMessage(rootMsg, rp.rc.rx.rr.rq.ri.rf.rt.al.inputProducer(rp.rc.rx.rr.rq.ri.rf.rt.ts)); err != nil {
+			rt := rp.rc.rx.rr.rq.ri.rf.rt
+			var status TurnEndStatus
+			rp.rc.ret0, status, rp.rc.ret1 = rt.al.contextWindowTurnExit(rt.ts, rt.iteration, rt.llmModel, err)
+			rp.rc.rx.rr.rq.ri.turnStatus = status
+			return agentLoopRunTurnConductorReturn
 		}
 	}
 
@@ -725,10 +836,13 @@ func (rp *agentLoopRunTurnPrepare) selectTurnProvider() agentLoopRunTurnConducto
 
 	var usedLight bool
 	rp.rc.rx.rr.rq.ri.rf.rt.activeCandidates, rp.rc.rx.rr.rq.ri.activeModel, usedLight = rp.rc.rx.rr.rq.ri.rf.rt.al.selectCandidates(rp.rc.rx.rr.rq.ri.rf.rt.ts.agent, rp.rc.rx.rr.rq.ri.rf.rt.ts.userMessage, rp.rc.rx.rr.rq.ri.messages)
-	rp.rc.rx.rr.rq.ri.rf.rt.activeProvider = rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.Provider
-	if usedLight && rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.LightProvider != nil {
-		rp.rc.rx.rr.rq.ri.rf.rt.activeProvider = rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.LightProvider
+	rt := rp.rc.rx.rr.rq.ri.rf.rt
+	rt.activeProvider = rt.ts.agent.Provider
+	rt.providerSelectionErr = nil
+	if len(rt.activeCandidates) > 0 {
+		rt.activeProvider, rt.providerSelectionErr = rt.ts.agent.providerForTurnCandidate(rt.activeCandidates[0], usedLight)
 	}
+	rt.providerSelectionChecked = true
 	rp.rc.rx.rr.rq.ri.rf.rt.ts.agent.mu.RUnlock()
 	rp.rc.rx.rr.rq.ri.pendingMessages = append([]providers.Message(nil), rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.InitialSteeringMessages...)
 	rp.rc.rx.rr.rq.ri.pendingSteeringReceipts = append([]string(nil), rp.rc.rx.rr.rq.ri.rf.rt.ts.opts.InitialSteeringCorrelationIDs...)
@@ -767,6 +881,9 @@ const (
 
 // prepareToolSurface filters and validates the tool surface offered for this provider request.
 func (rq *agentLoopRunTurnRequest) prepareToolSurface() agentLoopRunTurnRequestFlow {
+	// Reload rebuilds registry entries, not session membership. Restore only
+	// still-authorized loaded names before visibility filtering/pruning.
+	rq.ri.rf.rt.al.restoreLoadedToolRetention(rq.ri.rf.rt.ts)
 	allAgentTools := rq.ri.rf.rt.ts.agent.Tools.GetAll()
 	rq.policyFilteredTools, rq.filterTimePolicyMap = tools.FilterToolsByPolicy(allAgentTools, rq.ri.rf.rt.ts.agent.AgentType, rq.ri.rf.rt.ts.agent.LoadToolPolicy())
 
@@ -790,6 +907,9 @@ func (rq *agentLoopRunTurnRequest) prepareToolSurface() agentLoopRunTurnRequestF
 	// loop) read the exact same verdict. See evaluateGoalForcing's own doc
 	// comment for the full predicate.
 	rq.goalForce = rq.ri.rf.rt.al.evaluateGoalForcing(rq.ri.rf.rt.ts, rq.ri.rf.rt.iteration, rq.policyFilteredTools)
+	if rq.goalForce.readErr != nil {
+		return rq.refuseUnreadGoalState(rq.goalForce.readErr)
+	}
 
 	// FR-066: dedup invariant — tools[] must be name-unique after filter+assembly.
 	// If a duplicate is detected, emit HIGH audit and return an error turn result
@@ -816,7 +936,18 @@ func (rq *agentLoopRunTurnRequest) prepareToolSurface() agentLoopRunTurnRequestF
 		}
 		syntheticDenyMsg := providers.Message{Role: "system", Content: denyMsg}
 		if !rq.ri.rf.rt.ts.opts.NoHistory {
-			rq.ri.rf.rt.ts.agent.Sessions.AddFullMessage(rq.ri.rf.rt.ts.sessionKey, syntheticDenyMsg)
+			// #1178 (amendment §4.2): a failed window write ends the turn —
+			// the denial never reached the archive, so reporting it as a
+			// persisted denial would be a second false statement. Same
+			// messageNotSavedError wrap, markTurnFailed and existing exit.
+			if addErr := rq.ri.rf.rt.ts.agent.Sessions.AddFullMessage(rq.ri.rf.rt.ts.sessionKey, syntheticDenyMsg); addErr != nil {
+				notSaved := &messageNotSavedError{role: syntheticDenyMsg.Role, cause: addErr}
+				rq.ri.rf.rt.al.reportSessionSaveFailure(rq.ri.rf.rt.ts, notSaved)
+				rq.ri.turnStatus = TurnEndStatusError
+				rq.ret0 = turnResult{status: TurnEndStatusError, finalContent: messageNotSavedReply}
+				rq.ret1 = notSaved
+				return agentLoopRunTurnRequestReturn
+			}
 		}
 		// ADR-058 §3.2/§10.A3: this branch used to also invoke FR-084's
 		// per-turn synthetic-deny counter-and-abort helper before
@@ -828,9 +959,23 @@ func (rq *agentLoopRunTurnRequest) prepareToolSurface() agentLoopRunTurnRequestF
 		// structurally unreachable, issue #595). Nothing behavioural is
 		// lost: the turn already terminates unconditionally below.
 		//
+		// Synthetic context is not a user-facing outcome. Deliver the same
+		// classified notice live and durably, even after earlier narration.
+		llm := LLMError{Code: CodeUnknown, Message: UserMessageForCode(CodeUnknown)}
+		rq.ri.rf.rt.al.emitEvent(
+			EventKindError,
+			rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.error"),
+			ErrorPayload{
+				Stage: "tool_assembly", ChatID: rq.ri.rf.rt.ts.opts.ChatID,
+				Code: string(llm.Code), Message: llm.Message,
+				SessionID: string(rq.ri.rf.rt.ts.routingSessionID),
+			},
+		)
+		rq.ri.rf.rt.ts.appendClassifiedError(EventKindError.String(), "tool_assembly", llm)
+
 		// Fail the LLM call for this iteration by returning an error turn result.
 		rq.ri.turnStatus = TurnEndStatusError
-		rq.ret0 = turnResult{status: TurnEndStatusError, finalContent: denyMsg}
+		rq.ret0 = turnResult{status: TurnEndStatusError, finalContent: llm.Message}
 		rq.ret1 = dedupErr
 		return agentLoopRunTurnRequestReturn
 	}
@@ -845,7 +990,11 @@ func (rq *agentLoopRunTurnRequest) prepareToolSurface() agentLoopRunTurnRequestF
 		// force-through those helpers would otherwise apply.
 		rq.ri.rf.providerToolDefs = tools.ToolsToProviderDefs(rq.goalForce.narrowed)
 	case rq.ri.cfg.Tools.Manifest.Compressed:
-		rq.ri.rf.providerToolDefs = rq.ri.rf.rt.al.buildCompressedToolDefs(rq.ri.rf.rt.ts, rq.policyFilteredTools)
+		var err error
+		rq.ri.rf.providerToolDefs, err = rq.ri.rf.rt.al.buildCompressedToolDefs(rq.ri.rf.rt.ts, rq.policyFilteredTools)
+		if err != nil {
+			return rq.refuseUnreadGoalState(err)
+		}
 	default:
 		// Non-compressed defs path: strip manifest infra tools (ToolSearch)
 		// before surfacing defs to the model. ToolSearch resolves through the
@@ -860,6 +1009,8 @@ func (rq *agentLoopRunTurnRequest) prepareToolSurface() agentLoopRunTurnRequestF
 		// note) (#438).
 		rq.ri.rf.providerToolDefs = tools.ToolsToProviderDefs(stripInfraToolDefs(rq.policyFilteredTools))
 	}
+
+	rq.cacheToolSurface()
 
 	// Native web search support
 	_, hasWebSearch := rq.ri.rf.rt.ts.agent.Tools.Get("search_web")
@@ -886,48 +1037,32 @@ func (rq *agentLoopRunTurnRequest) prepareToolSurface() agentLoopRunTurnRequestF
 	return agentLoopRunTurnRequestNext
 }
 
-// prepareCallMessages repairs history and injects the current ephemeral instruction messages.
+// prepareCallMessages refuses a malformed tool-call history and injects the
+// current ephemeral instruction messages. The window-group check is the only
+// tool-structure gate: a bad history is refused here, never repaired.
 func (rq *agentLoopRunTurnRequest) prepareCallMessages() {
-	repairedHistory := rq.ri.messages
-	if rq.ri.rf.rt.ts.opts.TranscriptStore != nil && rq.ri.rf.rt.ts.opts.TranscriptSessionID != "" && rq.ri.rf.rt.ts.agent != nil && rq.ri.rf.rt.ts.agent.Tools != nil {
-		repaired, _ := repairHistory(rq.ri.rf.rt.turnCtx, rq.ri.messages, rq.ri.rf.rt.ts.opts.TranscriptStore, rq.ri.rf.rt.ts.opts.TranscriptSessionID, rq.ri.rf.rt.ts.agent.Tools, rq.ri.rf.rt.ts.agent.ID, rq.ri.rf.rt.ts.agent.LoadToolPolicy())
-		repairedHistory = repaired
+	repairedHistory := withoutVolatileNotes(rq.ri.messages)
+	if err := validateWindowGroups(repairedHistory); err != nil {
+		rq.ri.rf.rt.ts.setContextWindowError(err)
+		rq.ri.rf.callMessages = repairedHistory
+		return
 	}
 
-	rq.ri.rf.callMessages = repairedHistory
-	// Re-inject the acting agent's current scratchpad as an ephemeral system
-	// message so the checklist survives context compression and the agent
-	// always sees its plan at the top of the turn. The note is NOT persisted
+	rq.ri.rf.callMessages = rq.ri.rf.rt.al.freezeSessionSkillMenu(rq.ri.rf.rt.ts, repairedHistory)
+	// Rebuild the acting agent's scratchpad as request-only user-tail text,
+	// so its checklist survives context trimming without changing the prefix.
+	// The note is NOT persisted
 	// to history — it is rebuilt fresh each turn from the task store.
 	if rq.ri.rf.rt.ts.agent != nil {
 		if note := rq.ri.rf.rt.al.buildScratchpadNote(rq.ri.rf.rt.ts.agent.ID, rq.ri.rf.rt.ts.opts.TranscriptSessionID); note != "" && len(rq.ri.rf.callMessages) > 0 {
-			// Insert after callMessages[0] (the system prompt) so it immediately
-			// follows the agent's identity, before the conversation history.
-			injected := make([]providers.Message, 0, len(rq.ri.rf.callMessages)+1)
-			injected = append(injected, rq.ri.rf.callMessages[0])
-			injected = append(injected, providers.Message{Role: "system", Content: note})
-			injected = append(injected, rq.ri.rf.callMessages[1:]...)
-			rq.ri.rf.callMessages = injected
+			rq.ri.rf.callMessages = appendVolatileNote(rq.ri.rf.callMessages, note)
 		}
 		// Inject per-turn workspace instructions (AGENT.md) as an ephemeral
 		// system message immediately after the system prompt. Empty/absent
 		// instructions are a no-op — zero behavioral change.
 		//
-		// Ordering note (finding 10c, context-audit 2026-08 — ADR-088 D9
-		// retires the ADR-078 D2 goal-pending note that used to sit between
-		// this call and injectManifestNote below; buildGoalPendingNote/
-		// injectGoalPendingNote, pkg/agent/goal_pending_note.go, are deleted
-		// in full — instant activation leaves no pending state for a note to
-		// describe): the remaining injectors (this one, injectWebRenderingNote,
-		// injectManifestNote) insert at index 1 of the message array, so call
-		// order alone determines final position — the LAST call ends up
-		// CLOSEST to the system message. With every note present this turn,
-		// final order is: [0] system prompt · [1] manifest note · [2]
-		// web-rendering note · [3] workspace instructions · [4] scratchpad
-		// (spliced above, before this call) · [5+] history. See
-		// injectWorkspaceInstructions' own doc comment
-		// (workspace_instructions.go) for the authoritative, single-sourced
-		// version of this contract.
+		// Workspace and web-rendering instructions stay before history. The
+		// volatile note collectors are combined into one user message below.
 		rq.ri.rf.callMessages = injectWorkspaceInstructions(rq.ri.rf.callMessages, buildWorkspaceInstructionsNote(rq.ri.rf.rt.ts.opts.WorkspaceID))
 		// Web-only: encourage Mermaid diagrams when the turn comes from the web
 		// chat (the sole surface that renders them). Per-turn + surface-gated on
@@ -949,8 +1084,8 @@ func (rq *agentLoopRunTurnRequest) prepareCallMessages() {
 		// does not hold, making this call a no-op on every non-goal turn.
 		rq.ri.rf.callMessages = injectGoalRubricNote(rq.ri.rf.callMessages,
 			buildGoalRubricInjectionNote(rq.goalForce.rubric, rq.goalForce.isWebchat))
-		// Re-inject the compressed manifest of unloaded lazy tools as an ephemeral
-		// system message. Like the scratchpad, it is rebuilt every turn (never
+		// Rebuild the compressed unloaded-tool summary as volatile user-tail
+		// text. Like the scratchpad, it is request-only (never
 		// persisted) so it is never stale and not double-counted in the cached
 		// system prompt. Injected only when Compressed is active and there are
 		// unloaded lazy tools to list.
@@ -971,6 +1106,10 @@ func (rq *agentLoopRunTurnRequest) prepareCallMessages() {
 		rq.ri.rf.providerToolDefs = nil
 		rq.ri.rf.rt.ts.markGracefulTerminalUsed()
 	}
+	if rq.ri.rf.rt.ts.agent != nil {
+		rq.ri.rf.callMessages = appendVolatileNote(rq.ri.rf.callMessages, buildVolatileContext())
+	}
+	rq.ri.rf.callMessages = consolidateVolatileNotes(rq.ri.rf.callMessages)
 }
 
 // prepareLLMRequest applies request options and hooks, then records the outgoing LLM request.
@@ -979,21 +1118,13 @@ func (rq *agentLoopRunTurnRequest) prepareLLMRequest() agentLoopRunTurnRequestFl
 	rq.ri.rf.rt.llmOpts = map[string]any{
 		"max_tokens":       rq.ri.rf.rt.ts.agent.MaxTokens,
 		"temperature":      rq.ri.rf.rt.ts.agent.Temperature,
-		"prompt_cache_key": rq.ri.rf.rt.ts.agent.ID,
+		"prompt_cache_key": rq.ri.rf.rt.ts.cacheSessionID(),
 	}
 	if rq.useNativeSearch && !narrowingActive {
 		rq.ri.rf.rt.llmOpts["native_search"] = true
 	}
-	rq.ri.rf.rt.ts.agent.mu.RLock()
-	agentThinkingLevel := rq.ri.rf.rt.ts.agent.ThinkingLevel
-	rq.ri.rf.rt.ts.agent.mu.RUnlock()
-	if agentThinkingLevel != ThinkingOff {
-		if tc, ok := rq.ri.rf.rt.activeProvider.(providers.ThinkingCapable); ok && tc.SupportsThinking() {
-			rq.ri.rf.rt.llmOpts["thinking_level"] = string(agentThinkingLevel)
-		} else {
-			logger.WarnCF("agent", "thinking_level is set but current provider does not support it, ignoring",
-				map[string]any{"agent_id": rq.ri.rf.rt.ts.agent.ID, "thinking_level": string(agentThinkingLevel)})
-		}
+	if v := rq.ri.rf.rt.primaryEffortChoice(); v != "" {
+		rq.ri.rf.rt.llmOpts[effortdialect.EffortOptionKey] = v
 	}
 
 	rq.ri.rf.rt.llmModel = rq.ri.activeModel
@@ -1029,11 +1160,24 @@ func (rq *agentLoopRunTurnRequest) prepareLLMRequest() agentLoopRunTurnRequestFl
 		}
 	}
 
+	// No checkpoint on this seam: checkpointRequest runs once per actual send
+	// attempt from the callLLM closure (loop_run_turn_response.go) — MAJ-CW-004's
+	// one post-assembly pre-send measurement — and a prepare-side call here
+	// re-measured the same unchanged candidate, double-counting
+	// midTurnChecksTotal (B-33 count: N + N+1 required, duplicate measured 152
+	// for 50 results). Validation and relief still cover every actual send,
+	// inside the closure.
+
 	// The exact tool set this request offers, captured AFTER every step that
 	// shapes providerToolDefs (goal-door narrowing, compressed manifest,
 	// native-search strip, graceful-terminal clearing, BeforeLLM hook). The
 	// tool loop below refuses any call to a tool outside it — see
 	// toolNotOfferedRefusal (tool_offer_gate.go).
+	if err := rq.recordPromptTokenSizes(); err != nil {
+		rq.ret0 = turnResult{status: TurnEndStatusError}
+		rq.ret1 = err
+		return agentLoopRunTurnRequestReturn
+	}
 	rq.offeredTools = newOfferedToolSet(rq.ri.rf.providerToolDefs)
 
 	// G1 fix: a cheap, non-blocking tool-call-argument progress callback,
@@ -1186,32 +1330,21 @@ func (ri *agentLoopRunTurnIteration) beginIteration() agentLoopRunTurnIterationF
 	}
 
 	if ri.rf.rt.iteration > 1 {
-		if steerMsgs, steerCorrelationIDs := ri.rf.rt.al.dequeueSteeringMessagesForScope(ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
+		if _, items, steerMsgs, steerCorrelationIDs := ri.rf.rt.al.dequeueSteeringItemsForScopeWithFallback(ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
+			ri.rf.rt.al.noteConsumedOriginsForScope(ri.rf.rt.ts.sessionKey, items)
+			ri.noteInTurnSteering(items)
+			ri.rf.rt.ts.opts.roomCost.addInputs(steerCorrelationIDs, len(steerMsgs))
 			ri.pendingMessages = append(ri.pendingMessages, steerMsgs...)
 			ri.pendingSteeringReceipts = append(ri.pendingSteeringReceipts, steerCorrelationIDs...)
 		}
 	} else if !ri.rf.rt.ts.opts.SkipInitialSteeringPoll {
-		if steerMsgs, steerCorrelationIDs := ri.rf.rt.al.dequeueSteeringMessagesForScopeWithFallback(ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
+		if _, items, steerMsgs, steerCorrelationIDs := ri.rf.rt.al.dequeueSteeringItemsForScopeWithFallback(ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
+			ri.rf.rt.al.noteConsumedOriginsForScope(ri.rf.rt.ts.sessionKey, items)
+			ri.noteInTurnSteering(items)
+			ri.rf.rt.ts.opts.roomCost.addInputs(steerCorrelationIDs, len(steerMsgs))
 			ri.pendingMessages = append(ri.pendingMessages, steerMsgs...)
 			ri.pendingSteeringReceipts = append(ri.pendingSteeringReceipts, steerCorrelationIDs...)
 		}
-	}
-
-	// Check if parent turn has ended (SubTurn support)
-	if ri.rf.rt.ts.parentTurnState != nil && ri.rf.rt.ts.IsParentEnded() {
-		if !ri.rf.rt.ts.critical {
-			logger.InfoCF("agent", "Parent turn ended, non-critical SubTurn exiting gracefully", map[string]any{
-				"agent_id":  ri.rf.rt.ts.agentID,
-				"iteration": ri.rf.rt.iteration,
-				"turn_id":   ri.rf.rt.ts.turnID,
-			})
-			return agentLoopRunTurnIterationBreak
-		}
-		logger.InfoCF("agent", "Parent turn ended, critical SubTurn continues running", map[string]any{
-			"agent_id":  ri.rf.rt.ts.agentID,
-			"iteration": ri.rf.rt.iteration,
-			"turn_id":   ri.rf.rt.ts.turnID,
-		})
 	}
 
 	// Poll for pending SubTurn results
@@ -1239,13 +1372,30 @@ func (ri *agentLoopRunTurnIteration) beginIteration() agentLoopRunTurnIterationF
 		)
 		totalContentLen := 0
 		for i, pm := range ri.pendingMessages {
+			// Persist original compact media refs before using the resolved
+			// provider-only message. Failed admission cannot emit an applied receipt.
+			correlationID := ""
+			if i < len(ri.pendingSteeringReceipts) {
+				correlationID = ri.pendingSteeringReceipts[i]
+			}
+			include, err := ri.rf.rt.al.admitSteeringInput(ri.rf.rt.ts, pm, correlationID)
+			if err != nil {
+				// The rest of this dequeued batch is never attempted: give back
+				// the saved inputs' claims so they are not stranded in flight.
+				if i+1 < len(ri.pendingSteeringReceipts) {
+					ri.rf.rt.al.releaseSavedWakeClaims(ri.rf.rt.ts.transcriptSessionID, ri.pendingSteeringReceipts[i+1:])
+				}
+				var status TurnEndStatus
+				ri.ret0, status, ri.ret1 = ri.rf.rt.al.contextWindowTurnExit(ri.rf.rt.ts, ri.rf.rt.iteration, ri.rf.rt.llmModel, err)
+				ri.turnStatus = status
+				return agentLoopRunTurnIterationReturn
+			}
+			if !include {
+				continue
+			}
+			ri.rf.rt.ts.protectWindowControls(resolvedPending[i : i+1])
 			ri.messages = append(ri.messages, resolvedPending[i])
 			totalContentLen += len(pm.Content)
-			if !ri.rf.rt.ts.opts.NoHistory {
-				// Persist the original (unresolved) message to session history to preserve
-				// compact media refs; resolved (base64) form is only used for the LLM request.
-				ri.rf.rt.ts.agent.Sessions.AddFullMessage(ri.rf.rt.ts.sessionKey, pm)
-			}
 			logger.InfoCF("agent", "Injected steering message into context",
 				map[string]any{
 					"agent_id":    ri.rf.rt.ts.agent.ID,
@@ -1270,7 +1420,7 @@ func (ri *agentLoopRunTurnIteration) beginIteration() agentLoopRunTurnIterationF
 		// deliverSteeringReceiptsForInjection is a no-op for a plain,
 		// unsteered session — the child lifecycle lookup it performs finds
 		// no steering parent, so nothing is emitted).
-		ri.rf.rt.al.deliverSteeringReceiptsForInjection(ri.rf.rt.ts.sessionKey, ri.pendingSteeringReceipts)
+		ri.rf.rt.al.deliverSteeringReceiptsForInjection(ri.rf.rt.ts.sessionKey, visibleSteeringReceiptIDs(ri.pendingSteeringReceipts))
 		ri.pendingMessages = nil
 		ri.pendingSteeringReceipts = nil
 	}
@@ -1288,6 +1438,9 @@ func (ri *agentLoopRunTurnIteration) beginIteration() agentLoopRunTurnIterationF
 
 // tryPDFTextFallback retries a rejected native PDF request after converting its media to text.
 func (rf *agentLoopRunTurnFallbacks) tryPDFTextFallback() bool {
+	if permanentModelFailure(rf.err) {
+		return false
+	}
 	if !downgradePDFMediaToText(rf.callMessages) {
 		return false
 	}
@@ -1316,6 +1469,9 @@ const ModelSyntheticImageRejection = "synthetic:image-rejection"
 
 // synthesizeImageRejection turns an image-only capability rejection into actionable model guidance.
 func (rf *agentLoopRunTurnFallbacks) synthesizeImageRejection(pe *ProviderError, rejectionErr error) bool {
+	if permanentModelFailure(rejectionErr) {
+		return false
+	}
 	// FIX 5: this is the IMAGE-only friendly-rejection path — it must
 	// consult ts.imageRetryDone, the image-class guard, NOT
 	// ts.mediaRetryDone (the PDF-class guard). turn.go's design
@@ -1367,8 +1523,41 @@ func (rf *agentLoopRunTurnFallbacks) synthesizeImageRejection(pe *ProviderError,
 }
 
 // callProviderOnce calls the configured provider or fallback chain once and records streaming progress.
-// Delegated-turn rate-limit retries wrap this method in loop_provider_retry.go.
-func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message, toolDefsForCall []providers.ToolDefinition) (*providers.LLMResponse, error) {
+// Provider rate-limit retries for every turn, delegated included, live in the fallback chain (§7.4).
+func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message, toolDefsForCall []providers.ToolDefinition) (response *providers.LLMResponse, err error) {
+	if !rt.providerSelectionChecked && len(rt.activeCandidates) > 0 {
+		rt.ts.agent.mu.RLock()
+		rt.activeProvider, rt.providerSelectionErr = rt.ts.agent.providerForTurnCandidate(rt.activeCandidates[0], false)
+		rt.ts.agent.mu.RUnlock()
+		rt.providerSelectionChecked = true
+	}
+	if rt.providerSelectionErr != nil {
+		if ctxErr := rt.turnCtx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		var route *providers.ModelRouteUnavailableError
+		if errors.As(rt.providerSelectionErr, &route) {
+			return nil, &providers.ModelRouteUnavailableError{Provider: route.Provider, Model: rt.llmModel, Cause: route.Cause}
+		}
+		return nil, rt.providerSelectionErr
+	}
+	if accountingErr := rt.ts.callAccountingError(); accountingErr != nil {
+		return nil, accountingErr
+	}
+	if cwErr := rt.ts.contextWindowError(); cwErr != nil {
+		return nil, cwErr
+	}
+	if cwErr := validateWindowGroups(messagesForCall); cwErr != nil {
+		return nil, cwErr
+	}
+	if cwErr := rt.ts.validateWindowControls(messagesForCall); cwErr != nil {
+		return nil, cwErr
+	}
+	defer func() {
+		if err == nil {
+			rt.ts.completeWindowRequest()
+		}
+	}()
 	// Clear tool-argument progress when the round ends, on EVERY exit
 	// path (success, error, retry, recovery). Placed here rather than
 	// at the four call sites so no future path can forget it.
@@ -1388,7 +1577,7 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 	// paths (which rebuild callMessages via BuildMessages and continue back
 	// here) are always normalized. The fast path is allocation-free on valid
 	// histories, so per-call cost is negligible.
-	messagesForCall = normalizeMessagesForProvider(messagesForCall)
+	messagesForCall = normalizeWindowMessages(rt.ts, messagesForCall)
 
 	providerCtx, providerCancel := context.WithCancel(rt.turnCtx)
 	rt.ts.setProviderCancel(providerCancel)
@@ -1396,35 +1585,119 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 		providerCancel()
 		rt.ts.clearProviderCancel(providerCancel)
 	}()
+	// Issue #1478: tell the chat when the provider goes silent (provider_status).
+	providerCtx, stopSilenceWatch := rt.startProviderSilenceWatch(providerCtx)
+	defer stopSilenceWatch()
 
 	if !rt.al.beginActiveRequest() {
+		logger.WarnCF("agent", "active request admission refused after intake closed", map[string]any{
+			"site":        "callProviderOnce",
+			"channel":     rt.ts.channel,
+			"chat_id":     rt.ts.chatID,
+			"session_id":  rt.ts.opts.TranscriptSessionID,
+			"session_key": rt.ts.sessionKey,
+			"agent_id":    rt.ts.agent.ID,
+		})
 		return nil, context.Canceled
 	}
 	defer rt.al.endActiveRequest()
 
-	if len(rt.activeCandidates) > 1 && rt.al.fallback != nil {
-		fbResult, fbErr := rt.al.fallback.Execute(
-			providerCtx,
-			rt.activeCandidates,
+	// C-10 counts bytes streamed by THIS provider round only. The deleted
+	// delegated wrapper used to reset the counter per call; a value left over
+	// from an earlier round must never disable the chain's in-place retry
+	// (the multi-candidate closure below never resets it itself).
+	rt.providerCallStreamedBytes.Store(0)
+
+	// §7.4 (D3, gate finding F1): every turn — root or steered child — runs
+	// the fallback chain even with a single candidate: the chain owns the
+	// §7.4 per-candidate in-place retry (C-8: 3 total calls, C-9 ceiling,
+	// D14 budget, C-12 Stop) and the provider_retry frame. There is no
+	// separate delegated retry path (issue #857). The single-candidate chain
+	// runs on a
+	// throwaway cooldown tracker (WithCooldown): today's plain path marks
+	// nothing, and a shared-tracker MarkFailure would cooldown-skip the only
+	// candidate on a LATER turn — an all-skipped exhaustion whose generic
+	// message would replace the real error.
+	useChain := rt.al.fallback != nil && len(rt.activeCandidates) > 0
+	if useChain {
+		// §7.4: carry the D14 per-turn wait budget and the C-11 retry
+		// observer on the provider ctx for this chain call. The budget is
+		// per TURN (lazily created on turnState, shared across iterations —
+		// a per-call budget would multiply the 10-minute cap by the
+		// iteration count); the observer forwards each DECIDED in-place
+		// retry as one provider_retry frame from named fields only
+		// (C-2 — never an error string).
+		retryCtx := providers.WithWaitBudget(providerCtx, rt.ts.turnWaitBudgetForChain())
+		retryCtx = providers.WithRetryObserver(retryCtx, rt.providerRetryObserver())
+		retryCtx = providers.WithStreamedBytesCheck(retryCtx, func() int64 {
+			return rt.providerCallStreamedBytes.Load()
+		})
+		// Issue #1485: per-attempt limit fits this request (see attemptTimeoutResolver).
+		retryCtx = providers.WithAttemptTimeout(retryCtx, rt.attemptTimeoutResolver(messagesForCall, toolDefsForCall))
+		// F1 (read paths): one image attach per candidate, reused across the
+		// §7.4 in-place retries of that candidate — the retry must re-send
+		// the same request, and a re-attach re-runs the authorization
+		// recheck per call (the inspection-media boundary test pins
+		// 2 candidates → 2 rechecks, not 4). Scope: THIS provider round
+		// only; every new round (new callProviderOnce) attaches fresh.
+		rt.providerCallAttachCache = make(map[string][]providers.Message)
+		chain := rt.al.fallback
+		if len(rt.activeCandidates) == 1 {
+			// F1: single-candidate root turns run on a throwaway tracker so a
+			// final failure never marks the SHARED chain's tracker (see the
+			// gate comment), and on a budget-free copy of the chain: the
+			// per-candidate budget (120 s default) would clamp a turn ctx
+			// carrying its own longer deadline — JUDGE-FR-049 observed exactly
+			// that (the Judge turn's operator-configured 420 s clipped to
+			// 120 s, the UAT E-14 defect FR-049 exists to prevent). With one
+			// candidate there is nothing to split the budget across, so the
+			// turn's own deadline governs, exactly as the plain path passes
+			// the ctx through. The §7.4 retry loop, its fresh-per-call budget
+			// rule and the C-10 guard are budget-independent and keep
+			// running.
+			chain = rt.al.fallback.WithCooldown(providers.NewCooldownTracker()).WithoutPerCandidateTimeout()
+		}
+		// A single-candidate attempt uses the hook-modified model. Give the
+		// chain the same per-call identity without mutating shared candidates.
+		candidates := rt.activeCandidates
+		if len(candidates) == 1 && candidates[0].Model != rt.llmModel {
+			candidates = append([]providers.FallbackCandidate(nil), candidates...)
+			candidates[0].Model = rt.llmModel
+		}
+		fbResult, fbErr := chain.Execute(
+			retryCtx,
+			candidates,
 			func(ctx context.Context, provider, model string) (*providers.LLMResponse, error) {
-				cat := rt.al.getCapabilityCatalog()
-				budget := resizeBudgetForModel(cat, provider, model, int(catalog.DefaultResizeLimits.MaxBytes))
-				candidateMessages, imageErr := attachTurnInspectionImagesWithBudget(ctx, messagesForCall, rt.inspectionImages, modelSupportsImage(cat, provider, model), budget)
-				if imageErr != nil {
-					return nil, imageErr
+				if len(rt.activeCandidates) == 1 {
+					// selectTurnProvider binds the candidate's pool client even
+					// for one candidate. Keep this attempt path for streaming
+					// and rt.llmModel: a BeforeLLM hook may have overridden the
+					// selected model, which the chain's model would discard.
+					return rt.callWithEffort(provider, rt.llmModel, func(opts map[string]any) (*providers.LLMResponse, error) {
+						rt.providerCallStreamedBytes.Store(0) // C-10 counts THIS attempt only
+						return rt.runProviderAttempt(ctx, rt.activeProvider, provider, rt.llmModel, messagesForCall, toolDefsForCall, &rt.providerCallStreamedBytes, opts)
+					})
 				}
-				// FR-007: look up the provider instance that matches
-				// this candidate's pinned Provider. Without this,
-				// every fallback routes through activeProvider (the
-				// primary's instance) — defeating the point of
-				// provider-aware fallbacks. Falls back to
-				// activeProvider when the candidate has no Provider
-				// pinned (legacy wire shape) or no pool entry.
-				p := rt.ts.agent.GetProviderForCandidate(providers.FallbackCandidate{Provider: provider, Model: model})
+				// Resolve the exact configured pair. A missing named fallback
+				// is a refusal, never permission to borrow another client.
+				rt.ts.agent.mu.RLock()
+				p, routeErr := rt.ts.agent.providerForTurnCandidate(providers.FallbackCandidate{Provider: provider, Model: model}, false)
+				rt.ts.agent.mu.RUnlock()
+				if routeErr != nil {
+					return nil, routeErr
+				}
 				if p == nil {
-					p = rt.activeProvider
+					p = rt.activeProvider // legacy, explicitly unpinned candidate
 				}
-				return p.Chat(ctx, candidateMessages, toolDefsForCall, model, rt.llmOpts)
+				// Effort-levels S-88/S-95: every candidate runs the same attempt
+				// body as a single candidate (image attach once per candidate,
+				// streaming when the provider and channel allow it, accounting
+				// of the attempt). C-10 counts THIS attempt only; the chain
+				// ends instead of falling back once bytes of an attempt showed.
+				return rt.callWithEffort(provider, model, func(opts map[string]any) (*providers.LLMResponse, error) {
+					rt.providerCallStreamedBytes.Store(0)
+					return rt.runProviderAttempt(ctx, p, provider, model, messagesForCall, toolDefsForCall, &rt.providerCallStreamedBytes, opts)
+				})
 			},
 		)
 		if fbErr != nil {
@@ -1437,11 +1710,17 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 					fbResult.Provider, fbResult.Model, len(fbResult.Attempts)+1),
 				map[string]any{"agent_id": rt.ts.agent.ID, "iteration": rt.iteration},
 			)
+			// §7.4 fallback note: emit the provider_fallback frame and
+			// queue the once-per-(session, pair) transcript note (written
+			// at turn end, after the assistant answer — MIN-103).
+			rt.ts.queueProviderFallbackNote(fbResult.Model, fbResult.Attempts)
 		}
+		rt.noteProviderRecovered(fbResult.Retries) // #1280: "reconnected after N retries"
 		// Phase 1B FR-013: record the model that actually produced
 		// the response (may differ from the agent's primary model
 		// when a fallback candidate was used).
 		rt.ts.setLastProducedModel(fbResult.Model)
+		rt.ts.setLastProducedProvider(fbResult.Provider)
 		rt.ts.markLastStreamerProducedModel(fbResult.Model)
 		return fbResult.Response, nil
 	}
@@ -1449,116 +1728,8 @@ func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message
 	if len(rt.activeCandidates) > 0 {
 		providerName = rt.activeCandidates[0].Provider
 	}
-	var imageErr error
-	cat := rt.al.getCapabilityCatalog()
-	budget := resizeBudgetForModel(cat, providerName, rt.llmModel, int(catalog.DefaultResizeLimits.MaxBytes))
-	messagesForCall, imageErr = attachTurnInspectionImagesWithBudget(providerCtx, messagesForCall, rt.inspectionImages, modelSupportsImage(cat, providerName, rt.llmModel), budget)
-	if imageErr != nil {
-		return nil, imageErr
-	}
-	// Use streaming if the provider supports it and we have a streamer for this channel.
-	if sp, ok := rt.activeProvider.(providers.StreamingProvider); ok && rt.al.bus != nil {
-		logger.DebugCF("agent", "Provider supports streaming, checking for streamer", map[string]any{"channel": rt.ts.channel, "chat_id": rt.ts.chatID})
-		if streamer, hasStreamer := rt.al.bus.GetStreamer(providerCtx, rt.ts.channel, rt.ts.chatID, rt.ts.transcriptSessionID); hasStreamer {
-			logger.InfoCF("agent", "Using streaming for response", map[string]any{"channel": rt.ts.channel, "chat_id": rt.ts.chatID})
-			// FIX 5a/5c: stamp the TRUE per-turn producer and this turn's own
-			// ID before any token can flow — see stampStreamerProducerAgentID
-			// and stampStreamerTurnID's doc comments. stampStreamerParentSpawnCallID
-			// additionally stamps this turn's delegation-nesting correlation
-			// (empty for a root turn) so a delegate's own streamed final
-			// response round-trips through Finalize with the same
-			// ParentSpawnCallID its non-streaming siblings carry — see its
-			// own doc comment.
-			rt.ts.stampStreamerProducerAgentID(streamer)
-			rt.ts.stampStreamerTurnID(streamer)
-			rt.ts.stampStreamerParentSpawnCallID(streamer)
-			// #823: mint (or, for an ADR-087 D6 auto-continue round, reuse)
-			// this round's message id BEFORE any token can flow — mirrors the
-			// three stamps immediately above. nextRoundMessageID must run
-			// before the stamp so the freshly-obtained streamer and this
-			// round's later appendIntermediateAssistantTranscript call (if
-			// this round ends in tool calls) agree on the SAME id.
-			rt.ts.nextRoundMessageID()
-			rt.ts.stampStreamerMessageID(streamer)
-			var lastChunk string
-			// Residual native tool-call markup must never reach the
-			// live view. This is not only a rendering concern: the
-			// gateway streamer PERSISTS what it accumulated from these
-			// Update calls (wsStreamer.Finalize prefers its own buffer
-			// over the turn's final content), so anything forwarded
-			// here also lands in transcript.jsonl. Filtering at this
-			// seam is what keeps the live bubble and the persisted
-			// entry identical — and both clean. See
-			// providers.StreamTextFilter.
-			var streamFilter providers.StreamTextFilter
-			resp, streamErr := sp.ChatStream(providerCtx, messagesForCall, toolDefsForCall, rt.llmModel, rt.llmOpts, func(accumulated string) {
-				// B4: if the turn has been abandoned (stuck-goroutine detach),
-				// suppress further frame emits so a zombie goroutine cannot
-				// push frames to disconnected clients.
-				if rt.ts.abandoned.Load() {
-					abandonedWritesSuppressed.Add(1)
-					return
-				}
-				visible := streamFilter.Visible(accumulated)
-				// Send only the new delta (visible minus what we already sent).
-				//
-				// Defensive: this slice panics with index-out-of-range if a
-				// provider ever emits an accumulated string SHORTER than its
-				// predecessor. The contract is monotonic growth, but a provider
-				// bug, a block reorder, or an SDK revision changing accumulation
-				// semantics would otherwise take down the whole turn. Treat a
-				// non-growing value as "nothing new" and skip it. The filter
-				// upholds the same non-shrinking contract on its own output.
-				if len(visible) < len(lastChunk) {
-					logger.DebugCF("agent", "Streaming callback emitted a shorter accumulated string; ignoring", map[string]any{
-						"previous_len": len(lastChunk),
-						"new_len":      len(visible),
-					})
-					return
-				}
-				delta := visible[len(lastChunk):]
-				lastChunk = visible
-				if delta != "" {
-					// This attempt-local counter is independent of the concrete
-					// streamer. Some channels expose no buffer-length method, and
-					// WebSocket creates a fresh streamer per round. Count before
-					// Update so an attempted partial emit fails closed even if the
-					// client disconnects during the write.
-					rt.providerCallStreamedBytes.Add(int64(len(delta)))
-					if err := streamer.Update(providerCtx, delta); err != nil {
-						logger.DebugCF("agent", "Streaming update error (client may have disconnected)", map[string]any{"error": err.Error()})
-					}
-				}
-			}, rt.onToolCallProgress)
-			// Reconcile against the provider's final text. Two things
-			// need this: the few bytes the filter holds back mid-stream
-			// in case they start a marker split across SSE chunks, and
-			// a provider that returned content without ever invoking
-			// the callback. Without it those bytes would be dropped
-			// silently — the streamer's buffer is what gets persisted.
-			if streamErr == nil && resp != nil && !rt.ts.abandoned.Load() {
-				finalVisible := resp.Content
-				if om, isOrphan := providers.DetectOrphanToolCallMarkup(finalVisible); isOrphan {
-					finalVisible = om.Prose
-				}
-				if len(finalVisible) > len(lastChunk) && strings.HasPrefix(finalVisible, lastChunk) {
-					if err := streamer.Update(providerCtx, finalVisible[len(lastChunk):]); err != nil {
-						logger.DebugCF("agent", "Streaming tail flush error (client may have disconnected)", map[string]any{"error": err.Error()})
-					}
-				}
-			}
-			// Do NOT finalize here — the turn may continue with tool calls.
-			// Store the streamer so the turn-level code can finalize once,
-			// after the last LLM call, preventing premature "done" frames
-			// that tell the frontend the response is complete mid-turn.
-			rt.ts.setLastStreamer(streamer)
-			rt.ts.setLastProducedModel(rt.llmModel)
-			// FR-013: also push to the streamer so Finalize stamps the
-			// per-turn Model field on the streamed assistant entry.
-			rt.ts.markLastStreamerProducedModel(rt.llmModel)
-			return resp, streamErr
-		}
-	}
-	rt.ts.setLastProducedModel(rt.llmModel)
-	return rt.activeProvider.Chat(providerCtx, messagesForCall, toolDefsForCall, rt.llmModel, rt.llmOpts)
+	// callWithEffort names an unpinned primary by the agent's provider.
+	return rt.callWithEffort(providerName, rt.llmModel, func(opts map[string]any) (*providers.LLMResponse, error) {
+		return rt.runProviderAttempt(providerCtx, rt.activeProvider, providerName, rt.llmModel, messagesForCall, toolDefsForCall, &rt.providerCallStreamedBytes, opts)
+	})
 }

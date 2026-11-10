@@ -163,6 +163,38 @@ type SandboxPolicy struct {
 	// grant, it was the per-entry grant handed to a child that appeared after
 	// the snapshot.
 	DeniedPathPrefixes []string
+
+	// WriteDeniedPaths are absolute subtrees a sandboxed child may READ (and,
+	// where granted, execute) but must never WRITE (amendment §2 D3: the
+	// read-only allow-list entries — media, the session-scoped upload dirs,
+	// published runtime generations and the document prefix). macOS renders
+	// each as an explicit write-only deny in the final deny block, so no
+	// earlier allow (including $OMNIPUS_HOME's) can re-open writes; Linux
+	// needs no rule — the enumeration never grants them a write right, and
+	// their own branch rules carry none.
+	//
+	// Same rendering position as DeniedPaths (denied last, nothing after), so
+	// the measured precedence rule covers both lists identically.
+	WriteDeniedPaths []string
+
+	// AllowedBranches carries the allowed branch roots of the per-turn home
+	// enumeration WITH their exact access classes (amendment §2 D3/D5). It is
+	// consumed only by the Linux grant expansion: when an enumerated sibling
+	// IS a branch root, it is granted with the branch's own access instead of
+	// the parent rule's, which is how a read-only generation under the (RWX)
+	// home rule stays read+execute. macOS does not consume this field — its
+	// explicit denies already withhold write — and it is rendered by nothing;
+	// the branch rules themselves are ordinary FilesystemRules entries.
+	AllowedBranches []PathRule
+
+	// NetworkUnhandled marks a policy that expresses NO network restriction
+	// and must not inherit the backend's default net handling (amendment §2
+	// D7, God Mode A): on Linux ABI v4+ the ruleset then declares
+	// handledAccessNet = 0, so connect(2)/bind(2) stay unrestricted instead of
+	// deny-all-by-empty-allow-list; on macOS the profile renders blanket
+	// network allows instead of (deny network*) plus a port list. Set only by
+	// the God Mode floor derivation.
+	NetworkUnhandled bool
 }
 
 // FilesystemModel selects how the sandbox treats reads and program execution.

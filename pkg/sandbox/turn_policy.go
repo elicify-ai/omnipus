@@ -65,6 +65,9 @@ func RegisterTurnPolicyBase(in *TurnPolicyInput) {
 	cp.AllowedExecPaths = append([]string(nil), in.AllowedExecPaths...)
 	cp.BindPorts = append([]uint16(nil), in.BindPorts...)
 	cp.ConnectPorts = append([]uint16(nil), in.ConnectPorts...)
+	if in.AllowRoots != nil {
+		cp.AllowRoots = append([]fspolicy.AllowRoot(nil), in.AllowRoots...)
+	}
 	turnPolicyBase.Store(&cp)
 }
 
@@ -77,6 +80,14 @@ func TurnPolicyBaseInstalled() bool { return turnPolicyBase.Load() != nil }
 // KernelPolicyForTurn derives the PER-TURN kernel policy for authored, ready to
 // be assigned to Limits.KernelPolicy.
 //
+// extraAllowRoots are the turn's §2 A5/A6 runtime allowances (published shared
+// generations rx, the document runtime prefix rx, the worker's document cache
+// rw) that must reach the denial BEFORE it is computed — amendment §2 D3's
+// rule that anything the child legitimately needs inside $OMNIPUS_HOME arrives
+// as an allowance, not as a rule appended to a finished denial. They are
+// marked as internal runtime input, so the enumeration drops any of them that
+// would reopen a protected-inventory node.
+//
 // Returns (nil, nil) when no boot base is registered — the documented "no
 // per-turn policy, use whatever the boot profile is" fallback. Every spawn site
 // may assign the result unconditionally.
@@ -87,7 +98,7 @@ func TurnPolicyBaseInstalled() bool { return turnPolicyBase.Load() != nil }
 // WIDER of the two: falling back on a malformed turn policy would hand the
 // child more reach than the turn was entitled to, which is the precise failure
 // this whole wiring exists to remove.
-func KernelPolicyForTurn(authored fspolicy.FSPolicy) (*SandboxPolicy, error) {
+func KernelPolicyForTurn(authored fspolicy.FSPolicy, extraAllowRoots ...fspolicy.AllowRoot) (*SandboxPolicy, error) {
 	base := turnPolicyBase.Load()
 	if base == nil {
 		return nil, nil
@@ -97,6 +108,26 @@ func KernelPolicyForTurn(authored fspolicy.FSPolicy) (*SandboxPolicy, error) {
 			"sandbox: cannot derive a per-turn kernel policy from an FSPolicy with no WorkDir " +
 				"(the work dir IS the turn's write grant); refusing to fall back to the wider boot profile")
 	}
-	policy := DeriveKernelPolicy(authored, *base)
+	in := *base
+	if len(extraAllowRoots) > 0 {
+		in.AllowRoots = append(append([]fspolicy.AllowRoot(nil), base.AllowRoots...), extraAllowRoots...)
+	}
+	policy := DeriveKernelPolicy(authored, in)
 	return &policy, nil
+}
+
+// RegisteredTurnPolicyBase returns a copy of the boot-registered half of the
+// per-turn policy input, for the one spawn site that must derive from a
+// MODIFIED input rather than the base as registered: environment_setup strips
+// the operator's ordinary write widening before deriving its child's policy,
+// and per amendment §2 D3 its runtime/prefix allowances must be in the input
+// BEFORE the denial, which means it derives via DeriveKernelPolicy itself.
+// ok=false when no enforcing base is registered — the documented no-per-turn
+// fallback, never an error.
+func RegisteredTurnPolicyBase() (TurnPolicyInput, bool) {
+	base := turnPolicyBase.Load()
+	if base == nil {
+		return TurnPolicyInput{}, false
+	}
+	return *base, true
 }

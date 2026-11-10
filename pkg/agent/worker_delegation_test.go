@@ -51,7 +51,14 @@ func seedEdgesFromConfig(cfg *config.Config) []graphEdge {
 		}
 		modes := make([]string, 0, len(dp.Modes))
 		for _, m := range dp.Modes {
-			modes = append(modes, string(m))
+			// The graph stores the COLLAPSED edge vocabulary ("direct"/"task"),
+			// NOT the config mode name. coreagent seeds {task, background}, and
+			// "background" is a config mode that collapses to "direct"
+			// (loop_delegation.go::EdgeModeCategory). Writing the raw name makes
+			// the store drop the whole edge as invalid ("delegation edge mode
+			// background is invalid (valid: direct, task)"), so every seeded
+			// edge vanished and every check denied.
+			modes = append(modes, string(EdgeModeCategory(m)))
 		}
 		var depth *int
 		if dp.Depth != nil {
@@ -69,7 +76,8 @@ func seedEdgesFromConfig(cfg *config.Config) []graphEdge {
 }
 
 // TestSeedConfig_JimTaskTargetsMatchADR090 pins the orchestrator's staff and
-// self-delegation targets, including Ava for specialist/skill proposals.
+// self-delegation targets. Ava is retired (FR-008) and Omnipus accepts no
+// delegation from other agents (§6.5), so Jim has no system-agent target.
 func TestSeedConfig_JimTaskTargetsMatchADR090(t *testing.T) {
 	cfg := &config.Config{}
 	coreagent.SeedConfig(cfg)
@@ -78,31 +86,15 @@ func TestSeedConfig_JimTaskTargetsMatchADR090(t *testing.T) {
 	if policy == nil {
 		t.Fatal("Jim must have seeded delegation targets")
 	}
-	want := map[string]bool{"planner": true, "researcher": true, "worker": true, "jim": true, "ava": true}
+	want := map[string]bool{"planner": true, "researcher": true, "worker": true, "jim": true}
 	if len(policy.To) != len(want) {
-		t.Fatalf("Jim targets=%v, want exactly planner/researcher/worker/jim/ava", policy.To)
+		t.Fatalf("Jim targets=%v, want exactly planner/researcher/worker/jim", policy.To)
 	}
 	for _, ref := range policy.To {
 		if ref.Kind != config.AgentRefKindLocal || !want[ref.ID] {
 			t.Fatalf("unexpected or duplicate Jim target: %+v", ref)
 		}
 		delete(want, ref.ID)
-	}
-}
-
-// TestSeededGraph_JimToAvaTaskAllowed verifies Jim can request specialist/skill proposals.
-func TestSeededGraph_JimToAvaTaskAllowed(t *testing.T) {
-	cfg := &config.Config{}
-	coreagent.SeedConfig(cfg)
-	seedWorkspaceGraph(t, testWS, true, seedEdgesFromConfig(cfg))
-
-	check := buildDelegationDenyCheckerForTaskReassignment(
-		string(coreagent.IDJim),
-		cfg.Performance,
-		config.DelegationModeTask,
-	)
-	if denial := check(ctxWS(testWS, 0), string(coreagent.IDAva)); denial != nil {
-		t.Fatalf("Jim → Ava (task) must be allowed for specialist/skill proposals, got: %+v", denial)
 	}
 }
 
@@ -122,7 +114,8 @@ func TestSeededGraph_JimToWorkerAllowed(t *testing.T) {
 }
 
 // TestSeededGraph_DisallowedTargetDenied verifies deny-by-default holds for
-// targets outside the seeded trust set (Mia → Ava is NOT seeded).
+// targets outside the seeded trust set (Mia → Omnipus is NOT seeded; agents
+// reach Omnipus by message, not delegation — omnipus-system-agent US-10).
 func TestSeededGraph_DisallowedTargetDenied(t *testing.T) {
 	cfg := &config.Config{}
 	coreagent.SeedConfig(cfg)
@@ -133,14 +126,22 @@ func TestSeededGraph_DisallowedTargetDenied(t *testing.T) {
 		cfg.Performance,
 		config.DelegationModeTask,
 	)
-	if denial := check(ctxWS(testWS, 0), string(coreagent.IDAva)); denial == nil {
-		t.Fatal("Mia → Ava must be DENIED (no edge in the seeded graph)")
+	if denial := check(ctxWS(testWS, 0), string(coreagent.IDOmnipus)); denial == nil {
+		t.Fatal("Mia → Omnipus must be DENIED (no edge in the seeded graph)")
 	}
 }
 
-// TestSeededGraph_JimAwaitModeAllowed checks Jim's permitted await path and
-// Mia's lack of a staff delegation edge. Mode-category rules remain covered
-// separately by synthetic graph tests in delegation_enforce_test.go.
+// TestSeededGraph_JimAwaitModeAllowed checks Jim's permitted await path, plus a
+// deny-by-default control on a target Mia genuinely has no edge to.
+//
+// The control used to name WORKER and assert "Mia's lack of a staff delegation
+// edge". That is no longer true: the UAT DEF-001 fix put Worker on the
+// workspace team so the coreagent ->worker seed survives seedEdgesForTeam, and
+// TestDefaultWorkspaceSeeder_TeamAndEdges pins the seeded mia->worker edge. The
+// control therefore asserted the opposite of the product. It now names
+// Omnipus, which the seed genuinely omits as a Mia target (same target
+// TestSeededGraph_DisallowedTargetDenied uses; Ava is retired). Mode-category rules remain covered separately by synthetic graph tests
+// in delegation_enforce_test.go.
 func TestSeededGraph_JimAwaitModeAllowed(t *testing.T) {
 	cfg := &config.Config{}
 	coreagent.SeedConfig(cfg)
@@ -155,13 +156,15 @@ func TestSeededGraph_JimAwaitModeAllowed(t *testing.T) {
 		t.Fatalf("Jim → worker (await) must be allowed, got deny: %+v", denial)
 	}
 
-	// Mia hands substantial work to Jim rather than assigning staff directly.
+	// Deny-by-default control: a target Mia has no seeded edge to is denied by
+	// the trust graph. (See this test's doc comment for why this is Omnipus and
+	// not worker.)
 	miaCheck := buildDelegationDenyCheckerForDelegate(
 		string(coreagent.IDMia),
 		cfg.Performance,
 		config.DelegationMode("await"),
 	)
-	if denial := miaCheck(ctxWS(testWS, 0), string(coreagent.IDWorker)); denial == nil || denial.Policy != "trust_set" {
-		t.Fatalf("Mia → worker must be denied by the trust graph, got: %+v", denial)
+	if denial := miaCheck(ctxWS(testWS, 0), string(coreagent.IDOmnipus)); denial == nil || denial.Policy != "trust_set" {
+		t.Fatalf("Mia → Omnipus must be denied by the trust graph (no seeded edge), got: %+v", denial)
 	}
 }

@@ -1,0 +1,47 @@
+# no-cli-model-providers.allow — data file for scripts/check-no-cli-model-providers.sh
+#
+# Files that MAY still name the CLI-backed model providers deleted by WU-24
+# (founder 2026-10-14). Everything NOT listed here must be clean.
+#
+# Why these and only these: they are historical decision records — ADRs, dated
+# internal specs, their review and task reports, and one dated research note —
+# that mention the retired kinds AS HISTORY. Rewriting a past decision's text
+# to erase a name is falsifying the record, not removing a trace (same ruling
+# as ADR-068 §2.4 for its own deletions, and the same mechanism as
+# scripts/no-removed-providers.allow).
+#
+# Format: one path per line, relative to the repo root, POSIX extended regular
+# expression anchored at both ends by the guard. Blank lines and `#` comments
+# are ignored. Keep this list SHORT — every row here is a hole in the guard.
+# Never add live product code, user docs, or a new design document here: a
+# NEW document naming the retired kinds is a finding, not history.
+
+# --- this allow-list itself -------------------------------------------------
+scripts/no-cli-model-providers\.allow
+
+# --- ADRs: the decisions that built (and partly retired) these providers ----
+docs/internal/architecture/ADR-019-v01-workspaces-foundation(-review)?\.md
+docs/internal/architecture/ADR-031-connectors-providers-redesign(-review)?\.md
+docs/internal/architecture/ADR-053-bedrock-provider-first-class\.md
+docs/internal/architecture/ADR-066-[^/]*\.md
+docs/internal/architecture/ADR-067-registry-fed-catalog-and-provider-identity\.md
+docs/internal/architecture/ADR-068-subscriptions-provider-deletion-and-provider-ux\.md
+docs/internal/architecture/ADR-088-work-first-goal-flow\.md
+
+# --- the ADR-066/067/068 spec set, reviews, cross-spec review, plan, tasks --
+docs/internal/specs/adr-059-delegation-observability-spec-review-pass2\.md
+docs/internal/specs/adr-066-context-overflow-spec[^/]*\.md
+docs/internal/specs/adr-067-registry-catalog-spec[^/]*\.md
+docs/internal/specs/adr-068-providers-ux-spec[^/]*\.md
+docs/internal/specs/adr-090-visual-file-reading-spec\.md
+docs/internal/specs/cross-spec-review-adr-066-067-068\.md
+docs/internal/specs/implementation-plan-adr-066-067-068\.md
+docs/internal/specs/provider-messages-spec\.md
+docs/internal/specs/v01-spec4-external-agent-runners-spec(-review)?\.md
+docs/internal/specs/work-first-goal-flow-spec\.md
+docs/internal/specs/tasks/adr-06[67]-registry-catalog-spec-tasks\.md
+docs/internal/specs/tasks/adr-068-providers-ux-spec-tasks\.md
+docs/internal/specs/tasks/wave-[ab]-report\.md
+
+# --- a dated research note that predates the removal ------------------------
+docs/internal/research/cost-tracking-opencode-openclaw-2026-06\.md

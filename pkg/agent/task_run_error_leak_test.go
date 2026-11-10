@@ -136,7 +136,7 @@ func TestTaskRun_TemporaryErrorNeverLeaksProviderText(t *testing.T) {
 				wakesMu.Unlock()
 			})
 			tk := newRunLoopTask(t, al, nil)
-			store := al.GetAgentStore(tk.AgentID)
+			store := al.GetSessionStore()
 
 			const limit = 3 // the default task attempt limit
 			var sessions, prompts []string
@@ -312,7 +312,7 @@ func TestTaskRun_TransientJudgeErrorNeverLeaksProviderText(t *testing.T) {
 
 	rec := waitForGoalState(t, tk.ID, generated.GoalStateExhausted)
 	assertNoProviderText(t, "the goal record's terminal reason", rec.TerminalReason)
-	store := al.GetAgentStore(tk.AgentID)
+	store := al.GetSessionStore()
 	waitForGoalOutcomeEntry(t, store, final.SessionID)
 	outcome := requireOneGoalOutcome(t, store, final.SessionID, rec.GoalID)
 	assertNoProviderText(t, "the goal outcome line", outcome.Content)
@@ -407,7 +407,7 @@ func TestChatTurn_ProviderErrorNeverLeaksProviderText(t *testing.T) {
 	t.Cleanup(func() { msgBus.Close() })
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	t.Cleanup(al.Close)
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := al.GetRegistry().primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("SETUP: default agent must be registered")
 	}

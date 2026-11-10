@@ -12,7 +12,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -24,7 +23,7 @@ func newDepsWithSkillsLoader(t *testing.T, globalSkillsDir string) (*systools.De
 	t.Helper()
 	home := t.TempDir()
 	loader := skills.NewSkillsLoader("", globalSkillsDir, "")
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	deps.Home = home
 	deps.SkillsLoader = loader
 	return deps, home
@@ -37,7 +36,7 @@ func newDepsWithSkillsLoader(t *testing.T, globalSkillsDir string) (*systools.De
 //	When the tool is executed,
 //	Then it returns NOT_AVAILABLE error.
 func TestSkillListTool_NilLoader_ReturnsNotAvailable(t *testing.T) {
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	// Do NOT set deps.SkillsLoader — it is nil.
 	tool := systools.NewSkillListTool(deps)
 	result := tool.Execute(context.Background(), nil)
@@ -59,7 +58,8 @@ func TestSkillListTool_EmptyDir_ReturnsEmptyList(t *testing.T) {
 	empty := t.TempDir()
 	deps, _ := newDepsWithSkillsLoader(t, empty)
 	tool := systools.NewSkillListTool(deps)
-	result := tool.Execute(context.Background(), nil)
+	deps.ResolveToolPolicy = func(_, _ string) (string, bool) { return "allow", true }
+	result := tool.Execute(readCtx("editor"), map[string]any{"scope": "management"})
 	m := parseSuccess(t, result.ForLLM)
 	skillsList, _ := m["skills"].([]any)
 	if len(skillsList) != 0 {
@@ -88,7 +88,8 @@ func TestSkillListTool_WithInstalledSkill_ReturnsList(t *testing.T) {
 
 	deps, _ := newDepsWithSkillsLoader(t, globalDir)
 	tool := systools.NewSkillListTool(deps)
-	result := tool.Execute(context.Background(), nil)
+	deps.ResolveToolPolicy = func(_, _ string) (string, bool) { return "allow", true }
+	result := tool.Execute(readCtx("editor"), map[string]any{"scope": "management"})
 	m := parseSuccess(t, result.ForLLM)
 	skillsList, _ := m["skills"].([]any)
 	if len(skillsList) == 0 {
@@ -127,12 +128,8 @@ func TestSkillListTool_FiltersByGrantAndOmitsPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	deps, cfg := newTestDeps()
-	deps.SkillsLoader = skills.NewSkillsLoader("", globalDir, "")
-	cfg.Agents.List = append(cfg.Agents.List, config.AgentConfig{
-		ID:     "jim",
-		Skills: []string{"granted-skill"},
-	})
+	// r15 §5.13a: a real generation binding, not just a same-name grant.
+	deps := newSkillDeps(t, globalDir, skillDepsOpts{agentID: "jim", grants: []string{"granted-skill"}, policies: map[string]string{"list_skills": "allow"}})
 
 	tool := systools.NewSkillListTool(deps)
 	ctx := tools.WithAgentID(context.Background(), "jim")
@@ -160,7 +157,7 @@ func TestSkillListTool_FiltersByGrantAndOmitsPath(t *testing.T) {
 // the live config roster is granted nothing, rather than falling open.
 func TestSkillListTool_UnresolvableAgentDeniesEverything(t *testing.T) {
 	globalDir := t.TempDir()
-	deps, _ := newTestDeps()
+	deps, _ := newTestDeps(t)
 	deps.SkillsLoader = skills.NewSkillsLoader("", globalDir, "")
 	if err := os.MkdirAll(filepath.Join(globalDir, "some-skill"), 0o755); err != nil {
 		t.Fatal(err)
@@ -182,149 +179,81 @@ func TestSkillListTool_UnresolvableAgentDeniesEverything(t *testing.T) {
 	}
 }
 
-// ---- remove_skill ----
+// ---- r15 §5.4: deletion is edit_skill action=delete ----
 
-// BDD: Given SkillInstaller is nil (not wired),
-//
-//	When the tool is executed with name+confirm,
-//	Then it returns NOT_AVAILABLE.
-func TestSkillRemoveTool_NilInstaller_ReturnsNotAvailable(t *testing.T) {
-	deps, _ := newTestDeps()
-	tool := systools.NewSkillRemoveTool(deps)
-	result := tool.Execute(context.Background(), map[string]any{
-		"name":    "my-skill",
-		"confirm": true,
-	})
-	m := parseError(t, result.ForLLM)
-	errBlock, _ := m["error"].(map[string]any)
-	if code, _ := errBlock["code"].(string); code != "NOT_AVAILABLE" {
-		t.Errorf("expected NOT_AVAILABLE, got %q", code)
+func TestSkillDeleteTool_NilDeps_ReturnsNotAvailable(t *testing.T) {
+	result := systools.NewSkillEditTool(nil).Execute(context.Background(), map[string]any{"action": "delete", "skill": "my-skill"})
+	wu3Error(t, result, "NOT_AVAILABLE")
+}
+
+// The old confirm boolean is withdrawn. The live safety precondition is a
+// supported read in this session (§7.3), not an invented approval token.
+func TestSkillDeleteTool_NotRead_ReturnsSkillNotRead(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "skills")
+	validSkillFixture(t, root, "my-skill", "A skill to protect")
+	deps := newAuthoringDeps(t, root, "")
+	before := wu3ReadFile(t, filepath.Join(root, "my-skill", "SKILL.md"))
+	result := systools.NewSkillEditTool(deps).Execute(readCtx("editor"), map[string]any{"action": "delete", "skill": "my-skill"})
+	body := wu3Error(t, result, "SKILL_NOT_READ")
+	if body["message"] != "read skill 'my-skill' first (Skill, get_skill, read_file or list_directory), then retry" {
+		t.Fatalf("wrong read remedy: %s", result.ForLLM)
+	}
+	if string(wu3ReadFile(t, filepath.Join(root, "my-skill", "SKILL.md"))) != string(before) {
+		t.Fatal("unread deletion changed skill bytes")
 	}
 }
 
-// BDD: Given confirm is false,
-//
-//	When the tool is executed,
-//	Then it returns CONFIRMATION_REQUIRED.
-func TestSkillRemoveTool_NotConfirmed_ReturnsConfirmationRequired(t *testing.T) {
-	deps, _ := newTestDeps()
-	tool := systools.NewSkillRemoveTool(deps)
-	result := tool.Execute(context.Background(), map[string]any{
-		"name":    "my-skill",
-		"confirm": false,
-	})
-	m := parseError(t, result.ForLLM)
-	errBlock, _ := m["error"].(map[string]any)
-	if code, _ := errBlock["code"].(string); code != "CONFIRMATION_REQUIRED" {
-		t.Errorf("expected CONFIRMATION_REQUIRED, got %q", code)
+func TestSkillDeleteTool_InstalledSkill_RemovesAndReturnsSuccess(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "skills")
+	validSkillFixture(t, root, "test-skill", "A skill to delete")
+	deps := newAuthoringDeps(t, root, "")
+	ctx := observeSkillForMutation(t, deps, readCtx("editor"), "test-skill")
+	result := systools.NewSkillEditTool(deps).Execute(ctx, map[string]any{"action": "delete", "skill": "test-skill"})
+	m := wu3Success(t, result)
+	if m["success"] != true || m["skill"] != "test-skill" || m["action"] != "delete" {
+		t.Fatalf("wrong successful deletion: %s", result.ForLLM)
+	}
+	if _, err := os.Stat(filepath.Join(root, "test-skill")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("skill still exists: %v", err)
 	}
 }
 
-// BDD: Given a real SkillInstaller and an installed skill,
-//
-//	When the tool is executed with confirm=true,
-//	Then it successfully removes the skill and returns success=true.
-func TestSkillRemoveTool_InstalledSkill_RemovesAndReturnsSuccess(t *testing.T) {
-	workspace := t.TempDir()
-	// Create a fake installed skill in the workspace.
-	skillDir := filepath.Join(workspace, "skills", "test-skill")
-	if err := os.MkdirAll(skillDir, 0o755); err != nil {
-		t.Fatal(err)
+// §5.2: an authorized missing-object read says NOT_FOUND. A delete without
+// a successful observation says SKILL_NOT_READ; no fake absent revision.
+func TestSkillDeleteTool_NotInstalled_ReadNotFoundAndDeleteNotRead(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "skills")
+	deps := newAuthoringDeps(t, root, "")
+	deps.ResolveToolPolicy = func(_, name string) (string, bool) { return "allow", true }
+	ctx := readCtx("editor")
+	read := systools.NewGetSkillTool(deps).Execute(ctx, map[string]any{"id": "nonexistent-skill", "fields": []any{"state"}})
+	body := wu3Error(t, read, "NOT_FOUND")
+	if body["message"] != `skill "nonexistent-skill" is not installed` {
+		t.Fatalf("wrong missing-object remedy: %s", read.ForLLM)
 	}
-	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"),
-		[]byte("# test-skill\n\nA test skill.\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	installer, err := skills.NewSkillInstaller(workspace, "", "")
-	if err != nil {
-		t.Fatalf("NewSkillInstaller: %v", err)
-	}
-	deps, _ := newTestDeps()
-	deps.SkillInstaller = installer
-
-	tool := systools.NewSkillRemoveTool(deps)
-	revision, err := skills.NewSkillWriter(filepath.Join(workspace, "skills")).SkillRevision("test-skill")
-	if err != nil {
-		t.Fatal(err)
-	}
-	result := tool.Execute(context.Background(), map[string]any{
-		"name":     "test-skill",
-		"confirm":  true,
-		"revision": revision,
-	})
-	m := parseSuccess(t, result.ForLLM)
-	if success, _ := m["success"].(bool); !success {
-		t.Errorf("expected success=true, got: %s", result.ForLLM)
-	}
-	if name, _ := m["name"].(string); name != "test-skill" {
-		t.Errorf("expected name=test-skill, got %q", name)
-	}
-	// Verify the skill directory was actually removed.
-	if _, err := os.Stat(skillDir); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("expected skill directory to be removed, but it still exists")
+	result := systools.NewSkillEditTool(deps).Execute(ctx, map[string]any{"action": "delete", "skill": "nonexistent-skill"})
+	wu3Error(t, result, "SKILL_NOT_READ")
+	if _, err := os.Stat(filepath.Join(root, "nonexistent-skill")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing delete materialized skill: %v", err)
 	}
 }
 
-// BDD: Given a skill that is not installed,
-//
-//	When the remove tool is executed with confirm=true,
-//	Then it returns NOT_FOUND.
-func TestSkillRemoveTool_NotInstalled_ReturnsNotFound(t *testing.T) {
-	workspace := t.TempDir()
-	installer, err := skills.NewSkillInstaller(workspace, "", "")
-	if err != nil {
-		t.Fatalf("NewSkillInstaller: %v", err)
-	}
-	deps, _ := newTestDeps()
-	deps.SkillInstaller = installer
-
-	tool := systools.NewSkillRemoveTool(deps)
-	result := tool.Execute(context.Background(), map[string]any{
-		"name":     "nonexistent-skill",
-		"confirm":  true,
-		"revision": "reviewed-absent",
-	})
-	m := parseError(t, result.ForLLM)
-	errBlock, _ := m["error"].(map[string]any)
-	if code, _ := errBlock["code"].(string); code != "NOT_FOUND" {
-		t.Errorf("expected NOT_FOUND, got %q in: %s", code, result.ForLLM)
-	}
-}
-
-// ---- no-stub regression ----
-
-// BDD: Given any active skill tool,
-//
-//	When its ForLLM response is examined,
-//	Then it must not contain the string "stub".
-//
-// This is the zero-tolerance test: any leftover stub response is a build failure.
-// Note: system.skill.install and system.skill.search are retired (§7); only the
-// active tools (list_skills, remove_skill) are tested here.
+// Active tool results must be real success/refusal objects, never scaffold text.
 func TestSkillTools_NoStubStrings(t *testing.T) {
-	workspace := t.TempDir()
-	installer, _ := skills.NewSkillInstaller(workspace, "", "")
-	loader := skills.NewSkillsLoader(workspace, t.TempDir(), "")
-
-	deps, _ := newTestDeps()
-	deps.SkillInstaller = installer
-	deps.SkillsLoader = loader
-
-	ctx := context.Background()
-
-	// List tool.
-	listResult := systools.NewSkillListTool(deps).Execute(ctx, nil)
-	if strings.Contains(listResult.ForLLM, "stub") {
-		t.Errorf("list_skills result contains 'stub': %s", listResult.ForLLM)
+	root := filepath.Join(t.TempDir(), "skills")
+	deps := newAuthoringDeps(t, root, "")
+	deps.ResolveToolPolicy = func(_, _ string) (string, bool) { return "allow", true }
+	ctx := readCtx("editor")
+	results := map[string]*tools.ToolResult{
+		"list_skills": systools.NewSkillListTool(deps).Execute(ctx, map[string]any{"scope": "management"}),
+		"get_skill":   systools.NewGetSkillTool(deps).Execute(ctx, map[string]any{"id": "no-such-skill", "fields": []any{"state"}}),
+		"edit_skill":  systools.NewSkillEditTool(deps).Execute(ctx, map[string]any{"action": "delete", "skill": "no-such-skill"}),
 	}
-
-	// Remove tool with nonexistent skill → NOT_FOUND (real error, not stub).
-	removeResult := systools.NewSkillRemoveTool(deps).Execute(ctx, map[string]any{
-		"name":    "no-such-skill",
-		"confirm": true,
-	})
-	if strings.Contains(removeResult.ForLLM, "stub") {
-		t.Errorf("remove_skill result contains 'stub': %s", removeResult.ForLLM)
+	wu3Success(t, results["list_skills"])
+	wu3Error(t, results["get_skill"], "NOT_FOUND")
+	wu3Error(t, results["edit_skill"], "SKILL_NOT_READ")
+	for name, result := range results {
+		if strings.Contains(strings.ToLower(result.ForLLM), "stub") {
+			t.Errorf("%s result contains stub: %s", name, result.ForLLM)
+		}
 	}
 }

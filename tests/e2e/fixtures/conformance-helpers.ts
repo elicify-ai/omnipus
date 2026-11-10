@@ -58,12 +58,17 @@
 //      `test.skip()` — if a feature is missing the test FAILS loud.
 //
 // Real-LLM requirement (per §9.1 "at least one real-LLM run per
-// user-facing flow"): every test depends on OPENROUTER_API_KEY_CI.
-// The global-setup preflight throws immediately if it is unset.
+// user-facing flow"): every test needs the live-model keys — the central
+// primary's and the fallback's (fixtures/e2e-model-keys.ts). The global-setup
+// preflight throws immediately if either is unset.
 
-import { expect, type Page } from '@playwright/test'
-import { chatInput, assistantMessages, selectAgent } from './selectors'
-import { stubCliExecutor, type StubCliTexts } from './stub-external-cli'
+import { expect, test, type Page, type TestInfo } from '@playwright/test'
+import { assistantMessages, dismissStaleDialogOverlay } from './selectors'
+import { freshChat } from './session-setup'
+import { saveStubCliProgram, stubCliExecutor, type StubCliTexts } from './stub-external-cli'
+import { sessionMessages, type RetainedHistoryMessage } from './session-history'
+import { e2eAgentModelFields } from './e2e-agent-model'
+import { requireLiveModelKeys } from './e2e-model-keys'
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -71,14 +76,12 @@ export const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
 
 // ── T0.1: API key gate ──────────────────────────────────────────────────────
 
+// Checks the keys for the ACTIVE pair: the central primary (or the fallback
+// after a failed job-start check) and the fallback.
 export function requireApiKey(): void {
-  if (!process.env.OPENROUTER_API_KEY_CI) {
-    throw new Error(
-      'BLOCKED: OPENROUTER_API_KEY_CI not set. Every conformance e2e in this file ' +
-        'requires a real LLM (the spec demands at least one real-LLM run per user-facing ' +
-        'flow). See tests/e2e/README.md prerequisites.',
-    )
-  }
+  requireLiveModelKeys(
+    'the conformance e2e (the spec demands at least one real-LLM run per user-facing flow)',
+  )
 }
 
 // ── Shared helpers (mirror verifier-eval.spec.ts's apiFetch pattern) ────────
@@ -104,31 +107,236 @@ export async function getCsrfToken(page: Page): Promise<string> {
   return csrfCookie.value
 }
 
+/**
+ * Durable record of one ACTUAL transport-level replay in apiFetch (its GET/PUT
+ * reset retry): a test annotation plus a small JSON attachment, plus one
+ * sanitized stderr line. A replay that recovers makes the test pass on its
+ * FIRST Playwright attempt, so the no-flaky gate — which only counts
+ * Playwright-level retries (stats.flaky) — sees nothing, and a fully green job
+ * uploads no failure artifacts; annotations and attachments land in the
+ * always-uploaded JSON report, and the stderr line survives in the job log.
+ *
+ * SANITIZED BY CONSTRUCTION (2026-11-07 CHECK finding 4): the record carries
+ * ONLY the whitelisted error CLASS token (classifyTransportReset) plus
+ * route/attempt metadata — never the raw error text. A reset message can echo
+ * request headers or URL query values in its first characters, and the old
+ * `error.slice(0, 200)` copied that text into stderr, the annotation and the
+ * attachment. No headers, cookies or request/response bodies are recorded.
+ *
+ * NO BLANKET CATCH (2026-11-07 CHECK finding 1): a reporting failure is never
+ * swallowed. The only tolerated case is "no running test" — detected by
+ * currentTestInfo's exact-message discriminator (isTestInfoUnavailableError),
+ * which RETHROWS anything else. Every write below (annotations.push, attach)
+ * propagates its own failure to the awaiting apiFetch, which fails the test
+ * loudly at the reporting failure instead of silently continuing to a pass
+ * without the promised record.
+ */
+export const TRANSPORT_RESET = /socket hang up|ECONNRESET|ECONNABORTED|EPIPE/i
+
+/**
+ * Whitelisted CLASS token for a transport-reset error. Called only on errors
+ * that already matched TRANSPORT_RESET (apiFetch's retry decision), so the
+ * token always describes the failure class the replay was decided on; the
+ * 'unclassified-reset' fallback exists so a future TRANSPORT_RESET widening
+ * can never turn into silent arbitrary-text recording.
+ */
+export function classifyTransportReset(errorText: string): string {
+  const m = TRANSPORT_RESET.exec(errorText)
+  return m ? m[0].toLowerCase().replace(/\s+/g, '-') : 'unclassified-reset'
+}
+
+export interface ReplayRecord {
+  description: string
+  attachmentName: string
+  attachmentBody: string
+  stderrLine: string
+}
+
+/** Pure record builder — exported for the fixture unit tests
+ * (conformance-helpers.test.ts), which pin the sanitized shape. */
+export function buildReplayRecord(
+  method: string,
+  path: string,
+  errorText: string,
+  failedAttempt: number,
+): ReplayRecord {
+  const errorClass = classifyTransportReset(errorText)
+  const description =
+    `${method} ${path}: attempt ${failedAttempt} failed with a transport reset ` +
+    `(class ${errorClass}); replayed once as attempt ${failedAttempt + 1} after 1000ms — ` +
+    'recovered transport failure, not a Playwright-level retry'
+  const attachmentName = `transport-reset-replay-${method.toLowerCase()}-${Date.now()}.json`
+  const attachmentBody = JSON.stringify(
+    {
+      kind: 'transport-reset-replayed',
+      method,
+      path,
+      error_class: errorClass,
+      failed_attempt: failedAttempt,
+      retried_attempt: failedAttempt + 1,
+      delay_ms: 1_000,
+    },
+    null,
+    2,
+  )
+  return {
+    description,
+    attachmentName,
+    attachmentBody,
+    stderrLine: `[apiFetch] transport reset replayed: ${description}`,
+  }
+}
+
+/**
+ * The TestInfo surface recordTransportReplay writes to. Injectable so the
+ * fixture unit tests can exercise the recording path without a Playwright
+ * runner; production callers omit it and get the real test.info().
+ */
+export type ReplayEvidenceSink = Pick<TestInfo, 'annotations' | 'attach'>
+
+/**
+ * Playwright 1.61.1 throws EXACTLY this message from test.info() when
+ * currentTestInfo() is null (node_modules/playwright/lib/common/index.js, the
+ * `test.info` implementation). Pinned so the fallback below stays a NARROWED
+ * exception discriminator, never a blanket catch.
+ */
+export const TEST_INFO_UNAVAILABLE_MESSAGE = 'test.info() can only be called while test is running'
+
+/** True only for the known "no running test" error — anything else is an
+ * unexpected failure that must propagate (never swallowed). Exported for the
+ * fixture unit tests. */
+export function isTestInfoUnavailableError(err: unknown): boolean {
+  return err instanceof Error && err.message === TEST_INFO_UNAVAILABLE_MESSAGE
+}
+
+/**
+ * test.info() for the current context, or null when there is no running test
+ * (apiFetch is also reachable from worker-level setup, where the retry still
+ * applies but there is no test result to attach evidence to). The catch is
+ * deliberately NARROWED: only the exact known unavailable-test error returns
+ * null; any other error is rethrown so a reporting failure is loud.
+ */
+function currentTestInfo(): ReplayEvidenceSink | null {
+  try {
+    return test.info()
+  } catch (err) {
+    if (isTestInfoUnavailableError(err)) return null
+    throw err
+  }
+}
+
+export async function recordTransportReplay(
+  method: string,
+  path: string,
+  errorText: string,
+  failedAttempt: number,
+  info: ReplayEvidenceSink | null = currentTestInfo(),
+): Promise<void> {
+  const record = buildReplayRecord(method, path, errorText, failedAttempt)
+  // Kept deliberately FIRST: the job log is retained even for a green run, so
+  // the warning is the one record that survives even a lost report upload —
+  // and the only record in worker-level setup, where there is no test result.
+  console.warn(record.stderrLine)
+  if (!info) return
+  // No try/catch here on purpose (CHECK 2026-11-07 finding 1): an annotation
+  // or attachment failure propagates to the awaiting apiFetch and fails the
+  // test loudly — a replay must never succeed silently without its record.
+  info.annotations.push({ type: 'transport-reset-replayed', description: record.description })
+  await info.attach(record.attachmentName, {
+    body: record.attachmentBody,
+    contentType: 'application/json',
+  })
+}
+
 export async function apiFetch<T = unknown>(
   page: Page,
   method: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE',
   path: string,
   data?: unknown,
 ): Promise<ApiResult<T>> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  if (method !== 'GET') {
-    headers['X-Csrf-Token'] = await getCsrfToken(page)
-  }
-  const res = await page.request.fetch(`${BASE_URL}${path}`, {
-    method,
-    headers,
-    data: data !== undefined ? JSON.stringify(data) : undefined,
-  })
-  const raw = await res.text()
-  let body: unknown = null
-  if (raw) {
+  // Transport-level retry, for exactly one failure class: the peer reset the
+  // TCP connection before a response arrived ("socket hang up" / ECONNRESET).
+  //
+  // VERIFIED FACTS (CI run 42334402301, shard llm-conformance-plan, job
+  // 128297656734): Conformance_t3b's PUT /api/v1/agents/{id}/tools died with
+  // "socket hang up", the no-flaky gate failed the shard even though the
+  // retried attempt passed 7.3m later, and the gateway log for that window
+  // shows no panic, no error and no connection close it could have chosen
+  // (gateway_panic.log empty; the reload that ran 05:17:58→05:18:28 does NOT
+  // restart the HTTP listener — stopAndCleanupServices skips the channel
+  // manager when isReload). The job's call log has no GET/PUT start
+  // timestamps, so how long the PUT ran before the reset, and whether it rode
+  // a long-idle socket, are NOT established.
+  //
+  // SUSPECTED, NOT ESTABLISHED (hypotheses, ranked per the 2026-11-07 CHECK):
+  // (1) the config reload overlapping the in-flight PUT — a reload-backed
+  // write can be slower than the HTTP write deadline: Manager.SetupHTTPServer
+  // (pkg/channels/manager.go) sets ReadTimeout/WriteTimeout 30s while the
+  // reload wait allows up to 90s (pkg/gateway/gateway.go), so the response
+  // write can be abandoned on a live listener. See the focused gateway issue
+  // about reload-backed writes being slower than the HTTP write deadline.
+  // (2) the keep-alive idle close — SetupHTTPServer sets no IdleTimeout, so
+  // an idle keep-alive connection is closed after ~30s, and a Node-side
+  // client does not transparently replay a request that raced that close.
+  // Which mechanism (if either) fired in the incident is unverified.
+  //
+  // The replay is therefore a bounded workaround for either hypothesis, not
+  // a claim about what the server did or what other clients tolerate. Every
+  // actual replay is recorded as a test annotation + attachment
+  // (recordTransportReplay below) so a green run still shows the transport
+  // failure in the retained CI evidence.
+  //
+  // WHY ONLY GET AND PUT: GET is idempotent. The suite's single PUT is the
+  // revision-guarded read-modify-write of PUT /api/v1/agents/{id}/tools
+  // (createMainAgent below echoes the GET's revision; HandleAgentToolsRegistry
+  // rejects a stale revision with 409) — so if the reset happened AFTER the
+  // server had actually processed the first attempt, the replay surfaces as a
+  // loud 409 that the caller's !ok check throws, never as a masked pass. POST
+  // is deliberately NOT retried: replaying a create after a lost response
+  // would duplicate the entity silently — exactly the quiet-corruption shape
+  // this suite must not paper over.
+  const attempts = method === 'GET' || method === 'PUT' ? 2 : 1
+  let lastErr: unknown
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    if (attempt > 0) {
+      await page.waitForTimeout(1_000)
+    }
     try {
-      body = JSON.parse(raw)
-    } catch {
-      body = null
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      if (method !== 'GET') {
+        headers['X-Csrf-Token'] = await getCsrfToken(page)
+      }
+      const res = await page.request.fetch(`${BASE_URL}${path}`, {
+        method,
+        headers,
+        data: data !== undefined ? JSON.stringify(data) : undefined,
+      })
+      const raw = await res.text()
+      let body: unknown = null
+      if (raw) {
+        try {
+          body = JSON.parse(raw)
+        } catch {
+          body = null
+        }
+      }
+      return { ok: res.ok(), status: res.status(), body: body as T, raw }
+    } catch (err) {
+      lastErr = err
+      const msg = err instanceof Error ? err.message : String(err)
+      if (attempt === attempts - 1 || !TRANSPORT_RESET.test(msg)) {
+        throw err
+      }
+      // A retry was actually decided on: leave the durable record before the
+      // replay, so a successful recovery still shows in the report (a failed
+      // replay is visible anyway, and the annotation rides that failure too).
+      // Awaited so a RECORDING failure fails loudly here (it must never be
+      // swapped for a quiet retry that passes without its record).
+      await recordTransportReplay(method, path, msg, attempt + 1)
     }
   }
-  return { ok: res.ok(), status: res.status(), body: body as T, raw }
+  // Unreachable: the loop either returns or throws; kept for control-flow analysis.
+  throw lastErr
 }
 
 // ── Plan / member helpers ───────────────────────────────────────────────────
@@ -226,11 +434,18 @@ export function proseCriterion(text: string): Criterion {
  * `createMainAgent` with no `builtinPolicies` override is seeded fully
  * deny-by-default, so a check would fail closed on every member regardless of
  * its command (see checkCriterion's own doc comment).
+ *
+ * The wording must be CHECKABLE from the evidence the member Judge is given:
+ * the worker's completion claim and the session transcript window
+ * (pkg/agent/judge.go::buildJudgeUserContent). It must NOT point at the task
+ * record: `task.result` is written only after a met verdict
+ * (task_run_loop.go::adjudicateRunClaim), so at judging time that record
+ * cannot yet hold the reply and a strict Judge loops on "unmet".
  */
 export function defaultMemberDoD(label: string): Criterion[] {
   return [
     proseCriterion(
-      `the assignee ran the "${label}" task to completion and left its reply on the task record`,
+      `the assignee ran the "${label}" task to completion and gave a reply, which appears in the worker's completion claim and in the session transcript window`,
     ),
   ]
 }
@@ -313,6 +528,10 @@ export async function createMainAgent(
     type: 'Main',
     name,
     soul: 'Conformance e2e worker — follow the task prompt and reply concisely with exactly what is asked.',
+    // The central live model plus its fallback: the product falls back per
+    // agent only, so an agent without fallback_models fails when the primary
+    // is unavailable.
+    ...e2eAgentModelFields('live'),
   }
   const res = await apiFetch<{ id: string; warning?: string }>(page, 'POST', '/api/v1/agents', body)
   if (!res.ok) {
@@ -507,11 +726,22 @@ export async function createPlanWithMembers(
  * LLM on the worker side. Put it on the workspace team like any other assignee.
  */
 export async function createStubCliWorkerAgent(page: Page, name: string, texts: StubCliTexts): Promise<string> {
+  // The program path is Settings-owned (r17 §3.11): save the stub as the
+  // person-chosen claude-code program BEFORE the agent body — an agent request
+  // carrying executor.cli_path is refused 400 ("cli_path cannot be set on an
+  // agent"), and without a saved path the worker is created unable to run.
+  await saveStubCliProgram(page)
   const res = await apiFetch<{ id: string; warning?: string }>(page, 'POST', '/api/v1/agents', {
     type: 'subagent_3p',
     name,
     description: 'Stub external-CLI worker for a conformance e2e: its CLI ignores the prompt and prints a fixed reply.',
-    soul: 'You are a stub. Your CLI process prints a fixed reply regardless of input.',
+    // No `soul` key: AgentCreateRequestSubagent3p has additionalProperties:false
+    // and no soul field ("There is no soul: a third-party agent has no SOUL.md"),
+    // and the create handler decodes variant bodies with
+    // json.Decoder.DisallowUnknownFields (pkg/gateway/rest_agents_create.go), so
+    // a soul key is refused 400 "unknown field \"soul\"" (#1661, CI run
+    // 42279413808). The stub's behaviour rides executor.env_overrides
+    // (stubCliExecutor) — nothing here needs a soul.
     executor: stubCliExecutor(texts),
   })
   if (!res.ok) {
@@ -569,7 +799,7 @@ export function memberSignature(members: Array<{ id: string; status: string }>):
 }
 
 /**
- * Fetch a session's message transcript (GET /api/v1/sessions/{id}). Used to
+ * Enumerate a session's complete retained paged history, including clear segments. Used to
  * inspect PlanSupervisor's adjudication session for the `plan_correct` tool
  * calls it actually committed (E.3) — the only way to observe WHICH verb and
  * WHICH real member id a correction used, since the wire contract has no
@@ -577,16 +807,11 @@ export function memberSignature(members: Array<{ id: string; status: string }>):
  * is emitted as a SessionMessage, `kind: revision_entry`/tool_call, not
  * persisted as a queryable Plan field).
  */
-export async function getSessionMessages(page: Page, sessionId: string): Promise<Array<Record<string, unknown>>> {
-  const res = await apiFetch<{ messages: Array<Record<string, unknown>> }>(
-    page,
-    'GET',
-    `/api/v1/sessions/${sessionId}`,
-  )
-  if (!res.ok) {
-    throw new Error(`getSessionMessages: GET /sessions/${sessionId} failed ${res.status}: ${res.raw}`)
-  }
-  return res.body.messages ?? []
+export async function getSessionMessages(page: Page, sessionId: string): Promise<RetainedHistoryMessage[]> {
+  // D15: bounded detail is not a whole transcript, and unavailable detail is
+  // not empty history. The shared reader validates every envelope and follows
+  // exclusive continuation across clears; malformed/error pages fail loudly.
+  return sessionMessages(page, BASE_URL, sessionId)
 }
 
 /**
@@ -625,14 +850,33 @@ export function extractPlanCorrectCalls(
  */
 export async function startFreshChatWithAgent(page: Page, agent: RegExp): Promise<void> {
   await page.goto('/')
-  // Drive /new via the slash command (the canonical replacement for the
-  // header "New Chat" button that was removed in workspace top-bar redesign).
-  const input = chatInput(page)
-  await expect(input).toBeVisible({ timeout: 15_000 })
-  await input.fill('/new')
-  await input.press('Enter')
+  // A tool approval left pending by EARLIER work on this shared gateway
+  // rehydrates on load as a modal approval dialog, and that modal blocks
+  // every click this helper makes (freshChat opens the sidebar). Release run
+  // 39098485072: Conformance_t2's worker kept running for a second after t2
+  // ended, asked to run a command with no page attached (approval
+  // 1c545776, 10-minute wait), and all four t3b attempts timed out on
+  // "Show sidebar" behind that dialog. Drain it first, exactly as
+  // subagent.spec.ts::startFreshChat and bug-regression.spec.ts do —
+  // Escape on a live approval is a server-side Deny — and record every
+  // Deny in the report so a drained approval is visible, never silent.
+  for (const dialogText of await dismissStaleDialogOverlay(page)) {
+    test.info().annotations.push({
+      type: 'approval-drained',
+      description:
+        'Stale approval dialog dismissed via Escape (server-side Deny) before ' +
+        `starting this test's chat: ${dialogText}`,
+    })
+  }
+  // Fresh chat via freshChat (fixtures/session-setup.ts) — the agent row's
+  // "New chat with <Agent>" button this used to click is REMOVED (founder
+  // decision D7, DECISIONS.md squad nav-agent-row-menu-20261011: capability
+  // stays, UI access point gone). freshChat creates the session through the
+  // public REST API (POST /api/v1/sessions) and deep-links the SPA's own
+  // /sessions/<id> route; the agent row is selected once it returns, so the
+  // composer is bound to the requested agent with an empty thread here.
+  await freshChat(page, agent)
   await expect(assistantMessages(page)).toHaveCount(0, { timeout: 15_000 })
-  await selectAgent(page, agent)
 }
 
 /**

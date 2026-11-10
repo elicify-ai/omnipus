@@ -185,9 +185,25 @@ func resolveEffectivePolicyWith(
 	// honor it identically. The override stays non-destructive: only the local
 	// g is replaced — cfg.Policies / cfg.GlobalPolicies are NOT mutated, so
 	// clearing cfg.GodMode restores the prior decision exactly.
-	if cfg.GodMode {
+	//
+	// Always-ask exception (channels FR-036, T-10, founder Q22 B): a tool in
+	// AlwaysAskTools never receives the floor. Its stored layers are merged
+	// deny-first exactly as below, and an allow verdict then becomes ask, so
+	// the verdict is always ask or deny and a stored deny survives God Mode.
+	alwaysAsk := IsAlwaysAsk(toolName)
+	if cfg.GodMode && !alwaysAsk {
 		g = config.ToolPolicyAllow
 	}
+	verdict := mergeStoredPolicyLayers(toolName, g, a)
+	if alwaysAsk && verdict == config.ToolPolicyAllow {
+		return config.ToolPolicyAsk
+	}
+	return verdict
+}
+
+// mergeStoredPolicyLayers is the strictest-wins global x agent merge
+// (deny > ask > allow) behind resolveEffectivePolicyWith.
+func mergeStoredPolicyLayers(toolName string, g, a config.ToolPolicy) config.ToolPolicy {
 	switch {
 	case g == "" && a == "":
 		// Structurally impossible once boot/write-time coverage validation is
@@ -218,7 +234,7 @@ func resolveEffectivePolicyWith(
 // tools. It deliberately does NOT apply the scope gate — it is the bare
 // global×agent merge. Callers that need the FULL per-tool verdict (scope +
 // merge) must use EffectiveToolPolicy. Callers that need only the merge
-// (e.g. repair.go H3) use this.
+// use this.
 //
 // A nil cfg has no policy maps to resolve from at all, so it fails closed to
 // "deny" (logged at Error) rather than the historical hardcoded "allow" —
@@ -232,6 +248,28 @@ func ResolveEffectivePolicy(cfg *ToolPolicyCfg, toolName string) string {
 	agentWildcards := buildWildcardIndex(cfg.Policies)
 	globalWildcards := buildWildcardIndex(cfg.GlobalPolicies)
 	return string(resolveEffectivePolicyWith(cfg, toolName, agentWildcards, globalWildcards))
+}
+
+// ResolveEffectivePolicyIfCovered is ResolveEffectivePolicy for callers that
+// must distinguish "resolved to a verdict" from "no coverage". When neither the
+// global nor the agent layer has an exact or wildcard entry for toolName (and
+// god mode is off), ResolveEffectivePolicy would fail closed to "deny" and log
+// an Error; this returns ("", false) instead and logs nothing, so a pre-flight
+// check can leave an uncovered tool to the runtime filter rather than invent a
+// refusal from missing data. Whenever any layer covers the tool, the verdict is
+// exactly ResolveEffectivePolicy's (wildcards and god mode included).
+func ResolveEffectivePolicyIfCovered(cfg *ToolPolicyCfg, toolName string) (string, bool) {
+	if cfg == nil {
+		return "", false
+	}
+	// God Mode covers every tool except an always-ask one, which never
+	// receives the floor (FR-036) and so is covered only by a stored layer.
+	if (!cfg.GodMode || IsAlwaysAsk(toolName)) &&
+		resolveFromMap(toolName, cfg.GlobalPolicies, buildWildcardIndex(cfg.GlobalPolicies)) == "" &&
+		resolveFromMap(toolName, cfg.Policies, buildWildcardIndex(cfg.Policies)) == "" {
+		return "", false
+	}
+	return ResolveEffectivePolicy(cfg, toolName), true
 }
 
 // effectiveToolPolicyWith is the unified single-tool resolver: it produces the

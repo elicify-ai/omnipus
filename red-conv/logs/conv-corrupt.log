@@ -1,0 +1,11 @@
+=== RUN   TestSessionCoreConv_CorruptSavedChatSurfacesVisibleFailureAndRetainsSource
+2026/10/09 09:07:00 ERROR unified_store: load meta cache: session unreadable after retry — excluded until restart dir=chat-corrupt-1 error="unified_store: parse meta.json in \"/var/folders/rw/h_fqz_990kj3pnxsl9qf1v9w0000gn/T/TestSessionCoreConv_CorruptSavedChatSurfacesVisibleFailureAndRet903812031/001/sessions/chat-corrupt-1\": invalid character 'n' looking for beginning of object key string"
+    sessioncore_conv_behaviour_test.go:176: 
+        	Error Trace:	/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/session-core-red-conv-20261009/pkg/session/sessioncore_conv_behaviour_test.go:176
+        	Error:      	An error is expected but got nil.
+        	Test:       	TestSessionCoreConv_CorruptSavedChatSurfacesVisibleFailureAndRetainsSource
+        	Messages:   	CONV Failure: an unreadable saved chat must surface a visible cutover error, not be skipped-with-success
+--- FAIL: TestSessionCoreConv_CorruptSavedChatSurfacesVisibleFailureAndRetainsSource (0.01s)
+FAIL
+FAIL	github.com/elicify-ai/omnipus/pkg/session	3.416s
+FAIL

@@ -22,6 +22,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { act } from 'react'
 import { useChatStore, makeBucketMessages } from './chat'
 import { useSessionStore } from './session'
+import { emptyHistoryFixture } from '../../tests/chat-history-paging/empty-history'
 
 const ACTIVE_SID = 'unknown-target-active-session'
 const UNKNOWN_SID = 'unknown-target-unknown-session-xyz'
@@ -68,6 +69,7 @@ describe('chat.unknown-target — T1.14: done for unknown targetSid force-clears
       useChatStore.setState(() => ({
         sessionsById: {
           [ACTIVE_SID]: {
+            ...emptyHistoryFixture(),
             ...makeBucketMessages([spinnerMsg]),
             toolCalls: {},
             toolCallOrder: [],
@@ -127,6 +129,7 @@ describe('chat.unknown-target — T1.14: done for unknown targetSid force-clears
       useChatStore.setState(() => ({
         sessionsById: {
           [ACTIVE_SID]: {
+            ...emptyHistoryFixture(),
             ...makeBucketMessages([liveMsg]),
             toolCalls: {},
             toolCallOrder: [],

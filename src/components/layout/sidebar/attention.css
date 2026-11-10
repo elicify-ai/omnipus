@@ -1,0 +1,42 @@
+/* Attention cue motion. Color is the warning token (#EAB308). The data
+   attributes on the elements are the test oracle; this animation is the
+   visible loop. Reduced motion removes the loop and leaves the cue in place. */
+
+@keyframes sidebar-attention-dot {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.18);
+  }
+}
+
+@keyframes sidebar-attention-halo {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.18);
+  }
+}
+
+.sidebar-attention-dot {
+  animation: sidebar-attention-dot 1.6s ease-in-out infinite;
+}
+
+.sidebar-attention-halo {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-warning) 55%, transparent);
+}
+
+.sidebar-attention-halo-loop {
+  animation: sidebar-attention-halo 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-attention-dot,
+  .sidebar-attention-halo-loop {
+    animation: none;
+  }
+}

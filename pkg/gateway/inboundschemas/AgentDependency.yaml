@@ -1,0 +1,36 @@
+title: AgentDependency
+description: >
+  One thing that depends on an agent in one workspace (spec
+  omnipus-system-agent K50, §6.19; FR-243). Landing 1 kinds: a channel
+  connection whose main agent it is, a mailbox, a private secret, a room;
+  `people_row` is filled from landing 2 (WU-14).
+type: object
+required:
+  - workspace_id
+  - kind
+  - id
+  - label
+additionalProperties: false
+properties:
+  workspace_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+  kind:
+    type: string
+    enum:
+      - channel_main_agent
+      - people_row
+      - mailbox
+      - private_secret
+      - room
+  id:
+    type: string
+    minLength: 1
+    maxLength: 256
+    description: Id of the dependent item (connection id, mailbox id, reference name, room id).
+  label:
+    type: string
+    minLength: 1
+    maxLength: 200
+    description: Display label.

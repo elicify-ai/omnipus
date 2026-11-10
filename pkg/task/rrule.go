@@ -11,14 +11,12 @@ package task
 //   - Next-fire computation for the scheduler (§"Scheduler").
 //   - The bounded validation-support expansion + liveness probe used by
 //     ValidateTrigger's RRULE path (§"Validation").
-//   - The every_ms forward-only display projection (FR-008a).
 //   - Regularity classification + O(1) arithmetic derivation for
 //     provably-regular rules (no BY* modifiers), required so a plain
 //     FREQ=MINUTELY rule renders complete buckets without iteration.
 //
-// It does NOT do cron. Legacy `cron_expr` triggers are expanded by the REST
-// endpoint directly via gronx (server-zone iteration, D8/Timezone Semantics
-// §2) — this file has no cron dependency at all.
+// It does NOT do cron: the legacy cron_expr and every triggers were removed
+// (session-core DEL-19), so a task's recurrence is RRULE-only.
 //
 // DST policy (Timezone Semantics §3, normative): occurrences are wall-clock
 // in the rule's IANA tz.
@@ -903,42 +901,4 @@ func HasOccurrenceWithinYears(rruleBody string, dtstartMs int64, tz string, year
 	}
 	deadline := opt.Dtstart.AddDate(years, 0, 0)
 	return !first.After(deadline), nil
-}
-
-// ---------------------------------------------------------------------------
-// every_ms display projection (FR-008a)
-// ---------------------------------------------------------------------------
-
-// ProjectEveryMs implements the FR-008a forward-only projection for legacy
-// `every` triggers, which have no stored anchor (computeNextRun is
-// `now + interval`, drift-anchored, pkg/cron/service.go): the first returned
-// occurrence is the live job's NextRunAtMS (firstMs, supplied by the
-// caller); subsequent occurrences are first + k*everyMs. Occurrences before
-// fromMs are omitted (the caller passes max(nowMs, rangeFromMs) as fromMs to
-// satisfy "no backward extrapolation"); capped at cap with truncated=true.
-func ProjectEveryMs(firstMs, everyMs, fromMs, toMs int64, limit int) ([]int64, bool) {
-	if everyMs <= 0 || fromMs >= toMs || limit <= 0 {
-		return nil, false
-	}
-	k := int64(0)
-	if firstMs < fromMs {
-		k = (fromMs - firstMs + everyMs - 1) / everyMs
-	}
-	var out []int64
-	truncated := false
-	for {
-		ms := firstMs + k*everyMs
-		if ms >= toMs {
-			break
-		}
-		if ms >= fromMs {
-			out = append(out, ms)
-			if len(out) >= limit {
-				truncated = true
-				break
-			}
-		}
-		k++
-	}
-	return out, truncated
 }

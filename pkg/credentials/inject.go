@@ -62,13 +62,14 @@ const (
 // mirroring rest.go's describeCredentialResolutionError:
 //   - Err is *NotFoundError: the ref genuinely is not in the vault. Scoped,
 //     degradable — this ONE entry is unusable, nothing else is affected.
-//   - Err is anything else (ErrWrongKey, a corrupted-entry decrypt failure,
-//     an unreadable credentials.json, an os.Setenv failure, …): store-wide
-//     or environment-wide. MUST be treated the same as the bare
-//     ErrStoreLocked short-circuit below — fatal, not degraded. Gateway.go's
-//     reportInjectionErrors is the canonical caller; see its doc comment for
-//     the incident (2026-08-15) where degrading on *CredentialRefError alone
-//     let a wrong master key boot as if only one provider were broken.
+//   - Err is *EntryAuthError or *EntryEncodingError: defer the scope decision
+//     until Store.HealthCheck independently proves readability with another
+//     decryptable entry. A known damaged entry may then degrade its consumer;
+//     a nonempty store with no readable witness remains a whole-store failure.
+//   - Anything else (an unreadable credentials.json, an os.Setenv failure, …)
+//     stays fatal, like the bare ErrStoreLocked short-circuit below. Gateway's
+//     reportInjectionErrors is the canonical caller; degrading solely because
+//     an error carries a ref would let a wrong master key boot as a local fault.
 type CredentialRefError struct {
 	// Scope is ScopeProvider or ScopeMailbox.
 	Scope string
@@ -258,11 +259,20 @@ func nonChannelRefsFor(cfg *config.Config) []credentialRef {
 	}
 	add(cfg.Voice.ElevenLabsAPIKeyRef, ScopeVoice, "elevenlabs")
 	add(cfg.Voice.GroqAPIKeyRef, ScopeVoice, "groq")
-	add(cfg.Tools.Web.Brave.APIKeyRef, ScopeWebSearch, "brave")
-	add(cfg.Tools.Web.Tavily.APIKeyRef, ScopeWebSearch, "tavily")
-	add(cfg.Tools.Web.Perplexity.APIKeyRef, ScopeWebSearch, "perplexity")
-	add(cfg.Tools.Web.GLMSearch.APIKeyRef, ScopeWebSearch, "glm_search")
-	add(cfg.Tools.Web.BaiduSearch.APIKeyRef, ScopeWebSearch, "baidu_search")
+	// Keyed web-search providers derive from the single catalogue (ADR-096
+	// D15/FR-035) — the enumeration feeding InjectFromConfig (os.Setenv) and
+	// ResolveAll (the redaction bundle) covers every keyed catalogue entry
+	// with no hand-list edit. Without a catalogue entry a provider's key
+	// would sit in the vault, the process environment would never see it,
+	// and search would silently degrade — exactly the Tavily defect this
+	// function's shape fixed. Owner attribution uses the config section
+	// name (glm_search / baidu_search), the pre-catalogue convention.
+	for _, def := range config.SearchProviderCatalogue {
+		if !def.Keyed || def.APIKeyRef == nil {
+			continue
+		}
+		add(def.APIKeyRef(&cfg.Tools.Web), ScopeWebSearch, def.Section)
+	}
 	// Skill marketplace credential refs (FR-10.1 unified list): each
 	// marketplace entry may carry a ClawHub AuthTokenRef and/or a GitHub
 	// TokenRef, both resolved via the credential store (SEC-23).
@@ -276,6 +286,14 @@ func nonChannelRefsFor(cfg *config.Config) []credentialRef {
 	}
 	return out
 }
+
+// ResolveAllReadHookForTest is a test-only hook point (channels-spec-r8,
+// R8-MIN-001): when non-nil, ResolveAll calls it with the non-secret reference
+// name right after each successful store read and before the next reference is
+// read, so a test can pause a reload's bundle capture between two reads. It is
+// nil in normal execution; tests that set it must restore it in cleanup. The
+// callback never receives the secret value.
+var ResolveAllReadHookForTest func(ref string)
 
 // ResolveAll returns every resolved {ref → plaintext} pair for all provider and
 // channel credential references in cfg, WITHOUT calling os.Setenv. It is the
@@ -307,6 +325,9 @@ func ResolveAll(cfg *config.Config, store *Store) (map[string]string, []error) {
 			return
 		}
 		result[ref] = value
+		if hook := ResolveAllReadHookForTest; hook != nil {
+			hook(ref)
+		}
 	}
 
 	// Provider API keys.

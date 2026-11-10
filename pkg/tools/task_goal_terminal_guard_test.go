@@ -27,7 +27,14 @@
 // writes task.Patch.Status — the one operation through which a task can reach
 // a terminal status. That set must match the table below EXACTLY. Adding a new
 // terminal writer therefore fails this test until its author either wires the
-// hook or writes down why the writer cannot reach a terminal status.
+// hook or writes down why the writer cannot reach a terminal status. One
+// writer is deliberately exempt WHILE reaching a terminal status:
+// writeTaskStoppedByPerson, the one person-Stop writer (task cancel through
+// PlanEngine.cancelMemberLocked, and a session Stop of a never-started queued
+// task launch, #1557) — MAJ-003/D8.10
+// (ADR-20260928-sub-agent-control-plane) keep the goal active and the shared
+// mapper tools.GoalStateForTerminalTask refuses that disposition; its row
+// below carries that why, and no other writer may join it without its own.
 package tools
 
 import (
@@ -57,8 +64,10 @@ var goalHookNames = map[string]bool{
 type statusWriter struct {
 	// where is "<pkg dir>.<function>", the key the scan produces.
 	where string
-	// mustHook is true when this writer can move a task to done/failed and
-	// must therefore end the task's paired goal record.
+	// mustHook is true when this writer's terminal disposition is
+	// goal-terminal per tools.GoalStateForTerminalTask (done, or a failure
+	// that is not a resumable user Stop) and must therefore end the task's
+	// paired goal record.
 	mustHook bool
 	// why records the reason a writer is exempt from the hook. Required when
 	// mustHook is false — an exemption with no stated reason is how the
@@ -72,11 +81,33 @@ var knownStatusWriters = []statusWriter{
 	// ---- the terminal writers: each must end the paired goal record ------
 	{where: "pkg/agent.TaskExecutor.completeTaskWithResult", mustHook: true},
 	{where: "pkg/agent.TaskExecutor.failTask", mustHook: true},
-	{where: "pkg/agent.PlanEngine.cancelMemberLocked", mustHook: true},
+	{where: "pkg/agent.TaskExecutor.failTaskBeforeDispatch", mustHook: true},
 	{where: "pkg/gateway.taskPatch.buildPatch", mustHook: true},
-	{where: "pkg/gateway.restAPI.reconcileStuckTasks", mustHook: true},
+	// Boot reconcile of dead in_progress claims (moved from the gateway's
+	// restAPI.reconcileStuckTasks, which now delegates here; 6b review I2).
+	{where: "pkg/agent.recoverInterruptedTask", mustHook: true},
 	{where: "pkg/tools.taskUpdateToolExecute.buildPatchFields", mustHook: true},
-	{where: "pkg/sysagent/tools.taskUpdateToolExecute.buildPatch", mustHook: true},
+	// 6b U2b: a held fire whose agent is gone ends the task Failed
+	// (GOAL-FR-015/027/028), exactly like failTask.
+	{where: "pkg/agent.TaskExecutor.saveUnstartedFireFailed", mustHook: true},
+
+	// ---- the one classified exemption that REACHES a terminal status -----
+	// MAJ-003/D8.10 (sub-agent control-plane ADR): a user Stop is not an
+	// adjudication. This row must stay CLASSIFIED (the oracle is set
+	// equality) and must never drift back to mustHook without an ADR
+	// reversal; no other writer may join this exemption without its own
+	// written why.
+	{
+		// Shared by PlanEngine.cancelMemberLocked (task/plan Stop) and
+		// AgentLoop.closeStoppedQueuedTaskLaunch (#1557), which both call it.
+		where: "pkg/agent.writeTaskStoppedByPerson",
+		why: "writes failed(stopped_by_user) — a user Stop, which MAJ-003/D8.10 keep " +
+			"goal-non-terminal: the paired record stays ACTIVE with its original id and " +
+			"session binding so plan restart can reuse it (T17/T20). The policy point is " +
+			"the shared mapper tools.GoalStateForTerminalTask, which refuses that " +
+			"disposition, so no goal-end belongs here; the behavioural pins are " +
+			"pkg/agent/task_goal_terminal_test.go's stop row and the mapper's own test.",
+	},
 
 	// ---- non-terminal writers: each states why it cannot reach done/failed --
 	{
@@ -87,10 +118,12 @@ var knownStatusWriters = []statusWriter{
 			"attempts-exhausted branch delegates the terminal write to completeTaskWithResult, which " +
 			"carries the hook.",
 	},
-	{
-		where: "pkg/agent.PlanEngine.promoteInboxMembers",
-		why:   "writes task.StatusNext only — inbox -> next promotion.",
-	},
+	// pkg/agent.PlanEngine.promoteInboxMembers had a row here while it built a
+	// Patch itself. It now calls task.Store.PromoteInboxIfReleased, which does
+	// the inbox -> next write inside pkg/task (a package this scanner skips by
+	// design, see the pkgDir == "pkg/task" case below), so the function no
+	// longer writes task.Patch.Status and the row was removed per this
+	// guard's own instruction.
 	{
 		where: "pkg/gateway.restAPI.detachMemberOnPlanDelete",
 		why: "writes task.StatusInbox only — detaching a member from a deleted plan. " +

@@ -7,6 +7,7 @@ package systools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -47,7 +48,7 @@ func (t *ConfigGetTool) Execute(_ context.Context, args map[string]any) *tools.T
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "key is required", ""))
 	}
 	// Block reading sensitive keys by name.
-	if isSensitiveConfigName(key) {
+	if isSensitiveConfigPath(key) {
 		return tools.ErrorResult(errorJSON("FORBIDDEN",
 			"Credentials cannot be read via config.get — they are write-only",
 			"Use list_providers to see configured providers (without keys)",
@@ -120,7 +121,7 @@ func (t *ConfigSetTool) Execute(_ context.Context, args map[string]any) *tools.T
 	if !hasValue {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "value is required", ""))
 	}
-	if isSensitiveConfigName(key) {
+	if isSensitiveConfigPath(key) {
 		return tools.ErrorResult(errorJSON("FORBIDDEN",
 			"Use configure_provider to set API keys",
 			"Credentials are stored encrypted in credentials.json, not config.json",
@@ -144,16 +145,25 @@ func (t *ConfigSetTool) Execute(_ context.Context, args map[string]any) *tools.T
 	// window the lock exists to close: an instance created between the two
 	// reads could flip the deny-list verdict. Both checks now read the SAME
 	// locked cfg.
-	var denyErr, schemaErr, setErr, landErr error
+	var denyErr, schemaErr, setErr, landErr, inputErr error
 	var prevValue, storedValue any
 	var normalised []string
-	err := t.deps.WithConfig(func(cfg *config.Config) error {
+	err := t.deps.withGenericConfigWrite(key, value, func(cfg *config.Config) error {
 		// Validate that the key refers to a known, non-security-critical
 		// config path to prevent arbitrary injection and privilege escalation.
+		// #904 D15/D21: the global tool-iteration limit and its env-import
+		// marker are Settings → Performance only. Key-level refusal first,
+		// in any case spelling, so the caller is told where the setting
+		// lives; the section-write case is caught after dotSet below.
+		if err := validatePerformanceOnlyConfigKey(cfg, key); err != nil {
+			denyErr = err
+			return fmt.Errorf("INVALID_KEY: %w", err)
+		}
 		if err := validateConfigKey(cfg, key); err != nil {
 			denyErr = err
 			return fmt.Errorf("INVALID_KEY: %w", err)
 		}
+		protectedBefore := snapshotPerformanceOnlyConfig(cfg)
 		// Truth gate, before any mutation: does this key name a place a write
 		// can actually land? See validateConfigKeyLands — without it, a key that
 		// json.Unmarshal silently drops was reported as a successful write.
@@ -169,10 +179,24 @@ func (t *ConfigSetTool) Execute(_ context.Context, args map[string]any) *tools.T
 		// call now: validateConfigKeyLands just proved key lands, so the
 		// walk below addresses the same field dotSet is about to write.
 		value = coerceValueToFieldKind(resolveConfigFieldKind(cfg, key), value)
+		// Effort values are checked after coercion and before the write
+		// (FR-060): a refused value saves nothing of this write.
+		if msg := checkConfigEffortValues(key, value); msg != "" {
+			inputErr = errors.New(msg)
+			return fmt.Errorf("INVALID_INPUT: %w", inputErr)
+		}
 		prevValue, _ = dotGet(cfg, key)
 		if err := dotSet(cfg, key, value); err != nil {
 			setErr = err
 			return fmt.Errorf("SET_FAILED: %w", err)
+		}
+		// A section write ("agents.defaults" with an object value, in any
+		// key spelling) merges into the live struct and could reach the
+		// protected fields without naming them in key. Refuse — and roll
+		// back via WithConfig — if it changed either one.
+		if err := checkPerformanceOnlyConfigUnchanged(key, protectedBefore, cfg); err != nil {
+			denyErr = err
+			return fmt.Errorf("INVALID_KEY: %w", err)
 		}
 		// Truth gate, after the mutation. The schema walk above is a static
 		// check against the config TYPE; this one reads the live config back and
@@ -187,6 +211,10 @@ func (t *ConfigSetTool) Execute(_ context.Context, args map[string]any) *tools.T
 	if denyErr != nil {
 		return tools.ErrorResult(errorJSON("INVALID_KEY", denyErr.Error(),
 			"Use get_config to inspect available config keys"))
+	}
+	if inputErr != nil {
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", inputErr.Error(),
+			"Nothing was changed. Send each reasoning_effort as a string of at most 32 characters"))
 	}
 	if schemaErr != nil {
 		return tools.ErrorResult(errorJSON("INVALID_KEY", schemaErr.Error(),
@@ -587,6 +615,17 @@ var blockedConfigKeys = []blockedConfigKey{
 			"workspace its channel is bound to cannot explain a refused send, and the binding is " +
 			"enforcement configuration rather than a secret. The write stays blocked",
 	},
+	{
+		Key: "channels.*.outbound",
+		Reason: "it is the operator's decision whether the agent bound to this channel may start " +
+			"messages and to whom — changing it would let an agent grant itself or another agent new " +
+			"recipients without the operator's approval — change it in Connectors > Configure " +
+			"(\"Starting messages\"), with PUT /api/v1/channels/{id}/outbound, or, for Omnipus, " +
+			"with set_channel_outbound, which always asks for approval",
+		ReadOKReason: "the posting list is enforcement configuration, not credential material — an " +
+			"agent must be able to see which targets a channel may start messages to (list_channels " +
+			"shows the same list), as with the ownership record above. The write stays blocked",
+	},
 
 	// ---- security: the trust anchor, and one reserved sibling ----
 	//
@@ -850,6 +889,58 @@ func validateConfigKey(cfg *config.Config, key string) error {
 	return fmt.Errorf("unknown config key %q — only known sections may be set via this tool", key)
 }
 
+// performanceOnlyConfigReason is the refusal text for the #904 global
+// tool-iteration limit and its env-import marker (spec D8/D15, D21).
+const performanceOnlyConfigReason = "the global tool-iteration limit (max tool calls per turn) is changed " +
+	"only in Settings → Performance, which asks for the admin's password and confirms any agents it lowers — " +
+	"to limit one agent, use update_agent's max_tool_iterations instead"
+
+// performanceOnlyConfigKeys are refused by set_config at or under the key.
+// They are NOT in blockedConfigKeys: that table also refuses every ancestor
+// key, which would make all of agents.defaults (default_model,
+// default_agent_id, …) unwritable. A section write is instead checked by
+// value, after the merge (checkPerformanceOnlyConfigUnchanged). Reads stay
+// open — the limit is not secret.
+var performanceOnlyConfigKeys = []string{
+	string(config.AgentsDefaultsMaxToolIterations),
+	string(config.AgentsDefaultsMaxToolIterationsEnvImported),
+}
+
+// validatePerformanceOnlyConfigKey refuses a key at or under a
+// performance-only key, in any case spelling.
+func validatePerformanceOnlyConfigKey(cfg *config.Config, key string) error {
+	for _, k := range performanceOnlyConfigKeys {
+		if configKeyCovers(cfg, key, k) {
+			return fmt.Errorf("config key %q is not writable via this tool: %s", key, performanceOnlyConfigReason)
+		}
+	}
+	return nil
+}
+
+// performanceOnlyConfig is the value of the performance-only fields.
+type performanceOnlyConfig struct {
+	maxToolIterations int
+	envImported       bool
+}
+
+func snapshotPerformanceOnlyConfig(cfg *config.Config) performanceOnlyConfig {
+	return performanceOnlyConfig{
+		maxToolIterations: cfg.Agents.Defaults.MaxToolIterations,
+		envImported:       cfg.Agents.Defaults.MaxToolIterationsEnvImported,
+	}
+}
+
+// checkPerformanceOnlyConfigUnchanged refuses a write that changed a
+// performance-only field through an ancestor key.
+func checkPerformanceOnlyConfigUnchanged(key string, before performanceOnlyConfig, cfg *config.Config) error {
+	if snapshotPerformanceOnlyConfig(cfg) == before {
+		return nil
+	}
+	return fmt.Errorf("config key %q is not writable via this tool with this value: it would change %s — %s; "+
+		"leave max_tool_iterations out of the object",
+		key, config.AgentsDefaultsMaxToolIterations, performanceOnlyConfigReason)
+}
+
 // validateConfigReadKey returns an error if key is AT or UNDER a key the table
 // marks unreadable (ReadReason). An ANCESTOR read is not refused here — it is
 // served with the blocked subtrees redacted (redactConfigValue), because
@@ -934,7 +1025,7 @@ func redactConfigValue(path string, value any) any {
 			if path != "" {
 				childPath = path + "." + name
 			}
-			if isSensitiveConfigName(name) || configReadIsBlocked(childPath) {
+			if (isSensitiveConfigName(name) && !isNonSecretConfigPath(childPath)) || configReadIsBlocked(childPath) {
 				out[name] = redactedConfigValue
 				continue
 			}

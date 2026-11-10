@@ -82,9 +82,13 @@ func TestNewAgentInstanceWiresDocumentRuntimeForAllNativeAgents(t *testing.T) {
 func TestNewAgentLoopDocumentSkillPublishesProvisionedRuntime(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv(config.EnvHome, home)
+	registryFolder := filepath.Join(home, "skills", "elicify-docx")
+	if err := os.MkdirAll(registryFolder, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	cfg := config.DefaultConfig()
 	cfg.Agents.List = []config.AgentConfig{
-		{ID: "mia", Name: "Mia", Type: config.AgentTypeCore, Default: true},
+		{ID: "mia", Name: "Mia", Type: config.AgentTypeCore},
 		{ID: "worker", Name: "General Purpose", Type: config.AgentTypeWorker},
 	}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
@@ -103,15 +107,18 @@ func TestNewAgentLoopDocumentSkillPublishesProvisionedRuntime(t *testing.T) {
 			t.Fatalf("agent %q Skill has type %T", id, skill)
 		}
 		registered.SetResolver(func(context.Context, string) tools.SkillLoadOutcome {
-			return tools.SkillLoadOutcome{Status: tools.SkillLoadLoaded, Content: "document instructions"}
+			return tools.SkillLoadOutcome{Status: tools.SkillLoadLoaded, Content: "document instructions", CanonicalSlug: "elicify-docx", Folder: registryFolder}
 		}, func(context.Context, string) bool { return true }, nil)
 		result := skill.Execute(tools.WithAgentID(context.Background(), id), map[string]any{"name": "elicify-docx"})
 		if result.IsError {
 			t.Fatalf("agent %q document skill load failed: %s", id, result.ForLLM)
 		}
 		layout := agent.DocumentRuntime
-		if layout == nil || !strings.Contains(result.ForLLM, filepath.Join(layout.Skills, "elicify-docx")) || !strings.Contains(result.ForLLM, strings.Join(documentruntime.ProbeArgv(*layout), " ")) {
-			t.Fatalf("agent %q skill omitted provisioned runtime: %s", id, result.ForLLM)
+		if layout == nil || !strings.Contains(result.ForLLM, registryFolder) || !strings.Contains(result.ForLLM, strings.Join(documentruntime.ProbeArgv(*layout), " ")) {
+			t.Fatalf("agent %q skill omitted registry folder or provisioned runtime: %s", id, result.ForLLM)
+		}
+		if strings.Contains(result.ForLLM, filepath.Join(layout.Prefix, "skills")) {
+			t.Fatalf("agent %q guidance reintroduced the retired toolchain copy: %s", id, result.ForLLM)
 		}
 	}
 }

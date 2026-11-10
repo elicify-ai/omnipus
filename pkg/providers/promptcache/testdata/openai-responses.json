@@ -1,0 +1,8 @@
+{
+  "input_tokens": 1000,
+  "output_tokens": 10,
+  "input_tokens_details": {
+    "cached_tokens": 700,
+    "cache_write_tokens": 200
+  }
+}

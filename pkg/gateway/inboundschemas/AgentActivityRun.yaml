@@ -1,0 +1,70 @@
+type: object
+title: AgentActivityRun
+description: >
+  One task or scheduler run shown as a row in the Activity panel for an agent
+  (session-core FR-033). It exists even when the current chat spawned nothing:
+  the agent is either the run's assignee or one of its captured recipients
+  (FR-019). Only OPEN runs are listed. Provider-run token availability is not
+  carried (descoped); a client must treat a missing figure as unknown, never zero.
+required:
+  - run_id
+  - task_id
+  - task_title
+  - kind
+  - mode
+  - state
+  - role
+  - agent_id
+  - started_at
+additionalProperties: false
+properties:
+  run_id:
+    type: string
+    minLength: 1
+    description: The TaskRun id.
+  task_id:
+    type: string
+    minLength: 1
+    description: The task this run belongs to.
+  task_title:
+    type: string
+    description: The task title, for the row label.
+  kind:
+    type: string
+    enum:
+      - task
+      - scheduled
+    description: How the run started - a person or agent starting the task (`task`), or a scheduled fire (`scheduled`).
+  mode:
+    type: string
+    enum:
+      - main
+      - isolated
+    description: >
+      `main` when the run is a fresh child of the assignee's main (FR-017) - the
+      client shows it as the one MAIN row for that run, not as a task row plus a
+      child row; `isolated` for an independent chat.
+  state:
+    type: string
+    enum:
+      - running
+      - queued
+      - waiting
+    description: The run's session lifecycle - running, queued for a slot, or waiting on input.
+  role:
+    type: string
+    enum:
+      - assignee
+      - recipient
+    description: Why the agent sees this run - it is the assignee, or its main is one of the run's captured recipients.
+  agent_id:
+    type: string
+    minLength: 1
+    description: The task's assignee agent.
+  session_id:
+    type: string
+    description: The run's own session - the target of the row's Open control. Absent when the run has no session yet.
+  started_at:
+    type: string
+    format: date-time
+    description: When the run opened.

@@ -13,6 +13,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { BoardView } from './BoardView'
+import { showTaskInfo } from './tasksLayoutFixtures'
 import type { Task, Agent, Plan } from '@/lib/api'
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
@@ -79,12 +80,14 @@ const agentRay: Agent = {
   needs_model: false,
   status: 'active',
   soul: '',
-  color: '#3B82F6',
-  icon: 'MagnifyingGlass',
-  timeout_seconds: 300,
+  color: '#6E8BA8',
   max_tool_iterations: 50,
+  max_tool_iterations_source: 'global',
+  max_tool_iterations_override_ignored: false,
   // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
   memory_enabled: true,
+  figure: 'Omnipus',
+  role: 'general',
 }
 
 const plans: Plan[] = []
@@ -131,6 +134,7 @@ describe('BoardView delegation roll-up', () => {
     })
 
     renderBoard([parentWithRollup], [agentRay])
+    showTaskInfo('Parent task') // T26: delegation remains reachable in info.
 
     // The badge should be visible
     const badge = screen.getByLabelText(/1 sub-agent running/i)
@@ -141,7 +145,7 @@ describe('BoardView delegation roll-up', () => {
     expect(avatar).toBeDefined()
   })
 
-  it('renders multiple avatars in a rollup', () => {
+  it('T18 renders every delegated agent as plain text in the rollup', () => {
     const parentWithRollup = baseTask({
       rollup: [
         { agent_id: 'ray', label: 'Research', status: 'in_progress' },
@@ -149,14 +153,17 @@ describe('BoardView delegation roll-up', () => {
       ],
     })
 
-    const agentAva: Agent = { ...agentRay, id: 'ava', name: 'Ava', color: '#A855F7', icon: 'Gear' }
+    const agentAva: Agent = { ...agentRay, id: 'ava', name: 'Ava', color: '#7B7290' }
 
     renderBoard([parentWithRollup], [agentRay, agentAva])
+    showTaskInfo('Parent task')
 
-    // Two avatars should be listed in the avatar row
-    const avatarList = screen.getByRole('list', { name: /sub-agent avatars/i })
-    const items = within(avatarList).getAllByRole('listitem')
+    // Same two agents and statuses remain accessible, without avatar pills.
+    const agentList = screen.getByRole('list', { name: 'Sub-agents' })
+    const items = within(agentList).getAllByRole('listitem')
     expect(items.length).toBe(2)
+    expect(within(agentList).getByLabelText('Ray — in_progress')).toHaveTextContent('Ray')
+    expect(within(agentList).getByLabelText('Ava — next')).toHaveTextContent('Ava')
   })
 
   it('does NOT render subtask cards as top-level cards in any column', () => {

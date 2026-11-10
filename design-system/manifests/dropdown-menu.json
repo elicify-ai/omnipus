@@ -83,7 +83,8 @@
       "applicable": true,
       "file": "tests/design-system/browser.spec.ts",
       "test": "DropdownMenu [check:dropdown-menu-browser] browser",
-      "story": "MenuContract"
+      "story": "MenuContract",
+      "requiredTargets": [{ "selector": "[data-ds-trigger]", "attribute": "data-ds-trigger", "value": "true" }]
     },
     {
       "id": "dropdown-menu-pointer",

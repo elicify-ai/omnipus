@@ -72,11 +72,16 @@ func TestRecurringSurvivesOwnerMissingSkip(t *testing.T) {
 	}
 	defer cs.Stop()
 
-	// Owner-less recurring job (no SetDefaultAgentID) — the runner-wired lane
-	// skips it because AgentID == "".
-	job, err := cs.AddJob("orphan", CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)}, "x")
+	// DEL-15: AddJobFull refuses an owner-less job, so the defensive
+	// owner-missing guard's only remaining input is a legacy/hand-edited store
+	// record — model it by clearing the owner through UpdateJob.
+	job, err := cs.AddJobFull(JobSpec{Name: "orphan", Schedule: CronSchedule{Kind: "every", EveryMS: int64Ptr(60000)}, Message: "x", AgentID: "u6-test-owner"})
 	if err != nil {
 		t.Fatalf("AddJob: %v", err)
+	}
+	job.AgentID = ""
+	if err := cs.UpdateJob(job); err != nil {
+		t.Fatalf("UpdateJob (clear owner): %v", err)
 	}
 	clk.Advance(2 * time.Minute)
 	reArm(t, cs, job.ID, clk.Now().UnixMilli()-1)
@@ -160,9 +165,11 @@ func TestBoundedStopReturnsOnTimeout(t *testing.T) {
 	cs.WaitForLane()
 }
 
-// TestTimeoutClassifiedAsTimeoutStatus verifies a context.DeadlineExceeded run
-// is recorded with Status "timeout" (not "error"), so the contract enum is live.
-func TestTimeoutClassifiedAsTimeoutStatus(t *testing.T) {
+// TestDeadlineErrorClassifiedAsErrorNotTimeout pins issue #1306: a scheduled
+// run has no deadline, so a context.DeadlineExceeded reaching the lane can
+// only be a provider request timeout. It is an ordinary "error" run — the
+// "timeout" status (deadline aborted) is never written any more.
+func TestDeadlineErrorClassifiedAsErrorNotTimeout(t *testing.T) {
 	clk := newFakeClock(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
 	cs, _ := newAutonomyService(t, clk)
 	runner := &recordingRunner{ctxHook: func(ctx context.Context, job *CronJob) (string, error) {
@@ -178,14 +185,14 @@ func TestTimeoutClassifiedAsTimeoutStatus(t *testing.T) {
 	clk.Advance(2 * time.Minute)
 
 	status, _, err := cs.RunNow(job.ID)
-	if status != "timeout" {
-		t.Fatalf("RunNow status = %q, want timeout", status)
+	if status != "error" {
+		t.Fatalf("RunNow status = %q, want error (no deadline-aborted timeout status since #1306)", status)
 	}
 	if err == nil {
-		t.Fatal("expected a non-nil error for a timed-out run")
+		t.Fatal("expected a non-nil error for a failed run")
 	}
-	if st := jobState(t, cs, job.ID); st.LastStatus != "timeout" {
-		t.Fatalf("LastStatus = %q, want timeout", st.LastStatus)
+	if st := jobState(t, cs, job.ID); st.LastStatus != "error" {
+		t.Fatalf("LastStatus = %q, want error", st.LastStatus)
 	}
 }
 

@@ -28,6 +28,9 @@ required:
   - text
 additionalProperties: false
 properties:
+  history_origin:
+    $ref: './HistoryEntryOrigin.yaml'
+    x-go-type: HistoryEntryOrigin
   type:
     type: string
     const: browser_handover_notice

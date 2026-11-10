@@ -73,10 +73,10 @@ func ensureBuiltinRosterPresent(home string, w storedWorkspace, cfg *config.Conf
 // workspace's Team tab.
 //
 // Ids excluded from workspace teams by ROLE (coreagent.
-// ExcludedFromWorkspaceTeams — the Admin standalone operator, and the hidden
-// System Agents) are skipped: they are members of nothing BY DESIGN
-// (ADR-090 FR-001), so naming them here would cry wolf on every boot over
-// the designed state and drown the agents that actually need a remedy.
+// ExcludedFromWorkspaceTeams — the hidden System Agents) are skipped: they
+// are members of nothing BY DESIGN (ADR-090 FR-001), so naming them here
+// would cry wolf on every boot over the designed state and drown the agents
+// that actually need a remedy.
 func logWorkspacelessAgents(home string, cfg *config.Config) {
 	if cfg == nil || len(cfg.Agents.List) == 0 {
 		return
@@ -113,6 +113,12 @@ func logWorkspacelessAgents(home string, cfg *config.Config) {
 // wire field is absent (nil) so callers preserve merge semantics (absent →
 // unchanged). The server-managed session_id (FR-010, readOnly in the contract)
 // is intentionally NOT read from client input.
+//
+// Tri-state note (ADR-hide-from-sidebar): an absent hidden_from_sidebar maps
+// to false here — the same value as an explicit false. The distinction is
+// restored by applyUpdate's rule-1 preserve step (absent => the stored flag
+// is preserved; addendum 2026-10-11), which is the only place the stored
+// value is available; this mapper must stay storage-agnostic.
 func workspaceMemberConfigsFromWire(
 	wire *map[string]gen.WorkspaceMemberConfig,
 ) (map[string]workspace.MemberConfig, bool) {
@@ -135,6 +141,9 @@ func workspaceMemberConfigsFromWire(
 			}
 			mc.Heartbeat = mh
 		}
+		if wmc.HiddenFromSidebar != nil {
+			mc.HiddenFromSidebar = *wmc.HiddenFromSidebar
+		}
 		out[agentID] = mc
 	}
 	return out, true
@@ -151,14 +160,6 @@ func workspaceMemberConfigsFromWire(
 // caller could silently add a System Agent (or a typo'd/nonexistent id) to a
 // workspace's core_team with zero validation. Returns nil for an empty
 // coreTeam (nothing to validate).
-//
-// It also rejects the Admin standalone operator (ADR-090 FR-001/FR-006: "no
-// team membership"; "Admin and hidden agents cannot be added as ordinary
-// teammates to bypass role boundaries"). Admin is a registered CORE agent —
-// Type=="core", chat-able — so the IsSystem() check above does not catch it;
-// the roster-driven coreagent.ExcludedFromWorkspaceTeams predicate does. (An
-// id reaching that predicate with it true can only be Admin here: system ids
-// were already rejected by IsSystem(), unregistered ids by the lookup.)
 //
 // This rejection stays exactly as it was even after ADR-052's Judge/verifier
 // fix made System Agents IMPLICIT members of EVERY workspace (operator
@@ -190,7 +191,7 @@ func validateCoreTeamMembers(cfg *config.Config, coreTeam []string) error {
 		}
 		if coreagent.ExcludedFromWorkspaceTeams(coreagent.CoreAgentID(id)) {
 			return fmt.Errorf(
-				"core_team member %q is the Admin standalone operator and cannot be added to a workspace team roster (ADR-090)", id)
+				"core_team member %q is a hidden System Agent and cannot be added to a workspace team roster", id)
 		}
 	}
 	return nil

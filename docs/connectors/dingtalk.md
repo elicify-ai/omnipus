@@ -17,8 +17,7 @@ DingTalk (钉钉) is Alibaba's enterprise communication platform. Omnipus connec
       "group_trigger": {
         "mention_only": false,
         "prefixes": []
-      },
-      "reasoning_channel_id": ""
+      }
     }
   }
 }
@@ -31,7 +30,6 @@ DingTalk (钉钉) is Alibaba's enterprise communication platform. Omnipus connec
 | `client_secret_ref` | string | Yes | Key name in the Omnipus credential store holding the Client Secret. |
 | `allow_from` | array | No | User ID allowlist. Empty means all users are accepted. |
 | `group_trigger` | object | No | Controls when the bot responds in group chats. `mention_only: true` restricts responses to @-mentions; `prefixes` lists trigger prefixes. |
-| `reasoning_channel_id` | string | No | Channel or chat ID where extended reasoning traces are sent (separate from the main reply). |
 
 ## Setup
 
@@ -48,3 +46,7 @@ DingTalk (钉钉) is Alibaba's enterprise communication platform. Omnipus connec
 - **Stream Mode only.** The channel uses `github.com/open-dingtalk/dingtalk-stream-sdk-go` and does not support webhook mode.
 - **Outbound.** Replies use the per-session webhook URL provided by the DingTalk platform in each incoming event; no additional send API key is needed beyond `client_id` / `client_secret_ref`.
 - **Group chats.** Use `group_trigger.mention_only: true` or `group_trigger.prefixes` to avoid the bot responding to every message in a group.
+
+## Starting messages
+
+Starting messages is not supported yet on this platform; the agent only answers. See [Starting messages](../connectors.md#starting-messages).

@@ -8,7 +8,7 @@
  * document is not). Also covers the "Catalog unavailable in the picker" BDD
  * error path: a 500 must surface as a rejection the picker can render.
  *
- * The document under test is the 190-entry fixture every other ADR-068 SPA
+ * The document under test is the 188-entry fixture every other ADR-068 SPA
  * test renders against, so a fixture that stops satisfying the generated
  * schema fails here too.
  */
@@ -68,7 +68,7 @@ describe('fetchProvidersCatalog — first fetch', () => {
     expect(String(fetchSpy.mock.calls[0][0])).toContain(CATALOG_URL)
     expect(headerOf(fetchSpy.mock.calls[0], 'If-None-Match')).toBeUndefined()
     expect(doc.schema_version).toBe('2.0.0')
-    expect(doc.providers).toHaveLength(190)
+    expect(doc.providers).toHaveLength(188)
     expect(doc.served_from).toBe('embedded')
   })
 })
@@ -93,7 +93,7 @@ describe('fetchProvidersCatalog — ETag re-validation (FR-037 / MAJ-004)', () =
     const second = await fetchProvidersCatalog()
 
     expect(second).toBe(first)
-    expect(second.providers).toHaveLength(190)
+    expect(second.providers).toHaveLength(188)
   })
 
   it('serves at most one 200 per ETag value across repeated re-validations', async () => {
@@ -140,7 +140,7 @@ describe('fetchProvidersCatalog — ETag re-validation (FR-037 / MAJ-004)', () =
 
     const doc = await fetchProvidersCatalog()
 
-    expect(doc.providers).toHaveLength(190)
+    expect(doc.providers).toHaveLength(188)
     expect(fetchSpy).toHaveBeenCalledTimes(2)
     expect(headerOf(fetchSpy.mock.calls[1], 'If-None-Match')).toBeUndefined()
   })

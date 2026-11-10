@@ -1,0 +1,36 @@
+Warning: Route file "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/t3-ci-f/src/routes/authValidation.ts" does not export a Route. This file will not be included in the route tree.
+
+If this file is not intended to be a route, you can exclude it using one of these options:
+  1. Rename the file to "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/t3-ci-f/src/routes/-authValidation.ts" (prefix with "-")
+  2. Use 'routeFileIgnorePattern' in your config to match this file
+
+Current configuration:
+  routeFileIgnorePrefix: "-"
+  routeFileIgnorePattern: undefined
+Warning: Route file "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/t3-ci-f/src/routes/authValidation.test.ts" does not export a Route. This file will not be included in the route tree.
+
+If this file is not intended to be a route, you can exclude it using one of these options:
+  1. Rename the file to "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/t3-ci-f/src/routes/-authValidation.test.ts" (prefix with "-")
+  2. Use 'routeFileIgnorePattern' in your config to match this file
+
+Current configuration:
+  routeFileIgnorePrefix: "-"
+  routeFileIgnorePattern: undefined
+src/components/agents/ToolApprovalPanel.l1.test.tsx > R6 composition: thread-tail mounts the root panel without locking or focusing the adjacent composer
+src/components/agents/ToolApprovalPanel.l1.test.tsx > FR-092 / BDD-11.2 / R6: helper approval is inline in the Omnipus root while another workspace is active
+src/components/agents/ToolApprovalPanel.l1.test.tsx > BDD-11.3 / R6: root approval never renders in helper-child, even in the matching workspace
+src/components/agents/ToolApprovalPanel.l1.test.tsx > BDD-11.3 / R6: root approval never renders in other-main, even in the matching workspace
+src/components/agents/ToolApprovalPanel.l1.test.tsx > K7 / R6: omitted root_session_id renders only in the acting session
+src/components/agents/ToolApprovalPanel.l1.test.tsx > FR-240/251 / R2/R6: receiver root displays exact server origin "'while answering Anna on tg-1'"
+src/components/agents/ToolApprovalPanel.l1.test.tsx > FR-240/251 / R2/R6: receiver root displays exact server origin "'asked by Mia'"
+src/components/agents/ToolApprovalPanel.l1.test.tsx > FR-240/251 / R2/R6: receiver root displays exact server origin "'for group Sales'"
+src/components/agents/ToolApprovalPanel.l1.test.tsx > K7: an omitted origin renders no origin element — no empty label, no guessed origin
+src/components/agents/ToolApprovalPanel.l1.test.tsx > R6 safety floor: appearance, composer Enter and Escape preserve focus/pending state and never POST
+src/components/agents/ToolApprovalPanel.l1.test.tsx > R6 / ADR-092 D4: explicit 'allow_once' resolves only through authenticated id-keyed POST, without scope
+src/components/agents/ToolApprovalPanel.l1.test.tsx > R6 / ADR-092 D4: explicit 'deny' resolves only through authenticated id-keyed POST, without scope
+src/components/agents/ToolApprovalPanel.l1.test.tsx > R6 / ADR-092 D4: explicit 'cancel' resolves only through authenticated id-keyed POST, without scope
+src/components/agents/ToolApprovalPanel.l1.test.tsx > R6 / ADR-092 D4: Always Allow sends only the deliberately chosen bash exact scope
+src/components/agents/ToolApprovalPanel.l1.test.tsx > R6 / ADR-092 D4: Always Allow sends only the deliberately chosen bash prefix scope
+src/components/agents/ToolApprovalPanel.l1.test.tsx > R6 multi-tab floor: rapid clicks cannot resolve twice; confirmed resolution rejects late duplicate frame
+src/components/agents/ToolApprovalPanel.l1.test.tsx > R6: 600-second expiry never auto-approves or copies the question-card five-minute grace timer
+exit=0

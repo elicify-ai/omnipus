@@ -156,6 +156,38 @@
             "type": "string",
             "minLength": 1
           },
+          "requiredTargets": {
+            "type": "array",
+            "minItems": 1,
+            "description": "Independently anchored drawn outcome: the manifest check's own assertion(s) on what the story must render, sourced from the manifest so it cannot move with check.story. Asserted against the rendered page in tests/design-system/browser.spec.ts.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "selector"
+              ],
+              "properties": {
+                "selector": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "attribute": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "property": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "value": {
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                }
+              }
+            }
+          },
           "applicable": {
             "type": "boolean"
           },
@@ -201,6 +233,23 @@
             "then": {
               "required": [
                 "story"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "applicable": {
+                  "const": true
+                },
+                "kind": {
+                  "const": "browser"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "requiredTargets"
               ]
             }
           }

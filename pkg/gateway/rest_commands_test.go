@@ -77,11 +77,12 @@ func parseCommandsResponse(t *testing.T, w *httptest.ResponseRecorder) []gen.Sla
 	return cmds
 }
 
-// TestHandleListCommands_Web verifies surface=web returns exactly 11 commands.
-// Post ADR-026: /skill+/use removed; /skills and /agents gained the web surface.
-// The three memory commands (remember/recall/retrospective) are all-surface
-// (agent-delivery), bringing the web count to 9; ADR-049's /goal and /loop
-// (also all-surface, agent-delivery) bring it to 11.
+// TestHandleListCommands_Web verifies surface=web returns exactly 13 commands.
+// Post ADR-026 /skill+/use removed; ADR-049 added /goal, /loop; ADR-20260928 D9
+// added /stop, /stop-redirect; U10a (2026-10-09) removed /new and /agents from
+// the table entirely (FR-031); U10b restored /clear (FR-030/031); effort
+// levels FR-023 added /effort (web + channel, client delivery), leaving 13
+// web-surface commands.
 func TestHandleListCommands_Web(t *testing.T) {
 	api := newMinimalCommandsAPI(t)
 	w := doCommandsRequest(t, api, "web", true)
@@ -91,16 +92,18 @@ func TestHandleListCommands_Web(t *testing.T) {
 	}
 
 	cmds := parseCommandsResponse(t, w)
-	if len(cmds) != 11 {
-		t.Errorf("web: expected 11 commands, got %d: %v", len(cmds), commandNames(cmds))
+	if len(cmds) != 13 {
+		t.Errorf("web: expected 13 commands, got %d: %v", len(cmds), commandNames(cmds))
 	}
 
 	wantNames := map[string]bool{
-		"new":           true,
 		"help":          true,
 		"model":         true,
+		"effort":        true, // effort levels FR-023: the composer handles /effort (client)
+		"clear":         true, // U10b (FR-030/031) restored /clear as a canonical command
 		"cancel":        true,
-		"agents":        true,
+		"stop":          true, // ADR-20260928 D9
+		"stop-redirect": true, // ADR-20260928 D9
 		"skills":        true,
 		"remember":      true,
 		"recall":        true,
@@ -119,10 +122,9 @@ func TestHandleListCommands_Web(t *testing.T) {
 	}
 }
 
-// TestHandleListCommands_CLI verifies surface=cli returns all 15 canonical commands.
-// Post ADR-026: /skill (singular) removed, so the canonical set was 10 (was 11);
-// the memory commands (remember/recall/retrospective) bring it to 13, and
-// ADR-049's /goal and /loop bring it to 15.
+// TestHandleListCommands_CLI verifies surface=cli returns all 16 canonical commands.
+// U10a (2026-10-09) removed /new and /agents from the table entirely (FR-031);
+// U10b restored /clear (FR-030/031).
 func TestHandleListCommands_CLI(t *testing.T) {
 	api := newMinimalCommandsAPI(t)
 	w := doCommandsRequest(t, api, "cli", true)
@@ -132,16 +134,17 @@ func TestHandleListCommands_CLI(t *testing.T) {
 	}
 
 	cmds := parseCommandsResponse(t, w)
-	if len(cmds) != 15 {
-		t.Errorf("cli: expected 15 commands, got %d: %v", len(cmds), commandNames(cmds))
+	if len(cmds) != 16 {
+		t.Errorf("cli: expected 16 commands, got %d: %v", len(cmds), commandNames(cmds))
 	}
 
 	allCanonical := []string{
-		"new",
 		"help",
 		"model",
+		"clear", // U10b (FR-030/031)
 		"cancel",
-		"agents",
+		"stop",          // ADR-20260928 D9
+		"stop-redirect", // ADR-20260928 D9
 		"tasks",
 		"skills",
 		"channels",
@@ -164,7 +167,9 @@ func TestHandleListCommands_CLI(t *testing.T) {
 	}
 }
 
-// TestHandleListCommands_Channel verifies surface=channel returns all 13 commands.
+// TestHandleListCommands_Channel verifies surface=channel returns 17 commands:
+// the 16 CLI commands (U10b restored /clear, FR-030/031) plus /effort, which
+// is conversation-scoped on messengers (effort levels FR-023) and not on the CLI.
 func TestHandleListCommands_Channel(t *testing.T) {
 	api := newMinimalCommandsAPI(t)
 	w := doCommandsRequest(t, api, "channel", true)
@@ -174,8 +179,11 @@ func TestHandleListCommands_Channel(t *testing.T) {
 	}
 
 	cmds := parseCommandsResponse(t, w)
-	if len(cmds) != 15 {
-		t.Errorf("channel: expected 15 commands, got %d: %v", len(cmds), commandNames(cmds))
+	if len(cmds) != 17 {
+		t.Errorf("channel: expected 17 commands, got %d: %v", len(cmds), commandNames(cmds))
+	}
+	if !slicesContainsCommand(cmds, "effort") {
+		t.Errorf("channel: missing command %q: %v", "effort", commandNames(cmds))
 	}
 }
 
@@ -190,9 +198,9 @@ func TestHandleListCommands_DefaultSurface(t *testing.T) {
 	}
 
 	cmds := parseCommandsResponse(t, w)
-	if len(cmds) != 11 {
+	if len(cmds) != 13 {
 		t.Errorf(
-			"default surface (web): expected 11 commands, got %d: %v",
+			"default surface (web): expected 13 commands, got %d: %v",
 			len(cmds),
 			commandNames(cmds),
 		)
@@ -209,9 +217,9 @@ func TestHandleListCommands_UnknownSurface(t *testing.T) {
 	}
 
 	cmds := parseCommandsResponse(t, w)
-	if len(cmds) != 11 {
+	if len(cmds) != 13 {
 		t.Errorf(
-			"unknown surface should default to web (11 cmds), got %d: %v",
+			"unknown surface should default to web (13 cmds), got %d: %v",
 			len(cmds),
 			commandNames(cmds),
 		)
@@ -260,14 +268,16 @@ func TestHandleListCommands_DeliveryFields(t *testing.T) {
 	cmds := parseCommandsResponse(t, w)
 
 	clientCmds := map[string]bool{
-		"new":    true,
-		"help":   true,
-		"model":  true,
-		"cancel": true,
-		"agents": true,
-		"skills": true,
+		"help":          true,
+		"model":         true,
+		"effort":        true, // effort levels FR-023: handled by the composer, like /model
+		"cancel":        true,
+		"stop":          true, // ADR-20260928 D9
+		"stop-redirect": true, // ADR-20260928 D9
+		"skills":        true,
 	}
 	agentCmds := map[string]bool{
+		"clear":         true, // U10b (FR-030/031): the server executes /clear
 		"remember":      true,
 		"recall":        true,
 		"retrospective": true,
@@ -336,24 +346,26 @@ func TestHandleListCommands_AliasesNotEntries(t *testing.T) {
 	}
 }
 
-// TestHandleListCommands_CancelAvailableWhileStreaming verifies the AvailableWhileStreaming field.
-func TestHandleListCommands_CancelAvailableWhileStreaming(t *testing.T) {
+// TestHandleListCommands_StopFamilyAvailableWhileStreaming verifies the
+// AvailableWhileStreaming field: exactly /cancel, /stop and /stop-redirect
+// (ADR-20260928 D9) are true on the web surface; every other command is nil/false.
+func TestHandleListCommands_StopFamilyAvailableWhileStreaming(t *testing.T) {
 	api := newMinimalCommandsAPI(t)
 	w := doCommandsRequest(t, api, "web", true)
 	cmds := parseCommandsResponse(t, w)
 
+	streaming := map[string]bool{"cancel": true, "stop": true, "stop-redirect": true}
+	seen := map[string]bool{}
 	for _, c := range cmds {
-		if c.Name == "cancel" {
-			if c.AvailableWhileStreaming == nil || !*c.AvailableWhileStreaming {
-				t.Errorf(
-					"cancel: AvailableWhileStreaming must be true, got %v",
-					c.AvailableWhileStreaming,
-				)
-			}
-		} else {
-			if c.AvailableWhileStreaming != nil && *c.AvailableWhileStreaming {
-				t.Errorf("%q: AvailableWhileStreaming must be nil/false for non-cancel commands", c.Name)
-			}
+		seen[c.Name] = true
+		got := c.AvailableWhileStreaming != nil && *c.AvailableWhileStreaming
+		if got != streaming[c.Name] {
+			t.Errorf("%q: AvailableWhileStreaming=%v, want %v", c.Name, got, streaming[c.Name])
+		}
+	}
+	for name := range streaming {
+		if !seen[name] {
+			t.Errorf("/%s missing from web response", name)
 		}
 	}
 }
@@ -454,95 +466,6 @@ func TestHandleListCommands_DeliveryValidEnum(t *testing.T) {
 	}
 }
 
-// TestClearHandler_CLI exercises the /clear handler with Channel="cli" and a
-// Runtime providing ClearHistory. Verifies OutcomeHandled and the expected reply.
-// This covers the CLI/channel /clear branch (rt.ClearHistory) which was untested.
-func TestClearHandler_CLI(t *testing.T) {
-	cleared := false
-
-	rt := &commands.Runtime{
-		ClearHistory: func() error {
-			cleared = true
-			return nil
-		},
-	}
-
-	var reply string
-	req := commands.Request{
-		Channel:  "cli",
-		SenderID: "user_cli",
-		Text:     "/clear",
-		Reply: func(text string) error {
-			reply = text
-			return nil
-		},
-	}
-
-	// Invoke the handler directly (same path as the executor for CLI).
-	defs := commands.BuiltinDefinitions()
-	var clearDef *commands.Definition
-	for i := range defs {
-		if defs[i].Name == "new" {
-			d := defs[i]
-			clearDef = &d
-			break
-		}
-	}
-	if clearDef == nil {
-		t.Fatal("clear definition not found in BuiltinDefinitions()")
-	}
-	if clearDef.Handler == nil {
-		t.Fatal("clear handler must not be nil")
-	}
-
-	if err := clearDef.Handler(t.Context(), req, rt); err != nil {
-		t.Fatalf("handler returned unexpected error: %v", err)
-	}
-
-	if !cleared {
-		t.Error("ClearHistory must have been called")
-	}
-	if reply != "Chat history cleared!" {
-		t.Errorf("reply = %q, want %q", reply, "Chat history cleared!")
-	}
-}
-
-// TestClearHandler_NilRuntime exercises the nil-Runtime path of /clear.
-// When rt==nil, the handler must reply with the unavailable message and not panic.
-func TestClearHandler_NilRuntime(t *testing.T) {
-	var reply string
-	req := commands.Request{
-		Channel:  "cli",
-		SenderID: "user_cli",
-		Text:     "/clear",
-		Reply: func(text string) error {
-			reply = text
-			return nil
-		},
-	}
-
-	defs := commands.BuiltinDefinitions()
-	var clearDef *commands.Definition
-	for i := range defs {
-		if defs[i].Name == "new" {
-			d := defs[i]
-			clearDef = &d
-			break
-		}
-	}
-	if clearDef == nil {
-		t.Fatal("clear definition not found")
-	}
-
-	if err := clearDef.Handler(t.Context(), req, nil); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	// Reply must be the standard unavailable message, not a panic.
-	if reply == "" {
-		t.Error("reply must not be empty when Runtime is nil")
-	}
-}
-
 // commandNames extracts just the name slice for error messages.
 func commandNames(cmds []gen.SlashCommand) []string {
 	names := make([]string, len(cmds))
@@ -550,4 +473,14 @@ func commandNames(cmds []gen.SlashCommand) []string {
 		names[i] = c.Name
 	}
 	return names
+}
+
+// slicesContainsCommand reports whether the served list names the command.
+func slicesContainsCommand(cmds []gen.SlashCommand, name string) bool {
+	for _, c := range cmds {
+		if c.Name == name {
+			return true
+		}
+	}
+	return false
 }

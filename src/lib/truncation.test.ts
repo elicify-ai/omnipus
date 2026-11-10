@@ -15,8 +15,8 @@ describe('normalizeTruncationReason (ADR-087 D2 legacy-default rule)', () => {
     expect(normalizeTruncationReason(false, 'max_output_tokens')).toBeUndefined()
   })
 
-  it('legacy default: truncated:true with no reason means "cancelled"', () => {
-    expect(normalizeTruncationReason(true, undefined)).toBe('cancelled')
+  it('truncated:true with no explicit reason yields undefined — no invented "cancelled" (DEL-F36)', () => {
+    expect(normalizeTruncationReason(true, undefined)).toBeUndefined()
   })
 
   it('passes through an explicit reason on a truncated entry', () => {

@@ -518,6 +518,7 @@ const readerLengthParamDesc = "Amount to read. Plain text: bytes (silently cappe
 
 func (t *ReadFileTool) Description() string {
 	return "Read text and supported documents, or inspect a PNG or JPEG image in the current model turn. " +
+		"`path` may be workspace-relative or absolute. " +
 		readerImageInspectionParagraph +
 		"Text supports pagination via `offset` and `length` as bytes. " +
 		"Word (.docx), PowerPoint (.pptx), Excel (.xlsx), and PDF (.pdf) documents are " +
@@ -554,18 +555,6 @@ func (t *ReadFileTool) Parameters() map[string]any {
 	}
 }
 
-// AutoApproveVerdict implements AutoApproveClassifier: read_file runs under
-// Auto only when its path is inside the workspace or a mount (ADR-092 D9,
-// J2) — a read anywhere else asks.
-func (t *ReadFileTool) AutoApproveVerdict(ctx context.Context, args map[string]any) AutoVerdict {
-	path, ok := args["path"].(string)
-	if !ok {
-		return autoAsks("read_file: path argument missing")
-	}
-	return autoWorkspaceVerdict(ctx, t.agentHome, t.restrict, t.Name(), FSOpRead, path, t.patterns,
-		fspolicy.PathGrantAccessRead)
-}
-
 func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
 	path, ok := args["path"].(string)
 	if !ok {
@@ -582,7 +571,8 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	}
 
 	// Metadata guard: reject reads of agents/<id>/(SOUL|HEARTBEAT|MEMORY|AGENT).md
-	// via generic file tools — callers must use read_agent_metadata instead.
+	// via generic file tools — callers must use get_agent (fields soul,
+	// agent_md) instead.
 	// A re-rooted workspace turn has no AGENT metadata files, so the guard
 	// is a safe no-op there (it only ever matches the four canonical
 	// agents/<id>/ files).
@@ -637,10 +627,10 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	if _, imageNamed, _ := imageFormat(nil, path); imageNamed {
 		file, err = handle.OpenRegularNonBlocking()
 	} else {
-		file, err = handle.Open()
+		file, err = handle.OpenNonBlockingRead()
 	}
 	if err != nil {
-		if errors.Is(err, ErrImageSourceNotRegular) {
+		if errors.Is(err, ErrImageSourceNotRegular) || errors.Is(err, errReadSourceNotRegular) {
 			return ErrorResult(err.Error())
 		}
 		// Emit a path.access_denied audit entry on workspace-guard rejections.
@@ -1079,7 +1069,11 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 
 	var clobberNote string
 	if !overwrite {
-		if _, statErr := handle.Stat(); statErr == nil {
+		// A write into an installed skill folder is decided by the skill
+		// change pipeline's one precondition (skills spec r15 §7.3: the
+		// session's seen revision, SKILL_NOT_READ without one), not by the
+		// overwrite flag, which is no skill-change intent (V-40).
+		if _, statErr := handle.Stat(); statErr == nil && handle.skillWrite == nil {
 			// A PRECONDITION refusal, not a genuine I/O failure: the file is
 			// already there. The prose alone was the same shape as the real
 			// write failure two branches below (ErrorResult(err.Error())), so
@@ -1119,7 +1113,7 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *ToolR
 
 	emitFileWriteAudit(ctx, t.auditLogger, t.Name(), canonicalPath)
 
-	return SilentResult(fmt.Sprintf("File written: %s", path) + clobberNote)
+	return SilentResult(fmt.Sprintf("File written: %s", path) + clobberNote + handle.SkillChangeNote())
 }
 
 type ListDirTool struct {
@@ -1171,7 +1165,8 @@ func (t *ListDirTool) Name() string {
 func (t *ListDirTool) Description() string {
 	return "List files and directories in a path. Large directories page with offset/limit " +
 		"(entries), the same way read_file pages a file with offset/length (bytes). `path` " +
-		"defaults to \".\" (the workspace root) when omitted. A directory that is a knowledge " +
+		"may be workspace-relative or absolute, and defaults to \".\" (the workspace root) when " +
+		"omitted. A directory that is a knowledge " +
 		"base is marked KB: instead of DIR: — use knowledge_list or knowledge_describe on it " +
 		"rather than reading its files directly."
 }
@@ -1200,18 +1195,6 @@ func (t *ListDirTool) Parameters() map[string]any {
 			},
 		},
 	}
-}
-
-// AutoApproveVerdict implements AutoApproveClassifier: list_directory runs
-// under Auto only when its path (default ".", the work folder) is inside the
-// workspace or a mount (ADR-092 D9, J2).
-func (t *ListDirTool) AutoApproveVerdict(ctx context.Context, args map[string]any) AutoVerdict {
-	path, ok := args["path"].(string)
-	if !ok {
-		path = "."
-	}
-	return autoWorkspaceVerdict(ctx, t.agentHome, t.restrict, t.Name(), FSOpList, path, t.patterns,
-		fspolicy.PathGrantAccessRead)
 }
 
 func (t *ListDirTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
@@ -1270,7 +1253,15 @@ func (t *ListDirTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		emitFileReadAudit(ctx, t.auditLogger, t.Name(), resolved, "list")
 	}
 
-	return formatDirEntries(handle, entries, int(offset), int(limit))
+	return formatDirEntries(ctx, handle, entries, boundedListDirInt(offset), boundedListDirInt(limit))
+}
+
+// boundedListDirInt narrows validated nonnegative paging values safely on 32-bit hosts.
+func boundedListDirInt(value int64) int {
+	if value > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	return int(value)
 }
 
 // maxListDirEntries bounds one list_directory page (ADR-066 §15 task 1,
@@ -1340,13 +1331,22 @@ func isKnowledgeBaseEntry(handle *PathHandle, entry os.DirEntry) bool {
 // checked, matching the cost discipline
 // pkg/gateway/rest_library.go's own detectKnowledgeBaseInRoot documents for
 // the identical question over the REST listing.
-func formatDirEntries(handle *PathHandle, entries []os.DirEntry, offset, limit int) *ToolResult {
-	total := len(entries)
+func formatDirEntries(ctx context.Context, handle *PathHandle, entries []os.DirEntry, offset, limit int) *ToolResult {
+	entries = fspolicy.VisibleDirectoryEntries(handle.abs, entries, handle.policy)
+	// #1017: saved views placed in this folder follow the folder's own
+	// entries as VIEW: lines, inside the same paging.
+	viewLines := placedViewLines(ctx, handle)
+	total := len(entries) + len(viewLines)
 	start := min(offset, total)
 	end := min(start+limit, total)
 
 	var result strings.Builder
-	for _, entry := range entries[start:end] {
+	for i := start; i < end; i++ {
+		if i >= len(entries) {
+			result.WriteString(viewLines[i-len(entries)] + "\n")
+			continue
+		}
+		entry := entries[i]
 		switch {
 		case isKnowledgeBaseEntry(handle, entry):
 			result.WriteString("KB:   " + entry.Name() + "\n")

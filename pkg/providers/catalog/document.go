@@ -9,13 +9,15 @@ const SchemaVersion = "2.0.0"
 // dispatches on it (ADR-067 D11); vendor ids never appear in Go code.
 type Protocol string
 
-// The closed protocol set (FR-002).
+// The closed protocol set (FR-002). The former `cli` protocol (subprocess
+// model providers) was deleted outright with the CLI-backed model providers
+// (WU-24, founder 2026-10-14); a catalog feed that still carries such rows
+// has them skipped per-row by ParseDocument's unknown-protocol path.
 const (
 	ProtocolOpenAICompatible Protocol = "openai-compatible"
 	ProtocolAnthropic        Protocol = "anthropic"
 	ProtocolGoogle           Protocol = "google"
 	ProtocolOllama           Protocol = "ollama"
-	ProtocolCLI              Protocol = "cli"
 	ProtocolBedrock          Protocol = "bedrock"
 )
 
@@ -82,11 +84,23 @@ type ResizeLimits struct {
 	// MaxBytes is the max file size after the quality ladder. int64 keeps
 	// byte counts exact on 32-bit targets.
 	MaxBytes int64 `json:"max_bytes"`
+	// MaxPatches is the max number of 32x32-pixel tiles a vision provider
+	// counts in one image: ceil(width/32) * ceil(height/32) (issue #1435 —
+	// OpenAI/ChatGPT's 30,000-patch limit is the supplied value). Zero means
+	// the provider's patch accounting is unknown and no patch cap applies;
+	// the resize ladder then bounds the image by LongEdgePx and MaxBytes
+	// alone. Consumers MUST treat zero as "no limit", never as a zero budget.
+	MaxPatches int `json:"max_patches"`
 }
 
 // DefaultResizeLimits is the budget served when no document is loaded at
 // all (E7). A loaded document's own default_resize_limits wins over it.
-var DefaultResizeLimits = ResizeLimits{LongEdgePx: 7680, MaxBytes: 10 << 20}
+// MaxPatches carries the catalog's reconciled patch ceiling (the
+// default_resize_limits row's value); 30000 is the known strictest supplied
+// provider limit (OpenAI), applied to model-agnostic paths — tool-result
+// images enter history and are replayed to whichever provider serves the
+// next turn, so the default must fit the known strictest cap.
+var DefaultResizeLimits = ResizeLimits{LongEdgePx: 7680, MaxBytes: 10 << 20, MaxPatches: 30000}
 
 // Document is the validated 2.0.0 catalog (§5 "Document shape"). Every
 // invariant of FR-002 and FR-033 holds on a Document returned by
@@ -177,10 +191,6 @@ type Provider struct {
 	// Aliases are search-only strings for the picker's filter (A-9). They
 	// never participate in resolution, validation, or construction.
 	Aliases []string
-	// CLIKind is codex | copilot on protocol cli rows (X-14).
-	CLIKind string
-	// TokenSource is e.g. codex-auth-json (X-41).
-	TokenSource string
 	// Custom marks an operator-typed row (FR-035). The published snapshot
 	// never carries one; the flag exists so a custom row can be classified
 	// by DeriveLocality and URL-checked for parseability only (F-03).
@@ -218,4 +228,22 @@ type Model struct {
 	// this base model. Empty means on-demand (regional, unprefixed) access
 	// only.
 	InferenceProfiles []string
+	// Cost is the catalog price in USD per 1 million tokens. Nil when the
+	// published row has no cost object. A present object whose Input is
+	// nil is an unpriced model, not a zero price.
+	Cost *ModelCost
+	// Reasoning is the upstream reasoning control data (effort-levels spec
+	// FR-049). Nil when the row carries no reasoning object ("does not
+	// reason"). A present object with no levels and no switch means the
+	// model reasons but publishes no control Omnipus can send (for example
+	// a budget-only row); budget metadata itself is never kept.
+	Reasoning *ModelReasoning
+}
+
+// ModelReasoning is a model's published reasoning controls: the effort
+// levels in published order (may include "none") and whether an on/off
+// switch exists.
+type ModelReasoning struct {
+	Levels []string
+	Switch bool
 }

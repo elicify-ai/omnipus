@@ -148,10 +148,10 @@ func OpenOrCreate(room memrooms.Room) (*RoomIndex, error) {
 		count, cntErr := ri.idx.DocCount()
 		if cntErr != nil || count == 0 {
 			if rebuildErr := ri.rebuildLocked(); rebuildErr != nil {
-				slog.Warn("memrooms/index: initial rebuild failed",
-					"path", idxPath, "error", rebuildErr)
-				// Non-fatal: the index is open but empty; recall will return no results
-				// until the next write.
+				// Not registered yet: release the underlying handle directly,
+				// never recursively acquire the registry lock through Close().
+				closeErr := ri.closeUnderlying()
+				return nil, errors.Join(fmt.Errorf("memrooms/index: initial rebuild %s: %w", idxPath, rebuildErr), closeErr)
 			}
 		}
 
@@ -442,7 +442,7 @@ func (ri *RoomIndex) Rebuild() error {
 // rebuildLocked populates the open bleve index from all .md files in memoriesDir.
 // Caller MUST hold ri.mu.
 func (ri *RoomIndex) rebuildLocked() error {
-	memories, err := memrooms.ScanMemories(ri.memoriesDir)
+	memories, err := memrooms.ScanMemoriesWithErrors(ri.memoriesDir)
 	if err != nil {
 		return fmt.Errorf("memrooms/index: scan memories for rebuild: %w", err)
 	}

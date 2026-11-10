@@ -24,7 +24,9 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/google/uuid"
 )
 
 // cancelHardAbortDelay is PHASE B's escalation delay: how long after a
@@ -35,13 +37,16 @@ import (
 // fast tests instead of sleeping the real production duration).
 var cancelHardAbortDelay = 3 * time.Second
 
-// cancelDetachDelay is PHASE C's escalation delay, measured from PHASE B's
-// own hard-abort firing (not from the original Stop). Declared as a var for
-// the same test-shrinking reason as cancelHardAbortDelay.
-var cancelDetachDelay = 5 * time.Second
+// cancelDetachDelay is PHASE C's safety net, measured from PHASE B's own
+// hard-abort firing (not from the original Stop): a turn that ignored even
+// the forced stop is abandoned (its later writes suppressed) and audited.
+// 3 s like every other stop wait (founder one-stop decision, 2026-10-05).
+// Declared as a var for the same test-shrinking reason as cancelHardAbortDelay.
+var cancelDetachDelay = 3 * time.Second
 
 // CancelScope identifies what to cancel.
-// Exactly one of SessionID or (Channel + ChatID) must be set.
+// At least one of SessionID or (Channel + ChatID) must be set; if both are
+// set, SessionID takes priority and Channel/ChatID are ignored.
 //
 //   - SessionID is preferred when known (web SPA, CLI, Tier A /cancel).
 //   - Channel + ChatID is used by Tier B channels that carry no SessionID;
@@ -50,6 +55,14 @@ type CancelScope struct {
 	SessionID string // non-empty → cancel the session directly
 	Channel   string // Tier B: factory ID, e.g. "telegram"
 	ChatID    string // Tier B: platform chat identifier
+
+	// TurnOnly is a non-terminal Stop of this session's current turn. It never
+	// follows routing-root identities or changes the session's goal lifecycle.
+	// The zero value keeps existing administrative cancellation semantics.
+	TurnOnly bool
+	// Generation fences a durable Stop against a newer instruction. Zero means
+	// no lifecycle record was present (ordinary legacy chat).
+	Generation int
 }
 
 // CancelCanceller is the identity of who issued the cancel. Used for audit
@@ -121,6 +134,10 @@ type CancelOutcome struct {
 	// UNCONDITIONALLY, like BackgroundSessionsKilled/Failed above, since the
 	// walk that can fail runs before the ClaimCancel gate.
 	DescendantWalkIncomplete bool
+
+	// SkippedNewerGeneration means a later instruction won over this durable
+	// Stop. No turn or background work in that new generation was stopped.
+	SkippedNewerGeneration bool
 }
 
 // CancelHooks lets callers inject transport-specific side-effects. All fields
@@ -216,23 +233,31 @@ type CancelHooks struct {
 	// see cancel_prearm.go's own doc comment for why a longer window is a
 	// worse bug than the one it would be hiding.
 	OnLatchExpired func(scope CancelScope, canceller CancelCanceller)
+
+	// OnStopSettled reports the selected outer producer's eventual storage
+	// failure, after its actual disposition tail. It is not a timer stage.
+	OnStopSettled func(sessionID string, err error)
 }
 
 // agentLoopRequestCancel carries the shared state of RequestCancel across its stages.
 type agentLoopRequestCancel struct {
-	al                       *AgentLoop
-	ctx                      context.Context
-	scope                    CancelScope
-	canceller                CancelCanceller
-	hooks                    CancelHooks
-	at                       time.Time
-	auditLogger              *audit.Logger
+	al          *AgentLoop
+	ctx         context.Context
+	scope       CancelScope
+	canceller   CancelCanceller
+	hooks       CancelHooks
+	at          time.Time
+	auditLogger *audit.Logger
+	// audited is set once this request wrote its turn.cancel.attempt row, so the
+	// deferred fallback in RequestCancel writes one only when no path did.
+	audited                  bool
 	hint                     string
 	sessionID                string
 	backgroundSessionsKilled int64
 	backgroundSessionsFailed int64
 	descendantWalkIncomplete bool
 	activeTurn               TurnCancelHook
+	skippedNewerGeneration   bool
 	store                    *session.UnifiedStore
 	turnID                   string
 	descendants              []string
@@ -255,16 +280,13 @@ type agentLoopRequestCancel struct {
 //   - ClaimCancel atomic first-cancel-wins check
 //   - turn_cancel_attempt audit emission (always, even for no-op cancels)
 //   - graceful cascade via Interrupt(sessionID, ScopeSubtree, hint) / providerCancel
-//   - durable descendant lifecycle-record walk, own goroutine, off the
-//     escalation path (ADR-057 FR-025/FR-026 — see
-//     cancelDurableDescendantLifecycleRecords)
 //   - approval auto-deny (via hooks.CancelPendingApprovals)
 //   - cancel_stage frame emission (via hooks.SendStageFrame)
 //   - session status → interrupted (via hooks.SetSessionInterrupted)
-//   - transcript MarkLastEntryTruncated + turn_canceled entry on Finish
+//   - turn_canceled entry on Finish (its assistant entry is already written with the truncation flag, in one write)
 //   - turn_canceled audit on Finish
 //   - 3s timer → hard abort (InterruptSessionHard(sessionID, ScopeSubtree, hint))
-//   - 5s timer → detached / MarkAbandoned + turn_cancel_stuck audit
+//   - 3s after the hard abort → detached / MarkAbandoned + turn_cancel_stuck audit
 //
 // Returns:
 //   - CancelOutcome{Fired: true, Descendants, TurnID} on a successful claim
@@ -278,6 +300,14 @@ func (al *AgentLoop) RequestCancel(
 	hooks CancelHooks,
 ) (CancelOutcome, error) {
 	rc := &agentLoopRequestCancel{al: al, ctx: ctx, scope: scope, canceller: canceller, hooks: hooks}
+	// Every Stop attempt on a resolved session is audited exactly once: a
+	// request that returns early (superseded generation, an unreadable record,
+	// an error) still happened.
+	defer func() {
+		if !rc.audited && rc.sessionID != "" {
+			rc.auditAttempt(false, false)
+		}
+	}()
 
 	if r0, r1, stop := rc.validateAndResolve(); stop {
 		return r0, r1
@@ -285,6 +315,14 @@ func (al *AgentLoop) RequestCancel(
 
 	rc.cancelBackgroundWork()
 
+	if r0, r1, stop := rc.prepareSelectedStopDisposition(); stop {
+		if r1 == nil && !r0.SkippedNewerGeneration {
+			// A queued or idle session settled its Stop without a live turn
+			// to claim: the request still happened.
+			rc.auditAttempt(r0.Fired, false)
+		}
+		return r0, r1
+	}
 	if r0, r1, stop := rc.claimOrArm(); stop {
 		return r0, r1
 	}
@@ -322,6 +360,10 @@ func (rc *agentLoopRequestCancel) validateAndResolve() (CancelOutcome, error, bo
 	rc.sessionID = rc.scope.SessionID
 	if rc.sessionID == "" {
 		rc.sessionID = rc.al.resolveSessionIDByChannelChat(rc.scope.Channel, rc.scope.ChatID)
+	}
+
+	if outcome, err, stop := rc.validateStopGeneration(); stop {
+		return outcome, err, true
 	}
 
 	// Founder decision 2026-09-14 (UAT B-1 run 4): an explicit Stop/cancel on a
@@ -378,7 +420,11 @@ func (rc *agentLoopRequestCancel) cancelBackgroundWork() {
 		// signature stays single-id (see its doc comment for why); this loop
 		// is what actually reaches every descendant, summing each call's
 		// result into the totals below.
-		ids, walkErr := rc.al.resolveBackgroundKillSessionIDs(rc.sessionID)
+		ids := []string{rc.sessionID}
+		var walkErr error
+		if !rc.scope.TurnOnly {
+			ids, walkErr = rc.al.resolveBackgroundKillSessionIDs(rc.sessionID)
+		}
 		if walkErr != nil {
 			rc.descendantWalkIncomplete = true
 			slog.Warn("agent: RequestCancel: descendant walk failed partway through — the background-kill cascade below is INCOMPLETE; some descendants' background bash/exec work may be left running undetected",
@@ -422,7 +468,20 @@ func (rc *agentLoopRequestCancel) claimOrArm() (CancelOutcome, error, bool) {
 	// background-kill cascade above and for the same reason — this must NOT
 	// be gated on wasFired/ClaimCancel. Fires whenever sessionID resolved,
 	// unconditionally; a session with no pending set is a cheap no-op. ---
-	rc.al.cancelPendingAskForScope(rc.sessionID)
+	if err := rc.al.cancelPendingAskForScope(rc.sessionID); err != nil {
+		return CancelOutcome{}, err, true
+	}
+	if rc.scope.TurnOnly {
+		if err := rc.removeSelectedStopAdmission(); err != nil {
+			return CancelOutcome{}, err, true
+		}
+		// Parked/queued sessions have no live turn, but their approvals still
+		// belong to this Stop. The gateway also withdraws pending helper
+		// approvals owned by this chat; already-running helpers stay untouched.
+		if rc.hooks.CancelPendingApprovals != nil {
+			rc.hooks.CancelPendingApprovals(rc.sessionID, "session canceled")
+		}
+	}
 
 	// --- Abuse detection (always, before ClaimCancel) ---
 	if rc.al.cancelAbuse != nil {
@@ -432,7 +491,7 @@ func (rc *agentLoopRequestCancel) claimOrArm() (CancelOutcome, error, bool) {
 	// --- First-cancel-wins atomic claim ---
 
 	if rc.sessionID != "" {
-		rc.activeTurn = rc.al.GetActiveTurnHookForSession(rc.sessionID)
+		rc.activeTurn = rc.al.activeTurnForCancel(rc.sessionID, rc.scope)
 	}
 
 	// --- Pre-registration latch (cancel_prearm.go) ---
@@ -454,7 +513,7 @@ func (rc *agentLoopRequestCancel) claimOrArm() (CancelOutcome, error, bool) {
 		}
 	}
 
-	wasFired := rc.activeTurn != nil && rc.activeTurn.ClaimCancel()
+	wasFired := rc.claimActiveTurn()
 	// Fallback (release/v0.1.1 cancel-cascade fix, restored in the merge
 	// review — the resolution had kept this function and its CancelOutcome
 	// documentation but dropped the one production call site): when the
@@ -475,7 +534,7 @@ func (rc *agentLoopRequestCancel) claimOrArm() (CancelOutcome, error, bool) {
 	// claims whichever unrelated empty-routing-id turn it scans first,
 	// consuming its first-cancel-wins latch and reporting fired=true for a
 	// cancel that reached nothing.
-	if !wasFired && !armed && rc.sessionID != "" {
+	if !rc.scope.TurnOnly && !wasFired && !armed && rc.sessionID != "" {
 		if fallback := rc.al.claimAnyTurnForSession(rc.sessionID); fallback != nil {
 			rc.activeTurn = fallback
 			wasFired = true
@@ -483,13 +542,7 @@ func (rc *agentLoopRequestCancel) claimOrArm() (CancelOutcome, error, bool) {
 	}
 
 	// --- Audit: attempt (always, even for duplicate, no-turn, or armed-latch cancels) ---
-	audit.Emit(rc.ctx, rc.auditLogger, audit.EventTurnCancelAttempt, audit.SeverityInfo, map[string]any{
-		"session_id":        rc.sessionID,
-		"canceller_user":    rc.canceller.UserID,
-		"canceller_channel": rc.canceller.Channel,
-		"was_fired":         wasFired,
-		"armed":             armed,
-	})
+	rc.auditAttempt(wasFired, armed)
 
 	if !wasFired {
 		killedCount := int(atomic.LoadInt64(&rc.backgroundSessionsKilled))
@@ -517,6 +570,7 @@ func (rc *agentLoopRequestCancel) claimOrArm() (CancelOutcome, error, bool) {
 			BackgroundSessionsKilled: killedCount,
 			BackgroundSessionsFailed: failedCount,
 			DescendantWalkIncomplete: rc.descendantWalkIncomplete,
+			SkippedNewerGeneration:   rc.skippedNewerGeneration,
 		}, nil, true
 	}
 	return *new(CancelOutcome), nil, false
@@ -530,7 +584,7 @@ func (rc *agentLoopRequestCancel) installFinishReporting() {
 	// which wakes the agent goroutine. That goroutine may call Finish() before we
 	// reach SetOnCancelFinish below. If that happens, Finish() sees cancelFired==true
 	// but onCancelFinish==nil and returns without invoking the callback — the
-	// transcript entry, audit event, and MarkLastEntryTruncated are permanently lost.
+	// transcript entry, audit event and truncation flag are permanently lost.
 	//
 	// Fix: collect the descendants list now (same predicate as Interrupt),
 	// build the callback closure with the pre-computed list, register it via
@@ -585,20 +639,7 @@ func (rc *agentLoopRequestCancel) installFinishReporting() {
 	// PHASE-A time.
 	rc.store = rc.al.ResolveSessionStore(rc.sessionID)
 	rc.turnID = rc.activeTurn.TurnID()
-	rc.descendants = rc.al.collectDescendantTurnIDs(rc.sessionID)
-
-	// --- ADR-057 FR-025/FR-026: durable descendant lifecycle-record walk ---
-	// Runs on its OWN goroutine, off the 3s/5s escalation path below, so a
-	// subtree with many persisted lifecycle records never delays
-	// RequestCancel's return or the graceful/hard cascade timers. Reaches
-	// every descendant with a DURABLE lifecycle record — including one whose
-	// own intermediate parent turn has already finished and is no longer in
-	// al.activeTurnStates, a gap the in-memory descendants list above cannot
-	// close (see collectLiveDescendantTurnStates's KNOWN LIMITATION doc
-	// comment, steering.go) — and transitions each one's persisted record to
-	// cancelled. See cancelDurableDescendantLifecycleRecords's own doc
-	// comment for the full mechanism.
-	go rc.al.cancelDurableDescendantLifecycleRecords(rc.sessionID)
+	rc.descendants = rc.cancelTurnIDs()
 
 	// backgroundSessionsKilled was already computed above (independent of
 	// wasFired, before this function's ClaimCancel gate) and is read here via
@@ -607,7 +648,8 @@ func (rc *agentLoopRequestCancel) installFinishReporting() {
 	// goroutine (via Finish() called from the turn-processing goroutine), so
 	// atomic access is required for correct cross-goroutine visibility even
 	// though there is no write/write or write-after-read race to resolve.
-	rc.activeTurn.SetOnCancelFinish(func(cancelMethod string) {
+	native, nativeTurn := rc.activeTurn.(*turnState)
+	persist := func(cancelMethod string) {
 		// [Chain-reaction supersession of ADR-057 FR-024 — NOT a fresh
 		// recompute here, deliberately] This callback reports the PHASE-A
 		// snapshot (`descendants`), captured once, above, at the moment this
@@ -632,15 +674,14 @@ func (rc *agentLoopRequestCancel) installFinishReporting() {
 		// independent PHASE A and therefore its OWN accurate
 		// turn_canceled audit event, computed at THE MOMENT it was caught —
 		// not by mutating this single event after the fact.
-		// Mark the last transcript entry as truncated.
 		if rc.store != nil {
-			if err := rc.store.MarkLastEntryTruncated(rc.sessionID, rc.turnID, "cancelled"); err != nil {
-				slog.Warn("agent: RequestCancel: MarkLastEntryTruncated failed",
-					"session_id", rc.sessionID, "turn_id", rc.turnID, "error", err)
-			}
-			// Append a turn_canceled entry to the transcript.
+			// Append a turn_canceled entry to the transcript. It is also what
+			// marks the turn's last assistant entry truncated: the transcript
+			// reader derives that from this record (session.deriveCancelTruncation),
+			// so no earlier line is rewritten. It must stay appended AFTER that
+			// assistant entry.
 			appendErr := rc.store.AppendTranscript(rc.sessionID, session.TranscriptEntry{
-				ID:                   rc.sessionID + "_canceled",
+				ID:                   canceledEntryID(rc.sessionID, rc.turnID),
 				Type:                 session.EntryTypeTurnCancelled,
 				TurnID:               rc.turnID,
 				CancelledByUser:      rc.canceller.UserID,
@@ -650,9 +691,27 @@ func (rc *agentLoopRequestCancel) installFinishReporting() {
 				Timestamp:            time.Now().UTC(),
 			})
 			if appendErr != nil {
-				slog.Warn("agent: RequestCancel: could not append turn_canceled transcript entry",
-					"session_id", rc.sessionID, "error", appendErr)
+				if nativeTurn {
+					rc.al.reportSessionSaveFailure(native, &messageNotSavedError{role: "system", cause: appendErr})
+				} else {
+					// Unreachable today: *turnState is the only TurnCancelHook
+					// implementor (turn.go; both cancel resolution paths refuse
+					// anything else), so any new implementor must surface its
+					// own marker-append failure — never log-only.
+					slog.Warn("agent: RequestCancel: could not append turn_canceled transcript entry",
+						"session_id", rc.sessionID, "error", appendErr)
+				}
 			}
+		}
+	}
+	if nativeTurn {
+		native.setOnCancelPersist(persist)
+	}
+	rc.activeTurn.SetOnCancelFinish(func(cancelMethod string) {
+		if nativeTurn {
+			native.persistCancelOutcome(cancelMethod)
+		} else {
+			persist(cancelMethod)
 		}
 		// Audit: turn_canceled (fired once when the turn exits).
 		audit.Emit(rc.ctx, rc.auditLogger, audit.EventTurnCancelled, audit.SeverityInfo, map[string]any{
@@ -690,7 +749,7 @@ func (rc *agentLoopRequestCancel) interruptGracefully() {
 	// sharing sessionID's routingSessionID directly, so the descendant walk
 	// on top is redundant-but-harmless for a chat root) — ScopeSelfOnly would
 	// be a silent behavior regression here, not a neutral choice.
-	interrupted, _ := rc.al.Interrupt(rc.sessionID, ScopeSubtree, rc.hint)
+	interrupted, _ := rc.interruptCancelTargets(false)
 
 	// Defensive consistency check: the pre-computed descendants list must match
 	// what Interrupt collected. A mismatch means a turn was added or removed
@@ -726,34 +785,17 @@ func (rc *agentLoopRequestCancel) interruptGracefully() {
 		)
 	}
 
-	if rc.hooks.CancelPendingApprovals != nil {
+	if !rc.scope.TurnOnly && rc.hooks.CancelPendingApprovals != nil {
 		rc.hooks.CancelPendingApprovals(rc.sessionID, "session canceled")
 	}
 	if rc.hooks.SendStageFrame != nil {
 		rc.hooks.SendStageFrame(rc.sessionID, "graceful")
 	}
 
-	// --- Transition BOTH stores via the single mediator (Defect #28 fix) ---
-	//
-	// The cancel must transition the durable LifecycleRecord to
-	// LifecycleCancelled AND mirror onto UnifiedMeta (interrupted) — the same
-	// paired transition every task/delegate terminal write performs. Before
-	// this fix, this block wrote ONLY UnifiedMeta (via the hook or the default
-	// branch), orphaning the parent session's LifecycleRecord: it stayed
-	// running/queued on disk until a future boot sweep caught it. That is the
-	// SAME defect as a kill -9 crash, produced by NORMAL cancel operation, not
-	// just crashes. The mediator is now the single authority for the
-	// lifecycle-state → unified-status mapping (cancelled → interrupted).
-	//
-	// ErrLifecycleNotFound is expected and silenced here: a normal web CHAT
-	// session may have no LifecycleRecord at all (only task/delegate/plan
-	// sessions mint one), so the lifecycle half is a no-op for those and the
-	// UnifiedMeta mirror still proceeds inside the mediator.
-	lifecycleStore := rc.al.GetSessionLifecycleStore()
-	if err := session.TransitionSession(lifecycleStore, rc.store, rc.sessionID, session.LifecycleCancelled, ""); err != nil && !errors.Is(err, session.ErrLifecycleNotFound) {
-		slog.Warn("agent: RequestCancel: could not transition session to cancelled",
-			"session_id", rc.sessionID, "error", err)
-	}
+	// No lifecycle write here: RequestCancel only asks turns to stop. A
+	// durable stop is stamped by the one session Stop
+	// (stop_session.go::StopSession) and landed only by the owning execution
+	// after its running work shut down (ADR-20260928 D2).
 	// The hook (if supplied) fires for any additional transport-specific
 	// side-effects the WS layer needs beyond the UnifiedMeta mirror the
 	// mediator already performed (the WS hook itself also writes UnifiedMeta
@@ -815,8 +857,8 @@ func (rc *agentLoopRequestCancel) scheduleEscalation() {
 				)
 			}
 		}()
-		liveNow := rc.al.liveTurnStatesAmong(rc.al.collectDescendantTurnIDs(rc.sessionID))
-		pendingSpawn := rc.al.hasPendingDescendantSpawn(rc.sessionID, rc.scope)
+		liveNow := rc.liveCancelTargets()
+		pendingSpawn := !rc.scope.TurnOnly && rc.al.hasPendingDescendantSpawn(rc.sessionID, rc.scope)
 		if len(liveNow) == 0 {
 			if pendingSpawn {
 				// Nothing is alive right now, but hasPendingDescendantSpawn
@@ -844,7 +886,7 @@ func (rc *agentLoopRequestCancel) scheduleEscalation() {
 			// something — the armed latch (if any) is this branch's own
 			// complete protection for whatever is still pending.
 		}
-		if _, err := rc.al.InterruptSessionHard(rc.sessionID, ScopeSubtree, rc.hint); err != nil {
+		if _, err := rc.interruptCancelTargets(true); err != nil {
 			slog.Warn("agent: RequestCancel: hard abort failed",
 				"session_id", rc.sessionID, "error", err)
 		}
@@ -873,8 +915,8 @@ func (rc *agentLoopRequestCancel) scheduleEscalation() {
 					)
 				}
 			}()
-			stillAlive := rc.al.liveTurnStatesAmong(rc.al.collectDescendantTurnIDs(rc.sessionID))
-			pendingSpawnAtC := rc.al.hasPendingDescendantSpawn(rc.sessionID, rc.scope)
+			stillAlive := rc.liveCancelTargets()
+			pendingSpawnAtC := !rc.scope.TurnOnly && rc.al.hasPendingDescendantSpawn(rc.sessionID, rc.scope)
 			if len(stillAlive) == 0 {
 				if pendingSpawnAtC {
 					// This is the LAST scheduled checkpoint — no further
@@ -976,24 +1018,15 @@ func stringSliceSetDiff(a, b []string) (onlyInA, onlyInB []string) {
 // returns every reachable descendant's own session id (rootSessionID itself
 // is never included).
 //
-// [FIX-5, Defect 4, 2026-08-03] Exported and HOISTED: this used to be
-// duplicated byte-for-byte as pkg/gateway/websocket.go's unexported
-// u11CollectDescendantSessionIDs, kept as a separate copy only because a
-// parallel-implementation ownership rule forbade that unit from editing
-// pkg/agent (or this unit from editing pkg/gateway). That rule has expired.
-// websocket.go's buildCancelHooks now calls this function directly;
-// u11CollectDescendantSessionIDs itself survives only as a signature-compat
-// shim (its exact pre-existing name/signature is called directly by
-// pkg/gateway/rest.go's deleteSession handler and by
-// pkg/gateway/websocket_adr057_test.go's U11 unit tests — both outside this
-// fix's file ownership, so the shim is kept rather than requiring edits
-// there).
+// The ONE implementation: the gateway's cancel/approval cascade
+// (buildCancelHooks) and its session-delete handler both call it directly, and
+// it returns the walk error so a partial walk is never mistaken for "no more
+// children".
 //
 // This is the same primitive the cancel/approval-cascade paths in both
 // packages share, because a background bash/exec session (FR-027, see
-// resolveBackgroundKillSessionIDs below) and a persisted lifecycle record
-// (FR-025/FR-026, see cancelDurableDescendantLifecycleRecords below) can
-// each OUTLIVE the in-memory turnState that spawned them: a `delegate
+// resolveBackgroundKillSessionIDs below) can
+// OUTLIVE the in-memory turnState that spawned them: a `delegate
 // async=true` child's own turn frequently finishes almost immediately while
 // its spawned background bash job keeps running for minutes. Deriving this
 // set from al.activeTurnStates (which only knows about turns still
@@ -1098,70 +1131,6 @@ func (al *AgentLoop) resolveBackgroundKillSessionIDs(sessionID string) ([]string
 	}
 	descendants, err := al.collectDescendantSessionIDs(sessionID)
 	return append([]string{sessionID}, descendants...), err
-}
-
-// cancelDurableDescendantLifecycleRecords walks the durable steered-by edge
-// transitively from rootSessionID (via collectDescendantSessionIDs) and
-// transitions EVERY reachable descendant's persisted LifecycleRecord to
-// cancelled (FR-026), independent of whether that descendant still has a
-// live turnState in al.activeTurnStates. This is the DURABLE counterpart to
-// the in-memory turn cascade (Interrupt/InterruptSessionHard) RequestCancel
-// fires above: a descendant whose own intermediate parent turn has already
-// finished and been cleared from activeTurnStates is UNREACHABLE via the
-// in-memory parentTurnID chain (steering.go's collectLiveDescendantTurnStates
-// documents this limitation on itself) but remains reachable here, because
-// this walk is keyed on the durable SteeredBy edge persisted to disk,
-// never on any in-memory turn registration.
-//
-// FR-025: RequestCancel launches this via `go
-// al.cancelDurableDescendantLifecycleRecords(...)` — once per Stop, on its
-// OWN goroutine, off the 3s/5s escalation path — so a subtree with many
-// persisted lifecycle records never delays RequestCancel's return or the
-// graceful/hard cascade timers.
-//
-// rootSessionID's OWN lifecycle record is transitioned by RequestCancel's
-// existing session.TransitionSession call (PHASE A, above this function in
-// the file) — this walk starts its BFS AT rootSessionID (to enumerate its
-// direct children) but never re-writes rootSessionID's own record.
-// ErrLifecycleNotFound (no record for this descendant — e.g. it is itself a
-// plain, non-delegate session with no lifecycle record of its own) and
-// ErrLifecycleTerminalImmutable (the descendant already reached a terminal
-// state on its own, e.g. it completed naturally moments before the Stop)
-// are both expected, benign outcomes and are silenced rather than logged.
-func (al *AgentLoop) cancelDurableDescendantLifecycleRecords(rootSessionID string) {
-	defer func() {
-		if r := recover(); r != nil {
-			slog.Error("agent: cancelDurableDescendantLifecycleRecords: panic",
-				"root_session_id", rootSessionID, "panic", r, "stack", string(debug.Stack()))
-		}
-	}()
-	lifecycleStore := al.GetSessionLifecycleStore()
-	if lifecycleStore == nil {
-		return
-	}
-	ids, walkErr := al.collectDescendantSessionIDs(rootSessionID)
-	if walkErr != nil {
-		// [FIX-5, Defect 2] The walk itself failed partway through — ids is a
-		// PARTIAL view of the true descendant set. Every descendant beneath
-		// the failure point will NOT be transitioned to cancelled by the loop
-		// below and will sit on disk as running/queued until a future boot
-		// sweep catches it (the same class of staleness a kill -9 crash
-		// leaves, but produced here by normal cancel operation). This is a
-		// best-effort, fire-and-forget goroutine (FR-025) with no return
-		// value to propagate the failure through, so a clearly-worded WARN
-		// naming BOTH the root and the partial id count is the load-bearing
-		// signal for this path.
-		slog.Warn("agent: cancelDurableDescendantLifecycleRecords: descendant walk failed partway through — this cascade is INCOMPLETE, some durable lifecycle records beneath the failure point will NOT be transitioned to cancelled",
-			"root_session_id", rootSessionID, "partial_descendants_found", len(ids), "error", walkErr)
-	}
-	for _, id := range ids {
-		childStore := al.ResolveSessionStore(id)
-		err := session.TransitionSession(lifecycleStore, childStore, id, session.LifecycleCancelled, "")
-		if err != nil && !errors.Is(err, session.ErrLifecycleNotFound) && !errors.Is(err, session.ErrLifecycleTerminalImmutable) {
-			slog.Warn("agent: cancelDurableDescendantLifecycleRecords: could not transition descendant to cancelled",
-				"session_id", id, "root_session_id", rootSessionID, "error", err)
-		}
-	}
 }
 
 // turnStatesByTurnID resolves the live turnState pointers registered under
@@ -1309,74 +1278,67 @@ func (al *AgentLoop) armChainReactionCancelLatch(sessionID string, scope CancelS
 	}
 }
 
-// RequestCancelForSession is a primitive-argument adapter for RequestCancel
-// used by the commands.AgentLoopInterface (and, directly, by goal_loop.go's
-// `/goal clear` verifier-cancel and plan_engine.go's Stop session-cancel
-// fan-out). It avoids importing pkg/agent types in pkg/commands (which would
-// create a circular dependency) by accepting and returning only primitive
-// types.
+// RequestCancelForSession is the primitive-argument entry to the one session
+// Stop (stop_session.go::StopSession) for plan_engine.go's Stop fan-out: it
+// stops sessionID AND every helper under it (Stop all — stopping a plan stops
+// all of its work), records the session's stop with cause "cascade" (it was
+// swept by the plan's stop, D2/D6), asks running turns to stop at once and
+// forces them 3 s later; only the owning executions land `stopped`. It avoids
+// importing pkg/agent types in pkg/commands by using primitive types.
 //
-// sessionID must be non-empty. Returns (fired, armed, nil) on success:
-//   - fired is true when an active turn was claimed.
-//   - armed is true when fired is false BECAUSE no turn was registered yet
-//     for sessionID and a pre-registration cancel latch (cancel_prearm.go)
-//     was recorded in its place — see CancelOutcome.Armed's doc comment for
-//     the full contract. armed is NEVER true when fired is true.
-//
-// Every caller that surfaces fired to a user or operator MUST also check
-// armed before reporting a cancel as a no-op: fired=false, armed=true means
-// the cancel WILL still fire — against the next turn to register for this
-// session, within cancelPreArmTTL — not that nothing happened.
-//
-// HISTORY: prior to this widening, this adapter flattened CancelOutcome down
-// to a bare (bool, error), unconditionally discarding Armed at this exact
-// boundary — the structural gap CancelOutcome.Armed's own doc comment warns
-// every RequestCancel caller against, and the one this widening closes at
-// the source rather than in each of the (several) call sites that go through
-// it. See pkg/commands/runtime.go's CancelActiveTurn for the Tier A /cancel
-// consumer this was fixed for; pkg/agent/plan_engine.go's cancelSessions
-// (Stop fan-out) is a further consumer of this same adapter — it now has its
-// own dedicated `armed` bucket on sessionCancelReport (plan_engine.go), kept
-// apart from `failed`/`notFired` for exactly the same reason this doc
-// comment gives, so the "still needs its own bucket" gap noted here at the
-// time of this widening has since been closed, not merely tracked.
+// Returns (fired, armed, err): fired when a running turn was asked to stop or
+// a queued/idle stop landed; armed when nothing had registered yet and a
+// pre-registration latch stands in (never true with fired). Every caller that
+// surfaces fired must also check armed before reporting a no-op. err carries
+// any reached session the stop could not handle.
 func (al *AgentLoop) RequestCancelForSession(ctx context.Context, sessionID, userID, channel string) (fired bool, armed bool, err error) {
+	return al.requestSweptStop(ctx, sessionID, userID, channel, true)
+}
+
+// requestSweptStop stops sessionID (and, when tree, every helper under it)
+// through the one Stop with cause "cascade": the session is reached because a
+// larger stop swept it (a plan Stop, a `/goal clear` verifier cancel).
+func (al *AgentLoop) requestSweptStop(ctx context.Context, sessionID, userID, channel string, tree bool) (fired bool, armed bool, err error) {
 	if sessionID == "" {
 		return false, false, fmt.Errorf("RequestCancelForSession: sessionID must not be empty")
 	}
-	outcome, err := al.RequestCancel(ctx,
-		CancelScope{SessionID: sessionID},
-		CancelCanceller{UserID: userID, Channel: channel},
-		CancelHooks{
-			// Tier A /cancel command carries no other transport-specific side
-			// effects, but must still cascade to any background bash/exec
-			// sessions this chat session started (FR-B10/FR-B11).
-			KillBackgroundSessions: killBackgroundSessionsForCancelSurface,
-			// Mirror the WS handleCancel / cron watchDeadline callers (the two
-			// "fixed by hand" consumers of RequestCancel's own Armed field):
-			// give every caller of THIS adapter the same operator-visible
-			// signal when a latch it armed ages out (cancelPreArmTTL) before
-			// any turn consumes it — otherwise a caller that now honestly
-			// reports "acknowledged, pending" (via the armed return above)
-			// has nothing to fall back on if that promise silently expires.
-			// Generic and caller-agnostic by necessity: this primitive
-			// adapter has no per-call hook injection point of its own, so
-			// this fires identically for every caller that reaches it
-			// (Tier A /cancel, goal_loop.go's `/goal clear`, and
-			// plan_engine.go's Stop session-cancel fan-out alike).
-			OnLatchExpired: func(scope CancelScope, canceller CancelCanceller) {
-				slog.Warn("agent: RequestCancelForSession: pre-registration cancel latch expired unconsumed — the cancel this call acknowledged never actually took effect",
-					"session_id", sessionID,
-					"canceller_user", canceller.UserID,
-					"canceller_channel", canceller.Channel,
-				)
-			},
+	res, err := al.StopSession(ctx, StopRequest{
+		SessionID: sessionID,
+		By:        steer.Principal{Kind: steer.PrincipalKindHuman, ID: userID},
+		Channel:   channel,
+		Tree:      tree,
+		Cause:     session.StopCauseCascade,
+		HooksFor: func(string) CancelHooks {
+			return CancelHooks{
+				// Cascade to any background bash/exec sessions this session
+				// started (FR-B10/FR-B11).
+				KillBackgroundSessions: killBackgroundSessionsForCancelSurface,
+				// An armed latch that ages out (cancelPreArmTTL) before any
+				// turn consumes it is reported, never silent.
+				OnLatchExpired: func(scope CancelScope, canceller CancelCanceller) {
+					slog.Warn("agent: RequestCancelForSession: pre-registration cancel latch expired unconsumed — the cancel this call acknowledged never actually took effect",
+						"session_id", sessionID,
+						"canceller_user", canceller.UserID,
+						"canceller_channel", canceller.Channel,
+					)
+				},
+			}
 		},
-	)
+	})
 	if err != nil {
 		return false, false, err
 	}
-	return outcome.Fired, outcome.Armed, nil
+	failures := []error{res.RootErr}
+	for _, unreachable := range res.Report.Unreachable {
+		if unreachable.ID == sessionID && res.RootErr != nil {
+			continue // the same failure, already carried by RootErr
+		}
+		failures = append(failures, fmt.Errorf("Stop for session %s failed: %s", unreachable.ID, unreachable.Reason))
+	}
+	if joined := errors.Join(failures...); joined != nil {
+		return res.Fired, false, joined
+	}
+	return res.Fired, res.Armed, nil
 }
 
 // killBackgroundSessionsForCancelSurface is the CancelHooks.KillBackgroundSessions
@@ -1415,18 +1377,36 @@ func (al *AgentLoop) RequestCancelByChannelChat(ctx context.Context, channelName
 	if channelName == "" || chatID == "" {
 		return false, false, fmt.Errorf("RequestCancelByChannelChat: channel and chatID must not be empty")
 	}
-	outcome, err := al.RequestCancel(ctx,
-		CancelScope{Channel: channelName, ChatID: chatID},
-		CancelCanceller{UserID: userID, Channel: channelName},
-		CancelHooks{
-			// Tier B channels carry no other transport-specific side effects,
-			// but must still cascade to any background bash/exec sessions
-			// this chat session started (FR-B10/FR-B11).
-			KillBackgroundSessions: killBackgroundSessionsForCancelSurface,
-		},
-	)
-	if err != nil {
-		return false, false, err
+	return al.requestCommandStopByChannelChat(ctx, channelName, chatID, userID, "tree")
+}
+
+// canceledEntryID is the transcript id of one turn_canceled record. Every cancel
+// in a session needs its own id: a shared "<session>_canceled" would let any
+// id-deduplicating writer drop all but the first. The turn id makes it unique per
+// canceled turn; a cancel with no turn id gets a random suffix.
+func canceledEntryID(sessionID, turnID string) string {
+	if turnID == "" {
+		turnID = uuid.NewString()
 	}
-	return outcome.Fired, outcome.Armed, nil
+	return sessionID + "_canceled_" + turnID
+}
+
+// auditCancelAttempt writes the turn.cancel.attempt audit row: one per Stop
+// request, whatever the session's state (running, queued, idle, already
+// stopped, completed).
+func auditCancelAttempt(ctx context.Context, logger *audit.Logger, sessionID string, canceller CancelCanceller, wasFired, armed bool) {
+	audit.Emit(ctx, logger, audit.EventTurnCancelAttempt, audit.SeverityInfo, map[string]any{
+		"session_id":        sessionID,
+		"canceller_user":    canceller.UserID,
+		"canceller_channel": canceller.Channel,
+		"was_fired":         wasFired,
+		"armed":             armed,
+	})
+}
+
+// auditAttempt writes this request's turn.cancel.attempt row and records that it
+// did.
+func (rc *agentLoopRequestCancel) auditAttempt(wasFired, armed bool) {
+	auditCancelAttempt(rc.ctx, rc.auditLogger, rc.sessionID, rc.canceller, wasFired, armed)
+	rc.audited = true
 }

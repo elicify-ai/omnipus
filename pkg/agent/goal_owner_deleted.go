@@ -70,9 +70,9 @@ func (al *AgentLoop) goalSessionStoreFor(sessionID string) *session.UnifiedStore
 
 // goalWorkingAgentID resolves the agent that works the goal bound to
 // sessionID: the agent recorded on the goal's route at activation when this
-// process still holds it, else the session's own active agent, else the
-// session's agent (ADR-086 D6 folds goal_route_agent_id into the owner — for a
-// session-owned goal, the session's agent). Every keeper dispatch and every
+// process still holds it, else the session's owner (ADR-086 D6 folds
+// goal_route_agent_id into the owner — for a session-owned goal, the session's
+// immutable agent_id). Every keeper dispatch and every
 // ownership check must use this ONE resolution; an empty result is never a
 // licence to fall through to the default agent.
 func goalWorkingAgentID(sessionID string, store *session.UnifiedStore) (string, error) {
@@ -88,9 +88,6 @@ func goalWorkingAgentID(sessionID string, store *session.UnifiedStore) (string, 
 	}
 	if meta == nil {
 		return "", fmt.Errorf("session %q has no meta", sessionID)
-	}
-	if meta.ActiveAgentID != "" {
-		return meta.ActiveAgentID, nil
 	}
 	if meta.AgentID != "" {
 		return meta.AgentID, nil
@@ -168,4 +165,35 @@ func (al *AgentLoop) EndGoalsOfDeletedAgent(agentID, agentName string) (int, err
 			map[string]any{"component": "goal", "session_id": sessionID, "goal_id": g.GoalID, "agent_id": agentID})
 	}
 	return ended, errors.Join(errs...)
+}
+
+// goalOwnerMissingReason is the visible terminal reason for a goal whose
+// canonical owner no longer resolves (omnipus-system-agent FR-123, §6.4; chief
+// ruling 2026-10-14: the existing `failed` pill, this exact reason).
+func goalOwnerMissingReason(ownerID string) string {
+	return fmt.Sprintf("owner agent %s no longer exists", ownerID)
+}
+
+// failGoalIfOwnerMissing ends sessionID's active goal as failed with the
+// visible reason when ownerID does not resolve in the live registry, and
+// reports whether it did. A resolvable owner returns false and changes
+// nothing. A failure to end the goal is logged at error level; the goal is
+// still not dispatched (it can only run under its owner).
+func (al *AgentLoop) failGoalIfOwnerMissing(sessionID, goalID, ownerID string) bool {
+	if reg := al.GetRegistry(); reg != nil && strings.TrimSpace(ownerID) != "" {
+		if inst, ok := reg.GetAgent(ownerID); ok && inst != nil {
+			return false
+		}
+	}
+	label := strings.TrimSpace(ownerID)
+	if label == "" {
+		label = "(none)"
+	}
+	reason := goalOwnerMissingReason(label)
+	if _, ok := al.clearGoalStatus(sessionID, al.goalSessionStoreFor(sessionID), reason); !ok {
+		logger.ErrorCF("agent", "goal: canonical owner is gone and the goal could not be ended",
+			map[string]any{"session_id": sessionID, "goal_id": goalID, "owner_agent_id": ownerID})
+	}
+	al.goalMarkIdleSettling(goalID, false)
+	return true
 }

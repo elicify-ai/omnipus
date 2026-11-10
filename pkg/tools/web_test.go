@@ -586,9 +586,6 @@ func TestSearchRangeMappings(t *testing.T) {
 	if got := mapDuckDuckGoDateFilter("y"); got != "t" {
 		t.Fatalf("mapDuckDuckGoDateFilter(y) = %q, want t", got)
 	}
-	if got := mapSearXNGTimeRange("d"); got != "day" {
-		t.Fatalf("mapSearXNGTimeRange(d) = %q, want day", got)
-	}
 	if got := mapGLMRecencyFilter("w"); got != "oneWeek" {
 		t.Fatalf("mapGLMRecencyFilter(w) = %q, want oneWeek", got)
 	}
@@ -1544,39 +1541,6 @@ func TestWebTool_TavilySearch_Failover(t *testing.T) {
 	}
 	if !strings.Contains(result.ForUser, "Success Result") {
 		t.Errorf("Expected failover to second key and success result, got: %s", result.ForUser)
-	}
-}
-
-func TestWebTool_SearXNGSearch_RangeMapping(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.URL.Query().Get("time_range"); got != "year" {
-			t.Fatalf("expected time_range=year, got %q", got)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]any{
-			"results": []map[string]any{
-				{"title": "Recent result", "url": "https://example.com/1", "content": "snippet"},
-			},
-		})
-	}))
-	defer server.Close()
-
-	tool, err := NewWebSearchTool(WebSearchToolOptions{
-		SearXNGEnabled:    true,
-		SearXNGBaseURL:    server.URL,
-		SearXNGMaxResults: 5,
-	})
-	if err != nil {
-		t.Fatalf("NewWebSearchTool() error: %v", err)
-	}
-
-	result := tool.Execute(context.Background(), map[string]any{
-		"query": "test query",
-		"range": "y",
-	})
-	if result.IsError {
-		t.Fatalf("expected success, got %s", result.ForLLM)
 	}
 }
 

@@ -1,0 +1,236 @@
+import { lazy, useEffect, type ReactNode } from 'react'
+import { useWorkspacesStore } from '@/store/workspacesStore'
+import {
+  confirmDiscardLibraryEdits,
+  isLibraryEditorDirty,
+} from '@/components/library/preview/unsavedGuard'
+import { mailPanelDefinition } from '@/components/workspaces/mail/mailPanelDefinition'
+import type {
+  PanelContentProps,
+  PanelContext,
+  PanelDefinition,
+  PanelId,
+  WorkspacePanelContext,
+} from './types'
+
+function optionalSearchString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined
+}
+
+const LibraryPanel = lazy(async () => {
+  const module = await import('@/components/library/LibraryPanel')
+  return { default: module.LibraryPanel }
+})
+
+const BrowserLivePanel = lazy(async () => {
+  const module = await import('@/components/browser/BrowserLivePanel')
+  return { default: module.BrowserLivePanel }
+})
+
+const WorkspaceTasksPanel = lazy(async () => {
+  const module = await import('@/components/workspaces/WorkspaceTasksTab')
+  return { default: module.WorkspaceTasksTab }
+})
+
+const WorkspaceTeamPanel = lazy(async () => {
+  const module = await import('@/components/workspaces/team/TeamPanel')
+  return { default: module.TeamPanel }
+})
+
+const ParticipantsPanel = lazy(async () => {
+  const module = await import('@/components/rooms/ParticipantsPanel')
+  return { default: module.ParticipantsPanel }
+})
+
+const CalendarPanel = lazy(async () => {
+  const module = await import('@/components/screens/CalendarScreen')
+  return { default: module.CalendarScreen }
+})
+
+function LibraryPanelContent(props: PanelContentProps) {
+  return <LibraryPanel shellProps={props} />
+}
+
+function BrowserPanelContent(props: PanelContentProps) {
+  return <BrowserLivePanel shellProps={props} />
+}
+
+/** Shell seam for the workspace-scoped screens (Tasks/Team/Calendar — wave 3,
+ * SP-6): resolves the panel context's workspace (falling back to the active
+ * workspace the way the full-screen route's own re-dock does) and hands the
+ * real screen component just the `workspaceId` it already takes. The screens'
+ * internal layout is content work — this wrapper only adapts the contract. */
+function WorkspaceScopedPanelContent({
+  context,
+  registerExpandContext,
+  render,
+}: {
+  context: PanelContext
+  registerExpandContext?: PanelContentProps['registerExpandContext']
+  render: (workspaceId: string) => ReactNode
+}) {
+  const activeWorkspaceId = useWorkspacesStore((s) => s.activeWorkspaceId)
+  const workspaceId = (context as WorkspacePanelContext).workspaceId ?? activeWorkspaceId
+  useEffect(() => {
+    if (!workspaceId || !registerExpandContext) return undefined
+    // Report the workspace actually rendered, including child URL/Back/Forward changes.
+    registerExpandContext(() => ({ workspaceId }))
+    return () => registerExpandContext(null)
+  }, [registerExpandContext, workspaceId])
+  if (!workspaceId) {
+    return (
+      <div
+        role="status"
+        className="flex h-full items-center justify-center p-[var(--space-4)] text-center text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]"
+      >
+        Open this panel from inside a workspace to see its content here.
+      </div>
+    )
+  }
+  return <>{render(workspaceId)}</>
+}
+
+function TasksPanelContent(props: PanelContentProps) {
+  return (
+    <WorkspaceScopedPanelContent
+      context={props.context}
+      registerExpandContext={props.registerExpandContext}
+      render={(id) => <WorkspaceTasksPanel workspaceId={id} />}
+    />
+  )
+}
+
+function TeamPanelContent(props: PanelContentProps) {
+  // TeamPanel resolves the workspace record and binds the real context that
+  // WorkspaceTeamTab requires, including outside the workspace route shell.
+  return (
+    <WorkspaceScopedPanelContent
+      context={props.context}
+      render={(id) => <WorkspaceTeamPanel shellProps={{ ...props, context: { workspaceId: id } }} />}
+    />
+  )
+}
+
+function CalendarPanelContent(props: PanelContentProps) {
+  return (
+    <WorkspaceScopedPanelContent
+      context={props.context}
+      registerExpandContext={props.registerExpandContext}
+      render={(id) => <CalendarPanel workspaceId={id} />}
+    />
+  )
+}
+
+/** #1449 D6: the group chat's Participants panel. Its context names the room. */
+function ParticipantsPanelContent(props: PanelContentProps) {
+  return <ParticipantsPanel shellProps={props} />
+}
+
+/** The workspace search codec shared by every workspace-scoped panel: the
+ * workspace is REQUIRED on the full-screen route (a bare /panel/&lt;id&gt; link
+ * is an invalid link — the route shows its recovery page), and it round-trips
+ * exactly. */
+function workspaceFullScreenCodec() {
+  return {
+    toSearch: ({ workspaceId }: PanelContext) => ({
+      ...(workspaceId ? { workspace: workspaceId } : {}),
+    }),
+    fromSearch: (search: Record<string, unknown>) => {
+      const workspaceId = optionalSearchString(search.workspace)
+      return workspaceId ? { workspaceId } : null
+    },
+  }
+}
+
+export const panels: readonly PanelDefinition[] = [
+  {
+    id: 'library',
+    title: 'Library',
+    content: LibraryPanelContent,
+    fullScreen: {
+      toSearch: ({ workspaceId, path }) => ({
+        ...(workspaceId ? { workspace: workspaceId } : {}),
+        ...(path ? { path } : {}),
+      }),
+      fromSearch: (search) => {
+        const workspaceId = optionalSearchString(search.workspace)
+        const path = optionalSearchString(search.path)
+        return {
+          ...(workspaceId ? { workspaceId } : {}),
+          ...(path ? { path } : {}),
+        }
+      },
+    },
+    beforeLeave: () => confirmDiscardLibraryEdits(),
+    beforeLeaveRequired: () => isLibraryEditorDirty(),
+  },
+  {
+    id: 'browser',
+    title: 'Browser',
+    content: BrowserPanelContent,
+    fullScreen: {
+      toSearch: ({ sessionId, agentId }) => ({
+        ...(sessionId ? { session: sessionId } : {}),
+        ...(agentId ? { agent: agentId } : {}),
+      }),
+      fromSearch: (search) => {
+        const sessionId = optionalSearchString(search.session)
+        const agentId = optionalSearchString(search.agent)
+        return sessionId && agentId ? { sessionId, agentId } : null
+      },
+    },
+  },
+  // Wave 2 (side-panel-shell-spec.md §10 "Mail adopts the shell" + FR-014):
+  // Mail's §8.1 PanelDefinition — the payload (id/title/expandTarget/no
+  // beforeLeave) is owned by the mail module (mailPanelDefinition.tsx, pinned
+  // by its own pack). One entry, no shell change (SP-4's test).
+  mailPanelDefinition,
+  {
+    id: 'tasks',
+    title: 'Tasks',
+    content: TasksPanelContent,
+    fullScreen: {
+      ...workspaceFullScreenCodec(),
+    },
+  },
+  {
+    id: 'team',
+    title: 'Team',
+    content: TeamPanelContent,
+    fullScreen: {
+      ...workspaceFullScreenCodec(),
+    },
+  },
+  {
+    id: 'calendar',
+    title: 'Calendar',
+    content: CalendarPanelContent,
+    fullScreen: {
+      ...workspaceFullScreenCodec(),
+    },
+  },
+  {
+    // #1449 D6 / ADR-20261028 A10: opened only from a group chat's header
+    // Participants button; never a strip entry. The full-screen route needs
+    // both the workspace and the room.
+    id: 'participants',
+    title: 'Participants',
+    content: ParticipantsPanelContent,
+    fullScreen: {
+      toSearch: ({ workspaceId, roomId }) => ({
+        ...(workspaceId ? { workspace: workspaceId } : {}),
+        ...(roomId ? { room: roomId } : {}),
+      }),
+      fromSearch: (search) => {
+        const workspaceId = optionalSearchString(search.workspace)
+        const roomId = optionalSearchString(search.room)
+        return workspaceId && roomId ? { workspaceId, roomId } : null
+      },
+    },
+  },
+]
+
+/** Resolve the single production definition for an external transition. */
+export function getPanelDefinition(id: PanelId): PanelDefinition | undefined {
+  return panels.find((panel) => panel.id === id)
+}

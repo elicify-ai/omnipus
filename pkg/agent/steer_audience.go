@@ -5,17 +5,17 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/logger"
-	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
-	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // errSteerUpwardDelivererNotWired is returned by every SteerUpwardDeliverer
@@ -103,31 +103,59 @@ func isTerminalOutcome(o steer.Outcome) bool {
 	}
 }
 
-func validateOutcomeMessage(outcome steer.Outcome, class session.SessionMessageDeliveryClass) error {
-	var wantKind string
-	var wantFatal bool
-	switch outcome {
-	case steer.OutcomeFinalAnswer:
-		wantKind = "handback"
-	case steer.OutcomeEmptyAnswer, steer.OutcomeInterrupted, steer.OutcomeTimedOut, steer.OutcomeFailed:
-		wantKind, wantFatal = "error", true
-	case steer.OutcomeParkedQuestion:
-		wantKind = "question"
-	case steer.OutcomeBlocker:
-		wantKind = "blocker"
-	case steer.OutcomeGoalVerdict:
-		wantKind = "goal_status"
-	case steer.OutcomeProgress:
-		wantKind = "progress"
-	case steer.OutcomeCheckpoint:
-		wantKind = "checkpoint"
-	case steer.OutcomeLifecycleNotice:
-		wantKind = "error"
-	default:
+// outcomeAllowedKinds lists, per deliverable Outcome, every SessionMessage
+// kind that may carry it. Most outcomes have exactly one kind. Two carry a
+// second, because pkg/tools/message_parent.go::outcomeForKind deliberately
+// maps them there (issue #1011 D1 — each pairing used to be refused):
+//   - OutcomeCheckpoint also carries artifact (no dedicated Outcome: neither
+//     terminal nor wake-eligible, exactly like checkpoint);
+//   - OutcomeBlocker also carries a NON-final handback (mode=pause: wake-
+//     eligible, not terminal). A final handback stays OutcomeFinalAnswer's
+//     alone — it needs the terminal deterministic id Deliver stamps only for
+//     terminal outcomes — and OutcomeFinalAnswer takes only a final one, so
+//     a pause is never stamped final (boot_sweep.go::bootOutcome maps it to
+//     OutcomeBlocker too); validateOutcomeMessage enforces the mode.
+var outcomeAllowedKinds = map[steer.Outcome][]string{ //nolint:gochecknoglobals
+	steer.OutcomeFinalAnswer:     {"handback"},
+	steer.OutcomeEmptyAnswer:     {"error"},
+	steer.OutcomeInterrupted:     {"error"},
+	steer.OutcomeTimedOut:        {"error"},
+	steer.OutcomeFailed:          {"error"},
+	steer.OutcomeParkedQuestion:  {"question"},
+	steer.OutcomeBlocker:         {"blocker", "handback"},
+	steer.OutcomeGoalVerdict:     {"goal_status"},
+	steer.OutcomeProgress:        {"progress"},
+	steer.OutcomeCheckpoint:      {"checkpoint", "artifact"},
+	steer.OutcomeLifecycleNotice: {"error"},
+}
+
+// validateOutcomeMessage rejects an UpwardEvent whose Outcome and message
+// kind disagree (outcomeAllowedKinds). Error-kind outcomes additionally pin
+// Fatal: true for the four terminal failures, false for a lifecycle notice.
+// A handback must be final under OutcomeFinalAnswer and non-final under
+// OutcomeBlocker.
+func validateOutcomeMessage(outcome steer.Outcome, class session.SessionMessageDeliveryClass, msg generated.SessionMessage) error {
+	allowed, ok := outcomeAllowedKinds[outcome]
+	if !ok {
 		return fmt.Errorf("outcome %q has no deliverable message variant", outcome)
 	}
-	if class.Kind != wantKind || (wantKind == "error" && class.Fatal != wantFatal) {
-		return fmt.Errorf("outcome %q does not match message kind %q (fatal=%v)", outcome, class.Kind, class.Fatal)
+	mismatch := fmt.Errorf("outcome %q does not match message kind %q (fatal=%v)", outcome, class.Kind, class.Fatal)
+	if !slices.Contains(allowed, class.Kind) {
+		return mismatch
+	}
+	switch class.Kind {
+	case "error":
+		if class.Fatal != (outcome != steer.OutcomeLifecycleNotice) {
+			return mismatch
+		}
+	case "handback":
+		hb, err := msg.AsSessionMessageHandback()
+		if err != nil {
+			return fmt.Errorf("outcome %q: decode handback: %w", outcome, err)
+		}
+		if isFinal := hb.Mode == generated.SessionMessageHandbackModeFinal; isFinal != (outcome == steer.OutcomeFinalAnswer) {
+			return fmt.Errorf("outcome %q does not match a handback with mode %q", outcome, hb.Mode)
+		}
 	}
 	return nil
 }
@@ -208,10 +236,8 @@ func subagentStateForOutcome(o steer.Outcome) string {
 		return string(session.LifecycleCompleted)
 	case steer.OutcomeEmptyAnswer, steer.OutcomeFailed:
 		return string(session.LifecycleFailed)
-	case steer.OutcomeInterrupted:
-		return string(session.LifecycleCancelled)
-	case steer.OutcomeTimedOut:
-		return string(session.LifecycleTimedOut)
+	case steer.OutcomeInterrupted, steer.OutcomeTimedOut:
+		return string(session.LifecycleStopped)
 	default:
 		return ""
 	}
@@ -237,19 +263,28 @@ func deliverOwnerKey(rec *session.LifecycleRecord) string {
 // which Deliver's caller cannot reach here since res.MessageID was the id
 // Append itself just resolved).
 func deliverEntryIsAcked(inbox *session.MessageInboxStore, ownerKey, childSessionID, messageID string) (bool, error) {
+	_, unacked, err := unackedDeliverEntry(inbox, ownerKey, childSessionID, messageID)
+	return !unacked, err
+}
+
+// unackedDeliverEntry returns the stored, still-unacknowledged entry for
+// messageID. A deduplicated Append keeps the FIRST stored content, so a
+// re-delivery wakes with that stored entry, never with the newer caller's
+// bytes the inbox did not keep.
+func unackedDeliverEntry(inbox *session.MessageInboxStore, ownerKey, childSessionID, messageID string) (generated.SessionMessage, bool, error) {
 	cursor := ""
 	for {
 		msgs, next, more, err := inbox.Drain(ownerKey, childSessionID, cursor, session.DefaultInboxUnackedMax)
 		if err != nil {
-			return false, err
+			return generated.SessionMessage{}, false, err
 		}
 		for _, m := range msgs {
 			if messageIDOf(m) == messageID {
-				return false, nil
+				return m, true, nil
 			}
 		}
 		if !more || next == cursor {
-			return true, nil
+			return generated.SessionMessage{}, false, nil
 		}
 		cursor = next
 	}
@@ -312,7 +347,8 @@ func withDeterministicMessageID(msg generated.SessionMessage, id string) (genera
 // deliverySummary renders a short human-readable summary for the wake's
 // content field, extending pkg/tools/message_parent.go's
 // summarizeForWake with the two kinds only a turn-outcome event (never the
-// message_parent tool) ever produces: error and goal_status.
+// message_parent tool) ever produces: error and goal_status. artifact is
+// rendered too, so its paths and note reach the side-panel line (#1011).
 func deliverySummary(msg generated.SessionMessage) string {
 	kind, _ := msg.Discriminator()
 	switch kind {
@@ -334,7 +370,23 @@ func deliverySummary(msg generated.SessionMessage) string {
 		}
 	case "goal_status":
 		if v, err := msg.AsSessionMessageGoalStatus(); err == nil {
-			return fmt.Sprintf("A delegated session's goal verdict: %s", v.Condition)
+			text := fmt.Sprintf("A delegated session's goal verdict: %s", v.Condition)
+			if v.Evidence != nil {
+				for _, evidence := range *v.Evidence {
+					if evidence.Note != nil && strings.TrimSpace(*evidence.Note) != "" {
+						text += "\n" + *evidence.Note
+					}
+				}
+			}
+			return text
+		}
+	case "artifact":
+		if v, err := msg.AsSessionMessageArtifact(); err == nil {
+			out := "A delegated session shared artifacts: " + strings.Join(v.Paths, ", ")
+			if v.Note != nil && strings.TrimSpace(*v.Note) != "" {
+				out += " (" + *v.Note + ")"
+			}
+			return out
 		}
 	}
 	return "A delegated session sent a message."
@@ -366,7 +418,10 @@ func (d *SteerUpwardDeliverer) Deliver(ctx context.Context, event steer.UpwardEv
 	if err != nil {
 		return steer.Delivery{}, fmt.Errorf("steer: deliver: load child %q: %w", event.ChildSessionID, err)
 	}
-	ownerKey := deliverOwnerKey(childRec)
+	ownerKey := strings.TrimSpace(event.RecipientSessionID)
+	if ownerKey == "" {
+		ownerKey = deliverOwnerKey(childRec)
+	}
 	if ownerKey == "" {
 		return steer.Delivery{}, fmt.Errorf("steer: deliver: child %q has no steering session (no edge)", event.ChildSessionID)
 	}
@@ -376,20 +431,77 @@ func (d *SteerUpwardDeliverer) Deliver(ctx context.Context, event steer.UpwardEv
 	if classErr != nil {
 		return steer.Delivery{}, fmt.Errorf("steer: deliver: classify message: %w", classErr)
 	}
-	if matchErr := validateOutcomeMessage(event.Outcome, class); matchErr != nil {
+	if matchErr := validateOutcomeMessage(event.Outcome, class, msg); matchErr != nil {
 		return steer.Delivery{}, fmt.Errorf("steer: deliver: %w", matchErr)
 	}
 	if isTerminalOutcome(event.Outcome) {
-		id := fmt.Sprintf("%s:%d:final", event.ChildSessionID, childRec.Generation)
+		generation := childRec.Generation
+		if event.Generation != 0 {
+			if event.Generation != childRec.Generation {
+				return steer.Delivery{}, fmt.Errorf("steer: deliver: child %q generation changed from %d to %d",
+					event.ChildSessionID, event.Generation, childRec.Generation)
+			}
+			generation = event.Generation
+		}
+		id := fmt.Sprintf("%s:%d:final", event.ChildSessionID, generation)
 		msg, err = withDeterministicMessageID(msg, id)
 		if err != nil {
 			return steer.Delivery{}, fmt.Errorf("steer: deliver: stamp deterministic id: %w", err)
 		}
 	}
 
-	res, appendErr := inbox.Append(ownerKey, msg)
+	return d.publishUpward(ctx, al, lifecycle, inbox, ownerKey, childRec, event, msg, class)
+}
+
+// publishUpward is the shared append→dedupe→frames→wake tail of every
+// upward delivery: Deliver (after its guards and terminal id stamp) and the
+// restricted committed-outbox path (deliverCommittedOutboxFinal) both end
+// here, so a committed final's retry cannot drift from a first delivery.
+func (d *SteerUpwardDeliverer) publishUpward(
+	ctx context.Context,
+	al *AgentLoop,
+	lifecycle *session.LifecycleStore,
+	inbox *session.MessageInboxStore,
+	ownerKey string,
+	childRec *session.LifecycleRecord,
+	event steer.UpwardEvent,
+	msg generated.SessionMessage,
+	class session.SessionMessageDeliveryClass,
+) (delivery steer.Delivery, retErr error) {
+	var pendingRowError error
+	defer func() { retErr = errors.Join(retErr, pendingRowError) }()
+	// Q1=A (#984 follow-up): the producer's explicit suppression overrides the
+	// class's wake-eligibility. A suppressed event keeps EVERY other property
+	// of a wake-eligible delivery — frames, dedupe fall-through semantics,
+	// ack tracking — except the wake itself; see UpwardEvent.SuppressWake.
+	wakeEligible := class.WakeEligible && !event.SuppressWake && !isMetGoalMessage(msg)
+
+	// SFH-04: the row's repair payload is retained BEFORE the inbox entry can
+	// be polled, so a crash after a poll consumes the result still leaves the
+	// lasting event row recoverable by boot (no second turn for the repair).
+	if wakeEligible {
+		if err := al.preRetainUpwardHelperEvent(childRec, ownerKey, msg); err != nil {
+			return steer.Delivery{}, fmt.Errorf("steer: deliver: retain event row source: %w", err)
+		}
+	}
+	var res *session.AppendResult
+	var appendErr error
+	if isSystemFinal(ctx) && isTerminalOutcome(event.Outcome) {
+		// The completion tail's committed final (publishCommittedFinal or
+		// the boot committed-outbox pass): bounded by the hand-back
+		// contract, not the child-send cap.
+		res, appendErr = inbox.AppendSystemFinal(ownerKey, msg)
+	} else {
+		res, appendErr = inbox.Append(ownerKey, msg)
+	}
 	if appendErr != nil {
-		return steer.Delivery{}, fmt.Errorf("steer: deliver: append: %w", appendErr)
+		return steer.Delivery{}, al.recordNotDelivered(lifecycle, ownerKey, childRec, class.Kind, appendErr)
+	}
+	if steerUpwardAfterInboxAppendTestHook != nil {
+		// Crash-injection seam: the inbox entry is durable and pollable here.
+		if hookErr := steerUpwardAfterInboxAppendTestHook(ownerKey, res.MessageID); hookErr != nil {
+			return steer.Delivery{}, hookErr
+		}
 	}
 
 	// Finding C (ADR-091 fix lane 1, CRITICAL): a deterministic duplicate at
@@ -413,17 +525,41 @@ func (d *SteerUpwardDeliverer) Deliver(ctx context.Context, event steer.UpwardEv
 	// the SAME frames + wake path a first delivery takes — safe to repeat:
 	// deliverSubagentMessage/State/End's frame ids are deterministic and
 	// AppendTranscriptStrict rejects (id-dedupes) a repeat write.
+	// Earlier rows this child still owes (possibly to OTHER recipients) are
+	// retried, but their failure never blocks this recipient's own delivery:
+	// one chat's failed row write must not cost another chat its outcome. The
+	// payloads stay retained for boot and the next delivery, and the failure
+	// is reported where it happens (ARCH-5 / PW-D18).
+	if err := al.repairHelperEvents(childRec.SessionID); err != nil {
+		logger.ErrorCF("agent", "steer: deliver: retained event rows still pending repair; delivering this outcome anyway",
+			map[string]any{"session_id": childRec.SessionID, "recipient": ownerKey, "error": err.Error()})
+	}
+	if err := al.repairGoalOutcome(childRec.SessionID); err != nil {
+		var pending *helperEventRowPendingError
+		if !errors.As(err, &pending) {
+			return steer.Delivery{}, fmt.Errorf("steer: deliver: repair goal rows: %w", err)
+		}
+		pendingRowError = err
+	}
 	if res.Deduped {
-		shortCircuit := !class.WakeEligible
+		shortCircuit := !wakeEligible
 		if !shortCircuit {
-			acked, ackedErr := deliverEntryIsAcked(inbox, ownerKey, event.ChildSessionID, res.MessageID)
+			stored, unacked, ackedErr := unackedDeliverEntry(inbox, ownerKey, event.ChildSessionID, res.MessageID)
 			if ackedErr != nil {
 				return steer.Delivery{}, fmt.Errorf("steer: deliver: check acknowledgement: %w", ackedErr)
 			}
-			shortCircuit = acked
+			shortCircuit = !unacked
+			if unacked {
+				// The saved wake input must match the one entry the inbox kept.
+				msg = stored
+			}
 		}
 		if shortCircuit {
-			return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken}, nil
+			disposition := "not_eligible"
+			if wakeEligible {
+				disposition = "already_consumed"
+			}
+			return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken, Disposition: disposition}, nil
 		}
 	}
 
@@ -431,68 +567,210 @@ func (d *SteerUpwardDeliverer) Deliver(ctx context.Context, event steer.UpwardEv
 	// event in the parent's OWN transcript so it survives a reload
 	// (steer_frames.go). Best-effort — see deliverSubagentMessage/State's
 	// own doc comments for why a failure here never fails Deliver itself.
-	if kind := subagentMessageKindForOutcome(event.Outcome); kind != "" {
+	// A monitoring recipient (U6, FR-020) that is not the child's real parent
+	// gets the inbox entry and the wake only: no fake child row in its panel and
+	// no Stop over a tree it does not own.
+	realParent := ownerKey == deliverOwnerKey(childRec)
+	if kind := subagentMessageKindForOutcome(event.Outcome); realParent && kind != "" {
+		if event.Outcome == steer.OutcomeCheckpoint || event.Outcome == steer.OutcomeBlocker {
+			// Each allowed kind (outcomeAllowedKinds: checkpoint/artifact,
+			// blocker/handback) is a SubagentMessageFrame kind, so an
+			// artifact or a pause handback shows as itself (#1011).
+			kind = class.Kind
+		}
 		al.deliverSubagentMessage(ownerKey, childRec, kind, deliverySummary(msg), nil)
 	}
-	if state := subagentStateForOutcome(event.Outcome); state != "" {
+	if state := subagentStateForOutcome(event.Outcome); realParent && state != "" {
 		al.deliverSubagentState(ownerKey, childRec, state, nil)
 	}
-	if isTerminalOutcome(event.Outcome) {
+	if realParent && isTerminalOutcome(event.Outcome) {
 		al.deliverSubagentEnd(ownerKey, childRec, event.Outcome)
 	}
 
-	if !class.WakeEligible {
-		return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken}, nil
+	if !wakeEligible {
+		return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken, Disposition: "not_eligible"}, nil
 	}
-
-	ownerRec, ownerErr := lifecycle.Load(ownerKey)
-	if ownerErr != nil || ownerRec == nil {
-		// Edge case: the steering session's own record is gone (deleted
-		// while the child was running). The entry is still durably stored
-		// under the edge's owner key; surfaced to the operator, never a
-		// hard failure — the child's own outcome must still land.
-		logger.WarnCF("agent", "steer: deliver: steering session record missing — entry stored, wake skipped",
-			map[string]any{"owner_key": ownerKey, "child_session_id": event.ChildSessionID})
-		return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken}, nil
-	}
-
-	// FR-B-013: a recipient carrying a Stop marker for its CURRENT
-	// generation is not woken; the entry is stored and acknowledged at
-	// revival (I-6 Revive).
-	if ownerRec.Stop != nil && ownerRec.Stop.Generation == ownerRec.Generation {
-		return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken}, nil
-	}
-
-	sessionKey := ownerKey
-	if ts := al.getActiveTurnState(sessionKey); ts != nil && ts.IsAlive() {
-		pm := providers.Message{Role: "user", Content: deliverySummary(msg)}
-		if enqErr := al.EnqueueSteeringWake(sessionKey, ownerRec.AgentID, ownerKey, res.MessageID, pm); enqErr != nil {
-			return steer.Delivery{}, fmt.Errorf("steer: deliver: enqueue steering message: %w", enqErr)
-		}
-		return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryQueuedIntoLiveTurn}, nil
-	}
-
-	kindStr, _ := msg.Discriminator()
-	if al.asyncNotifier != nil {
-		target := childRec.SteeredBy.ReportingTarget
-		wakeEvent := tools.MessageParentWakeEvent{
-			Channel:             target.Channel,
-			ChatID:              target.ChatID,
-			AgentID:             ownerRec.AgentID,
-			TranscriptSessionID: ownerKey,
-			Content:             deliverySummary(msg),
-			MessageID:           res.MessageID,
-			Generation:          ownerRec.Generation,
-		}
-		if werr := al.asyncNotifier.WakeParentAlways(ctx, kindStr, wakeEvent); werr != nil {
-			// Best-effort (matches message_parent.go's own contract): the
-			// message is already durably stored; a wake failure is never
-			// fatal to Deliver — the boot re-nudge (WP-D) covers it.
-			logger.WarnCF("agent", "steer: deliver: wake failed (message is durable)",
-				map[string]any{"kind": kindStr, "error": werr.Error()})
-			return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken}, nil
-		}
-		return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryWoke}, nil
-	}
-	return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken}, nil
+	return d.wakeOwnerOrStore(ctx, al, lifecycle, ownerKey, childRec, event, msg, res)
 }
+
+// steerCommittedFinalRef names ONE committed final the boot delivery pass is
+// authorized to publish. deliverCommittedOutboxFinal re-reads the protected
+// tuple from the lifecycle journal under the session's lock and refuses
+// unless this identity matches it exactly — a public Deliver call with a
+// guessed Generation or an arbitrary inbox id can never reach publication
+// through this path.
+type steerCommittedFinalRef struct {
+	SessionID       string
+	Generation      int
+	CommitID        string
+	MessageID       string
+	ParentSessionID string
+	Outcome         string
+	PayloadHash     string
+}
+
+// committedOutboxPublisher is the RESTRICTED internal delivery path for an
+// already-committed final (D2/D8.1) — the only way a terminal event whose
+// generation is older than the session's current tail may be published, and
+// only after the lifecycle store itself verifies the commit's provenance
+// under its per-session lock. The public Deliver keeps its generation guard
+// for every ordinary (uncommitted) event; that guard is deliberately NOT
+// relaxed. Implemented by *SteerUpwardDeliverer; the boot delivery pass
+// type-asserts it and falls back to plain Deliver for a deliverer that does
+// not provide the restricted path.
+type committedOutboxPublisher interface {
+	deliverCommittedOutboxFinal(ctx context.Context, ref steerCommittedFinalRef) (steer.Delivery, error)
+}
+
+var _ committedOutboxPublisher = (*SteerUpwardDeliverer)(nil)
+
+// deliverCommittedOutboxFinal publishes ONE store-committed final —
+// including a historical generation behind a newer-generation RESUME — and
+// is the authorized historical-G publication path (D2 "Discovery after a
+// newer-generation RESUME", D8.1 pass two). Order of defense:
+//
+//  1. Provenance under the lifecycle store's per-session lock: the exact
+//     committed tuple must exist and match every ref field. The lock is
+//     released before any parent append or wake — none is held across them.
+//  2. Payload integrity on the store's own bytes: SHA-256 must equal the
+//     protected payload_hash before anything decodes, appends or wakes.
+//  3. Message identity: the committed bytes already carry the deterministic
+//     replay id; this path stamps nothing and publishes the store's bytes.
+//  4. Edge consistency: the CURRENT steering edge must still name the
+//     committed parent.
+//
+// Every refusal is a visible error the caller surfaces; the commit stays
+// pending. G's own metadata moves only through the delivery-only writer
+// (LifecycleStore.UpdateFinalDelivery) in the caller — the current G+1
+// record's state, generation and identity are never touched here, and no
+// LifecycleRecord is written behind the newer generation.
+func (d *SteerUpwardDeliverer) deliverCommittedOutboxFinal(ctx context.Context, ref steerCommittedFinalRef) (steer.Delivery, error) {
+	al := d.agentLoop
+	if al == nil {
+		return steer.Delivery{}, errSteerUpwardDelivererNotWired
+	}
+	lifecycle := al.GetSessionLifecycleStore()
+	inbox := al.GetMessageInboxStore()
+	if lifecycle == nil || inbox == nil {
+		return steer.Delivery{}, fmt.Errorf("steer: deliver: session-messaging stores not configured")
+	}
+
+	// progress/revision/retired are the publisher's CAS inputs; this
+	// deliverer reads only the protected tuple — the blanks are deliberate.
+	//nolint:dogsled // see above
+	commit, _, _, _, err := lifecycle.CommittedFinalDelivery(ref.SessionID, ref.Generation, ref.CommitID)
+	if err != nil {
+		return steer.Delivery{}, fmt.Errorf("steer: deliver: committed outbox provenance for %q generation %d commit %q: %w",
+			ref.SessionID, ref.Generation, ref.CommitID, err)
+	}
+	if commit.MessageID != ref.MessageID || commit.ParentSessionID != ref.ParentSessionID ||
+		commit.Outcome != ref.Outcome || commit.PayloadHash != ref.PayloadHash {
+		return steer.Delivery{}, fmt.Errorf(
+			"steer: deliver: committed outbox %q generation %d commit %q identity does not match the protected tuple (message_id %q parent %q outcome %q hash %q) — publication refused (D2)",
+			ref.SessionID, ref.Generation, ref.CommitID,
+			commit.MessageID, commit.ParentSessionID, commit.Outcome, commit.PayloadHash)
+	}
+	if len(commit.Payload) == 0 {
+		return steer.Delivery{}, fmt.Errorf(
+			"steer: deliver: committed outbox %q generation %d commit %q carries no payload bytes — publication refused (D2)",
+			ref.SessionID, ref.Generation, ref.CommitID)
+	}
+	if computed := fmt.Sprintf("%x", sha256.Sum256(commit.Payload)); computed != commit.PayloadHash {
+		return steer.Delivery{}, fmt.Errorf(
+			"steer: deliver: committed outbox %q generation %d commit %q payload hash %s does not match the protected payload_hash %s — publication refused (D2)",
+			ref.SessionID, ref.Generation, ref.CommitID, computed, commit.PayloadHash)
+	}
+
+	// The committed bytes are the ONLY bytes this path publishes.
+	var msg generated.SessionMessage
+	if decodeErr := msg.UnmarshalJSON(commit.Payload); decodeErr != nil {
+		return steer.Delivery{}, fmt.Errorf(
+			"steer: deliver: committed outbox %q generation %d commit %q payload does not decode: %w — publication refused (D2)",
+			ref.SessionID, ref.Generation, ref.CommitID, decodeErr)
+	}
+	if stamped := messageIDOf(msg); stamped != commit.MessageID {
+		return steer.Delivery{}, fmt.Errorf(
+			"steer: deliver: committed outbox %q generation %d commit %q payload carries message_id %q, want the committed %q — publication refused (D2)",
+			ref.SessionID, ref.Generation, ref.CommitID, stamped, commit.MessageID)
+	}
+	class, classErr := session.ClassifySessionMessage(msg)
+	if classErr != nil {
+		return steer.Delivery{}, fmt.Errorf("steer: deliver: classify committed message: %w", classErr)
+	}
+	if outcomeErr := validateOutcomeMessage(steer.Outcome(commit.Outcome), class, msg); outcomeErr != nil {
+		return steer.Delivery{}, fmt.Errorf(
+			"steer: deliver: committed outbox %q generation %d commit %q: %w — publication refused (D2)",
+			ref.SessionID, ref.Generation, ref.CommitID, outcomeErr)
+	}
+
+	childRec, err := lifecycle.Load(ref.SessionID)
+	if err != nil {
+		return steer.Delivery{}, fmt.Errorf("steer: deliver: load child %q: %w", ref.SessionID, err)
+	}
+	ownerKey := deliverOwnerKey(childRec)
+	if ownerKey == "" {
+		return steer.Delivery{}, fmt.Errorf("steer: deliver: child %q has no steering session (no edge)", ref.SessionID)
+	}
+	if ownerKey != commit.ParentSessionID {
+		return steer.Delivery{}, fmt.Errorf(
+			"steer: deliver: child %q steering edge names parent %q but the committed final names %q — publication refused (D2)",
+			ref.SessionID, ownerKey, commit.ParentSessionID)
+	}
+
+	// Frames and spans key on the generation this final belongs to — the
+	// historical G, never the current tail: a G-keyed end frame must not be
+	// mislabeled onto G+1 (where it would also collide with G+1's own future
+	// end frame and silently swallow it via AppendTranscriptStrict's id
+	// dedupe). Everything else about the record is shared.
+	historical := *childRec
+	historical.Generation = commit.Generation
+
+	event := steer.UpwardEvent{
+		ChildSessionID: ref.SessionID,
+		Generation:     commit.Generation,
+		Outcome:        steer.Outcome(commit.Outcome),
+		Message:        msg,
+	}
+	// Boot re-delivery of a committed final: the same system author as the
+	// completion tail (withSystemFinal), never a child send.
+	return d.publishUpward(withSystemFinal(ctx), al, lifecycle, inbox, ownerKey, &historical, event, msg, class)
+}
+
+// wakeOwnerOrStore resolves the steering session's own record and either
+// queues the wake into its live turn, notifies it asynchronously, or leaves
+// the already-durably-stored entry unwoken — the second half of Deliver,
+// reached only once the message is appended and confirmed wake-eligible.
+func (d *SteerUpwardDeliverer) wakeOwnerOrStore(
+	ctx context.Context,
+	al *AgentLoop,
+	lifecycle *session.LifecycleStore,
+	ownerKey string,
+	childRec *session.LifecycleRecord,
+	event steer.UpwardEvent,
+	msg generated.SessionMessage,
+	res *session.AppendResult,
+) (steer.Delivery, error) {
+	reason, helperEvent := upwardWakeDetails(childRec, msg)
+	if reason == "" {
+		return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken}, nil
+	}
+	body, err := al.upwardModelInput(childRec, msg, ownerKey, res.MessageID)
+	if err != nil {
+		return steer.Delivery{}, err
+	}
+	publishKind, _ := msg.Discriminator()
+	delivery, err := al.WakeSession(withUpwardWakeSource(ctx, childRec.SessionID, publishKind, helperEvent), ownerKey, reason, res.MessageID, body)
+	if errors.Is(err, errWakeRecipientUnavailable) {
+		reportUndeliveredWake("steer: deliver: recipient unavailable", event, ownerKey, childRec.Generation, delivery.Delivery)
+		return delivery.Delivery, nil
+	}
+	return delivery.Delivery, err
+}
+
+// steerUpwardAfterInboxAppendTestHook simulates a crash right after an upward
+// message became durable in the recipient's inbox (SFH-04). Nil in production.
+var steerUpwardAfterInboxAppendTestHook func(recipient, messageID string) error
+
+// steerUpwardDelivererAfterLiveTurnCheckTestHook is a deterministic seam for
+// the IsAlive-to-enqueue boundary. It is nil in production.
+var steerUpwardDelivererAfterLiveTurnCheckTestHook func(sessionID string, generation int)

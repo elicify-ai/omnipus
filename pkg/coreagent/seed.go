@@ -4,7 +4,6 @@ package coreagent
 
 import (
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -96,7 +95,7 @@ var allStaticToolNames = []string{
 	// on an override key absent from it.
 	"list_mounts",
 	"search_web", "fetch_url",
-	"send_message", "switch_agent", "send_file",
+	"send_message", "answer_request", "send_file",
 	"find_skills", "install_skill",
 	// Skill (ADR-072 D1): the on-demand skill load/search tool, wired into
 	// this literal alongside ToolSearch below — see its "Structural floor"
@@ -135,10 +134,25 @@ var allStaticToolNames = []string{
 	// PANICS validateOverrideKeys at boot.
 	"goal_claim",
 	"list_tasks", "create_task", "update_task", "delete_task", "list_agents",
+	// r17 §7.9 — the read-back tools beside list_tasks.
+	"get_task", "get_plan", "get_goal",
 	"remember", "recall_memory", "run_retrospective", "recall_conversation",
 	"serve_web",
 	"set_todos",
 	"read_inbox", "search_email", "read_message", "send_email", "reply",
+	// create_email_draft (email-mail-view-spec §2.7 point 4): the
+	// Drafts-only compose tool. Catalog inclusion keeps the
+	// catalog↔ceiling parity test one-for-one with the shipped
+	// defaults.go entry and keeps validateOverrideKeys exhaustive —
+	// the D19 fill (pkg/gateway/rest_mailbox.go) and the ADR-090
+	// inventory grant reference this name.
+	"create_email_draft",
+	// Attachment tools (ADR-20261001 F3, w4): list/read/save for RECEIVED
+	// attachments. An override key absent from this literal PANICS
+	// validateOverrideKeys at boot, so the three names land here in the
+	// same commit as their ceiling entries (defaults.go) and their ADR-090
+	// inventory grants.
+	"list_email_attachments", "read_email_attachment", "download_email_attachment",
 	"ToolSearch",
 	// ADR-056 — the unified read-only background-job roster (plans owned,
 	// subagents delegated, standalone tasks assigned to or created by the
@@ -190,20 +204,19 @@ var allStaticToolNames = []string{
 
 	// Sysagent management tools.
 	"create_workspace", "update_workspace", "delete_workspace", "list_workspaces", "get_workspace",
-	"read_agent_metadata",
 	"configure_provider", "list_providers", "test_provider", "list_models",
 	"run_doctor", "get_usage",
 	"add_mcp_server", "remove_mcp_server", "list_mcp_servers",
-	"create_skill", "edit_skill",
-	"create_task_in_workspace", "update_task_in_workspace", "delete_task_in_workspace", "list_tasks_in_workspace",
-	"remove_skill", "list_skills",
+	"edit_skill", "get_skill", "list_skills",
 	"enable_channel", "configure_channel", "disable_channel", "list_channels", "test_channel",
 	"get_config", "set_config",
-	"create_agent", "get_agent", "get_agent_tools", "update_agent", "delete_agent",
+	"create_agent", "get_agent", "update_agent", "delete_agent",
 
 	// ADR-052 — autonomous agent plan execution: planning tools + the
 	// verifier-role-only inspect_session tool.
 	"create_plan", "execute_plan", "run_task", "inspect_session",
+	// r17 §7.3 — update_plan beside create_plan.
+	"update_plan",
 
 	// ADR-055 (plan-supervisor-spec FR-006) — the supervision/containment
 	// pair. plan_correct is PlanSupervisor's ONLY tool (the correction verb
@@ -312,17 +325,30 @@ var allStaticToolNames = []string{
 	// implementation. Shipped at the
 	// global ceiling as "ask": the existing tool-approval mechanism IS the
 	// approval. Founder ruling (2026-09-18): setup permission is set at BOTH
-	// levels — the ceiling asks, AND every agent permitted to set up
-	// environments carries an explicit stored "ask" of its own (Mia, General
-	// Purpose, Admin via the deliberate-posture list in
-	// adr090SparseRolePolicies; new custom native agents via the constructor
-	// below), so a later ceiling raise loosens none of them. Jim, Ava,
-	// Planner and Researcher persist an explicit deny; Judge and Plan
-	// Supervisor stay locked deny via systemAgentSeed. Same one-commit rule
+	// levels — the ceiling asks, AND the Main/Worker defaults carry a stored
+	// "ask" of their own, so a later ceiling raise does not remove that
+	// posture. The 2026-10-22 default table extends Ask to every ordinary
+	// Main/Worker role; Omnipus keeps its no-per-agent-Ask exception and
+	// rides the ceiling. Judge and Plan Supervisor stay locked deny via
+	// systemAgentSeed. Same one-commit rule
 	// as every block above — the ceiling entry (pkg/config/defaults.go's
 	// defaultToolPoliciesGeneral), the per-agent seeds and this literal land
 	// together.
 	"environment_setup",
+	// Omnipus system agent (omnipus-system-agent spec §6.5, FR-007, FR-021):
+	// the secret, connection, permission and conversation tools are
+	// classified here — and in the shipped ceiling, the role inventories, the
+	// custom constructor and the Auto table — in the same change, ahead of
+	// their implementations landing (WU-4/5/6/7, landing 2 for
+	// read_conversation and list_mailboxes), under the same rule as the
+	// ADR-052 four above. set_agent_permissions is implemented in
+	// pkg/sysagent/tools (FR-024).
+	"request_secret", "list_secrets", "remove_secret", "select_secret_version",
+	"connect_channel", "connect_mailbox", "set_agent_permissions",
+	"read_conversation", "list_mailboxes",
+	// channels-spec-r8 FR-032: the dedicated outbound-list writer, implemented
+	// in pkg/sysagent/tools and always asking (FR-036).
+	"set_channel_outbound",
 }
 
 // AllStaticToolNames returns a copy of the full static builtin tool-name
@@ -398,13 +424,17 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 func coreAgentSkills(id CoreAgentID) []string {
 	switch id {
 	case IDMia:
-		return []string{"interview", "handoff", "define-goal", "inbox-triage", "elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"}
+		return []string{"interview", "define-goal", "inbox-triage", "elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"}
 	case IDJim:
 		return []string{"interview", "orchestrate", "plan", "define-goal"}
-	case IDAva:
-		return []string{"interview", "agent-authoring", "skill-authoring", "tool-mapping", "skill-mapping", "delegation-graph", "workspace-team"}
-	case IDAdmin:
-		return []string{"interview", "mcp-install", "provider-setup", "channel-setup", "doctor"}
+	case IDOmnipus:
+		// omnipus-system-agent FR-010/WU-9: the Omnipus workflow skills,
+		// granted to Omnipus only; interview stays shared with Mia and Jim.
+		return []string{"interview",
+			"create-agent", "change-agent", "remove-agent", "write-skill", "install-skill",
+			"team-delegation", "welcome-workspace", "add-connector", "remove-connector",
+			"add-provider", "provider-config", "connect-channel", "disable-channel",
+			"doctor-usage", "shell-diagnosis", "team-setup", "capability-plan", "dependency-check"}
 	case IDPlanner:
 		return []string{"plan", "define-goal"}
 	case IDResearcher:
@@ -416,18 +446,56 @@ func coreAgentSkills(id CoreAgentID) []string {
 	}
 }
 
+// missingSkills returns the names in want that have lacks, in want's order.
+func missingSkills(have, want []string) []string {
+	held := make(map[string]bool, len(have))
+	for _, name := range have {
+		held[name] = true
+	}
+	var out []string
+	for _, name := range want {
+		if !held[name] {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
 // HasSystemAllowsInConstructorSeed returns true if the named core agent's
-// constructor seed contains explicit system.* allow entries (FR-062).
-// Today only Ava qualifies. This is the predicate for the boot-time
-// "critical abort on corrupt config" path.
+// seed grants the system-management tools (FR-062). Today only Omnipus
+// qualifies (spec §6.5: the management family rides the ceiling for it alone).
+// This is the predicate for the boot-time "critical abort on corrupt config"
+// path.
 func HasSystemAllowsInConstructorSeed(agentID string) bool {
-	return CoreAgentID(agentID) == IDAva
+	return CoreAgentID(agentID) == IDOmnipus
 }
 
 // coreAgentDelegation supplies fresh workspace graph defaults: Jim can assign
-// Planner, Researcher, General Purpose, himself and Ava for configuration proposals;
-// Planner can ask Researcher;
-// General Purpose can create same-role helpers. Other roles have no seeded edges.
+// Planner, Researcher, General Purpose and himself; Mia can hand work to
+// General Purpose and fork herself; Planner can ask Researcher and fork
+// itself; General Purpose can fork itself; Omnipus forks itself for its
+// helpers at depth 1.
+//
+// SELF-EDGE (settled design, 2026-10-09): EVERY agent gets a self-edge
+// CANDIDATE — it may fork a NEW session running the same agent exactly like any
+// other target, seeded as an ordinary, visible, workspace edge a person can
+// remove in the policy editor. This function does NOT decide which ids actually
+// receive a self-row: the OPERATOR exclusion data
+// (config.workspace_seed_defaults.self_edge.exclude_agent_ids, shipped as
+// judge/plansupervisor and resolved by config.SelfEdgeExcludeAgentIDSet) is the
+// only exclusion every seed WRITER applies, so the hidden System Agents ship
+// without a self-row while an operator who empties the list gives them one.
+// There is NO IsSystemAgentID (or any other Go identity) predicate on this seed
+// path — the exclusion is DATA, never code (session-core FR-015).
+//
+// A newly created custom agent has no compiled-in case here and lands in the
+// default arm, so it too receives a self-edge — "every new agent at creation
+// time". The edge is only materialized into a workspace graph for an agent that
+// is actually present in config, on that workspace's team, AND not in the
+// operator's exclusion list (the gateway's defaultWorkspaceDelegationEdges,
+// update_workspace's seedDelegationEdgesForNewMembers and create_agent's join
+// all apply those filters).
+//
 // Task/background are agent delegation modes. Workspace creation translates
 // background into the graph's direct mode; this return value is not a graph.
 func coreAgentDelegation(id CoreAgentID) *config.DelegationPolicy {
@@ -437,16 +505,24 @@ func coreAgentDelegation(id CoreAgentID) *config.DelegationPolicy {
 	switch id {
 	case IDJim:
 		return &config.DelegationPolicy{
-			To: []config.AgentRef{ref(IDPlanner), ref(IDResearcher), ref(IDWorker), ref(IDJim), ref(IDAva)},
+			To: []config.AgentRef{ref(IDPlanner), ref(IDResearcher), ref(IDWorker), ref(IDJim)},
 			Modes: []config.DelegationMode{
 				config.DelegationModeTask,
 				config.DelegationModeBackground,
 			},
 		}
-	case IDPlanner:
-		// Planner can gather research before authoring the plan.
+	case IDMia:
+		// Mia hands bounded work to the General Purpose worker (founder test,
+		// gap 6) and forks herself. Seeded as ordinary workspace edges; the
+		// operator can remove them in the policy editor.
 		return &config.DelegationPolicy{
-			To: []config.AgentRef{ref(IDResearcher)},
+			To:    []config.AgentRef{ref(IDMia), ref(IDWorker)},
+			Modes: []config.DelegationMode{config.DelegationModeTask, config.DelegationModeBackground},
+		}
+	case IDPlanner:
+		// Planner can gather research before authoring the plan, and fork itself.
+		return &config.DelegationPolicy{
+			To: []config.AgentRef{ref(IDPlanner), ref(IDResearcher)},
 			Modes: []config.DelegationMode{
 				config.DelegationModeBackground,
 				config.DelegationModeTask,
@@ -458,9 +534,19 @@ func coreAgentDelegation(id CoreAgentID) *config.DelegationPolicy {
 			To:    []config.AgentRef{ref(IDWorker)},
 			Modes: []config.DelegationMode{config.DelegationModeTask, config.DelegationModeBackground},
 		}
+	case IDOmnipus:
+		// Omnipus's one ordinary self-row (OSA-8) runs its helpers; its depth
+		// is exactly 1 (spec §6.2) — a helper never forks again.
+		return &config.DelegationPolicy{To: []config.AgentRef{ref(IDOmnipus)}, SelfDepth: intPtr(1)}
 	default:
-		// Other roles receive no onward delegation by default.
-		return nil
+		// Every other agent (Researcher, the hidden System
+		// Agents, and every custom agent created later) gets a SINGLE self-edge
+		// CANDIDATE. Which ids actually receive the row is decided by the WRITERS
+		// from the operator's exclusion data (config.workspace_seed_defaults.
+		// self_edge.exclude_agent_ids) — never here by an identity predicate: a
+		// System Agent ships without a self-row only because the shipped list
+		// names it, and an operator who empties the list gives them one.
+		return &config.DelegationPolicy{To: []config.AgentRef{ref(id)}}
 	}
 }
 
@@ -491,24 +577,38 @@ func SeedDelegationEdges(id CoreAgentID) *config.DelegationPolicy {
 }
 
 // FreshSelfDelegationMaxDepth is the ADR-090 FR-006 pin for a freshly seeded
-// Jim→Jim or Worker→Worker workspace edge: 3, or the lower configured global
-// ceiling. Applied per-edge by SeededEdgeDepth — never as a role-wide
-// DelegationPolicy.Depth, which would also clamp Jim's staff edges.
-const FreshSelfDelegationMaxDepth = 3
+// SELF workspace edge (any agent, from == to): 10, or the lower configured
+// global ceiling. Applied per-edge by SeededEdgeDepth — never as a role-wide
+// DelegationPolicy.Depth, which would also clamp an agent's other edges.
+const FreshSelfDelegationMaxDepth = 10
 
 // SeededEdgeDepth returns the depth pointer a freshly seeded workspace edge
-// should carry. Permitted self-edges (Jim, General Purpose) get an explicit
+// should carry. Every SELF-edge (from == to) gets an explicit
 // min(FreshSelfDelegationMaxDepth, ceiling) so a raised global cap cannot
-// deepen a fresh self-chain beyond 3, and a lowered cap cannot cause
-// Validate to drop the edge. Every other pair copies policyDepth (nil stays
-// inherit). ceiling is the already-resolved effective global cap
+// deepen a fresh self-chain beyond 10, and a lowered cap cannot cause
+// Validate to drop the edge — with no ID predicate: session-core C-DELEGATE
+// (E-DELEGATE-CONFIG) applies the fresh self default to every freshly seeded
+// self-row, not only Jim/Worker. Every non-self pair copies policyDepth (nil
+// stays inherit). ceiling is the already-resolved effective global cap
 // (delegationDepthCeiling / workspaceDelegationDepthCeiling); non-positive
-// is treated as unset and the pin stays 3.
+// is treated as unset and the pin stays 10.
 func SeededEdgeDepth(from, to string, policyDepth *int, ceiling int) *int {
-	if from == to && (from == string(IDJim) || from == string(IDWorker)) {
+	return SeededEdgeDepthWithSelf(from, to, policyDepth, nil, ceiling)
+}
+
+// SeededEdgeDepthWithSelf is SeededEdgeDepth plus a role's SelfDepth data
+// (config.DelegationPolicy.SelfDepth): for a self-edge it lowers the fresh pin
+// further to selfDepth when that is set and smaller — Omnipus's self-row ships
+// depth 1 (spec §6.2). It never raises the pin and never touches a non-self
+// edge. Callers that hold the seeded DelegationPolicy pass its SelfDepth.
+func SeededEdgeDepthWithSelf(from, to string, policyDepth, selfDepth *int, ceiling int) *int {
+	if from == to {
 		d := FreshSelfDelegationMaxDepth
 		if ceiling > 0 && ceiling < d {
 			d = ceiling
+		}
+		if selfDepth != nil && *selfDepth > 0 && *selfDepth < d {
+			d = *selfDepth
 		}
 		return &d
 	}
@@ -584,12 +684,16 @@ func SeedConfig(cfg *config.Config) bool {
 			a.Description = ca.Description
 			sc.modified = true
 		}
-		if a.Color != ca.Color {
-			a.Color = ca.Color
+		if a.Figure != ca.Figure {
+			a.Figure = ca.Figure
 			sc.modified = true
 		}
-		if a.Icon != ca.Icon {
-			a.Icon = ca.Icon
+		if a.Role != ca.Role {
+			a.Role = ca.Role
+			sc.modified = true
+		}
+		if a.Color != ca.Color {
+			a.Color = ca.Color
 			sc.modified = true
 		}
 		// Fresh-install-only skill-allowlist seed (ADR-072 D5.1, FR-034).
@@ -601,8 +705,8 @@ func SeedConfig(cfg *config.Config) bool {
 		// migrate (§6.2), and re-running it on every boot would silently
 		// restore a grant list the operator later emptied on purpose — the
 		// exact ADR-054 D6.4 "reports success, doesn't stick" failure mode.
-		// Gating on isFreshInstall (same flag as the AutoRecap/DefaultAgentID
-		// seeds above) makes this fire once, on the very first boot, and
+		// Gating on isFreshInstall (same flag as the AutoRecap
+		// seed above) makes this fire once, on the very first boot, and
 		// never again. Do NOT restore this to an unconditional migration.
 		if sc.isFreshInstall && len(a.Skills) == 0 {
 			if seedSkills := coreAgentSkills(ca.ID); len(seedSkills) > 0 {
@@ -610,12 +714,23 @@ func SeedConfig(cfg *config.Config) bool {
 				sc.modified = true
 			}
 		}
+		// FR-135 (#1482, tool-parity r17 §6, US-14): the core Omnipus agent's
+		// workflow skills are product-owned, not an operator choice — without
+		// them its own workflows (Add agent, Set up a team) dead-end. They are
+		// reconciled at every start: a missing current grant is added; every
+		// other entry (a person's extra skill) is kept. Other core agents are
+		// untouched (the D5.1 rule above stands for them).
+		if ca.ID == IDOmnipus {
+			if missing := missingSkills(a.Skills, coreAgentSkills(IDOmnipus)); len(missing) > 0 {
+				a.Skills = append(a.Skills, missing...)
+				sc.modified = true
+			}
+		}
 
 		// Idempotent Type re-enforcement (tamper protection). The subagent tier
 		// (worker + specialists) MUST carry Type=worker and base agents Type=core —
 		// these classify routing and chat-target eligibility, so a tampered/absent
-		// Type is corrected on every boot. A subagent-tier agent can never be the
-		// default: clear a stray Default flag too.
+		// Type is corrected on every boot.
 		wantType := config.AgentTypeCore
 		if IsSubagentTierID(ca.ID) {
 			wantType = config.AgentTypeWorker
@@ -625,10 +740,6 @@ func SeedConfig(cfg *config.Config) bool {
 			sc.modified = true
 		}
 		if IsSubagentTierID(ca.ID) {
-			if a.Default {
-				a.Default = false
-				sc.modified = true
-			}
 			// Idempotent executor migration: the seeded subagent-tier agents run
 			// native. Fill the executor only when the existing entry has none, so an
 			// operator who pointed it at an external-cli/remote runtime keeps their
@@ -669,13 +780,6 @@ func SeedConfig(cfg *config.Config) bool {
 		}
 		policies := coreAgentSeed(ca.ID)
 		isSubagentTier := IsSubagentTierID(ca.ID)
-		// Mia is the default agent on fresh installs: she appears first in the
-		// All() list and is the friendliest entry-point for new users. A subagent
-		// (worker or specialist) is NEVER the default — it is not a chat target.
-		// Only set Default=true on the fresh-seed path (here). The re-enforcement
-		// loop above intentionally does NOT touch the Default field on existing
-		// entries so operator choices survive config reload.
-		isDefault := ca.ID == IDMia
 		// Type: the subagent tier (worker + specialists) is Type=worker; every
 		// other seeded agent is a base/core agent.
 		agentType := config.AgentTypeCore
@@ -686,11 +790,11 @@ func SeedConfig(cfg *config.Config) bool {
 			ID:          string(ca.ID),
 			Name:        ca.Name,
 			Description: ca.Description,
+			Figure:      ca.Figure,
+			Role:        ca.Role,
 			Color:       ca.Color,
-			Icon:        ca.Icon,
 			Type:        agentType,
 			Locked:      true,
-			Default:     isDefault,
 			CreatedAt:   timePtr(time.Now().UTC()),
 			// Per-agent skill allowlist (FR-9.4): default-DENY enforced at skill
 			// resolution. Nil for agents with no seeded skills (unrestricted).
@@ -729,6 +833,11 @@ func SeedConfig(cfg *config.Config) bool {
 	if seedSystemAgents(sc.cfg, sc.existing) {
 		sc.modified = true
 	}
+	// Custom agents only. Built-ins were enforced above and must not
+	// also pass through the one-time icon/hex map.
+	if migrateUnenforcedAgentIdentity(sc.cfg) {
+		sc.modified = true
+	}
 
 	// ADR-074 D4 / ADR-080 D-SKILL: the one-shot, marker-keyed skill-grant
 	// migrations for existing installs do NOT run on this seed path. ADR-090
@@ -756,30 +865,6 @@ func (sc *seedConfig) seedFreshInstallDefaults() {
 			sc.cfg.Agents.Defaults.BootstrapRecapEnabled = true
 			sc.modified = true
 		}
-	}
-
-	// RELEASE BLOCKER fix: Mia being "the default agent" on a fresh install
-	// was previously ONLY expressed via the per-entity AgentConfig.Default
-	// stamp on her fresh-seed record below (isDefault := ca.ID == IDMia) —
-	// but ADR-054 D6.4 moved default-agent RESOLUTION entirely to the
-	// settings singleton (cfg.Agents.Defaults.DefaultAgentID; see
-	// pkg/agent.AgentRegistry.GetDefaultAgent and
-	// pkg/routing.RouteResolver.resolveDefaultAgentID) and nothing ever seeded
-	// THAT field, so a fresh install had NO configured default at all:
-	// webchat and channel routing each fell back to a DIFFERENT priority-2/3
-	// default and disagreed. Seed the singleton here, on the exact same
-	// isFreshInstall gate the AutoRecap seed above uses, so a fresh install's
-	// actual resolved default matches the documented "Mia is default" intent.
-	// The per-entity Default:true stamp on Mia's fresh-seed record below is
-	// UNCHANGED (kept for backward display compatibility per config.go's
-	// ADR-054 D6.4 note) — this only adds the singleton write alongside it.
-	// Guarded by "still empty" so an operator's pre-boot env override
-	// (OMNIPUS_DEFAULT_AGENT_ID) is never clobbered, and so this is a
-	// fresh-install-only seed, not a re-enforcement that would overwrite an
-	// operator's later choice on every subsequent boot.
-	if sc.isFreshInstall && strings.TrimSpace(sc.cfg.Agents.Defaults.DefaultAgentID) == "" {
-		sc.cfg.Agents.Defaults.DefaultAgentID = string(IDMia)
-		sc.modified = true
 	}
 }
 
@@ -814,133 +899,147 @@ const SkillsMigrationDefineDone = "adr074-define-done"
 // marker sits outside those two scanned roots regardless.
 const SkillsMigrationDefineGoalRename = "adr080-define-goal-rename"
 
-// NewCustomAgentToolsCfg returns the default AgentToolsCfg for a newly created
-// custom/subagent/subagent_3p agent (FR-008, FR-022). Every new agent starts
-// fully-enumerated and deny-by-default (via denyAllThenOverride) — there is
-// no DefaultPolicy field and no allow-by-default fallback. Only a narrow,
-// conservative read-only surface is allowed out of the box (plus the
-// structural ToolSearch floor every agent gets — CLAUDE.md constraint 6, see
-// the "ToolSearch" entry below); the operator opts in explicitly (via the
-// tool picker or tools.builtin.policies) for anything else, including bash
-// and every system-management tool (create_agent, set_config,
-// add_mcp_server, …), which all stay denied.
+// NewCustomAgentToolsCfg returns the Main-agent creation defaults (founder
+// ruling, 2026-10-22). denyAllThenOverride still enumerates EVERY static tool
+// explicitly (R-12): only the named workflow tools below are granted; other
+// tools, including administration and bash, stay denied. These are editable
+// per-agent policies, not a runtime fallback or an extra permission layer.
+// The global ceiling still bounds every grant under strictest-wins.
 //
-// Callers should embed this into config.AgentConfig.Tools when constructing a
-// new agent via the REST API or create_agent tool.
+// REST create, create_agent and get_agent's new-agent preview share this constructor.
+// Worker callers apply RestrictForWorkerTier before any operator overrides.
+// Each call returns independent maps so one agent cannot change another's seed.
 //
-// bash:deny rationale (CRIT-001/FR-B12): pkg/tools/compositor.go's
-// passesScopeGate does NOT hard-deny ScopeCore tools (which "bash" is) for
-// custom agents — it defers to the merged policy. Denying it here explicitly
-// (rather than relying on an absent map entry) is what keeps a fresh agent
-// from getting shell access with zero configuration. This is the SINGLE
-// shared seed location for both agent-creation paths (the REST
-// POST /api/v1/agents handler in pkg/gateway/rest.go's createAgent, and the
-// LLM-driven system.agent.create tool in
-// pkg/sysagent/tools/agent.go's AgentCreateTool.Execute) — both call this
-// constructor rather than seeding independently, so the two paths cannot
-// drift out of sync again. Renamed from "exec" to "bash" by ADR-036 (the
-// tool-consolidation work this seed anticipated — see the migration in
-// pkg/config/shell_tool_policy_migration.go for existing persisted "exec"
-// policy entries).
+// bash:deny remains unchanged (CRIT-001/FR-B12): the scope gate defers to the
+// merged policy for custom agents. An explicit deny keeps a fresh agent from
+// gaining shell access just because the global ceiling permits it.
 func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
-	allow := config.ToolPolicyAllow
-	ask := config.ToolPolicyAsk
-	policies := &config.AgentToolsCfg{
+	allow, ask := config.ToolPolicyAllow, config.ToolPolicyAsk
+	return &config.AgentToolsCfg{
 		Builtin: config.AgentBuiltinToolsCfg{
 			Policies: denyAllThenOverride(map[string]config.ToolPolicy{
-				// AskUserQuestion (spec US-7 S1): customs' default allowlist
-				// carries it — every human-facing agent may ask the user
-				// structured clarification questions; never `ask`-gate asking.
-				"AskUserQuestion": allow,
-				// set_goal (ADR-088 D2): customs' default allowlist carries
-				// it too — every human-facing agent may author its own
-				// session's goal record, seeded alongside AskUserQuestion.
-				"set_goal": allow,
-				// goal_claim (ADR-084 D12, JUDGE-FR-089): customs' default
-				// allowlist carries it too, seeded alongside set_goal — see
-				// that entry's comment above. R-12: this is the SEVENTH
-				// per-agent policy map, and every new tool name in this
-				// delivery gets an explicit, intended entry here too — an
-				// absent key is not an unknown key, so validateOverrideKeys
-				// does not panic, but a fresh custom agent would silently
-				// resolve the tool to the denyAllThenOverride floor (deny)
-				// with no test noticing.
-				"goal_claim": allow,
-				// browser_handover (ADR-085 BROWSER-FR-051, C-70): EXPLICIT
-				// deny, not absence, for the same R-12 reason directly
-				// above. Customs' default allowlist grants no browser_*
-				// tool at all (see the conservative initial allow-list
-				// below), so it holds no browser action set to stand down
-				// from — an operator who wants a custom agent driving the
-				// browser changes this entry on their own install.
-				"browser_handover": config.ToolPolicyDeny,
-				// Conservative initial allow-list: read-only filesystem +
-				// persistent memory. Everything else — bash included — stays
-				// denied until the operator opts in.
-				"read_file":      allow,
-				"list_directory": allow,
-				// library_list/library_read (D3, library-spec) are part of
-				// the same read-only filesystem surface as read_file/
-				// list_directory above — a fresh agent can find and read
-				// whatever the operator uploaded to this workspace's chat.
-				"library_list":  allow,
-				"library_read":  allow,
-				"request_mount": ask,
-				// environment_setup (ADR-090 ES-FR-01, founder ruling
-				// 2026-09-18: setup permission is set at BOTH levels):
-				// new custom native agents stamp an explicit per-agent
-				// "ask", the same deliberate-posture data Mia, General
-				// Purpose and Admin carry — NOT an omission riding the
-				// ceiling — so a later ceiling raise loosens no one.
-				// Precedent: request_mount above (ceiling ask, per-agent
-				// ask; strictest-wins keeps ask+ask → ask). Both creation
-				// routes (REST create, create_agent) and the
-				// get_agent_tools preview read this ONE constructor, so
-				// creation default and preview cannot drift. A saved
-				// operator override (deny included) always wins over this
-				// default.
-				"environment_setup":   ask,
-				"list_mounts":         allow,
+				// Asking a question is itself allowed, never approval-gated.
+				"AskUserQuestion":     allow,
+				"send_message":        allow,
+				"message_parent":      allow,
+				"answer_request":      allow,
+				"read_conversation":   allow,
+				"set_todos":           allow,
+				"goal_claim":          allow,
+				"set_goal":            allow,
 				"remember":            allow,
 				"recall_memory":       allow,
-				"run_retrospective":   allow,
 				"recall_conversation": allow,
-				// Structural floor (CLAUDE.md constraint 6): every agent needs
-				// ToolSearch to reach ANY tiered (lazy/search-only) tool at all —
-				// seeded here as real data rather than the retired compositor.go
-				// hardcoded force-allow.
-				"ToolSearch": allow,
-				// Structural floor (ADR-072 D1, mirroring the ToolSearch
-				// structural floor immediately above): every agent needs the
-				// Skill tool to load ANY skill's content at all — the "# Skills"
-				// menu advertises skills but nothing else can ever load one.
-				"Skill": allow,
-				// ADR-081 D11 (FR-009), FOUNDER RULING (2026-09-07, updated
-				// after this constructor originally shipped grep as a
-				// hardcoded deny like every other unopted-in tool): "There
-				// must not be any tool default to deny — the global policy
-				// sets the default, not any hardcoded default." grep is
-				// EXPLICIT "allow" here, not merely omitted: this map is
-				// built via denyAllThenOverride, which fully enumerates
-				// every static builtin name with a literal value (no sparse
-				// variant exists for this constructor — see
-				// TestAgentConstructor_CustomAgent_DenyByDefaultFullCoverage's ElementsMatch pin and
-				// pkg/gateway/rest.go's createAgent, which validates a
-				// CALLER-submitted map for completeness via
-				// ValidateSubmittedToolPolicyMap under the same
-				// fully-enumerated contract), so an explicit "allow" is the
-				// only way to make a brand-new custom agent's grep resolve
-				// to the global ceiling's "allow" instead of a hardcoded
-				// per-agent deny that would otherwise BEAT the ceiling under
-				// strictest-wins. This closes the one gap the original
-				// ADR-081 D11 governance change deliberately left open (a
-				// fresh custom agent still denied grep by default,
-				// unlike every pre-existing agent's upgrade-path backfill,
-				// which already resolves allow — see
-				// tool_policy_catalog_drift.go's matching MV-8 exception).
-				"grep": allow,
+				"run_retrospective":   allow,
+				"delegate":            allow,
+				"list_agents":         allow,
+				"get_agent":           allow,
+				"inspect_session":     allow,
+				"list_jobs":           allow,
+				"create_plan":         allow,
+				"execute_plan":        allow,
+				"update_plan":         allow,
+				"stop_plan":           allow,
+				"plan_correct":        allow,
+				"list_tasks":          allow,
+				"get_task":            allow,
+				"get_plan":            allow,
+				"get_goal":            allow,
+				"update_task":         allow,
+				"create_task":         allow,
+				"delete_task":         ask,
+				// Discovery and skill loading are seeded data, not forced
+				// grants in the compositor. Skill changes keep Ask (skills
+				// spec r15 §10); the read of one skill is allowed.
+				"Skill":       allow,
+				"ToolSearch":  allow,
+				"find_skills": allow,
+				"list_skills": allow,
+				"get_skill":   allow,
+				"edit_skill":  ask,
+				"search_web":  allow,
+				"fetch_url":   allow,
+				// A browsing agent can also recover dialogs and hand over
+				// the browser. Upload alone keeps its consent gate.
+				"browser_navigate":      allow,
+				"browser_click":         allow,
+				"browser_type":          allow,
+				"browser_screenshot":    allow,
+				"browser_get_text":      allow,
+				"browser_wait":          allow,
+				"browser_evaluate":      allow,
+				"browser_list_tabs":     allow,
+				"browser_switch_tab":    allow,
+				"browser_close_tab":     allow,
+				"browser_open_tab":      allow,
+				"browser_select_option": allow,
+				"browser_press_key":     allow,
+				"browser_hover":         allow,
+				"browser_snapshot":      allow,
+				"browser_handle_dialog": allow,
+				"browser_handover":      allow,
+				"browser_upload_file":   ask,
+				"read_file":             allow,
+				"list_directory":        allow,
+				"grep":                  allow,
+				"list_mounts":           allow,
+				// Library reads reach files uploaded to this workspace;
+				// writes remain subject to the normal filesystem checks.
+				"library_list":  allow,
+				"library_read":  allow,
+				"write_file":    allow,
+				"edit_file":     allow,
+				"append_file":   allow,
+				"send_file":     allow,
+				"request_mount": ask,
+				"serve_web":     allow,
+				// Drafting and received attachments do not send mail.
+				"read_inbox":                allow,
+				"search_email":              allow,
+				"read_message":              allow,
+				"create_email_draft":        allow,
+				"list_email_attachments":    allow,
+				"read_email_attachment":     allow,
+				"download_email_attachment": allow,
+				"send_email":                ask,
+				"reply":                     ask,
+				"list_secrets":              allow,
+				"request_secret":            allow,
+				"list_workspaces":           allow,
+				"get_workspace":             allow,
+				// Setup approval is explicit at both levels so a later
+				// ceiling raise does not remove the agent's Ask posture.
+				"environment_setup": ask,
+				"bash":              config.ToolPolicyDeny,
+				// Founder Q4 (2026-11-03): every chat-capable agent may change
+				// a connection's posting list, always with a fresh approval
+				// (channels-spec-r8 FR-036); workers are denied below.
+				"set_channel_outbound": ask,
 			}),
 		},
 	}
-	return policies
+}
+
+// workerTierDeniedTools is the Main-only set from the 2026-10-22 default
+// tool table. Workers may list secrets but ask their main agent to request
+// one; they do not author goals, plans, new tasks or retrospectives, and
+// they do not change skills (skills spec r15 §10). Founder Q4 (2026-11-03)
+// opens set_channel_outbound to chat-capable (Main) agents only.
+var workerTierDeniedTools = []string{
+	"answer_request", "read_conversation", "set_goal", "run_retrospective",
+	"create_plan", "execute_plan", "update_plan", "stop_plan", "plan_correct", "create_task",
+	"request_secret", "edit_skill", "set_channel_outbound",
+}
+
+// RestrictForWorkerTier turns Main creation defaults into Worker defaults
+// (native Subagent or external subagent_3p). This seeds explicit denies, not
+// an immutable restriction: callers apply operator overrides afterwards.
+// A nil cfg or policy map is left alone.
+func RestrictForWorkerTier(cfg *config.AgentToolsCfg) {
+	if cfg == nil || cfg.Builtin.Policies == nil {
+		return
+	}
+	for _, name := range workerTierDeniedTools {
+		cfg.Builtin.Policies[name] = config.ToolPolicyDeny
+	}
 }

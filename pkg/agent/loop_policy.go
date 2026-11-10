@@ -204,6 +204,15 @@ func (al *AgentLoop) resolveToolPolicyAtExec(
 	toolName string,
 	filterTimePolicyMap map[string]string,
 ) string {
+	// Only hidden registrations need this extra session-membership check.
+	// Core tools still pass the exact offered-request and live-policy gates.
+	if cfg := al.GetConfig(); cfg != nil && cfg.Tools.Manifest.Compressed &&
+		tools.ToolManifestTier(toolName) == tools.ManifestLazy &&
+		(ts.agent == nil || !ts.agent.Tools.IsCoreTool(toolName)) &&
+		!al.sessionLoadedTools(ts.manifestBucket())[toolName] &&
+		toolName != "set_goal" && toolName != "AskUserQuestion" {
+		return "deny"
+	}
 	filterTimePolicy, wasInFilterMap := filterTimePolicyMap[toolName]
 	if !wasInFilterMap {
 		// Tool was not included at filter time — treat as deny regardless of live policy.
@@ -384,14 +393,31 @@ func (al *AgentLoop) CheckGrantOrRequestApproval(
 		return true, "", false
 	}
 	approver := al.loadToolApprover()
-	return approver.RequestApproval(ctx, PolicyApprovalReq{
-		ToolCallID: toolCallID,
-		ToolName:   toolName,
-		Args:       cloneStringAnyMap(args),
-		AgentID:    agentID,
-		SessionID:  sessionID,
-		TurnID:     turnID,
+	var origin approvalOrigin
+	if ts := turnStateFromContext(ctx); ts != nil {
+		origin = ts.currentApprovalOrigin()
+	}
+	approved, denialReason, recordGrant = approver.RequestApproval(ctx, PolicyApprovalReq{
+		ToolCallID:  toolCallID,
+		ToolName:    toolName,
+		Args:        cloneStringAnyMap(args),
+		AgentID:     agentID,
+		SessionID:   sessionID,
+		TurnID:      turnID,
+		RoomRef:     origin.roomRefCopy(),
+		OriginLabel: origin.Label,
 	})
+	// A session Stop is control, not an ordinary refusal for the model to
+	// interpret. The owning chat may have withdrawn this helper's approval
+	// without targeting any of its already-running siblings. End only the
+	// exact execution that was waiting; user Deny/Cancel still just refuse
+	// the call. This also covers shell pre-flight approvals through this gate.
+	if !approved && denialReason == "session canceled" {
+		if ts := turnStateFromContext(ctx); ts != nil && ts.transcriptSessionID == sessionID && ts.turnID == turnID {
+			ts.requestHardAbort()
+		}
+	}
+	return approved, denialReason, recordGrant
 }
 
 // checkStandingGrant reports whether a standing "Always Allow" grant already
@@ -409,7 +435,14 @@ func (al *AgentLoop) CheckGrantOrRequestApproval(
 // grant-lookup call site along this path (resolveAskPolicy's fast path,
 // requestAskApproval's pre-placeholder check, and this function's own
 // interactive fallback) now shares that one rule via this function.
+//
+// An always-ask tool (tools.AlwaysAskTools; channels-spec-r8 FR-038(a), T-10
+// row 14) is never settled by a standing grant: this one guard covers every
+// grant-lookup call site, so each of its calls gets a fresh approval.
 func (al *AgentLoop) checkStandingGrant(sessionID, agentID, toolName string, args map[string]any) bool {
+	if tools.IsAlwaysAsk(toolName) {
+		return false
+	}
 	if al.ApprovalGrants().IsAllowed(sessionID, agentID, toolName, args) {
 		return true
 	}
@@ -534,6 +567,36 @@ func (al *AgentLoop) emitScheduledAutoDenyAudit(
 	}
 }
 
+// emitTaskRunAutoDenyAudit writes the tool.policy.ask.denied entry for an
+// Ask-policy call refused in a task or plan chain (#1263 R4). Like the
+// scheduled variant it names no approval and no approver — none was ever
+// requested — but its reason is AskDenyReasonTaskRun, and it never warns about
+// a missing schedule identity: a task run has none.
+//
+// The row names the ACTING session — the concrete transcript the call was
+// refused in — not the turn's history scope: a task run's scope is
+// agent:<agent>:task:<task>, shared by every run of that task (gate round 1,
+// security S1; adr-057 session-unification spec, regression row 6).
+func (al *AgentLoop) emitTaskRunAutoDenyAudit(ctx context.Context, ts *turnState, toolName string) {
+	sessionID := ts.transcriptSessionID
+	if sessionID == "" {
+		sessionID = ts.sessionKey
+	}
+	audit.EmitToolPolicyAskDenied(
+		ctx,
+		al.auditLogger,
+		"", // approvalID — no approval request was made
+		"", // approverUserID — no human actor
+		toolName,
+		ts.agentID,
+		sessionID,
+		ts.turnID,
+		audit.AskDenyReasonTaskRun,
+		"",  // argsHash — not available at this call site
+		nil, // cancelledToolCallIDs — not applicable
+	)
+}
+
 // ShellPermissionGate implements tools.ShellModeResolver and
 // tools.ShellApprovalRequester: the ADR-092 adapter connecting the bash
 // tool's enforcement (pkg/tools/shell_permission_mode.go — D3 ask rules, D7
@@ -580,7 +643,7 @@ func (g *ShellPermissionGate) ResolveShellMode(ctx context.Context, agentID, ses
 	if m, ok := pinnedShellMode(ctx); ok {
 		return m
 	}
-	return g.liveMode(agentID, sessionID, false)
+	return g.liveMode(agentID, sessionID)
 }
 
 // liveMode resolves which bash enforcement mode applies to agentID's call in
@@ -607,7 +670,7 @@ func (g *ShellPermissionGate) ResolveShellMode(ctx context.Context, agentID, ses
 // enforcing kernel sandbox (ADR-092 D1/J13, revised) — see
 // autoApproveActive's own doc comment for the accepted risk. Every missing
 // dependency still fails closed to Ask.
-func (g *ShellPermissionGate) liveMode(agentID, sessionID string, delegated bool) tools.ShellMode {
+func (g *ShellPermissionGate) liveMode(agentID, sessionID string) tools.ShellMode {
 	if g == nil || g.Loop == nil {
 		return tools.ShellModeAsk
 	}
@@ -621,7 +684,7 @@ func (g *ShellPermissionGate) liveMode(agentID, sessionID string, delegated bool
 	if g.Loop.ResolveApprovalToolPolicy(agentID, "bash") != string(config.ToolPolicyAsk) {
 		return tools.ShellModeAsk
 	}
-	if !g.Loop.autoApproveActive(agentID, sessionID, delegated) {
+	if !g.Loop.autoApproveActive(sessionID) {
 		return tools.ShellModeAsk
 	}
 	return tools.ShellModeAuto
@@ -654,7 +717,7 @@ func (al *AgentLoop) bashShellModeFor(ts *turnState, toolName string) tools.Shel
 	if toolName != "bash" || ts == nil {
 		return ""
 	}
-	return al.shellGate.liveMode(ts.agentID, ts.transcriptSessionID, ts.isDelegated())
+	return al.shellGate.liveMode(ts.agentID, ts.transcriptSessionID)
 }
 
 // bashCommandArg reads args["command"] as a string, "" when absent or not a
@@ -719,35 +782,9 @@ func (al *AgentLoop) emitShellClassicAskDecisionAudit(ts *turnState, args map[st
 // permission state onto a delegate at spawn: its approval grants (ADR-057
 // two-key InheritFrom) and its per-chat Auto-approve modifier (ADR-092
 // FR-005), both keyed on the parent's own session id and the child's own.
-//
-// Review finding #6 (MEDIUM, 2026-09-23 security fix lane): a delegate must
-// never end up loosened past its OWN AutoApproveDisabled=true, however it
-// inherits — FR-005's "a delegate takes the tightest of (parent modifier,
-// its own override)" makes the delegate's own off-switch a floor the
-// inherited modifier cannot cross. sessionmode.go's per-chat scope is
-// documented and tested (TestResolveAutoApprove) as the one scope allowed
-// to loosen past an agent's off-switch for that CHAT'S OWN directly-
-// attached agent — a human is present and made the choice for exactly that
-// conversation. A delegate's session is not that: nobody reviewed THIS
-// agent's off-switch when the PARENT's chat toggle was set. Skipping the
-// SessionModes() copy here — rather than hardening ResolveAutoApprove
-// itself — leaves that documented direct-chat behaviour intact and closes
-// only the inheritance gap: with no per-chat modifier of its own, the
-// child's later ResolveAutoApprove call falls through to its own agent-level
-// AutoApproveDisabled check, which already resolves to Auto off correctly.
 func (al *AgentLoop) inheritSessionPermissions(parentSessionID, parentAgentID, childSessionID, childAgentID string) {
 	al.ApprovalGrants().InheritFrom(parentSessionID, parentAgentID, childSessionID, childAgentID)
-	if al.agentAutoApproveDisabled(childAgentID) {
-		return
-	}
 	al.SessionModes().InheritFrom(parentSessionID, childSessionID)
-}
-
-// agentAutoApproveDisabled reports whether agentID's own config carries
-// AutoApproveDisabled=true. A nil config or an agent absent from the list
-// reports false (not disabled).
-func (al *AgentLoop) agentAutoApproveDisabled(agentID string) bool {
-	return agentAutoApproveDisabledIn(al.GetConfig(), agentID)
 }
 
 // bashRuleVerdict is the ADR-092 D3 operator-rule verdict for one bash call,

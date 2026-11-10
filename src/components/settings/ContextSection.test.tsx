@@ -29,13 +29,14 @@ vi.mock('@/store/ui', () => ({
   useUiStore: vi.fn(() => ({ addToast: vi.fn() })),
 }))
 
-// Spec defaults (ADR-066 §5 / FR-036): 62,500 / 64,000 / 10,000 / 400,000 /
-// 8,000,000; default_context_window unset; model_overrides empty.
+// Spec defaults (ADR-066 §5 / FR-036, amended by MAJ-CW-007): 62,500 /
+// 64,000 / 10,000 / share fraction 0.5 (50%) / 8,000,000;
+// default_context_window unset; model_overrides empty.
 const DEFAULTS: ContextSettings = ContextSettingsSchema.parse({
   mcp_result_cap: 62500,
   builtin_success_cap: 64000,
   builtin_failure_cap: 10000,
-  absolute_trigger_chars: 400000,
+  tool_result_share_fraction: 0.5,
   ingest_bound_bytes: 8000000,
   model_overrides: [],
 })
@@ -68,12 +69,71 @@ describe('ContextSection (ADR-066 D9, Settings → Models)', () => {
     await waitFor(() => expect(inputByTestId('context-mcp-result-cap').value).toBe('62500'))
     expect(inputByTestId('context-builtin-success-cap').value).toBe('64000')
     expect(inputByTestId('context-builtin-failure-cap').value).toBe('10000')
-    expect(inputByTestId('context-absolute-trigger-chars').value).toBe('400000')
+    expect((screen.getByLabelText('Tool-result share limit') as HTMLInputElement).value).toBe('50')
     expect(inputByTestId('context-ingest-bound-bytes').value).toBe('8000000')
     expect(inputByTestId('context-default-window').value).toBe('')
     expect(screen.getByTestId('context-default-window-source').textContent).toMatch(/not set/i)
     expect(screen.queryAllByTestId('context-override-row')).toHaveLength(0)
     expect(screen.getByTestId('context-overrides-empty')).toBeTruthy()
+  })
+
+  // Independent oracle: ADR-066 MAJ-CW-007 / overflow spec Unit 4 and the
+  // generated ContextSettings{,Update} contracts. Percent = fraction * 100;
+  // these decimal cases must not pass through an integer-only parser.
+  it('MAJ-CW-007: displays a loaded share fraction of 0.125 as 12.5 percent', async () => {
+    vi.mocked(getContextSettings).mockResolvedValue({ ...DEFAULTS, tool_result_share_fraction: 0.125 })
+    renderSection()
+    await waitFor(() =>
+      expect((screen.getByLabelText('Tool-result share limit') as HTMLInputElement).value).toBe('12.5'),
+    )
+  })
+
+  // The contract has an open lower bound (0) and a closed upper bound (1).
+  // UI equivalents cover just above zero, 1%, fractional 12.5%, 99% and 100%.
+  it.each([
+    { percentage: '0.1', fraction: 0.001 },
+    { percentage: '1', fraction: 0.01 },
+    { percentage: '12.5', fraction: 0.125 },
+    { percentage: '99', fraction: 0.99 },
+    { percentage: '100', fraction: 1 },
+  ])('MAJ-CW-007: saves $percentage percent as fraction $fraction and round-trips it', async ({ percentage, fraction }) => {
+    renderSection()
+    const share = await screen.findByLabelText('Tool-result share limit') as HTMLInputElement
+    await waitFor(() => expect(share.value).toBe('50'))
+
+    fireEvent.change(share, { target: { value: percentage } })
+    fireEvent.click(screen.getByTestId('context-save'))
+
+    await waitFor(() => expect(putContextSettings).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(putContextSettings).mock.calls[0][0]).toEqual({ tool_result_share_fraction: fraction })
+    await waitFor(() => expect(screen.getByText('Saved')).toBeVisible())
+    expect((screen.getByLabelText('Tool-result share limit') as HTMLInputElement).value).toBe(percentage)
+  })
+
+  // UI interval is 0 < percentage <= 100, derived from z.number().gt(0).lte(1).
+  // Exact error prose is not prescribed. Range errors must name both bounds;
+  // malformed/empty input must show a nonempty error on this same field.
+  it.each([
+    { kind: 'negative percentage', value: '-1', error: /0.*100/ },
+    { kind: 'zero percentage', value: '0', error: /0.*100/ },
+    { kind: 'percentage above 100', value: '101', error: /0.*100/ },
+    { kind: 'numeric prefix with trailing text', value: '12.5oops', error: /\S/ },
+    { kind: 'empty percentage', value: '', error: /\S/ },
+    { kind: 'NaN', value: 'NaN', error: /\S/ },
+    { kind: 'Infinity', value: 'Infinity', error: /\S/ },
+  ])('MAJ-CW-007: rejects $kind with a visible field error and sends nothing', async ({ value, error }) => {
+    renderSection()
+    const share = await screen.findByLabelText('Tool-result share limit') as HTMLInputElement
+    await waitFor(() => expect(share.value).toBe('50'))
+
+    fireEvent.change(share, { target: { value } })
+    fireEvent.click(screen.getByTestId('context-save'))
+
+    const err = await screen.findByTestId('context-error-tool_result_share_fraction')
+    expect(err).toBeVisible()
+    expect(err.textContent).toMatch(error)
+    expect(share.getAttribute('aria-invalid')).toBe('true')
+    expect(putContextSettings).not.toHaveBeenCalled()
   })
 
   it('B-44: a partial write sends ONLY the changed fields and round-trips the response', async () => {

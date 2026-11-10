@@ -16,6 +16,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers/common"
+	"github.com/elicify-ai/omnipus/pkg/providers/effortdialect"
 	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 )
 
@@ -38,27 +39,128 @@ type Provider struct {
 	client             *anthropic.Client
 	tokenSource        func() (string, error)
 	baseURL            string
+	providerID         string        // catalog identity, preserved when api_base points at a proxy
 	streamStallTimeout time.Duration // streaming silence limit; 0 = common.DefaultStreamStallTimeout
+	// requestTimeout is the client-level request timeout; explicitRequestTimeout
+	// is the operator's request_timeout (issue #1485), zero when the shipped
+	// default applies. Only an explicit value is a hard ceiling on a
+	// non-streaming call that carries a longer deadline.
+	requestTimeout         time.Duration
+	explicitRequestTimeout time.Duration
+
+	// streamHTTPClient is the streaming request's HTTP client: the default
+	// transport plus a response-header CONNECTION guard (issue #1306 — with
+	// no turn timeout, a provider that accepts the request but never sends
+	// headers must still fail, retryably). It bounds only the wait for
+	// headers; the stream body is governed by the stall watcher alone. Nil
+	// for a provider built around a caller-supplied client
+	// (NewProviderWithClient), which owns its own transport.
+	streamHTTPClient *http.Client
 }
 
-// SupportsThinking implements providers.ThinkingCapable.
-func (p *Provider) SupportsThinking() bool { return true }
+// newStreamHTTPClient builds the guarded streaming client.
+func newStreamHTTPClient(headerTimeout time.Duration) *http.Client {
+	var transport *http.Transport
+	if base, ok := http.DefaultTransport.(*http.Transport); ok {
+		transport = base.Clone()
+	} else {
+		transport = &http.Transport{}
+	}
+	transport.ResponseHeaderTimeout = headerTimeout
+	common.GuardTransport(transport)
+	return &http.Client{Transport: transport}
+}
+
+// WithConnectionGuardTimeout overrides the streaming response-header guard
+// (default common.DefaultRequestTimeout). A non-positive value is ignored.
+func (p *Provider) WithConnectionGuardTimeout(d time.Duration) *Provider {
+	if d > 0 && p.streamHTTPClient != nil {
+		p.streamHTTPClient = newStreamHTTPClient(d)
+	}
+	return p
+}
+
+// defaultRequestTimeout is the shipped request timeout (a var so tests can
+// shorten it).
+var defaultRequestTimeout = common.DefaultRequestTimeout //nolint:gochecknoglobals // test seam
 
 func NewProvider(token string) *Provider {
 	return NewProviderWithBaseURL(token, "")
 }
 
-func NewProviderWithBaseURL(token, apiBase string) *Provider {
+func NewProviderWithBaseURL(token, apiBase string, timeoutSeconds ...int) *Provider {
 	baseURL := normalizeBaseURL(apiBase)
-	client := anthropic.NewClient(
-		option.WithAuthToken(token),
+	timeout := defaultRequestTimeout
+	var explicit time.Duration
+	if len(timeoutSeconds) > 0 && timeoutSeconds[0] > 0 {
+		timeout = time.Duration(timeoutSeconds[0]) * time.Second
+		explicit = timeout
+	}
+	opts := []option.RequestOption{
+		option.WithAuthToken(""),
+		option.WithAPIKey(token),
+		option.WithRequestTimeout(timeout),
 		option.WithBaseURL(baseURL),
-	)
+		// D13: the chain owns every retry decision (§7.4's in-chain
+		// rate-limit loop reads the provider's own retry-after fact). An
+		// SDK-internal retry would double-attack a rate-limited candidate
+		// and hide the boundary error whose headers carry the retry-after
+		// fact — so the SDK's default 2 retries are disabled here and the
+		// boundary error reaches the chain verbatim.
+		option.WithMaxRetries(0),
+	}
+	// Hosted edition: the non-streaming client dials through the provider
+	// endpoint guard too (common/endpoint_guard.go); nil elsewhere.
+	if guarded := common.GuardedHTTPClient(); guarded != nil {
+		opts = append(opts, option.WithHTTPClient(guarded))
+	}
+	client := anthropic.NewClient(opts...)
 	return &Provider{
-		client:  &client,
-		baseURL: baseURL,
+		client:                 &client,
+		baseURL:                baseURL,
+		streamHTTPClient:       newStreamHTTPClient(timeout),
+		requestTimeout:         timeout,
+		explicitRequestTimeout: explicit,
 	}
 }
+
+// ExplicitRequestTimeout implements providers.RequestTimeoutReporter: the
+// operator's request_timeout, or zero when the shipped default applies.
+func (p *Provider) ExplicitRequestTimeout() time.Duration { return p.explicitRequestTimeout }
+
+// deadlineGovernsRequest reports whether a non-streaming call should be
+// bounded by ctx alone (issue #1485): no explicit request_timeout, and the
+// caller granted a deadline longer than the client-level default. The
+// fallback chain's size-scaled per-attempt limit must not be undercut by the
+// shipped 120 s default.
+func (p *Provider) deadlineGovernsRequest(ctx context.Context) bool {
+	if p.explicitRequestTimeout > 0 || p.requestTimeout <= 0 {
+		return false
+	}
+	deadline, ok := ctx.Deadline()
+	return ok && time.Until(deadline) > p.requestTimeout
+}
+
+// NewProviderWithTimeout preserves the factory's canonical Messages endpoint
+// while the SDK uses its root (it adds v1/messages itself).
+func NewProviderWithTimeout(token, apiBase string, timeoutSeconds int) *Provider {
+	p := NewProviderWithBaseURL(token, apiBase, timeoutSeconds)
+	p.baseURL = strings.TrimRight(p.baseURL, "/") + "/v1"
+	return p
+}
+
+// effortProviderID is the provider this client answers for in the effort
+// record: the configured catalog row, else the native Anthropic API.
+func (p *Provider) effortProviderID() string {
+	if p.providerID != "" {
+		return p.providerID
+	}
+	return "anthropic"
+}
+
+// WithProviderID pins documented dialect selection to the configured catalog
+// row, even when an operator routes it through a private base URL.
+func (p *Provider) WithProviderID(id string) *Provider { p.providerID = id; return p }
 
 // WithStreamStallTimeout sets the streaming silence limit on this provider
 // (founder decision 2026-09-14): a ChatStream call receiving no events of any
@@ -112,6 +214,7 @@ func (p *Provider) Chat(
 		}
 		opts = append(opts,
 			option.WithAuthToken(tok),
+			option.WithAPIKey(""),
 			option.WithHeader("anthropic-beta", anthropicBetaHeader),
 		)
 	}
@@ -120,14 +223,23 @@ func (p *Provider) Chat(
 	if err != nil {
 		return nil, err
 	}
+	effortdialect.ReportProvider(options, p.effortProviderID())
+	p.markCache(&params, messages, model)
 
 	// OAuth/setup-tokens require streaming; API keys use non-streaming.
 	if p.tokenSource != nil {
 		return p.chatStreaming(ctx, params, opts)
 	}
 
+	boundary := sdkErrorBoundary{baseURL: p.baseURL}
+	opts = append(opts, option.WithMiddleware(boundary.middleware))
+	if p.deadlineGovernsRequest(ctx) {
+		// Issue #1485: zero disables the client-level default for this one
+		// call; the longer ctx deadline bounds it instead.
+		opts = append(opts, option.WithRequestTimeout(0))
+	}
 	resp, err := p.client.Messages.New(ctx, params, opts...)
-	if err != nil {
+	if err = boundary.wrap(err); err != nil {
 		return nil, fmt.Errorf("claude API call: %w", err)
 	}
 
@@ -159,6 +271,7 @@ func (p *Provider) ChatStream(
 		}
 		opts = append(opts,
 			option.WithAuthToken(tok),
+			option.WithAPIKey(""),
 			option.WithHeader("anthropic-beta", anthropicBetaHeader),
 		)
 	}
@@ -167,6 +280,8 @@ func (p *Provider) ChatStream(
 	if err != nil {
 		return nil, err
 	}
+	effortdialect.ReportProvider(options, p.effortProviderID())
+	p.markCache(&params, messages, model)
 
 	return p.streamWithCallbacks(ctx, params, opts, onChunk, onProgress)
 }
@@ -199,7 +314,7 @@ func (p *Provider) streamWithCallbacks(
 	opts []option.RequestOption,
 	onChunk func(accumulated string),
 	onProgress protocoltypes.OnToolCallProgress,
-) (*LLMResponse, error) {
+) (response *LLMResponse, err error) {
 	stall := p.effectiveStreamStallTimeout()
 
 	// stallArmer hands the monitor's arm fn to the body-wrapping middleware
@@ -208,13 +323,17 @@ func (p *Provider) streamWithCallbacks(
 	// immediately after the stream is created and every subsequent Read
 	// re-arms the clock. Reads that race the fill simply skip one arm.
 	var armer stallBodyArmer
-	streamOpts := opts
+	boundary := sdkErrorBoundary{baseURL: p.baseURL}
+	streamOpts := append(append([]option.RequestOption{}, opts...), option.WithRequestTimeout(0), option.WithMiddleware(boundary.middleware))
+	if p.streamHTTPClient != nil {
+		streamOpts = append(append([]option.RequestOption{}, streamOpts...), option.WithHTTPClient(p.streamHTTPClient))
+	}
 	if stall > 0 {
-		streamOpts = append(append([]option.RequestOption{}, opts...),
+		streamOpts = append(append([]option.RequestOption{}, streamOpts...),
 			option.WithMiddleware(func(req *http.Request, next func(*http.Request) (*http.Response, error)) (*http.Response, error) {
-				resp, err := next(req)
-				if err != nil || resp == nil || resp.Body == nil {
-					return resp, err
+				resp, nextErr := next(req)
+				if nextErr != nil || resp == nil || resp.Body == nil {
+					return resp, nextErr
 				}
 				// Method value, bound to &armer: reads made before the monitor
 				// exists find armer.arm nil and skip; every later read re-arms.
@@ -234,14 +353,26 @@ func (p *Provider) streamWithCallbacks(
 	}
 
 	var msg anthropic.Message
+	var openingUsage *anthropic.Usage
+	defer func() { err = failedStreamUsage(err, &msg, openingUsage) }()
 	var lastTextLen int
 	var lastReasoningLen int
 	lastArgsLen := map[int]int{}
 
+	sawStop := false
 	for stream.Next() {
 		event := stream.Current()
+		// message_stop ends a streamed message; a bare "message" event is a
+		// complete non-streamed message delivered through the same decoder.
+		if event.Type == "message_stop" || event.Type == "message" {
+			sawStop = true
+		}
 		if err := msg.Accumulate(event); err != nil {
 			return nil, fmt.Errorf("claude streaming accumulate: %w", err)
+		}
+		if event.Type == "message_start" {
+			u := msg.Usage
+			openingUsage = &u
 		}
 		if onChunk == nil && onProgress == nil {
 			continue
@@ -334,9 +465,23 @@ func (p *Provider) streamWithCallbacks(
 		if watch.Fired() {
 			return nil, common.NewStallError(stall)
 		}
-		return nil, fmt.Errorf("claude API call: %w", err)
+		return nil, boundary.wrap(fmt.Errorf("claude API call: %w", err))
+	}
+	if err := boundary.wrap(nil); err != nil {
+		return nil, err
+	}
+	// A stream that ends without message_stop was cut off (the connection was
+	// closed under it): what accumulated is not an answer and a tool call that
+	// was coming never arrived (issue #1278 sweep). An `error` event is already
+	// surfaced by stream.Err() above.
+	// A compatible endpoint that omits message_stop but delivered the final
+	// message_delta (which carries stop_reason) did finish; only a stream with
+	// neither was cut off (R2-S1-05).
+	if !sawStop && msg.StopReason == "" {
+		return nil, &common.StreamProviderError{Code: "incomplete_stream", Message: "the stream ended before message_stop"}
 	}
 
+	restoreOpeningUsage(&msg, openingUsage)
 	return parseResponse(&msg)
 }
 
@@ -405,9 +550,6 @@ func buildParams(
 			if len(msg.SystemParts) > 0 {
 				for _, part := range msg.SystemParts {
 					block := anthropic.TextBlockParam{Text: part.Text}
-					if part.CacheControl != nil && part.CacheControl.Type == "ephemeral" {
-						block.CacheControl = anthropic.NewCacheControlEphemeralParam()
-					}
 					system = append(system, block)
 				}
 			} else {
@@ -415,55 +557,41 @@ func buildParams(
 			}
 		case "user":
 			if msg.ToolCallID != "" {
-				anthropicMessages = append(anthropicMessages,
-					anthropic.NewUserMessage(anthropicToolResult(msg)),
-				)
+				anthropicMessages = appendToolResult(anthropicMessages, anthropicToolResult(msg))
 			} else {
 				anthropicMessages = append(anthropicMessages,
-					anthropic.NewUserMessage(anthropic.NewTextBlock(msg.Content)),
+					anthropic.NewUserMessage(anthropicUserContent(msg)...),
 				)
 			}
 		case "assistant":
-			if len(msg.ToolCalls) > 0 {
-				var blocks []anthropic.ContentBlockParamUnion
+			if len(msg.ToolCalls) > 0 || len(msg.ThinkingBlocks) > 0 {
+				blocks, replayErr := replayThinkingBlocks(msg.ThinkingBlocks)
+				if replayErr != nil {
+					return anthropic.MessageNewParams{}, replayErr
+				}
 				if msg.Content != "" {
 					blocks = append(blocks, anthropic.NewTextBlock(msg.Content))
 				}
 				for _, tc := range msg.ToolCalls {
-					// Skip tool calls with empty names to avoid API errors
-					if tc.Name == "" {
-						continue
+					name := tc.Name
+					if name == "" && tc.Function != nil {
+						name = tc.Function.Name
 					}
-					// OUTBOUND rebuild: this re-serialises OUR OWN history back
-					// into an Anthropic request, so unlike the inbound decode in
-					// parseResponse a failure here is an internal invariant
-					// violation, not a truncated upstream reply. It stays
-					// non-fatal — refusing to rebuild would make one bad history
-					// entry permanently unsendable, which is the wedge described
-					// in common.ErrToolArgumentsUndecodable — but it no longer
-					// happens in silence. Before, the error was discarded
-					// outright and an empty arguments block was sent as if the
-					// model had called the tool with no parameters.
+					if name == "" {
+						return anthropic.MessageNewParams{}, fmt.Errorf("stored tool call has no function name")
+					}
 					args := tc.Arguments
 					if args == nil && tc.Function != nil && tc.Function.Arguments != "" {
-						decoded, err := common.DecodeToolCallArguments(
-							json.RawMessage(tc.Function.Arguments), tc.Name,
-						)
-						if err != nil {
-							logger.ErrorCF(
-								"anthropic",
-								"stored tool call arguments will not decode when rebuilding the request; "+
-									"sending an empty arguments block",
-								map[string]any{"tool": tc.Name, "id": tc.ID, "error": err.Error()},
-							)
-						} else {
-							args = decoded
+						decoded, decodeErr := common.DecodeToolCallArguments(json.RawMessage(tc.Function.Arguments), name)
+						if decodeErr != nil {
+							return anthropic.MessageNewParams{}, decodeErr
 						}
+						args = decoded
 					}
 					if args == nil {
 						args = map[string]any{}
 					}
-					blocks = append(blocks, anthropic.NewToolUseBlock(tc.ID, args, tc.Name))
+					blocks = append(blocks, anthropic.NewToolUseBlock(tc.ID, args, name))
 				}
 				anthropicMessages = append(anthropicMessages, anthropic.NewAssistantMessage(blocks...))
 			} else {
@@ -472,23 +600,17 @@ func buildParams(
 				)
 			}
 		case "tool":
-			anthropicMessages = append(anthropicMessages,
-				anthropic.NewUserMessage(anthropicToolResult(msg)),
-			)
+			anthropicMessages = appendToolResult(anthropicMessages, anthropicToolResult(msg))
 		}
 	}
 
 	maxTokens := int64(4096)
-	if mt, ok := options["max_tokens"].(int); ok {
+	if mt, ok := common.AsInt(options["max_tokens"]); ok {
 		maxTokens = int64(mt)
 	}
 
-	// Normalize model ID: Anthropic API uses hyphens (claude-sonnet-4-6),
-	// but config may use dots (claude-sonnet-4.6).
-	apiModel := strings.ReplaceAll(model, ".", "-")
-
 	params := anthropic.MessageNewParams{
-		Model:     apiModel,
+		Model:     model,
 		Messages:  anthropicMessages,
 		MaxTokens: maxTokens,
 	}
@@ -505,15 +627,66 @@ func buildParams(
 		params.Tools = translateTools(tools)
 	}
 
-	// Extended Thinking / Adaptive Thinking
-	// The thinking_level value directly determines the API parameter format:
-	//   "adaptive" → {thinking: {type: "adaptive"}} + output_config.effort
-	//   "low/medium/high/xhigh" → {thinking: {type: "enabled", budget_tokens: N}}
-	if level, ok := options["thinking_level"].(string); ok && level != "" && level != "off" {
-		applyThinkingConfig(&params, level)
-	}
+	effortdialect.Report(options, applyEffort(&params, messages, effortdialect.Requested(options)))
 
 	return params, nil
+}
+
+// applyEffort encodes the resolved effort value on the Anthropic Messages
+// wire (effort-levels spec FR-012, FR-014, S-17, S-18, S-90):
+//
+//   - a level: thinking {type: adaptive} + output_config {effort: level};
+//   - On: thinking {type: adaptive} with no output_config (the provider
+//     picks the depth); Off: thinking {type: disabled};
+//   - enabling effort clears a set temperature; no display is sent;
+//   - Provider default ("") sends neither and keeps the temperature.
+//
+// Continuation guard (FR-014): when the value would ENABLE reasoning and the
+// current tool loop holds an assistant tool call without its own thinking
+// blocks, nothing is sent (reason continuation). An explicit disable is kept
+// on every request of the loop.
+func applyEffort(params *anthropic.MessageNewParams, messages []Message, v string) effortdialect.Sent {
+	if v == "" {
+		return effortdialect.Sent{}
+	}
+	if v == effortdialect.ValueOff || v == effortdialect.ValueNone {
+		params.Thinking = anthropic.ThinkingConfigParamUnion{OfDisabled: &anthropic.ThinkingConfigDisabledParam{}}
+		return effortdialect.Sent{Value: v}
+	}
+	if currentLoopLacksThinkingBlocks(messages) {
+		return effortdialect.Sent{Reason: effortdialect.ReasonContinuation}
+	}
+	if params.Temperature.Valid() {
+		logger.DebugCF("anthropic", "temperature cleared because thinking is enabled", map[string]any{"effort": v})
+	}
+	params.Temperature = anthropic.MessageNewParams{}.Temperature
+	params.Thinking = anthropic.ThinkingConfigParamUnion{OfAdaptive: &anthropic.ThinkingConfigAdaptiveParam{}}
+	if v != effortdialect.ValueOn {
+		params.OutputConfig = anthropic.OutputConfigParam{Effort: anthropic.OutputConfigEffort(v)}
+	}
+	return effortdialect.Sent{Value: v}
+}
+
+// currentLoopLacksThinkingBlocks reports whether the current tool loop (the
+// messages after the last real user message) holds an assistant tool call
+// that carries no thinking blocks of this route. The request-only volatile
+// note the loop appends after history is not a user turn and does not end
+// the loop.
+func currentLoopLacksThinkingBlocks(messages []Message) bool {
+	start := 0
+	for i := len(messages) - 1; i >= 0; i-- {
+		m := messages[i]
+		if m.Role == "user" && m.ToolCallID == "" && !m.Volatile {
+			start = i + 1
+			break
+		}
+	}
+	for _, m := range messages[start:] {
+		if m.Role == "assistant" && len(m.ToolCalls) > 0 && len(m.ThinkingBlocks) == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func anthropicToolResult(msg Message) anthropic.ContentBlockParamUnion {
@@ -568,74 +741,6 @@ func anthropicToolResult(msg Message) anthropic.ContentBlockParamUnion {
 	return anthropic.ContentBlockParamUnion{OfToolResult: &anthropic.ToolResultBlockParam{ToolUseID: msg.ToolCallID, Content: content}}
 }
 
-// applyThinkingConfig sets thinking parameters based on the level value.
-// "adaptive" uses the adaptive thinking API (Claude 4.6+).
-// All other levels use budget_tokens which is universally supported.
-//
-// Anthropic API constraint: temperature must not be set when thinking is enabled.
-// budget_tokens must be strictly less than max_tokens.
-func applyThinkingConfig(params *anthropic.MessageNewParams, level string) {
-	// Anthropic API rejects requests with temperature set alongside thinking.
-	// Reset to zero value (omitted from JSON serialization).
-	if params.Temperature.Valid() {
-		logger.DebugCF("anthropic", "temperature cleared because thinking is enabled", map[string]any{"level": level})
-	}
-	params.Temperature = anthropic.MessageNewParams{}.Temperature
-
-	if level == "adaptive" {
-		adaptive := anthropic.ThinkingConfigAdaptiveParam{}
-		params.Thinking = anthropic.ThinkingConfigParamUnion{OfAdaptive: &adaptive}
-		params.OutputConfig = anthropic.OutputConfigParam{
-			Effort: anthropic.OutputConfigEffortHigh,
-		}
-		return
-	}
-
-	budget := int64(levelToBudget(level))
-	if budget <= 0 {
-		return
-	}
-
-	// budget_tokens must be < max_tokens; clamp to respect user's max_tokens setting.
-	if budget >= params.MaxTokens {
-		logger.WarnCF("anthropic", "budget_tokens clamped to max_tokens-1", map[string]any{
-			"budget_tokens": budget,
-			"clamped_to":    params.MaxTokens - 1,
-		})
-		budget = params.MaxTokens - 1
-	} else if budget > params.MaxTokens*80/100 {
-		logger.WarnCF("anthropic", "thinking budget exceeds 80% of max_tokens, output may be truncated", map[string]any{
-			"budget_tokens": budget,
-			"max_tokens":    params.MaxTokens,
-		})
-	}
-	params.Thinking = anthropic.ThinkingConfigParamOfEnabled(budget)
-}
-
-// levelToBudget maps a thinking level to budget_tokens.
-// Values are based on Anthropic's recommendations and community best practices:
-//
-//	low    =  4,096  — simple reasoning, quick debugging (Claude Code "think")
-//	medium = 16,384  — Anthropic recommended sweet spot for most tasks
-//	high   = 32,000  — complex architecture, deep analysis (diminishing returns above this)
-//	xhigh  = 64,000  — extreme reasoning, research problems, benchmarks
-//
-// Note: For Claude 4.6+, prefer adaptive thinking over manual budget_tokens.
-func levelToBudget(level string) int {
-	switch level {
-	case "low":
-		return 4096
-	case "medium":
-		return 16384
-	case "high":
-		return 32000
-	case "xhigh":
-		return 64000
-	default:
-		return 0
-	}
-}
-
 func translateTools(tools []ToolDefinition) []anthropic.ToolUnionParam {
 	result := make([]anthropic.ToolUnionParam, 0, len(tools))
 	for _, t := range tools {
@@ -647,6 +752,15 @@ func translateTools(tools []ToolDefinition) []anthropic.ToolUnionParam {
 		}
 		if desc := t.Function.Description; desc != "" {
 			tool.Description = anthropic.String(desc)
+		}
+		tool.InputSchema.ExtraFields = make(map[string]any)
+		for key, value := range t.Function.Parameters {
+			if key != "type" && key != "properties" && key != "required" {
+				tool.InputSchema.ExtraFields[key] = value
+			}
+		}
+		if req, ok := t.Function.Parameters["required"].([]string); ok {
+			tool.InputSchema.Required = append([]string(nil), req...)
 		}
 		if req, ok := t.Function.Parameters["required"].([]any); ok {
 			required := make([]string, 0, len(req))
@@ -666,31 +780,28 @@ func parseResponse(resp *anthropic.Message) (*LLMResponse, error) {
 	var content strings.Builder
 	var reasoning strings.Builder
 	var toolCalls []ToolCall
+	var thinkingBlocks []string
 
-	// PromptTokens = plain (uncached) input; cache tokens are tracked separately.
-	// TotalTokens = plain input + cache_creation + cache_read + output.
-	// Computed up front (resp.Usage/resp.StopReason are top-level fields, not
-	// dependent on the content-block loop below) so a tool-call decode
-	// failure can attach this same evidence to the refusal (ADR-087 D3.9 /
-	// D5 / D7) instead of returning bare.
-	cacheWrite := int(resp.Usage.CacheCreationInputTokens)
-	cacheRead := int(resp.Usage.CacheReadInputTokens)
-	promptTokens := int(resp.Usage.InputTokens)
-	completionTokens := int(resp.Usage.OutputTokens)
-	total := promptTokens + cacheWrite + cacheRead + completionTokens
-	usage := &UsageInfo{
-		PromptTokens:     promptTokens,
-		CompletionTokens: completionTokens,
-		CacheWriteTokens: cacheWrite,
-		CacheReadTokens:  cacheRead,
-		TotalTokens:      total,
+	var usage *UsageInfo
+	if hasMessageUsage(resp) {
+		var usageErr error
+		usage, usageErr = messageUsage(resp)
+		if usageErr != nil {
+			return nil, usageErr
+		}
 	}
 
 	for _, block := range resp.Content {
 		switch block.Type {
 		case "thinking":
-			tb := block.AsThinking()
-			reasoning.WriteString(tb.Thinking)
+			reasoning.WriteString(block.Thinking)
+			fallthrough
+		case "redacted_thinking":
+			replay, replayErr := signedThinkingBlock(block)
+			if replayErr != nil {
+				return nil, replayErr
+			}
+			thinkingBlocks = append(thinkingBlocks, replay)
 		case "text":
 			tb := block.AsText()
 			content.WriteString(tb.Text)
@@ -739,11 +850,12 @@ func parseResponse(resp *anthropic.Message) (*LLMResponse, error) {
 	}
 
 	return &LLMResponse{
-		Content:      content.String(),
-		Reasoning:    reasoning.String(),
-		ToolCalls:    toolCalls,
-		FinishReason: finishReason,
-		Usage:        usage,
+		Content:        content.String(),
+		Reasoning:      reasoning.String(),
+		ThinkingBlocks: thinkingBlocks,
+		ToolCalls:      toolCalls,
+		FinishReason:   finishReason,
+		Usage:          usage,
 	}, nil
 }
 

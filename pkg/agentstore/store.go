@@ -36,6 +36,12 @@ import (
 // this store is rooted at (ADR-054 D2).
 const agentsSubdir = "agents"
 
+// RecordsDir is the directory holding the agent records under omnipusHome.
+// Read-only callers stat it before New, which creates it.
+func RecordsDir(omnipusHome string) string {
+	return filepath.Join(omnipusHome, "entities", agentsSubdir)
+}
+
 // accessors wires config.AgentConfig's identity/creation-timestamp fields
 // into the shape entity.Store[config.AgentConfig] needs. CreatedAt is a
 // *time.Time (nil means "never set"); entity.Accessors works in concrete
@@ -112,7 +118,7 @@ type Store struct {
 // scope); the underlying gap should still be fixed at the source for every
 // future entity kind (channels, etc.) that reuses entity.Store[T].
 func New(omnipusHome string) *Store {
-	dir := filepath.Join(omnipusHome, "entities", agentsSubdir)
+	dir := RecordsDir(omnipusHome)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		logger.WarnF("agentstore: could not pre-create entity directory (Create will retry via entity.Store's own MkdirAll)",
 			map[string]any{"dir": dir, "error": err.Error()})
@@ -147,9 +153,22 @@ func (s *Store) Dir() string { return s.inner.Dir() }
 // Get returns the agent record for id. Returns an error wrapping
 // entity.ErrNotFound when absent (errors.Is(err, entity.ErrNotFound) still
 // works through this wrapper, per fmt.Errorf's %w).
+//
+// Agent ids match exactly (chief ruling 2026-10-14): the loaded record's id
+// must equal id, so a differently cased spelling that a case-insensitive
+// filesystem resolves to another agent's file is entity.ErrNotFound. The
+// loader fills a record that stores no id with the id asked for, so the
+// record's file name must also be exactly id + ".json" (confirmExactAgentID,
+// as ReadState does) — otherwise "IDLESS" would read idless.json there.
 func (s *Store) Get(id string) (*config.AgentConfig, error) {
 	cfg, err := s.inner.Get(id)
 	if err != nil {
+		return nil, fmt.Errorf("agentstore: get %q: %w", id, err)
+	}
+	if cfg.ID != id {
+		return nil, fmt.Errorf("agentstore: get %q: %w", id, entity.ErrNotFound)
+	}
+	if err := confirmExactAgentID(filepath.Join(s.inner.Dir(), id+".json"), id, ""); err != nil {
 		return nil, fmt.Errorf("agentstore: get %q: %w", id, err)
 	}
 	return cfg, nil
@@ -163,10 +182,9 @@ func (s *Store) Get(id string) (*config.AgentConfig, error) {
 // Callers MUST distinguish `skipped` from "never existed" per D6 rule 2
 // (dangling is surfaced, never fatal): a binding or delegation target naming
 // a skipped ID is a different, more serious case ("this agent's record is
-// broken") than one naming an ID that was simply never created. See
-// pkg/agent.AgentRegistry.EvaluateDefaultAgentHealth for R3's specific
-// consumer of this distinction (the configured default agent's record failed
-// to load → mark degraded, but keep routing via the fallback ladder).
+// broken") than one naming an ID that was simply never created: routing
+// drops a skipped channel main agent rather than re-routing it
+// (pkg/routing.RouteResolver.ResolveRoute).
 func (s *Store) List() (agents []config.AgentConfig, skipped []string, err error) {
 	agents, skipped, err = s.inner.List()
 	if err != nil {
@@ -201,7 +219,13 @@ func (s *Store) Create(id string, cfg *config.AgentConfig) error {
 		return fmt.Errorf("agentstore: create %q: cfg.ID %q does not match requested id", id, cfg.ID)
 	}
 	cfg.ID = id
-	if err := s.inner.Create(cfg); err != nil {
+	err := s.withSkillsLock(func() error {
+		if err := s.bindSkillGrants(cfg); err != nil {
+			return err
+		}
+		return s.inner.Create(cfg)
+	})
+	if err != nil {
 		return fmt.Errorf("agentstore: create %q: %w", id, err)
 	}
 	if s.notifier != nil {
@@ -215,7 +239,12 @@ func (s *Store) Create(id string, cfg *config.AgentConfig) error {
 // notifies the registry cache of the result. mutate must not change the
 // record's ID.
 func (s *Store) Update(id string, mutate func(*config.AgentConfig) error) (*config.AgentConfig, error) {
-	updated, err := s.inner.Update(id, mutate)
+	var updated *config.AgentConfig
+	err := s.withSkillsLock(func() error {
+		var updateErr error
+		updated, updateErr = s.inner.Update(id, s.bindingMutate(mutate))
+		return updateErr
+	})
 	if err != nil {
 		return nil, fmt.Errorf("agentstore: update %q: %w", id, err)
 	}

@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { act } from 'react'
-import { useSidebarStore } from './sidebar'
+import { useSidebarStore, isSidebarOverlayOpen } from './sidebar'
 
 // Reset Zustand store state between tests.
 beforeEach(() => {
@@ -9,13 +9,16 @@ beforeEach(() => {
   })
 })
 
-// test_sidebar_store_default_state
-// Traces to: wave0-brand-design-spec.md Scenario: Sidebar is closed on first load (US-5 AC1)
+// A fresh visit is not pinned: closed until shown or pinned. A visitor who
+// already saved a pin keeps it — persist rehydrates isPinned over the
+// default, which the persist tests below cover by writing isPinned first.
 describe('sidebar store — default state', () => {
-  it('initializes with isOpen: false and isPinned: false', () => {
-    const state = useSidebarStore.getState()
-    expect(state.isOpen).toBe(false)
-    expect(state.isPinned).toBe(false)
+  it('starts closed and unpinned when nothing is saved', async () => {
+    vi.resetModules()
+    localStorage.removeItem('omnipus-sidebar')
+    const { useSidebarStore: fresh } = await import('./sidebar')
+    expect(fresh.getState().isOpen).toBe(false)
+    expect(fresh.getState().isPinned).toBe(false)
   })
 })
 
@@ -45,6 +48,19 @@ describe('sidebar store — toggle', () => {
       useSidebarStore.setState({ isOpen: true })
       useSidebarStore.getState().close()
     })
+    expect(useSidebarStore.getState().isOpen).toBe(false)
+  })
+
+  // Review finding: on a narrow window the sidebar is only an overlay, but
+  // Escape, the backdrop, and choosing a destination all call close() while a
+  // saved dock (isPinned) may still be true. close() must drop the overlay
+  // and must not forget that dock. Hide is the only action that clears it.
+  it('close() drops the overlay and keeps a saved dock', () => {
+    act(() => {
+      useSidebarStore.setState({ isPinned: true, isOpen: true })
+      useSidebarStore.getState().close()
+    })
+    expect(useSidebarStore.getState().isPinned).toBe(true)
     expect(useSidebarStore.getState().isOpen).toBe(false)
   })
 })
@@ -102,24 +118,78 @@ describe('sidebar store — persistence', () => {
   })
 })
 
-// test_sidebar_store_togglePin
-// Traces to: wave0-brand-design-spec.md Scenario: Pin toggle behaviour (US-5 AC4, AC5)
-describe('sidebar store — togglePin', () => {
-  it('togglePin() pins when unpinned', () => {
-    act(() => {
-      useSidebarStore.setState({ isPinned: false })
-      useSidebarStore.getState().togglePin()
-    })
-    const state = useSidebarStore.getState()
-    expect(state.isPinned).toBe(true)
-    expect(state.isOpen).toBe(true)
-  })
-
-  it('togglePin() unpins when pinned', () => {
+describe('sidebar store — hide', () => {
+  it('hide() clears both the docked and overlay states', () => {
     act(() => {
       useSidebarStore.setState({ isPinned: true, isOpen: true })
-      useSidebarStore.getState().togglePin()
+      useSidebarStore.getState().hide()
     })
     expect(useSidebarStore.getState().isPinned).toBe(false)
+    expect(useSidebarStore.getState().isOpen).toBe(false)
+  })
+})
+
+// R4-QA-01 / R4-S5-PTA-02 (combined review round 4, M1): isSidebarOverlayOpen
+// is the ONE shared Escape-precedence predicate — Sidebar.tsx::handleKeydown
+// closes the overlay when it answers true, and useCancelState's global cancel
+// handler stands down on the very same answer. It has three outcomes and both
+// owners must read them the same way: if the pinned/wide-viewport term ever
+// answered "overlay" for a DOCKED sidebar (pinned, window ≥ the breakpoint),
+// Escape on a normal desktop would stop reaching the streaming turn (the
+// cancel handler would stand down and the dock handler would call close()) —
+// with every previous test green, because they all ran unpinned/narrow.
+// Expected values below are the product rule (Escape acts on the topmost
+// layer; a docked sidebar is not a surface Escape closes), not the
+// implementation read back. Each branch's pin was proven to die on its mutant
+// (mutation receipts: receipts/nav-r4-mut-*.log).
+describe('sidebar store — isSidebarOverlayOpen (shared Escape predicate)', () => {
+  /** jsdom has no matchMedia: answer the pin-breakpoint query from a switch. */
+  function stubPinViewport(matches: boolean) {
+    Object.defineProperty(window, 'matchMedia', {
+      writable: true,
+      configurable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        matches,
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    })
+  }
+
+  it('CLOSED is never an overlay — even pinned on a wide viewport', () => {
+    stubPinViewport(true)
+    act(() => {
+      useSidebarStore.setState({ isOpen: false, isPinned: true })
+    })
+    expect(isSidebarOverlayOpen()).toBe(false)
+  })
+
+  it('OPEN and unpinned is an overlay — on any viewport', () => {
+    stubPinViewport(true)
+    act(() => {
+      useSidebarStore.setState({ isOpen: true, isPinned: false })
+    })
+    expect(isSidebarOverlayOpen()).toBe(true)
+  })
+
+  it('OPEN and pinned on a WIDE viewport is DOCKED — not an overlay, so Escape still reaches the streaming turn', () => {
+    stubPinViewport(true)
+    act(() => {
+      useSidebarStore.setState({ isOpen: true, isPinned: true })
+    })
+    expect(isSidebarOverlayOpen()).toBe(false)
+  })
+
+  it('OPEN and pinned on a NARROW viewport is an OVERLAY — the pin is not honoured below the breakpoint', () => {
+    stubPinViewport(false)
+    act(() => {
+      useSidebarStore.setState({ isOpen: true, isPinned: true })
+    })
+    expect(isSidebarOverlayOpen()).toBe(true)
   })
 })

@@ -4,13 +4,14 @@
 
 // ADR-092 (Auto-approve for tools other than bash) §5.5 typed audit event.
 //
-// docs/internal/specs/adr-092-auto-for-other-tools-design.md §5.5: "New
-// event `tool.auto_approved`: A typed constant in `pkg/audit`, added to the
-// event set in `audit.go`. Details: `{tool, agent_id, session_id, class,
-// reason, paths}`. Emitted once for each call Auto ran without a prompt,
+// docs/internal/specs/adr-092-auto-for-other-tools-design.md §5.5 defines
+// event `tool.auto_approved`. Details always carries `{tool, class,
+// kernel_sandbox}`; `reason` and `paths` are included only when non-empty.
+// The agent and session are top-level Entry.AgentID and Entry.SessionID,
+// not Details. Emitted once for each call Auto ran without a prompt,
 // through `audit.EmitEntry`, so a failed write shows up in the degraded
-// count. Calls that were prompted or denied keep their existing
-// `tool.policy.ask.*` rows." Details gained a `kernel_sandbox` bool
+// count. Calls that were prompted or denied keep their existing audit
+// rows. Details gained a `kernel_sandbox` bool
 // [2026-09-24, founder decision]: once Auto stopped requiring an enforcing
 // kernel sandbox (ADR-092 D1/J13, revised), this is the only per-call record
 // of whether the kernel was actually confining the process this call ran

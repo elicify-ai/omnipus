@@ -84,6 +84,7 @@ func TestTaskAttempt_OrphanMarkupExhaustion_SpendsOneTryAndContinuesTheRun(t *te
 	if err := al.taskStore.Create(tk); err != nil {
 		t.Fatalf("create task: %v", err)
 	}
+	seedTaskGoal(t, tk.ID, "greeting.sh prints exactly one line", "the script exits 0")
 	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
 	}

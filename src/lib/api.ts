@@ -88,8 +88,6 @@ import type {
   AgentToolEntry,
   SessionStats,
   Attachment,
-  SessionScopeRequest,
-  SessionScopeResponse,
   ToolRegistryEntry,
   GlobalToolPolicies,
   ToolPolicy,
@@ -155,7 +153,6 @@ import type {
   SkillTrustUpdateResponse,
   PromptGuardUpdateRequest,
   PromptGuardUpdateResponse,
-  SessionScopeUpdateResponse,
   ChannelEnabledResponse,
   AgentToolsResponse,
   UploadFilesResponse,
@@ -243,6 +240,15 @@ import type {
   // M11 per-(agent, workspace) email mailbox account (contract-first #8):
   Mailbox,
   MailboxConfigureRequest,
+  // Workspace Mail panel (email-mail-view-spec.md, contract-first #8):
+  MailFolder,
+  MailFolderList,
+  MailMessageSummary,
+  MailMessagePage,
+  MailMessage,
+  MailAttachment,
+  MailboxNewMailSummary,
+  MailSummaryList,
   // ADR-039 — user-initiated browsing + annotate-a-region-and-discuss:
   BrowserInspectRequest,
   BrowserInspectResponse,
@@ -276,8 +282,6 @@ export type {
   AgentToolEntry,
   SessionStats,
   Attachment,
-  SessionScopeRequest,
-  SessionScopeResponse,
   ToolRegistryEntry,
   GlobalToolPolicies,
   ToolPolicy,
@@ -342,7 +346,6 @@ export type {
   SkillTrustUpdateResponse,
   PromptGuardUpdateRequest,
   PromptGuardUpdateResponse,
-  SessionScopeUpdateResponse,
   ChannelEnabledResponse,
   AgentToolsResponse,
   UploadFilesResponse,
@@ -428,6 +431,15 @@ export type {
   // M11 per-(agent, workspace) email mailbox account:
   Mailbox,
   MailboxConfigureRequest,
+  // Workspace Mail panel (email-mail-view-spec.md, contract-first #8):
+  MailFolder,
+  MailFolderList,
+  MailMessageSummary,
+  MailMessagePage,
+  MailMessage,
+  MailAttachment,
+  MailboxNewMailSummary,
+  MailSummaryList,
   // ADR-039 — user-initiated browsing + annotate-a-region-and-discuss:
   BrowserInspectRequest,
   BrowserInspectResponse,
@@ -472,6 +484,7 @@ export { ApiSchemaError, CSRF_HEADER_NAME, getApiSchemaErrorCount, getCsrfCookie
 export * from './api/library'
 export * from './api/plans'
 export * from './api/providers'
+export * from './api/secrets'
 export * from './api/security'
 export * from './api/sessions'
 export * from './api/skills'

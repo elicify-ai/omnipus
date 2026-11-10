@@ -1,0 +1,339 @@
+/**
+ * stop-scope-tree.spec.ts — ADR-20260928 D9 + MAJ-002: web Stop/Esc//cancel
+ * surface scoping, asserted on the REAL WebSocket wire in a real browser.
+ *
+ * STATUS (2026-10-02, RED author): WRITTEN, NOT RUN. The vitest packs carry
+ * the frontend RED evidence (ChatScreen.stop-scope.test.tsx,
+ * Sidebar.lifecycle-labels.test.tsx); this spec is the browser-level
+ * counterpart for the e2e CI shard and has never been executed locally — the
+ * local machine has no live gateway/OpenRouter, and common.md forbids bare
+ * Playwright runs. First CI run may need frame-shape adjustments if the
+ * streaming handshake below drifts from the real gateway.
+ * Fixture repair (2026-10-06): exact-session HTTP history and a correlated
+ * saved-message acknowledgement added after CI setup failures. All original
+ * Stop-scope assertions remain. Browser execution is still delegated to CI.
+ *
+ * Approach — fully deterministic, no live model:
+ *   - page.routeWebSocket() fully mocks the chat WS transport (established
+ *     pattern: whatsapp-qr.spec.ts, reconnect-mid-turn.spec.ts).
+ *   - The mock answers the client's first `message` frame with
+ *     `session_started` + a `token` stream and never sends `done`, so the
+ *     turn is mid-stream for the whole test (stop button visible).
+ *   - Every client→server frame is captured in Node; the assertions read the
+ *     captured CANCEL FRAMES — the process edge, not DOM internals. Scope
+ *     values come from the generated CancelFrame schema (scope enum
+ *     "session"|"tree", optional).
+ *
+ * The contract under test (D9 surface table):
+ *   - single Stop press            → cancel frame WITHOUT scope "tree"
+ *   - first press keeps the SAME Stop button in place for the 3 s window
+ *     (no separate Stop-all button — founder 2026-10-06, Q16 = A)
+ *   - second Esc within 3 s        → cancel frame with scope "tree"
+ *   - after the window expires the next press is session-scoped again
+ *   - /cancel command              → cancel frame with scope "tree"
+ *
+ * Traces to: ADR-20260928 D9, MAJ-002, T21/T26; common.md decided behaviour.
+ *
+ * CLAUDE.md — "E2E tests always target the embedded SPA (Go binary)"
+ */
+
+import type { WebSocketRoute } from '@playwright/test'
+import { expect, test } from '@playwright/test'
+import { chatInput, waitForConnected } from './fixtures/selectors'
+
+import type { ClientFrame, CancelFrame, DoneFrame, ReplayMessageFrame, ServerFrame, SessionStartedFrame, SessionStateFrame, TokenFrame } from '../../src/lib/api/generated/asyncapi-types'
+import type { Message as WireMessage } from '../../src/lib/api/generated/openapi-types'
+import { fixtureHistoryPosition, wireHistoryPage, wireHistorySnapshot } from '../chat-history-paging/legacy-wire'
+
+type CapturedFrame = ClientFrame
+
+const E2E_SESSION_ID = 'sess-e2e-stop-scope'
+const E2E_TRIGGER_TEXT = 'Trigger a turn for the stop-scope test'
+const E2E_STREAMED_TEXT = 'Stop-scope e2e turn running.'
+const E2E_SECOND_TURN_TEXT = 'Second turn running.'
+
+/**
+ * Installs the WS mock and starts collecting client→server frames.
+ *
+ * Server-side script: acknowledge real attaches with generated bounded history,
+ * current turn state/projection and catch_up_complete (D7). A replay done is not
+ * a live turn completion. Messages still stream indefinitely unless cancel is
+ * acknowledged by opts; heartbeat replies keep this synthetic transport healthy.
+ * Squad-lead approval: setup only; all five case bodies/oracles below are frozen.
+ */
+async function mockChatWebSocket(
+  page: import('@playwright/test').Page,
+  sentToServer: CapturedFrame[],
+  // When true the server acknowledges a cancel frame with `done`, as the real
+  // gateway does once the turn has stopped. Default false: no ack is sent. The
+  // client does not wait for one — the first cancel ends the turn locally
+  // (store::markLastMessageInterrupted clears isStreaming at once).
+  opts: { ackCancelWithDone?: boolean } = {},
+): Promise<void> {
+  // session_started promises a durably saved first message. Its synthetic
+  // session therefore needs matching HTTP history, not a real-gateway 404.
+  const savedHistory: WireMessage[] = []
+  await page.route(`**/api/v1/sessions/${E2E_SESSION_ID}/messages`, (route) => route.fulfill({ status: 200, json: wireHistoryPage(E2E_SESSION_ID, savedHistory, savedHistory.length) }))
+  await page.routeWebSocket(/api\/v1\/chat\/ws/, (ws: WebSocketRoute) => {
+    let turnStarted = false
+    let activeTurn: SessionStateFrame['active_turn']
+    let activeText = ''
+    let turnNumber = 0
+    let attachSequence = 0
+    const startTurn = (message: Extract<ClientFrame, { type: 'message' }>) => {
+      activeText = ''
+      activeTurn = {
+        turn_id: `stop-scope-turn-${++turnNumber}`,
+        agent_id: message.agent_id ?? 'jim',
+        started_at: new Date().toISOString(),
+      }
+    }
+    ws.onMessage((raw: string | Buffer) => {
+      let frame: CapturedFrame
+      try {
+        frame = JSON.parse(typeof raw === 'string' ? raw : raw.toString())
+      } catch (error) {
+        throw new Error('Stop-scope fixture received malformed client JSON', { cause: error })
+      }
+      sentToServer.push(frame)
+
+      if (frame.type === 'ping') {
+        ws.send(JSON.stringify({ type: 'pong' } satisfies ServerFrame))
+        return
+      }
+      if (frame.type === 'attach_session') {
+        // Only persisted user occurrences are historical rows. The running
+        // answer is current active projection, excluded from page accounting.
+        const selected = frame.session_id === E2E_SESSION_ID ? savedHistory : []
+        const replay: ReplayMessageFrame[] = selected.map((source) => {
+          if (!source.id || source.role !== 'user' || typeof source.content !== 'string' || !source.history_position) {
+            throw new Error('Stop-scope fixture requires a recorded user source and history_position')
+          }
+          return {
+            type: 'replay_message', session_id: frame.session_id,
+            id: source.id, client_message_id: source.client_message_id,
+            role: 'user', content: source.content, timestamp: source.timestamp,
+            agent_id: source.agent_id,
+            history_origin: { position: source.history_position, entry_id: source.id },
+          }
+        })
+        const limit = frame.history_limit ?? 40
+        const history = wireHistoryPage(frame.session_id, selected, selected.length, {
+          info: { limit, min_rows: frame.history_min_rows ?? Math.min(limit, 20) },
+        })
+        const seq = ++attachSequence
+        const bootId = 'stop-scope-fixture'
+        const currentTurn = frame.session_id === E2E_SESSION_ID ? activeTurn : undefined
+        const current: SessionStateFrame = {
+          type: 'session_state', session_id: frame.session_id,
+          user_id: 'stop-scope-fixture', pending_approvals: [],
+          emitted_at: new Date().toISOString(),
+          history_state: { status: 'available' },
+          ...(currentTurn ? { active_turn: currentTurn } : {}),
+        }
+        const projection: TokenFrame[] = currentTurn && activeText ? [{
+          type: 'token', session_id: frame.session_id,
+          content: activeText, replace: true, turn_id: currentTurn.turn_id,
+          agent_id: currentTurn.agent_id,
+        }] : []
+        const replies: ServerFrame[] = [
+          wireHistorySnapshot(history, { seq, boot_id: bootId, reason: 'unknown_position' }, replay),
+          current, ...replay,
+          { type: 'done', session_id: frame.session_id, stats: { frames_emitted: replay.length } },
+          ...projection,
+          { type: 'catch_up_complete', session_id: frame.session_id, seq, boot_id: bootId, mode: 'snapshot' },
+        ]
+        for (const reply of replies) ws.send(JSON.stringify(reply))
+        return
+      }
+      if (frame.type === 'cancel') {
+        activeTurn = undefined
+        activeText = ''
+      }
+      if (frame.type === 'cancel' && opts.ackCancelWithDone) {
+        const done: DoneFrame = { type: 'done', session_id: E2E_SESSION_ID }
+        ws.send(JSON.stringify(done))
+      }
+
+      if (frame.type === 'message' && turnStarted) {
+        // A follow-up turn in the same session: stream and never finish.
+        startTurn(frame)
+        if (frame.client_message_id) {
+          savedHistory.push({
+            id: frame.client_message_id, client_message_id: frame.client_message_id,
+            history_position: fixtureHistoryPosition(E2E_SESSION_ID, frame.client_message_id),
+            role: 'user', content: frame.content, status: 'ok',
+            agent_id: frame.agent_id ?? 'jim', timestamp: new Date().toISOString(),
+          })
+        }
+        for (const chunk of ['Second ', 'turn ', 'running.']) {
+          activeText += chunk
+          const token: TokenFrame = { type: 'token', session_id: E2E_SESSION_ID, content: chunk, turn_id: activeTurn?.turn_id }
+          ws.send(JSON.stringify(token))
+        }
+      }
+
+      if (frame.type === 'message' && !turnStarted) {
+        expect(frame.content).toBe(E2E_TRIGGER_TEXT)
+        if (!frame.client_message_id) throw new Error('Stop-scope first message is missing its delivery ID')
+        startTurn(frame)
+        turnStarted = true
+        savedHistory.push({
+          id: frame.client_message_id, client_message_id: frame.client_message_id,
+          history_position: fixtureHistoryPosition(E2E_SESSION_ID, frame.client_message_id),
+          role: 'user', content: E2E_TRIGGER_TEXT, status: 'ok',
+          agent_id: frame.agent_id ?? 'jim', timestamp: new Date().toISOString(),
+        })
+        const ack: SessionStartedFrame = { type: 'session_started', session_id: E2E_SESSION_ID, client_message_id: frame.client_message_id }
+        ws.send(JSON.stringify(ack))
+        for (const chunk of ['Stop', '-scope ', 'e2e ', 'turn ', 'running.']) {
+          activeText += chunk
+          const token: TokenFrame = { type: 'token', session_id: E2E_SESSION_ID, content: chunk, turn_id: activeTurn?.turn_id }
+          ws.send(JSON.stringify(token))
+        }
+        // Deliberately NO done frame — the turn stays mid-stream.
+      }
+    })
+  })
+}
+
+function cancelFrames(sentToServer: CapturedFrame[]): CancelFrame[] {
+  return sentToServer.filter((f) => f.type === 'cancel')
+}
+
+async function startStreamingTurn(page: import('@playwright/test').Page): Promise<void> {
+  const input = chatInput(page)
+  await expect(input).toBeVisible({ timeout: 15_000 })
+  await waitForConnected(page)
+  await input.fill(E2E_TRIGGER_TEXT)
+  await input.press('Enter')
+  // Mid-stream confirmation: the Stop button replaced Send.
+  await expect(page.getByTestId('stop-btn')).toBeVisible({ timeout: 15_000 })
+  await expect(page.locator('[data-message-id]').first()).toBeVisible({ timeout: 15_000 })
+  // A visible optimistic Stop alone is insufficient: the real stream must
+  // have arrived, and the matching history route must not replace the thread.
+  await expect(page.getByText(E2E_STREAMED_TEXT, { exact: true })).toBeVisible({ timeout: 15_000 })
+}
+
+test.describe('Stop/Esc//cancel surface scoping (ADR-20260928 D9)', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/')
+  })
+
+  test('single Stop press sends one session-scoped cancel frame and the same Stop button stays for the window', async ({ page }) => {
+    test.setTimeout(90_000)
+    const sentToServer: CapturedFrame[] = []
+    await mockChatWebSocket(page, sentToServer)
+    await page.goto('/')
+    await startStreamingTurn(page)
+
+    await page.getByTestId('stop-btn').click()
+
+    // Founder 2026-10-06: no separate Stop-all button. The SAME Stop button
+    // stays in place so a second click inside the 3 s window is possible.
+    await expect(page.getByTestId('stop-btn')).toBeVisible()
+    await expect(page.getByText(/stop all/i)).toHaveCount(0)
+
+    // And the wire saw exactly one cancel frame, session-scoped (no tree).
+    const cancels = cancelFrames(sentToServer)
+    expect(cancels).toHaveLength(1)
+    expect(cancels[0].session_id).toBeTruthy()
+    expect(cancels[0].scope).not.toBe('tree')
+  })
+
+  test('second Esc within 3s confirms stop-all — cancel frame carries scope tree', async ({ page }) => {
+    test.setTimeout(90_000)
+    const sentToServer: CapturedFrame[] = []
+    await mockChatWebSocket(page, sentToServer)
+    await page.goto('/')
+    await startStreamingTurn(page)
+
+    const input = chatInput(page)
+    await input.press('Escape')
+    // Second Esc inside the confirmation window (well under 3 s).
+    await input.press('Escape')
+
+    await expect
+      .poll(() => cancelFrames(sentToServer).some((f) => f.scope === 'tree'), { timeout: 5_000 })
+      .toBe(true)
+  })
+
+  test('after the confirmation window expires the next Stop press is session-scoped again', async ({ page }) => {
+    test.setTimeout(90_000)
+    const sentToServer: CapturedFrame[] = []
+    await mockChatWebSocket(page, sentToServer)
+    await page.goto('/')
+    await startStreamingTurn(page)
+
+    await page.getByTestId('stop-btn').click()
+    await expect(page.getByTestId('stop-btn')).toBeVisible()
+    expect(cancelFrames(sentToServer)).toHaveLength(1)
+
+    // The first cancel ended the turn locally (no server done needed), so
+    // the chat is idle: past the 3-second window the composer shows Send, and
+    // an Escape on the idle chat sends nothing (cancelStream's completed-turn
+    // gate; unit pin: chat.cancel-delivery.test.ts). The fresh FIRST press is
+    // therefore taken on a new running turn: session-scoped, never a silent
+    // tree stop.
+    await page.waitForTimeout(3_500)
+    await expect(page.getByTestId('stop-btn')).toHaveCount(0)
+    await expect(page.getByTestId('chat-send')).toBeVisible()
+    const input = chatInput(page)
+    await input.fill('Second turn for the stop-scope test')
+    await input.press('Enter')
+    await expect(page.getByText(E2E_SECOND_TURN_TEXT, { exact: true })).toBeVisible({ timeout: 15_000 })
+    await page.getByTestId('stop-btn').click()
+
+    await expect
+      .poll(() => cancelFrames(sentToServer).length, { timeout: 5_000 })
+      .toBe(2)
+    const cancels = cancelFrames(sentToServer)
+    expect(cancels[0].scope).not.toBe('tree')
+    expect(cancels[1].scope, 'a press after the window closed must not be a tree stop').not.toBe('tree')
+    expect(cancels[1].session_id).toBe(E2E_SESSION_ID)
+  })
+
+  test('after the window closes on an acknowledged stop the composer shows Send again and Escape sends nothing', async ({ page }) => {
+    test.setTimeout(90_000)
+    const sentToServer: CapturedFrame[] = []
+    await mockChatWebSocket(page, sentToServer, { ackCancelWithDone: true })
+    await page.goto('/')
+    await startStreamingTurn(page)
+
+    await page.getByTestId('stop-btn').click()
+    // Inside the window the same Stop button still holds the Send position,
+    // even though the server's done has ended the turn (founder Q16 = A).
+    await expect(page.getByTestId('stop-btn')).toBeVisible()
+    expect(cancelFrames(sentToServer)).toHaveLength(1)
+
+    // Window closed (real time): Stop is gone, Send is back.
+    await page.waitForTimeout(3_500)
+    await expect(page.getByTestId('stop-btn')).toHaveCount(0)
+    await expect(page.getByTestId('chat-send')).toBeVisible()
+
+    // Idle chat: Escape has no turn to cancel, so no second cancel frame.
+    await chatInput(page).press('Escape')
+    await page.waitForTimeout(500)
+    expect(cancelFrames(sentToServer)).toHaveLength(1)
+    expect(cancelFrames(sentToServer)[0].scope).not.toBe('tree')
+  })
+
+  test('/cancel sends one cancel frame with scope tree', async ({ page }) => {
+    test.setTimeout(90_000)
+    const sentToServer: CapturedFrame[] = []
+    await mockChatWebSocket(page, sentToServer)
+    await page.goto('/')
+    await startStreamingTurn(page)
+
+    // /cancel is available while streaming; select it from the slash menu.
+    const input = chatInput(page)
+    await input.fill('/')
+    await page.getByText('/cancel').click()
+
+    await expect
+      .poll(() => cancelFrames(sentToServer), { timeout: 5_000 })
+      .toHaveLength(1)
+    expect(cancelFrames(sentToServer)[0].scope).toBe('tree')
+    expect(cancelFrames(sentToServer)[0].session_id).toBe(E2E_SESSION_ID)
+  })
+})

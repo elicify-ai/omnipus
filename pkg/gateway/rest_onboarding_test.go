@@ -23,6 +23,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/onboarding"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	providercommon "github.com/elicify-ai/omnipus/pkg/providers/common"
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
@@ -39,6 +40,7 @@ func newOnboardingTestAPI(t *testing.T, tmpDir string, al *agent.AgentLoop) *res
 	if err := credentials.Unlock(credStore); err != nil {
 		t.Fatalf("unlock credential store: %v", err)
 	}
+	allowLoopbackProviderEndpoints(t)
 	return &restAPI{
 		agentLoop:     al,
 		homePath:      tmpDir,
@@ -66,8 +68,22 @@ func newOnboardingTestAPI(t *testing.T, tmpDir string, al *agent.AgentLoop) *res
 //
 // The server binds 127.0.0.1; onboarding tests leave api.ssrfChecker nil, so the
 // SSRF gate (which blocks loopback by default) does not skip the probe.
+// allowLoopbackProviderEndpoints names loopback in the provider endpoint allow
+// list for the rest of the test. On the hosted edition an endpoint override on
+// a catalog provider is accepted only when the operator's SSRF allow list names
+// its host (installed at boot by createStartupProvider). These fixtures point
+// catalog ids at a loopback httptest upstream, so they name loopback the way
+// such an operator, and CI's end-to-end config, does. The provider-plant tests
+// (rest_provider_plant_test.go) reset it to the strict default.
+func allowLoopbackProviderEndpoints(t *testing.T) {
+	t.Helper()
+	providercommon.SetEndpointAllowlist([]string{"127.0.0.1", "::1", "localhost"})
+	t.Cleanup(func() { providercommon.SetEndpointAllowlist(nil) })
+}
+
 func startFakeProviderUpstream(t *testing.T) string {
 	t.Helper()
+	allowLoopbackProviderEndpoints(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
@@ -1020,7 +1036,7 @@ func TestHandleOnboardingProbeProvider_SSRFBlocksInternalEndpoint(t *testing.T) 
 	assert.Equal(t, http.StatusUnprocessableEntity, w.Code, "body=%s", w.Body.String())
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, "provider endpoint not allowed (SSRF guard)", resp["error"])
+	assert.Equal(t, "The provider address points at an internal network, which is not reachable from here. Use the provider's public address.", resp["error"])
 	assert.NotContains(t, w.Body.String(), "127.0.0.1",
 		"the refusal must not echo the internal address back to an unauthenticated caller")
 	assert.Zero(t, hits, "upstream must never be contacted when SSRF blocks the endpoint")
@@ -1067,7 +1083,9 @@ func TestHandleOnboardingProbeProvider_SSRFAllowsAllowlistedLoopback(t *testing.
 
 // newProviderTestAPI builds a restAPI wired with an unlocked credential store and a
 // config.json on disk, suitable for exercising POST /providers/{id}/test. The
-// onboarding manager is left incomplete so the endpoint serves without auth.
+// onboarding manager is left incomplete; the tests send a signed-in request,
+// because on the hosted edition the route never serves an anonymous caller,
+// onboarding or not.
 func newProviderTestAPI(t *testing.T, tmpDir, configJSON string) *restAPI {
 	t.Helper()
 	require.NoError(t, os.WriteFile(tmpDir+"/config.json", []byte(configJSON), 0o600))
@@ -1115,7 +1133,7 @@ func TestProviderTest_HonorsConfiguredAPIBase(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/providers/openai/test", nil)
 	w := httptest.NewRecorder()
-	api.HandleProviders(w, isolateRateLimit(t, req))
+	api.HandleProviders(w, isolateRateLimit(t, signedIn(req)))
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	var resp map[string]any
@@ -1145,7 +1163,7 @@ func TestProviderTest_ConfiguredAPIBaseRejectsBadKey(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/providers/openai/test", nil)
 	w := httptest.NewRecorder()
-	api.HandleProviders(w, isolateRateLimit(t, req))
+	api.HandleProviders(w, isolateRateLimit(t, signedIn(req)))
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	var resp map[string]any
@@ -1183,13 +1201,13 @@ func TestProviderTest_SSRFBlocksInternalAPIBase(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/providers/openai/test", nil)
 	w := httptest.NewRecorder()
-	api.HandleProviders(w, isolateRateLimit(t, req))
+	api.HandleProviders(w, isolateRateLimit(t, signedIn(req)))
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, false, resp["success"])
-	assert.Equal(t, "endpoint not allowed", resp["error"])
+	assert.Equal(t, "The provider address points at an internal network, which is not reachable from here. Use the provider's public address.", resp["error"])
 	assert.Zero(t, hits, "SSRF must block before any outbound call to the internal api_base")
 }
 
@@ -1231,7 +1249,7 @@ func TestProviderTest_CredentialVaultUnreadable(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/providers/openai/test", nil)
 	w := httptest.NewRecorder()
-	api.HandleProviders(w, isolateRateLimit(t, req))
+	api.HandleProviders(w, isolateRateLimit(t, signedIn(req)))
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	var resp map[string]any
@@ -1290,7 +1308,7 @@ func TestProviderTest_CredentialRefNotFound(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/providers/openai/test", nil)
 	w := httptest.NewRecorder()
-	api.HandleProviders(w, isolateRateLimit(t, req))
+	api.HandleProviders(w, isolateRateLimit(t, signedIn(req)))
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	var resp map[string]any

@@ -78,7 +78,7 @@ func TestHandleWebRTCOffer_CaptureFenceMu_SerializesFenceCheckAndEnsure(t *testi
 	})
 	t.Cleanup(handler.Wait)
 
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := primaryChatAgent(al.GetRegistry())
 	require.NotNil(t, defaultAgent)
 	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
 	require.Equal(t, agent.BrowserResolveOK, outcome)
@@ -168,7 +168,7 @@ func TestHandleWebRTCOffer_OtherAgentStartingCapture_SkippedNotSuperseded(t *tes
 	})
 	t.Cleanup(handler.Wait)
 
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := primaryChatAgent(al.GetRegistry())
 	require.NotNil(t, defaultAgent)
 	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
 	require.Equal(t, agent.BrowserResolveOK, outcome)

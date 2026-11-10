@@ -23,6 +23,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { act } from 'react'
 import { useChatStore, type SessionChatState } from './chat'
 import { useSessionStore } from './session'
+import { emptyHistoryFixture } from '../../tests/chat-history-paging/empty-history'
 import { useUiStore } from './ui'
 import { queryClient } from '@/lib/queryClient'
 
@@ -56,6 +57,7 @@ function resetStores() {
 /** Seed a bucket that is mid-stream: isStreaming=true, a streaming assistant bubble, a running tool. */
 function seedStreamingBucket(sid: string, overrides: Partial<SessionChatState> = {}) {
   const bucket: SessionChatState = {
+    ...emptyHistoryFixture(),
     messagesById: {
       'a1': {
         id: 'a1',

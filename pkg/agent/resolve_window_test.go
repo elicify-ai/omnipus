@@ -27,8 +27,8 @@ import (
 // T067-02 is merged, so the catalog rung is driven by the real parser, not
 // faked — spec X-27). Rows: openrouter / z-ai/glm-5.2 (1,048,576), ollama
 // (local, no models), lmstudio (local by id), vllm (local by id, no window),
-// codex-cli (protocol cli, cli_kind codex — the subprocess driver),
-// openai-chatgpt (HTTP transport, cloud, a real window).
+// openai-chatgpt (HTTP transport, cloud, a real window). The subprocess
+// model-provider row the fixture once carried is gone (WU-24).
 // ---------------------------------------------------------------------------
 
 func windowTestProvider(id, protocol, api string, extra map[string]any, models ...map[string]any) map[string]any {
@@ -86,9 +86,7 @@ func windowTestCatalogDoc(t *testing.T, glmWindow int) []byte {
 			windowTestProvider("lmstudio", "openai-compatible", "http://127.0.0.1:1234/v1", nil,
 				windowTestModel("qwen3-8b", 32768)),
 			windowTestProvider("vllm", "openai-compatible", "http://localhost:8000/v1", nil),
-			windowTestProvider("codex-cli", "cli", "", map[string]any{"cli_kind": "codex"},
-				windowTestModel("gpt-5-codex", 400000)),
-			windowTestProvider("openai-chatgpt", "openai-compatible", "https://chatgpt.com/backend-api/codex", map[string]any{"token_source": "codex-auth-json"},
+			windowTestProvider("openai-chatgpt", "openai-compatible", "https://chatgpt.com/backend-api/codex", nil,
 				windowTestModel("gpt-5.4", 272000)),
 		},
 	}
@@ -330,54 +328,11 @@ func TestResolveContextWindow_ClampAllRungs(t *testing.T) {
 	})
 }
 
-// TestResolveContextWindow_ExemptByCliDriver — spec test 3 (B-05; FR-005).
-// DS-4 rows 14 and 14b: exempt by the row's cli_kind FIELD (a subprocess
-// driver), never by id; openai-chatgpt is an HTTP transport and stays cloud.
-func TestResolveContextWindow_ExemptByCliDriver(t *testing.T) {
-	installWindowTestCatalog(t, 1_048_576)
-	installLiveWindowStub(t, nil)
-
-	t.Run("DS-4 #14 subprocess cli row → window 0, exempt, no source", func(t *testing.T) {
-		cfg := windowTestConfig()
-		// Overrides on an exempt row must not resurrect a window — the
-		// provider manages its own context.
-		cfg.Agents.List[0].ContextWindowOverride = intPtr(100_000)
-		cfg.Context.DefaultContextWindow = intPtr(150_000)
-		got := ResolveWindow(cfg, "codex-cli", "gpt-5-codex", "mia")
-		assert.Equal(t, 0, got.Window)
-		assert.True(t, got.Exempt)
-		assert.Equal(t, WindowSource(""), got.Source)
-		assert.False(t, got.Unknown)
-	})
-
-	t.Run("DS-4 #14b openai-chatgpt is cloud: catalog value", func(t *testing.T) {
-		cfg := windowTestConfig()
-		got := ResolveWindow(cfg, "openai-chatgpt", "gpt-5.4", "mia")
-		assert.Equal(t, 272_000, got.Window)
-		assert.Equal(t, WindowSourceCatalog, got.Source)
-		assert.False(t, got.Exempt)
-	})
-
-	t.Run("exemption is by field: no provider-id literal in the resolver", func(t *testing.T) {
-		src := readOwnedFileForTest(t, "resolve_window.go")
-		// The fourth id is assembled, not written whole: it names a provider
-		// ADR-068 §2.4 deleted, and scripts/check-no-removed-providers.sh
-		// fails the build on any occurrence of it under pkg/ ("no trace" is a
-		// property of the SOURCE). The assertion is unchanged — the same id is
-		// still searched for in resolve_window.go.
-		removedCLIID := `"` + "claude" + `-cli"`
-		for _, literal := range []string{`"codex-cli"`, `"codex"`, `"copilot"`, removedCLIID, `"openai-chatgpt"`} {
-			assert.NotContains(t, src, literal,
-				"resolve_window.go must decide exemption by the catalog row's cli_kind field, never by id %s", literal)
-		}
-		assert.Contains(t, src, "CLIKind", "exemption must read the row's cli_kind field")
-	})
-}
-
-// TestResolveWindow_NoAgent — spec test 3c (B-04b, B-04c; FR-001 / US-1.AC9,
-// AC10). Without an agent id rungs 2–6 apply; an exempt provider returns 0
-// with no source; an override for a provider that no longer exists is
-// ignored.
+// TestResolveWindow_NoAgent — spec test 3c (B-04b, B-04c; FR-001 /
+// US-1.AC9, AC10). Without an agent id rungs 2–6 apply; an override for a
+// provider that no longer exists is ignored. (The exempt catalog row
+// B-04b once also covered died with the subprocess model providers, WU-24;
+// the surviving external-CLI worker exemption needs an agent id.)
 func TestResolveWindow_NoAgent(t *testing.T) {
 	installWindowTestCatalog(t, 1_048_576)
 	installLiveWindowStub(t, nil)
@@ -412,14 +367,6 @@ func TestResolveWindow_NoAgent(t *testing.T) {
 		got = ResolveWindow(cfg, "openrouter", "z-ai/glm-5.2", "")
 		assert.Equal(t, 150_000, got.Window)
 		assert.Equal(t, WindowSourceOperator, got.Source)
-	})
-
-	t.Run("B-04b exempt provider → 0, no source", func(t *testing.T) {
-		cfg := windowTestConfig()
-		got := ResolveWindow(cfg, "codex-cli", "gpt-5-codex", "")
-		assert.Equal(t, 0, got.Window)
-		assert.True(t, got.Exempt)
-		assert.Equal(t, WindowSource(""), got.Source)
 	})
 
 	t.Run("B-04c dead override for a deleted provider is ignored", func(t *testing.T) {
@@ -582,13 +529,13 @@ func TestResolveContextWindow_ByLocality(t *testing.T) {
 }
 
 // TestNewAgentInstance_MaxTokensClampedWhenBudgetNonPositive — spec test 3b
-// (B-05b; FR-005b / A-18). DS-4 row 16: W = 8,192, max_tokens = 8,192 →
-// effective max_tokens = 2,048, one WARN naming the model, B > 0.
+// (B-05b; FR-005b / A-18). Founder minimum 2026-10-21: W = 16,384,
+// max_tokens = 16,384 → 4,096, one WARN naming the model, B > 0.
 func TestNewAgentInstance_MaxTokensClampedWhenBudgetNonPositive(t *testing.T) {
 	installWindowTestCatalog(t, 1_048_576)
 	installLiveWindowStub(t, func(provider, _, _ string) (int, bool) {
 		if provider == "ollama" {
-			return 8192, true
+			return 16_384, true
 		}
 		return 0, false
 	})
@@ -613,26 +560,46 @@ func TestNewAgentInstance_MaxTokensClampedWhenBudgetNonPositive(t *testing.T) {
 		return cfg
 	}
 
-	t.Run("DS-4 #16 8,192 / 8,192 → 2,048 + one WARN", func(t *testing.T) {
+	t.Run("DS-4 #16 16,384 / 16,384 → 4,096 + one WARN", func(t *testing.T) {
 		readLog := captureLogFile(t, logger.WARN)
-		cfg := newCfg(t, 8192)
+		cfg := newCfg(t, 16_384)
 		agent := NewAgentInstance(&cfg.Agents.List[0], &cfg.Agents.Defaults, cfg, &mockProvider{})
-		assert.Equal(t, 8192, agent.ContextWindow)
+		assert.Equal(t, 16_384, agent.ContextWindow)
 		assert.Equal(t, WindowSourceLive, agent.WindowSource)
-		assert.Equal(t, 2048, agent.MaxTokens)
-		assert.Positive(t, agentContextBudget(agent), "B must be > 0 after the clamp")
+		assert.Equal(t, 4_096, agent.MaxTokens)
+		assert.Positive(t, agentContextBudget(agent), "B must be > 0 after the clamp at the supported minimum")
 		log := readLog()
 		assert.Contains(t, log, "llama3:8b", "the WARN names the model")
-		assert.Contains(t, log, "8192")
-		assert.Contains(t, log, "2048")
+		assert.Contains(t, log, "16384")
+		assert.Contains(t, log, "4096")
 	})
 
 	t.Run("a max_tokens that leaves B > 0 is left alone", func(t *testing.T) {
 		cfg := newCfg(t, 1024)
 		agent := NewAgentInstance(&cfg.Agents.List[0], &cfg.Agents.Defaults, cfg, &mockProvider{})
-		assert.Equal(t, 8192, agent.ContextWindow)
+		assert.Equal(t, 16_384, agent.ContextWindow)
 		assert.Equal(t, 1024, agent.MaxTokens)
 		assert.Positive(t, agentContextBudget(agent))
+	})
+
+	t.Run("below the supported minimum preserves the reported capability", func(t *testing.T) {
+		// Characterization: support starts at 16,384, but the resolver does not
+		// invent a minimum-window refusal or inflate a known smaller window.
+		// FR-005b's existing floor(W/4) still applies: floor(16,383/4)=4,095.
+		installLiveWindowStub(t, func(provider, _, _ string) (int, bool) {
+			if provider == "ollama" {
+				return 16_383, true
+			}
+			return 0, false
+		})
+		cfg := newCfg(t, 16_383)
+		resolved := ResolveWindow(cfg, "ollama", "llama3:8b", "mia")
+		assert.Equal(t, WindowResolution{Window: 16_383, Source: WindowSourceLive}, resolved)
+		agent := NewAgentInstance(&cfg.Agents.List[0], &cfg.Agents.Defaults, cfg, &mockProvider{})
+		assert.Equal(t, 16_383, agent.ContextWindow)
+		assert.Equal(t, WindowSourceLive, agent.WindowSource)
+		assert.Equal(t, 4_095, agent.MaxTokens)
+		// No positive-budget/turn-readiness promise below the supported minimum.
 	})
 }
 

@@ -1,0 +1,67 @@
+production_head=842574ef9d9e6d5a257ca6646bcc9fb65c9c1da4
+
+POSITIVE CONTROL: real inbox type and append path
+275:type MessageInboxStore struct {
+533:func (s *MessageInboxStore) Append(ownerKey string, msg generated.SessionMessage) (*AppendResult, error) {
+positive_control_exit=0
+
+D6 named fields and alternate notice names, production Go only
+/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/u1-stopped-state/pkg/agent/loop_run_turn_tools.go:1599:			ex.rx.rr.rq.ri.rf.rt.ts.requestToolRepeatStop(toolRepeatStopNotice(ex.toolName, run))
+/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/u1-stopped-state/pkg/agent/turn.go:634:	// ends the run. toolRepeatStopNotice is set once the run reaches
+/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/u1-stopped-state/pkg/agent/turn.go:640:	toolRepeatStopNotice string
+/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/u1-stopped-state/pkg/agent/tool_failure_circuit_breaker.go:213:	if ts.toolRepeatStopNotice == "" {
+/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/u1-stopped-state/pkg/agent/tool_failure_circuit_breaker.go:214:		ts.toolRepeatStopNotice = notice
+/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/u1-stopped-state/pkg/agent/tool_failure_circuit_breaker.go:222:	notice := ts.toolRepeatStopNotice
+/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/u1-stopped-state/pkg/agent/tool_failure_circuit_breaker.go:223:	ts.toolRepeatStopNotice = ""
+/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/u1-stopped-state/pkg/agent/tool_failure_circuit_breaker.go:239:// toolRepeatStopNotice is the visible final content of a turn ended by the
+/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/u1-stopped-state/pkg/agent/tool_failure_circuit_breaker.go:241:func toolRepeatStopNotice(toolName string, run int) string {
+d6_name_field_search_exit=0
+
+Assigned test-symbol caller sweep (GitNexus unavailable)
+/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/u1-stopped-state/pkg/agent/goal_child_completion_947_test.go:425:// TestGoalChildCompletion947_CancelPreservesSessionOwnedGoal is a substantive
+/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/u1-stopped-state/pkg/agent/goal_child_completion_947_test.go:430:func TestGoalChildCompletion947_CancelPreservesSessionOwnedGoal(t *testing.T) {
+/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/u1-stopped-state/pkg/agent/goal_followup_984_test.go:310:// TestGoal984_GoalEnderRoutesDeferredChildThroughTail keeps the original F4
+/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/u1-stopped-state/pkg/agent/goal_followup_984_test.go:317:func TestGoal984_GoalEnderRoutesDeferredChildThroughTail(t *testing.T) {
+/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/u1-stopped-state/pkg/agent/goal_followup_984_test.go:318:	t.Run("goal clear", testGoal984ClearDeferredChild)
+/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/u1-stopped-state/pkg/agent/goal_followup_984_test.go:319:	t.Run("idle expiry sweep", testGoal984IdleExpiryDeferredChild)
+/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/u1-stopped-state/pkg/agent/goal_followup_984_test.go:322:func testGoal984ClearDeferredChild(t *testing.T) {
+/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/u1-stopped-state/pkg/agent/goal_followup_984_test.go:393:func testGoal984IdleExpiryDeferredChild(t *testing.T) {
+caller_sweep_exit=0
+
+Remaining retired lifecycle constants in package test files
+/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/u1-stopped-state/pkg/agent/steer_cancel_test.go:383:	if after.State != session.LifecycleCancelled {
+/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/u1-stopped-state/pkg/agent/steer_cancel_test.go:496:		session.LifecycleCancelled, steer.OutcomeInterrupted, "interrupted: the session was cancelled")
+/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/u1-stopped-state/pkg/agent/steer_goal_failure_test.go:85:			wantState: session.LifecycleTimedOut,
+/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/u1-stopped-state/pkg/agent/steer_goal_failure_test.go:92:			wantState: session.LifecycleCancelled,
+/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/u1-stopped-state/pkg/agent/steer_launcher_test.go:1121:	if rec.State != session.LifecycleTimedOut {
+/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/u1-stopped-state/pkg/agent/conformance_design_test.go:1534:		SessionID: "bs-owner", Generation: 1, State: session.LifecyclePaused,
+/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/u1-stopped-state/pkg/agent/conformance_design_test.go:1588:	if owner.State != session.LifecyclePaused {
+/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/u1-stopped-state/pkg/agent/boot_sweep_test.go:227:		SessionID: "sess-owner", Generation: 1, State: session.LifecyclePaused,
+/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/u1-stopped-state/pkg/agent/boot_sweep_test.go:259:		SessionID: "sess-owner-2", Generation: 1, State: session.LifecyclePaused,
+/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/u1-stopped-state/pkg/agent/boot_sweep_test.go:462:		SessionID: "owner-rs", Generation: 1, State: session.LifecyclePaused,
+/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/u1-stopped-state/pkg/agent/boot_sweep_test.go:483:	if owner.State != session.LifecyclePaused {
+remaining_legacy_constants_exit=0
+
+Compiler blocker positive control
+2:pkg/agent/boot_sweep_test.go:227:58: undefined: session.LifecyclePaused
+3:pkg/agent/boot_sweep_test.go:259:60: undefined: session.LifecyclePaused
+4:pkg/agent/boot_sweep_test.go:462:56: undefined: session.LifecyclePaused
+5:pkg/agent/boot_sweep_test.go:483:28: undefined: session.LifecyclePaused
+6:pkg/agent/conformance_design_test.go:1534:56: undefined: session.LifecyclePaused
+7:pkg/agent/conformance_design_test.go:1588:28: undefined: session.LifecyclePaused
+8:pkg/agent/steer_cancel_test.go:383:28: undefined: session.LifecycleCancelled
+9:pkg/agent/steer_cancel_test.go:496:11: undefined: session.LifecycleCancelled
+10:pkg/agent/steer_goal_failure_test.go:85:23: undefined: session.LifecycleTimedOut
+11:pkg/agent/steer_goal_failure_test.go:92:23: undefined: session.LifecycleCancelled
+13:FAIL	github.com/elicify-ai/omnipus/pkg/agent [build failed]
+compiler_failure_control_exit=0
+
+Named test execution / assertion lines
+named_execution_search_exit=1
+
+Exact D6 stop metadata / notice names (after positive inbox control)
+command=rg -n --glob '*.go' --glob '!**/*_test.go' '\b(stop_note|stop_seq|StoppedChildNotice|stopped_child_notice|StoppedNotice)\b' /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/u1-stopped-state/pkg
+exact_d6_metadata_search_exit=1
+
+Alternate-name hit inspected: /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/u1-stopped-state/pkg/agent/tool_failure_circuit_breaker.go::toolRepeatStopNotice
+Read confirms identical-tool-repeat turn-final text only; no durable stop_note, child-parent inbox delivery, resume/redirect choices, or stop-sequence identity in that symbol. This is not the D6 independent stopped-child mechanism.

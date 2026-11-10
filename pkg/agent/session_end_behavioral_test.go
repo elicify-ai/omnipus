@@ -2,6 +2,13 @@
 // Fix C's session-end pipeline. Complements session_end_smoke_test.go with
 // spec-mandated #35 (happy path), #43 (bootstrap pass), and boot-gate coverage
 // for FR-029a (cheap-model allow-list).
+//
+// session-core U12 port: these recap tests originally drove the recap via
+// CloseSession(sid, "explicit"). FR-036 / DEL-08 retired the explicit trigger
+// (recap now fires only for idle/bootstrap/joined), so they are ported to the
+// still-valid "idle" trigger with every assertion unchanged — spec
+// "Regression protection": port safety assertions to the canonical
+// replacement, never weaken them.
 
 package agent
 
@@ -25,8 +32,8 @@ import (
 
 // scriptedProvider is a mockProvider with a predetermined Chat response and
 // call-count observation. Exercises the session-end code path without a real
-// LLM. Records the last request so tests can assert recap-option hygiene
-// (max_tokens=512, extended_thinking=false, extra_body.reasoning.enabled=false).
+// LLM. Records the last request so tests can assert the recap's output cap
+// and the effort-levels FR-070 removal of obsolete hardcoded Off options.
 type scriptedProvider struct {
 	mu           sync.Mutex
 	responseBody string
@@ -62,9 +69,11 @@ func (s *scriptedProvider) GetDefaultModel() string { return "scripted-model" }
 
 // TestRunRecap_HappyPath_PersistsLastSessionAndRetro exercises #35 end-to-end:
 // a transcript is written, CloseSession is invoked, and after the recap
-// goroutine completes the MemoryStore must contain LAST_SESSION.md + a retro.
-// Also pins FR-029a cost-guard opts (max_tokens=512, extended_thinking=false,
-// extra_body.reasoning.enabled=false) onto the Chat request.
+// goroutine completes the MemoryStore must contain the workspace's
+// carry-forward summary + a retro.
+// Also preserves the output-cap cost guard (2,048 default) and migrates its
+// obsolete Off hints to FD-19 / FR-070: no hardcoded extended_thinking or
+// extra_body. This unoffered fixture model has no sendable Off capability.
 func TestRunRecap_HappyPath_PersistsLastSessionAndRetro(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
@@ -105,11 +114,14 @@ func TestRunRecap_HappyPath_PersistsLastSessionAndRetro(t *testing.T) {
 	al.registry.mu.Unlock()
 
 	// Create a real session owned by recap-agent and append a transcript entry.
+	// WU-21 re-aim (#1197): the session is stamped with a workspace so the recap
+	// has a carry-forward target, and the poll below reads that pair path.
 	meta, err := store.NewSession(session.SessionTypeChat, "web", "recap-agent")
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
 	sessionID := meta.ID
+	wu21ReaimStampWorkspace(t, store, sessionID)
 	if appendErr := store.AppendTranscript(sessionID, session.TranscriptEntry{
 		Role:      "user",
 		Content:   "please summarize what we did today",
@@ -120,13 +132,13 @@ func TestRunRecap_HappyPath_PersistsLastSessionAndRetro(t *testing.T) {
 	}
 
 	// Kick the recap and wait for it.
-	al.CloseSession(sessionID, "explicit")
+	al.CloseSession(sessionID, "idle")
 
 	deadline := time.Now().Add(5 * time.Second)
 	var lastSessionBytes []byte
 	for time.Now().Before(deadline) {
-		// Spec-5: last-session.md is now in <workspace>/.omnipus/last-session.md
-		data, readErr := os.ReadFile(filepath.Join(ag.Home, ".omnipus", "last-session.md"))
+		// WU-21: the summary is the (agent, workspace) pair file.
+		data, readErr := os.ReadFile(wu21ReaimPairPath(home, "recap-agent"))
 		if readErr == nil {
 			lastSessionBytes = data
 			break
@@ -134,50 +146,41 @@ func TestRunRecap_HappyPath_PersistsLastSessionAndRetro(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	if lastSessionBytes == nil {
-		t.Fatalf("last-session.md not produced within deadline; Chat calls=%d", script.callCount)
+		t.Fatalf("carry-forward summary not produced within deadline; Chat calls=%d", script.callCount)
 	}
 	if !strings.Contains(string(lastSessionBytes), "we shipped") {
-		t.Errorf("last-session.md missing recap content; got:\n%s", lastSessionBytes)
+		t.Errorf("carry-forward summary missing recap content; got:\n%s", lastSessionBytes)
 	}
 
-	// FR-029a: recap Chat call must set max_tokens=2048, extended_thinking=false,
-	// and extra_body.reasoning.enabled=false. max_tokens=2048 gives reasoning
-	// models (e.g. glm-5.2 on OpenRouter/Fireworks) enough budget to generate
-	// both the reasoning trace and the JSON content — the old 512-token cap was
-	// consumed entirely by reasoning (~500 tokens), leaving content=null.
+	// FD-19 / FR-070 retain the 2,048 default output cap, but remove both
+	// hardcoded Off hints. Off for this unoffered model sends no effort key;
+	// the whole options map must contain only the cap. Actual per-route Off
+	// encoding is covered by TestT_C5_S71_RecapDefaultOffPerRoute.
 	script.mu.Lock()
 	defer script.mu.Unlock()
 	if script.callCount != 1 {
 		t.Errorf("scripted Chat calls = %d, want 1", script.callCount)
 	}
-	if mt, _ := script.lastOpts["max_tokens"].(int); mt != 2048 {
-		t.Errorf("opts.max_tokens = %v, want 2048", script.lastOpts["max_tokens"])
+	if mt, ok := script.lastOpts["max_tokens"].(int); !ok || mt != 2048 {
+		t.Errorf("opts.max_tokens = %v, want integer 2048", script.lastOpts["max_tokens"])
 	}
-	if et, _ := script.lastOpts["extended_thinking"].(bool); et {
-		t.Error("opts.extended_thinking must be false")
-	}
-	eb, _ := script.lastOpts["extra_body"].(map[string]any)
-	if eb == nil {
-		t.Fatal("opts.extra_body missing")
-	}
-	reasoning, _ := eb["reasoning"].(map[string]any)
-	if reasoning == nil || reasoning["enabled"] != false {
-		t.Errorf("opts.extra_body.reasoning.enabled must be false; got %v", eb)
+	if len(script.lastOpts) != 1 {
+		t.Errorf("recap options = %v, want exactly {max_tokens: 2048}; FR-070 removes hardcoded Off hints", script.lastOpts)
 	}
 	if script.lastModel != "claude-haiku-3" {
 		t.Errorf("recap model = %q, want claude-haiku-3 (recap_model config)", script.lastModel)
 	}
 
 	// A retro file must exist too — date-directory under .omnipus/retros/.
-	// WriteLastSession and AppendRetro run sequentially in the recap
-	// goroutine (pkg/agent/session_end.go), but the last-session.md
+	// The carry-forward write and AppendRetro run sequentially in the recap
+	// goroutine (pkg/agent/session_end.go), but the summary file
 	// poll above can see the first write before the goroutine completes
 	// the second one under heavy CI load. Poll the retro the same way.
 	// Spec-5: retros are now in <workspace>/.omnipus/retros/<date>/.
 	//
 	// os.IsNotExist is treated as a transient condition here: AppendRetro
 	// creates the retros/<date>/ directory atomically, so the directory may
-	// not yet exist when the goroutine is between WriteLastSession and
+	// not yet exist when the goroutine is between the summary write and
 	// AppendRetro. Calling t.Fatalf on ENOENT causes a spurious failure under
 	// parallel-sibling load (the goroutine has less CPU time between the two
 	// sequential writes). Only non-"not found" errors are fatal.
@@ -225,7 +228,7 @@ func TestRunRecap_HappyPath_PersistsLastSessionAndRetro(t *testing.T) {
 			sawRetroFile = true
 			retroBytes = content
 		}
-		if found && strings.Contains(string(content), "trigger=explicit") && strings.Contains(string(content), "fallback=false") {
+		if found && strings.Contains(string(content), "trigger=idle") && strings.Contains(string(content), "fallback=false") {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -233,8 +236,8 @@ func TestRunRecap_HappyPath_PersistsLastSessionAndRetro(t *testing.T) {
 	if !sawRetroFile {
 		t.Fatal("no _retro.md file was produced in the happy path within 5s")
 	}
-	if !strings.Contains(string(retroBytes), "trigger=explicit") {
-		t.Errorf("retro missing trigger=explicit; got:\n%s", retroBytes)
+	if !strings.Contains(string(retroBytes), "trigger=idle") {
+		t.Errorf("retro missing trigger=idle; got:\n%s", retroBytes)
 	}
 	if !strings.Contains(string(retroBytes), "fallback=false") {
 		t.Errorf("happy-path retro should be fallback=false; got:\n%s", retroBytes)
@@ -243,7 +246,7 @@ func TestRunRecap_HappyPath_PersistsLastSessionAndRetro(t *testing.T) {
 
 // TestRunRecap_JSONParseError_WritesFallback covers the failure mode where the
 // model returns non-JSON: the fallback retro is written, the raw response is
-// logged, and no recap is persisted to LAST_SESSION.md.
+// logged, and no recap is persisted to the carry-forward summary.
 func TestRunRecap_JSONParseError_WritesFallback(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
@@ -274,11 +277,12 @@ func TestRunRecap_JSONParseError_WritesFallback(t *testing.T) {
 		t.Fatalf("NewSession: %v", err)
 	}
 	sessionID := pmeta.ID
+	wu21ReaimStampWorkspace(t, store, sessionID) // WU-21 re-aim: give the fallback a carry-forward target.
 	_ = store.AppendTranscript(sessionID, session.TranscriptEntry{
 		Role: "user", Content: "hi", Timestamp: time.Now().UTC(), AgentID: "parse-agent",
 	})
 
-	al.CloseSession(sessionID, "explicit")
+	al.CloseSession(sessionID, "idle")
 
 	// Wait for a retro to land (it will, via the fallback path).
 	// Spec-5: retros are now in <workspace>/.omnipus/retros/<date>/.
@@ -454,20 +458,21 @@ func TestRunRecap_ReasoningFallback_ExtractsJSONFromReasoning(t *testing.T) {
 		t.Fatalf("NewSession: %v", err)
 	}
 	sessionID := meta.ID
+	wu21ReaimStampWorkspace(t, store, sessionID) // WU-21 re-aim: carry-forward target.
 	if err := store.AppendTranscript(sessionID, session.TranscriptEntry{
 		Role: "user", Content: "what did we do?", Timestamp: time.Now().UTC(), AgentID: "reasoning-agent",
 	}); err != nil {
 		t.Fatalf("AppendTranscript: %v", err)
 	}
 
-	al.CloseSession(sessionID, "explicit")
+	al.CloseSession(sessionID, "idle")
 
-	// Wait for last-session.md — the reasoning-extraction path must succeed.
+	// Wait for the carry-forward summary — the reasoning-extraction path must succeed.
 	deadline := time.Now().Add(5 * time.Second)
 	var lastSessionBytes []byte
-	lastSessionPath := filepath.Join(ag.Home, ".omnipus", "last-session.md")
+	carryForwardPath := wu21ReaimPairPath(home, "reasoning-agent")
 	for time.Now().Before(deadline) {
-		data, readErr := os.ReadFile(lastSessionPath)
+		data, readErr := os.ReadFile(carryForwardPath)
 		if readErr == nil {
 			lastSessionBytes = data
 			break
@@ -475,15 +480,15 @@ func TestRunRecap_ReasoningFallback_ExtractsJSONFromReasoning(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	if lastSessionBytes == nil {
-		t.Fatal("last-session.md not produced within deadline — reasoning-extraction fallback did not fire")
+		t.Fatal("carry-forward summary not produced within deadline — reasoning-extraction fallback did not fire")
 	}
 	content := string(lastSessionBytes)
 	// Must be the real LLM recap (from reasoning extraction), not the heuristic fallback.
 	if !strings.Contains(content, recapText) {
-		t.Errorf("last-session.md does not contain expected recap text %q; got:\n%s", recapText, content)
+		t.Errorf("carry-forward summary does not contain expected recap text %q; got:\n%s", recapText, content)
 	}
 	if strings.Contains(content, "Fallback reason:") {
-		t.Errorf("last-session.md should contain LLM recap, not heuristic fallback; got:\n%s", content)
+		t.Errorf("carry-forward summary should contain LLM recap, not heuristic fallback; got:\n%s", content)
 	}
 }
 
@@ -546,33 +551,34 @@ func TestRunRecap_FencedContent(t *testing.T) {
 		t.Fatalf("NewSession: %v", err)
 	}
 	sessionID := meta.ID
+	wu21ReaimStampWorkspace(t, store, sessionID) // WU-21 re-aim: carry-forward target.
 	if err := store.AppendTranscript(sessionID, session.TranscriptEntry{
 		Role: "user", Content: "remember FALCON-XYZ", Timestamp: time.Now().UTC(), AgentID: "fenced-agent",
 	}); err != nil {
 		t.Fatalf("AppendTranscript: %v", err)
 	}
 
-	al.CloseSession(sessionID, "explicit")
+	al.CloseSession(sessionID, "idle")
 
 	deadline := time.Now().Add(5 * time.Second)
 	var lastSessionBytes []byte
-	lastSessionPath := filepath.Join(ag.Home, ".omnipus", "last-session.md")
+	carryForwardPath := wu21ReaimPairPath(home, "fenced-agent")
 	for time.Now().Before(deadline) {
-		if data, readErr := os.ReadFile(lastSessionPath); readErr == nil {
+		if data, readErr := os.ReadFile(carryForwardPath); readErr == nil {
 			lastSessionBytes = data
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 	if lastSessionBytes == nil {
-		t.Fatal("last-session.md not produced within deadline — fenced-content parse did not fire")
+		t.Fatal("carry-forward summary not produced within deadline — fenced-content parse did not fire")
 	}
 	content := string(lastSessionBytes)
 	if !strings.Contains(content, recapText) {
-		t.Errorf("last-session.md missing recap text %q; got:\n%s", recapText, content)
+		t.Errorf("carry-forward summary missing recap text %q; got:\n%s", recapText, content)
 	}
 	if strings.Contains(content, "Fallback reason:") {
-		t.Errorf("last-session.md should contain the LLM recap, not a heuristic fallback; got:\n%s", content)
+		t.Errorf("carry-forward summary should contain the LLM recap, not a heuristic fallback; got:\n%s", content)
 	}
 }
 
@@ -704,6 +710,7 @@ func TestBootstrapRecapPass_OneIterationPerSession(t *testing.T) {
 		t.Fatalf("NewSession: %v", err)
 	}
 	sessionID := bootMeta.ID
+	wu21ReaimStampWorkspace(t, store, sessionID) // WU-21 re-aim: carry-forward target.
 
 	// Age the transcript timestamp so the 30-min gate lets it through.
 	_ = store.AppendTranscript(sessionID, session.TranscriptEntry{
@@ -869,6 +876,7 @@ func TestRunRecap_FallbackChain_PrimaryFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
+	wu21ReaimStampWorkspace(t, store, meta.ID) // WU-21 re-aim: carry-forward target.
 	_ = store.AppendTranscript(meta.ID, session.TranscriptEntry{
 		Role:      "user",
 		Content:   "trigger fallback recap",
@@ -876,7 +884,7 @@ func TestRunRecap_FallbackChain_PrimaryFails(t *testing.T) {
 		Timestamp: time.Now().UTC(),
 	})
 
-	al.CloseSession(meta.ID, "explicit")
+	al.CloseSession(meta.ID, "idle")
 
 	// Wait for the recap goroutine to complete.
 	deadline := time.Now().Add(5 * time.Second)
@@ -947,6 +955,7 @@ func TestRunRecap_ModelResolution_UsesRecapModelField(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
+	wu21ReaimStampWorkspace(t, store, meta.ID) // WU-21 re-aim: carry-forward target.
 	_ = store.AppendTranscript(meta.ID, session.TranscriptEntry{
 		Role:      "user",
 		Content:   "test model resolution",
@@ -954,7 +963,7 @@ func TestRunRecap_ModelResolution_UsesRecapModelField(t *testing.T) {
 		Timestamp: time.Now().UTC(),
 	})
 
-	al.CloseSession(meta.ID, "explicit")
+	al.CloseSession(meta.ID, "idle")
 
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {

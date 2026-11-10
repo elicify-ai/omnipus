@@ -56,11 +56,19 @@ type startPlan struct {
 // per-turn kernel policy derived from an FSPolicy whose WorkDir is the
 // authorized target work root. This makes that root's source files part of
 // the own-tree read view; write is stripped again below except for the exact
-// selected installation roots. God mode mirrors bash: no kernel policy — the
-// same operator opt-out that governs that agent's bash children.
+// selected installation roots.
+//
+// #1284 amendment §2 D3 (fix round 1): the child's allowances — the
+// already-published shared runtime generations (read+execute) and its own
+// selected installation prefix/cache/tmp (write) — ride INTO the denial as
+// TurnPolicyInput.AllowRoots, in God Mode (the floor) exactly as in normal
+// mode, never appended to a policy whose denial had already shipped. They are
+// marked as internal runtime input, so one pointing at protected inventory is
+// dropped by the enumeration rather than honoured.
 func (t *EnvironmentSetupTool) buildSetupLimits(ctx context.Context, area EnvironmentSetupTarget, targetRoot string, runtimeEnv environmentsetup.RuntimeEnv, timeoutSeconds int32) (sandbox.Limits, error) {
 	prefix := area.Prefix()
-	lim, err := sandbox.ResolveLimits(t.godMode, prefix, t.proxy, timeoutSeconds)
+	setupAllowRoots := setupAllowRoots(area, runtimeEnv)
+	lim, err := sandbox.ResolveLimits(t.godMode, prefix, t.proxy, timeoutSeconds, setupAllowRoots...)
 	if err != nil {
 		return sandbox.Limits{}, err
 	}
@@ -77,12 +85,22 @@ func (t *EnvironmentSetupTool) buildSetupLimits(ctx context.Context, area Enviro
 	}
 	authored.AllowedRoots = writableRootsOutsidePrefix(area)
 
-	policy, err := sandbox.KernelPolicyForTurn(authored)
-	if err != nil {
-		// Fail closed (mirrors turnKernelPolicy): falling back to the boot
-		// profile would hand the child the WIDER posture.
-		return sandbox.Limits{}, fmt.Errorf("derive setup kernel policy: %w", err)
-	}
+	// The setup child derives from a MODIFIED boot input: the operator's
+	// ordinary allowed_paths are not part of a setup child's posture, and its
+	// runtime/prefix allowances must be in the input BEFORE the denial, so
+	// this site derives via DeriveKernelPolicy itself rather than through
+	// KernelPolicyForTurn's as-registered base.
+	policy := func() *sandbox.SandboxPolicy {
+		base, ok := sandbox.RegisteredTurnPolicyBase()
+		if !ok {
+			return nil // documented no-per-turn fallback: the boot profile governs
+		}
+		in := base
+		in.AllowedPaths = nil // setup keeps only its selected writes (stripped again below)
+		in.AllowRoots = setupAllowRoots
+		derived := sandbox.DeriveKernelPolicy(authored, in)
+		return &derived
+	}()
 	// nil is legal: no boot-registered base means the boot profile governs,
 	// the same documented fallback bash has.
 	if policy != nil {
@@ -112,9 +130,51 @@ func (t *EnvironmentSetupTool) buildSetupLimits(ctx context.Context, area Enviro
 			policy.FilesystemRules = append(policy.FilesystemRules,
 				sandbox.PathRule{Path: filepath.Clean(root), Access: sandbox.AccessRead | sandbox.AccessExecute})
 		}
+		// The SAME access classes as branch grants, so the Linux home-rule
+		// explosion grants the target root read+execute and the selected
+		// roots read+write instead of the parent rule's broad access — the
+		// rule strip above cannot reach grants the explosion derives from
+		// the home branch itself.
+		branchRules := []sandbox.PathRule{
+			{Path: filepath.Clean(targetRoot), Access: sandbox.AccessRead | sandbox.AccessExecute},
+			{Path: filepath.Clean(area.Prefix()), Access: sandbox.AccessRead | sandbox.AccessWrite},
+		}
+		for _, root := range writableRootsOutsidePrefix(area) {
+			branchRules = append(branchRules, sandbox.PathRule{Path: filepath.Clean(root), Access: sandbox.AccessRead | sandbox.AccessWrite})
+		}
+		for _, root := range runtimeEnv.ReadExec {
+			branchRules = append(branchRules, sandbox.PathRule{Path: filepath.Clean(root), Access: sandbox.AccessRead | sandbox.AccessExecute})
+		}
+		policy.AllowedBranches = append(policy.AllowedBranches, branchRules...)
 	}
 	lim.KernelPolicy = policy
 	return lim, nil
+}
+
+// setupAllowRoots lists the setup child's §2 A5/A6 allowances: the published
+// shared runtime generations (read+execute) and its own selected
+// installation prefix/cache/tmp (write), for the input side of the denial.
+func setupAllowRoots(area EnvironmentSetupTarget, runtimeEnv environmentsetup.RuntimeEnv) []fspolicy.AllowRoot {
+	roots := make([]fspolicy.AllowRoot, 0, len(runtimeEnv.ReadExec)+3)
+	for _, root := range runtimeEnv.ReadExec {
+		if strings.TrimSpace(root) == "" {
+			continue
+		}
+		roots = append(roots, fspolicy.AllowRoot{Path: filepath.Clean(root), Writable: false})
+	}
+	prefix := filepath.Clean(area.Prefix())
+	roots = append(roots, fspolicy.AllowRoot{Path: prefix, Writable: true})
+	for _, root := range []string{area.Cache(), area.Tmp()} {
+		// The writable prefix already covers its cache/tmp subtrees. Adding
+		// them as separate branches makes the prefix a denied ancestor node
+		// on Landlock, preventing the installer from creating direct files.
+		// Keep only external selections: the union of authorized paths does
+		// not widen, and inventory/ancestor protections remain unchanged.
+		if root != "" && !pathWithin(prefix, root) {
+			roots = append(roots, fspolicy.AllowRoot{Path: filepath.Clean(root), Writable: true})
+		}
+	}
+	return roots
 }
 
 // writableRootsOutsidePrefix returns the target's writable roots that are not
@@ -255,7 +315,18 @@ func (t *EnvironmentSetupTool) startSession(ctx context.Context, plan startPlan)
 
 	var startErr error
 	if t.godMode {
-		startErr = cmd.Start()
+		// God Mode FLOOR (amendment §2 D7): the setup child applies the same
+		// floor bash's foreground and background paths do — ResolveLimits
+		// returned it in plan.lim.KernelPolicy; macOS renders it into the
+		// child's Seatbelt profile, Linux applies it to the spawning thread
+		// before the fork. A nil policy (sandbox off, degraded backend,
+		// nogodmode build) reproduces the pre-floor god path exactly.
+		if plan.lim.KernelPolicy != nil {
+			if err := sandbox.ApplyChildKernelPolicy(cmd, plan.lim.KernelPolicy); err != nil {
+				return setupStartAbortResult(plan.area, fmt.Sprintf("sandbox floor failed: %v", err))
+			}
+		}
+		startErr = sandbox.StartLockedWithPolicy(cmd, plan.lim.KernelPolicy)
 	} else {
 		// CRIT-1: the per-turn kernel policy must reach the Linux child —
 		// StartLocked applies only the boot-global domain on the spawning
@@ -275,7 +346,7 @@ func (t *EnvironmentSetupTool) startSession(ctx context.Context, plan startPlan)
 				_ = cmd.Process.Kill()
 			}
 			_ = cmd.Wait()
-			return setupStartAbortResult(plan.area, fmt.Sprintf("sandbox post-start hardening failed: %v", err))
+			return setupPostStartAbortResult(plan.area, fmt.Sprintf("sandbox post-start hardening failed: %v", err))
 		}
 	}
 
@@ -288,32 +359,11 @@ func (t *EnvironmentSetupTool) startSession(ctx context.Context, plan startPlan)
 	// Bounded output capture — the same 1MB buffer + truncation marker as
 	// bash (maxOutputBufferSize/outputTruncateMarker in session.go).
 	session.outputBuffer = &bytes.Buffer{}
-	pipeReadFn := func(r io.Reader) {
-		buf := make([]byte, 4096)
-		for {
-			n, readErr := r.Read(buf)
-			if n > 0 {
-				session.mu.Lock()
-				if session.outputBuffer.Len() >= maxOutputBufferSize {
-					if !session.outputTruncated {
-						session.outputBuffer.WriteString(outputTruncateMarker)
-						session.outputTruncated = true
-					}
-				} else {
-					session.outputBuffer.Write(buf[:n])
-				}
-				session.mu.Unlock()
-			}
-			if readErr != nil {
-				return
-			}
-		}
-	}
 
 	var pipeWG sync.WaitGroup
 	pipeWG.Add(2)
-	go func() { defer pipeWG.Done(); pipeReadFn(stdoutReader) }()
-	go func() { defer pipeWG.Done(); pipeReadFn(stderrReader) }()
+	go func() { defer pipeWG.Done(); readSetupSessionPipe(session, stdoutReader) }()
+	go func() { defer pipeWG.Done(); readSetupSessionPipe(session, stderrReader) }()
 
 	// naturalCompletionCh guards the timeout timer against the stale-timer
 	// false positive (see runBackground's doc comment in shell_bg.go: a
@@ -390,19 +440,19 @@ func (t *EnvironmentSetupTool) startSession(ctx context.Context, plan startPlan)
 		pub := t.publishTarget(plan, plan.area, naturalExit, finalExitCode)
 
 		completion := backgroundCompletionResult(session.ID, effectiveStatus, finalExitCode, outputSoFar)
-		// The command's OWN failure (nonzero natural exit) is an error
-		// result: backgroundCompletionResult reports any natural exit as
-		// "finished", but the environment_setup contract is exit 0 = command
-		// success only — a nonzero exit must not fold into a clean result.
-		if effectiveStatus == StatusDone && finalExitCode != 0 {
-			completion.IsError = true
-		}
-		switch pub.outcome {
-		case "commit_failed", "abort_failed":
+		// One terminal verdict and error classification (setupTerminalVerdict),
+		// shared with every later poll/read/kill of this session: exit 0 is
+		// command success only, and a failed publication or cleanup is an
+		// error even after exit 0.
+		o, isError, done := setupTerminalVerdict(string(effectiveStatus), finalExitCode, pub.outcome)
+		if isError {
 			completion.IsError = true
 		}
 		notice := t.setupCompletionNotice(plan, pub)
 		completion.ForLLM += notice
+		if done {
+			completion.ForLLM += "\n\nOutcome: " + marshalResult(o.Into(map[string]any{}))
+		}
 		if completion.ForUser != "" {
 			completion.ForUser += notice
 		}
@@ -443,6 +493,20 @@ func (t *EnvironmentSetupTool) startSession(ctx context.Context, plan startPlan)
 	}
 }
 
+// readSetupSessionPipe captures the bounded output for either session pipe.
+func readSetupSessionPipe(session *ProcessSession, r io.Reader) {
+	buf := make([]byte, 4096)
+	for {
+		n, readErr := r.Read(buf)
+		if n > 0 {
+			session.appendOutput(buf[:n])
+		}
+		if readErr != nil {
+			return
+		}
+	}
+}
+
 // persistCompletionOutcome writes the terminal record once publication has
 // settled, atomically under one mutex section: the note feeds poll and read,
 // the cap-aware buffer append feeds read, and the terminal status is the
@@ -460,7 +524,9 @@ func (t *EnvironmentSetupTool) startSession(ctx context.Context, plan startPlan)
 func (t *EnvironmentSetupTool) persistCompletionOutcome(session *ProcessSession, pub setupPublication, notice string, naturalExit bool, finalExitCode int) {
 	session.mu.Lock()
 	defer session.mu.Unlock()
+	session.recordActivityLocked()
 	session.resultNote = t.setupPollNote(pub)
+	session.publication = pub.outcome
 	if !session.outputTruncated {
 		session.outputBuffer.WriteString(notice)
 	}
@@ -477,9 +543,27 @@ func (t *EnvironmentSetupTool) persistCompletionOutcome(session *ProcessSession,
 // is the only result the caller can use to inspect the partial effect.
 func setupStartAbortResult(area EnvironmentSetupTarget, cause string) *ToolResult {
 	if err := area.Abort(); err != nil {
-		return ErrorResult(cause + "; staging cleanup FAILED: " + err.Error())
+		// FR-030: the allocated area could not be cleaned up — a side effect
+		// is proven, so this is never "failed: nothing saved".
+		msg := cause + "; staging cleanup FAILED: " + err.Error()
+		return ChangeErrorResult(map[string]any{"error": msg, "changed_fields": []string{"installation area"}},
+			ChangePartlySaved(msg, "", []string{"installation area cleanup"}))
 	}
 	return ErrorResult(cause)
+}
+
+// setupPostStartAbortResult is setupStartAbortResult for a failure AFTER the
+// installer process started: it ran, however briefly, so side effects are not
+// proven absent (FR-030).
+func setupPostStartAbortResult(area EnvironmentSetupTarget, cause string) *ToolResult {
+	res := setupStartAbortResult(area, cause)
+	var m map[string]any
+	if json.Unmarshal([]byte(res.ForLLM), &m) == nil && m["outcome"] != nil {
+		return res
+	}
+	msg := cause + "; the installer process had started, so side effects are not proven absent"
+	return ChangeErrorResult(map[string]any{"error": msg, "changed_fields": []string{}},
+		ChangePartlySaved(msg, "", []string{"a successful installation"}))
 }
 
 // setupPublication is the outcome record publishTarget returns: the outcome
@@ -657,7 +741,7 @@ func (t *EnvironmentSetupTool) executePoll(ctx context.Context, args map[string]
 		Status:    session.GetStatus(),
 		ExitCode:  session.GetExitCode(),
 	}
-	data, marshalErr := json.Marshal(resp)
+	data, marshalErr := marshalSetupStatus(resp, session.Publication())
 	if marshalErr != nil {
 		slog.Warn("environment_setup: failed to marshal poll response", "error", marshalErr.Error())
 		data = marshalErrorFallback(marshalErr)
@@ -681,8 +765,9 @@ func (t *EnvironmentSetupTool) executeRead(ctx context.Context, args map[string]
 		SessionID: sessionID,
 		Output:    output,
 		Status:    session.GetStatus(),
+		ExitCode:  session.GetExitCode(),
 	}
-	data, marshalErr := json.Marshal(resp)
+	data, marshalErr := marshalSetupStatus(resp, session.Publication())
 	if marshalErr != nil {
 		slog.Warn("environment_setup: failed to marshal read response", "error", marshalErr.Error())
 		data = marshalErrorFallback(marshalErr)
@@ -728,7 +813,7 @@ func (t *EnvironmentSetupTool) sessionActionResult(sessionID string, session *Pr
 		Status:    status,
 		ExitCode:  session.GetExitCode(),
 	}
-	data, marshalErr := json.Marshal(resp)
+	data, marshalErr := marshalSetupStatus(resp, session.Publication())
 	if marshalErr != nil {
 		slog.Warn("environment_setup: failed to marshal session action response", "error", marshalErr.Error())
 		data = marshalErrorFallback(marshalErr)
@@ -745,4 +830,69 @@ func (t *EnvironmentSetupTool) sessionActionResult(sessionID string, session *Pr
 		result.ForLLM += "\n\n" + note
 	}
 	return result
+}
+
+// environmentSetupOutcome is the FR-030 verdict of a FINISHED installation
+// (chief ruling Q3, 2026-10-15; ADR-090: exit 0 is command success, not
+// readiness). A session still running has no verdict (ok=false).
+func environmentSetupOutcome(status string, exitCode int) (ChangeOutcome, bool) {
+	const scope = "installer command exit status"
+	switch SessionStatus(status) {
+	case StatusDone:
+		if exitCode == 0 {
+			return ChangeWorking("installer command exited 0", "readiness inside the agent's sandbox"), true
+		}
+		return ChangePartlySaved(fmt.Sprintf("installer exited %d; side effects not proven absent", exitCode),
+			scope, []string{"a successful installation"}, "readiness inside the agent's sandbox"), true
+	case StatusKilled, StatusTimeout, StatusCanceled:
+		return ChangePartlySaved(fmt.Sprintf("installer was %s before it finished (exit %d); side effects not proven absent",
+			status, exitCode), scope, []string{"a successful installation"}, "readiness inside the agent's sandbox"), true
+	}
+	return ChangeOutcome{}, false
+}
+
+// setupTerminalVerdict is THE terminal verdict of an installation and its
+// error classification, used by the completion and by every later
+// poll/read/kill so they never disagree (WU-3 IM-02/SF-06): the
+// exit-status verdict (environmentSetupOutcome), overridden to "partly saved"
+// when the installation area could not be published or cleaned up. A run that
+// has not finished has no verdict (done=false).
+func setupTerminalVerdict(status string, exitCode int, publication string) (o ChangeOutcome, isError, done bool) {
+	o, done = environmentSetupOutcome(status, exitCode)
+	if !done {
+		return ChangeOutcome{}, false, false
+	}
+	isError = SessionStatus(status) == StatusDone && exitCode != 0
+	switch publication {
+	case "commit_failed", "abort_failed":
+		o = ChangePartlySaved("the installer finished but the installation area could not be "+
+			"published or cleaned up; side effects not proven absent", o.CheckScope,
+			[]string{"published installation area"}, o.NotTested...)
+		isError = true
+	}
+	return o, isError, true
+}
+
+// marshalSetupStatus renders a poll/read/kill status; a finished session also
+// carries the FR-030 outcome fields of setupTerminalVerdict — the same verdict
+// the completion gave. The status action itself succeeded, so its result is
+// not an error (IsError means the poll/read/kill failed); the installation's
+// verdict is in the outcome fields.
+func marshalSetupStatus(resp ExecResponse, publication string) ([]byte, error) {
+	o, _, done := setupTerminalVerdict(resp.Status, resp.ExitCode, publication)
+	if !done {
+		return json.Marshal(resp)
+	}
+	b, err := json.Marshal(resp)
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil, err
+	}
+	// exitCode is omitempty on the shared response type; a finished
+	// installation always states it, 0 included.
+	m["exitCode"] = resp.ExitCode
+	return json.Marshal(o.Into(m))
 }

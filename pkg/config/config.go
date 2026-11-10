@@ -40,17 +40,21 @@ const CurrentVersion = 1
 
 // Config is the current config structure with version support
 type Config struct {
-	Version   int                              `json:"version"             yaml:"-"` // schema version for migration
-	Agents    AgentsConfig                     `json:"agents"              yaml:"-"`
-	Bindings  []AgentBinding                   `json:"bindings,omitempty"  yaml:"-"`
-	Session   SessionConfig                    `json:"session,omitempty"   yaml:"-"`
-	Channels  map[string]ChannelInstanceConfig `json:"channels"            yaml:"channels"`
-	Providers []*ModelConfig                   `json:"providers"           yaml:"providers"` // Configured providers with credentials
-	Gateway   GatewayConfig                    `json:"gateway"             yaml:"-"`
-	Hooks     HooksConfig                      `json:"hooks,omitempty"     yaml:"-"`
-	Tools     ToolsConfig                      `json:"tools"               yaml:",inline"`
-	Schedules SchedulesConfig                  `json:"schedules,omitempty" yaml:"-"`
-	Voice     VoiceConfig                      `json:"voice"               yaml:"-"`
+	Version  int                              `json:"version"             yaml:"-"` // schema version for migration
+	Agents   AgentsConfig                     `json:"agents"              yaml:"-"`
+	Bindings []AgentBinding                   `json:"bindings,omitempty"  yaml:"-"`
+	Session  SessionConfig                    `json:"session,omitempty"   yaml:"-"`
+	Channels map[string]ChannelInstanceConfig `json:"channels"            yaml:"channels"`
+	// channelOrder belongs to this exact runtime snapshot, never to config.json.
+	// Populate only before publication; Clone preserves it without rebinding.
+	channelOrder        map[string]uint64
+	channelOrderChanged map[string]bool // this unpublished write's protected entries
+	Providers           []*ModelConfig  `json:"providers"           yaml:"providers"` // Configured providers with credentials
+	Gateway             GatewayConfig   `json:"gateway"             yaml:"-"`
+	Hooks               HooksConfig     `json:"hooks,omitempty"     yaml:"-"`
+	Tools               ToolsConfig     `json:"tools"               yaml:",inline"`
+	Schedules           SchedulesConfig `json:"schedules,omitempty" yaml:"-"`
+	Voice               VoiceConfig     `json:"voice"               yaml:"-"`
 	// Mailboxes holds email mailbox accounts (M11), keyed agent ID → workspace
 	// ID → mailbox: every (agent, workspace) pair may hold its own mailbox — an
 	// agent plays different roles in different workspaces and can have a
@@ -146,6 +150,17 @@ type Config struct {
 	// wireExcludedConfigFields) and never crosses the wire.
 	SeededToolPolicyUpdates []string `json:"seeded_tool_policy_updates,omitempty" yaml:"-"`
 
+	// WorkspaceSeedDefaults holds the operator-facing, CONFIG-FILE-ONLY defaults
+	// for the workspace delegation seed (session-core C-DELEGATE, FR-014/015,
+	// BDD-05.7) — today, the self-delegation self-row exclusion list. It has no
+	// wire type and no gateway/SPA exposure: the GET path strips it
+	// (pkg/gateway/rest_config.go's wireExcludedConfigFields) and the generic
+	// PUT refuses it (blockedPaths). A nil pointer means "unset — apply the
+	// shipped default"; a present block with a nil ExcludeAgentIDs means the
+	// same; a present [] means "no exclusions". See
+	// workspace_seed_defaults.go for the resolver every seed writer reads.
+	WorkspaceSeedDefaults *WorkspaceSeedDefaultsConfig `json:"workspace_seed_defaults,omitempty" yaml:"-"`
+
 	// UnknownFields preserves JSON keys not recognized by this version of Omnipus.
 	// They are re-emitted verbatim during SaveConfig for round-trip safety (FR-004).
 	// Never serialized by json.Marshal or yaml.Marshal — only written back by MarshalJSON.
@@ -182,7 +197,13 @@ type Config struct {
 	// RegisterSensitiveValues (e.g., resolved credential store values). These
 	// supplement the reflection-walked SecureString fields so that *Ref-based
 	// credentials are also scrubbed from LLM output and audit logs.
-	registeredSensitive []string
+	registeredSensitive   []string
+	storedSensitiveSource func() ([]string, error)
+	// agentEnvSource reads every stored external-worker env value (r17
+	// SR-2); agentEnvValues is its last successful read, the env part of
+	// the masking set. See agent_env_sensitive.go.
+	agentEnvSource func() ([]string, error)
+	agentEnvValues []string
 }
 
 // OmnipusStorageConfig holds storage-related settings per Appendix E §E.5.4.
@@ -283,10 +304,14 @@ func (c *Config) Clone() (*Config, error) {
 	// so the next SensitiveDataReplacer rebuilds from this carried set.
 	c.sensitiveMu.RLock()
 	registered := append([]string(nil), c.registeredSensitive...)
+	clone.storedSensitiveSource = c.storedSensitiveSource
+	clone.agentEnvSource = c.agentEnvSource
+	clone.agentEnvValues = append([]string(nil), c.agentEnvValues...)
 	c.sensitiveMu.RUnlock()
 	if len(registered) > 0 {
 		clone.RegisterSensitiveValues(registered)
 	}
+	clone.CopyChannelOrderFrom(c)
 	return clone, nil
 }
 
@@ -363,22 +388,19 @@ type PerformanceConfig struct {
 	// never silently reinterpreted).
 	MaxDelegationDepth int `json:"max_delegation_depth,omitempty" env:"OMNIPUS_PERFORMANCE_MAX_DELEGATION_DEPTH"`
 
-	// DelegationTimeoutMinutes is the shared timeout for a delegated session.
-	// 0 means unset (the built-in 30-minute default applies — see
-	// pkg/agent's defaultSubTurnTimeout; founder raised it from 5 minutes,
-	// 2026-09-23); negative is a
-	// configuration error.
-	DelegationTimeoutMinutes int `json:"delegation_timeout_minutes,omitempty" env:"OMNIPUS_PERFORMANCE_DELEGATION_TIMEOUT_MINUTES"`
+	// performance.delegation_timeout_minutes is retired (issue #1306): a
+	// delegated session has no time limit. A config.json that still carries
+	// the key loads normally — the value is ignored and dropped on the next
+	// save (TestOldTimeLimitKeysAreIgnoredOnLoad).
 }
 
 // ErrPerformanceLimitMisconfigured is returned by
-// PerformanceConfig.EffectiveMaxDelegationDepth /
-// EffectiveDelegationTimeoutMinutes for a negative configured value — a
+// PerformanceConfig.EffectiveMaxDelegationDepth for a negative configured value — a
 // genuine configuration error, never silently coerced into "unset"
 // (mirrors admission.go::ErrRootDelegationCapMisconfigured's identical
 // rule for max_parallel_agents' sibling knob).
 var ErrPerformanceLimitMisconfigured = errors.New(
-	"performance: max_delegation_depth and delegation_timeout_minutes must each be >= 0")
+	"performance: max_delegation_depth must be >= 0")
 
 // EffectiveMaxDelegationDepth returns MaxDelegationDepth, or an error when
 // it is negative. 0 (unset) is not an error — callers apply their own
@@ -391,13 +413,24 @@ func (p PerformanceConfig) EffectiveMaxDelegationDepth() (int, error) {
 	return p.MaxDelegationDepth, nil
 }
 
-// EffectiveDelegationTimeoutMinutes returns DelegationTimeoutMinutes, or an
-// error when it is negative. 0 (unset) is not an error.
-func (p PerformanceConfig) EffectiveDelegationTimeoutMinutes() (int, error) {
-	if p.DelegationTimeoutMinutes < 0 {
-		return 0, fmt.Errorf("%w: delegation_timeout_minutes=%d", ErrPerformanceLimitMisconfigured, p.DelegationTimeoutMinutes)
+// DelegationDepthConfigKey is the operator-facing name of the depth limit,
+// carried as config_key on every invalid-limit log.
+const DelegationDepthConfigKey = "performance.max_delegation_depth"
+
+// ConfiguredMaxDelegationDepth is THE single reader every consumer of
+// performance.max_delegation_depth uses (delegation block, gate, launcher
+// budget, bound setters, and the workspace edge validators). An invalid
+// (negative) value is never swallowed into the unset/backstop default: it logs
+// ERROR with config_key and the caller's site, and returns valid=false so each
+// caller fails closed in its own terms.
+func ConfiguredMaxDelegationDepth(p PerformanceConfig, site string) (limit int, valid bool) {
+	limit, err := p.EffectiveMaxDelegationDepth()
+	if err != nil {
+		logger.ErrorCF("config", "invalid performance.max_delegation_depth — failing closed",
+			map[string]any{"config_key": DelegationDepthConfigKey, "site": site, "error": err.Error()})
+		return 0, false
 	}
-	return p.DelegationTimeoutMinutes, nil
+	return limit, true
 }
 
 type HooksConfig struct {
@@ -577,6 +610,9 @@ type FallbackModel struct {
 	// "openai"). Distinct from any "provider/" prefix embedded in Model —
 	// Provider is the credential/endpoint selection key.
 	Provider string `json:"provider,omitempty"`
+	// ReasoningEffort is this fallback's own stored effort (effort-levels spec
+	// FR-021, FR-029). A chat or conversation value never reaches a fallback.
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
 // FallbackModelSlice is the JSON wire shape for an agent's fallback chain.
@@ -588,21 +624,34 @@ type FallbackModelSlice []FallbackModel
 
 type AgentConfig struct {
 	ID          string            `json:"id"`
-	Default     bool              `json:"default,omitempty"`
 	Name        string            `json:"name,omitempty"`
 	Description string            `json:"description,omitempty"`
 	Home        string            `json:"workspace,omitempty"`
 	Model       *AgentModelConfig `json:"model,omitempty"`
+	// ReasoningEffort is the agent primary model's stored effort
+	// (effort-levels spec FR-029): "" = Not set (an agent riding the default
+	// model inherits the default's effort), "provider_default", a catalog
+	// level name, "on" or "off". Written with the model pair in the same
+	// config write; REST writers never check it against the catalog.
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 	// MaxToolIterations caps the LLM/tool rounds PER TURN for this agent
 	// (one chat message, board task, or heartbeat run = one turn; the turn
-	// pauses at the cap and can be continued). 0 = inherit
-	// agents.defaults.max_tool_iterations (which itself falls back to 200).
+	// pauses at the cap and can be continued). This is the agent's OWN value:
+	// it may only lower the global agents.defaults.max_tool_iterations —
+	// config.ResolveMaxToolIterations runs min(global, own); a value above the
+	// global is kept but ignored and flagged (#904 D1). <= 0 = no own value
+	// (D17), the agent rides the global.
 	// This field previously existed only on the wire and in raw config.json —
 	// it was silently dropped on load and never applied by the runtime
 	// (P0 bug, fixed 2026-07-03).
-	MaxToolIterations int              `json:"max_tool_iterations,omitempty"`
-	Skills            []string         `json:"skills,omitempty"`
-	Subagents         *SubagentsConfig `json:"subagents,omitempty"`
+	MaxToolIterations int      `json:"max_tool_iterations,omitempty"`
+	Skills            []string `json:"skills,omitempty"`
+	// SkillGrants binds each granted skill key to the folder generation it
+	// was granted against (skills spec r15 §5.13a, SD-30). Written by the
+	// server at every agent save; an absent entry is unbound and authorizes
+	// nothing for a stamped folder.
+	SkillGrants map[string]string `json:"skill_grants,omitempty"`
+	Subagents   *SubagentsConfig  `json:"subagents,omitempty"`
 	// FallbackModels is the ordered fallback chain tried when the primary
 	// model returns an error. Each entry carries its own provider so a
 	// fallback can route through a different provider than the primary (e.g.
@@ -623,15 +672,19 @@ type AgentConfig struct {
 	// Distinct from the global VoiceConfig engine settings.
 	// Schema-pinned; not yet active (TTS delivery, tracked #306).
 	Voice string `json:"voice,omitempty"`
-	// Color is the hex color code for this agent's avatar in the UI (e.g. "#22C55E").
+	// Figure is the agent mark body: Robot, Man, Woman, Omnipus, or Monogram.
+	// Empty until create or boot migration fills it.
+	Figure string `json:"figure,omitempty"`
+	// Role is the curated role slug (the badge). Not the legacy Icon.
+	// Empty until create or boot migration fills it.
+	Role string `json:"role,omitempty"`
+	// Color is an identity-palette hex. Boot rewrites older hexes once.
 	Color string `json:"color,omitempty"`
-	// Icon is the Phosphor icon name for this agent's avatar in the UI (e.g. "robot").
-	Icon string `json:"icon,omitempty"`
 	// Type classifies the agent. Empty defaults to AgentTypeCustom for stored agents;
 	// use ResolveType() to get the effective type.
 	Type AgentType `json:"type,omitempty"`
 	// Locked prevents modification of identity fields (name, description, color,
-	// icon, prompt). Used by core agents to keep their identity stable.
+	// prompt). Used by core agents to keep their identity stable.
 	// Users CAN still change model, remove tools, and set heartbeat.
 	Locked bool `json:"locked,omitempty"`
 	// MemoryEnabled gates whether this agent's ContextBuilder injects its
@@ -665,17 +718,6 @@ type AgentConfig struct {
 	// Tools, when non-nil, overrides scope-based tool visibility for this agent.
 	// Nil means all tools allowed by the agent's type are available.
 	Tools *AgentToolsCfg `json:"tools,omitempty"`
-	// AutoApproveDisabled is the per-agent tighten-only override for
-	// ADR-092 D1's Auto shell-permission mode (sandbox.AutoApprove is the
-	// global default). false (default) means this agent follows the global
-	// default; true forces this agent's shell calls into Ask (every
-	// command prompts) even when the global default is Auto. There is
-	// deliberately no way to set this false when the global default is
-	// already false/Auto-disabled-by-policy — server-side tighten-only
-	// enforcement (FR-003) rejects any write that would loosen a single
-	// agent past the global default, mirroring the existing per-agent
-	// bash tool-policy override.
-	AutoApproveDisabled bool `json:"auto_approve_disabled,omitempty"`
 	// CreatedAt is the timestamp this agent record was created. Set once and
 	// never modified thereafter. Added by ADR-054 D2 (docs/internal/architecture/
 	// ADR-054-entity-config-separation.md) — the per-entity store's List()
@@ -775,6 +817,13 @@ type DelegationPolicy struct {
 	// Depth is the maximum delegation chain depth for the seeded edges.
 	// Zero means uncapped (nil pointer = uncapped).
 	Depth *int `json:"depth,omitempty"`
+
+	// SelfDepth lowers the depth of the seeded SELF-edge only (from == to)
+	// below the fresh self pin (coreagent.FreshSelfDelegationMaxDepth) when
+	// set and smaller; nil keeps the pin. Seed data, never consulted at
+	// delegation time: Omnipus's self-row ships depth 1
+	// (omnipus-system-agent spec §6.2).
+	SelfDepth *int `json:"self_depth,omitempty"`
 }
 
 // ExecutorKind enumerates the runtime used to execute a sub-agent task.
@@ -858,7 +907,7 @@ type SessionConfig struct {
 	// decision 2). Zero means "unset" — EffectiveStatsFlushInterval
 	// substitutes DefaultSessionStatsFlushInterval (5s). Accepts a JSON
 	// string ("5s", "10s") or a bare number interpreted as seconds, mirroring
-	// SessionMessagingConfig's duration fields (CancelGrace, NeedsInputTTL).
+	// SessionMessagingConfig's duration fields (NeedsInputTTL).
 	// Owned by U28 (pkg/config/**); U6 (pkg/session/unified.go) reads it —
 	// U28 does not wire it into the store.
 	StatsFlushInterval duration `json:"stats_flush_interval,omitempty"`
@@ -951,31 +1000,45 @@ type AgentDefaults struct {
 	// the zero value (FR-040) — onboarding's explicit pick and the
 	// default-model PUT are its only writers; no boot/reload path may back-fill
 	// it (FR-020).
-	DefaultModel        DefaultModel `json:"default_model"`
-	ModelFallbacks      []string     `json:"model_fallbacks,omitempty"`
-	ImageModel          string       `json:"image_model,omitempty"           env:"OMNIPUS_AGENTS_DEFAULTS_IMAGE_MODEL"`
-	ImageModelFallbacks []string     `json:"image_model_fallbacks,omitempty"`
-	MaxTokens           int          `json:"max_tokens"                      env:"OMNIPUS_AGENTS_DEFAULTS_MAX_TOKENS"`
+	DefaultModel DefaultModel `json:"default_model"`
+	// model_fallbacks (a global default fallback list inherited by every
+	// agent without its own) was removed (issue #1340, founder ruling
+	// 2026-10-19): an agent's chain is exactly its own configured pairs. A
+	// stale key in config.json is ignored with one load-time WARN
+	// (migration.go::warnRemovedModelFallbacks).
+	ImageModel          string   `json:"image_model,omitempty"           env:"OMNIPUS_AGENTS_DEFAULTS_IMAGE_MODEL"`
+	ImageModelFallbacks []string `json:"image_model_fallbacks,omitempty"`
+	MaxTokens           int      `json:"max_tokens"                      env:"OMNIPUS_AGENTS_DEFAULTS_MAX_TOKENS"`
 	// context_window was deleted by ADR-066 D2 (FR-004, T066-09). The global
 	// default lives in ContextSettings.DefaultContextWindow (the `context`
 	// key, D9) and every agent's window is resolved by the D2 ladder
 	// (pkg/agent ResolveWindow) — there is no agents.defaults.context_window
 	// key and no matching env var. A stale key in an operator's config.json
 	// is ignored (greenfield, no migration).
-	Temperature       *float64 `json:"temperature,omitempty"           env:"OMNIPUS_AGENTS_DEFAULTS_TEMPERATURE"`
-	MaxToolIterations int      `json:"max_tool_iterations"             env:"OMNIPUS_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS"`
+	Temperature *float64 `json:"temperature,omitempty"           env:"OMNIPUS_AGENTS_DEFAULTS_TEMPERATURE"`
+	// MaxToolIterations is the saved global "max tool calls per turn" limit
+	// (#904). Read it only through EffectiveGlobalMaxToolIterations /
+	// ResolveMaxToolIterations (max_tool_iterations.go), which apply the
+	// 1-1000 in-memory correction; the raw value is kept as saved so Settings
+	// can show it. No env tag: OMNIPUS_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS is
+	// imported once on load (importMaxToolIterationsEnv), never read live.
+	MaxToolIterations int `json:"max_tool_iterations"`
+	// MaxToolIterationsEnvImported is the one-time env import marker (D6).
+	// Config-file-only bookkeeping: stripped from GET /api/v1/config.
+	MaxToolIterationsEnvImported bool `json:"max_tool_iterations_env_imported,omitempty"`
+	// MaxToolIterationsKeyMissing is load provenance, not configuration: true
+	// when config.json had no agents.defaults.max_tool_iterations key (D13
+	// saved-state "missing"). Set by applyMaxToolIterationsOnLoad.
+	MaxToolIterationsKeyMissing bool `json:"-"`
 	// summarize_token_percent was deleted by ADR-066 D6 (FR-004, T066-03).
 	// The legacy summariser's percentage knob had outlived ADR-028 only to
 	// scale the timeout-recovery trim trigger; every consumer now reads the
 	// one budget B (pkg/agent/context_budget.go::contextBudget). A stale key
 	// in config.json is ignored (greenfield rule: no migration, no rejection).
-	MaxMediaSize   int                `json:"max_media_size,omitempty"        env:"OMNIPUS_AGENTS_DEFAULTS_MAX_MEDIA_SIZE"`
-	Routing        *RoutingConfig     `json:"routing,omitempty"`
-	SteeringMode   string             `json:"steering_mode,omitempty"         env:"OMNIPUS_AGENTS_DEFAULTS_STEERING_MODE"` // "one-at-a-time" (default) or "all"
-	ToolFeedback   ToolFeedbackConfig `json:"tool_feedback,omitempty"`
-	SplitOnMarker  bool               `json:"split_on_marker"                 env:"OMNIPUS_AGENTS_DEFAULTS_SPLIT_ON_MARKER"` // split messages on <|[SPLIT]|> marker
-	TimeoutSeconds int                `json:"timeout_seconds"                 env:"OMNIPUS_AGENTS_DEFAULTS_TIMEOUT_SECONDS"` // per-turn timeout in seconds; 0 = disabled
-	DefaultAgentID string             `json:"default_agent_id,omitempty"      env:"OMNIPUS_DEFAULT_AGENT_ID"`
+	MaxMediaSize  int                `json:"max_media_size,omitempty"        env:"OMNIPUS_AGENTS_DEFAULTS_MAX_MEDIA_SIZE"`
+	Routing       *RoutingConfig     `json:"routing,omitempty"`
+	ToolFeedback  ToolFeedbackConfig `json:"tool_feedback,omitempty"`
+	SplitOnMarker bool               `json:"split_on_marker"                 env:"OMNIPUS_AGENTS_DEFAULTS_SPLIT_ON_MARKER"` // split messages on <|[SPLIT]|> marker
 
 	// AutoRecapEnabled gates the session-end recap pipeline (FR-033).
 	// When false, CloseSession is a no-op and no background LLM calls are made.
@@ -1007,6 +1070,29 @@ type AgentDefaults struct {
 	// own Provider so the fallback can route through a different provider than
 	// the primary.
 	RecapFallbackModels FallbackModelSlice `json:"recap_fallback_models,omitempty"`
+
+	// RecapProvider is the recap model's provider (#1291, effort-levels spec
+	// FR-063), so its catalog row can be found.
+	RecapProvider string `json:"recap_provider,omitempty" env:"OMNIPUS_AGENTS_DEFAULTS_RECAP_PROVIDER"`
+
+	// RecapReasoningEffort is the recap model's own effort; absent or "" means
+	// Off (FD-19, FR-072), never "inherit".
+	RecapReasoningEffort string `json:"recap_reasoning_effort,omitempty"`
+
+	// Recap limits (effort-levels spec "Recap limits", FD-20, FD-23, FR-074).
+	// Each is read through its getter (recap_limits.go), which returns the
+	// default when the key is missing (or 0, except RecapStreamRetries where 0
+	// is a valid choice) and clamps an out-of-range saved value in memory.
+	RecapMaxOutputTokens            int  `json:"recap_max_output_tokens,omitempty"`
+	RecapInputTokens                int  `json:"recap_input_tokens,omitempty"`
+	RecapSummaryWords               int  `json:"recap_summary_words,omitempty"`
+	RecapListItems                  int  `json:"recap_list_items,omitempty"`
+	RecapFallbackContextChars       int  `json:"recap_fallback_context_chars,omitempty"`
+	RecapTimeoutSeconds             int  `json:"recap_timeout_seconds,omitempty"`
+	RecapStreamRetries              *int `json:"recap_stream_retries,omitempty"`
+	RecapRetryPauseMs               int  `json:"recap_retry_pause_ms,omitempty"`
+	RecapCharsPerToken              int  `json:"recap_chars_per_token,omitempty"`
+	BootstrapRecapMinSpacingSeconds int  `json:"bootstrap_recap_min_spacing_seconds,omitempty"`
 }
 
 // DefaultModel is the persisted (provider, model) pair at
@@ -1020,6 +1106,9 @@ type AgentDefaults struct {
 type DefaultModel struct {
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
+	// ReasoningEffort is the default model's stored effort (effort-levels spec
+	// FR-029); an agent primary that rides the default model inherits it.
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
 // ChannelIdentity identifies whether an inbound connection acts on behalf of an
@@ -1048,14 +1137,17 @@ type ChannelInstanceConfig struct {
 	Identity *ChannelIdentity `json:"identity,omitempty"`
 	// WorkspaceID binds this instance to one workspace (ADR-029). Empty = unbound.
 	WorkspaceID string `json:"workspace_id,omitempty"`
+	// Outbound is the operator's start-messages setting (channels spec
+	// FR-010). Absent = reply_only. Only the dedicated outbound writer may
+	// change it; set_config refuses channels.*.outbound (FR-024).
+	Outbound *ChannelOutboundConfig `json:"outbound,omitempty"`
 
 	// --- Common per-channel fields shared across multiple channel types ---
-	AllowFrom          FlexibleStringSlice `json:"allow_from,omitempty"`
-	GroupTrigger       GroupTriggerConfig  `json:"group_trigger,omitempty"`
-	Typing             TypingConfig        `json:"typing,omitempty"`
-	Placeholder        PlaceholderConfig   `json:"placeholder,omitempty"`
-	ReasoningChannelID string              `json:"reasoning_channel_id,omitempty"`
-	Proxy              string              `json:"proxy,omitempty"`
+	AllowFrom    FlexibleStringSlice `json:"allow_from,omitempty"`
+	GroupTrigger GroupTriggerConfig  `json:"group_trigger,omitempty"`
+	Typing       TypingConfig        `json:"typing,omitempty"`
+	Placeholder  PlaceholderConfig   `json:"placeholder,omitempty"`
+	Proxy        string              `json:"proxy,omitempty"`
 	// token_ref is used by Telegram (bot token ref) and Weixin (account token ref).
 	TokenRef string `json:"token_ref,omitempty"`
 	// base_url is used by Telegram (API base URL) and Weixin (WeChat base URL).
@@ -1166,6 +1258,41 @@ type ChannelInstanceConfig struct {
 	// Both IRC and email use the same password_ref JSON key for their connection
 	// password, which is stored encrypted in the credential store.
 	EmailUsername string `json:"username,omitempty"`
+
+	// allowFromText keeps an allowed-sender field saved as one string while
+	// the instance's type is not yet known (no "type" key), so loading can
+	// split it with the effective type's separators (channel_allow_from.go).
+	// Never serialized; CanonicalChannelInstance clears it.
+	allowFromText *pendingAllowFromText
+}
+
+// CredentialRefs returns every credential-reference field this instance
+// configures, in a stable order. This is the ONE canonical list of a channel
+// instance's secret references: credentials.ResolveAll (pkg/credentials/
+// inject.go) and gateway buildEnabledRefMap walk the same fields inline and
+// must stay in sync with it, and pkg/channels uses it to classify a factory
+// failure as credential-scoped (#1277) and to detect a credential-availability
+// change between reloads. A new *_ref field on this struct must be added here.
+func (c ChannelInstanceConfig) CredentialRefs() []string {
+	return []string{
+		c.TokenRef,
+		c.BotTokenRef,
+		c.AppTokenRef,
+		c.AppSecretRef,
+		c.EncryptKeyRef,
+		c.VerificationTokenRef,
+		c.ClientSecretRef,
+		c.AccessTokenRef,
+		c.CryptoPassphraseRef,
+		c.ChannelSecretRef,
+		c.ChannelAccessTokenRef,
+		c.SecretRef,
+		c.WebhookURLRef,
+		c.ServiceAccountJSONRef,
+		c.PasswordRef,
+		c.NickServPasswordRef,
+		c.SASLPasswordRef,
+	}
 }
 
 // GroupTriggerConfig controls when the bot responds in group chats.
@@ -1233,6 +1360,17 @@ type MailboxConfig struct {
 	// PasswordRef is the credential-store key for the mailbox password. The
 	// plaintext password never appears in config.json.
 	PasswordRef string `json:"password_ref,omitempty"`
+	// SignatureHTML is the account signature as ALREADY-SANITIZED HTML
+	// (email-mail-view-spec §2.1 signature_html, MC-1: at most 16,384 chars —
+	// sanitized and bounded at the REST setter; Compose re-sanitizes
+	// defensively on every use). Empty means no signature.
+	SignatureHTML string `json:"signature_html,omitempty"`
+	// SentFolderName is the IMAP folder sent copies are APPENDed to
+	// (email-mail-view-spec §2.1). Empty means the server default ("Sent").
+	SentFolderName string `json:"sent_folder_name,omitempty"`
+	// DraftsFolderName is the IMAP folder agent drafts are APPENDed to with
+	// \Draft (email-mail-view-spec §2.1). Empty means the default ("Drafts").
+	DraftsFolderName string `json:"drafts_folder_name,omitempty"`
 }
 
 // MailboxesConfig maps agent ID → workspace ID → mailbox. Every (agent,
@@ -1241,16 +1379,16 @@ type MailboxConfig struct {
 type MailboxesConfig map[string]map[string]MailboxConfig
 
 // SchedulesConfig holds global guardrail settings for scheduled agent runs
-// (#264). These are deliberately separate from agents.defaults.timeout_seconds
-// (which is intentionally 0/disabled): scheduled runs are unattended and need
-// their own deadline + concurrency bounds.
+// (#264): the concurrency bound and the transient-error retry backoff. There
+// is no run deadline — a scheduled run ends when it finishes or is explicitly
+// stopped (issue #1306).
 type SchedulesConfig struct {
 	// MaxConcurrentRuns bounds the parallel autonomous-run lane (FR-007).
 	// Default 8; values <= 0 fall back to the default on load.
 	MaxConcurrentRuns int `json:"max_concurrent_runs,omitempty" env:"OMNIPUS_SCHEDULES_MAX_CONCURRENT_RUNS"`
-	// RunTimeoutSeconds is the global per-run deadline applied to every scheduled
-	// run that does not set a per-schedule override (FR-003). Default 300.
-	RunTimeoutSeconds int `json:"run_timeout_seconds,omitempty" env:"OMNIPUS_SCHEDULES_RUN_TIMEOUT_SECONDS"`
+	// schedules.run_timeout_seconds is retired (issue #1306): a scheduled run
+	// has no time limit. An old config.json key is ignored on load.
+
 	// RetryBackoffMs is the transient-error retry backoff schedule (FR-010): the
 	// next fire after the Nth consecutive transient failure is offset by
 	// RetryBackoffMs[N] ms, capped at len(RetryBackoffMs) attempts before
@@ -1352,8 +1490,7 @@ type ModelConfig struct {
 	// call that keeps streaming, however slowly, is never cut. Applies to the
 	// streaming providers only; non-streaming calls stay under RequestTimeout.
 	StreamStallTimeout int            `json:"stream_stall_timeout,omitempty"`
-	ThinkingLevel      string         `json:"thinking_level,omitempty"` // Extended thinking: off|low|medium|high|xhigh|adaptive
-	ExtraBody          map[string]any `json:"extra_body,omitempty"`     // Additional fields to inject into request body
+	ExtraBody          map[string]any `json:"extra_body,omitempty"` // Additional fields to inject into request body
 
 	// APIKeyRef references a named credential in credentials.json (e.g. "ANTHROPIC_API_KEY").
 	// At runtime the system resolves the reference, decrypts the value, and injects it
@@ -1544,6 +1681,7 @@ type BraveConfig struct {
 	// At runtime the system resolves the reference, decrypts the value, and injects it
 	// via the process environment (SEC-22). Raw values must never appear in config files.
 	APIKeyRef  string `json:"api_key_ref,omitempty" yaml:"api_key_ref,omitempty" env:"OMNIPUS_TOOLS_WEB_BRAVE_API_KEY_REF"`
+	BaseURL    string `json:"base_url" yaml:"-" env:"OMNIPUS_TOOLS_WEB_BRAVE_BASE_URL"` // Empty uses the official endpoint.
 	MaxResults int    `json:"max_results"           yaml:"-"                     env:"OMNIPUS_TOOLS_WEB_BRAVE_MAX_RESULTS"`
 }
 
@@ -1552,9 +1690,15 @@ type TavilyConfig struct {
 	// APIKeyRef references a named credential in credentials.json (e.g. "TAVILY_API_KEY").
 	// At runtime the system resolves the reference, decrypts the value, and injects it
 	// via the process environment (SEC-22). Raw values must never appear in config files.
-	APIKeyRef  string `json:"api_key_ref,omitempty" yaml:"api_key_ref,omitempty" env:"OMNIPUS_TOOLS_WEB_TAVILY_API_KEY_REF"`
-	BaseURL    string `json:"base_url"              yaml:"-"                     env:"OMNIPUS_TOOLS_WEB_TAVILY_BASE_URL"`
-	MaxResults int    `json:"max_results"           yaml:"-"                     env:"OMNIPUS_TOOLS_WEB_TAVILY_MAX_RESULTS"`
+	APIKeyRef string `json:"api_key_ref,omitempty" yaml:"api_key_ref,omitempty" env:"OMNIPUS_TOOLS_WEB_TAVILY_API_KEY_REF"`
+	BaseURL   string `json:"base_url"              yaml:"-"                     env:"OMNIPUS_TOOLS_WEB_TAVILY_BASE_URL"`
+	// SearchDepth is the operator's Tavily search-depth default, in Tavily's
+	// own vocabulary (ADR-096 D12: basic | advanced | fast | ultra-fast).
+	// Shipped default "basic"; an existing install whose file carries a
+	// tavily object without this key inherits "advanced" from the roles
+	// migration (ADR-096 D11), so today's bill does not change.
+	SearchDepth string `json:"search_depth"          yaml:"-"                     env:"OMNIPUS_TOOLS_WEB_TAVILY_SEARCH_DEPTH"`
+	MaxResults  int    `json:"max_results"           yaml:"-"                     env:"OMNIPUS_TOOLS_WEB_TAVILY_MAX_RESULTS"`
 }
 
 type DuckDuckGoConfig struct {
@@ -1567,14 +1711,15 @@ type PerplexityConfig struct {
 	// APIKeyRef references a named credential in credentials.json (e.g. "PERPLEXITY_API_KEY").
 	// At runtime the system resolves the reference, decrypts the value, and injects it
 	// via the process environment (SEC-22). Raw values must never appear in config files.
-	APIKeyRef  string `json:"api_key_ref,omitempty" yaml:"api_key_ref,omitempty" env:"OMNIPUS_TOOLS_WEB_PERPLEXITY_API_KEY_REF"`
-	MaxResults int    `json:"max_results"           yaml:"-"                     env:"OMNIPUS_TOOLS_WEB_PERPLEXITY_MAX_RESULTS"`
-}
-
-type SearXNGConfig struct {
-	Enabled    bool   `json:"enabled"     env:"OMNIPUS_TOOLS_WEB_SEARXNG_ENABLED"`
-	BaseURL    string `json:"base_url"    env:"OMNIPUS_TOOLS_WEB_SEARXNG_BASE_URL"`
-	MaxResults int    `json:"max_results" env:"OMNIPUS_TOOLS_WEB_SEARXNG_MAX_RESULTS"`
+	APIKeyRef string `json:"api_key_ref,omitempty" yaml:"api_key_ref,omitempty" env:"OMNIPUS_TOOLS_WEB_PERPLEXITY_API_KEY_REF"`
+	BaseURL   string `json:"base_url" yaml:"-" env:"OMNIPUS_TOOLS_WEB_PERPLEXITY_BASE_URL"` // Empty uses the official endpoint.
+	// SearchContextSize is the operator's Perplexity search-context-size
+	// default (ADR-096 D12: low | medium | high). Shipped default is
+	// ABSENT — the field is not sent today, and the roles migration is
+	// forbidden from writing one (ADR-096 D11 step 7), so an empty value is
+	// the operator-visible "do not send the field" default.
+	SearchContextSize string `json:"search_context_size,omitempty" yaml:"-" env:"OMNIPUS_TOOLS_WEB_PERPLEXITY_SEARCH_CONTEXT_SIZE"`
+	MaxResults        int    `json:"max_results"                   yaml:"-" env:"OMNIPUS_TOOLS_WEB_PERPLEXITY_MAX_RESULTS"`
 }
 
 type GLMSearchConfig struct {
@@ -1587,7 +1732,13 @@ type GLMSearchConfig struct {
 	// SearchEngine specifies the search backend: "search_std" (default),
 	// "search_pro", "search_pro_sogou", or "search_pro_quark".
 	SearchEngine string `json:"search_engine" yaml:"-" env:"OMNIPUS_TOOLS_WEB_GLM_SEARCH_ENGINE"`
-	MaxResults   int    `json:"max_results"   yaml:"-" env:"OMNIPUS_TOOLS_WEB_GLM_MAX_RESULTS"`
+	// ContentSize is the operator's GLM content-size default, in GLM's own
+	// vocabulary (ADR-096 D12: medium | high — the two established values).
+	// Shipped default "medium", the value the provider code hardcodes today;
+	// the roles migration writes "medium" onto an existing glm_search object
+	// whose file lacks the key (ADR-096 D11 step 7).
+	ContentSize string `json:"content_size"  yaml:"-" env:"OMNIPUS_TOOLS_WEB_GLM_CONTENT_SIZE"`
+	MaxResults  int    `json:"max_results"   yaml:"-" env:"OMNIPUS_TOOLS_WEB_GLM_MAX_RESULTS"`
 }
 
 type BaiduSearchConfig struct {
@@ -1600,13 +1751,51 @@ type BaiduSearchConfig struct {
 	MaxResults int    `json:"max_results"           yaml:"-"                     env:"OMNIPUS_TOOLS_WEB_BAIDU_MAX_RESULTS"`
 }
 
+type ExaConfig struct {
+	Enabled bool `json:"enabled" yaml:"-" env:"OMNIPUS_TOOLS_WEB_EXA_ENABLED"`
+	// APIKeyRef references a named credential in credentials.json (e.g. "EXA_API_KEY").
+	// At runtime the system resolves the reference, decrypts the value, and injects it
+	// via the process environment (SEC-22). Raw values must never appear in config files.
+	// Exa's ref is a member of pkg/credentials/inject.go::nonChannelRefsFor and
+	// pkg/tools/web.go::enabledButKeylessSearchProviders — the two lists the
+	// spec names so the key actually reaches the process (ADR-096 D2).
+	APIKeyRef string `json:"api_key_ref,omitempty" yaml:"api_key_ref,omitempty" env:"OMNIPUS_TOOLS_WEB_EXA_API_KEY_REF"`
+	// BaseURL overrides the Exa endpoint. Shipped EMPTY; the provider
+	// applies https://api.exa.ai/search when empty at call time (spec "Exa"
+	// table — the default is applied at call time, not shipped in config).
+	BaseURL    string `json:"base_url"              yaml:"-"                     env:"OMNIPUS_TOOLS_WEB_EXA_BASE_URL"`
+	MaxResults int    `json:"max_results"           yaml:"-"                     env:"OMNIPUS_TOOLS_WEB_EXA_MAX_RESULTS"`
+}
+
 type WebToolsConfig struct {
+	// DefaultProvider is tools.web.default_provider (ADR-096 D4): the
+	// catalogue id of who is tried first — perplexity, brave, tavily,
+	// duckduckgo, baidu, glm, exa. A missing key means "this file has
+	// not been migrated"; an explicit value must survive every save, so the
+	// JSON tag carries NO omitempty.
+	//
+	// env:"-" is load-bearing: WebToolsConfig embeds ToolConfig with
+	// envPrefix:"OMNIPUS_TOOLS_WEB_" and every sibling scalar carries an
+	// env: tag, so without env:"-" an environment variable could make this
+	// non-empty and permanently suppress the migration (ADR-096 D11 keys
+	// idempotency off the marker's absence).
+	DefaultProvider string `json:"default_provider"           yaml:"-"           env:"-"`
+	// FallbackProvider is tools.web.fallback_provider (ADR-096 D4): a
+	// catalogue id, or the literal "none" ("No fallback"), or absent ("not
+	// chosen"). Same no-omitempty and env:"-" reasoning as DefaultProvider.
+	FallbackProvider string `json:"fallback_provider"          yaml:"-"           env:"-"`
+	// RolesMigratedAt is tools.web.roles_migrated_at (ADR-096 D11): the
+	// RFC 3339 marker the migration's idempotency keys off — NOT
+	// DefaultProvider's presence, so a later corrective pass can tell
+	// whether this migration ran.
+	RolesMigratedAt string `json:"roles_migrated_at"          yaml:"-"           env:"-"`
+
+	Exa         ExaConfig `yaml:"exa,omitempty"                                         json:"exa"`
 	ToolConfig  `                  yaml:"-"                      envPrefix:"OMNIPUS_TOOLS_WEB_"`
 	Brave       BraveConfig       `yaml:"brave,omitempty"                                       json:"brave"`
 	Tavily      TavilyConfig      `yaml:"tavily,omitempty"                                      json:"tavily"`
 	DuckDuckGo  DuckDuckGoConfig  `yaml:"-"                                                     json:"duckduckgo"`
 	Perplexity  PerplexityConfig  `yaml:"perplexity,omitempty"                                  json:"perplexity"`
-	SearXNG     SearXNGConfig     `yaml:"-"                                                     json:"searxng"`
 	GLMSearch   GLMSearchConfig   `yaml:"glm_search,omitempty"                                  json:"glm_search"`
 	BaiduSearch BaiduSearchConfig `yaml:"baidu_search,omitempty"                                json:"baidu_search"`
 	// PreferNative controls whether to use provider-native web search when
@@ -1764,36 +1953,6 @@ type ToolsConfig struct {
 	// sent as a full callable def every turn (legacy behavior; backward-compat
 	// kill-switch).
 	Manifest ManifestConfig `json:"manifest" yaml:"manifest,omitempty"`
-
-	// Delegate holds the operator controls for the `delegate` tool.
-	// Maps to config.json: tools.delegate.*
-	Delegate DelegateToolConfig `json:"delegate,omitempty" yaml:"-"`
-}
-
-// DelegateToolConfig holds operator controls for the `delegate` tool.
-// Maps to config.json: tools.delegate.*
-type DelegateToolConfig struct {
-	// RequireParentAgentID gates the fail-closed parent-agent-id guard
-	// (R2-MAJ-015): when it resolves TRUE (the default), a delegate call whose
-	// context carries no resolvable calling-agent id is REFUSED outright rather
-	// than minting a delegation record with an empty ParentAgentID — an
-	// unattributable delegation is a broken audit chain, and a broken audit
-	// chain is not a safe thing to persist.
-	//
-	// This exists because that guard's failure mode is "delegation stops
-	// entirely": a wiring bug anywhere upstream of ToolAgentID turns every
-	// delegate call in the install into an error, with no operator lever to
-	// get work moving again while the real bug is diagnosed. Setting this to
-	// FALSE downgrades the guard to a log-at-Error and mints with an empty
-	// parent id — deliberately degraded attribution, chosen consciously, never
-	// the default and never silent.
-	//
-	// Pointer + omitempty because the semantic default is TRUE: a plain bool
-	// would make an explicit `false` indistinguishable from "unset" after a
-	// round-trip through omitempty, so the kill switch could never actually be
-	// turned off. nil = unset = true; an explicit false wins. Resolve via
-	// EffectiveRequireParentAgentID, never by reading the pointer directly.
-	RequireParentAgentID *bool `json:"require_parent_agent_id,omitempty"`
 }
 
 // ManifestConfig holds settings for the tool-manifest optimization.
@@ -2158,11 +2317,10 @@ type BrowserToolConfig struct {
 	// renderer) and removes that wait.
 	//
 	// It warms the SAME session the live panel uses — the WORKSPACE-OWNED tab
-	// set (BrowserManager.OperatorSessionID) — on ONE agent: the default agent
-	// (agents.defaults.default_agent_id), or, when that is unset/has no
-	// browser manager, the lexicographically-first agent that has one. It is
-	// not a per-agent pool: warming every agent would spawn one renderer per
-	// agent for a panel only one of them is likely to open first.
+	// set (BrowserManager.OperatorSessionID) — for ONE workspace: the default
+	// workspace (omnipus-system-agent FR-126). With no browser manager for
+	// it, nothing is warmed and the reason is logged. It is not a pool:
+	// warming every workspace would spawn renderers for panels nobody opens.
 	//
 	// Best-effort and never blocks or fails boot (Hard Constraint #4), exactly
 	// like WarmAtBoot: a failure is logged at WARN, audited, and the ordinary
@@ -2326,7 +2484,7 @@ type CredentialStore interface {
 // documented credential boot contract, ADR-004: NewStore → Unlock →
 // LoadConfigWithStore → InjectFromConfig → ...).
 func LoadConfigWithStore(path string, store CredentialStore) (*Config, error) {
-	return loadConfigInternal(path, store, nil)
+	return loadConfigWithSensitiveSource(path, store, nil)
 }
 
 func LoadConfig(path string) (*Config, error) {
@@ -2368,7 +2526,7 @@ func LoadConfigWithStoreAndSelfHealHook(
 	store CredentialStore,
 	onSelfHeal SelfHealWriteHook,
 ) (*Config, error) {
-	return loadConfigInternal(path, store, onSelfHeal)
+	return loadConfigWithSensitiveSource(path, store, onSelfHeal)
 }
 
 // seedPublicURLFromEnv fills cfg.Gateway.PublicURL from $DEVPOD_PREVIEW_URL when
@@ -2423,6 +2581,7 @@ func freshInstallConfig() (*Config, error) {
 	if err := env.Parse(c); err != nil {
 		return nil, err
 	}
+	applyMaxToolIterationsEnvFreshInstall(c)
 	return c, nil
 }
 
@@ -2472,6 +2631,12 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 		if err != nil {
 			return nil, err
 		}
+		// Remove unsupported SearXNG settings and roles from the persisted
+		// file before later load-time repairs read it again. A failed rewrite
+		// is a visible load error, not an in-memory-only correction.
+		if err := scrubSearXNGConfig(cfg, path, data, onSelfHeal); err != nil {
+			return nil, err
+		}
 
 	default:
 		return nil, fmt.Errorf("unsupported config version: %d", *versionInfo.Version)
@@ -2480,6 +2645,11 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	if err := env.Parse(cfg); err != nil {
 		return nil, err
 	}
+
+	// #904: global tool-iteration limit — key provenance, the one-time
+	// import of the retired env var, and the saved-state WARN. Never refuses
+	// the load and never rewrites the saved global except for the import.
+	applyMaxToolIterationsOnLoad(cfg, data, path, onSelfHeal)
 
 	// ADR-067 FR-036 / A-19: the config boundary is the ONE place a provider
 	// id is normalised, and the normalisation is TRIM-ONLY. Case is
@@ -2571,26 +2741,10 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	// legacy_agents_list.go.
 	stripLegacyAgentsList(cfg, path, onSelfHeal)
 
-	// NOTE (ADR-054 D6.4): this used to call RepairMultipleDefaults(cfg) here
-	// to enforce an at-most-one AgentConfig.Default==true invariant (F11).
-	// That repair function — and the field's role in default-agent
-	// resolution — is retired: RepairMultipleDefaults and
-	// AgentInstance.IsRoutingDefault (which consumed it) are dead code and
-	// have been removed. Splitting agents into independent per-entity files
-	// means two concurrent writes to two different agents could each set
-	// Default=true with no shared lock to serialize them (each delta
-	// individually valid, the composition not). Rather than inventing a
-	// cross-entity lock for a single bool, "the one default" signal moved
-	// entirely to the settings singleton (Agents.Defaults.DefaultAgentID,
-	// which already existed) — a single string field the existing
-	// config-write lock already serializes, structurally incapable of having
-	// two winners. See pkg/agent.AgentRegistry.GetDefaultAgent and
-	// pkg/routing.RouteResolver.resolveDefaultAgentID for the current
-	// (settings-only) resolution ladder. AgentConfig.Default itself is left
-	// in place on the wire/struct (read/written by the REST agent
-	// create/PUT/list handlers) purely for backward display compatibility
-	// until those handlers are converted to the entity-store write path;
-	// it is no longer consulted by any resolution logic.
+	// omnipus-system-agent FR-120 / K17: there is no default agent. A
+	// leftover agents.defaults.default_agent_id is ignored, with a warning on
+	// every load and reload, never migrated.
+	warnIgnoredDefaultAgentKey(data)
 
 	// ADR-029 FR-029/OBS-001: enforce the two-representation rule. A channel
 	// instance that carries BOTH a bound representation (WorkspaceID + Identity)

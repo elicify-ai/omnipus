@@ -46,18 +46,17 @@ import (
 //     format is deliberately frozen (existing config.json files must keep
 //     parsing), so e.g. Home string with tag json:"workspace,omitempty" is
 //     correct and must never be flagged.
-//     NOTE ON FRAGILITY: the allowlist pins absolute LINE NUMBERS, so ANY edit
-//     that adds or removes lines above an entry in the same file shifts it and
-//     makes this guard report the same, unchanged code as a fresh violation.
-//     That is exactly what happened when dead exports were removed from
-//     openclaw_config.go: all seven entries moved by a uniform -22. If this test
-//     fails with a uniform offset across every entry in one file, the code did
-//     not regress — re-point the entries. A content-based anchor would be more
-//     robust, but line numbers keep the allowlist reviewable at a glance.
+//     NOTE ON ROBUSTNESS (item 9): the allowlist is keyed by file AND the exact
+//     trimmed source line, NOT by absolute line numbers. It used to pin line
+//     numbers, so any edit above an entry re-reported unchanged, legitimate code
+//     as a fresh violation (the reason this guard was red at 67345b1d7 with no
+//     real regression). A moved line now costs nothing; a genuine new
+//     agent-config ".Workspace" use still fails, because it cannot match any
+//     reviewed line.
 //
-//   - a documented, reviewed file:line allowlist (allowedWorkspaceIdentifierLines
-//     below) for the two unrelated types that happen to share the field
-//     name "Workspace" by coincidence, plus one comment heading — see the
+//   - a documented, reviewed content-anchored allowlist
+//     (allowedWorkspaceIdentifierSites below) for the unrelated types that
+//     happen to share the field name "Workspace" by coincidence — see the
 //     allowlist's own doc comment for exactly why each entry is there.
 func TestNoAgentConfigWorkspaceIdentifier(t *testing.T) {
 	root := repoRootForRenameGuard(t)
@@ -74,11 +73,11 @@ func TestNoAgentConfigWorkspaceIdentifier(t *testing.T) {
 	var violations []string
 
 	for _, base := range []string{filepath.Join(root, "pkg"), filepath.Join(root, "cmd")} {
-		walkErr := filepath.Walk(base, func(path string, info os.FileInfo, err error) error {
+		walkErr := walkRenameGuardSourceTree(base, func(path string, directory bool, err error) error {
 			if err != nil {
 				return err
 			}
-			if info.IsDir() {
+			if directory {
 				if skipDirs[path] {
 					return filepath.SkipDir
 				}
@@ -127,11 +126,14 @@ func TestNoAgentConfigWorkspaceIdentifier(t *testing.T) {
 					continue
 				}
 
-				key := fmt.Sprintf("%s:%d", relPath, lineNum)
-				if allowedWorkspaceIdentifierLines[key] {
+				// Content-anchored allowlist: keyed by (file, exact trimmed
+				// source line), so an edit that shifts line numbers no longer
+				// re-reports unchanged, legitimate code as a fresh violation.
+				if allowedWorkspaceIdentifierSites[relPath][strings.TrimSpace(line)] {
 					continue
 				}
 
+				key := fmt.Sprintf("%s:%d", relPath, lineNum)
 				violations = append(violations, fmt.Sprintf("%s: %s", key, strings.TrimSpace(line)))
 			}
 			if scanErr := scanner.Err(); scanErr != nil {
@@ -148,135 +150,179 @@ func TestNoAgentConfigWorkspaceIdentifier(t *testing.T) {
 		sort.Strings(violations)
 		t.Fatalf(
 			"reintroduced agent-config .Workspace usage (FR-001/FR-002 — rename "+
-				"the identifier to .Home, or add a reviewed file:line entry to "+
-				"allowedWorkspaceIdentifierLines in this file with a documented "+
-				"reason if it genuinely belongs to an unrelated type):\n%s",
+				"the identifier to .Home, or add a reviewed entry to "+
+				"allowedWorkspaceIdentifierSites in this file (keyed by file AND the "+
+				"exact trimmed source line) with a documented reason if it genuinely "+
+				"belongs to an unrelated type):\n%s",
 			strings.Join(violations, "\n"),
 		)
 	}
 }
 
-// allowedWorkspaceIdentifierLines documents every file:line where a literal
-// "Workspace" selector or composite-literal key legitimately survives the
-// ADR-046 "agent home" rename. Every entry here belongs to one of two
-// types that are NOT one of the four renamed agent-config types
-// (config.AgentConfig, config.AgentDefaults, config.AgentModelConfig,
-// agent.AgentInstance) — they merely share the field name "Workspace" by
+// allowedWorkspaceIdentifierSites is the CONTENT-anchored allowlist: every
+// reviewed place a literal "Workspace" selector or composite-literal key
+// legitimately survives the ADR-046 "agent home" rename, keyed by the file and
+// the EXACT trimmed source line.
+//
+// Why content, not file:line (item 9): the previous allowlist pinned absolute
+// line numbers, so any edit above an entry shifted it and re-reported the same,
+// unchanged, legitimate code as a fresh violation — the reason this guard was
+// red at 67345b1d7 while containing no real regression. That churned the
+// allowlist on nearly every merge. Keyed by content, a line move costs nothing
+// and a genuine new agent-config ".Workspace" use still fails: it cannot match
+// any reviewed line.
+//
+// Every entry belongs to a type that is NOT one of the four renamed agent-config
+// types (config.AgentConfig, config.AgentDefaults, config.AgentModelConfig,
+// agent.AgentInstance) — the types merely share the field name "Workspace" by
 // historical coincidence:
 //
+//   - workspace.State.Workspace (ADR-090): the multi-agent workspace record
+//     paired with its delegation graph and revision, read through
+//     ReadState/CheckRevisionLocked — not an agent home.
 //   - pkg/skills: GitHubRegistryConfig.Workspace and the MarketplaceEntry
-//     .Workspace it's built from (pkg/skills/registry.go's own field, task
-//     explicitly out of scope for this rename) — the skills-marketplace
-//     install directory, unrelated to any agent's own home directory.
-//   - pkg/migrate/sources/openclaw/openclaw_config.go (+ its _test.go): the
-//     read side is OpenClawAgentDefaults.Workspace, mirroring OpenClaw's
-//     FROZEN third-party JSON schema (renaming breaks parsing real openclaw
-//     configs); the local OmnipusConfig/AgentDefaults/AgentConfig types
-//     declared later in the SAME file are a package-private staging format
-//     used only to shuttle data between the two schemas before
-//     ToStandardConfig() writes the REAL config.AgentConfig/AgentDefaults —
-//     which correctly uses .Home (openclaw_config.go:884,919 — NOT
-//     allowlisted, and must never be added here).
-//   - (retired) pkg/sandbox/sandbox.go's comment heading ("// Workspace: full
-//     RWX ...", a prose label), not a struct field or composite literal.
+//     .Workspace it's built from (the skills-marketplace install directory,
+//     unrelated to any agent's own home directory).
 //
-// Adding a new entry is a deliberate, reviewed exception: confirm which type
-// is genuinely involved before silencing a failure this way.
-var allowedWorkspaceIdentifierLines = map[string]bool{
-	// ADR-090 workspace.State.Workspace is the multi-agent workspace record
-	// paired with its delegation graph and revision, not an agent home.
-	// These callers read that state through ReadState/CheckRevisionLocked.
-	// (Re-pointed 2026-09-19 after the log-sanitization and workspace-ID
-	// validation changes shifted the lines; per the fragility note above, a
-	// reviewed shift means re-pointing, not a regression. The previous
-	// gateway entries were rest_workspace_delegation.go:139,212 and
-	// rest_workspaces.go:378,962,1253,1321,1579.)
-	// (Re-pointed again 2026-09-23: ADR-091 D9's config-fold commit
-	// (8667a4e58, "performance.max_delegation_depth" comment rewrite)
-	// added two comment lines above delegationDepthCeiling, shifting both
-	// call sites in this file down by +1; still config.workspace.State's
-	// unrelated Workspace field, not agent-config.)
-	"pkg/gateway/rest_workspace_delegation.go:139":             true,
-	"pkg/gateway/rest_workspace_delegation.go:212":             true,
-	"pkg/gateway/rest_workspace_wire_snapshot_test.go:32":      true,
-	"pkg/gateway/rest_workspace_wire_snapshot_test.go:37":      true,
-	"pkg/gateway/rest_workspaces.go:390":                       true,
-	"pkg/gateway/rest_workspaces.go:974":                       true,
-	"pkg/gateway/rest_workspaces.go:1265":                      true,
-	"pkg/gateway/rest_workspaces.go:1333":                      true,
-	"pkg/gateway/rest_workspaces.go:1591":                      true,
-	"pkg/sysagent/tools/workspace.go:102":                      true,
-	"pkg/sysagent/tools/workspace.go:103":                      true,
-	"pkg/sysagent/tools/workspace.go:104":                      true,
-	"pkg/sysagent/tools/workspace.go:105":                      true,
-	"pkg/sysagent/tools/workspace.go:106":                      true,
-	"pkg/sysagent/tools/workspace.go:107":                      true,
-	"pkg/sysagent/tools/workspace.go:108":                      true,
-	"pkg/sysagent/tools/workspace.go:464":                      true,
-	"pkg/sysagent/tools/workspace.go:644":                      true,
-	"pkg/sysagent/tools/workspace.go:646":                      true,
-	"pkg/sysagent/tools/workspace.go:1364":                     true,
-	"pkg/sysagent/tools/ava_configuration_context_test.go:236": true,
-	"pkg/sysagent/tools/ava_configuration_context_test.go:237": true,
-	"pkg/sysagent/tools/ava_configuration_context_test.go:238": true,
-	"pkg/sysagent/tools/ava_configuration_context_test.go:269": true,
-	"pkg/sysagent/tools/ava_configuration_context_test.go:270": true,
-	"pkg/sysagent/tools/ava_configuration_context_test.go:271": true,
-	"pkg/sysagent/tools/ava_configuration_context_test.go:272": true,
-	"pkg/sysagent/tools/workspace_outcomes_test.go:76":         true,
+// Adding a new entry is a deliberate, reviewed exception: confirm which type is
+// genuinely involved before silencing a failure this way.
+//
+// COLLISION NOTE: because keys are content, two identical lines in the same file
+// collapse to one entry — intended for repeated idioms (e.g. the seven
+// state.Workspace field reads in pkg/sysagent/tools/workspace.go). A reviewed
+// entry therefore whitelists that exact line wherever it appears in that file.
+var allowedWorkspaceIdentifierSites = map[string]map[string]bool{
+	// L1 #1274 fixtures: these ReadState results are workspace.State (whose
+	// Workspace field is the live workspace record), never AgentConfig.
+	// Reviewed ci1-fs chief ruling 2026-10-14: exact content-anchored entries;
+	// the scanner and all membership/delegation assertions stay unchanged.
+	// l11274AssertCreated: durable membership readback.
+	"pkg/agent/l1_1274_create_test.go": {
+		`if !reflect.DeepEqual(state.Workspace.CoreTeam, []string{"omnipus", id}) {`:                                              true,
+		`t.Errorf("create must join exactly the requesting workspace: team=%v, want [omnipus %s]", state.Workspace.CoreTeam, id)`: true,
+	},
+	// l11274DelegatingContext and l11274SeedWorker: fixture team records.
+	"pkg/agent/l1_1274_delegate_test.go": {
+		`state.Workspace.CoreTeam = append(state.Workspace.CoreTeam, "jim")`: true,
+		`state.Workspace.CoreTeam = append(state.Workspace.CoreTeam, id)`:    true,
+		`data, err := json.Marshal(state.Workspace)`:                         true,
+	},
+	// TestL11274NativeMainAndSubagentAcceptAndPersistSoul: membership readback.
+	"pkg/agent/l1_1274_fix1_soul_test.go": {
+		// WU-3: the created agent's id is a generated UUID read from the result.
+		`if err != nil || !reflect.DeepEqual(state.Workspace.CoreTeam, []string{"omnipus", id}) {`:  true,
+		`t.Errorf("native create membership readback = %v, err=%v", state.Workspace.CoreTeam, err)`: true,
+	},
+	// ADR-090 workspace.State.Workspace — the multi-agent workspace record.
+	"pkg/gateway/rest_workspace_delegation.go": {
+		"ws := state.Workspace": true,
+	},
+	"pkg/agent/routing_drops.go": {
+		"ws := state.Workspace": true,
+	},
+	"pkg/gateway/rest_workspace_wire_snapshot_test.go": {
+		"reread := workspaceToWire(api, snapshot.Workspace, 0)":                                               true,
+		"wire := workspaceToWireFrom(api.homePath, snapshot.Workspace, 0, &snapshot, api.mainSessionAddress)": true,
+	},
+	"pkg/gateway/rest_workspaces.go": {
+		"existingTeam := workspace.TeamSet(rw.state.Workspace.CoreTeam, nil)":                                                               true,
+		"jsonOK(w, workspaceToWireFrom(a.homePath, state.Workspace, countTasksForWorkspace(a.homePath, id), &state, a.mainSessionAddress))": true,
+		"rd.ws = state.Workspace": true,
+		"return &workspace.State{Workspace: rw.ws, Delegation: edges, Revision: revision}": true,
+		"rw.ws = state.Workspace": true,
+		// Train 1 main-chat retry: ReadStateLocked returns workspace.State;
+		// these read its shared workspace record, not an agent's home.
+		"if len(state.Workspace.CoreTeam) > 0 {":                                  true,
+		"if mainsErr := a.ensureMainsForTeam(state.Workspace); mainsErr != nil {": true,
+	},
+	// Train 1 #1363: ReadState returns workspace.State; this is the default
+	// multi-agent workspace record, not an agent's home directory.
+	"pkg/gateway/train1_default_workspace_delete_test.go": {
+		`require.True(t, before.Workspace.IsDefault)`: true,
+	},
+	"pkg/sysagent/tools/workspace.go": {
+		"\"core_team\":   state.Workspace.CoreTeam,":    true,
+		"\"description\": state.Workspace.Description,": true,
+		"\"id\":          state.Workspace.ID,":          true,
+		"\"name\":        state.Workspace.Name,":        true,
+		"\"pin_order\":   state.Workspace.PinOrder,":    true,
+		"\"pinned\":      state.Workspace.Pinned,":      true,
+		"\"status\":      state.Workspace.Status,":      true,
+		// Train 1 #1363: CheckRevisionLocked returns workspace.State;
+		// default-workspace protection reads that record, not AgentConfig.
+		`if refusal := workspacepkg.RefuseDefaultDeletion(state.Workspace.IsDefault); refusal != nil {`: true,
+		// WU-3 (FR-032, #1057): update_workspace's staged read-back and the
+		// canonical workspace view read workspace.State.Workspace.
+		`resp := workspaceView(state.Workspace, state.Delegation, state.Revision, computeWorkspaceTaskCount(home, id))`:                                                                    true,
+		`members := workspacepkg.TeamSet(state.Workspace.CoreTeam, nil)`:                                                                                                                   true,
+		`u := &workspaceUpdate{t: t, args: args, id: id, state: state, w: state.Workspace,`:                                                                                                true,
+		`oldTeam: append([]string(nil), state.Workspace.CoreTeam...)}`:                                                                                                                     true,
+		`changed := workspaceChangedFields(u.state.Workspace, u.w)`:                                                                                                                        true,
+		`resp := workspaceView(u.state.Workspace, u.state.Delegation, u.state.Revision, computeWorkspaceTaskCount(home, u.id))`:                                                            true,
+		`return workspaceMutationError(u.id, "save_delegation", "partial", "", workspaceChangedFields(u.state.Workspace, u.w), map[string]any{"exists": true, "state_read_failed": true})`: true,
+		`return workspaceMutationError(u.id, "save_delegation", "partial", actual.Revision, workspaceChangedFields(u.state.Workspace, actual.Workspace), workspaceActualState(actual))`:    true,
+		`return tools.NewToolResult(successJSON(workspaceView(state.Workspace, state.Delegation, state.Revision,`:                                                                          true,
+	},
+	// WU-3 RED real-registry tests: workspace.ReadState returns workspace.State.
+	"pkg/gateway/wu3_real_registry_test.go": {
+		`assert.Equal(t, []string{id}, target.Workspace.CoreTeam)`:                                                                                       true,
+		`assert.Equal(t, []string{"omnipus"}, anchor.Workspace.CoreTeam)`:                                                                                true,
+		`assert.Equal(t, "real WU3 turn write", after.Workspace.Description, "actual registered Execute must have committed, not returned model prose")`: true,
+	},
+	// WU-3 create_agent workspace_id test: ReadState returns workspace.State.
+	// WU-3 team-admission test (b39cfe2fe): workspace.ReadState returns
+	// workspace.State; after.Workspace is that state's record, not AgentConfig.
+	"pkg/sysagent/tools/wu3_fix_team_admission_test.go": {
+		`assert.Empty(t, after.Workspace.CoreTeam)`: true,
+	},
+	"pkg/sysagent/tools/wu3dev_create_agent_target_test.go": {
+		`require.Contains(t, sales.Workspace.CoreTeam, id, "the agent joins the target team")`:          true,
+		`require.NotContains(t, other.Workspace.CoreTeam, id, "the caller's workspace is not touched")`: true,
+	},
+	"pkg/sysagent/tools/ava_configuration_context_test.go": {
+		"require.Equal(t, \"Coordination for the launch\", state.Workspace.Description)": true,
+		"require.Equal(t, \"Coordination for the launch\", state.Workspace.Description,": true,
+		"require.Equal(t, \"Launch Room West\", state.Workspace.Name)":                   true,
+		"require.Equal(t, \"Launch Room\", state.Workspace.Name)":                        true,
+		"require.Equal(t, \"active\", state.Workspace.Status)":                           true,
+		"require.Equal(t, []string{\"field-analyst\"}, state.Workspace.CoreTeam)":        true,
+		"require.Equal(t, true, state.Workspace.Pinned)":                                 true,
+	},
+	"pkg/sysagent/tools/workspace_outcomes_test.go": {
+		"if after.Workspace.Name != \"After\" || !reflect.DeepEqual(after.Delegation, oldEdges) {": true,
+	},
+	// DEL-23 task Owner attribution: st is a workspace.State (workspace.ReadState).
+	"pkg/tools/task.go": {
+		"owner = st.Workspace.Owner": true,
+	},
 
-	"pkg/skills/github_registry.go:41": true,
-	"pkg/skills/github_registry.go:50": true,
-	"pkg/skills/github_registry.go:65": true,
-	"pkg/skills/github_registry.go:74": true,
-	"pkg/skills/registry.go:208":       true,
-	"pkg/skills/config_bridge.go:53":   true,
-	"pkg/skills/config_bridge.go:54":   true,
-
-	// MarketplaceConfig.Workspace (pkg/skills), not AgentConfig — the same
-	// unrelated type whose producing lines config_bridge.go:53,54 are
-	// already allowed above. Added 2026-09-16 with the SSRF-client test.
-	"pkg/skills/config_bridge_test.go:133": true,
-
-	"pkg/skills/github_registry_test.go:24":  true,
-	"pkg/skills/github_registry_test.go:35":  true,
-	"pkg/skills/github_registry_test.go:46":  true,
-	"pkg/skills/github_registry_test.go:58":  true,
-	"pkg/skills/github_registry_test.go:69":  true,
-	"pkg/skills/github_registry_test.go:78":  true,
-	"pkg/skills/github_registry_test.go:98":  true,
-	"pkg/skills/github_registry_test.go:134": true,
-	"pkg/skills/github_registry_test.go:179": true,
-	"pkg/skills/github_registry_test.go:204": true,
-	"pkg/skills/github_registry_test.go:205": true,
-	"pkg/skills/github_registry_test.go:221": true,
-	"pkg/skills/github_registry_test.go:236": true,
-	"pkg/skills/github_registry_test.go:238": true,
-	"pkg/skills/github_registry_test.go:321": true,
-
-	"pkg/migrate/sources/openclaw/openclaw_config.go:374": true,
-	"pkg/migrate/sources/openclaw/openclaw_config.go:377": true,
-	"pkg/migrate/sources/openclaw/openclaw_config.go:416": true,
-	// (Re-pointed 2026-09-24: the ADR-092 removal-lane retirement of
-	// OpenClaw's Exec/ExecConfig deny-pattern migration (dead exports —
-	// ADR-036's config.ExecConfig is gone) removed 6 lines above these four
-	// entries (863/864/890/925 -> 857/858/884/919); per the fragility note
-	// above, a reviewed shift means re-pointing, not a regression. Same
-	// four call sites as before: entry.Workspace/agentCfg.Workspace is the
-	// package-private staging AgentConfig (this file's own type, not
-	// config.AgentConfig), and the two `.Workspace` reads on the right of
-	// a `.Home =`/`Home:` assignment are OpenClawAgentDefaults.Workspace /
-	// the same staging AgentConfig.Workspace being translated INTO the
-	// real config.AgentConfig/AgentDefaults .Home field, not reintroducing
-	// the renamed identifier.)
-	"pkg/migrate/sources/openclaw/openclaw_config.go:857": true,
-	"pkg/migrate/sources/openclaw/openclaw_config.go:858": true,
-	"pkg/migrate/sources/openclaw/openclaw_config.go:884": true,
-	"pkg/migrate/sources/openclaw/openclaw_config.go:919": true,
-
-	"pkg/migrate/sources/openclaw/openclaw_config_test.go:250": true,
-	"pkg/migrate/sources/openclaw/openclaw_config_test.go:251": true,
-	"pkg/migrate/sources/openclaw/openclaw_config_test.go:618": true,
+	// pkg/skills: GitHubRegistryConfig.Workspace / MarketplaceEntry.Workspace.
+	"pkg/skills/github_registry.go": {
+		"if cfg.Workspace == \"\" {": true,
+		"installer, err := NewSkillInstaller(cfg.Workspace, cfg.Token, cfg.Proxy)":              true,
+		"installer, err := NewSkillInstallerWithSSRF(cfg.Workspace, cfg.Token, cfg.Proxy, nil)": true,
+	},
+	"pkg/skills/registry.go": {
+		"Workspace: m.Workspace,": true,
+	},
+	"pkg/skills/config_bridge.go": {
+		"entry.Workspace = githubWorkspace":                                      true,
+		"if m.Type == config.MarketplaceTypeGitHub && entry.Workspace == \"\" {": true,
+	},
+	"pkg/skills/config_bridge_test.go": {
+		"assert.Equal(t, \"/injected-ws\", gh.Workspace, \"empty github Workspace must be injected\")": true,
+	},
+	"pkg/skills/github_registry_test.go": {
+		"GitHubRegistryConfig{Enabled: true, Workspace: ws},": true,
+		"Workspace: ws,": true,
+		"_, err := NewGitHubRegistry(GitHubRegistryConfig{Enabled: true, Workspace: \"\"})": true,
+		"reg, err := NewGitHubRegistry(GitHubRegistryConfig{Enabled: true, Workspace: ws})": true,
+		"{Name: \"github\", Type: \"github\", Enabled: false, Workspace: ws},":              true,
+		"{Name: \"github-bad\", Type: \"github\", Enabled: true, Workspace: \"\"},":         true,
+		"{Name: \"github-corp\", Type: \"github\", Enabled: true, Workspace: ws2},":         true,
+		"{Name: \"github-good\", Type: \"github\", Enabled: true, Workspace: t.TempDir()},": true,
+		"{Name: \"github-public\", Type: \"github\", Enabled: true, Workspace: ws1},":       true,
+	},
 }
 
 // repoRootForRenameGuard resolves the repository root from this test file's

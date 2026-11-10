@@ -1,6 +1,6 @@
 // Package tools implements the Tool interface, the central ToolRegistry, and
 // the full catalog of builtin tools available to Omnipus agents — the
-// unified bash tool (ADR-036), delegate/switch_agent (agent-to-agent
+// unified bash tool (ADR-036), delegate (agent-to-agent
 // delegation, ADR-071 D4), filesystem, session, web, memory, messaging,
 // skills, and MCP-backed tools.
 // ToolRegistry (this file) is the single registration/dispatch point every
@@ -29,6 +29,9 @@ type ToolEntry struct {
 	Tool   Tool
 	IsCore bool
 	TTL    int
+	// retained keeps an advertised schema executable after discovery TTL expiry.
+	// Session membership and live authorization remain agent-loop gates.
+	retained bool
 }
 
 type ToolRegistry struct {
@@ -352,6 +355,19 @@ func (r *ToolRegistry) PromoteTools(names []string, ttl int) {
 	)
 }
 
+// RetainLoadedTools keeps definitions that a real session advertised available
+// beyond the discovery TTL. This is NOT an authorization grant: the loop still
+// checks that session's loaded set, policy, assignment and current registration.
+func (r *ToolRegistry) RetainLoadedTools(names []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, name := range names {
+		if entry := r.tools[name]; entry != nil {
+			entry.retained = true
+		}
+	}
+}
+
 // TickTTL decreases TTL only for non-core tools
 func (r *ToolRegistry) TickTTL() {
 	r.mu.Lock()
@@ -430,10 +446,22 @@ func (r *ToolRegistry) Get(name string) (Tool, bool) {
 		return nil, false
 	}
 	// Hidden tools with expired TTL are not callable.
-	if !entry.IsCore && entry.TTL <= 0 {
+	if !entry.IsCore && !entry.retained && entry.TTL <= 0 {
 		return nil, false
 	}
 	return entry.Tool, true
+}
+
+// IsCoreTool reports whether a registered tool is part of the always-visible
+// registry surface. It grants no policy or offered-request authority.
+func (r *ToolRegistry) IsCoreTool(name string) bool {
+	if r == nil {
+		return false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	entry := r.tools[name]
+	return entry != nil && entry.IsCore
 }
 
 // GetIncludingHidden returns the registered tool for name regardless of whether
@@ -478,6 +506,27 @@ func (r *ToolRegistry) Execute(ctx context.Context, name string, args map[string
 var retiredToolCanonicalNames = map[string]string{
 	// ADR-071 D1: load_tool -> ToolSearch (2026-08-28).
 	"load_tool": "ToolSearch",
+	// Skills spec r15 §10: a skill is created by writing its SKILL.md and
+	// deleted with edit_skill action=delete.
+	"create_skill": "write_file",
+	"remove_skill": "edit_skill",
+	// Tool-parity r17 §7.12.3: get_agent is the single agent reader
+	// (fields ["tool_permissions"], ["soul"], ["agent_md"]).
+	"get_agent_tools":     "get_agent",
+	"read_agent_metadata": "get_agent",
+}
+
+// RetiredToolCanonical returns the current replacement of a tool name retired
+// by a rename, and whether name is such a retired name. It never makes the
+// retired name callable (see retiredToolCanonicalNames).
+func RetiredToolCanonical(name string) (canonical string, ok bool) {
+	canonical, ok = retiredToolCanonicalNames[name]
+	return canonical, ok
+}
+
+// RetiredToolMessage is the tool result a call to a retired name gets.
+func RetiredToolMessage(name, canonical string) string {
+	return fmt.Sprintf("tool %q was renamed to %q — call %q instead", name, canonical, canonical)
 }
 
 // ExecuteWithContext executes a tool with channel/chatID context and optional async callback.
@@ -491,10 +540,24 @@ func (r *ToolRegistry) ExecuteWithContext(
 	channel, chatID string,
 	asyncCallback AsyncCallback,
 ) *ToolResult {
+	tool, ok := r.Get(name)
+	logArgs := args
+	if ok {
+		// Rejected secret-shaped inputs never enter the args log below.
+		if refusal := ToolArgumentRefusal(tool, args); refusal != nil {
+			return refusal
+		}
+		// r17 SR-3: the log carries the record copy; execution keeps args.
+		recorded, err := RecordArguments(tool, args)
+		if err != nil {
+			return RedactionRefusal(tool, err)
+		}
+		logArgs = recorded
+	}
 	logger.InfoCF("tool", "Tool execution started",
 		map[string]any{
 			"tool": name,
-			"args": args,
+			"args": logArgs,
 		})
 
 	// Capture the registry's injected dependencies once, under a single read
@@ -506,7 +569,6 @@ func (r *ToolRegistry) ExecuteWithContext(
 	mediaStore := r.mediaStore
 	r.mu.RUnlock()
 
-	tool, ok := r.Get(name)
 	if !ok {
 		if canonical, retired := retiredToolCanonicalNames[name]; retired {
 			logger.WarnCF("tool", "Tool call used a retired name",
@@ -514,7 +576,7 @@ func (r *ToolRegistry) ExecuteWithContext(
 					"tool":      name,
 					"canonical": canonical,
 				})
-			return ErrorResult(fmt.Sprintf("tool %q was renamed to %q — call %q instead", name, canonical, canonical)).
+			return ErrorResult(RetiredToolMessage(name, canonical)).
 				WithError(fmt.Errorf("tool %q was renamed to %q", name, canonical))
 		}
 		logger.ErrorCF("tool", "Tool not found",
@@ -541,17 +603,42 @@ func (r *ToolRegistry) ExecuteWithContext(
 	// the fingerprint of a genuine leak, so a legitimate value that merely
 	// mentions the tag is left untouched (A1).
 	if repaired, ok := repairLeakedToolArgs(args); ok {
+		if IsAlwaysAsk(name) {
+			// Channels security S1: an always-ask call executes exactly the
+			// arguments the person approved. A repair here would run an
+			// operation nobody saw on the card, so refuse it; the model must
+			// make a new, well-formed call that gets its own fresh approval.
+			logger.WarnCF("tool", "refused repair of an approved always-ask call",
+				map[string]any{"tool": name})
+			return alwaysAskRepairRefusal(tool, name)
+		}
 		args = repaired
 		logger.WarnCF("tool", "repaired leaked tool-call template tokens in arguments",
 			map[string]any{"tool": name})
+	}
+
+	// A read tool's `fields` argument is checked by the one shared helper
+	// before generic schema validation, so the agent sees the §7.13 text
+	// (tool-parity spec r17, scenario 20.10) rather than the generic refusal,
+	// and the tool's Execute is not reached on a bad selection.
+	if selecting, ok := tool.(FieldSelecting); ok {
+		if _, refusal := ValidateFieldsArg(args, selecting.FieldSpecFor(args)); refusal != nil {
+			return refusal
+		}
 	}
 
 	// Validate arguments against the tool's declared schema.
 	if err := validateToolArgs(tool.Parameters(), args); err != nil {
 		logger.WarnCF("tool", "Tool argument validation failed",
 			map[string]any{"tool": name, "error": err.Error()})
-		return ErrorResult(fmt.Sprintf("invalid arguments for tool %q: %s", name, err)).
+		refusal := ErrorResult(fmt.Sprintf("invalid arguments for tool %q: %s", name, err)).
 			WithError(fmt.Errorf("argument validation failed: %w", err))
+		if _, isChange := tool.(ChangeTool); isChange {
+			// The tool never ran, so nothing was saved: a change tool's refusal
+			// carries the FR-030 envelope here too (WU-3 CHECK F01).
+			refusal = FinalizeChangeResult(name, refusal)
+		}
+		return refusal
 	}
 
 	// Inject channel/chatID into ctx so tools read them via ToolChannel(ctx)/ToolChatID(ctx).
@@ -561,6 +648,7 @@ func (r *ToolRegistry) ExecuteWithContext(
 	// If tool implements AsyncExecutor and callback is provided, use ExecuteAsync.
 	// The callback is a call parameter, not mutable state on the tool instance.
 	var result *ToolResult
+	invoked := false
 	start := time.Now()
 
 	// Use recover to catch any panics during tool execution
@@ -588,8 +676,10 @@ func (r *ToolRegistry) ExecuteWithContext(
 				map[string]any{
 					"tool": name,
 				})
+			invoked = true
 			result = asyncExec.ExecuteAsync(ctx, args, asyncCallback)
 		} else {
+			invoked = true
 			result = tool.Execute(ctx, args)
 		}
 	}()
@@ -603,6 +693,11 @@ func (r *ToolRegistry) ExecuteWithContext(
 			Err:     fmt.Errorf("nil result from tool"),
 		}
 	}
+
+	// Own the per-call live fact rather than mutating a tool's reusable result.
+	ownedResult := *result
+	ownedResult.invoked = invoked
+	result = &ownedResult
 
 	// mediaStore is the snapshot taken at entry, not a fresh r.mediaStore
 	// read — see the capture block above.
@@ -696,7 +791,7 @@ func (r *ToolRegistry) GetDefinitions() []map[string]any {
 	for _, name := range sorted {
 		entry := r.tools[name]
 
-		if !entry.IsCore && entry.TTL <= 0 {
+		if !entry.IsCore && !entry.retained && entry.TTL <= 0 {
 			continue
 		}
 
@@ -716,7 +811,7 @@ func (r *ToolRegistry) ToProviderDefs() []providers.ToolDefinition {
 	for _, name := range sorted {
 		entry := r.tools[name]
 
-		if !entry.IsCore && entry.TTL <= 0 {
+		if !entry.IsCore && !entry.retained && entry.TTL <= 0 {
 			continue
 		}
 
@@ -846,9 +941,10 @@ func (r *ToolRegistry) List() []string {
 // IMPORTANT: keep this in sync with the ToolEntry struct definition above.
 func cloneEntry(e *ToolEntry) *ToolEntry {
 	return &ToolEntry{
-		Tool:   e.Tool,
-		IsCore: e.IsCore,
-		TTL:    e.TTL,
+		Tool:     e.Tool,
+		IsCore:   e.IsCore,
+		TTL:      e.TTL,
+		retained: e.retained,
 	}
 }
 
@@ -887,10 +983,9 @@ const (
 	// since both tools are now the same "delegate" registration.
 	//
 	// REVERSED (ADR-040, 2026-07-12): this constant is no longer applied when
-	// a steered child session is launched — the launcher carries only the
-	// switch_agent exclusion on LaunchRequest.ToolExclusions, so the child's
-	// registry is built from the record's own exclusions rather than a blanket
-	// CloneExcept. FR-H-006's registry-level "one level only for general
+	// a steered child session is launched — the child's registry is built from
+	// the record's own exclusions (LaunchRequest.ToolExclusions) rather than a
+	// blanket CloneExcept. FR-H-006's registry-level "one level only for general
 	// subagents" block pre-empted the per-workspace delegation trust-graph
 	// (ADR-037) from ever running for nested delegation, silently overriding
 	// an operator's explicit, wired, unrestricted trust edge. Nested
@@ -902,13 +997,6 @@ const (
 	// legitimately needs to omit `delegate` from a cloned registry; it is
 	// simply no longer applied unconditionally to every steered child session.
 	ExcludedDelegate ExcludedTool = "delegate"
-	// ExcludedSwitchAgent is the agent-switch tool. Excluded from child
-	// registries to prevent sub-turns from hijacking the active agent
-	// session (FR-H-006). Renamed from ExcludedHandoff (ADR-071 D4, which
-	// merged hand_off + return_to_default into switch_agent) — the constant
-	// identity tracks the tool it excludes, matching ExcludedDelegate's
-	// naming convention.
-	ExcludedSwitchAgent ExcludedTool = "switch_agent"
 )
 
 // CloneExcept creates an independent copy of the registry omitting the named tools.
@@ -916,28 +1004,18 @@ const (
 // certain tools. The version counter is reset to 0 in the clone as it is a new
 // independent registry.
 //
-// Production no longer constructs a child registry through a wholesale,
-// unconditional CloneExcept applied to every steered child the way it once
-// did: a steered child's tool exclusion is carried on LaunchRequest.
-// ToolExclusions (the switch_agent exclusion, set by the delegate tool,
-// req.ToolExclusions → LifecycleRecord.SteeredBy.ToolExclusions,
+// Production does not construct a child registry through a wholesale,
+// unconditional CloneExcept applied to every steered child: a steered child's
+// tool exclusion is carried on LaunchRequest.ToolExclusions
+// (req.ToolExclusions -> LifecycleRecord.SteeredBy.ToolExclusions,
 // steer_launcher.go) and applied ONE call at reconstruction —
 // pkg/agent/steer_reconstruct.go's agentInstanceWithToolExclusions, called
 // from reconstructSteeredTurn whenever SteeredBy.ToolExclusions is
-// non-empty. (Finding 2, ADR-091 seven-reviewer gate, 2026-09: this comment
-// previously claimed the wiring above already existed while
-// steer_reconstruct.go contained no such code at all — a delegated child
-// could call switch_agent, which D2 and the long-standing identity rule
-// forbid, and the false claim here was actively stopping the next reader
-// from noticing the gap. It is fixed now; this comment describes the
-// current, real call site.) A child must never be able to hijack the
-// active agent session via switch_agent, but CAN delegate onward to a
-// grandchild, governed instead by the per-workspace delegation
-// trust-graph's mode/depth gate. This reverses the prior "a child sub-turn
-// must never be able to delegate to a grandchild" rule that used to live here:
-// see ADR-040 (docs/internal/architecture/ADR-040-fr-h-006-nested-delegation-reversal.md)
-// for the full root-cause and rationale. ExcludedDelegate is unaffected as a
-// CloneExcept primitive — see its own doc comment above.
+// non-empty. A child CAN delegate onward to a grandchild, governed by the
+// per-workspace delegation trust-graph's mode/depth gate (ADR-040,
+// docs/internal/architecture/ADR-040-fr-h-006-nested-delegation-reversal.md).
+// ExcludedDelegate is unaffected as a CloneExcept primitive — see its own
+// doc comment above.
 //
 // Existence check: each ExcludedTool name is validated against the base registry.
 // If a named tool is absent, slog.Warn is emitted and processing continues — this
@@ -998,7 +1076,7 @@ func (r *ToolRegistry) GetAll() []Tool {
 		entry := r.tools[name]
 
 		// Include core tools and non-core tools with active TTL
-		if entry.IsCore || entry.TTL > 0 {
+		if entry.IsCore || entry.retained || entry.TTL > 0 {
 			tools = append(tools, entry.Tool)
 		}
 	}

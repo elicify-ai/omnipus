@@ -17,6 +17,7 @@
 
 import type { AgentToolsCfg, RegistryTool } from '@/lib/api'
 import type { ToolPolicy } from '@/components/shared/PolicyBadge'
+import { isAlwaysAskTool } from '@/lib/alwaysAskTools'
 
 /**
  * The policy value shape used by ToolPolicyEditor and returned by applyRolePreset.
@@ -122,6 +123,9 @@ export const POLICY_PRESETS: Record<RolePreset, PresetDefinition> = {
  * never re-invented) and assigning each tool the preset's per-tool override
  * when one exists, otherwise the preset's default policy.
  *
+ * Always-ask tools (ALWAYS_ASK_TOOLS, channels-spec-r8 FR-036/FR-037) never
+ * receive `allow`: a preset's allow becomes `ask`, a declared `deny` is kept.
+ *
  * The returned `policies` object is a fresh map — mutations to it do not
  * affect the preset definition.
  */
@@ -129,17 +133,18 @@ export function applyRolePreset(role: RolePreset, tools: RegistryTool[]): ToolPo
   const preset = POLICY_PRESETS[role]
   const policies: Record<string, ToolPolicy> = {}
   for (const tool of tools) {
-    policies[tool.name] = preset.overrides[tool.name] ?? preset.defaultPolicy
+    const policy = preset.overrides[tool.name] ?? preset.defaultPolicy
+    // Channels FR-037: an always-ask tool can be stored as ask or deny, never
+    // allow — the server refuses allow on every writer, agent creation
+    // included — so a preset's allow becomes ask; a declared deny stays deny.
+    policies[tool.name] = policy === 'allow' && isAlwaysAskTool(tool.name) ? 'ask' : policy
   }
   return { policies }
 }
 
 /**
  * Resolve a (possibly partial or absent) `tools_cfg` into a complete,
- * wire-ready `AgentToolsCfg` — the ONE piece of logic behind both the create
- * wizard's uncommitted-default render (Step3Tools.tsx's tools-policy display)
- * and its commit-on-submit default (CreateAgentModal.tsx's create-request
- * payload). Sharing this function is deliberate: two independently
+ * wire-ready `AgentToolsCfg`. One shared function is deliberate: two independently
  * maintained copies of "what counts as already-set vs. needs-a-default" is
  * exactly how this codebase's original commit-on-submit bug happened —
  * the display path and the submit path silently disagreed.

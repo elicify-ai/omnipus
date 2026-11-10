@@ -8,6 +8,70 @@
     "application"
   ],
   "entries": [
+    {"source":"src/components/ui/search-field.tsx","classification":"composite","exports":["SearchFieldProps","SearchToolbarProps","SearchField","SearchToolbar"],"publicExports":["SearchField","SearchToolbar"],"publicTypes":["SearchFieldProps","SearchToolbarProps"]},
+    {"source":"src/components/ui/list-group.tsx","classification":"composite","exports":["ListGroupProps","ListGroup"],"publicExports":["ListGroup"],"publicTypes":["ListGroupProps"]},
+    {"source":"src/components/ui/page-header.tsx","classification":"composite","exports":["PageHeaderProps","PageHeader"],"publicExports":["PageHeader"],"publicTypes":["PageHeaderProps"]},
+    {"source":"src/components/ui/empty.tsx","classification":"primitive","exports":["EmptyMediaProps","Empty","EmptyHeader","EmptyMedia","EmptyTitle","EmptyDescription","EmptyContent"],"publicExports":["Empty","EmptyHeader","EmptyMedia","EmptyTitle","EmptyDescription","EmptyContent"],"publicTypes":["EmptyMediaProps"]},
+    {"source":"src/components/ui/callout.tsx","classification":"primitive","exports":["CalloutProps","Callout","CalloutTitle","CalloutDescription","CalloutActions","calloutVariants"],"publicExports":["Callout","CalloutTitle","CalloutDescription","CalloutActions","calloutVariants"],"publicTypes":["CalloutProps"]},
+    {"source":"src/components/ui/spinner.tsx","classification":"primitive","exports":["SpinnerProps","Spinner"],"publicExports":["Spinner"],"publicTypes":["SpinnerProps"]},
+    {"source":"src/components/ui/copy-button.tsx","classification":"composite","exports":["COPY_FEEDBACK_MS","CopyButtonProps","CopyButton"],"publicExports":["CopyButton","COPY_FEEDBACK_MS"],"publicTypes":["CopyButtonProps"]},
+    {"source":"src/components/ui/word-boundary-text.tsx","classification":"primitive","exports":["WordBoundaryTextProps","WordBoundaryText"],"publicExports":["WordBoundaryText"],"publicTypes":["WordBoundaryTextProps"]},
+    {
+      "source": "src/components/ui/filter-menu.tsx",
+      "classification": "composite",
+      "exports": ["FilterMenuOption", "FilterMenuProps", "FilterMenu"],
+      "publicExports": ["FilterMenu"],
+      "publicTypes": ["FilterMenuOption", "FilterMenuProps"]
+    },
+    {
+      "source": "src/components/ui/view-switch.tsx",
+      "classification": "composite",
+      "exports": ["ViewSwitchOption", "ViewSwitchProps", "ViewSwitch"],
+      "publicExports": ["ViewSwitch"],
+      "publicTypes": ["ViewSwitchOption", "ViewSwitchProps"]
+    },
+    {
+      "source": "src/components/ui/AutoSaveIndicator.tsx",
+      "classification": "domain",
+      "exports": [
+        "AutoSaveIndicator"
+      ],
+      "publicExports": [],
+      "publicTypes": []
+    },
+    {
+      "source": "src/components/ui/FormError.tsx",
+      "classification": "domain",
+      "exports": [
+        "FormErrorProps",
+        "FormError"
+      ],
+      "publicExports": [],
+      "publicTypes": []
+    },
+    {
+      "source": "src/components/ui/RestartConfirmDialog.tsx",
+      "classification": "domain",
+      "exports": [
+        "RestartConfirmDialog"
+      ],
+      "publicExports": [],
+      "publicTypes": []
+    },
+    {
+      "source": "src/components/ui/RunningIndicator.tsx",
+      "classification": "composite",
+      "exports": [
+        "RunningIndicatorProps",
+        "RunningIndicator"
+      ],
+      "publicExports": [
+        "RunningIndicator"
+      ],
+      "publicTypes": [
+        "RunningIndicatorProps"
+      ]
+    },
     {
       "source": "src/components/ui/accordion.tsx",
       "classification": "primitive",
@@ -45,15 +109,6 @@
       "publicTypes": []
     },
     {
-      "source": "src/components/ui/AutoSaveIndicator.tsx",
-      "classification": "domain",
-      "exports": [
-        "AutoSaveIndicator"
-      ],
-      "publicExports": [],
-      "publicTypes": []
-    },
-    {
       "source": "src/components/ui/avatar.tsx",
       "classification": "primitive",
       "exports": [
@@ -69,6 +124,22 @@
       ],
       "publicTypes": [
         "AvatarImageProps"
+      ]
+    },
+    {
+      "source": "src/components/ui/avatar-stack.tsx",
+      "classification": "composite",
+      "exports": [
+        "AvatarStack",
+        "AvatarStackItem",
+        "AvatarStackProps"
+      ],
+      "publicExports": [
+        "AvatarStack"
+      ],
+      "publicTypes": [
+        "AvatarStackItem",
+        "AvatarStackProps"
       ]
     },
     {
@@ -312,54 +383,6 @@
       ]
     },
     {
-      "source": "src/components/ui/zoomable-view.tsx",
-      "classification": "composite",
-      "exports": [
-        "ZoomPill",
-        "ZoomableMediaSurface",
-        "clampZoomScale",
-        "effectiveMinScale",
-        "computeFittedScale",
-        "computeOpeningScale",
-        "resolveSvgIntrinsicSize",
-        "useZoomableViewKeyboard",
-        "useZoomableMedia",
-        "ZOOMABLE_VIEW_MIN_SCALE",
-        "ZOOMABLE_VIEW_MAX_SCALE",
-        "ZOOMABLE_VIEW_LABEL_FLOOR_PX",
-        "ZoomableSize",
-        "OpeningScaleParams",
-        "ZoomableViewKeyboardHandlers",
-        "ZoomPillProps",
-        "ZoomableMediaController",
-        "UseZoomableMediaOptions",
-        "ZoomableMediaSurfaceProps"
-      ],
-      "publicExports": [
-        "ZoomPill",
-        "ZoomableMediaSurface",
-        "clampZoomScale",
-        "effectiveMinScale",
-        "computeFittedScale",
-        "computeOpeningScale",
-        "resolveSvgIntrinsicSize",
-        "useZoomableViewKeyboard",
-        "useZoomableMedia",
-        "ZOOMABLE_VIEW_MIN_SCALE",
-        "ZOOMABLE_VIEW_MAX_SCALE",
-        "ZOOMABLE_VIEW_LABEL_FLOOR_PX"
-      ],
-      "publicTypes": [
-        "ZoomableSize",
-        "OpeningScaleParams",
-        "ZoomableViewKeyboardHandlers",
-        "ZoomPillProps",
-        "ZoomableMediaController",
-        "UseZoomableMediaOptions",
-        "ZoomableMediaSurfaceProps"
-      ]
-    },
-    {
       "source": "src/components/ui/dropdown-menu.tsx",
       "classification": "primitive",
       "exports": [
@@ -399,29 +422,6 @@
       "publicTypes": []
     },
     {
-      "source": "src/components/ui/empty-state.tsx",
-      "classification": "composite",
-      "exports": [
-        "EmptyStateProps",
-        "EmptyState"
-      ],
-      "publicExports": [
-        "EmptyState"
-      ],
-      "publicTypes": [
-        "EmptyStateProps"
-      ]
-    },
-    {
-      "source": "src/components/ui/error-boundary.tsx",
-      "classification": "application",
-      "exports": [
-        "ErrorBoundary"
-      ],
-      "publicExports": [],
-      "publicTypes": []
-    },
-    {
       "source": "src/components/ui/error-state.tsx",
       "classification": "composite",
       "exports": [
@@ -450,16 +450,6 @@
         "FieldProps",
         "FieldControlProps"
       ]
-    },
-    {
-      "source": "src/components/ui/FormError.tsx",
-      "classification": "domain",
-      "exports": [
-        "FormErrorProps",
-        "FormError"
-      ],
-      "publicExports": [],
-      "publicTypes": []
     },
     {
       "source": "src/components/ui/icon-button.tsx",
@@ -511,6 +501,25 @@
       "publicExports": [
         "Label"
       ],
+      "publicTypes": []
+    },
+    {
+      "source": "src/components/ui/model-effort-picker.tsx",
+      "classification": "domain",
+      "exports": [
+        "EffortValue",
+        "EffortChangeMeta",
+        "EffortScope",
+        "ModelEffortPickerProps",
+        "MUTED_EFFORT_TEXT",
+        "ModelEffortPicker",
+        "EffortControlProps",
+        "RECAP_OFF_NOT_SENDABLE_TEXT",
+        "EffortControl",
+        "QuietEffortLineProps",
+        "QuietEffortLine"
+      ],
+      "publicExports": [],
       "publicTypes": []
     },
     {
@@ -590,13 +599,20 @@
       ]
     },
     {
-      "source": "src/components/ui/RestartConfirmDialog.tsx",
-      "classification": "domain",
+      "source": "src/components/ui/resize-separator.tsx",
+      "classification": "primitive",
       "exports": [
-        "RestartConfirmDialog"
+        "ResizeSeparator",
+        "ResizeSeparatorProps",
+        "ResizeSeparatorSource"
       ],
-      "publicExports": [],
-      "publicTypes": []
+      "publicExports": [
+        "ResizeSeparator"
+      ],
+      "publicTypes": [
+        "ResizeSeparatorProps",
+        "ResizeSeparatorSource"
+      ]
     },
     {
       "source": "src/components/ui/segmented-control.tsx",
@@ -629,7 +645,9 @@
         "SelectItem",
         "SelectSeparator",
         "SelectScrollUpButton",
-        "SelectScrollDownButton"
+        "SelectScrollDownButton",
+        "selectTriggerVariants",
+        "SelectTriggerProps"
       ],
       "publicExports": [
         "Select",
@@ -641,9 +659,12 @@
         "SelectItem",
         "SelectSeparator",
         "SelectScrollUpButton",
-        "SelectScrollDownButton"
+        "SelectScrollDownButton",
+        "selectTriggerVariants"
       ],
-      "publicTypes": []
+      "publicTypes": [
+        "SelectTriggerProps"
+      ]
     },
     {
       "source": "src/components/ui/separator.tsx",
@@ -777,6 +798,20 @@
       "publicTypes": []
     },
     {
+      "source": "src/components/ui/text-toggle.tsx",
+      "classification": "composite",
+      "exports": [
+        "TextToggle",
+        "TextToggleProps"
+      ],
+      "publicExports": [
+        "TextToggle"
+      ],
+      "publicTypes": [
+        "TextToggleProps"
+      ]
+    },
+    {
       "source": "src/components/ui/textarea.tsx",
       "classification": "primitive",
       "exports": [
@@ -788,25 +823,93 @@
       "publicTypes": []
     },
     {
-      "source": "src/components/ui/tooltip.tsx",
-      "classification": "primitive",
-      "exports": [
-        "Tooltip",
-        "TooltipProps"
-      ],
-      "publicExports": [
-        "Tooltip"
-      ],
-      "publicTypes": [
-        "TooltipProps"
-      ]
-    },
-    {
       "source": "src/components/ui/toast-container.tsx",
       "classification": "application",
       "exports": [
         "ToastContainer"
       ],
+      "publicExports": [],
+      "publicTypes": []
+    },
+    {
+      "source": "src/components/ui/tooltip.tsx",
+      "classification": "primitive",
+      "exports": [
+        "TooltipProvider",
+        "Tooltip",
+        "TooltipTrigger",
+        "TooltipContent"
+      ],
+      "publicExports": [
+        "TooltipProvider",
+        "Tooltip",
+        "TooltipTrigger",
+        "TooltipContent"
+      ],
+      "publicTypes": []
+    },
+    {
+      "source": "src/components/ui/zoomable-view.tsx",
+      "classification": "composite",
+      "exports": [
+        "ZoomPill",
+        "ZoomableMediaSurface",
+        "clampZoomScale",
+        "effectiveMinScale",
+        "computeFittedScale",
+        "computeOpeningScale",
+        "resolveSvgIntrinsicSize",
+        "useZoomableViewKeyboard",
+        "useZoomableMedia",
+        "ZOOMABLE_VIEW_MIN_SCALE",
+        "ZOOMABLE_VIEW_MAX_SCALE",
+        "ZOOMABLE_VIEW_LABEL_FLOOR_PX",
+        "ZoomableSize",
+        "OpeningScaleParams",
+        "ZoomableViewKeyboardHandlers",
+        "ZoomPillProps",
+        "ZoomableMediaController",
+        "UseZoomableMediaOptions",
+        "ZoomableMediaSurfaceProps"
+      ],
+      "publicExports": [
+        "ZoomPill",
+        "ZoomableMediaSurface",
+        "clampZoomScale",
+        "effectiveMinScale",
+        "computeFittedScale",
+        "computeOpeningScale",
+        "resolveSvgIntrinsicSize",
+        "useZoomableViewKeyboard",
+        "useZoomableMedia",
+        "ZOOMABLE_VIEW_MIN_SCALE",
+        "ZOOMABLE_VIEW_MAX_SCALE",
+        "ZOOMABLE_VIEW_LABEL_FLOOR_PX"
+      ],
+      "publicTypes": [
+        "ZoomableSize",
+        "OpeningScaleParams",
+        "ZoomableViewKeyboardHandlers",
+        "ZoomPillProps",
+        "ZoomableMediaController",
+        "UseZoomableMediaOptions",
+        "ZoomableMediaSurfaceProps"
+      ]
+    },
+    {
+      "source": "src/design-system/agent-identity.ts",
+      "classification": "foundations",
+      "exports": [
+        "IDENTITY_GROUP_ORDER", "AgentRoleGroup", "AgentIconRole", "ROLE_VOCABULARY",
+        "FIGURE_ART", "AgentIconFigure", "AGENT_ICON_PALETTE", "AgentIconColor"
+      ],
+      "publicExports": [],
+      "publicTypes": []
+    },
+    {
+      "source": "src/lib/agentIconArt.ts",
+      "classification": "foundations",
+      "exports": ["agentIconInner", "monogramInner", "roleBadgeInner", "escapeMarkup"],
       "publicExports": [],
       "publicTypes": []
     },
@@ -859,11 +962,28 @@
       "publicTypes": []
     },
     {
+      "source": "src/lib/formatTokens.ts",
+      "classification": "foundations",
+      "exports": [
+        "formatTokens"
+      ],
+      "publicExports": [],
+      "publicTypes": []
+    },
+    {
+      "source": "src/components/ui/agent-icon.tsx",
+      "classification": "composite",
+      "exports": ["AgentIcon", "AgentIconProps"],
+      "publicExports": ["AgentIcon"],
+      "publicTypes": ["AgentIconProps"]
+    },
+    {
       "source": "src/lib/utils.ts",
       "classification": "foundations",
       "exports": [
         "cn",
-        "initialOf"
+        "initialOf",
+        "isEditableEventTarget"
       ],
       "publicExports": [
         "cn"

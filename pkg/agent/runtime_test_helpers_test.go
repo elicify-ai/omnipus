@@ -65,7 +65,7 @@ func (d *blockingExternalDriver) Run(ctx context.Context, _ runner.RunOptions) (
 func (d *blockingExternalDriver) Decide(runner.PermissionDecision) {}
 func (d *blockingExternalDriver) Cancel()                          {}
 func (d *blockingExternalDriver) Input(string) error               { return nil }
-func (d *blockingExternalDriver) Resume(ctx context.Context, _ string) (<-chan runner.RunEvent, error) {
+func (d *blockingExternalDriver) Resume(ctx context.Context, _ string, _ ...string) (<-chan runner.RunEvent, error) {
 	return d.Run(ctx, runner.RunOptions{})
 }
 func (d *blockingExternalDriver) Test(context.Context) runner.ConnectionTestResult {

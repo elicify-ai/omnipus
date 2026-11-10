@@ -60,7 +60,10 @@ func applyAgentContextWindow(ag *gen.Agent, cfg *config.Config, ac *config.Agent
 		ag.ContextWindowOverride = nil
 	}
 
-	res := agent.ResolveWindow(cfg, agentPrimaryProviderID(cfg, ac), agentPrimaryModelID(cfg, ac), ac.ID)
+	// H4: a provider-less stored model is keyed by the provider it really
+	// runs on, never by "" (a guaranteed catalog miss → the cloud floor).
+	provider, model := agent.RuntimeWindowPair(cfg, agentPrimaryProviderID(cfg, ac), agentPrimaryModelID(cfg, ac))
+	res := agent.ResolveWindow(cfg, provider, model, ac.ID)
 	ag.ContextWindowEffective = nil
 	ag.ContextWindowSource = nil
 	ag.ContextWindowClamped = nil

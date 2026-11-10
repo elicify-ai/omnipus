@@ -1,16 +1,41 @@
 import AxeBuilder from '@axe-core/playwright'
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { resolve, dirname } from 'node:path'
+import { readFile, mkdir } from 'node:fs/promises'
+import { compile } from '@tailwindcss/node'
+import { createElement, Fragment } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import type { ComponentType } from 'react'
+import { createRequire } from 'node:module'
+import { runInNewContext } from 'node:vm'
+import { build } from 'esbuild'
+import type { AgentIconProps } from '../../src/components/ui/agent-icon'
+import { AgentColor } from '../../src/lib/api/generated/schemas'
 
-type Check = { id: string; kind: string; file?: string; test?: string; story?: string; applicable: boolean }
+type BrowserAssertion = { selector: string; attribute?: string; property?: string; value?: string; text?: string }
+type Check = { id: string; kind: string; file?: string; test?: string; story?: string; applicable: boolean; requiredTargets?: BrowserAssertion[] }
 type Manifest = { component: string; stories: Array<{ file: string; exports: string[] }>; checks: Check[] }
 type StoryIndex = { entries: Record<string, { id: string; importPath: string; exportName: string; type: string }> }
 type AxeViolation = { id: string; nodes: Array<{ target: unknown[]; html: string; failureSummary?: string }> }
-type AccessibilityException = {
+type AccessibilityExceptionBase = {
   id: string; owner: string; component: string; story: string; check: string; rule: string; node: string
-  trigger: string; focusScope: string; requiredAutomatedProofs: string[]; manualEvidence: string; reference: string; rationale: string
+  requiredAutomatedProofs: string[]; manualEvidence: string; reference: string; rationale: string
 }
+// Modal-menu exception (DropdownMenu): the reviewed node is the host root, and
+// focusScope is the subtree scanned with the full ruleset.
+type ModalMenuAccessibilityException = AccessibilityExceptionBase & {
+  rule: 'aria-hidden-focus'; trigger: string; focusScope: string
+}
+// Portal-region exception (Tooltip): the reviewed node is the one region
+// violation (the bubble's positioning wrapper), trigger carries
+// aria-describedby, content is the bubble root that wrapper must hold. No
+// focus-trap fields — a tooltip is not a modal menu, and those proofs stay on
+// the DropdownMenu path only.
+type PortalRegionAccessibilityException = AccessibilityExceptionBase & {
+  rule: 'region'; trigger: string; content: string
+}
+type AccessibilityException = ModalMenuAccessibilityException | PortalRegionAccessibilityException
 type Metadata = {
   keyboard?: Array<{
     trigger: string; key: string; expectFocus?: string; expectExpanded?: boolean
@@ -79,6 +104,24 @@ function assertSuccessfulStoryFinished(finished: StoryFinished | undefined, stor
   expect(finished?.reporters?.some((report) => report.status === 'failed') ?? false, `${storyId} must not contain a failed Storybook report${cause}`).toBe(false)
 }
 
+// Assert one drawn outcome (attribute / property / text beyond mere visibility)
+// against the rendered page. Shared by the story's own browserAssertions and the
+// manifest check's independently anchored requiredTargets so both use one oracle.
+async function assertDrawnOutcome(page: Page, assertion: BrowserAssertion, origin: string) {
+  expect(assertion.attribute || assertion.property || assertion.text, `${origin} browser assertion requires an attribute, property or text outcome beyond visibility`).toBeTruthy()
+  const target = page.locator(assertion.selector)
+  await expect(target).toBeVisible()
+  if (assertion.attribute) {
+    if (assertion.value === undefined) await expect(target).toHaveAttribute(assertion.attribute)
+    else await expect(target).toHaveAttribute(assertion.attribute, assertion.value)
+  }
+  if (assertion.property) {
+    expect(assertion.value, `${origin} browser property assertion requires an expected value`).toBeDefined()
+    await expect.poll(() => target.evaluate((element, property) => String((element as unknown as Record<string, unknown>)[property]), assertion.property!)).toBe(assertion.value)
+  }
+  if (assertion.text) await expect(target).toContainText(assertion.text)
+}
+
 const manifestDir = resolve('design-system/manifests')
 const exceptionRegistry = JSON.parse(readFileSync(resolve('design-system/accessibility-exceptions.json'), 'utf8')) as { version: number; exceptions: AccessibilityException[] }
 const expectedException = {
@@ -87,10 +130,31 @@ const expectedException = {
   requiredAutomatedProofs: ['single-reviewed-axe-node', 'open-menu-full-axe', 'single-hidden-root-focusable', 'initial-focus-in-menu', 'tab-contained', 'shift-tab-contained', 'programmatic-focus-contained', 'escape-restores-trigger', 'restored-document-full-axe'],
   manualEvidence: 'outstanding-screen-reader', reference: 'https://github.com/radix-ui/primitives/discussions/3994',
 }
-if (exceptionRegistry.version !== 1 || exceptionRegistry.exceptions.length !== 1) throw new Error('Accessibility exception registry has unknown version or entries')
-const dropdownMenuException = exceptionRegistry.exceptions[0]
+// Founder K1 A (2026-11-07): the region rule only, for the open Tooltip bubble
+// only. node is the selector axe-core 4.12's region rule reports (the outermost
+// regionless ancestor — Radix's positioning wrapper). content is the bubble
+// root (src/components/ui/tooltip.tsx TooltipContent, data-slot="tooltip-content").
+// trigger is TooltipTrigger (data-slot="tooltip-trigger"), which carries
+// aria-describedby while the bubble is open.
+const expectedTooltipException = {
+  id: 'radix-tooltip-portal-region', owner: 'design-system', component: 'Tooltip', story: 'Default', check: 'tooltip-axe',
+  rule: 'region', node: 'div[data-radix-popper-content-wrapper=""]', trigger: '[data-slot="tooltip-trigger"]', content: '[data-slot="tooltip-content"]',
+  requiredAutomatedProofs: ['open-bubble-full-axe', 'single-reviewed-region-node', 'trigger-described-by-bubble-text', 'restored-document-full-axe'],
+  manualEvidence: 'outstanding-screen-reader', reference: 'https://dequeuniversity.com/rules/axe/4.12/region',
+  rationale: 'The open Tooltip bubble is portalled to the end of the document, outside the story main landmark (contract §2.9; founder K1 A, 2026-11-07). axe-core 4.12\'s region rule reports the outermost regionless ancestor, which is Radix\'s positioning wrapper around the content root (src/components/ui/tooltip.tsx TooltipContent). The exception is the region rule only, for that one wrapper only, and only while its single element child is the content root, one scan of the open document with the full axe ruleset reports nothing but that one region node (so the bubble subtree passes every other rule), the trigger\'s aria-describedby points at the bubble\'s text, and the whole document passes the full axe ruleset after the bubble closes. Screen-reader confirmation is still outstanding; the describedby link is the automated stand-in, not a screen-reader session.',
+}
+if (exceptionRegistry.version !== 1) throw new Error('Accessibility exception registry has unknown version or entries')
+const exceptionsById = new Map(exceptionRegistry.exceptions.map((entry) => [entry.id, entry]))
+if (exceptionsById.size !== exceptionRegistry.exceptions.length) throw new Error('Accessibility exception registry has unknown version or entries')
+const expectedExceptionIds = [expectedException.id, expectedTooltipException.id]
+if (exceptionsById.size !== expectedExceptionIds.length || expectedExceptionIds.some((id) => !exceptionsById.has(id))) throw new Error('Accessibility exception registry has unknown version or entries')
+const dropdownMenuException = exceptionsById.get(expectedException.id) as ModalMenuAccessibilityException
+const tooltipRegionException = exceptionsById.get(expectedTooltipException.id) as PortalRegionAccessibilityException
 for (const [key, value] of Object.entries(expectedException)) {
-  if (JSON.stringify(dropdownMenuException[key as keyof AccessibilityException]) !== JSON.stringify(value)) throw new Error(`Accessibility exception registry drift: ${key}`)
+  if (JSON.stringify(dropdownMenuException[key as keyof ModalMenuAccessibilityException]) !== JSON.stringify(value)) throw new Error(`Accessibility exception registry drift: ${key}`)
+}
+for (const [key, value] of Object.entries(expectedTooltipException)) {
+  if (JSON.stringify(tooltipRegionException[key as keyof PortalRegionAccessibilityException]) !== JSON.stringify(value)) throw new Error(`Accessibility exception registry drift: ${key}`)
 }
 const manifests: Manifest[] = existsSync(manifestDir)
   ? readdirSync(manifestDir).filter((file) => file.endsWith('.json')).sort()
@@ -131,7 +195,12 @@ async function openStory(page: Page, manifest: Manifest, check: Check) {
     attach()
   }, [...storyErrorEvents])
   await page.goto(`/iframe.html?id=${entry!.id}&viewMode=story`)
-  await expect(page.locator('[data-design-system-config]')).toBeAttached()
+  // goto resolves at the load event, but Storybook mounts the story afterwards by
+  // lazily fetching the story module and its chunks. On a contended CI static
+  // server that waterfall outlasts the 5s default expect timeout (WebKit
+  // slider-reflow, run 38019826826), so wait with the same 30s budget as the
+  // storyFinished wait below instead of racing it with a shorter one.
+  await expect(page.locator('[data-design-system-config]')).toBeAttached({ timeout: 30_000 })
   await page.waitForFunction((storyId) => {
     const state = window as Window & { __designSystemStoryFinished?: { storyId?: string } }
     return state.__designSystemStoryFinished?.storyId === storyId
@@ -334,6 +403,80 @@ async function proveDropdownMenuFocusContainment(page: Page) {
   return outcome
 }
 
+// Takes the findings of one scan of the OPEN document with every axe rule. The
+// region rule only, and only the one reviewed node: a second rule, a second
+// node, a node that is not the registered wrapper, or no region finding at all
+// (a stale exception) fails here — the same shape as
+// assertDropdownMenuExceptionBoundary, for a different rule.
+function assertTooltipRegionBoundary(manifest: Manifest, check: Check, violations: AxeViolation[]) {
+  expect({ component: manifest.component, story: check.story, check: check.id }).toEqual({
+    component: tooltipRegionException.component, story: tooltipRegionException.story, check: tooltipRegionException.check,
+  })
+  const found = JSON.stringify(violations.map((violation) => ({ id: violation.id, targets: violation.nodes.map((node) => node.target) })))
+  expect(violations.map((violation) => violation.id), `the open-state scan must report only the reviewed ${tooltipRegionException.rule} finding; it reported ${found}`).toEqual([tooltipRegionException.rule])
+  const nodes = violations[0]?.nodes ?? []
+  expect(nodes, 'the region scan must report exactly one node').toHaveLength(1)
+  // Identity is the axe target, not node.html. axe-core truncates that snippet
+  // (measured: `data-radix-popper-co...`), so a substring of the full attribute
+  // name cannot be read back from it. The content-root proof is the live
+  // element in proveTooltipBubbleException: the wrapper's only element child
+  // is [data-slot="tooltip-content"].
+  expect(nodes[0].target, `region node target ${JSON.stringify(nodes[0].target)}`).toEqual([tooltipRegionException.node])
+  return nodes[0]
+}
+
+// While the bubble is open: the reviewed wrapper's only element child is the
+// content root, and the trigger's aria-describedby resolves to that bubble. The
+// reference is followed from the TRIGGER's attribute, never from the bubble's own
+// id: looking the bubble up by its own id would only prove it matches itself.
+// Then Escape closes the bubble so the caller can scan the whole document.
+async function proveTooltipBubbleException(page: Page) {
+  const outcome: Record<string, boolean> = {}
+  const content = page.locator(tooltipRegionException.content)
+  const trigger = page.locator(tooltipRegionException.trigger)
+  const wrapper = page.locator(tooltipRegionException.node)
+  await expect(wrapper, 'the reviewed region node must be on the page exactly once').toHaveCount(1)
+  await expect(trigger, 'the tooltip trigger must be on the page exactly once').toHaveCount(1)
+  await expect(content, 'the tooltip content root must be visible while the exception is claimed').toBeVisible()
+  const onlyChild = await wrapper.evaluate((element, contentSelector) => {
+    const children = [...element.children]
+    return children.length === 1 && (children[0] as Element).matches(contentSelector)
+  }, tooltipRegionException.content)
+  expect(onlyChild, 'the reviewed region node must be the positioning wrapper whose only element child is the tooltip content root').toBe(true)
+  outcome['single-reviewed-region-node'] = true
+
+  const description = await page.evaluate(({ triggerSelector, contentSelector }) => {
+    // Case and whitespace do not change the words a screen reader speaks, so a CSS
+    // text-transform on the visible bubble cannot fail the comparison.
+    const words = (text: string | null | undefined) => (text ?? '').replace(/\s+/g, ' ').trim().toLowerCase()
+    const bubble = document.querySelector<HTMLElement>(contentSelector)
+    const ids = (document.querySelector(triggerSelector)?.getAttribute('aria-describedby') ?? '').split(/\s+/).filter(Boolean)
+    return {
+      ids,
+      targets: ids.map((id) => {
+        const element = document.getElementById(id)
+        return {
+          id,
+          found: element !== null,
+          inBubble: element !== null && bubble !== null && (element === bubble || bubble.contains(element)),
+          text: words(element?.textContent),
+        }
+      }),
+      bubbleText: words(bubble?.innerText),
+    }
+  }, { triggerSelector: tooltipRegionException.trigger, contentSelector: tooltipRegionException.content })
+  expect(description.ids, 'the trigger must name the bubble in aria-describedby while it is open').not.toEqual([])
+  const bubbleTarget = description.targets.find((target) => target.found && target.inBubble)
+  expect(bubbleTarget, `aria-describedby must resolve to the bubble; it resolved ${JSON.stringify(description.targets)}`).toBeDefined()
+  expect(bubbleTarget!.text.length, 'the described text must not be empty').toBeGreaterThan(0)
+  expect(bubbleTarget!.text, 'the described text must be the bubble text').toBe(description.bubbleText)
+  outcome['trigger-described-by-bubble-text'] = true
+
+  await page.keyboard.press('Escape')
+  await expect(content, 'Escape must remove the portalled bubble before the restored-document scan').toHaveCount(0)
+  return outcome
+}
+
 async function pointerHitsTarget(page: Page, selector: string, x: number, y: number, coarse: boolean) {
   await page.evaluate(({ selector }) => {
     const state = window as Window & { __designSystemPointerHit?: boolean | null }
@@ -370,6 +513,131 @@ async function performKeyboardStep(page: Page, step: NonNullable<Metadata['keybo
   }
 }
 
+async function assertPointerCheck(page: Page, testInfo: TestInfo, metadata: Metadata) {
+  const coarse = testInfo.project.name.includes('coarse-pointer')
+  expect(await page.evaluate(() => matchMedia('(pointer: coarse)').matches), `project must expose a ${coarse ? 'coarse' : 'fine'} pointer`).toBe(coarse)
+  expect(metadata.pointerTargets?.length, 'pointer checks require parameters.designSystem.pointerTargets').toBeGreaterThan(0)
+  const targets = await Promise.all((metadata.pointerTargets ?? []).map(async (selector) => ({
+    box: await page.locator(selector).boundingBox(),
+    borderRadius: await page.locator(selector).evaluate((element) => parseFloat(getComputedStyle(element).borderTopLeftRadius) || 0),
+  })))
+  const minimum = coarse ? 44 : 24
+  const effective = []
+  for (let index = 0; index < targets.length; index += 1) {
+    const { box, borderRadius } = targets[index]
+    expect(box, `pointer target ${metadata.pointerTargets![index]} must render`).not.toBeNull()
+    const center = { x: box!.x + box!.width / 2, y: box!.y + box!.height / 2 }
+    const width = Math.max(box!.width, minimum)
+    const height = Math.max(box!.height, minimum)
+    const radiusX = width / 2 - 1
+    const radiusY = height / 2 - 1
+    const cornerX = radiusX - (box!.width >= minimum ? Math.min(borderRadius + 1, radiusX - 1) : 0)
+    const cornerY = radiusY - (box!.height >= minimum ? Math.min(borderRadius + 1, radiusY - 1) : 0)
+    for (const point of [
+      center,
+      { x: center.x - radiusX, y: center.y }, { x: center.x + radiusX, y: center.y },
+      { x: center.x, y: center.y - radiusY }, { x: center.x, y: center.y + radiusY },
+      { x: center.x - cornerX, y: center.y - cornerY }, { x: center.x + cornerX, y: center.y - cornerY },
+      { x: center.x - cornerX, y: center.y + cornerY }, { x: center.x + cornerX, y: center.y + cornerY },
+    ]) {
+      expect(await pointerHitsTarget(page, metadata.pointerTargets![index], point.x, point.y, coarse), `${metadata.pointerTargets![index]} must receive a real pointer event at (${point.x}, ${point.y}) across its ${minimum}px effective region`).toBe(true)
+    }
+    effective.push({ x: center.x - width / 2, y: center.y - height / 2, width, height })
+  }
+  for (let left = 0; left < effective.length; left += 1) for (let right = left + 1; right < effective.length; right += 1) {
+    const a = effective[left]; const b = effective[right]
+    expect(a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y || b.y + b.height <= a.y, 'pointer hit regions must not overlap').toBe(true)
+  }
+}
+
+async function assertReducedMotionCheck(page: Page, metadata: Metadata) {
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  expect(await page.evaluate(() => matchMedia('(prefers-reduced-motion: reduce)').matches)).toBe(true)
+  if (metadata.motionSetup) await page.locator(metadata.motionSetup.trigger).press(metadata.motionSetup.key)
+  expect(metadata.motionTargets?.length, 'reduced-motion checks require parameters.designSystem.motionTargets').toBeGreaterThan(0)
+  for (const selector of metadata.motionTargets ?? []) {
+    const timing = await page.locator(selector).evaluate((element) => {
+      const style = getComputedStyle(element)
+      return {
+        animationNames: style.animationName.split(',').map((value) => value.trim()),
+        animationDurations: style.animationDuration.split(',').map((value) => parseFloat(value)),
+        transitionProperties: style.transitionProperty.split(',').map((value) => value.trim()),
+        transitionDurations: style.transitionDuration.split(',').map((value) => parseFloat(value)),
+      }
+    })
+    const animationsInactive = timing.animationNames.every((name, index) => name === 'none' || (timing.animationDurations[index % timing.animationDurations.length] ?? 0) <= 0.01)
+    const transitionsInactive = timing.transitionProperties.every((property, index) => property === 'none' || (timing.transitionDurations[index % timing.transitionDurations.length] ?? 0) <= 0.01)
+    expect({ animationsInactive, transitionsInactive }, `${selector} must expose no active animation or transition under reduced motion`).toEqual({ animationsInactive: true, transitionsInactive: true })
+  }
+}
+
+async function assertForcedColorsCheck(page: Page, testInfo: TestInfo, metadata: Metadata, manifest: Manifest) {
+  expect(await page.evaluate(() => matchMedia('(forced-colors: active)').matches), `forced colors unsupported in ${testInfo.project.name}; record as a coverage gap`).toBe(true)
+  await assertForcedColorsContract(page, metadata.forcedColors)
+  if (manifest.component === 'ViewSwitch') {
+    const board = page.getByRole('radio', { name: 'Board', exact: true })
+    const list = page.getByRole('radio', { name: 'List', exact: true })
+    const decoration = (target: Locator) => target.evaluate((element) => getComputedStyle(element).textDecorationLine)
+    await expect.poll(() => decoration(board), 'the selected view needs a visible cue beyond label contrast').toBe('underline')
+    await expect.poll(() => decoration(list)).toBe('none')
+    for (const target of [board, list]) {
+      await expect(target, 'each view must keep ButtonText on hover in forced colors').toHaveClass(/(?:^|\s)forced-colors:hover:text-\[ButtonText\](?:\s|$)/)
+      await expect(target, 'each view must keep ButtonFace on hover in forced colors').toHaveClass(/(?:^|\s)forced-colors:hover:bg-\[ButtonFace\](?:\s|$)/)
+    }
+    // Coarse-pointer projects cannot hover; they still verify both utilities above.
+    if (await page.evaluate(() => matchMedia('(hover: hover)').matches)) {
+      const expectedHoverColors = await page.evaluate(() => {
+        const probe = document.createElement('span')
+        probe.style.color = 'ButtonText'
+        probe.style.backgroundColor = 'ButtonFace'
+        probe.style.forcedColorAdjust = 'none'
+        document.body.append(probe)
+        const style = getComputedStyle(probe)
+        const colors = { color: style.color, background: style.backgroundColor }
+        probe.remove()
+        return colors
+      })
+      for (const target of [board, list]) {
+        await target.hover()
+        await expect.poll(() => target.evaluate((element) => {
+          const style = getComputedStyle(element)
+          return { color: style.color, background: style.backgroundColor }
+        }), 'selected and unselected hovered views must use the ButtonText/ButtonFace pair').toEqual(expectedHoverColors)
+      }
+    }
+    await board.focus()
+    await board.press('ArrowRight')
+    await expect(list).toBeFocused()
+    await expect(list).toHaveAttribute('aria-checked', 'true')
+    await expect(board).toHaveAttribute('aria-checked', 'false')
+    await expect.poll(() => decoration(list), 'the selection cue must follow keyboard selection').toBe('underline')
+    await expect.poll(() => decoration(board)).toBe('none')
+  }
+}
+
+async function assertReflowCheck(page: Page, metadata: Metadata) {
+  await page.setViewportSize({ width: 320, height: 720 })
+  // setViewportSize returns as soon as the browser process has applied the
+  // new size; the renderer processes the resize (fires the window resize
+  // event, re-lays out) a beat later. Portalled Radix floaters reposition
+  // from that resize event via floating-ui's autoUpdate, i.e. one frame
+  // after the resize lands — measured on Linux chromium (Playwright
+  // 1.61.1): the popper wrapper still sits at its 1280px-layout position
+  // (left 514) in the instant after the resize and only repositions to
+  // its 320px-layout spot (left 34) by the next frame (~21ms). Measuring
+  // overflow in that window raced the reposition and made this check
+  // flake red on loaded CI runners (3 red / 2 green on unchanged code)
+  // while the content itself always reflowed correctly. Wait for the
+  // resize-processing frame to finish (resize steps run before rAF
+  // callbacks in a frame) plus one more, so the measurement sees the
+  // settled layout. The assertion below is untouched: content that
+  // genuinely overflows at 320px still fails it.
+  await page.evaluate(() => new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+  }))
+  await assertNoOverflow(page, metadata.reflowExemptions)
+}
+
 test('manifest coverage exists before browser verification can pass', async () => {
   expect(manifests.length, 'design-system/manifests contains no component manifests').toBeGreaterThan(0)
 })
@@ -389,6 +657,70 @@ test('reviewed DropdownMenu exception rejects an extra violation, extra node and
   await page.setContent('<div id="storybook-root" aria-hidden="true"><button data-ds-trigger="true" aria-haspopup="menu" aria-expanded="true">Menu</button></div><div role="menu" tabindex="-1">Item</div>')
   await page.locator('[role="menu"]').focus()
   await expect(proveDropdownMenuFocusContainment(page)).rejects.toThrow()
+})
+
+test('reviewed Tooltip region exception accepts the one registered wrapper and rejects everything else', () => {
+  const manifest = { component: 'Tooltip', stories: [], checks: [] }
+  const check = { id: 'tooltip-axe', kind: 'axe', story: 'Default', applicable: true }
+  const reviewedNode = {
+    target: ['div[data-radix-popper-content-wrapper=""]'],
+    html: '<div data-radix-popper-content-wrapper=""><div data-slot="tooltip-content" role="tooltip">Bubble</div></div>',
+  }
+  // Positive control: the exact reviewed finding is accepted and handed back. Every
+  // rejection below differs from this input by one fault, so none of them can be a
+  // helper that throws for every input.
+  expect(assertTooltipRegionBoundary(manifest, check, [{ id: 'region', nodes: [reviewedNode] }])).toBe(reviewedNode)
+  expect(() => assertTooltipRegionBoundary(manifest, check, [
+    { id: 'region', nodes: [reviewedNode] },
+    { id: 'button-name', nodes: [] },
+  ])).toThrow()
+  expect(() => assertTooltipRegionBoundary(manifest, check, [{
+    id: 'region', nodes: [reviewedNode, { target: ['div.stray'], html: '<div class="stray">Stray</div>' }],
+  }])).toThrow()
+  expect(() => assertTooltipRegionBoundary(manifest, check, [{
+    id: 'region', nodes: [{ target: ['#storybook-root'], html: '<div id="storybook-root"></div>' }],
+  }])).toThrow()
+  // A stale exception — no region finding left to excuse — fails so it gets removed.
+  expect(() => assertTooltipRegionBoundary(manifest, check, [])).toThrow()
+  // The exception belongs to its own component, story and check only.
+  expect(() => assertTooltipRegionBoundary(manifest, { ...check, id: 'tooltip-keyboard' }, [{ id: 'region', nodes: [reviewedNode] }])).toThrow()
+})
+
+test('reviewed Tooltip bubble proof follows the trigger reference and rejects every other shape', async ({ page }) => {
+  const trigger = (attributes: string) => `<span data-slot="tooltip-trigger" tabindex="0" ${attributes}>Trigger</span>`
+  const bubbleWith = (inner: string) => `<div data-radix-popper-content-wrapper=""><div data-slot="tooltip-content" role="tooltip" id="bubble-id">${inner}</div></div>`
+  const show = async (markup: string) => {
+    await page.setContent(markup)
+    // Radix removes the portalled bubble when it closes; model that on Escape.
+    await page.evaluate(() => {
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') document.querySelector('[data-radix-popper-content-wrapper]')?.remove()
+      })
+    })
+  }
+  const bubble = bubbleWith('Auto approval is on')
+  // Positive control: a trigger that points at the bubble passes both proofs and
+  // Escape closes the bubble. Each rejection below differs from this by one fault.
+  await show(`<main>${trigger('aria-describedby="bubble-id"')}</main>${bubble}`)
+  await expect(proveTooltipBubbleException(page)).resolves.toEqual({ 'single-reviewed-region-node': true, 'trigger-described-by-bubble-text': true })
+  // No aria-describedby at all.
+  await show(`<main>${trigger('')}</main>${bubble}`)
+  await expect(proveTooltipBubbleException(page)).rejects.toThrow(/must name the bubble/)
+  // A reference to an id that does not exist.
+  await show(`<main>${trigger('aria-describedby="bubble-id-gone"')}</main>${bubble}`)
+  await expect(proveTooltipBubbleException(page)).rejects.toThrow(/must resolve to the bubble/)
+  // A reference to another element carrying the same words outside the bubble.
+  await show(`<main>${trigger('aria-describedby="elsewhere"')}<p id="elsewhere">Auto approval is on</p></main>${bubble}`)
+  await expect(proveTooltipBubbleException(page)).rejects.toThrow(/must resolve to the bubble/)
+  // A reference to a part of the bubble that carries only some of its words.
+  await show(`<main>${trigger('aria-describedby="inner"')}</main>${bubbleWith('<span id="inner">Auto</span> approval is on')}`)
+  await expect(proveTooltipBubbleException(page)).rejects.toThrow(/described text must be the bubble text/)
+  // A visible bubble that carries no text at all (an icon only).
+  await show(`<main>${trigger('aria-describedby="bubble-id"')}</main>${bubbleWith('<svg width="12" height="12"></svg>')}`)
+  await expect(proveTooltipBubbleException(page)).rejects.toThrow(/described text must not be empty/)
+  // A wrapper that holds something besides the content root.
+  await show(`<main>${trigger('aria-describedby="bubble-id"')}</main>${bubble.replace('</div></div>', '</div><div>extra</div></div>')}`)
+  await expect(proveTooltipBubbleException(page)).rejects.toThrow(/only element child/)
 })
 
 test('forced-colors contract rejects stripped boundaries and indicators', async ({ page }) => {
@@ -480,6 +812,42 @@ for (const manifest of manifests) {
             }, null, 2)),
             contentType: 'application/json',
           })
+        } else if (manifest.component === tooltipRegionException.component && check.id === tooltipRegionException.check && check.story === tooltipRegionException.story) {
+          // The bubble is portalled outside the story's <main>, so axe's region rule
+          // reports it. Unlike the modal DropdownMenu, the host document is NOT inert
+          // while the bubble is open, so one scan of the open document with every axe
+          // rule is enough: its only finding must be the one reviewed region node.
+          // That is the open-bubble proof — the bubble subtree and the rest of the page
+          // pass every other rule — and any second regionless node fails. It is one
+          // scan instead of a subtree scan plus a region-only scan because each axe
+          // scan costs several seconds of this test's fixed 45s budget. Escape then
+          // closes the bubble and the whole document must pass the full ruleset. The
+          // DropdownMenu path above is unchanged.
+          const openResult = await new AxeBuilder({ page }).analyze()
+          const rawFinding = assertTooltipRegionBoundary(manifest, check, openResult.violations as AxeViolation[])
+          const bubbleProofs = await proveTooltipBubbleException(page)
+          const restoredDocumentResult = await new AxeBuilder({ page }).analyze()
+          expect(restoredDocumentResult.violations, 'Tooltip host document must pass the complete axe ruleset after the bubble closes').toEqual([])
+          const proofs: Record<string, boolean> = {
+            'open-bubble-full-axe': openResult.violations.length === 1 && openResult.violations[0].id === tooltipRegionException.rule,
+            'single-reviewed-region-node': rawFinding.target.length === 1 && rawFinding.target[0] === tooltipRegionException.node && bubbleProofs['single-reviewed-region-node'] === true,
+            'trigger-described-by-bubble-text': bubbleProofs['trigger-described-by-bubble-text'] === true,
+            'restored-document-full-axe': restoredDocumentResult.violations.length === 0,
+          }
+          for (const proof of tooltipRegionException.requiredAutomatedProofs) {
+            expect(proofs[proof], `required Tooltip region proof ${proof} must pass`).toBe(true)
+          }
+          await testInfo.attach('reviewed-accessibility-exception.json', {
+            body: Buffer.from(JSON.stringify({
+              exception: tooltipRegionException,
+              openDocumentViolations: openResult.violations,
+              rawFinding,
+              bubbleProofs,
+              proofs,
+              restoredDocumentViolations: restoredDocumentResult.violations,
+            }, null, 2)),
+            contentType: 'application/json',
+          })
         } else {
           const result = await new AxeBuilder({ page }).analyze()
           expect(result.violations).toEqual([])
@@ -491,62 +859,11 @@ for (const manifest of manifests) {
           await performKeyboardStep(page, step)
         }
       } else if (check.kind === 'pointer') {
-        const coarse = testInfo.project.name.includes('coarse-pointer')
-        expect(await page.evaluate(() => matchMedia('(pointer: coarse)').matches), `project must expose a ${coarse ? 'coarse' : 'fine'} pointer`).toBe(coarse)
-        expect(metadata.pointerTargets?.length, 'pointer checks require parameters.designSystem.pointerTargets').toBeGreaterThan(0)
-        const targets = await Promise.all((metadata.pointerTargets ?? []).map(async (selector) => ({
-          box: await page.locator(selector).boundingBox(),
-          borderRadius: await page.locator(selector).evaluate((element) => parseFloat(getComputedStyle(element).borderTopLeftRadius) || 0),
-        })))
-        const minimum = coarse ? 44 : 24
-        const effective = []
-        for (let index = 0; index < targets.length; index += 1) {
-          const { box, borderRadius } = targets[index]
-          expect(box, `pointer target ${metadata.pointerTargets![index]} must render`).not.toBeNull()
-          const center = { x: box!.x + box!.width / 2, y: box!.y + box!.height / 2 }
-          const width = Math.max(box!.width, minimum)
-          const height = Math.max(box!.height, minimum)
-          const radiusX = width / 2 - 1
-          const radiusY = height / 2 - 1
-          const cornerX = radiusX - (box!.width >= minimum ? Math.min(borderRadius + 1, radiusX - 1) : 0)
-          const cornerY = radiusY - (box!.height >= minimum ? Math.min(borderRadius + 1, radiusY - 1) : 0)
-          for (const point of [
-            center,
-            { x: center.x - radiusX, y: center.y }, { x: center.x + radiusX, y: center.y },
-            { x: center.x, y: center.y - radiusY }, { x: center.x, y: center.y + radiusY },
-            { x: center.x - cornerX, y: center.y - cornerY }, { x: center.x + cornerX, y: center.y - cornerY },
-            { x: center.x - cornerX, y: center.y + cornerY }, { x: center.x + cornerX, y: center.y + cornerY },
-          ]) {
-            expect(await pointerHitsTarget(page, metadata.pointerTargets![index], point.x, point.y, coarse), `${metadata.pointerTargets![index]} must receive a real pointer event at (${point.x}, ${point.y}) across its ${minimum}px effective region`).toBe(true)
-          }
-          effective.push({ x: center.x - width / 2, y: center.y - height / 2, width, height })
-        }
-        for (let left = 0; left < effective.length; left += 1) for (let right = left + 1; right < effective.length; right += 1) {
-          const a = effective[left]; const b = effective[right]
-          expect(a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y || b.y + b.height <= a.y, 'pointer hit regions must not overlap').toBe(true)
-        }
+        await assertPointerCheck(page, testInfo, metadata)
       } else if (check.kind === 'reduced-motion') {
-        await page.emulateMedia({ reducedMotion: 'reduce' })
-        expect(await page.evaluate(() => matchMedia('(prefers-reduced-motion: reduce)').matches)).toBe(true)
-        if (metadata.motionSetup) await page.locator(metadata.motionSetup.trigger).press(metadata.motionSetup.key)
-        expect(metadata.motionTargets?.length, 'reduced-motion checks require parameters.designSystem.motionTargets').toBeGreaterThan(0)
-        for (const selector of metadata.motionTargets ?? []) {
-          const timing = await page.locator(selector).evaluate((element) => {
-            const style = getComputedStyle(element)
-            return {
-              animationNames: style.animationName.split(',').map((value) => value.trim()),
-              animationDurations: style.animationDuration.split(',').map((value) => parseFloat(value)),
-              transitionProperties: style.transitionProperty.split(',').map((value) => value.trim()),
-              transitionDurations: style.transitionDuration.split(',').map((value) => parseFloat(value)),
-            }
-          })
-          const animationsInactive = timing.animationNames.every((name, index) => name === 'none' || (timing.animationDurations[index % timing.animationDurations.length] ?? 0) <= 0.01)
-          const transitionsInactive = timing.transitionProperties.every((property, index) => property === 'none' || (timing.transitionDurations[index % timing.transitionDurations.length] ?? 0) <= 0.01)
-          expect({ animationsInactive, transitionsInactive }, `${selector} must expose no active animation or transition under reduced motion`).toEqual({ animationsInactive: true, transitionsInactive: true })
-        }
+        await assertReducedMotionCheck(page, metadata)
       } else if (check.kind === 'forced-colors') {
-        expect(await page.evaluate(() => matchMedia('(forced-colors: active)').matches), `forced colors unsupported in ${testInfo.project.name}; record as a coverage gap`).toBe(true)
-        await assertForcedColorsContract(page, metadata.forcedColors)
+        await assertForcedColorsCheck(page, testInfo, metadata, manifest)
       } else if (check.kind === 'root-size') {
         for (const [input, expected] of [[10, 12], [12, 12], [14, 14], [20, 20], [22, 20]]) {
           await page.evaluate((size) => { document.documentElement.style.setProperty('--user-font-size', `${size}px`) }, input)
@@ -575,42 +892,19 @@ for (const manifest of manifests) {
         }))
         await assertNoOverflow(page, metadata.reflowExemptions)
       } else if (check.kind === 'reflow') {
-        await page.setViewportSize({ width: 320, height: 720 })
-        // setViewportSize returns as soon as the browser process has applied the
-        // new size; the renderer processes the resize (fires the window resize
-        // event, re-lays out) a beat later. Portalled Radix floaters reposition
-        // from that resize event via floating-ui's autoUpdate, i.e. one frame
-        // after the resize lands — measured on Linux chromium (Playwright
-        // 1.61.1): the popper wrapper still sits at its 1280px-layout position
-        // (left 514) in the instant after the resize and only repositions to
-        // its 320px-layout spot (left 34) by the next frame (~21ms). Measuring
-        // overflow in that window raced the reposition and made this check
-        // flake red on loaded CI runners (3 red / 2 green on unchanged code)
-        // while the content itself always reflowed correctly. Wait for the
-        // resize-processing frame to finish (resize steps run before rAF
-        // callbacks in a frame) plus one more, so the measurement sees the
-        // settled layout. The assertion below is untouched: content that
-        // genuinely overflows at 320px still fails it.
-        await page.evaluate(() => new Promise<void>((resolve) => {
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
-        }))
-        await assertNoOverflow(page, metadata.reflowExemptions)
+        await assertReflowCheck(page, metadata)
       } else {
         expect(metadata.browserAssertions?.length, 'browser checks require parameters.designSystem.browserAssertions').toBeGreaterThan(0)
-        for (const assertion of metadata.browserAssertions ?? []) {
-          expect(assertion.attribute || assertion.property || assertion.text, 'browser assertions require an attribute, property or text outcome beyond visibility').toBeTruthy()
-          const target = page.locator(assertion.selector)
-          await expect(target).toBeVisible()
-          if (assertion.attribute) {
-            if (assertion.value === undefined) await expect(target).toHaveAttribute(assertion.attribute)
-            else await expect(target).toHaveAttribute(assertion.attribute, assertion.value)
-          }
-          if (assertion.property) {
-            expect(assertion.value, 'browser property assertions require an expected value').toBeDefined()
-            await expect.poll(() => target.evaluate((element, property) => String((element as unknown as Record<string, unknown>)[property]), assertion.property!)).toBe(assertion.value)
-          }
-          if (assertion.text) await expect(target).toContainText(assertion.text)
-        }
+        // The opened story's own assertions move with `check.story` (openStory selects
+        // the story from it), so on their own they cannot detect a check pointed at the
+        // wrong story: the wrong story's own valid assertions would satisfy them. The
+        // check's manifest-level `requiredTargets` is an independently anchored drawn
+        // outcome whose source does NOT move with `check.story`, asserted here against
+        // the rendered page. A wrong-story check therefore fails on the drawn attribute
+        // instead of passing on the other story's own equally valid assertions.
+        expect(check.requiredTargets?.length, `${manifest.component}/${check.id} browser check must declare a manifest-level requiredTargets drawn outcome, anchored independently of check.story`).toBeGreaterThan(0)
+        for (const assertion of metadata.browserAssertions ?? []) await assertDrawnOutcome(page, assertion, `${manifest.component}/${check.id} opened story`)
+        for (const assertion of check.requiredTargets ?? []) await assertDrawnOutcome(page, assertion, `${manifest.component}/${check.id} required target`)
         if (manifest.component === 'Button' && check.id === 'button-auxiliary-browser') {
           const nativeMiddleClick = async (selector: string, openTimeoutMs: number) => {
             const link = page.locator(selector)
@@ -671,3 +965,408 @@ for (const manifest of manifests) {
     })
   }
 }
+
+async function expectOwnAgentIconResources(page: Page, testInfo: TestInfo) {
+  const facts = await page.getByTestId('agent-icon').evaluateAll((icons) => {
+    const idNodes = Array.from(document.querySelectorAll('[id]'))
+    const ids = idNodes.map((node) => node.id)
+    const targetOf = (reference: string): Element | null => reference.startsWith('#') ? document.getElementById(reference.slice(1)) : null
+    const urlReferences = (value: string) => Array.from(value.matchAll(/url\(([^)]*)\)/g), (match) =>
+      match[1].trim().replace(/^(['"])(.*)\1$/, '$2'))
+    return {
+      duplicateIds: ids.filter((id, index) => ids.indexOf(id) !== index),
+      icons: icons.map((icon) => {
+        const ink = icon.querySelector('[data-ink] > svg')
+        const stencilMask = icon.querySelector('[data-agent-icon-mask-ink]')?.closest('mask')
+        const urls = []
+        for (const node of [icon, ...icon.querySelectorAll('*')]) {
+          for (const attribute of node.attributes) {
+            for (const reference of urlReferences(attribute.value)) {
+              const target = targetOf(reference)
+              urls.push({
+                reference,
+                local: reference.startsWith('#'),
+                targetCount: idNodes.filter((candidate) => candidate.id === reference.slice(1)).length,
+                ownTarget: target !== null && icon.contains(target),
+              })
+            }
+          }
+        }
+        return {
+          motion: icon.getAttribute('data-motion'),
+          urls,
+          sheenMasks: Array.from(icon.querySelectorAll('[data-agent-icon-sheen-mask]'), (surface) => {
+            const references = urlReferences(getComputedStyle(surface).maskImage)
+            return references.length === 1 && stencilMask !== undefined && stencilMask !== null && targetOf(references[0]) === stencilMask
+          }),
+          useTargets: Array.from(icon.querySelectorAll('use'), (use) =>
+            ink !== null && targetOf(use.getAttribute('href') ?? '') === ink),
+        }
+      }),
+    }
+  })
+  await testInfo.attach('agent-icon-resource-bindings', { body: JSON.stringify(facts, null, 2), contentType: 'application/json' })
+  expect(facts.duplicateIds, 'SSR icons must not share document-wide SVG resource IDs').toEqual([])
+  expect(facts.icons.map((icon) => icon.motion)).toEqual(['thinking', 'working', 'waiting', 'thinking', 'working'])
+  for (const [index, icon] of facts.icons.entries()) {
+    expect(icon.urls.length, `icon ${index} exposes real mask/url bindings`).toBeGreaterThan(0)
+    for (const binding of icon.urls) {
+      expect([binding.local, binding.targetCount, binding.ownTarget], `icon ${index} resolves ${binding.reference} only within itself`)
+        .toEqual([true, 1, true])
+    }
+  }
+  expect(facts.icons.map((icon) => icon.sheenMasks), 'each Working URL selects its own stencil mask').toEqual([[], [true], [], [], [true]])
+  expect(facts.icons.map((icon) => icon.useTargets), 'each Working use selects its own actual ink SVG').toEqual([[], [true], [], [], [true]])
+}
+
+test('AgentIcon renders commissioned motion frames and opaque >=3:1 ink on both backgrounds', async ({ page }, testInfo) => {
+    // Spec Safeguards / ARCH decision 3.2. Compile the real publication CSS
+    // with the classes selected by real AgentIcon renders. No fake animation
+    // styles, phase data attributes or source-text checks certify a frame.
+    // Bundle only the actual component tree, using the app's existing path
+    // mapping. The browser test runner's own root config has no SPA aliases.
+    const compiled = await build({ entryPoints: [resolve('src/components/ui/agent-icon.tsx')], bundle: true, platform: 'node', format: 'cjs', write: false, tsconfig: resolve('tsconfig.app.json'), external: ['react', 'react/*'] })
+    const componentModule: { exports: { AgentIcon?: ComponentType<AgentIconProps> } } = { exports: {} }
+    runInNewContext(compiled.outputFiles[0].text, { module: componentModule, exports: componentModule.exports, require: createRequire(import.meta.url) })
+    const AgentIcon = componentModule.exports.AgentIcon
+    expect(typeof AgentIcon, 'actual bundled AgentIcon').toBe('function')
+    const marks = (['thinking', 'working', 'waiting'] as const).map((motion) => createElement(AgentIcon!, {
+      key: `forced-${motion}`,
+      figure: 'Robot', role: 'security', size: 48, motion, reducedMotion: false, color: AgentColor.options[8], name: 'Mia',
+    }))
+    marks.push(createElement(AgentIcon!, {
+      key: 'system-thinking',
+      figure: 'Robot', role: 'security', size: 48, motion: 'thinking', color: AgentColor.options[8], name: 'Mia',
+    }), createElement(AgentIcon!, {
+      // R1: omitted reducedMotion must follow the system preference, not force either branch.
+      key: 'system-working',
+      figure: 'Robot', role: 'security', size: 48, motion: 'working', color: AgentColor.options[8], name: 'Mia',
+    }))
+    // One SSR tree gives useId a shared identity scope without adding a DOM wrapper.
+    const markup = renderToStaticMarkup(createElement(Fragment, null, ...marks))
+    const classes = Array.from(markup.matchAll(/class="([^"]*)"/g)).flatMap((match) => match[1].split(/\s+/))
+    const source = resolve('src/styles/library.css')
+    const css = await compile(await readFile(source, 'utf8'), { base: dirname(source), onDependency() {} })
+    await page.emulateMedia({ reducedMotion: 'no-preference' })
+      await page.setContent(`<style>${css.build(classes)}</style>${markup}`)
+      await page.getByTestId('agent-icon').first().waitFor({ state: 'visible' })
+      await expectOwnAgentIconResources(page, testInfo)
+      for (const [index, oracle] of [
+        { duration: 2600, scales: [0.96, 1.01, 0.96], glow: [0.55, 1, 0.55] },
+        { duration: 1600, scales: [0.97, 1.03, 0.97], glow: null },
+        { duration: 3400, scales: null, glow: null },
+      ].entries()) {
+        const mark = page.getByTestId('agent-icon').nth(index)
+        const frames = await mark.evaluate((root) => {
+          const ink = root.querySelector('[data-ink]')!
+          const glow = root.querySelector('[data-glow]')!
+          const inkAnimation = ink.getAnimations()[0]
+          const glowAnimation = glow.getAnimations()[0]
+          if (!inkAnimation?.effect || !glowAnimation?.effect) throw new Error('Published CSS did not animate the rendered mark/glow')
+          const inkFrames = (inkAnimation.effect as KeyframeEffect).getKeyframes()
+          const glowFrames = (glowAnimation.effect as KeyframeEffect).getKeyframes()
+          return {
+            inkDuration: inkAnimation.effect.getTiming().duration,
+            glowDuration: glowAnimation.effect.getTiming().duration,
+            // CSSOM keyframes retain decimal contract values; converting
+            // them through DOMMatrix introduces unrelated Float32 rounding.
+            scales: inkFrames.filter((frame) => frame.transform !== undefined).map((frame) => {
+              const match = /^scale\((\d+(?:\.\d+)?)\)$/.exec(String(frame.transform))
+              if (!match) throw new Error(`Expected a uniform scale keyframe, got ${String(frame.transform)}`)
+              return Number(match[1])
+            }),
+            glowOpacity: glowFrames.filter((frame) => frame.opacity !== undefined).map((frame) => Number(frame.opacity)),
+            sheenDuration: root.querySelector('[data-agent-icon-sheen]')?.getAnimations()[0]?.effect?.getTiming().duration ?? null,
+          }
+        })
+        expect(frames.inkDuration).toBe(oracle.duration)
+        expect(frames.glowDuration).toBe(oracle.duration)
+        if (oracle.scales) expect(frames.scales).toEqual(oracle.scales)
+        else expect(Math.max(...frames.scales)).toBe(1.07) // Waiting specifies the peak, not a frame count.
+        if (oracle.glow) expect(frames.glowOpacity).toEqual(oracle.glow)
+        if (index === 1) expect(frames.sheenDuration).toBe(2400)
+      }
+      const thinking = page.getByTestId('agent-icon').first()
+      // The ink is the SUPPLIED palette hex, opaquely passed through
+      // (AgentIconProps.color: "Palette ink. Fully opaque. Passed through as
+      // currentColor"). The expected fill therefore derives from the SAME
+      // contract enum value the renders above were given — the founder's
+      // 2026-10-11 metallic avatar palette (AVATAR-PALETTE-DECISION;
+      // options[8] is the champagne ink) — by hex arithmetic, never from
+      // observing the component, so a mapping, tinting or swap regression
+      // still fails this exact equality. The >=3:1 contrast assertion below
+      // keeps gating whatever ink the palette carries.
+      const inkHex = AgentColor.options[8]
+      const expectedFill = `rgb(${parseInt(inkHex.slice(1, 3), 16)}, ${parseInt(inkHex.slice(3, 5), 16)}, ${parseInt(inkHex.slice(5, 7), 16)})`
+      for (const background of ['#111113', '#0A0A0B']) {
+        // Pause at the actual glow's dimmest frame, not a guessed delay.
+        const sample = await thinking.evaluate((root, backdrop) => {
+          document.body.style.backgroundColor = backdrop
+          for (const animation of root.getAnimations({ subtree: true })) { animation.pause(); animation.currentTime = 0 }
+          const ink = root.querySelector('[data-ink]')!
+          const svg = ink.querySelector('svg')!
+          const badge = ink.querySelector('[data-role="security"]')!
+          function effectiveOpacity(element: Element) {
+            let value = 1
+            for (let node: Element | null = element; node; node = node.parentElement) value *= Number(getComputedStyle(node).opacity)
+            return value
+          }
+          return {
+            background: getComputedStyle(document.body).backgroundColor,
+            fill: getComputedStyle(svg).fill,
+            inkOpacity: effectiveOpacity(svg), badgeOpacity: effectiveOpacity(badge),
+            dimmestGlow: Number(getComputedStyle(root.querySelector('[data-glow]')!).opacity),
+          }
+        }, background)
+        expect(sample.fill).toBe(expectedFill)
+        expect(sample.inkOpacity).toBe(1)
+        expect(sample.badgeOpacity).toBe(1)
+        expect(sample.dimmestGlow).toBe(0.55)
+        // WCAG sRGB relative luminance; use actual browser fill/background.
+        const luminance = (rgb: string) => {
+          const channels = rgb.match(/\d+(?:\.\d+)?/g)!.slice(0, 3).map(Number).map((channel) => channel / 255)
+          const linear = channels.map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4)
+          return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+        }
+        const inkL = luminance(sample.fill)
+        const backgroundL = luminance(sample.background)
+        expect((Math.max(inkL, backgroundL) + 0.05) / (Math.min(inkL, backgroundL) + 0.05), `dimmest ink contrast on ${background}`).toBeGreaterThanOrEqual(3)
+        const directory = testInfo.outputPath('wave1-testpower')
+        await mkdir(directory, { recursive: true })
+        await thinking.screenshot({ path: resolve(directory, `thinking-dimmest-${background.slice(1)}.png`), animations: 'allow' })
+      }
+      const systemWorking = page.getByTestId('agent-icon').nth(4)
+      const normalWorking = await systemWorking.evaluate((root) => {
+        const running = (selector: string) => {
+          const layer = root.querySelector(selector)!
+          return getComputedStyle(layer).animationName !== 'none'
+            && layer.getAnimations().some((animation) => animation.playState === 'running')
+        }
+        return {
+          reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
+          inkRunning: running('[data-ink]'),
+          glowRunning: running('[data-glow]'),
+          sheenRunning: running('[data-agent-icon-sheen]'),
+          loops: root.getAnimations({ subtree: true }).length,
+        }
+      })
+      expect(normalWorking, 'Working starts with an active ink, glow and sheen loop').toEqual({
+        reducedMotion: false, inkRunning: true, glowRunning: true, sheenRunning: true, loops: 4,
+      })
+      const stencilWorking = await systemWorking.evaluate((root) => {
+        const ink = root.querySelector('[data-ink]')!
+        const stencil = root.querySelector('[data-agent-icon-mask-ink]')
+        if (!stencil) throw new Error('Working must expose its artwork mask stencil')
+        const inkAnimation = ink.getAnimations()[0]
+        const stencilAnimation = stencil.getAnimations()[0]
+        if (!inkAnimation?.effect || !stencilAnimation?.effect) throw new Error('Published CSS must animate both ink and stencil pumps')
+        const inkEffect = inkAnimation.effect as KeyframeEffect
+        const stencilEffect = stencilAnimation.effect as KeyframeEffect
+        const originalTargets = [ink, root.querySelector('[data-glow]'), root.querySelector('[data-agent-icon-sheen]')]
+        const additional = root.getAnimations({ subtree: true })
+          .filter((animation) => !originalTargets.includes((animation.effect as KeyframeEffect).target))
+        return {
+          additional: additional.map((animation) => ({
+            targetIsStencil: (animation.effect as KeyframeEffect).target === stencil,
+            name: animation instanceof CSSAnimation ? animation.animationName : null,
+          })),
+          inkName: inkAnimation instanceof CSSAnimation ? inkAnimation.animationName : null,
+          sameTimeline: inkAnimation.timeline === stencilAnimation.timeline,
+          inkKeyframes: inkEffect.getKeyframes(),
+          stencilKeyframes: stencilEffect.getKeyframes(),
+          inkTiming: inkEffect.getTiming(),
+          stencilTiming: stencilEffect.getTiming(),
+          inkStartTime: inkAnimation.startTime,
+          stencilStartTime: stencilAnimation.startTime,
+          inkCurrentTime: inkAnimation.currentTime,
+          stencilCurrentTime: stencilAnimation.currentTime,
+        }
+      })
+      expect(stencilWorking.additional, 'the fourth loop targets only the mask stencil pump').toEqual([
+        { targetIsStencil: true, name: 'agent-icon-pump' },
+      ])
+      expect(stencilWorking.inkName).toBe('agent-icon-pump')
+      expect(stencilWorking.sameTimeline, 'ink and stencil share the same animation clock').toBe(true)
+      expect(stencilWorking.stencilKeyframes, 'stencil follows every ink pump frame').toEqual(stencilWorking.inkKeyframes)
+      expect(stencilWorking.stencilTiming, 'stencil follows the complete ink pump timing').toEqual(stencilWorking.inkTiming)
+      expect(stencilWorking.stencilTiming.duration).toBe(1600)
+      expect(stencilWorking.inkStartTime).not.toBeNull()
+      expect(stencilWorking.stencilStartTime, 'stencil and ink begin together').toBe(stencilWorking.inkStartTime)
+      expect(stencilWorking.inkCurrentTime).not.toBeNull()
+      expect(stencilWorking.stencilCurrentTime, 'stencil and ink remain in phase').toBe(stencilWorking.inkCurrentTime)
+      await testInfo.attach('working-stencil-synchronization', {
+        body: JSON.stringify(stencilWorking, null, 2), contentType: 'application/json',
+      })
+      await page.emulateMedia({ reducedMotion: 'reduce' })
+      const mediaAware = page.getByTestId('agent-icon').nth(3)
+      const reduced = await mediaAware.evaluate((root) => ({
+        inkAnimation: getComputedStyle(root.querySelector('[data-ink]')!).animationName,
+        glowAnimation: getComputedStyle(root.querySelector('[data-glow]')!).animationName,
+        loops: root.getAnimations({ subtree: true }).length,
+        inkOpacity: getComputedStyle(root.querySelector('[data-ink]')!).opacity,
+      }))
+      expect(reduced).toEqual({ inkAnimation: 'none', glowAnimation: 'none', loops: 0, inkOpacity: '1' })
+      const reducedWorking = await systemWorking.evaluate((root) => ({
+        reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches,
+        inkAnimation: getComputedStyle(root.querySelector('[data-ink]')!).animationName,
+        glowAnimation: getComputedStyle(root.querySelector('[data-glow]')!).animationName,
+        sheenAnimation: getComputedStyle(root.querySelector('[data-agent-icon-sheen]')!).animationName,
+        loops: root.getAnimations({ subtree: true }).length,
+        inkOpacity: getComputedStyle(root.querySelector('[data-ink]')!).opacity,
+      }))
+      expect(reducedWorking, 'Working respects system reduced motion for all three layers').toEqual({
+        reducedMotion: true, inkAnimation: 'none', glowAnimation: 'none', sheenAnimation: 'none', loops: 0, inkOpacity: '1',
+      })
+})
+
+// App adapter, not a new published kit component. Locate its real static story
+// through the existing index/lifecycle harness; do not mirror animation CSS.
+const statusMotionFixture: Manifest = {
+  component: 'AgentStatusIndicator',
+  stories: [{ file: 'src/components/chat/AgentStatusIndicator.stories.tsx', exports: ['ThinkingActive', 'ThinkingFallback', 'WorkingActive', 'WorkingFallback', 'WaitingNotice', 'LateIdentity', 'MotionTransitions'] }],
+  checks: [],
+}
+
+async function openStatusMotion(page: Page, story: string) {
+  await openStory(page, statusMotionFixture, { id: `status-motion-${story}`, kind: 'browser', story, applicable: true })
+  return page.getByTestId('reply-status-indicator')
+}
+
+async function statusMotionTiming(root: Locator) {
+  return root.evaluate((element) => {
+    const text = element.querySelector<HTMLElement>('.agent-status-text')
+    const ink = element.querySelector<HTMLElement>('[data-testid="agent-icon"] > [data-ink]')
+    if (!text || !ink) return null
+    const textAnimation = text.getAnimations().find((animation) => animation instanceof CSSAnimation)
+    const inkAnimation = ink.getAnimations().find((animation) => animation instanceof CSSAnimation)
+    if (!textAnimation?.effect || !inkAnimation?.effect || typeof textAnimation.startTime !== 'number' || typeof inkAnimation.startTime !== 'number') return null
+    return {
+      textDuration: textAnimation.effect.getTiming().duration,
+      inkDuration: inkAnimation.effect.getTiming().duration,
+      textEasing: getComputedStyle(text).animationTimingFunction,
+      inkEasing: getComputedStyle(ink).animationTimingFunction,
+      textStart: textAnimation.startTime,
+      inkStart: inkAnimation.startTime,
+      inkOpacity: getComputedStyle(ink).opacity,
+    }
+  })
+}
+
+async function paintedStatusOpacity(root: Locator, duration: number, peak: number) {
+  return root.locator('.agent-status-text').evaluate((element, { duration, peak }) => {
+    const animation = element.getAnimations().find((value) => value instanceof CSSAnimation)
+    if (!animation || typeof animation.startTime !== 'number') throw new Error('Missing running status animation')
+    const start = animation.startTime
+    try {
+      // Inspect painted output, not getKeyframes()'s variable substitution:
+      // WebKit reports 1 for var()-based opacity frames even while painting .9.
+      // Sampling the exact nominal peak also avoids treating Firefox's float32
+      // metadata offset for 74% as a change in actual rendered phase.
+      animation.pause()
+      return [0, peak, 1].map((offset) => {
+        animation.currentTime = duration * offset
+        return Number(getComputedStyle(element).opacity)
+      })
+    } finally {
+      animation.play()
+      animation.startTime = start // Keep the original clock for later phase/copy checks.
+    }
+  }, { duration, peak })
+}
+
+async function expectStatusTiming(root: Locator, duration: number, peak: number) {
+  await expect.poll(() => statusMotionTiming(root), 'both actual CSS animations must start').not.toBeNull()
+  const timing = (await statusMotionTiming(root))!
+  expect(timing.textDuration).toBe(duration)
+  expect(timing.inkDuration).toBe(duration)
+  expect(timing.textEasing).toBe(timing.inkEasing)
+  expect(timing.textEasing).toBe('ease-in-out')
+  expect(timing.textStart).toBe(timing.inkStart)
+  expect(await paintedStatusOpacity(root, duration, peak)).toEqual([0.9, 1, 0.9])
+  expect(timing.inkOpacity).toBe('1')
+}
+
+test.describe('AgentStatusIndicator synchronized text motion', () => {
+  for (const [story, phase, duration, peak, copy] of [
+    ['ThinkingActive', 'thinking', 2600, 0.5, 'Drafting the Q4 summary'],
+    ['ThinkingFallback', 'thinking', 2600, 0.5, null],
+    ['WorkingActive', 'working', 1600, 0.5, 'Drafting the Q4 summary'],
+    ['WorkingFallback', 'working', 1600, 0.5, null],
+    ['WaitingNotice', 'waiting', 3400, 0.74, 'Waiting for your input'],
+  ] as const) {
+    test(`${story} shares the icon timing, phase and readable opacity`, async ({ page }, testInfo) => {
+      await page.emulateMedia({ reducedMotion: 'no-preference', forcedColors: 'none' })
+      const root = await openStatusMotion(page, story)
+      await expect(root).toHaveAttribute('data-agent-status-motion', phase)
+      if (copy) await expect(root.locator('.agent-status-text')).toHaveText(copy)
+      else await expect(root.getByTestId('reply-status-fallback')).toBeVisible()
+      await expectStatusTiming(root, duration, peak)
+      await expect(root).not.toContainText(/Working on\s*:/)
+      await expect(root).not.toContainText(/Current checklist\s+unavailable/)
+      const sample = await root.locator('.agent-status-text').evaluate((element) => {
+        for (const animation of element.getAnimations()) { animation.pause(); animation.currentTime = 0 }
+        const style = getComputedStyle(element)
+        return { color: style.color, opacity: Number(style.opacity), background: getComputedStyle(document.body).backgroundColor }
+      })
+      expect(sample.opacity).toBe(0.9)
+      const channels = (value: string) => value.match(/\d+(?:\.\d+)?/g)!.slice(0, 3).map(Number)
+      const background = channels(sample.background)
+      const foreground = channels(sample.color).map((value, index) => value * sample.opacity + background[index] * (1 - sample.opacity))
+      const luminance = (values: number[]) => values.map((value) => value / 255).map((value) => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4).reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index], 0)
+      const light = luminance(foreground)
+      const dark = luminance(background)
+      expect((Math.max(light, dark) + 0.05) / (Math.min(light, dark) + 0.05), 'actual dimmest text contrast on the canvas').toBeGreaterThanOrEqual(4.5)
+      await page.screenshot({ path: testInfo.outputPath(`status-${story}.png`), animations: 'allow' })
+    })
+  }
+
+  for (const story of ['ThinkingActive', 'ThinkingFallback'] as const) {
+    test(`${story} has no text pulse with reduced motion`, async ({ page }) => {
+      await page.emulateMedia({ reducedMotion: 'reduce' })
+      const root = await openStatusMotion(page, story)
+      const state = await root.locator('.agent-status-text').evaluate((element) => ({ loops: element.getAnimations().length, opacity: getComputedStyle(element).opacity }))
+      expect(state).toEqual({ loops: 0, opacity: '1' })
+      await expect(root).toHaveAttribute('data-agent-status-motion', 'none')
+    })
+
+    test(`${story} has no text pulse in forced colors`, async ({ page }) => {
+      await page.emulateMedia({ reducedMotion: 'no-preference', forcedColors: 'active' })
+      expect(await page.evaluate(() => matchMedia('(forced-colors: active)').matches)).toBe(true)
+      const root = await openStatusMotion(page, story)
+      const state = await root.locator('.agent-status-text').evaluate((element) => ({ loops: element.getAnimations().length, opacity: getComputedStyle(element).opacity }))
+      expect(state).toEqual({ loops: 0, opacity: '1' })
+    })
+  }
+
+  test('motion/identity epochs restart both clocks but copy updates keep their phase', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'no-preference', forcedColors: 'none' })
+    const root = await openStatusMotion(page, 'MotionTransitions')
+    await expectStatusTiming(root, 2600, 0.5)
+    // Set a real CSS animation's time, not a guessed sleep. If only the icon
+    // restarts on the following phase change, the retained text clock differs.
+    await root.evaluate((element) => {
+      for (const target of [element.querySelector('.agent-status-text'), element.querySelector('[data-ink]')]) {
+        for (const animation of target!.getAnimations()) animation.currentTime = 1000
+      }
+    })
+    await page.getByRole('button', { name: /^Working$/ }).click()
+    await expect(root).toHaveAttribute('data-agent-status-motion', 'working')
+    await expectStatusTiming(root, 1600, 0.5)
+    await page.getByRole('button', { name: /^Waiting$/ }).click()
+    await expectStatusTiming(root, 3400, 0.74)
+    await page.getByRole('button', { name: /^Thinking$/ }).click()
+    await expectStatusTiming(root, 2600, 0.5)
+
+    await page.getByRole('button', { name: /^Hide agent$/ }).click()
+    await expect(root.getByTestId('agent-icon')).toHaveCount(0)
+    await root.locator('.agent-status-text').evaluate((element) => { for (const animation of element.getAnimations()) animation.currentTime = 1000 })
+    await page.getByRole('button', { name: /^Show agent$/ }).click()
+    await expectStatusTiming(root, 2600, 0.5)
+    const before = await statusMotionTiming(root)
+    await page.getByRole('button', { name: /^Update item$/ }).click()
+    await expect(root.getByTestId('reply-current-todo')).toHaveText('Reviewing the final notes')
+    const after = await statusMotionTiming(root)
+    expect(after!.textStart).toBe(before!.textStart)
+    expect(after!.inkStart).toBe(before!.inkStart)
+  })
+})

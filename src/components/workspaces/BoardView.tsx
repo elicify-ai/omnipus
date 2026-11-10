@@ -18,6 +18,7 @@ import {
 } from '@dnd-kit/core'
 import { Info } from '@phosphor-icons/react'
 import { TaskCard } from './TaskCard'
+import { useBoardCardHeights } from './useBoardCardHeights'
 import { isRecurringTrigger, isScheduledTrigger } from './taskFormFields'
 import { STATUS_LABELS, STATUS_ORDER } from '@/lib/statusColors'
 import { taskMoveErrorMessage } from '@/lib/api'
@@ -96,14 +97,14 @@ const COLUMN_STATUSES: TaskStatus[] = COLUMNS.map((c) => c.status)
  * origin column with zero network calls.
  *
  * This getter instead teleports the drag rect directly onto the CENTER of
- * the adjacent column (by `COLUMN_STATUSES` order, i.e. visual left-to-right
- * order — the board is a single row, so ArrowRight/ArrowDown both mean "next
- * column" and ArrowLeft/ArrowUp both mean "previous column"), so one key
- * press reliably moves exactly one column and stops at the first/last
- * column rather than drifting by a few pixels. Paired with `closestCenter`
- * (passed as the DndContext's `collisionDetection` below, replacing the
- * default `rectIntersection`) so the teleported position resolves
- * predictably to the target column.
+ * the adjacent column (by `COLUMN_STATUSES` order — the wide board is a
+ * single left-to-right row, so ArrowRight/ArrowDown both mean "next column"
+ * and ArrowLeft/ArrowUp both mean "previous column"; narrow Tasks uses
+ * List instead of stacking this Board), so one key press moves exactly one
+ * column and stops at the first/last column rather than drifting by a few
+ * pixels. Paired with `closestCenter` (passed as the DndContext's
+ * `collisionDetection` below, replacing the default `rectIntersection`) so
+ * the teleported position resolves predictably to the target column.
  */
 const ARROW_COLUMN_STEP: Partial<Record<string, 1 | -1>> = {
   [KeyboardCode.Right]: 1,
@@ -112,6 +113,9 @@ const ARROW_COLUMN_STEP: Partial<Record<string, 1 | -1>> = {
   [KeyboardCode.Up]: -1,
 }
 
+// T5: no stacked Board layout. WorkspaceTasksTab substitutes the real List
+// below the six-column minimum, leaving every Board drag on the horizontal axis.
+
 export const boardKeyboardCoordinateGetter: KeyboardCoordinateGetter = (event, { context, currentCoordinates }) => {
   const step = ARROW_COLUMN_STEP[event.code]
   if (step === undefined) return undefined
@@ -119,22 +123,21 @@ export const boardKeyboardCoordinateGetter: KeyboardCoordinateGetter = (event, {
   const { collisionRect, droppableRects } = context
   if (!collisionRect) return undefined
 
-  const rectCenterX = collisionRect.left + collisionRect.width / 2
+  const axisStart = 'left'
+  const axisSize = 'width'
+  const rectCenter = collisionRect.left + collisionRect.width / 2
 
-  // Which column is the drag rect currently over? Prefer an exact match;
-  // fall back to the nearest column center (covers the first keypress,
-  // before any move, when the rect is still measured over its origin card
-  // rather than sitting exactly within a column boundary).
+  // Prefer the exact horizontal column, then its nearest center.
   let currentIndex = COLUMN_STATUSES.findIndex((status) => {
     const rect = droppableRects.get(status)
-    return !!rect && rectCenterX >= rect.left && rectCenterX <= rect.left + rect.width
+    return !!rect && rectCenter >= rect[axisStart] && rectCenter <= rect[axisStart] + rect[axisSize]
   })
   if (currentIndex === -1) {
     let closestDistance = Infinity
     COLUMN_STATUSES.forEach((status, index) => {
       const rect = droppableRects.get(status)
       if (!rect) return
-      const distance = Math.abs(rect.left + rect.width / 2 - rectCenterX)
+      const distance = Math.abs(rect[axisStart] + rect[axisSize] / 2 - rectCenter)
       if (distance < closestDistance) {
         closestDistance = distance
         currentIndex = index
@@ -345,9 +348,11 @@ export function BoardView({
   }, [orphanTasks])
 
   const counts = useMemo(() => countByStatus(rootTasks), [rootTasks])
+  const boardRef = useRef<HTMLDivElement>(null)
+  useBoardCardHeights(boardRef, rootTasks)
 
   return (
-    <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
+    <div ref={boardRef} className="@container flex min-w-0 flex-col flex-1 min-h-0 overflow-hidden bg-[var(--color-surface-2)]">
       {orphanTasks.length > 0 && (
         <div
           role="status"
@@ -358,20 +363,10 @@ export function BoardView({
           {orphanTasks.length === 1 ? "isn't" : "aren't"} shown in any column.
         </div>
       )}
-      {/* UAT Finding 3 fix: this outer container used to be `overflow-auto`
-          (scrolling BOTH axes) wrapping a `min-h-full` (floor-only) inner
-          div — that made it ONE shared vertical scroller for the whole
-          board, so the tallest lane (e.g. Inbox) set the scrollHeight for
-          every column and scrolling past a short lane's content just showed
-          blank space under its still-visible header/count. Now this level
-          only ever scrolls HORIZONTALLY (for narrow viewports/many
-          columns); vertical scrolling is delegated to each column
-          individually (see StatusColumn's own `overflow-y-auto` below), so
-          the header row and each lane's own count stay meaningful no matter
-          how far any single lane is scrolled, and two lanes' cards can be
-          visible at once. */}
-      <div className="relative flex-1 min-h-0 overflow-x-auto overflow-y-hidden overscroll-contain">
-        <div className="min-w-max flex flex-col h-full">
+      {/* No horizontal scroller: all six equal columns fit the measured frame.
+          Each lane keeps its independent vertical scrolling and sticky count. */}
+      <div className="relative flex-1 min-w-0 min-h-0 overflow-hidden bg-[var(--color-surface-2)]">
+        <div className="flex min-w-0 flex-col h-full">
           <StatusHeaderRow counts={counts} />
           <StatusColumnsRow
             tasks={rootTasks}
@@ -408,10 +403,10 @@ function BoardEmptyState({ filtered }: { filtered: boolean }) {
 
 function StatusHeaderRow({ counts }: { counts: Record<TaskStatus, number> }) {
   return (
-    <div className="flex sticky top-0 z-10 bg-[var(--color-surface-0)] border-b border-[var(--color-border)]/15">
+    <div className="flex sticky top-0 z-10 bg-[var(--color-surface-1)] border-b border-[var(--color-border)]/15">
       {COLUMNS.map((col) => (
         // Compact status header: a thin label + count strip.
-        <div key={col.status} className="flex-1 min-w-[162px] flex items-center gap-[var(--space-2)] px-[var(--space-2-5)] h-[25px]">
+        <div key={col.status} className="flex-1 basis-0 min-w-[162px] flex items-center gap-[var(--space-2)] px-[var(--space-2-5)] h-[25px]">
           <span className="text-[length:var(--type-utility-xs-size)] font-semibold leading-none" style={{ color: col.headerColor }}>
             {col.label}
           </span>
@@ -570,11 +565,8 @@ function StatusColumnsRow({
         onDragEnd={handleDragEnd}
         onDragCancel={() => setActiveTask(null)}
       >
-        {/* `min-h-0` lets this row take exactly the wrapper's remaining
-            height (after the header) rather than growing with content —
-            required for each StatusColumn's own `overflow-y-auto` below to
-            actually bound and scroll (Finding 3). */}
-        <div className="flex flex-1 min-h-0">
+        {/* Bound the height so each lane, not the entire board, scrolls vertically. */}
+        <div className="flex flex-1 min-w-0 min-h-0">
           {COLUMNS.map((col) => (
             <StatusColumn
               key={col.status}
@@ -605,6 +597,7 @@ function StatusColumnsRow({
                 // interactive-looking control following the cursor mid-drag
                 // would just be visual noise.
                 showActions={false}
+                showDetails={false}
               />
             </div>
           ) : null}
@@ -666,17 +659,9 @@ function StatusColumn({
       role="group"
       aria-label={`${config.label} column`}
       className={cn(
-        // Vertical column dividers, restored (ADR-051 D4) — a subtle hairline
-        // between columns so the board reads as a real grid, not a loose row
-        // of stacks. Full-height via flex-1 stretch against the row's height.
-        // `min-h-0 overflow-y-auto overscroll-contain` (Finding 3): each lane
-        // gets its OWN vertical scroller bounded by the row's stretched
-        // height, instead of all six columns sharing one scroller sized to
-        // the tallest lane — a short lane's content (and its own header
-        // count above) stays visible/meaningful regardless of how far a
-        // neighboring lane has been scrolled, and scrolling one lane never
-        // bleeds into the page/board underneath (`overscroll-contain`).
-        'flex flex-col flex-1 min-w-[162px] min-h-0 gap-[var(--space-2)] p-[var(--space-2)] overflow-y-auto overscroll-contain border-r border-[var(--color-border)]/25 last:border-r-0 transition-colors',
+        // Equal-width columns, including their borders/padding; each lane
+        // keeps its own vertical scroller and never becomes a stacked group.
+        'flex flex-col flex-1 basis-0 min-w-[162px] min-h-0 gap-[var(--space-2)] p-[var(--space-2)] overflow-x-hidden overflow-y-auto overscroll-contain border-r border-[var(--color-border)]/25 last:border-r-0 transition-colors',
         isOver && canAccept && 'bg-[var(--color-accent)]/5 ring-1 ring-inset ring-[var(--color-accent)]/40',
         isOver && !canAccept ? 'bg-[var(--color-error)]/5 ring-1 ring-inset ring-[var(--color-error)]/40' : undefined,
       )}

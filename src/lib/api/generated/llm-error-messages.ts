@@ -33,7 +33,7 @@ export type LLMErrorAttribution =
 export const llmErrorAttributionValues = ["model", "provider", "product", "config", "ambiguous", "unknown", "user"] as const
 
 /** Every LLMError code, in contract (enum) order. */
-export const llmErrorCodes = ["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "network", "provider_stalled", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "delegated_task_limit", "context_unrecoverable", "context_window_unknown", "unknown"] as const
+export const llmErrorCodes = ["media_unsupported", "media_too_large", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "quota_billing", "network", "provider_stalled", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "model_retired", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "judge_time_limit", "judge_conclusion_failed", "delegated_task_limit", "context_window_unknown", "bad_model", "provider_request_rejected", "model_route_unavailable", "unknown"] as const
 
 /**
  * The sentence a user sees for each code. Exhaustive by construction: codegen
@@ -42,10 +42,12 @@ export const llmErrorCodes = ["media_unsupported", "provider_rejected", "request
  */
 export const llmErrorUserMessages: Record<LLMErrorCode, string> = {
   media_unsupported: "This model can’t use that kind of attachment. Try a different file format, or switch to a model that supports it.",
+  media_too_large: "An image in this conversation is too large for this model’s size limit, even after Omnipus resized it automatically. Try a smaller image, or open Verbose chat for details.",
   provider_rejected: "The model declined to respond to this request. Try rephrasing it, or switch models.",
   request_too_large: "We built a request that was too large for this model to accept. Try shortening your message, or switch to a model with a larger limit.",
   provider_auth_failed: "The model provider rejected our credentials. Check this provider’s API key in Settings.",
   rate_limited: "The model provider is temporarily overloaded. Wait a moment, then retry.",
+  quota_billing: "The model provider says your account is out of credit.",
   network: "We couldn’t reach the model provider. Check your internet connection and retry.",
   provider_stalled: "The model provider stopped responding: nothing arrived for 5 minutes (or the silence limit set for this provider), so the call was ended. Retry — if it keeps happening, open Verbose chat for details.",
   content_policy: "The model provider blocked this request under its content policy. Try rephrasing to remove the flagged content.",
@@ -56,23 +58,30 @@ export const llmErrorUserMessages: Record<LLMErrorCode, string> = {
   agent_not_configured: "This agent isn’t on any workspace yet, so it has nowhere to work. Add it to a workspace team to get started.",
   workspace_unavailable: "This agent’s working folder could not be opened. Check that the disk has space and the folder is writable.",
   model_unavailable: "The model you picked isn’t available for this turn, so this reply used the previous model. Check the model in Settings.",
+  model_retired: "This model is no longer offered by its provider. Pick a new model in the agent's settings.",
   needs_provider: "Your sign-in for this provider expired. Sign in again under Settings → Providers.",
   model_unassigned: "This agent has no model. Pick one in the agent's settings.",
   turn_canceled: "This turn was stopped before it finished.",
-  turn_timed_out: "The model provider didn’t finish this turn in time, so it was stopped. Retry — if it keeps happening, open Verbose chat for details.",
+  turn_timed_out: "The model provider didn’t answer this request in time. Retry — if it keeps happening, open Verbose chat for details.",
+  judge_time_limit: "The Judge reached its own check time limit before it finished checking this work. Raise judge.timeout_sec in config.json if checks need longer, then check again.",
+  judge_conclusion_failed: "Omnipus could not fully save or deliver the Judge's conclusion. Check disk space, file permissions and the chat's channel connection, then reload the chat. Open Verbose chat for details.",
   delegated_task_limit: "A delegated task reached its configured limit before finishing. Open its task or session, then adjust the named limit if more work is needed.",
-  context_unrecoverable: "We couldn’t fit this turn into the model’s context even after clearing older tool results — that’s a bug on our side, not yours. Start a new session, or open Verbose chat for technical details.",
   context_window_unknown: "This endpoint did not report a context length for this model. Set it under Settings → Models → Model overrides → Context length.",
+  bad_model: "The model configured for this agent is not offered by its provider (bad_model). Pick a new model in the agent's settings.",
+  provider_request_rejected: "We sent the model provider a request it rejected (HTTP 400: Bad Request; format). Open Verbose chat for technical details.",
+  model_route_unavailable: "The provider for this model could not be set up from its saved settings, so no request was sent. Check the provider's API key and endpoint settings.",
   unknown: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model.",
 }
 
 /** The fault attribution for each code. Exhaustive by construction. */
 export const llmErrorUserAttributions: Record<LLMErrorCode, LLMErrorAttribution> = {
   media_unsupported: "model",
+  media_too_large: "model",
   provider_rejected: "model",
   request_too_large: "product",
   provider_auth_failed: "config",
   rate_limited: "provider",
+  quota_billing: "config",
   network: "ambiguous",
   provider_stalled: "provider",
   content_policy: "provider",
@@ -83,12 +92,34 @@ export const llmErrorUserAttributions: Record<LLMErrorCode, LLMErrorAttribution>
   agent_not_configured: "config",
   workspace_unavailable: "config",
   model_unavailable: "config",
+  model_retired: "config",
   needs_provider: "user",
   model_unassigned: "config",
   turn_canceled: "user",
   turn_timed_out: "provider",
+  judge_time_limit: "config",
+  judge_conclusion_failed: "ambiguous",
   delegated_task_limit: "config",
-  context_unrecoverable: "product",
   context_window_unknown: "config",
+  bad_model: "config",
+  provider_request_rejected: "product",
+  model_route_unavailable: "config",
   unknown: "unknown",
+}
+
+/**
+ * The templated variant of the sentence for codes that carry one (the optional
+ * `provider_message` sibling in x-user-messages, provider-messages spec §6).
+ * A code absent from this map has no template — the catalogue message is the
+ * only copy. Slots come from the closed vocabulary enforced by codegen. The
+ * Go half is LLMErrorProviderMessages in llm_error_messages.gen.go.
+ */
+export const llmErrorProviderMessages: Partial<Record<LLMErrorCode, string>> = {
+  provider_auth_failed: "{provider} rejected the API key. Check the key in Settings → Providers.",
+  rate_limited: "{provider} is busy right now. You can retry the turn.",
+  quota_billing: "{provider} says your account is out of credit.",
+  model_retired: "This model is no longer offered by {provider}. Pick a new model in the agent's settings.",
+  bad_model: "Model {model} is not offered by provider {provider} (bad_model). Pick a new model in the agent's settings.",
+  provider_request_rejected: "Provider {provider} rejected the request for model {model} (HTTP 400: Bad Request; format). Open Verbose chat for technical details.",
+  model_route_unavailable: "{provider} cannot serve model {model}: no usable connection could be set up from its saved settings, so no request was sent. Check the provider's API key and endpoint settings.",
 }

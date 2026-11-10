@@ -69,6 +69,11 @@ func defToSlashCommand(def commands.Definition) gen.SlashCommand {
 		sc.Usage = &usage
 	}
 
+	if def.ArgumentHint != "" {
+		hint := def.ArgumentHint
+		sc.ArgumentHint = &hint
+	}
+
 	// AvailableWhileStreaming: driven by the Definition field, not a name string-match.
 	if def.AvailableWhileStreaming {
 		t := true

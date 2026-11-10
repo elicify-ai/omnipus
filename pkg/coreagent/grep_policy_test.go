@@ -69,6 +69,15 @@ func TestGrep_PolicyAllTiersAndDriftBackfill(t *testing.T) {
 		for _, id := range grepRoster() {
 			ac := findSeeded(t, cfg, id)
 			require.NotNilf(t, ac.Tools, "agent %q must carry an explicit tools policy", id)
+			if id == string(coreagent.IDOmnipus) {
+				// omnipus-system-agent spec §6.5: Omnipus's supporting set
+				// (grep included) is "allow-to-ceiling" — deliberately NO
+				// per-agent entry. The resolution subtest below still pins
+				// that its grep resolves allow.
+				_, has := ac.Tools.Builtin.Policies["grep"]
+				assert.Falsef(t, has, "§6.5: Omnipus carries no per-agent grep entry (allow-to-ceiling)")
+				continue
+			}
 			p, ok := ac.Tools.Builtin.Policies["grep"]
 			require.Truef(t, ok,
 				"agent %q must carry an EXPLICIT grep entry (Constraint #6, no default fallback)", id)
@@ -130,6 +139,9 @@ func TestGrep_PolicyAllTiersAndDriftBackfill(t *testing.T) {
 		for i := range cfg.Agents.List {
 			ac := cfg.Agents.List[i]
 			require.NotNilf(t, ac.Tools, "agent %q must carry a tools config after SeedConfig", ac.ID)
+			if ac.ID == string(coreagent.IDOmnipus) {
+				continue // §6.5 allow-to-ceiling: no per-agent entry, pinned above
+			}
 			p, ok := ac.Tools.Builtin.Policies["grep"]
 			require.Truef(t, ok, "agent %q has no explicit grep policy entry after SeedConfig", ac.ID)
 			assert.Equalf(t, config.ToolPolicyAllow, p,

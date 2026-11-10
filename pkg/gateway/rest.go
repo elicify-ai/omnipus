@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -21,13 +22,16 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/cron"
+	"github.com/elicify-ai/omnipus/pkg/email"
 	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
+	"github.com/elicify-ai/omnipus/pkg/mailattachment"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/notifications"
 	"github.com/elicify-ai/omnipus/pkg/onboarding"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	providers_pkg "github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
+	providercommon "github.com/elicify-ai/omnipus/pkg/providers/common"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/skills"
@@ -63,7 +67,23 @@ var errAgentVanishedDuringUpdate = errors.New("agent no longer exists")
 // Note: do NOT cache *config.Config here — use a.agentLoop.GetConfig() for
 // the current config, since config can hot-reload.
 type restAPI struct {
-	agentLoop     *agent.AgentLoop
+	agentLoop *agent.AgentLoop
+	// setupOfferPoster posts the workspace-setup offer into Omnipus's main
+	// (FR-047). nil means the real poster (workspace_setup_offer.go).
+	setupOfferPoster workspaceSetupOfferPoster
+	// beforeWorkspaceDetailPreparation is a scheduling observer for lifecycle
+	// interleaving tests. Nil in production; never replaces reads or writes.
+	beforeWorkspaceDetailPreparation func()
+	// sessionHubs is the chat WebSocket hub registry. The setup-offer poster
+	// publishes each saved offer line into Omnipus's main hub so an already
+	// attached chat receives it and an incremental re-attach replays it from
+	// the journal. Nil in tests and partial boots that have no WebSocket
+	// handler: the saved transcript line stays, and the miss is logged.
+	sessionHubs *hubRegistry
+	// stopSession, when set, replaces agentLoop.StopSession in the delete
+	// path (a test seam for outcomes a real Stop cannot be made to produce
+	// portably, such as a failed background-shell kill). Nil in production.
+	stopSession   func(context.Context, agent.StopRequest) (agent.StopResult, error)
 	allowedOrigin string
 	onboardingMgr *onboarding.Manager // manages first-launch + doctor state
 	// onboardingStateUnknown records that system/state.json existed at boot
@@ -76,15 +96,49 @@ type restAPI struct {
 	// preAuthOnboardingWindowOpen (rest_auth.go). False in test
 	// constructions, which is correct: they have no corrupt state file.
 	onboardingStateUnknown bool
-	// copilotProbe bounds the cost of the GitHub Copilot sign-in probe (C2):
-	// one concurrent vendor-CLI exec at a time, and one premium request per
-	// cache TTL rather than one per HTTP call. Zero value is ready; see
-	// copilotProbeGuard (rest_signin_copilot.go).
-	copilotProbe copilotProbeGuard
-	homePath     string              // ~/.omnipus — root of the data directory
-	configMu     sync.Mutex          // guards safeUpdateConfigJSON (read-modify-write cycle)
-	taskStore    *task.Store         // unified task persistence
-	taskExecutor *agent.TaskExecutor // task execution engine
+	// searchChecks bounds manual diagnostic requests per static search service.
+	searchChecks searchCheckAdmission
+	homePath     string // ~/.omnipus — root of the data directory
+	// mailBudget is the restAPI's handle on the shared A8 mail-operation
+	// budget (spec §2.3/A8): the four dialing Mail panel GETs gate their
+	// IMAP dials through it (rest_mail_budget.go). Nil is allowed —
+	// mailBudgetFor then resolves the process-wide instance lazily
+	// (email.SharedMailBudget, keyed by the state dir), so a directly
+	// constructed restAPI (the unit-test literal) shares the same gate.
+	mailBudget     *email.MailBudget
+	mailBudgetOnce sync.Once
+	// mailSessions is the restAPI's handle on the shared pooled session
+	// manager (w5-integration, MC-1): ONE process-wide instance per data
+	// root, injected at boot (gateway_boot.go) and resolved lazily — via the
+	// same state-dir-keyed email.SharedMailSessions — when a directly
+	// constructed restAPI omits it. Every client this restAPI constructs
+	// (mailPairClient) borrows sessions from THIS manager; a second pool
+	// cannot form below the facade.
+	mailSessions     *email.MailSessions
+	mailSessionsOnce sync.Once
+	configMu         sync.Mutex          // guards safeUpdateConfigJSON (read-modify-write cycle)
+	taskStore        *task.Store         // unified task persistence
+	taskExecutor     *agent.TaskExecutor // task execution engine
+
+	// outboundDedicatedWrite is true only while applyOutboundChange's save
+	// runs (guarded by configMu): the outbound guard then keeps the
+	// writer's value (T-8 row 2). Every other save is not dedicated.
+	outboundDedicatedWrite bool
+
+	// limitAgentStore is the agent store the #904 global tool-iteration
+	// lowering (PUT /performance, D11) reads and writes. Nil in production
+	// (agentstore.New(homePath) is used); tests inject I/O and revision
+	// faults here (rest_performance_max_tool_iterations.go).
+	limitAgentStore maxToolIterationsAgentStore
+
+	// pendingApply is the #904 "Performance settings saved but not applied
+	// yet" state (PerformanceSettings.pending_apply); zero value = nothing
+	// pending. reloadOutcome is the gateway's registry-reload outcome record
+	// (shared with services; nil in test constructions without the boot
+	// path). See rest_performance_pending_apply.go.
+	pendingApply  performancePendingApply
+	reloadOutcome *reloadOutcomeTracker
+
 	// liveTaskActivity (founder decision 2026-09-14) is the read seam
 	// Task.last_activity_at is stamped from: the live progress stamp of a
 	// running task's turn (advancing on streamed reasoning as well as
@@ -182,6 +236,17 @@ type restAPI struct {
 	// exists.
 	libraryChangeBroadcast atomic.Pointer[func(gen.LibraryChangedFrame)]
 
+	// agentCreatedBroadcast is the agent-picker-freshness cross-tab
+	// invalidation hook, the same D-107 shape as libraryChangeBroadcast
+	// above: createAgent (this file's caller) calls emitAgentCreated after
+	// the new agent is durably persisted, which fans an agent_created WS
+	// frame out through the chat WS handler so every connected tab
+	// (including the create_agent tool's own conversation tab, which has no
+	// invalidateQueries call of its own) drops its stale ['agents'] listing.
+	// Wired in gateway.go right after this struct is built, once wsHandler
+	// exists; nil-safe by design (unwired tests, partial boots).
+	agentCreatedBroadcast atomic.Pointer[func(gen.AgentCreatedFrame)]
+
 	// previewTokens is the live ADR-067 preview-token store (rest_library_preview.go),
 	// published by newLibraryPreviewRoutes at registration time.
 	//
@@ -197,6 +262,33 @@ type restAPI struct {
 	// Nil until the preview routes are registered; every reader goes through
 	// previewTokenStore(), which is nil-safe.
 	previewTokens atomic.Pointer[PreviewTokenStore]
+
+	// mailPreviewTokens is the Mail HTML-preview token store (rest_mail_preview.go,
+	// MC-43), published by newMailPreviewRoutes at registration time and read by
+	// logout revocation. Nil until registered; readers go through
+	// mailPreviewTokenStoreOf(), which is nil-safe.
+	mailPreviewTokens atomic.Pointer[mailPreviewTokenStore]
+
+	// mailAttachmentTokens is the attachment PREVIEW grant store
+	// (rest_mail_attachment.go, F1) — metadata-only grants, published by
+	// newMailAttachmentRoutes at registration time; logout revocation walks
+	// it the same way. Nil until registered.
+	mailAttachmentTokens atomic.Pointer[mailAttachmentGrantStore]
+
+	// mailCleanupIntents holds the pending-cleanup intents of the Mail
+	// removal cascade (mail_cleanup.go, US-5.2): the opaque retry addresses
+	// POST /api/v1/mailboxes/cleanup consumes, kept so a truthful
+	// removed_cleanup_pending stays retryable after the mailbox config row
+	// is gone. Lazily built; a gateway restart drops intents BY DESIGN — the
+	// boot reconciler then owns the same state through the orphan sweep.
+	mailCleanupIntents *mailCleanupIntentStore
+	mailCleanupOnce    sync.Once
+
+	// mailSaveReceipts is the process-lifetime save-operation receipt store
+	// (rest_mail_attachment.go, correction M-02): one store per process,
+	// lazily built, no eviction — the restart is the only bound (grill-2
+	// F-9). Nil until the first save.
+	mailSaveReceipts atomic.Pointer[mailattachment.SaveReceiptStore]
 
 	// devServers is the gateway-wide Tier 3 dev-server registry. Shared with
 	// the web_serve tool (dev mode) and workspace.shell_bg tool via the agent
@@ -214,6 +306,9 @@ type restAPI struct {
 	// approvalReg is the in-process tool-approval registry (FR-016, FR-070).
 	// Injected at boot by the gateway; nil in test setups that do not exercise approvals.
 	approvalReg *approvalRegistryV2
+	// rooms is the group-chat service (rest_rooms.go, rooms_runtime.go);
+	// nil until boot wires it (routes then answer 500).
+	rooms atomic.Pointer[roomsHub]
 
 	// builtinRegistry is the central registry for builtin tools (M16, FR-001).
 	// Populated at boot via BuiltinRegistry.RegisterBuiltin for all sysagent tools.
@@ -317,11 +412,39 @@ type restAPI struct {
 // providers_pkg.ValidateKey / FetchModels on the nil-receiver method call). The
 // NoopChecker makes "no SSRF guard" an explicit, type-safe value.
 func (a *restAPI) ssrfChk() providers_pkg.URLChecker {
-	if a.ssrfChecker == nil {
-		return providers_pkg.NoopChecker{}
+	if c := a.endpointChecker(); c != nil {
+		return c
 	}
-	return a.ssrfChecker
+	return providers_pkg.NoopChecker{}
 }
+
+// endpointChecker is the SSRF checker every provider endpoint this API calls
+// or saves must pass: the configured one (sandbox.ssrf on), else the hosted
+// edition's provider endpoint guard, which is on there whatever sandbox.ssrf
+// says (common.EndpointGuard). nil means no check on this build.
+func (a *restAPI) endpointChecker() *security.SSRFChecker {
+	if a.ssrfChecker != nil {
+		return a.ssrfChecker
+	}
+	return providercommon.EndpointGuard()
+}
+
+// endpointRefusalMessage is the 422 body for a provider endpoint the checker
+// refused. A host that does not resolve is reported as such, not as a blocked
+// address: the operator has a typo or a DNS problem to fix, not an allow list.
+func endpointRefusalMessage(err error) string {
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) || strings.Contains(err.Error(), "DNS resolution failed") {
+		return "The provider address was not found: its host name did not resolve. Check the address for typos."
+	}
+	return providerEndpointBlockedMsg
+}
+
+// providerEndpointBlockedMsg is the refusal for a provider address that
+// resolves to a loopback, private or metadata address the endpoint checker
+// blocks. It names neither the address nor the guard.
+const providerEndpointBlockedMsg = "The provider address points at an internal network, " +
+	"which is not reachable from here. Use the provider's public address."
 
 // reauthStoreOrInit returns the lazily-initialized re-auth token store, creating
 // it on first use. Safe for concurrent callers.
@@ -440,6 +563,9 @@ func (a *restAPI) withAuthAndBodyLimit(handler http.HandlerFunc, bodyLimit int64
 		if result.ViaCLIToken {
 			ctx = context.WithValue(ctx, CLITokenContextKey{}, true)
 		}
+		if result.ViaSessionCookie {
+			ctx = context.WithValue(ctx, sessionCookieAuthContextKey{}, true)
+		}
 		handler(w, r.WithContext(ctx))
 	}
 }
@@ -527,6 +653,17 @@ func jsonErr(w http.ResponseWriter, status int, msg string) {
 	}
 }
 
+// jsonErrCode writes an ErrorResponse with a machine-readable code (MC-8's
+// closed error-class enum in `code`, MC-16's stale_draft). Same Content-Type
+// discipline as jsonErr.
+func jsonErrCode(w http.ResponseWriter, status int, msg, code string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(gen.ErrorResponse{Error: msg, Code: &code}); err != nil {
+		slog.Debug("rest: write error response failed", "error", err)
+	}
+}
+
 // boolPtr returns a pointer to b. Used wherever an API response field requires
 // *bool but the source value is a plain bool.
 func boolPtr(b bool) *bool { return &b }
@@ -574,6 +711,10 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 
 // registerCoreRoutes registers state, system, task, workspace, library, provider, tool, channel, agent, mailbox, token, and activity routes.
 func (rae *restAPIRegisterAdditionalEndpoints) registerCoreRoutes() {
+	rae.cm.RegisterHTTPHandler("/api/v1/secret-requests/", rae.a.withAuthAndBodyLimit(rae.a.HandleSecretRequests, secretSubmitBodyLimit))
+	// K6 listing and K49 options: authenticated web user only; value-free.
+	rae.cm.RegisterHTTPHandler("/api/v1/secrets", rae.a.withAuth(rae.a.HandleSecrets))
+	rae.cm.RegisterHTTPHandler("/api/v1/secrets/", rae.a.withAuth(rae.a.HandleSecrets))
 	rae.cm.RegisterHTTPHandler("/api/v1/state", rae.a.withOptionalAuth(rae.a.HandleState))
 	rae.cm.RegisterHTTPHandler("/api/v1/system/cli-detect", rae.a.withAuth(rae.a.HandleSystemCliDetect))
 	// withAuth, never withOptionalAuth: this lists the operator's own disk.
@@ -614,8 +755,16 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerCoreRoutes() {
 	// GET/PUT/DELETE and /approve /stop live here.
 	rae.cm.RegisterHTTPHandler("/api/v1/plans", rae.a.withAuth(rae.a.HandlePlans))
 	rae.cm.RegisterHTTPHandler("/api/v1/plans/", rae.a.withAuth(rae.a.HandlePlans))
-	rae.cm.RegisterHTTPHandler("/api/v1/workspaces", rae.a.withAuth(withRateLimit(configLimiter, rae.a.HandleWorkspaces)))
-	rae.cm.RegisterHTTPHandler("/api/v1/workspaces/", rae.a.withAuth(withRateLimit(configLimiter, rae.a.HandleWorkspaces)))
+	// withWorkspacesBodyLimit (rest_mail.go): the Mail panel's /mail/ routes
+	// get their own larger body limit (mailBodyLimit) instead of the
+	// generic withAuth's 1 MiB, which truncated any real MC-32 attachment
+	// over 1 MiB before mail's own 25 MiB budget check ever ran; every
+	// other workspace-scoped route is unaffected (still the generic 1 MiB).
+	rae.cm.RegisterHTTPHandler("/api/v1/workspaces", rae.a.withWorkspacesBodyLimit(withRateLimit(configLimiter, rae.a.HandleWorkspaces)))
+	rae.cm.RegisterHTTPHandler("/api/v1/workspaces/", rae.a.withWorkspacesBodyLimit(withRateLimit(configLimiter, rae.a.HandleWorkspaces)))
+	// Group chats (omnipus-system-agent K23-K26): /rooms/{id}[/members|/messages].
+	// /workspaces/{id}/rooms is dispatched from HandleWorkspaces.
+	rae.cm.RegisterHTTPHandler("/api/v1/rooms/", rae.a.withAuth(rae.a.HandleRooms))
 	// Library file explorer (rest_library.go). withUploadAuth, not plain
 	// withAuth: /library/{id}/upload streams multipart straight through this
 	// dispatcher, and withAuth's body limit would truncate it. Every JSON
@@ -634,6 +783,14 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerCoreRoutes() {
 	// so the two halves share one token store. The mint path is an EXACT
 	// pattern, so it outranks the "/api/v1/library/" subtree above.
 	rae.a.registerLibraryPreviewRoutes(rae.cm)
+	// Mail HTML preview (email-mail-view-spec 2.3a, MC-10): the session-auth
+	// mint endpoint and the token-only /mail-preview/ serve prefix, sharing
+	// one token store published on the restAPI for logout revocation.
+	rae.a.registerMailPreviewRoutes(rae.cm)
+	// Attachment preview mint/revoke + the preview-purpose byte/HTML serve
+	// prefix (w4, F1) — registered AFTER the generic /mail-preview/ route;
+	// the mux prefers the more specific prefix.
+	rae.a.registerMailAttachmentRoutes(rae.cm)
 	// GET/PUT /api/v1/providers/default-model (ADR-068 FR-018/FR-042,
 	// T068-11): its OWN route with the high-blast-radius adminWrap chain
 	// (withAuth → RequireNotBypass — 401 unauthenticated, 503 under
@@ -666,7 +823,6 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerCoreRoutes() {
 	rae.cm.RegisterHTTPHandler("/api/v1/mcp-servers/", rae.a.withAuth(rae.a.HandleMCPServers))
 	rae.cm.RegisterHTTPHandler("/api/v1/storage/stats", rae.a.withAuth(rae.a.HandleStorageStats))
 	rae.cm.RegisterHTTPHandler("/api/v1/tools", rae.a.withAuth(rae.a.HandleToolsRegistry))
-	rae.cm.RegisterHTTPHandler("/api/v1/tools/builtin", rae.a.withAuth(rae.a.HandleBuiltinToolsDeprecated))
 	rae.cm.RegisterHTTPHandler("/api/v1/tools/mcp", rae.a.withAuth(rae.a.HandleMCPTools))
 	rae.cm.RegisterHTTPHandler("/api/v1/tool-approvals/", rae.a.withAuth(rae.a.HandleToolApprovals))
 	rae.cm.RegisterHTTPHandler("/api/v1/channels", rae.a.withAuth(rae.a.HandleChannels))
@@ -675,6 +831,11 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerCoreRoutes() {
 	// M11: list all configured mailboxes (never 404s; empty list = none) so the
 	// SPA doesn't have to probe every agent's /agents/{id}/mailbox endpoint.
 	rae.cm.RegisterHTTPHandler("/api/v1/mailboxes", rae.a.withAuth(rae.a.listMailboxes))
+	// w5-integration (US-5.2/MC-8): the separately authorized Retry-cleanup
+	// operation for a mailbox removal that ended removed_cleanup_pending —
+	// keyed ONLY by the opaque cleanup intent, so it keeps working after the
+	// mailbox's config row is gone.
+	rae.cm.RegisterHTTPHandler("/api/v1/mailboxes/cleanup", rae.a.withAuth(rae.a.handleMailboxCleanup))
 	rae.cm.RegisterHTTPHandler("/api/v1/config/gateway/rotate-token", rae.a.withAuth(rae.a.rotateGatewayToken))
 	rae.cm.RegisterHTTPHandler("/api/v1/activity", rae.a.withAuth(rae.a.HandleActivity))
 }
@@ -692,6 +853,12 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerSettingsAndAccountRoutes(
 	// authenticated user (A2/G-02 — not admin-only because recap and retention
 	// settings are non-sensitive operational knobs without blast-radius risk).
 	rae.cm.RegisterHTTPHandler("/api/v1/settings/memory", rae.a.withAuth(rae.a.HandleMemorySettings))
+	// Settings -> Third-party agents (tool-parity spec r17 §3.3): signed-in
+	// person only, behind the shared T11 slice A check — no session 401, a
+	// CLI token or a non-person identity 403, no password step — and, for
+	// row 9.23, any bearer token 403 (requireSessionCookieAuth).
+	rae.cm.RegisterHTTPHandler("/api/v1/settings/third-party-agents",
+		rae.a.withAuth(middleware.RequirePersonSession(requireSessionCookieAuth(rae.a.HandleThirdPartyAgentSettings))))
 
 	// Context-budget settings endpoint (ADR-066 D9, FR-036 / US-11): the D4
 	// per-surface caps, the D6 absolute trigger, the D10 ingest bound, the D2
@@ -736,6 +903,10 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerSettingsAndAccountRoutes(
 	rae.cm.RegisterHTTPHandler("/api/v1/security/retention", rae.a.adminWrap(rae.a.HandleRetention))
 	rae.cm.RegisterHTTPHandler("/api/v1/security/retention/sweep", rae.a.adminWrap(rae.a.HandleRetentionSweep))
 	rae.cm.RegisterHTTPHandler("/api/v1/performance", rae.a.adminWrap(rae.a.HandlePerformance))
+	// #904 D11: read-only lowering preview — the same gate as GET
+	// /performance, no step-up token (the confirmed PUT consumes it).
+	rae.cm.RegisterHTTPHandler("/api/v1/performance/max-tool-iterations/preview",
+		rae.a.adminWrap(rae.a.HandleMaxToolIterationsPreview))
 	// Wave 5 security endpoints (SEC-01/02/03).
 	rae.cm.RegisterHTTPHandler("/api/v1/security/sandbox-status", rae.a.withAuth(rae.a.HandleSandboxStatus))
 	// /api/v1/security/sandbox-config is registered above with adminWrap — do NOT

@@ -1,7 +1,7 @@
 // Humanized, sentence-case labels for tool-call chips.
 //
 // Tool IDs use snake_case (`recall_memory`, `browser_navigate`,
-// `create_task`) and special verbs (`switch_agent`). The collapsed chip
+// `create_task`). The collapsed chip
 // should show a readable label; the expanded chip still shows the raw ID so
 // power users see the real tool name.
 //
@@ -18,9 +18,6 @@ const EXPLICIT_LABELS: Record<string, string> = {
   recall: 'Recall memory',
   // New canonical names
   run_retrospective: 'Retrospective',
-  // ADR-071 D4: `hand_off` and `return_to_default` are merged into one
-  // tool, `switch_agent(target, note?)` — see §5.1 of the ADR.
-  switch_agent: 'Switch agent',
   // ADR-036: `delegate` replaces spawn / run_subagent / check_spawn_status
   // (one unified delegation tool — see §3.2).
   delegate: 'Delegate task',
@@ -95,10 +92,16 @@ const EXPLICIT_LABELS: Record<string, string> = {
   update_task_in_workspace: 'Update task in workspace',
   list_tasks_in_workspace: 'List tasks in workspace',
   delete_task_in_workspace: 'Delete task in workspace',
+  // T8 read and plan-edit tools (tool-parity r17 FR-161, scenario 17.4).
+  get_task: 'Read task',
+  get_plan: 'Read plan',
+  get_goal: 'Read goal',
+  update_plan: 'Update plan',
   // Agent tools
   list_agents: 'List agents',
   create_agent: 'Create agent',
   update_agent: 'Update agent',
+  set_agent_permissions: 'Set agent permissions',
   delete_agent: 'Delete agent',
   read_agent_metadata: 'Read agent metadata',
   write_agent_metadata: 'Write agent metadata',

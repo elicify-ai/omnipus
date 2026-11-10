@@ -11,6 +11,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
+import { showTaskInfo } from './tasksLayoutFixtures'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { TaskCard } from './TaskCard'
 import type { Task } from '@/lib/api'
@@ -70,12 +71,14 @@ function renderCard(task: Task, extraProps: Partial<React.ComponentProps<typeof 
 describe('TaskCard — orange "Cancelled" vs red "Failed" marker (ADR-052 FR-015/US-8)', () => {
   it('a task Stopped by the user (cancel_reason: stopped_by_user) shows "Cancelled", not "Failed"', () => {
     renderCard(baseTask({ status: 'failed', cancel_reason: 'stopped_by_user' }))
+    showTaskInfo('Sample task')
     expect(screen.getByText('Cancelled')).toBeInTheDocument()
     expect(screen.queryByText('Failed')).not.toBeInTheDocument()
   })
 
   it('a genuinely-failed task (no cancel_reason) shows "Failed", not "Cancelled"', () => {
     renderCard(baseTask({ status: 'failed' }))
+    showTaskInfo('Sample task')
     expect(screen.getByText('Failed')).toBeInTheDocument()
     expect(screen.queryByText('Cancelled')).not.toBeInTheDocument()
   })
@@ -93,17 +96,17 @@ describe('TaskCard — orange "Cancelled" vs red "Failed" marker (ADR-052 FR-015
         <TaskCard task={baseTask({ status: 'failed', cancel_reason: 'stopped_by_user' })} onClick={vi.fn()} />
       </QueryClientProvider>,
     )
-    const cancelledColor = screen.getByText('Cancelled').style.color
+    const beforePaint = getComputedStyle(screen.getByText('Sample task').closest('[role="button"]')!).borderLeftColor
 
     rerender(
       <QueryClientProvider client={client}>
         <TaskCard task={baseTask({ status: 'failed' })} onClick={vi.fn()} />
       </QueryClientProvider>,
     )
-    const failedColor = screen.getByText('Failed').style.color
-    expect(cancelledColor).not.toBe(failedColor)
-    expect(cancelledColor).not.toBe('')
-    expect(failedColor).not.toBe('')
+    const afterPaint = getComputedStyle(screen.getByText('Sample task').closest('[role="button"]')!).borderLeftColor
+    expect(beforePaint).not.toBe(afterPaint)
+    expect(beforePaint).not.toBe('')
+    expect(afterPaint).not.toBe('')
   })
 
   // Gate-2 finding #1 regression: TaskCard.tsx:236 builds the pill's tint

@@ -49,6 +49,16 @@ type StreamingCapable interface {
 	BeginStream(ctx context.Context, chatID string) (Streamer, error)
 }
 
+// NotRunningReasoner — channels that know why they are not running right now,
+// beyond a failed start (for example a lost connection the channel is
+// re-establishing on its own). Manager.Availability reports a non-empty
+// NotRunningReason ahead of the last start error and the shared "not started".
+// The text is a plain sentence fragment a person reads: callers embed it
+// after a colon or in parentheses, so no capital and no final full stop.
+type NotRunningReasoner interface {
+	NotRunningReason() string
+}
+
 // Streamer is defined in pkg/bus to avoid circular imports.
 // This alias keeps channel implementations using channels.Streamer unchanged.
 type Streamer = bus.Streamer
@@ -77,9 +87,10 @@ type CommandRegistrarCapable interface {
 type PairingStatus string
 
 const (
-	// PairingStatusWaiting is reserved for a pre-QR connecting state. It is not
-	// currently emitted; the SPA renders its initial prompt from the absence of
-	// any pairing state.
+	// PairingStatusWaiting is the pre-QR connecting state. The WhatsApp channel
+	// emits it when a pairing loop starts, which also evicts a terminal frame a
+	// previous chat-started pairing left cached (BDD-8.8); the SPA renders it
+	// exactly like the absence of any pairing state.
 	PairingStatusWaiting PairingStatus = "waiting"
 	// PairingStatusCode means a QR code is available to scan (qr is set).
 	PairingStatusCode PairingStatus = "code"
@@ -89,6 +100,9 @@ const (
 	PairingStatusTimeout PairingStatus = "timeout"
 	// PairingStatusError means pairing failed; message carries the reason.
 	PairingStatusError PairingStatus = "error"
+	// PairingStatusStopped means the user pressed Stop in the chat that started
+	// the pairing; the pairing was ended and no further codes follow (BDD-8.8).
+	PairingStatusStopped PairingStatus = "stopped"
 )
 
 // AllPairingStatuses is the authoritative set of pairing statuses, kept next to
@@ -100,6 +114,7 @@ var AllPairingStatuses = []PairingStatus{
 	PairingStatusLinked,
 	PairingStatusTimeout,
 	PairingStatusError,
+	PairingStatusStopped,
 }
 
 // PairingObservable is implemented by channels that produce linked-device

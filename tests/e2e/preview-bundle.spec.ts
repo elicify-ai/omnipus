@@ -1082,6 +1082,9 @@ test.describe('ADR-067 tests 9 / 60 / 64 — a bundle through the token path', (
     }
   });
 
+})
+
+test.describe('ADR-067 tests 9 / 60 / 64 — a bundle through the token path', () => {
   /**
    * Test 9's wire half, and FR-015c's whole point.
    *
@@ -1148,6 +1151,9 @@ test.describe('ADR-067 tests 9 / 60 / 64 — a bundle through the token path', (
     }
   });
 
+})
+
+test.describe('ADR-067 tests 9 / 60 / 64 — a bundle through the token path', () => {
   /**
    * Tests 9 and 60 and the containment half — ONE observation of ONE loaded
    * preview, embedded exactly as §10.6 and FR-005b require.
@@ -1293,6 +1299,9 @@ test.describe('ADR-067 tests 9 / 60 / 64 — a bundle through the token path', (
     expect(report.origin_opaque, 'with no sandbox directive the origin is NOT opaque').toBe(false);
   });
 
+})
+
+test.describe('ADR-067 tests 9 / 60 / 64 — a bundle through the token path', () => {
   /**
    * ═══════════════════════════════════════════════════════════════════════
    * TEST 60's PROOF OF FAILURE — the CORS mutation, over real sockets.
@@ -1450,6 +1459,9 @@ test.describe('ADR-067 tests 9 / 60 / 64 — a bundle through the token path', (
     }
   });
 
+})
+
+test.describe('ADR-067 tests 9 / 60 / 64 — a bundle through the token path', () => {
   /**
    * MUTATION B — CORS. FR-019's own mechanism, measured per engine.
    *

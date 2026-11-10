@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { renderHook } from '@testing-library/react'
-import { buildModelToProvider, useModelToProvider } from './modelToProvider'
+import { buildModelToProvider, useModelToProvider, resolveUniqueModelProvider } from './modelToProvider'
 import type { Provider } from '@/lib/api/generated/openapi-types'
 
 const openrouter: Provider = {
@@ -132,5 +132,40 @@ describe('useModelToProvider — react hook memoization', () => {
     expect(result.current.lookup('claude-sonnet-4-6')).toBe('')
     rerender({ providers: [openrouter, anthropic] })
     expect(result.current.lookup('claude-sonnet-4-6')).toBe('anthropic')
+  })
+})
+// ── H6 R2 (review round 1 — F3) — resolveUniqueModelProvider ──────────────────
+//
+// Display-side provider resolution for values whose provider was never
+// recorded. Unlike `lookup`'s deliberate first-wins, ambiguity must yield NO
+// provider ('') — list order is not evidence of which provider served a turn.
+
+describe('resolveUniqueModelProvider', () => {
+  const grokLocal: Provider = { ...openrouter, id: 'grok-local', models: ['gpt-6.1-sol', 'grok-4'] }
+  const chatgpt: Provider = { ...anthropic, id: 'openai-chatgpt', models: ['gpt-6.1-sol', 'gpt-5.6'] }
+
+  it('resolves the provider id when exactly ONE provider serves the model', () => {
+    expect(resolveUniqueModelProvider([grokLocal, chatgpt], 'grok-4')).toBe('grok-local')
+    expect(resolveUniqueModelProvider([grokLocal, chatgpt], 'gpt-5.6')).toBe('openai-chatgpt')
+  })
+
+  it('returns "" when TWO providers serve the same slug — ambiguous, never first-wins', () => {
+    expect(resolveUniqueModelProvider([grokLocal, chatgpt], 'gpt-6.1-sol')).toBe('')
+  })
+
+  it('returns "" when NO provider serves the model, and for an empty slug', () => {
+    expect(resolveUniqueModelProvider([grokLocal, chatgpt], 'unknown-model')).toBe('')
+    expect(resolveUniqueModelProvider([grokLocal, chatgpt], '')).toBe('')
+    expect(resolveUniqueModelProvider([grokLocal, chatgpt], '   ')).toBe('')
+  })
+
+  it('matches on exact slug (no substring), same as buildModelToProvider', () => {
+    expect(resolveUniqueModelProvider([grokLocal], 'grok-4-extended')).toBe('')
+  })
+
+  it('tolerates the same provider advertising the slug twice, and providers without an id', () => {
+    const dupListing: Provider = { ...grokLocal, models: ['grok-4', 'grok-4'] }
+    const noId: Provider = { ...chatgpt, id: '', models: ['grok-4'] }
+    expect(resolveUniqueModelProvider([dupListing, noId], 'grok-4')).toBe('grok-local')
   })
 })

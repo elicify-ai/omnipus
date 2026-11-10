@@ -41,6 +41,10 @@ func estimateMessageTokens(msg providers.Message) int {
 		chars += utf8.RuneCountInString(msg.ReasoningContent)
 	}
 
+	for _, block := range msg.ThinkingBlocks {
+		chars += utf8.RuneCountInString(block)
+	}
+
 	for _, tc := range msg.ToolCalls {
 		chars += len(tc.ID) + len(tc.Type)
 		if tc.Function != nil {

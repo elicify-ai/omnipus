@@ -6,10 +6,9 @@
 // Package agent provides the MemoryStoreAdapter that bridges the agent-side
 // MemoryStore to the tools.MemoryAccess / tools.RoomMemoryAccess interfaces (FR-7.3).
 //
-// Room routing (MIN-002 / FR-7.3): the adapter reads workspace_id from the
-// tool execution context. Default scope:
-//   - Workspace session (workspace_id set):  shared
-//   - Direct/private session (no workspace): private
+// Room routing (MIN-002 / FR-7.3): every room-aware operation receives the
+// current tool call's workspace_id as a value and constructs a MemoryScope.
+// No current-room state is stored on the adapter or MemoryStore.
 //
 // String-based room scope ("private" | "shared" | "both") is used at the interface
 // boundary to prevent a pkg/tools → pkg/memrooms import that would create a cycle.
@@ -40,7 +39,7 @@ func NewMemoryStoreAdapter(ms *MemoryStore) *MemoryStoreAdapter {
 // --- tools.MemoryWriter implementation --------------------------------------
 
 // AppendLongTerm implements tools.MemoryWriter.
-// Delegates to the default scope (shared when workspace session, private otherwise).
+// With no turn workspace supplied, writes only to the agent's private room.
 func (a *MemoryStoreAdapter) AppendLongTerm(content, category string) error {
 	return a.ms.AppendLongTerm(content, category)
 }
@@ -61,39 +60,31 @@ func (a *MemoryStoreAdapter) AppendRetro(sessionID string, r tools.MemoryRetro) 
 // --- tools.MemorySearcher implementation ------------------------------------
 
 // SearchEntries implements tools.MemorySearcher.
-// Searches both rooms when a shared room is active.
+// With no turn workspace supplied, searches only the agent's private room.
 func (a *MemoryStoreAdapter) SearchEntries(query string, limit int) ([]tools.MemoryEntry, error) {
-	return a.SearchEntriesInRoom(query, limit, "both")
+	return a.SearchEntriesInRoom(query, limit, "private", "")
 }
 
 // --- tools.RoomMemoryWriter implementation ----------------------------------
 
 // AppendLongTermToRoom implements tools.RoomMemoryWriter.
 // scope is "private" | "shared" | "both" (both→ private for writes).
-func (a *MemoryStoreAdapter) AppendLongTermToRoom(content, category, scope string) error {
+func (a *MemoryStoreAdapter) AppendLongTermToRoom(content, category, scope, workspaceID string) error {
+	identity := a.ms.scopeForWorkspace(workspaceID)
 	rs := stringToRoomScope(scope)
 	// "both" is not valid for writes; treat as the default scope.
 	if rs == memrooms.RoomScopeBoth {
-		rs = a.ms.rooms().DefaultRoomScope()
+		rs = a.ms.rooms(identity).DefaultRoomScope()
 	}
-	return a.ms.AppendLongTermToScope(content, category, rs)
-}
-
-// SetWorkspaceID implements tools.RoomMemoryWriter.
-// Wires the shared room for the current turn; called before each tool invocation.
-func (a *MemoryStoreAdapter) SetWorkspaceID(workspaceID string) {
-	a.ms.SetWorkspaceID(workspaceID)
+	return a.ms.AppendLongTermToScope(content, category, rs, identity)
 }
 
 // --- tools.RoomMemorySearcher implementation --------------------------------
 
 // SearchEntriesInRoom implements tools.RoomMemorySearcher.
 // scope is "private" | "shared" | "both".
-func (a *MemoryStoreAdapter) SearchEntriesInRoom(query string, limit int, scope string) ([]tools.MemoryEntry, error) {
-	agentEntries, err := a.ms.SearchEntriesInScope(query, limit, stringToRoomScope(scope))
-	if err != nil {
-		return nil, err
-	}
+func (a *MemoryStoreAdapter) SearchEntriesInRoom(query string, limit int, scope, workspaceID string) ([]tools.MemoryEntry, error) {
+	agentEntries, err := a.ms.SearchEntriesInScope(query, limit, stringToRoomScope(scope), a.ms.scopeForWorkspace(workspaceID))
 	result := make([]tools.MemoryEntry, len(agentEntries))
 	for i, e := range agentEntries {
 		result[i] = tools.MemoryEntry{
@@ -104,7 +95,7 @@ func (a *MemoryStoreAdapter) SearchEntriesInRoom(query string, limit int, scope 
 			Title:     e.Title,
 		}
 	}
-	return result, nil
+	return result, err
 }
 
 // --- tools.RetroSearcher implementation -------------------------------------

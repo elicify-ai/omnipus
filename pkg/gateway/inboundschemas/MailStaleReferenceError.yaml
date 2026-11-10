@@ -1,0 +1,37 @@
+title: MailStaleReferenceError
+description: >
+  Typed 409 body for a stale Mail cursor or reference
+  (mail-live-access-landing-order register row 4 — W0 is the single
+  publisher; ADR-20261001 "Human Retry and upstream limits" row: "Use a
+  typed 409 stale-cursor/reference result to request one view reset; never
+  spin/reset/replay indefinitely"). code=stale_cursor: a paging/search
+  cursor no longer matches the folder epoch (UIDVALIDITY), configuration
+  generation or browse/search sequence it was issued in — the client
+  restarts the list view once. code=stale_reference: a message reference's
+  embedded folder epoch, pair or configuration binding no longer matches
+  the live folder (correction I-03) — the client re-reads the list; the
+  gateway refused the fetch/mutation BEFORE any server work. Never a
+  best-effort result against whatever the folder now holds. Shares the
+  error/code convention with ErrorResponse and MailUnavailableError.
+type: object
+additionalProperties: false
+required:
+  - error
+  - code
+properties:
+  error:
+    type: string
+    description: Human-readable message, safe to display.
+    example: "This message changed or was deleted. Refresh the list."
+  code:
+    type: string
+    enum:
+      - stale_cursor
+      - stale_reference
+    description: >
+      Machine-readable discriminator. stale_cursor = the paging/search
+      cursor is stale or mismatched — reset the view once. stale_reference
+      = the message reference failed its epoch/pair/generation validation
+      on the lease that would have served it — refresh the list. A client
+      branches on it without string matching on the message.
+    example: "stale_reference"

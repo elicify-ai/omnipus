@@ -1,0 +1,12 @@
+=== RUN   TestSessionCoreConv_SecondBootIsIdempotentAndAddsNoSecondIdentity
+    sessioncore_conv_behaviour_test.go:107: 
+        	Error Trace:	/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/session-core-red-conv-20261009/pkg/session/sessioncore_conv_behaviour_test.go:107
+        	Error:      	Not equal: 
+        	            	expected: string("chat")
+        	            	actual  : <nil>(<nil>)
+        	Test:       	TestSessionCoreConv_SecondBootIsIdempotentAndAddsNoSecondIdentity
+        	Messages:   	precondition: the first boot converted the saved chat (this is the RED assertion on current code)
+--- FAIL: TestSessionCoreConv_SecondBootIsIdempotentAndAddsNoSecondIdentity (0.01s)
+FAIL
+FAIL	github.com/elicify-ai/omnipus/pkg/session	3.136s
+FAIL

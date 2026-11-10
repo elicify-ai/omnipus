@@ -11,6 +11,7 @@ import { PerformanceSection } from '@/components/settings/PerformanceSection'
 import { ChatSection } from '@/components/settings/ChatSection'
 import { MemorySection } from '@/components/settings/MemorySection'
 import { ContextSection } from '@/components/settings/ContextSection'
+import { SystemAgentsSection } from '@/components/settings/SystemAgentsSection'
 import { ScreenHeader } from '@/components/layout/ScreenHeader'
 import { fetchAboutInfo, isDevicePairingEnabled } from '@/lib/api'
 // O4: the passive RestartBanner at the top of Settings is replaced by the
@@ -20,6 +21,7 @@ import { fetchAboutInfo, isDevicePairingEnabled } from '@/lib/api'
 export type SettingsTab =
   | 'providers'
   | 'models'
+  | 'system-agents'
   | 'integrations'
   | 'security'
   | 'gateway'
@@ -60,7 +62,7 @@ export function SettingsScreen({ initialTab = 'providers', prefillOverride, focu
         <div className="mb-[var(--space-4)]">
           <h1 className="font-headline text-2xl font-bold text-[var(--color-secondary)]">Settings</h1>
           <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
-            Configure providers, integrations, gateway, security, and data management.
+            Configure providers, system agents, integrations, gateway, security, and data management.
             Personal preferences live under Profile.
           </p>
           {aboutInfoError && (
@@ -88,6 +90,7 @@ export function SettingsScreen({ initialTab = 'providers', prefillOverride, focu
           <TabsList className="mb-[var(--space-4)] flex-wrap h-auto gap-[var(--space-1)] sticky top-0 z-10 bg-[var(--color-primary)] py-[var(--space-2)] -mx-[var(--space-1)] px-[var(--space-1)]">
             <TabsTrigger data-testid="settings-tab-providers" value="providers">Providers</TabsTrigger>
             <TabsTrigger data-testid="settings-tab-models" value="models">Models</TabsTrigger>
+            <TabsTrigger data-testid="settings-tab-system-agents" value="system-agents">System agents</TabsTrigger>
             <TabsTrigger data-testid="settings-tab-integrations" value="integrations">Integrations</TabsTrigger>
             <TabsTrigger data-testid="settings-tab-security" value="security">Security</TabsTrigger>
             <TabsTrigger value="gateway">Gateway</TabsTrigger>
@@ -106,6 +109,12 @@ export function SettingsScreen({ initialTab = 'providers', prefillOverride, focu
           {/* ADR-066 D9 / FR-037 — Settings → Models (context-budget controls) */}
           <TabsContent value="models">
             <ContextSection prefillOverride={prefillOverride} />
+          </TabsContent>
+
+          {/* omnipus-system-agent FR-106: Judge, Plan Supervisor and Omnipus
+              through the shared agent editor; linked from Omnipus's chat header. */}
+          <TabsContent value="system-agents">
+            <SystemAgentsSection />
           </TabsContent>
 
           <TabsContent value="integrations">

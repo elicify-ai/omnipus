@@ -91,6 +91,7 @@
       "file": "tests/design-system/browser.spec.ts",
       "test": "Card [check:card-browser] browser",
       "story": "Default",
+      "requiredTargets": [{ "selector": "[data-testid=\"card\"]", "text": "Sovereign workspace" }],
       "applicable": true
     },
     {

@@ -34,6 +34,7 @@
 package agent
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -85,7 +86,9 @@ func (al *AgentLoop) clearGoalWithOutcome(
 ) (string, bool) {
 	reply, ended, ok := al.endActiveGoal(sessionID, store, note)
 	if ok && ended != nil {
-		al.recordGoalOutcome(store, sessionID, ended.rec, ended.endedAt, in)
+		if err := al.recordGoalOutcome(store, sessionID, ended.rec, ended.endedAt, in); err != nil {
+			al.reportGoalOutcomePending(sessionID, ended.rec, ended.endedAt, err)
+		}
 	}
 	return reply, ok
 }
@@ -95,13 +98,26 @@ func (al *AgentLoop) clearGoalWithOutcome(
 // the goal had actually completed.
 func (al *AgentLoop) clearGoalByUser(sessionID string, store *session.UnifiedStore, agentID string) string {
 	in := goalOutcomeInput{ending: generated.GoalOutcomeEndingStoppedByUser, agentID: agentID}
-	if rec := activeGoalForSession(sessionID); rec != nil {
+	rec, err := activeGoalForSession(sessionID)
+	if err != nil {
+		return al.reportGoalReadError(sessionID, "goal clear", err)
+	}
+	if rec != nil {
 		in.roundsUsed = rec.Round
 		in.maxRounds = rec.MaxRounds
 		in.content = fmt.Sprintf("Goal %q was stopped by the user after %d of %d round(s).",
 			rec.Prompt, rec.Round, rec.MaxRounds)
 	}
-	reply, _ := al.clearGoalWithOutcome(sessionID, store, goalClearNoteUser, in)
+	reply, ok := al.clearGoalWithOutcome(sessionID, store, goalClearNoteUser, in)
+	if ok {
+		// F4 (#984 follow-up): /goal clear on a goal bound to a non-terminal
+		// steered session deferred at the (a) gate — the gate only re-runs on
+		// a turn exit or cancel, so route the child through the completion
+		// tail now, or it stays `running` until the next boot sweep repairs
+		// it. Never for ordinary roots (completeSteeredTurn refuses without a
+		// steered edge) — the founder rule holds.
+		al.completeSteeredTurnIfDeferredAtGate(sessionID)
+	}
 	return reply
 }
 
@@ -112,47 +128,67 @@ func (al *AgentLoop) clearGoalByUser(sessionID string, store *session.UnifiedSto
 // worse than the terminal pill alone, which the ending already emitted.
 func (al *AgentLoop) recordGoalOutcome(
 	store *session.UnifiedStore, sessionID string, rec *goal.Goal, endedAt time.Time, in goalOutcomeInput,
-) {
+) error {
 	if rec == nil || sessionID == "" {
-		return
+		return nil
 	}
 	if store == nil {
 		taskGoalTranscriptWriteFailures.Add(1)
-		logger.WarnCF("agent", "goal: outcome line not recorded — no session store resolves the goal's session",
-			map[string]any{"component": "goal", "session_id": sessionID, "goal_id": rec.GoalID, "ending": string(in.ending)})
-		return
+		return fmt.Errorf("goal outcome: no session store for %q", sessionID)
 	}
 	endedAt = endedAt.UTC()
 	outcome := buildGoalOutcome(rec, endedAt, in)
-	messageID := goalOutcomeMessageID(rec.GoalID, endedAt)
+	outcome.GoalText = al.filterWakeText(outcome.GoalText)
+	if outcome.JudgeReason != nil {
+		filtered := al.filterWakeText(*outcome.JudgeReason)
+		outcome.JudgeReason = &filtered
+	}
 	content := strings.TrimSpace(in.content)
 	if content == "" {
 		content = fmt.Sprintf("Goal %q ended.", outcome.GoalText)
 	}
-	if err := store.AppendTranscriptStrict(sessionID, session.TranscriptEntry{
-		ID:            messageID,
-		Type:          session.EntryTypeSystem,
-		Role:          "system",
-		Content:       content,
-		AgentID:       in.agentID,
-		Timestamp:     endedAt,
-		SystemSubtype: session.SystemSubtypeGoalOutcome,
-		GoalOutcome:   &outcome,
-	}); err != nil {
-		taskGoalTranscriptWriteFailures.Add(1)
-		logger.WarnCF("agent", "goal: outcome entry could not be saved — no outcome line was sent",
-			map[string]any{"component": "goal", "session_id": sessionID, "goal_id": rec.GoalID,
-				"ending": string(in.ending), "error": err.Error()})
-		return
+	content = al.filterWakeText(content)
+	var errs []error
+	destinations := []string{sessionID}
+	if err := al.appendGoalOutcome(store, sessionID, goalOutcomeMessageID(rec.GoalID, endedAt), outcome, in.agentID, content); err != nil {
+		errs = append(errs, err)
 	}
-	logger.InfoCF("agent", "goal: outcome line recorded",
-		map[string]any{"component": "goal", "session_id": sessionID, "goal_id": rec.GoalID,
-			"ending": string(in.ending), "rounds_used": outcome.RoundsUsed, "message_id": messageID})
-	al.emitEvent(EventKindGoalOutcome, EventMeta{Source: "goal_loop"}, GoalOutcomePayload{
-		SessionID: sessionID,
-		MessageID: messageID,
-		Outcome:   outcome,
+	if lifecycle := al.GetSessionLifecycleStore(); lifecycle != nil {
+		child, err := lifecycle.Load(sessionID)
+		if err != nil && !errors.Is(err, session.ErrLifecycleNotFound) {
+			errs = append(errs, err)
+		} else if err == nil && child.SteeredBy != nil {
+			parentID := child.SteeringSessionID()
+			destinations = append(destinations, parentID)
+			parentMessageID := fmt.Sprintf("goal-outcome-%s-%s-%d", parentID, rec.GoalID, endedAt.UnixNano())
+			if err := al.appendGoalOutcome(store, parentID, parentMessageID, outcome, in.agentID, content); err != nil {
+				errs = append(errs, err)
+			}
+		}
+	}
+	if len(errs) != 0 {
+		if err := al.retainGoalOutcomeRepair(sessionID, destinations, outcome); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func (al *AgentLoop) appendGoalOutcome(store *session.UnifiedStore, sessionID, messageID string, outcome generated.GoalOutcome, agentID, content string) error {
+	written, err := store.AppendTranscriptOnce(sessionID, session.TranscriptEntry{
+		ID: messageID, Type: session.EntryTypeSystem, Role: "system", Content: content,
+		AgentID: agentID, Timestamp: outcome.EndedAt, SystemSubtype: session.SystemSubtypeGoalOutcome, GoalOutcome: &outcome,
 	})
+	if err != nil {
+		taskGoalTranscriptWriteFailures.Add(1)
+		return fmt.Errorf("goal outcome row %q: %w", messageID, err)
+	}
+	if written {
+		al.emitEvent(EventKindGoalOutcome, EventMeta{Source: "goal_loop"}, GoalOutcomePayload{
+			SessionID: sessionID, MessageID: messageID, Outcome: outcome,
+		})
+	}
+	return nil
 }
 
 // goalOutcomeMessageID mints the id shared by the persisted entry and every
@@ -194,7 +230,7 @@ func buildGoalOutcome(rec *goal.Goal, endedAt time.Time, in goalOutcomeInput) ge
 		MaxRounds:  maxRounds,
 		EndedAt:    endedAt,
 	}
-	if reason := strings.TrimSpace(in.judgeReason); reason != "" && reason != goalNoReasonRecorded {
+	if reason := verdictReasonForOutcome(in); reason != "" {
 		out.JudgeReason = &reason
 	}
 	if in.verdict != nil && len(in.verdict.PerCriterion) > 0 {
@@ -225,8 +261,10 @@ func (al *AgentLoop) recordTaskGoalOutcome(ended goal.Goal, taskStatus task.Stat
 			map[string]any{"component": "goal", "goal_id": ended.GoalID, "task_id": ended.OwnerID})
 		return
 	}
-	al.recordGoalOutcome(al.goalSessionStoreFor(sessionID), sessionID, &ended, ended.LastActivityAt,
-		taskGoalOutcomeInput(&ended, taskStatus))
+	if err := al.recordGoalOutcome(al.goalSessionStoreFor(sessionID), sessionID, &ended, ended.LastActivityAt,
+		taskGoalOutcomeInput(&ended, taskStatus)); err != nil {
+		al.reportGoalOutcomePending(sessionID, &ended, ended.LastActivityAt, err)
+	}
 }
 
 // taskGoalOutcomeInput maps a task-owned goal's terminal state onto the

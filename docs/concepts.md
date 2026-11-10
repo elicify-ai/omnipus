@@ -6,8 +6,8 @@ Omnipus is a team of AI agents that runs on your own machine. This page introduc
 
 Everything in Omnipus hangs together in one shape:
 
-- All your work lives in a **workspace**. Chats, tasks, the calendar, files, and the team of agents belong to it.
-- **Agents** do the work. Four ship built in, and you can create your own.
+- **Workspaces** keep related chats, tasks, calendar entries, files and agent teams together; ordinary conversations can also exist without a workspace.
+- **Agents** do the work. Three chat colleagues ship built in, alongside workers and internal engine agents. You add your own agents by asking Omnipus.
 - Agents act through **tools**: reading and writing files, searching the web, running commands.
 - Work takes three shapes: **tasks**, **plans**, and **goals**.
 - **Connectors** carry your messages in from chat platforms such as Telegram or Discord.
@@ -31,24 +31,23 @@ Read this page once before [getting started](getting-started.md), so the words a
 
 ## The workspace
 
-A workspace is the container your work happens in. Every chat, task, plan, file, and calendar entry belongs to exactly one workspace, and each workspace keeps its own team of agents and its own memory. On a fresh install you start with one workspace, named My Workspace, with the four built-in agents already on the team. The same agent can sit on several workspaces, so you can split work by client or by topic without doubling up. See [workspaces](workspaces.md).
+A workspace keeps related work together, with its own team and memory. Workspace chats belong to that workspace; ordinary named-agent conversations without an associated workspace can also exist as unfiled sessions. Omnipus is different: its one main chat belongs to the default workspace only. On a fresh install you start with one workspace, named My Workspace, with Mia, Jim, Omnipus, Planner, Researcher and General Purpose already on the team (Omnipus belongs to this default workspace only). The same agent can sit on several workspaces, so you can split work by client or by topic without doubling up. See [workspaces](workspaces.md).
 
 ## The agents
 
-Agents are who does the work. Four of them ship with Omnipus, and Mia is the default on a fresh install:
+Agents are who does the work. Three chat colleagues ship with Omnipus. There is no global default agent: each conversation names its agent, and a new conversation without one is refused.
 
 | Agent | Role | Reach for them when |
 |---|---|---|
 | Mia | Assistant | You want an everyday starting point. She answers and connects you with the right specialist. |
 | Jim | Planner and Orchestrator | A job has many steps. He breaks it into tasks, hands them out, and tracks them to done. |
-| Ava | Builder | You want a new agent. She interviews you, then creates it. |
-| Ray | Scout | You need research. He digs into sources and presents findings with citations. |
+| Omnipus | System agent | You want to set up or change agents, teams, skills, connectors, providers or channels. It is instructed to show one plan summary and ask Go / Change / Cancel outside God Mode. In God Mode, it shows the summary as a message and skips approval questions and global tool-policy prompts. |
 
 You can also create your own agents, in three kinds. A **Main** agent is a chat colleague. A **Subagent** is a worker that other agents hand work to. An **external worker** runs on a command-line agent tool you already have. Workers never chat with you. See [agents](agents.md).
 
 ## Connectors
 
-A connector links a chat platform you already use — Telegram, Discord, Slack, among others — to your agents. You write where you already write. The connector delivers the message into the workspace it is bound to, and the answer comes back in the same conversation. See [connectors](connectors.md).
+A connector links a chat platform you already use — Telegram, Discord, Slack, among others — to your agents. You write where you already write. Every connector is bound to a workspace and the agent that answers it; the connector delivers the message to that agent, and the answer comes back in the same conversation. There is no default agent: a connector that is not bound drops messages and shows why on the Connectors page. See [connectors](connectors.md).
 
 ## Tasks, plans, and goals
 
@@ -68,7 +67,7 @@ A tool is one capability an agent can call while it works: reading a file, searc
 
 ## Limits and things to watch
 
-- The four built-in agents are locked. They ship as they are; you add capacity by creating your own agents, not by editing the built-ins.
+- The built-in chat colleagues and workers keep their identity and base instructions. Their supported model, tool and skill settings remain editable; Judge and Plan Supervisor keep fixed capabilities. See [agents](agents.md).
 - Who may hand work to whom is set inside each workspace, not on an agent. The same agent can be trusted to receive work in one workspace and not in another.
 - A task with no agent assigned cannot run. It stays on the board as a to-do for you.
 

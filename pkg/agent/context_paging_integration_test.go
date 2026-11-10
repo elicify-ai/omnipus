@@ -108,7 +108,7 @@ func TestRecallSpan_DroppedFirstUnderPressure(t *testing.T) {
 
 		// Run windowTrim. Because the window alone is tiny and under budget, but
 		// window+span is over budget, windowTrim should drop the span and return ok=false.
-		_, ok := al.windowTrim(al.GetRegistry().GetDefaultAgent(), "", sk)
+		_, ok := al.windowTrim(al.GetRegistry().primaryChatAgentForTest(), "", sk)
 
 		// The span must be dropped.
 		if al.activeRecallSpan(sk) != nil {
@@ -128,7 +128,7 @@ func TestRecallSpan_DroppedFirstUnderPressure(t *testing.T) {
 		if ok {
 			// If ok=true, the window was trimmed — that means the span drop alone was
 			// NOT sufficient. But we sized the window to be tiny, so this would be a bug.
-			afterWindow := al.GetRegistry().GetDefaultAgent().Sessions.GetHistory(sk)
+			afterWindow := al.GetRegistry().primaryChatAgentForTest().Sessions.GetHistory(sk)
 			if len(afterWindow) < len(smallWindow) {
 				t.Errorf(
 					"SC-016: real Turns were evicted even though span-drop alone should suffice: before=%d after=%d",
@@ -165,7 +165,7 @@ func TestRecallSpan_DroppedFirstUnderPressure(t *testing.T) {
 
 		pressureBefore := RecallSpanDropCount("pressure")
 
-		_, ok := al2.windowTrim(al2.GetRegistry().GetDefaultAgent(), "", sk2)
+		_, ok := al2.windowTrim(al2.GetRegistry().primaryChatAgentForTest(), "", sk2)
 
 		// The span must be dropped.
 		if al2.activeRecallSpan(sk2) != nil {
@@ -182,7 +182,7 @@ func TestRecallSpan_DroppedFirstUnderPressure(t *testing.T) {
 			t.Error("T29b: windowTrim must return ok=true when real Turns are evicted")
 		}
 
-		afterWindow := al2.GetRegistry().GetDefaultAgent().Sessions.GetHistory(sk2)
+		afterWindow := al2.GetRegistry().primaryChatAgentForTest().Sessions.GetHistory(sk2)
 		if len(afterWindow) >= len(bigHistory) {
 			t.Errorf("T29b: real Turns must be evicted when span drop is insufficient: before=%d after=%d",
 				len(bigHistory), len(afterWindow))
@@ -241,6 +241,7 @@ func TestFitInvariantHolds_WindowPlusRecall(t *testing.T) {
 		"- turns 1–2 · earlier · \"This was an earlier question\""
 
 	assembled := cb.BuildMessages(
+		0,
 		window,
 		"Current question",
 		nil,
@@ -375,6 +376,7 @@ func TestRecallSpan_ZeroDuplicateOrphanToolCallIDs_EndToEnd(t *testing.T) {
 	}
 
 	assembled := cb.BuildMessages(
+		0,
 		liveWindow,
 		"What did we find?",
 		nil,
@@ -630,7 +632,7 @@ func TestBreadcrumb_ZeroLLMCallsViaStubCounter(t *testing.T) {
 //	[0] system (pinned core + breadcrumb)
 //	[1..N] recall span messages (old recalled turns)
 //	[N+1..M] sliding window messages (recent live turns)
-//	[last] current user message
+//	[penultimate] current user message · [last] volatile user tail (prompt-caching FR-007)
 //
 // Traces to: spec §7 T31, FR-019, spec line 296.
 func TestBuildMessages_SpanPlacedViaRealContextBuilder(t *testing.T) {
@@ -666,6 +668,7 @@ func TestBuildMessages_SpanPlacedViaRealContextBuilder(t *testing.T) {
 	currentMsg := "CURRENT_MSG: what is Paris known for?"
 
 	assembled := cb.BuildMessages(
+		0,
 		windowMsgs,
 		currentMsg,
 		nil,
@@ -755,9 +758,11 @@ func TestBuildMessages_SpanPlacedViaRealContextBuilder(t *testing.T) {
 			spanUserIdx, currentIdx)
 	}
 
-	// Current must be the last message.
-	if currentIdx != len(assembled)-1 {
-		t.Errorf("T31-real: current user message must be last (idx=%d), got assembled len=%d",
-			currentIdx, len(assembled))
+	// FR-007: current is last in the conversation, immediately before the
+	// separate volatile tail. Span/window order above is unchanged.
+	conversation := requireConversationBeforeVolatileTail(t, assembled)
+	if currentIdx != len(conversation)-1 {
+		t.Errorf("T31-real: current user message must precede the volatile tail (idx=%d), got conversation len=%d",
+			currentIdx, len(conversation))
 	}
 }

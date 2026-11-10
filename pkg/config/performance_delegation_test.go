@@ -2,10 +2,10 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// ADR-091 D9 — the config fold: performance.max_delegation_depth /
-// performance.delegation_timeout_minutes are the single source of truth
-// for the onward-delegation depth ceiling and default timeout (moved off
-// agents.defaults.subturn.max_depth / default_timeout_minutes).
+// ADR-091 D9 — the config fold: performance.max_delegation_depth is the
+// single source of truth for the onward-delegation depth ceiling (moved off
+// agents.defaults.subturn.max_depth). The sibling delegation timeout was
+// retired by issue #1306 (delegated work has no time limit).
 
 package config
 
@@ -41,24 +41,5 @@ func TestEffectiveMaxDelegationDepth_NegativeIsRejected(t *testing.T) {
 	_, err := p.EffectiveMaxDelegationDepth()
 	if !errors.Is(err, ErrPerformanceLimitMisconfigured) {
 		t.Fatalf("EffectiveMaxDelegationDepth(-1) error = %v, want ErrPerformanceLimitMisconfigured", err)
-	}
-}
-
-func TestEffectiveDelegationTimeoutMinutes_ZeroIsUnsetNotError(t *testing.T) {
-	p := PerformanceConfig{DelegationTimeoutMinutes: 0}
-	got, err := p.EffectiveDelegationTimeoutMinutes()
-	if err != nil {
-		t.Fatalf("EffectiveDelegationTimeoutMinutes(0): %v, want nil error", err)
-	}
-	if got != 0 {
-		t.Fatalf("EffectiveDelegationTimeoutMinutes(0) = %d, want 0", got)
-	}
-}
-
-func TestEffectiveDelegationTimeoutMinutes_NegativeIsRejected(t *testing.T) {
-	p := PerformanceConfig{DelegationTimeoutMinutes: -5}
-	_, err := p.EffectiveDelegationTimeoutMinutes()
-	if !errors.Is(err, ErrPerformanceLimitMisconfigured) {
-		t.Fatalf("EffectiveDelegationTimeoutMinutes(-5) error = %v, want ErrPerformanceLimitMisconfigured", err)
 	}
 }

@@ -87,7 +87,7 @@ func TestConfigSet_ChannelOwnershipRecordRefused(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			deps, cfg := newTestDeps()
+			deps, cfg := newTestDeps(t)
 			seedOwnedChannel(cfg)
 			before := snapshotConfig(t, cfg)
 
@@ -171,7 +171,7 @@ func TestConfigSet_NamespacedInstanceOwnershipRefused(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			deps, cfg := newTestDeps()
+			deps, cfg := newTestDeps(t)
 			cfg.Channels = map[string]config.ChannelInstanceConfig{
 				instance: {
 					Type:        "slack",
@@ -231,7 +231,7 @@ func TestConfigSet_ChannelOwnershipBlockDoesNotOverBlock(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.key, func(t *testing.T) {
-			deps, cfg := newTestDeps()
+			deps, cfg := newTestDeps(t)
 			seedOwnedChannel(cfg)
 
 			result := systools.NewConfigSetTool(deps).Execute(context.Background(),
@@ -270,7 +270,7 @@ func TestConfigSet_ChannelOwnershipBlockDoesNotOverBlock(t *testing.T) {
 // is, and enforcement now lives at the send tool and at dispatch (FR-4, FR-6),
 // so knowing an owner buys an attacker nothing it can act on.
 func TestConfigGet_ChannelOwnershipRecordIsReadable(t *testing.T) {
-	deps, cfg := newTestDeps()
+	deps, cfg := newTestDeps(t)
 	seedOwnedChannel(cfg)
 	get := systools.NewConfigGetTool(deps)
 

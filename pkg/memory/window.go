@@ -1,0 +1,60 @@
+package memory
+
+import "errors"
+
+// WindowState is internal context-view persistence, never a gateway wire type.
+// AnchorLine addresses the original user message when it lies before Skip.
+type WindowState struct {
+	Skip  int
+	Count int
+	// ClearFloor is the ordinal a /clear moved the window to. Slots below it are
+	// the cleared part of the conversation: they stay in the archive for recall
+	// but never feed the next request (no breadcrumb snippets of them). 0 when
+	// the session was never cleared.
+	ClearFloor int
+	// DropExpiryNote asks a commit to drop the retention notice stored with the
+	// window. A /clear sets it: when the window is already empty the clear moves
+	// neither the cursor nor the floor, so nothing else would tell the commit.
+	// It is a one-shot request, never stored and never part of the state compare.
+	DropExpiryNote bool
+	// RestoreExpiryNote, set on the state a RestoreWindow puts back, writes this
+	// retention notice back: the undo of a /clear that had dropped it. Like
+	// DropExpiryNote it is a one-shot request, never stored or compared.
+	RestoreExpiryNote string
+	AnchorLine        *int
+	Projection        ProjectionMeta
+}
+
+func (w WindowState) Clone() WindowState {
+	out := w
+	if w.AnchorLine != nil {
+		v := *w.AnchorLine
+		out.AnchorLine = &v
+	}
+	out.Projection.Entries = w.Projection.Entries.Clone()
+	out.Projection.SourceRunes = make(map[ProjectionKey]int, len(w.Projection.SourceRunes))
+	for k, v := range w.Projection.SourceRunes {
+		out.Projection.SourceRunes[k] = v
+	}
+	out.Projection.TranscriptAddr = make(map[ProjectionKey]RecordAddress, len(w.Projection.TranscriptAddr))
+	for k, v := range w.Projection.TranscriptAddr {
+		out.Projection.TranscriptAddr[k] = v
+	}
+	return out
+}
+
+// ArchiveSpan is a half-open [Start, End) range of physical archive-line
+// indices that is RETAINED on disk but EXCLUDED from the model view by an
+// append-only rollback effect (session-core FR-006 / DEL-12). The bytes stay in
+// the archive — ReadArchive/recall still return them — while every provider
+// request built from WindowHistory omits them. Because the archive is strictly
+// append-only and never renumbered, a span address stays exact for the
+// session's whole lifetime, which is why spans are never re-derived or shifted.
+type ArchiveSpan struct {
+	Start int `json:"start"`
+	End   int `json:"end"`
+}
+
+// ErrWindowChanged is returned when a compare-and-set checkpoint finds the
+// window moved while the checkpoint was being staged.
+var ErrWindowChanged = errors.New("memory: context window changed while staging checkpoint")

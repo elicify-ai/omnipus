@@ -120,7 +120,31 @@ func TestOnlyOneGate_SessionConcurrencyBoundByCentralValueAlone(t *testing.T) {
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			List: []config.AgentConfig{{ID: "mia"}},
+			List: []config.AgentConfig{{
+				ID: "mia",
+				// Per-test agent Home (cross-test leak fix, 2026-10-02): this is
+				// the only test in the package that runs REAL blocking turns and
+				// relies on a Home-less named agent. Without an explicit Home,
+				// resolveAgentHome (FUNC-11, pkg/agent/instance.go) resolves this
+				// named agent to <omnipusHome()>/agents/mia — one directory shared
+				// by every Home-less "mia" in the binary, because TestMain
+				// (test_helpers_test.go) pins HOME once for the whole run. This
+				// test's two admitted turns then persist their window history into
+				// that shared agent's session store (<Home>/sessions, per
+				// instance.go::newAgentInstance.prepareWorkspace), and any later
+				// test in the same binary that routes to
+				// session_key=agent:mia:main starts its turn with those messages
+				// already in the window (measured: this test's "hold slot 1"/
+				// "hold slot 2" texts were found as entries 0-1 of the shared
+				// .omnipus/agents/mia/sessions/.context/agent_mia_main.jsonl, and
+				// TestLoadTool_EndToEndMessageHistoryIntegrity failed its
+				// normalization-is-noop assertions 5→4 / 7→6 after receiving them).
+				// An explicit per-test Home is the same supported config
+				// construction session_worker_test.go's newConcurrentTestAgentLoop
+				// already uses ({ID: "mia", Home: tmpDir}); the admission
+				// assertions below are config- and wiring-only and do not read it.
+				Home: t.TempDir(),
+			}},
 		},
 		Performance: config.PerformanceConfig{MaxParallelAgents: 2},
 	}

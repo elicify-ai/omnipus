@@ -5,9 +5,7 @@
 //     and emits {type:"session_started", session_id, agent_id} BEFORE bus publish.
 //   - Session-scoped server frames (token, done, error, session_started) carry session_id.
 //   - bus.InboundMessage.SessionID carries the resolved id.
-//   - Handoff override is keyed by "session:"+sessionID in sessionActiveAgent.
 //   - Per-agent session storage key is agent:<agentID>:session:<sessionID>.
-//   - (*AgentLoop).GetSessionActiveAgent(sessionID) reads the new key.
 //   - WS handler no longer holds a per-connection *sessionID; every frame
 //     stands on its own frame.SessionID.
 //
@@ -113,7 +111,7 @@ func newStreamingTestWSHandler(t *testing.T) (*WSHandler, *bus.MessageBus, *agen
 	}()
 	// Wait for Run to fully exit before t.TempDir cleanup — otherwise session
 	// writers race with RemoveAll and produce "directory not empty" failures
-	// (TestWS_HandoffOverrideKeyedBySessionID and friends).
+	// (multi-session WS tests).
 	t.Cleanup(func() {
 		cancel()
 		select {
@@ -189,7 +187,7 @@ func TestWS_MessageWithEmptySessionID_MintsAndAcks(t *testing.T) {
 	sendWSAuthFrameDevMode(t, conn)
 
 	// BDD: When — send message without session_id
-	firstMsg := wsClientFrameTestHelper{Type: "message", Content: "first message no session id"}
+	firstMsg := wsClientFrameTestHelper{Type: "message", Content: "first message no session id", AgentID: "mia"}
 	data, err := json.Marshal(firstMsg)
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
@@ -290,7 +288,7 @@ func TestWS_TwoParallelSessions_NoCrosstalk(t *testing.T) {
 	sendWSAuthFrameDevMode(t, conn)
 
 	// Mint session A
-	msgA := wsClientFrameTestHelper{Type: "message", Content: "session-a-message"}
+	msgA := wsClientFrameTestHelper{Type: "message", Content: "session-a-message", AgentID: "mia"}
 	dataA, merr := json.Marshal(msgA)
 	require.NoError(t, merr)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, dataA))
@@ -302,7 +300,7 @@ func TestWS_TwoParallelSessions_NoCrosstalk(t *testing.T) {
 	drainUntilSessionDone(t, conn, sessionA, 5*time.Second)
 
 	// Mint session B
-	msgB := wsClientFrameTestHelper{Type: "message", Content: "session-b-message"}
+	msgB := wsClientFrameTestHelper{Type: "message", Content: "session-b-message", AgentID: "mia"}
 	dataB, merr := json.Marshal(msgB)
 	require.NoError(t, merr)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, dataB))
@@ -431,84 +429,11 @@ func TestWS_MessageWithUnknownSessionID_ErrorsCleanly(t *testing.T) {
 
 	// BDD: And — connection stays open (write a follow-up to confirm)
 	conn.SetWriteDeadline(time.Now().Add(2 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
-	ping := wsClientFrameTestHelper{Type: "message", Content: "still open after error?"}
+	ping := wsClientFrameTestHelper{Type: "message", Content: "still open after error?", AgentID: "mia"}
 	pingData, err := json.Marshal(ping)
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, pingData),
 		"connection must stay open after error frame — not a fatal disconnect")
-}
-
-// ---------------------------------------------------------------------------
-// TestWS_HandoffOverrideKeyedBySessionID
-// ---------------------------------------------------------------------------
-
-// TestWS_HandoffOverrideKeyedBySessionID verifies that two independently minted
-// sessions each have isolated GetSessionActiveAgent state. The session-scoped
-// key "session:"+sessionID means session A's state cannot bleed into session B.
-//
-// BDD:
-//
-//	Given two sessions A and B are minted via WS messages without session_id,
-//	When each session's first message is delivered,
-//	Then GetSessionActiveAgent(sessionA) returns ("", false) — no override seeded,
-//	 and GetSessionActiveAgent(sessionB) returns ("", false).
-//	And the two session_ids are distinct (key isolation proof).
-//
-// Traces to: quizzical-marinating-frog.md Step 9 — TestWS_HandoffOverrideKeyedBySessionID
-func TestWS_HandoffOverrideKeyedBySessionID(t *testing.T) {
-	// BDD: Given
-	handler, _, al := newStreamingTestWSHandler(t)
-
-	srv := httptest.NewServer(handler)
-	t.Cleanup(srv.Close)
-	t.Cleanup(handler.Wait)
-
-	conn := dialTestWS(t, srv)
-	t.Cleanup(func() { _ = conn.Close() })
-
-	sendWSAuthFrameDevMode(t, conn)
-
-	// Mint session A
-	msgA := wsClientFrameTestHelper{Type: "message", Content: "handoff-test-session-a"}
-	dataA, err := json.Marshal(msgA)
-	require.NoError(t, err)
-	require.NoError(t, conn.WriteMessage(websocket.TextMessage, dataA))
-
-	startedA := readFrameOfType(t, conn, "session_started", 5*time.Second)
-	require.NotEmpty(t, startedA.SessionID, "session A must be minted")
-	sessionA := startedA.SessionID
-	drainUntilSessionDone(t, conn, sessionA, 5*time.Second)
-
-	// Mint session B
-	msgB := wsClientFrameTestHelper{Type: "message", Content: "handoff-test-session-b"}
-	dataB, err := json.Marshal(msgB)
-	require.NoError(t, err)
-	require.NoError(t, conn.WriteMessage(websocket.TextMessage, dataB))
-
-	startedB := readFrameOfType(t, conn, "session_started", 5*time.Second)
-	require.NotEmpty(t, startedB.SessionID, "session B must be minted")
-	sessionB := startedB.SessionID
-	drainUntilSessionDone(t, conn, sessionB, 5*time.Second)
-
-	// Differentiation: the two minted ids must differ.
-	require.NotEqual(t, sessionA, sessionB,
-		"two independent session mints must produce different ids — hardcoded implementation would fail here")
-
-	// BDD: Then — neither session has a handoff override (no handoff tool was called).
-	_, aHasOverride := al.GetSessionActiveAgent(sessionA)
-	assert.False(t, aHasOverride,
-		"session A must not have a handoff override — GetSessionActiveAgent reads 'session:'+sessionID key, "+
-			"and no handoff tool call was fired in this session")
-
-	_, bHasOverride := al.GetSessionActiveAgent(sessionB)
-	assert.False(t, bHasOverride,
-		"session B must not have a handoff override — sessions are independent; "+
-			"if the old 'chat:'+chatID key format were used, both sessions would share override state")
-
-	// Key isolation: the map keys for session A and B are different strings.
-	// "session:A" != "session:B" means an override seeded for A cannot be retrieved via B.
-	assert.NotEqual(t, "session:"+sessionA, "session:"+sessionB,
-		"session-scoped keys must be different; same key would mean sessions share override state")
 }
 
 // ---------------------------------------------------------------------------
@@ -540,7 +465,7 @@ func TestWS_FrameTaggingCompleteness_AllSessionScopedFramesCarrySessionID(t *tes
 	sendWSAuthFrameDevMode(t, conn)
 
 	// Mint session
-	initMsg := wsClientFrameTestHelper{Type: "message", Content: "trigger session for frame tagging test"}
+	initMsg := wsClientFrameTestHelper{Type: "message", Content: "trigger session for frame tagging test", AgentID: "mia"}
 	data, err := json.Marshal(initMsg)
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
@@ -614,8 +539,6 @@ func TestWS_FrameTaggingCompleteness_AllSessionScopedFramesCarrySessionID(t *tes
 //	Given two sequential WS messages each without session_id,
 //	When each message completes (done/error frame received),
 //	Then the two minted session_ids are distinct.
-//	And GetSessionActiveAgent returns no override for either
-//	  (session-scoped key "session:"+sessionID is correct).
 //	And each session's directory exists on disk.
 //
 // Traces to: quizzical-marinating-frog.md Step 9 — TestWS_PerAgentSessionKeyFormat
@@ -633,7 +556,7 @@ func TestWS_PerAgentSessionKeyFormat(t *testing.T) {
 	sendWSAuthFrameDevMode(t, conn)
 
 	// Mint session A — send, wait for session_started, wait for done.
-	msgA := wsClientFrameTestHelper{Type: "message", Content: "session-A-content"}
+	msgA := wsClientFrameTestHelper{Type: "message", Content: "session-A-content", AgentID: "mia"}
 	dataA, err := json.Marshal(msgA)
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, dataA))
@@ -644,7 +567,7 @@ func TestWS_PerAgentSessionKeyFormat(t *testing.T) {
 	drainUntilSessionDone(t, conn, sessionA, 5*time.Second)
 
 	// Mint session B
-	msgB := wsClientFrameTestHelper{Type: "message", Content: "session-B-content"}
+	msgB := wsClientFrameTestHelper{Type: "message", Content: "session-B-content", AgentID: "mia"}
 	dataB, err := json.Marshal(msgB)
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, dataB))
@@ -660,17 +583,6 @@ func TestWS_PerAgentSessionKeyFormat(t *testing.T) {
 
 	// Give the agent loop time to flush writes.
 	time.Sleep(200 * time.Millisecond)
-
-	// Verify GetSessionActiveAgent uses "session:"+sessionID key format correctly.
-	// No handoff tool call was made, so both should return false.
-	_, aOk := al.GetSessionActiveAgent(sessionA)
-	assert.False(t, aOk,
-		"GetSessionActiveAgent(%q) must return false — no handoff was fired; "+
-			"the function reads 'session:'+sessionID which is the correct new key format", sessionA)
-
-	_, bOk := al.GetSessionActiveAgent(sessionB)
-	assert.False(t, bOk,
-		"GetSessionActiveAgent(%q) must return false — session B must not inherit session A state", sessionB)
 
 	// Disk: confirm the session directories exist.
 	store := al.GetSessionStore()
@@ -741,7 +653,7 @@ func TestWS_Cancel_OnlyInterruptsTargetSession(t *testing.T) {
 	sendWSAuthFrameDevMode(t, conn)
 
 	// Mint a real session first.
-	msg := wsClientFrameTestHelper{Type: "message", Content: "hello"}
+	msg := wsClientFrameTestHelper{Type: "message", Content: "hello", AgentID: "mia"}
 	data, err := json.Marshal(msg)
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
@@ -760,64 +672,24 @@ func TestWS_Cancel_OnlyInterruptsTargetSession(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, cancelData))
 
-	// Give the server a moment to process. No error frame should arrive.
-	conn.SetReadDeadline(time.Now().Add(300 * time.Millisecond)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
-	_, _, readErr := conn.ReadMessage()
-	// Only allowed failure: deadline exceeded (no frame) or close.
-	if readErr == nil {
-		t.Error("cancel on a finished session must not produce any server frame")
+	// R2-S5-07 / R3-S5-PTA-03: the cancel_stage report is published
+	// ASYNCHRONOUSLY by the cascade (ADR-091 I-6), and the test REQUIRES it, so
+	// the deadline covers a real publish on a loaded worker. Read every frame
+	// up to the cancel_stage report instead of assuming it is the first one:
+	// an earlier unrelated frame (a status frame) must not fail the test for
+	// the wrong reason, and an error frame anywhere before the report is
+	// exactly what this test forbids ("no error frame ... from this cancel").
+	deadline := time.Now().Add(3 * time.Second)
+	var sawStage bool
+	for !sawStage {
+		conn.SetReadDeadline(deadline) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
+		_, rawFrame, readErr := conn.ReadMessage()
+		require.NoError(t, readErr,
+			"ADR-091 I-6: a cancel publishes a cancel_stage report; none arrived before the deadline")
+		var f replayFrameDecoder
+		require.NoError(t, json.Unmarshal(rawFrame, &f), "undecodable frame: %s", rawFrame)
+		require.NotEqual(t, "error", f.Type,
+			"cancel on a finished session must not produce an error frame; got %s", rawFrame)
+		sawStage = f.Type == "cancel_stage"
 	}
-}
-
-// ---------------------------------------------------------------------------
-// TestWS_TwoConnections_HandoffInOneDoesNotAffectOther (F7/session isolation)
-// ---------------------------------------------------------------------------
-
-// TestWS_TwoConnections_HandoffInOneDoesNotAffectOther verifies that two
-// independent WebSocket connections each mint their own session and that
-// GetSessionActiveAgent for one session's ID does not return stale data for
-// the other connection's session.
-func TestWS_TwoConnections_HandoffInOneDoesNotAffectOther(t *testing.T) {
-	handler, _, al := newStreamingTestWSHandler(t)
-	srv := httptest.NewServer(handler)
-	t.Cleanup(srv.Close)
-	t.Cleanup(handler.Wait)
-
-	// Connection 1.
-	conn1 := dialTestWS(t, srv)
-	t.Cleanup(func() { _ = conn1.Close() })
-	sendWSAuthFrameDevMode(t, conn1)
-
-	// Connection 2.
-	conn2 := dialTestWS(t, srv)
-	t.Cleanup(func() { _ = conn2.Close() })
-	sendWSAuthFrameDevMode(t, conn2)
-
-	// Mint session on connection 1.
-	data1, err := json.Marshal(wsClientFrameTestHelper{Type: "message", Content: "conn1"})
-	require.NoError(t, err)
-	require.NoError(t, conn1.WriteMessage(websocket.TextMessage, data1))
-	started1 := readFrameOfType(t, conn1, "session_started", 5*time.Second)
-	sid1 := started1.SessionID
-	require.NotEmpty(t, sid1)
-	drainUntilSessionDone(t, conn1, sid1, 5*time.Second)
-
-	// Mint session on connection 2.
-	data2, err := json.Marshal(wsClientFrameTestHelper{Type: "message", Content: "conn2"})
-	require.NoError(t, err)
-	require.NoError(t, conn2.WriteMessage(websocket.TextMessage, data2))
-	started2 := readFrameOfType(t, conn2, "session_started", 5*time.Second)
-	sid2 := started2.SessionID
-	require.NotEmpty(t, sid2)
-	drainUntilSessionDone(t, conn2, sid2, 5*time.Second)
-
-	// Differentiation: the two sessions must be independent.
-	assert.NotEqual(t, sid1, sid2, "two connections must produce distinct session ids")
-
-	// Simulate a handoff override on session 1 only.
-	al.SetCurrentSession("main", sid1)
-
-	// Session 2 must not be affected by the handoff on session 1.
-	_, hasHandoff2 := al.GetSessionActiveAgent(sid2)
-	assert.False(t, hasHandoff2, "session 2 must not inherit handoff state from session 1")
 }

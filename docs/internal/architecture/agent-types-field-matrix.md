@@ -1,5 +1,7 @@
 # Agent Types — Field Matrix
 
+> **Amendment 2026-10-14 — founder order ([PR #1311](https://github.com/elicify-ai/omnipus/pull/1311), [issue #1306](https://github.com/elicify-ai/omnipus/issues/1306)).** No wall-clock limit ends agent work. The Judge retains its timers but must always conclude visibly with the work result. The timeout row, mutable-timeout note and Decision 2 below are **superseded**: no agent type has a create/edit lifetime-duration setting, and external agent work has no process kill timer. Strict per-variant create decoding remains. Sources: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/contracts/components/schemas/AgentCreateRequestSubagent3p.yaml`::properties; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/pkg/gateway/rest_agents_create.go`::decodeAgentCreateVariant; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/pkg/agent/external_dispatch.go`::startAndDrain. Other field decisions are not changed by this amendment.
+
 > **2026-07-04**: `sandbox_profile` removed entirely (ADR-035) — it never
 > differentiated the actual kernel-enforced boundary per agent. The row below
 > reflects `shell_policy` only; the old combined row and `inherit_sandbox` are
@@ -29,6 +31,8 @@ change (operator-approved 2026-07-03, pending two field decisions — see
 
 ## Field-by-field matrix
 
+> **Amended 2026-10-14 — superseded (founder; PR #1311 / #1306):** the **`timeout_seconds` row below** is retained as the July field allocation, but all four type cells are now **removed / not applicable**. Do not render it, require a default, or send it in create/edit payloads. Count-based tool iterations remain independent.
+
 Legend: **R** = required · **O** = optional · **RO** = visible read-only ·
 **inherit** = may be inherited from the caller instead of set ·
 **—** = not applicable / hidden (and, once the discriminated-union contract
@@ -51,7 +55,7 @@ UI; inherits `agents.defaults`.
 | `shell_policy` | defaults-only in UI | O | O | — (runner manages its own isolation) |
 | `executor` (cli, cli_path, args, env) | — | — | — (native) | **R** (`cli` **R**, `cli_path` **R**, validated on blur; `args`/`env` O) |
 | `timeout_seconds` | O (editable; Execution knobs exposed for locked, decided 2026-07-03) | O | O | O — kept (operator-decided 2026-07-03; process-level kill for a hung CLI) |
-| `max_tool_iterations` (per-turn cap) | O (editable; Execution knobs exposed for locked, decided 2026-07-03) | O (default 200/turn) | O (default 200/turn) | — excluded (operator-decided 2026-07-03; the external CLI runs its own loop; schema-rejected on create, 400 on update) |
+| `max_tool_iterations` (per-turn cap) | O (editable; Execution knobs exposed for locked, decided 2026-07-03) | O (1–1000; may only lower the global limit — #904) | O (1–1000; may only lower the global limit — #904) | O (1–1000; may only lower the global limit; handed to the CLI as its turn cap — #904 D14, supersedes the 2026-07-03 exclusion) |
 | `steering_mode` | O (Main-surface concept) | O (**Main-only** among user types; workers forced `one-at-a-time` server-side) | — | — |
 | `rate_limits` | O | O | O | O (calls still metered at the gateway) |
 | ~~`delegation_policy` / `can_delegate_to`~~ — **removed by [ADR-037]** (delegation is workspace-scoped; edit via the workspace Team tab, `pkg/workspace/delegation.go`) | — | — | — | — |
@@ -61,6 +65,8 @@ UI; inherits `agents.defaults`.
 | email mailbox | per (agent, workspace) pair — ADR-033; owner must be workspace `core_team`; **workers excluded** | same | — (worker) | — (worker) |
 
 ## Notes that keep biting
+
+> **Amended 2026-10-14 — superseded in part (founder; PR #1311 / #1306):** **“timeout … ARE mutable via the API”** in the built-in note below is no longer true. Locked-agent editability does not preserve a retired duration property. Model, rate-limit and count-cap semantics are not changed by this removal.
 
 - **Built-in ≠ untouchable.** Locked core agents reject only the identity/
   capability set — `name`, `description`, `soul`, `color`, `icon`, `skills`
@@ -84,10 +90,21 @@ UI; inherits `agents.defaults`.
 
 ## Decisions (resolved 2026-07-03, operator-approved)
 
-1. `max_tool_iterations` on `subagent_3p`: **excluded** — schema-rejected on
-   create (discriminated-union variant), 400 on update, hidden in UI.
+1. ~~`max_tool_iterations` on `subagent_3p`: **excluded** — schema-rejected on
+   create (discriminated-union variant), 400 on update, hidden in UI.~~ —
+   **superseded 2026-09-26 by #904 D14** (`docs/internal/specs/tool-iteration-limit-spec.md`):
+   external-CLI workers carry the same per-agent limit as every other type
+   (create form + profile, "Use global limit" reset). For every type the
+   value is 1–1000 and may only LOWER the global limit
+   (`agents.defaults.max_tool_iterations`, Settings → Performance); the
+   effective value is `min(global, own)`, resolved by
+   `pkg/config/max_tool_iterations.go::ResolveMaxToolIterations`. The shipped
+   global default (200) lives only in `config.DefaultMaxToolIterations`.
 2. `timeout_seconds` on `subagent_3p`: **kept** — process-level kill for a
    hung CLI; settable at create (slim Advanced) and edit.
+
+   **Amended 2026-10-14 — superseded (founder; PR #1311 / #1306):** this July decision is retained as history, not current field allocation. The lifetime setting is removed from external creation, editing and the `Agent` response. A strict create request containing it returns 400. Keep the variant's valid CLI authoring fields without adding a replacement timer; old saved duration fields are inert, not create-time compatibility.
+
 3. ~~`delegation_policy` on `subagent_3p` create: **allowed** (matrix +
    update-path consistency; previously 400).~~ — **superseded by [ADR-037]:** the `delegation_policy` field no longer exists for any agent type; `PUT`/create now 400 on it via a raw-body sniff. Delegation is workspace-scoped (workspace Team tab).
 4. The create contract is a discriminated union (`AgentCreateRequestMain` /

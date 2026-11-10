@@ -21,7 +21,8 @@
 // another test wrote, in this file or in any sibling — which is precisely what
 // makes splitting the suite across shards sound.
 
-import { expect } from '@playwright/test'
+import { expect, type Page } from '@playwright/test'
+import type { components } from '../../src/lib/api/generated/openapi-types'
 import { test } from './fixtures/plan-cleanup'
 import {
   apiFetch,
@@ -122,436 +123,29 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED
 
   // 900s, not 600s: Step 1's own hold budget below was widened from 120s to
   // 300s (see that constant's comment for the live-shard evidence), and
-  // Step 2's observe loop already budgets a further 420s after Step 1
-  // returns — 300s + 420s = 720s of INTENTIONAL polling alone, before setup
-  // (agent/workspace/plan creation) or teardown assertions run at all. The
+  // Step 2's observe loop already budgeted a further 420s after Step 1
+  // returned — 300s + 420s = 720s of INTENTIONAL polling alone, before setup
+  // (agent/workspace/plan creation) or teardown assertions ran at all. The
   // old 600s ceiling was already tighter than the 720s of polling it was
   // asked to contain; it happened to work only when round-1 finished fast
   // enough that Step 1 returned in a few seconds, not close to its deadline.
-  test.setTimeout(900_000)
-  await startFreshChatWithJim(page)
+  // WIDENED AGAIN 900s -> 1500s (2026-09-28): Step 1 now budgets 600s after
+  // its 2026-09-17 widening, and Step 2 now budgets 600s after the measured
+  // live-shard exhaustion documented beside observeDeadline. Their combined
+  // 1200s intentional polling budget therefore needs more than the stale 900s
+  // ceiling; 1500s preserves 300s for setup, evidence collection, assertions,
+  // and teardown when both polling stages approach their full budgets.
+  test.setTimeout(1_500_000)
 
-  // Setup: per-test Main agent (chat-target owner + member assignee) in
-  // its own workspace core_team (avoids multi-workspace ambiguity).
-  // `bash: allow` is required for the `check` criteria below (see t2's
-  // createMainAgent comment — a fresh custom agent is deny-by-default).
-  const ownerId = await createMainAgent(page, `conformance-t3-owner-${Date.now()}`, { bash: 'allow' })
-  // m3's assignee: a stub external-CLI worker that ends every run reporting a
-  // transient failure (see m3 in the members comment below for why).
-  const m3WorkerId = await createStubCliWorkerAgent(page, `conformance-t3-m3-stub-${Date.now()}`, {
-    firstTry: blockedMarker(
-      'a transient network error interrupted writing out/t3/m3.txt; the member itself is sound and is ' +
-        'expected to succeed when retried',
-    ),
-  })
-  const wsRes = await apiFetch<{ id: string }>(page, 'POST', '/api/v1/workspaces', {
-    name: 'conformance-t3',
-    core_team: [ownerId, m3WorkerId],
-  })
-  if (!wsRes.ok) throw new Error(`t3: POST /workspaces failed ${wsRes.status}: ${wsRes.raw}`)
-  const workspaceId = wsRes.body.id
+  const setup = await runReplanSetup(page, createdPlanIds)
 
-  // Three independent (disjoint write_set, no blocked_by — they dispatch in
-  // parallel) members:
-  //   m1 — trivial filler, own check trivially passes.
-  //   m2 — the SUPERSEDE target: own check trivially passes (member ends
-  //        `done`), but the plan's DoD (below) explicitly says its recorded
-  //        outcome is wrong — "member finished but result incorrect" is
-  //        PlanSupervisor's own rubric language for SUPERSEDE.
-  //   m3 — the TARGETED-RETRY target. It must end `failed` promptly and the
-  //        same way on every run. Its worker is the stub external CLI above,
-  //        which ends every run with a failure marker naming a transient
-  //        cause; the task run reads that as a blocked claim, so m3 ends
-  //        Failed "Blocked: <cause>" at once — no Judge call, no task attempt
-  //        used, no restart (ADR-043 §8, ADR-084 §11). Its title frames the
-  //        failure as transient — PlanSupervisor's member-list wake data is
-  //        exactly "member_id | status | title", so the title is real,
-  //        load-bearing signal it reads (the same idiom this file already
-  //        uses for g7's exact-tool-call prompt engineering).
-  //
-  //        WHY NOT a native worker with a check that can never pass (`exit 1`,
-  //        max_attempts=1), as this test used until 2026-09-15: under the
-  //        two-level task-run model (ADR-086 §8, issue #710) a Judge ruling of
-  //        "not met" no longer uses up a task attempt. The worker keeps working
-  //        in the same run, up to Tries per goal (default 20), and every try is
-  //        a worker LLM turn plus a Judge call on the member's Definition of
-  //        Done. A check that can never pass therefore kept m3 in progress for
-  //        many minutes; in CI run 34917711499 two of three attempts never
-  //        reached the hold within Step 1's 300s. Tries per goal cannot be
-  //        lowered for one test either: PUT /api/v1/performance answers 503
-  //        while dev_mode_bypass is on, and every CI e2e gateway runs with it
-  //        on. A blocked claim is the documented way a run ends at once, and it
-  //        keeps m3's failure deterministic with no LLM involved.
-  const { planId, memberIds } = await createPlanWithMembers(
-    page,
-    workspaceId,
-    ownerId,
-    {
-      title: 't3 conformance plan',
-      goal: 'exercise the supersede + targeted-retry correction paths',
-      description: 'owner re-plans after an unmet DoD adjudication',
-      // A single prose DoD (real Judge LLM call, not a machine check) that
-      // unambiguously names BOTH problems by each member's own title, so
-      // the Judge's per-criterion reasoning — which is the ONLY diagnostic
-      // text PlanSupervisor's wake carries — can correctly attribute each
-      // problem to the right member.
-      dod: [
-        proseCriterion(
-          'Member "m2-supersede-target" completed (status done) but its recorded outcome is ' +
-            'factually WRONG and must be redone, not merely accepted as-is. Separately, member ' +
-            '"m3-retry-target" must have SUCCEEDED at its check — if it is currently `failed`, that ' +
-            'failure was for a transient, recoverable reason and the member should be retried, not ' +
-            'abandoned or replaced. The plan is only met once BOTH conditions hold.',
-        ),
-      ],
-      bounds: { plan_judge_max_rounds: 4 },
-    },
-    [
-      {
-        label: 'm1',
-        title: 'm1-filler',
-        prompt: 'reply with alpha',
-        write_set: ['out/t3/m1.txt'],
-        criteria: [checkCriterion('m1 trivially passes', 'exit 0', 0)],
-      },
-      {
-        label: 'm2',
-        title: 'm2-supersede-target: work is done but its recorded result is wrong',
-        prompt: 'reply with beta',
-        write_set: ['out/t3/m2.txt'],
-        criteria: [checkCriterion('m2 own criterion trivially passes (member reaches done)', 'exit 0', 0)],
-      },
-      {
-        label: 'm3',
-        title: 'm3-retry-target: transient/flaky failure, safe and expected to succeed if retried',
-        prompt: 'reply with gamma',
-        write_set: ['out/t3/m3.txt'],
-        agent_id: m3WorkerId,
-        // Never judged: the stub worker ends every run with a blocked claim,
-        // before any Judge call. A criterion is still mandatory at creation.
-        criteria: [proseCriterion('m3 replied with the word gamma')],
-      },
-    ],
-    createdPlanIds,
-  )
+  await assertFirstHoldReached(page, setup)
 
-  // Approve + run.
-  const approveRes = await apiFetch<{ status: string }>(page, 'POST', `/api/v1/plans/${planId}/approve`, {})
-  expect(approveRes.ok, `t3: POST /plans/{id}/approve failed ${approveRes.status}: ${approveRes.raw}`).toBe(true)
+  const obs = await observeReplanCorrections(page, setup)
 
-  const HOLD_PHASE = 'awaiting_supervision'
+  assertReplanCorrectionCommits(obs, setup)
 
-  // --- Step 1: MANDATORY — reach the hold at least once -------------------
-  // Not conditional (the original escape hatch this section replaces): with
-  // m2 done-but-DoD-wrong and m3 ending Failed "Blocked: <transient cause>" on
-  // its first try, a round-1 unmet verdict (and the awaiting_supervision hold
-  // it triggers) is expected reliably, not merely hoped for.
-  //
-  // BUDGET, widened from 120s to 300s (investigation, 2026-07-29, plan
-  // 01KYQ6T9HAMNWNG507Y94G4GHS on the ee7ecc47 CI shard): 120s was a TIMING
-  // defect, not a correctness one. Pulled straight from that plan's own
-  // persisted record on the CI worker (plan_intents/<id>.jsonl,
-  // plans/<id>.json) — approved at 15:10:26Z, round-1's real Judge verdict
-  // and PlanSupervisor turn produced its first committed SUPERSEDE at
-  // 15:15:08Z, ~282s later — reaching the hold itself (strictly before that
-  // commit) was already past 120s. This is unlike t3b's E.3 fix (a scenario
-  // ambiguity, fixed by splitting the test): here the mechanism is provably
-  // sound — the SAME plan went on to commit three real SUPERSEDE corrections
-  // (each with a genuine Judge-cited falsified-assumption) over the
-  // following ~19 minutes, ending in a legitimate judge_rounds_exhausted,
-  // not a premature abandon. t3's own round-1 requires THREE parallel real
-  // member LLM turns plus a real Judge LLM call against a prose DoD
-  // criterion (unlike t2's machine-checked, judgment-free DoD, or t3b's
-  // single-member scenario) — the heaviest real-LLM critical path of any
-  // conformance test here, and therefore the one most exposed when the
-  // shared CI worker is under load. The SAME shard log showed, concurrently
-  // with this plan's round-1: a sibling plan's supervision turn repeatedly
-  // timing out over real HTTP (`net/http: request canceled
-  // (Client.Timeout...)`) and re-arming its wake every ~30s for several
-  // minutes, and an unrelated agent turn retrying a denied ToolSearch call
-  // every few seconds for the same window — genuine, external LLM/CPU
-  // contention on the shard, not anything introduced by plan_engine.go's own
-  // dispatch/judge/supervision logic (unchanged by the commits under test).
-  // 300s carries comfortable margin over the observed ~282s without eating
-  // into Step 2's own 420s observation budget (see test.setTimeout's comment
-  // above for the combined worst case).
-  let reachedHoldOnce = false
-  // WIDENED AGAIN 300s -> 600s (2026-09-17). The 300s above was set from a
-  // measured ~282s on a shard running largely alone - 6% headroom over a real
-  // observation, which is not a budget, it is a coin flip. The e2e plan now
-  // runs LLM shards 4-wide by default (E2E_MAX_PARALLEL_LLM), and every one of
-  // them is waiting on the same OpenRouter capacity, so the same work takes
-  // materially longer than it did when 300s was chosen. This shard failed three
-  // consecutive retries on 2026-09-16 with three different plan ids, each
-  // "must reach plan_phase=awaiting_supervision" - the hold never arrived in
-  // time, not a wrong state. The transition itself is correct:
-  // pkg/agent/plan_engine_supervise.go writes JudgeRounds,
-  // PlanPhaseAwaitingSupervision, handover text and the terminal signature
-  // atomically after an UNMET verdict.
-  const firstHoldBudgetMs = 600_000
-  const firstHoldDeadline = Date.now() + firstHoldBudgetMs
-  while (Date.now() < firstHoldDeadline) {
-    const poll = await apiFetch<{ plan_phase?: string }>(page, 'GET', `/api/v1/plans/${planId}`)
-    if (!poll.ok) throw new Error(`t3: GET /plans/{id} poll (first hold) failed ${poll.status}: ${poll.raw}`)
-    if (poll.body.plan_phase === HOLD_PHASE) {
-      reachedHoldOnce = true
-      break
-    }
-    await page.waitForTimeout(1_500)
-  }
-  expect(
-    reachedHoldOnce,
-    `t3: plan ${planId} must reach plan_phase=awaiting_supervision within ${firstHoldBudgetMs / 1000}s of approval — m2 (done, ` +
-      'DoD-flagged wrong) + m3 (its stub worker ends every run Blocked at once) make a round-1 unmet verdict ' +
-      'expected reliably.',
-  ).toBe(true)
-
-  // --- Step 2: observe the REAL correction mechanism over the plan's full
-  // round budget. Every distinct plan_correct call is discoverable via the
-  // adjudication session(s) the plan's `supervision.session_id` names — a
-  // NEW session may be minted each time the plan opens a fresh park
-  // (pkg/agent/plan_engine.go's `ensureSupervisionSessionLocked`), so we
-  // track every session id ever observed and inspect all of them at the end,
-  // not just the most recent one.
-  //
-  // Alongside session tracking, sample (plan_phase, judge_rounds,
-  // correction_rounds, member signature) at the same cadence — the identical
-  // idiom Conformance_t2_PlanLifecycleE2E's F2 proof already uses
-  // (memberSignature + listPlanMemberTasks, see that test's Step 2 comment).
-  // This is evidence for the no-wedge check below: it needs to tell "the
-  // plan is genuinely stuck" apart from "a real member LLM turn is still
-  // running", and the only honest way to do that without a new arbitrary
-  // staleness budget is to record whether the plan's own observable state
-  // ever moves at all, and hand that trace to the check.
-  interface T3Sample {
-    tMs: number
-    state: string
-    phase: string
-    judgeRounds: number
-    correctionRounds: number
-    memberSig: string
-  }
-  const samples: T3Sample[] = []
-  const seenSessionIds = new Set<string>()
-  // Cumulative set of every member task id this plan has ever had — seeded
-  // with the 3 ids known at plan-create time, then extended every observe
-  // tick with whatever listPlanMemberTasks returns. The product's documented
-  // behaviour (pkg/agent/plan_engine.go `AppendCorrection`) lets a committed
-  // SUPERSEDE add fresh replacement members (e.g. an `m2_replacement` after
-  // m2 is superseded), and the supervisor can legitimately issue a follow-up
-  // `targeted_retry` against such a replacement in a later correction round —
-  // in CI run 35437922067 attempt-1, the supervisor's third plan_correct
-  // call targeted exactly such a replacement (id `2f6b1d08-…`, the
-  // m2_replacement minted by its own prior SUPERSEDE) and the original
-  // assertion `realMemberIds.has(targetId)` failed against the plan-create
-  // snapshot. The E.3 intent — target id must be a REAL plan member task id,
-  // never a label string, and never a member of some other plan — is fully
-  // preserved here: replacement members created mid-supervision by THIS plan
-  // are still real members of THIS plan (listPlanMemberTasks filters on
-  // `plan_id === planId` before returning), and 'm1'/'m2'/'m3' label
-  // strings still cannot appear in that list.
-  const allObservedMemberIds = new Set<string>(Object.values(memberIds))
-  let finalPlanState = ''
-  let finalPlanPhase = ''
-  const observeDeadline = Date.now() + 420_000
-  const sampleWindowStart = Date.now()
-  while (Date.now() < observeDeadline) {
-    const [poll, members] = await Promise.all([
-      apiFetch<{
-        state: string
-        plan_phase?: string
-        judge_rounds?: number
-        supervision?: { session_id?: string; correction_rounds?: number }
-      }>(page, 'GET', `/api/v1/plans/${planId}`),
-      listPlanMemberTasks(page, workspaceId, planId),
-    ])
-    if (!poll.ok) throw new Error(`t3: GET /plans/{id} poll (observe) failed ${poll.status}: ${poll.raw}`)
-    finalPlanState = poll.body.state
-    finalPlanPhase = poll.body.plan_phase ?? ''
-    const sid = poll.body.supervision?.session_id
-    if (sid) seenSessionIds.add(sid)
-    for (const m of members) allObservedMemberIds.add(m.id)
-    samples.push({
-      tMs: Date.now() - sampleWindowStart,
-      state: finalPlanState,
-      phase: finalPlanPhase,
-      judgeRounds: poll.body.judge_rounds ?? 0,
-      correctionRounds: poll.body.supervision?.correction_rounds ?? 0,
-      memberSig: memberSignature(members),
-    })
-    if (finalPlanState === 'done' || finalPlanState === 'failed') break
-    await page.waitForTimeout(4_000)
-  }
-
-  // Last sample offset (ms into the window) whose (phase, judge_rounds,
-  // correction_rounds, member signature) tuple differed from the sample
-  // before it — i.e. the last time the plan was observed to do ANYTHING.
-  // Diagnostic only (see the no-wedge check below for why this does not
-  // gate pass/fail on its own): a plan mid a real member LLM turn can
-  // legitimately hold an identical tuple for minutes (dispatch only touches
-  // the tuple at the START of a turn, not while it's in flight), so a fixed
-  // staleness cutoff here would just be a second budget-widening exercise in
-  // disguise.
-  let lastChangeTMs = samples.length > 0 ? samples[0].tMs : 0
-  for (let i = 1; i < samples.length; i++) {
-    const prev = samples[i - 1]
-    const cur = samples[i]
-    if (
-      cur.phase !== prev.phase ||
-      cur.judgeRounds !== prev.judgeRounds ||
-      cur.correctionRounds !== prev.correctionRounds ||
-      cur.memberSig !== prev.memberSig
-    ) {
-      lastChangeTMs = cur.tMs
-    }
-  }
-  const staleForMs = samples.length > 0 ? samples[samples.length - 1].tMs - lastChangeTMs : 0
-
-  // Collect every plan_correct call (any status) across every adjudication
-  // session this plan ever used.
-  const allCalls: Array<{ status: string; parameters: Record<string, unknown> }> = []
-  for (const sid of seenSessionIds) {
-    const messages = await getSessionMessages(page, sid)
-    allCalls.push(...extractPlanCorrectCalls(messages))
-  }
-  const committed = allCalls.filter((c) => c.status === 'success')
-
-  const diagnostic =
-    `plan state="${finalPlanState}" phase="${finalPlanPhase}"; sessions=${[...seenSessionIds].join(',')}; ` +
-    `all plan_correct calls: ${JSON.stringify(allCalls)}`
-
-  // MANDATORY: the mechanism actually committed at least one correction.
-  // Zero committed corrections after a full round budget with two
-  // unambiguous, well-motivated problems means plan_correct is not
-  // genuinely wired end-to-end — a CRITICAL finding, not a soft skip.
-  expect(
-    committed.length,
-    `t3: zero plan_correct calls committed (status=success) across the plan's full round budget. ${diagnostic}`,
-  ).toBeGreaterThan(0)
-
-  // Real member ids — the E.3 defect this test exists to catch: never a
-  // label string ('m1'/'m2'/'m3'), always a real task id that belongs to
-  // this plan. `allObservedMemberIds` is seeded from memberIds (the 3 ids
-  // known at plan-create) and extended with every member id returned by
-  // listPlanMemberTasks during the observe loop, so any replacement
-  // members the supervisor legitimately mints via SUPERSEDE (e.g.
-  // `m2_replacement`) are included without weakening the test's intent.
-  const realMemberIds = allObservedMemberIds
-  const labelStrings = new Set(Object.keys(memberIds))
-  for (const call of committed) {
-    const supersededId = call.parameters.superseded_member_id as string | undefined
-    const retriedId = call.parameters.retried_member_id as string | undefined
-    const targetId = supersededId ?? retriedId
-    if (targetId === undefined) continue // append/abandon name no existing member
-    expect(
-      labelStrings.has(targetId),
-      `t3: a committed correction named a LABEL STRING ("${targetId}") instead of a real task id — ` +
-        `exactly the E.3 defect this test exists to catch. ${diagnostic}`,
-    ).toBe(false)
-    expect(
-      realMemberIds.has(targetId),
-      `t3: a committed correction's target id ("${targetId}") does not match any real member task id ` +
-        `(${[...realMemberIds].join(', ')}). ${diagnostic}`,
-    ).toBe(true)
-  }
-
-  // THE core E.3 ask, SUPERSEDE half: the real adjudicator actually applied
-  // SUPERSEDE against m2 (the done-but-wrong target), naming its real member
-  // id (verified above, never a label). This is a hard requirement, not a
-  // best-effort one.
-  //
-  // TARGETED-RETRY is deliberately NOT asserted here — see the "UPDATE"
-  // paragraph in this test's header comment: committing a SUPERSEDE in this
-  // same round auto-resets every live-round failed member, m3 included, so a
-  // well-reasoned supervisor that has already superseded m2 has no remaining
-  // reason to ALSO spend a targeted_retry on an already-reset m3.
-  // `Conformance_t3b_TargetedRetryOnlyE2E` immediately below is the isolated
-  // proof that targeted_retry itself works, in a plan with no done-but-wrong
-  // member so supersede cannot fire and cannot mask it.
-  const verbsSeen = new Set(committed.map((c) => c.parameters.verb as string))
-  expect(
-    verbsSeen.has('supersede'),
-    `t3: no committed correction used verb="supersede" against m2 (the done-but-wrong target). ` +
-      `Verbs actually observed: ${[...verbsSeen].join(', ') || '(none)'}. ${diagnostic}`,
-  ).toBe(true)
-
-  // Cross-check the SPECIFIC member: at least one supersede named m2's real
-  // id (not just "supersede occurred somewhere, against an arbitrary
-  // target").
-  const supersededM2 = committed.some(
-    (c) => c.parameters.verb === 'supersede' && c.parameters.superseded_member_id === memberIds.m2,
-  )
-  expect(
-    supersededM2,
-    `t3: no committed supersede named m2's real id (${memberIds.m2}) as superseded_member_id. ${diagnostic}`,
-  ).toBe(true)
-
-  // No-wedge sanity: the plan must not be permanently stuck. This is
-  // deliberately NOT "the plan is finished or held" (the previous version of
-  // this check, copied from Conformance_t2_PlanLifecycleE2E's Step 3) — t2's
-  // DoD check itself is a machine-checked `exit 1`, but t2's Step 3 was
-  // ITSELF found to need this exact widening (2026-07-30, live CI shard
-  // llm-conformance): the PlanSupervisor turn that decides whether to
-  // correct is a real LLM call regardless of how the DoD is checked, and any
-  // correction re-runs members as real LLM turns too, so t2 can equally land
-  // in state="running" phase="dispatching" at window-close. Both tests now
-  // share this logic. t3's members run REAL LLM turns, and
-  // pkg/plan/plan.go's Supervision doc comment states the contract
-  // explicitly: "a plan leaves the supervision-eligible phase set on EVERY
-  // applied correction... an applied correction returns the plan to
-  // dispatching" — i.e. re-running its members. Observing
-  // state="running" phase="dispatching" right after the SUPERSEDE this test
-  // already proved committed (above) is that exact, documented, healthy
-  // re-run — not a stall. Treating every non-terminal, non-held phase as
-  // failure punishes normal forward motion.
-  //
-  // The property actually worth checking — is the plan stuck — is already
-  // diagnosed continuously by the engine itself for EACH active phase, so
-  // this check trusts that diagnosis rather than inventing a new one:
-  //   - dispatching: processPlan (pkg/agent/plan_engine.go) reaches
-  //     surfaceStallIfAny only when real member work remains AND this tick's
-  //     dispatch found nothing new to start — exactly the condition under
-  //     which it flips plan_phase to "stalled" (a member is dispatchable
-  //     (`next`) or in flight (`in_progress`) is required to STAY at
-  //     dispatching). `stalled` is itself a supervision-eligible phase (the
-  //     same set as `awaiting_supervision`, plan.go's
-  //     supervisionEligiblePhases), so a genuinely stuck plan self-escalates
-  //     through the exact correction mechanism this test already proved
-  //     works, instead of sitting silently in `dispatching`.
-  //   - judging: processPlan's own switch returns immediately either because
-  //     an adjudication goroutine is confirmed in flight in THIS process, or
-  //     (crash-recovery case) it resumes the round from scratch right there
-  //     — never leaves the plan sitting inert at judging.
-  //   - synthesizing: processPlan returns immediately with "terminal hand-off
-  //     already in progress" — by construction an active, in-flight state.
-  // So observing `dispatching`/`judging`/`synthesizing` at window-close means
-  // the engine's own live view is "something is next, in-flight, or actively
-  // synthesizing right now" — real work, not silence. A fixed elapsed-time
-  // staleness cutoff was deliberately NOT used here (see staleForMs's
-  // comment above): during a real member LLM turn the observable tuple can
-  // legitimately sit unchanged for minutes, and picking a cutoff short
-  // enough to "prove" anything would just be a second, disguised
-  // budget-widening exercise.
-  //
-  // What THIS still catches: state="running" with an unrecognised or
-  // empty/idle plan_phase — the plan falling OUT of the documented phase
-  // state machine entirely after Step 1 already proved it reached the hold.
-  // That is a genuine, undiagnosed wedge, and the full sample trace
-  // (including staleForMs) is reported for it.
-  const ACTIVE_ROUND_PHASES = new Set(['dispatching', 'judging', 'synthesizing'])
-  const HELD_PHASES = new Set([HOLD_PHASE, 'stalled'])
-  const notWedged =
-    finalPlanState === 'done' ||
-    finalPlanState === 'failed' ||
-    HELD_PHASES.has(finalPlanPhase) ||
-    (finalPlanState === 'running' && ACTIVE_ROUND_PHASES.has(finalPlanPhase))
-  expect(
-    notWedged,
-    `t3: plan ${planId} must be at a documented terminus, still legitimately held/stalled, or observably ` +
-      `still progressing through an active round after the observation window — observed ` +
-      `state="${finalPlanState}" phase="${finalPlanPhase}", last observed change ${staleForMs}ms before the ` +
-      `window closed. Sample trace: ${JSON.stringify(samples)}`,
-  ).toBe(true)
+  assertReplanNotWedged(obs, setup)
 })
 
 // ── Conformance_g4_ParallelLintE2E ───────────────────────────────────────────
@@ -681,3 +275,614 @@ test('Conformance_g4_ParallelLintE2E: disjoint write-sets approve; overlapping r
     `g4: overlapping plan approve must be rejected with 4xx — got ${approveOverlap.status}: ${approveOverlap.raw}`,
   ).toBe(true)
 })
+
+
+// ── Extracted step helpers for Conformance_t3_PlanningReplanningE2E ───
+// Pure refactor (no behaviour change): the test body above is split into
+// contiguous step helpers so every function stays under the 240-line function
+// budget. Each helper receives exactly the values it needs and the test calls
+// them in the same order as the original inline body.
+
+const HOLD_PHASE = 'awaiting_supervision'
+
+interface T3Sample {
+  tMs: number
+  state: string
+  phase: string
+  judgeRounds: number
+  correctionRounds: number
+  memberSig: string
+}
+
+interface ReplanSetup {
+  planId: string
+  workspaceId: string
+  memberIds: Record<string, string>
+  m2WrongNumberEvidence: string
+}
+
+interface ReplanObservation {
+  samples: T3Sample[]
+  committed: Array<{ status: string; parameters: Record<string, unknown> }>
+  diagnostic: string
+  allObservedMemberIds: Set<string>
+  finalPlanState: string
+  finalPlanPhase: string
+  staleForMs: number
+}
+
+async function runReplanSetup(page: Page, createdPlanIds: string[]): Promise<ReplanSetup> {
+  await startFreshChatWithJim(page)
+
+  // Setup: per-test Main agent (chat-target owner + member assignee) in
+  // its own workspace core_team (avoids multi-workspace ambiguity).
+  // `bash: allow` is required for the `check` criteria below (see t2's
+  // createMainAgent comment — a fresh custom agent is deny-by-default).
+  const ownerId = await createMainAgent(page, `conformance-t3-owner-${Date.now()}`, { bash: 'allow' })
+  // m2's assignee: a stub external-CLI worker whose recorded result states a
+  // DIFFERENT verification number than the one its own task prompt assigns
+  // (see m2 in the members comment below for why this replaced a real LLM
+  // member) — deterministic, so the mismatch the plan's DoD checks for is a
+  // genuine fact every run, not a matter of real-LLM chance.
+  const m2WrongNumberEvidence = 'I confirmed the assigned verification number is 17.'
+  const m2WorkerId = await createStubCliWorkerAgent(page, `conformance-t3-m2-stub-${Date.now()}`, {
+    firstTry: [
+      `[goal:evidence] ${m2WrongNumberEvidence}`,
+      'TASK_STATUS: success',
+      'TASK_SUMMARY: Confirmed the verification number as instructed.',
+    ].join('\n'),
+  })
+  // m3's assignee: a stub external-CLI worker that ends every run reporting a
+  // transient failure (see m3 in the members comment below for why).
+  const m3WorkerId = await createStubCliWorkerAgent(page, `conformance-t3-m3-stub-${Date.now()}`, {
+    firstTry: blockedMarker(
+      'a transient network error interrupted writing out/t3/m3.txt; the member itself is sound and is ' +
+        'expected to succeed when retried',
+    ),
+  })
+  const wsRes = await apiFetch<{ id: string }>(page, 'POST', '/api/v1/workspaces', {
+    name: 'conformance-t3',
+    core_team: [ownerId, m2WorkerId, m3WorkerId],
+  })
+  if (!wsRes.ok) throw new Error(`t3: POST /workspaces failed ${wsRes.status}: ${wsRes.raw}`)
+  const workspaceId = wsRes.body.id
+
+  // Three independent (disjoint write_set, no blocked_by — they dispatch in
+  // parallel) members:
+  //   m1 — trivial filler, own check trivially passes.
+  //   m2 — the SUPERSEDE target: its own criterion is deliberately broad so
+  //        a wrong number can satisfy it. The real Judge still has to mark
+  //        the member `done`; Step 1 verifies this precondition explicitly.
+  //        Its recorded result, via a deterministic stub worker (like m3's below),
+  //        states a DIFFERENT verification number than the one its own task
+  //        prompt assigned. That mismatch is a genuine, checkable fact in the
+  //        member's own Result text — buildPlanClaimText
+  //        (pkg/agent/plan_engine_supervise.go) hands the Judge that text
+  //        verbatim — which is what the plan's DoD (below) asks the real
+  //        Judge to verify, not an unanchored assertion. See the DoD's own
+  //        comment for the 2026-09-29 redesign and the CI incident it fixes.
+  //        "Member finished but result incorrect" is still PlanSupervisor's
+  //        own rubric language for SUPERSEDE.
+  //   m3 — the TARGETED-RETRY target. It must end `failed` promptly and the
+  //        same way on every run. Its worker is the stub external CLI above,
+  //        which ends every run with a failure marker naming a transient
+  //        cause; the task run reads that as a blocked claim, so m3 ends
+  //        Failed "Blocked: <cause>" at once — no Judge call, no task attempt
+  //        used, no restart (ADR-043 §8, ADR-084 §11). Its title frames the
+  //        failure as transient — PlanSupervisor's member-list wake data is
+  //        exactly "member_id | status | title", so the title is real,
+  //        load-bearing signal it reads (the same idiom this file already
+  //        uses for g7's exact-tool-call prompt engineering).
+  //
+  //        WHY NOT a native worker with a check that can never pass (`exit 1`,
+  //        max_attempts=1), as this test used until 2026-09-15: under the
+  //        two-level task-run model (ADR-086 §8, issue #710) a Judge ruling of
+  //        "not met" no longer uses up a task attempt. The worker keeps working
+  //        in the same run, up to Tries per goal (default 20), and every try is
+  //        a worker LLM turn plus a Judge call on the member's Definition of
+  //        Done. A check that can never pass therefore kept m3 in progress for
+  //        many minutes; in CI run 34917711499 two of three attempts never
+  //        reached the hold within Step 1's 300s. Tries per goal cannot be
+  //        lowered for one test either: PUT /api/v1/performance answers 503
+  //        while dev_mode_bypass is on, and every CI e2e gateway runs with it
+  //        on. A blocked claim is the documented way a run ends at once, and it
+  //        keeps m3's failure deterministic with no LLM involved.
+  //
+  //        INVESTIGATED, NOT CHANGED (2026-09-29): m3's title/stub also frame
+  //        its failure as one "expected to succeed when retried" — checked
+  //        whether that carries the same no-evidentiary-anchor defect the
+  //        DoD's m2 half had. It does not, for a different reason: with no
+  //        `laterTry` configured, ANY fresh dispatch of m3 (an explicit
+  //        targeted_retry, or the free auto-reset a committed SUPERSEDE gives
+  //        every other live-round-failed member —
+  //        autoResetLiveRoundFailedMembers,
+  //        pkg/agent/plan_engine_correction.go) starts a brand-new run and
+  //        re-invokes the identical stub script with the same env vars, so it
+  //        always re-emits the same blockedMarker — m3 never actually reaches
+  //        `done`, retried or not (confirmed against task_run_loop.go's
+  //        "blocked claim: no attempt consumed, no restart" contract, and
+  //        RestartReset's status-only reset gate in
+  //        pkg/agent/plan_engine_correction.go). Unlike m2's claim, this is a
+  //        forward-looking prediction about an event that has not happened
+  //        yet in the round where the Judge decides — there is nothing in
+  //        round 1 to check it against, so it cannot be immediately falsified
+  //        the way m2's completed, readable Result text could be. The real
+  //        run quoted below already reasons correctly with this exact
+  //        framing, and this test's own assertions (SUPERSEDE against m2's
+  //        real id; the no-wedge check) never require m3 to reach `done` —
+  //        t3b (conformance-design-plan-e2e.spec.ts) is the isolated proof of
+  //        targeted_retry itself and carries its own, separately-tracked
+  //        flake. Left as-is here; not the same defect class as m2's.
+  const { planId, memberIds } = await createPlanWithMembers(
+    page,
+    workspaceId,
+    ownerId,
+    {
+      title: 't3 conformance plan',
+      goal: 'exercise the supersede + targeted-retry correction paths',
+      description: 'owner re-plans after an unmet DoD adjudication',
+      // A single prose DoD (real Judge LLM call, not a machine check) that
+      // unambiguously names BOTH problems by each member's own title, so
+      // the Judge's per-criterion reasoning — which is the ONLY diagnostic
+      // text PlanSupervisor's wake carries — can correctly attribute each
+      // problem to the right member.
+      //
+      // REDESIGNED 2026-09-29 (release run 36477436582, job 109120266594):
+      // the PREVIOUS version of this DoD asserted m2's outcome was "factually
+      // WRONG" with no evidentiary anchor anywhere in the scenario — m2's
+      // prompt was 'reply with beta' and m2 (a real LLM) correctly replied
+      // "beta". buildPlanClaimText (pkg/agent/plan_engine_supervise.go) hands
+      // the Judge m2's own recorded Result text verbatim, so the real Judge
+      // (the configured E2E model, tests/e2e/e2e-model.json) read that reply, correctly noticed it
+      // matched the prompt exactly, concluded the DoD's premise was false,
+      // and ABANDONED the plan rather than superseding work that was, on the
+      // evidence actually in front of it, correct — the right call given a
+      // false premise, not a Judge/Supervisor defect (both rubrics —
+      // PlanSupervisorDefaultRubric, JudgeDefaultRubric in
+      // pkg/coreagent/seed_system.go — instruct judging against evidence,
+      // never trusting an unverified claim at face value).
+      //
+      // FIX: m2 is now a deterministic stub worker (see its creation above)
+      // whose recorded result states a DIFFERENT verification number than
+      // the one its own task prompt assigns (42 vs. 17) — a genuine,
+      // textual, objectively-checkable mismatch that exists independently of
+      // this prose, in the member's own Result text the Judge already reads.
+      // The DoD states the required number so the Judge has a concrete fact
+      // to verify, and explicitly tells it to check the member's actual
+      // recorded result rather than trust the "done" status alone.
+      dod: [
+        proseCriterion(
+          'Member "m2-supersede-target" was assigned the verification number 42 (see its own task ' +
+            'prompt) and reached status done, but read its ACTUAL recorded result text yourself: it ' +
+            'states a DIFFERENT number, not 42. Do not accept the "done" status as proof the work is ' +
+            'correct — compare the number the member actually recorded against the required number 42. ' +
+            'Because they do not match, that recorded outcome is factually WRONG and must be redone ' +
+            '(superseded), not merely accepted as-is. Separately, member "m3-retry-target" must have ' +
+            'SUCCEEDED at its check — if it is currently `failed`, that failure was for a transient, ' +
+            'recoverable reason and the member should be retried, not abandoned or replaced. The plan ' +
+            'is only met once BOTH conditions hold.',
+        ),
+      ],
+      bounds: { plan_judge_max_rounds: 4 },
+    },
+    [
+      {
+        label: 'm1',
+        title: 'm1-filler',
+        prompt: 'reply with alpha',
+        write_set: ['out/t3/m1.txt'],
+        criteria: [checkCriterion('m1 trivially passes', 'exit 0', 0)],
+      },
+      {
+        label: 'm2',
+        title: 'm2-supersede-target: work is done but its recorded result is wrong',
+        // The exact number (42) is the fact the plan's DoD above asks the
+        // Judge to check the member's ACTUAL recorded result against — m2's
+        // stub worker (created above) deliberately records a different one
+        // (17), giving the DoD's "factually WRONG" claim a real anchor.
+        prompt: 'Reply confirming the assigned verification number, which is 42. State only that number.',
+        write_set: ['out/t3/m2.txt'],
+        agent_id: m2WorkerId,
+        // Deliberately broad: ANY numeric confirmation satisfies this;
+        // correctness of the number belongs to the plan-level DoD. This does
+        // not guarantee `done`: the real member Judge also checks the default
+        // prose DoD and can fail (e.g. a truncated verdict). Step 1 must prove
+        // "member technically finishes, but got it wrong" before evaluating
+        // the supervisor.
+        criteria: [proseCriterion('m2 replied confirming some verification number')],
+      },
+      {
+        label: 'm3',
+        title: 'm3-retry-target: transient/flaky failure, safe and expected to succeed if retried',
+        prompt: 'reply with gamma',
+        write_set: ['out/t3/m3.txt'],
+        agent_id: m3WorkerId,
+        // Never judged: the stub worker ends every run with a blocked claim,
+        // before any Judge call. A criterion is still mandatory at creation.
+        criteria: [proseCriterion('m3 replied with the word gamma')],
+      },
+    ],
+    createdPlanIds,
+  )
+
+  // Approve + run.
+  const approveRes = await apiFetch<{ status: string }>(page, 'POST', `/api/v1/plans/${planId}/approve`, {})
+  expect(approveRes.ok, `t3: POST /plans/{id}/approve failed ${approveRes.status}: ${approveRes.raw}`).toBe(true)
+
+  return { planId, workspaceId, memberIds, m2WrongNumberEvidence }
+}
+
+async function assertFirstHoldReached(page: Page, setup: ReplanSetup): Promise<void> {
+  const { planId, memberIds, m2WrongNumberEvidence } = setup
+
+  // --- Step 1: MANDATORY — reach the hold at least once -------------------
+  // First prove m2 is done-but-wrong, not merely that its stub printed a
+  // wrong number. A truncated member-Judge verdict can leave m2 failed;
+  // supersede is then illegal, so that is a precondition failure, not evidence
+  // of a supervisor defect. Sample m2 inside the existing first-hold budget
+  // and stop on failure or the first observed hold — never wait for a later
+  // correction to reset a failed m2 and manufacture the required state.
+  // With that precondition met and m3 ending Failed "Blocked: <transient
+  // cause>", the round-1 unmet verdict must reach awaiting_supervision.
+  //
+  // BUDGET, widened from 120s to 300s (investigation, 2026-07-29, plan
+  // 01KYQ6T9HAMNWNG507Y94G4GHS on the ee7ecc47 CI shard): 120s was a TIMING
+  // defect, not a correctness one. Pulled straight from that plan's own
+  // persisted record on the CI worker (plan_intents/<id>.jsonl,
+  // plans/<id>.json) — approved at 15:10:26Z, round-1's real Judge verdict
+  // and PlanSupervisor turn produced its first committed SUPERSEDE at
+  // 15:15:08Z, ~282s later — reaching the hold itself (strictly before that
+  // commit) was already past 120s. This is unlike t3b's E.3 fix (a scenario
+  // ambiguity, fixed by splitting the test): here the mechanism is provably
+  // sound — the SAME plan went on to commit three real SUPERSEDE corrections
+  // (each with a genuine Judge-cited falsified-assumption) over the
+  // following ~19 minutes, ending in a legitimate judge_rounds_exhausted,
+  // not a premature abandon. t3's own round-1 requires THREE parallel real
+  // member LLM turns plus a real Judge LLM call against a prose DoD
+  // criterion (unlike t2's machine-checked, judgment-free DoD, or t3b's
+  // single-member scenario) — the heaviest real-LLM critical path of any
+  // conformance test here, and therefore the one most exposed when the
+  // shared CI worker is under load. The SAME shard log showed, concurrently
+  // with this plan's round-1: a sibling plan's supervision turn repeatedly
+  // timing out over real HTTP (`net/http: request canceled
+  // (Client.Timeout...)`) and re-arming its wake every ~30s for several
+  // minutes, and an unrelated agent turn retrying a denied ToolSearch call
+  // every few seconds for the same window — genuine, external LLM/CPU
+  // contention on the shard, not anything introduced by plan_engine.go's own
+  // dispatch/judge/supervision logic (unchanged by the commits under test).
+  // 300s carries comfortable margin over the observed ~282s without eating
+  // into Step 2's own 420s observation budget (see test.setTimeout's comment
+  // above for the combined worst case).
+  let reachedHoldOnce = false
+  // WIDENED AGAIN 300s -> 600s (2026-09-17). The 300s above was set from a
+  // measured ~282s on a shard running largely alone - 6% headroom over a real
+  // observation, which is not a budget, it is a coin flip. The e2e plan now
+  // runs LLM shards 4-wide by default (E2E_MAX_PARALLEL_LLM), and every one of
+  // them is waiting on the same OpenRouter capacity, so the same work takes
+  // materially longer than it did when 300s was chosen. This shard failed three
+  // consecutive retries on 2026-09-16 with three different plan ids, each
+  // "must reach plan_phase=awaiting_supervision" - the hold never arrived in
+  // time, not a wrong state. The transition itself is correct:
+  // pkg/agent/plan_engine_supervise.go writes JudgeRounds,
+  // PlanPhaseAwaitingSupervision, handover text and the terminal signature
+  // atomically after an UNMET verdict.
+  const firstHoldBudgetMs = 600_000
+  const firstHoldDeadline = Date.now() + firstHoldBudgetMs
+  let observedM2: components['schemas']['Task'] | undefined
+  let observedPlan: components['schemas']['Plan'] | undefined
+  while (Date.now() < firstHoldDeadline) {
+    const poll = await apiFetch<components['schemas']['Plan']>(page, 'GET', `/api/v1/plans/${planId}`)
+    if (!poll.ok) throw new Error(`t3: GET /plans/{id} poll (first hold) failed ${poll.status}: ${poll.raw}`)
+    observedPlan = poll.body
+    // Read m2 AFTER the plan snapshot: if that snapshot is at the hold, the
+    // member should already be terminal, not a stale in-progress sample.
+    const m2Poll = await apiFetch<components['schemas']['Task']>(page, 'GET', `/api/v1/tasks/${memberIds.m2}`)
+    if (!m2Poll.ok) {
+      throw new Error(
+        `t3: precondition not met: m2 (${memberIds.m2}) could not be read; ` +
+          `GET /tasks/{id} returned ${m2Poll.status}: ${m2Poll.raw}`,
+      )
+    }
+    observedM2 = m2Poll.body
+    if (poll.body.plan_phase === HOLD_PHASE) {
+      reachedHoldOnce = true
+      break
+    }
+    if (observedM2?.status === 'failed') break
+    await page.waitForTimeout(1_500)
+  }
+  const preconditionDiagnostic =
+    `t3: precondition not met: m2 (${memberIds.m2}) status="${observedM2?.status ?? '(not observed)'}" ` +
+    `result=${JSON.stringify(observedM2?.result ?? null)}; plan ${planId} ` +
+    `state="${observedPlan?.state ?? '(not observed)'}" phase="${observedPlan?.plan_phase ?? ''}" ` +
+    `judge_rounds=${observedPlan?.judge_rounds ?? 0}`
+  expect(
+    observedM2?.status,
+    `${preconditionDiagnostic}; missing status="done" — supersede requires a done member.`,
+  ).toBe('done')
+  expect(
+    observedM2?.result,
+    `${preconditionDiagnostic}; missing recorded wrong-number evidence ${JSON.stringify(m2WrongNumberEvidence)} ` +
+      '(the task assigned 42).',
+  ).toContain(m2WrongNumberEvidence)
+  expect(
+    reachedHoldOnce,
+    `t3: plan ${planId} must reach plan_phase=awaiting_supervision within ${firstHoldBudgetMs / 1000}s of approval — m2 (done, ` +
+      'DoD-flagged wrong) + m3 (its stub worker ends every run Blocked at once) make a round-1 unmet verdict ' +
+      'expected reliably.',
+  ).toBe(true)
+}
+
+async function observeReplanCorrections(page: Page, setup: ReplanSetup): Promise<ReplanObservation> {
+  const { planId, workspaceId, memberIds } = setup
+
+  // --- Step 2: observe the REAL correction mechanism over the plan's full
+  // round budget. Every distinct plan_correct call is discoverable via the
+  // adjudication session(s) the plan's `supervision.session_id` names — a
+  // NEW session may be minted each time the plan opens a fresh park
+  // (pkg/agent/plan_engine.go's `ensureSupervisionSessionLocked`), so we
+  // track every session id ever observed and inspect all of them at the end,
+  // not just the most recent one.
+  //
+  // Alongside session tracking, sample (plan_phase, judge_rounds,
+  // correction_rounds, member signature) at the same cadence — the identical
+  // idiom Conformance_t2_PlanLifecycleE2E's F2 proof already uses
+  // (memberSignature + listPlanMemberTasks, see that test's Step 2 comment).
+  // This is evidence for the no-wedge check below: it needs to tell "the
+  // plan is genuinely stuck" apart from "a real member LLM turn is still
+  // running", and the only honest way to do that without a new arbitrary
+  // staleness budget is to record whether the plan's own observable state
+  // ever moves at all, and hand that trace to the check.
+  const samples: T3Sample[] = []
+  const seenSessionIds = new Set<string>()
+  // Cumulative set of every member task id this plan has ever had — seeded
+  // with the 3 ids known at plan-create time, then extended every observe
+  // tick with whatever listPlanMemberTasks returns. The product's documented
+  // behaviour (pkg/agent/plan_engine.go `AppendCorrection`) lets a committed
+  // SUPERSEDE add fresh replacement members (e.g. an `m2_replacement` after
+  // m2 is superseded), and the supervisor can legitimately issue a follow-up
+  // `targeted_retry` against such a replacement in a later correction round —
+  // in CI run 35437922067 attempt-1, the supervisor's third plan_correct
+  // call targeted exactly such a replacement (id `2f6b1d08-…`, the
+  // m2_replacement minted by its own prior SUPERSEDE) and the original
+  // assertion `realMemberIds.has(targetId)` failed against the plan-create
+  // snapshot. The E.3 intent — target id must be a REAL plan member task id,
+  // never a label string, and never a member of some other plan — is fully
+  // preserved here: replacement members created mid-supervision by THIS plan
+  // are still real members of THIS plan (listPlanMemberTasks filters on
+  // `plan_id === planId` before returning), and 'm1'/'m2'/'m3' label
+  // strings still cannot appear in that list.
+  const allObservedMemberIds = new Set<string>(Object.values(memberIds))
+  let finalPlanState = ''
+  let finalPlanPhase = ''
+  // BUDGET, widened from 420s to 600s (CI run 36407879088, job 108884271025,
+  // 2026-09-28): attempt 1 ran for 516s and exhausted this full observation
+  // window with the plan still legitimately running/awaiting_supervision and
+  // zero committed plan_correct calls; retry 1 passed with the same code in
+  // 510s. Setup plus Step 1 took only ~96s in both attempts, so Step 2's 420s
+  // ceiling — not the outer timeout or Step 1 — was the measured bottleneck.
+  // The e2e plan runs LLM shards 4-wide by default (E2E_MAX_PARALLEL_LLM), and
+  // all share the same OpenRouter capacity, so the same external LLM/CPU
+  // contention that required Step 1's 300s -> 600s widening applies here too.
+  // 600s adds 43% margin over the exhausted window and matches Step 1's
+  // load-adjusted budget without weakening any correction assertion below.
+  const observeDeadline = Date.now() + 600_000
+  const sampleWindowStart = Date.now()
+  while (Date.now() < observeDeadline) {
+    const [poll, members] = await Promise.all([
+      apiFetch<{
+        state: string
+        plan_phase?: string
+        judge_rounds?: number
+        supervision?: { session_id?: string; correction_rounds?: number }
+      }>(page, 'GET', `/api/v1/plans/${planId}`),
+      listPlanMemberTasks(page, workspaceId, planId),
+    ])
+    if (!poll.ok) throw new Error(`t3: GET /plans/{id} poll (observe) failed ${poll.status}: ${poll.raw}`)
+    finalPlanState = poll.body.state
+    finalPlanPhase = poll.body.plan_phase ?? ''
+    const sid = poll.body.supervision?.session_id
+    if (sid) seenSessionIds.add(sid)
+    for (const m of members) allObservedMemberIds.add(m.id)
+    samples.push({
+      tMs: Date.now() - sampleWindowStart,
+      state: finalPlanState,
+      phase: finalPlanPhase,
+      judgeRounds: poll.body.judge_rounds ?? 0,
+      correctionRounds: poll.body.supervision?.correction_rounds ?? 0,
+      memberSig: memberSignature(members),
+    })
+    if (finalPlanState === 'done' || finalPlanState === 'failed') break
+    await page.waitForTimeout(4_000)
+  }
+
+  // Last sample offset (ms into the window) whose (phase, judge_rounds,
+  // correction_rounds, member signature) tuple differed from the sample
+  // before it — i.e. the last time the plan was observed to do ANYTHING.
+  // Diagnostic only (see the no-wedge check below for why this does not
+  // gate pass/fail on its own): a plan mid a real member LLM turn can
+  // legitimately hold an identical tuple for minutes (dispatch only touches
+  // the tuple at the START of a turn, not while it's in flight), so a fixed
+  // staleness cutoff here would just be a second budget-widening exercise in
+  // disguise.
+  let lastChangeTMs = samples.length > 0 ? samples[0].tMs : 0
+  for (let i = 1; i < samples.length; i++) {
+    const prev = samples[i - 1]
+    const cur = samples[i]
+    if (
+      cur.phase !== prev.phase ||
+      cur.judgeRounds !== prev.judgeRounds ||
+      cur.correctionRounds !== prev.correctionRounds ||
+      cur.memberSig !== prev.memberSig
+    ) {
+      lastChangeTMs = cur.tMs
+    }
+  }
+  const staleForMs = samples.length > 0 ? samples[samples.length - 1].tMs - lastChangeTMs : 0
+
+  // Collect every plan_correct call (any status) across every adjudication
+  // session this plan ever used.
+  const allCalls: Array<{ status: string; parameters: Record<string, unknown> }> = []
+  for (const sid of seenSessionIds) {
+    const messages = await getSessionMessages(page, sid)
+    allCalls.push(...extractPlanCorrectCalls(messages))
+  }
+  const committed = allCalls.filter((c) => c.status === 'success')
+
+  const diagnostic =
+    `plan state="${finalPlanState}" phase="${finalPlanPhase}"; sessions=${[...seenSessionIds].join(',')}; ` +
+    `all plan_correct calls: ${JSON.stringify(allCalls)}`
+
+  return {
+    samples,
+    committed,
+    diagnostic,
+    allObservedMemberIds,
+    finalPlanState,
+    finalPlanPhase,
+    staleForMs,
+  }
+}
+
+function assertReplanCorrectionCommits(obs: ReplanObservation, setup: ReplanSetup): void {
+  const { committed, diagnostic, allObservedMemberIds } = obs
+  const { memberIds } = setup
+
+  // MANDATORY: the mechanism actually committed at least one correction.
+  // Zero committed corrections after a full round budget with two
+  // unambiguous, well-motivated problems means plan_correct is not
+  // genuinely wired end-to-end — a CRITICAL finding, not a soft skip.
+  expect(
+    committed.length,
+    `t3: zero plan_correct calls committed (status=success) across the plan's full round budget. ${diagnostic}`,
+  ).toBeGreaterThan(0)
+
+  // Real member ids — the E.3 defect this test exists to catch: never a
+  // label string ('m1'/'m2'/'m3'), always a real task id that belongs to
+  // this plan. `allObservedMemberIds` is seeded from memberIds (the 3 ids
+  // known at plan-create) and extended with every member id returned by
+  // listPlanMemberTasks during the observe loop, so any replacement
+  // members the supervisor legitimately mints via SUPERSEDE (e.g.
+  // `m2_replacement`) are included without weakening the test's intent.
+  const realMemberIds = allObservedMemberIds
+  const labelStrings = new Set(Object.keys(memberIds))
+  for (const call of committed) {
+    const supersededId = call.parameters.superseded_member_id as string | undefined
+    const retriedId = call.parameters.retried_member_id as string | undefined
+    const targetId = supersededId ?? retriedId
+    if (targetId === undefined) continue // append/abandon name no existing member
+    expect(
+      labelStrings.has(targetId),
+      `t3: a committed correction named a LABEL STRING ("${targetId}") instead of a real task id — ` +
+        `exactly the E.3 defect this test exists to catch. ${diagnostic}`,
+    ).toBe(false)
+    expect(
+      realMemberIds.has(targetId),
+      `t3: a committed correction's target id ("${targetId}") does not match any real member task id ` +
+        `(${[...realMemberIds].join(', ')}). ${diagnostic}`,
+    ).toBe(true)
+  }
+
+  // THE core E.3 ask, SUPERSEDE half: the real adjudicator actually applied
+  // SUPERSEDE against m2 (the done-but-wrong target), naming its real member
+  // id (verified above, never a label). This is a hard requirement, not a
+  // best-effort one.
+  //
+  // TARGETED-RETRY is deliberately NOT asserted here — see the "UPDATE"
+  // paragraph in this test's header comment: committing a SUPERSEDE in this
+  // same round auto-resets every live-round failed member, m3 included, so a
+  // well-reasoned supervisor that has already superseded m2 has no remaining
+  // reason to ALSO spend a targeted_retry on an already-reset m3.
+  // `Conformance_t3b_TargetedRetryOnlyE2E` immediately below is the isolated
+  // proof that targeted_retry itself works, in a plan with no done-but-wrong
+  // member so supersede cannot fire and cannot mask it.
+  const verbsSeen = new Set(committed.map((c) => c.parameters.verb as string))
+  expect(
+    verbsSeen.has('supersede'),
+    `t3: no committed correction used verb="supersede" against m2 (the done-but-wrong target). ` +
+      `Verbs actually observed: ${[...verbsSeen].join(', ') || '(none)'}. ${diagnostic}`,
+  ).toBe(true)
+
+  // Cross-check the SPECIFIC member: at least one supersede named m2's real
+  // id (not just "supersede occurred somewhere, against an arbitrary
+  // target").
+  const supersededM2 = committed.some(
+    (c) => c.parameters.verb === 'supersede' && c.parameters.superseded_member_id === memberIds.m2,
+  )
+  expect(
+    supersededM2,
+    `t3: no committed supersede named m2's real id (${memberIds.m2}) as superseded_member_id. ${diagnostic}`,
+  ).toBe(true)
+}
+
+function assertReplanNotWedged(obs: ReplanObservation, setup: ReplanSetup): void {
+  const { samples, finalPlanState, finalPlanPhase, staleForMs } = obs
+  const { planId } = setup
+
+  // No-wedge sanity: the plan must not be permanently stuck. This is
+  // deliberately NOT "the plan is finished or held" (the previous version of
+  // this check, copied from Conformance_t2_PlanLifecycleE2E's Step 3) — t2's
+  // DoD check itself is a machine-checked `exit 1`, but t2's Step 3 was
+  // ITSELF found to need this exact widening (2026-07-30, live CI shard
+  // llm-conformance): the PlanSupervisor turn that decides whether to
+  // correct is a real LLM call regardless of how the DoD is checked, and any
+  // correction re-runs members as real LLM turns too, so t2 can equally land
+  // in state="running" phase="dispatching" at window-close. Both tests now
+  // share this logic. t3's members run REAL LLM turns, and
+  // pkg/plan/plan.go's Supervision doc comment states the contract
+  // explicitly: "a plan leaves the supervision-eligible phase set on EVERY
+  // applied correction... an applied correction returns the plan to
+  // dispatching" — i.e. re-running its members. Observing
+  // state="running" phase="dispatching" right after the SUPERSEDE this test
+  // already proved committed (above) is that exact, documented, healthy
+  // re-run — not a stall. Treating every non-terminal, non-held phase as
+  // failure punishes normal forward motion.
+  //
+  // The property actually worth checking — is the plan stuck — is already
+  // diagnosed continuously by the engine itself for EACH active phase, so
+  // this check trusts that diagnosis rather than inventing a new one:
+  //   - dispatching: processPlan (pkg/agent/plan_engine.go) reaches
+  //     surfaceStallIfAny only when real member work remains AND this tick's
+  //     dispatch found nothing new to start — exactly the condition under
+  //     which it flips plan_phase to "stalled" (a member is dispatchable
+  //     (`next`) or in flight (`in_progress`) is required to STAY at
+  //     dispatching). `stalled` is itself a supervision-eligible phase (the
+  //     same set as `awaiting_supervision`, plan.go's
+  //     supervisionEligiblePhases), so a genuinely stuck plan self-escalates
+  //     through the exact correction mechanism this test already proved
+  //     works, instead of sitting silently in `dispatching`.
+  //   - judging: processPlan's own switch returns immediately either because
+  //     an adjudication goroutine is confirmed in flight in THIS process, or
+  //     (crash-recovery case) it resumes the round from scratch right there
+  //     — never leaves the plan sitting inert at judging.
+  //   - synthesizing: processPlan returns immediately with "terminal hand-off
+  //     already in progress" — by construction an active, in-flight state.
+  // So observing `dispatching`/`judging`/`synthesizing` at window-close means
+  // the engine's own live view is "something is next, in-flight, or actively
+  // synthesizing right now" — real work, not silence. A fixed elapsed-time
+  // staleness cutoff was deliberately NOT used here (see staleForMs's
+  // comment above): during a real member LLM turn the observable tuple can
+  // legitimately sit unchanged for minutes, and picking a cutoff short
+  // enough to "prove" anything would just be a second, disguised
+  // budget-widening exercise.
+  //
+  // What THIS still catches: state="running" with an unrecognised or
+  // empty/idle plan_phase — the plan falling OUT of the documented phase
+  // state machine entirely after Step 1 already proved it reached the hold.
+  // That is a genuine, undiagnosed wedge, and the full sample trace
+  // (including staleForMs) is reported for it.
+  const ACTIVE_ROUND_PHASES = new Set(['dispatching', 'judging', 'synthesizing'])
+  const HELD_PHASES = new Set([HOLD_PHASE, 'stalled'])
+  const notWedged =
+    finalPlanState === 'done' ||
+    finalPlanState === 'failed' ||
+    HELD_PHASES.has(finalPlanPhase) ||
+    (finalPlanState === 'running' && ACTIVE_ROUND_PHASES.has(finalPlanPhase))
+  expect(
+    notWedged,
+    `t3: plan ${planId} must be at a documented terminus, still legitimately held/stalled, or observably ` +
+      `still progressing through an active round after the observation window — observed ` +
+      `state="${finalPlanState}" phase="${finalPlanPhase}", last observed change ${staleForMs}ms before the ` +
+      `window closed. Sample trace: ${JSON.stringify(samples)}`,
+  ).toBe(true)
+}

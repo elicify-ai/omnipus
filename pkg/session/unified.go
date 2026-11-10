@@ -1,9 +1,10 @@
 package session
 
 import (
-	"encoding/json"
+	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"maps"
 	"os"
@@ -15,7 +16,6 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
-	"github.com/elicify-ai/omnipus/pkg/memory"
 )
 
 // UnifiedSessionType classifies what created a session.
@@ -25,6 +25,15 @@ const (
 	SessionTypeChat    UnifiedSessionType = "chat"
 	SessionTypeTask    UnifiedSessionType = "task"
 	SessionTypeChannel UnifiedSessionType = "channel"
+	// SessionTypeMain classifies the ONE standing session of an eligible
+	// (workspace, agent) pair (session-core U1, FR-002/C-MAIN). Its id is
+	// COMPUTED, not minted — see MainSessionID (main_session.go). It replaces
+	// the retired heartbeat-only standing session: a main exists for every
+	// eligible member whether or not that member's heartbeat is enabled, and
+	// for Admin in the default workspace only. Server-created only: "main" is
+	// deliberately absent from SessionCreateRequest's create-time enum, so a
+	// REST client can never POST /sessions into this type.
+	SessionTypeMain UnifiedSessionType = "main"
 	// SessionTypeScheduled classifies sessions created by a fired schedule
 	// (issue #264, FR-005). isolated/continue scheduled runs use this type so
 	// the SPA can badge them and group them separately from human chat/task/
@@ -70,7 +79,7 @@ const (
 // validation/listing site accepts them.
 func IsValidSessionType(t UnifiedSessionType) bool {
 	switch t {
-	case SessionTypeChat, SessionTypeTask, SessionTypeChannel, SessionTypeScheduled, SessionTypeHeartbeat, SessionTypeVerifier, SessionTypeDelegate:
+	case SessionTypeChat, SessionTypeTask, SessionTypeChannel, SessionTypeMain, SessionTypeScheduled, SessionTypeHeartbeat, SessionTypeVerifier, SessionTypeDelegate:
 		return true
 	default:
 		return false
@@ -82,7 +91,10 @@ func IsValidSessionType(t UnifiedSessionType) bool {
 type MetaPatch struct {
 	Title  *string
 	Status *SessionStatus
-	TaskID *string
+	// ReasoningEffort patches the conversation effort override (/effort);
+	// an empty string clears it (effort-levels spec FR-039).
+	ReasoningEffort *string
+	TaskID          *string
 	// Owner stamps the authenticated user who created the session.
 	// Only written when non-nil; empty string is a valid value (clears ownership).
 	Owner *string
@@ -136,6 +148,9 @@ type MetaPatch struct {
 type UnifiedMeta struct {
 	SessionMeta
 	Type UnifiedSessionType `json:"type"`
+	// Private aggregate provenance, never a generated/public wire property.
+	// Numeric counters and later activity cannot establish a lost baseline.
+	usageBaselineKnown bool
 }
 
 // Clone returns a deep, independent copy of m. Nil-safe (returns nil for a
@@ -173,6 +188,7 @@ func (m *UnifiedMeta) Clone() *UnifiedMeta {
 	c.AgentIDs = slices.Clone(m.AgentIDs)
 	c.CompactionSummaries = maps.Clone(m.CompactionSummaries)
 	c.Stats.ByModel = maps.Clone(m.Stats.ByModel)
+	c.Stats.ByProvider = maps.Clone(m.Stats.ByProvider)
 	return &c
 }
 
@@ -210,7 +226,27 @@ type UnifiedStore struct {
 	sessionLocks u4SessionStripedLock
 	baseDir      string // {workspace}/sessions/
 	homePath     string // ~/.omnipus/ — uploads cascade-delete root (home-rooted per rest.go:4352)
-	backend      *memory.JSONLStore
+	backend      *archiveBackend
+
+	// archiveMu guards archives: the one ArchiveDayStore per session directory,
+	// shared by the transcript writers and the model-window backend so every
+	// append to a session's archive serializes on the same store lock (effects
+	// design D2). archiveNow, when set (tests), is the store clock that decides
+	// the UTC day an append is written under.
+	archiveMu  sync.Mutex
+	archives   map[string]*ArchiveDayStore
+	archiveNow func() time.Time
+
+	// historyMu protects only owner lookup; no filesystem I/O is done under it.
+	historyMu           sync.Mutex
+	historyOwners       map[string]*chatHistoryOwner
+	historyStartupError error
+	// historyHealNow, when set (tests), is the clock for demand self-heal
+	// eligibility and backoff; nil means time.Now.
+	historyHealNow func() time.Time
+	// historyHealWithTimeout, when set (tests), creates the self-heal's
+	// bounded context; nil means context.WithTimeout.
+	historyHealWithTimeout func(context.Context, time.Duration) (context.Context, context.CancelFunc)
 
 	// cacheMu is the FR-048(b) narrow lock guarding metaCache,
 	// cacheLoadFailures and the FR-097 parent index ONLY — see this struct's
@@ -231,7 +267,7 @@ type UnifiedStore struct {
 	// so a loop tick no longer touches this entry's Stats field and a
 	// transcript append no longer touches its Loop fields; via
 	// readMetaLocked self-healing
-	// the cache on a cache-miss disk read (SetMeta, SwitchAgent,
+	// the cache on a cache-miss disk read (SetMeta,
 	// AppendTranscript, GetOrCreateScheduledSession, and GetMeta's cache-miss
 	// path all reach the cache this way, composing across all four on-disk
 	// group files — see readUnifiedMeta); and via ListSessions' own
@@ -253,6 +289,12 @@ type UnifiedStore struct {
 	// limitation assertable/observable instead of a silent gap. See
 	// CacheLoadFailureCount. Guarded by cacheMu (was: us.mu).
 	cacheLoadFailures int
+
+	// orphanDirs counts directories under the base dir that have no meta.json
+	// at construction time: not sessions (no record to load), so they are
+	// skipped with one clear warning each rather than retried and reported as
+	// unreadable sessions. See OrphanSessionDirCount. Guarded by cacheMu.
+	orphanDirs int
 
 	// parentIndex/childToParent are the ADR-057 FR-097 in-memory parent
 	// index: parentIndex maps a parent session id to the set of its DIRECT
@@ -276,7 +318,7 @@ type UnifiedStore struct {
 	// SetMeta (including a bare Owner/Title patch — u4IndexAddChild is a
 	// no-op when ParentSessionID is unchanged/empty, so this is safe to call
 	// unconditionally rather than only when the patch touches
-	// ParentSessionID specifically), SwitchAgent, NewChannelSession, and
+	// ParentSessionID specifically), NewChannelSession, and
 	// unified_api.go's CreateSessionWithID/AppendTranscriptStrict call sites
 	// via the writeMetaLocked dispatcher. U6 consumes ChildCount for
 	// roots-only listing (FR-097's stated ownership split: "U4 creates the
@@ -316,6 +358,14 @@ type UnifiedStore struct {
 	flushTimer *time.Timer
 }
 
+// OrphanSessionDirCount returns the number of directories skipped at
+// construction because they hold no meta.json (so are not sessions).
+func (us *UnifiedStore) OrphanSessionDirCount() int {
+	us.cacheMu.RLock()
+	defer us.cacheMu.RUnlock()
+	return us.orphanDirs
+}
+
 // CacheLoadFailureCount returns the number of sessions that failed to load
 // into metaCache at construction time (after one retry) — see
 // loadMetaCacheLocked's doc comment for the accepted limitation this
@@ -339,7 +389,7 @@ func (us *UnifiedStore) BaseDir() string {
 // step. It defaults to fileutil.WriteFileAtomic; tests override it to force
 // a deterministic write failure (the MB-1 cache/disk-divergence regression
 // guard) without depending on OS permission enforcement — same rationale as
-// removeAllFn above (root bypasses chmod-based failure injection via
+// the other test seams here (root bypasses chmod-based failure injection via
 // CAP_DAC_OVERRIDE in CI).
 var writeFileAtomicFn = fileutil.WriteFileAtomic
 
@@ -365,8 +415,9 @@ func validateSessionID(id string) error {
 	return nil
 }
 
-// NewUnifiedStore creates a UnifiedStore rooted at baseDir.
-// It migrates legacy flat JSONL files if any are found.
+// NewUnifiedStore creates a UnifiedStore rooted at baseDir. It performs no
+// saved-chat conversion: that runs only in the explicit boot step
+// (CutoverSavedChatsAtBoot / CutoverSavedChatsAtBootWithAgentStores).
 // The agentID is no longer baked into the store — callers pass it per-operation
 // (e.g., NewSession receives creatingAgentID).
 //
@@ -376,7 +427,7 @@ func validateSessionID(id string) error {
 // (e.g., <home>/agents/<id>/sessions), use NewUnifiedStoreWithHome so that
 // upload files are found at the correct <home>/uploads/<sessionID> path.
 func NewUnifiedStore(baseDir string) (*UnifiedStore, error) {
-	return NewUnifiedStoreWithHome(baseDir, filepath.Dir(filepath.Clean(baseDir)))
+	return newUnifiedStore(baseDir, filepath.Dir(filepath.Clean(baseDir)))
 }
 
 // NewUnifiedStoreWithHome creates a UnifiedStore rooted at baseDir whose
@@ -386,31 +437,43 @@ func NewUnifiedStore(baseDir string) (*UnifiedStore, error) {
 // per-agent stores at <home>/agents/<id>/sessions). The homePath ensures that
 // cascade-deletes on DeleteSession, ClearAll, and RetentionSweep always remove
 // files from the correct location regardless of the store's baseDir depth.
+//
+// Like NewUnifiedStore it never converts saved chats. The one-time CONV
+// cutover (unified_conv.go) is the explicit boot step the agent boot flow runs
+// BEFORE it opens the shared store (architect Q10): the only legacy reader.
 func NewUnifiedStoreWithHome(baseDir, homePath string) (*UnifiedStore, error) {
+	return newUnifiedStore(baseDir, homePath)
+}
+
+// newUnifiedStore is the shared constructor body.
+func newUnifiedStore(baseDir, homePath string) (*UnifiedStore, error) {
 	if err := os.MkdirAll(baseDir, 0o700); err != nil {
 		return nil, fmt.Errorf("unified_store: create base dir %q: %w", baseDir, err)
 	}
 
-	// The JSONL backend for context.jsonl lives in a sub-directory so its
-	// flat .jsonl files don't collide with session sub-directories.
-	contextDir := filepath.Join(baseDir, ".context")
-	store, err := memory.NewJSONLStore(contextDir)
-	if err != nil {
-		return nil, fmt.Errorf("unified_store: init context backend: %w", err)
-	}
+	// Session-core C-ARCHIVE / U2 Decision D (DEL-12): the ONE content authority
+	// is the addressed day archive, not a separate .context model JSONL backend.
+	// The constructor creates no .context directory and instantiates no
+	// model-content JSONLStore; every model-content operation is served by the
+	// archive-backed store below.
+	backend := newArchiveBackend(baseDir)
 
 	us := &UnifiedStore{
 		baseDir:       baseDir,
 		homePath:      homePath,
-		backend:       store,
+		backend:       backend,
+		archives:      make(map[string]*ArchiveDayStore),
 		metaCache:     make(map[string]*UnifiedMeta),
 		parentIndex:   make(map[string]map[string]struct{}),
 		childToParent: make(map[string]string),
 		dirtyStats:    make(map[string]struct{}),
 	}
 
-	us.migrateLegacy()
+	backend.provider = us.archiveStore
 	us.loadMetaCacheLocked()
+	// Readiness errors are retained independently of session/control identity.
+	// Only existing indexes are reconciled; this never builds an old baseline.
+	us.historyStartupError = us.reconcileExistingChatHistory(context.Background())
 	// ADR-057 U6 W24 (FR-063): every store gets a running periodic flusher
 	// from construction — a fresh install with no operator override still
 	// converges stats.json every DefaultSessionStatsFlushInterval (5s, see
@@ -422,7 +485,7 @@ func NewUnifiedStoreWithHome(baseDir, homePath string) (*UnifiedStore, error) {
 }
 
 // loadMetaCacheLocked scans baseDir once and populates metaCache with every
-// session's metadata. Called from the constructor, after migrateLegacy, so
+// session's metadata. Called from the constructor, after the CONV cutover, so
 // this moves the O(N) directory scan + per-session disk read from every
 // future ListSessions call to a single one-time cost at store construction.
 //
@@ -459,6 +522,17 @@ func (us *UnifiedStore) loadMetaCacheLocked() {
 		}
 		sessionDir := filepath.Join(us.baseDir, entry.Name())
 		meta, err := readUnifiedMeta(sessionDir)
+		if err != nil && errors.Is(err, os.ErrNotExist) {
+			// No meta.json at all: this directory was never a session (its
+			// files were written for a window key with no session record), so
+			// there is nothing to load and nothing a retry could fix. One clear,
+			// actionable warning; the directory is left alone.
+			us.orphanDirs++
+			slog.Warn("unified_store: skipping a directory with no meta.json - it is not a session "+
+				"(archive files written for a window key that has no session record); it is safe to delete",
+				"dir", sessionDir)
+			continue
+		}
 		if err != nil {
 			// One retry: absorbs a transient boot-time blip before we give up.
 			meta, err = readUnifiedMeta(sessionDir)
@@ -505,58 +579,6 @@ func (us *UnifiedStore) uploadsRoot() string {
 	}
 	// Fallback: derive from baseDir (correct only for stores directly under home).
 	return filepath.Join(filepath.Dir(filepath.Clean(us.baseDir)), "uploads")
-}
-
-// migrateLegacy scans for old flat JSONL files and wraps each in a session directory.
-func (us *UnifiedStore) migrateLegacy() {
-	entries, err := os.ReadDir(us.baseDir)
-	if err != nil {
-		return
-	}
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
-			continue
-		}
-		name := strings.TrimSuffix(e.Name(), ".jsonl")
-		sessionDir := filepath.Join(us.baseDir, name)
-		if mkErr := os.MkdirAll(sessionDir, 0o700); mkErr != nil {
-			slog.Warn("unified_store: migrate: could not create dir", "name", name, "error", mkErr)
-			continue
-		}
-		src := filepath.Join(us.baseDir, e.Name())
-		dst := filepath.Join(sessionDir, "context.jsonl")
-		if _, statErr := os.Stat(dst); statErr == nil {
-			// Already migrated.
-			continue
-		}
-		data, readErr := os.ReadFile(src)
-		if readErr != nil {
-			slog.Warn("unified_store: migrate: could not read file", "path", src, "error", readErr)
-			continue
-		}
-		if writeErr := fileutil.WriteFileAtomic(dst, data, 0o600); writeErr != nil {
-			slog.Warn("unified_store: migrate: could not write context.jsonl", "path", dst, "error", writeErr)
-			continue
-		}
-		now := time.Now().UTC()
-		meta := &UnifiedMeta{
-			SessionMeta: SessionMeta{
-				ID:        name,
-				Status:    StatusActive,
-				CreatedAt: now,
-				UpdatedAt: now,
-			},
-			Type: SessionTypeChat,
-		}
-		if writeMetaErr := writeUnifiedMetaDirect(sessionDir, meta); writeMetaErr != nil {
-			slog.Warn("unified_store: migrate: could not write meta.json", "name", name, "error", writeMetaErr)
-			continue
-		}
-		if removeErr := os.Remove(src); removeErr != nil {
-			slog.Warn("unified_store: migrate: could not remove legacy file", "path", src, "error", removeErr)
-		}
-		slog.Info("unified_store: migrated legacy session", "id", name)
-	}
 }
 
 // NewSession creates a new session directory with meta.json and empty files.
@@ -616,20 +638,37 @@ func (us *UnifiedStore) createSessionLocked(
 	creatingAgentID string,
 ) (*UnifiedMeta, error) {
 	now := time.Now().UTC()
+	// NOTE (session-core U1, DEL-11): a freshly created session records NO
+	// ActiveAgentID. The field is the mutable HANDOVER owner — the agent a
+	// session has been switched to — and the spec deletes the concept: a
+	// session's owner is its immutable AgentID. Seeding it here (as this
+	// literal once did, ActiveAgentID = creatingAgentID) both persisted a
+	// redundant second owner on every meta.json and made a session look
+	// handed-over the moment it was created. Nothing writes it any more: the
+	// switch_agent tool and UnifiedStore.SwitchAgent were deleted (DEL-07).
 	meta := &UnifiedMeta{
 		SessionMeta: SessionMeta{
-			ID:            sessionID,
-			AgentID:       creatingAgentID,
-			AgentIDs:      []string{creatingAgentID},
-			ActiveAgentID: creatingAgentID,
-			Status:        StatusActive,
-			Channel:       channel,
-			CreatedAt:     now,
-			UpdatedAt:     now,
+			ID:        sessionID,
+			AgentID:   creatingAgentID,
+			AgentIDs:  []string{creatingAgentID},
+			Status:    StatusActive,
+			Channel:   channel,
+			CreatedAt: now,
+			UpdatedAt: now,
 		},
 		Type: sessionType,
 	}
+	return us.persistNewSessionLocked(sessionID, meta)
+}
 
+// persistNewSessionLocked materialises an already-built session meta: the
+// directory, meta.json and the empty transcript. Split out of
+// createSessionLocked so a caller that must stamp identity fields present
+// only in its own context — GetOrCreateMainSession's workspace_id — can do so
+// in the SAME single write instead of create-then-patch, which would leave a
+// window in which a main exists without its workspace tag. Caller must hold
+// sessionID's shard.
+func (us *UnifiedStore) persistNewSessionLocked(sessionID string, meta *UnifiedMeta) (*UnifiedMeta, error) {
 	sessionDir := filepath.Join(us.baseDir, sessionID)
 	if err := os.MkdirAll(sessionDir, 0o700); err != nil {
 		return nil, fmt.Errorf("unified_store: create session dir: %w", err)
@@ -639,7 +678,17 @@ func (us *UnifiedStore) createSessionLocked(
 	// stats.json/loop.json are created lazily by their own targeted writers
 	// the first time something actually touches that group (dataset row 2:
 	// meta.json only).
+	if err := us.initEmptyChatHistoryIndexLocked(sessionID); err != nil {
+		return nil, err
+	}
+	meta.usageBaselineKnown = true // Verified new/empty identity, not historical backfill.
+	if err := historyPublication(chatHistoryPublicationEvent{SessionID: sessionID, Operation: "create", Point: "before_identity_publish"}); err != nil {
+		return nil, err
+	}
 	if err := us.u5WriteIdentityLocked(sessionID, meta); err != nil {
+		return nil, err
+	}
+	if err := historyPublication(chatHistoryPublicationEvent{SessionID: sessionID, Operation: "create", Point: "identity_published"}); err != nil {
 		return nil, err
 	}
 	// Create empty transcript so readers don't error on first access.
@@ -650,7 +699,7 @@ func (us *UnifiedStore) createSessionLocked(
 		}
 	}
 
-	slog.Debug("unified_store: created session", "id", sessionID, "type", sessionType, "agent", creatingAgentID)
+	slog.Debug("unified_store: created session", "id", sessionID, "type", meta.Type, "agent", meta.AgentID)
 	return meta, nil
 }
 
@@ -662,38 +711,90 @@ func (us *UnifiedStore) NewScheduledSession(ownerAgentID string) (*UnifiedMeta, 
 	return us.NewSession(SessionTypeScheduled, "scheduled", ownerAgentID)
 }
 
-// NewHeartbeatSession eagerly creates the standing session for a workspace-
-// scoped heartbeat (FR-010, A1/F-02, A2). It stamps:
-//   - Type = SessionTypeHeartbeat
-//   - WorkspaceID = workspaceID
-//   - AgentID = agentID (also AgentIDs and ActiveAgentID)
+// GetOrCreateMainSession returns the one standing main session for a
+// (workspaceID, agentID) pair, creating it in the same call if it does not
+// exist yet (session-core U1, FR-002/C-MAIN). It replaces the retired
+// heartbeat-only standing session (NewHeartbeatSession, DEL-01): the main is
+// pinned and protected whether or not the member's heartbeat is enabled, so
+// creation is a property of ELIGIBLE MEMBERSHIP, not of an enable toggle.
 //
-// The caller (gateway workspace handler) stores the returned session's ID at
-// member_configs[agentID].heartbeat.session_id so the cron reconciler can
-// inject it into the JobSpec.SessionID field and continue the same session
-// across every heartbeat run (FR-007b).
+// The id is computed, never minted — MainSessionID(workspaceID, agentID),
+// which refuses an over-long or ill-formed pair with a visible error and
+// stores nothing. Callers that must know eligibility (is this agent a member
+// of this workspace? is this Admin in the default workspace?) decide that
+// BEFORE calling: this method's only contract is the identity itself.
 //
-// Unlike NewScheduledSession, this variant accepts an explicit workspaceID so
-// the session carries the correct workspace tag for the delete-guard lookup
-// (FR-014) and the SPA's Session panel grouping (FR-021).
-func (us *UnifiedStore) NewHeartbeatSession(workspaceID, agentID string) (*UnifiedMeta, error) {
-	meta, err := us.NewSession(SessionTypeHeartbeat, "heartbeat", agentID)
+// Stored-pair validation (BDD-01.4). When the computed id already has a
+// stored record, the record must match the pair exactly — type main, the same
+// agent, the same workspace. Anything else (a mismatched owner, a mismatched
+// workspace, a record of another type) is a REFUSAL: it is returned as an
+// error and left byte-for-byte untouched. It is never adopted, rewritten or
+// "repaired", because adopting it would hand Mia's main to whoever the record
+// actually belongs to.
+//
+// A read error on the computed id is likewise the refusal, NEVER a cache miss.
+// This is the specific bug this method must not reproduce: the older
+// GetOrCreateScheduledSession fall-through mints a brand-new session whenever
+// readMetaLocked returns ANY error, so corrupt or unreadable metadata silently
+// produced a second session under the same (or a fresh) id. Here only the
+// genuinely-absent case creates: errors.Is(err, fs.ErrNotExist). A corrupt
+// meta.json is an error the caller sees.
+func (us *UnifiedStore) GetOrCreateMainSession(workspaceID, agentID string) (*UnifiedMeta, error) {
+	return us.getOrCreateMainSession(workspaceID, agentID, "")
+}
+
+// getOrCreateMainSession is the shared body of GetOrCreateMainSession and
+// GetOrCreateMainSessionOwned (unified_main_owner.go). owner is stamped only
+// when the main is created; an existing main is returned unchanged.
+func (us *UnifiedStore) getOrCreateMainSession(workspaceID, agentID, owner string) (*UnifiedMeta, error) {
+	sessionID, err := MainSessionID(workspaceID, agentID)
 	if err != nil {
-		return nil, fmt.Errorf("session: new heartbeat session (workspace=%s agent=%s): %w", workspaceID, agentID, err)
+		return nil, err
 	}
-	// Stamp the workspace_id onto the meta so the delete-guard can load the
-	// right workspace without scanning all workspaces (A2/G-01).
-	if err := us.SetMeta(meta.ID, MetaPatch{WorkspaceID: &workspaceID}); err != nil {
-		// MEDIUM-C: SetMeta failed — best-effort delete the half-initialized session
-		// so a transient failure does not leave an orphaned session directory.
-		if delErr := us.DeleteSession(meta.ID); delErr != nil {
-			slog.Warn("session: cleanup of partial heartbeat session failed",
-				"session_id", meta.ID, "workspace_id", workspaceID, "agent_id", agentID, "error", delErr)
+	h := us.lockSession(sessionID)
+	defer h.Unlock()
+
+	meta, readErr := us.readMetaLocked(sessionID)
+	if readErr != nil {
+		if !errors.Is(readErr, fs.ErrNotExist) {
+			return nil, fmt.Errorf(
+				"main session %q: refusing to reuse or replace an unreadable stored identity: %w",
+				sessionID, readErr)
 		}
-		return nil, fmt.Errorf("session: stamp workspace_id on heartbeat session %s: %w", meta.ID, err)
+		return us.createMainSessionLocked(sessionID, workspaceID, agentID, owner)
 	}
-	meta.WorkspaceID = workspaceID
-	return meta, nil
+	if meta.Type != SessionTypeMain || meta.AgentID != agentID || meta.WorkspaceID != workspaceID {
+		return nil, fmt.Errorf(
+			"main session %q: stored identity does not match the pair (workspace=%q agent=%q type=%q); refusing to adopt or replace it",
+			sessionID, meta.WorkspaceID, meta.AgentID, meta.Type)
+	}
+	return meta.Clone(), nil
+}
+
+// createMainSessionLocked materialises the main session for an already-validated
+// pair under its computed id, with owner (possibly empty) stamped in the same
+// single identity write. Caller must hold sessionID's shard.
+func (us *UnifiedStore) createMainSessionLocked(sessionID, workspaceID, agentID, owner string) (*UnifiedMeta, error) {
+	now := time.Now().UTC()
+	meta := &UnifiedMeta{
+		SessionMeta: SessionMeta{
+			ID:          sessionID,
+			AgentID:     agentID,
+			AgentIDs:    []string{agentID},
+			Status:      StatusActive,
+			Channel:     "main",
+			WorkspaceID: workspaceID,
+			Owner:       owner,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		},
+		Type: SessionTypeMain,
+	}
+	created, err := us.persistNewSessionLocked(sessionID, meta)
+	if err != nil {
+		return nil, fmt.Errorf("session: create main session (workspace=%s agent=%s): %w", workspaceID, agentID, err)
+	}
+	return created, nil
 }
 
 // NewVerifierSession mints a fresh, isolated session of SessionTypeVerifier
@@ -805,7 +906,7 @@ func (us *UnifiedStore) GetMeta(sessionID string) (*UnifiedMeta, error) {
 //
 // MB-1 fix (cache/disk divergence on write failure): an earlier version of
 // this method returned the LIVE cache entry pointer on a hit, reasoning that
-// every read-modify-write caller (SetMeta, SwitchAgent, AppendTranscript,
+// every read-modify-write caller (SetMeta, AppendTranscript,
 // GetOrCreateScheduledSession, GetMeta's cache-miss path) holds the
 // session's shard across its entire mutate-then-write, so no reader of a
 // DIFFERENT session could observe this entry mid-mutation. That reasoning
@@ -856,7 +957,7 @@ func (us *UnifiedStore) readMetaLocked(sessionID string) (*UnifiedMeta, error) {
 	// Before this fix, this was the second of two metaCache-population
 	// paths (alongside loadMetaCacheLocked) that populated the cache
 	// without ever touching parentIndex/childToParent — every caller that
-	// reaches this branch (GetMeta, SetMeta, SwitchAgent, AppendTranscript,
+	// reaches this branch (GetMeta, SetMeta, AppendTranscript,
 	// GetOrCreateScheduledSession, ListSessions' out-of-band reconcile) was
 	// silently leaving ChildCount under-reporting for the session it just
 	// composed from disk. A no-op when meta.ParentSessionID is empty;
@@ -904,7 +1005,7 @@ func (us *UnifiedStore) Close() error {
 // must not) also accept a pre-split fused meta.json carrying embedded
 // Stats/Goal*/Loop* fields — greenfield permits this (ADR-057 v4 operator
 // decision 1: no migration, no back-compat; ADR-086 D-F restates it for
-// this addition) and migrateLegacy's own freshly migrated sessions carry
+// this addition) and CONV's own freshly converted saved chats carry
 // zero-valued Stats/Loop/PendingAsk anyway, so composing them from the
 // files that exist yields the identical zero result a fused reader would
 // have.
@@ -927,6 +1028,9 @@ func readUnifiedMeta(sessionDir string) (*UnifiedMeta, error) {
 	}
 
 	meta := u5ComposeUnifiedMeta(identity, stats, loop, pendingAsk)
+	if !stats.present {
+		meta.usageBaselineKnown = historyEmptyUsageBaseline(sessionDir, meta.ID, len(meta.Partitions))
+	}
 	// If Type is not set (legacy PartitionStore session), default to chat.
 	if meta.Type == "" {
 		meta.Type = SessionTypeChat
@@ -935,17 +1039,22 @@ func readUnifiedMeta(sessionDir string) (*UnifiedMeta, error) {
 	return meta, nil
 }
 
-// writeUnifiedMetaDirect atomically writes meta.json to sessionDir with an OS
-// flock for cross-process defense-in-depth. This is a package-level helper used
-// during migration (called before the store is fully constructed). Normal writes
-// go through UnifiedStore.writeMetaLocked which also holds the in-process mutex.
-func writeUnifiedMetaDirect(sessionDir string, meta *UnifiedMeta) error {
-	data, err := json.MarshalIndent(meta, "", "  ")
-	if err != nil {
-		return fmt.Errorf("unified_store: marshal meta: %w", err)
+// archiveStore returns the session's one ArchiveDayStore, creating it on first
+// use. Every append to the session directory's archive goes through it.
+func (us *UnifiedStore) archiveStore(sessionID string) (*ArchiveDayStore, error) {
+	us.archiveMu.Lock()
+	defer us.archiveMu.Unlock()
+	if s, ok := us.archives[sessionID]; ok {
+		return s, nil
 	}
-	metaPath := filepath.Join(sessionDir, "meta.json")
-	return fileutil.WithFlock(sessionFileLockPath(metaPath), func() error {
-		return fileutil.WriteFileAtomic(metaPath, data, 0o600)
-	})
+	s, err := NewArchiveDayStore(us.baseDir, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if us.archiveNow != nil {
+		s.now = us.archiveNow
+	}
+	s.historyAccepted = func(addr ArchiveAddress, rec ArchiveRecord) { us.historyAccepted(sessionID, addr, rec) }
+	us.archives[sessionID] = s
+	return s, nil
 }

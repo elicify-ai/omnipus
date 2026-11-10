@@ -202,8 +202,9 @@ func TestProcessMessage_UserMessageBound_AllIntakes(t *testing.T) {
 				}
 				msg := bus.InboundMessage{
 					Channel: in.channel, ChatID: "chat-" + in.name,
-					Sender:  bus.SenderInfo{CanonicalID: in.name + "-user", DisplayName: "Alice"},
-					Content: strings.Repeat("x", bound+1),
+					Sender:   bus.SenderInfo{CanonicalID: in.name + "-user", DisplayName: "Alice"},
+					Metadata: map[string]string{"agent_id": testDefaultAgentID}, // the intake names its agent (FR-122)
+					Content:  strings.Repeat("x", bound+1),
 				}
 				sessionsBefore := b.sessionCount(t)
 				var sessionID string
@@ -244,8 +245,9 @@ func TestProcessMessage_UserMessageBound_AllIntakes(t *testing.T) {
 					b := newBoundTestLoop(t, 0, &providers.LLMResponse{Content: "turn ran"})
 					msg := bus.InboundMessage{
 						Channel: in.channel, ChatID: "chat-" + in.name,
-						Sender:  bus.SenderInfo{CanonicalID: in.name + "-user"},
-						Content: strings.Repeat("y", n),
+						Sender:   bus.SenderInfo{CanonicalID: in.name + "-user"},
+						Metadata: map[string]string{"agent_id": testDefaultAgentID}, // the intake names its agent (FR-122)
+						Content:  strings.Repeat("y", n),
 					}
 					if in.withSession {
 						meta, err := b.al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", testDefaultAgentID)
@@ -263,9 +265,10 @@ func TestProcessMessage_UserMessageBound_AllIntakes(t *testing.T) {
 				b := newBoundTestLoop(t, 1_000, &providers.LLMResponse{Content: "turn ran"})
 				msg := bus.InboundMessage{
 					Channel: in.channel, ChatID: "chat-" + in.name,
-					Sender:  bus.SenderInfo{CanonicalID: in.name + "-user"},
-					Content: strings.Repeat("z", 1_000),
-					Media:   []string{"media-ref-one", "media-ref-two", "media-ref-three"},
+					Sender:   bus.SenderInfo{CanonicalID: in.name + "-user"},
+					Metadata: map[string]string{"agent_id": testDefaultAgentID}, // the intake names its agent (FR-122)
+					Content:  strings.Repeat("z", 1_000),
+					Media:    []string{"media-ref-one", "media-ref-two", "media-ref-three"},
 				}
 				if in.withSession {
 					meta, err := b.al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", testDefaultAgentID)
@@ -282,8 +285,9 @@ func TestProcessMessage_UserMessageBound_AllIntakes(t *testing.T) {
 				b := newBoundTestLoop(t, 50_000)
 				msg := bus.InboundMessage{
 					Channel: in.channel, ChatID: "chat-" + in.name,
-					Sender:  bus.SenderInfo{CanonicalID: in.name + "-user"},
-					Content: strings.Repeat("w", 50_001),
+					Sender:   bus.SenderInfo{CanonicalID: in.name + "-user"},
+					Metadata: map[string]string{"agent_id": testDefaultAgentID}, // the intake names its agent (FR-122)
+					Content:  strings.Repeat("w", 50_001),
 				}
 				if in.withSession {
 					meta, err := b.al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", testDefaultAgentID)

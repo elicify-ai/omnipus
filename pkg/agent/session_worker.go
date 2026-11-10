@@ -19,10 +19,6 @@ import (
 )
 
 const (
-	// workerInboxCap is the buffered capacity of a session worker's inbox.
-	// A depth of 8 covers rapid-fire follow-ups without blocking the dispatcher.
-	workerInboxCap = 8
-
 	// continueDrainMaxRetries bounds processTurn's drain-loop retry of a
 	// failing al.Continue call before giving up and abandoning the queued
 	// steering messages (design note "Recommended design"). The mixed
@@ -55,9 +51,20 @@ type sessionWorker struct {
 	// this worker. Immutable after construction.
 	scope string
 
-	// inbox receives messages dispatched by Run().
-	// Full → drop with WARN and notify user (see enqueue).
+	// inbox receives messages dispatched by Run(). It is a SMALL channel
+	// (workerInboxBuffer): the one waiting-item bound, MaxQueueSize, is counted
+	// on enqueue over inbox plus overflow rather than preallocated here, so an
+	// idle worker costs a few slots, not MaxQueueSize of them. Waiting more than
+	// MaxQueueSize → drop with WARN and notify user (see enqueue).
 	inbox chan bus.InboundMessage
+
+	// inboxMu guards overflow and makes the bound check atomic with the add.
+	inboxMu sync.Mutex
+	// overflow holds the waiting messages that did not fit in inbox, oldest
+	// first. Invariant: overflow is non-empty only while inbox is non-empty
+	// (every receive is followed by refillInbox), so FIFO order is inbox then
+	// overflow.
+	overflow []bus.InboundMessage
 
 	// ctx is the worker's own context, derived from context.Background() so
 	// the worker's lifetime is independent of Run()'s context.
@@ -114,6 +121,62 @@ type sessionWorker struct {
 	parent *AgentLoop
 }
 
+// inputBusyReply is the visible refusal for input that is dropped because the
+// waiting-item bound (MaxQueueSize) is full - on a session worker inbox or on a
+// connector chat lane.
+const inputBusyReply = "Your message could not be queued — the agent is busy. Please resend in a few seconds."
+
+// workerInboxBuffer is the inbox channel's buffer: only the hot path, not a
+// capacity. The capacity is MaxQueueSize, counted in enqueue (see pushInbox).
+const workerInboxBuffer = 8
+
+// waitingInboxCount is the number of messages waiting to start a turn, in
+// the channel and the overflow together.
+func (w *sessionWorker) waitingInboxCount() int {
+	w.inboxMu.Lock()
+	defer w.inboxMu.Unlock()
+	return len(w.inbox) + len(w.overflow)
+}
+
+// pushInbox adds msg behind everything already waiting, reporting false when
+// MaxQueueSize messages are already waiting.
+func (w *sessionWorker) pushInbox(msg bus.InboundMessage) bool {
+	w.inboxMu.Lock()
+	defer w.inboxMu.Unlock()
+	if w.exiting.Load() {
+		return false // a dying worker will not drain it; the caller re-dispatches
+	}
+	if len(w.inbox)+len(w.overflow) >= MaxQueueSize {
+		return false
+	}
+	if len(w.overflow) == 0 {
+		select {
+		case w.inbox <- msg:
+			return true
+		default:
+		}
+	}
+	w.overflow = append(w.overflow, msg)
+	return true
+}
+
+// refillInbox moves waiting overflow messages into the channel after a receive
+// freed room, keeping FIFO order.
+func (w *sessionWorker) refillInbox() {
+	w.inboxMu.Lock()
+	defer w.inboxMu.Unlock()
+	for len(w.overflow) > 0 {
+		select {
+		case w.inbox <- w.overflow[0]:
+			w.overflow[0] = bus.InboundMessage{}
+			w.overflow = w.overflow[1:]
+		default:
+			return
+		}
+	}
+	w.overflow = nil
+}
+
 // newSessionWorker constructs a session worker but does NOT start its goroutine.
 // Callers must call go w.runLoop() immediately after spawning.
 //
@@ -129,8 +192,13 @@ func newSessionWorker(scope string, parent *AgentLoop, admissionRelease func()) 
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &sessionWorker{
-		scope:            scope,
-		inbox:            make(chan bus.InboundMessage, workerInboxCap),
+		scope: scope,
+		// FR-009 / DEL-03: ONE waiting-item bound (MaxQueueSize, 200), enforced
+		// in enqueue. The channel itself stays small: preallocating the bound
+		// gave every session worker 200 message slots and pushed
+		// TestCompactionBoundsMemory from ~3 MB to ~10 MB. The deeper
+		// unification of this inbox into the steering FIFO is a follow-up.
+		inbox:            make(chan bus.InboundMessage, workerInboxBuffer),
 		ctx:              ctx,
 		cancel:           cancel,
 		done:             make(chan struct{}),
@@ -166,41 +234,58 @@ func newSessionWorker(scope string, parent *AgentLoop, admissionRelease func()) 
 // including a user message dropped on a full inbox (that drop is announced to
 // the user, exactly as before).
 func (w *sessionWorker) enqueue(msg bus.InboundMessage) bool {
+	handled, _ := w.enqueueOrRetry(msg)
+	return handled
+}
+
+// enqueueOrRetry is enqueue that also reports retry: the worker began exiting
+// between the dispatcher's check and the push, so it will never drain the
+// message and nothing was queued or answered. The dispatcher re-dispatches it
+// to a fresh worker (dispatchSessionWorker); it is NOT a full inbox, and the
+// person gets no "busy" reply for it.
+func (w *sessionWorker) enqueueOrRetry(msg bus.InboundMessage) (handled, retry bool) {
+	if w.deferClearUntilStopped(msg) {
+		return true, false
+	}
 	if w.trySteerIntoLiveTurn(msg) {
-		return true
+		return true, false
 	}
-	select {
-	case w.inbox <- msg:
-		return true
-	default:
-		if msg.Channel == "system" {
-			logger.WarnCF("agent.worker", "Session worker inbox full — system message not queued; falling back to unserialized dispatch",
-				map[string]any{
-					"scope":      w.scope,
-					"chat_id":    msg.ChatID,
-					"session_id": msg.AsyncTranscriptSessionID,
-				})
-			return false
-		}
-		logger.WarnCF("agent.worker", "Session worker inbox full — dropping message",
+	if w.pushInbox(msg) {
+		return true, false
+	}
+	if w.exiting.Load() {
+		return false, true
+	}
+	if w.parent.deferSecretResume(msg, "worker_inbox_full") {
+		return true, false
+	}
+	if msg.Channel == "system" {
+		logger.WarnCF("agent.worker", "Session worker inbox full — system message not queued; falling back to unserialized dispatch",
 			map[string]any{
-				"scope":   w.scope,
-				"channel": msg.Channel,
-				"chat_id": msg.ChatID,
+				"scope":      w.scope,
+				"chat_id":    msg.ChatID,
+				"session_id": msg.AsyncTranscriptSessionID,
 			})
-		// Notify the user so the drop is not silent.
-		rejectCtx, rejectCancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer rejectCancel()
-		if pubErr := w.parent.bus.PublishOutbound(rejectCtx, bus.OutboundMessage{
-			Channel: msg.Channel,
-			ChatID:  msg.ChatID,
-			Content: "Your message could not be queued — the agent is busy. Please resend in a few seconds.",
-		}); pubErr != nil {
-			logger.WarnCF("agent.worker", "Failed to send inbox-full reply",
-				map[string]any{"channel": msg.Channel, "error": pubErr.Error()})
-		}
-		return true
+		return false, false
 	}
+	logger.WarnCF("agent.worker", "Session worker inbox full — dropping message",
+		map[string]any{
+			"scope":   w.scope,
+			"channel": msg.Channel,
+			"chat_id": msg.ChatID,
+		})
+	// Notify the user so the drop is not silent.
+	rejectCtx, rejectCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer rejectCancel()
+	if pubErr := w.parent.bus.PublishOutbound(rejectCtx, bus.OutboundMessage{
+		Channel: msg.Channel,
+		ChatID:  msg.ChatID,
+		Content: inputBusyReply,
+	}); pubErr != nil {
+		logger.WarnCF("agent.worker", "Failed to send inbox-full reply",
+			map[string]any{"channel": msg.Channel, "error": pubErr.Error()})
+	}
+	return true, false
 }
 
 // trySteerIntoLiveTurn routes msg into the live turn's steering queue when
@@ -218,13 +303,21 @@ func (w *sessionWorker) enqueue(msg bus.InboundMessage) bool {
 // (and drained) or sees inTurn=false (and goes to the inbox) — never in
 // between.
 func (w *sessionWorker) trySteerIntoLiveTurn(msg bus.InboundMessage) bool {
-	if msg.Channel == "system" {
+	// A group-chat room request is never steered into a running turn
+	// (omnipus-system-agent FR-214, the no-join intake): it waits in the
+	// inbox and runs as its own turn once the current one settles.
+	if msg.Channel == "system" || inboundMetadata(msg, secretResumeMetadataKey) != "" || isNoJoinRoomWake(msg) {
 		return false
 	}
 	w.steerMu.Lock()
 	defer w.steerMu.Unlock()
 	if !w.inTurn.Load() || w.systemTurn.Load() {
 		return false
+	}
+	// A held room request re-published for the turn that revived its member
+	// passes the room fence first; a cancelled one is discarded, not run.
+	if isRoomRequestWake(msg) && !w.parent.steerRoomRequest(msg) {
+		return true
 	}
 	if err := w.parent.enqueueSteeringFromMessage(msg); err != nil {
 		// A steering-rejected error here means the message was NOT accepted
@@ -236,6 +329,10 @@ func (w *sessionWorker) trySteerIntoLiveTurn(msg bus.InboundMessage) bool {
 			map[string]any{"scope": w.scope, "error": err.Error()})
 		return false
 	}
+	// Accepted into the live turn: the model gets the text at its next
+	// boundary. Marked only now - a rejected steer falls back to the inbox and
+	// is delivered (or dropped) by the turn that really admits it.
+	w.parent.markRequestDelivered(msg.SessionID, msg.TranscriptEntryID)
 	return true
 }
 
@@ -263,6 +360,12 @@ func (w *sessionWorker) closeSteeringWhenDrained(sessionKey string) bool {
 // dispatch (dispatchSystemMessageToSessionWorker) uses the exact same
 // load-or-spawn mechanics as every other inbound message.
 func (al *AgentLoop) dispatchSessionWorker(scope string, msg bus.InboundMessage) bool {
+	// A person typing into a helper's own pane steers that existing helper
+	// (Steering commands C1): the helper's own execution consumes it, never
+	// a second ordinary turn on the helper's session.
+	if msg.Channel != "system" && al.deliverHumanHelperInput(msg) {
+		return true
+	}
 	// If a worker already exists for this scope AND is not in the
 	// middle of exiting, enqueue into it. The exiting check closes the
 	// silent-drop race (pass-2 silent-failure-hunter N1) where
@@ -278,7 +381,11 @@ func (al *AgentLoop) dispatchSessionWorker(scope string, msg bus.InboundMessage)
 				map[string]any{"scope": scope, "got_type": fmt.Sprintf("%T", existing)})
 			// Fall through to spawn a replacement, same as a dying worker.
 		} else if !w.exiting.Load() {
-			return w.enqueue(msg)
+			if handled, retry := w.enqueueOrRetry(msg); !retry {
+				return handled
+			}
+			// The worker started exiting after the check above: fall through
+			// to spawn its replacement.
 		}
 		// Dying worker (or corrupted entry) — fall through to spawn replacement.
 	}
@@ -290,6 +397,9 @@ func (al *AgentLoop) dispatchSessionWorker(scope string, msg bus.InboundMessage)
 	// the check and overshoot the cap.
 	admitted, release := al.admission.TryAdmit(scope)
 	if !admitted {
+		if al.deferSecretResume(msg, "session_capacity") {
+			return true
+		}
 		logger.WarnCF("agent", "At capacity — rejecting new session",
 			map[string]any{
 				"scope":    scope,
@@ -315,12 +425,40 @@ func (al *AgentLoop) dispatchSessionWorker(scope string, msg bus.InboundMessage)
 	}
 
 	// Spawn a new worker for this scope. The worker holds the admission
-	// slot via release() and calls it in its deferred runLoop cleanup.
+	// slot via release() and calls it in its deferred runLoop cleanup. The
+	// spawn happens under workerSpawnMu so it cannot interleave with Close's
+	// drain snapshot: once Close has begun, the message is not delivered
+	// (a secret resume stays submitted and unclaimed for boot recovery).
+	al.workerSpawnMu.Lock()
+	if al.workerSpawnClosed {
+		al.workerSpawnMu.Unlock()
+		release()
+		logger.WarnCF("agent", "Agent loop is closing — message not dispatched to a new session worker",
+			map[string]any{"scope": scope, "channel": msg.Channel, "session_id": msg.SessionID})
+		return false
+	}
 	w := newSessionWorker(scope, al, release)
 	al.sessionWorkers.Store(scope, w)
+	al.workerSpawnMu.Unlock()
 	go w.runLoop()
 	return w.enqueue(msg)
 }
+
+// closeSessionWorkerSpawns makes every later dispatchSessionWorker refuse to
+// spawn a worker. Close calls it before stopSessionWorkers takes its snapshot.
+func (al *AgentLoop) closeSessionWorkerSpawns() {
+	al.workerSpawnMu.Lock()
+	al.workerSpawnClosed = true
+	al.workerSpawnMu.Unlock()
+	if afterWorkerSpawnFenceTestHook != nil {
+		afterWorkerSpawnFenceTestHook(al)
+	}
+}
+
+// afterWorkerSpawnFenceTestHook is a test-only seam fired inside Close after
+// the spawn fence is set and before stopSessionWorkers takes its snapshot. It
+// is nil in production.
+var afterWorkerSpawnFenceTestHook func(al *AgentLoop)
 
 // dispatchSystemMessageToSessionWorker routes an async-origin system message
 // (#505, AsyncTranscriptSessionID set) through the per-session sessionWorker
@@ -366,7 +504,10 @@ func (al *AgentLoop) dispatchSystemMessageToSessionWorker(msg bus.InboundMessage
 		return true
 	})
 	if live != nil {
-		return live.enqueue(msg)
+		if handled, retry := live.enqueueOrRetry(msg); !retry {
+			return handled
+		}
+		// It started exiting meanwhile: resolve the scope below instead.
 	}
 
 	// 2. No live worker — resolve the scope this session's own user traffic
@@ -384,6 +525,20 @@ func (al *AgentLoop) dispatchSystemMessageToSessionWorker(msg bus.InboundMessage
 		return false
 	}
 	return al.dispatchSessionWorker(scope, msg)
+}
+
+// retireIfIdle is the idle-timeout decision. Under inboxMu (the lock pushInbox
+// holds) it either finds a message waiting and leaves the worker alive, or marks
+// the worker exiting so every later push is refused and re-dispatched. It
+// reports whether the worker is now exiting.
+func (w *sessionWorker) retireIfIdle() bool {
+	w.inboxMu.Lock()
+	defer w.inboxMu.Unlock()
+	if len(w.inbox)+len(w.overflow) > 0 {
+		return false
+	}
+	w.exiting.Store(true)
+	return true
 }
 
 // runLoop is the worker goroutine. It reads messages from inbox and processes
@@ -417,7 +572,14 @@ func (w *sessionWorker) runLoop() {
 			w.exiting.Store(true)
 			return
 		case <-idleTimer.C:
-			w.exiting.Store(true)
+			// Leave only when nothing is waiting, and refuse new pushes from
+			// that moment (exiting is set under inboxMu, the lock pushInbox
+			// holds): a message accepted a heartbeat before the exit is run,
+			// never stranded in a dead inbox.
+			if !w.retireIfIdle() {
+				idleTimer.Reset(workerIdleTimeout)
+				continue
+			}
 			logger.DebugCF("agent.worker", "Session worker idle-timeout — exiting",
 				map[string]any{"scope": w.scope})
 			return
@@ -436,7 +598,19 @@ func (w *sessionWorker) runLoop() {
 			}
 			idleTimer.Reset(workerIdleTimeout)
 
+			w.refillInbox()
 			w.processTurn(ctx, msg)
+			// The idle window starts when the worker goes idle, not when it
+			// received the message: a turn longer than workerIdleTimeout must not
+			// leave an already-fired timer that exits the worker the moment the
+			// turn ends (delta review R1 #1, the /clear typed during a long turn).
+			if !idleTimer.Stop() {
+				select {
+				case <-idleTimer.C:
+				default:
+				}
+			}
+			idleTimer.Reset(workerIdleTimeout)
 		}
 	}
 }
@@ -447,6 +621,19 @@ func (w *sessionWorker) runLoop() {
 // so each session worker has its own independent execution path.
 func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage) {
 	al := w.parent
+	// Registered first, so it runs last: after the turn, its response and the
+	// worker's in-turn flag are all settled. An unanswered request gets its one
+	// reminder (request_reminder.go).
+	defer al.remindUnansweredRequests(msg.SessionID)
+	// No delivered mark here: the turn is not admitted yet, and a stopped agent
+	// drops this wake. The mark is written once the turn is admitted
+	// (runInboundTurnWithRevival), when the model really gets the text.
+	ctx, executionEntry := ordinaryExecutionContext(ctx)
+	defer func() {
+		if err := al.finishExecutionDisposition(executionEntry.disposition); err != nil {
+			al.reportOrdinarySettlementFailure(msg, err)
+		}
+	}()
 
 	// Mark the worker as inside a turn so concurrent enqueue() calls for the
 	// same scope route to the in-turn steering queue rather than the inbox.
@@ -479,6 +666,7 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 	published := false
 	publishChannel := msg.Channel
 	publishChatID := msg.ChatID
+	publishSessionID := msg.SessionID
 
 	defer func() {
 		defer func() {
@@ -488,7 +676,7 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 			}
 		}()
 		if finalResponse != "" && !published {
-			al.publishResponseIfNeeded(ctx, activeAgent, publishChannel, publishChatID, finalResponse)
+			al.publishResponseIfNeeded(ctx, activeAgent, publishChannel, publishChatID, finalResponse, publishSessionID)
 			published = true
 		}
 	}()
@@ -519,7 +707,7 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 				// ctx may be canceled during panic unwinding; use a fresh,
 				// short-lived context so the terminal frame still reaches the client.
 				termCtx, termCancel := context.WithTimeout(context.Background(), 5*time.Second)
-				al.publishResponseIfNeeded(termCtx, activeAgent, publishChannel, publishChatID, finalResponse)
+				al.publishResponseIfNeeded(termCtx, activeAgent, publishChannel, publishChatID, finalResponse, publishSessionID)
 				termCancel()
 				published = true
 			}
@@ -531,17 +719,23 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 
 	response, agent, err := al.processMessage(ctx, msg)
 	activeAgent = agent
+	err = errors.Join(err, al.roomTurnEnded(msg, err))
 	if err != nil {
 		// ADR-051 §RD5: never surface raw err text in the assistant-facing
 		// reply. Route through the classifier so provider-originated body /
 		// status / model identity is replaced with the typed copy. The raw
-		// err stays in worker logging for operator triage.
+		// err stays in worker logging for operator triage — the error-level
+		// log below is that record.
 		//
-		// TranslateTurnError, not TranslateLLMError(nil, err.Error()): passing
-		// the error VALUE keeps the sentinels intact, so a turn refused for a
-		// known reason (agent on no workspace) says so instead of falling to
-		// the "we can't tell why" copy.
-		response = TranslateTurnError(err).Message
+		// userVisibleTurnError, not TranslateLLMError(nil, err.Error()):
+		// passing the error VALUE keeps the sentinels intact, so a turn
+		// refused for a known reason (agent on no workspace) says so instead
+		// of falling to the "we can't tell why" copy, and a curatedTurnError
+		// in the chain (the in-flight stop-fence refusals, hook/budget
+		// aborts) is published as written.
+		logger.ErrorCF("agent.worker", "Turn failed — raw error for operator triage",
+			map[string]any{"session_id": msg.SessionID, "error": err.Error()})
+		response = userVisibleTurnError(err)
 	}
 	finalResponse = response
 
@@ -572,23 +766,12 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 		// normal drain below so nothing strands in the queue. When the probe
 		// does not resolve either, targetErr stays ErrNoContinuationTarget
 		// and the early return below behaves exactly as before.
-		probe := msg
-		if idx := strings.Index(msg.ChatID, ":"); idx > 0 {
-			probe.Channel = msg.ChatID[:idx]
-			probe.ChatID = msg.ChatID[idx+1:]
-		} else {
-			probe.Channel = "cli"
-		}
-		probe.SessionID = msg.AsyncTranscriptSessionID
-		target, targetErr = al.buildContinuationTarget(probe)
-		if targetErr != nil {
-			target = nil
-		}
+		target, targetErr = al.systemContinuationProbeTarget(msg)
 	}
 	if targetErr != nil {
 		if errors.Is(targetErr, ErrNoContinuationTarget) {
 			if finalResponse != "" {
-				al.publishResponseIfNeeded(ctx, activeAgent, msg.Channel, msg.ChatID, finalResponse)
+				al.publishResponseIfNeeded(ctx, activeAgent, msg.Channel, msg.ChatID, finalResponse, msg.SessionID)
 				published = true
 			}
 			return
@@ -612,21 +795,12 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 				"chat_id": msg.ChatID,
 				"error":   targetErr.Error(),
 			})
-		notifyCtx, notifyCancel := context.WithTimeout(context.Background(), 3*time.Second)
-		if pubErr := al.bus.PublishOutbound(notifyCtx, bus.OutboundMessage{
-			Channel: msg.Channel,
-			ChatID:  msg.ChatID,
-			Content: "A problem occurred while checking for further pending instructions in this conversation. If you sent a follow-up message, please resend it.",
-		}); pubErr != nil {
-			logger.WarnCF("agent.worker", "Failed to publish continuation-target-failure notice",
-				map[string]any{"scope": w.scope, "error": pubErr.Error()})
-		}
-		notifyCancel()
+		w.publishContinuationTargetFailureNotice(msg)
 		return
 	}
 	if target == nil {
 		if finalResponse != "" {
-			al.publishResponseIfNeeded(ctx, activeAgent, msg.Channel, msg.ChatID, finalResponse)
+			al.publishResponseIfNeeded(ctx, activeAgent, msg.Channel, msg.ChatID, finalResponse, msg.SessionID)
 			published = true
 		}
 		return
@@ -635,6 +809,7 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 	// Update the defer's publish target to the resolved continuation target.
 	publishChannel = target.Channel
 	publishChatID = target.ChatID
+	publishSessionID = target.SessionID
 
 	// Drain steering messages that were queued during this turn (user typed
 	// a follow-up while the agent was still in its tool loop). The loop ends
@@ -650,6 +825,13 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 				"session_key": target.SessionKey,
 				"queue_depth": al.pendingSteeringCountForScope(target.SessionKey),
 			})
+
+		// Settle this turn's already-delivered stream before another turn can
+		// replace it. A notice-only stream must not suppress a later plain
+		// continuation answer through the channel's next-Send flag.
+		if finalResponse != "" && !published && al.bus.SettleStreamedResponse(target.Channel, target.ChatID) {
+			published = true
+		}
 
 		// Exit (a) (design note "Recommended design"): bounded retry, then
 		// fail loud. See continueDrainRetry's own doc comment for why a
@@ -667,9 +849,47 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 	}
 
 	if finalResponse != "" {
-		al.publishResponseIfNeeded(ctx, activeAgent, target.Channel, target.ChatID, finalResponse)
+		al.publishResponseIfNeeded(ctx, activeAgent, target.Channel, target.ChatID, finalResponse, target.SessionID)
 		published = true
 	}
+}
+
+// systemContinuationProbeTarget derives the drain target for a system-triggered
+// turn that has no continuation target of its own, from a probe of the session's
+// own user traffic (extracted verbatim from processTurn to keep it under its
+// size budget). When the probe does not resolve either, the target is nil and
+// the error is the probe's.
+func (al *AgentLoop) systemContinuationProbeTarget(msg bus.InboundMessage) (*continuationTarget, error) {
+	probe := msg
+	if idx := strings.Index(msg.ChatID, ":"); idx > 0 {
+		probe.Channel = msg.ChatID[:idx]
+		probe.ChatID = msg.ChatID[idx+1:]
+	} else {
+		probe.Channel = "cli"
+	}
+	probe.SessionID = msg.AsyncTranscriptSessionID
+	target, targetErr := al.buildContinuationTarget(probe)
+	if targetErr != nil {
+		target = nil
+	}
+	return target, targetErr
+}
+
+// publishContinuationTargetFailureNotice tells the user a follow-up may need
+// resending when the steering continuation target could not be built
+// (extracted verbatim from processTurn).
+func (w *sessionWorker) publishContinuationTargetFailureNotice(msg bus.InboundMessage) {
+	al := w.parent
+	notifyCtx, notifyCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	if pubErr := al.bus.PublishOutbound(notifyCtx, bus.OutboundMessage{
+		Channel: msg.Channel,
+		ChatID:  msg.ChatID,
+		Content: "A problem occurred while checking for further pending instructions in this conversation. If you sent a follow-up message, please resend it.",
+	}); pubErr != nil {
+		logger.WarnCF("agent.worker", "Failed to publish continuation-target-failure notice",
+			map[string]any{"scope": w.scope, "error": pubErr.Error()})
+	}
+	notifyCancel()
 }
 
 // continueDrainRetry is processTurn's drain-loop bounded-retry step (design
@@ -695,14 +915,31 @@ func (w *sessionWorker) processTurn(ctx context.Context, msg bus.InboundMessage)
 // and correctly keep the bounded-retry-with-backoff behavior below.
 func (w *sessionWorker) continueDrainRetry(ctx context.Context, target *continuationTarget) (continued string, attemptsMade int, continueErr error) {
 	al := w.parent
+	return retrySteeringContinuation(ctx, func() (string, error) {
+		return al.continueSession(ctx, target.SessionKey, target.Channel, target.ChatID, target.WorkspaceID, target.SessionID)
+	}, func(err error) bool {
+		return errors.Is(err, errContinuePostDequeueFailure)
+	})
+}
+
+// retrySteeringContinuation is the shared bounded-retry policy for post-turn
+// drains. stopOn identifies errors that must not be replayed because the
+// attempted continuation either crossed the destructive dequeue boundary or
+// became ineligible to run. The backoff shape deliberately remains identical
+// for ordinary session workers and steered children.
+func retrySteeringContinuation(
+	ctx context.Context,
+	run func() (string, error),
+	stopOn func(error) bool,
+) (continued string, attemptsMade int, continueErr error) {
 retryLoop:
 	for attempt := 0; attempt < continueDrainMaxRetries; attempt++ {
 		attemptsMade = attempt + 1
-		continued, continueErr = al.Continue(ctx, target.SessionKey, target.Channel, target.ChatID, target.WorkspaceID)
+		continued, continueErr = run()
 		if continueErr == nil {
 			break
 		}
-		if errors.Is(continueErr, errContinuePostDequeueFailure) {
+		if stopOn != nil && stopOn(continueErr) {
 			break
 		}
 		if attempt < len(continueDrainBackoff) {
@@ -773,6 +1010,13 @@ func (w *sessionWorker) abandonQueuedSteering(ctx context.Context, target *conti
 	// window would restore it minus the pointer writeSteeringConsumedMarker's
 	// consume-ack bookkeeping depends on.
 	abandonedScope, abandonedItems, _, _ = al.dequeueSteeringItemsForScopeWithFallback(target.SessionKey)
+	// SFH-02: an abandoned saved helper input gives back its in-process claim;
+	// its saved record stays pending for the next legitimate fence.
+	for _, item := range abandonedItems {
+		if item.wake != nil {
+			al.releaseWakePublication(item.wake.transcriptSessionID, item.wake.messageID)
+		}
+	}
 
 	// Load-bearing (see doc comment above): the next message for this
 	// session must go to the inbox as a fresh turn, not be steered into a
@@ -805,5 +1049,5 @@ func (w *sessionWorker) abandonQueuedSteering(ctx context.Context, target *conti
 	notifyCtx, notifyCancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer notifyCancel()
 	al.publishResponseIfNeeded(notifyCtx, nil, target.Channel, target.ChatID,
-		"Your follow-up message could not be processed and was not delivered — please resend it.")
+		"Your follow-up message could not be processed and was not delivered — please resend it.", target.SessionID)
 }

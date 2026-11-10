@@ -223,6 +223,33 @@ describe('refusals', () => {
     expect(events[0].childSessionId).toBeUndefined()
   })
 
+  it('#895: a skill the target is not granted uses the tool message as the reason and has no child', () => {
+    const result = JSON.stringify({
+      error: 'skill_not_granted',
+      tool: 'delegate',
+      skill: 'restricted-skill',
+      target_agent_id: 'ray',
+      message: 'delegate: requested_skill "restricted-skill" is not granted to agent "ray".',
+    })
+    const events = deriveDelegationEvents(
+      source({
+        messages: [
+          message({
+            id: 'm1',
+            toolCalls: [tool({ id: 'run-grant', tool: 'delegate', status: 'error', params: { action: 'run' }, result })],
+          }),
+        ],
+      }),
+    )
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: 'refused',
+        reason: 'delegate: requested_skill "restricted-skill" is not granted to agent "ray".',
+      }),
+    ])
+    expect(events[0].childSessionId).toBeUndefined()
+  })
+
 })
 
 describe('child lifecycle', () => {

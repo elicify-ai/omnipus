@@ -1,7 +1,7 @@
 // ContextSection — Settings → Models (ADR-066 D9, FR-036 / FR-037).
 //
 // Global context-budget controls: the three per-surface tool-result caps
-// (D4), the absolute mid-turn trigger (D6), the ingest bound (D10), the
+// (D4), the relative tool-result share limit (D6), the ingest bound (D10), the
 // global default context window (D2 rung 3) and the per-(provider, model)
 // window overrides (D2 rung 2). Everything renders from the generated
 // ContextSettings / ContextSettingsUpdate types only (Constraint #8).
@@ -52,7 +52,7 @@ type NumericKey =
   | 'mcp_result_cap'
   | 'builtin_success_cap'
   | 'builtin_failure_cap'
-  | 'absolute_trigger_chars'
+  | 'tool_result_share_fraction'
   | 'ingest_bound_bytes'
 
 type OverrideRow = { provider: string; model: string; context_window: string }
@@ -64,12 +64,27 @@ type FormState = Record<NumericKey, string> & {
 
 type FieldErrors = Record<string, string>
 
+// Shift the decimal point without rounding fractional percentages or adding
+// binary multiplication artifacts (for example, 0.29 must display as 29%).
+function fractionToPercent(fraction: number): string {
+  const [coefficient, exponent = '0'] = String(fraction).split('e')
+  const [whole, decimal = ''] = coefficient.split('.')
+  const digits = whole + decimal
+  const point = whole.length + Number(exponent) + 2
+  const percent = point <= 0
+    ? `0.${'0'.repeat(-point)}${digits}`
+    : point >= digits.length
+      ? digits + '0'.repeat(point - digits.length)
+      : `${digits.slice(0, point)}.${digits.slice(point)}`
+  return percent.replace(/^0+(?=\d)/, '')
+}
+
 function toForm(s: ContextSettings): FormState {
   return {
     mcp_result_cap: String(s.mcp_result_cap),
     builtin_success_cap: String(s.builtin_success_cap),
     builtin_failure_cap: String(s.builtin_failure_cap),
-    absolute_trigger_chars: String(s.absolute_trigger_chars),
+    tool_result_share_fraction: fractionToPercent(s.tool_result_share_fraction),
     ingest_bound_bytes: String(s.ingest_bound_bytes),
     default_context_window:
       s.default_context_window === undefined || s.default_context_window === null
@@ -119,10 +134,11 @@ const NUMERIC_FIELDS: Array<{
     max: CAP_CEILING,
   },
   {
-    key: 'absolute_trigger_chars',
-    label: 'Mid-turn check trigger',
-    description: 'When tool results in a single turn reach this many characters, the window is re-checked before the next model call.',
-    unit: 'characters',
+    key: 'tool_result_share_fraction',
+    label: 'Tool-result share limit',
+    description: 'Maximum share of the model’s effective context window (W) used by tool results, not the remaining request budget. Default: 50%.',
+    unit: '%',
+    max: 100,
   },
   {
     key: 'ingest_bound_bytes',
@@ -140,6 +156,18 @@ function validate(form: FormState): { errors: FieldErrors; parsed: Partial<Conte
   const parsed: Partial<ContextSettings> = {}
 
   for (const f of NUMERIC_FIELDS) {
+    if (f.key === 'tool_result_share_fraction') {
+      const raw = form[f.key].trim()
+      const percent = Number(raw)
+      const [coefficient, exponent = '0'] = raw.toLowerCase().split('e')
+      const fraction = Number(`${coefficient}e${Number(exponent) - 2}`)
+      if (!Number.isFinite(percent) || !Number.isFinite(fraction) || fraction <= 0 || percent > 100) {
+        errors[f.key] = `${f.label} must be a number greater than 0% and at most 100%.`
+      } else {
+        parsed[f.key] = fraction
+      }
+      continue
+    }
     const n = parseInt_(form[f.key])
     if (n === null || Number.isNaN(n)) {
       errors[f.key] = `${f.label} must be a whole number.`
@@ -412,7 +440,7 @@ export function ContextSection({ prefillOverride }: ContextSectionProps): React.
         </div>
       )}
 
-      {/* Caps, trigger, ingest bound */}
+      {/* Caps, share limit, ingest bound */}
       <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-3)]">
         <h3 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">Tool results and limits</h3>
         {NUMERIC_FIELDS.map((f) => {
@@ -429,10 +457,10 @@ export function ContextSection({ prefillOverride }: ContextSectionProps): React.
                   id={id}
                   data-testid={id}
                   type="number"
-                  inputMode="numeric"
-                  min={1}
+                  inputMode={f.key === 'tool_result_share_fraction' ? 'decimal' : 'numeric'}
+                  min={f.key === 'tool_result_share_fraction' ? 0 : 1}
                   max={f.max ?? (f.maxExclusive !== undefined ? f.maxExclusive - 1 : undefined)}
-                  step={1}
+                  step={f.key === 'tool_result_share_fraction' ? 'any' : 1}
                   value={form[f.key]}
                   aria-invalid={err ? 'true' : undefined}
                   aria-describedby={err ? `context-error-${f.key}` : undefined}

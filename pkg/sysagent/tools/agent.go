@@ -9,12 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/rand"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
-	"unicode"
+
+	"github.com/google/uuid"
 
 	"github.com/elicify-ai/omnipus/pkg/agentmutation"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
@@ -22,40 +21,37 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/datamodel"
 	"github.com/elicify-ai/omnipus/pkg/entity"
+	"github.com/elicify-ai/omnipus/pkg/memrooms"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/validation"
 	workspacepkg "github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
-// slugRegexp matches characters that should be replaced in agent name → ID conversion.
-var slugRegexp = regexp.MustCompile(`[^a-z0-9]+`)
+// newAgentID returns the id of a newly created agent: a random UUID, exactly
+// as the REST create path does (pkg/gateway/rest_agents_create.go). No agent
+// id is ever derived from its name — the name is a free label kept verbatim,
+// and two agents may share one (founder decision 2026-10-14). Built-in agents
+// keep their fixed ids. Production ignores the name argument; it exists only
+// so tests whose fixtures are keyed by a known id (or that plant a fault at
+// the new agent's paths) can choose the id per created agent.
+var newAgentID = func(_ string) string { return uuid.New().String() }
 
-// hexColorRe validates HTML hex colors like "#22C55E".
-var hexColorRe = regexp.MustCompile(`^#[0-9A-Fa-f]{6}$`)
-
-// toSlug converts a display name to a URL-safe slug ID.
-func toSlug(name string) string {
-	s := strings.ToLower(strings.TrimSpace(name))
-	s = slugRegexp.ReplaceAllString(s, "-")
-	s = strings.Trim(s, "-")
+// canonicalAgentColor applies the REST colour rule (coreagent.CanonicalColor,
+// AgentColor.yaml): a palette value in any letter-case is returned uppercase and
+// anything else - a well-formed hex outside the ten included - is refused. Empty
+// passes (the field is optional on update).
+func canonicalAgentColor(s string) (string, error) {
 	if s == "" {
-		s = fmt.Sprintf("agent-%d", rand.Intn(99999))
+		return "", nil
 	}
-	return s
-}
-
-// validateAgentColor returns an error when color is non-empty and not a valid
-// 6-digit hex color. Empty strings pass validation (field is optional).
-func validateAgentColor(s string) error {
-	if s == "" {
-		return nil
+	canon, ok := coreagent.CanonicalColor(s)
+	if !ok {
+		return "", fmt.Errorf("invalid color %q: use one of the palette colors %s", s, strings.Join(coreagent.PaletteColors(), ", "))
 	}
-	if !hexColorRe.MatchString(s) {
-		return fmt.Errorf("invalid color %q: must match ^#[0-9A-Fa-f]{6}$", s)
-	}
-	return nil
+	return canon, nil
 }
 
 // resolveOmnipusHome returns the effective $OMNIPUS_HOME to use for both the
@@ -86,24 +82,6 @@ func resolveOmnipusHome(depsHome string) (string, error) {
 	return h + "/.omnipus", nil
 }
 
-// validateAgentIcon returns an error when icon is non-empty and contains
-// characters outside the Phosphor icon naming convention (alphanumeric + hyphens,
-// max 64 chars). Empty strings pass (field is optional).
-func validateAgentIcon(s string) error {
-	if s == "" {
-		return nil
-	}
-	if len(s) > 64 {
-		return fmt.Errorf("invalid icon %q: must be ≤64 characters", s)
-	}
-	for _, r := range s {
-		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '-' {
-			return fmt.Errorf("invalid icon %q: must be alphanumeric + hyphens only", s)
-		}
-	}
-	return nil
-}
-
 // ---- system.agent.create ----
 
 // AgentCreateTool implements system.agent.create per BRD §D.4.2.
@@ -114,7 +92,7 @@ func NewAgentCreateTool(d *Deps) *AgentCreateTool { return &AgentCreateTool{deps
 func (t *AgentCreateTool) Name() string           { return "create_agent" }
 func (t *AgentCreateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *AgentCreateTool) Description() string {
-	return "Create a new agent with personality, model, tools, and configuration. Use agent_type to choose the runtime: 'Main' (default, native chat colleague), 'Subagent' (native delegation-only worker), or 'subagent_3p' (delegation-only worker on an external CLI — set cli and cli_path). name, description, soul, model, color (6-digit hex, e.g. #22C55E) and icon (a Phosphor icon name, e.g. 'robot') are all required — color/icon are rejected if missing or malformed. A new agent created inside a workspace's turn context joins that workspace's core_team and is immediately runnable there; created with no workspace context it is metadata-only (a member of no team) and cannot run in chat or be delegated to until an operator adds it to a workspace's Team tab — check the response's status field (joined_workspace vs metadata_only) to tell which happened."
+	return "Create a new agent with personality, model, tools, and configuration. Use agent_type to choose the runtime: 'Main' (default, native chat colleague) and 'Subagent' (native delegation-only worker) require soul; 'subagent_3p' is a delegation-only worker on an external CLI — it takes no soul and requires cli; the program that runs that CLI is set by a person in Settings → Third-party agents, never by an agent, so there is no cli_path argument (an unusable or missing program still creates the agent, with runnable false and program_warning naming what a person must fix in Settings). An external worker may also take env_overrides (environment names and values for its runs; values are never echoed back) and cli_args (extra command-line flags as one string; the result lists them as argv and names any the safety filter drops at run time). name, description and model are required; soul is required for native agents ('Main'/'Subagent') and must be omitted for 'subagent_3p' (an external CLI worker has no soul; supplying one is refused). color is optional (a palette hex, e.g. #6E8BA8; default Pewter #8E9196) — a color outside the palette is rejected. A new agent created inside a workspace's turn context joins that workspace's core_team when membership succeeds; created with no workspace context it is metadata-only (a member of no team) and cannot run in chat or be delegated to until an operator adds it to a workspace's Team tab — the response's status field (joined_workspace vs metadata_only) reports membership, persistence_status reports durable-save completion (complete, partial, or none), and activation_status reports live publication (active, failed, or not_attempted); joined_workspace alone does not prove the agent is live or runnable — check persistence_status, activation_status and any publish_warning before reporting it ready."
 }
 
 func (t *AgentCreateTool) Parameters() map[string]any {
@@ -128,51 +106,59 @@ func (t *AgentCreateTool) Parameters() map[string]any {
 				"description": "One-line description of the agent's purpose",
 			},
 			"soul": map[string]any{
-				"type":        "string",
-				"description": "The agent's personality, role, and behavioral instructions (written to SOUL.md)",
+				"type": "string",
+				"description": "The agent's personality, role, and behavioral instructions (written to SOUL.md). " +
+					"REQUIRED for native agents ('Main'/'Subagent'); NOT supported for 'subagent_3p' — an external " +
+					"CLI worker has no native soul, and supplying one is refused.",
 			},
 			"model": map[string]any{
 				"type":        "string",
 				"description": "Primary LLM model slug (e.g. 'z-ai/glm-5v-turbo')",
 			},
-			"color": map[string]any{"type": "string", "description": "Hex avatar color (e.g. '#22C55E')"},
-			"icon": map[string]any{
-				"type":        "string",
-				"description": "Phosphor icon name (e.g. 'robot', 'pencil', 'book')",
-			},
+			"color": map[string]any{"type": "string", "description": "Avatar color, optional: one of the ten palette hex values #4F8A80, #5E6973, #6E8BA8, #7A8C9E, #7B7290, #8E9196, #9C8A5B, #A97142, #B76E79, #CDBA96 (letter-case is normalized). Omitted, null or empty creates the agent with the default Pewter #8E9196; any other value is rejected."},
+			// Visual identity figure/role (#1303): the same catalogs the SPA
+			// agent editor and REST create use; helpers in agent_visuals.go.
+			"figure": figureCreateProperty(),
+			"role":   roleCreateProperty(),
 			// Optional — agent type + external-CLI worker runtime.
 			"agent_type": map[string]any{
 				"type":        "string",
 				"enum":        []any{"Main", "Subagent", "subagent_3p"},
-				"description": "Agent type. 'Main' (default) = native chat colleague on the Omnipus engine. 'Subagent' = native delegation-only worker. 'subagent_3p' = delegation-only worker that runs on an EXTERNAL CLI (requires cli + cli_path).",
+				"description": "Agent type. 'Main' (default) = native chat colleague on the Omnipus engine; 'Subagent' = native delegation-only worker — both native types require soul. 'subagent_3p' = delegation-only worker on an EXTERNAL CLI: requires cli; its program is set by a person in Settings → Third-party agents.",
 			},
 			"cli": map[string]any{
 				"type":        "string",
 				"enum":        []any{"claude-code", "codex", "opencode"},
 				"description": "External CLI runtime. REQUIRED when agent_type='subagent_3p'. 'claude-code' for Claude (claudex), 'opencode' for opencode, 'codex' for Codex.",
 			},
-			"cli_path": map[string]any{
-				"type":        "string",
-				"description": "Optional. Absolute path to the external CLI binary. Leave EMPTY to use the CLI's default binary on $PATH (claude / codex / opencode). Set it only when this machine invokes the CLI via a wrapper or a non-standard path — and derive the real path on this system, never hardcode a guess.",
+			"env_overrides": map[string]any{
+				"type":                 "object",
+				"additionalProperties": map[string]any{"type": "string"},
+				"description": "subagent_3p only. Environment variables for the worker's runs: names match ^[A-Za-z_][A-Za-z0-9_]*$ " +
+					"(at most 64, each at most 128 characters), values at most 8,192 characters. OMNIPUS_* names are reserved. " +
+					"Values are never shown again: every read returns the names with a fixed mask, and the mask itself is not a valid value.",
+			},
+			"cli_args": map[string]any{
+				"type": "string",
+				"description": "subagent_3p only. Extra command-line flags for the CLI as one string (at most 4,096 characters), " +
+					"stored as typed. The result lists the tokens as argv and, in dropped_at_run, any flag the safety filter removes at run time.",
 			},
 			"provider": map[string]any{
 				"type":        "string",
 				"description": "Explicit provider routing key for the primary model (e.g. 'openrouter'). Pins model resolution to this provider instead of inferring one from the slug.",
 			},
-			"fallback_models": fallbackModelsParameters(),
-			"heartbeat": map[string]any{
-				"type":        "string",
-				"description": "Proactive scheduling instructions (written to HEARTBEAT.md)",
-			},
+			"fallback_models":  fallbackModelsParameters(),
+			"reasoning_effort": effortParameter(),
 			"max_tool_iterations": map[string]any{
 				"type":        "integer",
-				"description": "Max tool calls per turn (0 = inherit the system default)",
+				"minimum":     1,
+				"maximum":     1000,
+				"description": "Max tool calls per turn for this agent, 1-1000. Must not exceed the global limit set in Settings → Performance (a higher value is refused). Omit to use the global limit.",
 			},
 			"skills":              skillsParameters(false),
 			"mcp_servers":         mcpServersParameters(),
 			"tool_policy_changes": toolPolicyChangesParameters(),
 			"memory_enabled":      map[string]any{"type": "boolean"},
-			"default":             map[string]any{"type": "boolean"},
 			"voice": map[string]any{
 				"type":        "string",
 				"description": "Per-agent TTS persona identifier. Persisted; playback is inactive in this release.",
@@ -182,8 +168,16 @@ func (t *AgentCreateTool) Parameters() map[string]any {
 				"description": "Positive token override. JSON null clears the override.",
 			},
 			"model_params": modelParamsParameters(),
+			// FR-040/FR-041: the workspace the new agent joins and gets its
+			// main chat in; omitted = the conversation's workspace.
+			workspaceIDParam: workspaceIDProperty("the new agent joins (and gets its main chat in)"),
 		},
-		"required": []string{"name", "description", "soul", "model", "color", "icon"},
+		// soul is deliberately NOT in the schema required list: it is required
+		// for native agents ('Main'/'Subagent') only. External CLI workers
+		// ('subagent_3p') have no native soul — validate() enforces the
+		// conditional requirement, and the store refuses a supplied external
+		// soul as an unsupported field (issue #1274, chief ruling Q1 B).
+		"required": []string{"name", "description", "model"},
 	}
 }
 
@@ -197,18 +191,32 @@ type agentCreateToolExecute struct {
 	soul            string
 	model           string
 	color           string
-	icon            string
+	figure          string
+	role            string
 	agentType       string
 	execCLI         string
-	execCLIPath     string
+	execEnv         map[string]string
+	execCLIArgs     *string
 	id              string
 	newAgent        config.AgentConfig
 	finalID         string
 	joinedWorkspace bool
-	mutation        agentstore.MutationResult
+	// joinedWorkspaceID is the workspace the new agent joined ("" when none); its
+	// mains are provisioned in publishAndRespond, AFTER the live roster has the agent.
+	joinedWorkspaceID string
+	// target is the destination workspace resolved before any write (FR-040).
+	target   targetWorkspace
+	mutation agentstore.MutationResult
+	// mainsErr is the failure of the new member's main-chat provisioning.
+	mainsErr error
+	// joinMissed is set when a target workspace was resolved but the
+	// membership did not land (joinErr carries the cause when there is one).
+	joinMissed bool
+	joinErr    error
 }
 
-func (t *AgentCreateTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
+func (t *AgentCreateTool) Execute(ctx context.Context, args map[string]any) (res *tools.ToolResult) {
+	defer func() { res = finalizeChangeResult(t.Name(), res) }()
 	ac := &agentCreateToolExecute{t: t, ctx: ctx, args: args}
 
 	if r0, stop := ac.validate(); stop {
@@ -223,6 +231,19 @@ func (t *AgentCreateTool) Execute(ctx context.Context, args map[string]any) *too
 		return r0
 	}
 
+	// agent-picker-freshness fix (#1009), corrected: NotifyAgentCreated used
+	// to fire HERE, right after persistAndJoin's durable-persist success —
+	// but persistAndJoin only writes the entity record to disk; it does NOT
+	// put the new agent into the live, in-memory registry/config list that
+	// pkg/gateway/rest_agents.go::listAgents (GET /api/v1/agents) reads. That
+	// happens inside publishAndRespond, via publishAgentActivation. Firing
+	// here raced a tab's agent_created handler (src/store/chat/slices/
+	// frames.ts) against publishAgentActivation: a refetch that landed before
+	// publishAgentActivation ran would get a response missing the new agent
+	// and cache that miss for 30s — the exact bug #1009 exists to close,
+	// reappearing via this ordering. The notify now lives inside
+	// publishAndRespond, gated on the agent actually being live — see that
+	// function for the exact point and why.
 	return ac.publishAndRespond()
 }
 
@@ -233,14 +254,39 @@ func (ac *agentCreateToolExecute) validate() (*tools.ToolResult, bool) {
 	if strings.TrimSpace(ac.name) == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "name is required", "Provide a name for the agent")), true
 	}
+	if coreagent.AgentNameTooLong(ac.name) {
+		// #1075: refused before anything is stored, so a long name never
+		// reaches the store as an opaque SAVE_FAILED.
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", coreagent.AgentNameTooLongRefusal,
+			"Choose a shorter name")), true
+	}
+	if coreagent.IsReservedAgentName(ac.name) {
+		return reservedNameResult(), true
+	}
 	ac.description, _ = ac.args["description"].(string)
 	if strings.TrimSpace(ac.description) == "" {
 		return tools.ErrorResult(
 			errorJSON("INVALID_INPUT", "description is required", "Provide a one-line description"),
 		), true
 	}
+	// Agent type + external-CLI worker runtime (W4 taxonomy). Default "Main".
+	// Resolved BEFORE the soul check: soul is required for native agents only —
+	// an external CLI worker ('subagent_3p') has no native soul, and supplying
+	// one stays an unsupported-field refusal (agentmutation.ValidateFields,
+	// issue #1274, chief ruling Q1 B).
+	ac.agentType, _ = ac.args["agent_type"].(string)
+	if ac.agentType == "" {
+		ac.agentType = "Main"
+	}
+	switch ac.agentType {
+	case "Main", "Subagent", "subagent_3p":
+	default:
+		return tools.ErrorResult(errorJSON("INVALID_INPUT",
+			"agent_type must be one of Main, Subagent, subagent_3p",
+			"Use 'subagent_3p' for an external CLI worker")), true
+	}
 	ac.soul, _ = ac.args["soul"].(string)
-	if strings.TrimSpace(ac.soul) == "" {
+	if ac.agentType != "subagent_3p" && strings.TrimSpace(ac.soul) == "" {
 		return tools.ErrorResult(
 			errorJSON(
 				"INVALID_INPUT",
@@ -254,27 +300,33 @@ func (ac *agentCreateToolExecute) validate() (*tools.ToolResult, bool) {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "model is required", "Provide the LLM model slug")), true
 	}
 	ac.color, _ = ac.args["color"].(string)
-	if err := validateAgentColor(ac.color); err != nil {
-		return tools.ErrorResult(errorJSON("INVALID_COLOR", err.Error(), "Use a 6-digit hex color, e.g. #22C55E")), true
+	canonColor, err := canonicalAgentColor(ac.color)
+	if err != nil {
+		return tools.ErrorResult(errorJSON("INVALID_COLOR", err.Error(), "Use a palette color, e.g. #6E8BA8")), true
 	}
-	ac.icon, _ = ac.args["icon"].(string)
-	if err := validateAgentIcon(ac.icon); err != nil {
-		return tools.ErrorResult(errorJSON("INVALID_ICON", err.Error(), "Use alphanumeric + hyphens, e.g. robot")), true
+	ac.color = canonColor
+	if ac.color == "" {
+		ac.color = coreagent.DefaultColor // same default as REST create
 	}
+	// The shared apply step re-reads the argument map; give it the resolved value
+	// so an explicit empty colour cannot overwrite the default.
+	ac.args["color"] = ac.color
 
-	// Agent type + external-CLI worker runtime (W4 taxonomy). Default "Main".
-	ac.agentType, _ = ac.args["agent_type"].(string)
-	if ac.agentType == "" {
-		ac.agentType = "Main"
+	// Visual identity figure/role (#1303, chief Q1 A 2026-10-14): omitted, null
+	// (NormalizeArgs renders it "") or empty select the shipped default —
+	// exactly like REST create — and any other non-catalog value is refused
+	// with the full choice list, before any write. Same catalog and
+	// canonicalizers as the color argument above.
+	figure, figureStop := resolveCreateVisual(ac.args, "figure", coreagent.DefaultFigure)
+	if figureStop != nil {
+		return figureStop, true
 	}
-
-	switch ac.agentType {
-	case "Main", "Subagent", "subagent_3p":
-	default:
-		return tools.ErrorResult(errorJSON("INVALID_INPUT",
-			"agent_type must be one of Main, Subagent, subagent_3p",
-			"Use 'subagent_3p' for an external CLI worker")), true
+	ac.figure = figure
+	role, roleStop := resolveCreateVisual(ac.args, "role", coreagent.DefaultRole)
+	if roleStop != nil {
+		return roleStop, true
 	}
+	ac.role = role
 	if ac.agentType == "subagent_3p" {
 		ac.execCLI, _ = ac.args["cli"].(string)
 		switch ac.execCLI {
@@ -284,21 +336,65 @@ func (ac *agentCreateToolExecute) validate() (*tools.ToolResult, bool) {
 				"cli is required for subagent_3p and must be one of claude-code, codex, opencode",
 				"Set cli (e.g. 'opencode' or 'claude-code')")), true
 		}
-		// cli_path is OPTIONAL: when empty the driver invokes the CLI's default
-		// binary name on $PATH (claude / codex / opencode). Set it only when this
-		// machine uses a wrapper or a non-standard binary path.
-		ac.execCLIPath, _ = ac.args["cli_path"].(string)
+	}
+	// r17 §3.9 AG-12/AG-13, EX-01/EX-04: the worker's own environment and
+	// flags, checked with the rules REST uses, before any write. The
+	// program itself is Settings-owned (AG-10): a cli_path argument is an
+	// unknown field, refused by rejectUnknownAgentFields below.
+	if stop := ac.validateExecutorSettings(); stop != nil {
+		return stop, true
 	}
 
 	if err := rejectUnknownAgentFields(ac.args, agentCreateArgNames); err != nil {
 		return fieldErrorResult(err), true
 	}
-	if _, _, err := parseOptionalHeartbeat(ac.args); err != nil {
-		return fieldErrorResult(err), true
+	if r0, stop := refuseManagementGrants(ac.args); stop {
+		return r0, true
 	}
-	ac.id = toSlug(ac.name)
+	ac.id = newAgentID(ac.name)
 	if err := validateID(ac.id); err != nil {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), "")), true
+	}
+	// FR-040/FR-043: the destination workspace is validated before any
+	// write; an unknown one fails with nothing saved.
+	target, refusal := resolveTargetWorkspace(ac.t.deps, ac.ctx, ac.args)
+	if refusal != nil {
+		return refusal, true
+	}
+	ac.target = target
+	return nil, false
+}
+
+// refuseManagementGrants refuses a create whose tool_policy_changes grant any
+// management-family tool with a non-deny policy — "allow" and "ask" are both
+// grants — or remove one (dropping the constructor's Deny lets the agent ride
+// the ceiling) (omnipus-system-agent FR-025, BDD-14.3). Runs before any
+// write. A malformed patch is refused with the shared decoder's own message.
+func refuseManagementGrants(args map[string]any) (*tools.ToolResult, bool) {
+	raw, present := args["tool_policy_changes"]
+	if !present {
+		return nil, false
+	}
+	patch, err := decodePolicyPatch(raw)
+	if err != nil {
+		return fieldErrorResult(err), true
+	}
+	// Channels FR-037: an always-ask tool can be stored as ask or deny, never
+	// allow — on create exactly as on every update writer.
+	if name, bad := tools.AlwaysAskAllowViolation(patch.Set); bad {
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", tools.AlwaysAskAllowRefusal(name),
+			"Set "+name+" to ask or deny, or leave it out")), true
+	}
+	if tool, bad := coreagent.ManagementGrantViolation(patch.Set); bad {
+		return tools.ErrorResult(errorJSON("MANAGEMENT_GRANT_REFUSED", coreagent.ManagementGrantRefusal(tool),
+			"Set "+tool+" to deny or leave it out; ask Omnipus to make management changes")), true
+	}
+	// Removing the constructor's explicit Deny lets the new agent ride the
+	// ceiling (allow or ask for this family) — the same grant, refused the
+	// same way (founder-approved security fix, 2026-10-14).
+	if tool, bad := coreagent.ManagementRemoveViolation(patch.Remove); bad {
+		return tools.ErrorResult(errorJSON("MANAGEMENT_GRANT_REFUSED", coreagent.ManagementRemoveRefusal(tool),
+			"Leave "+tool+" out of remove; ask Omnipus to make management changes")), true
 	}
 	return nil, false
 }
@@ -317,7 +413,8 @@ func (ac *agentCreateToolExecute) prepareConfig() (*tools.ToolResult, bool) {
 		Name:        ac.name,
 		Description: ac.description,
 		Color:       ac.color,
-		Icon:        ac.icon,
+		Figure:      ac.figure, // resolved default or canonical catalog value (#1303)
+		Role:        ac.role,
 		Model:       &config.AgentModelConfig{Primary: ac.model},
 	}
 	// Agent type / runtime (W4). Subagent + subagent_3p persist as worker;
@@ -334,10 +431,13 @@ func (ac *agentCreateToolExecute) prepareConfig() (*tools.ToolResult, bool) {
 		ac.newAgent.Type = config.AgentTypeWorker
 		ac.newAgent.Subagents = &config.SubagentsConfig{
 			Executor: &config.ExecutorConfig{
-				Kind:    config.ExecutorKindExternalCLI,
-				CLI:     ac.execCLI,
-				CLIPath: ac.execCLIPath,
+				Kind:         config.ExecutorKindExternalCLI,
+				CLI:          ac.execCLI,
+				EnvOverrides: ac.execEnv,
 			},
+		}
+		if ac.execCLIArgs != nil {
+			ac.newAgent.Subagents.Executor.CLIArgs = *ac.execCLIArgs
 		}
 	}
 	if _, retired := ac.args["model_fallbacks"]; retired {
@@ -356,44 +456,50 @@ func (ac *agentCreateToolExecute) prepareConfig() (*tools.ToolResult, bool) {
 	if v, ok := ac.args["provider"].(string); ok {
 		ac.newAgent.Model.Provider = strings.TrimSpace(v)
 	}
-	// Optional: per-turn tool-call cap (config.AgentConfig.MaxToolIterations's
-	// doc comment: 0/absent inherits agents.defaults.max_tool_iterations).
-	// Same previously-silently-ignored-parameter bug as provider above.
-	if v, ok := ac.args["max_tool_iterations"].(float64); ok {
-		n := int(v)
-		if n < 0 {
-			return tools.ErrorResult(errorJSON("INVALID_INPUT",
-				"max_tool_iterations must be >= 0", "Use 0 to inherit the system default")), true
-		}
-		ac.newAgent.MaxToolIterations = n
-	}
+	// Optional: per-turn tool-call cap — applied (1..1000, not above the
+	// global, #904 D15) by applyAgentToolArgs below, the same code path
+	// update_agent uses.
 	// ADR-037: can_delegate_to is retired — it was write-only (its last real
 	// reader, config.ResolveDelegationTo, was deleted as part of the
 	// delegation-policy removal). Delegation trust is configured
 	// exclusively via the per-workspace Team tab now
 	// (PUT /api/v1/workspaces/{id}/delegation); this tool does not — and
 	// must not — pretend to grant it.
-	// Seed the privilege rail (FR-008/FR-022, plus bash:deny per CRIT-001 /
-	// bash-tool-spec.md FR-B12): system.agent.create has no tools_cfg
-	// parameter (see Parameters() above — there is no caller-supplied
-	// override for Tools), so newAgent.Tools is always nil here and the
-	// default seed IS the agent's entire tools config. Delegate to the
-	// single shared constructor — also used by the REST create path
-	// (pkg/gateway/rest.go's createAgent, via
-	// coreagent.NewCustomAgentToolsCfg()) — so the two agent-creation
-	// paths cannot drift out of sync on this seed again.
+	// Share the REST path's complete Main/Worker creation defaults (founder
+	// ruling, 2026-10-22). Main-only tools are denied for Workers before any
+	// sparse caller patch is applied below. Workers may list secrets but ask
+	// their main agent to request one. bash and administration stay denied.
 	ac.newAgent.Tools = coreagent.NewCustomAgentToolsCfg()
-	fields := mutationFieldNames(ac.args)
+	if ac.newAgent.Type == config.AgentTypeWorker {
+		coreagent.RestrictForWorkerTier(ac.newAgent.Tools)
+	}
+	// The flattened executor arguments (env_overrides, cli_args) are the
+	// record field "executor" in the role matrix, exactly as on update_agent
+	// (r17 §7.5 AG-12/AG-13; §7.1 rule 4 flattened mapping).
+	fields := executorRecordFields(mutationFieldNames(ac.args))
 	if err := agentmutation.ValidateFields(ac.newAgent, fields); err != nil {
 		return fieldErrorResult(err), true
 	}
-	if err := applyAgentToolArgs(&ac.newAgent, ac.args, knownToolPolicies(ac.t.deps), ac.t.deps.currentInventory()); err != nil {
+	if err := applyAgentToolArgs(&ac.newAgent, ac.args, knownToolPolicies(ac.t.deps), ac.t.deps.currentInventory(),
+		ac.t.deps.agentDefaults()); err != nil {
 		return fieldErrorResult(err), true
 	}
 	return nil, false
 }
 
 // persistAndJoin persists the agent and its workspace files, then joins the contextual workspace when present.
+//
+// The early-return (stop=true) branches below — default-singleton write
+// failure and InitAgentHome failure — run AFTER agentstore.CreateState has already durably saved the entity
+// record. None of them call Deps.NotifyAgentCreated, and that is intentional,
+// not a gap: returning stop=true here means Execute never reaches
+// publishAndRespond(), so publishAgentActivation() never runs and the agent
+// is never put into the live, in-memory config/registry that
+// pkg/gateway/rest_agents.go::listAgents reads — the agent is durably
+// persisted but genuinely not yet listable. This is consistent with the
+// #1009 ordering fix in Execute/publishAndRespond: firing agent_created for
+// an agent that isn't listable yet would just recreate that fix's exact
+// race for these three edge cases. Do not add a notify call to any of them.
 func (ac *agentCreateToolExecute) persistAndJoin() (*tools.ToolResult, bool) {
 	// Resolve home ONCE, before constructing the agent store, so the entity
 	// record (below) and the agent's own workspace (SOUL.md/HEARTBEAT.md,
@@ -405,12 +511,19 @@ func (ac *agentCreateToolExecute) persistAndJoin() (*tools.ToolResult, bool) {
 			"Set OMNIPUS_HOME environment variable")), true
 	}
 
-	if _, present := ac.args["default"]; present {
-		if err := requireDefaultWriter(ac.t.deps); err != nil {
-			return fieldErrorResult(err), true
+	ac.finalID = ac.id
+	// #904 D10/D15: re-check the agent's own limit against a FRESH read of
+	// the global immediately before the write — prepareConfig checked it
+	// against the config current at call start. Residual window: this path
+	// does not hold the gateway's configMu, so a PUT /performance lowering
+	// that commits between this read and CreateState does not see the new
+	// agent; it then sits above the new global, which the resolver caps and
+	// flags (D1). Never unbounded, and visible on the profile.
+	if ac.newAgent.MaxToolIterations > 0 {
+		if err := config.ValidateAgentMaxToolIterations(ac.newAgent.MaxToolIterations, ac.t.deps.agentDefaults()); err != nil {
+			return fieldErrorResult(fieldErr("max_tool_iterations", err.Error())), true
 		}
 	}
-	ac.finalID = ac.id
 	mutation, err := agentstore.New(omnipusHome).CreateState(ac.id, &ac.newAgent, ac.soul)
 	ac.mutation = mutation
 	if err != nil {
@@ -421,39 +534,23 @@ func (ac *agentCreateToolExecute) persistAndJoin() (*tools.ToolResult, bool) {
 				"Use update_agent to modify the existing agent or choose a different name",
 			)), true
 		}
-		return tools.ErrorResult(errorJSON("SAVE_FAILED", fmt.Sprintf("persistence=%s stage=%s revision=%s", mutation.PersistenceStatus, mutation.ErrorStage, mutation.Revision), "Read the agent state before retrying")), true
-	}
-
-	if raw, present := ac.args["default"]; present {
-		if want, ok := raw.(bool); ok {
-			if err := writeDefaultSingleton(ac.t.deps, ac.finalID, want); err != nil {
-				return defaultSingletonPartialResult(ac.finalID, ac.mutation.Revision, mutationFieldNames(ac.args)), true
-			}
-		}
+		return createSaveFailedResult(ac.id, mutation, err), true
 	}
 
 	// Create agent workspace and write personality files.
 	if err := datamodel.InitAgentHome(omnipusHome, ac.finalID); err != nil {
-		// Entity (and optional default singleton) already durable. Do not
+		// Entity already durable. Do not
 		// delete them: report the actual revision so the caller can read
 		// and recover instead of claiming a complete create.
+		// No NotifyAgentCreated here — see this function's doc comment: the
+		// entity is durable but not yet listable.
 		slog.Error("sysagent: create_agent: InitAgentHome failed after entity save",
 			"id", ac.finalID, "error", err)
 		return createHomePartialResult(ac.finalID, ac.mutation.Revision, mutationFieldNames(ac.args), err), true
 	}
 
-	heartbeat, _, hbErr := parseOptionalHeartbeat(ac.args)
-	if hbErr != nil {
-		return fieldErrorResult(hbErr), true
-	}
-	if strings.TrimSpace(heartbeat) != "" {
-		hbPath := filepath.Join(omnipusHome, "agents", ac.finalID, "HEARTBEAT.md")
-		if err := os.WriteFile(hbPath, []byte(heartbeat), 0o600); err != nil {
-			slog.Error("sysagent: create_agent: HEARTBEAT.md write failed after entity save",
-				"id", ac.finalID, "error", err)
-			return createHeartbeatPartialResult(ac.finalID, ac.mutation.Revision, mutationFieldNames(ac.args), err), true
-		}
-	}
+	// r17 AG-06 / FR-134 (#1064): create_agent takes no heartbeat — heartbeats
+	// are a workspace feature; a heartbeat argument is an unknown field.
 
 	// ADR-046 P1 (FR-007/008, US-3 AS-2/AS-3): agents are metadata — creating
 	// one must NOT auto-add it to any global roster. If this call is running
@@ -474,12 +571,32 @@ func (ac *agentCreateToolExecute) persistAndJoin() (*tools.ToolResult, bool) {
 	// re-deriving it from whether a workspace context happened to be
 	// present, since a join attempt can also fail (logged, non-fatal).
 	ac.joinedWorkspace = false
-	if wsID := tools.ToolWorkspaceID(ac.ctx); wsID != "" {
-		if err := ac.t.joinWorkspaceTeam(wsID, ac.finalID); err != nil {
+	if wsID := ac.target.ID; wsID != "" {
+		joined, joinErr := ac.t.joinWorkspaceTeam(wsID, ac.finalID)
+		ac.joinedWorkspace = joined
+		if joined {
+			ac.joinedWorkspaceID = wsID
+		}
+		switch {
+		case joinErr == nil:
+			// Fully joined: the membership landed AND the self-row was seeded.
+		case joined:
+			// U5A-FIX-R1 / N3: the membership landed, but the self-row seed did
+			// not. The agent IS a workspace member, so returning the normal
+			// "metadata_only" success would both misdescribe its state and hide
+			// a missing required authorization row. Return the truthful
+			// partial-failure result naming what landed and how to recover.
+			slog.Error("sysagent: create_agent: joined workspace but could not seed the self-delegation row",
+				"agent_id", ac.finalID, "workspace_id", wsID, "error", joinErr)
+			return createJoinSeedPartialResult(ac.finalID, ac.mutation.Revision, mutationFieldNames(ac.args), wsID, joinErr), true
+		default:
+			// The membership itself did not land, so the agent is genuinely
+			// metadata-only (a member of no team). The agent record is durable,
+			// so the result is "partly saved" naming the missing membership
+			// (FR-030, BDD-9.4) — never a plain success.
 			slog.Warn("sysagent: create_agent: could not add new agent to workspace core_team",
-				"agent_id", ac.finalID, "workspace_id", wsID, "error", err)
-		} else {
-			ac.joinedWorkspace = true
+				"agent_id", ac.finalID, "workspace_id", wsID, "error", joinErr)
+			ac.joinMissed, ac.joinErr = true, joinErr
 		}
 	}
 	return nil, false
@@ -512,6 +629,67 @@ func (ac *agentCreateToolExecute) publishAndRespond() *tools.ToolResult {
 				"after the next config reload or gateway restart", ac.finalID, publishErr)
 	}
 
+	// Final-gate H2 / founder-reported 2026-10-11: the member's main chat is
+	// provisioned through the workspace-save path, and that path's eligibility
+	// reads the LIVE roster (an agent absent from it is skipped without error).
+	// So it must run only after publishAgentActivation has put the new agent in
+	// that roster, and before the agent_created notify below so the client's
+	// refetch sees the main. A failure is logged, not fatal: the main is
+	// re-attempted when its chat is opened.
+	if ac.joinedWorkspaceID != "" && ac.t.deps.EnsureWorkspaceMains == nil {
+		// FR-041: a joined member's main chat is part of the change; without
+		// the provisioning hook it was not created, so the result must say so.
+		ac.mainsErr = errors.New("main chat provisioning is not available here")
+	}
+	if ac.joinedWorkspaceID != "" && ac.t.deps.EnsureWorkspaceMains != nil {
+		if mainsErr := ac.t.deps.EnsureWorkspaceMains(ac.joinedWorkspaceID); mainsErr != nil {
+			slog.Error("sysagent: create_agent: the new member's main chat was not created; it is re-attempted when the chat is opened",
+				"agent_id", ac.finalID, "workspace_id", ac.joinedWorkspaceID, "error", mainsErr)
+			ac.mainsErr = mainsErr
+		}
+	}
+
+	// agent-picker-freshness fix (#1009), corrected ordering: notify ONLY
+	// after publishAgentActivation reports ActivationActive — i.e. only once
+	// the live, in-memory config/registry that pkg/gateway/rest_agents.go::
+	// listAgents reads actually contains the new agent. publishAgentActivation
+	// BLOCKS on deps.WaitForPendingReloadFunc after the publish hook's nil
+	// return to close the async-reload race the production wiring leaves open
+	// (the gateway's UpsertAgentFastFunc closure falls back to the async
+	// reloadTrigger on any failure, and the plain ReloadFunc is also
+	// fire-and-forget — see publishAgentActivation's own doc comment for the
+	// mechanism and why it uses the wait-only WaitForPendingReloadFunc rather
+	// than WaitForReloadFunc, whose production wiring calls TriggerReload
+	// unconditionally as its first action and would therefore kick off a fresh
+	// full reload cycle on every fast-path success). On the queued-reload
+	// branch this blocks until the queued reload has actually rebuilt the
+	// registry; on the fast-path branch (no reload queued) the pending flag is
+	// already clear so the call returns IMMEDIATELY. A nil return from
+	// publishAgentActivation is now a genuine "agent is live and listable"
+	// rather than "agent was queued for publication". Both
+	// ActivationFailed (the call ran but errored — publishWarning above) and
+	// ActivationNotAttempted (neither hook wired — degraded/test deps) leave
+	// the agent NOT listable, so notifying on either would recreate the exact
+	// race this ordering fix closes: a tab's agent_created handler
+	// (src/store/chat/slices/frames.ts) refetching ['agents'] and getting a
+	// response that still lacks the new agent. See Deps.NotifyAgentCreated's
+	// doc comment for why this tool needs its own hook at all: create_agent
+	// persists straight to the entity store and never reaches the gateway's
+	// REST createAgent handler, the only OTHER place this broadcast fires —
+	// that path is already correct here because its own equivalent
+	// (emitAgentCreated, pkg/gateway/rest_agents_create.go::createAgent) is
+	// called only after persistAgent's withToolPolicyCoverageGuard has
+	// already refilled the in-memory list via refreshConfigAndRewireServices
+	// AND waited it out via triggerReloadAndWait (the trigger-and-wait
+	// counterpart to WaitForPendingReloadFunc's wait-only shape; AgentDeleteTool
+	// uses the same WaitForPendingReloadFunc's sibling WaitForReloadFunc for
+	// its own delete_agent → list_agents ghost-listing race).
+	if activation == agentstore.ActivationActive {
+		if fn := ac.t.deps.NotifyAgentCreated; fn != nil {
+			fn(ac.finalID)
+		}
+	}
+
 	// status must reflect actual runnability, not
 	// a fixed "active" — a metadata-only agent (no workspace context at
 	// creation) cannot run in chat or be delegated to at all
@@ -534,28 +712,98 @@ func (ac *agentCreateToolExecute) publishAndRespond() *tools.ToolResult {
 	}
 	if ac.agentType == "subagent_3p" {
 		result["cli"] = ac.execCLI
-		result["cli_path"] = ac.execCLIPath
+		ac.addExecutorResult(result)
 	}
 	if publishWarning != "" {
 		result["publish_warning"] = publishWarning
 	}
-	return tools.NewToolResult(successJSON(result))
+	if ac.joinedWorkspaceID != "" {
+		result["workspace_id"] = ac.joinedWorkspaceID
+	}
+	return changeSuccess(result, ac.createVerdict(activation, publishWarning))
 }
 
-func parseOptionalHeartbeat(args map[string]any) (string, bool, error) {
-	raw, present := args["heartbeat"]
-	if !present {
-		return "", false, nil
+// createVerdict is create_agent's FR-030 verdict, built from the existing
+// read-backs: the durable entity revision, the joined workspace (membership
+// re-read from disk in joinWorkspaceTeam), the main-chat provisioning and the
+// live activation.
+func (ac *agentCreateToolExecute) createVerdict(activation agentstore.ActivationStatus, publishWarning string) changeOutcome {
+	const scope = "saved agent record; workspace membership re-read from disk; main chat provisioning; live activation"
+	notTested := []string{"a conversation turn with the new agent", "its model answering"}
+	var missing, reasons []string
+	if ac.joinMissed {
+		missing = append(missing, "workspace membership in "+ac.target.ID)
+		r := "the agent was saved but did not join workspace " + ac.target.ID
+		if ac.joinErr != nil {
+			r += ": " + ac.joinErr.Error()
+		}
+		reasons = append(reasons, r)
 	}
-	s, ok := raw.(string)
-	if !ok {
-		return "", true, fieldErr("heartbeat", "heartbeat must be a string")
+	if ac.mainsErr != nil {
+		missing = append(missing, "main chat in "+ac.joinedWorkspaceID)
+		reasons = append(reasons, "the main chat was not created: "+ac.mainsErr.Error())
 	}
-	return s, true, nil
+	switch {
+	case publishWarning != "":
+		missing = append(missing, "live activation")
+		reasons = append(reasons, publishWarning)
+	case activation != agentstore.ActivationActive:
+		missing = append(missing, "live activation")
+		reasons = append(reasons, fmt.Sprintf("live activation was not confirmed (%s)", activation))
+	}
+	if len(missing) > 0 {
+		return partlySaved(strings.Join(reasons, "; "), scope, missing, notTested...)
+	}
+	if !ac.joinedWorkspace {
+		return savedNotWorking("the agent belongs to no workspace, so it cannot chat or be delegated to until "+
+			"it is added to a workspace's team", scope, notTested...)
+	}
+	return working(scope, notTested...)
+}
+
+// createSaveFailedResult reports a failed entity save. The store's own
+// persistence status decides the verdict: a partial write is "partly saved";
+// otherwise nothing was saved. The stage, revision and cause are always named
+// — never blank fields (#1064 A2).
+func createSaveFailedResult(id string, mutation agentstore.MutationResult, err error) *tools.ToolResult {
+	// The store marks a status as soon as any file is published; an empty
+	// status means it failed before publishing anything (same reading as
+	// update_agent's mutateErrorResult).
+	stage := mutation.ErrorStage
+	if stage == "" {
+		stage = "prepare"
+	}
+	persistence := string(mutation.PersistenceStatus)
+	if persistence == "" {
+		persistence = string(agentstore.PersistenceNone)
+	}
+	body := map[string]any{
+		"success": false,
+		"error": map[string]any{
+			"code":       "SAVE_FAILED",
+			"message":    strings.TrimSpace(fmt.Sprintf("the agent %q could not be saved at stage %s: %v. %s", id, stage, err, mutation.Message)),
+			"suggestion": "Read the agent state (get_agent) before retrying",
+		},
+		"id":                 id,
+		"persistence_status": persistence,
+		"error_stage":        stage,
+		"revision":           mutation.Revision,
+	}
+	if mutation.PersistenceStatus == agentstore.PersistencePartial {
+		// The store's own list of what it published is the durable part.
+		changed := mutation.ChangedFields
+		if changed == nil {
+			changed = []string{}
+		}
+		body["changed_fields"] = changed
+		return changeErrorWithOutcome(body, partlySaved("the agent record was partly written: "+err.Error(), "",
+			[]string{"complete agent record"}))
+	}
+	return tools.ErrorResult(successJSON(body))
 }
 
 func createHomePartialResult(id, revision string, fields []string, err error) *tools.ToolResult {
-	return tools.ErrorResult(successJSON(map[string]any{
+	return changeErrorWithOutcome(map[string]any{
 		"id":                 id,
 		"code":               "SAVE_FAILED",
 		"message":            "agent was saved but the agent home could not be initialized. Read current state before retrying.",
@@ -565,29 +813,58 @@ func createHomePartialResult(id, revision string, fields []string, err error) *t
 		"changed_fields":     fields,
 		"error_stage":        "init_home",
 		"detail":             err.Error(),
-	}))
+	}, partlySaved("the agent record was saved but its home folder could not be created: "+err.Error(), "",
+		[]string{"agent home folder", "workspace membership", "live activation"}))
 }
 
-func createHeartbeatPartialResult(id, revision string, fields []string, err error) *tools.ToolResult {
-	return tools.ErrorResult(successJSON(map[string]any{
+// createJoinSeedPartialResult is the U5A-FIX-R1 / N3 truthful partial-failure
+// result for a creation-in-context whose MEMBERSHIP landed but whose ordinary
+// self-delegation row could not be seeded. It follows the same shape as the
+// other create_agent partial results (createHomePartialResult): the entity and (here) the workspace membership
+// are already durably written, so this is a partial success that must NOT be
+// dressed up as the ordinary "metadata_only" success — that status would say
+// the agent belongs to no team when it is in fact a member, and would hide the
+// missing row.
+//
+// The suggestion names a recovery that actually re-seeds: the self-row is a
+// normal, editable Team-tab row, so the operator can add it directly (or remove
+// and re-add the agent on the team). Re-running update_workspace with an
+// UNCHANGED team does NOT recover it — that tool only seeds for NEWLY added
+// members — so it is deliberately not offered as the fix.
+func createJoinSeedPartialResult(id, revision string, fields []string, wsID string, err error) *tools.ToolResult {
+	return changeErrorWithOutcome(map[string]any{
 		"id":                 id,
 		"code":               "SAVE_FAILED",
-		"message":            "agent was saved but HEARTBEAT.md could not be written. Read current state before retrying.",
+		"message":            fmt.Sprintf("agent %q was saved and added to workspace %q, but its self-delegation row could not be written. Read the workspace's Team tab before retrying.", id, wsID),
 		"persistence_status": agentstore.PersistencePartial,
 		"activation_status":  agentstore.ActivationNotAttempted,
 		"revision":           revision,
 		"changed_fields":     fields,
-		"error_stage":        "heartbeat",
+		"error_stage":        "seed_self_edge",
+		"workspace_id":       wsID,
+		"joined_workspace":   true,
+		"self_edge_seeded":   false,
 		"detail":             err.Error(),
-	}))
+		"suggestion":         "Open the workspace's Team tab and add this agent's self-delegation row (or remove and re-add the agent on the team), then confirm the row is present.",
+	}, partlySaved(fmt.Sprintf("the agent was saved and joined workspace %q but its self-delegation row was not written: %v",
+		wsID, err), "workspace membership re-read from disk",
+		[]string{"self-delegation row in " + wsID, "live activation"}))
 }
 
 // joinWorkspaceTeam appends agentID to workspace wsID's CoreTeam (deduped)
-// and persists the change. Used exclusively by create_agent's
-// creation-in-context join (ADR-046 P1, US-3 AS-2): a custom agent created
-// from within a workspace's turn context joins THAT workspace's team only —
-// never any other, and never seeds a Delegation[] trust edge (FR-038:
-// expanding a workspace team must not create or imply delegation trust).
+// and persists the change, then seeds agentID's ordinary self-delegation row.
+// Used exclusively by create_agent's creation-in-context join (ADR-046 P1,
+// US-3 AS-2): a custom agent created from within a workspace's turn context
+// joins THAT workspace's team only — never any other.
+//
+// session-core C-DELEGATE (FR-014/015, BDD-05.7): an authorized
+// creation-with-membership seeds the new agent's ordinary {id→id} self-row
+// IMMEDIATELY, through the same shared workspace-graph computation the install
+// seed and the team-growth writer use. This is not the retired "expanding a
+// team implies delegation trust" grant — it is the single, removable self-row
+// the operator data list governs, and no other agent's trust changes. A join
+// that must not seed (metadata-only creation with no membership) never reaches
+// here.
 //
 // wsID here is the caller's tools.ToolWorkspaceID(ctx) — the channel-bound
 // turn workspace id that memory routing uses — which is a different,
@@ -595,20 +872,105 @@ func createHeartbeatPartialResult(id, revision string, fields []string, err erro
 // workspace.FindForAgentPreferring keys off (CoreTeam membership) for
 // execution/work-dir purposes; the two can diverge, exactly as pkg/agent/loop.go's
 // runTurn documents for its own mirrored resolution.
-func (t *AgentCreateTool) joinWorkspaceTeam(wsID, agentID string) error {
+func (t *AgentCreateTool) joinWorkspaceTeam(wsID, agentID string) (joined bool, seedErr error) {
+	// U5A-FIX-R1 / N1: the authoritative membership read-and-decision and the
+	// self-row seed publication run in ONE workspace critical section
+	// (workspacepkg.LockID + the authoritative re-read below). The membership
+	// write used to be unlocked: a concurrent explicit delegation graph PUT
+	// (which holds LockID and replaces the whole edge set) could land after the
+	// membership became visible but before the seed acquired its own lock, and
+	// the late implicit seed then re-added the self-row the operator had just
+	// excluded — reversing a successful explicit policy decision. Holding one
+	// lock across both phases means a competing writer lands wholly before or
+	// wholly after this join, never between.
+	unlock := workspacepkg.LockID(wsID)
+	defer unlock()
+
 	w, err := readWorkspaceFromDisk(t.deps.Home, wsID)
 	if err != nil {
-		return fmt.Errorf("read workspace %s: %w", wsID, err)
+		return false, fmt.Errorf("read workspace %s: %w", wsID, err)
 	}
-	for _, id := range w.CoreTeam {
-		if id == agentID {
-			return nil // already a member
+	if !teamContains(w.CoreTeam, agentID) {
+		w.CoreTeam = append(w.CoreTeam, agentID)
+		w.UpdatedAt = nowISO()
+		if err := writeEntity(workspacesDir(t.deps.Home), wsID, w); err != nil {
+			return false, fmt.Errorf("write workspace %s: %w", wsID, err)
 		}
 	}
-	w.CoreTeam = append(w.CoreTeam, agentID)
-	w.UpdatedAt = nowISO()
-	if err := writeEntity(workspacesDir(t.deps.Home), wsID, w); err != nil {
-		return fmt.Errorf("write workspace %s: %w", wsID, err)
+
+	// Deterministic test seam (always nil in production): fires with LockID
+	// held, AFTER the membership write and BEFORE the authoritative re-read, so
+	// a test can land a competing membership/graph edit at exactly this point.
+	if joinWorkspaceMembershipTestHook != nil {
+		joinWorkspaceMembershipTestHook(wsID, agentID)
+	}
+
+	// Re-read the AUTHORITATIVE membership (fresh from disk) and seed ONLY when
+	// the agent is genuinely on the team. A member that is no longer on the team
+	// (a competing removal that landed) gets no self-row: seeding one would
+	// invent a delegation row for a non-member. The re-read is what turns "this
+	// call appended a member" into "the member is actually on the team now".
+	fresh, readErr := readWorkspaceFromDisk(t.deps.Home, wsID)
+	if readErr != nil {
+		// The membership write above already landed; only the confirm failed.
+		return true, fmt.Errorf("re-read workspace %s membership: %w", wsID, readErr)
+	}
+	if !teamContains(fresh.CoreTeam, agentID) {
+		return false, nil
+	}
+
+	// Seed the new agent's ordinary self-row. A failure here means the agent IS
+	// a workspace member but its required self-row was not written — the caller
+	// reports the truthful partial result (never a metadata_only success).
+	if err := t.seedSelfEdgeLocked(wsID, agentID); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+// teamContains reports whether agentID is a (non-empty) entry of team.
+func teamContains(team []string, agentID string) bool {
+	for _, id := range team {
+		if id == agentID {
+			return true
+		}
+	}
+	return false
+}
+
+// joinWorkspaceMembershipTestHook is a test-only synchronization seam fired by
+// joinWorkspaceTeam while it holds workspacepkg.LockID(wsID), after the
+// membership write and before the seed's authoritative membership re-read. It
+// lets a test land a competing membership/graph edit at exactly that point
+// deterministically (no sleeps), proving the join is one critical section and
+// that the seed never fires for a member that is no longer on the team. Always
+// nil in production; never set outside a _test.go file.
+var joinWorkspaceMembershipTestHook func(wsID, agentID string)
+
+// seedSelfEdgeLocked writes agentID's ordinary self-delegation row into
+// workspace wsID's delegation store, preserving every existing edge. It uses
+// the shared workspace.SelfEdgeSeedRows computation, so the row is identical to
+// the install-seed and team-growth rows, and it threads the OPERATOR exclusion
+// data (config.workspace_seed_defaults.self_edge.exclude_agent_ids) through
+// selfEdgeExcludedAgentIDs — the exclusion is config DATA, never a Go identity
+// predicate. Idempotent: an agent already carrying a self-row is left untouched.
+//
+// The caller MUST already hold workspacepkg.LockID(wsID) (joinWorkspaceTeam
+// does, for its whole membership-plus-seed span): the lock pool is not
+// reentrant, so this must NOT acquire it again.
+func (t *AgentCreateTool) seedSelfEdgeLocked(wsID, agentID string) error {
+	existing, ok := workspacepkg.LoadDelegation(t.deps.Home, wsID)
+	if !ok {
+		return fmt.Errorf("workspace %s delegation record is unreadable — refusing to seed a self-row over it", wsID)
+	}
+	rows := workspacepkg.SelfEdgeSeedRows(
+		[]string{agentID}, existing, selfEdgeExcludedAgentIDs(t.deps), workspaceDelegationDepthCeiling(t.deps))
+	if len(rows) == 0 {
+		return nil
+	}
+	merged := append(append([]workspacepkg.DelegationEdge(nil), existing...), rows...)
+	if err := saveWorkspaceDelegation(t.deps.Home, wsID, merged); err != nil {
+		return fmt.Errorf("seed self-row for %s in workspace %s: %w", agentID, wsID, err)
 	}
 	return nil
 }
@@ -623,14 +985,30 @@ func NewAgentUpdateTool(d *Deps) *AgentUpdateTool { return &AgentUpdateTool{deps
 func (t *AgentUpdateTool) Name() string           { return "update_agent" }
 func (t *AgentUpdateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *AgentUpdateTool) Description() string {
-	return "Update an existing agent using the revision returned by get_agent. Only provided fields are changed; omitted fields are left as-is. Mia, Jim, Ava, Admin, Planner, Researcher, and General Purpose keep their built-in identity and instructions, while their tool policies, installed connector assignments, and skills are editable. Judge and Plan Supervisor allow instruction and supported tuning changes but keep fixed tool, connector, and skill capabilities. An empty provider clears its pin. Use fallback_models with model/provider objects; [] clears the fallback chain. The agent type and an external agent's cli/cli_path cannot change after creation; create a new agent for a different type."
+	return "Update an existing agent using the revision returned by get_agent. Only provided fields are changed; omitted fields are left as-is. Mia, Jim, Omnipus, Planner, Researcher, and General Purpose keep their built-in identity and instructions, while their skills are editable. An existing agent's per-agent tool policies and connector (MCP) assignments are changed with set_agent_permissions, never update_agent. Judge and Plan Supervisor allow instruction and supported tuning changes but keep fixed tool, connector, and skill capabilities. An empty provider clears its pin. Use fallback_models with model/provider objects; [] clears the fallback chain. The agent type and an external agent's cli cannot change after creation; create a new agent for a different type or CLI. An external worker's program is set by a person in Settings → Third-party agents, never here. An external worker's env_overrides merge into its stored environment (env_overrides_remove removes names) and cli_args replaces its extra flags; the result lists environment names by outcome, never values."
 }
 
 func (t *AgentUpdateTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"id":          map[string]any{"type": "string", "description": "Agent ID to update"},
+			"id": map[string]any{"type": "string", "description": "Agent ID to update"},
+			"env_overrides": map[string]any{
+				"type":                 "object",
+				"additionalProperties": map[string]any{"type": "string"},
+				"description": "External-CLI workers only. MERGE into the stored environment: each name is added or its value replaced; " +
+					"names not sent are kept; {} changes nothing. Same limits as create; the read mask is not a valid value.",
+			},
+			"env_overrides_remove": map[string]any{
+				"type":        "array",
+				"items":       map[string]any{"type": "string"},
+				"maxItems":    64,
+				"description": "External-CLI workers only. Names to remove; a name that is not stored is reported as absent_removed, not refused. A name both set and removed is refused.",
+			},
+			"cli_args": map[string]any{
+				"type":        "string",
+				"description": "External-CLI workers only. Replacement extra flags as one string (at most 4,096 characters), stored as typed.",
+			},
 			"revision":    map[string]any{"type": "string", "description": "Opaque revision returned by get_agent"},
 			"name":        map[string]any{"type": "string"},
 			"description": map[string]any{"type": "string"},
@@ -638,32 +1016,53 @@ func (t *AgentUpdateTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "New personality/instructions (overwrites SOUL.md)",
 			},
-			"model":           map[string]any{"type": "string", "description": "New primary model slug"},
-			"fallback_models": fallbackModelsParameters(),
+			"model":            map[string]any{"type": "string", "description": "New primary model slug"},
+			"fallback_models":  fallbackModelsParameters(),
+			"reasoning_effort": effortParameter(),
 			"provider": map[string]any{
 				"type":        "string",
 				"description": "Explicit provider routing key for the primary model. Empty string clears an existing pin (falls back to default-provider resolution).",
 			},
-			"color":               map[string]any{"type": "string"},
-			"icon":                map[string]any{"type": "string"},
-			"max_tool_iterations": map[string]any{"type": "integer", "description": "New max tool calls per turn (0 = inherit the system default)"},
-			"skills":              skillsParameters(true),
-			"mcp_servers":         mcpServersParameters(),
-			"tool_policy_changes": toolPolicyChangesParameters(),
-			"memory_enabled":      map[string]any{"type": "boolean"},
-			"default":             map[string]any{"type": "boolean"},
+			"color": map[string]any{"type": "string", "description": "New avatar color: one of the ten palette hex values #4F8A80, #5E6973, #6E8BA8, #7A8C9E, #7B7290, #8E9196, #9C8A5B, #A97142, #B76E79, #CDBA96 (letter-case is normalized). Omitted leaves the stored color unchanged; null or empty is refused."},
+			// Visual identity figure/role (#1303): same catalogs as create;
+			// helpers in agent_visuals.go.
+			"figure": figureUpdateProperty(),
+			"role":   roleUpdateProperty(),
+			// #904 D15: JSON null clears the own value ("use the global
+			// limit"), so the schema admits null; 1..1000 bound structurally.
+			"max_tool_iterations": map[string]any{
+				"type": []string{"integer", "null"}, "minimum": 1, "maximum": 1000,
+				"description": "New max tool calls per turn for this agent, 1-1000. Must not exceed the global limit set in Settings → Performance (a higher value is refused). Pass null to clear the agent's own value and use the global limit; omit to leave it unchanged.",
+			},
+			// tool_policy_changes and mcp_servers are deliberately absent:
+			// set_agent_permissions owns them on an existing agent (FR-024).
+			"skills":         skillsParameters(true),
+			"memory_enabled": map[string]any{"type": "boolean"},
 			"voice": map[string]any{
 				"type":        "string",
 				"description": "Per-agent TTS persona identifier. Persisted; playback is inactive in this release.",
 			},
-			"context_window_override": map[string]any{"type": "integer", "description": "Positive token override. JSON null clears the override."},
+			// Like max_tool_iterations above: the schema admits JSON null so the
+			// documented null clear reaches Execute through the registry's type
+			// check (CHECK F1) — the tool's own validator
+			// (applyContextWindow/jsonInt) still refuses non-integers.
+			"context_window_override": map[string]any{"type": []string{"integer", "null"}, "description": "Positive token override. JSON null clears the override."},
 			"model_params":            modelParamsParameters(),
+			// #1064: AGENT.md, the agent definition file read on every turn,
+			// beside soul. (Heartbeats are per workspace and live in the
+			// workspace's member settings, not in a file, so there is no
+			// heartbeat field here.)
+			"agent_md": map[string]any{
+				"type":        "string",
+				"description": "New AGENT.md content (overwrites the agent's AGENT.md).",
+			},
 		},
 		"required": []string{"id", "revision"},
 	}
 }
 
-func (t *AgentUpdateTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
+func (t *AgentUpdateTool) Execute(ctx context.Context, args map[string]any) (res *tools.ToolResult) {
+	defer func() { res = finalizeChangeResult(t.Name(), res) }()
 	return t.executeADR090(args)
 }
 
@@ -684,9 +1083,8 @@ func (t *AgentDeleteTool) Description() string {
 		"in the response. Every GTD task assigned to this agent is unassigned (not deleted — the task itself " +
 		"survives); tasks it merely created keep that historical attribution. This agent is also removed from " +
 		"every workspace's core_team, and every delegation-trust edge naming it (as either side) is dropped from " +
-		"each affected workspace's delegation graph. Seeded built-ins (Mia, Jim, Ava, Admin, Planner, Researcher, General Purpose, Judge, and Plan Supervisor), the currently " +
-		"configured default agent, and an agent that owns at least one active (running) Plan cannot be deleted " +
-		"— set another agent as default first (Agents screen ★), or stop/reassign the Plan(s), before retrying. " +
+		"each affected workspace's delegation graph. Seeded built-ins (Mia, Jim, Omnipus, Planner, Researcher, General Purpose, Judge, and Plan Supervisor) cannot be deleted. " +
+		"An agent that owns at least one active (running) Plan cannot be deleted — stop/reassign the Plan(s) before retrying. " +
 		"A step that fails partway through is reported in the response rather than " +
 		"silently swallowed — check for a warning field before assuming the cascade fully completed." +
 		"\nParameters: id (required), revision (required, from get_agent), confirm (bool, must be true)."
@@ -750,7 +1148,8 @@ type agentDeleteToolExecute struct {
 	deletionResult          agentstore.MutationResult
 }
 
-func (t *AgentDeleteTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
+func (t *AgentDeleteTool) Execute(ctx context.Context, args map[string]any) (res *tools.ToolResult) {
+	defer func() { res = finalizeChangeResult(t.Name(), res) }()
 	ad := &agentDeleteToolExecute{t: t, args: args}
 
 	if r0, stop := ad.validateAndLoad(); stop {
@@ -782,24 +1181,6 @@ func (ad *agentDeleteToolExecute) validateAndLoad() (*tools.ToolResult, bool) {
 	}
 	if err := agentstore.ValidateRevision(ad.revision); err != nil {
 		return tools.ErrorResult(errorJSON("INVALID_REVISION", err.Error(), "Read the agent again and retry with its current revision")), true
-	}
-	// Guard 0: refuse outright — BEFORE any
-	// destructive action — if id is the configured default agent. Deleting
-	// it would leave cfg.Agents.Defaults.DefaultAgentID pointing at a
-	// nonexistent id, silently demoting default-agent resolution to its
-	// Priority-2 fallback (Registry.GetDefaultAgent / route.go's
-	// resolveDefaultAgentID — see CLAUDE.md's "Default agent (single source
-	// of truth)" section, itself a former release blocker for exactly this
-	// kind of silent divergence). A nil GetCfg/Config (test scaffolding
-	// without a wired config) skips the check rather than trusting an
-	// unknown default — matches configAgentPresenceSet's
-	// precedent for "no config visible" defaulting to exclude, never allow.
-	if ad.t.deps.GetCfg != nil {
-		if cfg := ad.t.deps.GetCfg(); cfg != nil && cfg.Agents.Defaults.DefaultAgentID == ad.id {
-			return tools.ErrorResult(errorJSON("AGENT_IS_DEFAULT",
-				fmt.Sprintf("agent %q is the configured default agent and cannot be deleted", ad.id),
-				"Set another agent as default first (Agents screen ★), then retry delete_agent")), true
-		}
 	}
 	// ADR-054 D2/D6 rule 5/§11 checklist item 6: agents are per-entity
 	// records under entities/agents/<id>.json, not config.json's
@@ -883,87 +1264,279 @@ func (ad *agentDeleteToolExecute) validateAndLoad() (*tools.ToolResult, bool) {
 	return nil, false
 }
 
-// deleteAndCascade deletes the agent record and performs the best-effort cleanup cascades.
-func (ad *agentDeleteToolExecute) deleteAndCascade() (*tools.ToolResult, bool) {
-	// cascadeWarnings collects every best-effort cascade-step failure so the
-	// response can report a real partial-failure instead of silently
-	// claiming full success (mirrors this file's
-	// existing publish_warning pattern for create/update, generalized to the
-	// several independent stores this cascade touches). None of these steps
-	// abort the delete — the agent entity record is already durably removed
-	// by the time any of them run (see store.Delete below) — so a failure
-	// here is best-effort/non-fatal, matching delete_workspace's own
-	// best-effort-cascade shape (a failed mount/delegation-store cleanup
-	// there does not stop the workspace from being deleted either).
-	// Capacity 3: one slot per cascade source (sessions, tasks, workspaces)
-	// below — a reasonable hint for the common case of zero-to-few
-	// warnings; exact per-source counts aren't known until each step runs.
-	ad.cascadeWarnings = make([]string, 0, 3)
+// AgentDeleteCascadeResult is the outcome of RunAgentDeleteCascade, the
+// shared FR-037/C-DELETE cleanup-first / record-last agent delete cascade.
+type AgentDeleteCascadeResult struct {
+	// SessionsDeleted, SessionsPreservedShared, TasksUnassigned,
+	// WorkspacesUpdated and EdgesRemoved are the per-step cleanup counts, so a
+	// caller can report exactly what the cascade did.
+	SessionsDeleted         int
+	SessionsPreservedShared int
+	TasksUnassigned         int
+	WorkspacesUpdated       int
+	EdgesRemoved            int
+	// Warnings collects every per-step cleanup failure so the caller reports
+	// what happened rather than claiming full success.
+	Warnings []string
+	// CleanupFailed is true when at least one owned-data cleanup step failed.
+	// The record was then deliberately left in place (record-last), so Deletion
+	// and DeletionErr are zero-valued and the same Delete retries idempotently.
+	CleanupFailed bool
+	// Deletion is the record-removal result and DeletionErr its error. Only
+	// meaningful when CleanupFailed is false; DeletionErr is nil on success.
+	Deletion    agentstore.MutationResult
+	DeletionErr error
+}
 
-	// store.Delete(id) — the authoritative entity-record delete — runs
-	// FIRST, before any of the irreversible cascade steps below (bug-fix,
-	// this session: sessions/tasks cascade used to run BEFORE this call,
-	// which meant a store.Delete failure was reported to the caller as a
-	// bare SAVE_FAILED with the sessions already gone and tasks already
-	// unassigned — directly contradicting this tool's own Description(),
-	// which promises "a step that fails partway through is reported in the
-	// response rather than silently swallowed". With store.Delete FIRST: if
-	// it fails, nothing destructive has happened yet — the fail-safe order.
-	// Unrelated files in the agent home are deliberately preserved; DeleteState
-	// removes only the entity and applicable SOUL bytes owned by this resource.
-	var err error
-	ad.deletionResult, err = ad.store.DeleteState(ad.id, ad.revision)
+// sessionStoreForDelete returns the live store from Deps, or a true nil interface
+// when none is wired (never a typed-nil), so the cascade fails closed.
+func (t *AgentDeleteTool) sessionStoreForDelete() AgentSessionStore {
+	if t.deps == nil || t.deps.DeleteSessionStore == nil {
+		return nil
+	}
+	return t.deps.DeleteSessionStore()
+}
+
+// AgentSessionStore is the narrow view of the loop's ONE live session store the
+// delete cascade needs. The cascade never opens a store (DEL-10: one lock set per
+// directory); its callers pass the shared store in.
+type AgentSessionStore interface {
+	ListSessionsFiltered(keep func(*session.UnifiedMeta) bool) ([]*session.UnifiedMeta, error)
+	DeleteSession(id string) error
+}
+
+// CheckAgentDeleteRevision is the read-only revision comparison a delete does
+// before any cleanup. It returns agentstore.ErrRevisionConflict (wrapped) when
+// the agent's current revision differs from the caller's. A MISSING record is
+// not decided here (the cascade keeps its idempotent-retry behaviour and
+// DeleteState reports it); a record that exists but cannot be read is an error.
+func CheckAgentDeleteRevision(omnipusHome, agentID, revision string) error {
+	// A lock-free peek: this is an advisory pre-check, and DeleteState repeats the
+	// authoritative comparison under the lock.
+	current, err := agentstore.New(omnipusHome).PeekRevision(agentID)
 	if err != nil {
-		if errors.Is(err, agentstore.ErrRevisionConflict) {
-			return tools.ErrorResult(errorJSON("REVISION_CONFLICT", err.Error(), "Read the agent again and retry with its current revision")), true
+		if errors.Is(err, entity.ErrNotFound) {
+			return nil // a missing record is the cascade's idempotent retry; DeleteState reports it
 		}
-		payload := map[string]any{
-			"code":               "SAVE_FAILED",
-			"message":            "agent storage deletion failed; read the agent again before retrying",
-			"persistence_status": ad.deletionResult.PersistenceStatus,
-			"activation_status":  ad.deletionResult.ActivationStatus,
-			"revision":           ad.deletionResult.Revision,
-			"changed_fields":     ad.deletionResult.ChangedFields,
-			"error_stage":        ad.deletionResult.ErrorStage,
-		}
-		return tools.ErrorResult(successJSON(payload)), true
+		// A record that exists but cannot be read (corrupt, unreadable) must stop
+		// the delete here, BEFORE sessions and task assignments are destroyed and
+		// DeleteState then fails (delta review R1 #10).
+		return fmt.Errorf("read the agent record before deleting it: %w", err)
+	}
+	if current != revision {
+		return fmt.Errorf("%w: expected %s, current %s", agentstore.ErrRevisionConflict, revision, current)
+	}
+	return nil
+}
+
+// RunAgentDeleteCascade performs FR-037/C-DELETE's cleanup-first, record-last
+// agent delete cascade — the SAME sequence BOTH the delete_agent tool and the
+// REST DELETE /api/v1/agents/{id} handler run, so the two entry points cannot
+// drift on the order (spec §C-DELETE: "UI/tool/API same cleanup-first/
+// record-last cascade").
+//
+// Every artifact the agent owns or that dangles off it — its solely-owned
+// sessions (with uploads), its task assignments, and its workspace core_team /
+// delegation-edge references — is cleaned FIRST. If any cleanup step fails the
+// record is deliberately left in place (CleanupFailed=true, so the record stays
+// visible) and the caller reports the agent as only PARTLY DELETED, so the same
+// Delete retries idempotently, including after a restart. Only when every
+// cleanup step succeeds is the authoritative agent entity record (with any
+// owned SOUL bytes) removed LAST, via store.DeleteState.
+//
+// omnipusHome is the resolved $OMNIPUS_HOME (see resolveOmnipusHome) and
+// revision the caller's expected record revision. The agent store is built here
+// so both callers pass identical inputs.
+func RunAgentDeleteCascade(omnipusHome, agentID, revision string, sessions AgentSessionStore, stopSession func(sessionID string) string) AgentDeleteCascadeResult {
+	res := AgentDeleteCascadeResult{Warnings: make([]string, 0, 3)}
+
+	// Final-gate H1: a stale revision refuses BEFORE any destructive step. The
+	// cleanup below deletes sessions and unassigns tasks, and DeleteState (the
+	// authoritative, atomic comparison) runs last - without this read-only
+	// pre-check a stale delete destroyed the agent's data and then answered
+	// 409 with the agent still alive.
+	if err := CheckAgentDeleteRevision(omnipusHome, agentID, revision); err != nil {
+		res.DeletionErr = err
+		return res
 	}
 
 	// Step 1a: delete every session in the SHARED session store
 	// ($OMNIPUS_HOME/sessions/) that belongs SOLELY to this agent, together
-	// with its uploads. Runs AFTER the authoritative entity-record delete
-	// above (see that call's comment for why) — this is best-effort cascade
-	// cleanup of things that reference the now-deleted agent, mirroring
-	// cascadeCleanAgentWorkspaceReferences below. See
-	// cascadeDeleteAgentSessions's doc comment for why a session shared with
-	// another agent is deliberately left untouched rather than deleted or
-	// partially edited.
-	var sessionWarnings []string
-	ad.sessionsDeleted, ad.sessionsPreservedShared, sessionWarnings = cascadeDeleteAgentSessions(ad.omnipusHome, ad.id)
-	ad.cascadeWarnings = append(ad.cascadeWarnings, sessionWarnings...)
+	// with its uploads. See cascadeDeleteAgentSessions's doc comment for why a
+	// session shared with another agent is deliberately left untouched rather
+	// than deleted or partially edited.
+	var w []string
+	res.SessionsDeleted, res.SessionsPreservedShared, w = cascadeDeleteAgentSessions(sessions, stopSession, agentID)
+	res.Warnings = append(res.Warnings, w...)
 
-	// Step 1b: unassign (never delete) every GTD task currently
-	// assigned to this agent, using the same task.Store.Update primitive
-	// (and per-task locking) the ordinary task-update tools use — never a
-	// hand-rolled read-modify-write. Runs AFTER the authoritative
-	// entity-record delete above, same reasoning as Step 1a. See
+	// Step 1b: unassign (never delete) every GTD task currently assigned to
+	// this agent, using the same task.Store.Update primitive (and per-task
+	// locking) the ordinary task-update tools use. See
 	// cascadeUnassignAgentTasks's doc comment for why CreatedByAgentID is
 	// deliberately left untouched.
-	var taskWarnings []string
-	ad.tasksUnassigned, taskWarnings = cascadeUnassignAgentTasks(ad.omnipusHome, ad.id)
-	ad.cascadeWarnings = append(ad.cascadeWarnings, taskWarnings...)
+	res.TasksUnassigned, w = cascadeUnassignAgentTasks(omnipusHome, agentID)
+	res.Warnings = append(res.Warnings, w...)
 
-	// Step 2: best-effort cleanup of DANGLING REFERENCES to the
-	// now-deleted agent across every workspace — core_team membership and
-	// delegation-trust edges naming it as either side. Runs AFTER the
-	// authoritative entity-record delete above, mirroring delete_workspace's
-	// own post-record-delete cleanup of its mount/delegation stores: this is
-	// "clean up what still points at the thing that's gone", not data that
-	// belongs to the agent itself.
-	var wsWarnings []string
-	ad.workspacesUpdated, ad.edgesRemoved, wsWarnings = cascadeCleanAgentWorkspaceReferences(ad.omnipusHome, ad.id)
-	ad.cascadeWarnings = append(ad.cascadeWarnings, wsWarnings...)
+	// Step 2: cleanup of DANGLING REFERENCES to the agent across every
+	// workspace — core_team membership and delegation-trust edges naming it as
+	// either side.
+	res.WorkspacesUpdated, res.EdgesRemoved, w = cascadeCleanAgentWorkspaceReferences(omnipusHome, agentID)
+	res.Warnings = append(res.Warnings, w...)
+
+	// Step 2b (WU-21 / #1197, amendment §3.2(6)): the agent's end-of-chat
+	// summaries are workspace-owned files — one per (agent, workspace) pair —
+	// so delete_agent removes this agent's pair file in EVERY workspace.
+	// Other agents' files, and workspaces the agent merely left (membership
+	// removal), stay untouched. A failure is an FR-037 warning that keeps the
+	// record visible for retry, never a recursive erase of an unexpected
+	// directory and never a claimed success.
+	w = cascadeDeleteAgentCarryForwardFiles(omnipusHome, agentID)
+	res.Warnings = append(res.Warnings, w...)
+
+	// FR-037: if any owned-data cleanup step failed, STOP — the record must
+	// remain VISIBLE so the same Delete can retry, and the result must say the
+	// agent is only partly deleted rather than claim success.
+	if len(res.Warnings) > 0 {
+		res.CleanupFailed = true
+		return res
+	}
+
+	// Step 3 (LAST): remove the authoritative entity record and any SOUL bytes
+	// it owns. Unrelated files in the agent home are deliberately preserved;
+	// DeleteState removes only the entity and applicable SOUL bytes owned by
+	// this resource.
+	res.Deletion, res.DeletionErr = agentstore.New(omnipusHome).DeleteState(agentID, revision)
+	return res
+}
+
+// cascadeDeleteAgentCarryForwardFiles removes this agent's end-of-chat summary
+// file — workspaces/<id>/.omnipus/carry-forward/<agentID>.md — in every
+// workspace under $OMNIPUS_HOME (WU-21 / #1197, amendment §3.2(6)). It returns
+// one warning per failure (an FR-037 cleanup failure: the caller keeps the
+// entity record for retry) and none when there was nothing to remove.
+// Enumeration is done with per-workspace ReadDir, not filepath.Glob: Glob
+// silently skips subtrees it cannot read, so a permission-denied carry-forward
+// directory would be indistinguishable from an empty one and the agent record
+// would be deleted while its summary survived. A subtree that cannot be
+// scanned is therefore a warning naming the owning workspace, never a silent
+// skip; a workspace with no carry-forward room yet is the normal empty case.
+// Each warning labels the owning workspace id, so the diagnostic names the
+// owner and not merely a path buried in wrapped OS error text.
+// Membership-only removal never reaches this function.
+func cascadeDeleteAgentCarryForwardFiles(omnipusHome, agentID string) []string {
+	if err := validation.EntityID(agentID); err != nil {
+		return []string{fmt.Sprintf("carry-forward cleanup skipped: invalid agent id: %v", err)}
+	}
+	workspacesDir := filepath.Join(omnipusHome, memrooms.WorkspacesDirName)
+	entries, err := os.ReadDir(workspacesDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil // no workspaces exist, so no workspace-owned summary can.
+		}
+		return []string{fmt.Sprintf("carry-forward cleanup failed: cannot enumerate workspaces: %v", err)}
+	}
+	var warnings []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue // workspace records (workspaces/<id>.json) are not rooms.
+		}
+		workspaceID := entry.Name()
+		carryForwardDir := filepath.Join(workspacesDir, workspaceID, memrooms.OmnipusRoomDir, "carry-forward")
+		files, err := os.ReadDir(carryForwardDir)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue // this workspace holds no carry-forward room yet.
+			}
+			// An unscannable subtree is a cleanup failure, never evidence of
+			// an empty directory: report it instead of silently skipping the
+			// agent's owned data there.
+			warnings = append(warnings, fmt.Sprintf("carry-forward cleanup failed for workspace %q: cannot enumerate: %v", workspaceID, err))
+			continue
+		}
+		for _, file := range files {
+			if file.Name() != agentID+".md" {
+				continue // only this agent's own summary; siblings stay.
+			}
+			// os.Remove deliberately refuses a directory: a non-file at the
+			// pair path is reported, never recursively erased.
+			if rmErr := os.Remove(filepath.Join(carryForwardDir, file.Name())); rmErr != nil {
+				warnings = append(warnings, fmt.Sprintf("carry-forward cleanup failed for workspace %q: remove %s: %v", workspaceID, file.Name(), rmErr))
+			}
+		}
+	}
+	return warnings
+}
+
+// deleteAndCascade runs the shared cleanup-first, record-last cascade
+// (RunAgentDeleteCascade) and maps its outcome onto the tool result: a cleanup
+// failure or a failed record removal becomes the honest partly-deleted result
+// (the record stays visible and the same Delete retries with its current
+// revision), a stale revision becomes a REVISION_CONFLICT error, and a clean
+// run returns stop=false so Execute proceeds to reload/respond.
+func (ad *agentDeleteToolExecute) deleteAndCascade() (*tools.ToolResult, bool) {
+	res := RunAgentDeleteCascade(ad.omnipusHome, ad.id, ad.revision, ad.t.sessionStoreForDelete(), ad.t.deps.StopSessionForDelete)
+	ad.cascadeWarnings = res.Warnings
+	ad.sessionsDeleted = res.SessionsDeleted
+	ad.sessionsPreservedShared = res.SessionsPreservedShared
+	ad.tasksUnassigned = res.TasksUnassigned
+	ad.workspacesUpdated = res.WorkspacesUpdated
+	ad.edgesRemoved = res.EdgesRemoved
+
+	if res.CleanupFailed {
+		return ad.partlyDeletedResult("cleanup"), true
+	}
+
+	ad.deletionResult = res.Deletion
+	if res.DeletionErr != nil {
+		if errors.Is(res.DeletionErr, agentstore.ErrRevisionConflict) {
+			if ad.cascadeChangedAnything() {
+				// The cleanup steps ran before the record's revision check
+				// refused: the agent is partly deleted, never "nothing saved".
+				return ad.partlyDeletedResult("record_delete_revision_conflict"), true
+			}
+			return tools.ErrorResult(errorJSON("REVISION_CONFLICT", res.DeletionErr.Error(), "Read the agent again and retry with its current revision")), true
+		}
+		return ad.partlyDeletedResult("record_delete"), true
+	}
 	return nil, false
+}
+
+// partlyDeletedResult builds the honest FR-037 failure result: the agent's
+// owned data may already be partly cleaned, but its record is still visible and
+// the same Delete retries with the agent's current revision. It carries the
+// cascade counts already performed and the collected warnings so the caller can
+// see exactly what did and did not happen — never a bare success.
+func (ad *agentDeleteToolExecute) partlyDeletedResult(errorStage string) *tools.ToolResult {
+	body := map[string]any{
+		"success": false,
+		"error": map[string]any{
+			"code":       "SAVE_FAILED",
+			"message":    fmt.Sprintf("agent %q is partly deleted (%s failed); its record remains visible and the same delete retries with its current revision", ad.id, errorStage),
+			"suggestion": "Read the agent again and retry delete_agent with its current revision",
+		},
+		"id":                        ad.id,
+		"partly_deleted":            true,
+		"error_stage":               errorStage,
+		"persistence_status":        string(agentstore.PersistencePartial),
+		"activation_status":         string(agentstore.ActivationNotAttempted),
+		"sessions_deleted":          ad.sessionsDeleted,
+		"sessions_preserved_shared": ad.sessionsPreservedShared,
+		"tasks_unassigned":          ad.tasksUnassigned,
+		"workspaces_updated":        ad.workspacesUpdated,
+		"delegation_edges_removed":  ad.edgesRemoved,
+	}
+	if len(ad.cascadeWarnings) > 0 {
+		body["cascade_warnings"] = ad.cascadeWarnings
+	}
+	return changeErrorWithOutcome(body, partlySaved(
+		fmt.Sprintf("agent %q is partly deleted: the %s step failed", ad.id, errorStage), "",
+		append([]string{"agent record deletion"}, ad.cascadeWarnings...)))
+}
+
+// cascadeChangedAnything reports whether the delete cascade changed any
+// durable data before stopping.
+func (ad *agentDeleteToolExecute) cascadeChangedAnything() bool {
+	return ad.sessionsDeleted+ad.tasksUnassigned+ad.workspacesUpdated+ad.edgesRemoved > 0
 }
 
 // reload reloads live configuration and records a warning if publication fails.
@@ -1006,6 +1579,23 @@ func (ad *agentDeleteToolExecute) reload() {
 	// same turn must not still see the deleted agent because the reload was
 	// only queued, not yet applied. Falls back to the fire-and-forget
 	// ReloadFunc when WaitForReloadFunc is nil (tests/degraded wiring).
+	//
+	// WHY WaitForReloadFunc (TRIGGER-and-wait) AND NOT WaitForPendingReloadFunc
+	// (wait-only): delete has no fast path on the publish side — nothing has
+	// already removed the agent from the live in-memory list the way
+	// UpsertAgentFast does for create/update — so we WANT the reload to
+	// actually fire here. WaitForPendingReloadFunc would only poll
+	// IsReloadPending and return immediately if nothing else happens to be
+	// pending, WITHOUT ever triggering the reload delete actually needs —
+	// leaving the just-deleted agent still ROUTED/listed (reachable) until
+	// some OTHER caller happens to trigger a reload for its own reasons,
+	// which may be never on an idle gateway.
+	// WaitForReloadFunc's production wiring (rest_auth.go::waitForReload,
+	// which calls TriggerReload unconditionally as its first action) is the
+	// right shape here. Compare to publishAgentActivation's comment, which
+	// uses WaitForPendingReloadFunc because that path's publish hook is the
+	// fast path that ALREADY updated the live registry when it succeeds
+	// inline — triggering again would be the bug #571 closed.
 
 	if ad.t.deps.WaitForReloadFunc != nil {
 		if err := ad.t.deps.WaitForReloadFunc(); err != nil {
@@ -1055,7 +1645,20 @@ func (ad *agentDeleteToolExecute) respond() *tools.ToolResult {
 	if len(ad.cascadeWarnings) > 0 {
 		result["cascade_warnings"] = ad.cascadeWarnings
 	}
-	return tools.NewToolResult(successJSON(result))
+	const scope = "agent record deleted; cascade over its sessions, tasks and workspace references; live registry reload"
+	var missing, reasons []string
+	if ad.publishWarning != "" {
+		missing = append(missing, "live registry update")
+		reasons = append(reasons, ad.publishWarning)
+	}
+	if len(ad.cascadeWarnings) > 0 {
+		missing = append(missing, ad.cascadeWarnings...)
+		reasons = append(reasons, "some references to the agent could not be cleaned up")
+	}
+	if len(missing) > 0 {
+		return changeSuccess(result, partlySaved(strings.Join(reasons, "; "), scope, missing))
+	}
+	return changeSuccess(result, working(scope))
 }
 
 // cascadeDeleteAgentSessions removes every session in the shared session
@@ -1069,7 +1672,7 @@ func (ad *agentDeleteToolExecute) respond() *tools.ToolResult {
 // pkg/session's SessionMeta doc comment — PostLoad-backfilled from the
 // legacy AgentID on every disk read, so this check is safe even against
 // pre-v2 sessions). A session with MORE than one agent in AgentIDs (a
-// conversation another agent also participated in, e.g. via SwitchAgent) is
+// conversation another agent also participated in) is
 // deliberately left COMPLETELY untouched rather than partially edited:
 // there is no supported primitive to remove a single id from AgentIDs
 // (session.MetaPatch has no AgentIDs field), and hand-rolling a direct
@@ -1084,25 +1687,14 @@ func (ad *agentDeleteToolExecute) respond() *tools.ToolResult {
 // untouched, and any non-fatal per-session failures. Best-effort throughout:
 // one failure does not abort the sweep, matching every other cascade step in
 // AgentDeleteTool.Execute.
-func cascadeDeleteAgentSessions(omnipusHome, agentID string) (deleted, sharedSkipped int, warnings []string) {
-	sessionsDir := filepath.Join(omnipusHome, "sessions")
-	store, err := session.NewUnifiedStore(sessionsDir)
-	if err != nil {
-		return 0, 0, []string{fmt.Sprintf("could not open session store for cascade delete: %v", err)}
+func cascadeDeleteAgentSessions(store AgentSessionStore, stopSession func(sessionID string) string, agentID string) (deleted, sharedSkipped int, warnings []string) {
+	// DEL-10 (architect final-gate item 1): the cascade works on the loop's ONE
+	// live store, passed in by its caller. It never opens a store of its own: a
+	// second store would take different shard locks over the same directory. A
+	// missing store fails the cleanup (the record stays and the delete retries).
+	if store == nil {
+		return 0, 0, []string{"session store unavailable: the agent's sessions could not be cleaned up; retry the delete"}
 	}
-	// Close stops the store's periodic stats-flusher goroutine. This
-	// function constructs a short-lived store instance for the duration of
-	// one delete_agent call (same "fresh store per call" convention this
-	// file already uses for agentstore.New in every Execute), so it must
-	// also tear it down — otherwise every delete_agent call leaks one
-	// ticker goroutine for the life of the process.
-	defer func() {
-		if closeErr := store.Close(); closeErr != nil {
-			slog.Warn("sysagent: cascade session delete: session store close failed",
-				"agent_id", agentID, "error", closeErr)
-		}
-	}()
-
 	metas, err := store.ListSessionsFiltered(func(m *session.UnifiedMeta) bool {
 		for _, a := range m.AgentIDs {
 			if a == agentID {
@@ -1112,7 +1704,8 @@ func cascadeDeleteAgentSessions(omnipusHome, agentID string) (deleted, sharedSki
 		return false
 	})
 	if err != nil {
-		return 0, 0, []string{fmt.Sprintf("could not list sessions for cascade delete: %v", err)}
+		slog.Error("sysagent: cascade session delete: list failed", "agent_id", agentID, "error", err)
+		return 0, 0, []string{"could not list the agent's sessions for cleanup; retry the delete"}
 	}
 
 	for _, m := range metas {
@@ -1120,8 +1713,22 @@ func cascadeDeleteAgentSessions(omnipusHome, agentID string) (deleted, sharedSki
 			sharedSkipped++
 			continue
 		}
+		// Stop the session's running work (the session and its helper tree)
+		// BEFORE deleting it, as every other delete surface does. A session that
+		// will not stop is kept and the cleanup fails, so the agent record
+		// stays and the same delete retries.
+		if stopSession != nil {
+			if summary := stopSession(m.ID); summary != "" {
+				slog.Warn("sysagent: cascade session delete: a session did not stop; it is kept",
+					"agent_id", agentID, "session_id", m.ID, "summary", summary)
+				warnings = append(warnings, "a running session of this agent did not stop and was kept; retry the delete once it has stopped")
+				continue
+			}
+		}
 		if delErr := store.DeleteSession(m.ID); delErr != nil {
-			warnings = append(warnings, fmt.Sprintf("could not delete session %s: %v", m.ID, delErr))
+			slog.Error("sysagent: cascade session delete: delete failed",
+				"agent_id", agentID, "session_id", m.ID, "error", delErr)
+			warnings = append(warnings, "a session of this agent could not be deleted; retry the delete")
 			continue
 		}
 		deleted++

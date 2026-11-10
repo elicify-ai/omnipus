@@ -1,65 +1,51 @@
 [
   {
     "name": "add_mcp_server",
-    "description": "Add an MCP server to the configuration (tools.mcp.servers). The server is saved to config.json, a connection is attempted immediately, and the result reports live connection status and tool count. Every key in env is stored in the encrypted credential store and referenced from config.json by a ref (mcp_\u003cname\u003e_\u003ckey\u003e) — never written in plaintext, mirroring configure_channel's credential handling. sse/http URLs must be https, or http only for loopback addresses (localhost, 127.x.x.x, ::1). Adding a server when MCP is globally disabled and no other server is enabled will turn tools.mcp.enabled ON — an install-wide change; if another server is already enabled the global flag is left alone and the new server will not connect until an operator enables it. A name that already exists is refused, not updated — remove it first with remove_mcp_server. Tools the server exposes register with no tool policy and cannot be called until an operator assigns one.\nParameters: name (required), transport (stdio/sse/http; default stdio), command (required for stdio), url (required for sse/http), args, env.",
+    "description": "Create an MCP server or attach stored env_refs to an existing unchanged descriptor; plaintext secrets are refused. For a new stdio server needing a secret, first create its descriptor without secrets using expected_revision=\"absent\". Then call request_secret with purpose and exactly one recipient form: server + env_key. Wait for the person to submit the secure web card. Submit stores a version; approved attachment selects it. Read list_mcp_servers, confirm the current entry, then call add_mcp_server with name, its expected_revision and non-empty env_refs. Each reference must have been stored for that exact server descriptor and environment variable; a different recipient is refused, so request a new card for it. Attachment changes only the named references: omit descriptor fields or supply exact matches; all other references, enable flags, assignments and policies stay unchanged. A stale revision or attempted descriptor change is refused; re-read and obtain confirmation before retrying. This is not a general server update or an in-place secret-value edit. The initial save is provisional when credentials are needed. If a later setup or connection step fails after commit, report \"saved but not working\" with the reason, not working or nothing saved. Connection status and tool count do not prove its tools can be called; operator assignment and tool policy still apply. Creation enables MCP globally if it was off and no other server was enabled; attachment never does.",
     "scope": "core",
     "category": "mcp",
     "source": "builtin"
   },
   {
     "name": "configure_channel",
-    "description": "Store a channel's credentials and settings. Secrets (token, app_secret) go into the encrypted credential store and are referenced from config.json by a *_ref — they are never written to config.json in plaintext. Non-secret fields (bot_id, app_id, mode) are written to config.json directly. This does NOT enable the channel and does NOT check whether it is enabled: call enable_channel separately, and note the channel only connects on the next config reload. WhatsApp does not take credentials here — it pairs by QR code in the Channels screen.\nParameters: id (required, from list_channels), token, app_secret, bot_id, app_id, mode.",
+    "description": "Save a channel instance's non-secret settings and select stored credential references; plaintext secrets are refused. Establish its intended settings first, then call request_secret with purpose and exactly one recipient form: instance + field for that existing connection. Wait for the person to submit the secure web card, then pass its returned references through the matching reference parameters. Submit stores a version; this approved change selects it. Each reference must match that exact instance, recipient settings and field; a different recipient is refused, so request a new card for it. A settings change that would redirect retained credentials is refused: change the destination in Settings first, then request a new card. Slack's paired card supplies bot_token and app_token; pass both as bot_token_ref and app_token_ref, not token_ref. Omitted references stay unchanged. Read list_channels and pass expected_revision (\"absent\" for a new entry); stale writes are refused. This does not enable or live-test the channel: call enable_channel separately; new settings take effect on the next config reload. Saving changed settings can interrupt an existing pairing immediately; the result states whether this happened. Report committed settings as \"saved but not working\" with the reason, never working or nothing saved. WhatsApp pairs by QR code under Connectors \u003e WhatsApp, not with credentials here.",
     "scope": "core",
     "category": "channels",
     "source": "builtin"
   },
   {
     "name": "configure_provider",
-    "description": "Store an LLM provider's API key in the encrypted credential store and wire it into config.json so the provider becomes usable. Does NOT contact the provider — the key is stored and referenced, never validated against the live API, so a wrong or revoked key is accepted here without complaint; call list_models afterwards to confirm the key actually works. name must be a catalog provider id (list_models or the Settings → Providers screen show the valid ids; note the ids are 'amazon-bedrock' and 'google', not 'bedrock' or 'gemini'). api_key is required for every cloud provider and optional only for local ones (ollama, lmstudio, vllm). api_base is optional and overrides the catalog's default endpoint; it must be a full http:// or https:// URL with a host.\nParameters: name (required), api_key, api_base.",
+    "description": "Configure a provider by selecting api_key_ref; plaintext secrets are refused. First call request_secret with purpose and exactly one recipient: provider or endpoint. Wait for the person to submit the secure web card. Submit stores a version; this approved change selects it. A reference stored for a different recipient is refused: request a new card for the intended recipient. Cloud providers require api_key_ref; local providers need no key. Use catalog ids such as amazon-bedrock or google, not bedrock or gemini. This tool connects API-key and keyless local providers only: account sign-in (for example openai-chatgpt), coding-plan variants and providers needing more than one credential (for example amazon-bedrock: access key, secret, region) cannot be connected here — they are Settings → Providers paths; see the provider-config skill. After saving, this tool will check the SAVED entry by requesting a model list from the configured endpoint using its saved credential and protocol — when the protocol has a model listing; a protocol without one is reported as \"not checked\", leaving the endpoint and the credential untested. This does not prove that a chosen model runs. A failed reload or saved-entry check after commit is \"saved but not working\" with the reason; never report it as working or unsaved. Pass expected_revision from list_providers (\"absent\" for a new entry); stale writes are refused. dry_run checks input shape only, without saving, recipient validation or network calls.",
     "scope": "core",
     "category": "providers",
     "source": "builtin"
   },
   {
+    "name": "connect_channel",
+    "description": "Connect a channel in one approved call: save its configuration, bind the instance's main agent in a workspace, enable it and live-test it. Supply id (the instance key: a bare type such as telegram for the default instance, or a namespaced key such as telegram.eu for an additional one), workspace_id, and agent_id for the main agent, who must be a member of that workspace — a valid token with a non-member target fails and nothing is saved. Credentials travel as stored references only, never plaintext: first request_secret for the instance's fields, wait for the person's card, then pass the returned references through the matching reference parameters; each must match that exact instance and field. WhatsApp needs no credentials here — an already-linked device is reported working with the pairing note 'the WhatsApp device was already linked; no QR code was needed'. A failed pairing start is saved but not working: report the cause and use Retry in this chat. An unlinked device reports 'pairing not finished: scan the WhatsApp QR code'; the connection works only after the QR scan. The QR code appears in this chat while pairing runs (and on Connectors \u003e WhatsApp), and Stop in this chat ends the pairing; a pairing timeout is reported as saved but not working. The result lists the facts proven by real platform calls and everything not tested; a channel that does not start is reported as saved but not working, with the reason — follow the result's cause and repair: some start failures identify a local session-store problem or an unreachable platform; the fallback groups rejected credentials with other start failures, and some status paths still combine credential rejection and reachability — and failed: nothing saved when validation stopped the save; never working. The shipped policy shows an approval card before it runs; Omnipus skips approvals in God Mode.",
+    "scope": "core",
+    "category": "channels",
+    "source": "builtin"
+  },
+  {
     "name": "create_agent",
-    "description": "Create a new agent with personality, model, tools, and configuration. Use agent_type to choose the runtime: 'Main' (default, native chat colleague), 'Subagent' (native delegation-only worker), or 'subagent_3p' (delegation-only worker on an external CLI — set cli and cli_path). name, description, soul, model, color (6-digit hex, e.g. #22C55E) and icon (a Phosphor icon name, e.g. 'robot') are all required — color/icon are rejected if missing or malformed. A new agent created inside a workspace's turn context joins that workspace's core_team and is immediately runnable there; created with no workspace context it is metadata-only (a member of no team) and cannot run in chat or be delegated to until an operator adds it to a workspace's Team tab — check the response's status field (joined_workspace vs metadata_only) to tell which happened.",
+    "description": "Create a new agent with personality, model, tools, and configuration. Use agent_type to choose the runtime: 'Main' (default, native chat colleague) and 'Subagent' (native delegation-only worker) require soul; 'subagent_3p' is a delegation-only worker on an external CLI — it takes no soul and requires cli; the program that runs that CLI is set by a person in Settings → Third-party agents, never by an agent, so there is no cli_path argument (an unusable or missing program still creates the agent, with runnable false and program_warning naming what a person must fix in Settings). An external worker may also take env_overrides (environment names and values for its runs; values are never echoed back) and cli_args (extra command-line flags as one string; the result lists them as argv and names any the safety filter drops at run time). name, description and model are required; soul is required for native agents ('Main'/'Subagent') and must be omitted for 'subagent_3p' (an external CLI worker has no soul; supplying one is refused). color is optional (a palette hex, e.g. #6E8BA8; default Pewter #8E9196) — a color outside the palette is rejected. A new agent created inside a workspace's turn context joins that workspace's core_team when membership succeeds; created with no workspace context it is metadata-only (a member of no team) and cannot run in chat or be delegated to until an operator adds it to a workspace's Team tab — the response's status field (joined_workspace vs metadata_only) reports membership, persistence_status reports durable-save completion (complete, partial, or none), and activation_status reports live publication (active, failed, or not_attempted); joined_workspace alone does not prove the agent is live or runnable — check persistence_status, activation_status and any publish_warning before reporting it ready.",
     "scope": "core",
     "category": "agents",
     "source": "builtin"
   },
   {
-    "name": "create_skill",
-    "description": "Author a NEW skill (procedural memory). Writes a SKILL.md to the user skills directory; prior versions are snapshotted for rollback. This call writes the file; it is not a confirmation step. Policy may still Ask at execution; that is not a substitute for the user's confirmation of the proposal, and you must not invent a second confirmation ritual. content must not exceed 262144 bytes. A name that already exists is refused — use edit_skill to modify it instead. Parameters: name (required, alphanumeric+hyphens), content (required, full SKILL.md including YAML frontmatter with name and description).",
-    "scope": "core",
-    "category": "skills",
-    "source": "builtin"
-  },
-  {
-    "name": "create_task_in_workspace",
-    "description": "Create a task on the workspace board. Call this when the user wants to create, add, or track a task or action item. If the user mentioned a workspace name, call list_workspaces first to get the workspace_id.\nParameters: name (required, the task title), description (optional), prompt (optional, agent instruction), workspace_id (required, from list_workspaces), agent_id (optional, agent to assign), status (optional: inbox=new/untriaged, next=ready, blocked, done, failed — defaults to inbox; in_progress is rejected — it is only ever reached through real dispatch via run_task, never persisted directly), due (optional, RFC 3339 due date/time), priority (optional, 1 highest to 5 lowest, default 3), plan_id (optional, ID of the Plan this task is a member of — must exist in the same workspace and must still be a draft plan; a plan's membership is frozen at approval), write_set (optional, array of concrete paths this plan member creates/edits; meaningful only alongside plan_id), stream (optional, the parallel-group id this plan member belongs to), is_join (optional, true marks this plan member as an authored join/assemble member), blocked_by (optional, array of task IDs this task is blocked by), criteria (REQUIRED when agent_id is set: at least one acceptance criterion), dod (REQUIRED when agent_id is set: at least one definition-of-done item, distinct from criteria — GOAL-FR-021/D-C). Before authoring acceptance criteria or dod, load the define-goal skill (via the Skill tool) and follow its quality bar. Assigning agent_id to an agent other than yourself is delegation and requires delegation trust to that agent within the workspace, or the call is refused. If every acceptance criterion is kind=check, the assignee must have bash policy allow — otherwise the criteria set could never be satisfied and the create is rejected. An unknown status value is rejected, not defaulted.",
-    "scope": "core",
-    "category": "tasks",
-    "source": "builtin"
-  },
-  {
     "name": "create_workspace",
-    "description": "Create a new workspace to group related tasks. Call this when the user mentions starting a new workspace, initiative, or area of work. Returns the created workspace's id — pass this id to create_task_in_workspace when creating tasks for the workspace. Members named in core_team also get the default delegation trust edges between them, so they can delegate to each other immediately. name is capped at 200 characters and description at 2000; exceeding either is rejected.\nParameters: name (required, workspace title), description (optional, free text), core_team (optional, list of agent IDs associated with this workspace).",
+    "description": "Create a new workspace to group related tasks. Call this when the user mentions starting a new workspace, initiative, or area of work. Returns the created workspace's id — pass this id as workspace_id to create_task when delivering tasks to the workspace. Members named in core_team also get the default delegation trust edges between them, so they can delegate to each other immediately. name is capped at 200 characters and description at 2000; exceeding either is rejected.\nParameters: name (required, workspace title), description (optional, free text), core_team (optional, list of agent IDs associated with this workspace).",
     "scope": "core",
     "category": "workspaces",
     "source": "builtin"
   },
   {
     "name": "delete_agent",
-    "description": "Delete an agent. IRREVERSIBLE. Removes the agent's entity record and applicable SOUL.md instructions. Preserves unrelated files in its home, including HEARTBEAT.md, local skills, and any vestigial MEMORY.md left by an older install. Also cascades: every chat session in the shared session store that belongs SOLELY to this agent is deleted, together with its uploaded files — a session another agent also participated in (e.g. via a mid-conversation agent switch) is left untouched to avoid destroying that agent's history, and is reported separately in the response. Every GTD task assigned to this agent is unassigned (not deleted — the task itself survives); tasks it merely created keep that historical attribution. This agent is also removed from every workspace's core_team, and every delegation-trust edge naming it (as either side) is dropped from each affected workspace's delegation graph. Seeded built-ins (Mia, Jim, Ava, Admin, Planner, Researcher, General Purpose, Judge, and Plan Supervisor), the currently configured default agent, and an agent that owns at least one active (running) Plan cannot be deleted — set another agent as default first (Agents screen ★), or stop/reassign the Plan(s), before retrying. A step that fails partway through is reported in the response rather than silently swallowed — check for a warning field before assuming the cascade fully completed.\nParameters: id (required), revision (required, from get_agent), confirm (bool, must be true).",
+    "description": "Delete an agent. IRREVERSIBLE. Removes the agent's entity record and applicable SOUL.md instructions. Preserves unrelated files in its home, including HEARTBEAT.md, local skills, and any vestigial MEMORY.md left by an older install. Also cascades: every chat session in the shared session store that belongs SOLELY to this agent is deleted, together with its uploaded files — a session another agent also participated in (e.g. via a mid-conversation agent switch) is left untouched to avoid destroying that agent's history, and is reported separately in the response. Every GTD task assigned to this agent is unassigned (not deleted — the task itself survives); tasks it merely created keep that historical attribution. This agent is also removed from every workspace's core_team, and every delegation-trust edge naming it (as either side) is dropped from each affected workspace's delegation graph. Seeded built-ins (Mia, Jim, Omnipus, Planner, Researcher, General Purpose, Judge, and Plan Supervisor) cannot be deleted. An agent that owns at least one active (running) Plan cannot be deleted — stop/reassign the Plan(s) before retrying. A step that fails partway through is reported in the response rather than silently swallowed — check for a warning field before assuming the cascade fully completed.\nParameters: id (required), revision (required, from get_agent), confirm (bool, must be true).",
     "scope": "core",
     "category": "agents",
-    "source": "builtin"
-  },
-  {
-    "name": "delete_task_in_workspace",
-    "description": "Permanently delete a to-do/task item from a workspace by id. Irreversible. You may only delete a task you own (creator or assignee) — deleting another agent's task requires delegation trust to that agent within the workspace, or the call is refused. Use list_tasks_in_workspace first to find the task id.\nParameters: id (required), confirm (bool, must be true). Deleting a task also removes it from every other task's blocked_by list, which can unblock dependents and make them runnable — the response lists any tasks unblocked this way in unblocked_tasks. If those edges cannot be fully cleaned up the deletion still stands and the response carries a cascade_warning.",
-    "scope": "core",
-    "category": "tasks",
     "source": "builtin"
   },
   {
@@ -71,35 +57,28 @@
   },
   {
     "name": "disable_channel",
-    "description": "Disable a channel connection. The channel will stop on the next config reload. A channel that has never been configured cannot be disabled — it is already inactive.\nParameters: id (required, the channel type e.g. 'telegram', 'discord').",
+    "description": "Disable a channel connection. Saving the change can interrupt an existing pairing immediately; other live connection changes take effect on the next config reload. The result states whether a pairing was interrupted. A channel that has never been configured cannot be disabled — it is already inactive. expected_revision is the channel's revision from list_channels; the write is refused if the channel changed since.\nParameters: id (required, the channel type e.g. 'telegram', 'discord'), expected_revision (required).",
     "scope": "core",
     "category": "channels",
     "source": "builtin"
   },
   {
     "name": "edit_skill",
-    "description": "Edit / refine an EXISTING skill (self-improvement). Snapshots the prior version for rollback, then writes the new SKILL.md. This call writes the file; it is not a confirmation step. Policy may still Ask at execution; that is not a substitute for the user's confirmation of the proposal, and you must not invent a second confirmation ritual. Editing a built-in creates a user override; the built-in is never mutated in place. content must not exceed 262144 bytes. Parameters: name, content (full new SKILL.md), and revision from the reviewed skill read are required. A conflict means the skill changed after review; stop, reread, and do not retry the stale write.",
+    "description": "Change a skill other than by writing a file: action=copy makes your own copy of a skill (built-ins included) under the name given in to; action=delete_file removes one file (path, never SKILL.md); action=delete deletes the skill (its history is kept, so it can be restored); action=restore brings back a version listed by get_skill (version). To create a skill, write its SKILL.md with write_file; to change a file, use write_file or edit_file. delete_file, delete and restoring an existing skill need a current read of the skill in this session (get_skill, Skill, read_file or list_directory). Built-in skills are read-only: copy them first. A new copy is granted to no agent.",
     "scope": "core",
     "category": "skills",
     "source": "builtin"
   },
   {
     "name": "enable_channel",
-    "description": "Enable a channel connection. The channel will start on the next config reload. Call list_channels for valid ids. Enabling a channel with no credentials configured is allowed but the channel will fail to connect — configure it with configure_channel first.\nParameters: id (required, the channel type e.g. 'telegram', 'discord').",
+    "description": "Enable a channel connection. The channel will start on the next config reload. Call list_channels for valid ids. Enabling a channel with no credentials configured is allowed but the channel will fail to connect — configure it with configure_channel first. expected_revision is the channel's revision from list_channels; the write is refused if the channel changed since.\nParameters: id (required, the channel type e.g. 'telegram', 'discord'), expected_revision (required).",
     "scope": "core",
     "category": "channels",
     "source": "builtin"
   },
   {
     "name": "get_agent",
-    "description": "Read one agent's sanitized configuration, instructions, editable fields, stored assignments, revision, and activation status. Use get_agent_tools for the full tool catalog.",
-    "scope": "core",
-    "category": "agents",
-    "source": "builtin"
-  },
-  {
-    "name": "get_agent_tools",
-    "description": "Read tool inventory and effective policies. Supply either id for an existing agent or new_agent_type (Main or Subagent) to preview native creation defaults before proposing a new agent. Preview is read-only, has no persisted id/revision, and includes no connector assignments. In preview, stored_tool_overrides contains creation defaults before proposed changes, not user-applied overrides. Main and Subagent share these defaults. Sparse creation patches modify only named policies; omitted policies retain their defaults. This does not grant or execute target tools.",
+    "description": "Read one agent: pass `fields` with the properties you need, or [\"all\"]. Select it by exact id or exact name; with neither you read yourself. Covers its model and effective model chain, instructions (soul, agent_md), skills (granted names; stale_skill_grants lists the granted names whose skill was replaced and must be re-granted), tool permissions (effective policy per tool, plus its stored overrides), connectors, external-worker executor (env values masked) and state. With new_agent_type (Main, Subagent, subagent_3p) it previews the tool_permissions and connectors a new agent of that type would get, without creating one.",
     "scope": "core",
     "category": "agents",
     "source": "builtin"
@@ -109,6 +88,13 @@
     "description": "Read a setting (port, timeout, host, feature flag, or similar) from config.json by dot-notation key, e.g. 'gateway.port', 'sandbox.mode'. Pair with set_config to change a value. Credential-shaped fields (API keys, secrets, tokens, passwords) and a handful of security-critical keys (gateway account/token data, the whole sandbox namespace's writable form, etc.) are refused or returned redacted — use list_providers to check configured providers without exposing keys.\nParameters: key (required, e.g. 'gateway.port').",
     "scope": "core",
     "category": "platform",
+    "source": "builtin"
+  },
+  {
+    "name": "get_skill",
+    "description": "Read one installed skill's details by id. fields is required: pass [\"all\"] or one or more of: state, name, description, shelf, folder, files, metadata, compatibility, allowed_tools, needs, last_change, has_local_changes, versions, instructions. versions lists retained versions newest first (versions_limit 1-100, default 50; pass next_before back as versions_before for older ones). A successful read lets this session change the skill afterwards. If versions make the result too large, lower versions_limit.",
+    "scope": "core",
+    "category": "skills",
     "source": "builtin"
   },
   {
@@ -155,44 +141,30 @@
   },
   {
     "name": "list_skills",
-    "description": "List installed skills. scope=usable (the default) lists only skills assigned for this agent to run. scope=management lists sanitized installed inventory for configuration review when the caller has management-read authority; name may inspect one skill's sanitized content in management scope. Use Skill to run an assigned skill and find_skills to search the marketplace.",
+    "description": "List installed skills. scope=usable (the default) lists only skills assigned for this agent to run. scope=management lists sanitized installed inventory for configuration review when the caller has management-read authority. Read one skill's details with get_skill. Use Skill to run an assigned skill and find_skills to search the marketplace.",
     "scope": "core",
     "category": "skills",
     "source": "builtin"
   },
   {
-    "name": "list_tasks_in_workspace",
-    "description": "List YOUR OWN tasks across workspaces: tasks assigned to you, plus tasks you created for other agents. It never returns another agent's or a human's tasks, so an empty result means you have no matching work — not that the workspace is empty. Bounded to the 100 most recently updated matches; `truncated` and `matched` say when there were more.\nParameters: workspace_id, agent_id, status (all optional, all narrow the result further).",
-    "scope": "core",
-    "category": "tasks",
-    "source": "builtin"
-  },
-  {
     "name": "list_workspaces",
-    "description": "List workspaces with their live task counts. Call this to find workspace ids for create_task_in_workspace, list_tasks_in_workspace, get_workspace, or update_workspace. Ordering is: the default workspace first, then pinned workspaces by pin_order, then the rest newest-first — so the first result is not necessarily the most recently created one. Returns id, name, description, status, pinned, pin_order, is_default, core_team and task_count. Any workspace file that cannot be read is skipped and counted in `skipped`.\nParameters: status (optional: active/archived/all, defaults to active).",
+    "description": "List workspaces with their live task counts. Call this to find workspace ids to use with create_task, list_tasks (their optional workspace_id), get_workspace, or update_workspace. Ordering is: the default workspace first, then pinned workspaces by pin_order, then the rest newest-first — so the first result is not necessarily the most recently created one. Returns id, name, description, status, pinned, pin_order, is_default, core_team and task_count. Any workspace file that cannot be read is skipped and counted in `skipped`.\nParameters: status (optional: active/archived/all, defaults to active).",
     "scope": "core",
     "category": "workspaces",
     "source": "builtin"
   },
   {
-    "name": "read_agent_metadata",
-    "description": "Read one of an agent's three metadata files: SOUL.md (personality, persona, system prompt and behavioural instructions), HEARTBEAT.md (proactive schedule), or AGENT.md (frontmatter config). Defaults to the calling agent's own files; pass agent_id to read another agent's. There is no per-target permission check — any agent granted this tool can read any agent's metadata. Use recall_memory to access memories.",
-    "scope": "core",
-    "category": "agents",
-    "source": "builtin"
-  },
-  {
     "name": "remove_mcp_server",
-    "description": "Remove an MCP server from the configuration (tools.mcp.servers) and persist the change.\nParameters: name (required), confirm (bool, must be true).",
+    "description": "Remove an MCP server from the configuration (tools.mcp.servers) and persist the change. expected_revision is the server's revision from list_mcp_servers; the removal is refused if the server changed since.\nParameters: name (required), confirm (bool, must be true), expected_revision (required).",
     "scope": "core",
     "category": "mcp",
     "source": "builtin"
   },
   {
-    "name": "remove_skill",
-    "description": "Remove an installed skill. IRREVERSIBLE — the skill's whole directory, including any version history it holds, is permanently deleted; there is no undo. This only reaches a skill in the operator's installed-skills directory (populated by installing from the marketplace) — it does NOT reach a skill authored with create_skill or a user override created with edit_skill, which live in a separate directory: naming one here returns NOT_FOUND even though list_skills reports it as available. If the removed skill was shadowing a lower-priority skill of the same id (an override or a built-in), that one becomes visible again. Parameters: name (required, the skill id as reported by list_skills — no path separators), revision (required from the reviewed skill read), confirm (bool, must be true). A conflict requires a fresh read; do not retry the stale deletion.",
+    "name": "remove_secret",
+    "description": "Remove one stored secret reference after the person has seen who depends on it. Supply the full reference name as list_secrets reports it, version suffix included. The consumers are listed on the approval card before anything is deleted. Removal of an in-use reference proceeds behind the approval; the result names every consumer, reports the stale live value truthfully, and the next boot starts with the affected integrations degraded. Removing an older version that a replacement superseded leaves the integration unaffected and working. The result reports three separate facts and they must stay separate: whether the value is durably deleted, what the live effect on running connections is, and whether the configuration still starts on the next boot. Never summarise them into a single ok. Values are never an input or an output. Only Omnipus holds this tool — an agent that wants a reference removed asks Omnipus. The shipped policy shows an approval card before it runs; Omnipus skips approvals in God Mode.",
     "scope": "core",
-    "category": "skills",
+    "category": "platform",
     "source": "builtin"
   },
   {
@@ -200,6 +172,27 @@
     "description": "Run a narrow set of security diagnostic checks (exec egress config, credentials.json/config.json file permissions, audit log directory presence) and return checks_failed_pct — the percentage of THESE FEW checks that failed — plus actionable recommendations. This is NOT a comprehensive security audit: it never looks at sandbox.mode, god-mode, dev_mode_bypass, or Landlock/seccomp availability, so an install with every real protection disabled can still score 0% (\"no risk\"). A low checks_failed_pct means only these specific checks passed, not that the install is secure. No parameters required.",
     "scope": "core",
     "category": "platform",
+    "source": "builtin"
+  },
+  {
+    "name": "select_secret_version",
+    "description": "Select a stored version of a secret reference as the version in use; the previously selected version becomes superseded, listed and removable. Call it when the person asks to roll an agent's private variable back to an earlier one — a private replacement is always selected on submit on the owner's card, so a private variable only ever moves backwards through this tool. Supply reference_name and version as list_secrets reports them; for a private variable also supply the target workspace and agent. A reference stored for a different recipient is refused with nothing selected — request a fresh card for the current recipient instead; the same applies to a private selection that does not match the owner pair. Values are never an input or an output: reference names and version numbers only. Only Omnipus holds this tool — an agent that wants its own variable rolled back asks Omnipus. The shipped policy shows an approval card before it runs; Omnipus skips approvals in God Mode.",
+    "scope": "core",
+    "category": "platform",
+    "source": "builtin"
+  },
+  {
+    "name": "set_agent_permissions",
+    "description": "Change an existing agent's per-agent tool policies and connector (MCP) assignments. This is the only agent-tool path for those changes — update_agent refuses both. The shipped policy asks the user for approval before it runs; Omnipus skips approvals in God Mode. Send id, revision (the opaque revision returned by get_agent), and at least one of tool_policy_changes or mcp_servers. A stale revision or any other input field is refused; re-read the agent before retrying a stale write. tool_policy_changes is a sparse patch: set maps tool names to allow|ask|deny, and remove lists per-agent override names to delete. Unknown tools and invalid policy values are rejected; per-agent policies cannot widen the global tool policy. mcp_servers replaces the full connector-assignment list; [] clears all bindings. Each entry is {id, tools?}: omitted tools grants all tools of that assigned server, an empty tools list grants none. Unknown servers or unknown/unavailable tool names are rejected. An agent cannot change its own permissions: an id equal to the calling agent is refused. External CLI workers reject these capability fields; Judge and Plan Supervisor keep fixed capabilities. Omnipus refuses any per-agent ask as a whole — use deny, or set ask on the global tool policy.",
+    "scope": "core",
+    "category": "agents",
+    "source": "builtin"
+  },
+  {
+    "name": "set_channel_outbound",
+    "description": "Change which people and groups an agent may start messages to on one chat connection, or switch the connection back to only answering. Supply id, policy (reply_only = Only answer; agent_may_start = Answer and also start messages) and the whole targets list (exact ids as the allowed-senders list writes them: a person's user id for a direct message, a group's chat id; no @names, no *; at most 20). expected_revision is optional: leave it out, the tool reads the current settings itself and shows the person the current and the new list on the approval card. Only Discord and Telegram can start messages; on Discord, a channel id must be a text channel, announcement channel or thread. Refused for a connection bound to you. It always shows an approval card, even in God Mode, and every approval applies to that one request only — it is never remembered.",
+    "scope": "core",
+    "category": "channels",
     "source": "builtin"
   },
   {
@@ -225,21 +218,14 @@
   },
   {
     "name": "update_agent",
-    "description": "Update an existing agent using the revision returned by get_agent. Only provided fields are changed; omitted fields are left as-is. Mia, Jim, Ava, Admin, Planner, Researcher, and General Purpose keep their built-in identity and instructions, while their tool policies, installed connector assignments, and skills are editable. Judge and Plan Supervisor allow instruction and supported tuning changes but keep fixed tool, connector, and skill capabilities. An empty provider clears its pin. Use fallback_models with model/provider objects; [] clears the fallback chain. The agent type and an external agent's cli/cli_path cannot change after creation; create a new agent for a different type.",
+    "description": "Update an existing agent using the revision returned by get_agent. Only provided fields are changed; omitted fields are left as-is. Mia, Jim, Omnipus, Planner, Researcher, and General Purpose keep their built-in identity and instructions, while their skills are editable. An existing agent's per-agent tool policies and connector (MCP) assignments are changed with set_agent_permissions, never update_agent. Judge and Plan Supervisor allow instruction and supported tuning changes but keep fixed tool, connector, and skill capabilities. An empty provider clears its pin. Use fallback_models with model/provider objects; [] clears the fallback chain. The agent type and an external agent's cli cannot change after creation; create a new agent for a different type or CLI. An external worker's program is set by a person in Settings → Third-party agents, never here. An external worker's env_overrides merge into its stored environment (env_overrides_remove removes names) and cli_args replaces its extra flags; the result lists environment names by outcome, never values.",
     "scope": "core",
     "category": "agents",
     "source": "builtin"
   },
   {
-    "name": "update_task_in_workspace",
-    "description": "Update an existing task. Call this to change status, reassign, rename, or link to a workspace. Use list_tasks_in_workspace first to find the task id.\nParameters: id (required, from list_tasks_in_workspace), name, description, prompt, workspace_id, agent_id, status (inbox/next/blocked/done/failed — in_progress is reached only through real dispatch via run_task, never written directly here), due (RFC 3339), priority (1 highest to 5 lowest), blocked_by (array of task IDs, replaces existing list), write_set (array of concrete paths this plan member creates/edits, replaces existing list; pass [] to clear), stream (new parallel-group id for this plan member; pass \"\" to clear), is_join (set/clear whether this plan member is an authored join/assemble member), result (completion summary; used as the judge's claim text — required in practice for a done claim on a task with acceptance criteria, since only the criteria's own assignee running that task can force one through). Only provided fields are updated. A status:\"done\" call on a task with acceptance criteria is NOT applied immediately — it is adjudicated by the judge during that task's own run. You may only update a task you own (assignee or creator); updating another agent's task requires delegation trust to that agent within the workspace, or the call is refused. Refuses with PRINCIPAL_REQUIRED if the calling agent cannot be resolved. A call that fails validation changes nothing — the whole update, including a workspace_id move, is all-or-nothing.",
-    "scope": "core",
-    "category": "tasks",
-    "source": "builtin"
-  },
-  {
     "name": "update_workspace",
-    "description": "Update an existing workspace using the revision returned by get_workspace. Call this to change its name, description, status, pin state, complete core team, or complete delegation graph. Omitted fields are preserved. core_team replaces the entire team. Omitted delegation preserves valid existing edges, removes edges for removed members, and may seed approved edges for newly added built-ins; an explicit delegation array replaces the entire graph, suppresses implicit seeding, and [] clears it. Read the workspace first, include all intended membership and graph effects in the proposal, then submit its id and revision.",
+    "description": "Update an existing workspace using the revision returned by get_workspace. Call this to change its name, description, status, pin state, complete core team, or complete delegation graph. Omitted fields are preserved. core_team replaces the entire team. Omitted delegation preserves valid existing edges, removes edges for removed members, and may seed approved edges for newly added built-ins; an explicit delegation array replaces the graph for continuing members, and [] clears their lines; each member newly added by the same update still receives its self-line unless the operator's seed defaults exclude it. Read the workspace first, include all intended membership and graph effects in the proposal, then submit its id and revision.",
     "scope": "core",
     "category": "workspaces",
     "source": "builtin"

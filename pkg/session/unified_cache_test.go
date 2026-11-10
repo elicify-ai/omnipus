@@ -23,7 +23,7 @@
 //	Scenario: RetentionSweep evicts a swept session from the cache (companion-fix regression)
 //	Scenario: GetOrCreateScheduledSession's second call serves from cache
 //	Scenario (concurrency, -race): list-while-writing, NewChannelSession-while-listing, delete-while-listing
-//	Scenario (concurrency, -race): SetMeta/SwitchAgent (RMW) interleaved with ListSessions/GetMeta
+//	Scenario (concurrency, -race): SetMeta (RMW) interleaved with ListSessions/GetMeta
 //	Scenario (MB-1 regression): a FAILED SetMeta must not corrupt the cache — GetMeta/ListSessions
 //	  keep returning the OLD (disk-matching) value, never the attempted-but-unpersisted one
 //	Scenario: loadMetaCacheLocked (boot-time cache seed) happy path — a fresh store over N
@@ -312,19 +312,19 @@ func TestConcurrentDeleteWhileListing(t *testing.T) {
 	assert.Empty(t, metas, "all sessions must be deleted by the end of the concurrent run")
 }
 
-// TestConcurrentSetMetaSwitchAgentWhileReading is the -race test-gap fix
+// TestConcurrentSetMetaWhileReading is the -race test-gap fix
 // (pr-test sev3): the existing concurrency trio above covers
 // NewSession/NewChannelSession/DeleteSession racing ListSessions, but none of
 // them exercise the specific read-modify-write pattern readMetaLocked's doc
-// comment calls out — SetMeta/SwitchAgent mutate the value readMetaLocked
-// returns and then call writeMetaLocked. This interleaves SetMeta and
-// SwitchAgent (both RMW callers) with ListSessions and GetMeta (both readers)
+// comment calls out — SetMeta mutates the value readMetaLocked
+// returns and then calls writeMetaLocked. This interleaves two SetMeta
+// writers (RMW callers) with ListSessions and GetMeta (both readers)
 // across many sessions; run with -race to catch any metaCache/cacheMu misuse
 // on this path specifically.
 //
-// Traces to: pkg/session/unified.go readMetaLocked, SetMeta, SwitchAgent,
+// Traces to: pkg/session/unified.go readMetaLocked, SetMeta,
 // ListSessions, GetMeta.
-func TestConcurrentSetMetaSwitchAgentWhileReading(t *testing.T) {
+func TestConcurrentSetMetaWhileReading(t *testing.T) {
 	store := newTestStore(t)
 	const n = 10
 	const iterations = 50
@@ -354,9 +354,9 @@ func TestConcurrentSetMetaSwitchAgentWhileReading(t *testing.T) {
 		agents := []string{"agent-1", "agent-2"}
 		for i := 0; i < iterations; i++ {
 			id := ids[i%n]
-			newAgent := agents[i%2]
-			if err := store.SwitchAgent(id, newAgent); err != nil && !errors.Is(err, ErrAlreadyActive) {
-				t.Errorf("SwitchAgent failed: %v", err)
+			newTitle := agents[i%2]
+			if err := store.SetMeta(id, MetaPatch{Title: &newTitle}); err != nil {
+				t.Errorf("SetMeta (second writer) failed: %v", err)
 			}
 		}
 	}()
@@ -373,7 +373,6 @@ func TestConcurrentSetMetaSwitchAgentWhileReading(t *testing.T) {
 			// concurrently mutating in place.
 			for _, m := range metas {
 				_ = m.Title
-				_ = m.ActiveAgentID
 				_ = len(m.AgentIDs)
 			}
 		}
@@ -388,7 +387,6 @@ func TestConcurrentSetMetaSwitchAgentWhileReading(t *testing.T) {
 				continue
 			}
 			_ = m.Title
-			_ = m.ActiveAgentID
 		}
 	}()
 
@@ -486,7 +484,7 @@ func TestNewUnifiedStore_LoadMetaCache_CorruptSessionExcludedAndCounted(t *testi
 
 // TestClone_GuardsEveryReferenceField is the MB-3 regression guard: Clone()
 // is a hand-maintained enumeration of UnifiedMeta's current reference fields
-// (Partitions, AgentIDs, CompactionSummaries, Stats.ByModel) with nothing
+// (Partitions, AgentIDs, CompactionSummaries, Stats.ByModel, Stats.ByProvider) with nothing
 // forcing a FUTURE slice/map/pointer field added to
 // UnifiedMeta/SessionMeta/SessionStats to also be cloned there — a silent
 // aliasing bug otherwise.
@@ -520,6 +518,9 @@ func TestClone_GuardsEveryReferenceField(t *testing.T) {
 			Stats: SessionStats{
 				ByModel: map[string]ModelTokens{
 					"model-a": {Total: 10},
+				},
+				ByProvider: map[string]ModelTokens{
+					"provider-a": {In: 2, Out: 3, CacheRead: 4, CacheWrite: 1, Total: 10},
 				},
 			},
 		},
@@ -566,6 +567,7 @@ func TestClone_GuardsEveryReferenceField(t *testing.T) {
 		"AgentIDs":            true,
 		"CompactionSummaries": true,
 		"Stats.ByModel":       true,
+		"Stats.ByProvider":    true,
 	}
 	for _, rf := range refFields {
 		if !known[rf.path] {
@@ -618,4 +620,15 @@ func TestClone_GuardsEveryReferenceField(t *testing.T) {
 	clone.Stats.ByModel["model-a"] = cloneEntry
 	assert.Equal(t, 10, original.Stats.ByModel["model-a"].Total,
 		"mutating clone.Stats.ByModel must not affect original.Stats.ByModel")
+
+	wantProvider := ModelTokens{In: 2, Out: 3, CacheRead: 4, CacheWrite: 1, Total: 10}
+	require.Equal(t, map[string]ModelTokens{"provider-a": wantProvider}, clone.Stats.ByProvider,
+		"Clone must preserve the complete per-provider breakdown before mutation")
+	clone.Stats.ByProvider["provider-a"] = ModelTokens{Total: 999}
+	clone.Stats.ByProvider["provider-new"] = ModelTokens{Total: 123}
+	assert.Equal(t, map[string]ModelTokens{"provider-a": wantProvider}, original.Stats.ByProvider,
+		"mutating or adding clone provider cells must not alias the original map")
+	delete(clone.Stats.ByProvider, "provider-a")
+	assert.Equal(t, map[string]ModelTokens{"provider-a": wantProvider}, original.Stats.ByProvider,
+		"deleting a cloned provider must not delete the original provider")
 }

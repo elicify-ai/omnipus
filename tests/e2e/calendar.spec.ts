@@ -117,6 +117,28 @@ async function navigateToCalendar(page: import('@playwright/test').Page): Promis
   await expect(fc).toBeVisible({ timeout: 30_000 });
 }
 
+/**
+ * Select Month through the real toolbar control. SP-39 (side-panel-shell-spec.md
+ * §10 Wave 3): the Calendar docks on WEEK by default, so every Month assertion
+ * must select Month first. Month renders the compact in-place grid
+ * (CalendarMonthGrid, `calendar-month-grid`); FullCalendar's own DOM stays
+ * mounted but hidden while Month is active, so Month assertions target the
+ * grid's test ids, never `.fc-*` selectors.
+ */
+async function selectMonthView(page: import('@playwright/test').Page): Promise<void> {
+  const monthBtn = page.getByTestId('calendar-view-dayGridMonth');
+  await expect(monthBtn).toBeVisible({ timeout: 10_000 });
+  await monthBtn.click();
+  await expect(page.getByTestId('calendar-month-grid')).toBeVisible({ timeout: 10_000 });
+}
+
+/** Local YYYY-MM-DD for the day `offset` days after this week's Monday (the grid is Monday-first, firstDay=1). */
+function dayOfCurrentWeek(offset: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7) + offset);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 test(
@@ -129,15 +151,18 @@ test(
 
     await navigateToCalendar(page);
 
-    // FullCalendar's daygrid renders a .fc-daygrid-body (or .fc-daygrid) element
-    // containing the day cells. Assert it exists (SC-001).
-    await expect(page.locator('.fc-daygrid')).toBeVisible({ timeout: 10_000 });
-
     // The toolbar we built (CalendarToolbar.tsx) should also be visible
     await expect(page.getByTestId('calendar-toolbar')).toBeVisible({ timeout: 10_000 });
 
-    // Month view is the default — .fc-dayGridMonth-view must be in the DOM
-    await expect(page.locator('.fc-dayGridMonth-view')).toBeVisible({ timeout: 10_000 });
+    // SP-39: Week is the DEFAULT view (the grid still renders with no events).
+    await expect(page.locator('.fc-timeGridWeek-view')).toBeVisible({ timeout: 10_000 });
+
+    // Selecting Month through the toolbar renders the month grid and its day
+    // cells with no tasks or milestones (SC-001) — always.
+    await selectMonthView(page);
+    await expect(
+      page.locator('[data-testid^="calendar-month-day-"]').first(),
+    ).toBeVisible({ timeout: 10_000 });
   },
 );
 
@@ -148,15 +173,21 @@ test(
     // BDD: The grid must have weekday headers + day cells (28–31 per SC-001).
 
     await navigateToCalendar(page);
+    await selectMonthView(page);
 
-    // Weekday header row (Mon, Tue, ... Sun) rendered by FullCalendar daygrid
-    const dayHeaders = page.locator('.fc-col-header-cell');
+    // Weekday header row (Mon, Tue, ... Sun): the first child of the month grid
+    // (CalendarMonthGrid's day-of-week row, one span per weekday).
+    const dayHeaders = page
+      .getByTestId('calendar-month-grid')
+      .locator(':scope > div')
+      .first()
+      .locator('span');
     await expect(dayHeaders.first()).toBeVisible({ timeout: 10_000 });
     // There must be exactly 7 column headers (one per weekday)
     await expect(dayHeaders).toHaveCount(7, { timeout: 10_000 });
 
-    // Day cells — the month grid renders between 28 and 42 .fc-daygrid-day cells
-    const dayCells = page.locator('.fc-daygrid-day');
+    // Day cells — the month grid renders between 28 and 42 day cells
+    const dayCells = page.locator('[data-testid^="calendar-month-day-"]');
     const cellCount = await dayCells.count();
     expect(cellCount).toBeGreaterThanOrEqual(28);
     expect(cellCount).toBeLessThanOrEqual(42);
@@ -202,20 +233,21 @@ test(
 );
 
 test(
-  '(e) switch to Agenda view renders the list (listWeek)',
+  '(e) Agenda view is not offered — the toolbar switches only Day/Week/Month (SP-39)',
   async ({ page }) => {
-    // Traces to: workspace-calendar-fullcalendar-spec.md §9 #22 / SC-003 / FR-006 / US-2/AS-3
-    // BDD: When I select Agenda via the toolbar, listWeek renders.
-    // With no events: a themed "No events" / "No scheduled items" message appears.
+    // Traces to: side-panel-shell-spec.md §10 Wave 3 Calendar row / SP-39
+    // ("Day/Week/Month all user-selectable"). The workspace-calendar spec's
+    // original four-view model (Agenda/listWeek) is superseded: SP-39 dropped
+    // Agenda (commit 7e8fce1b3 deleted listWeek outright).
+    // BDD: When I open the Calendar toolbar, Then Agenda is not offered and
+    // the view switcher holds exactly Month, Week and Day.
 
     await navigateToCalendar(page);
 
-    const agendaBtn = page.getByTestId('calendar-view-listWeek');
-    await expect(agendaBtn).toBeVisible({ timeout: 10_000 });
-    await agendaBtn.click();
-
-    // FullCalendar adds fc-listWeek-view to the view container
-    await expect(page.locator('.fc-listWeek-view')).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId('calendar-view-timeGridWeek')).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId('calendar-view-listWeek')).toHaveCount(0);
+    await expect(page.locator('[data-testid^="calendar-view-"]')).toHaveCount(3);
+    await expect(page.locator('.fc-listWeek-view')).toHaveCount(0);
   },
 );
 
@@ -231,9 +263,10 @@ test(
     await page.getByTestId('calendar-view-timeGridWeek').click();
     await expect(page.locator('.fc-timeGridWeek-view')).toBeVisible({ timeout: 10_000 });
 
-    // Return to Month
-    await page.getByTestId('calendar-view-dayGridMonth').click();
-    await expect(page.locator('.fc-dayGridMonth-view')).toBeVisible({ timeout: 10_000 });
+    // Return to Month through the toolbar: the month grid is back and the
+    // week time-grid is gone (SP-39).
+    await selectMonthView(page);
+    await expect(page.locator('.fc-timeGridWeek-view')).not.toBeVisible({ timeout: 5_000 });
   },
 );
 
@@ -297,17 +330,18 @@ test(
 );
 
 test(
-  '(i) all four view tabs are present in the toolbar',
+  '(i) all three view tabs (Month/Week/Day) are present in the toolbar',
   async ({ page }) => {
-    // Traces to: workspace-calendar-fullcalendar-spec.md §9 #22 / FR-006 / US-2/AS-1
-    // BDD: All four views (Month/Week/Day/Agenda) must be reachable via the toolbar.
+    // Traces to: side-panel-shell-spec.md SP-39 (Day/Week/Month user-selectable;
+    // Agenda dropped) / workspace-calendar-fullcalendar-spec.md FR-006 / US-2/AS-1
+    // BDD: Month, Week and Day are reachable via the toolbar; Agenda is not.
 
     await navigateToCalendar(page);
 
     await expect(page.getByTestId('calendar-view-dayGridMonth')).toBeVisible({ timeout: 10_000 });
     await expect(page.getByTestId('calendar-view-timeGridWeek')).toBeVisible({ timeout: 10_000 });
     await expect(page.getByTestId('calendar-view-timeGridDay')).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByTestId('calendar-view-listWeek')).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId('calendar-view-listWeek')).toHaveCount(0);
   },
 );
 
@@ -402,17 +436,23 @@ test(
   '(j) drag a task chip to another day and assert it persists after reload',
   async ({ page }) => {
     // Traces to: workspace-calendar-fullcalendar-spec.md §9 #22 / US-3/AS-1 / DS-2 row 1 / FR-008
-    // BDD: Given a task seeded via REST with due=2026-06-20,
-    // When its chip is dragged to another day in Month view,
+    // BDD: Given a task seeded via REST with a due date this week,
+    // When its chip is dragged to another day in Week view,
     // Then after reload the chip is on the new day (persisted).
+    //
+    // SP-39 (side-panel-shell-spec.md §10 Wave 3): Month is now the compact
+    // status-dot grid with no draggable chips, and Week is the default view, so
+    // drag-to-reschedule is exercised in WEEK view — the due chip sits in the
+    // all-day row and is dragged to another day's all-day cell. The persisted-
+    // date assertion is unchanged.
     //
     // LLM-independent: no agent turns.
 
     test.setTimeout(90_000);
 
-    // Seed a task with a fixed due date — use the current month so it's visible
-    const today = new Date();
-    const dueDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-10`;
+    // Seed a task due on Wednesday of the CURRENT week (Monday-first) so the
+    // chip is in the default Week view; the drag target is that Friday.
+    const dueDate = dayOfCurrentWeek(2);
     let taskId: string;
     try {
       const task = await createTaskWithDue(workspaceId, 'E2E drag reschedule', dueDate);
@@ -438,31 +478,28 @@ test(
       const chipLocator = page.locator('.fc-event', { hasText: 'E2E drag reschedule' });
       await expect(chipLocator).toBeVisible({ timeout: 15_000 });
 
-      // Find the day-10 cell and a day-13 cell in Month view to drag between.
-      // FullCalendar daygrid day cells carry a data-date attribute "YYYY-MM-DD".
-      const year = today.getFullYear();
-      const month = String(today.getMonth() + 1).padStart(2, '0');
-      const targetDate = `${year}-${month}-13`;
+      // Find the Friday all-day cell of this week in Week view to drag onto.
+      // FullCalendar all-day cells carry a data-date attribute "YYYY-MM-DD".
+      const targetDate = dayOfCurrentWeek(4);
       const targetCell = page.locator(`.fc-daygrid-day[data-date="${targetDate}"]`);
 
       // If the target cell is not in view, the grid precondition is unmet —
       // see the BLOCKED throw below for why that is a defect, not a skip.
       const cellVisible = await targetCell.isVisible({ timeout: 5_000 }).catch(() => false);
       if (!cellVisible) {
-        // The historical skip reason ("day-13 doesn't exist due to month
-        // length") is mathematically impossible — no month is shorter than 28
-        // days — so an absent cell means the grid rendered the wrong month or
-        // did not render at all. That is a defect: RED, not a skip. Converted
-        // 2026-09-16 from a raw test.skip() that bypassed the skip gate.
+        // Every day of the current week is rendered by the default Week view,
+        // so an absent cell means the grid rendered the wrong week or did not
+        // render at all. That is a defect: RED, not a skip. (Converted
+        // 2026-09-16 from a raw test.skip() that bypassed the skip gate.)
         throw new Error(
-          'BLOCKED: target day-13 cell not visible in the rendered Month grid — grid precondition unmet. ' +
-          'FullCalendar month view always renders days 1-28 of the current month, so an absent ' +
-          'cell means the calendar rendered the wrong month or the grid did not render — a ' +
+          `BLOCKED: target ${targetDate} all-day cell not visible in the rendered Week view — grid precondition unmet. ` +
+          'The default Week view always renders all seven days of the current week, so an absent ' +
+          'cell means the calendar rendered the wrong week or the grid did not render — a ' +
           'defect, not a skip condition.',
         );
       }
 
-      // Perform the drag — from chip bounding box centre to day-13 cell centre
+      // Perform the drag — from chip bounding box centre to the target day cell centre
       const chipBox = await chipLocator.first().boundingBox();
       const cellBox = await targetCell.boundingBox();
 
@@ -518,15 +555,16 @@ test(
   async ({ page }) => {
     // Traces to: workspace-calendar-fullcalendar-spec.md §9 #22 / US-3/AS-5 / DS-2 row 4 / FR-010
     // BDD: Given a gateway that returns 500 on PATCH tasks/{id},
-    // When I drag a due task chip to another day,
+    // When I drag a due task chip to another day (Week view — SP-39: Month has
+    // no draggable chips and Week is the default view),
     // Then the chip snaps back to its original day and an error toast appears.
     //
     // LLM-independent: no agent turns; route intercepted via Playwright's page.route.
 
     test.setTimeout(90_000);
 
-    const today = new Date();
-    const dueDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-15`;
+    // Due on Wednesday of the CURRENT week (Monday-first), dragged to Friday.
+    const dueDate = dayOfCurrentWeek(2);
     let taskId: string;
     try {
       const task = await createTaskWithDue(workspaceId, 'E2E revert test', dueDate);
@@ -551,20 +589,19 @@ test(
       const chipLocator = page.locator('.fc-event', { hasText: 'E2E revert test' });
       await expect(chipLocator).toBeVisible({ timeout: 15_000 });
 
-      const year = today.getFullYear();
-      const month = String(today.getMonth() + 1).padStart(2, '0');
-      const targetDate = `${year}-${month}-18`;
+      const targetDate = dayOfCurrentWeek(4);
       const targetCell = page.locator(`.fc-daygrid-day[data-date="${targetDate}"]`);
 
       const cellVisible = await targetCell.isVisible({ timeout: 5_000 }).catch(() => false);
       if (!cellVisible) {
-        // Same reasoning as test (j)'s day-13 guard: day 18 exists in every
-        // month, so an absent cell is a rendering defect. RED, not a skip.
-        // Converted 2026-09-16 from a raw test.skip() that bypassed the gate.
+        // Same reasoning as test (j)'s target-cell guard: every day of the
+        // current week is rendered, so an absent cell is a rendering defect.
+        // RED, not a skip. Converted 2026-09-16 from a raw test.skip() that
+        // bypassed the gate.
         throw new Error(
-          'BLOCKED: target day-18 cell not visible in the rendered Month grid — grid precondition unmet. ' +
-          'FullCalendar month view always renders days 1-28 of the current month, so an absent ' +
-          'cell means the calendar rendered the wrong month or the grid did not render — a ' +
+          `BLOCKED: target ${targetDate} all-day cell not visible in the rendered Week view — grid precondition unmet. ` +
+          'The default Week view always renders all seven days of the current week, so an absent ' +
+          'cell means the calendar rendered the wrong week or the grid did not render — a ' +
           'defect, not a skip condition.',
         );
       }
@@ -609,7 +646,7 @@ test(
       // Wait for the revert + error toast to appear
       await page.waitForTimeout(2000);
 
-      // The chip must have reverted to the original day (day-15)
+      // The chip must have reverted to the original day (Wednesday)
       const sourceCell = page.locator(`.fc-daygrid-day[data-date="${dueDate}"]`);
       await expect(sourceCell.locator('.fc-event', { hasText: 'E2E revert test' })).toBeVisible({
         timeout: 10_000,

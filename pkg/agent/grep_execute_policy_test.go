@@ -121,7 +121,7 @@ func TestGrepTool_ExecuteAndPolicy(t *testing.T) {
 		// (toolsRegistry.Register(tools.NewGrepTool(workspace, readRestrict)))
 		// runs unconditionally for every agent at construction time — this
 		// is not something this test wires up itself.
-		defaultAgent := al.GetRegistry().GetDefaultAgent()
+		defaultAgent := al.GetRegistry().primaryChatAgentForTest()
 		require.NotNil(t, defaultAgent, "default agent must exist after boot")
 		_, registered := defaultAgent.Tools.Get("grep")
 		require.True(t, registered, "grep must be registered on every agent by default (Constraint #6: registration, not permission)")
@@ -138,10 +138,10 @@ func TestGrepTool_ExecuteAndPolicy(t *testing.T) {
 		})
 
 		ctx := context.Background()
-		_, err := al.ProcessDirect(ctx, "please grep for needle", "test-session-grep-allow")
+		_, err := al.processDirectPrimaryForTest(ctx, "please grep for needle", "test-session-grep-allow")
 		require.NoError(t, err)
 
-		const resolvedSessionKey = "agent:mia:main"
+		resolvedSessionKey := directTurnHistoryKeyForTest("mia", "cli", "direct")
 		history := defaultAgent.Sessions.GetHistory(resolvedSessionKey)
 		require.NotEmpty(t, history, "session history must not be empty after a completed turn")
 
@@ -209,7 +209,7 @@ func TestGrepTool_ExecuteAndPolicy(t *testing.T) {
 		}
 
 		ctx := context.Background()
-		_, err := al.ProcessDirect(ctx, "please grep for needle", "test-session-grep-deny")
+		_, err := al.processDirectPrimaryForTest(ctx, "please grep for needle", "test-session-grep-deny")
 		require.NoError(t, err, "policy deny is a loop-level action, not an agent error")
 
 		auditPath := filepath.Join(tmpHome, "system", "audit.jsonl")
@@ -242,7 +242,7 @@ func TestGrepTool_ExecuteAndPolicy(t *testing.T) {
 		// result actually reached session history, not just an audit line.
 		defaultAgent, ok := al.GetRegistry().GetAgent("mia")
 		require.True(t, ok)
-		history := defaultAgent.Sessions.GetHistory("agent:mia:main")
+		history := defaultAgent.Sessions.GetHistory(directTurnHistoryKeyForTest("mia", "cli", "direct"))
 		require.NotEmpty(t, history)
 
 		var denyMsgFound bool

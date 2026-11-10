@@ -7,16 +7,31 @@ import {
   Clock,
   CloudSlash,
   PauseCircle,
+  Prohibit,
   WifiSlash,
 } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { useConnectionStore } from '@/store/connection'
 import { useChatStore } from '@/store/chat'
+import type { FirstSendStatus } from '@/store/chat/types'
 import { useSessionStore } from '@/store/session'
 import { cn } from '@/lib/utils'
+import type { UserDeliveryState } from '@/lib/userDeliveryState'
+import { dismissRestartNotice, useRestartInterrupted, useRestartNoticeDismissal } from './useRestartInterrupted'
 
-export type UserDeliveryState = 'queued' | 'received' | 'working' | 'failed'
+
+const FIRST_SEND_COPY: Record<FirstSendStatus, { label: string; action?: 'Retry' | 'Generate again' }> = {
+  sending: { label: 'Sending…' },
+  unconfirmed: { label: 'Delivery not confirmed', action: 'Retry' },
+  retrying: { label: 'Checking delivery…' },
+  checking_chat: { label: 'Checking chat…' },
+  check_failed: { label: 'Could not check this chat', action: 'Retry' },
+  not_saved: { label: 'Could not save message', action: 'Retry' },
+  saved: { label: 'Saved' },
+  answer_not_started: { label: 'Message saved, but no answer started', action: 'Generate again' },
+  unfinished: { label: "Couldn't finish", action: 'Generate again' },
+}
 export type AssistantConnectionState = 'paused' | 'unfinished'
 export type ChatConnectionState = 'offline' | 'unreachable' | 'back'
 
@@ -93,11 +108,13 @@ function StatusActionButton({
   tooltip,
   onClick,
   testId,
+  disabled,
   children,
 }: {
   label: string
   tooltip: string
   onClick?: () => void
+  disabled?: boolean
   /**
    * Optional stable hook for e2e specs. The failed-send retry keeps the
    * pre-#823 id `user-message-retry` so `tests/e2e/open-in-chat.spec.ts`'s
@@ -115,6 +132,7 @@ function StatusActionButton({
         variant="ghost"
         size="sm"
         onClick={onClick}
+        disabled={disabled}
         data-testid={testId}
         aria-label={label}
         aria-describedby={open ? tooltipId : undefined}
@@ -138,17 +156,119 @@ function StatusActionButton({
   )
 }
 
+/**
+ * The quiet icon-chip copy for every non-failed, non-first-send delivery
+ * state. Extracted so the /clear-specific variant (delta re-review C1)
+ * reads as a table instead of a ternary chain:
+ *   - 'discarded' for a /clear — "Not applied": the generic wording says the
+ *     text was never read, which is false for a held-then-discarded command.
+ * (Ruling S3-02 deleted the 'not-performed' and 'unconfirmed' variants: a
+ * refused /clear is the wire's message_status failed — the failed chip in
+ * UserMessageDeliveryStatus covers it — and a /clear the server holds
+ * (message_status held) shows the held copy, with no deadline.) Both are passive (no action button): the honest repair
+ * for a /clear is to send /clear again, which the tooltip says.
+ */
+function deliveryStateCopy(
+  state: UserDeliveryState,
+  agentName: string,
+  isClearCommand: boolean,
+): { label: string; tooltip: string; icon: React.ReactNode } {
+  if (state === 'queued') {
+    return {
+      label: 'Not sent yet, will be sent automatically',
+      tooltip: "Not sent yet — it will be sent automatically as soon as you're back online.",
+      icon: <Clock size={14} aria-hidden="true" />,
+    }
+  }
+  if (state === 'held' && isClearCommand) {
+    // The server holds this /clear while it stops the agent's running reply so
+    // the clear can apply (message_status held) - the only state in which a
+    // /clear shows a pending look at all.
+    return {
+      label: 'Not sent yet, will be sent automatically',
+      tooltip: `Stopping ${agentName}'s current reply first. Your /clear is applied as soon as it has stopped. Nothing has been cleared yet.`,
+      icon: <Clock size={14} aria-hidden="true" />,
+    }
+  }
+  if (state === 'held') {
+    return {
+      label: `Waiting \u2014 delivered when ${agentName} runs again`,
+      tooltip: `${agentName} is stopped. Your message is saved and will be delivered when ${agentName} runs again.`,
+      icon: <Clock size={14} aria-hidden="true" />,
+    }
+  }
+  if (state === 'received') {
+    return {
+      label: 'Received',
+      tooltip: `Received by Omnipus. ${agentName} will pick it up after finishing the current step.`,
+      icon: <Check size={14} aria-hidden="true" />,
+    }
+  }
+  if (state === 'discarded') {
+    return isClearCommand
+      ? {
+          label: 'Not applied',
+          tooltip: 'You stopped the turn, so this /clear was discarded — nothing was cleared. Send /clear again if you still want a fresh start.',
+          icon: <Prohibit size={14} aria-hidden="true" />,
+        }
+      : {
+          label: 'Not delivered',
+          tooltip: `Not delivered. You stopped ${agentName} before it read this message, so it was discarded.`,
+          icon: <Prohibit size={14} aria-hidden="true" />,
+        }
+  }
+  return {
+    label: `${agentName} is working on it`,
+    tooltip: `${agentName} is working on this.`,
+    icon: <Checks size={14} aria-hidden="true" />,
+  }
+}
+
 export function UserMessageDeliveryStatus({
   state,
   agentName,
   latest = false,
   onRetry,
+  firstSendStatus,
+  onGenerateAgain,
+  isClearCommand = false,
 }: {
   state: UserDeliveryState
   agentName: string
   latest?: boolean
   onRetry?: () => void
+  firstSendStatus?: FirstSendStatus
+  onGenerateAgain?: () => void
+  /** The message is a /clear command — only the 'discarded' copy changes for
+   * it (delta re-review C1): the generic "not delivered" wording says the
+   * text was never read, which is false for a held-then-discarded /clear. */
+  isClearCommand?: boolean
 }) {
+  const connected = useConnectionStore((s) => s.isConnected)
+  const busy = useChatStore((s) => s.isStreaming || s.isReplaying)
+  if (firstSendStatus && !(firstSendStatus === 'saved' && (state === 'working' || state === 'failed'))) {
+    const copy = FIRST_SEND_COPY[firstSendStatus]
+    return (
+      <div role="status" aria-live="polite" data-testid="user-message-delivery-status" className="flex min-h-8 items-center justify-end text-[length:var(--type-caption-size)] text-[var(--color-secondary)]">
+        {copy.action ? (
+          <StatusActionButton
+            label={copy.action}
+            tooltip={copy.action === 'Retry'
+              ? connected ? 'Retry the original message or check its saved chat. Recovery across a gateway restart can create a second chat.' : 'Reconnect before checking this message.'
+              : 'Start a new answer in this saved chat. This may repeat work or tool actions.'}
+            disabled={!connected || busy}
+            testId={copy.action === 'Retry' ? 'user-message-retry' : undefined}
+            onClick={copy.action === 'Retry' ? onRetry : onGenerateAgain}
+          >
+            <ArrowClockwise size={14} aria-hidden="true" />
+            <span>{copy.label}</span>
+            <span aria-hidden="true">{' · '}</span>
+            <span>{copy.action}</span>
+          </StatusActionButton>
+        ) : <span>{copy.label}</span>}
+      </div>
+    )
+  }
   if (state === 'failed') {
     return (
       // Review finding 15 (contrast): fading was designed for the passive
@@ -177,23 +297,11 @@ export function UserMessageDeliveryStatus({
     )
   }
 
-  const copy = state === 'queued'
-    ? {
-        label: 'Not sent yet, will be sent automatically',
-        tooltip: "Not sent yet — it will be sent automatically as soon as you're back online.",
-        icon: <Clock size={14} aria-hidden="true" />,
-      }
-    : state === 'received'
-      ? {
-          label: 'Received',
-          tooltip: `Received by Omnipus. ${agentName} will pick it up after finishing the current step.`,
-          icon: <Check size={14} aria-hidden="true" />,
-        }
-      : {
-          label: `${agentName} is working on it`,
-          tooltip: `${agentName} is working on this.`,
-          icon: <Checks size={14} aria-hidden="true" />,
-        }
+  // A /clear in flight on a connected chat (queued, not held) shows no chip:
+  // "not sent yet" would be false, and only a held /clear has anything to say.
+  if (state === 'queued' && isClearCommand && connected) return null
+
+  const copy = deliveryStateCopy(state, agentName, isClearCommand)
 
   return (
     <div role="status" aria-live="polite" data-testid="user-message-delivery-status" className="flex min-h-8 items-center justify-end">
@@ -368,6 +476,62 @@ export function ChatConnectionStatusLine({ state, onRetry }: { state: ChatConnec
   )
 }
 
+/**
+ * The user message that still has no answer and may be regenerated: the saved
+ * unanswered marker, while it is still the last message and nothing runs for the
+ * chat. Any new turn (Generate again, a sent message, a redirect) appends a
+ * message or starts streaming, so the marker stops qualifying on its own —
+ * no control is left clickable after the answer is Done.
+ */
+function useUnansweredQuestionId(): string | null {
+  const sessionId = useSessionStore((s) => s.activeSessionId)
+  return useChatStore((s) => {
+    const bucket = sessionId == null ? undefined : s.sessionsById[sessionId]
+    const id = bucket?.unansweredLastUserMessageId
+    if (!bucket || !id || bucket.isStreaming || bucket.activeTurnId != null) return null
+    return bucket.messageOrder[bucket.messageOrder.length - 1] === id ? id : null
+  })
+}
+
+/**
+ * I1: the chat-body twin of the sidebar's Interrupted label. A restart cut this
+ * chat's turn off; the partial text above stays, nothing resumes by itself, and
+ * the next message the user sends continues the same chat.
+ */
+export function RestartInterruptedNotice() {
+  useRestartNoticeDismissal()
+  const interrupted = useRestartInterrupted()
+  const sessionId = useSessionStore((s) => s.activeSessionId)
+  const unansweredId = useUnansweredQuestionId()
+  if (!interrupted) return null
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      data-testid="restart-interrupted-notice"
+      className="flex min-h-8 items-center justify-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-secondary)]"
+    >
+      <PauseCircle size={15} aria-hidden="true" />
+      <span>Interrupted</span>
+      <span aria-hidden="true">{' · '}</span>
+      <span>The restart cut this answer off. Send a message to continue.</span>
+      {unansweredId && (
+        <StatusActionButton
+          onClick={() => {
+            if (sessionId) dismissRestartNotice(sessionId)
+            useChatStore.getState().resendMessage(unansweredId)
+          }}
+          label="Generate again"
+          tooltip="Start a new answer to your last question in this saved chat. This may repeat work or tool actions."
+        >
+          <ArrowClockwise size={14} aria-hidden="true" />
+          <span>Generate again</span>
+        </StatusActionButton>
+      )}
+    </div>
+  )
+}
+
 export function ChatConnectionNotice() {
   const connection = useConnectionStore((state) => state)
   const active = !connection.isConnected || connection.reconnectedAt !== null
@@ -467,7 +631,9 @@ export function AssistantMessageConnectionStatus({ messageId, agentName }: { mes
   const awaitingCatchUp = useChatStore((state) =>
     activeSessionId != null && !!state.sessionsById[activeSessionId]?.awaitingCatchUp,
   )
-  if (!disconnectedHere && !unfinishedHere) return null
+  const restartInterrupted = useRestartInterrupted()
+  // A restart-cut chat is announced once, as Interrupted (RestartInterruptedNotice).
+  if ((!disconnectedHere && !unfinishedHere) || restartInterrupted) return null
   const display = deriveConnectionDisplay({
     isConnected,
     reconnectPhase,
@@ -504,13 +670,14 @@ export function AssistantMessageConnectionStatus({ messageId, agentName }: { mes
 // comment covers the exact scope (boot_mismatch specifically, not
 // retention_exceeded, and only when the exchange truly has no reply and no
 // turn is running).
+// Founder decision Q1 = A (2026-10-07): for a restart-cut question that never got
+// an answer, "Generate again" stays as a manual button next to the Interrupted
+// notice. It only resends when the user clicks it; nothing resumes on its own.
 export function UnansweredUserMessageStatus({ messageId, agentName }: { messageId: string; agentName: string }) {
-  const activeSessionId = useSessionStore((state) => state.activeSessionId)
-  const unanswered = useChatStore((state) => {
-    if (activeSessionId == null) return false
-    return state.sessionsById[activeSessionId]?.unansweredLastUserMessageId === messageId
-  })
-  if (!unanswered) return null
+  const unansweredId = useUnansweredQuestionId()
+  // A restart-cut chat is announced once, as Interrupted; the notice carries Generate again.
+  const restartInterrupted = useRestartInterrupted()
+  if (unansweredId !== messageId || restartInterrupted) return null
   const generateAgain = () => {
     useChatStore.getState().resendMessage(messageId)
   }

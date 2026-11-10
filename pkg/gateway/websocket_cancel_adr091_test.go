@@ -6,15 +6,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
 func TestCascade_PartialReported_FrameAndChannel(t *testing.T) {
-	// #823 merge: both frames are published through the session hub (every
-	// bound tab sees them, numbered); the requester here is NOT bound to
-	// "root", so it gets the unsequenced §1.4 copy — the same bytes minus seq.
-	h := makeMinimalHandler()
-	wc, _ := makeForwarderTestConn(4)
+	// The cancel-stage facts stay on the session hub. Operational text goes
+	// to the requesting user's notification center, not a terminal chat error.
+	f := newStopHelperApprovalFixture(t)
+	h, wc := f.h, f.wc
 	report := steer.CancelReport{
 		Reached:                []string{"root", "a", "c"},
 		Unreachable:            []steer.UnreachableSession{{ID: "b", Reason: "unreadable"}, {ID: "d", Reason: "missing edge"}},
@@ -25,8 +25,8 @@ func TestCascade_PartialReported_FrameAndChannel(t *testing.T) {
 	h.sendCancelReportFrame(wc, "root", "detached", report)
 	h.sendCancelPartialNotice(wc, "root", report)
 
-	// #823: numbered once in the session's journal, whether or not a tab is
-	// bound — a tab attaching later catches both up.
+	// Stage facts are numbered once in the session journal. The notice must
+	// never replay as a terminal error against a later chat turn.
 	hub := h.hubs.lookup("root")
 	if hub == nil {
 		t.Fatal("the Stop report must be published through the session hub")
@@ -34,8 +34,12 @@ func TestCascade_PartialReported_FrameAndChannel(t *testing.T) {
 	if got := len(journalFramesOfType(t, hub, "cancel_stage")); got != 1 {
 		t.Fatalf("journaled cancel_stage frames = %d, want 1", got)
 	}
-	if got := len(journalFramesOfType(t, hub, "error")); got != 1 {
-		t.Fatalf("journaled partial notices = %d, want 1", got)
+	if got := len(journalFramesOfType(t, hub, "error")); got != 0 {
+		t.Fatalf("terminal chat errors for an operational notice = %d, want 0", got)
+	}
+	stored, err := h.notifStore.ListForUser(wc.userID)
+	if err != nil || len(stored) != 1 || stored[0].Body != "stopped 3 of 5; 2 unreachable" {
+		t.Fatalf("persisted partial notice = %+v, error = %v", stored, err)
 	}
 
 	if len(wc.sendCh) != 2 {
@@ -74,15 +78,11 @@ func TestCascade_PartialReported_FrameAndChannel(t *testing.T) {
 		t.Fatalf("unreachable = %+v", frame.Unreachable)
 	}
 
-	var notice struct {
-		Type      string  `json:"type"`
-		SessionID *string `json:"session_id"`
-		Message   string  `json:"message"`
-	}
+	var notice generated.NotificationFrame
 	if err := json.Unmarshal(<-wc.sendCh, &notice); err != nil {
 		t.Fatalf("decode partial notice: %v", err)
 	}
-	if notice.Type != "error" || notice.SessionID == nil || *notice.SessionID != "root" {
+	if notice.Type != "notification" || notice.NotificationType != "stop_notice" || notice.SessionId == nil || *notice.SessionId != "root" || notice.Body == nil {
 		t.Fatalf("partial notice envelope = %+v", notice)
 	}
 	// The exact wording is fixed by the spec, not read off the producer:
@@ -94,8 +94,8 @@ func TestCascade_PartialReported_FrameAndChannel(t *testing.T) {
 	// deliberately absent from this line, because a revival that landed
 	// after the Stop is a correct outcome, not something the cascade failed
 	// to do (ADR-091 D8, "the later instruction wins").
-	if strings.TrimSpace(notice.Message) != "stopped 3 of 5; 2 unreachable" {
-		t.Fatalf("partial notice = %q", notice.Message)
+	if *notice.Body != "stopped 3 of 5; 2 unreachable" {
+		t.Fatalf("partial notice = %q", *notice.Body)
 	}
 }
 

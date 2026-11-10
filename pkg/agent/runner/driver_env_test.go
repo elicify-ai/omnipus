@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
@@ -104,7 +105,7 @@ func TestExternalCLIChild_DoesNotInheritMasterKey(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	ch, err := d.Run(ctx, RunOptions{Input: "task", Env: scrubbed})
+	ch, err := d.Run(ctx, RunOptions{Input: "task", Env: scrubbed, MaxTurns: config.DefaultMaxToolIterations})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -400,7 +401,7 @@ func TestCodexDriver_TurnCompletedDoesNotEmitEnd(t *testing.T) {
 	turnCount := 0
 	line := []byte(`{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":5}}`)
 
-	ev, ok := d.parseLine(line, "run-x", &turnCount, defaultMaxTurns)
+	ev, ok := d.parseLine(line, "run-x", &turnCount, config.DefaultMaxToolIterations)
 	if ok {
 		t.Fatalf("turn.completed must be consumed (ok=false); got ok=true, ev=%+v", ev)
 	}
@@ -422,7 +423,7 @@ func TestCodexDriver_MultiTurnYieldsSingleEnd(t *testing.T) {
 		`{"type":"item.completed","item":{"id":"i2","type":"agent_message","text":"second"}}` + "\n" +
 		`{"type":"turn.completed","usage":{"input_tokens":12,"output_tokens":6}}` + "\n"
 
-	events := ParseCodexStreamJSON([]byte(stream), "run-multi")
+	events := ParseCodexStreamJSON([]byte(stream), "run-multi", config.DefaultMaxToolIterations)
 
 	endCount := 0
 	for _, ev := range events {

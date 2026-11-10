@@ -6,14 +6,16 @@
 // wake, follow-up) rebuilds a steered session's turn from its lifecycle
 // record through this ONE function, never by hand.
 //
-// reconstructSteeredTurn is called from two entry points:
-// SessionLauncher.Dispatch (first run and revival, steer_launcher.go) and
-// loop_inbound.go::processSteeredSystemWake (the wake path). The latter also
-// appends I-3's consumption marker (step 3: "before executing, the turn
-// appends a `consumed <MessageID>` marker") once the woken turn is certain
-// to run. Boot recovery (boot_sweep.go::SteerBootRecovery) does not call
-// this function — a steered session still mid-flight at boot is marked
-// OutcomeInterrupted and delivered to its parent rather than resumed.
+// reconstructSteeredTurn is called from three entry paths:
+// SessionLauncher.Dispatch (first run and revival, steer_launcher.go),
+// loop_inbound.go::processSteeredSystemWake (the wake path), and the bounded
+// post-turn steering drain (steer_turn_drain.go). The wake path also appends
+// I-3's consumption marker (step 3: "before executing, the turn appends a
+// `consumed <MessageID>` marker") once the woken turn is certain to run; the
+// drain writes the equivalent marker through Continue's shared dequeue path.
+// Boot recovery resumes native restart-stopped helpers through the normal
+// launcher/Dispatch path. That entry reconstructs from saved model history,
+// rather than replaying a historical tool invocation or launch instruction.
 package agent
 
 import (
@@ -65,6 +67,10 @@ func (al *AgentLoop) reconstructSteeredTurn(rec *session.LifecycleRecord, wake *
 		return nil, fmt.Errorf("steer: reconstruct %q: load child address: %w", rec.SessionID, err)
 	}
 
+	if rec.WorkspaceID != meta.WorkspaceID {
+		return nil, fmt.Errorf("%w: %w", session.ErrWorkspaceImmutable, &curatedTurnError{text: session.ErrWorkspaceImmutable.Error()})
+	}
+
 	// FIX (live-view gap, 2026-09-27): a steered child's own UnifiedMeta is
 	// minted with an empty Channel by design (steer_launcher.go's
 	// reportingTargetFor doc comment: "a steered session's OWN UnifiedMeta
@@ -87,19 +93,19 @@ func (al *AgentLoop) reconstructSteeredTurn(rec *session.LifecycleRecord, wake *
 	// live view is a real webchat surface (ADR-091 D1: each child owns its
 	// own store-backed session, rendered through the identical ChatScreen/
 	// WS path a root session uses) — stamp it explicitly rather than
-	// inheriting the reporting-target's empty placeholder. An
-	// ordinary_root revival (rec.SteeredBy == nil) keeps meta.Channel
-	// untouched: that session's channel is real (webchat, whatsapp, ...)
-	// and must never be overwritten.
-	channel := meta.Channel
+	// inheriting the reporting-target's empty placeholder.
+	// Ordinary roots resolve their stream address without rewriting metadata.
+	// A main/empty address is the session's web chat (PW-D1).
+	channel, chatID := wakeStreamAddress(meta)
 	if rec.SteeredBy != nil {
 		channel = "webchat"
+		chatID = meta.PeerID
 	}
 
 	opts := processOptions{
 		SessionKey:          rec.SessionID,
 		Channel:             channel,
-		ChatID:              meta.PeerID,
+		ChatID:              chatID,
 		TranscriptSessionID: rec.SessionID,
 		TranscriptStore:     store,
 		// I-5: a steered session has no user audience — reconstruction
@@ -114,26 +120,67 @@ func (al *AgentLoop) reconstructSteeredTurn(rec *session.LifecycleRecord, wake *
 		// session. Mark it as user-originated for the session-owned goal loop;
 		// wakes/re-entries carry their own origin and are not initial claims.
 		UserInitiated: wake == nil,
+		// Issue #891: a child of an unattended parent inherits AutoDenyAsk —
+		// the posture persisted on its record at launch (durable across a
+		// restart or an idle close, unlike any in-memory per-session store).
+		AutoDenyAsk: rec.Unattended,
 	}
 	if wake == nil {
-		entries, readErr := store.ReadTranscript(rec.SessionID)
-		if readErr != nil {
-			return nil, fmt.Errorf("steer: reconstruct %q: read launch instruction: %w", rec.SessionID, readErr)
-		}
-		for i := len(entries) - 1; i >= 0; i-- {
-			if entries[i].Role == "user" && strings.TrimSpace(entries[i].Content) != "" {
-				opts.UserMessage = entries[i].Content
-				break
+		// A queued promotion consumes ALL wake content in arrival order. Take
+		// the current list (not the earlier Load snapshot) and clear it in a
+		// single durable mutation BEFORE the turn can start. If that write
+		// fails, return an error: running while the prompts remain persisted
+		// would replay the same content on a later promotion.
+		if len(rec.PendingUserMessages) > 0 || len(rec.PendingSavedInputs) > 0 {
+			var pending []string
+			if persistErr := al.GetSessionLifecycleStore().Mutate(rec.SessionID, func(r *session.LifecycleRecord) error {
+				if r == nil {
+					return session.ErrLifecycleNotFound
+				}
+				if len(r.PendingUserMessages) == 0 && len(r.PendingSavedInputs) == 0 {
+					return fmt.Errorf("steer: reconstruct %q: queued wakes disappeared before promotion", rec.SessionID)
+				}
+				pending = append([]string(nil), r.PendingUserMessages...)
+				r.PendingUserMessages = nil
+				r.PendingSavedInputs = nil
+				return nil
+			}); persistErr != nil {
+				return nil, fmt.Errorf("steer: reconstruct %q: consume queued wakes: %w", rec.SessionID, persistErr)
+			}
+			opts.UserMessage = strings.Join(pending, "\n\n")
+			if len(pending) == 0 {
+				// Only saved wakes were queued: each is placed once from its
+				// saved record at the consumption fence (PW-D16). No fresh user
+				// message, and not a person's instruction.
+				opts.InputAlreadyArchived = true
+				opts.UserInitiated = false
+			}
+		} else {
+			resumeHistory, historyErr := al.restartHistoryResume(rec)
+			if historyErr != nil {
+				return nil, historyErr
+			}
+			if resumeHistory {
+				// The next model decision reads saved calls/results. Do not turn
+				// the old launch instruction into a new user message at boot.
+				opts.InputAlreadyArchived = true
+			} else {
+				entries, readErr := store.ReadTranscript(rec.SessionID)
+				if readErr != nil {
+					return nil, fmt.Errorf("steer: reconstruct %q: read launch instruction: %w", rec.SessionID, readErr)
+				}
+				for i := len(entries) - 1; i >= 0; i-- {
+					if entries[i].Role == "user" && strings.TrimSpace(entries[i].Content) != "" {
+						opts.UserMessage = entries[i].Content
+						opts.InputAlreadyArchived = true
+						break
+					}
+				}
 			}
 		}
 	}
-	// Finding 2 fix (ADR-091 seven-reviewer gate, 2026-09): rec.SteeredBy.
-	// ToolExclusions is set by the delegate tool, persisted, exposed on the
-	// wire, and asserted by a serialisation test — but was never actually
-	// READ here. pkg/tools/registry.go's own CloneExcept doc comment
-	// claimed it was "applied from the record at reconstruction"; this file
-	// contained no such code, so a delegated child could call switch_agent,
-	// which D2 and the long-standing identity rule forbid. turnAgent is
+	// rec.SteeredBy.ToolExclusions is persisted, exposed on the wire, and
+	// applied here at reconstruction. turnAgent is
 	// agentInst unchanged when there is nothing to exclude (the overwhelming
 	// common case), so every existing non-excluding path is byte-identical
 	// to before.
@@ -141,6 +188,9 @@ func (al *AgentLoop) reconstructSteeredTurn(rec *session.LifecycleRecord, wake *
 	if rec.SteeredBy != nil && len(rec.SteeredBy.ToolExclusions) > 0 {
 		turnAgent = agentInstanceWithToolExclusions(agentInst, rec.SteeredBy.ToolExclusions)
 	}
+	// #1263 R1/R5: a re-entered or revived session keeps its chain's
+	// attendance — rec.Unattended above, tightened by the root origin.
+	al.applyTurnAttendance(&opts)
 	ts := newTurnState(turnAgent, opts, al.newTurnEventScope(agentInst.ID, opts.SessionKey))
 	ts.generation = rec.Generation
 	if rec.SteeredBy != nil {
@@ -166,7 +216,7 @@ func (al *AgentLoop) reconstructSteeredTurn(rec *session.LifecycleRecord, wake *
 
 // agentInstanceWithToolExclusions returns an independent *AgentInstance
 // whose Tools registry has excluded names removed (pkg/tools/registry.go's
-// ToolRegistry.CloneExcept — switch_agent today, FR-H-006), leaving base
+// ToolRegistry.CloneExcept), leaving base
 // itself, and every OTHER session currently running that same shared agent,
 // untouched. base.Tools is a pointer SHARED by every session that runs this
 // agent (AgentRegistry.GetAgent returns the same *AgentInstance to every

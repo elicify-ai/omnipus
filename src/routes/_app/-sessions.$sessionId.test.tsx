@@ -102,12 +102,13 @@ import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { fetchSessionDetail, ApiError } from '@/lib/api'
 import type { SessionDetail } from '@/lib/api'
+import { availableHistoryDetail } from '../../../tests/chat-history-paging/legacy-fixtures'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function makeTaskSession(overrides?: Partial<SessionDetail['session']>): SessionDetail {
   return {
-    session: {
+    ...availableHistoryDetail({
       id: mockSessionId,
       agent_id: 'jim',
       title: 'Fix bug #42',
@@ -116,15 +117,14 @@ function makeTaskSession(overrides?: Partial<SessionDetail['session']>): Session
       updated_at: '2026-01-01T00:00:00Z',
       message_count: 2,
       ...overrides,
-    },
-    messages: [],
+    }),
     agent_removed: false,
   }
 }
 
 function makeChatSession(overrides?: Partial<SessionDetail['session']>): SessionDetail {
   return {
-    session: {
+    ...availableHistoryDetail({
       id: mockSessionId,
       agent_id: 'jim',
       title: 'General chat',
@@ -133,8 +133,7 @@ function makeChatSession(overrides?: Partial<SessionDetail['session']>): Session
       updated_at: '2026-01-01T00:00:00Z',
       message_count: 0,
       ...overrides,
-    },
-    messages: [],
+    }),
     agent_removed: false,
   }
 }
@@ -406,11 +405,11 @@ describe('SessionRoute loader — deep-link WS-replay regression guard', () => {
       const mod = await import('./sessions.$sessionId')
       const loader = (
         mod.Route as unknown as {
-          loader: (opts: { params: { sessionId: string } }) => Promise<SessionDetail | null>
+          loader: (opts: { params: { sessionId: string }; abortController: AbortController }) => Promise<SessionDetail | null>
         }
       ).loader
 
-      const result = await loader({ params: { sessionId: mockSessionId } })
+      const result = await loader({ abortController: new AbortController(), params: { sessionId: mockSessionId } })
 
       expect(result).toEqual(detail)
       expect(setActiveSession).not.toHaveBeenCalled()
@@ -432,11 +431,11 @@ describe('SessionRoute loader — deep-link WS-replay regression guard', () => {
       const mod = await import('./sessions.$sessionId')
       const loader = (
         mod.Route as unknown as {
-          loader: (opts: { params: { sessionId: string } }) => Promise<SessionDetail | null>
+          loader: (opts: { params: { sessionId: string }; abortController: AbortController }) => Promise<SessionDetail | null>
         }
       ).loader
 
-      const result = await loader({ params: { sessionId: mockSessionId } })
+      const result = await loader({ abortController: new AbortController(), params: { sessionId: mockSessionId } })
 
       expect(result).toBeNull()
       expect(setActiveSession).not.toHaveBeenCalled()
@@ -465,10 +464,10 @@ describe('SessionRoute loader — deep-link WS-replay regression guard', () => {
       const mod = await import('./sessions.$sessionId')
       const loader = (
         mod.Route as unknown as {
-          loader: (opts: { params: { sessionId: string } }) => Promise<SessionDetail | null>
+          loader: (opts: { params: { sessionId: string }; abortController: AbortController }) => Promise<SessionDetail | null>
         }
       ).loader
-      await loader({ params: { sessionId: mockSessionId } })
+      await loader({ abortController: new AbortController(), params: { sessionId: mockSessionId } })
 
       // Confirm the loader did not poison activeSessionId before mount.
       expect(useSessionStore.getState().activeSessionId).toBeNull()

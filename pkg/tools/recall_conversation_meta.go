@@ -36,7 +36,12 @@ func (recallConversationMeta) Description() string {
 		"The matching earlier exchanges are brought back so you can read and reference them. " +
 		"To retrieve one capped or emptied TOOL RESULT verbatim, pass the tool_call_id a " +
 		"[capped]/[emptied] mark cites; large results come back one page at a time (offset/length). " +
-		"Provide exactly one of query, turn_range, time, or tool_call_id. " +
+		"To pull back the archive's own raw line range directly instead of turn numbers, pass " +
+		"archive_range ({\"from\": N, \"to\": M}, zero-based archive line numbers, inclusive); " +
+		"this returns the literal underlying log text for those lines verbatim, paged the same way " +
+		"(offset/length) as tool_call_id. Use turn_range for ordinary numbered turns; reach for " +
+		"archive_range only when you already have specific archive line numbers to address directly. " +
+		"Provide exactly one of query, turn_range, time, tool_call_id, or archive_range. " +
 		"Note: to find facts saved across DIFFERENT conversations, use recall_memory instead."
 }
 
@@ -72,6 +77,25 @@ func (recallConversationMeta) Parameters() map[string]any {
 					"[capped]/[emptied] mark cites. Returns one page of the result; the page " +
 					"framing states the total size and the next offset when more remains.",
 			},
+			"archive_range": map[string]any{
+				"type": "object",
+				"description": "A zero-based, inclusive range of ARCHIVE LINE numbers (not turn numbers) to " +
+					"bring back verbatim, e.g. {\"from\": 10, \"to\": 12}. Returns the literal underlying log " +
+					"text for those lines, paged like tool_call_id (offset/length).",
+				"properties": map[string]any{
+					"from": map[string]any{
+						"type":        "integer",
+						"minimum":     0,
+						"description": "Start archive line (zero-based, inclusive).",
+					},
+					"to": map[string]any{
+						"type":        "integer",
+						"minimum":     0,
+						"description": "End archive line (zero-based, inclusive); must be >= from.",
+					},
+				},
+				"required": []string{"from", "to"},
+			},
 			"max_results": map[string]any{
 				"type": "integer",
 				"description": "Only with query, turn_range or time: the maximum number of turns to " +
@@ -83,13 +107,15 @@ func (recallConversationMeta) Parameters() map[string]any {
 					"to disambiguate duplicate ids. When omitted, the most recent line wins.",
 			},
 			"offset": map[string]any{
-				"type": "integer",
-				"description": "Only with tool_call_id: page start in characters into the full " +
+				"type":    "integer",
+				"minimum": 0,
+				"description": "Only with tool_call_id or archive_range: page start in characters into the full " +
 					"result (default 0). Use the next offset the previous page's framing stated.",
 			},
 			"length": map[string]any{
-				"type": "integer",
-				"description": "Only with tool_call_id: page size in characters (min 1); values " +
+				"type":    "integer",
+				"minimum": 1,
+				"description": "Only with tool_call_id or archive_range: page size in characters (min 1); values " +
 					"above the page maximum are clamped to it.",
 			},
 		},

@@ -1,0 +1,34 @@
+title: MailHtmlPreviewTokenResponse
+description: >
+  Minted preview token for one message's HTML body (D13/D17). Mirrors the
+  Library token hygiene (MC-43): 256-bit crypto/rand token, fail-closed on
+  entropy failure, named TTL, per-session live-token cap that refuses never
+  evicts, indistinguishable 404s on the serve routes, logout revocation,
+  bound to (pair, folder, ref, load_remote). The SPA constructs the
+  /mail-preview/html/{token} and /mail-preview/part/{token}/{index} URLs
+  from the token; expiry comes from expires_in_seconds.
+type: object
+additionalProperties: false
+required:
+  - token
+  - expires_in_seconds
+properties:
+  token:
+    type: string
+    minLength: 43
+    maxLength: 43
+    description: >
+      The credential: 32 bytes from a cryptographic random source, encoded
+      base64url without padding — 43 characters (Library token hygiene,
+      MC-43). This string is the entire security of the unauthenticated
+      /mail-preview/ serve routes, so it MUST NOT be logged, put in an audit
+      record, or sent in a Referer header (Referrer-Policy: no-referrer on
+      the served responses).
+    example: "kZ8vQ2mR7xT1yB4nW6cA9pL0sD3fG5hJ8kM2nP4qR6t"
+  expires_in_seconds:
+    type: integer
+    minimum: 1
+    description: >
+      Seconds from the moment this response was produced until the token
+      stops working (Library precedent: 900 for the 15-minute PreviewTokenTTL).
+    example: 900

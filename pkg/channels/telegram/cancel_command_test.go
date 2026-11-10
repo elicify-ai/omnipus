@@ -13,8 +13,10 @@ import (
 // TestCancel_TelegramCommandExactSet (T12a) — asserts that:
 //  1. The set of command names registered by Telegram's startCommandRegistration
 //     includes "/cancel" (derived from commands.BuiltinDefinitions()).
-//  2. The forbidden aliases /stop, /abort, /kill are NOT in the registered set
-//     (FR-5 alias prohibition).
+//  2. The forbidden aliases /abort, /kill are NOT in the registered set
+//     (FR-5 alias prohibition). /stop is no longer forbidden: ADR-20260928
+//     (sub-agent control plane) D9 adds /stop and /stop-redirect as their own
+//     commands; /cancel keeps no alias, so "stop" must not be one of its aliases.
 //
 // Theater smell: the existing command_registration_test.go only checks that
 // retries work correctly — it never asserts on the actual command names passed
@@ -70,15 +72,20 @@ func TestCancel_TelegramExactCommandSet(t *testing.T) {
 		"Telegram must register the /cancel command; names in set: %v", nameSet)
 
 	// ASSERT 2: forbidden aliases must NOT be registered (FR-5).
-	forbiddenAliases := []string{"stop", "abort", "kill"}
+	forbiddenAliases := []string{"abort", "kill"}
 	for _, alias := range forbiddenAliases {
 		assert.False(t, nameSet[alias],
 			"Telegram must NOT register /%s — it is a forbidden alias for /cancel (FR-5); "+
 				"names in set: %v", alias, nameSet)
 	}
 
-	// DIFFERENTIATION: if a future developer adds /stop as an alias to
-	// cancelCommand(), this test catches it immediately. The exact-set check
+	// ADR-20260928 D9: /stop and /stop-redirect are their own registered
+	// commands, distinct from /cancel.
+	assert.True(t, nameSet["stop"], "Telegram must register /stop (ADR-20260928 D9); names in set: %v", nameSet)
+	assert.True(t, nameSet["stop-redirect"], "Telegram must register /stop-redirect (ADR-20260928 D9); names in set: %v", nameSet)
+
+	// DIFFERENTIATION: if a future developer adds /abort or /kill as an alias
+	// to cancelCommand(), this test catches it immediately. The exact-set check
 	// fails if any forbidden name appears — not just if /cancel is missing.
 
 	// CONTENT ASSERTION: verify cancel definition has non-empty description
@@ -93,8 +100,9 @@ func TestCancel_TelegramExactCommandSet(t *testing.T) {
 }
 
 // TestCancel_TelegramNoStopAbortKillInBuiltins verifies directly that
-// commands.BuiltinDefinitions() does not contain /stop, /abort, or /kill as
-// either primary names or aliases. This is the compile-time enforcement of FR-5.
+// commands.BuiltinDefinitions() does not contain /abort or /kill as either
+// primary names or aliases (FR-5), and that /cancel has no "stop" alias:
+// ADR-20260928 D9 makes /stop its own command while /cancel keeps no alias.
 //
 // If someone adds these as aliases (even if Telegram doesn't register them
 // separately), the FR-5 prohibition requires they not exist at all.
@@ -102,7 +110,7 @@ func TestCancel_TelegramNoStopAbortKillInBuiltins(t *testing.T) {
 	t.Parallel()
 
 	defs := commands.BuiltinDefinitions()
-	forbidden := map[string]bool{"stop": true, "abort": true, "kill": true}
+	forbidden := map[string]bool{"abort": true, "kill": true}
 
 	for _, d := range defs {
 		// Check primary name.
@@ -112,6 +120,17 @@ func TestCancel_TelegramNoStopAbortKillInBuiltins(t *testing.T) {
 		for _, alias := range d.Aliases {
 			assert.False(t, forbidden[alias],
 				"command %q has forbidden alias %q (FR-5 prohibition)", d.Name, alias)
+		}
+	}
+
+	// /cancel keeps no alias: "stop" is its own command (D9), not an alias.
+	for _, d := range defs {
+		if d.Name == "cancel" {
+			assert.Empty(t, d.Aliases, "/cancel must have no aliases, in particular no \"stop\" alias (ADR-20260928 D9)")
+		}
+		for _, alias := range d.Aliases {
+			assert.NotEqual(t, "stop", alias,
+				"command %q must not carry \"stop\" as an alias — /stop is its own command (ADR-20260928 D9)", d.Name)
 		}
 	}
 }

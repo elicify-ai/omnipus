@@ -31,9 +31,9 @@ import (
 // with no backing store entry.
 func TestU26_WriteGoalSystemTranscript_NonexistentSession_CountsAndWarns(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-	store := al.GetAgentStore("native-agent")
+	store := al.GetSessionStore()
 	if store == nil {
-		t.Fatal("GetAgentStore(native-agent) returned nil")
+		t.Fatal("GetSessionStore() returned nil")
 	}
 
 	before := TaskGoalTranscriptWriteFailures()
@@ -51,9 +51,9 @@ func TestU26_WriteGoalSystemTranscript_NonexistentSession_CountsAndWarns(t *test
 // and the counter does not move.
 func TestU26_WriteGoalSystemTranscript_RealSession_PersistsAndDoesNotCount(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-	store := al.GetAgentStore("native-agent")
+	store := al.GetSessionStore()
 	if store == nil {
-		t.Fatal("GetAgentStore(native-agent) returned nil")
+		t.Fatal("GetSessionStore() returned nil")
 	}
 	sessionID := u26FreshTaskSession(t, store, "native-agent")
 
@@ -84,9 +84,9 @@ func TestU26_WriteGoalSystemTranscript_RealSession_PersistsAndDoesNotCount(t *te
 // with no backing store entry.
 func TestU26_WriteGoalVerdictTranscript_NonexistentSession_CountsAndWarns(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-	store := al.GetAgentStore("native-agent")
+	store := al.GetSessionStore()
 	if store == nil {
-		t.Fatal("GetAgentStore(native-agent) returned nil")
+		t.Fatal("GetSessionStore() returned nil")
 	}
 	verdict := &task.JudgeVerdict{
 		Round: 1, Met: false, JudgeAgentID: "judge",
@@ -108,9 +108,9 @@ func TestU26_WriteGoalVerdictTranscript_NonexistentSession_CountsAndWarns(t *tes
 // entry and the counter does not move.
 func TestU26_WriteGoalVerdictTranscript_RealSession_PersistsAndDoesNotCount(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-	store := al.GetAgentStore("native-agent")
+	store := al.GetSessionStore()
 	if store == nil {
-		t.Fatal("GetAgentStore(native-agent) returned nil")
+		t.Fatal("GetSessionStore() returned nil")
 	}
 	sessionID := u26FreshTaskSession(t, store, "native-agent")
 	verdict := &task.JudgeVerdict{
@@ -159,9 +159,9 @@ func TestU26_WriteGoalVerdictTranscript_RealSession_PersistsAndDoesNotCount(t *t
 // ListActive(), which is where under-sweeping could now actually happen.
 func TestU26_GoalIdleExpirySweep_SelectorIsUnpaginatedFullScan(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-	store := al.GetAgentStore("native-agent")
+	store := al.GetSessionStore()
 	if store == nil {
-		t.Fatal("GetAgentStore(native-agent) returned nil")
+		t.Fatal("GetSessionStore() returned nil")
 	}
 	// Create more goal-bearing sessions than any plausible single UI page
 	// size and confirm the sweep's selector still returns every one of them

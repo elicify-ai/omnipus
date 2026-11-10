@@ -285,7 +285,7 @@ func (f *permissionRequestFakeDriver) Decide(d runner.PermissionDecision) {
 }
 func (f *permissionRequestFakeDriver) Cancel()            {}
 func (f *permissionRequestFakeDriver) Input(string) error { return nil }
-func (f *permissionRequestFakeDriver) Resume(context.Context, string) (<-chan runner.RunEvent, error) {
+func (f *permissionRequestFakeDriver) Resume(context.Context, string, ...string) (<-chan runner.RunEvent, error) {
 	// Resume is unused by this fake's scenarios; return an already-closed
 	// channel (rather than nil, nil) so a caller ranging over it sees an
 	// immediately-completed empty run instead of a nil channel that would
@@ -366,7 +366,7 @@ func (f *capturingFakeDriver) Run(_ context.Context, opts runner.RunOptions) (<-
 func (f *capturingFakeDriver) Decide(runner.PermissionDecision) {}
 func (f *capturingFakeDriver) Cancel()                          {}
 func (f *capturingFakeDriver) Input(string) error               { return nil }
-func (f *capturingFakeDriver) Resume(context.Context, string) (<-chan runner.RunEvent, error) {
+func (f *capturingFakeDriver) Resume(context.Context, string, ...string) (<-chan runner.RunEvent, error) {
 	// Resume is unused by this fake's scenarios; return an already-closed
 	// channel (rather than nil, nil) so a caller ranging over it sees an
 	// immediately-completed empty run instead of a nil channel that would
@@ -504,7 +504,7 @@ func (f *instantFakeDriver) Run(_ context.Context, _ runner.RunOptions) (<-chan 
 func (f *instantFakeDriver) Decide(runner.PermissionDecision) {}
 func (f *instantFakeDriver) Cancel()                          {}
 func (f *instantFakeDriver) Input(string) error               { return nil }
-func (f *instantFakeDriver) Resume(context.Context, string) (<-chan runner.RunEvent, error) {
+func (f *instantFakeDriver) Resume(context.Context, string, ...string) (<-chan runner.RunEvent, error) {
 	// Resume is unused by this fake's scenarios; return an already-closed
 	// channel (rather than nil, nil) so a caller ranging over it sees an
 	// immediately-completed empty run instead of a nil channel that would
@@ -547,7 +547,7 @@ func (f *blockingFakeDriver) Run(ctx context.Context, _ runner.RunOptions) (<-ch
 func (f *blockingFakeDriver) Decide(runner.PermissionDecision) {}
 func (f *blockingFakeDriver) Cancel()                          {}
 func (f *blockingFakeDriver) Input(string) error               { return nil }
-func (f *blockingFakeDriver) Resume(context.Context, string) (<-chan runner.RunEvent, error) {
+func (f *blockingFakeDriver) Resume(context.Context, string, ...string) (<-chan runner.RunEvent, error) {
 	// Resume is unused by this fake's scenarios; return an already-closed
 	// channel (rather than nil, nil) so a caller ranging over it sees an
 	// immediately-completed empty run instead of a nil channel that would
@@ -843,7 +843,7 @@ func (f *delayedCloseFakeDriver) Run(ctx context.Context, _ runner.RunOptions) (
 func (f *delayedCloseFakeDriver) Decide(runner.PermissionDecision) {}
 func (f *delayedCloseFakeDriver) Cancel()                          {}
 func (f *delayedCloseFakeDriver) Input(string) error               { return nil }
-func (f *delayedCloseFakeDriver) Resume(context.Context, string) (<-chan runner.RunEvent, error) {
+func (f *delayedCloseFakeDriver) Resume(context.Context, string, ...string) (<-chan runner.RunEvent, error) {
 	// Resume is unused by this fake's scenarios; return an already-closed
 	// channel (rather than nil, nil) so a caller ranging over it sees an
 	// immediately-completed empty run instead of a nil channel that would

@@ -131,7 +131,7 @@ describe('WhatsAppNativeNotice — Retry restarts the channel (terminal QR loop)
   // only re-emit a CACHED code, never mint a new one. Retry must therefore
   // bounce the channel (disable → enable), which re-arms the QR loop.
   it.each(['whatsapp', 'whatsapp.sales'])(
-    'clicking Retry disables then re-enables the instance and re-subscribes (%s)',
+    'clicking Retry disables then re-enables the instance without toggling subscriptions (%s)',
     async (channelId) => {
       pairing.byChannel[channelId] = { status: 'timeout', qr: '', message: 'expired' }
 
@@ -150,17 +150,9 @@ describe('WhatsAppNativeNotice — Retry restarts the channel (terminal QR loop)
       expect(disableSpy.mock.invocationCallOrder[0]).toBeLessThan(
         enableSpy.mock.invocationCallOrder[0],
       )
-      // interest re-registered for THIS instance after the restart
-      expect(sendSpy).toHaveBeenCalledWith({
-        type: 'whatsapp_pairing_subscribe',
-        channel_id: channelId,
-        active: false,
-      })
-      expect(sendSpy).toHaveBeenCalledWith({
-        type: 'whatsapp_pairing_subscribe',
-        channel_id: channelId,
-        active: true,
-      })
+      // The mounted viewer is already subscribed. Retry must not toggle
+      // observation interest (arch-retry-contract.md::Decision).
+      expect(sendSpy.mock.calls).toEqual([])
     },
   )
 

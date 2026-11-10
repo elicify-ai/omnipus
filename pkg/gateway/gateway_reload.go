@@ -58,10 +58,38 @@ func (s *services) markReloadDegraded(err error) {
 	s.reloadError = err
 }
 
+// reloadDegradedReasonText is the fixed /health reason for a failed config
+// reload. /health is served without a session, so the underlying error (a
+// config file path, an OS error, a rejected rule) goes to the log only.
+const reloadDegradedReasonText = "config reload failed: the configuration could not be read or was rejected. " +
+	"Fix the configuration file; details are in the server log."
+
+// reloadStoreDegradedReasonText is the fixed /health reason variant for a
+// reload rejected by the store-level credential failure class (#1277 round 3):
+// it names the store — the class the operator must fix — while still keeping
+// the underlying error detail in the log only.
+const reloadStoreDegradedReasonText = "config reload failed: the credential store could not be read " +
+	"(wrong master key, corrupted or locked store). Restore the credential store; details are in the server log."
+
+// reloadDegradedStatus is the reload half of the /health degraded check.
+func (s *services) reloadDegradedStatus() (bool, string) {
+	s.reloadMu.Lock()
+	defer s.reloadMu.Unlock()
+	if !s.reloadDegraded {
+		return false, ""
+	}
+	slog.Error("health: config reload is degraded", "error", s.reloadError)
+	if errors.Is(s.reloadError, errCredentialStoreUnreadableClass) {
+		return true, reloadStoreDegradedReasonText
+	}
+	return true, reloadDegradedReasonText
+}
+
 // servicesSnapshot captures all fields that restartServices and executeReload
 // mutate, so they can be atomically restored on reload failure.
 type servicesSnapshot struct {
 	bundle         credentials.SecretBundle
+	bundleCapture  uint64
 	ChannelManager *channels.Manager
 	CronService    *cron.CronService
 	TaskTrigger    *agent.TaskTriggerScheduler
@@ -72,6 +100,7 @@ type servicesSnapshot struct {
 func snapshotServices(svc *services) servicesSnapshot {
 	return servicesSnapshot{
 		bundle:         svc.bundle,
+		bundleCapture:  svc.bundleCaptureVersion,
 		ChannelManager: svc.ChannelManager,
 		CronService:    svc.CronService,
 		TaskTrigger:    svc.TaskTrigger,
@@ -82,6 +111,7 @@ func snapshotServices(svc *services) servicesSnapshot {
 
 func restoreServices(svc *services, snap servicesSnapshot) {
 	svc.bundle = snap.bundle
+	svc.bundleCaptureVersion = snap.bundleCapture
 	svc.ChannelManager = snap.ChannelManager
 	svc.CronService = snap.CronService
 	svc.TaskTrigger = snap.TaskTrigger
@@ -219,8 +249,30 @@ func newReloadTrigger(runningServices *services, agentLoop *agent.AgentLoop) fun
 //
 // first is the config for the initial reload (the file-watcher path already has
 // a candidate), or nil to load it from disk via loadNext (the /reload path).
-// Every coalesced follow-up always re-reads from disk: serving it from the
-// snapshot the previous reload used would defeat the entire point.
+// firstReadSeq is the reloadOutcomeTracker.markConfigRead sequence number the
+// caller stamped first with when it loaded it (0 when first is nil — the
+// loadNext load below stamps its own). Every coalesced follow-up always
+// re-reads from disk: serving it from the snapshot the previous reload used
+// would defeat the entire point.
+//
+// Round-4 finding: first can be a file-watcher snapshot loaded well before
+// this cycle actually runs — a reload STARTING after
+// performancePendingApply's latest mark does not prove the config it
+// APPLIED was read after that mark. runReloadCycle threads the config's own
+// read-sequence number (firstReadSeq, or a fresh one from markConfigRead for
+// every loadNext-sourced config) through to reloadOutcomeTracker.finish
+// alongside the reload's own start-sequence number, so
+// performancePendingApply.clearAfterReload can require both.
+//
+// Round-6 finding: readSeq/firstReadSeq describes only the config this cycle
+// STARTED with. exec (executeReload in production) can swap in a DIFFERENT,
+// more-recently-read config partway through — handleConfigReload's swap-time
+// re-read (reloadConfigForSwap) — and that swapped-in config, not the
+// starting one, is what actually gets applied. runningServices.
+// lastAppliedConfigReadSeq carries that swap-time read's own sequence number
+// back out of exec; when set, it overrides readSeq before finish is called,
+// so clearAfterReload is always told the APPLIED config's provenance, never
+// a stale starting snapshot's.
 //
 // exec runs one reload (executeReload in production) and loadNext re-reads
 // config.json; both are parameters so the coalescing contract can be tested
@@ -229,6 +281,7 @@ func runReloadCycle(
 	agentLoop *agent.AgentLoop,
 	runningServices *services,
 	first *config.Config,
+	firstReadSeq uint64,
 	exec func(*config.Config) error,
 	loadNext func() (*config.Config, error),
 ) {
@@ -243,6 +296,7 @@ func runReloadCycle(
 	}()
 
 	cfg := first
+	readSeq := firstReadSeq
 	for {
 		if cfg == nil {
 			loaded, err := loadNext()
@@ -288,12 +342,42 @@ func runReloadCycle(
 				return
 			}
 			cfg = loaded
+			// This config was just read fresh from disk, right here — stamp
+			// it so a success below can prove (to
+			// performancePendingApply.clearAfterReload) that it postdates
+			// any mark that happened before this point (round-4 finding).
+			// Every loadNext call takes this path (the manual /reload path's
+			// very first iteration, and every coalesced follow-up), so a
+			// stale firstReadSeq from the initial first snapshot never
+			// survives past the first re-read.
+			readSeq = runningServices.reloadOutcome.markConfigRead()
 		}
-		if err := exec(cfg); err != nil {
-			logger.Errorf("Config reload failed: %v", err)
+		// Record the rebuild outcome BEFORE finishReload can clear the
+		// pending flag, so a poller it releases reads this outcome.
+		seq := runningServices.reloadOutcome.begin()
+		// Reset before exec: only a swap-time re-read that runs INSIDE this
+		// exec call (executeReload -> handleConfigReload ->
+		// reloadConfigForSwap) may set this, so a stale value left over
+		// from a PREVIOUS cycle's swap can never leak into this cycle's
+		// finish() call (round-6 finding — see the field's own doc comment
+		// on *services).
+		runningServices.lastAppliedConfigReadSeq = 0
+		execErr := exec(cfg)
+		if execErr != nil {
+			logger.Errorf("Config reload failed: %v", execErr)
 		} else {
 			logger.Info("Config reload completed successfully")
 		}
+		// The config actually APPLIED is whatever the swap-time re-read
+		// produced, when handleConfigReload ran one this exec call;
+		// otherwise it is exactly the config this cycle started with,
+		// already described by readSeq (round-6 finding: the outer readSeq
+		// alone does not prove the SWAPPED-IN config's own provenance).
+		appliedReadSeq := readSeq
+		if s := runningServices.lastAppliedConfigReadSeq; s != 0 {
+			appliedReadSeq = s
+		}
+		runningServices.reloadOutcome.finish(seq, execErr, appliedReadSeq)
 		if !runningServices.finishReload(agentLoop.ClearReloadPending) {
 			slotHeld = false
 			return
@@ -327,7 +411,7 @@ func executeReload(
 	// restored atomically if the reload fails. bundle and ChannelManager are
 	// mutated here in executeReload itself; the rest are mutated in
 	// restartServices (CronService, TaskTrigger, MediaStore).
-	// TaskDrain and MailboxDrain are also recreated by restartServices but are
+	// TaskDrain and MailWatch are also recreated by restartServices but are
 	// NOT part of this atomic rollback snapshot.
 	snap := snapshotServices(runningServices)
 
@@ -349,6 +433,17 @@ func executeReload(
 	if err := prepareReloadConfig(newCfg, runningServices); err != nil {
 		markDegraded(err)
 		return err
+	}
+	// ADR-096 D11 / FR-030: mirror bootCredentials' migration after
+	// InjectFromConfig has made provider keys visible and before the agent
+	// loop rebuilds its tools. Register the migration write so the config
+	// watcher recognizes it as internal and does not trigger another reload.
+	if runningServices != nil && runningServices.restAPIRef != nil {
+		config.MigrateWebSearchRoles(
+			newCfg,
+			runningServices.restAPIRef.configPath(),
+			selfHealWriteHook(runningServices.selfWriteReg),
+		)
 	}
 	if err := handleConfigReload(
 		ctx,
@@ -374,6 +469,18 @@ func executeReload(
 // markDegraded restores the bundle snapshot). Called for the config a reload
 // was handed and again, under restAPI.configMu, for handleConfigReload's
 // swap-time re-read.
+// reloadCredentialCaptureHook is a test seam (channels spec S-88 case g,
+// R8-MIN-001; test-only hook point, no sleeps): prepareReloadConfig calls it
+// with "stamped" after recording the credential-write version and before
+// resolving the channel bundle, and with "captured" after resolving it;
+// reloadChannels calls it with "rebuild" after the final capture, with the
+// config-write lock released, right before the channel rebuild. A test
+// blocks inside it to interleave a Configure credential write with the
+// capture (the swap-time capture holds configMu, which Configure also takes,
+// so the stale-bundle window of S-88 case g is "rebuild"). Nil in
+// production; never assign it outside tests.
+var reloadCredentialCaptureHook func(stage string)
+
 func prepareReloadConfig(newCfg *config.Config, runningServices *services) error {
 	// CLAUDE.md hard constraint 6 / config.ValidateToolPolicyCoverage: a
 	// config reload (file-watcher poll via configReloadChan, or manual
@@ -407,9 +514,19 @@ func prepareReloadConfig(newCfg *config.Config, runningServices *services) error
 	// api_key_ref got none of their changes applied and a degraded gateway,
 	// and the same config would then refuse to boot on the next restart. A
 	// store-wide failure (locked vault) still rejects and rolls back.
+	//
+	// #1277 (founder decision 2026-10-12): one integration's missing or
+	// unreadable secret no longer rejects the reload either — the channel
+	// manager stops exactly that instance and records its ref-naming failure,
+	// while the rest of the config applies. Entry-auth failures stay deferred
+	// until the store health check: no decryptable entry in a nonempty store
+	// is the whole-store failure class and still rejects.
 	if cs := runningServices.credStore; cs != nil {
+		var deferredAuth []error
 		if errs := credentials.InjectFromConfig(newCfg, cs); len(errs) > 0 {
-			if fatal := reportInjectionErrors(errs, "reload"); len(fatal) > 0 {
+			fatal, auth := reportInjectionErrors(errs, "reload")
+			deferredAuth = append(deferredAuth, auth...)
+			if len(fatal) > 0 {
 				reloadErr := fmt.Errorf(
 					"reload rejected: provider credential injection failed: %w",
 					errors.Join(fatal...),
@@ -419,68 +536,68 @@ func prepareReloadConfig(newCfg *config.Config, runningServices *services) error
 		}
 
 		// Re-resolve the SecretBundle for channels (no os.Setenv for channel creds).
-		// enabledRefs mirrors bootCredentials: a NotFoundError (or any other
-		// resolution error) on a channel ref that IS enabled in newCfg must
-		// reject the reload — not silently continue — because "channel may be
-		// disabled" is only true if we actually check. Missing the enabled
-		// check here (unlike boot's equivalent NotFoundError-on-enabled fatal
-		// branch) would let a reload silently break an enabled channel's
-		// credentials while reporting success.
+		// enabledRefs mirrors bootCredentials: since #1277 a resolution error on
+		// a channel ref that IS enabled in newCfg degrades only that channel
+		// (loud, ref-naming, surfaced through FailedChannels and the Settings
+		// overlay) instead of rejecting the whole reload — a rejection rolled
+		// back every other edit in the same save and kept the deleted
+		// credential's stale value live on the still-running old instance.
 		//
-		// Cross-cutting interaction (intentional, fail-closed tradeoff — see
-		// the matching note on rest.go's configureChannel audit block): this
-		// check is global, not scoped to whatever channel triggered this
-		// reload. Config writes default to HotReload=true
-		// (pkg/config/defaults.go), so ANY config.json write — including an
-		// unrelated configureChannel call that only touched a different
-		// channel — runs this same all-enabled-channels credential check via
-		// the file-watcher. That means a configureChannel request can be
-		// audited as DecisionAllow (its own write succeeded) and 200 OK to
-		// the caller, and then have its effect asynchronously rolled back
-		// moments later by executeReload's markDegraded because SOME OTHER enabled
-		// channel's pre-existing credential ref fails to resolve — not the
-		// channel the caller just configured. This is deliberate: we fail
-		// closed rather than silently run an enabled channel with a broken
-		// credential. There is no correlation ID linking the earlier audit
-		// entry to this later rejection; an operator discovers it via
-		// reloadDegraded surfaced on GET /health (503, "reason": "config
-		// reload failed: …") and the "config reload failed — rolling back to
-		// previous in-memory state" / "reload rejected: enabled channel
-		// credential …" slog.Error lines emitted by markDegraded and the
-		// branches below. Making rejection scoped to only the
-		// just-edited channel would be a structural change to
-		// reload-rejection scoping and is out of scope for this hotfix pass.
+		// ONE store-level health decision, made from the store itself and
+		// independent of which reference kinds the configuration holds
+		// (#1277 round-3 chief ruling; CHECK F1/F2): a wrong master key,
+		// corrupt/undecodable file or locked vault rejects the reload whatever
+		// refs exist — including MCP-only and reference-free configs. The class
+		// sentinel lets /health's degraded reason name the store without
+		// leaking the underlying error.
 		enabledRefs := buildEnabledRefMap(newCfg)
+		// FR-050 (ii): stamp the credential-write version BEFORE resolving,
+		// so a write marked after this point is never acknowledged by a
+		// rebuild that consumes this bundle (even if the resolver saw it).
+		captureVersion := channels.NoCredentialCapture
+		if mgr := runningServices.ChannelManager; mgr != nil {
+			captureVersion = mgr.CredentialWriteVersion()
+		}
+		if reloadCredentialCaptureHook != nil {
+			reloadCredentialCaptureHook("stamped") // test seam (S-88 case g)
+		}
 		newBundle, bundleErrs := credentials.ResolveBundle(newCfg, cs)
-		for _, e := range bundleErrs {
+		if reloadCredentialCaptureHook != nil {
+			reloadCredentialCaptureHook("captured") // test seam (S-88 case g)
+		}
+		bundleAuth, bundleRest := splitEntryAuthFailures(bundleErrs)
+		if healthErr := storeHealthFailure("reload", cs.HealthCheck()); healthErr != nil {
+			return fmt.Errorf("reload rejected: %w", fatalStoreWideAuthFailure(healthErr,
+				append(append([]error{}, deferredAuth...), bundleAuth...)))
+		}
+		logScopedCredentialFailures("reload", deferredAuth)
+		for _, e := range bundleAuth {
+			slog.Error(
+				"reload: credential unusable — the referencing entry will not work until it is fixed, "+
+					"the rest of the system continues",
+				"error", e,
+			)
+		}
+		for _, e := range bundleRest {
 			var notFound *credentials.NotFoundError
 			if errors.As(e, &notFound) {
 				if enabledRefs[notFound.Name] {
-					reloadErr := fmt.Errorf(
-						"reload rejected: enabled credential %q not found in store: %w",
-						notFound.Name, e,
+					slog.Error(
+						"reload: credential unusable — the referencing entry will not work until it is fixed, "+
+							"the rest of the system continues",
+						"credential_ref", notFound.Name,
+						"error", e,
 					)
-					return reloadErr
+					continue
 				}
 				slog.Info("reload: credential not found (not currently enabled/in use)", "ref", notFound.Name)
 				continue
 			}
-			// Any error other than "not found" on an enabled/in-use ref is
-			// worse than a simple missing ref (the credential exists but can't
-			// be read) — escalate exactly like the NotFoundError-on-enabled
-			// case above, reusing the existing reject-and-rollback mechanism
-			// (executeReload's markDegraded / reloadDegraded) rather than a log-only Warn or a
-			// new degraded-signal field.
-			if ref, ok := enabledRefFromBundleError(e, enabledRefs); ok {
-				reloadErr := fmt.Errorf(
-					"reload rejected: enabled credential %q failed to resolve: %w",
-					ref, e,
-				)
-				return reloadErr
-			}
-			slog.Warn("reload: credential bundle resolution error", "error", e)
+			// A file/lock failure observed between reads still rejects reload.
+			return fmt.Errorf("reload rejected: %w", fatalStoreWideAuthFailure(e, nil))
 		}
 		runningServices.bundle = newBundle
+		runningServices.bundleCaptureVersion = captureVersion
 
 		// Re-register the complete plaintext set so the scrubber stays current
 		// after reload: config refs, enabled MCP env values, and OAuth grants
@@ -577,6 +694,15 @@ func handleConfigReload(
 	defer reloadCancel()
 
 	reloadErr := al.ReloadProviderAndConfig(reloadCtx, newProvider, newCfg)
+	if reloadErr == nil && runningServices != nil && runningServices.restAPIRef != nil {
+		// Invalidate held checks before releasing the same config-write lock
+		// admission takes. A later service-restart failure does not undo the swap.
+		for _, def := range config.SearchProviderCatalogue {
+			if def.Keyed {
+				runningServices.restAPIRef.searchChecks.bumpGeneration(def.ID)
+			}
+		}
+	}
 	// The swap is done (or failed): config writers may proceed.
 	unlockWrites()
 	if reloadErr != nil {
@@ -630,6 +756,19 @@ func lockConfigWrites(runningServices *services) (unlock func()) {
 // prepareReloadConfig, so it carries every write committed before the caller
 // took configMu. Returns loaded unchanged when no swap-time loader is wired.
 // The caller must hold configMu (lockConfigWrites).
+//
+// Round-6 finding: the config this returns is what handleConfigReload
+// actually applies next (its caller assigns `newCfg = swapCfg` immediately
+// after this returns) — so once it has fully passed prepareReloadConfig,
+// this stamps its own config-read sequence number
+// (runningServices.lastAppliedConfigReadSeq, via reloadOutcome.markConfigRead)
+// exactly like every other config-read call site (setupConfigWatcherPolling,
+// runReloadCycle's own loadNext calls) does once ITS read is known-good.
+// Without this stamp, runReloadCycle had no way to tell
+// performancePendingApply.clearAfterReload that the config it actually
+// applied was read from disk strictly after a pending-apply mark, even when
+// the reload cycle's own OUTER read (the `first`/loadNext snapshot, taken
+// before this swap-time re-read ran) predated it.
 func reloadConfigForSwap(runningServices *services, loaded *config.Config) (*config.Config, error) {
 	if runningServices == nil || runningServices.loadConfigForSwap == nil {
 		return loaded, nil
@@ -641,6 +780,16 @@ func reloadConfigForSwap(runningServices *services, loaded *config.Config) (*con
 	if prepErr := prepareReloadConfig(fresh, runningServices); prepErr != nil {
 		return nil, prepErr
 	}
+	if a := runningServices.restAPIRef; a != nil {
+		if store := a.pairingOrderStore(); store != nil {
+			progress, bindErr := store.BindSavedConfigRead(fresh)
+			if bindErr != nil {
+				return nil, bindErr
+			}
+			a.publishPairingAfterConfigUnlock(progress)
+		}
+	}
+	runningServices.lastAppliedConfigReadSeq = runningServices.reloadOutcome.markConfigRead()
 	return fresh, nil
 }
 
@@ -753,22 +902,10 @@ func (rs *restartServicesState) restartSchedulersAndDrains() (error, bool) {
 		fmt.Println("  ✓ Plan engine restarted")
 	}
 
-	// Restart the task time-trigger scheduler on its dedicated CronService. The
-	// previous instance was already Stop()'d in stopAndCleanupServices(isReload).
-	if tStore := agent.GetTaskStore(rs.al); tStore != nil {
-		triggerStorePath := filepath.Join(rs.homePath, "tasks_triggers", "jobs.json")
-		rs.runningServices.TaskTrigger = agent.NewTaskTriggerScheduler(
-			triggerStorePath, tStore, agent.GetTaskExecutor(rs.al),
-		)
-		if startErr := rs.runningServices.TaskTrigger.Start(); startErr != nil {
-			return fmt.Errorf("error restarting task trigger scheduler: %w", startErr), true
-		}
-		rs.al.SetTaskTriggerScheduler(rs.runningServices.TaskTrigger)
-		if recErr := rs.runningServices.TaskTrigger.Reconcile(); recErr != nil {
-			slog.Error("gateway: task trigger reconcile failed on reload", "error", recErr)
-		}
-		fmt.Println("  ✓ Task trigger scheduler restarted")
-	}
+	// The task time-trigger scheduler is NOT restarted: a configuration reload
+	// keeps the one live instance (r17 TK-30, 18.40; stopAndCleanupServices
+	// skips it on reload), so ownership of an armed or queued occurrence never
+	// changes hands within a process.
 
 	// Restart the /loop scheduler on a fresh dedicated CronService (ADR-049
 	// D6/D7). The previous instance was already Stop()'d in
@@ -793,24 +930,37 @@ func (rs *restartServicesState) restartSchedulersAndDrains() (error, bool) {
 		fmt.Println("  ✓ Queued-task drain restarted (TaskDrainService)")
 	}
 
-	// Restart the M11 mailbox drain (unhandled mail → Board tasks). The previous
-	// instance was Stop()'d in stopAndCleanupServices(isReload). The provider reads
-	// live config + the credential store on each tick, so a mailbox added/removed
-	// before this reload is reflected immediately.
+	// Restart the new-mail watcher (D20/#631 — replaces the deleted mailbox
+	// drainer). The previous instance was Stop()'d in stopAndCleanupServices.
+	// The provider reads live config + the credential store on each cycle, so
+	// a mailbox added/removed before this reload is reflected immediately.
 	if tStore := agent.GetTaskStore(rs.al); tStore != nil {
 		credStore := rs.runningServices.credStore
 		provider := email.MailboxProviderFunc(func() []email.Mailbox {
-			return buildMailboxes(rs.al.GetConfig(), credStore)
+			rt := gatewayMailRuntimeFor(rs.homePath)
+			return buildMailboxes(rs.al.GetConfig(), credStore,
+				gatewayMailSessionsFor(rs.homePath), rt.mailGenerationForPair)
 		})
-		drainer := email.NewDrainer(tStore, provider, 0)
-		rs.runningServices.MailboxDrain = heartbeat.NewMailboxDrainService(drainer, 0)
-		rs.runningServices.MailboxDrain.Start()
-		fmt.Println("  ✓ Mailbox drain restarted (MailboxDrainService)")
+		// Same shared A8 budget instance as boot (keyed by the state dir):
+		// reload swaps the watcher set, never the gate.
+		rs.runningServices.MailWatch = heartbeat.NewMailWatchService(email.NewMailboxWatcherSet(provider, rs.homePath, email.SharedMailBudget(rs.homePath)), 0)
+		rs.runningServices.MailWatch.Start()
+		fmt.Println("  ✓ New-mail watcher restarted (MailWatchService)")
 	}
 	return nil, false
 }
 
 // replaceMediaStore installs a fresh media store before flushing and stopping the previous store.
+//
+// #1439: refs that lived only in the outgoing store's memory — created inside
+// the last saveDebounce window, or after its last successful save — reach
+// registry.json in the old store's Stop flush below, AFTER the new store's
+// LoadRegistry has already read the file, so no live consumer ever sees them.
+// HandoverTo (step 2) moves that in-memory state into the new store before the
+// swap and retires the old store's save machinery, which also makes the final
+// Stop a save no-op: it cannot overwrite a newer snapshot the new store writes
+// after the pointer flip. Copy, not move: a turn in flight across the reload
+// keeps resolving through its turnMediaStore snapshot (the old store).
 func (rs *restartServicesState) replaceMediaStore() {
 	// N-D fix: build and wire the NEW store BEFORE stopping the old one so that
 	// any upload whose scheduleSave fires in the narrow window between the Stop
@@ -819,12 +969,15 @@ func (rs *restartServicesState) replaceMediaStore() {
 	//
 	// Order:
 	//   1. Create new store (inactive; Start() below begins the cleanup goroutine).
-	//   2. Swap the agent-loop pointer so new uploads land in the new store.
-	//   3. Flush the old store (pending debounced saves) and stop its goroutines.
+	//   2. Hand over the old store's live ref state (#1439) and load the
+	//      persisted registry.
+	//   3. Swap the agent-loop pointer so new uploads land in the new store.
+	//   4. Stop the old store: saves were retired at handover, so this only
+	//      closes its cleanup goroutine.
 	//
 	// The old store is retained via oldStore until after Stop() completes so the
-	// GC does not reclaim it while the debounced save goroutine may still be
-	// running.
+	// GC does not reclaim it while a turn in flight across the swap may still
+	// resolve refs through it.
 	oldStore := rs.runningServices.MediaStore
 	rs.runningServices.MediaStore = media.NewFileMediaStoreWithCleanup(media.MediaCleanerConfig{
 		Enabled:  rs.cfg.Tools.MediaCleanup.Enabled,
@@ -837,6 +990,13 @@ func (rs *restartServicesState) replaceMediaStore() {
 		// Best-effort — a load failure should not block boot.
 		if loadErr := fms.LoadRegistry(); loadErr != nil {
 			slog.Warn("media: failed to load persisted registry", "error", loadErr)
+		}
+		// #1439: the old store's in-memory refs are authoritative over the
+		// just-loaded file (it is a superset, and may have released refs the
+		// file still contains) — hand them over before the swap. No-op when
+		// the outgoing store is not a FileMediaStore.
+		if oldFMS, ok := oldStore.(*media.FileMediaStore); ok {
+			oldFMS.HandoverTo(fms)
 		}
 		fms.Start()
 		// Re-wire workspace-library provider onto the new store (same shared
@@ -868,7 +1028,11 @@ func (rs *restartServicesState) reloadChannels() (error, bool) {
 	// PairingObserver set when they first emit events.
 	wireChannelManager(rs.runningServices.ChannelManager, rs.al)
 
-	if rs.err = rs.runningServices.ChannelManager.Reload(context.Background(), rs.cfg, rs.runningServices.bundle); rs.err != nil {
+	if reloadCredentialCaptureHook != nil {
+		reloadCredentialCaptureHook("rebuild") // test seam (S-88 case g)
+	}
+	if rs.err = rs.runningServices.ChannelManager.ReloadCaptured(context.Background(), rs.cfg,
+		rs.runningServices.bundle, rs.runningServices.bundleCaptureVersion); rs.err != nil {
 		return fmt.Errorf("error reload channels: %w", rs.err), true
 	}
 	// Post-Reload re-wire: Reload() may have recreated channel instances (new
@@ -934,9 +1098,23 @@ func (rs *restartServicesState) applyMessagingCaps() error {
 	return nil
 }
 
+// watchedConfigChange is what the file-watcher poller sends on the channel
+// setupConfigWatcherPolling returns: the freshly-loaded config plus the
+// reloadOutcomeTracker sequence number stamped at load time
+// (reloadOutcomeTracker.markConfigRead). Carrying the read-seq alongside the
+// config is what lets runReloadCycle pass it on to
+// performancePendingApply.clearAfterReload — round-4 finding: without it, a
+// reload cycle seeded from this snapshot has no way to prove its config
+// predates or postdates a pending-apply mark that happened after the poller
+// loaded it but before the cycle actually ran.
+type watchedConfigChange struct {
+	cfg     *config.Config
+	readSeq uint64
+}
+
 // setupConfigWatcherPolling starts a background goroutine that polls
-// configPath every 2 s for mtime/size changes and emits the new *config.Config
-// on the returned channel.
+// configPath every 2 s for mtime/size changes and emits the new config, paired
+// with its read-seq (watchedConfigChange), on the returned channel.
 //
 // selfWriteReg (may be nil) is consulted to suppress reloads for writes that
 // the app itself made via safeUpdateConfigJSON. When the detected change is
@@ -970,6 +1148,12 @@ func (rs *restartServicesState) applyMessagingCaps() error {
 // surface the same operator-visible /health degraded signal executeReload's
 // own internal checks already produce, for a failure that happens BEFORE
 // executeReload is even reached.
+//
+// reloadOutcome (may be nil, e.g. in tests that do not exercise pending-apply
+// provenance) is stamped via markConfigRead for every config this poller
+// accepts, so runReloadCycle can pass that read-seq on to
+// performancePendingApply.clearAfterReload (round-4 finding; see
+// watchedConfigChange's doc comment).
 func setupConfigWatcherPolling(
 	configPath string,
 	homePath string,
@@ -977,8 +1161,9 @@ func setupConfigWatcherPolling(
 	credStore *credentials.Store,
 	selfWriteReg *configSelfWriteRegistry,
 	markDegraded func(error),
-) (chan *config.Config, func()) {
-	configChan := make(chan *config.Config, 1)
+	reloadOutcome *reloadOutcomeTracker,
+) (chan watchedConfigChange, func()) {
+	configChan := make(chan watchedConfigChange, 1)
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
 
@@ -1079,8 +1264,14 @@ func setupConfigWatcherPolling(
 
 					logger.Info("✓ Config file validated and loaded (external edit)")
 
+					// Stamp this config's read-seq BEFORE handing it off, not
+					// after: the send below can block/drop, but the read
+					// itself already happened just above, and that is the
+					// instant clearAfterReload's provenance check must date
+					// this config from (round-4 finding).
+					change := watchedConfigChange{cfg: newCfg, readSeq: reloadOutcome.markConfigRead()}
 					select {
-					case configChan <- newCfg:
+					case configChan <- change:
 					default:
 						logger.Warn("⚠ Previous config reload still in progress, skipping")
 					}

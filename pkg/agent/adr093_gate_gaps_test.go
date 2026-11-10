@@ -138,7 +138,7 @@ func newAdr093OverlapProvider() *adr093OverlapProvider {
 
 func (p *adr093OverlapProvider) stop() { p.once.Do(func() { close(p.release) }) }
 
-func (p *adr093OverlapProvider) Chat(ctx context.Context, _ []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any) (*providers.LLMResponse, error) {
+func (p *adr093OverlapProvider) Chat(_ context.Context, _ []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any) (*providers.LLMResponse, error) {
 	p.mu.Lock()
 	p.current++
 	p.entries++
@@ -150,10 +150,11 @@ func (p *adr093OverlapProvider) Chat(ctx context.Context, _ []providers.Message,
 	case p.entered <- struct{}{}:
 	default:
 	}
-	select {
-	case <-p.release:
-	case <-ctx.Done():
-	}
+	// Hold the process-edge response until the test releases it, even when
+	// its request is cancelled. Otherwise cancellation can complete the owner
+	// before the in-flight-fence assertion, making that ordering a race.
+	// This models the dying provider call, not a fake lifecycle/Stop landing.
+	<-p.release
 	p.mu.Lock()
 	p.current--
 	p.mu.Unlock()
@@ -238,22 +239,6 @@ func (s adr093StopBeforeDispatch) Dispatch(ctx context.Context, sessionID string
 	return s.inner.Dispatch(ctx, sessionID, gen)
 }
 
-// adr093RefuseLiveSteering returns D2's sentinel when the launch still names
-// a steering session. That is the race ADR-093 D5 names for the task path:
-// the creator was live at the gate and stopped before Launch.
-type adr093RefuseLiveSteering struct{ inner steer.SessionLauncher }
-
-func (s adr093RefuseLiveSteering) Launch(ctx context.Context, req steer.LaunchRequest) (steer.LaunchResult, error) {
-	if strings.TrimSpace(req.SteeringSessionID) != "" {
-		return steer.LaunchResult{}, steer.ErrSteeringStopped
-	}
-	return s.inner.Launch(ctx, req)
-}
-
-func (s adr093RefuseLiveSteering) Dispatch(ctx context.Context, sessionID string, gen int) (steer.DispatchResult, error) {
-	return s.inner.Dispatch(ctx, sessionID, gen)
-}
-
 func adr093MakeLifecycleUnreadable(t *testing.T, al *AgentLoop, sessionID string) {
 	t.Helper()
 	path := filepath.Join(al.GetSessionLifecycleStore().Dir(), sessionID+".jsonl")
@@ -274,10 +259,7 @@ func adr093GlobalAutoOn(t *testing.T, al *AgentLoop) {
 		t.Fatal("setup: agent loop has no config")
 	}
 	cfg.Sandbox.AutoApprove = true
-	if al.agentAutoApproveDisabled(testDefaultAgentID) {
-		t.Fatal("setup: the test agent has its own auto-approve off switch; this case is about the chat's switch")
-	}
-	if !al.SessionAutoApprove(testDefaultAgentID, "adr093-no-modifier") {
+	if !al.SessionAutoApprove("adr093-no-modifier") {
 		t.Fatal("setup: global auto-approve is not on, so a chat's off switch cannot be told apart from the default")
 	}
 }
@@ -290,7 +272,7 @@ func TestAdr093RevivedRoot_ReplyIsDeliveredOnTheOutboundBus(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	t.Cleanup(cleanup)
 	parentID := newTestSteeringSession(t, al, adr093Workspace)
-	adr093StoppedRoot(t, al, parentID)
+	g2StoppedOrdinaryRoot(t, al, parentID)
 	adr093UseProvider(t, al, adr093FixedReplyProvider{reply: adr093RevivedReply})
 
 	msg := adr093HumanMessage("Right, carry on with the plan.", parentID)
@@ -318,7 +300,7 @@ func TestAdr093RevivedRoot_FailedTurnIsNotQueuedAgain(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	t.Cleanup(cleanup)
 	parentID := newTestSteeringSession(t, al, adr093Workspace)
-	adr093StoppedRoot(t, al, parentID)
+	g2StoppedOrdinaryRoot(t, al, parentID)
 	provider := &adr093FailingProvider{}
 	adr093UseProvider(t, al, provider)
 
@@ -371,7 +353,6 @@ func TestAdr093RevivedRoot_DoesNotOverlapTheDyingTurn(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	t.Cleanup(cleanup)
 	parentID := newTestSteeringSession(t, al, adr093Workspace)
-	adr093Persist(t, al, adr093Record(parentID, 1, session.LifecycleRunning))
 	provider := newAdr093OverlapProvider()
 	t.Cleanup(provider.stop)
 	adr093UseProvider(t, al, provider)
@@ -381,7 +362,7 @@ func TestAdr093RevivedRoot_DoesNotOverlapTheDyingTurn(t *testing.T) {
 
 	firstDone := make(chan struct{})
 	go func() {
-		_, _, _ = al.processMessage(context.Background(), adr093HumanMessage("still working", parentID))
+		_, _, _ = al.processMessageAsPrimaryForTest(context.Background(), adr093HumanMessage("still working", parentID))
 		close(firstDone)
 	}()
 	select {
@@ -390,13 +371,23 @@ func TestAdr093RevivedRoot_DoesNotOverlapTheDyingTurn(t *testing.T) {
 		t.Fatal("the in-flight turn never reached the model")
 	}
 
-	stopped := adr093Load(t, al, parentID)
-	stopped.Stop = &session.Stop{At: time.Now(), Generation: stopped.Generation, By: session.Principal{Kind: session.PrincipalKindHuman}}
-	adr093Persist(t, al, stopped)
-
-	go func() {
-		_ = w.enqueue(adr093HumanMessage("Right, carry on with the plan.", parentID))
-	}()
+	selected := adr093Load(t, al, parentID)
+	if selected.ExecutionID == nil {
+		t.Fatal("SETUP: the dying turn has no real admitted execution")
+	}
+	stop, stopErr := al.StopSession(context.Background(), StopRequest{
+		SessionID: parentID, By: steer.Principal{Kind: steer.PrincipalKindHuman, ID: "user-adr093"},
+	})
+	if stopErr != nil || stop.RootErr != nil || len(stop.Report.Unreachable) != 0 {
+		t.Fatalf("Stop while the selected turn is inside the model = %+v, %v", stop, stopErr)
+	}
+	msg := adr093HumanMessage("Right, carry on with the plan.", parentID)
+	// D2: "Landing LifecycleStopped clears the Stop marker ... in the same
+	// mutation." Until that owner landing, a raw fence is an in-flight Stop,
+	// not permission to run beside the selected execution. Retry after landing.
+	if err := al.enqueueSteeringFromMessage(msg); err == nil || !strings.Contains(err.Error(), "retry once the stop has landed") {
+		t.Fatalf("message during in-flight Stop = %v, want the visible retry refusal", err)
+	}
 
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
@@ -410,6 +401,10 @@ func TestAdr093RevivedRoot_DoesNotOverlapTheDyingTurn(t *testing.T) {
 	case <-firstDone:
 	case <-time.After(15 * time.Second):
 		t.Fatal("the in-flight turn did not finish after release")
+	}
+	awaitSteeringRepairStopped(t, al, parentID, selected.Generation)
+	if !w.enqueue(msg) {
+		t.Fatal("the fresh retry after the owner landed Stop was not accepted")
 	}
 	waitUntil := time.Now().Add(15 * time.Second)
 	for provider.entryCount() < 2 && time.Now().Before(waitUntil) {
@@ -430,7 +425,7 @@ func TestAdr093RevivedRoot_ShutdownCancelsTheTurn(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	t.Cleanup(cleanup)
 	parentID := newTestSteeringSession(t, al, adr093Workspace)
-	adr093StoppedRoot(t, al, parentID)
+	g2StoppedOrdinaryRoot(t, al, parentID)
 	provider := newAdr093CancelWatchProvider()
 	t.Cleanup(provider.stop)
 	adr093UseProvider(t, al, provider)
@@ -470,7 +465,7 @@ func TestAdr093StopDuringRevivedTurn_DelegateRefuses(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	t.Cleanup(cleanup)
 	parentID := newTestSteeringSession(t, al, adr093Workspace)
-	adr093StoppedRoot(t, al, parentID)
+	previous := g2StoppedOrdinaryRoot(t, al, parentID)
 	provider, release := installParkedProvider(t, al)
 	defer release()
 
@@ -481,15 +476,20 @@ func TestAdr093StopDuringRevivedTurn_DelegateRefuses(t *testing.T) {
 	adr093WaitForEntered(t, provider, 30*time.Second)
 
 	revived := adr093Load(t, al, parentID)
-	if revived.Generation != 2 {
-		t.Fatalf("generation after revival = %d, want 2 before Stop lands (ADR-093 D4)", revived.Generation)
+	// Frozen D2 CRIT-001: "resumes a stopped child on the same generation
+	// ... only done/failed mints a next generation" (C1 preserves this).
+	if revived.Generation != previous.Generation {
+		t.Fatalf("generation after stopped revival = %d, want the stopped generation %d (D2)", revived.Generation, previous.Generation)
+	}
+	if revived.ExecutionID == nil || previous.ExecutionID == nil || revived.ExecutionID.RunID == previous.ExecutionID.RunID {
+		t.Fatalf("same-generation resume reused its selected execution: before=%+v after=%+v", previous.ExecutionID, revived.ExecutionID)
 	}
 
-	if _, err := al.steerCanceller().CancelSubtree(context.Background(), parentID, steer.Principal{
-		Kind: steer.PrincipalKindHuman,
-		ID:   "user-adr093",
-	}); err != nil {
-		t.Fatalf("CancelSubtree while the revived turn is in flight: %v", err)
+	stop, stopErr := al.StopSession(context.Background(), StopRequest{
+		SessionID: parentID, By: steer.Principal{Kind: steer.PrincipalKindHuman, ID: "user-adr093"}, Tree: true,
+	})
+	if stopErr != nil || stop.RootErr != nil || len(stop.Report.Unreachable) != 0 {
+		t.Fatalf("Stop all while the revived turn is in flight = %+v, %v", stop, stopErr)
 	}
 	release()
 	select {
@@ -519,8 +519,8 @@ func TestAdr093StopDuringRevivedTurn_DelegateRefuses(t *testing.T) {
 		t.Fatalf("lifecycle records after Stop-during-revival = %v, want only the parent %s (no child on the stopped generation)", ids, parentID)
 	}
 	parent := adr093Load(t, al, parentID)
-	if parent.Generation != 2 {
-		t.Fatalf("parent generation = %d, want 2 (the revival's generation, which the newer Stop covers)", parent.Generation)
+	if parent.Generation != previous.Generation {
+		t.Fatalf("parent generation = %d, want %d (the same-generation revival that the newer Stop covers)", parent.Generation, previous.Generation)
 	}
 	if !parent.Stopped() && !parent.Terminal() {
 		t.Fatalf("parent after the concurrent Stop is generation %d state %q with no current Stop — ADR-093: the newer Stop covers that generation", parent.Generation, parent.State)
@@ -555,33 +555,6 @@ func TestDelegateRun_DispatchRefusal_SaysHowToResume(t *testing.T) {
 	assertIssue890RefusalText(t, "ForLLM", result.ForLLM, parentID)
 	if result.ForLLM != adr093D5Sentence {
 		t.Fatalf("dispatch refusal ForLLM =\n%s\nwant ADR-093 D5's sentence\n%s", result.ForLLM, adr093D5Sentence)
-	}
-}
-
-// TestAdr093TaskLaunch_SteeringRefusalUsesThePlainSentence is ADR-093 D5 for
-// the task executor: a launch refused because the creator stopped between
-// the gate and Launch is the plain sentence, not "task_executor: StartTaskNow: launch:".
-func TestAdr093TaskLaunch_SteeringRefusalUsesThePlainSentence(t *testing.T) {
-	al, cleanup := newSteerAL(t)
-	t.Cleanup(cleanup)
-	creatorID := newTestSteeringSession(t, al, adr093Workspace)
-	adr093Persist(t, al, adr093Record(creatorID, 1, session.LifecycleRunning))
-
-	te := adr093TaskExecutor(t, al)
-	te.launcher = adr093RefuseLiveSteering{inner: te.launcher}
-	tk := adr093CreatorTask("Live then stopped", creatorID)
-	if err := te.store.Create(tk); err != nil {
-		t.Fatalf("create task: %v", err)
-	}
-	_, err := te.startTaskNowViaLauncher(context.Background(), tk)
-	if err == nil {
-		t.Fatal("startTaskNowViaLauncher succeeded — ADR-093 D5: a steering refusal is returned to the caller")
-	}
-	if err.Error() != adr093D5Sentence {
-		t.Fatalf("task launch refusal =\n%s\nwant ADR-093 D5's sentence\n%s", err.Error(), adr093D5Sentence)
-	}
-	if strings.Contains(err.Error(), "task_executor:") || strings.Contains(err.Error(), "steer:") {
-		t.Fatalf("task launch refusal still quotes machinery: %s", err.Error())
 	}
 }
 
@@ -621,7 +594,7 @@ func TestAdr093RevivePredicate_SteerWakeOnWebchatDoesNotRevive(t *testing.T) {
 
 	msg := adr093HumanMessage("this is a steer wake, not a person", parentID)
 	msg.Metadata = map[string]string{"steer_message_id": "wake-1"}
-	if _, _, err := al.processMessage(context.Background(), msg); err != nil {
+	if _, _, err := al.processMessageAsPrimaryForTest(context.Background(), msg); err != nil {
 		t.Fatalf("processMessage: %v", err)
 	}
 	got := adr093Load(t, al, parentID)
@@ -630,10 +603,13 @@ func TestAdr093RevivePredicate_SteerWakeOnWebchatDoesNotRevive(t *testing.T) {
 	}
 }
 
-// TestAdr093TaskFromStoppedChat_InheritsNeverAutoApprove is ADR-092's per-chat
-// off switch on ADR-093 D6's path: global auto-approve is on, the chat turned
-// it off, the chat is stopped, and the task started from it must still be off.
-func TestAdr093TaskFromStoppedChat_InheritsNeverAutoApprove(t *testing.T) {
+// TestAdr093TaskFromStoppedChat_DoesNotInheritCreatorAutoApprove is F10: a
+// task run does NOT copy the creating chat's per-chat Auto setting — the run
+// uses the agent's and the global settings (founder ruling F10, session-core
+// U6). Global auto-approve is on and the creating chat turned its own off, so
+// the task session must resolve to the GLOBAL default (on), not the chat's off
+// switch. The creating chat is never the parent and never a recipient.
+func TestAdr093TaskFromStoppedChat_DoesNotInheritCreatorAutoApprove(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	t.Cleanup(cleanup)
 	adr093GlobalAutoOn(t, al)
@@ -651,15 +627,17 @@ func TestAdr093TaskFromStoppedChat_InheritsNeverAutoApprove(t *testing.T) {
 		t.Fatalf("startTaskNowViaLauncher: %v — ADR-093 D6: the task still runs", err)
 	}
 	adr093AssertOrdinaryTaskRoot(t, al, childID, tk.ID)
-	if al.SessionAutoApprove(testDefaultAgentID, childID) {
-		t.Fatalf("task session %s has auto-approve on — the stopped chat had turned it off, and ADR-092's per-chat off switch still applies (D6 does not drop it)", childID)
+	if !al.SessionAutoApprove(childID) {
+		t.Fatalf("task session %s has auto-approve off — F10: the run uses the agent's and global settings, "+
+			"never the creating chat's per-chat setting", childID)
 	}
 }
 
-// TestAdr093TaskFromLiveChat_InheritsNeverAutoApprove is the control: a task
-// from a live chat with the same off switch inherits it. If this fails, the
-// stopped-chat test is not measuring inheritance.
-func TestAdr093TaskFromLiveChat_InheritsNeverAutoApprove(t *testing.T) {
+// TestAdr093TaskFromLiveChat_DoesNotInheritCreatorAutoApprove is the control: a
+// task from a LIVE chat with the same per-chat off switch behaves identically —
+// no inheritance either way. If the stopped-chat case and this disagree, the
+// stopped-chat test is not measuring the F10 rule.
+func TestAdr093TaskFromLiveChat_DoesNotInheritCreatorAutoApprove(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	t.Cleanup(cleanup)
 	adr093GlobalAutoOn(t, al)
@@ -676,8 +654,9 @@ func TestAdr093TaskFromLiveChat_InheritsNeverAutoApprove(t *testing.T) {
 	if err != nil {
 		t.Fatalf("startTaskNowViaLauncher: %v", err)
 	}
-	if al.SessionAutoApprove(testDefaultAgentID, childID) {
-		t.Fatalf("task session %s has auto-approve on — a live chat's off switch must be inherited (control for the stopped-chat case)", childID)
+	if !al.SessionAutoApprove(childID) {
+		t.Fatalf("task session %s has auto-approve off — F10: a live chat's per-chat off switch is NOT "+
+			"inherited either (control for the stopped-chat case)", childID)
 	}
 }
 
@@ -714,30 +693,5 @@ func TestAdr093Revival_MissingRecordIsNotAnErrorLog(t *testing.T) {
 	}
 	if log := readLog(); strings.Contains(log, parentID) {
 		t.Fatalf("a missing lifecycle record was logged at error level:\n%s\nnot-found is not a read failure", log)
-	}
-}
-
-// TestAdr093Task_CreatorReadErrorIsLogged is the same rule on the task path:
-// the creator record could not be read, and that is logged, not dropped.
-func TestAdr093Task_CreatorReadErrorIsLogged(t *testing.T) {
-	al, cleanup := newSteerAL(t)
-	t.Cleanup(cleanup)
-	creatorID := newTestSteeringSession(t, al, adr093Workspace)
-	adr093StoppedRoot(t, al, creatorID)
-	adr093MakeLifecycleUnreadable(t, al, creatorID)
-
-	te := adr093TaskExecutor(t, al)
-	tk := adr093CreatorTask("Unreadable creator", creatorID)
-	if err := te.store.Create(tk); err != nil {
-		t.Fatalf("create task: %v", err)
-	}
-	readLog := captureLogFile(t, logger.ERROR)
-	_, err := te.startTaskNowViaLauncher(context.Background(), tk)
-	log := readLog()
-	if err == nil {
-		t.Fatal("startTaskNowViaLauncher succeeded despite an unreadable creator record")
-	}
-	if !strings.Contains(log, creatorID) || !strings.Contains(strings.ToLower(log), "permission denied") {
-		t.Fatalf("creator-record read error was not logged at error level.\nerr: %v\nlog:\n%s\nwant both %q and \"permission denied\"", err, log, creatorID)
 	}
 }

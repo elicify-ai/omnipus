@@ -49,9 +49,17 @@ export function AgentDelegatePicker({
 
   const candidates = useMemo(
     () =>
+      // NO identity filter here (F6, reverify 60e299a86): a member's ordinary
+      // self-edge IS a valid target, so the source must be offered back to
+      // itself whenever the SHARED model accepts that self-edge — this is the
+      // keyboard path to restore a self-edge that was deleted. Hard-coding
+      // `n.id !== source.id` (or any identity rule) here would duplicate the
+      // model's rules and drift from them; the single source of truth is
+      // `validateConnection`, which already exempts a self-edge from the cycle
+      // check and bounds it by membership/duplicate/system-target like any
+      // other edge. See teamGraphModel.ts::validateConnection's doc comment.
       nodes.filter(
         (n) =>
-          n.id !== source.id &&
           // SD-C17 defense-in-depth: a System agent is never a valid
           // delegation target, even though it cannot appear as a team
           // member (and therefore as a node here) through the supported
@@ -68,8 +76,8 @@ export function AgentDelegatePicker({
           ref={triggerRef}
           data-node-action="delegate"
           data-testid={`team-node-delegate-${source.id}`}
-          aria-label={`Delegate from ${source.name} to another agent`}
-          title="Delegate to another agent — keyboard equivalent of dragging the gold connection dot"
+          aria-label={`Delegate from ${source.name}`}
+          title="Delegate — keyboard equivalent of dragging the gold connection dot onto a target (an agent, or this same agent to add a self-line)"
           className="nodrag h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-accent)]/15 hover:text-[var(--color-accent)]"
           onClick={(e) => e.stopPropagation()}
         >
@@ -94,8 +102,8 @@ export function AgentDelegatePicker({
         <DropdownMenuSeparator />
         {candidates.length === 0 ? (
           <p className="px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
-            No eligible agents — every other team member already has an edge from{' '}
-            {source.name}, or the team has only this one agent.
+            No eligible agents — every possible target already has a delegation
+            edge from {source.name}, or is not a valid target.
           </p>
         ) : (
           candidates.map((n) => (

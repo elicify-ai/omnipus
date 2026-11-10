@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 const addToast = vi.fn()
@@ -43,13 +43,15 @@ const PLATFORM_APP_STATE = {
 
 const CATALOGUE = {
   search: [
-    { id: 'brave', kind: 'search', display_name: 'Brave Search', configured: false, requires_key: true, active: false },
-    { id: 'duckduckgo', kind: 'search', display_name: 'DuckDuckGo', configured: true, requires_key: false, active: true },
+    { id: 'brave', kind: 'search', display_name: 'Brave Search', configured: false, requires_key: true, active: false, usable: false },
+    { id: 'duckduckgo', kind: 'search', display_name: 'DuckDuckGo', configured: true, requires_key: false, active: true, usable: true },
   ],
   voice: [
     { id: 'elevenlabs', kind: 'voice', display_name: 'ElevenLabs Scribe', configured: false, requires_key: true, active: false },
   ],
   active_search: 'duckduckgo',
+  default_search: 'duckduckgo',
+  fallback_search: null,
 }
 
 function makeClient() {
@@ -74,8 +76,8 @@ describe('IntegrationsSection', () => {
   it('lists search and voice providers from the API', async () => {
     renderSection()
     await waitFor(() => {
-      expect(screen.getByText('Brave Search')).toBeInTheDocument()
-      expect(screen.getByText('DuckDuckGo')).toBeInTheDocument()
+      expect(within(screen.getByTestId('search-row-brave')).getByText('Brave Search')).toBeInTheDocument()
+      expect(within(screen.getByTestId('search-row-duckduckgo')).getByText('DuckDuckGo')).toBeInTheDocument()
       expect(screen.getByText('ElevenLabs Scribe')).toBeInTheDocument()
     })
     // Section headings present.
@@ -83,55 +85,28 @@ describe('IntegrationsSection', () => {
     expect(screen.getByText(/voice input/i)).toBeInTheDocument()
   })
 
-  it('marks the active provider', async () => {
+  it('shows the stored DuckDuckGo default on its choice card, not as an old Active badge', async () => {
     renderSection()
-    await waitFor(() => {
-      expect(screen.getByTestId('active-duckduckgo')).toBeInTheDocument()
-    })
+    expect(await screen.findByTestId('default-search-card')).toHaveTextContent('DuckDuckGo')
+    expect(screen.queryByTestId('active-duckduckgo')).not.toBeInTheDocument()
   })
 
-  it('D14: renders a "Needs configuration" badge for a keyless, not-yet-configured provider (SearXNG / audio-model)', async () => {
-    // D14 regression. Root cause: the badge ternary branched only on
-    // `configured` / `requires_key`, with no else-case for
-    // `!configured && !requires_key`. SearXNG (requiresKey:false;
-    // `configured` derives from `BaseURL != ""`, empty by default) and
-    // audio-model (requiresKey:false; `configured` derives from
-    // `voice.model_name`, empty by default) both fall through BOTH branches
-    // on a fresh install and render no badge at all — inert-looking rows
-    // next to every other provider.
+  it('D14: keeps the keyless, not-yet-configured voice-provider badge after removing SearXNG', async () => {
+    // The keyless search service that originally shared this regression was
+    // removed by #1056. Audio Model still needs voice.model_name; the voice
+    // badge must not fall through when configured and requires_key are false.
     vi.mocked(api.fetchIntegrationProviders).mockResolvedValueOnce({
-      search: [
-        {
-          id: 'searxng',
-          kind: 'search',
-          display_name: 'SearXNG',
-          configured: false,
-          requires_key: false,
-          active: false,
-        },
-      ],
-      voice: [
-        {
-          id: 'audio-model',
-          kind: 'voice',
-          display_name: 'Audio Model (provider)',
-          configured: false,
-          requires_key: false,
-          active: false,
-        },
-      ],
-      active_search: 'duckduckgo',
+      search: CATALOGUE.search,
+      voice: [{
+        id: 'audio-model', kind: 'voice', display_name: 'Audio Model (provider)',
+        configured: false, requires_key: false, active: false,
+      }],
+      default_search: 'duckduckgo', fallback_search: null,
     } as never)
     renderSection()
-    await waitFor(() => {
-      expect(screen.getByText('SearXNG')).toBeInTheDocument()
-      expect(screen.getByText('Audio Model (provider)')).toBeInTheDocument()
-    })
-    expect(screen.getByTestId('needs-config-searxng')).toBeInTheDocument()
-    expect(screen.getByTestId('needs-config-searxng')).toHaveTextContent(/needs configuration/i)
-    expect(screen.getByTestId('needs-config-audio-model')).toBeInTheDocument()
-    // Neither row should ALSO show the "Configured"/"Needs API key" badges.
-    expect(screen.queryByTestId('active-searxng')).not.toBeInTheDocument()
+    expect(await screen.findByText('Audio Model (provider)')).toBeInTheDocument()
+    expect(screen.getByTestId('needs-config-audio-model')).toHaveTextContent(/needs configuration/i)
+    expect(screen.queryByText('Configured')).not.toBeInTheDocument()
   })
 
   // FR-OB-041/042: exactly Cancel and one confirm, no input of any kind, and
@@ -140,7 +115,7 @@ describe('IntegrationsSection', () => {
     renderSection()
     await waitFor(() => screen.getByText('Brave Search'))
 
-    // Expand Brave's key form, type a key, and click Save & activate.
+    // Expand Brave's key form, type a key, and click Save key; roles stay unchanged.
     fireEvent.click(screen.getByTestId('addkey-brave'))
     fireEvent.change(screen.getByTestId('key-input-brave'), { target: { value: 'BSA-secret' } })
     fireEvent.click(screen.getByTestId('save-brave'))
@@ -173,7 +148,7 @@ describe('IntegrationsSection', () => {
       // run(token) positionally.
       expect(api.configureIntegrationProvider).toHaveBeenCalledWith(
         'brave',
-        { kind: 'search', api_key: 'BSA-secret', active: true },
+        { kind: 'search', api_key: 'BSA-secret' },
         undefined,
       )
     })

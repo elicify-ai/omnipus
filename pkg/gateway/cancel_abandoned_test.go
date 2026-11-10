@@ -26,6 +26,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -100,7 +101,7 @@ func (p *stubbornProvider) GetDefaultModel() string { return "stubborn-provider"
 // TestCancel_AbandonedAfterHardTimeout (T7) — verifies that:
 //  1. A cancel on a running turn produces a graceful stage frame immediately.
 //  2. When the turn outlives the 3s hard-abort window, the hard stage fires.
-//  3. When the turn outlives the 5s detach window (8s total), MarkAbandoned is
+//  3. When the turn outlives the 3s detach window (6s total), MarkAbandoned is
 //     called, the detached stage frame is emitted, and the session status is
 //     set to interrupted.
 //  4. Any output the stuck goroutine attempts to emit after abandonment is
@@ -109,7 +110,7 @@ func (p *stubbornProvider) GetDefaultModel() string { return "stubborn-provider"
 // Theater smell: old test manually set isAbandoned=true on a fakeTurnHook and
 // manually emitted the audit event. This version drives real timers.
 //
-// NOTE: This test waits ~9 seconds for the real hard + detach timers. It does
+// NOTE: This test waits ~7 seconds for the real hard + detach timers. It does
 // not use t.Parallel() to avoid compressing the overall test timeout budget.
 //
 // Traces to: pkg/agent/cancel.go:252-276 (Phase C timer + MarkAbandoned).
@@ -120,7 +121,7 @@ func TestCancel_AbandonedAfterHardTimeout(t *testing.T) {
 	workspaceDir := filepath.Join(tmpDir, "workspace")
 	require.NoError(t, os.MkdirAll(workspaceDir, 0o755))
 
-	// Block for 30s — well past the 3+5=8s combined timer window.
+	// Block for 30s — well past the 3+3=6s combined timer window.
 	// The shutdownCh allows cleanup to unblock the goroutine after the test
 	// ends. sp.Shutdown is registered LAST below (closest to the test body
 	// end) so t.Cleanup's LIFO ordering runs it FIRST — unblocking the
@@ -194,7 +195,7 @@ func TestCancel_AbandonedAfterHardTimeout(t *testing.T) {
 	sendWSAuthFrameDevMode(t, conn)
 
 	// Start a real blocking turn.
-	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "start stubborn turn"}
+	msgFrame := wsClientFrameTestHelper{Type: "message", Content: "start stubborn turn", AgentID: "mia"}
 	data, err := json.Marshal(msgFrame)
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
@@ -202,6 +203,26 @@ func TestCancel_AbandonedAfterHardTimeout(t *testing.T) {
 	started := readFrameOfType(t, conn, "session_started", 5*time.Second)
 	sessionID := started.SessionID
 	require.NotEmpty(t, sessionID)
+
+	// qa-lead strengthening (issue #1161): a freshly-created session already
+	// starts at StatusActive (pkg/session/unified.go::createSessionLocked),
+	// so asserting StatusActive after cancel would be vacuous on its own —
+	// it would pass identically whether the cancel path's status-mirror ran
+	// or was deleted outright. Seed a DIFFERENT starting status here so the
+	// post-cancel StatusActive assertion below is only true if something in
+	// the cancel path actually wrote it back. This is sound specifically
+	// because the WS cancel path's SetSessionInterrupted hook
+	// (pkg/gateway/websocket_cancel.go::buildCancelHooksWithReport) does an
+	// UNCONDITIONAL explicit write — `status := session.StatusActive;
+	// store.SetMeta(sid, session.MetaPatch{Status: &status})` — not a
+	// skip-if-already-right no-op, so it converges any starting value back
+	// to active; deleting that hook/write would leave the session at the
+	// seeded non-active value instead.
+	preStore := al.ResolveSessionStore(sessionID)
+	require.NotNil(t, preStore, "session store must resolve for a session that just reported session_started")
+	seedStatus := session.StatusFailed
+	require.NoError(t, preStore.SetMeta(sessionID, session.MetaPatch{Status: &seedStatus}),
+		"seed the session to a non-active status before cancel")
 
 	// Wait until the stubborn provider is inside Chat.
 	select {
@@ -216,24 +237,41 @@ func TestCancel_AbandonedAfterHardTimeout(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, cancelData))
 
-	// Collect cancel_stage frames for up to 11 seconds (graceful + 3s hard + 5s detach + margin).
-	stages := readCancelStageFrames(conn, 11*time.Second)
+	// Collect cancel_stage frames with their arrival offsets for 8 seconds:
+	// the founder's one-stop decision (2026-10-05) fixes the timeline at
+	// polite stop immediately, forced stop at 3 s, detach 3 s after the forced
+	// stop (6 s total). Nothing in the stop path waits 5 s any more, so the
+	// detached stage MUST arrive inside this window.
+	cancelSentAt := time.Now()
+	stages := readTimedCancelStageFrames(conn, cancelSentAt, 8*time.Second)
+	names := stageNames(stages)
 
-	// ASSERT: "graceful" must appear first.
-	require.Contains(t, stages, "graceful",
+	// ASSERT: "graceful" must appear first and immediately.
+	require.Contains(t, names, "graceful",
 		"'graceful' cancel_stage must be emitted immediately after cancel; got: %v", stages)
+	assert.Less(t, offsetOf(stages, "graceful"), 1500*time.Millisecond,
+		"polite stop is immediate; got stages %v", stages)
 
-	// ASSERT: "hard" must appear ~3s after graceful.
-	assert.Contains(t, stages, "hard",
+	// ASSERT: "hard" is the forced stop, 3 s after the polite stop.
+	require.Contains(t, names, "hard",
 		"'hard' cancel_stage must be emitted ~3s after graceful when turn does not self-terminate; got: %v", stages)
+	hardAt := offsetOf(stages, "hard")
+	assert.GreaterOrEqual(t, hardAt, 2500*time.Millisecond, "forced stop must not fire before ~3s; got %v", stages)
+	assert.LessOrEqual(t, hardAt, 4200*time.Millisecond, "forced stop must fire at ~3s; got %v", stages)
 
-	// ASSERT: "detached" must appear ~5s after hard (8s total).
-	assert.Contains(t, stages, "detached",
-		"'detached' cancel_stage must be emitted ~8s after cancel when turn is still alive; got: %v", stages)
+	// ASSERT: "detached" arrives 3 s after the forced stop, not 5 s.
+	require.Contains(t, names, "detached",
+		"'detached' cancel_stage must be emitted ~3s after the forced stop (~6s after cancel) while the turn is "+
+			"still alive; got: %v", stages)
+	detachedAt := offsetOf(stages, "detached")
+	assert.GreaterOrEqual(t, detachedAt-hardAt, 2500*time.Millisecond,
+		"detach must wait ~3s after the forced stop; got %v", stages)
+	assert.LessOrEqual(t, detachedAt-hardAt, 4200*time.Millisecond,
+		"detach must fire 3s (not 5s) after the forced stop; got %v", stages)
 
 	// ASSERT: stage ordering — graceful before hard before detached.
 	stageIdx := func(s string) int {
-		for i, stage := range stages {
+		for i, stage := range names {
 			if stage == s {
 				return i
 			}
@@ -248,13 +286,22 @@ func TestCancel_AbandonedAfterHardTimeout(t *testing.T) {
 		assert.Less(t, hi, di, "'hard' must precede 'detached'")
 	}
 
-	// ASSERT: session status must be interrupted in meta.
+	// ASSERT: session status CONVERGES to coarse-active after cancel
+	// (sub-agent control plane ADR D4/MAJ-009 — a cancel is a stop, not a
+	// failure; the retired StatusInterrupted is never written). The session
+	// was seeded to StatusFailed above, so this is only true if the cancel
+	// path's SetSessionInterrupted hook actually ran its explicit
+	// write-back — see the seeding comment above for why that write (not a
+	// no-op) makes this a real, non-vacuous proof instead of just observing
+	// an untouched freshly-created default.
 	store := al.ResolveSessionStore(sessionID)
 	if store != nil {
 		meta, err := store.GetMeta(sessionID)
 		if err == nil {
-			assert.Equal(t, session.StatusInterrupted, meta.Status,
-				"session status must be 'interrupted' after cancel")
+			assert.Equal(t, session.StatusActive, meta.Status,
+				"session status must converge to 'active' after cancel (ADR D4) — "+
+					"it was seeded to 'failed' before the cancel fired, so this only "+
+					"passes if the cancel path's status write-back actually ran")
 		}
 	}
 
@@ -270,4 +317,56 @@ func TestCancel_AbandonedAfterHardTimeout(t *testing.T) {
 	// matters is the three stage frames arrived in order.
 
 	cancelCtx()
+}
+
+// timedCancelStage is one cancel_stage frame and when it arrived, measured
+// from the moment the cancel frame was sent.
+type timedCancelStage struct {
+	stage  string
+	offset time.Duration
+}
+
+// readTimedCancelStageFrames drains WebSocket frames for at most `timeout` and
+// returns every cancel_stage frame with its arrival offset from `since`.
+func readTimedCancelStageFrames(conn *websocket.Conn, since time.Time, timeout time.Duration) []timedCancelStage {
+	deadline := since.Add(timeout)
+	var out []timedCancelStage
+	for time.Now().Before(deadline) {
+		_ = conn.SetReadDeadline(deadline) // test websocket conn deadline; failure only affects test timing
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			break
+		}
+		var f struct {
+			Type  string `json:"type"`
+			Stage string `json:"stage"`
+		}
+		if json.Unmarshal(raw, &f) == nil && f.Type == "cancel_stage" {
+			out = append(out, timedCancelStage{stage: f.Stage, offset: time.Since(since)})
+		}
+	}
+	return out
+}
+
+func (s timedCancelStage) String() string {
+	return fmt.Sprintf("%s@%v", s.stage, s.offset.Round(time.Millisecond))
+}
+
+func stageNames(in []timedCancelStage) []string {
+	names := make([]string, 0, len(in))
+	for _, s := range in {
+		names = append(names, s.stage)
+	}
+	return names
+}
+
+// offsetOf returns the arrival offset of the first frame for stage, or a huge
+// duration when the stage never arrived (so a missing stage fails range checks).
+func offsetOf(in []timedCancelStage, stage string) time.Duration {
+	for _, s := range in {
+		if s.stage == stage {
+			return s.offset
+		}
+	}
+	return time.Hour
 }

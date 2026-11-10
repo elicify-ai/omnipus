@@ -41,7 +41,7 @@ func TestRecallMark_SingleProducerSanitised(t *testing.T) {
 
 	for _, state := range []string{"emptied", "capped"} {
 		t.Run(state, func(t *testing.T) {
-			mark, err := buildRecallMark(state, hostileName, hostileID, 6, content, turnNumberForArchiveLine(archive, 6))
+			mark, err := buildRecallMark(state, hostileName, hostileID, 6, content, turnNumberForArchiveLine(denseArchive(archive), 6))
 			require.NoError(t, err)
 
 			var parsed map[string]any
@@ -75,13 +75,13 @@ func TestRecallMark_SingleProducerSanitised(t *testing.T) {
 	}
 
 	t.Run("turn number counts only preceding user lines", func(t *testing.T) {
-		assert.Equal(t, 1, turnNumberForArchiveLine(archive, 0))
-		assert.Equal(t, 1, turnNumberForArchiveLine(archive, 1), "the user line itself is not preceding")
-		assert.Equal(t, 2, turnNumberForArchiveLine(archive, 3))
-		assert.Equal(t, 3, turnNumberForArchiveLine(archive, 6))
-		assert.Equal(t, 3, turnNumberForArchiveLine(archive, 7), "the user line at 7 is not preceding itself")
-		assert.Equal(t, 4, turnNumberForArchiveLine(archive, 99), "a line past the end counts every user line")
-		assert.Equal(t, 1, turnNumberForArchiveLine(archive, -1))
+		assert.Equal(t, 1, turnNumberForArchiveLine(denseArchive(archive), 0))
+		assert.Equal(t, 1, turnNumberForArchiveLine(denseArchive(archive), 1), "the user line itself is not preceding")
+		assert.Equal(t, 2, turnNumberForArchiveLine(denseArchive(archive), 3))
+		assert.Equal(t, 3, turnNumberForArchiveLine(denseArchive(archive), 6))
+		assert.Equal(t, 3, turnNumberForArchiveLine(denseArchive(archive), 7), "the user line at 7 is not preceding itself")
+		assert.Equal(t, 4, turnNumberForArchiveLine(denseArchive(archive), 99), "a line past the end counts every user line")
+		assert.Equal(t, 1, turnNumberForArchiveLine(denseArchive(archive), -1))
 	})
 
 	t.Run("unknown state is refused", func(t *testing.T) {

@@ -79,15 +79,14 @@ func TestUpsertAgentFast_ConcurrentFullReload_CfgNotReverted(t *testing.T) {
 		ID: "gamma", Name: "Gamma", Type: config.AgentTypeCustom,
 	})
 
-	// cfgReload: an INDEPENDENT full-reload snapshot — adds "delta" and sets
-	// it as the configured default agent. Represents an unrelated admin
+	// cfgReload: an INDEPENDENT full-reload snapshot — adds "delta".
+	// Represents an unrelated admin
 	// action (e.g. a Settings change) that completes entirely while
 	// goroutine A is mid-flight, exactly per the bug's traced interleaving.
 	cfgReload := cloneCfg(t, al.GetConfig())
 	cfgReload.Agents.List = append(cfgReload.Agents.List, config.AgentConfig{
 		ID: "delta", Name: "Delta", Type: config.AgentTypeCustom,
 	})
-	cfgReload.Agents.Defaults.DefaultAgentID = "delta"
 
 	snapshotTaken := make(chan struct{})
 	reloadDone := make(chan struct{})
@@ -123,17 +122,21 @@ func TestUpsertAgentFast_ConcurrentFullReload_CfgNotReverted(t *testing.T) {
 	require.NoError(t, fastErr, "UpsertAgentFast must still succeed after losing the CAS race and retrying")
 
 	// --- The reload's own installed state must survive (BUG 1's core claim). ---
-	def := al.GetRegistry().GetDefaultAgent()
-	require.NotNil(t, def)
-	require.Equal(t, "delta", def.ID,
-		"GetDefaultAgent must resolve to the agent the concurrent reload installed as default (\"delta\") — "+
-			"resolving to the \"main\" sentinel instead means UpsertAgentFast's retry silently reverted the "+
-			"reload's default-agent override (BUG 1)")
+	_, deltaLive := al.GetRegistry().GetAgent("delta")
+	require.True(t, deltaLive,
+		"the agent the concurrent reload installed (\"delta\") must still be registered — losing it means "+
+			"UpsertAgentFast's retry silently reverted the reload (BUG 1)")
 
 	liveCfg := al.GetConfig()
-	require.Equal(t, "delta", liveCfg.Agents.Defaults.DefaultAgentID,
-		"al.cfg's default-agent override must still be \"delta\" after the race — reverting to \"\" is "+
-			"exactly BUG 1's silent `al.cfg = cfg` revert of a stale snapshot")
+	deltaInCfg := false
+	for i := range liveCfg.Agents.List {
+		if liveCfg.Agents.List[i].ID == "delta" {
+			deltaInCfg = true
+		}
+	}
+	require.True(t, deltaInCfg,
+		"al.cfg must still list \"delta\" after the race — dropping it is exactly BUG 1's silent "+
+			"`al.cfg = cfg` revert of a stale snapshot")
 
 	// --- Goroutine A's OWN request must not have been lost either — the fix
 	// must not trade "don't revert the reload" for "drop the caller's own

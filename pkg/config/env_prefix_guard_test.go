@@ -252,17 +252,16 @@ func TestBrowserToolConfig_EnvOverride_ActuallyOverridesJSON(t *testing.T) {
 }
 
 // TestPerformanceDelegation_EnvOverride_ActuallyOverridesJSON is the
-// revert-proof test for the two delegation limits folded into Performance.
+// revert-proof test for the delegation depth limit folded into Performance.
 func TestPerformanceDelegation_EnvOverride_ActuallyOverridesJSON(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := tmpDir + "/config.json"
-	configJSON := `{"version":1,"performance":{"max_delegation_depth":3,"delegation_timeout_minutes":4}}`
+	configJSON := `{"version":1,"performance":{"max_delegation_depth":3}}`
 	if err := writeTestConfigFile(t, configPath, configJSON); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
 	t.Setenv("OMNIPUS_PERFORMANCE_MAX_DELEGATION_DEPTH", "9")
-	t.Setenv("OMNIPUS_PERFORMANCE_DELEGATION_TIMEOUT_MINUTES", "12")
 
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
@@ -273,12 +272,6 @@ func TestPerformanceDelegation_EnvOverride_ActuallyOverridesJSON(t *testing.T) {
 		t.Errorf(
 			"Performance.MaxDelegationDepth=%d: env override did not replace JSON 3",
 			cfg.Performance.MaxDelegationDepth,
-		)
-	}
-	if cfg.Performance.DelegationTimeoutMinutes != 12 {
-		t.Errorf(
-			"Performance.DelegationTimeoutMinutes=%d: env override did not replace JSON 4",
-			cfg.Performance.DelegationTimeoutMinutes,
 		)
 	}
 }

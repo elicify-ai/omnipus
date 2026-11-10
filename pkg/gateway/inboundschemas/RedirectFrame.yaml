@@ -1,0 +1,52 @@
+title: RedirectFrame
+description: >
+  Client → server. `/stop-redirect <text>` for one chat — the wire transport
+  of the command (founder rule 2026-10-06; ADR-20260928 sub-agent control
+  plane, D2 redirect sequence, D9): stop THIS session's own current turn, then
+  continue THIS session with `instruction` as its next user message. It works
+  on any session the caller is in, root chat or helper, and never touches any
+  other session. A helper session is resumed on the same generation; an
+  ordinary chat is continued as its next turn on the chat's own channel and
+  chat. The SPA sends this frame from its client-side interception of the
+  typed command — never as chat text, which mid-stream would only enter the
+  steering queue. There is deliberately no scope field. The server's redirect
+  handler owns the runtime checks a JSON Schema cannot express: the
+  16384-byte instruction ceiling (maxLength counts characters, not UTF-8
+  bytes), the authoritative Unicode-aware trim behind the nonblank rule, and
+  D4's existing redirect rate/body-cap semantics — this frame adds no cap or
+  rate behavior of its own.
+type: object
+required:
+  - type
+  - session_id
+  - instruction
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: redirect
+  session_id:
+    type: string
+    minLength: 1
+    maxLength: 255
+    description: >
+      The session to redirect: the chat the command was typed in, root chat or
+      helper. Its own current turn is stopped and the chat continues with the
+      instruction; no other session is affected.
+  instruction:
+    type: string
+    minLength: 1
+    maxLength: 16384
+    pattern: '\S'
+    description: >
+      The redirect instruction; becomes the next user message of the continued
+      chat. Must be nonblank after whitespace trimming — a blank or
+      whitespace-only instruction gets a usage reply and changes nothing
+      (D9 row 2). `pattern: '\S'` is only a client-side approximation (any
+      non-whitespace character anywhere); the authoritative check is the
+      server's Unicode-aware trim. Ceiling: 16384 UTF-8 bytes (16 KiB, the
+      D4/T22 steer-body ceiling — exactly 16 KiB accepted, over refused).
+      JSON Schema maxLength counts characters (UTF-16 code units), not bytes,
+      so maxLength: 16384 does NOT prove byte-bound enforcement; the server
+      redirect handler MUST enforce the byte ceiling at runtime.
+    example: "Skip the xlsx shard, export the CSV now."

@@ -22,6 +22,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/notifications"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // scheduledExecutor is the subset of *agent.AgentLoop the runner needs. It is an
@@ -40,29 +41,21 @@ type agentChecker interface {
 	IsRegistered(agentID string) bool
 }
 
-// scheduledCanceller is the subset of *agent.AgentLoop used to force-abort a
-// scheduled run that overran its deadline (FR-003/FR-006). Defined as an
-// interface so the runner can be tested without a full agent loop.
-type scheduledCanceller interface {
-	RequestCancel(
-		ctx context.Context,
-		scope agent.CancelScope,
-		canceller agent.CancelCanceller,
-		hooks agent.CancelHooks,
-	) (agent.CancelOutcome, error)
-}
-
 // scheduledRunner implements cron.ScheduledRunner (#264). It wakes a fired
-// schedule's OWNING agent in the session mode the schedule chose, under a
-// per-run deadline, and on failure raises a notification + a channel alert to
+// schedule's OWNING agent in the session mode the schedule chose, with no
+// time limit (issue #1306), and on failure raises a notification + a channel alert to
 // the owning agent's default channel. It NEVER falls back to the default agent.
 type scheduledRunner struct {
 	exec      scheduledExecutor
 	checker   agentChecker
-	canceller scheduledCanceller
 	msgBus    *bus.MessageBus
 	notifs    *notifications.Store
 	getConfig func() *config.Config
+
+	// home is the OMNIPUS_HOME the runner resolves workspaces under; empty (a
+	// runner built without it) resolves config.OmnipusHomeDir(), the same home the
+	// rest of the gateway uses. A test or embedded host sets it directly.
+	home string
 
 	// procTrack records a child PID spawned during a run under the run's session
 	// id (FR-011). It is installed on the ProcessScheduled context so the exec/
@@ -77,9 +70,7 @@ type scheduledRunner struct {
 }
 
 // newScheduledRunner builds the runner. getConfig is read at run time so the
-// runner always sees the live (possibly hot-reloaded) config. If exec also
-// implements scheduledCanceller (the real *agent.AgentLoop does), it is used to
-// force-abort a run that overran its deadline (FR-003).
+// runner always sees the live (possibly hot-reloaded) config.
 func newScheduledRunner(
 	exec scheduledExecutor,
 	checker agentChecker,
@@ -94,10 +85,15 @@ func newScheduledRunner(
 		notifs:    notifs,
 		getConfig: getConfig,
 	}
-	if c, ok := exec.(scheduledCanceller); ok {
-		r.canceller = c
-	}
 	return r
+}
+
+// homeDir is the OMNIPUS_HOME this runner resolves workspaces under.
+func (r *scheduledRunner) homeDir() string {
+	if r.home != "" {
+		return r.home
+	}
+	return config.OmnipusHomeDir()
 }
 
 // RunScheduled is the owner-aware fire path (FR-001/FR-003/FR-004/FR-013/FR-014).
@@ -144,23 +140,16 @@ func (r *scheduledRunner) RunScheduled(ctx context.Context, job *cron.CronJob) (
 		return "", err
 	}
 
-	// Per-run deadline (FR-003): per-schedule override else global default.
-	timeout := job.TimeoutSeconds
-	if timeout <= 0 {
-		if cfg := r.getConfig(); cfg != nil {
-			timeout = cfg.Schedules.RunTimeoutSeconds
-		}
-		if timeout <= 0 {
-			timeout = config.DefaultSchedulesRunTimeoutSeconds
-		}
-	}
-	ctx2, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
-	defer cancel()
+	// No per-run deadline (issue #1306): a scheduled run ends when the owning
+	// agent's turn finishes or an explicit Stop cancels it — never on a
+	// timer. The retired schedules.run_timeout_seconds / per-schedule
+	// timeout_seconds keys are ignored when an older install still has them.
+	ctx2 := ctx
 
 	// FR-011: install a per-run child-process tracker on the run context so the
 	// exec/shell tools (which call tools.TrackProcess after spawning a child)
 	// record their PIDs under THIS run's session id. cleanupRunProcesses below
-	// then terminates exactly those PIDs on completion (success/error/timeout).
+	// then terminates exactly those PIDs on completion (success/error).
 	if r.procTrack != nil {
 		sid := sessionID
 		ctx2 = tools.WithProcessTracker(ctx2, func(pid int) { r.procTrack(sid, pid) })
@@ -182,16 +171,7 @@ func (r *scheduledRunner) RunScheduled(ctx context.Context, job *cron.CronJob) (
 	// EmitToolPolicyAskDenied has a fixed field set without them.
 	ctx2 = agent.WithScheduledJobContext(ctx2, job.ID, job.Name)
 
-	// Run the owning agent's turn. If the deadline fires while the turn is
-	// still going, force-abort it via RequestCancel(CancelScope{SessionID}) and
-	// allow a short cleanup window, then return a deadline error so the lane
-	// records a "timeout" run (FR-003/FR-006). A watcher goroutine triggers the
-	// cancel exactly once on ctx2.Done() while ProcessScheduled is in flight.
-	runDone := make(chan struct{})
-	go r.watchDeadline(ctx2, runDone, sessionID, owner)
-
 	reply, runErr := r.exec.ProcessScheduled(ctx2, owner, sessionID, job.Payload.Message, "", "")
-	close(runDone)
 	// M6: ProcessScheduled runs the turn with SendResponse:false,
 	// so the agent's final text reply is NOT auto-published to any channel. If the
 	// agent wants to message a user, it does so via the message tool during its
@@ -211,124 +191,16 @@ func (r *scheduledRunner) RunScheduled(ctx context.Context, job *cron.CronJob) (
 				"owner":       owner,
 				"error":       runErr.Error(),
 			})
-		// Surface the deadline as a context.DeadlineExceeded error so the cron
-		// lane classifies the run record Status as "timeout" (errors.Is). The
-		// underlying agent error is wrapped so it stays inspectable.
-		if ctx2.Err() == context.DeadlineExceeded {
-			runErr = fmt.Errorf("scheduled run timed out after %ds: %w", timeout, context.DeadlineExceeded)
-		} else {
-			// Classify transient provider errors so the lane schedules a backoff
-			// retry (FR-010). Wrapping in *cron.TransientError lets cron.IsTransient
-			// detect it without coupling cron to provider error types.
-			if isTransientRunError(runErr) {
-				runErr = &cron.TransientError{Err: runErr}
-			}
+		// Classify transient provider errors so the lane schedules a backoff
+		// retry (FR-010). Wrapping in *cron.TransientError lets cron.IsTransient
+		// detect it without coupling cron to provider error types.
+		if isTransientRunError(runErr) {
+			runErr = &cron.TransientError{Err: runErr}
 		}
 		r.onFailure(job, sessionID, runErr)
 		return sessionID, runErr
 	}
 	return sessionID, nil
-}
-
-// watchDeadline force-aborts the in-flight scheduled run when ctx2's deadline
-// fires (FR-003/FR-006). It returns immediately if the run completes first
-// (runDone closed). On deadline it issues RequestCancel against the run's
-// session and allows a short cleanup window for the turn to tear down.
-func (r *scheduledRunner) watchDeadline(ctx2 context.Context, runDone <-chan struct{}, sessionID, owner string) {
-	select {
-	case <-runDone:
-		return
-	case <-ctx2.Done():
-		if ctx2.Err() != context.DeadlineExceeded || r.canceller == nil || sessionID == "" {
-			return
-		}
-		logger.WarnCF("gateway", "scheduled run exceeded deadline — force-aborting",
-			map[string]any{"session_id": sessionID, "owner": owner})
-		// Force-abort the turn registered under this session id. Use a detached
-		// context so the cancel itself is not aborted by the just-expired ctx2.
-		cancelCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		outcome, cancelErr := r.canceller.RequestCancel(cancelCtx,
-			agent.CancelScope{SessionID: sessionID},
-			agent.CancelCanceller{UserID: "scheduler", Channel: "cron"},
-			agent.CancelHooks{
-				// Cascade the scheduled-run force-abort to any detached
-				// background bash/exec sessions this run's session started
-				// (FR-B10/FR-B11). The returned counts flow back through
-				// RequestCancel into the turn_canceled audit event's
-				// background_sessions_killed/background_sessions_failed
-				// fields.
-				KillBackgroundSessions: func(sid string) (killed, failed int) {
-					return tools.GetSharedSessionManager().KillAllForSession(sid)
-				},
-				// OnLatchExpired: this force-abort found no active turn and
-				// (per outcome.Armed, logged just below) may have armed a
-				// pre-registration cancel latch (pkg/agent/cancel_prearm.go)
-				// in its place — deadline enforcement DEFERRED to the next
-				// turn to register under this session, not skipped. If that
-				// latch itself ages out (cancelPreArmTTL) with no turn ever
-				// registering, deferred became NEVER: the scheduled run's
-				// deadline was silently never enforced at all. There is no
-				// browser watching a cron run (unlike handleCancel's WS
-				// path), so an operator-visible log is this surface's only
-				// possible signal — notifyLatchExpired already logs a
-				// generic Warn unconditionally; this adds the cron-specific
-				// context (which run, which owner) so it is findable against
-				// "scheduled run exceeded deadline" above rather than an
-				// unattributed line.
-				OnLatchExpired: func(scope agent.CancelScope, canceller agent.CancelCanceller) {
-					logger.WarnCF("gateway", "scheduled run deadline force-abort's pre-registration cancel latch expired unconsumed — the run was never actually force-aborted",
-						map[string]any{
-							"session_id":        scope.SessionID,
-							"owner":             owner,
-							"canceller_channel": canceller.Channel,
-						})
-				},
-			})
-		if cancelErr == nil {
-			if !outcome.Fired {
-				// A force-abort that targeted no active turn is worth observing: the
-				// run may have already completed between the deadline check and the
-				// cancel, or the turn was never registered under this session id.
-				// outcome.Armed distinguishes the two (CancelOutcome.Armed doc
-				// comment, pkg/agent/cancel.go): true means RequestCancel latched a
-				// pre-registration cancel (pkg/agent/cancel_prearm.go) that fires
-				// the instant a turn registers under this session, bounded by the
-				// latch's TTL — deadline enforcement is DEFERRED, not skipped;
-				// false means there is genuinely nothing left to enforce against.
-				logger.DebugCF("gateway", "scheduled run force-abort hit no active turn",
-					map[string]any{"session_id": sessionID, "owner": owner, "armed": outcome.Armed})
-				if outcome.Armed {
-					logger.InfoCF("gateway", "scheduled run force-abort armed a pre-registration cancel latch — deadline enforcement deferred to the next turn registration for this session, bounded by the latch TTL",
-						map[string]any{"session_id": sessionID, "owner": owner})
-				}
-			}
-			// Observability fix: even when the run's own turn is already
-			// gone (!Fired — e.g. it dispatched a `bash
-			// run_in_background=true` job and returned before the deadline
-			// fired), the kill cascade above still runs unconditionally and
-			// may have killed real background work. There is no live client
-			// connection to notify here (unlike the WS handleCancel path),
-			// so an INFO log is this surface's equivalent observability
-			// signal — an operator scanning gateway.log for this run should
-			// see that background work was cleaned up, not just silence.
-			if outcome.BackgroundSessionsKilled > 0 || outcome.BackgroundSessionsFailed > 0 {
-				logger.InfoCF("gateway", "scheduled run force-abort killed background session(s)",
-					map[string]any{
-						"session_id":                 sessionID,
-						"owner":                      owner,
-						"background_sessions_killed": outcome.BackgroundSessionsKilled,
-						"background_sessions_failed": outcome.BackgroundSessionsFailed,
-					})
-			}
-		}
-		// Short cleanup window: let the turn observe the cancel and unwind before
-		// ProcessScheduled returns.
-		select {
-		case <-runDone:
-		case <-time.After(2 * time.Second):
-		}
-	}
 }
 
 // setProcessCleanup wires the best-effort per-run child-process cleanup hook
@@ -350,17 +222,17 @@ func (r *scheduledRunner) setProcessTracker(fn func(sessionID string, pid int)) 
 // paths: the runner installs a tools.ProcessTracker on the run context keyed to
 // the run's session id, and ExecTool.runSync / ExecTool.runBackground call
 // tools.TrackProcess(ctx, pid) after spawning a child, which lands here via
-// Track. On run completion (success, error, or timeout) the runner calls
+// Track. On run completion (success or error) the runner calls
 // Cleanup(sessionID), which terminates and forgets every tracked PID for that
 // session.
 //
 // Residual / NOT covered:
 //   - Sandbox-ON exec (ExecTool.runSyncHardened → sandbox.Run) is NOT tracked
 //     here: sandbox.Run owns its child's full lifecycle and force-kills it
-//     (SIGTERM→SIGKILL) on context cancel/timeout via the run's own ctx2, so a
+//     (SIGTERM→SIGKILL) on context cancel via the run's own ctx2, so a
 //     hardened child cannot outlive the run regardless of this registry. Adding
 //     a PID hook through sandbox.Run would require threading a callback through
-//     the hardened-exec API for no additional safety on the timeout path.
+//     the hardened-exec API for no additional safety on the cancel path.
 //   - Browser/chromedp processes are not tracked: chromedp manages its own
 //     allocator lifecycle tied to the run context. This is the known residual.
 //
@@ -483,6 +355,26 @@ func (r *scheduledRunner) stampScheduledSessionOwner(store *session.UnifiedStore
 	}
 }
 
+// adoptScheduledMainOwner gives an ownerless main its first owner through
+// UnifiedStore.AdoptMainSessionOwner: the check and the write are one locked
+// step, unlike stampScheduledSessionOwner's read-then-SetMeta, and the main's
+// recency is not bumped. A failure is non-fatal for the run, like the
+// non-main stamp: the run proceeds and the main stays ownerless until a later
+// adoption; it is logged at warning level with the cause. A successful
+// adoption is logged at Info.
+func (r *scheduledRunner) adoptScheduledMainOwner(store *session.UnifiedStore, sessionID, mainOwner string) {
+	adopted, err := store.AdoptMainSessionOwner(sessionID, mainOwner)
+	if err != nil {
+		logger.WarnCF("gateway", "scheduled run: could not record the main session owner",
+			map[string]any{"session_id": sessionID, "owner": mainOwner, "error": err.Error()})
+		return
+	}
+	if adopted {
+		logger.InfoCF("gateway", "scheduled run: main session owner recorded",
+			map[string]any{"session_id": sessionID, "owner": mainOwner})
+	}
+}
+
 // pickSession resolves the session id for the run per session mode (W-2). The
 // session is created/looked up BEFORE the run so ProcessScheduled can register
 // the cancellable turn under it. On a pruned continue-session, it falls back to
@@ -545,12 +437,54 @@ func (r *scheduledRunner) pickSession(job *cron.CronJob, owner string) (string, 
 		return meta.ID, nil
 
 	case cron.SessionModeMain:
-		id := "sched-main-" + owner
-		meta, err := store.GetOrCreateScheduledSession(id, owner)
+		// session-core U1 / DEL-01: the standing main is the pair's COMPUTED
+		// session (main-session-<workspace>+<agent>), not a per-agent
+		// `sched-main-<owner>` id. The workspace is what makes the pair — and
+		// therefore the main — well defined; a job that carries none has no
+		// main to resolve and must refuse visibly rather than fall back to a
+		// second naming scheme.
+		if workspaceID == "" {
+			// A derived-MAIN schedule (FR-017) runs in the owner's main of the
+			// default workspace, the one place a user schedule's main lives.
+			if def, derr := workspace.ResolveDefaultID(r.homeDir()); derr == nil {
+				workspaceID = def
+			}
+		}
+		if workspaceID == "" {
+			return "", fmt.Errorf("main session mode: the job carries no workspace, so no main can be resolved")
+		}
+		// Final-gate M5: the owner's entitlement to this main is re-checked when
+		// the run FIRES, not only when the schedule was saved. The owner may have
+		// been removed from the team or deleted since; writing into the hidden
+		// main (or minting one) would resurrect it. Heartbeat jobs are exempt:
+		// they are workspace-owned and reconciled from the team on every
+		// membership write.
+		if job.Payload.Kind != heartbeatJobKind {
+			mainID, idErr := session.MainSessionID(workspaceID, owner)
+			if idErr != nil {
+				return "", fmt.Errorf("main session mode: %w", idErr)
+			}
+			_, eligible, gateErr := mainSessionGate(r.homeDir(), r.getConfig(), mainID)
+			if gateErr != nil {
+				return "", fmt.Errorf("main session mode: the owner's workspace could not be read: %w", gateErr)
+			}
+			if !eligible {
+				return "", fmt.Errorf("main session mode: the owner no longer has a main in this workspace (removed from the team or no longer a chat agent); the run was not started")
+			}
+		}
+		// A main this run creates is owned by the schedule's creator
+		// (job.CreatedBy), or by the operator when no person created the
+		// schedule (a heartbeat, or the machine principal "cli"). An existing
+		// ownerless main adopts only a person creator, in one compare-and-set
+		// step that leaves its recency untouched; an owned main keeps its owner.
+		mainOwner := systemMainOwner(r.getConfig(), userOwner)
+		meta, err := store.GetOrCreateMainSessionOwned(workspaceID, owner, mainOwner)
 		if err != nil {
 			return "", fmt.Errorf("main session create: %w", err)
 		}
-		r.stampScheduledSessionOwner(store, meta.ID, userOwner)
+		if meta.Owner == "" && userOwner != "" && userOwner != config.MachinePrincipalUsername {
+			r.adoptScheduledMainOwner(store, meta.ID, userOwner)
+		}
 		r.stampScheduledSessionWorkspace(store, meta.ID, workspaceID)
 		return meta.ID, nil
 
@@ -921,22 +855,17 @@ func intPtr(v int) *int { return &v }
 
 // toSchedule projects a cron.CronJob onto the generated Schedule wire type.
 func toSchedule(job cron.CronJob) gen.Schedule {
-	mode := job.SessionMode
-	if mode == "" {
-		mode = cron.SessionModeIsolated
-	}
 	s := gen.Schedule{
-		Id:             job.ID,
-		Name:           job.Name,
-		Enabled:        job.Enabled,
-		OwnerAgentId:   job.AgentID,
-		CreatedBy:      strPtr(job.CreatedBy),
-		Message:        job.Payload.Message,
-		SessionMode:    gen.ScheduleSessionMode(mode),
-		SessionId:      strPtr(job.SessionID),
-		TimeoutSeconds: job.TimeoutSeconds,
-		CreatedAtMs:    job.CreatedAtMS,
-		UpdatedAtMs:    job.UpdatedAtMS,
+		Id:           job.ID,
+		Name:         job.Name,
+		Enabled:      job.Enabled,
+		OwnerAgentId: job.AgentID,
+		CreatedBy:    strPtr(job.CreatedBy),
+		Message:      job.Payload.Message,
+		RunIsolated:  boolPtrIfTrue(job.RunIsolated),
+		SessionId:    strPtr(job.SessionID),
+		CreatedAtMs:  job.CreatedAtMS,
+		UpdatedAtMs:  job.UpdatedAtMS,
 	}
 
 	// Trigger.
@@ -1115,34 +1044,28 @@ func (a *restAPI) handleCreateSchedule(w http.ResponseWriter, r *http.Request, u
 		jsonErr(w, http.StatusBadRequest, msg)
 		return
 	}
-	timeout := derefInt(req.TimeoutSeconds)
-	if timeout < 0 {
-		jsonErr(w, http.StatusBadRequest, "timeout_seconds must be >= 0")
+
+	// FR-017: there is no session-mode choice. The mode is derived from the
+	// owner and the run_isolated checkbox.
+	runIsolated := req.RunIsolated != nil && *req.RunIsolated
+	sessionMode, modeErr := a.deriveScheduleSessionMode(runIsolated, req.OwnerAgentId, schedule)
+	if modeErr != nil {
+		jsonServerFailure(w, http.StatusInternalServerError, "could not determine the schedule's run mode", modeErr)
 		return
 	}
 
-	// Resolve the session mode (M5b: reject an unknown value up front).
-	sessionMode := cron.SessionModeIsolated
-	if req.SessionMode != nil {
-		sessionMode = cron.SessionMode(*req.SessionMode)
-		if !sessionMode.Valid() {
-			jsonErr(w, http.StatusBadRequest, "session_mode must be one of isolated|continue|main")
-			return
-		}
-	}
-
-	// M3: persist the COMPLETE job (owner, mode, timeout, created-by) in one
+	// M3: persist the COMPLETE job (owner, mode, created-by) in one
 	// atomic write via AddJobFull. The previous AddJob+UpdateJob pair briefly
 	// persisted an owner-less job that could fire and die between the two writes.
 	job, err := a.cronSvc().AddJobFull(cron.JobSpec{
-		Name:           req.Name,
-		Schedule:       schedule,
-		Message:        req.Message,
-		AgentID:        req.OwnerAgentId,
-		SessionMode:    sessionMode,
-		TimeoutSeconds: timeout,
-		CreatedBy:      user.Username,
-		Enabled:        req.Enabled,
+		Name:        req.Name,
+		Schedule:    schedule,
+		Message:     req.Message,
+		AgentID:     req.OwnerAgentId,
+		SessionMode: sessionMode,
+		RunIsolated: runIsolated,
+		CreatedBy:   user.Username,
+		Enabled:     req.Enabled,
 	})
 	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, "failed to create schedule")
@@ -1210,22 +1133,8 @@ func (a *restAPI) handleUpdateSchedule(w http.ResponseWriter, r *http.Request, i
 	if req.Message != nil {
 		job.Payload.Message = *req.Message
 	}
-	if req.SessionMode != nil {
-		// M5b: reject an unknown session mode before persisting it (a bad value
-		// would silently degrade to isolated at run time).
-		mode := cron.SessionMode(*req.SessionMode)
-		if !mode.Valid() {
-			jsonErr(w, http.StatusBadRequest, "session_mode must be one of isolated|continue|main")
-			return
-		}
-		job.SessionMode = mode
-	}
-	if req.TimeoutSeconds != nil {
-		if *req.TimeoutSeconds < 0 {
-			jsonErr(w, http.StatusBadRequest, "timeout_seconds must be >= 0")
-			return
-		}
-		job.TimeoutSeconds = *req.TimeoutSeconds
+	if req.RunIsolated != nil {
+		job.RunIsolated = *req.RunIsolated
 	}
 	if req.Enabled != nil {
 		job.Enabled = *req.Enabled
@@ -1240,6 +1149,16 @@ func (a *restAPI) handleUpdateSchedule(w http.ResponseWriter, r *http.Request, i
 			return
 		}
 		job.Schedule = schedule
+	}
+	// FR-017: re-derive the mode from the (possibly changed) owner, trigger and
+	// run_isolated. A heartbeat job keeps its internal main mode.
+	if job.Payload.Kind != heartbeatJobKind {
+		mode, modeErr := a.deriveScheduleSessionMode(job.RunIsolated, job.AgentID, job.Schedule)
+		if modeErr != nil {
+			jsonServerFailure(w, http.StatusInternalServerError, "could not determine the schedule's run mode", modeErr)
+			return
+		}
+		job.SessionMode = mode
 	}
 
 	if err := a.cronSvc().UpdateJob(&job); err != nil {
@@ -1327,13 +1246,6 @@ func validateTrigger(s cron.CronSchedule) (string, bool) {
 func derefStr(p *string) string {
 	if p == nil {
 		return ""
-	}
-	return *p
-}
-
-func derefInt(p *int) int {
-	if p == nil {
-		return 0
 	}
 	return *p
 }
@@ -1437,4 +1349,74 @@ func (a *restAPI) handleListNotifications(w http.ResponseWriter, user *config.Us
 		return
 	}
 	jsonOK(w, out)
+}
+
+func boolPtrIfTrue(b bool) *bool {
+	if !b {
+		return nil
+	}
+	return &b
+}
+
+// deriveScheduleSessionMode derives a schedule's run mode (session-core FR-017;
+// there is no user-facing chooser): run_isolated forces a fresh independent chat;
+// otherwise an owner with an eligible main in the default workspace runs in that
+// main; otherwise a recurring schedule continues its own chat and a one-time
+// schedule runs isolated. Heartbeats set their main mode internally.
+//
+// A failure to READ the default workspace (final-gate M10) is returned, not
+// treated as "no main": the schedule would otherwise be saved as continue or
+// isolated with no signal that it was downgraded from main. A missing default
+// workspace is the ordinary "no main" and is not an error.
+func (a *restAPI) deriveScheduleSessionMode(runIsolated bool, ownerAgentID string, schedule cron.CronSchedule) (cron.SessionMode, error) {
+	if runIsolated {
+		return cron.SessionModeIsolated, nil // the checkbox decides; no eligibility read needed
+	}
+	eligible, err := a.ownerHasEligibleDefaultMain(ownerAgentID)
+	if err != nil {
+		return "", err
+	}
+	return deriveScheduleSessionMode(runIsolated, eligible, schedule.Kind != "at"), nil
+}
+
+func deriveScheduleSessionMode(runIsolated, ownerMainEligible, recurring bool) cron.SessionMode {
+	switch {
+	case runIsolated:
+		return cron.SessionModeIsolated
+	case ownerMainEligible:
+		return cron.SessionModeMain
+	case recurring:
+		return cron.SessionModeContinue
+	default:
+		return cron.SessionModeIsolated
+	}
+}
+
+// ownerHasEligibleDefaultMain reports whether agentID owns an eligible visible
+// main in the default workspace. No default workspace, or a workspace that does
+// not exist, is (false, nil). A read failure is an error: the caller must not
+// guess a main, and must not silently downgrade the schedule either.
+func (a *restAPI) ownerHasEligibleDefaultMain(agentID string) (bool, error) {
+	home := a.homePath
+	if home == "" {
+		home = config.OmnipusHomeDir()
+	}
+	wsID, err := workspace.ResolveDefaultID(home)
+	if err != nil {
+		if errors.Is(err, workspace.ErrNoDefault) {
+			return false, nil
+		}
+		return false, fmt.Errorf("resolve the default workspace: %w", err)
+	}
+	if wsID == "" {
+		return false, nil
+	}
+	ws, found, err := loadWorkspaceForMain(home, wsID)
+	if err != nil {
+		return false, fmt.Errorf("read the default workspace: %w", err)
+	}
+	if !found {
+		return false, nil
+	}
+	return mainSessionPairEligible(a.agentLoop.GetConfig(), ws, agentID), nil
 }

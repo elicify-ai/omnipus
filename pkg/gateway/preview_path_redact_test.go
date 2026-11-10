@@ -483,7 +483,9 @@ var expectedRedactionSites = []redactionRecordingSite{
 	{file: "rest_preview_audit.go", what: "emitPreviewAuditEntry: details[\"sanitized_path\"]"},
 	{file: filepath.Join("middleware", "bypass_gate.go"), what: "RequireNotBypass: 503 forensic warning"},
 	{file: filepath.Join("middleware", "csrf.go"), what: "CSRFMiddleware: safe-method cookie re-mint failure"},
-	{file: "rest_signin_copilot.go", what: "handleCopilotSignInStatus: probe-refused 429 warning"},
+	{file: filepath.Join("middleware", "person_session.go"), what: "RequirePersonSession: person-session refusal warning (r17 Settings endpoint)"},
+	// WU-24 (PLAN-omnipus-L1-v2-20261013.md §10): Copilot CLI model
+	// provider and its sign-in handler are deleted, including its log sink.
 	{file: "rest_knowledge.go", what: "allowKnowledgeRetrieval: knowledge rate-limit 429 warning (2026-09-14 limiter fix)"},
 }
 
@@ -531,14 +533,10 @@ func TestRequestPathRedaction_SourceInventory(t *testing.T) {
 	})
 
 	t.Run("inventory_is_eight_sites", func(t *testing.T) {
-		// FR-003e counted six; a seventh (rest_signin_copilot.go's probe-refused
-		// 429 warning) was added during the release/v0.1.1 merge, and an
-		// eighth (rest_knowledge.go's knowledge rate-limit 429 warning) during
-		// the 2026-09-14 limiter fix. If the product grows a ninth, this is
-		// the line that says so out loud rather than letting the number drift.
+		// WU-24 retired the Copilot sign-in sink; the person-session refusal
+		// (r17 Settings endpoint) added one redacted site: an exact eight-site set.
 		assert.Len(t, expectedRedactionSites, 8,
-			"FR-003e-era inventory plus the rest_signin_copilot.go and rest_knowledge.go "+
-				"sites enumerates eight request-path recording sites")
+			"WU-24 removes the Copilot sink; all eight recording sites must stay redacted")
 	})
 }
 

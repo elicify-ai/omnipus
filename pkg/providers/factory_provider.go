@@ -13,51 +13,21 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/auth"
 	"github.com/elicify-ai/omnipus/pkg/config"
-	anthropicmessages "github.com/elicify-ai/omnipus/pkg/providers/anthropic_messages"
+	anthropicprovider "github.com/elicify-ai/omnipus/pkg/providers/anthropic"
 	"github.com/elicify-ai/omnipus/pkg/providers/bedrock"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
+	"github.com/elicify-ai/omnipus/pkg/providers/common"
+	"github.com/elicify-ai/omnipus/pkg/providers/openai_compat"
 )
 
-// NewCliProviderForKind returns the subprocess driver named by a catalog row's
-// `cli_kind` (ADR-068 FR-003, X-14): `codex` -> CodexCliProvider,
-// `copilot` -> CopilotCliProvider. cliPath is an explicit override for the
-// Copilot binary name/path; empty means the vendor's default binary name on
-// PATH. It is NOT a catalog row field — catalog.Provider (pkg/providers/
-// catalog/document.go) carries no `cli_path`, nothing parses one out of the
-// catalog document, and both call sites (CreateProviderFromConfig below,
-// and the onboarding probe in pkg/gateway/rest_onboarding.go) pass ""
-// unconditionally today, so there is currently no way to steer this. Do not
-// confuse it with the unrelated, functioning
-// config.ExecutorConfig.CLIPath used by subagent_3p external-CLI dispatch
-// (pkg/agent/runner) — same name, different mechanism.
-//
-// It is the ONE place a kind maps to a constructor; `case ProtocolCLI` in
-// CreateProviderFromConfig calls it with the row's own kind and never with a
-// provider id.
-func NewCliProviderForKind(kind, workspace, cliPath string) (LLMProvider, error) {
-	if workspace == "" {
-		workspace = "."
-	}
-	switch kind {
-	case catalog.CLIKindCodex:
-		return NewCodexCliProvider(workspace), nil
-	case catalog.CLIKindCopilot:
-		return NewCopilotCliProviderWithCommand(cliPath, workspace), nil
-	default:
-		return nil, fmt.Errorf("unknown cli_kind %q (want %s|%s)",
-			kind, catalog.CLIKindCodex, catalog.CLIKindCopilot)
-	}
-}
-
 // resolvedRow is everything the dispatch below needs, already decided: which
-// wire protocol to speak, at which base URL, and (for a subprocess row) which
-// CLI. It is produced by resolveRow — the only function that knows the
+// wire protocol to speak, at which base URL. It is produced by resolveRow —
+// the only function that knows the
 // difference between a catalog row and an operator-typed custom row, so the
 // dispatch itself never asks "who is this provider?" again.
 type resolvedRow struct {
 	protocol catalog.Protocol
 	api      string
-	cliKind  string
 	// locality is the catalog's FR-039 classification. It is the ONLY thing
 	// that decides whether a row may be constructed without a credential: a
 	// local runtime (Ollama, vLLM, LM Studio, a custom row on a private
@@ -126,15 +96,66 @@ func resolveRow(cfg *config.ModelConfig) (resolvedRow, error) {
 	if err != nil {
 		return resolvedRow{}, err
 	}
+	if base != "" && common.CatalogBaseOverrideRefused(base) {
+		// Hosted edition: a catalog id keeps the catalog's own endpoint
+		// unless the operator's SSRF allow list names the override's host.
+		// Any other stored override is refused, public host or not: it was
+		// written before the endpoint guard existed and may belong to someone
+		// else, so no client is built for it. createStartupProvider keeps the
+		// gateway booting when such a row backs the default model.
+		return resolvedRow{}, &PlantedEndpointError{ProviderID: id}
+	}
 	if base != "" {
 		ep.API = base
 	}
 	return resolvedRow{
 		protocol: ep.Protocol,
 		api:      ep.API,
-		cliKind:  row.CLIKind,
 		locality: row.Locality,
 	}, nil
+}
+
+// PlantedEndpointError refuses a stored api_base on a catalog provider id
+// that the hosted edition will not use: the operator's SSRF allow list does
+// not name its host. A row like this was written before the endpoint guard
+// existed (for example through the old pre-auth onboarding window), so the
+// address may belong to someone else. The owner's next save of the provider
+// clears it. Error() is the person-facing text shown in chat.
+type PlantedEndpointError struct {
+	ProviderID string
+}
+
+func (e *PlantedEndpointError) Error() string {
+	name := DisplayName(e.ProviderID)
+	return fmt.Sprintf("The request to %s was not sent: its saved address is not %s's own. "+
+		"Save %s again in the provider settings to reset the address.", name, name, name)
+}
+
+// EffectiveEndpoint is what a configured provider row resolves to at runtime:
+// the wire protocol it speaks, the base URL it calls and the catalog's
+// locality classification. It is the exported view of resolveRow, so a
+// caller that must check or describe the SAVED entry (the configure_provider
+// check, the shared-resource revision token — omnipus-system-agent FR-031,
+// FR-088) resolves it exactly as CreateProviderFromConfig does.
+type EffectiveEndpoint struct {
+	Protocol catalog.Protocol
+	API      string
+	Locality catalog.Locality
+}
+
+// ResolveEndpoint resolves a configured row's effective protocol, base URL
+// and locality with the same rules CreateProviderFromConfig uses (catalog
+// row, explicit protocol, api_base override, custom row). An unknown,
+// unsupported or mis-specified row returns resolveRow's error.
+func ResolveEndpoint(cfg *config.ModelConfig) (EffectiveEndpoint, error) {
+	if cfg == nil {
+		return EffectiveEndpoint{}, fmt.Errorf("config is nil")
+	}
+	row, err := resolveRow(cfg)
+	if err != nil {
+		return EffectiveEndpoint{}, err
+	}
+	return EffectiveEndpoint{Protocol: row.protocol, API: row.api, Locality: row.locality}, nil
 }
 
 // isCustomProtocol reports whether an operator-typed row may speak this
@@ -210,8 +231,7 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		// ADR-068 §8b (T068-32/T068-14): openai-chatgpt is an
 		// openai-compatible row whose credential is Omnipus's OWN stored
 		// device-code OAuth token, not an API key — so it is handled here,
-		// ahead of requireKey, rather than as a protocol of its own. The
-		// vendor file ~/.codex/auth.json stays codex-cli's and read-only.
+		// ahead of requireKey, rather than as a protocol of its own.
 		// DefaultCredentialStore is wired once at gateway boot
 		// (pkg/gateway/gateway.go); a nil store means a test or CLI path
 		// never called SetDefaultCredentialStore, and we fail closed with a
@@ -248,6 +268,7 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 			cfg.RequestTimeout,
 			int(cfg.EffectiveStreamStallTimeout().Seconds()),
 			cfg.ExtraBody,
+			openai_compat.WithProviderID(cfg.Provider),
 		)
 		if err != nil {
 			return nil, "", err
@@ -258,11 +279,11 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		if err := requireKey(cfg, row); err != nil {
 			return nil, "", err
 		}
-		return anthropicmessages.NewProviderWithTimeout(
+		return anthropicprovider.NewProviderWithTimeout(
 			cfg.APIKey(),
 			row.api,
 			cfg.RequestTimeout,
-		), modelID, nil
+		).WithProviderID(cfg.Provider).WithStreamStallTimeout(cfg.EffectiveStreamStallTimeout()), modelID, nil
 
 	case catalog.ProtocolBedrock:
 		if err := requireKey(cfg, row); err != nil {
@@ -295,7 +316,8 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 			cfg.BedrockInferenceProfiles,
 		)
 
-		opts := make([]bedrock.Option, 0, 2)
+		opts := make([]bedrock.Option, 0, 3)
+		opts = append(opts, bedrock.WithBaseModel(resolvedModelID, modelID))
 		if customEndpoint := strings.TrimSpace(cfg.APIBase); customEndpoint != "" {
 			opts = append(opts, bedrock.WithBaseEndpoint(customEndpoint))
 		} else {
@@ -309,13 +331,6 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 			return nil, "", err
 		}
 		return p, resolvedModelID, nil
-
-	case catalog.ProtocolCLI:
-		p, err := NewCliProviderForKind(row.cliKind, cfg.Home, "")
-		if err != nil {
-			return nil, "", err
-		}
-		return p, modelID, nil
 
 	default:
 		return nil, "", fmt.Errorf("provider %q declares no usable protocol", cfg.Provider)

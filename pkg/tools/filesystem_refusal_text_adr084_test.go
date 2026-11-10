@@ -70,10 +70,13 @@ func newRefusalTextTree(t *testing.T) refusalTextTree {
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
 		t.Fatalf("mkdir workDir: %v", err)
 	}
-	outside := filepath.Join(raw, "sessions", "other", "transcript.jsonl")
-	if err := os.MkdirAll(filepath.Dir(outside), 0o755); err != nil {
-		t.Fatalf("mkdir sessions: %v", err)
+	// L1-AMENDMENTS-20261013.md §2 D2 / §2.4: sessions are now
+	// protected for every turn. Ordinary scope controls must be outside home.
+	outsideDir, outsideErr := filepath.EvalSymlinks(t.TempDir())
+	if outsideErr != nil {
+		t.Fatal(outsideErr)
 	}
+	outside := filepath.Join(outsideDir, "transcript.jsonl")
 	if err := os.WriteFile(outside, []byte(`{"role":"user","content":"hello"}`), 0o600); err != nil {
 		t.Fatalf("write transcript: %v", err)
 	}
@@ -91,7 +94,7 @@ func newRefusalTextTree(t *testing.T) refusalTextTree {
 		home:        resolved,
 		workDir:     filepath.Join(resolved, "agents", "judge"),
 		missingPath: filepath.Join(resolved, "agents", "judge", "never-created.txt"),
-		outsidePath: filepath.Join(resolved, "sessions", "other", "transcript.jsonl"),
+		outsidePath: outside,
 		masterKey:   filepath.Join(resolved, "master.key"),
 	}
 }
@@ -184,6 +187,23 @@ func TestReadFileTool_NotFoundAndRefusalTextsAreDistinct(t *testing.T) {
 			}
 		})
 	}
+
+	// Preserve the original sessions fixture as a separate WU-23 D2
+	// negative, not an ordinary scope refusal.
+	t.Run("internal transcript is refused even without read confinement", func(t *testing.T) {
+		internal := filepath.Join(tr.home, "sessions", "other", "transcript.jsonl")
+		if err := os.MkdirAll(filepath.Dir(internal), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(internal, []byte("INTERNAL-TRANSCRIPT-CANARY"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		res := tool.Execute(context.Background(), map[string]any{"path": internal})
+		requireInternalFileRefusal(t, res, "read_file")
+		if strings.Contains(res.ForLLM, "INTERNAL-TRANSCRIPT-CANARY") {
+			t.Fatal("protected transcript leaked")
+		}
+	})
 
 	// The pairwise property, stated directly: no two of the three outcomes
 	// produce the same text. Written separately from the marker rows above

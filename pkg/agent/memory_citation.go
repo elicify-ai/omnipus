@@ -16,6 +16,8 @@
 package agent
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,7 +33,8 @@ import (
 // installs it on the tool context, and calls EmitCitations after each LLM
 // response.
 type citationTracker struct {
-	ms *MemoryStore
+	ms    *MemoryStore
+	scope MemoryScope // immutable identity of the citing turn
 
 	mu       sync.Mutex
 	recalled []recalledMem
@@ -50,11 +53,11 @@ type recalledMem struct {
 // Returns nil when ms is nil (main gateway agent has no memory store) — the
 // agent loop treats nil as "no tracking", matching WithCitationTracker's
 // nil-short-circuit.
-func newCitationTracker(ms *MemoryStore) *citationTracker {
+func newCitationTracker(ms *MemoryStore, workspaceID string) *citationTracker {
 	if ms == nil {
 		return nil
 	}
-	return &citationTracker{ms: ms, emitted: make(map[string]bool)}
+	return &citationTracker{ms: ms, scope: ms.scopeForWorkspace(workspaceID), emitted: make(map[string]bool)}
 }
 
 // RecordRecalled implements tools.CitationTracker. It captures the IDs/titles
@@ -104,7 +107,17 @@ func (c *citationTracker) EmitCitations(assistantText string) {
 		if !citationMatches(lower, m) {
 			continue
 		}
-		countersPath := c.resolveCountersPath(m.id)
+		countersPath, lookupErr := c.resolveCountersPath(m.id)
+		if lookupErr != nil {
+			fields := map[string]any{"memory_id": m.id, "agent_id": c.scope.AgentID,
+				"workspace_id": c.scope.WorkspaceID, "error": lookupErr.Error()}
+			var pathErr *os.PathError
+			if errors.As(lookupErr, &pathErr) {
+				fields["path"] = pathErr.Path
+			}
+			logger.WarnCF("agent.memory", "citation: memory lookup failed; citation can be retried", fields)
+			continue
+		}
 		if countersPath == "" {
 			// Memory no longer on disk (deleted between recall and citation).
 			// Mark emitted so we don't repeatedly re-scan a missing file.
@@ -124,12 +137,8 @@ func (c *citationTracker) EmitCitations(assistantText string) {
 		if err := memrooms.AppendCounterRecord(countersPath, rec); err != nil {
 			logger.WarnCF("agent.memory", "citation: failed to append op:cited counter",
 				map[string]any{"memory_id": m.id, "error": err.Error()})
-			// Mark emitted to suppress repeated WARN noise on persistent
-			// write failures (e.g. read-only filesystem). The citation is
-			// best-effort; a transient failure will not be retried.
-			c.mu.Lock()
-			c.emitted[m.id] = true
-			c.mu.Unlock()
+			// The write did not succeed. Retain the pending citation so a later
+			// response in this turn can retry after storage is repaired.
 			continue
 		}
 		c.mu.Lock()
@@ -158,19 +167,26 @@ func citationMatches(lowerText string, m recalledMem) bool {
 	return strings.Contains(lowerText, t)
 }
 
-// resolveCountersPath locates which room holds the memory file and returns that
-// room's counters.jsonl path. Private room is checked first, then the active
-// shared room. Returns "" when the memory is not found in either room.
-func (c *citationTracker) resolveCountersPath(memoryID string) string {
-	memFile := filepath.Join(c.ms.privateRoom.MemoriesDir, memrooms.Filename(memoryID))
-	if _, err := os.Stat(memFile); err == nil {
-		return c.ms.privateRoom.CountersPath
+// resolveCountersPath checks only this turn's rooms. A missing file is normal;
+// any other stat failure is returned with its original path and cause.
+func (c *citationTracker) resolveCountersPath(memoryID string) (string, error) {
+	path, err := existingMemoryCounters(c.ms.privateRoom, memoryID)
+	if err != nil || path != "" {
+		return path, err
 	}
-	if shared := c.ms.currentSharedRoom(); shared != nil {
-		memFile := filepath.Join(shared.MemoriesDir, memrooms.Filename(memoryID))
-		if _, err := os.Stat(memFile); err == nil {
-			return shared.CountersPath
+	if shared := c.ms.SharedRoom(c.scope); shared != nil {
+		return existingMemoryCounters(*shared, memoryID)
+	}
+	return "", nil
+}
+
+func existingMemoryCounters(room memrooms.Room, memoryID string) (string, error) {
+	path := filepath.Join(room.MemoriesDir, memrooms.Filename(memoryID))
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
 		}
+		return "", fmt.Errorf("citation: stat recalled memory %q: %w", path, err)
 	}
-	return ""
+	return room.CountersPath, nil
 }

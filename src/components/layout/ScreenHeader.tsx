@@ -1,6 +1,4 @@
-import { List } from '@phosphor-icons/react'
-import { IconButton } from '@/components/ui/icon-button'
-import { useSidebarStore } from '@/store/sidebar'
+import { SidebarShowButton } from './SidebarShowButton'
 
 interface ScreenHeaderProps {
   title: string
@@ -23,29 +21,12 @@ interface ScreenHeaderProps {
  * corner indicator instead; see GodModeIndicators.tsx.
  */
 export function ScreenHeader({ title, actions }: ScreenHeaderProps) {
-  const toggle = useSidebarStore((s) => s.toggle)
-  // Reflects the overlay drawer's real open state on the toggle button —
-  // without it, a screen reader user has no way to know whether activating
-  // the hamburger will open or close the sidebar.
-  const isOpen = useSidebarStore((s) => s.isOpen)
-
   return (
     <header
       role="banner"
       className="flex items-center gap-[var(--space-2-5)] px-[var(--space-3)] h-chrome-header min-h-chrome-header bg-[var(--color-surface-0)] flex-shrink-0"
     >
-      {/* Hamburger — sidebar toggle (full chrome-row height for Fitts / AA) */}
-      <IconButton
-        id="sidebar-hamburger"
-        type="button"
-        variant="ghost"
-        onClick={toggle}
-        aria-label="Toggle navigation sidebar"
-        aria-expanded={isOpen}
-        className="h-chrome-header min-h-chrome-header w-10 -ml-[var(--space-2)] rounded-md text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex-shrink-0"
-      >
-        <List size={20} />
-      </IconButton>
+      <SidebarShowButton className="h-chrome-header min-h-chrome-header w-10 -ml-[var(--space-2)] rounded-md text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex-shrink-0" />
 
       {/* Screen title */}
       <h2 className="flex-1 min-w-0 font-headline font-semibold text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] truncate">

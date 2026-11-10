@@ -50,6 +50,17 @@ func toAskUserCard(set *askuser.PendingSet, defaultSafeDelay time.Duration) gene
 		Status:    string(set.Status),
 		CreatedAt: set.CreatedAt.UTC().Format(time.RFC3339),
 	}
+	// #1449 C-I6: the provenance stored at creation, on live, snapshot and
+	// terminal cards alike.
+	// Same wire-length guards as the approval card's projection.
+	if set.RoomRef != nil && fitsWireLength(set.RoomRef.RoomName, approvalRoomNameMaxLen) {
+		ref := *set.RoomRef
+		card.RoomRef = &ref
+	}
+	if set.OriginLabel != "" && fitsWireLength(set.OriginLabel, approvalOriginLabelMaxLen) {
+		label := set.OriginLabel
+		card.OriginLabel = &label
+	}
 
 	// Elements are grown zero-valued and assigned field-by-field through
 	// pointers into the generated slices (the setGoalStatusCriteria pattern)
@@ -171,6 +182,10 @@ func (s *askUserCardSink) EmitCard(set *askuser.PendingSet) {
 		delay = s.delayFn()
 	}
 	s.h.broadcastAskUserCard(toAskUserCard(set, delay))
+	// A pending question while the member works on a group-chat request
+	// shows the room "waiting for you" (FR-169). A question that carries a
+	// group reference flips only its own request (#1449 FR-053).
+	s.h.roomCardFor(set.TranscriptSessionID, set.RoomRef, "ask:"+set.CardID, set.Status == askuser.StatusPending)
 }
 
 // askUserResumeDispatcher publishes the §0.2 resume message as a
@@ -224,6 +239,9 @@ func (d *askUserResumeDispatcher) DispatchResume(set *askuser.PendingSet, resume
 	if set.AgentID != "" {
 		msg.Metadata = map[string]string{"agent_id": set.AgentID}
 	}
+	// #1449 C-I6: the resumed work keeps the question's group origin, so its
+	// next approval appears in the group too (S-76). Server-set only.
+	agent.StampResumeProvenance(&msg, set.RoomRef, set.OriginLabel)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	err := d.msgBus.PublishInbound(ctx, msg)
@@ -349,10 +367,11 @@ func (h *WSHandler) handleAskUserAnswer(wc *wsConn, f generated.AskUserAnswerFra
 				"card_id", f.CardId,
 				"session_id", f.SessionId,
 				"outcome", outcome,
-				"reason", reason)
+				"reason", reason,
+				"error", err) // the real cause, for the operator; the client frame stays fixed text
 			sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 				Type:    string(generated.WsFrameTypeError),
-				Message: "ask_user_answer: " + err.Error(),
+				Message: "ask_user_answer: your answer was accepted but the paused turn could not resume. Details are in the server log.",
 			})
 			return
 		}

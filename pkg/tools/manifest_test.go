@@ -30,13 +30,13 @@ func TestToolManifestTier_FullSet(t *testing.T) {
 // definitions. ToolSearch is the 37th upfront name, classified as infra.
 func TestToolManifestTier_FullSetExact(t *testing.T) {
 	specFull := []string{
-		"AskUserQuestion", "Skill", "append_file", "bash", "create_plan",
+		"AskUserQuestion", "Skill", "answer_request", "append_file", "bash", "create_plan",
 		"create_task", "delegate", "edit_file", "execute_plan", "fetch_url",
 		"get_workspace", "goal_claim", "grep", "inspect_session", "library_list",
 		"library_read", "list_agents", "list_directory", "list_jobs", "list_mounts",
 		"list_tasks", "message_parent", "plan_correct", "read_file", "recall_conversation",
 		"recall_memory", "remember", "search_web", "send_file", "send_message",
-		"set_goal", "set_todos", "stop_plan", "switch_agent", "update_task", "write_file",
+		"set_goal", "set_todos", "stop_plan", "update_task", "write_file",
 	}
 	for _, n := range specFull {
 		if ToolManifestTier(n) != ManifestFull {
@@ -606,7 +606,11 @@ func TestInfraManifestToolNames_Set(t *testing.T) {
 // that isn’t in previewedLazyToolNames, not by membership in an explicit set).
 
 // TestVisibility_TierArithmetic pins ADR-090's 36 full + 1 preview + 1 infra
-// cardinalities and their disjointness. Deferred tools remain lazy/search-only.
+// cardinalities and their disjointness (answer_request joined the full set: an
+// agent told to answer a request with it must be able to call it without a
+// ToolSearch round trip). Deferred tools remain lazy/search-only.
+// (U8 / DEL-07 / DEL-21 deleted switch_agent, dropping the full set from 36 to
+// 35 and the union from 38 to 37.)
 // navigate's retirement dropped the previewed set from 8 to 7, and
 // write_agent_metadata's retirement dropped the search-only set from 63 to
 // 62, and ADR-075 D2 raised it from 62 to 68 (five interaction/snapshot

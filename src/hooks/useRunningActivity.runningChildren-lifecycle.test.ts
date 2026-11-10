@@ -6,7 +6,7 @@
 // pill/avatar-stack reads — FR-E-005) used only `span.status === 'running'`,
 // the PARENT's own "is this span still open" flag (set at subagent_start,
 // cleared at subagent_end). That is a different axis from `lifecycleState`,
-// the ADR-053 eight-state domain a `subagent_state` frame reduces onto the
+// the ADR-053 six-state domain a `subagent_state` frame reduces onto the
 // span. A span is 'running' (status) from the moment subagent_start fires —
 // including a QUEUED launch (the spec: "a queued launch emits
 // subagent_start immediately, before the child actually starts executing")
@@ -18,9 +18,9 @@
 //
 // Fix: the pill (and the Activity Bar's avatar stack) is derived from
 // direct agent spans whose `lifecycleState` is exactly 'running' — the
-// broader `running` list (used by ActivityPanel's row list, which must
-// still SHOW a queued child, just labelled "queued" — US-1 AS-5) is
-// unaffected.
+// ActivityPanel must still SHOW queued/waiting children, but U2 and
+// ADR-20260928 D2 (Stop is "non-terminal") supersede the old assertion
+// that lifecycle-stopped/completed spans belong to Running now.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, waitFor, act } from '@testing-library/react'
@@ -29,6 +29,7 @@ import React from 'react'
 import { useChatStore } from '@/store/chat'
 import type { ChatMessage, SubagentSpan } from '@/store/chat'
 import type { Agent, ToolCall } from '@/lib/api'
+import { makeAgent } from '@/test/factories'
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
@@ -49,7 +50,7 @@ function makeClient() {
 }
 
 const AGENTS: Agent[] = [
-  { id: 'ray', name: 'Ray', type: 'Subagent', locked: false, status: 'active', icon: 'compass' } as Agent,
+  makeAgent({ id: 'ray', name: 'Ray', type: 'Subagent', locked: false, status: 'active' }),
 ]
 
 function makeAssistantMessage(spans: SubagentSpan[]): ChatMessage {
@@ -125,17 +126,25 @@ describe('useRunningActivity — runningChildren is exactly-lifecycleState-runni
 
     const { result } = renderHook(() => useRunningActivity(), { wrapper: makeWrapper(client) })
 
-    // Sanity: the broader `running` list (ActivityPanel's row source) still
-    // carries all four — queued/lifecycle-terminal spans and the shell job
-    // are NOT hidden from the panel, only excluded from the pill count.
+    // U2: terminal lifecycle is retained as history, not Running now.
+    // Queued work remains visible, without contributing to runningCount.
     await waitFor(() => {
-      expect(result.current.running).toHaveLength(4)
+      expect(result.current.running.map((item) => item.key)).toStrictEqual(['span-running', 'span-queued', 'bash-running-1'])
     })
-
+    expect(result.current.recentlyFinished.map((item) => ({ key: item.key, status: item.status }))).toStrictEqual([{ key: 'span-done-early', status: 'success' }])
+    expect(result.current.runningCount).toBe(2)
     expect(result.current.runningChildren).toBe(1)
     client.clear()
   })
 
+  // Re-pinned to the settled rule (spec DEL-F27, commit a5789fb5c — UF2): an
+  // open `subagent_start` bracket with no `lifecycleState` yet maps to
+  // 'parked' — pending, not executing — and the guessed `span.status`
+  // fallback is gone (the old assertion here had the span in `running`;
+  // uf2_running-activity-attribution.test.ts pins the opposite). The span is
+  // therefore not running activity at all: absent from `running` (and so
+  // from runningChildren), retained among recentlyFinished until a
+  // `subagent_state` frame arrives.
   it('a span with no lifecycleState yet (subagent_start received, no subagent_state yet) does not count toward runningChildren', async () => {
     vi.mocked(fetchAgents).mockResolvedValue(AGENTS)
     const client = makeClient()
@@ -152,8 +161,11 @@ describe('useRunningActivity — runningChildren is exactly-lifecycleState-runni
     const { result } = renderHook(() => useRunningActivity(), { wrapper: makeWrapper(client) })
 
     await waitFor(() => {
-      expect(result.current.running).toHaveLength(1)
+      expect(result.current.recentlyFinished.map((item) => ({ key: item.key, status: item.status }))).toStrictEqual([
+        { key: 'span-no-state-yet', status: 'parked' },
+      ])
     })
+    expect(result.current.running).toHaveLength(0)
     expect(result.current.runningChildren).toBe(0)
     client.clear()
   })
@@ -168,7 +180,7 @@ describe('useRunningActivity — runningChildren is exactly-lifecycleState-runni
             runningSpan({ spanId: 'span-r1', parentCallId: 'call-r1', lifecycleState: 'running' }),
             runningSpan({ spanId: 'span-r2', parentCallId: 'call-r2', lifecycleState: 'running' }),
             runningSpan({ spanId: 'span-needs-input', parentCallId: 'call-needs-input', lifecycleState: 'needs_input' }),
-            runningSpan({ spanId: 'span-paused', parentCallId: 'call-paused', lifecycleState: 'paused' }),
+            runningSpan({ spanId: 'span-stopped', parentCallId: 'call-stopped', lifecycleState: 'stopped' }),
           ]),
         ],
       })
@@ -177,8 +189,10 @@ describe('useRunningActivity — runningChildren is exactly-lifecycleState-runni
     const { result } = renderHook(() => useRunningActivity(), { wrapper: makeWrapper(client) })
 
     await waitFor(() => {
-      expect(result.current.running).toHaveLength(4)
+      expect(result.current.running.map((item) => item.key)).toStrictEqual(['span-r1', 'span-r2', 'span-needs-input'])
     })
+    expect(result.current.recentlyFinished.map((item) => ({ key: item.key, lifecycle: item.kind === 'agent' ? item.lifecycleState : undefined }))).toStrictEqual([{ key: 'span-stopped', lifecycle: 'stopped' }])
+    expect(result.current.runningCount).toBe(2)
     expect(result.current.runningChildren).toBe(2)
     client.clear()
   })

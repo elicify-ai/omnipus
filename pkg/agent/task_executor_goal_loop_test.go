@@ -50,7 +50,7 @@ func t3WaitForTerminal(t *testing.T, al *AgentLoop, taskID string, expectedDispa
 			if got.SessionID == "" {
 				return got
 			}
-			sessStore := al.GetAgentStore(got.AgentID)
+			sessStore := al.GetSessionStore()
 			if sessStore == nil {
 				return got
 			}
@@ -236,6 +236,7 @@ func TestLegacyCriterialessTask_AttemptAccountingUnchanged_GOALFR023(t *testing.
 			if err := al.taskStore.Create(tk); err != nil {
 				t.Fatalf("create task: %v", err)
 			}
+			pairTaskGoalRecordUsingTaskCriteria(t, al, tk.ID)
 			if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 				t.Fatalf("ExecuteTask: %v", err)
 			}

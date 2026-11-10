@@ -7,7 +7,22 @@
 **Decision record:** the founder-round mapping and every review disposition live in the companion file `docs/internal/design/dev-team-setup-design-2026-09-25.decisions.md`; this file carries the design itself.
 **Evidence base:** every repo path cited below was verified to exist on 2026-09-25 unless labelled otherwise (appendix). Behavioural facts about Claude Code 2.1.282 were tested 2026-09-25 in a scratch repo (founder-verified), including the subagent-nesting test recorded in the appendix. Facts about the Elicify skills repository were verified by direct git inspection on 2026-09-25 (appendix).
 
-**One-line summary:** we replace six stale, sometimes harmful agent instruction files with an **eleven-role** development team built around one orchestrator (team-lead, ~95% orchestration, small steps itself) that runs work directly **and through squads** — in-session `squad-lead` subagents (nesting verified) that **hand back fully gated branches** for team-lead to land, plus, across the founder's sessions, a founder-named **chief** aligning squad leads through a **coordination ledger directory** outside the repo whose **landing lock** serialises integration-branch pushes, separate-session squads landing themselves under it — delivered by a shared skill, role-specific skills and a **mandatory planning-orchestration skill**, with **developer and reviewer discipline** carried in the body of every developer-side and reviewer-side agent file (evidence tables ending every report, claims untrue until re-verified, findings only with failure scenarios) and reaching the six plugin reviewers through a short dispatch template that has them **load the shared skill with the Skill tool**; a three-size change flow (feature = RED/GREEN/CHECK into an 8-reviewer gate, code-simplifier allowed to edit the branch under review with a follow-up code-reviewer pass on its diff); an auditor-and-reviewer security-lead inside that gate and on demand (backend-lead implements security code); skill-based failure handling with no ci-triage role; event-driven status updates with **batched landing asks**; parallelism capped by no width number but held by a machine-capacity monitor that counts active dispatches from the ledger; a single **all-at-once rollout** preceded by a full dry-run pass; and a CI guard — now also banning `model:` lines in agent files — that keeps the agent files and skills honest as the repo moves.
+**One-line summary:** we replace six stale, sometimes harmful agent instruction files with an **eleven-role** development team built around one orchestrator (team-lead, ~95% orchestration, small steps itself) that runs work directly **and through squads** — in-session `squad-lead` subagents (nesting verified) that **hand back fully gated branches** for team-lead to land, plus, across the founder's sessions, a founder-named **chief** aligning squad leads through a **coordination ledger directory** outside the repo whose **landing lock** serialises integration-branch pushes, separate-session squads landing themselves under it — delivered by a shared skill, role-specific skills and a **mandatory planning-orchestration skill**, with **developer and reviewer discipline** carried in the body of every developer-side and reviewer-side agent file (evidence tables ending every report, claims untrue until re-verified, findings only with failure scenarios) and reaching the six plugin reviewers through a short dispatch template that has them **load the shared skill with the Skill tool**; a three-size change flow (feature = RED/GREEN/CHECK into a 5-reviewer gate — 3 mandatory pr-review-toolkit reviewers plus architect and security-lead; type-design-analyzer, comment-analyzer and code-simplifier demoted to on-request-only by founder decision 2026-09-29, code-simplifier still the one reviewer allowed to edit the branch under review, with a follow-up code-reviewer pass on its diff, whenever it is dispatched); an auditor-and-reviewer security-lead inside that gate and on demand (backend-lead implements security code); skill-based failure handling with no ci-triage role; event-driven status updates with **batched landing asks**; parallelism capped by no width number but held by a machine-capacity monitor that counts active dispatches from the ledger; a single **all-at-once rollout** preceded by a full dry-run pass; and a CI guard — now also banning `model:` lines in agent files — that keeps the agent files and skills honest as the repo moves.
+
+**Current-process notice (2026-10-23):** the dated amendment at the end of this document
+supersedes the original topology, ownership, capacity, review-scope and landing text
+where they differ. The body above/below preserves the original design record; use
+root `CLAUDE.md` and the linked procedures for current operation.
+
+**Current-process notice (2026-10-28):** the `squad-lead` role is **deleted** — founder
+decision 2026-10-27, confirmed 2026-10-28: "squad leads need to be deleted as agents, we
+do not need them anymore." The 2026-10-23 amendment had already retired in-session
+squad-lead dispatch for new work and kept #1266 as the sole exception; #1266 has since
+landed, so nothing needs the role. Team-lead coordinates workers directly; a separate,
+directly addressable session for an independent stream is simply another **team-lead**
+session (for example the Discord team leads on the pods). The dated amendment at the end
+of this document records what changed and where. The body above and below preserves the
+original design record, including the squad-lead role this amendment supersedes.
 
 ---
 
@@ -123,14 +138,19 @@ Severity: **blocker** = actively causes wrong behaviour or violations; **warning
 
      the specialists every dispatch or squad draws on (section 4):
      IMPLEMENTING          DESIGN           TEST             VERIFY            REVIEW (gate)
-     backend-lead          architect        qa-lead          uat-tester        6 plugin reviewers
-     frontend-lead         (also the        (RED author —    uat-validator     (pr-review-toolkit;
-     (backend-lead         cross-cutting    ONE instance     (ONE PER LANE)    code-simplifier may
-     writes the            reviewer)        by default;      docs-verifier     EDIT the branch
-     security code;                         CHECK auditor,   (feature size;    under review, 7.1)
-     see 4.1)                               UAT campaign     on demand: 7.5)  + architect pass
-                                             planner)                           + security-lead pass
-                                                                               = 8 REVIEWERS
+     backend-lead          architect        qa-lead          uat-tester        3 mandatory
+     frontend-lead         (also the        (RED author —    uat-validator     pr-review-toolkit
+     (backend-lead         cross-cutting    ONE instance     (ONE PER LANE)    reviewers + architect
+     writes the            reviewer)        by default;      docs-verifier     pass + security-lead
+     security code;                         CHECK auditor,   (feature size;    pass = 5 REVIEWERS
+     see 4.1)                               UAT campaign     on demand: 7.5)  (founder, 2026-09-29;
+                                             planner)                          type-design-analyzer,
+                                                                               comment-analyzer and
+                                                                               code-simplifier are
+                                                                               on request only —
+                                                                               code-simplifier may
+                                                                               EDIT the branch under
+                                                                               review when used, 7.1)
 
      META + PRODUCT TEXT
      prometheus-prompt-engineer (agent files and dev-team skills; also
@@ -205,7 +225,7 @@ Ownership edges the master table needs stated explicitly:
 | qa-lead vs local suites | qa-lead lives under the same limit as every role: at most one narrowly-scoped tagged Go test locally, plus the local frontend suites the shared skill permits. CI remains the authority for full Go results — "qa-lead runs suites" never means full local Go suites |
 | `scripts/` ownership | backend-lead owns `scripts/` generally; agent- and skill-related guard and tooling scripts (including the vendored-skill provenance check and the ledger-enforcing pre-push hook, 5.9) are prometheus-prompt-engineer's as author. A module CLAUDE.md is edited only together with its byte-identical AGENTS.md twin (`scripts/check-agents-md-sync.sh` enforces it) — this rule also goes into the shared skill |
 | Reviewer-finding routing | every reviewer finding routes to the lead owning the tree it sits in — a finding under the security packages routes to **backend-lead for the fix, with security-lead verifying the fix closes it** (the implementer/reviewer split applied to findings) |
-| code-simplifier edits (Round 15) | code-simplifier is the one plugin reviewer **allowed to edit the branch under review** — a simplification that only reports would force a second review cycle anyway. Its edits become part of the change under review and are covered by the remaining reviewers, or — when it runs after them — by a **follow-up code-reviewer pass on its diff alone** (7.1). No other plugin reviewer edits anything |
+| code-simplifier edits (Round 15; demoted to on-request-only, founder 2026-09-29) | code-simplifier is no longer a gate member, but remains the one plugin reviewer **allowed to edit the branch under review** whenever it is dispatched on explicit request — a simplification that only reports would force a second review cycle anyway. Its edits become part of the change under review and are covered by the remaining reviewers, or — when it runs after them — by a **follow-up code-reviewer pass on its diff alone** (7.1). No other plugin reviewer edits anything |
 | docs-verifier corrections | reviewed by team-lead before landing; the role never approves its own rewrite (its Must-never) |
 | Contracts | architect decides the shape; backend-lead edits the spec (`contracts/openapi.yaml`, `contracts/asyncapi.yaml`, `contracts/components/schemas/`) and regenerates the artifacts via `scripts/gen-contracts.sh`. Nobody else touches contracts (Round 8) |
 | CI, deploy, Makefile, e2e | backend-lead owns the CI workflows, `deploy/` and the `Makefile`; qa-lead owns the end-to-end suites (`tests/e2e`) as part of its test-file ownership (Round 8) |
@@ -426,7 +446,7 @@ Status updates are **event-driven** (Round 12): they fire when something lands, 
 
 | Signal | Role | Proposed HOLD threshold | Why this signal |
 |---|---|---|---|
-| Memory | **hard** | Available RAM below ~4 GB, or swap-in activity rising | Parallel agents and build caches OOM the machine, not just one lane |
+| Memory | **hard** | Available RAM below ~3 GB (founder, 2026-09-27; was 4 GB), or swap-in activity rising | Parallel agents and build caches OOM the machine, not just one lane |
 | Disk | **hard** | Free space on the workspace volume below ~20 GB | Worktrees, node_modules and Go caches grow fast |
 | CPU load | advisory — feeds the verdict, never holds alone | sustained 1-minute load above ~80% of logical cores over two samples ~30 s apart | One spike is noise; sustained load means lanes already compete |
 | Active dispatches | advisory — counted from the ledger's in-flight rows across all squad files | more than ~12 in-flight rows | The work-in-flight measure that replaces the deleted agent-process count; the ceiling is founder-adjustable |
@@ -447,7 +467,7 @@ The constants are the gate-before-landing and the founder's yes in chat; the lan
 
 Two structural rules follow:
 
-- **The gate runs before landing, not after.** The review gate for the change's size (7.1 — feature: the 8-reviewer gate; standard: the 3 fixed reviewers; small: one code-reviewer) executes on the feature's work branch; only a clean gate (findings fixed or explicitly deferred with a tracked issue) plus the founder's yes in chat earns the landing — and "clean" means the Round 14 finding format held: real findings carried failure scenarios, and every UNVERIFIED claim was adjudicated, not waved through (4.5). The whole-epic gate runs on the integration branch before the `main` merge.
+- **The gate runs before landing, not after.** The review gate for the change's size (7.1 — feature: the 5-reviewer gate; standard: the 3 fixed reviewers; small: one code-reviewer) executes on the feature's work branch; only a clean gate (findings fixed or explicitly deferred with a tracked issue) plus the founder's yes in chat earns the landing — and "clean" means the Round 14 finding format held: real findings carried failure scenarios, and every UNVERIFIED claim was adjudicated, not waved through (4.5). The whole-epic gate runs on the integration branch before the `main` merge.
 - **The pre-landing re-check is proportionate (Round 15, Q3).** After merging the latest integration branch into the work branch — the landing rule's step 3 (5.9) — the re-check is **CI for the affected areas plus a review of the conflict resolution**, never the full size gate again. Affected areas means the CI tiers covering the trees the merge touched (Go trees → the go tier; `src/` → the node tier; and so on); the conflict-resolution review covers the merge's conflict hunks, done by the landing actor (team-lead for hand-back landings), escalating to architect only where a resolution changes a design decision. [INFERRED mapping of "affected areas" to CI tiers — the founder fixed the principle; the tier mapping follows the cluster's layout (deploy/ci-worker).]
 - **The integration branch is never hard-coded.** It changes over time (currently `release/v0.1.1`, founder-stated 2026-09-25 — recorded here as narrative, in no loadable asset). Identification: the founder names the current integration branch when commissioning an epic; team-lead confirms it at engagement start, repeats it in every dispatch brief that needs it, and re-confirms with the founder at each landing. The guard's check 10 (section 8.1) fails any `release/v…` literal in `.claude/agents/` or `.claude/skills/` so the name cannot silently bake into a role. [INFERRED mechanism — the founder required "never hard-coded"; this identification loop is this design's proposal.]
 
@@ -632,7 +652,7 @@ Every change is sized before it is dispatched. Three sizes exist (founder decisi
 |---|---|---|---|
 | **Small** | A typo, a one-line follow-up, a mechanical edit with no design choice in it. Carries no RED step — and is **exempt from red-before-green evidence** (N6) | One code-reviewer pass on the work branch | Minutes to an hour |
 | **Standard** | Real implementation work that is not structural: **build with tests in the same step** — no separate RED/GREEN/CHECK — then review | The **3 fixed reviewers**: code-reviewer, silent-failure-hunter, pr-test-analyzer | A few hours to a day |
-| **Feature** | Structural, security-relevant, cross-tree, or anything needing a spec — and the size that runs **as a squad**: its own feature branch, worktree(s) and squad lead (5.6, 5.9) | The full RED/GREEN/CHECK flow below **plus the 8-reviewer gate** | Days — spec, RED, GREEN, CHECK, gate |
+| **Feature** | Structural, security-relevant, cross-tree, or anything needing a spec — and the size that runs **as a squad**: its own feature branch, worktree(s) and squad lead (5.6, 5.9) | The full RED/GREEN/CHECK flow below **plus the 5-reviewer gate** | Days — spec, RED, GREEN, CHECK, gate |
 
 The standard-size reviewers are fixed by founder decision (Round 8): always code-reviewer, silent-failure-hunter and pr-test-analyzer — never a rotating pick, and security-lead is **not** in it (security-lead sits in the feature gate only, plus on demand, 7.5). Design-system-only stages keep their recorded lighter ruling (`/code-review high`). Sizing is team-lead's judgement, checked by the same evidence review as everything else. [INFERRED boundary — the founder fixed the sizes and their gates; the cut between standard and feature is operationalised here.]
 
@@ -684,17 +704,23 @@ a warning, team-lead decides)
 team-lead reviews EVERY output (evidence tables, not assertions — 4.5)
       |
       v
-8-REVIEWER GATE — ON THE FEATURE'S WORK BRANCH, BEFORE any landing:
-  6 plugin reviewers (dispatch template pasted into each dispatch — 4.5;
-  code-simplifier may EDIT the branch under review, Round 15: its edits
-  are part of the change, covered by the remaining reviewers or a
-  follow-up code-reviewer pass on its diff alone)
+5-REVIEWER GATE — ON THE FEATURE'S WORK BRANCH, BEFORE any landing:
+  3 mandatory plugin reviewers — code-reviewer, silent-failure-hunter,
+  pr-test-analyzer (dispatch template pasted into each dispatch — 4.5)
   + architect cross-cutting pass + security-lead security pass
-  (Round 6: the gate is 8 reviewers; security-lead also reviews
-  on demand, 7.5. Small size: one code-reviewer. Standard size:
-  the 3 fixed reviewers — code-reviewer, silent-failure-hunter,
-  pr-test-analyzer. Design-system-only stages keep the recorded
-  lighter ruling: /code-review high.)
+  (founder, 2026-09-29: type-design-analyzer, comment-analyzer and
+  code-simplifier are demoted from mandatory gate members to
+  on-request-only — they rarely found anything decisive and cost
+  review rounds; if code-simplifier is dispatched on request, it may
+  still EDIT the branch under review, Round 15: its edits are part of
+  the change, covered by the remaining reviewers or a follow-up
+  code-reviewer pass on its diff alone)
+  (Round 6, superseded by the founder's 2026-09-29 ruling above:
+  security-lead also reviews on demand, 7.5. Small size: one
+  code-reviewer. Standard size: the 3 fixed reviewers —
+  code-reviewer, silent-failure-hunter, pr-test-analyzer.
+  Design-system-only stages keep the recorded lighter ruling:
+  /code-review high.)
       |                          |
       v                          v
 findings fixed             all clean or deferred-with-tracked-issue
@@ -722,7 +748,7 @@ message when several wait — G6) ->
 UAT where user-facing (7.3)  +  docs-verifier if user-facing docs changed
       |
       v
-whole epic: 8-reviewer gate on the epic diff (integration branch)
+whole epic: 5-reviewer gate on the epic diff (integration branch)
       |
       v
 human review -> merge to main (founder approval, always)
@@ -735,6 +761,8 @@ team-lead's two-line report: "code correct and tested" /
 Routing rules inside the flow: the architect's cross-cutting pass never adjudicates a finding against a design the architect authored — those escalate to the founder (the recusal rule, 4.1); every finding is dispatched to the lead owning the tree it sits in; a CHECK verdict of BLOCK sends the feature back to GREEN (or RED, if the tests themselves were the problem) — it never proceeds to the gate. Gate findings follow the Round 14 format: every finding carries a failure scenario, evidence, severity and certainty — a style preference with no failure scenario is not a finding and does not gate; a claim a reviewer cannot verify is marked UNVERIFIED, a warning team-lead adjudicates (verify itself, dispatch a verification, or accept with the gap stated) before the gate is called clean — it never blocks alone (4.5). Cross-stack work runs in a fixed order (Round 8): **contract first** (architect decides the shape, backend-lead lands the spec and regenerates), **then backend-lead and frontend-lead in parallel**, **then one combined review** — the gate above runs once over the combined diff, never once per stack. For RED lanes, the `isolation: worktree` frontmatter field (verified to exist — a temporary isolated worktree per subagent) is a candidate replacement for manual worktree setup; evaluate it before rollout.
 
 The small-fixes carve-out this section used to carry is now the **small** row of the sizes table above — Round 6 generalised it from a carve-out into one of three sizes. Landing rules (5.7) are unchanged by size: every size lands only after its gate and the founder's yes in chat.
+
+**Fix/re-review rounds on a gate (founder, 2026-09-28).** A review gate gets at most **5** fix/re-review rounds; a finding still open after round 5 stops and escalates to the founder through team-lead — there is never a round 6. Each re-review round re-dispatches **only** the reviewer(s) whose findings that round fixed, never the whole gate — the gate's first pass still runs every reviewer for that size (small: 1, standard: 3, feature: 8). This is unchanged for the whole-epic gate that runs on the integration branch before the `main` merge. The round count is recorded in the squad's ledger row (5.9, coordination-ledger knowledge file).
 
 ### 7.2 Failure handling (replaces the ci-triage role — founder decision)
 
@@ -873,7 +901,7 @@ security-lead verifies each fix closes its finding
 
 The implementer/reviewer split is the point: the agent that would have to live with a security weakness is not the agent that wrote it. security-lead holds no production trees (4.1) — its authority is the verdict, and its findings are evidence-backed, not vibes: each names the input or state that produces the wrong result, with severity and certainty (4.5).
 
-**Gate membership and on-demand review (Round 6).** security-lead is a standing member of the feature-size gate (one of the 8 reviewers in 7.1) **and** reviews on demand beyond it: a standard- or small-size change touching a focus area gets an on-demand security-lead review before it lands, even though those lighter gates do not include security-lead. The focus-area list is the scope of that on-demand duty — it is deliberately the full set of security-sensitive packages (verified against `pkg/`), not a four-package sample.
+**Gate membership and on-demand review (Round 6; gate size revised founder 2026-09-29).** security-lead is a standing member of the feature-size gate (one of the 5 reviewers in 7.1) **and** reviews on demand beyond it: a standard- or small-size change touching a focus area gets an on-demand security-lead review before it lands, even though those lighter gates do not include security-lead. The focus-area list is the scope of that on-demand duty — it is deliberately the full set of security-sensitive packages (verified against `pkg/`), not a four-package sample.
 
 **Proof tests (Round 7).** security-lead may write test files that demonstrate a security hole — a reproduction in test form, the strongest evidence a finding can carry. These are test files only, handed to qa-lead and landed as part of qa-lead's test pack; security-lead never lands them itself and never touches production code writing them. backend-lead then fixes the hole, and security-lead verifies the fix closes it, exactly as for any other finding.
 
@@ -1155,3 +1183,80 @@ The committed settings file reaches every worktree of this repo and every sessio
 | The founder's personal delegation layer starts unattended workers | Verified as lead-confirmed review finding | Interview Round 6 note + the independent review's verified summary; handled by the override requirement in 5.3 — outside this repo, so not independently checkable here |
 | No `scripts/hooks/` directory and no active hooks exist today; the coordination directory does not exist yet | Verified | Directory listings, 2026-09-25 — both are created at rollout (10.1) |
 | Founder decisions as recorded (Rounds 1–16, plus the final-review resolutions) | Verified | Read of `uat/agent-refresh/INTERVIEW.md`, 2026-09-25 — this revision's binding input; the round mapping and every review disposition live in the companion decisions file |
+
+---
+
+## Amendment — 2026-10-23: founder-approved delivery-process rollout
+
+Last reviewed: 2026-10-23
+
+Decision source: the founder-approved
+`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/process-review-20261023/ROLLOUT-MANDATE.md`,
+with `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/coordination/process-review-20261023/NAV-INPUT.md`
+and the dated correction note in
+`/Users/danielpiatkowski/AI-Agent-Workspace/claude-code-notes/delivery-process-review-20261023.html`.
+Founder: "the founder questions are actually ok, but i want that we role it out it
+needs to be reflected in skills, prompts an operating prociedures claude.mds etc what
+ever we use here".
+
+This amendment adopts proposals **1–7, 9 and 10**, with proposal 3 in its refined
+combined-feature form. Proposal **8 is not adopted**: the existing founder interview,
+question, escalation and explicit landing-approval rules remain unchanged. Preserve
+the historical sections above; this table points to the current canonical rules,
+not a second copy of them.
+
+| Approved item | Canonical current rule | Procedure |
+|---|---|---|
+| 1 — landing trains and standalone candidates | Root `CLAUDE.md`, "Landing trains" | Planning skill, `knowledge/landing-trains.md`; ledger sequence in `knowledge/coordination-ledger.md` |
+| 2 — whole-area ownership, one test author, independent CHECK/validation | Root `CLAUDE.md`, "Feature ownership" | Planning skill, `knowledge/parallel-planning.md`; qa-lead's RED/CHECK duties |
+| 3 — one combined-feature gate; small/standard combined train review | Root `CLAUDE.md`, "Change sizes and the review gate" | Planning skill, `knowledge/landing-trains.md`; plugin-reviewer dispatch scope |
+| 4 — issue-tracked, founder-controlled qualified CI quarantine | Root `CLAUDE.md`, "CI quarantine", read with Hard Constraint #7 | Shared skill, "Build and test" |
+| 5 — spec-time rows and paired, exact-version hands-on pipeline | Root `CLAUDE.md`, "Definition of Done" | Planning skill, `knowledge/landing-trains.md`; plan-spec template; qa-lead and UAT role files |
+| 6 — chief performs mechanical merges/integration | Root `CLAUDE.md`, "Landing trains" | Planning skill, candidate and ledger procedures |
+| 7 — candidate-only full CI; targeted lanes and Fly pre-flight | Root `CLAUDE.md`, "CI scope and remote pre-flight" | Shared skill, "Build and test"; CI-worker guidance |
+| 9 — controller safety, heavy-command slots and live-build pin | Root `CLAUDE.md`, "Running CLI agents" and "Build, test, and quality gates" | Planning skill, `knowledge/dispatch-and-watch.md` and `knowledge/capacity-check.md`; shared skill |
+| 10 — provider pre-flight and saved-state capability routing | Root `CLAUDE.md`, "Running CLI agents" | Planning skill, `knowledge/dispatch-and-watch.md`; model specifics stay in the personal layer outside the repo |
+| Squad leads retired for new in-session work | Root `CLAUDE.md`, "Subagent Workflow" | team-lead coordinates specialists directly; squad-lead is only a separate directly addressable independent stream; existing #1266 is retained |
+
+The whole-epic gate before `main`, on-demand security review, independent CHECK and
+UAT validation, the two delivery claims, the landing lock and human-only `main` merge
+remain. This amendment supersedes contrary original text in §§3–5, 6.1, 6.5–6.6 and
+7.1–7.7 on the approved topics; it does not revive the historical code-simplifier
+write exception (removed 2026-10-06).
+
+**Implementation-status follow-up — 2026-10-23.** CI event selection and quarantine
+reporting/list are implemented in `05fa19f85`, integrated as `447c91139`; root
+`CLAUDE.md` ("CI implementation pointer") links their exact guide and sources.
+Controller locks, load refusal and local-receipt quota pre-flight are implemented
+outside the repo; root "Running CLI agents" and the planning skill's
+`knowledge/dispatch-and-watch.md` give the controller pointer and shared-launch-root
+exemptions. The standing-instance rebuild pipeline still needs its own campaign,
+version and readiness evidence. Implementation is not a passing later candidate;
+raw failures, independent verification and founder-question rules remain unchanged.
+
+## Amendment — 2026-10-28: the squad-lead role is deleted
+
+Last reviewed: 2026-10-28
+
+Decision source: founder decision 2026-10-27, confirmed 2026-10-28 — "squad leads need
+to be deleted as agents, we do not need them anymore." The 2026-10-23 amendment had
+already retired in-session squad-lead dispatch for new work and retained #1266 as the
+sole exception; #1266 has since landed, so no live work needs the role.
+
+This amendment supersedes the original squad-lead text wherever it appears in the body
+above — the term definitions in §1, the team-size and diagram text in §3, the role tables
+in §4, the capacity and coordination text in §5, the skill-preload mapping in §6.1, the
+guard checks in §8.1 and the rollout stages in §10. That text is preserved, not
+rewritten: it is the original design record.
+
+| Superseded original | Current canonical rule |
+|---|---|
+| `squad-lead.md` — the eleventh agent file, carrying the shared-traits discipline block | Deleted. `.claude/agents/` holds **ten** role files; every orchestrator session runs `team-lead.md` |
+| Squad lead — "the agent running one squad", dispatched in-session or run by one of the founder's separate sessions | A separate, directly addressable session for an independent stream is a **team-lead** session; it coordinates workers directly under the same rules |
+| Squad — "the unit of parallel feature-size work: one squad lead, its own worktree(s), its own feature branch…" | A **stream** — the same unit of parallel feature-size work: its own worktree(s), its own feature branch, and the specialists it draws from the ten roles. The coordination ledger's `squads/<id>.md` path and its `squad=` parser key are unchanged file and field conventions, not a role reference |
+| The chief aligns "squad leads" across the founder's sessions | The chief aligns team-lead sessions across the founder's sessions |
+| Guard check 11's orchestrator-side role category (`ORCH_SHARED_ONLY`) | Removed with the role; `scripts/check-agent-files.sh` classifies the ten remaining role files |
+| The planning skill preloaded into "team-lead.md and squad-lead.md" | Preloaded into `team-lead.md` only; a separate team-lead session loads it the same way |
+
+Root `CLAUDE.md` ("Subagent Workflow") and `.claude/agents/team-lead.md` carry the
+current rule. The roster count is **ten** roles.

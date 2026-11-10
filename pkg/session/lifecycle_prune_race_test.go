@@ -27,7 +27,7 @@ type errBox struct{ err error }
 // decide a session was terminal and past the retention cutoff, then
 // separately re-acquired the SAME lock just to remove the file. In the
 // window between those two acquisitions no lock was held for that
-// session_id at all: a follow_up/Play legitimately minting a fresh,
+// session_id at all: a resume legitimately minting a fresh,
 // non-terminal generation onto the terminal tail in that exact gap (the
 // package doc explicitly allows this) would have that brand-new generation
 // silently destroyed when the prune then deleted the whole .jsonl anyway —
@@ -78,7 +78,7 @@ func TestLifecycleStore_PruneTerminal_ReopenDuringPruneWindow(t *testing.T) {
 	var reopenSawExistingTail atomic.Bool
 	var reopenErr atomic.Value // holds errBox
 
-	// fn simulates a follow_up/Play: mint a new generation onto whatever tail
+	// fn simulates a resume: mint a new generation onto whatever tail
 	// currently exists. If the tail is already gone (next == nil), this
 	// reopen attempt lost the race against an ALREADY-COMPLETED removal —
 	// correct, non-lossy no-op, not a failure.

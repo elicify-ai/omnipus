@@ -252,16 +252,17 @@ func TestWsStreamer_SetTurnID_EmptyIsNoop(t *testing.T) {
 	assert.Equal(t, "turn-existing", got, "an empty SetTurnID call must not clobber the existing turnID")
 }
 
-// TestWsStreamer_Finalize_TurnIDEnablesMarkLastEntryTruncatedCorrelation is
-// the end-to-end regression test proving FIX 5c/1 actually closes the live-
-// verification bug: MarkLastEntryTruncated's own turn-scoped backward-walk
-// (pkg/session/unified.go, requires e.TurnID == turnID) must now find and
-// flag a REAL entry written through the production wsStreamer.Finalize path
-// — not just a hand-seeded test fixture. Before this fix, EVERY real
-// assistant entry had TurnID=="" while MarkLastEntryTruncated is always
-// called with a genuine non-empty turn ID (pkg/agent/cancel.go), so the
-// match could never succeed and Truncated was silently never set for any
-// real cancel.
+// TestWsStreamer_Finalize_TurnIDEnablesCancelTruncationCorrelation (was
+// …MarkLastEntryTruncatedCorrelation) is
+// the end-to-end regression test proving FIX 5c/1 still closes the live-
+// verification bug on the append-only design: the truncation is now DERIVED on
+// read from the turn_canceled record the cancel appends right after the turn's
+// last assistant entry (effects design D8), and it must find and flag a REAL
+// entry written through the production wsStreamer.Finalize path — not just a
+// hand-seeded test fixture. Before FIX 5c/1, EVERY real assistant entry had
+// TurnID=="" while the cancel is always issued with a genuine non-empty turn
+// ID (pkg/agent/cancel.go), so the match could never succeed and Truncated was
+// silently never set for any real cancel.
 //
 // BDD:
 //
@@ -269,10 +270,10 @@ func TestWsStreamer_SetTurnID_EmptyIsNoop(t *testing.T) {
 //	  does via stampStreamerTurnID before any token flows),
 //	  And Update/Finalize have persisted the resulting assistant entry
 //	  exactly as a live mid-stream turn would,
-//	When MarkLastEntryTruncated(sessionID, "turn-cancel-1") is called
+//	When the turn_canceled record for "turn-cancel-1" is appended
 //	  (exactly as pkg/agent/cancel.go's RequestCancel does),
-//	Then the REAL persisted entry is found and flagged Truncated=true.
-func TestWsStreamer_Finalize_TurnIDEnablesMarkLastEntryTruncatedCorrelation(t *testing.T) {
+//	Then the REAL persisted entry is found and reads as Truncated=true.
+func TestWsStreamer_Finalize_TurnIDEnablesCancelTruncationCorrelation(t *testing.T) {
 	handler, _, al := newTestWSHandler(t)
 	t.Cleanup(handler.Wait)
 
@@ -304,9 +305,15 @@ func TestWsStreamer_Finalize_TurnIDEnablesMarkLastEntryTruncatedCorrelation(t *t
 	require.NoError(t, s.Update(context.Background(), "Partial response before cancel..."))
 	require.NoError(t, s.Finalize(context.Background(), "Partial response before cancel..."))
 
-	// This is the exact call pkg/agent/cancel.go's RequestCancel makes on a
-	// mid-stream cancel, with the real turn ID it tracked throughout the turn.
-	require.NoError(t, store.MarkLastEntryTruncated(meta.ID, "turn-cancel-1", "cancelled"))
+	// This is the exact record pkg/agent/cancel.go's RequestCancel now appends
+	// on a mid-stream cancel (effects design D8): the turn_canceled record
+	// right after the turn's last assistant entry, carrying the turn ID the
+	// turn tracked throughout. ReadTranscript derives Truncated from it, so the
+	// stamping this test proves is still the load-bearing correlation.
+	require.NoError(t, store.AppendTranscript(meta.ID, session.TranscriptEntry{
+		ID: meta.ID + "_canceled", Type: session.EntryTypeTurnCancelled, TurnID: "turn-cancel-1",
+		CancelMethod: "graceful", Timestamp: time.Now().UTC(),
+	}))
 
 	entries, err := store.ReadTranscript(meta.ID)
 	require.NoError(t, err, "read transcript")
@@ -321,6 +328,6 @@ func TestWsStreamer_Finalize_TurnIDEnablesMarkLastEntryTruncatedCorrelation(t *t
 	assert.Equal(t, "turn-cancel-1", assistantEntries[0].TurnID,
 		"the persisted entry must carry the stamped TurnID")
 	assert.True(t, assistantEntries[0].Truncated,
-		"MarkLastEntryTruncated must find and flag the REAL entry via TurnID correlation — "+
+		"the turn_canceled record must find and truncate the REAL entry via TurnID correlation — "+
 			"before FIX 5c/1 this always silently failed to match on production data")
 }

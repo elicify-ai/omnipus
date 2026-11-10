@@ -6,8 +6,9 @@ package config
 
 // Default bounds for PlanningConfig (ADR-049 D7, spec Part A §G "Config
 // bounds"). Applied by the boot validator (validateBootConfig, validator.go)
-// whenever the corresponding field is zero, and used directly by DefaultConfig
-// (defaults.go) to populate a fresh install's config.json.
+// for the existing plain-number fields when zero. Goal timer pointers default
+// only when absent/nil; explicit zero is invalid. DefaultConfig (defaults.go)
+// uses these same values to populate a fresh install's config.json.
 const (
 	// DefaultGoalMaxRounds is the shipped value of the global goal try limit
 	// (Settings -> Performance "goal_max_rounds", ADR-086 GOAL-FR-024): how many
@@ -15,6 +16,15 @@ const (
 	// claim — before it ends not met. It bounds a chat goal and the goal a task
 	// run works toward identically (the INNER limit).
 	DefaultGoalMaxRounds = 20
+	// Goal timer defaults distinguish absent/nil from an explicit value. Numeric
+	// zero is invalid, not a default or an off sentinel.
+	DefaultGoalReminderQuietSeconds  = 60
+	MinGoalReminderQuietSeconds      = 30
+	MaxGoalReminderQuietSeconds      = 3600
+	DefaultGoalStalledCheckinEnabled = true
+	DefaultGoalStalledCheckinMinutes = 30
+	MinGoalStalledCheckinMinutes     = 5
+	MaxGoalStalledCheckinMinutes     = 1440
 	// DefaultTaskMaxAttempts is the shipped task attempt limit (the OUTER
 	// limit): how many times a task is run from a fresh start before it ends
 	// Failed. A run fails as a whole when its goal ends not met after all its
@@ -71,6 +81,15 @@ type PlanningConfig struct {
 	// EffectiveGoalMaxRounds and snapshotted onto the goal record when the goal
 	// starts. It does not bound task attempts.
 	GoalMaxRounds int `json:"goal_max_rounds,omitempty"`
+	// GoalReminderQuietSeconds gates idle reminders only. Nil resolves to 60;
+	// every explicit value must be in [30, 3600]. There is no quiet-off mode.
+	GoalReminderQuietSeconds *int `json:"goal_reminder_quiet_seconds,omitempty"`
+	// GoalStalledCheckinEnabled is the busy-check-in switch. Nil defaults true;
+	// explicit false is retained independently of the chosen minutes.
+	GoalStalledCheckinEnabled *bool `json:"goal_stalled_checkin_enabled,omitempty"`
+	// GoalStalledCheckinMinutes is independent of idle quiet. Nil defaults to
+	// 30; explicit values must be in [5, 1440], even when check-ins are off.
+	GoalStalledCheckinMinutes *int `json:"goal_stalled_checkin_minutes,omitempty"`
 	// PlanJudgeMaxRounds is the default plan-judge round ceiling before a
 	// running Plan fails with failed_reason=judge_rounds_exhausted.
 	// Overridden per-plan by plan.PlanBounds.PlanJudgeMaxRounds.
@@ -275,4 +294,27 @@ func (c PlanningConfig) EffectiveGoalCompileWindowTokens() int {
 		return c.GoalCompileWindowTokens
 	}
 	return DefaultGoalCompileWindowTokens
+}
+
+// EffectiveGoalReminderQuietSeconds defaults only absence. Explicit invalid
+// numbers are rejected at the config/API boundary, never silently replaced.
+func (c PlanningConfig) EffectiveGoalReminderQuietSeconds() int {
+	if c.GoalReminderQuietSeconds == nil {
+		return DefaultGoalReminderQuietSeconds
+	}
+	return *c.GoalReminderQuietSeconds
+}
+
+func (c PlanningConfig) EffectiveGoalStalledCheckinEnabled() bool {
+	if c.GoalStalledCheckinEnabled == nil {
+		return DefaultGoalStalledCheckinEnabled
+	}
+	return *c.GoalStalledCheckinEnabled
+}
+
+func (c PlanningConfig) EffectiveGoalStalledCheckinMinutes() int {
+	if c.GoalStalledCheckinMinutes == nil {
+		return DefaultGoalStalledCheckinMinutes
+	}
+	return *c.GoalStalledCheckinMinutes
 }

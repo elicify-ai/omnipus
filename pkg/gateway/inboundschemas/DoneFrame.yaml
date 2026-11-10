@@ -35,6 +35,13 @@ properties:
       #823 catch-up redesign. The id of the turn's last assistant message, matching the
       message_id stamped on that message's token frames and on its persisted transcript
       entry.
+  goal_id:
+    type: string
+    description: >-
+      session-core FR-039 / C-GOAL. The goal this producing turn was dispatched under
+      (captured at turn start), spread onto the done frame so a no-stream turn's bubble
+      (created from this frame's message_id, not from tokens) still joins to the exact
+      keyed goal criteria. Absent means UNKNOWN association.
   seq:
     type: integer
     format: int64
@@ -45,7 +52,15 @@ properties:
       hub as the single chokepoint through which every session-scoped frame is published,
       after the turn's transcript entry has been durably persisted (persist-before-publish
       — the invariant done(T) <= seq W implies T's final entry is in any transcript read
-      taken after that point). Optional: absent on an unsequenced copy of this frame. The
-      client stores the highest seq it has applied per session and sends it back as
-      since_seq on attach_session; frames at or below that cursor are ignored, which makes
-      re-delivery idempotent.
+      taken after that point). Optional: absent on an unsequenced copy of this frame. this seq is dedup state, never itself the resume cursor: the client's cursor is
+      committed only by a completed catch-up (catch_up_complete) and is sent back as
+      since_seq on attach_session (2026-10-26, architect ruling arch-q33 — an earlier
+      sentence here described per-frame cursor advance, which was stale). Frames at
+      or below that cursor are ignored, which makes re-delivery idempotent.
+  room_ref:
+    $ref: './RoomRef.yaml'
+    description: >
+      Spec omnipus-system-agent K33 (FR-202, FR-215). Present when this
+      main-session entry is a room request to this agent or this agent's
+      answer into a room, so live, history and replay render the same
+      collapsed entry.

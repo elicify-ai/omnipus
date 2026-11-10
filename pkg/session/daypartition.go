@@ -37,6 +37,12 @@ const (
 	EntryTypeSystem EntryType = "system"
 	// EntryTypeToolCall marks a tool invocation entry.
 	EntryTypeToolCall EntryType = "tool_call"
+	// EntryTypeProviderFallback marks the §7.4 fallback-model note entry:
+	// the once-per-(session, pair) "Answered by the Fallback model ..." note
+	// persisted after the assistant answer (MIN-103), with the pair facts
+	// (unavailable/answered models, unavailable_code) the replay carrier
+	// (replay_provider_fallback) renders back on session reload.
+	EntryTypeProviderFallback EntryType = "provider_fallback"
 	// EntryTypeTurnCancelled marks the JSONL entry written when a turn is canceled
 	// mid-stream. Written once per fired cancel to transcript.jsonl (FR-15).
 	EntryTypeTurnCancelled EntryType = "turn_canceled"
@@ -45,17 +51,40 @@ const (
 	// completion marker so the two cannot silently disagree — the Judge System
 	// Agent's verdict is never inferred from absence (NFR-2).
 	EntryTypeJudgeVerdict EntryType = "judge_verdict"
+	// EntryTypeContextWindowNotice carries a classified, Verbose-only context
+	// diagnostic, never an ordinary message or model-history entry.
+	EntryTypeContextWindowNotice EntryType = "context_window_notice"
+)
+
+// ViewMembership values of a TranscriptEntry (session-core FR-004 / contract
+// slice C-ARCHIVE): which view(s) of the single append-only archive an entry
+// belongs to. See TranscriptEntry.ViewMembership.
+const (
+	ViewMembershipChat  = "chat"
+	ViewMembershipModel = "model"
+	ViewMembershipBoth  = "both"
 )
 
 // SessionStatus classifies the lifecycle state of a session.
 type SessionStatus string
 
 const (
-	// StatusActive is a session that is currently in use.
+	// StatusActive is a session that is currently in use. Also covers a
+	// session that is working, waiting for an answer, or stopped — see
+	// lifecycle_state (SessionLifecycleState) for the exact distinction
+	// (sub-agent control plane ADR D4/MAJ-009).
 	StatusActive SessionStatus = "active"
 	// StatusArchived is a session that has been intentionally closed.
 	StatusArchived SessionStatus = "archived"
-	// StatusInterrupted is a session that was terminated unexpectedly or canceled.
+	// StatusFailed mirrors a genuine landed lifecycle `failed` (sub-agent
+	// control plane ADR D4/MAJ-009). An explicit RESUME of a done/failed
+	// session resets coarse metadata back to StatusActive.
+	StatusFailed SessionStatus = "failed"
+	// StatusInterrupted is a session whose turn a gateway restart cut off.
+	// Founder rule (2026-10-06): a session does not fail because of a
+	// restart. pkg/agent/boot_sweep.go::reconcileUnifiedMetaStatus is its only
+	// writer (a Stop never writes it); it is part of the Session.yaml::status
+	// wire enum. An explicit RESUME resets it back to StatusActive.
 	StatusInterrupted SessionStatus = "interrupted"
 )
 
@@ -74,20 +103,38 @@ func NewPartitionStore(agentWorkspaceDir, agentID string) *PartitionStore {
 	}
 }
 
+// AttentionMark is the bounded shared attention state of a main (U11).
+//
+//   - OutcomeOrder is the saved order of the newest attention outcome (a goal
+//     ending met, rounds_exhausted or other; stopped_by_user never raises it):
+//     the outcome entry's saved timestamp in Unix MILLISECONDS, made strictly
+//     increasing. Milliseconds, not nanoseconds: a nanosecond int64 exceeds
+//     JavaScript's exact-integer range, and the SPA echoes this number back.
+//   - SeenOrder is the one shared seen mark; it only ever moves up, and never
+//     past OutcomeOrder.
+type AttentionMark struct {
+	OutcomeOrder int64 `json:"outcome_order"`
+	SeenOrder    int64 `json:"seen_order"`
+}
+
 // SessionMeta is the meta.json file per Appendix E §E.5.1.
 type SessionMeta struct {
-	ID          string        `json:"id"`
-	AgentID     string        `json:"agent_id"`
-	Title       string        `json:"title,omitempty"`
-	Status      SessionStatus `json:"status"` // StatusActive | StatusArchived | StatusInterrupted
-	CreatedAt   time.Time     `json:"created_at"`
-	UpdatedAt   time.Time     `json:"updated_at"`
-	Model       string        `json:"model,omitempty"`
-	Provider    string        `json:"provider,omitempty"`
-	Stats       SessionStats  `json:"stats"`
-	WorkspaceID string        `json:"workspace_id,omitempty"`
-	TaskID      string        `json:"task_id,omitempty"`
-	Channel     string        `json:"channel"`
+	ID        string        `json:"id"`
+	AgentID   string        `json:"agent_id"`
+	Title     string        `json:"title,omitempty"`
+	Status    SessionStatus `json:"status"` // StatusActive | StatusArchived | StatusInterrupted
+	CreatedAt time.Time     `json:"created_at"`
+	UpdatedAt time.Time     `json:"updated_at"`
+	Model     string        `json:"model,omitempty"`
+	Provider  string        `json:"provider,omitempty"`
+	// ReasoningEffort is the conversation's own effort override set by the
+	// /effort command (effort-levels spec FR-039). "" (absent) = Not set:
+	// the agent's setting applies. Never written by a model change.
+	ReasoningEffort string       `json:"reasoning_effort,omitempty"`
+	Stats           SessionStats `json:"stats"`
+	WorkspaceID     string       `json:"workspace_id,omitempty"`
+	TaskID          string       `json:"task_id,omitempty"`
+	Channel         string       `json:"channel"`
 	// InstanceID is the channel INSTANCE this session belongs to — the key in
 	// cfg.Channels, e.g. "whatsapp.eu", not the bare type "whatsapp".
 	//
@@ -117,7 +164,6 @@ type SessionMeta struct {
 
 	// v2 multi-agent fields (joined session model)
 	AgentIDs            []string          `json:"agent_ids,omitempty"`
-	ActiveAgentID       string            `json:"active_agent_id,omitempty"`
 	CompactionSummaries map[string]string `json:"compaction_summaries,omitempty"` // per-agent compaction
 
 	// ParentSessionID names the DIRECT parent of a delegated child session
@@ -133,6 +179,16 @@ type SessionMeta struct {
 	// listing) — without a reader this field could ship write-only with
 	// every test green (spec note on W2).
 	ParentSessionID string `json:"parent_session_id,omitempty"`
+
+	// Attention is a main's bounded attention mark (session-core U11, FR-047,
+	// C-ATTENTION): the saved order of its newest attention outcome and the one
+	// shared seen mark. Nil on every non-main and on a main that has never had an
+	// attention outcome. Lives in meta.json (identity group).
+	//
+	// A VALUE, not a pointer, and excluded from this struct's own JSON (json:"-"):
+	// it is persisted only through meta.json's identity group (u5IdentityFile),
+	// and a value keeps UnifiedMeta.Clone a plain copy (no new reference field).
+	Attention AttentionMark `json:"-"`
 
 	// ADR-086 GOAL-FR-005 (wave S6, "the deletion half"): the goal loop
 	// state that used to live here — GoalID, GoalCondition, GoalRoundsUsed,
@@ -195,14 +251,15 @@ type SessionMeta struct {
 	LoopLastActivityAt string `json:"loop_last_activity_at,omitempty"`
 }
 
-// PostLoad backfills v2 multi-agent fields from the legacy AgentID field.
+// PostLoad backfills the participants list from the single owner field.
 // Call after every JSON unmarshal of SessionMeta.
+//
+// A session's owner is its immutable AgentID. The retired handover owner
+// (active_agent_id) no longer exists: a saved file that still carries the key
+// has it ignored on read and dropped on the next write (session-core DEL-11).
 func (m *SessionMeta) PostLoad() {
 	if len(m.AgentIDs) == 0 && m.AgentID != "" {
 		m.AgentIDs = []string{m.AgentID}
-	}
-	if m.ActiveAgentID == "" && m.AgentID != "" {
-		m.ActiveAgentID = m.AgentID
 	}
 }
 
@@ -214,6 +271,13 @@ type ModelTokens struct {
 	CacheRead  int `json:"cache_read"`
 	CacheWrite int `json:"cache_write"`
 	Total      int `json:"total"`
+	// Reasoning is the sum of the reported reasoning-token counts of the
+	// entries in this cell (effort-levels spec FR-024/FR-036): a subset of
+	// Out, never added to Total; nil when no entry reported a count.
+	Reasoning *int `json:"reasoning,omitempty"`
+	// CacheHitRatio is cache_read / (in + cache_read + cache_write) when that
+	// denominator is greater than zero, and nil when it is zero. Not filled yet.
+	CacheHitRatio *float64 `json:"cache_hit_ratio,omitempty"`
 }
 
 // SessionStats aggregates usage across all partitions.
@@ -245,34 +309,91 @@ type SessionStats struct {
 	// ByModel maps model name → per-model token breakdown.
 	// nil on old sessions; the reader must treat nil as empty.
 	ByModel map[string]ModelTokens `json:"by_model,omitempty"`
+	// ByProvider maps a catalog provider id to the same cell shape as ByModel.
+	// Nil until per-call provider ids are summed. The reader must treat nil as empty.
+	ByProvider map[string]ModelTokens `json:"by_provider,omitempty"`
+	// UnpricedTokens counts only the unpriced portion of calls, not the whole call.
+	// A cost of 0 with UnpricedTokens > 0 is unpriced, not free.
+	UnpricedTokens int `json:"unpriced_tokens,omitempty"`
+	// SubscriptionTokens counts ChatGPT sign-in tokens. Those tokens recorded no
+	// dollars and are excluded from Cost.
+	SubscriptionTokens int `json:"subscription_tokens,omitempty"`
 }
 
 // TranscriptEntry represents one line in a partition JSONL file.
 type TranscriptEntry struct {
-	ID          string       `json:"id"`
-	Type        EntryType    `json:"type,omitempty"` // EntryTypeMessage | EntryTypeCompaction | EntryTypeSystem; empty = message
-	Role        string       `json:"role,omitempty"` // "user" | "assistant" | "system"
-	Content     string       `json:"content,omitempty"`
-	Summary     string       `json:"summary,omitempty"` // for compaction entries
-	Timestamp   time.Time    `json:"timestamp"`
-	Tokens      int          `json:"tokens,omitempty"`
-	Cost        float64      `json:"cost,omitempty"`
-	Status      string       `json:"status,omitempty"` // "ok" | "error" | "interrupted"
-	Attachments []Attachment `json:"attachments,omitempty"`
-	ToolCalls   []ToolCall   `json:"tool_calls,omitempty"`
-	AgentID     string       `json:"agent_id"` // which agent produced this entry (FR-002)
+	ID      string    `json:"id"`
+	Type    EntryType `json:"type,omitempty"` // EntryTypeMessage | EntryTypeCompaction | EntryTypeSystem; empty = message
+	Role    string    `json:"role,omitempty"` // "user" | "assistant" | "system"
+	Content string    `json:"content,omitempty"`
+	// ViewMembership classifies which view(s) of the single append-only archive
+	// this entry belongs to (session-core FR-004 / contract slice C-ARCHIVE):
+	// ViewMembershipChat ("chat" — rendered in the conversation),
+	// ViewMembershipModel ("model" — part of the model context window) or
+	// ViewMembershipBoth ("both"). Every canonical archive entry the store
+	// writes carries exactly one of these; the writer defaults an empty value
+	// to ViewMembershipBoth (an ordinary turn lives in both views). Empty is
+	// tolerated on read for entries written before this field existed — the
+	// reader treats absent as unknown, never re-deriving a view. It is a
+	// per-entry classification on the one archive, never a second store.
+	ViewMembership string `json:"view_membership,omitempty"`
+	// ContextWindowNotice is required when Type is context_window_notice. The
+	// generated payload survives REST history without becoming ordinary Content.
+	ContextWindowNotice *generated.ContextWindowNotice `json:"context_window_notice,omitempty"`
+	Summary             string                         `json:"summary,omitempty"` // for compaction entries
+	Timestamp           time.Time                      `json:"timestamp"`
+	Tokens              int                            `json:"tokens,omitempty"`
+	Cost                float64                        `json:"cost,omitempty"`
+	Status              string                         `json:"status,omitempty"` // "ok" | "error" | "interrupted"
+	Attachments         []Attachment                   `json:"attachments,omitempty"`
+	ToolCalls           []ToolCall                     `json:"tool_calls,omitempty"`
+	AgentID             string                         `json:"agent_id"` // which agent produced this entry (FR-002)
+	// ReplyToMessageID is set only on a guest reply (session-core FR-027): the
+	// id of the admitted request this entry answers. The guest author is
+	// AgentID. Projected as reply_to_message_id live and on replay.
+	ReplyToMessageID string `json:"reply_to_message_id,omitempty"`
+	// Participant labels who wrote a left-side user-role entry, and
+	// ReplyToParticipant who a reply went to (session-core F15). Display only,
+	// stamped by the server from authenticated facts or the request capture —
+	// never from model or tool input. Projected as participant /
+	// reply_to_participant live, on replay and in REST.
+	Participant        *generated.ChatParticipant `json:"participant,omitempty"`
+	ReplyToParticipant *generated.ChatParticipant `json:"reply_to_participant,omitempty"`
+	// RoomRef marks a main-session entry that is group-chat traffic
+	// (omnipus-system-agent K33, FR-202, FR-215): the room's request to this
+	// agent (role "request") or this agent's answer into the room (role
+	// "answer"). Server-stamped display and navigation data only; it grants
+	// nothing. Projected as room_ref live, on replay and in REST.
+	RoomRef *generated.RoomRef `json:"room_ref,omitempty"`
 	// Model records which model produced this assistant message. Populated
 	// on every assistant message written via pkg/agent/turn.go (FR-013).
 	// Empty for legacy turns written before this field existed; the UI
 	// omits the model span entirely for those (FR-014) — there is no
 	// "(model not recorded)" placeholder string rendered.
 	Model string `json:"model,omitempty"`
+	// ModelID is the verbatim model id used for this accounting call.
+	ModelID string `json:"model_id,omitempty"`
 	// ErrorCode is the translated LLMError.code (per ADR-051 Rev 3).
 	// Populated by appendErrorTranscript and consumed by the replay path so
 	// the SPA can render the same code/message regardless of the live wire.
 	ErrorCode string `json:"error_code,omitempty"`
 	// ErrorRetryable is the translated LLMError.retryable flag.
 	ErrorRetryable bool `json:"error_retryable,omitempty"`
+	// UnavailableModel / UnavailableCode carry the §7.4 fallback-note pair
+	// facts on an EntryTypeProviderFallback entry (unavailable_code gates
+	// the D12 pick-a-new-model hint; the models name the §6 note's slots).
+	// Empty on every other entry type.
+	UnavailableModel string `json:"unavailable_model,omitempty"`
+	UnavailableCode  string `json:"unavailable_code,omitempty"`
+	// ProviderMessage is the provider-messages spec §12/MAJ-104/C-14
+	// persisted marker: true when this error entry's content is the §6
+	// assembled sentence (a §6 template applied with the failing
+	// attempt's identity). Written by the agent's provider stage
+	// (pkg/agent/turn_transcript.go::persistErrorTranscript) and
+	// round-tripped by the replay path (pkg/gateway/replay.go::
+	// buildReplayErrorFrame) so the SPA renders the persisted entry
+	// exactly like the live frame.
+	ProviderMessage bool `json:"provider_message,omitempty"`
 	// CacheReadTokens and CacheWriteTokens carry the provider cache split for
 	// this assistant turn. Both are 0 for non-assistant entries and for legacy
 	// entries written before Wave 1 token tracking. Used to accumulate
@@ -286,6 +407,30 @@ type TranscriptEntry struct {
 
 	CacheReadTokens  int `json:"cache_read_tokens,omitempty"`
 	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
+	// ProviderID is the catalog provider id for this call. Empty on entries
+	// written before prompt-caching accounting.
+	ProviderID string `json:"provider_id,omitempty"`
+	// BillingClass is "priced", "unpriced", or "subscription".
+	BillingClass string `json:"billing_class,omitempty"`
+	// UnpricedTokens is the unpriced portion of this call, not the whole call.
+	// A mixed call stays BillingClass "priced" and still stores that portion.
+	UnpricedTokens int `json:"unpriced_tokens,omitempty"`
+	// CacheWrite5mTokens and CacheWrite1hTokens are the split write counts when
+	// the provider reported them. CacheWriteTokens stays the sum of the two.
+	CacheWrite5mTokens int `json:"cache_write_5m_tokens,omitempty"`
+	CacheWrite1hTokens int `json:"cache_write_1h_tokens,omitempty"`
+
+	// ReasoningTokens is this call's reported reasoning-token count
+	// (effort-levels spec FR-024): a subset of CompletionTokens, nil when the
+	// provider reported none, 0 when it reported zero. Booked per call.
+	ReasoningTokens *int `json:"reasoning_tokens,omitempty"`
+	// TurnReasoningTokens is the display-only snapshot of the turn's reported
+	// reasoning-token sum, stored on the answering entry (FR-024). Never read
+	// by any statistic.
+	TurnReasoningTokens *int `json:"turn_reasoning_tokens,omitempty"`
+	// Effort is the per-turn effort record of the answering call (FR-058).
+	// Never carries reasoning text.
+	Effort *generated.EffortRecord `json:"effort,omitempty"`
 
 	// For compaction entries.
 	MessagesCompacted int `json:"messages_compacted,omitempty"`
@@ -303,9 +448,22 @@ type TranscriptEntry struct {
 	// See ADR-087 D2.
 	TruncationReason string `json:"truncation_reason,omitempty"`
 
+	// TurnID preserves the producing turn for cancellations and classified
+	// context-window diagnostics.
+	TurnID string `json:"turn_id,omitempty"`
+
+	// GoalID is the goal the producing turn was dispatched under (session-core
+	// FR-039 / C-GOAL), captured once at turn start from the session's active
+	// goal record and stamped onto every entry that turn writes. It is the
+	// EXACT key the SPA joins this message to its keyed goal criteria
+	// (goalPills[goal_id]) — never the latest-goal scalar. Empty means UNKNOWN
+	// association (the turn ran under no proven goal); a later goal's frame must
+	// never rebind an earlier entry. Additive/optional: entries written before
+	// this field existed carry no value.
+	GoalID string `json:"goal_id,omitempty"`
+
 	// Cancel-specific fields — only populated for EntryTypeTurnCancelled entries
 	// (FR-15). All are omitempty so they are invisible on other entry types.
-	TurnID               string   `json:"turn_id,omitempty"`
 	CancelledByUser      string   `json:"canceled_by_user,omitempty"`
 	CancelledByChannel   string   `json:"canceled_by_channel,omitempty"`
 	CancelMethod         string   `json:"cancel_method,omitempty"` // "graceful" | "hard"
@@ -413,6 +571,11 @@ type TranscriptEntry struct {
 	// wire frame").
 	ClientMessageID string `json:"client_message_id,omitempty"`
 
+	// InputDisposition is a READ-ONLY PROJECTION (session-core FR-024): set
+	// only by ReadTranscriptWithDispositions for a user input Stop discarded
+	// before delivery. It is never written to the archive.
+	InputDisposition *InputDisposition `json:"input_disposition,omitempty"`
+
 	// SystemSubtype discriminates an EntryTypeSystem entry by what kind of
 	// system event it records (ADR-085 BROWSER-FR-043a, folded into this
 	// wave per delivery-plan R-23 — a persisted-field dependency of wave
@@ -438,6 +601,19 @@ type TranscriptEntry struct {
 	// re-sent on replay as the goal_outcome WS frame with this entry's ID as
 	// its message id. nil, and omitted from JSON, on every other entry.
 	GoalOutcome *generated.GoalOutcome `json:"goal_outcome,omitempty"`
+	// HelperEvent is an immutable event row, not a goal ending or model input.
+	HelperEvent *generated.HelperEvent `json:"helper_event,omitempty"`
+
+	// TerminalOutcome marks an assistant entry that is a turn's distinct
+	// terminal outcome sentence — the text written AFTER the turn's earlier
+	// narration was already persisted (the iteration-cap notice is the
+	// canonical case). Live, the gateway closes the narration bubble with
+	// done(<narration id>) before this entry arrives, so the SPA shows two
+	// messages; replay carries no such boundary, so this flag is what lets a
+	// reload keep them apart. Set only by wsStreamer.Finalize's
+	// distinct-terminal-notice write; false (and omitted from JSON) on every
+	// other entry, including every entry written before this field existed.
+	TerminalOutcome bool `json:"terminal_outcome,omitempty"`
 
 	// SubagentStart/SubagentState/SubagentMessage/SubagentEnd carry the four
 	// ADR-091 D7/I-4 sub-agent lifecycle frames, persisted as events in the
@@ -456,11 +632,27 @@ type TranscriptEntry struct {
 	SubagentState   *generated.SubagentStateFrame   `json:"subagent_state,omitempty"`
 	SubagentMessage *generated.SubagentMessageFrame `json:"subagent_message,omitempty"`
 	SubagentEnd     *generated.SubagentEndFrame     `json:"subagent_end,omitempty"`
+
+	// displayContentOriginalSize is set only on a bounded history-page copy
+	// whose ordinary message Content was shortened for display (chat-history
+	// paging spec, Amendment 2026-10-27 D2, A2.1). Never persisted, never set
+	// on a canonical, model or full-content read.
+	displayContentOriginalSize int
+	// displayUnavailable marks a bounded history-page stand-in for a record
+	// the streamed display read could not read (A2.8): only ID and Role are
+	// set and the projector shows the D4 per-item placeholder. Never
+	// persisted, never set on a canonical, model or full-content read.
+	displayUnavailable bool
 }
 
 // SystemSubtypeGoalOutcome is the TranscriptEntry.SystemSubtype value of a goal
 // outcome entry — the discriminator replay reads, never Content.
 const SystemSubtypeGoalOutcome = "goal_outcome"
+
+// SystemSubtypeExpiryNotice is the SystemSubtype of the FR-007 agent expiry
+// notice a retention sweep writes when it moves a session's window past expired
+// content.
+const SystemSubtypeExpiryNotice = "expiry_notice"
 
 // ADR-091 D7/I-4 SystemSubtype values for the four persisted sub-agent
 // lifecycle frames — see SubagentStart's own doc comment above.
@@ -525,6 +717,11 @@ type ToolCall struct {
 	// holds the PROJECTED text the model saw; the full content stays on the
 	// window archive line and in the gateway tool_results/ store.
 	ContentState string `json:"content_state,omitempty"`
+
+	// historyPreview is set only on a bounded history-page copy whose Result
+	// was replaced by a display preview (A2.1); Result is then nil. Never
+	// persisted, never set on a canonical, model or full-content read.
+	historyPreview *HistoryResultDisplay
 }
 
 // NewSessionID generates a ULID-based session ID prefixed with "session_".

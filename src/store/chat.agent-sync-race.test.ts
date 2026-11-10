@@ -1,21 +1,12 @@
 /**
- * chat.agent-sync-race.test.ts — the session_started ack must not override a
- * newer explicit agent choice.
+ * session_started agent synchronization after the Wave-2 picker removal.
  *
- * Contract being pinned:
- *   - A mint (send with no session_id) goes out under whatever agent is active.
- *     Its `session_started` ack carries the agent the SERVER resolved.
- *   - If the user has NOT touched the picker since that send, the ack's
- *     agent_id is authoritative and is adopted (the ordinary case: the client
- *     had no agent, the server picked one).
- *   - If the user HAS switched the picker while the ack was in flight, their
- *     newer explicit choice wins and the stale echo is ignored.
- *
- * Why this matters: without the guard, "pick Mia → send → switch to Jim" lets
- * the in-flight ack (resolved under Mia) snap the picker back to Mia, and the
- * user's next turn silently runs as an agent they did not choose. This was a
- * contributing factor in e2e T24a, where the turn ran as Mia — whose tool
- * policy denies `delegate` — after the picker had been switched to Jim.
+ * Oracle: agent-first-navigation-spec, FR-007/FR-024 and DEP-U1's immutable
+ * owner. A same-session hint is no longer an explicit recipient selection:
+ * it must keep the attached owner, including while the first ack is in flight.
+ * A later acknowledgement binding a different session still adopts its owner.
+ * This deliberately replaces the OLD picker-choice oracle, not the protection
+ * against silently sending to the wrong agent. The real stores remain in use.
  */
 import { act } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -28,7 +19,7 @@ const MINTED_SID = 'agent-sync-race-minted-sid'
 
 function resetStores() {
   act(() => {
-    useChatStore.setState({ sessionsById: {}, isStreaming: false })
+    useChatStore.setState(useChatStore.getInitialState(), true)
     useConnectionStore.setState({
       connection: null,
       isConnected: false,
@@ -36,10 +27,11 @@ function resetStores() {
     })
     // No active session: the next send is a MINT (no session_id on the wire).
     useSessionStore.setState({
+      ...useSessionStore.getInitialState(),
       activeSessionId: null,
       activeAgentId: 'mia',
       activeAgentType: null,
-    })
+    }, true)
   })
 }
 
@@ -60,8 +52,8 @@ function connectWithSendSpy() {
   return send
 }
 
-describe('chat — session_started agent sync vs. a newer explicit selection', () => {
-  it('adopts the server agent when the user has NOT re-picked since the mint', () => {
+describe('chat — session_started agent sync with the session owner', () => {
+  it('adopts the server owner when the first session is acknowledged', () => {
     // Given a mint sent while "mia" was active…
     connectWithSendSpy()
     act(() => {
@@ -79,40 +71,61 @@ describe('chat — session_started agent sync vs. a newer explicit selection', (
     expect(useSessionStore.getState().activeAgentId).toBe('mia')
   })
 
-  it('keeps the user\'s newer pick when the picker changed while the ack was in flight', () => {
-    // Given a mint sent while "mia" was active…
-    connectWithSendSpy()
+  it('keeps the pending session owner when a different agent hint arrives before its ack', () => {
+    const send = connectWithSendSpy()
     act(() => {
-      useChatStore.getState().sendMessage('delegate something')
+      useChatStore.getState().sendMessage('delegate something', { clientMessageId: 'owner-race-first' })
+    })
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(send).toHaveBeenNthCalledWith(1, {
+      type: 'message', content: 'delegate something', client_message_id: 'owner-race-first', agent_id: 'mia',
     })
 
-    // …and the user switches to "jim" BEFORE the ack lands.
+    // Wave-2 removed the picker: setActiveSession on the same id is a hint,
+    // not a user-authorized owner switch. Both before and after the ack must
+    // still name the agent to whom the actual first message was sent.
     act(() => {
       useSessionStore.getState().setActiveSession(useSessionStore.getState().activeSessionId, 'jim')
     })
+    expect(useSessionStore.getState().activeSessionId).toBe('__pending')
+    expect(useSessionStore.getState().activeAgentId).toBe('mia')
 
-    // When the stale ack arrives still naming "mia"…
     act(() => {
-      useChatStore
-        .getState()
-        .handleFrame({ type: 'session_started', session_id: MINTED_SID, agent_id: 'mia' } as never)
+      useChatStore.getState().handleFrame({
+        type: 'session_started', session_id: MINTED_SID, agent_id: 'mia', client_message_id: 'owner-race-first',
+      })
     })
-
-    // Then the explicit user choice wins — the echo must not reassign the agent.
-    expect(useSessionStore.getState().activeAgentId).toBe('jim')
+    expect(useSessionStore.getState().activeSessionId).toBe(MINTED_SID)
+    expect(useSessionStore.getState().activeAgentId).toBe('mia')
+    expect(send).toHaveBeenCalledTimes(1)
+    act(() => {
+      useChatStore.getState().handleFrame({ type: 'done', session_id: MINTED_SID })
+      useChatStore.getState().sendMessage('next turn', { clientMessageId: 'owner-race-followup' })
+    })
+    expect(send).toHaveBeenCalledTimes(2)
+    expect(send).toHaveBeenNthCalledWith(2, {
+      type: 'message', session_id: MINTED_SID, content: 'next turn',
+      client_message_id: 'owner-race-followup', agent_id: 'mia',
+    })
   })
 
-  it('does not suppress a later ack once the mint marker is consumed', () => {
-    // Guard against over-correction: the marker is cleared on the first ack, so
-    // a subsequent server-driven agent change is still honoured.
-    connectWithSendSpy()
+  it('adopts the owner when a later acknowledgement binds a different session', () => {
+    // Guard against over-correction: the marker is cleared on the first ack,
+    // so a later session binding is not mistaken for a same-session hint.
+    const send = connectWithSendSpy()
     act(() => {
       useChatStore.getState().sendMessage('first')
     })
+    // The gateway echoes the initiating message's client_message_id on the
+    // first send's ack (pkg/gateway/websocket_first_message.go::
+    // acknowledgeNewSession) — DEL-F21/F22 made that echo the only
+    // correlated receipt, so the first ack carries it. The SECOND ack below
+    // stays uncorrelated (kickoff shape) to drive the preserved tail.
+    const firstCid = (send.mock.calls[0][0] as { client_message_id?: string }).client_message_id
     act(() => {
       useChatStore
         .getState()
-        .handleFrame({ type: 'session_started', session_id: MINTED_SID, agent_id: 'mia' } as never)
+        .handleFrame({ type: 'session_started', session_id: MINTED_SID, agent_id: 'mia', client_message_id: firstCid } as never)
     })
 
     act(() => {

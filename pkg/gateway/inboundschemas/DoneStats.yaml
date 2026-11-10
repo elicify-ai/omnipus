@@ -1,7 +1,8 @@
 title: DoneStats
 description: >
-  Statistics payload included in a done frame. All numeric fields default to 0
-  when not applicable (e.g., a turn with no LLM calls). Additional diagnostic
+  Statistics payload included in a done frame. Per-turn numeric fields default
+  to 0 when not applicable (e.g., a turn with no LLM calls). The optional absolute
+  session_tokens_total is omitted when unknown, never defaulted to 0. Additional diagnostic
   keys may be present from replay (frames_emitted, orphan_count,
   duplicate_tool_call_id_count, truncated_result_count, replay_error).
   additionalProperties: true is intentional — replay extras are allowed.
@@ -12,6 +13,16 @@ properties:
     type: integer
     minimum: 0
     description: Total tokens consumed in this turn (input + output).
+  session_tokens_total:
+    type: integer
+    minimum: 0
+    readOnly: true
+    description: >
+      Authoritative absolute session-wide consumed-token total, with the same
+      meaning as SessionStats.tokens_total. Present on live turn completion when
+      authoritative usage is available; omitted on replay-terminating done frames.
+      Omitted means unknown, never zero. Not a per-turn delta: tokens remains
+      per-turn usage, and frames_emitted remains replay-only diagnostics.
   cost:
     type: number
     minimum: 0
@@ -20,16 +31,6 @@ properties:
     type: integer
     minimum: 0
     description: Wall-clock duration of the turn in milliseconds.
-  tokens_dropped:
-    type: integer
-    minimum: 0
-    deprecated: true
-    description: >
-      Deprecated (#823 catch-up redesign, Q5): the gateway no longer drops frames under
-      backpressure — a connection that falls too far behind is closed with WS close code
-      4008 ("catch-up required") and reconnects to catch up from its cursor instead. This
-      field is never set by the current gateway; kept only so an older client's decoder
-      does not choke on its absence. Do not read it as a liveness signal.
   # Replay-only diagnostics (present on done frames emitted by streamReplay)
   frames_emitted:
     type: integer
@@ -86,3 +87,19 @@ properties:
       user canceled the turn mid-stream) or "max_output_tokens" (the
       provider's output-token limit cut the answer off before it finished).
       Absent on a normal turn.
+  effort:
+    $ref: './EffortRecord.yaml'
+    description: >
+      Effort levels spec (FR-058). The answering candidate's effort record.
+      Absent when nothing was chosen and nothing was sent. Live-turn field:
+      the replay-terminating done frame omits it.
+  reasoning_tokens:
+    type: integer
+    minimum: 0
+    description: >
+      Effort levels spec (FR-024). Display-only turn sum of the reasoning-token
+      counts reported by this turn's provider calls (a subset of output tokens,
+      never booked into any statistic). Absent = no call reported a count;
+      0 = reported zero. Live-turn field: the replay-terminating done frame
+      omits it.
+    example: 120

@@ -5,7 +5,7 @@
 // behind withAuth and may 401 before the session cookie exists (fresh
 // install race). The query then sits permanently errored — nothing in the
 // app ever refetches it — so the palette silently stays limited to the two
-// hardcoded client-only entries (/resume, /workspace) for the entire page
+// hardcoded client-only entries (/sessions, /workspace) for the entire page
 // session, recoverable only by a hard reload.
 //
 // The fix: login.tsx and onboarding.tsx now call
@@ -99,8 +99,9 @@ describe('useSlashMenu — commands cache recovers after invalidateQueries (no r
           inputEnabled: true,
           composerRuntime: makeComposerRuntime(),
           appendMessage: vi.fn(),
-          startNewSession: vi.fn(),
           cancelIfStreaming: vi.fn(),
+          sendRedirectFrame: vi.fn(),
+          activateStop: vi.fn(),
         }),
       { wrapper },
     )
@@ -114,7 +115,8 @@ describe('useSlashMenu — commands cache recovers after invalidateQueries (no r
     // present; the backend list never arrived.
     act(() => { result.current.onInputChange('/') })
     const labelsBeforeRecovery = result.current.slashItems.map((i) => i.label)
-    expect(labelsBeforeRecovery).toContain('/resume')
+    expect(labelsBeforeRecovery).toContain('/sessions')
+    expect(labelsBeforeRecovery).not.toContain('/resume')
     expect(labelsBeforeRecovery).toContain('/workspace')
     expect(labelsBeforeRecovery).not.toContain('/cancel')
     expect(labelsBeforeRecovery).not.toContain('/goal')
@@ -138,7 +140,8 @@ describe('useSlashMenu — commands cache recovers after invalidateQueries (no r
     expect(labelsAfterRecovery).toContain('/cancel')
     expect(labelsAfterRecovery).toContain('/goal')
     // The client-only entries still coexist with the recovered backend list.
-    expect(labelsAfterRecovery).toContain('/resume')
+    expect(labelsAfterRecovery).toContain('/sessions')
+    expect(labelsAfterRecovery).not.toContain('/resume')
     expect(labelsAfterRecovery).toContain('/workspace')
   })
 
@@ -157,8 +160,9 @@ describe('useSlashMenu — commands cache recovers after invalidateQueries (no r
           inputEnabled: true,
           composerRuntime: makeComposerRuntime(),
           appendMessage: vi.fn(),
-          startNewSession: vi.fn(),
           cancelIfStreaming: vi.fn(),
+          sendRedirectFrame: vi.fn(),
+          activateStop: vi.fn(),
         }),
       { wrapper },
     )

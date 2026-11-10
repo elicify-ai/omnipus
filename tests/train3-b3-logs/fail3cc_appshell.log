@@ -1,0 +1,1421 @@
+Warning: Route file "/private/tmp/b3-failproof/src/routes/authValidation.ts" does not export a Route. This file will not be included in the route tree.
+
+If this file is not intended to be a route, you can exclude it using one of these options:
+  1. Rename the file to "/private/tmp/b3-failproof/src/routes/-authValidation.ts" (prefix with "-")
+  2. Use 'routeFileIgnorePattern' in your config to match this file
+
+Current configuration:
+  routeFileIgnorePrefix: "-"
+  routeFileIgnorePattern: undefined
+Warning: Route file "/private/tmp/b3-failproof/src/routes/authValidation.test.ts" does not export a Route. This file will not be included in the route tree.
+
+If this file is not intended to be a route, you can exclude it using one of these options:
+  1. Rename the file to "/private/tmp/b3-failproof/src/routes/-authValidation.test.ts" (prefix with "-")
+  2. Use 'routeFileIgnorePattern' in your config to match this file
+
+Current configuration:
+  routeFileIgnorePrefix: "-"
+  routeFileIgnorePattern: undefined
+
+ RUN  v4.1.11 /private/tmp/b3-failproof
+
+stderr | src/components/layout/AppShell.stage1.test.tsx > stage 1 — the inline approval card is actionable in the root chat (bundle B3) > [S1-c; dispatch 2(c)] 'Approve Once' on the card in the root chat posts the exact 'allow_once' decision for the active chat approval
+[api] GET /api/v1/skills: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+stderr | src/components/layout/AppShell.stage1.test.tsx > stage 1 — the inline approval card is actionable in the root chat (bundle B3) > [S1-c; dispatch 2(c)] 'Deny' on the card in the root chat posts the exact 'deny' decision for the active chat approval
+[api] GET /api/v1/skills: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+stderr | src/components/layout/AppShell.stage1.test.tsx > stage 1 — every pending approval has exactly one actionable surface > [S1-d; dispatch 2(d)] a child approval without root_session_id appears on the card in the parent main chat, which stays open, without a Go there detour — and the parent main’s attention cue comes on
+[api] GET /api/v1/skills: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+stderr | src/components/layout/AppShell.stage1.test.tsx > stage 1 — every pending approval has exactly one actionable surface > [S1-e; dispatch 2(e)] the open chat own approval appears exactly once, inline in the root chat — never the app-wide modal
+[api] GET /api/v1/skills: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+stderr | src/components/layout/AppShell.stage1.test.tsx > stage 1 — the inline card drains its chat's queued approvals (bundle B3) > [S1-q; added dispatch] approve/deny drains two same-chat queued requests in arrival order on the inline card, while another chat's approval waits its turn, without navigation
+[api] GET /api/v1/skills: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+stderr | src/components/layout/AppShell.stage1.test.tsx > stage 1 — the inline card expiry cannot approve a timed-out call (bundle B3) > [S1-exp; added dispatch] at expiry the card actions disappear without a POST and denied_timeout promotes the next queued request
+[api] GET /api/v1/skills: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+stderr | src/components/layout/AppShell.stage1.test.tsx > stage 1 — the inline card expiry cannot approve a timed-out call (bundle B3) > [S1-exp zero; added dispatch] a zero-lifetime request is already non-actionable on arrival and never submits automatically
+[api] GET /api/v1/skills: no Zod schema — response validation skipped. Add schema from src/lib/api/generated/schemas.ts.
+
+ ❯ src/components/layout/AppShell.stage1.test.tsx (18 tests | 7 failed) 59508ms
+     × [S1-c; dispatch 2(c)] 'Approve Once' on the card in the root chat posts the exact 'allow_once' decision for the active chat approval 6866ms
+     × [S1-c; dispatch 2(c)] 'Deny' on the card in the root chat posts the exact 'deny' decision for the active chat approval 6634ms
+     × [S1-d; dispatch 2(d)] a child approval without root_session_id appears on the card in the parent main chat, which stays open, without a Go there detour — and the parent main’s attention cue comes on 6695ms
+     × [S1-e; dispatch 2(e)] the open chat own approval appears exactly once, inline in the root chat — never the app-wide modal 6613ms
+     × [S1-q; added dispatch] approve/deny drains two same-chat queued requests in arrival order on the inline card, while another chat's approval waits its turn, without navigation 6750ms
+     × [S1-exp; added dispatch] at expiry the card actions disappear without a POST and denied_timeout promotes the next queued request 6662ms
+     × [S1-exp zero; added dispatch] a zero-lifetime request is already non-actionable on arrival and never submits automatically 8026ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 7 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — the inline approval card is actionable in the root chat (bundle B3) > [S1-c; dispatch 2(c)] 'Approve Once' on the card in the root chat posts the exact 'allow_once' decision for the active chat approval
+ FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — the inline approval card is actionable in the root chat (bundle B3) > [S1-c; dispatch 2(c)] 'Deny' on the card in the root chat posts the exact 'deny' decision for the active chat approval
+TestingLibraryElementError: Unable to find an element by: [data-testid="tool-approval-thread-tail"]
+
+Ignored nodes: comments, script, style
+[36m<body[39m
+  [33mdata-scroll-locked[39m=[32m"1"[39m
+  [33mstyle[39m=[32m"pointer-events: none;"[39m
+[36m>[39m
+  [36m<span[39m
+    [33maria-hidden[39m=[32m"true"[39m
+    [33mdata-aria-hidden[39m=[32m"true"[39m
+    [33mdata-radix-focus-guard[39m=[32m""[39m
+    [33mstyle[39m=[32m"outline: none; opacity: 0; position: fixed; pointer-events: none;"[39m
+    [33mtabindex[39m=[32m"0"[39m
+  [36m/>[39m
+  [36m<textarea[39m
+    [33maria-hidden[39m=[32m"true"[39m
+    [33mdata-aria-hidden[39m=[32m"true"[39m
+    [33mstyle[39m=[32m"min-height: 0px !important; max-height: none !important; height: 0px !important; visibility: hidden !important; overflow: hidden !important; position: absolute !important; z-index: -1000 !important; top: 0px !important; right: 0px !important; display: block !important; border-bottom-width: medium; border-left-width: medium; border-right-width: medium; border-top-width: medium; box-sizing: content-box; font-family: \"depends on user agent\"; font-size: medium; font-style: normal; font-weight: normal; letter-spacing: normal; line-height: normal; tab-size: 8; text-indent: 0px; text-rendering: auto; text-transform: none; width: auto; word-break: normal; word-spacing: normal; scrollbar-gutter: auto; padding: 0px;"[39m
+    [33mtabindex[39m=[32m"-1"[39m
+  [36m/>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"fixed inset-x-0 flex overflow-hidden bg-[var(--color-primary)]"[39m
+      [33mdata-app-shell[39m=[32m"true"[39m
+      [33mstyle[39m=[32m"top: var(--app-top, 0px); height: var(--app-vh, 100dvh);"[39m
+    [36m>[39m
+      [36m<a[39m
+        [33maria-hidden[39m=[32m"true"[39m
+        [33mclass[39m=[32m"sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:px-[var(--space-2-5)] focus:py-[var(--space-2)] focus:rounded-md focus:bg-[var(--color-surface-2)] focus:text-[var(--color-secondary)] focus:text-[length:var(--type-body-compact-size)]"[39m
+        [33mdata-aria-hidden[39m=[32m"true"[39m
+        [33mhref[39m=[32m"#main-content"[39m
+        [33mtabindex[39m=[32m"1"[39m
+      [36m>[39m
+        [0mSkip to content[0m
+      [36m</a>[39m
+      [36m<aside[39m
+        [33maria-hidden[39m=[32m"true"[39m
+        [33mclass[39m=[32m"flex flex-col h-full flex-shrink-0 bg-[var(--color-surface-0)] border-r border-[var(--color-border)]"[39m
+        [33mdata-aria-hidden[39m=[32m"true"[39m
+        [33mstyle[39m=[32m"width: var(--spacing-sidebar);"[39m
+      [36m>[39m
+        [36m<nav[39m
+          [33maria-label[39m=[32m"Main navigation"[39m
+          [33mclass[39m=[32m"flex h-full flex-col"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-center gap-[var(--space-2)] px-[var(--space-3)] h-chrome-header min-h-chrome-header shrink-0"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"font-headline font-bold lowercase text-[var(--color-secondary)] text-base"[39m
+            [36m>[39m
+              [0momnipus[0m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-[var(--color-accent)]"[39m
+              [36m>[39m
+                [0m.ai[0m
+              [36m</span>[39m
+            [36m</span>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Search sessions"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto ml-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Search sessions"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M229.66,218.34l-50.07-50.06a88.11,88.11,0,1,0-11.31,11.31l50.06,50.07a8,8,0,0,0,11.32-11.32ZM40,112a72,72,0,1,1,72,72A72.08,72.08,0,0,1,40,112Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Unpin sidebar"[39m
+              [33maria-pressed[39m=[32m"true"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Unpin sidebar"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M224,176a8,8,0,0,1-8,8H136v56a8,8,0,0,1-16,0V184H40a8,8,0,0,1,0-16h9.29L70.46,48H64a8,8,0,0,1,0-16H192a8,8,0,0,1,0,16h-6.46l21.17,120H216A8,8,0,0,1,224,176Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+          [36m</div>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex-1 overflow-y-auto overscroll-contain py-[var(--space-2-5)]"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33maria-label[39m=[32m"Omnipus"...
+
+Ignored nodes: comments, script, style
+[36m<body[39m
+  [33mdata-scroll-locked[39m=[32m"1"[39m
+  [33mstyle[39m=[32m"pointer-events: none;"[39m
+[36m>[39m
+  [36m<span[39m
+    [33maria-hidden[39m=[32m"true"[39m
+    [33mdata-aria-hidden[39m=[32m"true"[39m
+    [33mdata-radix-focus-guard[39m=[32m""[39m
+    [33mstyle[39m=[32m"outline: none; opacity: 0; position: fixed; pointer-events: none;"[39m
+    [33mtabindex[39m=[32m"0"[39m
+  [36m/>[39m
+  [36m<textarea[39m
+    [33maria-hidden[39m=[32m"true"[39m
+    [33mdata-aria-hidden[39m=[32m"true"[39m
+    [33mstyle[39m=[32m"min-height: 0px !important; max-height: none !important; height: 0px !important; visibility: hidden !important; overflow: hidden !important; position: absolute !important; z-index: -1000 !important; top: 0px !important; right: 0px !important; display: block !important; border-bottom-width: medium; border-left-width: medium; border-right-width: medium; border-top-width: medium; box-sizing: content-box; font-family: \"depends on user agent\"; font-size: medium; font-style: normal; font-weight: normal; letter-spacing: normal; line-height: normal; tab-size: 8; text-indent: 0px; text-rendering: auto; text-transform: none; width: auto; word-break: normal; word-spacing: normal; scrollbar-gutter: auto; padding: 0px;"[39m
+    [33mtabindex[39m=[32m"-1"[39m
+  [36m/>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"fixed inset-x-0 flex overflow-hidden bg-[var(--color-primary)]"[39m
+      [33mdata-app-shell[39m=[32m"true"[39m
+      [33mstyle[39m=[32m"top: var(--app-top, 0px); height: var(--app-vh, 100dvh);"[39m
+    [36m>[39m
+      [36m<a[39m
+        [33maria-hidden[39m=[32m"true"[39m
+        [33mclass[39m=[32m"sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:px-[var(--space-2-5)] focus:py-[var(--space-2)] focus:rounded-md focus:bg-[var(--color-surface-2)] focus:text-[var(--color-secondary)] focus:text-[length:var(--type-body-compact-size)]"[39m
+        [33mdata-aria-hidden[39m=[32m"true"[39m
+        [33mhref[39m=[32m"#main-content"[39m
+        [33mtabindex[39m=[32m"1"[39m
+      [36m>[39m
+        [0mSkip to content[0m
+      [36m</a>[39m
+      [36m<aside[39m
+        [33maria-hidden[39m=[32m"true"[39m
+        [33mclass[39m=[32m"flex flex-col h-full flex-shrink-0 bg-[var(--color-surface-0)] border-r border-[var(--color-border)]"[39m
+        [33mdata-aria-hidden[39m=[32m"true"[39m
+        [33mstyle[39m=[32m"width: var(--spacing-sidebar);"[39m
+      [36m>[39m
+        [36m<nav[39m
+          [33maria-label[39m=[32m"Main navigation"[39m
+          [33mclass[39m=[32m"flex h-full flex-col"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-center gap-[var(--space-2)] px-[var(--space-3)] h-chrome-header min-h-chrome-header shrink-0"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"font-headline font-bold lowercase text-[var(--color-secondary)] text-base"[39m
+            [36m>[39m
+              [0momnipus[0m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-[var(--color-accent)]"[39m
+              [36m>[39m
+                [0m.ai[0m
+              [36m</span>[39m
+            [36m</span>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Search sessions"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto ml-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Search sessions"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M229.66,218.34l-50.07-50.06a88.11,88.11,0,1,0-11.31,11.31l50.06,50.07a8,8,0,0,0,11.32-11.32ZM40,112a72,72,0,1,1,72,72A72.08,72.08,0,0,1,40,112Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Unpin sidebar"[39m
+              [33maria-pressed[39m=[32m"true"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Unpin sidebar"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M224,176a8,8,0,0,1-8,8H136v56a8,8,0,0,1-16,0V184H40a8,8,0,0,1,0-16h9.29L70.46,48H64a8,8,0,0,1,0-16H192a8,8,0,0,1,0,16h-6.46l21.17,120H216A8,8,0,0,1,224,176Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+          [36m</div>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex-1 overflow-y-auto overscroll-contain py-[var(--space-2-5)]"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33maria-label[39m=[32m"Omnipus"...
+ ❯ waitForWrapper node_modules/@testing-library/dom/dist/wait-for.js:163:27
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:86:33
+ ❯ showApproval src/components/layout/AppShell.stage1.test.tsx:64:29
+     62|   await waitFor(() => expect(useToolApprovalStore.getState().queue.map…
+     63|   // The card is the inline thread tail in the root chat — never the m…
+     64|   const card = await screen.findByTestId('tool-approval-thread-tail')
+       |                             ^
+     65|   expect(card).toBeVisible()
+     66|   const panel = within(card).getByTestId('tool-approval-panel')
+ ❯ src/components/layout/AppShell.stage1.test.tsx:162:19
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/7]⎯
+
+ FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — every pending approval has exactly one actionable surface > [S1-d; dispatch 2(d)] a child approval without root_session_id appears on the card in the parent main chat, which stays open, without a Go there detour — and the parent main’s attention cue comes on
+TestingLibraryElementError: Unable to find an element by: [data-testid="tool-approval-thread-tail"]
+
+Ignored nodes: comments, script, style
+[36m<body[39m
+  [33mdata-scroll-locked[39m=[32m"1"[39m
+  [33mstyle[39m=[32m"pointer-events: none;"[39m
+[36m>[39m
+  [36m<span[39m
+    [33maria-hidden[39m=[32m"true"[39m
+    [33mdata-aria-hidden[39m=[32m"true"[39m
+    [33mdata-radix-focus-guard[39m=[32m""[39m
+    [33mstyle[39m=[32m"outline: none; opacity: 0; position: fixed; pointer-events: none;"[39m
+    [33mtabindex[39m=[32m"0"[39m
+  [36m/>[39m
+  [36m<textarea[39m
+    [33maria-hidden[39m=[32m"true"[39m
+    [33mdata-aria-hidden[39m=[32m"true"[39m
+    [33mstyle[39m=[32m"min-height: 0px !important; max-height: none !important; height: 0px !important; visibility: hidden !important; overflow: hidden !important; position: absolute !important; z-index: -1000 !important; top: 0px !important; right: 0px !important; display: block !important; border-bottom-width: medium; border-left-width: medium; border-right-width: medium; border-top-width: medium; box-sizing: content-box; font-family: \"depends on user agent\"; font-size: medium; font-style: normal; font-weight: normal; letter-spacing: normal; line-height: normal; tab-size: 8; text-indent: 0px; text-rendering: auto; text-transform: none; width: auto; word-break: normal; word-spacing: normal; scrollbar-gutter: auto; padding: 0px;"[39m
+    [33mtabindex[39m=[32m"-1"[39m
+  [36m/>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"fixed inset-x-0 flex overflow-hidden bg-[var(--color-primary)]"[39m
+      [33mdata-app-shell[39m=[32m"true"[39m
+      [33mstyle[39m=[32m"top: var(--app-top, 0px); height: var(--app-vh, 100dvh);"[39m
+    [36m>[39m
+      [36m<a[39m
+        [33maria-hidden[39m=[32m"true"[39m
+        [33mclass[39m=[32m"sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:px-[var(--space-2-5)] focus:py-[var(--space-2)] focus:rounded-md focus:bg-[var(--color-surface-2)] focus:text-[var(--color-secondary)] focus:text-[length:var(--type-body-compact-size)]"[39m
+        [33mdata-aria-hidden[39m=[32m"true"[39m
+        [33mhref[39m=[32m"#main-content"[39m
+        [33mtabindex[39m=[32m"1"[39m
+      [36m>[39m
+        [0mSkip to content[0m
+      [36m</a>[39m
+      [36m<aside[39m
+        [33maria-hidden[39m=[32m"true"[39m
+        [33mclass[39m=[32m"flex flex-col h-full flex-shrink-0 bg-[var(--color-surface-0)] border-r border-[var(--color-border)]"[39m
+        [33mdata-aria-hidden[39m=[32m"true"[39m
+        [33mstyle[39m=[32m"width: var(--spacing-sidebar);"[39m
+      [36m>[39m
+        [36m<nav[39m
+          [33maria-label[39m=[32m"Main navigation"[39m
+          [33mclass[39m=[32m"flex h-full flex-col"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-center gap-[var(--space-2)] px-[var(--space-3)] h-chrome-header min-h-chrome-header shrink-0"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"font-headline font-bold lowercase text-[var(--color-secondary)] text-base"[39m
+            [36m>[39m
+              [0momnipus[0m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-[var(--color-accent)]"[39m
+              [36m>[39m
+                [0m.ai[0m
+              [36m</span>[39m
+            [36m</span>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Search sessions"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto ml-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Search sessions"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M229.66,218.34l-50.07-50.06a88.11,88.11,0,1,0-11.31,11.31l50.06,50.07a8,8,0,0,0,11.32-11.32ZM40,112a72,72,0,1,1,72,72A72.08,72.08,0,0,1,40,112Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Unpin sidebar"[39m
+              [33maria-pressed[39m=[32m"true"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Unpin sidebar"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M224,176a8,8,0,0,1-8,8H136v56a8,8,0,0,1-16,0V184H40a8,8,0,0,1,0-16h9.29L70.46,48H64a8,8,0,0,1,0-16H192a8,8,0,0,1,0,16h-6.46l21.17,120H216A8,8,0,0,1,224,176Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+          [36m</div>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex-1 overflow-y-auto overscroll-contain py-[var(--space-2-5)]"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33maria-label[39m=[32m"Omnipus"...
+
+Ignored nodes: comments, script, style
+[36m<body[39m
+  [33mdata-scroll-locked[39m=[32m"1"[39m
+  [33mstyle[39m=[32m"pointer-events: none;"[39m
+[36m>[39m
+  [36m<span[39m
+    [33maria-hidden[39m=[32m"true"[39m
+    [33mdata-aria-hidden[39m=[32m"true"[39m
+    [33mdata-radix-focus-guard[39m=[32m""[39m
+    [33mstyle[39m=[32m"outline: none; opacity: 0; position: fixed; pointer-events: none;"[39m
+    [33mtabindex[39m=[32m"0"[39m
+  [36m/>[39m
+  [36m<textarea[39m
+    [33maria-hidden[39m=[32m"true"[39m
+    [33mdata-aria-hidden[39m=[32m"true"[39m
+    [33mstyle[39m=[32m"min-height: 0px !important; max-height: none !important; height: 0px !important; visibility: hidden !important; overflow: hidden !important; position: absolute !important; z-index: -1000 !important; top: 0px !important; right: 0px !important; display: block !important; border-bottom-width: medium; border-left-width: medium; border-right-width: medium; border-top-width: medium; box-sizing: content-box; font-family: \"depends on user agent\"; font-size: medium; font-style: normal; font-weight: normal; letter-spacing: normal; line-height: normal; tab-size: 8; text-indent: 0px; text-rendering: auto; text-transform: none; width: auto; word-break: normal; word-spacing: normal; scrollbar-gutter: auto; padding: 0px;"[39m
+    [33mtabindex[39m=[32m"-1"[39m
+  [36m/>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"fixed inset-x-0 flex overflow-hidden bg-[var(--color-primary)]"[39m
+      [33mdata-app-shell[39m=[32m"true"[39m
+      [33mstyle[39m=[32m"top: var(--app-top, 0px); height: var(--app-vh, 100dvh);"[39m
+    [36m>[39m
+      [36m<a[39m
+        [33maria-hidden[39m=[32m"true"[39m
+        [33mclass[39m=[32m"sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:px-[var(--space-2-5)] focus:py-[var(--space-2)] focus:rounded-md focus:bg-[var(--color-surface-2)] focus:text-[var(--color-secondary)] focus:text-[length:var(--type-body-compact-size)]"[39m
+        [33mdata-aria-hidden[39m=[32m"true"[39m
+        [33mhref[39m=[32m"#main-content"[39m
+        [33mtabindex[39m=[32m"1"[39m
+      [36m>[39m
+        [0mSkip to content[0m
+      [36m</a>[39m
+      [36m<aside[39m
+        [33maria-hidden[39m=[32m"true"[39m
+        [33mclass[39m=[32m"flex flex-col h-full flex-shrink-0 bg-[var(--color-surface-0)] border-r border-[var(--color-border)]"[39m
+        [33mdata-aria-hidden[39m=[32m"true"[39m
+        [33mstyle[39m=[32m"width: var(--spacing-sidebar);"[39m
+      [36m>[39m
+        [36m<nav[39m
+          [33maria-label[39m=[32m"Main navigation"[39m
+          [33mclass[39m=[32m"flex h-full flex-col"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-center gap-[var(--space-2)] px-[var(--space-3)] h-chrome-header min-h-chrome-header shrink-0"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"font-headline font-bold lowercase text-[var(--color-secondary)] text-base"[39m
+            [36m>[39m
+              [0momnipus[0m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-[var(--color-accent)]"[39m
+              [36m>[39m
+                [0m.ai[0m
+              [36m</span>[39m
+            [36m</span>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Search sessions"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto ml-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Search sessions"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M229.66,218.34l-50.07-50.06a88.11,88.11,0,1,0-11.31,11.31l50.06,50.07a8,8,0,0,0,11.32-11.32ZM40,112a72,72,0,1,1,72,72A72.08,72.08,0,0,1,40,112Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Unpin sidebar"[39m
+              [33maria-pressed[39m=[32m"true"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Unpin sidebar"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M224,176a8,8,0,0,1-8,8H136v56a8,8,0,0,1-16,0V184H40a8,8,0,0,1,0-16h9.29L70.46,48H64a8,8,0,0,1,0-16H192a8,8,0,0,1,0,16h-6.46l21.17,120H216A8,8,0,0,1,224,176Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+          [36m</div>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex-1 overflow-y-auto overscroll-contain py-[var(--space-2-5)]"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33maria-label[39m=[32m"Omnipus"...
+ ❯ waitForWrapper node_modules/@testing-library/dom/dist/wait-for.js:163:27
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:86:33
+ ❯ showApproval src/components/layout/AppShell.stage1.test.tsx:64:29
+     62|   await waitFor(() => expect(useToolApprovalStore.getState().queue.map…
+     63|   // The card is the inline thread tail in the root chat — never the m…
+     64|   const card = await screen.findByTestId('tool-approval-thread-tail')
+       |                             ^
+     65|   expect(card).toBeVisible()
+     66|   const panel = within(card).getByTestId('tool-approval-panel')
+ ❯ src/components/layout/AppShell.stage1.test.tsx:184:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/7]⎯
+
+ FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — every pending approval has exactly one actionable surface > [S1-e; dispatch 2(e)] the open chat own approval appears exactly once, inline in the root chat — never the app-wide modal
+TestingLibraryElementError: Unable to find an element by: [data-testid="tool-approval-thread-tail"]
+
+Ignored nodes: comments, script, style
+[36m<body[39m
+  [33mdata-scroll-locked[39m=[32m"1"[39m
+  [33mstyle[39m=[32m"pointer-events: none;"[39m
+[36m>[39m
+  [36m<span[39m
+    [33maria-hidden[39m=[32m"true"[39m
+    [33mdata-aria-hidden[39m=[32m"true"[39m
+    [33mdata-radix-focus-guard[39m=[32m""[39m
+    [33mstyle[39m=[32m"outline: none; opacity: 0; position: fixed; pointer-events: none;"[39m
+    [33mtabindex[39m=[32m"0"[39m
+  [36m/>[39m
+  [36m<textarea[39m
+    [33maria-hidden[39m=[32m"true"[39m
+    [33mdata-aria-hidden[39m=[32m"true"[39m
+    [33mstyle[39m=[32m"min-height: 0px !important; max-height: none !important; height: 0px !important; visibility: hidden !important; overflow: hidden !important; position: absolute !important; z-index: -1000 !important; top: 0px !important; right: 0px !important; display: block !important; border-bottom-width: medium; border-left-width: medium; border-right-width: medium; border-top-width: medium; box-sizing: content-box; font-family: \"depends on user agent\"; font-size: medium; font-style: normal; font-weight: normal; letter-spacing: normal; line-height: normal; tab-size: 8; text-indent: 0px; text-rendering: auto; text-transform: none; width: auto; word-break: normal; word-spacing: normal; scrollbar-gutter: auto; padding: 0px;"[39m
+    [33mtabindex[39m=[32m"-1"[39m
+  [36m/>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"fixed inset-x-0 flex overflow-hidden bg-[var(--color-primary)]"[39m
+      [33mdata-app-shell[39m=[32m"true"[39m
+      [33mstyle[39m=[32m"top: var(--app-top, 0px); height: var(--app-vh, 100dvh);"[39m
+    [36m>[39m
+      [36m<a[39m
+        [33maria-hidden[39m=[32m"true"[39m
+        [33mclass[39m=[32m"sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:px-[var(--space-2-5)] focus:py-[var(--space-2)] focus:rounded-md focus:bg-[var(--color-surface-2)] focus:text-[var(--color-secondary)] focus:text-[length:var(--type-body-compact-size)]"[39m
+        [33mdata-aria-hidden[39m=[32m"true"[39m
+        [33mhref[39m=[32m"#main-content"[39m
+        [33mtabindex[39m=[32m"1"[39m
+      [36m>[39m
+        [0mSkip to content[0m
+      [36m</a>[39m
+      [36m<aside[39m
+        [33maria-hidden[39m=[32m"true"[39m
+        [33mclass[39m=[32m"flex flex-col h-full flex-shrink-0 bg-[var(--color-surface-0)] border-r border-[var(--color-border)]"[39m
+        [33mdata-aria-hidden[39m=[32m"true"[39m
+        [33mstyle[39m=[32m"width: var(--spacing-sidebar);"[39m
+      [36m>[39m
+        [36m<nav[39m
+          [33maria-label[39m=[32m"Main navigation"[39m
+          [33mclass[39m=[32m"flex h-full flex-col"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-center gap-[var(--space-2)] px-[var(--space-3)] h-chrome-header min-h-chrome-header shrink-0"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"font-headline font-bold lowercase text-[var(--color-secondary)] text-base"[39m
+            [36m>[39m
+              [0momnipus[0m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-[var(--color-accent)]"[39m
+              [36m>[39m
+                [0m.ai[0m
+              [36m</span>[39m
+            [36m</span>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Search sessions"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto ml-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Search sessions"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M229.66,218.34l-50.07-50.06a88.11,88.11,0,1,0-11.31,11.31l50.06,50.07a8,8,0,0,0,11.32-11.32ZM40,112a72,72,0,1,1,72,72A72.08,72.08,0,0,1,40,112Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Unpin sidebar"[39m
+              [33maria-pressed[39m=[32m"true"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Unpin sidebar"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M224,176a8,8,0,0,1-8,8H136v56a8,8,0,0,1-16,0V184H40a8,8,0,0,1,0-16h9.29L70.46,48H64a8,8,0,0,1,0-16H192a8,8,0,0,1,0,16h-6.46l21.17,120H216A8,8,0,0,1,224,176Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+          [36m</div>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex-1 overflow-y-auto overscroll-contain py-[var(--space-2-5)]"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33maria-label[39m=[32m"Omnipus"...
+
+Ignored nodes: comments, script, style
+[36m<body[39m
+  [33mdata-scroll-locked[39m=[32m"1"[39m
+  [33mstyle[39m=[32m"pointer-events: none;"[39m
+[36m>[39m
+  [36m<span[39m
+    [33maria-hidden[39m=[32m"true"[39m
+    [33mdata-aria-hidden[39m=[32m"true"[39m
+    [33mdata-radix-focus-guard[39m=[32m""[39m
+    [33mstyle[39m=[32m"outline: none; opacity: 0; position: fixed; pointer-events: none;"[39m
+    [33mtabindex[39m=[32m"0"[39m
+  [36m/>[39m
+  [36m<textarea[39m
+    [33maria-hidden[39m=[32m"true"[39m
+    [33mdata-aria-hidden[39m=[32m"true"[39m
+    [33mstyle[39m=[32m"min-height: 0px !important; max-height: none !important; height: 0px !important; visibility: hidden !important; overflow: hidden !important; position: absolute !important; z-index: -1000 !important; top: 0px !important; right: 0px !important; display: block !important; border-bottom-width: medium; border-left-width: medium; border-right-width: medium; border-top-width: medium; box-sizing: content-box; font-family: \"depends on user agent\"; font-size: medium; font-style: normal; font-weight: normal; letter-spacing: normal; line-height: normal; tab-size: 8; text-indent: 0px; text-rendering: auto; text-transform: none; width: auto; word-break: normal; word-spacing: normal; scrollbar-gutter: auto; padding: 0px;"[39m
+    [33mtabindex[39m=[32m"-1"[39m
+  [36m/>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"fixed inset-x-0 flex overflow-hidden bg-[var(--color-primary)]"[39m
+      [33mdata-app-shell[39m=[32m"true"[39m
+      [33mstyle[39m=[32m"top: var(--app-top, 0px); height: var(--app-vh, 100dvh);"[39m
+    [36m>[39m
+      [36m<a[39m
+        [33maria-hidden[39m=[32m"true"[39m
+        [33mclass[39m=[32m"sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:px-[var(--space-2-5)] focus:py-[var(--space-2)] focus:rounded-md focus:bg-[var(--color-surface-2)] focus:text-[var(--color-secondary)] focus:text-[length:var(--type-body-compact-size)]"[39m
+        [33mdata-aria-hidden[39m=[32m"true"[39m
+        [33mhref[39m=[32m"#main-content"[39m
+        [33mtabindex[39m=[32m"1"[39m
+      [36m>[39m
+        [0mSkip to content[0m
+      [36m</a>[39m
+      [36m<aside[39m
+        [33maria-hidden[39m=[32m"true"[39m
+        [33mclass[39m=[32m"flex flex-col h-full flex-shrink-0 bg-[var(--color-surface-0)] border-r border-[var(--color-border)]"[39m
+        [33mdata-aria-hidden[39m=[32m"true"[39m
+        [33mstyle[39m=[32m"width: var(--spacing-sidebar);"[39m
+      [36m>[39m
+        [36m<nav[39m
+          [33maria-label[39m=[32m"Main navigation"[39m
+          [33mclass[39m=[32m"flex h-full flex-col"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-center gap-[var(--space-2)] px-[var(--space-3)] h-chrome-header min-h-chrome-header shrink-0"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"font-headline font-bold lowercase text-[var(--color-secondary)] text-base"[39m
+            [36m>[39m
+              [0momnipus[0m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-[var(--color-accent)]"[39m
+              [36m>[39m
+                [0m.ai[0m
+              [36m</span>[39m
+            [36m</span>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Search sessions"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto ml-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Search sessions"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M229.66,218.34l-50.07-50.06a88.11,88.11,0,1,0-11.31,11.31l50.06,50.07a8,8,0,0,0,11.32-11.32ZM40,112a72,72,0,1,1,72,72A72.08,72.08,0,0,1,40,112Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Unpin sidebar"[39m
+              [33maria-pressed[39m=[32m"true"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Unpin sidebar"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M224,176a8,8,0,0,1-8,8H136v56a8,8,0,0,1-16,0V184H40a8,8,0,0,1,0-16h9.29L70.46,48H64a8,8,0,0,1,0-16H192a8,8,0,0,1,0,16h-6.46l21.17,120H216A8,8,0,0,1,224,176Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+          [36m</div>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex-1 overflow-y-auto overscroll-contain py-[var(--space-2-5)]"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33maria-label[39m=[32m"Omnipus"...
+ ❯ waitForWrapper node_modules/@testing-library/dom/dist/wait-for.js:163:27
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:86:33
+ ❯ showApproval src/components/layout/AppShell.stage1.test.tsx:64:29
+     62|   await waitFor(() => expect(useToolApprovalStore.getState().queue.map…
+     63|   // The card is the inline thread tail in the root chat — never the m…
+     64|   const card = await screen.findByTestId('tool-approval-thread-tail')
+       |                             ^
+     65|   expect(card).toBeVisible()
+     66|   const panel = within(card).getByTestId('tool-approval-panel')
+ ❯ src/components/layout/AppShell.stage1.test.tsx:206:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/7]⎯
+
+ FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — the inline card drains its chat's queued approvals (bundle B3) > [S1-q; added dispatch] approve/deny drains two same-chat queued requests in arrival order on the inline card, while another chat's approval waits its turn, without navigation
+TestingLibraryElementError: Unable to find an element by: [data-testid="tool-approval-thread-tail"]
+
+Ignored nodes: comments, script, style
+[36m<body[39m
+  [33mdata-scroll-locked[39m=[32m"1"[39m
+  [33mstyle[39m=[32m"pointer-events: none;"[39m
+[36m>[39m
+  [36m<span[39m
+    [33maria-hidden[39m=[32m"true"[39m
+    [33mdata-aria-hidden[39m=[32m"true"[39m
+    [33mdata-radix-focus-guard[39m=[32m""[39m
+    [33mstyle[39m=[32m"outline: none; opacity: 0; position: fixed; pointer-events: none;"[39m
+    [33mtabindex[39m=[32m"0"[39m
+  [36m/>[39m
+  [36m<textarea[39m
+    [33maria-hidden[39m=[32m"true"[39m
+    [33mdata-aria-hidden[39m=[32m"true"[39m
+    [33mstyle[39m=[32m"min-height: 0px !important; max-height: none !important; height: 0px !important; visibility: hidden !important; overflow: hidden !important; position: absolute !important; z-index: -1000 !important; top: 0px !important; right: 0px !important; display: block !important; border-bottom-width: medium; border-left-width: medium; border-right-width: medium; border-top-width: medium; box-sizing: content-box; font-family: \"depends on user agent\"; font-size: medium; font-style: normal; font-weight: normal; letter-spacing: normal; line-height: normal; tab-size: 8; text-indent: 0px; text-rendering: auto; text-transform: none; width: auto; word-break: normal; word-spacing: normal; scrollbar-gutter: auto; padding: 0px;"[39m
+    [33mtabindex[39m=[32m"-1"[39m
+  [36m/>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"fixed inset-x-0 flex overflow-hidden bg-[var(--color-primary)]"[39m
+      [33mdata-app-shell[39m=[32m"true"[39m
+      [33mstyle[39m=[32m"top: var(--app-top, 0px); height: var(--app-vh, 100dvh);"[39m
+    [36m>[39m
+      [36m<a[39m
+        [33maria-hidden[39m=[32m"true"[39m
+        [33mclass[39m=[32m"sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:px-[var(--space-2-5)] focus:py-[var(--space-2)] focus:rounded-md focus:bg-[var(--color-surface-2)] focus:text-[var(--color-secondary)] focus:text-[length:var(--type-body-compact-size)]"[39m
+        [33mdata-aria-hidden[39m=[32m"true"[39m
+        [33mhref[39m=[32m"#main-content"[39m
+        [33mtabindex[39m=[32m"1"[39m
+      [36m>[39m
+        [0mSkip to content[0m
+      [36m</a>[39m
+      [36m<aside[39m
+        [33maria-hidden[39m=[32m"true"[39m
+        [33mclass[39m=[32m"flex flex-col h-full flex-shrink-0 bg-[var(--color-surface-0)] border-r border-[var(--color-border)]"[39m
+        [33mdata-aria-hidden[39m=[32m"true"[39m
+        [33mstyle[39m=[32m"width: var(--spacing-sidebar);"[39m
+      [36m>[39m
+        [36m<nav[39m
+          [33maria-label[39m=[32m"Main navigation"[39m
+          [33mclass[39m=[32m"flex h-full flex-col"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-center gap-[var(--space-2)] px-[var(--space-3)] h-chrome-header min-h-chrome-header shrink-0"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"font-headline font-bold lowercase text-[var(--color-secondary)] text-base"[39m
+            [36m>[39m
+              [0momnipus[0m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-[var(--color-accent)]"[39m
+              [36m>[39m
+                [0m.ai[0m
+              [36m</span>[39m
+            [36m</span>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Search sessions"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto ml-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Search sessions"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M229.66,218.34l-50.07-50.06a88.11,88.11,0,1,0-11.31,11.31l50.06,50.07a8,8,0,0,0,11.32-11.32ZM40,112a72,72,0,1,1,72,72A72.08,72.08,0,0,1,40,112Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Unpin sidebar"[39m
+              [33maria-pressed[39m=[32m"true"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Unpin sidebar"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M224,176a8,8,0,0,1-8,8H136v56a8,8,0,0,1-16,0V184H40a8,8,0,0,1,0-16h9.29L70.46,48H64a8,8,0,0,1,0-16H192a8,8,0,0,1,0,16h-6.46l21.17,120H216A8,8,0,0,1,224,176Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+          [36m</div>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex-1 overflow-y-auto overscroll-contain py-[var(--space-2-5)]"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33maria-label[39m=[32m"Omnipus"...
+
+Ignored nodes: comments, script, style
+[36m<body[39m
+  [33mdata-scroll-locked[39m=[32m"1"[39m
+  [33mstyle[39m=[32m"pointer-events: none;"[39m
+[36m>[39m
+  [36m<span[39m
+    [33maria-hidden[39m=[32m"true"[39m
+    [33mdata-aria-hidden[39m=[32m"true"[39m
+    [33mdata-radix-focus-guard[39m=[32m""[39m
+    [33mstyle[39m=[32m"outline: none; opacity: 0; position: fixed; pointer-events: none;"[39m
+    [33mtabindex[39m=[32m"0"[39m
+  [36m/>[39m
+  [36m<textarea[39m
+    [33maria-hidden[39m=[32m"true"[39m
+    [33mdata-aria-hidden[39m=[32m"true"[39m
+    [33mstyle[39m=[32m"min-height: 0px !important; max-height: none !important; height: 0px !important; visibility: hidden !important; overflow: hidden !important; position: absolute !important; z-index: -1000 !important; top: 0px !important; right: 0px !important; display: block !important; border-bottom-width: medium; border-left-width: medium; border-right-width: medium; border-top-width: medium; box-sizing: content-box; font-family: \"depends on user agent\"; font-size: medium; font-style: normal; font-weight: normal; letter-spacing: normal; line-height: normal; tab-size: 8; text-indent: 0px; text-rendering: auto; text-transform: none; width: auto; word-break: normal; word-spacing: normal; scrollbar-gutter: auto; padding: 0px;"[39m
+    [33mtabindex[39m=[32m"-1"[39m
+  [36m/>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"fixed inset-x-0 flex overflow-hidden bg-[var(--color-primary)]"[39m
+      [33mdata-app-shell[39m=[32m"true"[39m
+      [33mstyle[39m=[32m"top: var(--app-top, 0px); height: var(--app-vh, 100dvh);"[39m
+    [36m>[39m
+      [36m<a[39m
+        [33maria-hidden[39m=[32m"true"[39m
+        [33mclass[39m=[32m"sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:px-[var(--space-2-5)] focus:py-[var(--space-2)] focus:rounded-md focus:bg-[var(--color-surface-2)] focus:text-[var(--color-secondary)] focus:text-[length:var(--type-body-compact-size)]"[39m
+        [33mdata-aria-hidden[39m=[32m"true"[39m
+        [33mhref[39m=[32m"#main-content"[39m
+        [33mtabindex[39m=[32m"1"[39m
+      [36m>[39m
+        [0mSkip to content[0m
+      [36m</a>[39m
+      [36m<aside[39m
+        [33maria-hidden[39m=[32m"true"[39m
+        [33mclass[39m=[32m"flex flex-col h-full flex-shrink-0 bg-[var(--color-surface-0)] border-r border-[var(--color-border)]"[39m
+        [33mdata-aria-hidden[39m=[32m"true"[39m
+        [33mstyle[39m=[32m"width: var(--spacing-sidebar);"[39m
+      [36m>[39m
+        [36m<nav[39m
+          [33maria-label[39m=[32m"Main navigation"[39m
+          [33mclass[39m=[32m"flex h-full flex-col"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-center gap-[var(--space-2)] px-[var(--space-3)] h-chrome-header min-h-chrome-header shrink-0"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"font-headline font-bold lowercase text-[var(--color-secondary)] text-base"[39m
+            [36m>[39m
+              [0momnipus[0m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-[var(--color-accent)]"[39m
+              [36m>[39m
+                [0m.ai[0m
+              [36m</span>[39m
+            [36m</span>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Search sessions"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto ml-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Search sessions"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M229.66,218.34l-50.07-50.06a88.11,88.11,0,1,0-11.31,11.31l50.06,50.07a8,8,0,0,0,11.32-11.32ZM40,112a72,72,0,1,1,72,72A72.08,72.08,0,0,1,40,112Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Unpin sidebar"[39m
+              [33maria-pressed[39m=[32m"true"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Unpin sidebar"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M224,176a8,8,0,0,1-8,8H136v56a8,8,0,0,1-16,0V184H40a8,8,0,0,1,0-16h9.29L70.46,48H64a8,8,0,0,1,0-16H192a8,8,0,0,1,0,16h-6.46l21.17,120H216A8,8,0,0,1,224,176Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+          [36m</div>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex-1 overflow-y-auto overscroll-contain py-[var(--space-2-5)]"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33maria-label[39m=[32m"Omnipus"...
+ ❯ waitForWrapper node_modules/@testing-library/dom/dist/wait-for.js:163:27
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:86:33
+ ❯ showApproval src/components/layout/AppShell.stage1.test.tsx:64:29
+     62|   await waitFor(() => expect(useToolApprovalStore.getState().queue.map…
+     63|   // The card is the inline thread tail in the root chat — never the m…
+     64|   const card = await screen.findByTestId('tool-approval-thread-tail')
+       |                             ^
+     65|   expect(card).toBeVisible()
+     66|   const panel = within(card).getByTestId('tool-approval-panel')
+ ❯ src/components/layout/AppShell.stage1.test.tsx:360:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/7]⎯
+
+ FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — the inline card expiry cannot approve a timed-out call (bundle B3) > [S1-exp; added dispatch] at expiry the card actions disappear without a POST and denied_timeout promotes the next queued request
+TestingLibraryElementError: Unable to find an element by: [data-testid="tool-approval-thread-tail"]
+
+Ignored nodes: comments, script, style
+[36m<body[39m
+  [33mdata-scroll-locked[39m=[32m"1"[39m
+  [33mstyle[39m=[32m"pointer-events: none;"[39m
+[36m>[39m
+  [36m<span[39m
+    [33maria-hidden[39m=[32m"true"[39m
+    [33mdata-aria-hidden[39m=[32m"true"[39m
+    [33mdata-radix-focus-guard[39m=[32m""[39m
+    [33mstyle[39m=[32m"outline: none; opacity: 0; position: fixed; pointer-events: none;"[39m
+    [33mtabindex[39m=[32m"0"[39m
+  [36m/>[39m
+  [36m<textarea[39m
+    [33maria-hidden[39m=[32m"true"[39m
+    [33mdata-aria-hidden[39m=[32m"true"[39m
+    [33mstyle[39m=[32m"min-height: 0px !important; max-height: none !important; height: 0px !important; visibility: hidden !important; overflow: hidden !important; position: absolute !important; z-index: -1000 !important; top: 0px !important; right: 0px !important; display: block !important; border-bottom-width: medium; border-left-width: medium; border-right-width: medium; border-top-width: medium; box-sizing: content-box; font-family: \"depends on user agent\"; font-size: medium; font-style: normal; font-weight: normal; letter-spacing: normal; line-height: normal; tab-size: 8; text-indent: 0px; text-rendering: auto; text-transform: none; width: auto; word-break: normal; word-spacing: normal; scrollbar-gutter: auto; padding: 0px;"[39m
+    [33mtabindex[39m=[32m"-1"[39m
+  [36m/>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"fixed inset-x-0 flex overflow-hidden bg-[var(--color-primary)]"[39m
+      [33mdata-app-shell[39m=[32m"true"[39m
+      [33mstyle[39m=[32m"top: var(--app-top, 0px); height: var(--app-vh, 100dvh);"[39m
+    [36m>[39m
+      [36m<a[39m
+        [33maria-hidden[39m=[32m"true"[39m
+        [33mclass[39m=[32m"sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:px-[var(--space-2-5)] focus:py-[var(--space-2)] focus:rounded-md focus:bg-[var(--color-surface-2)] focus:text-[var(--color-secondary)] focus:text-[length:var(--type-body-compact-size)]"[39m
+        [33mdata-aria-hidden[39m=[32m"true"[39m
+        [33mhref[39m=[32m"#main-content"[39m
+        [33mtabindex[39m=[32m"1"[39m
+      [36m>[39m
+        [0mSkip to content[0m
+      [36m</a>[39m
+      [36m<aside[39m
+        [33maria-hidden[39m=[32m"true"[39m
+        [33mclass[39m=[32m"flex flex-col h-full flex-shrink-0 bg-[var(--color-surface-0)] border-r border-[var(--color-border)]"[39m
+        [33mdata-aria-hidden[39m=[32m"true"[39m
+        [33mstyle[39m=[32m"width: var(--spacing-sidebar);"[39m
+      [36m>[39m
+        [36m<nav[39m
+          [33maria-label[39m=[32m"Main navigation"[39m
+          [33mclass[39m=[32m"flex h-full flex-col"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-center gap-[var(--space-2)] px-[var(--space-3)] h-chrome-header min-h-chrome-header shrink-0"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"font-headline font-bold lowercase text-[var(--color-secondary)] text-base"[39m
+            [36m>[39m
+              [0momnipus[0m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-[var(--color-accent)]"[39m
+              [36m>[39m
+                [0m.ai[0m
+              [36m</span>[39m
+            [36m</span>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Search sessions"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto ml-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Search sessions"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M229.66,218.34l-50.07-50.06a88.11,88.11,0,1,0-11.31,11.31l50.06,50.07a8,8,0,0,0,11.32-11.32ZM40,112a72,72,0,1,1,72,72A72.08,72.08,0,0,1,40,112Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Unpin sidebar"[39m
+              [33maria-pressed[39m=[32m"true"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Unpin sidebar"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M224,176a8,8,0,0,1-8,8H136v56a8,8,0,0,1-16,0V184H40a8,8,0,0,1,0-16h9.29L70.46,48H64a8,8,0,0,1,0-16H192a8,8,0,0,1,0,16h-6.46l21.17,120H216A8,8,0,0,1,224,176Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+          [36m</div>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex-1 overflow-y-auto overscroll-contain py-[var(--space-2-5)]"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33maria-label[39m=[32m"Omnipus"...
+
+Ignored nodes: comments, script, style
+[36m<body[39m
+  [33mdata-scroll-locked[39m=[32m"1"[39m
+  [33mstyle[39m=[32m"pointer-events: none;"[39m
+[36m>[39m
+  [36m<span[39m
+    [33maria-hidden[39m=[32m"true"[39m
+    [33mdata-aria-hidden[39m=[32m"true"[39m
+    [33mdata-radix-focus-guard[39m=[32m""[39m
+    [33mstyle[39m=[32m"outline: none; opacity: 0; position: fixed; pointer-events: none;"[39m
+    [33mtabindex[39m=[32m"0"[39m
+  [36m/>[39m
+  [36m<textarea[39m
+    [33maria-hidden[39m=[32m"true"[39m
+    [33mdata-aria-hidden[39m=[32m"true"[39m
+    [33mstyle[39m=[32m"min-height: 0px !important; max-height: none !important; height: 0px !important; visibility: hidden !important; overflow: hidden !important; position: absolute !important; z-index: -1000 !important; top: 0px !important; right: 0px !important; display: block !important; border-bottom-width: medium; border-left-width: medium; border-right-width: medium; border-top-width: medium; box-sizing: content-box; font-family: \"depends on user agent\"; font-size: medium; font-style: normal; font-weight: normal; letter-spacing: normal; line-height: normal; tab-size: 8; text-indent: 0px; text-rendering: auto; text-transform: none; width: auto; word-break: normal; word-spacing: normal; scrollbar-gutter: auto; padding: 0px;"[39m
+    [33mtabindex[39m=[32m"-1"[39m
+  [36m/>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"fixed inset-x-0 flex overflow-hidden bg-[var(--color-primary)]"[39m
+      [33mdata-app-shell[39m=[32m"true"[39m
+      [33mstyle[39m=[32m"top: var(--app-top, 0px); height: var(--app-vh, 100dvh);"[39m
+    [36m>[39m
+      [36m<a[39m
+        [33maria-hidden[39m=[32m"true"[39m
+        [33mclass[39m=[32m"sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:px-[var(--space-2-5)] focus:py-[var(--space-2)] focus:rounded-md focus:bg-[var(--color-surface-2)] focus:text-[var(--color-secondary)] focus:text-[length:var(--type-body-compact-size)]"[39m
+        [33mdata-aria-hidden[39m=[32m"true"[39m
+        [33mhref[39m=[32m"#main-content"[39m
+        [33mtabindex[39m=[32m"1"[39m
+      [36m>[39m
+        [0mSkip to content[0m
+      [36m</a>[39m
+      [36m<aside[39m
+        [33maria-hidden[39m=[32m"true"[39m
+        [33mclass[39m=[32m"flex flex-col h-full flex-shrink-0 bg-[var(--color-surface-0)] border-r border-[var(--color-border)]"[39m
+        [33mdata-aria-hidden[39m=[32m"true"[39m
+        [33mstyle[39m=[32m"width: var(--spacing-sidebar);"[39m
+      [36m>[39m
+        [36m<nav[39m
+          [33maria-label[39m=[32m"Main navigation"[39m
+          [33mclass[39m=[32m"flex h-full flex-col"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-center gap-[var(--space-2)] px-[var(--space-3)] h-chrome-header min-h-chrome-header shrink-0"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"font-headline font-bold lowercase text-[var(--color-secondary)] text-base"[39m
+            [36m>[39m
+              [0momnipus[0m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-[var(--color-accent)]"[39m
+              [36m>[39m
+                [0m.ai[0m
+              [36m</span>[39m
+            [36m</span>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Search sessions"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto ml-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Search sessions"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M229.66,218.34l-50.07-50.06a88.11,88.11,0,1,0-11.31,11.31l50.06,50.07a8,8,0,0,0,11.32-11.32ZM40,112a72,72,0,1,1,72,72A72.08,72.08,0,0,1,40,112Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Unpin sidebar"[39m
+              [33maria-pressed[39m=[32m"true"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Unpin sidebar"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M224,176a8,8,0,0,1-8,8H136v56a8,8,0,0,1-16,0V184H40a8,8,0,0,1,0-16h9.29L70.46,48H64a8,8,0,0,1,0-16H192a8,8,0,0,1,0,16h-6.46l21.17,120H216A8,8,0,0,1,224,176Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+          [36m</div>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex-1 overflow-y-auto overscroll-contain py-[var(--space-2-5)]"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33maria-label[39m=[32m"Omnipus"...
+ ❯ waitForWrapper node_modules/@testing-library/dom/dist/wait-for.js:163:27
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:86:33
+ ❯ showApproval src/components/layout/AppShell.stage1.test.tsx:64:29
+     62|   await waitFor(() => expect(useToolApprovalStore.getState().queue.map…
+     63|   // The card is the inline thread tail in the root chat — never the m…
+     64|   const card = await screen.findByTestId('tool-approval-thread-tail')
+       |                             ^
+     65|   expect(card).toBeVisible()
+     66|   const panel = within(card).getByTestId('tool-approval-panel')
+ ❯ src/components/layout/AppShell.stage1.test.tsx:409:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/7]⎯
+
+ FAIL  src/components/layout/AppShell.stage1.test.tsx > stage 1 — the inline card expiry cannot approve a timed-out call (bundle B3) > [S1-exp zero; added dispatch] a zero-lifetime request is already non-actionable on arrival and never submits automatically
+TestingLibraryElementError: Unable to find an element by: [data-testid="tool-approval-thread-tail"]
+
+Ignored nodes: comments, script, style
+[36m<body[39m
+  [33mdata-scroll-locked[39m=[32m"1"[39m
+  [33mstyle[39m=[32m"pointer-events: none;"[39m
+[36m>[39m
+  [36m<span[39m
+    [33maria-hidden[39m=[32m"true"[39m
+    [33mdata-aria-hidden[39m=[32m"true"[39m
+    [33mdata-radix-focus-guard[39m=[32m""[39m
+    [33mstyle[39m=[32m"outline: none; opacity: 0; position: fixed; pointer-events: none;"[39m
+    [33mtabindex[39m=[32m"0"[39m
+  [36m/>[39m
+  [36m<textarea[39m
+    [33maria-hidden[39m=[32m"true"[39m
+    [33mdata-aria-hidden[39m=[32m"true"[39m
+    [33mstyle[39m=[32m"min-height: 0px !important; max-height: none !important; height: 0px !important; visibility: hidden !important; overflow: hidden !important; position: absolute !important; z-index: -1000 !important; top: 0px !important; right: 0px !important; display: block !important; border-bottom-width: medium; border-left-width: medium; border-right-width: medium; border-top-width: medium; box-sizing: content-box; font-family: \"depends on user agent\"; font-size: medium; font-style: normal; font-weight: normal; letter-spacing: normal; line-height: normal; tab-size: 8; text-indent: 0px; text-rendering: auto; text-transform: none; width: auto; word-break: normal; word-spacing: normal; scrollbar-gutter: auto; padding: 0px;"[39m
+    [33mtabindex[39m=[32m"-1"[39m
+  [36m/>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"fixed inset-x-0 flex overflow-hidden bg-[var(--color-primary)]"[39m
+      [33mdata-app-shell[39m=[32m"true"[39m
+      [33mstyle[39m=[32m"top: var(--app-top, 0px); height: var(--app-vh, 100dvh);"[39m
+    [36m>[39m
+      [36m<a[39m
+        [33maria-hidden[39m=[32m"true"[39m
+        [33mclass[39m=[32m"sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:px-[var(--space-2-5)] focus:py-[var(--space-2)] focus:rounded-md focus:bg-[var(--color-surface-2)] focus:text-[var(--color-secondary)] focus:text-[length:var(--type-body-compact-size)]"[39m
+        [33mdata-aria-hidden[39m=[32m"true"[39m
+        [33mhref[39m=[32m"#main-content"[39m
+        [33mtabindex[39m=[32m"1"[39m
+      [36m>[39m
+        [0mSkip to content[0m
+      [36m</a>[39m
+      [36m<aside[39m
+        [33maria-hidden[39m=[32m"true"[39m
+        [33mclass[39m=[32m"flex flex-col h-full flex-shrink-0 bg-[var(--color-surface-0)] border-r border-[var(--color-border)]"[39m
+        [33mdata-aria-hidden[39m=[32m"true"[39m
+        [33mstyle[39m=[32m"width: var(--spacing-sidebar);"[39m
+      [36m>[39m
+        [36m<nav[39m
+          [33maria-label[39m=[32m"Main navigation"[39m
+          [33mclass[39m=[32m"flex h-full flex-col"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-center gap-[var(--space-2)] px-[var(--space-3)] h-chrome-header min-h-chrome-header shrink-0"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"font-headline font-bold lowercase text-[var(--color-secondary)] text-base"[39m
+            [36m>[39m
+              [0momnipus[0m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-[var(--color-accent)]"[39m
+              [36m>[39m
+                [0m.ai[0m
+              [36m</span>[39m
+            [36m</span>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Search sessions"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto ml-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Search sessions"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M229.66,218.34l-50.07-50.06a88.11,88.11,0,1,0-11.31,11.31l50.06,50.07a8,8,0,0,0,11.32-11.32ZM40,112a72,72,0,1,1,72,72A72.08,72.08,0,0,1,40,112Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Unpin sidebar"[39m
+              [33maria-pressed[39m=[32m"true"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Unpin sidebar"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M224,176a8,8,0,0,1-8,8H136v56a8,8,0,0,1-16,0V184H40a8,8,0,0,1,0-16h9.29L70.46,48H64a8,8,0,0,1,0-16H192a8,8,0,0,1,0,16h-6.46l21.17,120H216A8,8,0,0,1,224,176Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+          [36m</div>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex-1 overflow-y-auto overscroll-contain py-[var(--space-2-5)]"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33maria-label[39m=[32m"Omnipus"...
+
+Ignored nodes: comments, script, style
+[36m<body[39m
+  [33mdata-scroll-locked[39m=[32m"1"[39m
+  [33mstyle[39m=[32m"pointer-events: none;"[39m
+[36m>[39m
+  [36m<span[39m
+    [33maria-hidden[39m=[32m"true"[39m
+    [33mdata-aria-hidden[39m=[32m"true"[39m
+    [33mdata-radix-focus-guard[39m=[32m""[39m
+    [33mstyle[39m=[32m"outline: none; opacity: 0; position: fixed; pointer-events: none;"[39m
+    [33mtabindex[39m=[32m"0"[39m
+  [36m/>[39m
+  [36m<textarea[39m
+    [33maria-hidden[39m=[32m"true"[39m
+    [33mdata-aria-hidden[39m=[32m"true"[39m
+    [33mstyle[39m=[32m"min-height: 0px !important; max-height: none !important; height: 0px !important; visibility: hidden !important; overflow: hidden !important; position: absolute !important; z-index: -1000 !important; top: 0px !important; right: 0px !important; display: block !important; border-bottom-width: medium; border-left-width: medium; border-right-width: medium; border-top-width: medium; box-sizing: content-box; font-family: \"depends on user agent\"; font-size: medium; font-style: normal; font-weight: normal; letter-spacing: normal; line-height: normal; tab-size: 8; text-indent: 0px; text-rendering: auto; text-transform: none; width: auto; word-break: normal; word-spacing: normal; scrollbar-gutter: auto; padding: 0px;"[39m
+    [33mtabindex[39m=[32m"-1"[39m
+  [36m/>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"fixed inset-x-0 flex overflow-hidden bg-[var(--color-primary)]"[39m
+      [33mdata-app-shell[39m=[32m"true"[39m
+      [33mstyle[39m=[32m"top: var(--app-top, 0px); height: var(--app-vh, 100dvh);"[39m
+    [36m>[39m
+      [36m<a[39m
+        [33maria-hidden[39m=[32m"true"[39m
+        [33mclass[39m=[32m"sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:px-[var(--space-2-5)] focus:py-[var(--space-2)] focus:rounded-md focus:bg-[var(--color-surface-2)] focus:text-[var(--color-secondary)] focus:text-[length:var(--type-body-compact-size)]"[39m
+        [33mdata-aria-hidden[39m=[32m"true"[39m
+        [33mhref[39m=[32m"#main-content"[39m
+        [33mtabindex[39m=[32m"1"[39m
+      [36m>[39m
+        [0mSkip to content[0m
+      [36m</a>[39m
+      [36m<aside[39m
+        [33maria-hidden[39m=[32m"true"[39m
+        [33mclass[39m=[32m"flex flex-col h-full flex-shrink-0 bg-[var(--color-surface-0)] border-r border-[var(--color-border)]"[39m
+        [33mdata-aria-hidden[39m=[32m"true"[39m
+        [33mstyle[39m=[32m"width: var(--spacing-sidebar);"[39m
+      [36m>[39m
+        [36m<nav[39m
+          [33maria-label[39m=[32m"Main navigation"[39m
+          [33mclass[39m=[32m"flex h-full flex-col"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-center gap-[var(--space-2)] px-[var(--space-3)] h-chrome-header min-h-chrome-header shrink-0"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"font-headline font-bold lowercase text-[var(--color-secondary)] text-base"[39m
+            [36m>[39m
+              [0momnipus[0m
+              [36m<span[39m
+                [33mclass[39m=[32m"text-[var(--color-accent)]"[39m
+              [36m>[39m
+                [0m.ai[0m
+              [36m</span>[39m
+            [36m</span>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Search sessions"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto ml-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Search sessions"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M229.66,218.34l-50.07-50.06a88.11,88.11,0,1,0-11.31,11.31l50.06,50.07a8,8,0,0,0,11.32-11.32ZM40,112a72,72,0,1,1,72,72A72.08,72.08,0,0,1,40,112Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+            [36m<button[39m
+              [33maria-label[39m=[32m"Unpin sidebar"[39m
+              [33maria-pressed[39m=[32m"true"[39m
+              [33mclass[39m=[32m"relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"[39m
+              [33mdata-action-state[39m=[32m"idle"[39m
+              [33mdata-ds-action[39m=[32m""[39m
+              [33mtabindex[39m=[32m"0"[39m
+              [33mtitle[39m=[32m"Unpin sidebar"[39m
+              [33mtype[39m=[32m"button"[39m
+            [36m>[39m
+              [36m<svg[39m
+                [33mfill[39m=[32m"currentColor"[39m
+                [33mheight[39m=[32m"16"[39m
+                [33mviewBox[39m=[32m"0 0 256 256"[39m
+                [33mwidth[39m=[32m"16"[39m
+                [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+              [36m>[39m
+                [36m<path[39m
+                  [33md[39m=[32m"M224,176a8,8,0,0,1-8,8H136v56a8,8,0,0,1-16,0V184H40a8,8,0,0,1,0-16h9.29L70.46,48H64a8,8,0,0,1,0-16H192a8,8,0,0,1,0,16h-6.46l21.17,120H216A8,8,0,0,1,224,176Z"[39m
+                [36m/>[39m
+              [36m</svg>[39m
+            [36m</button>[39m
+          [36m</div>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex-1 overflow-y-auto overscroll-contain py-[var(--space-2-5)]"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33maria-label[39m=[32m"Omnipus"...
+ ❯ waitForWrapper node_modules/@testing-library/dom/dist/wait-for.js:163:27
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:86:33
+ ❯ src/components/layout/AppShell.stage1.test.tsx:439:31
+    437|     await emitFromGateway(socket, frame)
+    438|     await waitFor(() => expect(useToolApprovalStore.getState().queue.m…
+    439|     const card = await screen.findByTestId('tool-approval-thread-tail')
+       |                               ^
+    440|     expect(card).toBeVisible()
+    441|     const panel = within(card).getByTestId('tool-approval-panel')
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/7]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  7 failed | 11 passed (18)
+   Start at  18:53:28
+   Duration  116.76s (transform 35.74s, setup 404ms, import 54.37s, tests 59.51s, environment 1.99s)
+

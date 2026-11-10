@@ -8,32 +8,61 @@ import { useUiStore } from '@/store/ui'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { queryClient } from '@/lib/queryClient'
-import { tasksQueryKeys } from '@/lib/api'
-import type { Agent } from '@/lib/api'
-import type {
-  WsSubagentStartFrame,
-  WsSubagentEndFrame,
-} from '@/lib/ws'
-import { useWorkspacesStore } from '@/store/workspacesStore'
+import { invalidateAfterAgentCreate, tasksQueryKeys } from '@/lib/api'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { logDiagnostic } from '@/lib/telemetry'
 import { normalizeTruncationReason } from '@/lib/truncation'
+import { isClearCommandText } from '@/lib/clearMarker'
 import {
   getLLMErrorDisplay,
   readEntryIdFromFrame,
   readLLMErrorFromFrame,
   sanitizeLegacyErrorMessage,
 } from '@/lib/llm-error'
-import { advanceEventTime, clampToolResult, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
+import { advanceEventTime, busyFlagIsUnbacked, clampToolResult, endTurnState, evictMessageFromBucket, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from '../messages'
 import { markTurnFinished, scheduleLibraryChangedInvalidate } from '../routing'
-import { CANCEL_ACK_FRAME_TYPES, EMPTY_BUCKET, REPLAY_ERROR_BASE_DELAY_MS, REPLAY_ERROR_MAX_DELAY_MS, SESSION_SCOPED_FRAME_TYPES, UNKNOWN_FRAME_TOAST_THRESHOLD, inFlightReattachSids, pendingCancelAckSids, replayErrorRetryAttempts, replayErrorRetryTimers, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from '../runtime-state'
+import { mergeRecordedSessionTokens } from '../session-usage'
+import { CANCEL_ACK_FRAME_TYPES, EMPTY_BUCKET, GAP_REATTACH_BASE_DELAY_MS, GAP_REATTACH_MAX_DELAY_MS, GAP_REATTACH_TOAST_THRESHOLD, REPLAY_ERROR_BASE_DELAY_MS, REPLAY_ERROR_MAX_DELAY_MS, SESSION_SCOPED_FRAME_TYPES, UNKNOWN_FRAME_TOAST_THRESHOLD, gapReattachRetryAttempts, gapReattachRetryTimers, inFlightReattachSids, pendingCancelAckSids, pendingRedirectSids, replayErrorRetryAttempts, replayErrorRetryTimers, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from '../runtime-state'
+import { flushHeldClearProjection, forgetClearRefreshForSend, settleClearRefetchAfterTurn } from '../clear-refetch'
 import { applyMessageArray, bakeToolCallsByOwner, emptySessionState, isToolCallBakedInBucket } from '../session'
 import { gateFrameBySeq, cursorFromTerminalFrame, insertHistoryMessageId, CURSOR_MINTING_FRAME_TYPES, type SeqFrameLike } from '../cursor'
-import type { ChatMessage, ChatStore, RateLimitEventData, SessionChatState, SubagentSpan, SubagentSpanRunning, SubagentSpanTerminal } from '../types'
+import type { ChatMessage, ChatStore, RateLimitEventData, SessionChatState, SessionCursor } from '../types'
 import { handleReplayAndStatusFrame } from './replay-and-status-frames'
 import { handleCatchUpFrame } from './catchup-frames'
+import { handleProviderFrame } from './provider-frames'
+import { handleMailPanelObserverFrame } from './mail-panel-observer-frames'
+import { handleSecretRequestFrame } from './secret-request-frames'
+import { handleRoomFrame } from './room-frames'
+import { applySpanFrame } from './span-frames'
+import { rememberLiveSpanFact } from '../history-merge'
+import { refreshRosterAfterAgentMutation } from '../agentMutationRefresh'
+import { handleFirstSendFrame } from './first-send-frames'
+import { findFirstSendMessage } from '../first-send'
+import { appendErrorNotice, handleJudgeConclusionErrorFrame } from './error-notice-frames'
+import { recordCombinedPart, singlePart } from '../history-parts'
 
 
+
+// Refresh the whole prefix: roots and every observed expanded child page.
+// This is a prompt refresh, not a lifecycle projection: polling in the list
+// observers also covers an ordinary-root commit made after done was sent.
+const SESSION_LIST_REFRESH_FRAMES = new Set([
+  'done', 'error', 'subagent_start', 'subagent_state', 'subagent_end', 'catch_up_complete',
+])
+
+// Frames that do not refresh the session list while their bucket is replaying.
+const REPLAY_DEFERRED_REFRESH_FRAMES = new Set(['subagent_start', 'subagent_state', 'subagent_end'])
+
+// A replay re-delivers every persisted subagent_* row; refreshing the roster
+// per row fired dozens of GET /sessions on sign-in. While the bucket is
+// replaying, only the terminators (done / error / catch_up_complete) refresh —
+// once per batch. Live frames still refresh. Kept at module scope so it adds
+// nothing to handleFrame's grandfathered function budget.
+function refreshSessionListForFrame(frameType: string, bucketReplaying: boolean): void {
+  if (!SESSION_LIST_REFRESH_FRAMES.has(frameType)) return
+  if (bucketReplaying && REPLAY_DEFERRED_REFRESH_FRAMES.has(frameType)) return
+  void queryClient.invalidateQueries({ queryKey: ['sessions'] })
+}
 
 type FrameSlice = Pick<ChatStore, 'handleFrame'>
 type ToolCallResultFrame = Extract<Parameters<ChatStore['handleFrame']>[0], { type: 'tool_call_result' }>
@@ -50,10 +79,51 @@ type TokenFrameType = Extract<Parameters<ChatStore['handleFrame']>[0], { type: '
 
 // #823 state A: received/working/failed map onto the user message's own
 // deliveryStatus.
+// Founder ruling 2026-10-11: a /clear row shows as QUEUED from its send and
+// stays queued until the server's clear lands and the fresh view replaces
+// the screen (or a settle outcome resolves it) — an append ack for the
+// command row must not flip it to a sent look midway. A server-reported
+// failure still marks the row for Retry, and (delta re-review C1) a DISCARDED
+// is a settle outcome too: the row must resolve, never wait for a marker the
+// discarded clear can never write.
+/**
+ * A send the server failed or discarded never starts a turn. Drop the empty
+ * optimistic "thinking" placeholder sendMessage put right after the user row,
+ * then release the busy flag only if nothing else backs it (another running
+ * turn, a streaming bubble, a running tool). A mid-turn steer has no
+ * placeholder, so its discard removes nothing and never stops the running turn.
+ */
+function releaseUnstartedSend(draft: SessionChatState, userMessageId: string): void {
+  const idx = draft.messageOrder.indexOf(userMessageId)
+  const nextId = idx === -1 ? undefined : draft.messageOrder[idx + 1]
+  const next = nextId ? draft.messagesById[nextId] : undefined
+  const ownsLiveTool = !!nextId && Object.values(draft.toolCallOwnerMessageId ?? {}).includes(nextId)
+  const isOptimisticPlaceholder =
+    !!next && next.role === 'assistant' && (next.isStreaming || next.status === 'streaming') &&
+    !next.content && !next.turnId && !next.agentId && !next.tool_calls?.length && !next.spans?.length && !next.media?.length && !ownsLiveTool
+  if (nextId && isOptimisticPlaceholder) {
+    delete draft.messagesById[nextId]
+    draft.messageOrder.splice(idx + 1, 1)
+  }
+  if (busyFlagIsUnbacked(draft)) draft.isStreaming = false
+}
+
 function applyMessageStatusFrame(bucket: SessionChatState, frame: MessageStatusFrame): Partial<SessionChatState> {
   return produce(bucket, (draft) => {
-    const message = draft.messagesById[frame.client_message_id]
+    const message = draft.messagesById[frame.client_message_id] ?? findFirstSendMessage(draft, frame.client_message_id)
     if (!message || message.role !== 'user') return
+    if (frame.state === 'failed' || frame.state === 'discarded') releaseUnstartedSend(draft, message.id)
+    // Only the IN-FLIGHT states early-return for a /clear row — the founder
+    // ruling pins the queued look while the clear is in flight, not after it
+    // has settled. failed and discarded are settle outcomes: the row must
+    // resolve (C1), never wait forever on a marker that will never come.
+    if (frame.state !== 'failed' && frame.state !== 'discarded' && isClearCommandText(message.content)) {
+      // A /clear row records ONE in-flight state: held (a running reply is being
+      // stopped so the clear can apply). It stays held until the clear marker
+      // replaces the row or failed settles it; other acks never move it.
+      if (frame.state === 'held') message.deliveryStatus = 'held'
+      return
+    }
     message.deliveryStatus = frame.state === 'failed' ? 'failed' : frame.state
     message.status = frame.state === 'failed' ? 'error' : 'done'
   }) as Partial<SessionChatState>
@@ -117,6 +187,71 @@ function advanceReceivedEventTime(
 // design requires (§6.2's gap row: "send attach_session{S, cursor}") using
 // whatever cursor the bucket already has — the server's own §3.3 rule
 // decides whether that cursor is still servable.
+// Resolves a gap re-attach: cancels any pending retry timer for `sid` and
+// resets its attempt counter, so a LATER, unrelated gap starts its own
+// backoff from scratch rather than continuing to count up from a previous,
+// now-resolved incident — same reasoning as catchup-frames.ts's identical
+// reset of replayErrorRetryAttempts/Timers on a genuine catch_up_complete.
+function clearGapReattachRetry(sid: string): void {
+  delete gapReattachRetryAttempts[sid]
+  if (gapReattachRetryTimers[sid]) {
+    clearTimeout(gapReattachRetryTimers[sid])
+    delete gapReattachRetryTimers[sid]
+  }
+}
+
+// Safety hardening, parallel to the backend-side investigation into the
+// steered-session-stop.spec.ts E2E failure (not a proven fix for it — see
+// this function's own call site comment): applySeqGate's gap branch used to
+// be a bare, fire-once `connection.send()` — if that attach_session's
+// response never arrives (e.g. raced against a concurrent attach_session for
+// a DIFFERENT session on the same shared connection), inFlightReattachSids
+// permanently blocks any further attempt and the session is stuck with no
+// recourse but a manual reload. Retries with exponential backoff, on the
+// same shape as scheduleReplayErrorRetry below, but self-rescheduling: a
+// lost ack has no external "it failed again" signal to re-trigger a retry
+// (unlike replay_error's repeated `done` frames), so this function calls
+// itself from inside its own timeout instead of waiting to be invoked again.
+// Each firing re-checks inFlightReattachSids first — if the gap resolved
+// (an 'apply' or cursor-minting frame arrived) while the timer was pending,
+// clearGapReattachRetry already cancelled this timer, but a race between
+// that cancellation and an already-fired callback is still possible, so the
+// check is the authoritative guard, not just the cancellation.
+function scheduleGapReattachRetry(sid: string, cursor: SessionCursor): void {
+  const attempt = (gapReattachRetryAttempts[sid] ?? 0) + 1
+  gapReattachRetryAttempts[sid] = attempt
+  if (gapReattachRetryTimers[sid]) clearTimeout(gapReattachRetryTimers[sid])
+  const delay = Math.min(GAP_REATTACH_BASE_DELAY_MS * 2 ** (attempt - 1), GAP_REATTACH_MAX_DELAY_MS)
+  gapReattachRetryTimers[sid] = setTimeout(() => {
+    delete gapReattachRetryTimers[sid]
+    if (!inFlightReattachSids.has(sid)) return // resolved while this timer was pending
+    console.warn('[chat] sequence gap re-attach retry — no response yet', { sessionId: sid, attempt, have: cursor.seq })
+    logDiagnostic('chatSeqGapReattachRetry', { sessionId: sid, attempt, have: cursor.seq })
+    // Same silent-failure rule as the unknown-frame default case below: a
+    // retry loop the user cannot see is a session that silently stops
+    // updating. Unlike that counter, this one is NOT reset to 0 after
+    // toasting — it drives the exponential backoff — so "exactly once per
+    // stuck episode" comes from equality instead: the attempt count is
+    // strictly monotonic within an episode (armed once per gap, only ever
+    // self-rescheduled) and clearGapReattachRetry deletes it the moment the
+    // gap resolves, so the threshold value is reached exactly once; a later,
+    // unrelated stuck episode starts counting from 1 again.
+    if (attempt === GAP_REATTACH_TOAST_THRESHOLD) {
+      useUiStore.getState().addToast({
+        message: 'This conversation may be out of sync — reconnecting keeps failing. Refresh to reload it.',
+        variant: 'warning',
+      })
+    }
+    useConnectionStore.getState().connection?.send({
+      type: 'attach_session',
+      session_id: sid,
+      since_seq: cursor.seq,
+      boot_id: cursor.bootId,
+    })
+    scheduleGapReattachRetry(sid, cursor)
+  }, delay)
+}
+
 function applySeqGate(
   frame: unknown,
   targetSid: string | null,
@@ -130,6 +265,7 @@ function applySeqGate(
     // that was in flight for this session is now resolved (Opus review
     // round 2 item 7).
     inFlightReattachSids.delete(targetSid)
+    clearGapReattachRetry(targetSid)
     return 'apply'
   }
   const bucket = get().sessionsById[targetSid]
@@ -137,6 +273,7 @@ function applySeqGate(
   if (decision.kind === 'apply') {
     withBucket(targetSid, () => ({ cursor: decision.cursor }))
     inFlightReattachSids.delete(targetSid)
+    clearGapReattachRetry(targetSid)
     return 'apply'
   }
   if (decision.kind === 'gap') {
@@ -156,9 +293,20 @@ function applySeqGate(
         since_seq: decision.cursor.seq,
         boot_id: decision.cursor.bootId,
       })
+      // Safety hardening (see scheduleGapReattachRetry's own doc comment):
+      // arm the retry-with-backoff in case this send's response never comes.
+      scheduleGapReattachRetry(targetSid, decision.cursor)
     }
   }
   return 'drop-or-gap'
+}
+
+// R2-S3-05: a copy of an idle-mark set without one call id.
+function withoutIdleMark(marks: Record<string, true> | undefined, callId: string): Record<string, true> | undefined {
+  if (!marks || !(callId in marks)) return marks
+  const rest = { ...marks }
+  delete rest[callId]
+  return rest
 }
 
 // ADR-091 D7/D10 + #823 Opus review round 2 item 1 ("update moved tools by
@@ -173,25 +321,38 @@ function applySeqGate(
 // baked tool_calls for this call_id and update it in place. Extracted from
 // handleFrame to keep it under its grandfathered line budget
 // (scripts/budgets/functions.txt) — no behaviour change.
-function applyToolCallResultFrame(
+export function applyToolCallResultFrame(
   b: SessionChatState,
   frame: ToolCallResultFrame,
   clampedResult: ReturnType<typeof clampToolResult>,
 ): Partial<SessionChatState> {
+  // A confirmed per-call cancellation is terminal; a late result cannot revive it.
+  if (b.toolCalls[frame.call_id]?.status === 'cancelled' && frame.status !== 'cancelled') return {}
   if (!b.toolCalls[frame.call_id]) {
-    for (const id of b.messageOrder) {
+    // This call no longer has a live entry (baked or unmatched), so its idle
+    // mark - if it had one - can never be released by a live result. Drop it
+    // here, or it would later let an unrelated lone tool result blink Stop off
+    // mid-turn (R2-S3-05).
+    const idleArmedToolCalls = withoutIdleMark(b.idleArmedToolCalls, frame.call_id)
+    // A detached reader's current-tail projection also contains cached owners
+    // outside its displayed order. Resolve this exact call, never the page edge.
+    for (const id of Object.keys(b.messagesById)) {
       const msg = b.messagesById[id]
       const idx = msg?.tool_calls?.findIndex((tc) => tc.id === frame.call_id) ?? -1
       if (idx === -1) continue
-      return produce(b, (draft) => {
-        const tc = draft.messagesById[id].tool_calls![idx]
-        tc.result = clampedResult
-        tc.status = frame.status ?? 'success'
-        tc.duration_ms = frame.duration_ms
-        tc.error = frame.error
-      }) as Partial<SessionChatState>
+      if (msg.tool_calls![idx].status === 'cancelled' && frame.status !== 'cancelled') return { idleArmedToolCalls }
+      return {
+        ...(produce(b, (draft) => {
+          const tc = draft.messagesById[id].tool_calls![idx]
+          tc.result = clampedResult
+          tc.status = frame.status ?? 'success'
+          tc.duration_ms = frame.duration_ms
+          tc.error = frame.error
+        }) as Partial<SessionChatState>),
+        idleArmedToolCalls,
+      }
     }
-    return appendUnmatchedToolError(b, frame, clampedResult)
+    return { ...appendUnmatchedToolError(b, frame, clampedResult), idleArmedToolCalls }
   }
   return produce(b, (draft) => {
     const tc = draft.toolCalls[frame.call_id]
@@ -199,24 +360,18 @@ function applyToolCallResultFrame(
     tc.status = frame.status ?? 'success'
     tc.duration_ms = frame.duration_ms
     tc.error = frame.error
+    // A start that re-armed an idle flag (a straggler from a turn that already
+    // ended) leaves nothing else to clear it. A call that started while the
+    // flag was already up belongs to a turn in flight: leave the flag to that
+    // turn's own terminal frame. Overlapping stragglers share ONE armed burst:
+    // the marks stay until no tool is running, so whichever call finishes last
+    // releases the flag (a later-started call is not itself idle-armed).
+    const armed = draft.idleArmedToolCalls
+    if (armed && Object.keys(armed).length > 0 && !Object.values(draft.toolCalls).some((t) => t.status === 'running')) {
+      draft.idleArmedToolCalls = {}
+      if (busyFlagIsUnbacked(draft)) draft.isStreaming = false
+    }
   }) as Partial<SessionChatState>
-}
-
-// #823/ADR-091 merge review (Opus F4, low, plausible race): the Go side's
-// deliverSubagentStart persists the span to the session transcript BEFORE
-// emitting the live frame — not one atomic step. If a second tab's
-// attach_session binds in that exact window, its snapshot replay emits this
-// SAME span (reconstructed from the transcript, unsequenced) and the live
-// copy (sequenced, seq above whatever the bucket's cursor already had) also
-// arrives — one delegation, two subagent_start frames for the same span_id.
-// The subagent_start case ignores a frame whose span_id this reports as
-// already present: it never creates a second span and never touches the
-// existing one's state (a subagent_message/subagent_state may have updated
-// it since the first copy was applied).
-function bucketHasSpan(b: SessionChatState, spanId: string): boolean {
-  const entry = b.spanBySpanId?.[spanId]
-  const span = entry ? b.messagesById[entry.messageId]?.spans?.[entry.spanIdx] : undefined
-  return !!span && span.spanId === spanId
 }
 
 function appendUnmatchedToolError(
@@ -252,75 +407,6 @@ function appendUnmatchedToolError(
     draft.messagesById[notice.id] = notice
     draft.messageOrder.push(notice.id)
   }) as Partial<SessionChatState>
-}
-
-// ADR-091 D7/I-4 (cross-family review finding 19): bounds
-// SessionChatState.pendingSpanUpdatesBySpanId growth for a span_id whose
-// subagent_start never arrives (e.g. an old transcript missing it — edge
-// case table). Small, matching GOAL_PILLS_CAP's role for the same shape of
-// "bounded pending map" problem (goals.ts::evictGoalPillsOverCap) — there is
-// no realistic scenario with dozens of concurrently in-flight replay gaps.
-const PENDING_SPAN_UPDATE_CAP = 50
-
-type PendingSpanUpdate = NonNullable<SessionChatState['pendingSpanUpdatesBySpanId']>[string]
-
-/**
- * Merge a subagent_message/subagent_state update into span_id's pending
- * slot (created on first miss) when the span itself can't be found — the
- * frame arrived before its span's own subagent_start. Each field in `patch`
- * is applied independently: `patch` must omit a key entirely rather than
- * set it to `undefined`, or a later-arriving update of the OTHER frame type
- * would clobber an earlier one's field (e.g. a pending statusLine from
- * subagent_message wiped by a subsequent subagent_state's patch that never
- * meant to touch it). Evicts the oldest entry (insertion order) once over
- * PENDING_SPAN_UPDATE_CAP.
- */
-function recordPendingSpanUpdate(
-  existing: SessionChatState['pendingSpanUpdatesBySpanId'],
-  spanId: string,
-  patch: PendingSpanUpdate,
-): NonNullable<SessionChatState['pendingSpanUpdatesBySpanId']> {
-  const next = { ...(existing ?? {}) }
-  next[spanId] = { ...next[spanId], ...patch }
-  const keys = Object.keys(next)
-  if (keys.length > PENDING_SPAN_UPDATE_CAP) {
-    delete next[keys[0]]
-  }
-  return next
-}
-
-/**
- * Lifecycle values that mean the child left the queue. `queued` does not.
- * Names are SubagentStateFrame.state (running / needs_input / paused / completed).
- * Kept at module scope so handleFrame's grandfathered line budget does not grow.
- */
-const RAN_LIFECYCLE_STATES: ReadonlySet<string> = new Set(['running', 'needs_input', 'paused', 'completed'])
-
-/** Once true, stays true. A later failed / cancelled / timed_out must not clear it. */
-function stickyHasRun(previous: boolean | undefined, state: string): true | undefined {
-  if (previous === true || RAN_LIFECYCLE_STATES.has(state)) return true
-  return undefined
-}
-
-function spanWithLifecycle(
-  span: SubagentSpan,
-  state: NonNullable<SubagentSpan['lifecycleState']>,
-  createdAt: string,
-): SubagentSpan {
-  const hasRun = stickyHasRun(span.hasRun, state)
-  if (hasRun) return { ...span, lifecycleState: state, lastUpdateAt: createdAt, hasRun }
-  return { ...span, lifecycleState: state, lastUpdateAt: createdAt }
-}
-
-/** Omit hasRun when unset so a merge cannot clobber a sticky true with undefined. */
-function pendingLifecyclePatch(
-  previous: PendingSpanUpdate | undefined,
-  state: NonNullable<SubagentSpan['lifecycleState']>,
-  createdAt: string,
-): PendingSpanUpdate {
-  const hasRun = stickyHasRun(previous?.hasRun, state)
-  if (hasRun) return { lifecycleState: state, lastUpdateAt: createdAt, hasRun }
-  return { lifecycleState: state, lastUpdateAt: createdAt }
 }
 
 // #823 catch-up redesign, Opus review round 2 (BE-DESIGN.md §6.3, "Turn-keyed
@@ -380,10 +466,101 @@ function scheduleReplayErrorRetry(sid: string): void {
   }, delay)
 }
 
+// FR-I-014: the shared replay-display threshold. setReplaying (store.ts)
+// carries its own copy of this constant — the two must stay in lockstep, so
+// both sites' comments cite each other.
+const MIN_REPLAY_DISPLAY_MS = 750
+
+// Clears a session's isReplaying after the minimum replay-display window:
+// immediately once MIN_REPLAY_DISPLAY_MS has elapsed, otherwise after a
+// deferred timer (cancelling any stale one first). Extracted 2026-10-10 from
+// the 'done' and 'error' cases, which carried byte-identical copies of this
+// block (the same extract-to-module-scope move scheduleReplayErrorRetry
+// made, for the same handleFrame line budget); no behavior change from the
+// inline versions it replaces. Returns whether the clear happened
+// immediately (callers flip isReplaying inside their own bucket writes).
+function scheduleReplayingClear(
+  sid: string,
+  wasReplaying: boolean,
+  elapsed: number,
+  withBucket: (sid: string | null, updater: (bucket: SessionChatState) => Partial<SessionChatState>) => void,
+): boolean {
+  const clearReplayingNow = wasReplaying && elapsed >= MIN_REPLAY_DISPLAY_MS
+  if (wasReplaying) {
+    sawReplayMessageThisTurn[sid] = false
+    if (!clearReplayingNow) {
+      if (replayingClearTimers[sid]) {
+        clearTimeout(replayingClearTimers[sid])
+      }
+      replayingClearTimers[sid] = setTimeout(() => {
+        delete replayingClearTimers[sid]
+        withBucket(sid, () => ({ isReplaying: false }))
+        // D1: the timer is a busy→idle transition — a projection the clear
+        // re-read held back during replay applies here, with no new read.
+        flushHeldClearProjection(sid, withBucket)
+      }, MIN_REPLAY_DISPLAY_MS - elapsed)
+    }
+  }
+  return clearReplayingNow
+}
+
+/** Keep an occupied answer; discard only its data-free superseded placeholder. */
+function canRekeyAssistantPlaceholder(draft: SessionChatState, frame: TokenFrameType, localId: string): boolean {
+  if (!draft.messagesById[frame.message_id!]) return true
+  logDiagnostic('chatPlaceholderRekeyCollision', {
+    sessionId: frame.session_id,
+    turnId: frame.turn_id ?? null,
+    reason: 'occupied_destination',
+  })
+  if (!draft.messagesById[localId].tool_calls?.length) evictMessageFromBucket(draft, localId)
+  return false
+}
+
+/** Adopt a wire identity in place; tool/span references move only for step 2. */
+function rekeyAssistantPlaceholder(draft: SessionChatState, localId: string, messageId: string, remapOwnedReferences = false): void {
+  const placeholder = draft.messagesById[localId]
+  delete draft.messagesById[localId]
+  draft.messagesById[messageId] = { ...placeholder, id: messageId }
+  const idx = draft.messageOrder.indexOf(localId)
+  if (idx !== -1) draft.messageOrder[idx] = messageId
+  else draft.messageOrder.push(messageId)
+  if (!remapOwnedReferences) return
+  const owners = draft.toolCallOwnerMessageId
+  if (owners) {
+    for (const callId of Object.keys(owners)) {
+      if (owners[callId] === localId) owners[callId] = messageId
+    }
+  }
+  for (const entry of Object.values(draft.spanBySpanId ?? {})) {
+    if (entry.messageId === localId) entry.messageId = messageId
+  }
+}
+
+/**
+ * #1452 S11b re-key contract, live half: a saved row adopted by its turn's
+ * first text moves to the token's id in this same update, with every index
+ * that names it (tool and span owners, bound history positions, the hidden
+ * live order). Part source ids and positions never change.
+ */
+function rekeyHistoryRow(draft: SessionChatState, fromId: string, toId: string): void {
+  rekeyAssistantPlaceholder(draft, fromId, toId, true)
+  for (const [position, owner] of Object.entries(draft.historySourceAliases ?? {})) if (owner === fromId) draft.historySourceAliases![position] = toId
+  if (draft.historyLiveOrder) draft.historyLiveOrder = draft.historyLiveOrder.map(id => id === fromId ? toId : id)
+}
+
+/** S11b unrecorded seam: a saved row whose last part is a tool-only source after text gets a paragraph break. */
+function savedToolSeam(row: ChatMessage): boolean {
+  const last = row.historyParts?.at(-1)
+  return !!row.content && !!last && last.start === row.content.length && !!last.callIds?.length
+}
+
 function applyTokenContentTo(draft: SessionChatState, bubbleId: string, frame: TokenFrameType): void {
   const m = draft.messagesById[bubbleId]
   if (frame.replace) {
     m.content = frame.content
+    // A catch-up replace rewrites the whole row; its recorded part offsets
+    // no longer describe the text, so the row merges as a whole again.
+    m.historyParts = undefined
   } else {
     // Opus review round 3 item N3 (MEDIUM-LOW): the #823 rewrite of the
     // token case dropped the paragraph-break insertion `pendingTextBoundary`
@@ -401,9 +578,49 @@ function applyTokenContentTo(draft: SessionChatState, bubbleId: string, frame: T
   }
   if (frame.agent_id) m.agentId = frame.agent_id
   if (frame.turn_id && !m.turnId) m.turnId = frame.turn_id
+  // U8/F15/F17 — the live reply mirror arrives as one token+done pair
+  // carrying reply_to_message_id + reply_to_participant (pkg/gateway/
+  // address_deps.go::PublishGuestReply). First write wins: a bubble resolved
+  // across several tokens stamps the pair once.
+  if (frame.reply_to_message_id && !m.replyToMessageId) m.replyToMessageId = frame.reply_to_message_id
+  if (frame.reply_to_participant && !m.replyToParticipant) m.replyToParticipant = frame.reply_to_participant
+  // K33 / FR-202: an answer into a group chat, mirrored here, renders collapsed.
+  if (frame.room_ref && !m.roomRef) m.roomRef = frame.room_ref
   m.isStreaming = true
   m.status = 'streaming'
   draft.isStreaming = true
+}
+
+/**
+ * Step 2's join of a token into the open bubble of its turn segment
+ * (extracted from resolveTokenBubbleByMessageId for its size budget): an
+ * empty local placeholder or a text-less saved row adopts the token's id;
+ * otherwise the id becomes a part and prose alias of the bubble.
+ */
+function joinTurnBubble(draft: SessionChatState, turnBubbleId: string, messageId: string, frame: TokenFrameType): void {
+  const m = draft.messagesById[turnBubbleId]
+  if (m.turnId === undefined) m.turnId = frame.turn_id // now that a token has named the turn
+  m.closedBySteer = false
+  // Empty local placeholders adopt the wire key without replacing a real entry.
+  const rekeyable = !m.content && (m.isStreaming || m.status === 'streaming') && !m.mergedReplayIds?.length && !draft.messagesById[messageId]
+  if (rekeyable) {
+    rekeyAssistantPlaceholder(draft, turnBubbleId, messageId, true)
+    applyTokenContentTo(draft, messageId, frame)
+    return
+  }
+  // #1452 S11c/S11b: a saved row with no text adopts the first text's id
+  // (atomic re-key) instead of listing it as a prose alias.
+  if (m.historyPosition && !m.content && !draft.messagesById[messageId]) {
+    recordCombinedPart(m, messageId, '')
+    rekeyHistoryRow(draft, turnBubbleId, messageId)
+    applyTokenContentTo(draft, messageId, frame)
+    return
+  }
+  if (m.historyPosition && !frame.replace && savedToolSeam(m)) m.pendingTextBoundary = true
+  recordCombinedPart(m, messageId, !frame.replace && m.pendingTextBoundary && m.content ? '\n\n' : '') // #1452 D1 S7/S2a: the joiner the append inserts
+  m.mergedReplayIds = [...(m.mergedReplayIds ?? []), messageId]
+  draft.mergedReplayMessageIds = { ...(draft.mergedReplayMessageIds ?? {}), [messageId]: true }
+  applyTokenContentTo(draft, turnBubbleId, frame)
 }
 
 function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFrameType): void {
@@ -512,6 +729,10 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
       // stopped looking past the last user message), so matching ANY
       // unstamped bubble here is safe — there is at most one.
       const unstamped = m.turnId === undefined
+      // #1452 S11c saved-row adoption: a saved row joins only under S11a in
+      // full, so a saved row of unknown turn (or one that ends its turn
+      // segment) is never adopted; step 3 then mints a new row.
+      if (m.historyPosition && (unstamped || m.historyBoundary)) continue
       if (!unstamped && m.turnId !== turnId) continue
       if (frame.agent_id && m.agentId && m.agentId !== frame.agent_id) continue
       if (m.status === 'interrupted' || m.status === 'error') continue
@@ -526,12 +747,7 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
       break
     }
     if (turnBubbleId) {
-      const m = draft.messagesById[turnBubbleId]
-      if (m.turnId === undefined) m.turnId = turnId // now that a token has named the turn
-      m.closedBySteer = false
-      m.mergedReplayIds = [...(m.mergedReplayIds ?? []), messageId]
-      draft.mergedReplayMessageIds = { ...(draft.mergedReplayMessageIds ?? {}), [messageId]: true }
-      applyTokenContentTo(draft, turnBubbleId, frame)
+      joinTurnBubble(draft, turnBubbleId, messageId, frame)
       return
     }
   }
@@ -577,23 +793,17 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
       ownedIds.length === 0 &&
       !prevMsg.media?.length &&
       !prevMsg.spans?.length
-    if (isEmptyPlaceholder) {
-      delete draft.messagesById[prevOpenId]
-      const idx = draft.messageOrder.indexOf(prevOpenId)
-      const bubble: ChatMessage = {
-        ...prevMsg,
-        id: messageId,
-        content: frame.content,
-        agentId: frame.agent_id ?? prevMsg.agentId,
-        turnId: turnId ?? prevMsg.turnId,
-      }
-      draft.messagesById[messageId] = bubble
-      if (idx !== -1) draft.messageOrder[idx] = messageId
-      else draft.messageOrder.push(messageId)
+    if (isEmptyPlaceholder && canRekeyAssistantPlaceholder(draft, frame, prevOpenId)) {
+      rekeyAssistantPlaceholder(draft, prevOpenId, messageId)
+      const bubble = draft.messagesById[messageId]
+      bubble.content = frame.content
+      bubble.agentId = frame.agent_id ?? prevMsg.agentId
+      bubble.turnId = turnId ?? prevMsg.turnId
+      if (frame.room_ref) bubble.roomRef = frame.room_ref
       draft.isStreaming = true
       return
     }
-    if (prevMsg.isStreaming || prevMsg.status === 'streaming') {
+    if (draft.messagesById[prevOpenId] && (prevMsg.isStreaming || prevMsg.status === 'streaming')) {
       if (ownedIds.length > 0) {
         bakeToolCallsByOwner(draft.messagesById, ownedIds, draft.toolCalls, draft.toolCallOwnerMessageId ?? {}, prevOpenId, draft.textAtToolCallStart)
       }
@@ -621,7 +831,12 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
     isStreaming: true,
     agentId: frame.agent_id ?? useSessionStore.getState().activeAgentId ?? undefined,
     turnId,
-    ...(idCollision ? { mergedReplayIds: [messageId] } : {}),
+    // U8/F15/F17 — a reply's first token mints the bubble WITH its reply pair
+    // (see applyTokenContentTo for the merged-continuation path).
+    ...(frame.reply_to_message_id ? { replyToMessageId: frame.reply_to_message_id } : {}),
+    ...(frame.reply_to_participant ? { replyToParticipant: frame.reply_to_participant } : {}),
+    ...(frame.room_ref ? { roomRef: frame.room_ref } : {}), // K33 / FR-202
+    ...(idCollision ? { mergedReplayIds: [messageId], historyParts: singlePart(messageId) } : {}), // #1452 D1 S7: local id shows message_id
   }
   if (idCollision) {
     draft.mergedReplayMessageIds = { ...(draft.mergedReplayMessageIds ?? {}), [messageId]: true }
@@ -640,23 +855,91 @@ function resolveTokenBubbleByMessageId(draft: SessionChatState, frame: TokenFram
   draft.isStreaming = true
 }
 
+/**
+ * The assistant bubble a tool_call_start mints when no assistant bubble is open.
+ * C3: behind a user row the server discarded/failed, it is a straggler from the
+ * stopped turn: done, not streaming, so it cannot back the busy flag after the
+ * result. #1452 S11c J2 (6c UAT U-D1-4): a live tool frame carries no turn id,
+ * so a live bubble takes the bucket's known active turn; a mid-turn snapshot
+ * then binds it to its saved segment instead of keeping a second, unstamped
+ * row. The straggler stays unstamped.
+ */
+function liveToolPlaceholder(draft: SessionChatState, agentId: string | undefined, tailUser: boolean): ChatMessage {
+  const ph: ChatMessage = { id: generateId(), role: 'assistant', content: '', timestamp: new Date().toISOString(), status: tailUser ? 'done' : 'streaming', isStreaming: !tailUser, agentId: agentId ?? useSessionStore.getState().activeAgentId ?? undefined }
+  if (!tailUser && draft.activeTurnId) ph.turnId = draft.activeTurnId
+  return ph
+}
+
+/**
+ * Founder ruling 2026-10-07 (S7): this session's pending redirect is answered by
+ * an error frame. Only a turn_canceled answer means the redirect stopped the
+ * turn; the still-streaming bubble is then finalised as a normal answer, never
+ * as error/interrupted. Always consumes the pending flag.
+ */
+function consumeRedirectStop(sid: string, errorCode: string | undefined): boolean {
+  return pendingRedirectSids.delete(sid) && errorCode === 'turn_canceled'
+}
+
+/**
+ * Status of a streaming bubble closed by an error frame. A turn_canceled that no
+ * redirect of ours asked for (a Stop from another tab or a channel) is a plain
+ * stop: the partial stays, marked interrupted (FR-21 / T21-T23: an already
+ * interrupted bubble is never overwritten with 'error').
+ */
+function resolveClosedBubbleStatus(
+  redirectStoppedTurn: boolean,
+  alreadyInterrupted: boolean,
+  errorCode: string | undefined,
+): 'done' | 'interrupted' | 'error' {
+  if (redirectStoppedTurn) return 'done'
+  return alreadyInterrupted || errorCode === 'turn_canceled' ? 'interrupted' : 'error'
+}
+
 interface FrameContext {
   set: StoreApi<ChatStore>['setState']
   get: StoreApi<ChatStore>['getState']
   getActiveSid: () => string | null
   bucketToForeground: (bucket: SessionChatState) => Omit<SessionChatState, 'messageOrder' | 'trimmedCount' | 'spanBySpanId' | 'pendingSpanUpdatesBySpanId' | 'toolCallOwnerMessageId'> & { messages: ChatMessage[]; lastAssistantMessageId: string | null }
   withBucket: (sid: string | null, updater: (bucket: SessionChatState) => Partial<SessionChatState>) => void
-  deleteBucket: (sid: string) => void
-  resolveKickoffAttempt: (workspaceId: string, outcome: 'done' | 'failed') => void
-  abandonPendingKickoffInternal: () => void
   syncForeground: () => void
   armRateLimitClear: (sid: string, event: RateLimitEventData) => void
   maybeDrainNext: () => void
   runtime: { unknownFrameCount: number; agentIdAtLastMintSend: string | null }
 }
-export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, withBucket, deleteBucket, resolveKickoffAttempt, abandonPendingKickoffInternal, syncForeground, armRateLimitClear, maybeDrainNext, runtime }: FrameContext): FrameSlice {
+
+/**
+ * The `message_status` switch case body, extracted so the main switch
+ * (createFrameSlice/handleFrame — both grandfathered budget entries) keeps
+ * its listed size after growth elsewhere. Behaviour is IDENTICAL to the
+ * previous inline body: reduce the frame into the target bucket, then retire
+ * the /clear refresh the frame may have armed.
+ */
+function applyMessageStatusCase(
+  frame: MessageStatusFrame,
+  targetSid: string | null,
+  withBucket: FrameContext['withBucket'],
+): void {
+  withBucket(targetSid, (bucket) => applyMessageStatusFrame(bucket, frame))
+  // C1 + ruling S3-02 signal 1: a /clear the server settles WITHOUT
+  // executing — DISCARDED (stop before delivery) or FAILED (any
+  // refusal path: the busy-turn not-performed case, a helper-session
+  // refusal, a plain failure) — never writes its marker, so the
+  // transcript re-read it armed could only spin and then claim the
+  // clear was "not confirmed" after the server already answered on
+  // the wire. Retire the operation it armed; the client_message_id
+  // match is the guard, so a newer /clear's own operation is
+  // untouched (only the armed /clear's id can match). A HELD clear
+  // (stopped agent, busy-turn wait) sends no terminal state and
+  // stays queued with no deadline — ruling signal 3.
+  if ((frame.state === 'discarded' || frame.state === 'failed') && targetSid) {
+    forgetClearRefreshForSend(targetSid, frame.client_message_id)
+  }
+}
+
+export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, withBucket, syncForeground, armRateLimitClear, maybeDrainNext, runtime }: FrameContext): FrameSlice {
   return {
     handleFrame: (frame) => {
+      if (handleRoomFrame(frame)) return // group-chat frames never touch session routing (room-frames.ts)
       // Resolve which session this frame belongs to.
       // session_started is special: it carries the new id for the pending message.
       // ask_user_question nests its session id on card.session_id (required
@@ -738,107 +1021,60 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
       // handleFrame past its grandfathered line budget).
       advanceReceivedEventTime(frame, targetSid, withBucket)
 
-      // #823 catch-up redesign (BE-DESIGN.md §6.2): the apply rule, gating
-      // every SEQUENCED session-scoped frame ahead of the switch below — see
-      // applySeqGate's own doc comment for why this belongs here rather than
-      // per-case.
+      // Gate sequence gaps before reducing frames or refreshing lists.
       if (applySeqGate(frame, targetSid, get, withBucket) === 'drop-or-gap') {
         syncForeground()
         return
       }
 
+      refreshSessionListForFrame(frame.type, get().sessionsById[targetSid ?? '']?.isReplaying === true)
+      if (handleJudgeConclusionErrorFrame(frame, withBucket)) {
+        syncForeground()
+        return
+      }
+      if (handleFirstSendFrame({ frame, set, get, withBucket, runtime })) {
+        syncForeground()
+        return
+      }
       if (handleReplayAndStatusFrame({ frame, targetSid, get, withBucket, armRateLimitClear })) {
         syncForeground()
         return
       }
 
-      if (handleCatchUpFrame({ frame, targetSid, get, withBucket })) {
+      if (handleCatchUpFrame({ frame, targetSid, set, get, withBucket })) {
+        syncForeground()
+        return
+      }
+
+      // provider-messages spec §8 — the failover-chain frames
+      // (provider_retry / provider_fallback / replay_provider_fallback).
+      // Own-switch handler (catchup-frames.ts pattern): the main switch
+      // below is a grandfathered budget entry. Returns false for every
+      // other frame type.
+      if (handleProviderFrame({ frame, targetSid, get, withBucket })) {
+        syncForeground()
+        return
+      }
+
+      // Mail panel presence and the secret card (K1/K3/K4): own handlers, main switch is grandfathered.
+      if (handleMailPanelObserverFrame(frame) || handleSecretRequestFrame(frame)) {
         syncForeground()
         return
       }
 
       switch (frame.type) {
         case 'message_status':
-          withBucket(targetSid, (bucket) => applyMessageStatusFrame(bucket, frame))
+          applyMessageStatusCase(frame, targetSid, withBucket)
           break
         case 'session_started': {
           // Server minted a new session_id in response to a message sent without one.
           const newSid = frame.session_id
 
-          // This ack may be resolving a pending workspace-setup
-          // kickoff rather than an ordinary sendMessage no-session turn.
-          // Capture + clear `pendingKickoff` up front — this frame always
-          // resolves whichever kickoff was outstanding, regardless of which
-          // branch below runs. Resolve the per-workspace attempt tracker
-          // ('done') too — this ack is always a SUCCESS for the kickoff
-          // (a failure arrives as an 'error' frame instead, never as
-          // session_started), regardless of which branch below handles it.
-          const resolvedKickoff = get().pendingKickoff
-          if (resolvedKickoff) {
-            set({ pendingKickoff: null })
-            resolveKickoffAttempt(resolvedKickoff.workspaceId, 'done')
-          }
-          const stillOnOriginatingWorkspace =
-            resolvedKickoff === null ||
-            useWorkspacesStore.getState().activeWorkspaceId === resolvedKickoff.workspaceId
-          // Plausibility gate: even when still on the originating
-          // workspace, only treat this ack as safe to FOREGROUND when the
-          // '__pending' placeholder is STILL the local foreground turn
-          // (activeSessionId === '__pending'). If the user has since
-          // attached to a different, real session WITHOUT leaving the
-          // workspace — e.g. picked an existing conversation from the
-          // sidebar/search while the kickoff was still resolving —
-          // `activeSessionId` is that real session's id, not '__pending';
-          // forefronting the kickoff's session here would silently evict
-          // the session the user actually selected (and, with `sendMessage`'s
-          // no-longer-possible collision — the collision guard prevents
-          // a stray plain message from ever sharing the '__pending' bucket
-          // with the kickoff — this is the one remaining way a late kickoff
-          // ack could still misattribute). Treat it exactly like "wrong
-          // workspace": migrate silently, do not disturb whatever is
-          // actually foreground.
-          const kickoffStillForeground =
-            resolvedKickoff === null || useSessionStore.getState().activeSessionId === '__pending'
-
-          if (resolvedKickoff && (!stillOnOriginatingWorkspace || !kickoffStillForeground)) {
-            // Late ack, wrong workspace, or superseded foreground:
-            // do NOT foreground it — leave whatever the user is currently
-            // looking at completely alone. Record the real session id under
-            // the ORIGINATING workspace's descriptor instead, so a later
-            // enterWorkspaceChat for that workspace attaches to (and
-            // replays) this session normally.
-            useSessionStore.getState().setWorkspaceSessionDescriptor(resolvedKickoff.workspaceId, {
-              id: newSid,
-              type: 'chat',
-              title: null,
-              agentId: frame.agent_id ?? null,
-            })
-            // Free the '__pending' bucket key. Its content so far (Ava's
-            // greeting, still streaming) isn't needed locally — re-entering
-            // the originating workspace triggers a fresh server replay via
-            // attachToSession regardless, and leaving it here would risk
-            // colliding with the next unrelated no-session turn that reuses
-            // the same '__pending' key.
-            deleteBucket('__pending')
-            queryClient.invalidateQueries({ queryKey: ['sessions'] })
-            // A message that collided with this kickoff's slot (via
-            // the `sendMessage` collision guard) sits in `outboundQueue` —
-            // nothing else will release it now that this kickoff has
-            // resolved via this (non-foregrounding) branch.
-            get().drainOutboundQueue()
-            break
-          }
-
-          // Plain sendMessage ack, OR a kickoff ack while the user is still
-          // on the workspace that triggered it — foreground exactly as
-          // before (byte-for-byte unchanged from the pre-fix logic).
-          //
-          // Register in session store and create the bucket.
-          //
-          // Only adopt the server's agent while the selection is still the one
-          // this mint was sent under. If the user switched the picker while the
-          // ack was in flight, their newer explicit choice wins — a stale echo
-          // must not silently reassign the agent out from under them.
+          // Ordinary first sends are resolved by handleFirstSendFrame above.
+          // This tail remains for an ack that arrives with no unbound pending
+          // first send (DEL-F21/F22 deleted the legacy ordinary-ack migration;
+          // the client workspace-setup kickoff is retired, K9/FR-047).
+          // A newer explicit agent-picker choice wins over this stale echo.
           const currentAgentId = useSessionStore.getState().activeAgentId
           const userReselected =
             runtime.agentIdAtLastMintSend !== null && currentAgentId !== runtime.agentIdAtLastMintSend
@@ -1241,25 +1477,15 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
             // terminally acknowledged — stop treating it as "pending" so a
             // later, unrelated untagged frame doesn't get misattributed here.
             pendingCancelAckSids.delete(sid)
+            // A done ends the turn a pending redirect was aimed at: never carry it on.
+            pendingRedirectSids.delete(sid)
             const priorBucket = get().sessionsById[sid] ?? EMPTY_BUCKET
             const wasReplaying = priorBucket.isReplaying
             const elapsed = wasReplaying ? Date.now() - (replayingStartedAt[sid] ?? 0) : 0
-            // FR-I-014: mirror the same MIN_REPLAY_DISPLAY_MS used in setReplaying above.
-            // Both code paths that clear isReplaying must use the same threshold.
-            const MIN_REPLAY_DISPLAY_MS = 750
-            const clearReplayingNow = wasReplaying && elapsed >= MIN_REPLAY_DISPLAY_MS
-            if (wasReplaying) {
-              sawReplayMessageThisTurn[sid] = false
-              if (!clearReplayingNow) {
-                if (replayingClearTimers[sid]) {
-                  clearTimeout(replayingClearTimers[sid])
-                }
-                replayingClearTimers[sid] = setTimeout(() => {
-                  delete replayingClearTimers[sid]
-                  withBucket(sid, () => ({ isReplaying: false }))
-                }, MIN_REPLAY_DISPLAY_MS - elapsed)
-              }
-            }
+            // FR-I-014: scheduleReplayingClear mirrors the same
+            // MIN_REPLAY_DISPLAY_MS setReplaying (store.ts) uses — both code
+            // paths that clear isReplaying must use the same threshold.
+            const clearReplayingNow = scheduleReplayingClear(sid, wasReplaying, elapsed, withBucket)
             // ADR-082 D3/D4 (FR-007/FR-009), review S1/CR1, updated for
             // #823 pass 2: a `done` frame can still arrive TWICE for a
             // mid-turn attach on Lane A's current gateway — once marking the
@@ -1419,6 +1645,14 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                     m.truncated = true
                     m.truncationReason = doneTruncationReason
                   }
+                  // Effort levels FR-058 / FR-036: the answering candidate's
+                  // record and the turn's reported thinking sum ride the live
+                  // done frame; stamped on the bubble the turn finished on, so
+                  // the live note and tooltip equal what a reload shows.
+                  if (id === lastMsgId && m.role === 'assistant') {
+                    if (doneStats?.effort) m.effort = doneStats.effort
+                    if (doneStats?.reasoning_tokens !== undefined) m.turnReasoningTokens = doneStats.reasoning_tokens
+                  }
                 }
                 // Bake any pending tool calls into the last assistant message so
                 // VirtualAssistantMessageRow can render them from message.tool_calls.
@@ -1447,10 +1681,10 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                   draft.textAtToolCallStart = {}
                   draft.toolCallOwnerMessageId = {}
                 }
-                const tokenDelta = frame.stats?.tokens ?? 0
                 const costDelta = frame.stats?.cost ?? 0
                 draft.isStreaming = false
-                draft.sessionTokens = draft.sessionTokens + tokenDelta
+                // Recorded session usage only; replay terminators returned above.
+                draft.sessionTokens = mergeRecordedSessionTokens(draft.sessionTokens, frame.stats?.session_tokens_total)
                 draft.sessionCost = draft.sessionCost + costDelta
                 draft.replayCompletedForSession = draft.isReplaying ? sid : draft.replayCompletedForSession
                 draft.cancelStage = null
@@ -1470,15 +1704,20 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                 // replay-terminating done for this session never mistakes a
                 // stale id for a still-open turn.
                 markTurnFinished(sid, draft.activeTurnId)
-                draft.activeTurnId = null
-                draft.activeTurnAgentId = null
+                endTurnState(draft)
                 if (clearReplayingNow) {
                   draft.isReplaying = false
                 }
               }) as Partial<SessionChatState>
             })
-            // The turn that just completed may be one we sent from the
-            // offline-queue drain — send the next queued message, if any.
+            // FR-030/031 (U10b): settle what this turn means for the /clear
+            // transcript re-read — BEFORE the drain below can put another
+            // message on the wire and arm a different operation (the intent
+            // is bound to the /clear send itself: the turn that was active at
+            // send-time cannot consume it with its own done, and the intent
+            // clears only once the post-clear projection, marker included, is
+            // applied to the bucket). Then the drain.
+            settleClearRefetchAfterTurn(sid, frame.turn_id, withBucket)
             maybeDrainNext()
           } else {
             // Defensive (boundary case, not an observed failure): a 'done'
@@ -1501,15 +1740,15 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
             // to `frame.message` verbatim — exactly the pre-ADR-051 behavior.
             // `errorEntryId` powers the live→replay dedup (a reloaded session
             // must not re-render the same error twice). Read once here at the
-            // top so all three error sub-paths below (kickoff reject, no-bucket
-            // sweep, per-bucket render) see the same values.
+            // top so both error sub-paths below (no-bucket sweep, per-bucket
+            // render) see the same values.
             const llmError = readLLMErrorFromFrame(frame)
             const errorEntryId = readEntryIdFromFrame(frame)
             const verboseChatEnabled = useChatPreferencesStore.getState().verboseChatEnabled
             // D5 fix (UAT Site 3): a legacy/synthesized ErrorFrame (no typed
             // llm_error payload) falls back to the raw wire `message` for
             // display in several branches below (translatedMessage here, the
-            // kickoff-reject toast, setConnectionError x2, and the
+            // unroutable global error, and the
             // coalesced/fresh bubble content). Sanitize ONCE up front so
             // every one of those reads the same safe value — see
             // sanitizeLegacyErrorMessage's doc comment (lib/llm-error.ts) for
@@ -1537,84 +1776,29 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
             // path's case 'replay_error' performs the symmetric check.)
             const errorDedupId = errorEntryId
 
-            // A kickoff rejection (duplicate kickoff, unknown
-            // workspace, or a server-side kickoff error) is a hard REJECT of
-            // a turn that never really started — there is no real session
-            // behind it, only the local '__pending' sentinel. A kickoff
-            // rejection therefore NEVER carries a session_id on the wire
-            // (there is no real session to tag it with) — a
-            // session-TAGGED error frame is by definition never a kickoff
-            // reject, so `!frameSessionId` gates the ENTIRE kickoff-error
-            // branch (both sub-cases below), never just the still-foreground
-            // one. A genuinely tagged error always falls through unchanged
-            // to the generic routing further down.
-            const rejectedKickoff = get().pendingKickoff
-            if (rejectedKickoff && !frameSessionId) {
-              const sessionStillPending = useSessionStore.getState().activeSessionId === '__pending'
-              // "already ran" style messages are a benign DUPLICATE — an
-              // EARLIER attempt already succeeded server-side (setup_pending
-              // is already correctly false), not a real failure. Everything
-              // else is a genuine failure, worded differently so the user
-              // knows re-opening the workspace will retry it.
-              const isDuplicate = /already/i.test(frame.message ?? '')
-              // `abandonPendingKickoffInternal` handles the shared cleanup
-              // trio for BOTH sub-cases below: clear `pendingKickoff`, drop
-              // the orphaned '__pending' bucket, and mark this workspace's
-              // `kickoffAttemptStatus` 'failed' so
-              // useWorkspaceSetupKickoff's invalidate-on-failure effect can
-              // react and roll back its own premature optimistic
-              // setup_pending:false cache write.
-              abandonPendingKickoffInternal()
-              console.warn('chat.workspace_setup_kickoff_rejected', { message: frame.message, duplicate: isDuplicate, stillForeground: sessionStillPending })
-              logDiagnostic('chatWorkspaceSetupKickoffRejected', { message: frame.message, duplicate: isDuplicate, stillForeground: sessionStillPending })
-              if (sessionStillPending) {
-                // The kickoff's placeholder is still what the user is
-                // looking at — reset the composer back to a normal, empty
-                // state (not to be left as a stuck 'error'-status bubble
-                // under '__pending', which would otherwise poison every
-                // subsequent sendMessage call with a protocol-violating
-                // session_id:'__pending' frame — see sendMessage's composer
-                // guard) and surface a toast.
-                useSessionStore.getState().setActiveSession(null)
-                useUiStore.getState().addToast(
-                  isDuplicate
-                    ? {
-                        message: 'Workspace setup already ran — find the interview in your sessions list.',
-                        variant: 'default',
-                      }
-                    : {
-                        // D5 fix (Site 3): safeMessage (computed once at the
-                        // top of this case block) instead of the raw
-                        // frame.message.
-                        message: frame.message
-                          ? `Could not start the workspace setup interview: ${safeMessage}`
-                          : 'Could not start the workspace setup interview — reopen the workspace to retry.',
-                        variant: 'warning',
-                      },
-                )
-              }
-              // Reject-after-navigation fall-through: when the
-              // kickoff's placeholder is NO LONGER the local foreground
-              // (the user already navigated away, or attached to a
-              // different real session — either resets `activeSessionId`
-              // away from '__pending'), this untagged reject belongs to a
-              // turn nothing is currently showing. No toast — there is
-              // nothing on screen to retry FROM; the workspace-open hook is
-              // what will retry, once it re-checks server truth on the next
-              // open. Swallow quietly and do NOT let this frame fall through
-              // to the generic routing below — it would otherwise
-              // misattribute to whatever IS foreground (erroring an
-              // unrelated conversation's last bubble, or — if nothing is
-              // foreground — raising a bogus global connection-error banner
-              // via the `!targetSid` branch just below).
-              //
-              // Only `drainOutboundQueue()` (not `maybeDrainNext()`,
-              // which the ORIGINAL version of this branch used — a bug: it
-              // only ever moves `pendingDrainQueue`, never `outboundQueue`,
-              // so it never actually freed a message buffered by the
-              // collision guard or mid-turn '__pending' steering) releases
-              // whatever is actually queued.
-              get().drainOutboundQueue()
+
+            // C2 (decided 2026-10-11; record: docs/internal/architecture/ADR-20261012-session-core-delta-amendments-c2-r1-2.md):
+            // a MESSAGE-SCOPED refusal — the frame carries session_id AND
+            // client_message_id and no first_message_error. The server
+            // refused ONE message (an @-addressed send, or any
+            // client_message_id-tagged refusal of a mid-turn send) while the
+            // turn it was sent into KEEPS RUNNING: route to that chat (the
+            // session tag already does that), render the refusal as a notice
+            // bubble, and touch nothing turn-shaped — no streaming-bubble
+            // sweep, no isStreaming=false, no activeTurnId clear, no
+            // markTurnFinished, no drain (a live turn in that chat keeps its
+            // Stop; tagging the session alone still dropped it, which is why
+            // this branch exists). The refused ROW is reconciled by the
+            // paired MessageStatusFrame{failed} (applyMessageStatusFrame).
+            // Nothing is persisted server-side on a refusal, so no
+            // replay/reload can re-deliver this frame; the per-bucket
+            // entry-id check is belt-and-braces dedup. An error frame
+            // without client_message_id keeps today's full turn-ending
+            // behaviour below.
+            if (frameSessionId && frame.client_message_id && !frame.first_message_error) {
+              const refusalSid = frameSessionId
+              withBucket(refusalSid, (b) => appendErrorNotice(b, llmError ? translatedMessage : safeMessage, llmError, errorEntryId, errorDetail))
+              logDiagnostic('chatMessageScopedRefusal', { sessionId: refusalSid })
               break
             }
 
@@ -1642,22 +1826,12 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
             const sid = targetSid
             // F-S3: see the matching comment in the 'done' case above.
             pendingCancelAckSids.delete(sid)
+            const redirectStoppedTurn = consumeRedirectStop(sid, llmError?.code)
             const wasReplaying = (get().sessionsById[sid] ?? EMPTY_BUCKET).isReplaying
             const replayElapsed = wasReplaying ? Date.now() - (replayingStartedAt[sid] ?? 0) : 0
-            const MIN_REPLAY_DISPLAY_MS = 750
-            const clearReplayingNow = wasReplaying && replayElapsed >= MIN_REPLAY_DISPLAY_MS
-            if (wasReplaying) {
-              sawReplayMessageThisTurn[sid] = false
-              if (!clearReplayingNow) {
-                if (replayingClearTimers[sid]) {
-                  clearTimeout(replayingClearTimers[sid])
-                }
-                replayingClearTimers[sid] = setTimeout(() => {
-                  delete replayingClearTimers[sid]
-                  withBucket(sid, () => ({ isReplaying: false }))
-                }, MIN_REPLAY_DISPLAY_MS - replayElapsed)
-              }
-            }
+            // Same scheduleReplayingClear the done case uses — the two cases
+            // carried byte-identical copies of this block until 2026-10-10.
+            const clearReplayingNow = scheduleReplayingClear(sid, wasReplaying, replayElapsed, withBucket)
             withBucket(targetSid, (b) => {
               const isCancelAck = /turn.cancel/i.test(frame.message ?? '')
               // ADR-051 — live→replay dedup (per-bucket half; the foreground
@@ -1679,8 +1853,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                     // done would — see the matching comment on the C8 sweep
                     // branch below for why every branch here clears this.
                     markTurnFinished(targetSid, draft.activeTurnId)
-                    draft.activeTurnId = null
-                    draft.activeTurnAgentId = null
+                    endTurnState(draft)
                   }) as Partial<SessionChatState>
                 }
               }
@@ -1753,24 +1926,19 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                     const msg = draft.messagesById[id]
                     const prevStatus = msg.status
                     // FR-21 / T21–T23: do NOT overwrite 'interrupted' status with 'error'.
-                    const resolvedStatus = (prevStatus === 'interrupted' || isCancelAck)
-                      ? 'interrupted'
-                      : 'error'
-                    // ADR-051: when the typed payload is present, prefer the
-                    // translated code→display copy as the bubble content —
-                    // but only when the bubble has NO partial content yet
-                    // (msg.content is empty). A bubble that already streamed
-                    // narration text keeps that text as its content and just
-                    // gets the typed error fields stamped on for the
-                    // "Technical details" disclosure. Pre-ADR-051 fallback
-                    // (`frame.message`, sanitized — D5 fix Site 3) is
-                    // preserved when no typed payload.
+                    const resolvedStatus = resolveClosedBubbleStatus(redirectStoppedTurn, prevStatus === 'interrupted' || isCancelAck, llmError?.code)
+                    // Founder decision #1081 RC2 / Q4: a terminal error must
+                    // always be visible, narration or not. Replace existing
+                    // content with translated catalogue copy (typed payload)
+                    // or sanitized frame.message (legacy fallback, D5 Site 3).
+                    // This overturns ADR-051's partial-content preservation
+                    // for 'error' only; FR-21 still preserves 'interrupted'.
                     const fallbackContent = llmError
                       ? translatedMessage
                       : safeMessage
-                    msg.content = (resolvedStatus === 'interrupted')
+                    msg.content = (resolvedStatus === 'interrupted' || resolvedStatus === 'done')
                       ? msg.content
-                      : (msg.content || (fallbackContent ?? ''))
+                      : (fallbackContent ?? '')
                     msg.isStreaming = false
                     msg.status = resolvedStatus
                     msg.pendingTextBoundary = false
@@ -1794,6 +1962,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                       msg.errorCode = llmError.code
                       if (errorDetail !== undefined) msg.errorDetail = errorDetail
                       if (errorEntryId) msg.errorEntryId = errorEntryId
+                      if (llmError.facts) msg.errorFacts = llmError.facts
                     }
                   }
                   draft.isStreaming = false
@@ -1807,8 +1976,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                   // stale activeTurnId as "replay still awaiting catch-up"
                   // and open a stray empty placeholder.
                   markTurnFinished(targetSid, draft.activeTurnId)
-                  draft.activeTurnId = null
-                  draft.activeTurnAgentId = null
+                  endTurnState(draft)
                 }) as Partial<SessionChatState>
               }
               // Same catalogue already on the last bubble (replay drew it,
@@ -1818,17 +1986,14 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                   draft.isStreaming = false
                   if (clearReplayingNow) draft.isReplaying = false
                   markTurnFinished(targetSid, draft.activeTurnId)
-                  draft.activeTurnId = null
-                  draft.activeTurnAgentId = null
+                  endTurnState(draft)
                 }) as Partial<SessionChatState>
               }
               // No this-turn assistant to coalesce into — last is a prior
               // healthy reply, or the bucket is empty. Push one new bubble
               // so the error is not silently dropped or written onto history.
-              if (!isCancelAck) {
-                // D5 fix (Site 3): safeMessage, not the raw frame.message.
-                useConnectionStore.getState().setConnectionError(safeMessage)
-              }
+              // A routed chat failure belongs only to this bubble, not the
+              // app-wide connection banner — even before any reply exists.
               // ADR-051 — fresh error bubble: use the translated copy when
               // the typed payload is present (matches the streaming-coalesce
               // branch above), else the sanitized legacy `frame.message`
@@ -1846,6 +2011,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                       errorCode: llmError.code,
                       ...(errorDetail !== undefined ? { errorDetail } : {}),
                       ...(errorEntryId ? { errorEntryId } : {}),
+                      ...(llmError.facts ? { errorFacts: llmError.facts } : {}),
                     }
                   : {}),
               }
@@ -1855,10 +2021,19 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                 ...applyMessageArray(msgs, b),
                 isStreaming: false,
                 ...(clearReplayingNow ? { isReplaying: false } : {}),
-                activeTurnId: null,
-                activeTurnAgentId: null,
+                activeTurnId: null, activeTurnAgentId: null, idleArmedToolCalls: undefined,
+                // The endTurnState write, spelled out for this spread return.
+                providerRetryEvent: null,
               }
             })
+            // FR-030/031 (U10b): an errored turn ends the session's turn
+            // exactly like a done — settle the /clear transcript re-read the
+            // same way (a queued mid-turn /clear dispatches only after this
+            // turn ends), again BEFORE the drain can arm a different
+            // operation. An error frame carries no turn id, so a turn that
+            // was active at arm-time cannot be excluded here; a too-early
+            // read simply finds no marker yet and the intent survives.
+            settleClearRefetchAfterTurn(sid, undefined, withBucket)
             // The failed turn may have been one we sent from the offline-queue
             // drain — send the next queued message, if any.
             maybeDrainNext()
@@ -1909,7 +2084,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
               const rawTail = rawTailId ? b.messagesById[rawTailId] : undefined
               let lastMsgId: string | undefined
               let lastMsg: ChatMessage | undefined
-              if (rawTail?.role === 'assistant') {
+              if (rawTail?.role === 'assistant' && rawTail.errorCode !== 'judge_conclusion_failed') {
                 lastMsgId = rawTailId
                 lastMsg = rawTail
               } else {
@@ -1962,7 +2137,12 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                 // when not already recorded, mirroring existingSnapshot).
                 let ownerMsgId: string | null = null
                 if (!lastMsg || lastMsg.role !== 'assistant') {
-                  const ph: ChatMessage = { id: generateId(), role: 'assistant', content: '', timestamp: new Date().toISOString(), status: 'streaming', isStreaming: true, agentId: frame.agent_id ?? useSessionStore.getState().activeAgentId ?? undefined }
+                  // C3: a start landing right behind a user row the server
+                  // discarded/failed is a straggler from the stopped turn, not a
+                  // new one. Its bubble carries the tool but is NOT streaming, so
+                  // it cannot back the busy flag after the result.
+                  const tailUser = rawTail?.role === 'user' && (rawTail.deliveryStatus === 'discarded' || rawTail.deliveryStatus === 'failed')
+                  const ph = liveToolPlaceholder(draft, frame.agent_id, tailUser)
                   draft.messagesById[ph.id] = ph
                   draft.messageOrder.push(ph.id)
                   ownerMsgId = ph.id
@@ -2005,7 +2185,10 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                     draft.messagesById[lastMsgId].agentId = frame.agent_id
                   }
                 }
-                if (shouldMarkStreaming) draft.isStreaming = true
+                if (shouldMarkStreaming) {
+                  if (!b.isStreaming) (draft.idleArmedToolCalls ??= {})[frame.call_id] = true
+                  draft.isStreaming = true
+                }
                 if (!existingTC || existingTC.status === 'running') {
                   draft.toolCalls[frame.call_id] = { id: frame.call_id, call_id: frame.call_id, tool: frame.tool, params: frame.params, status: 'running' }
                 }
@@ -2025,275 +2208,21 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
         case 'tool_call_result': {
           if (!targetSid) break
           const clampedResult = clampToolResult(frame.result)
-          // ADR-091 D7/D10: see case 'tool_call_start' — every result here
-          // is for this session's own flat tool call; no span-nesting path.
-          withBucket(targetSid, (b) => applyToolCallResultFrame(b, frame, clampedResult))
+          withBucket(targetSid, (b) => applyToolCallResultFrame(b, frame, clampedResult)) // ADR-091 D7/D10: own flat call (see tool_call_start)
+          refreshRosterAfterAgentMutation(frame) // #215: a successful agent change refreshes roster + teams
           break
         }
 
-        case 'subagent_start': {
-          if (!targetSid) break
-          const sf = frame as WsSubagentStartFrame
-          withBucket(targetSid, (b) => {
-            // Opus F4 — see bucketHasSpan's own doc comment.
-            if (bucketHasSpan(b, sf.span_id)) return {}
-            return produce(b, (draft) => {
-              // ADR-070 §2.1/F2: a bare findLastAssistantMessageId scan here
-              // would reattach this span to a closed, closedBySteer bubble
-              // (positioned before a mid-turn steer's user message) if the
-              // span is the first live frame to arrive after the steer.
-              // findOpenAssistantMessageId refuses that; when it resolves to
-              // null, open a fresh placeholder — mirroring
-              // case 'tool_call_start' — rather than silently dropping a
-              // real delegation span (worse than the mis-ordering itself).
-              let lastMsgId = findOpenAssistantMessageId(draft.messageOrder, draft.messagesById)
-              if (!lastMsgId) {
-                const placeholder: ChatMessage = {
-                  id: generateId(),
-                  role: 'assistant',
-                  content: '',
-                  timestamp: new Date().toISOString(),
-                  status: 'streaming',
-                  isStreaming: true,
-                  agentId: sf.agent_id ?? useSessionStore.getState().activeAgentId ?? undefined,
-                }
-                draft.messagesById[placeholder.id] = placeholder
-                draft.messageOrder.push(placeholder.id)
-                lastMsgId = placeholder.id
-              }
-              // ADR-091 D7/I-4 (cross-family review finding 19): a
-              // subagent_message/subagent_state that arrived BEFORE this
-              // subagent_start (replay-gap ordering) left its update parked
-              // here, keyed by span_id — apply and clear it now rather than
-              // seeding the span with nothing and waiting for a NEXT update
-              // that may never come.
-              const pendingUpdate = draft.pendingSpanUpdatesBySpanId?.[sf.span_id]
-
-              // ADR-091 D7/I-4: `child_session_id` (additive, CP-0) is now
-              // the open control's target — populated from whichever front
-              // door launched it (`delegate` or `create_task`, both stamp
-              // it — I-4). `producing_session_id`, the ADR-057 relabelling
-              // workaround this delivery supersedes, is still present on the
-              // wire until the coordinated deletion (not yet — the lead
-              // sends it once the Go readers are gone) but is no longer
-              // read here.
-              const span: SubagentSpanRunning = {
-                spanId: sf.span_id,
-                parentCallId: sf.parent_call_id,
-                taskLabel: sf.task_label,
-                status: 'running',
-                agentId: sf.agent_id,
-                childSessionId: sf.child_session_id,
-                statusLine: pendingUpdate?.statusLine,
-                lifecycleState: pendingUpdate?.lifecycleState, hasRun: pendingUpdate?.hasRun,
-                // Seeds the status line's "last update N s ago" fallback
-                // (D7 table) from the moment the span itself appears — a
-                // real subagent_message/subagent_state, each carrying its
-                // own created_at, supersedes this the instant one arrives.
-                // subagent_start carries no created_at of its own (wire
-                // gap), so Date.now() is the only source — UNLESS a pending
-                // update (above) already carries the true event time of the
-                // update that arrived first.
-                lastUpdateAt: pendingUpdate?.lastUpdateAt ?? new Date().toISOString(),
-              }
-              const lastMsg = draft.messagesById[lastMsgId]
-              const spanIdx = (lastMsg.spans ?? []).length
-              if (!lastMsg.spans) lastMsg.spans = []
-              lastMsg.spans.push(span)
-              // O(1) index keyed by span_id, consumed by the subagent_end/
-              // _message/_state handlers below for O(1) lookup instead of a
-              // backward linear scan.
-              if (!draft.spanBySpanId) draft.spanBySpanId = {}
-              draft.spanBySpanId[sf.span_id] = { messageId: lastMsgId, spanIdx }
-              if (pendingUpdate && draft.pendingSpanUpdatesBySpanId) {
-                delete draft.pendingSpanUpdatesBySpanId[sf.span_id]
-              }
-            }) as Partial<SessionChatState>
-          })
-          break
-        }
-
-        case 'subagent_end': {
-          if (!targetSid) break
-          const ef = frame as WsSubagentEndFrame
-          withBucket(targetSid, (b) => {
-            return produce(b, (draft) => {
-              // Builds the terminal span record from whichever running span
-              // (indexed or scanned) matched ef.span_id — shared by both
-              // resolution paths below so they can never diverge.
-              function buildTerminalSpan(existingSpan: SubagentSpan): SubagentSpanTerminal {
-                return {
-                  spanId: existingSpan.spanId,
-                  parentCallId: existingSpan.parentCallId,
-                  taskLabel: existingSpan.taskLabel,
-                  // Defensive fallback: SubagentEndFrame carries its own optional
-                  // agent_id; prefer it if the server ever populates it, else
-                  // keep the value already stamped by subagent_start.
-                  agentId: ef.agent_id ?? existingSpan.agentId,
-                  // SubagentEndFrame carries no child_session_id of its own
-                  // (only subagent_start does, I-4) — keep whatever
-                  // subagent_start already stamped.
-                  childSessionId: existingSpan.childSessionId,
-                  statusLine: existingSpan.statusLine,
-                  lifecycleState: existingSpan.lifecycleState, hasRun: existingSpan.hasRun,
-                  lastUpdateAt: new Date().toISOString(),
-                  status: ef.status,
-                  durationMs: ef.duration_ms ?? 0,
-                  finalResult: ef.final_result,
-                  reason: ef.reason,
-                }
-              }
-
-              // O(1) lookup first. Re-verify the indexed span's own id still
-              // matches before trusting it — cheap, and guards against any
-              // staleness (e.g. an index entry surviving a code path that
-              // doesn't maintain it) rather than silently mutating the wrong
-              // span.
-              const indexEntry = draft.spanBySpanId?.[ef.span_id]
-              const indexedMsg = indexEntry ? draft.messagesById[indexEntry.messageId] : undefined
-              const indexedSpan = indexEntry ? indexedMsg?.spans?.[indexEntry.spanIdx] : undefined
-              if (indexEntry && indexedMsg?.spans && indexedSpan && indexedSpan.spanId === ef.span_id) {
-                indexedMsg.spans[indexEntry.spanIdx] = buildTerminalSpan(indexedSpan)
-                delete draft.spanBySpanId![ef.span_id]
-                return
-              }
-
-              // Fallback: O(N) scan (legacy path, index miss — e.g. a bucket
-              // built before this index existed, or an out-of-band mutation
-              // that didn't maintain it).
-              console.warn('[chat] subagent_end: span index miss, falling back to O(N) scan', { spanId: ef.span_id })
-              logDiagnostic('chatSubagentEndSpanIndexMiss', { spanId: ef.span_id, sessionId: targetSid })
-              for (let i = draft.messageOrder.length - 1; i >= 0; i--) {
-                const msgId = draft.messageOrder[i]
-                const msg = draft.messagesById[msgId]
-                if (msg.role !== 'assistant' || !msg.spans) continue
-                const spanIdx = msg.spans.findIndex((s) => s.spanId === ef.span_id)
-                if (spanIdx === -1) continue
-                const existingSpan = msg.spans[spanIdx]
-                msg.spans[spanIdx] = buildTerminalSpan(existingSpan)
-                if (draft.spanBySpanId) delete draft.spanBySpanId[existingSpan.spanId]
-                return
-              }
-              console.warn('[chat] subagent_end received for unknown span_id', { spanId: ef.span_id })
-              logDiagnostic('chatSubagentEndUnknownSpanId', { spanId: ef.span_id, sessionId: targetSid })
-            }) as Partial<SessionChatState>
-          })
-          break
-        }
-
-        // ADR-091 D7/I-4/FR-E-004, FR-E-010: wires what ADR-053 designed and
-        // nothing ever emitted or consumed — the row's status line and
-        // lifecycle state, reduced onto the span record (never nested as a
-        // "step"; there is no child-step nesting left to feed, D10). Kept
-        // beside subagent_start/_end (not in replay-and-status-frames.ts)
-        // since all four subagent_* frames share one span-index lookup.
-        case 'subagent_message': {
-          if (!targetSid) break
-          const mf = frame
-          withBucket(targetSid, (b) => {
-            return produce(b, (draft) => {
-              // Ambiguity resolution (WP-E spec, accepted default): 'steer'
-              // and 'respond' carry no `text` and render as the literal
-              // string 'steered'; every other kind shows its `text` when
-              // present, truncated to 120 characters with an ellipsis. A
-              // kind with no text (e.g. a bare 'artifact' ping) leaves the
-              // existing statusLine untouched rather than blanking it.
-              const nextStatusLine =
-                mf.kind === 'steer' || mf.kind === 'respond'
-                  ? 'steered'
-                  : mf.text
-                    ? mf.text.length > 120 ? `${mf.text.slice(0, 120)}…` : mf.text
-                    : undefined
-
-              function applyToSpan(span: SubagentSpan): SubagentSpan {
-                return {
-                  ...span,
-                  statusLine: nextStatusLine ?? span.statusLine,
-                  lastUpdateAt: mf.created_at,
-                }
-              }
-
-              const indexEntry = draft.spanBySpanId?.[mf.span_id]
-              const indexedMsg = indexEntry ? draft.messagesById[indexEntry.messageId] : undefined
-              const indexedSpan = indexEntry ? indexedMsg?.spans?.[indexEntry.spanIdx] : undefined
-              if (indexEntry && indexedMsg?.spans && indexedSpan && indexedSpan.spanId === mf.span_id) {
-                indexedMsg.spans[indexEntry.spanIdx] = applyToSpan(indexedSpan)
-                return
-              }
-              console.warn('[chat] subagent_message: span index miss, falling back to O(N) scan', { spanId: mf.span_id })
-              logDiagnostic('chatSubagentMessageSpanIndexMiss', { spanId: mf.span_id, sessionId: targetSid })
-              for (let i = draft.messageOrder.length - 1; i >= 0; i--) {
-                const msgId = draft.messageOrder[i]
-                const msg = draft.messagesById[msgId]
-                if (msg.role !== 'assistant' || !msg.spans) continue
-                const spanIdx = msg.spans.findIndex((s) => s.spanId === mf.span_id)
-                if (spanIdx === -1) continue
-                msg.spans[spanIdx] = applyToSpan(msg.spans[spanIdx])
-                return
-              }
-              // ADR-091 D7/I-4 (cross-family review finding 19): no span
-              // exists yet anywhere in this session — a genuine replay-gap
-              // ordering (this frame arrived before its span's own
-              // subagent_start), not necessarily a real "unknown" frame.
-              // Park the update; subagent_start applies and clears it.
-              // `patch` omits `statusLine` entirely when there is nothing to
-              // apply (mirrors applyToSpan's own `?? span.statusLine`
-              // no-op above) so a PRIOR pending statusLine from an earlier
-              // subagent_message for the same span_id is never overwritten
-              // with `undefined`.
-              console.warn('[chat] subagent_message received before its span\'s subagent_start — parked as a pending update', { spanId: mf.span_id })
-              logDiagnostic('chatSubagentMessageReplayGap', { spanId: mf.span_id, sessionId: targetSid })
-              draft.pendingSpanUpdatesBySpanId = recordPendingSpanUpdate(
-                draft.pendingSpanUpdatesBySpanId,
-                mf.span_id,
-                nextStatusLine !== undefined
-                  ? { statusLine: nextStatusLine, lastUpdateAt: mf.created_at }
-                  : { lastUpdateAt: mf.created_at },
-              )
-            }) as Partial<SessionChatState>
-          })
-          break
-        }
-
+        case 'subagent_start':
+        case 'subagent_end':
+        case 'subagent_message':
         case 'subagent_state': {
+          // ADR-091 D7/I-4: all four subagent_* frames share one span-index
+          // lookup and one rule set (span-frames.ts::applySpanFrame), also used
+          // by the paged history paths.
           if (!targetSid) break
-          const sf2 = frame
-          withBucket(targetSid, (b) => {
-            return produce(b, (draft) => {
-              function applyToSpan(span: SubagentSpan): SubagentSpan {
-                return spanWithLifecycle(span, sf2.state, sf2.created_at)
-              }
-
-              const indexEntry = draft.spanBySpanId?.[sf2.span_id]
-              const indexedMsg = indexEntry ? draft.messagesById[indexEntry.messageId] : undefined
-              const indexedSpan = indexEntry ? indexedMsg?.spans?.[indexEntry.spanIdx] : undefined
-              if (indexEntry && indexedMsg?.spans && indexedSpan && indexedSpan.spanId === sf2.span_id) {
-                indexedMsg.spans[indexEntry.spanIdx] = applyToSpan(indexedSpan)
-                return
-              }
-              console.warn('[chat] subagent_state: span index miss, falling back to O(N) scan', { spanId: sf2.span_id })
-              logDiagnostic('chatSubagentStateSpanIndexMiss', { spanId: sf2.span_id, sessionId: targetSid })
-              for (let i = draft.messageOrder.length - 1; i >= 0; i--) {
-                const msgId = draft.messageOrder[i]
-                const msg = draft.messagesById[msgId]
-                if (msg.role !== 'assistant' || !msg.spans) continue
-                const spanIdx = msg.spans.findIndex((s) => s.spanId === sf2.span_id)
-                if (spanIdx === -1) continue
-                msg.spans[spanIdx] = applyToSpan(msg.spans[spanIdx])
-                return
-              }
-              // ADR-091 D7/I-4 (cross-family review finding 19): see the
-              // matching comment in the 'subagent_message' case above —
-              // same replay-gap parking, keyed by the same pending map.
-              console.warn('[chat] subagent_state received before its span\'s subagent_start — parked as a pending update', { spanId: sf2.span_id })
-              logDiagnostic('chatSubagentStateReplayGap', { spanId: sf2.span_id, sessionId: targetSid })
-              draft.pendingSpanUpdatesBySpanId = recordPendingSpanUpdate(
-                draft.pendingSpanUpdatesBySpanId,
-                sf2.span_id,
-                pendingLifecyclePatch(draft.pendingSpanUpdatesBySpanId?.[sf2.span_id], sf2.state, sf2.created_at),
-              )
-            }) as Partial<SessionChatState>
-          })
+          rememberLiveSpanFact(targetSid, frame, get().sessionsById[targetSid])
+          withBucket(targetSid, (b) => applySpanFrame(b, frame, targetSid))
           break
         }
 
@@ -2325,6 +2254,19 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
           scheduleLibraryChangedInvalidate(frame.workspace_id)
           break
 
+        // agent_created (issue #1009): new agent, any connected tab —
+        // coarse invalidate of ['agents'], matching library_changed's
+        // D-107 shape just above. Not debounced like library_changed:
+        // creates don't burst, so a direct invalidate matches the other
+        // single-shot cases here (task_status_changed/task_run_status).
+        // invalidateAfterAgentCreate (founder bug 2026-10-11) additionally
+        // invalidates the workspaces list queries: the sidebar roster is
+        // membership-driven (core_team + member_configs), so ['agents']
+        // alone left the new agent's row waiting for the 30 s poll.
+        case 'agent_created':
+          invalidateAfterAgentCreate(queryClient)
+          break
+
         // Per-task run history (ADR-050 / task-run-history-spec §3.8): fires
         // at run open AND close (not just terminal), so the calendar chip
         // flips to "In progress" immediately, not only on completion. Unlike
@@ -2339,49 +2281,6 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
           queryClient.invalidateQueries({ queryKey: ['tasks', 'occurrences'] })
           queryClient.invalidateQueries({ queryKey: tasksQueryKeys.runs(frame.task_id) })
           break
-
-        case 'agent_switched': {
-          const newAgentId = frame.agent_id
-          const sessionStore = useSessionStore.getState()
-          // Use the frame's session_id if present; fall back to active.
-          const switchSid = frameSessionId ?? sessionStore.activeSessionId
-          if (newAgentId) {
-            // Precedence rule 1 (src/store/session.ts's AGENT PRECEDENCE
-            // RULE): this frame reports a handover the BACKEND already
-            // performed, so it outranks an explicit user pick rather than
-            // being filtered out as a session-derived hint — the picker has
-            // to name whoever is actually answering.
-            sessionStore.applyServerAgentSwitch(switchSid, newAgentId)
-          } else {
-            // agent_id ABSENT/nil is the backend's deliberate wire shape for
-            // a return-to-default switch (pkg/gateway/websocket.go's
-            // agent_switched frame builder omits AgentId specifically for
-            // that case). Without this branch the picker silently keeps
-            // showing whoever the conversation was handed off to, since
-            // `if (newAgentId)` above never fires.
-            //
-            // There is no dedicated "clear the server-side override" action,
-            // so resolve the configured default agent the same way the rest
-            // of the app already does — the cached `['agents']` list
-            // (useChatAgents/AgentCard/WorkspaceTeamTab all key off
-            // `Agent.default === true`, itself derived server-side from
-            // `cfg.Agents.Defaults.DefaultAgentID`) — and apply it via the
-            // same server-authoritative path as a named switch.
-            const agents = queryClient.getQueryData<Agent[]>(['agents'])
-            const defaultAgent = agents?.find((a) => a.default)
-            if (defaultAgent) {
-              sessionStore.applyServerAgentSwitch(switchSid, defaultAgent.id, defaultAgent.type)
-            } else {
-              // No cached agent list yet (e.g. first frame before the
-              // AgentPicker/mention menu has mounted) — refetch it so a
-              // subsequent read finds the default agent. Never silently do
-              // nothing here: that is exactly the bug this branch fixes.
-              queryClient.invalidateQueries({ queryKey: ['agents'] })
-            }
-          }
-          queryClient.invalidateQueries({ queryKey: ['sessions'] })
-          break
-        }
 
         default:
           runtime.unknownFrameCount++

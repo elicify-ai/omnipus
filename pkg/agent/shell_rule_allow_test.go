@@ -118,7 +118,7 @@ func TestRunTurn_AllowRuleSkipsAskPrompt(t *testing.T) {
 			approver := &countingDenyApprover{reason: "user"}
 			al.SetToolApprover(approver)
 
-			_, err := al.ProcessDirect(context.Background(), "run echo", "allow-rule-turn")
+			_, err := al.processDirectPrimaryForTest(context.Background(), "run echo", "allow-rule-turn")
 			require.NoError(t, err)
 			assert.Equal(t, tc.wantCalls, approver.callCount())
 		})

@@ -24,7 +24,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/entity"
 	"github.com/elicify-ai/omnipus/pkg/providers"
-	"github.com/elicify-ai/omnipus/pkg/routing"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -141,7 +140,7 @@ func TestUpdateAgent_LockedCoreAgentSoulStillForbidden(t *testing.T) {
 
 // TestUpdateAgent_JudgeOtherIdentityFieldsStillForbidden verifies that only
 // soul is exempted from the Judge's locked-identity reject-set — name,
-// description, color, icon, and skills all still 403 on a System Agent.
+// description, color, and skills all still 403 on a System Agent.
 func TestUpdateAgent_JudgeOtherIdentityFieldsStillForbidden(t *testing.T) {
 	cases := []struct {
 		name string
@@ -149,8 +148,7 @@ func TestUpdateAgent_JudgeOtherIdentityFieldsStillForbidden(t *testing.T) {
 	}{
 		{"name", `{"name":"Rogue Judge"}`},
 		{"description", `{"description":"a rewritten description"}`},
-		{"color", `{"color":"#ff0000"}`},
-		{"icon", `{"icon":"skull"}`},
+		{"color", `{"color":"#6E8BA8"}`},
 		{"skills", `{"skills":["some-skill"]}`},
 	}
 	for _, tc := range cases {
@@ -292,7 +290,10 @@ func TestUpdateAgent_ContextWindowOverride_NullClears(t *testing.T) {
 		putAgentJSON(t, api, "agent-a", `{"context_window_override":32768}`).Code)
 
 	// An unrelated write must NOT clear it.
-	keep := putAgentJSON(t, api, "agent-a", `{"max_tool_iterations":25}`)
+	// #904: 15, not 25 — this harness's global is 20 and a per-agent value
+	// above the global is now refused (D10); the point here is only "an
+	// unrelated write", so any in-range value at or below the global serves.
+	keep := putAgentJSON(t, api, "agent-a", `{"max_tool_iterations":15}`)
 	require.Equal(t, http.StatusOK, keep.Code, "body: %s", keep.Body.String())
 	var kept gen.Agent
 	require.NoError(t, json.Unmarshal(keep.Body.Bytes(), &kept))
@@ -334,121 +335,56 @@ func TestUpdateAgent_ContextWindowOverride_RejectsNonPositive(t *testing.T) {
 // cli was freely mutable; the cli-lock rule per spec §4.16 / F-10 is
 // exercised by this test.)
 func TestUpdateAgent_ExecutorChanges(t *testing.T) {
-	api := buildExecutorTestAPIWithWorker(t)
-
-	// Seed the worker with an initial external-cli executor.
-	put1 := `{"executor":{"kind":"external-cli","cli":"codex"}}`
-	pw1 := httptest.NewRecorder()
-	pr1 := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-worker", strings.NewReader(put1))
-	pr1.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(pw1, pr1)
-	require.Equal(t, http.StatusOK, pw1.Code)
-
-	// Attempt to change the cli to opencode — must be rejected 400 by the
-	// cli-lock rule.
-	put2 := `{"executor":{"kind":"external-cli","cli":"opencode"}}`
-	pw2 := httptest.NewRecorder()
-	pr2 := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-worker", strings.NewReader(put2))
-	pr2.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(pw2, pr2)
-	require.Equal(t, http.StatusBadRequest, pw2.Code,
-		"changing cli after create must be rejected by the cli-lock rule; body: %s", pw2.Body.String())
-	assert.Contains(t, pw2.Body.String(), "executor.cli is locked",
-		"the rejection must reference the cli-lock rule")
-
-	// Persisted to the agent's entity record — original cli is preserved, not
-	// overwritten (ADR-054: no longer config.json's agents.list).
-	exec := agentExecutorFromStore(t, api.homePath, "test-worker")
-	require.NotNil(t, exec, "executor not persisted")
-	assert.Equal(t, config.ExecutorKindExternalCLI, exec.Kind)
-	assert.Equal(t, "codex", exec.CLI,
-		"original cli must survive the rejected PUT (cli-lock rule)")
-}
-
-// TestUpdateAgent_NonWorkerRejectsExternalCLIExecutor verifies the
-// native-only-for-non-workers rule at the update gate. A non-worker updated
-// to kind=external-cli must be rejected with 400; a non-worker updated to
-// kind=native (or omitting the field) stays allowed.
-func TestUpdateAgent_NonWorkerRejectsExternalCLIExecutor(t *testing.T) {
-	api := buildExecutorTestAPI(t)
-
-	// External-cli on the test-agent (a custom non-worker) → 400.
-	w := httptest.NewRecorder()
-	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent",
-		strings.NewReader(`{"executor":{"kind":"external-cli","cli":"codex"}}`))
-	r.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(w, r)
-	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
-	assert.Contains(t, w.Body.String(), "only sub-agent workers",
-		"the rejection must reference the worker-only rule")
-
-	// Remote-a2a on the test-agent → 400.
-	w = httptest.NewRecorder()
-	r = revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent",
-		strings.NewReader(`{"executor":{"kind":"remote-a2a"}}`))
-	r.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(w, r)
-	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
-}
-
-// TestUpdateAgent_NonWorkerNativeExecutorAllowed is the control: a non-worker
-// updated with kind=native (or omitting the executor) must still be 200. The
-// native-only rule is not a blanket reject.
-func TestUpdateAgent_NonWorkerNativeExecutorAllowed(t *testing.T) {
-	api := buildExecutorTestAPI(t)
-
-	w := httptest.NewRecorder()
-	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent",
-		strings.NewReader(`{"executor":{"kind":"native"}}`))
-	r.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(w, r)
-	assert.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-}
-
-// TestUpdateAgent_WorkerAllowsExternalCLIExecutor is the control: a worker
-// can keep / change its executor to external-cli (workers are the only
-// agents allowed non-native executors).
-func TestUpdateAgent_WorkerAllowsExternalCLIExecutor(t *testing.T) {
-	api := buildExecutorTestAPIWithWorker(t)
-
-	w := httptest.NewRecorder()
-	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-worker",
-		strings.NewReader(`{"executor":{"kind":"external-cli","cli":"codex"}}`))
-	r.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(w, r)
-	assert.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-
-	// And it is persisted to the agent's entity record (ADR-054) — the
-	// write-time guard is the regression we are guarding against, so the
-	// persistence is the load-bearing assertion. (The PUT response may not
-	// echo the executor because the response reads from the live in-memory
-	// config; the entity record is the source of truth.)
-	exec := agentExecutorFromStore(t, api.homePath, "test-worker")
-	require.NotNil(t, exec, "worker executor must be persisted to the entity record")
+	api, id := t8ExistingExternalWorker(t)
+	t8AssertExecutorRefusal(t, api, id, `{"executor":{"cli":"opencode"}}`, "executor.cli", "executor.cli is locked after create; create a new agent to switch CLIs.")
+	exec := agentExecutorFromStore(t, api.homePath, id)
+	require.NotNil(t, exec)
 	assert.Equal(t, config.ExecutorKindExternalCLI, exec.Kind)
 	assert.Equal(t, "codex", exec.CLI)
 }
 
-// TestUpdateAgent_WorkerAllowsRemoteA2AExecutor is the positive control for
-// remote-a2a: a worker's executor.kind may be changed to remote-a2a
-// (reserved/future — accepted and persisted without roster resolution or
-// dispatch, per executorConfigFromRequest's "accepted but reserved" comment).
-// TestUpdateAgent_NonWorkerRejectsExternalCLIExecutor only covers the
-// negative (non-worker rejected with remote-a2a too); this is the missing
-// worker-allowed positive case.
-func TestUpdateAgent_WorkerAllowsRemoteA2AExecutor(t *testing.T) {
-	api := buildExecutorTestAPIWithWorker(t)
+// r17 contract reconciliation: program paths are Settings-owned; kind is derived and CLI is immutable.
+func TestUpdateAgent_NonWorkerRejectsExternalCLIExecutor(t *testing.T) {
+	api := buildExecutorTestAPI(t)
+	for _, kind := range []string{"external-cli", "remote-a2a"} {
+		t.Run(kind, func(t *testing.T) {
+			t8AssertExecutorRefusal(t, api, "test-agent", `{"executor":{"kind":"`+kind+`"}}`, "executor.kind", "executor.kind is derived from the agent type and cannot be set.")
+		})
+	}
+}
 
+// r17 contract reconciliation: program paths are Settings-owned; kind is derived and CLI is immutable.
+func TestUpdateAgent_NonWorkerNativeExecutorRefused(t *testing.T) {
+	api := buildExecutorTestAPI(t)
+	t8AssertExecutorRefusal(t, api, "test-agent", `{"executor":{"kind":"native"}}`, "executor.kind", "executor.kind is derived from the agent type and cannot be set.")
+	// Omission is the positive control: unrelated mutable fields still work.
 	w := httptest.NewRecorder()
-	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-worker",
-		strings.NewReader(`{"executor":{"kind":"remote-a2a"}}`))
-	r.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(w, r)
-	assert.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	api.HandleAgents(w, revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent", strings.NewReader(`{"description":"native remains native"}`)))
+	require.Equal(t, http.StatusOK, w.Code, "%s", w.Body.String())
+	assert.Nil(t, agentExecutorFromStore(t, api.homePath, "test-agent"))
+	saved, err := agentstore.New(api.homePath).Get("test-agent")
+	require.NoError(t, err)
+	assert.Equal(t, "native remains native", saved.Description)
+}
 
-	exec := agentExecutorFromStore(t, api.homePath, "test-worker")
-	require.NotNil(t, exec, "worker remote-a2a executor must be persisted")
-	assert.Equal(t, config.ExecutorKindRemoteA2A, exec.Kind)
+// r17 contract reconciliation: program paths are Settings-owned; kind is derived and CLI is immutable.
+func TestUpdateAgent_WorkerAllowsMutableExecutorFields(t *testing.T) {
+	api, id := t8ExistingExternalWorker(t)
+	w := httptest.NewRecorder()
+	api.HandleAgents(w, revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+id, strings.NewReader(`{"executor":{"cli_args":"--verbose","env_overrides":{"FOO":"bar"}}}`)))
+	require.Equal(t, http.StatusOK, w.Code, "%s", w.Body.String())
+	exec := agentExecutorFromStore(t, api.homePath, id)
+	require.NotNil(t, exec)
+	assert.Equal(t, config.ExecutorKindExternalCLI, exec.Kind)
+	assert.Equal(t, "codex", exec.CLI)
+	assert.Equal(t, "--verbose", exec.CLIArgs)
+	assert.Equal(t, map[string]string{"FOO": "bar"}, exec.EnvOverrides)
+}
+
+// r17 contract reconciliation: program paths are Settings-owned; kind is derived and CLI is immutable.
+func TestUpdateAgent_WorkerRejectsRemoteA2AExecutor(t *testing.T) {
+	api, id := t8ExistingExternalWorker(t)
+	t8AssertExecutorRefusal(t, api, id, `{"executor":{"kind":"remote-a2a"}}`, "executor.kind", "executor.kind is derived from the agent type and cannot be set.")
 }
 
 // Note: agent-level heartbeat write-time guards (RejectsHeartbeatOnWorker /
@@ -488,19 +424,22 @@ func TestUpdateAgent_AllowsNullVoiceOnWorker(t *testing.T) {
 
 // TestUpdateAgent_Worker_AcceptsValidPatch is the worker-PUT-400 regression: a
 // PUT carrying only fields that ARE valid for a worker (model,
-// color, icon, description — plus max_tool_iterations for a NATIVE Subagent
+// color, description — plus max_tool_iterations for a NATIVE Subagent
 // only) must succeed (200), not 400. Covers both a native Subagent and a
 // subagent_3p.
 func TestUpdateAgent_Worker_AcceptsValidPatch(t *testing.T) {
 	t.Run("native Subagent", func(t *testing.T) {
 		api := buildExecutorTestAPI(t)
 		id := createNativeSubagent(t, api)
-		validPatch := `{"model":"test-model","max_tool_iterations":8,"color":"#d4af37","icon":"robot","description":"updated worker"}`
+		validPatch := `{"model":"test-model","max_tool_iterations":8,"color":"#A97142","description":"updated worker"}`
 		w := httptest.NewRecorder()
 		r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+id, strings.NewReader(validPatch))
 		r.Header.Set("Content-Type", "application/json")
 		api.HandleAgents(w, r)
 		assert.Equal(t, http.StatusOK, w.Code, "valid worker patch must be accepted; body: %s", w.Body.String())
+		saved, err := agentstore.New(api.homePath).Get(id)
+		require.NoError(t, err)
+		assert.Equal(t, "#A97142", saved.Color, "a palette hex is stored as given")
 	})
 
 	t.Run("subagent_3p", func(t *testing.T) {
@@ -510,12 +449,15 @@ func TestUpdateAgent_Worker_AcceptsValidPatch(t *testing.T) {
 		// forbidden on a subagent_3p PUT (agent_field_rules.go
 		// subagent3pForbiddenUpdateFields, extended in W2a). See
 		// TestUpdateAgent_Subagent3p_ForbiddenFields for the 400 case.
-		validPatch := `{"model":"test-model","color":"#d4af37","icon":"robot","description":"updated worker"}`
+		validPatch := `{"model":"test-model","color":"#A97142","description":"updated worker"}`
 		w := httptest.NewRecorder()
 		r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+id, strings.NewReader(validPatch))
 		r.Header.Set("Content-Type", "application/json")
 		api.HandleAgents(w, r)
 		assert.Equal(t, http.StatusOK, w.Code, "valid subagent_3p patch must be accepted; body: %s", w.Body.String())
+		saved, err := agentstore.New(api.homePath).Get(id)
+		require.NoError(t, err)
+		assert.Equal(t, "#A97142", saved.Color, "a palette hex is stored as given")
 	})
 }
 
@@ -572,11 +514,11 @@ func TestUpdateAgent_Subagent3p_ForbiddenFields(t *testing.T) {
 		{"skills", `{"skills":["web-research"]}`},
 		{"fallback_models", `{"fallback_models":[{"model":"m","provider":"p"}]}`},
 		{"model_params", `{"model_params":{"temperature":0.5}}`},
-		// W2a: max_tool_iterations joins the forbidden set on subagent_3p PUT
-		// (the external CLI runs its own turn loop — Omnipus cannot cap its
-		// per-turn tool-call budget). subagent3pForbiddenUpdateFields in
-		// agent_field_rules.go is the single source of truth for this list.
-		{"max_tool_iterations", `{"max_tool_iterations":8}`},
+		// #904 D14 (founder decision 2026-09-26): max_tool_iterations LEFT the
+		// forbidden set — external-CLI workers get the same per-agent limit,
+		// passed as the CLI's turn cap. Its acceptance is pinned by
+		// TestAgentUpdate_Worker_MaxToolIterationsAccepted
+		// (rest_agents_max_tool_iterations_test.go).
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -590,14 +532,13 @@ func TestUpdateAgent_Subagent3p_ForbiddenFields(t *testing.T) {
 	}
 }
 
-// TestUpdateAgent_ExecutorMutability verifies that cli_path, env_overrides, and
-// cli_args are mutable on a subagent_3p worker, while the cli itself is locked.
+// TestUpdateAgent_ExecutorMutability preserves mutable env/args; r17 removes agent-owned paths.
 func TestUpdateAgent_ExecutorMutability(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 	id := createSubagent3p(t, api)
 
 	// Mutate CLI-owned mutable fields.
-	body := `{"executor":{"cli_path":"/opt/codex","env_overrides":{"FOO":"bar"},"cli_args":"--verbose"}}`
+	body := `{"executor":{"env_overrides":{"FOO":"bar"},"cli_args":"--verbose"}}`
 	w := httptest.NewRecorder()
 	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+id, strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
@@ -606,7 +547,7 @@ func TestUpdateAgent_ExecutorMutability(t *testing.T) {
 
 	exec := agentExecutorFromStore(t, api.homePath, id)
 	require.NotNil(t, exec)
-	assert.Equal(t, "/opt/codex", exec.CLIPath)
+	assert.Empty(t, exec.CLIPath, "r17: no per-agent program path")
 	assert.Equal(t, map[string]string{"FOO": "bar"}, exec.EnvOverrides)
 	assert.Equal(t, "--verbose", exec.CLIArgs)
 }
@@ -623,7 +564,9 @@ func TestUpdateAgent_ExecutorOMNIPUSPrefixRejected(t *testing.T) {
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
-	assert.Contains(t, w.Body.String(), "OMNIPUS_* is gateway-internal")
+	var out map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &out))
+	assert.Equal(t, `env_overrides key "OMNIPUS_MASTER_KEY" is reserved: OMNIPUS_* is gateway-internal`, out["error"])
 }
 
 // TestUpdateAgent_UpdatedAtRejected verifies FR-007's single concurrency
@@ -637,7 +580,7 @@ func TestUpdateAgent_UpdatedAtRejected(t *testing.T) {
 	//    current display-only value used by the presence-rejection cases.
 	w1 := httptest.NewRecorder()
 	r1 := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent",
-		strings.NewReader(`{"color":"#FF0000"}`))
+		strings.NewReader(`{"color":"#6E8BA8"}`))
 	r1.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w1, r1)
 	require.Equal(t, http.StatusOK, w1.Code, "establishing PUT body: %s", w1.Body.String())
@@ -651,9 +594,9 @@ func TestUpdateAgent_UpdatedAtRejected(t *testing.T) {
 		name string
 		body string
 	}{
-		{name: "stale timestamp", body: fmt.Sprintf(`{"color":"#00FF00","updated_at":%q}`, "2000-01-01T00:00:00Z")},
-		{name: "current timestamp", body: fmt.Sprintf(`{"color":"#0000FF","updated_at":%q}`, currentUpdatedAt)},
-		{name: "null", body: `{"color":"#00FFFF","updated_at":null}`},
+		{name: "stale timestamp", body: fmt.Sprintf(`{"color":"#7A8C9E","updated_at":%q}`, "2000-01-01T00:00:00Z")},
+		{name: "current timestamp", body: fmt.Sprintf(`{"color":"#4F8A80","updated_at":%q}`, currentUpdatedAt)},
+		{name: "null", body: `{"color":"#5E6973","updated_at":null}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
@@ -670,6 +613,9 @@ func TestUpdateAgent_UpdatedAtRejected(t *testing.T) {
 			require.NoError(t, readErr)
 			assert.Equal(t, beforeRejectedWrites.Revision, after.Revision, "rejection must be zero-write")
 			assert.Equal(t, currentUpdatedAt, agentUpdatedAtFromConfig(t, api, "test-agent"))
+			saved, colorErr := agentstore.New(api.homePath).Get("test-agent")
+			require.NoError(t, colorErr)
+			assert.Equal(t, "#6E8BA8", saved.Color, "rejected updated_at must not apply the colour")
 		})
 	}
 }
@@ -786,7 +732,7 @@ func TestUpdateAgent_ConcurrentDeleteRace_Returns404NotPhantom200(t *testing.T) 
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(`{"revision":"`+strings.Repeat("0", 64)+`","color":"#123456"}`))
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(`{"revision":"`+strings.Repeat("0", 64)+`","color":"#6E8BA8"}`))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 
@@ -818,8 +764,10 @@ func TestUpdateAgent_ExecutorCliImmutable_Returns400(t *testing.T) {
 
 	require.Equal(t, http.StatusBadRequest, w.Code,
 		"switching executor.cli after create must be rejected with 400; body: %s", w.Body.String())
-	assert.Contains(t, w.Body.String(), "executor.cli is locked",
-		"error message must explain that cli is locked; body: %s", w.Body.String())
+	var out map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &out))
+	assert.Equal(t, "executor.cli", out["field"])
+	assert.Equal(t, "executor.cli is locked after create; create a new agent to switch CLIs.", out["error"])
 
 	// Verify the persisted cli is still the original.
 	exec := agentExecutorFromStore(t, api.homePath, id)
@@ -828,25 +776,10 @@ func TestUpdateAgent_ExecutorCliImmutable_Returns400(t *testing.T) {
 		"persisted executor.cli must be unchanged after a rejected mutation")
 }
 
-// TestUpdateAgent_ExecutorCliPathMutable verifies that cli_path IS mutable on
-// PUT for a subagent_3p agent (binary upgrade without re-creating the agent).
-// Spec §9.2: "PUT executor.cli_path: /new/path → 200".
-func TestUpdateAgent_ExecutorCliPathMutable(t *testing.T) {
-	api := buildExecutorTestAPI(t)
-	id := createSubagent3p(t, api) // cli_path: /usr/local/bin/codex
-
-	body := `{"executor":{"cli_path":"/opt/codex-v2"}}`
-	w := httptest.NewRecorder()
-	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+id, strings.NewReader(body))
-	r.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(w, r)
-
-	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-
-	exec := agentExecutorFromStore(t, api.homePath, id)
-	require.NotNil(t, exec)
-	assert.Equal(t, "/opt/codex-v2", exec.CLIPath,
-		"cli_path must be updated to the new value")
+// r17 contract reconciliation: program paths are Settings-owned; kind is derived and CLI is immutable.
+func TestUpdateAgent_ExecutorCliPathRefused(t *testing.T) {
+	api, id := t8ExistingExternalWorker(t)
+	t8AssertExecutorRefusal(t, api, id, `{"executor":{"cli_path":"/opt/codex-v2"}}`, "executor.cli_path", "cli_path cannot be set on an agent. The program for the chosen CLI is set by a person in Settings → Third-party agents.")
 }
 
 // TestUpdateAgent_FallbackModels_PersistAndEchoOnPUT proves the PUT response
@@ -1189,30 +1122,8 @@ func TestUpdateAgent_SoulChange_RegistryReloadCompletesBeforeResponse(t *testing
 			"pre-update state")
 }
 
-// TestUpdateAgent_RejectsReservedDefaultName verifies updateAgent 400s on a
-// name of "default", case-insensitively, for an existing agent.
-func TestUpdateAgent_RejectsReservedDefaultName(t *testing.T) {
-	for _, name := range []string{"default", "Default", "DEFAULT"} {
-		t.Run("name="+name, func(t *testing.T) {
-			api := buildExecutorTestAPI(t)
-
-			body := `{"name":"` + name + `"}`
-			w := httptest.NewRecorder()
-			r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent", strings.NewReader(body))
-			r.Header.Set("Content-Type", "application/json")
-			api.updateAgent(w, r, "test-agent")
-
-			require.Equal(t, http.StatusBadRequest, w.Code,
-				"update to reserved name %q must be rejected 400, got body: %s", name, w.Body.String())
-			assert.Contains(t, w.Body.String(), "reserved",
-				"error body must explain the name is reserved")
-		})
-	}
-}
-
-// TestUpdateAgent_AllowsOrdinaryNameChange is the negative control — an
-// ordinary name update must still succeed, proving the reserved-name check
-// does not over-fire.
+// TestUpdateAgent_AllowsOrdinaryNameChange verifies an ordinary name update
+// succeeds.
 func TestUpdateAgent_AllowsOrdinaryNameChange(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
@@ -1374,221 +1285,6 @@ func TestUpdateAgent_PATCH_Returns405(t *testing.T) {
 		"PATCH /api/v1/agents/{id} must return 405 (no PATCH handler registered anymore); body: %s", w.Body.String())
 }
 
-// TestUpdateAgent_DefaultToggle_RegistryAndRoutingAgree is the DoD test for the
-// ★ default-agent release blocker: it FAILS before the fix (registry and
-// routing disagree, as described above) and PASSES after it (both ladders
-// resolve the just-starred agent).
-//
-// BDD: Given two ordinary (non-worker) agents and NO configured default
-// (agents.defaults.default_agent_id is empty — the exact precondition every
-// fresh/existing install has before this fix, since nothing ever wrote it),
-//
-//	When PUT /api/v1/agents/agent-b with {"default": true} (the ★ toggle),
-//	Then the settings singleton (agents.defaults.default_agent_id) is
-//	persisted as "agent-b" — the write half of the bug — and a fresh registry
-//	built from that persisted config resolves BOTH
-//	pkg/agent.AgentRegistry.GetDefaultAgent() (the webchat ladder) AND
-//	pkg/agent.AgentRegistry.ResolveRoute()'s fallback tier (the channel-routing
-//	ladder, mirroring pkg/routing.RouteResolver.resolveDefaultAgentID) to the
-//	SAME agent — agent-b.
-func TestUpdateAgent_DefaultToggle_RegistryAndRoutingAgree(t *testing.T) {
-	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
-	tmpDir := t.TempDir()
-	cfgPath := tmpDir + "/config.json"
-
-	cfg := &config.Config{
-		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Home:              tmpDir,
-				DefaultModel:      config.DefaultModel{Model: "test-model"},
-				MaxTokens:         4096,
-				MaxToolIterations: 20,
-				// Deliberately no DefaultAgentID: this is the exact
-				// precondition of the bug — no operator has ever starred an
-				// agent, and (pre-fix) coreagent.SeedConfig never wrote this
-				// either, so it is empty on every affected install.
-			},
-			// List order is deliberately "agent-b" THEN "agent-a" — the
-			// opposite of lexicographic order. The retired "main" sentinel
-			// used to be GetDefaultAgent's own Priority-2 fallback (disagreeing
-			// with resolveDefaultAgentID's first-in-list-order fallback on
-			// EVERY install, regardless of naming); with the sentinel gone,
-			// GetDefaultAgent's Priority 2 is now "lexicographically first
-			// registered non-worker agent" while resolveDefaultAgentID's is
-			// still "first chat-target agent in cfg.Agents.List order" (see
-			// both doc comments — pkg/agent/registry.go::GetDefaultAgent and
-			// pkg/routing/route.go::resolveDefaultAgentID). The two orderings
-			// only disagree when list order isn't already lexicographic, so
-			// this fixture orders the list backwards on purpose to keep
-			// reproducing the "the two ladders can disagree with no configured
-			// override" precondition this test exists to guard.
-			List: []config.AgentConfig{
-				{ID: "agent-b", Name: "Agent B"},
-				{ID: "agent-a", Name: "Agent A"},
-			},
-		},
-	}
-	require.NoError(t, os.WriteFile(cfgPath, marshalConfigForDisk(t, cfg), 0o600))
-
-	msgBus := bus.NewMessageBus()
-	provider := &restMockProvider{}
-	al := mustAgentLoop(t, cfg, msgBus, provider)
-	api := &restAPI{agentLoop: al, homePath: tmpDir}
-	seedRoutingAgentEntities(t, tmpDir, cfg.Agents.List)
-
-	// The precondition INVERTED, deliberately.
-	//
-	// This block used to assert that the two ladders DISAGREE before the ★
-	// toggle — that was the release blocker's exact claim, and the fixture
-	// reverses cfg.Agents.List specifically to reproduce it: GetDefaultAgent
-	// took the lexicographically-first agent while ResolveRoute took the first
-	// in slice order.
-	//
-	// That divergence is now FIXED (ADR-064 §7): both ladders apply the same
-	// eligibility rule and both sort, so they agree with or without an
-	// override. Asserting they still disagree would pin a bug as if it were a
-	// requirement, so this asserts the property that replaced it.
-	//
-	// The test's actual subject is unchanged and follows below: setting the
-	// default via ★ must move BOTH ladders to the chosen agent.
-	preRegistry := agent.NewAgentRegistry(al.GetConfig(), provider)
-	preDefault := preRegistry.GetDefaultAgent()
-	require.NotNil(t, preDefault)
-	preResolved := preRegistry.ResolveRoute(routing.RouteInput{Channel: "telegram", AccountID: "*"})
-	preRegistry.Close()
-	require.Equal(t, preDefault.ID, preResolved.AgentID,
-		"with no configured default the two ladders must AGREE: they answer the same question "+
-			"and both now fall back to the lexicographically-first chat-target agent. This "+
-			"fixture reverses cfg.Agents.List precisely because slice order used to change "+
-			"routing's answer — if that ever returns, this fails here")
-
-	// The ★ toggle: PUT /api/v1/agents/agent-b {"default": true}.
-	body := `{"default": true}`
-	w := httptest.NewRecorder()
-	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/agent-b", strings.NewReader(body))
-	api.HandleAgents(w, r)
-	require.Equal(t, http.StatusOK, w.Code, "starring agent-b as default must succeed")
-
-	var resp gen.Agent
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
-	require.NotNil(t, resp.Default, "response.default must be non-nil")
-	assert.True(t, *resp.Default, "PUT response must echo default=true for agent-b")
-
-	// Write half of the bug: the toggle must persist the settings singleton,
-	// not just the per-entity display flag. a.agentLoop.GetConfig() already
-	// reflects the PUT's write (updateConfigJSONLocked calls
-	// refreshConfigAndRewireServices, which reloads config.json and swaps it
-	// in via SwapConfig) — no extra reload step is needed to observe it here.
-	freshCfg := al.GetConfig()
-	require.Equal(t, "agent-b", freshCfg.Agents.Defaults.DefaultAgentID,
-		"the star toggle must persist agents.defaults.default_agent_id — this is the write half of the bug")
-
-	// Read half of the bug: build a registry the same way the NEXT full
-	// reload/boot would (pkg/gateway's gateway.go and pkg/agent's
-	// ReloadProviderAndConfig both do exactly this: NewAgentRegistry, then
-	// apply the configured override — see loop.go's NewAgentLoop /
-	// ReloadProviderAndConfig, which this mirrors since this lightweight test
-	// harness never wires a real reload function).
-	freshRegistry := agent.NewAgentRegistry(freshCfg, provider)
-	t.Cleanup(freshRegistry.Close)
-	if freshCfg.Agents.Defaults.DefaultAgentID != "" {
-		freshRegistry.SetDefaultAgentOverride(freshCfg.Agents.Defaults.DefaultAgentID)
-	}
-
-	// Ladder 1: webchat / GetDefaultAgent.
-	defaultAgent := freshRegistry.GetDefaultAgent()
-	require.NotNil(t, defaultAgent, "GetDefaultAgent must resolve some agent")
-
-	// Ladder 2: channel routing, via ResolveRoute's fallback tier (no
-	// bindings configured, so the whole cascade falls through to
-	// resolveDefaultAgentID — matchedBy=="default").
-	resolved := freshRegistry.ResolveRoute(routing.RouteInput{Channel: "telegram", AccountID: "*"})
-	assert.Equal(t, "default", resolved.MatchedBy, "no bindings are configured; must resolve via the default tier")
-
-	assert.Equal(t, "agent-b", defaultAgent.ID,
-		"registry.GetDefaultAgent must resolve to the agent that was just starred")
-	assert.Equal(t, "agent-b", resolved.AgentID,
-		"routing's resolveDefaultAgentID (via ResolveRoute) must resolve to the same just-starred agent")
-	assert.Equal(t, defaultAgent.ID, resolved.AgentID,
-		"THE BUG: webchat (GetDefaultAgent) and channel routing (ResolveRoute) must never disagree "+
-			"on who the default agent is")
-}
-
-// TestUpdateAgent_DefaultToggle_WireResponseDerivedFromSingleton verifies the
-// read half of the fix in isolation: the wire `default` field on GET/PUT
-// responses must be DERIVED from the settings singleton
-// (agents.defaults.default_agent_id), never echoed from the per-entity
-// AgentConfig.Default bool — so a GET on an agent whose entity record still
-// carries a stale Default:true (e.g. from before this fix, or simply never
-// cleared now that the N-write fan-out is retired) does NOT falsely report
-// default=true once another agent holds the singleton.
-//
-// BDD: Given agent-a's entity record has Default:true (a stale/legacy value)
-// but the settings singleton points at agent-b,
-//
-//	When GET /api/v1/agents/agent-a,
-//	Then the response's default field is false (derived from the singleton,
-//	not the stale per-entity bool).
-func TestUpdateAgent_DefaultToggle_WireResponseDerivedFromSingleton(t *testing.T) {
-	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
-	tmpDir := t.TempDir()
-	cfgPath := tmpDir + "/config.json"
-
-	cfg := &config.Config{
-		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Home:              tmpDir,
-				DefaultModel:      config.DefaultModel{Model: "test-model"},
-				MaxTokens:         4096,
-				MaxToolIterations: 20,
-				// The singleton names agent-b as the real default...
-				DefaultAgentID: "agent-b",
-			},
-			List: []config.AgentConfig{
-				// ...but agent-a's entity record still carries a stale
-				// Default:true (simulating a record written by an older
-				// build, or simply never reconciled now that the racy
-				// clear-others fan-out is retired).
-				{ID: "agent-a", Name: "Agent A", Default: true},
-				{ID: "agent-b", Name: "Agent B"},
-			},
-		},
-	}
-	require.NoError(t, os.WriteFile(cfgPath, marshalConfigForDisk(t, cfg), 0o600))
-
-	msgBus := bus.NewMessageBus()
-	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
-	api := &restAPI{agentLoop: al, homePath: tmpDir}
-	seedRoutingAgentEntities(t, tmpDir, cfg.Agents.List)
-
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, "/api/v1/agents/agent-a", nil)
-	api.HandleAgents(w, r)
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var resp gen.Agent
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
-	require.NotNil(t, resp.Default)
-	assert.False(t, *resp.Default,
-		"agent-a's stale per-entity Default:true must NOT leak onto the wire; "+
-			"the response must be derived from the settings singleton (which names agent-b)")
-
-	// Control: agent-b (named by the singleton, zero-value per-entity Default)
-	// must report true.
-	w2 := httptest.NewRecorder()
-	r2 := httptest.NewRequest(http.MethodGet, "/api/v1/agents/agent-b", nil)
-	api.HandleAgents(w2, r2)
-	require.Equal(t, http.StatusOK, w2.Code)
-	var respB gen.Agent
-	require.NoError(t, json.NewDecoder(w2.Body).Decode(&respB))
-	require.NotNil(t, respB.Default)
-	assert.True(t, *respB.Default,
-		"agent-b has no per-entity Default flag set at all, but IS named by the singleton, "+
-			"so the derived wire value must be true")
-}
-
 // ── Handler integration tests — updateAgent ───────────────────────────────────
 
 // TestUpdateAgent_ValidateInbound_InvalidBody asserts that PATCH /agents/{id}
@@ -1720,281 +1416,6 @@ func TestUpdateAgent_InvalidatesPreamble(t *testing.T) {
 	// The builder must still be registered after invalidation.
 	reg.Register("test-agent2", agent.NewContextBuilder(tmpDir))
 	reg.InvalidateAllContextBuilders() // must tolerate multiple calls
-}
-
-// --- updateAgent default-flag tests ---
-
-// TestUpdateAgent_SetDefaultClearsOthers verifies the single-default invariant:
-// setting default=true on agent-b must clear default on agent-a.
-//
-// BDD: Given agent-a is default=true and agent-b is default=false,
-//
-//	When PUT /api/v1/agents/agent-b with {"default": true},
-//	Then agent-b.Default becomes true,
-//	And agent-a.Default becomes false (cleared).
-func TestUpdateAgent_SetDefaultClearsOthers(t *testing.T) {
-	api, _ := newRoutingTestAPI(t)
-
-	body := `{"default": true}`
-	w := httptest.NewRecorder()
-	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/agent-b", strings.NewReader(body))
-	api.HandleAgents(w, r)
-	require.Equal(t, http.StatusOK, w.Code, "setting default on agent-b must succeed")
-
-	var resp gen.Agent
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
-	require.NotNil(t, resp.Default, "response.default must be non-nil")
-	assert.True(t, *resp.Default, "agent-b must now be default=true")
-
-	// Verify agent-a is no longer default.
-	w2 := httptest.NewRecorder()
-	r2 := httptest.NewRequest(http.MethodGet, "/api/v1/agents/agent-a", nil)
-	api.HandleAgents(w2, r2)
-	require.Equal(t, http.StatusOK, w2.Code)
-	var respA gen.Agent
-	require.NoError(t, json.NewDecoder(w2.Body).Decode(&respA))
-	require.NotNil(t, respA.Default, "agent-a.default must be non-nil after invariant enforcement")
-	assert.False(t, *respA.Default, "agent-a must be default=false after agent-b became default")
-}
-
-// TestUpdateAgent_SetDefaultFalseOnlyAffectsTarget verifies that setting
-// default=false on agent-a does not change agent-b.
-//
-// BDD: Given agent-a is default=true and agent-b is default=false,
-//
-//	When PUT /api/v1/agents/agent-a with {"default": false},
-//	Then agent-a.Default becomes false,
-//	And agent-b.Default remains false (untouched).
-func TestUpdateAgent_SetDefaultFalseOnlyAffectsTarget(t *testing.T) {
-	api, _ := newRoutingTestAPI(t)
-
-	body := `{"default": false}`
-	w := httptest.NewRecorder()
-	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/agent-a", strings.NewReader(body))
-	api.HandleAgents(w, r)
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var resp gen.Agent
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
-	require.NotNil(t, resp.Default)
-	assert.False(t, *resp.Default, "agent-a must be default=false")
-
-	// agent-b must remain false (untouched).
-	w2 := httptest.NewRecorder()
-	r2 := httptest.NewRequest(http.MethodGet, "/api/v1/agents/agent-b", nil)
-	api.HandleAgents(w2, r2)
-	require.Equal(t, http.StatusOK, w2.Code)
-	var respB gen.Agent
-	require.NoError(t, json.NewDecoder(w2.Body).Decode(&respB))
-	require.NotNil(t, respB.Default)
-	assert.False(t, *respB.Default, "agent-b must remain false when only agent-a was updated")
-}
-
-// TestUpdateAgent_AbsentDefaultFieldChangesNothing verifies that omitting the
-// default field from the request leaves all Default flags unchanged.
-//
-// BDD: Given agent-a is default=true,
-//
-//	When PUT /api/v1/agents/agent-a with {"model": "gpt-4"} (no default field),
-//	Then agent-a.Default remains true.
-func TestUpdateAgent_AbsentDefaultFieldChangesNothing(t *testing.T) {
-	api, _ := newRoutingTestAPI(t)
-
-	body := `{"model": "gpt-4"}`
-	w := httptest.NewRecorder()
-	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/agent-a", strings.NewReader(body))
-	api.HandleAgents(w, r)
-	require.Equal(t, http.StatusOK, w.Code)
-
-	// agent-a must still be default.
-	w2 := httptest.NewRecorder()
-	r2 := httptest.NewRequest(http.MethodGet, "/api/v1/agents/agent-a", nil)
-	api.HandleAgents(w2, r2)
-	require.Equal(t, http.StatusOK, w2.Code)
-	var resp gen.Agent
-	require.NoError(t, json.NewDecoder(w2.Body).Decode(&resp))
-	require.NotNil(t, resp.Default)
-	assert.True(t, *resp.Default, "agent-a must remain default=true when default field was absent")
-}
-
-// TestUpdateAgent_RejectsWorkerAsDefault verifies that PUT {"default":true} on a
-// worker agent is rejected with 400 — a worker can never be the routing default
-// (it is not a chat target).
-//
-// BDD: Given a worker agent and a base default agent,
-//
-//	When PUT /api/v1/agents/<worker> with {"default": true},
-//	Then the request fails with 400 and the base agent remains default.
-func TestUpdateAgent_RejectsWorkerAsDefault(t *testing.T) {
-	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
-	tmpDir := t.TempDir()
-	cfgPath := tmpDir + "/config.json"
-
-	cfg := &config.Config{
-		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Home:              tmpDir,
-				DefaultModel:      config.DefaultModel{Model: "test-model"},
-				MaxTokens:         4096,
-				MaxToolIterations: 20,
-			},
-			List: []config.AgentConfig{
-				{ID: "mia", Name: "Mia", Type: config.AgentTypeCore, Default: true},
-				{ID: "worker", Name: "Worker", Type: config.AgentTypeWorker},
-			},
-		},
-	}
-	require.NoError(t, os.WriteFile(cfgPath, marshalConfigForDisk(t, cfg), 0o600))
-
-	msgBus := bus.NewMessageBus()
-	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
-	api := &restAPI{agentLoop: al, homePath: tmpDir}
-	seedRoutingAgentEntities(t, tmpDir, cfg.Agents.List)
-
-	w := httptest.NewRecorder()
-	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/worker", strings.NewReader(`{"default": true}`))
-	api.HandleAgents(w, r)
-	require.Equal(t, http.StatusBadRequest, w.Code,
-		"setting a worker as default must be rejected with 400")
-	assert.Contains(t, strings.ToLower(w.Body.String()), "worker",
-		"the error must explain a worker cannot be the default")
-}
-
-// TestUpdateAgent_SetDefaultAlreadyDefault verifies that setting default=true
-// on an agent that is already the default is idempotent: it stays default=true
-// and no other agent changes.
-//
-// BDD: Given agent-a is default=true and agent-b is default=false,
-//
-//	When PUT /api/v1/agents/agent-a with {"default": true} (agent-a is already default),
-//	Then agent-a.Default remains true,
-//	And agent-b.Default remains false (invariant check: no spurious clear).
-//
-// Traces to: sprint/258-jun-2026 — single-default invariant, idempotent case.
-func TestUpdateAgent_SetDefaultAlreadyDefault(t *testing.T) {
-	api, _ := newRoutingTestAPI(t)
-
-	body := `{"default": true}`
-	w := httptest.NewRecorder()
-	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/agent-a", strings.NewReader(body))
-	api.HandleAgents(w, r)
-	require.Equal(t, http.StatusOK, w.Code, "setting default on already-default agent must succeed")
-
-	var resp gen.Agent
-	require.NoError(t, json.NewDecoder(w.Body).Decode(&resp))
-	require.NotNil(t, resp.Default)
-	assert.True(t, *resp.Default, "agent-a must still be default=true")
-
-	// agent-b must still be false (idempotent PUT must not disturb other agents).
-	w2 := httptest.NewRecorder()
-	r2 := httptest.NewRequest(http.MethodGet, "/api/v1/agents/agent-b", nil)
-	api.HandleAgents(w2, r2)
-	require.Equal(t, http.StatusOK, w2.Code)
-	var respB gen.Agent
-	require.NoError(t, json.NewDecoder(w2.Body).Decode(&respB))
-	require.NotNil(t, respB.Default)
-	assert.False(t, *respB.Default, "agent-b must remain false (idempotent default on agent-a)")
-}
-
-// TestUpdateAgent_DiskSingleDefault verifies the disk-level single-default
-// invariant: after PUT /api/v1/agents/{id} with {default:true}, re-reading
-// config.json from disk must show the settings singleton
-// (agents.defaults.default_agent_id) naming exactly agent-b.
-//
-// BDD: Given agent-a is default=true and agent-b is default=false (per the
-// settings singleton — see newRoutingTestAPI),
-//
-//	When PUT /api/v1/agents/agent-b with {"default": true},
-//	Then re-reading config.json shows agents.defaults.default_agent_id is
-//	"agent-b".
-//
-// Traces to: sprint/258-jun-2026 — updateAgent single-default invariant,
-// disk-level. RELEASE BLOCKER fix follow-up: the durable source of "the one
-// default" moved from an aggregate invariant over N per-entity Default bools
-// (each its own independently-locked write — the exact race ADR-054 D6.4
-// retired RepairMultipleDefaults over) to a single settings-singleton string
-// behind the existing config-write lock, which cannot have two winners by
-// construction. This test used to count agentstore.List() entries with
-// Default==true and require exactly one; that invariant is no longer
-// maintained by anything (the N-write fan-out that used to clear every OTHER
-// agent's per-entity flag is retired — see rest.go's updateAgent) because
-// nothing reads it anymore, so asserting on it here would just pin dead
-// behavior back in.
-func TestUpdateAgent_DiskSingleDefault(t *testing.T) {
-	api, _ := newRoutingTestAPI(t)
-
-	body := `{"default": true}`
-	w := httptest.NewRecorder()
-	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/agent-b", strings.NewReader(body))
-	api.HandleAgents(w, r)
-	require.Equal(t, http.StatusOK, w.Code, "PUT agent-b default=true must succeed")
-
-	// Re-read the live config (already reflects the just-written config.json —
-	// updateConfigJSONLocked calls refreshConfigAndRewireServices, which
-	// reloads from disk and swaps it in via SwapConfig).
-	liveCfg := api.agentLoop.GetConfig()
-	assert.Equal(t, "agent-b", liveCfg.Agents.Defaults.DefaultAgentID,
-		"agents.defaults.default_agent_id must name agent-b on disk after the PUT")
-
-	// The per-entity Default bool on agent-b's OWN entity record is still
-	// written too (kept for backward display compatibility, per config.go's
-	// ADR-054 D6.4 note) — but only ITS record, not an aggregate invariant
-	// across every agent.
-	agents, _, err := agentstore.New(api.homePath).List()
-	require.NoError(t, err)
-	var agentBRec *config.AgentConfig
-	for i := range agents {
-		if agents[i].ID == "agent-b" {
-			agentBRec = &agents[i]
-		}
-	}
-	require.NotNil(t, agentBRec, "agent-b's entity record must exist")
-	assert.True(t, agentBRec.Default, "agent-b's own entity record must reflect the PUT's default:true")
-}
-
-// TestUpdateAgent_IdempotentDefault verifies that PUT default=true on an agent that is
-// already the default is a no-op: the settings singleton still names that
-// same agent, and no other agent is disturbed.
-//
-// BDD: Given agent-a is already default=true (the settings singleton names
-// agent-a),
-//
-//	When PUT /api/v1/agents/agent-a with {"default": true} again,
-//	Then agents.defaults.default_agent_id still names agent-a,
-//	And agent-b's entity record remains default=false (untouched).
-//
-// Traces to: sprint/258-jun-2026 — updateAgent single-default invariant,
-// idempotent case. RELEASE BLOCKER fix follow-up: the durable "is this THE
-// default" signal is the settings singleton (agents.defaults.default_agent_id),
-// not an aggregate count of per-entity Default==true records — see
-// TestUpdateAgent_DiskSingleDefault's doc comment for why the old aggregate
-// invariant is no longer meaningful to assert.
-func TestUpdateAgent_IdempotentDefault(t *testing.T) {
-	api, _ := newRoutingTestAPI(t)
-
-	// agent-a is already default=true in newRoutingTestAPI.
-	body := `{"default": true}`
-	w := httptest.NewRecorder()
-	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/agent-a", strings.NewReader(body))
-	api.HandleAgents(w, r)
-	require.Equal(t, http.StatusOK, w.Code, "PUT agent-a default=true (already default) must succeed")
-
-	liveCfg := api.agentLoop.GetConfig()
-	assert.Equal(t, "agent-a", liveCfg.Agents.Defaults.DefaultAgentID,
-		"idempotent PUT must keep the settings singleton pointed at agent-a")
-
-	// agent-b's own entity record must remain untouched.
-	agents, _, err := agentstore.New(api.homePath).List()
-	require.NoError(t, err)
-	var agentBRec *config.AgentConfig
-	for i := range agents {
-		if agents[i].ID == "agent-b" {
-			agentBRec = &agents[i]
-		}
-	}
-	require.NotNil(t, agentBRec, "agent-b's entity record must exist")
-	assert.False(t, agentBRec.Default, "agent-b must remain untouched by an idempotent PUT on agent-a")
 }
 
 // TestUpdateAgent_LockedRejectsIdentityChange verifies that locked (core) agents

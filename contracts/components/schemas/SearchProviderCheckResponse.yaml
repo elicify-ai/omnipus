@@ -1,0 +1,47 @@
+type: object
+description: >
+  Temporary outcome of one real search through the addressed service. Readiness
+  is unchanged: success is not persisted health, and failure does not disable
+  the service or change its roles. Contains no key, results, authorization,
+  upstream payload or free-form upstream error.
+additionalProperties: false
+required:
+  - provider_id
+  - status
+  - checked_at
+properties:
+  provider_id:
+    type: string
+    enum:
+      - brave
+      - tavily
+      - perplexity
+      - glm
+      - baidu
+      - exa
+    description: The keyed search catalogue entry that was checked.
+    example: tavily
+  status:
+    type: string
+    enum:
+      - success
+      - auth_error
+      - rate_limited
+      - timeout
+      - network_error
+      - provider_error
+      - invalid_response
+    description: Normalized diagnostic outcome; a valid empty result is success.
+    example: success
+  checked_at:
+    type: string
+    format: date-time
+    description: UTC completion timestamp for this attempt.
+    example: '2026-09-30T12:00:00Z'
+  retry_after_seconds:
+    type: integer
+    minimum: 1
+    description: >
+      Optional upstream retry guidance for rate_limited. No automatic retry is
+      scheduled. Local admission limits instead use HTTP 429 and Retry-After.
+    example: 61

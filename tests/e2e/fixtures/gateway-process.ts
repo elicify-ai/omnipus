@@ -39,8 +39,11 @@ import * as os from 'os';
 import * as path from 'path';
 import { request, type APIRequestContext } from '@playwright/test';
 import { getFreePort, waitForHealth, DEFAULT_OMNIPUS_BINARY } from '../setup.js';
+import { E2E_FALLBACK, E2E_PRIMARY } from './e2e-model.js';
+import { onboardViaAPI } from './onboard-via-api.js';
 
-const DEFAULT_MODEL = 'deepseek/deepseek-v4.1-flash';
+/** The fake key every mock-provider gateway onboards with; never a real secret. */
+const MOCK_PROVIDER_KEY = 'sk-test-placeholder';
 
 export interface ApiResult<T> {
   ok: boolean;
@@ -54,6 +57,17 @@ export interface GatewayProcessOptions {
   adminUsername?: string;
   adminPassword?: string;
   model?: string;
+  /**
+   * provider-messages row 20: explicit provider base URL passed through to
+   * onboarding as `provider.endpoint` (the OnboardingProviderApiKey wire
+   * field — contracts/components/schemas/OnboardingProviderApiKey.yaml).
+   * The onboarding key probe (rest_onboarding.go: probeBase resolves
+   * variant.Endpoint ahead of the catalog default) then goes to THIS base
+   * instead of the real vendor, so a spec can point the whole install at a
+   * local mock provider. Omitted → behaviour identical to before (no
+   * endpoint sent).
+   */
+  apiBase?: string;
   /** Extra gateway args (default: ['--sandbox=off'], mirroring setup.ts —
    * this is an isolated throwaway OMNIPUS_HOME, never the developer's real
    * one, so a permissive sandbox is safe and keeps the boot-sweep proof
@@ -86,6 +100,8 @@ export class GatewayProcess {
   readonly baseURL: string;
   readonly adminUsername: string;
   readonly adminPassword: string;
+  /** provider-messages row 20: api_base passed to onboarding ('' = not set). */
+  readonly apiBase: string;
 
   private readonly binary: string;
   private readonly extraArgs: string[];
@@ -96,13 +112,14 @@ export class GatewayProcess {
   private csrfToken = '';
 
   private constructor(
-    opts: { binary: string; adminUsername: string; adminPassword: string; model: string; extraArgs: string[]; extraEnv: Record<string, string> },
+    opts: { binary: string; adminUsername: string; adminPassword: string; model: string; apiBase: string; extraArgs: string[]; extraEnv: Record<string, string> },
     homeDir: string,
     port: number,
   ) {
     this.binary = opts.binary;
     this.adminUsername = opts.adminUsername;
     this.adminPassword = opts.adminPassword;
+    this.apiBase = opts.apiBase;
     this.model = opts.model;
     this.extraArgs = opts.extraArgs;
     this.extraEnv = opts.extraEnv;
@@ -124,9 +141,16 @@ export class GatewayProcess {
     }
     const port = await getFreePort();
     const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), `omnipus-e2e-gwproc-${port}-`));
+    // A mock-provider gateway onboards a catalog provider with its endpoint
+    // pointed at the loopback mock. A hosted-stamped binary accepts that
+    // endpoint override only when the operator SSRF allow list names its host,
+    // so the mock gateway's config names loopback, as such an operator would.
+    const sandbox = opts.apiBase
+      ? { sandbox: { ssrf: { allow_internal: ['127.0.0.1', '::1', 'localhost'] } } }
+      : {};
     fs.writeFileSync(
       path.join(homeDir, 'config.json'),
-      JSON.stringify({ version: 1, gateway: { port } }, null, 2),
+      JSON.stringify({ version: 1, gateway: { port }, ...sandbox }, null, 2),
       { mode: 0o600 },
     );
 
@@ -135,7 +159,11 @@ export class GatewayProcess {
         binary,
         adminUsername: opts.adminUsername ?? 'admin',
         adminPassword: opts.adminPassword ?? 'admin1234',
-        model: opts.model ?? DEFAULT_MODEL,
+        // A mock-provider gateway (apiBase set) runs on the fallback pair: the
+        // mocks speak the OpenAI-compatible protocol. A live gateway runs on
+        // the primary.
+        model: opts.model ?? (opts.apiBase ? E2E_FALLBACK.model : E2E_PRIMARY.model),
+        apiBase: opts.apiBase ?? '',
         extraArgs: opts.extraArgs ?? ['--sandbox=off'],
         extraEnv: opts.env ?? {},
       },
@@ -143,16 +171,24 @@ export class GatewayProcess {
       port,
     );
 
-    await gw.spawnProcess();
-    await waitForHealth(gw.baseURL, 15_000, gw.proc ?? undefined);
-    await gw.onboardAndLogin();
+    // A failed boot or onboarding (a missing key, a refused probe) must not
+    // leave the process running or its temp OMNIPUS_HOME behind: the caller
+    // never receives a handle to stop().
+    try {
+      await gw.spawnProcess();
+      await waitForHealth(gw.baseURL, 15_000, gw.proc ?? undefined);
+      await gw.onboardAndLogin();
+    } catch (err) {
+      await gw.stop();
+      throw err;
+    }
     return gw;
   }
 
   /** Spawn the binary against this.homeDir/this.port and resolve once the
    * process has logged that it is listening (mirrors setup.ts:startGateway's
    * log-matching + fatal-exit-during-boot handling exactly). */
-  private async spawnProcess(): Promise<void> {
+  private async spawnProcess(envOverrides: Record<string, string> = {}): Promise<void> {
     const args = ['gateway', '--allow-empty', ...this.extraArgs];
     this.proc = await new Promise<ChildProcess>((resolve, reject) => {
       const child = spawn(this.binary, args, {
@@ -161,6 +197,7 @@ export class GatewayProcess {
           OMNIPUS_HOME: this.homeDir,
           OMNIPUS_BEARER_TOKEN: '',
           ...this.extraEnv,
+          ...envOverrides,
         },
         stdio: ['ignore', 'pipe', 'pipe'],
       });
@@ -198,14 +235,44 @@ export class GatewayProcess {
     });
   }
 
-  /** First-boot only: seed the admin/provider via onboarding, then log in. */
+  /** First-boot only: seed the admin/provider via onboarding, then log in.
+   *
+   * Live gateway (no apiBase): the shared onboardViaAPI — primary provider
+   * with its key, then the fallback provider and every agent's
+   * fallback_models. Mock gateway (apiBase): the fallback pair (an
+   * OpenAI-compatible provider) pointed at the mock with a fixed fake key. */
   private async onboardAndLogin(): Promise<void> {
-    const apiKey = process.env.OPENROUTER_API_KEY_CI ?? process.env.OPENROUTER_API_KEY ?? 'sk-test-placeholder';
+    if (!this.apiBase) {
+      await onboardViaAPI({
+        baseURL: this.baseURL,
+        model: this.model,
+        username: this.adminUsername,
+        password: this.adminPassword,
+      });
+      await this.login();
+      return;
+    }
+    // A mock provider accepts any key, so a mock gateway never receives a real
+    // one: this request goes through Playwright's request client, which the
+    // trace records (see onboard-via-api.ts).
+    const apiKey = MOCK_PROVIDER_KEY;
     const onboardCtx = await request.newContext({ baseURL: this.baseURL });
     try {
       const res = await onboardCtx.post('/api/v1/onboarding/complete', {
         data: {
-          provider: { auth_method: 'api_key', id: 'openrouter', api_key: apiKey, model: this.model },
+          provider: {
+            auth_method: 'api_key',
+            id: E2E_FALLBACK.provider,
+            api_key: apiKey,
+            model: this.model,
+            // provider-messages row 20: an explicit endpoint rides the same
+            // onboarding contract (OnboardingProviderApiKey.endpoint —
+            // contracts/components/schemas/OnboardingProviderApiKey.yaml;
+            // rest_onboarding.go reads variant.Endpoint and persists it as
+            // the provider entry's api_base; probeBase prefers it) — the key
+            // probe AND every later chat call go to this base.
+            endpoint: this.apiBase,
+          },
           admin: { username: this.adminUsername, password: this.adminPassword },
         },
       });
@@ -247,6 +314,15 @@ export class GatewayProcess {
     }
     this.ctx = ctx;
     this.csrfToken = csrf.value;
+  }
+
+  /** Storage state for a browser aimed at THIS gateway only. Cookies are for
+   * this process's host, not the shared e2e gateway. */
+  async browserStorageState() {
+    if (!this.ctx) {
+      throw new Error('GatewayProcess.browserStorageState: not authenticated — call start() first')
+    }
+    return this.ctx.storageState()
   }
 
   /** REST call against THIS gateway's own authenticated context — the
@@ -353,11 +429,22 @@ export class GatewayProcess {
    * genuinely needs both an external page's session AND its own apiFetch
    * access after a restart).
    */
-  async restart(opts: { relogin?: boolean } = {}): Promise<void> {
-    await this.spawnProcess();
+  async restart(opts: { relogin?: boolean; env?: Record<string, string> } = {}): Promise<void> {
+    // Test-only process knobs can be phase-scoped without changing the saved
+    // home, port, binary or credentials. Overrides apply to this boot only;
+    // omitted keys retain the fixture's original environment.
+    await this.spawnProcess(opts.env);
     await waitForHealth(this.baseURL, 15_000, this.proc ?? undefined);
     if (opts.relogin ?? true) {
       await this.login();
+    }
+  }
+
+  /** Test-only offline mutation guard (chat-history seam F). A requested kill
+   * or kill9()'s backstop is not evidence that this owned child really exited. */
+  assertStoppedForFixture(): void {
+    if (!this.proc || (this.proc.exitCode === null && this.proc.signalCode === null)) {
+      throw new Error('GatewayProcess.assertStoppedForFixture: owned gateway has not actually exited; refusing offline fixture mutation');
     }
   }
 

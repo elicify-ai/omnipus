@@ -26,6 +26,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/notifications"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // fakeExecutor implements scheduledExecutor for the runner tests.
@@ -36,9 +37,6 @@ type fakeExecutor struct {
 	reply   string
 	err     error
 	emitted []agent.NotificationPayload
-	// hangUntilCtxDone makes ProcessScheduled block until ctx is canceled,
-	// returning ctx.Err(). Used by the deadline/timeout test.
-	hangUntilCtxDone bool
 	// onProcess, when set, is invoked with the run context before returning. It
 	// lets a test simulate a tool spawning a child during the run (e.g. by
 	// calling tools.TrackProcess(ctx, pid)) so the FR-011 tracker wiring is
@@ -57,10 +55,6 @@ func (f *fakeExecutor) ProcessScheduled(ctx context.Context, owner, sessionID, c
 	if f.onProcess != nil {
 		f.onProcess(ctx)
 	}
-	if f.hangUntilCtxDone {
-		<-ctx.Done()
-		return "", ctx.Err()
-	}
 	return f.reply, f.err
 }
 func (f *fakeExecutor) GetSessionStore() *session.UnifiedStore { return f.store }
@@ -72,32 +66,6 @@ func (f *fakeExecutor) EmitNotification(p agent.NotificationPayload) {
 type fakeChecker struct{ registered map[string]bool }
 
 func (c fakeChecker) IsRegistered(id string) bool { return c.registered[id] }
-
-// fakeCanceller records RequestCancel calls (for the timeout/force-abort test).
-type fakeCanceller struct {
-	mu       sync.Mutex
-	sessions []string
-}
-
-func (c *fakeCanceller) RequestCancel(
-	_ context.Context,
-	scope agent.CancelScope,
-	_ agent.CancelCanceller,
-	_ agent.CancelHooks,
-) (agent.CancelOutcome, error) {
-	c.mu.Lock()
-	c.sessions = append(c.sessions, scope.SessionID)
-	c.mu.Unlock()
-	return agent.CancelOutcome{Fired: true}, nil
-}
-
-func (c *fakeCanceller) calls() []string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	out := make([]string, len(c.sessions))
-	copy(out, c.sessions)
-	return out
-}
 
 func newRunnerHarness(
 	t *testing.T,
@@ -307,18 +275,81 @@ func TestRunner_DisabledOwner_NoFallback(t *testing.T) {
 	assert.Empty(t, exec.calls, "disabled owner must not run, and must not fall back")
 }
 
-// TestRunner_SessionMode_Main uses the reserved per-owner session id.
+// TestRunner_SessionMode_Main resolves the pair's COMPUTED main session.
+//
+// session-core U1 / DEL-01 replaced the reserved per-owner `sched-main-<owner>`
+// id with the computed `main-session-<workspace>+<agent>`: the workspace is
+// what makes the pair well defined, so the job must carry one (a heartbeat job
+// carries it in its name by construction).
 func TestRunner_SessionMode_Main(t *testing.T) {
 	cfg := baseConfig()
 	r := newRunnerOnly(t, cfg, map[string]bool{"mia": true})
 
 	job := &cron.CronJob{
-		ID: "j5", AgentID: "mia", SessionMode: cron.SessionModeMain,
-		Payload: cron.CronPayload{Message: "remind"},
+		ID: "j5", Name: heartbeatJobName("ws1", "mia"), AgentID: "mia",
+		SessionMode: cron.SessionModeMain,
+		Payload:     cron.CronPayload{Kind: heartbeatJobKind, Message: "remind"},
 	}
 	sid, err := r.RunScheduled(context.Background(), job)
 	require.NoError(t, err)
-	assert.Equal(t, "sched-main-mia", sid)
+	assert.Equal(t, "main-session-ws1+mia", sid, "main mode resolves the computed main, not the retired per-owner id")
+	assert.NotEqual(t, "sched-main-mia", sid)
+}
+
+// TestRunner_SessionMode_MainWithoutWorkspaceRefuses pins the refusal: a
+// main-mode job that carries no workspace has no pair, so it must fail
+// visibly rather than fabricate a workspace or fall back to a second naming
+// scheme.
+// TestRunner_SessionMode_MainWithoutWorkspaceRefuses: a main-mode job with no
+// workspace must refuse — UNLESS a default workspace exists to derive the main
+// from (FR-017, the sibling test below). The refusal therefore depends on the
+// process-wide OMNIPUS_HOME, so this test isolates its own home FIRST: without
+// it, any earlier test that left a default workspace in the shared home turns
+// the refusal into a success and the test passes only inside its group.
+func TestRunner_SessionMode_MainWithoutWorkspaceRefuses(t *testing.T) {
+	t.Setenv("OMNIPUS_HOME", t.TempDir())
+	// Instrument check: the isolated home must carry NO default workspace, or
+	// the refusal below would be the wrong path (a leaked default from another
+	// test would let the job derive a main and succeed).
+	_, derr := workspace.ResolveDefaultID(config.OmnipusHomeDir())
+	require.Error(t, derr, "instrument: this test's home must have no default workspace")
+	cfg := baseConfig()
+	r := newRunnerOnly(t, cfg, map[string]bool{"mia": true})
+
+	job := &cron.CronJob{
+		ID: "j5b", Name: "plain", AgentID: "mia", SessionMode: cron.SessionModeMain,
+		Payload: cron.CronPayload{Message: "remind"},
+	}
+	sid, err := r.RunScheduled(context.Background(), job)
+	assert.Error(t, err, "a main-mode job with no workspace must refuse visibly")
+	assert.Empty(t, sid)
+}
+
+// TestRunner_SessionMode_MainDerivesTheDefaultWorkspaceMain is the positive
+// sibling of the refusal above (FR-017): the SAME job shape, with a default
+// workspace seeded in this test's OWN home, must run in that workspace's
+// computed main — the pair's main-session-<workspace>+<agent> id.
+func TestRunner_SessionMode_MainDerivesTheDefaultWorkspaceMain(t *testing.T) {
+	t.Setenv("OMNIPUS_HOME", t.TempDir())
+	cfg := baseConfig()
+	// The owner must be a TEAM MEMBER of the default workspace, or the derived
+	// main resolves to nobody and the run is refused ("the owner no longer has a
+	// main in this workspace"). Membership first, then the delegation graph the
+	// graph seeder needs.
+	ensureTestWorkspaceMembership(t, cfg)
+	seedDefaultDelegationGraph(t, testHarnessAgentIDs(cfg))
+	r, exec, _, _ := newRunnerHarness(t, cfg, map[string]bool{"mia": true})
+
+	job := &cron.CronJob{
+		ID: "j5c", Name: "derived main", AgentID: "mia", SessionMode: cron.SessionModeMain,
+		Payload: cron.CronPayload{Message: "remind"},
+	}
+	sid, err := r.RunScheduled(context.Background(), job)
+	require.NoError(t, err, "a derived-MAIN schedule must resolve the default workspace's main (FR-017)")
+	want, err := session.MainSessionID(testHarnessWorkspaceMembershipID, "mia")
+	require.NoError(t, err, "fixture: the harness workspace id must form a valid main id")
+	assert.Equal(t, want, sid, "the run must land in the pair's computed main, not a second naming scheme")
+	require.Len(t, exec.calls, 1, "the resolved main must actually run the job")
 }
 
 // TestRunner_Failure_NotifiesAndAlerts asserts a failed run creates a
@@ -449,39 +480,35 @@ func TestRunner_Failure_PushesEvenWhenCreateFails(t *testing.T) {
 	assert.True(t, recipients["bob"], "creator must get a live push")
 }
 
-// TestRunner_Timeout_ForceCancels asserts that a run exceeding its deadline is
-// force-aborted via RequestCancel(CancelScope{SessionID}) and that the returned
-// error is a context.DeadlineExceeded (so the cron lane records it as "timeout").
-func TestRunner_Timeout_ForceCancels(t *testing.T) {
+// TestRunner_NoDeadline_RunContextIsUnbounded pins issue #1306: a scheduled
+// run (task trigger or heartbeat) has no time limit. The owning agent's turn
+// receives a run context with no deadline, so it ends only when it finishes
+// or an explicit Stop cancels it — never on the retired 300 s default or a
+// per-schedule timeout.
+func TestRunner_NoDeadline_RunContextIsUnbounded(t *testing.T) {
 	cfg := baseConfig()
-	cfg.Schedules.RunTimeoutSeconds = 0 // force per-schedule override below
 	r, exec, mb, _ := newRunnerHarness(t, cfg, map[string]bool{"mia": true})
-	exec.hangUntilCtxDone = true
-	canceller := &fakeCanceller{}
-	r.canceller = canceller // inject the force-abort surface
 	go func() {
 		for range mb.OutboundChan() {
 		}
 	}()
-
-	job := &cron.CronJob{
-		ID: "jt", Name: "slow", AgentID: "mia", CreatedBy: "alice",
-		SessionMode: cron.SessionModeIsolated, TimeoutSeconds: 1, // 1s deadline
-		Payload: cron.CronPayload{Message: "work"},
+	var sawDeadline atomic.Value
+	exec.onProcess = func(ctx context.Context) {
+		_, has := ctx.Deadline()
+		sawDeadline.Store(has)
 	}
 
+	job := &cron.CronJob{
+		ID: "jnd", Name: "long", AgentID: "mia", CreatedBy: "alice",
+		SessionMode: cron.SessionModeIsolated,
+		Payload:     cron.CronPayload{Message: "work for as long as it takes"},
+	}
 	sid, err := r.RunScheduled(context.Background(), job)
-	require.Error(t, err)
-	assert.True(t, errors.Is(err, context.DeadlineExceeded), "timeout error must be DeadlineExceeded, got %v", err)
+	require.NoError(t, err)
 	require.NotEmpty(t, sid)
-
-	// RequestCancel was called for the run's session.
-	calls := canceller.calls()
-	require.NotEmpty(t, calls, "RequestCancel must be called on deadline")
-	assert.Equal(t, sid, calls[0], "RequestCancel must target the run's session id")
-
-	// A deadline must NOT be classified as a transient (retryable) error.
-	assert.False(t, cron.IsTransient(err), "deadline must not be classified transient")
+	got, ok := sawDeadline.Load().(bool)
+	require.True(t, ok, "ProcessScheduled was never reached")
+	assert.False(t, got, "a scheduled run's context must carry no deadline (issue #1306)")
 }
 
 // TestRunner_ChildProcessCleanup_Invoked asserts the FR-011 best-effort cleanup
@@ -539,41 +566,6 @@ func TestRunner_ChildProcessCleanup_OnError(t *testing.T) {
 	require.NotEmpty(t, sid)
 
 	assert.Equal(t, int32(1), atomic.LoadInt32(&cleaned), "process cleanup must fire on the error path")
-	assert.Equal(t, sid, cleanedSession.Load(), "cleanup must be scoped to the run's session id")
-}
-
-// TestRunner_ChildProcessCleanup_OnTimeout asserts the FR-011 cleanup hook fires
-// on the deadline/timeout path. A run that overran its deadline is exactly when
-// orphaned children are most likely, so cleanup must run there too.
-func TestRunner_ChildProcessCleanup_OnTimeout(t *testing.T) {
-	cfg := baseConfig()
-	cfg.Schedules.RunTimeoutSeconds = 0
-	r, exec, mb, _ := newRunnerHarness(t, cfg, map[string]bool{"mia": true})
-	exec.hangUntilCtxDone = true
-	r.canceller = &fakeCanceller{}
-	go func() {
-		for range mb.OutboundChan() {
-		}
-	}()
-
-	var cleaned int32
-	var cleanedSession atomic.Value
-	r.setProcessCleanup(func(sessionID string) {
-		atomic.AddInt32(&cleaned, 1)
-		cleanedSession.Store(sessionID)
-	})
-
-	job := &cron.CronJob{
-		ID: "jct", AgentID: "mia", CreatedBy: "alice",
-		SessionMode: cron.SessionModeIsolated, TimeoutSeconds: 1,
-		Payload: cron.CronPayload{Message: "work"},
-	}
-	sid, err := r.RunScheduled(context.Background(), job)
-	require.Error(t, err)
-	assert.True(t, errors.Is(err, context.DeadlineExceeded))
-	require.NotEmpty(t, sid)
-
-	assert.Equal(t, int32(1), atomic.LoadInt32(&cleaned), "process cleanup must fire on the timeout path")
 	assert.Equal(t, sid, cleanedSession.Load(), "cleanup must be scoped to the run's session id")
 }
 

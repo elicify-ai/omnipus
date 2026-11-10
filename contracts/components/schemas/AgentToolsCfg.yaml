@@ -15,9 +15,13 @@ properties:
         description: >
           Policy map. GET tools returns the complete effective catalog while persisted
           ordinary built-in maps contain sparse overrides. Dedicated replacement
-          requests require every static tool as an explicit, literal key (e.g. "bash", "remember") with an
-          "allow"/"ask"/"deny" value — wildcard keys are not valid for the static
-          builtin catalog. There is no default_policy field; every new custom
+          requests require every implemented static builtin listed by GET /api/v1/tools
+          as an explicit, literal key (e.g. "bash", "remember") with an
+          "allow"/"ask"/"deny" value. Declared future tool names are accepted when supplied
+          but are not required before implementation; omitted existing policies for
+          those names are preserved on replacement, never newly seeded.
+          Wildcard keys are not valid for the static builtin catalog.
+          There is no default_policy field; every new custom
           agent is seeded fully deny-by-default (every static tool explicitly
           "deny"), with only a narrow, deliberately conservative allow-list for
           its actual needs.

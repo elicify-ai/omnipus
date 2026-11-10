@@ -25,6 +25,7 @@ import (
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/gateway/ctxkey"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 )
@@ -63,6 +64,13 @@ func TestListProviders_ConfiguredOnly(t *testing.T) {
 		// openrouter; the id is immaterial to the template-row assertion.
 		const ref = "T068_04_MYGW_API_KEY"
 		t.Setenv(ref, "sk-configured")
+		// The filtering scenario is a healthy configured row, not a stale
+		// env-only key. Keep count/id/connected assertions and provide its key.
+		api.credStore = credentials.NewStore(api.credentialsStorePath())
+		t.Setenv("OMNIPUS_MASTER_KEY", fixedHexKey)
+		t.Setenv("OMNIPUS_KEY_FILE", "")
+		require.NoError(t, credentials.Unlock(api.credStore))
+		require.NoError(t, api.credStore.Set(ref, "sk-configured"))
 		seedTemplateProviders(t, api, &config.ModelConfig{
 			Name:      "mygw",
 			Provider:  "mygw",

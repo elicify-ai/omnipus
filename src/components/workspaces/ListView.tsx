@@ -10,12 +10,15 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { PriorityBadge } from './PriorityBadge'
 import { TaskActionButton } from './TaskActionButton'
+import { RunningIndicator } from '@/components/ui/RunningIndicator'
 import { Button } from '@/components/ui/button'
+import { WordBoundaryText } from '@/components/ui/word-boundary-text'
 import { cn } from '@/lib/utils'
 // 6-state unified vocabulary + colour — single source of truth.
 import { STATUS_ORDER, statusLabel, taskDisplayColor, taskDisplayLabel } from '@/lib/statusColors'
 import { isScheduledTrigger } from './taskFormFields'
-import type { Task, Agent } from '@/lib/api'
+import type { Task, Agent, Plan } from '@/lib/api'
+import { TaskDetailsPopover } from './WorkItemDetails'
 
 type SortKey = 'priority' | 'title' | 'status' | 'agent' | 'updated'
 type SortDir = 'asc' | 'desc'
@@ -43,15 +46,19 @@ const UNASSIGNED = '\u0000unassigned'
 // enumerates in ascending numeric order, exactly this list).
 const PRIORITY_ORDER: string[] = ['1', '2', '3', '4', '5']
 
+/** T11 keeps every column present. The table reserves its fixed-column budget
+ * plus a readable Title floor (two --space-8 plus --space-3); a narrow panel
+ * scrolls the table viewport only instead of hiding or squeezing columns.
+ */
+
 interface ListViewProps {
   /**
-   * Plan-scoped task set (the plan band filter applies upstream); the List
-   * owns everything else — per-column sort AND filter, Excel-style. Board's
-   * toolbar Agent/Tags filters are NOT applied here, so the column filter
-   * dropdowns always offer the full set of values in the current plan scope.
+   * Shared plan/agent/tag-scoped task set. List's own column sorting and
+   * filters further narrow that visible set; toolbar scope stays applied.
    */
   tasks: Task[]
   agents: AgentRef[]
+  plans?: Plan[]
   onTaskClick: (task: Task) => void
 }
 
@@ -78,9 +85,12 @@ function resolveAgentName(task: Task, agents: AgentRef[]): string | null {
  * prop. Borderless: no filled header slab, no row rules — rows separate by
  * padding + hover only.
  */
-export function ListView({ tasks, agents, onTaskClick }: ListViewProps) {
+export function ListView({ tasks, agents, plans = [], onTaskClick }: ListViewProps) {
   const [sortKey, setSortKey] = useState<SortKey>('updated')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
+
+  // T11: no hidden columns or reveal toggle. One width-stable table scrolls
+  // inside its own viewport; its sticky header shares that exact geometry.
 
   // Per-column value filters (empty set = no filter on that column). Priority
   // keys are stringified ('1'..'5') so all four filters share one Set<string>.
@@ -235,8 +245,10 @@ export function ListView({ tasks, agents, onTaskClick }: ListViewProps) {
     sortKey === key ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'
 
   return (
-    <div className="flex flex-1 flex-col overflow-hidden">
-      <div className="flex-1 overflow-y-auto">
+    // The viewport is bounded by the actual panel, never the window's width.
+    <div className="@container flex flex-1 flex-col overflow-hidden">
+      {/* Native scrolling leaves room for the shared focus outline at either edge. */}
+      <div className="flex-1 overflow-auto scroll-px-[var(--space-1)]">
         {/* UAT Finding 2 fix: `table-layout: auto` (the default) sizes
             columns from CONTENT's min-content width, ignoring the Title
             cell's own `truncate`/overflow-hidden entirely — a 200-char
@@ -246,9 +258,10 @@ export function ListView({ tasks, agents, onTaskClick }: ListViewProps) {
             reach them. `table-fixed` sizes every column from the header
             row's own explicit widths (w-12/w-24/w-28/w-10 on the other
             columns) instead — content can no longer drive column width, so
-            the unwidthed Title column always gets exactly "whatever's left"
-            and its own `truncate` (see TaskRow below) finally has effect. */}
-        <table className="w-full table-fixed text-[length:var(--type-body-compact-size)]">
+            Title takes the remaining width and its own `truncate` (see
+            TaskRow below) has effect. T11 reserves a Title floor and scrolls
+            only this content area; every column stays present. */}
+        <table className="w-full min-w-[calc(37rem+var(--space-8)*2+var(--space-3))] table-fixed text-[length:var(--type-body-compact-size)]">
           <thead className="sticky top-0 border-b border-[var(--color-border)]/15 bg-[var(--color-surface-0)]">
             <tr>
               <th className="w-12 px-[var(--space-3)] py-[var(--space-2)] text-left" aria-sort={ariaSort('priority')}>
@@ -260,33 +273,37 @@ export function ListView({ tasks, agents, onTaskClick }: ListViewProps) {
               <th className="w-24 px-[var(--space-2)] py-[var(--space-2)] text-left" aria-sort={ariaSort('status')}>
                 <ColumnMenu label="Status" sort={sortCfg('status')} filter={buildFilter(statusValues, statusFilter, setStatusFilter)} />
               </th>
-              <th className="w-28 px-[var(--space-2)] py-[var(--space-2)] text-left">
+              <th className="w-12 px-[var(--space-2)] py-[var(--space-2)] text-left"><span className="sr-only">Details</span></th>
+              {/* T15 inserts Details before Actions; T11 keeps every column present. */}
+              <th className="w-20 px-[var(--space-2)] py-[var(--space-2)] text-left">
+                <span className="text-[length:var(--type-caption-size)] font-semibold text-[var(--color-muted)]">Actions</span>
+              </th>
+              <th
+                className="w-28 px-[var(--space-2)] py-[var(--space-2)] text-left"
+              >
                 <ColumnMenu label="Tags" filter={buildFilter(tagValues, tagFilter, setTagFilter)} />
               </th>
               <th className="w-24 px-[var(--space-2)] py-[var(--space-2)] text-left" aria-sort={ariaSort('agent')}>
                 <ColumnMenu label="Agent" sort={sortCfg('agent')} filter={buildFilter(agentValues, agentFilter, setAgentFilter)} />
               </th>
-              <th className="w-28 px-[var(--space-3)] py-[var(--space-2)] text-right" aria-sort={ariaSort('updated')}>
+              <th
+                className="w-28 px-[var(--space-3)] py-[var(--space-2)] text-right"
+                aria-sort={ariaSort('updated')}
+              >
                 <ColumnMenu label="Updated" align="right" sort={sortCfg('updated')} />
-              </th>
-              {/* ADR-052 §6.8 — a row action column (▶ Play / ■ Stop per
-                  task state). Not sortable/filterable, so it's a plain
-                  header rather than a ColumnMenu trigger. */}
-              <th className="w-10 px-[var(--space-2)] py-[var(--space-2)] text-right">
-                <span className="sr-only">Actions</span>
               </th>
             </tr>
           </thead>
           <tbody>
             {sorted.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-[var(--space-3)] py-[var(--space-5)] text-center text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+                <td colSpan={8} className="px-[var(--space-3)] py-[var(--space-5)] text-center text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                   {anyFilterActive ? 'No tasks match the column filters' : 'No tasks to show'}
                 </td>
               </tr>
             ) : (
               sorted.map((task) => (
-                <TaskRow key={task.id} task={task} agents={agents} onClick={() => onTaskClick(task)} />
+                <TaskRow key={task.id} task={task} agents={agents} plans={plans} onClick={() => onTaskClick(task)} />
               ))
             )}
           </tbody>
@@ -361,7 +378,7 @@ function ColumnMenu({ label, align = 'left', sort, filter }: ColumnMenuProps) {
           variant="ghost"
           aria-label={`${label} column — ${affordance}`}
           className={cn(
-            'h-auto gap-[var(--space-1)] p-0 text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider hover:bg-transparent',
+            'h-auto gap-[var(--space-1)] p-0 text-[length:var(--type-caption-size)] font-semibold hover:bg-transparent',
             isSorted || isFiltered
               ? 'text-[var(--color-secondary)]'
               : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
@@ -428,18 +445,13 @@ function ColumnMenu({ label, align = 'left', sort, filter }: ColumnMenuProps) {
   )
 }
 
-function TaskRow({
-  task,
-  agents,
-  onClick,
-}: {
-  task: Task
-  agents: AgentRef[]
-  onClick: () => void
-}) {
+function TaskRow({ task, agents, plans, onClick }: { task: Task; agents: AgentRef[]; plans: Plan[]; onClick: () => void }) {
   const priority = task.priority ?? 3
   const tags = task.tags ?? []
   const agentName = resolveAgentName(task, agents)
+  // FR-022 (SP-41) + founder PI3: a running task's row shows THE catalogued
+  // running indicator — animated spinner only, no token count.
+  const running = task.status === 'in_progress'
 
   return (
     // The row is mouse-clickable for whole-row convenience; the REAL keyboard/AT
@@ -449,7 +461,7 @@ function TaskRow({
       <td className="px-[var(--space-3)] py-[var(--space-2)]">
         <PriorityBadge
           priority={priority}
-          className="rounded px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-bold"
+          className="bg-transparent p-0 text-[length:var(--type-caption-size)] font-bold"
         />
       </td>
       <td className="px-[var(--space-2)] py-[var(--space-2)]">
@@ -463,18 +475,11 @@ function TaskRow({
             e.stopPropagation()
             onClick()
           }}
+          data-task-open=""
           aria-label={`${task.title}, status ${taskDisplayLabel(task)}`}
-          // `title` gives a native tooltip with the full text (Finding 2 —
-          // "truncate with ellipsis plus a title/tooltip"). `truncate`
-          // (nowrap + overflow-hidden + ellipsis) — rather than the old
-          // `line-clamp-1` (which clips with no ellipsis once the row can't
-          // grow) — reads as a real single-line ellipsis, and now that the
-          // table itself is `table-fixed` (see ListView's <table> above),
-          // this button's `w-full` resolves against a WIDTH-STABLE column
-          // instead of one that grows to fit the very content it's meant to
-          // truncate.
-          title={task.title}
-          className="h-auto w-full min-w-0 justify-start truncate p-0 text-left text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent"
+          // T13: one-line ellipsis; T15 supplies full text from the info
+          // button's click-triggered Popover; there is no native hover popup.
+          className="block h-auto w-full min-w-0 truncate p-0 text-left text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent"
         >
           {task.title}
         </Button>
@@ -483,20 +488,26 @@ function TaskRow({
         {/* ADR-052 FR-015/US-8 — a user-cancelled task renders "Cancelled"
             (orange), distinct from a genuine "Failed" (red), via the shared
             taskDisplayColor/taskDisplayLabel helpers (statusColors.ts). */}
-        <span className="text-[length:var(--type-utility-xs-size)] font-medium" style={{ color: taskDisplayColor(task) }}>
-          {taskDisplayLabel(task)}
-        </span>
+        <div className="flex items-center gap-[var(--space-1)]">
+          {running ? <RunningIndicator /> : <span aria-hidden="true" style={{ color: taskDisplayColor(task) }}>●</span>}
+          <span className="text-[length:var(--type-utility-xs-size)] font-medium" style={{ color: taskDisplayColor(task) }}>
+            {taskDisplayLabel(task)}
+          </span>
+        </div>
       </td>
-      <td className="px-[var(--space-2)] py-[var(--space-2)]">
+      <td className="px-[var(--space-2)] py-[var(--space-2)]"><TaskDetailsPopover task={task} plans={plans} agents={agents} onOpenTask={onClick} /></td>
+      {/* Always visible, and isolated from the row's open-detail action. */}
+      <td className="px-[var(--space-2)] py-[var(--space-2)]" onClick={(e) => e.stopPropagation()}>
+        <TaskActionButton task={task} />
+      </td>
+      <td
+        className="px-[var(--space-2)] py-[var(--space-2)]"
+      >
         {tags.length > 0 ? (
           <div className="flex max-w-[7rem] flex-wrap items-center gap-[var(--space-1)]">
-            {tags.slice(0, 2).map((tag) => (
-              <span
-                key={tag}
-                title={tag}
-                className="max-w-[4rem] truncate rounded bg-[var(--color-accent)]/10 px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-accent)]"
-              >
-                {tag}
+            {tags.slice(0, 2).map((tag, index) => (
+              <span key={tag} data-task-tag="" className="inline-flex min-w-0 max-w-full items-center gap-[var(--space-1)] whitespace-normal break-normal wrap-break-word text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+                <WordBoundaryText text={tag} />{index < Math.min(tags.length, 2) - 1 && <span aria-hidden="true">·</span>}
               </span>
             ))}
             {tags.length > 2 && <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">+{tags.length - 2}</span>}
@@ -512,16 +523,10 @@ function TaskRow({
           <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">—</span>
         )}
       </td>
-      <td className="px-[var(--space-3)] py-[var(--space-2)] text-right">
+      <td
+        className="px-[var(--space-3)] py-[var(--space-2)] text-right"
+      >
         <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{formatUpdated(task.updated_at)}</span>
-      </td>
-      {/* ADR-052 §6.8 row action (▶ Play / ■ Stop per task state) — always
-          visible (not hover-gated) so it's reachable on touch devices, which
-          can't hover a row to discover it. TaskActionButton itself already
-          stops the click/pointerdown/keydown from bubbling into the row's
-          own onClick (open task). */}
-      <td className="px-[var(--space-2)] py-[var(--space-2)] text-right" onClick={(e) => e.stopPropagation()}>
-        <TaskActionButton task={task} />
       </td>
     </tr>
   )

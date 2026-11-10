@@ -139,7 +139,7 @@ The reply streams to stdout; tool activity and progress go to stderr, so you can
 omnipus jim "List the top 5 files by size" > files.txt
 ```
 
-Run `omnipus` with no arguments to list the agents you can address, by ID and name — on a fresh install that is `mia`, `jim`, `ava`, and `ray`.
+Run `omnipus` with no arguments to list the agents you can address, by ID and name — on a fresh install that is `mia`, `jim`, `ava`, and `admin`.
 
 Some tools, such as an agent's shell, require approval. Without `--yes` they are denied and the run continues; with it, approvals are granted for this run only:
 
@@ -187,7 +187,7 @@ Most jobs can be done from either place.
 | Pick a model for one run | `--model <slug>` | The model picker in chat |
 | Manage API keys | `omnipus credentials …` | Settings → Providers |
 | Review the audit log | `omnipus audit` | Settings → Security |
-| Create and edit agents | — | The Agents screen |
+| Create and edit agents | — | Ask Omnipus (**Add agent** in the sidebar or **Team → Add agent**); edit from the workspace's **Team** |
 | Connect Telegram, Discord, Slack and more | — | The Connectors screen, Configure |
 | Add MCP servers | — | The Skills screen |
 | Follow task work | — | A workspace's Board and Calendar |
@@ -195,7 +195,7 @@ Most jobs can be done from either place.
 
 ## Limits and things to watch
 
-- **One-shot tasks need a running server.** If it is down, the command prints `Omnipus isn't running — start it with: omnipus start`. Runs also time out after five minutes by default; change it with `--timeout <duration>`.
+- **One-shot tasks need a running server.** If it is down, the command prints `Omnipus isn't running — start it with: omnipus start`. The command stops waiting for the answer after five minutes by default; change it with `--timeout <duration>`. That only ends the terminal's wait: the agent's work has no time limit and carries on in the server, so you can read its result in the web app.
 - **Talking to a remote server is not supported yet.** The `--url` flag exists but is reserved.
 - **Command names shadow agent names, and worker agents cannot be addressed directly.** An agent named `start` cannot be run from the terminal; rename it or use the web app. `omnipus` with no arguments lists the agents you can run.
 

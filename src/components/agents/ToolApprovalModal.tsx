@@ -71,9 +71,9 @@
 // (another tab, timeout, Stop, agent deletion) arrive as tool_approval_resolved
 // frames and are applied by src/store/chat.ts → markResolved.
 //
-// Scope: only approvals whose workspace matches the active workspace (or that
-// have no workspace) are shown — see isApprovalInScope. Out-of-scope approvals
-// stay queued and appear when the user switches to their workspace.
+// Scope (L1 stage 1): every pending approval is shown, whatever its workspace
+// or chat — see ToolApprovalModal below. Release showed only the active
+// workspace's approvals (isApprovalInScope) plus a cross-workspace banner.
 //
 // ADR-036 §3.4 note: this is now the ONLY tool-approval UI — the dedicated
 // exec-only flow (ExecApprovalBlock/ExecApprovalTool, WS
@@ -98,7 +98,8 @@
 //     exec-only flow.
 
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
-import { CheckCircle, XCircle, ProhibitInset, Shield, Lock, WarningCircle } from '@phosphor-icons/react'
+import { ArrowSquareOut, CheckCircle, XCircle, ProhibitInset, Shield, Lock, WarningCircle } from '@phosphor-icons/react'
+import { useRouter } from '@tanstack/react-router'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
@@ -109,15 +110,16 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog'
-import { useToolApprovalStore, isApprovalInScope } from '@/store/toolApproval'
-import { useWorkspacesStore } from '@/store/workspacesStore'
+import { useToolApprovalStore } from '@/store/toolApproval'
 import { submitToolApproval, isApiError, fetchAgents } from '@/lib/api'
 import type { Agent } from '@/lib/api'
 import type { ToolApprovalActionRequest } from '@/lib/api/generated/openapi-types'
 import type { CommandSegmentInfo } from '@/lib/api/generated/asyncapi-types'
 import { useUiStore } from '@/store/ui'
+import { useSessionStore } from '@/store/session'
 import { forceLogout } from '@/lib/authLogout'
 import { humanizeToolName } from '@/lib/humanizeToolName'
+import { isAlwaysAskTool, ONE_REQUEST_APPROVAL_NOTICE } from '@/lib/alwaysAskTools'
 import { queryClient } from '@/lib/queryClient'
 import { TOOL_APPROVAL_PREVIEWS } from './approvalPreviews/registry'
 import type { ToolApprovalPreviewContext } from './approvalPreviews/types'
@@ -212,14 +214,6 @@ interface ToolApprovalCardProps {
   agentId: string
   expiresAt: number
   queueLength: number
-  /**
-   * Present on every entry sourced from a live tool_approval_required frame
-   * (the wire schema requires both non-empty, minLength 1). Empty here is the
-   * "reconnect stub" signal — see isReconnectStub below and the Deliverable 4
-   * note on ToolApprovalModal's call site.
-   */
-  toolCallId: string
-  turnId: string
   sessionId: string
   /**
    * ADR-092 D4 — per-segment breakdown of a chained shell command, present
@@ -228,6 +222,8 @@ interface ToolApprovalCardProps {
    * own doc comment (src/store/toolApproval.ts).
    */
   segments?: CommandSegmentInfo[]
+  /** K7 / FR-251: server-derived turn origin, retained across reconnects. */
+  originLabel?: string
 }
 
 function ToolApprovalCard({
@@ -237,14 +233,15 @@ function ToolApprovalCard({
   agentId,
   expiresAt,
   queueLength,
-  toolCallId,
-  turnId,
   sessionId,
   segments,
+  originLabel,
 }: ToolApprovalCardProps) {
   const dequeue = useToolApprovalStore((s) => s.dequeue)
   const markResolved = useToolApprovalStore((s) => s.markResolved)
   const addToast = useUiStore((s) => s.addToast)
+  const router = useRouter({ warn: false })
+  const viewedSessionId = useSessionStore((s) => s.activeSessionId)
   const [submitting, setSubmitting] = useState(false)
   const { remainingMs, progressPct } = useCountdown(expiresAt)
   // Default-focus target: the Deny button (the safe default). Focusing Deny
@@ -415,32 +412,18 @@ function ToolApprovalCard({
     }
   }, [submitting, hasExpired, dequeue, approvalId, handleAction])
 
-  const argsJson = JSON.stringify(args, null, 2)
   const titleId = `tool-approval-title-${approvalId}`
   const descId = `tool-approval-desc-${approvalId}`
 
-  // ── Reconnect-gap guard (Deliverable 4) ───────────────────────────────────
-  // SessionStatePendingApproval (the WS session_state reconnect snapshot)
-  // carries no `args`, `tool_call_id`, or `turn_id` — strictly less than a
-  // live tool_approval_required frame. When an approval the server still
-  // considers pending was never seen by this tab as a live frame (page
-  // reload while an approval was outstanding, or a second tab connecting
-  // afterwards), reconcileWithSessionState (src/store/toolApproval.ts) adds a
-  // stub queue entry for it with toolCallId/turnId set to '' — see that
-  // function's own comment for the full rationale. This is a safe,
-  // collision-free signal rather than a heuristic: toolCallId and turnId are
-  // both required + minLength 1 on the wire (ToolApprovalRequiredFrame
-  // schema), so a genuine live frame — the only thing enqueue() ever
-  // constructs a queue entry from — can never produce an empty string here.
-  const isReconnectStub = toolCallId === '' && turnId === ''
   const mountPath =
     typeof args.host_path === 'string' ? args.host_path.trim()
     : typeof args.path === 'string' ? args.path.trim()
     : ''
   // Always Allow remembers the exact arguments. A request_mount with no
-  // folder path has nothing safe to remember — hide the button, same as a
-  // reconnect stub.
-  const hideAlwaysAllow = isReconnectStub || (toolName === 'request_mount' && !mountPath)
+  // folder path has nothing safe to remember — hide the button. An always-ask
+  // tool's approval is never remembered (channels FR-038): no Always Allow.
+  const alwaysAsk = isAlwaysAskTool(toolName)
+  const hideAlwaysAllow = alwaysAsk || (toolName === 'request_mount' && !mountPath)
 
   // ── Per-tool readable-summary registry (Deliverables 1-3) ─────────────────
   // Agent display name (D-87): a permission prompt is exactly where the human
@@ -470,9 +453,12 @@ function ToolApprovalCard({
   const resolvedAgentName = cachedAgentName || fetchedAgentName || agentId
   const previewEntry = TOOL_APPROVAL_PREVIEWS[toolName]
   const replaceEntry = previewEntry?.mode === 'replace' ? previewEntry : undefined
+  // The card shows only the entry's redacted copy (summary and raw dump alike).
+  const shownArgs = previewEntry?.redactArgs ? previewEntry.redactArgs(args) : args
+  const argsJson = JSON.stringify(shownArgs, null, 2)
   const previewCtx: ToolApprovalPreviewContext = {
     toolName,
-    args,
+    args: shownArgs,
     agentId,
     agentName: resolvedAgentName,
     sessionId,
@@ -498,7 +484,7 @@ function ToolApprovalCard({
       <DialogContent
         className="max-w-lg border-[var(--color-warning)]/40 p-0 overflow-hidden gap-0"
         aria-labelledby={titleId}
-        aria-describedby={descId}
+        aria-describedby={originLabel ? `${descId} ${descId}-origin` : descId}
         // Land focus on Deny (safe default) instead of Radix's first-focusable
         // heuristic (which would be the X close button).
         onOpenAutoFocus={(e) => {
@@ -523,12 +509,10 @@ function ToolApprovalCard({
               id={titleId}
               className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)] font-headline"
             >
-              {isReconnectStub ? 'Approval Details Unavailable' : dialogTitleText}
+              {dialogTitleText}
             </DialogTitle>
             <DialogDescription id={descId} className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] truncate">
-              {isReconnectStub ? (
-                "This page can't show what's being asked — see below."
-              ) : replaceEntry ? (
+              {replaceEntry ? (
                 'Review the details below before deciding.'
               ) : (
                 <>
@@ -537,6 +521,15 @@ function ToolApprovalCard({
                 </>
               )}
             </DialogDescription>
+            {originLabel && (
+              <DialogDescription
+                id={`${descId}-origin`}
+                className="break-words text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
+                data-testid="tool-approval-origin"
+              >
+                {originLabel}
+              </DialogDescription>
+            )}
           </div>
           {queueLength > 1 && (
             <span className="shrink-0 text-[length:var(--type-caption-size)] bg-[var(--color-surface-2)] text-[var(--color-muted)] px-[var(--space-2)] py-[var(--space-0-5)] rounded-full">
@@ -545,23 +538,36 @@ function ToolApprovalCard({
           )}
         </DialogHeader>
 
-        {/* Tool info — reconnect-stub notice, a 'replace'-mode readable summary
+        {/* FR-034: a helper or run asked, not the chat in front of the user.
+            Names where it is acting and opens that run's own session. */}
+        {sessionId && sessionId !== viewedSessionId && (
+          <div className="flex items-center gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-2)] border-b border-[var(--color-border)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+            <span className="flex-1 min-w-0 truncate">Asked from a helper or run in another session.</span>
+            <Button
+              type="button"
+              variant="link"
+              size="sm"
+              data-testid="approval-open-run"
+              data-session-id={sessionId}
+              className="h-auto shrink-0 gap-[var(--space-1)] px-0 py-0 text-[length:var(--type-utility-xs-size)]"
+              onClick={() => {
+                if (!router) {
+                  addToast({ message: "Can't open that run from here.", variant: 'warning' })
+                  return
+                }
+                void router.navigate({ to: '/sessions/$sessionId', params: { sessionId } })
+              }}
+            >
+              <ArrowSquareOut size={11} aria-hidden="true" />
+              Open run
+            </Button>
+          </div>
+        )}
+
+        {/* Tool info — a 'replace'-mode readable summary
             (e.g. request_mount), or the generic Tool line + optional
             'additive' preview (e.g. bash) + raw Arguments JSON fallback. */}
-        {isReconnectStub ? (
-          <div className="px-[var(--space-3)] py-[var(--space-3)] space-y-[var(--space-2)]">
-            <div className="flex items-start gap-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-warning)]">
-              <WarningCircle size={16} weight="bold" className="shrink-0 mt-[var(--space-0-5)]" aria-hidden="true" />
-              <p>
-                This page reconnected after {humanizeToolName(toolName)} was already waiting on a
-                decision, and the original request details did not come back with it.
-              </p>
-            </div>
-            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
-              Denying is the safe choice when you can&apos;t see what&apos;s being asked.
-            </p>
-          </div>
-        ) : replaceEntry ? (
+        {replaceEntry ? (
           <replaceEntry.Body {...previewCtx} />
         ) : (
           <div className="px-[var(--space-3)] py-[var(--space-3)] space-y-[var(--space-2-5)]">
@@ -652,6 +658,13 @@ function ToolApprovalCard({
           </div>
         )}
 
+        {/* Channels FR-038 / S-29: an always-ask tool's approval covers only this call. */}
+        {!hasExpired && alwaysAsk && (
+          <p className="px-[var(--space-3)] pb-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">
+            {ONE_REQUEST_APPROVAL_NOTICE}
+          </p>
+        )}
+
         {/* Countdown */}
         <div className="px-[var(--space-3)] pb-[var(--space-2-5)]">
           {hasExpired ? (
@@ -682,7 +695,7 @@ function ToolApprovalCard({
             once the server has actually suggested one (prefixScopeAvailable)
             — never a client-guessed prefix. Applies to every currently
             unmatched segment shown above (one choice, not one per segment). */}
-        {!hasExpired && !isReconnectStub && !hideAlwaysAllow && isShellCommand && (
+        {!hasExpired && !hideAlwaysAllow && isShellCommand && (
           <div className="px-[var(--space-3)] pb-[var(--space-2-5)]">
             <RadioGroup
               aria-label="Grant scope for Always Allow"
@@ -719,25 +732,7 @@ function ToolApprovalCard({
             without any button clipping. */}
         {!hasExpired && (
           <div className="flex flex-wrap gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-3)] border-t border-[var(--color-border)] bg-[var(--color-surface-2)]">
-            {isReconnectStub ? (
-              // Only the safe action is offered. A reconnect stub has no
-              // arguments: Always Allow would record a grant for {}, which
-              // is not the call the user was asked about. No Approve either
-              // — approving a request this page cannot show would be a
-              // blind decision.
-              <Button
-                ref={denyButtonRef}
-                size="sm"
-                variant="outline"
-                onClick={() => handleAction('deny')}
-                disabled={submitting}
-                className="h-8 text-[length:var(--type-utility-xs-size)] w-full"
-              >
-                <XCircle size={14} weight="bold" aria-hidden="true" />
-                Deny
-              </Button>
-            ) : (
-              <>
+            <>
                 <Button
                   size="sm"
                   variant="default"
@@ -785,7 +780,6 @@ function ToolApprovalCard({
                   </Button>
                 )}
               </>
-            )}
           </div>
         )}
 
@@ -811,8 +805,11 @@ function ToolApprovalCard({
 // and surface when the user switches to their workspace.
 export function ToolApprovalModal() {
   const queue = useToolApprovalStore((s) => s.queue)
-  const activeWorkspaceId = useWorkspacesStore((s) => s.activeWorkspaceId)
-  const visible = queue.filter((a) => isApprovalInScope(a, activeWorkspaceId))
+  // L1 stage 1 (founder, 2026-10-14): there is no "waiting elsewhere" banner,
+  // so every pending approval — any workspace, any chat, the open one too —
+  // is shown here; none can be lost. (Release scoped this to the active
+  // workspace and announced the rest in a cross-workspace banner.)
+  const visible = queue
   const first = visible[0]
 
   if (!first) return null
@@ -826,10 +823,9 @@ export function ToolApprovalModal() {
       agentId={first.agentId}
       expiresAt={first.expiresAt}
       queueLength={visible.length}
-      toolCallId={first.toolCallId}
-      turnId={first.turnId}
       sessionId={first.sessionId}
       segments={first.segments}
+      originLabel={first.originLabel}
     />
   )
 }

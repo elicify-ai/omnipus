@@ -32,22 +32,21 @@ func (f signInRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error
 // the encrypted-store credential successfully.
 func TestSignInPoll_SignedInCreatesUsableProvider(t *testing.T) {
 	api := newProbeAPI(t)
-	signedOutCodexHome(t) // the device-code credential must stand on its own
 
 	state := "signed_in"
 	vendor := httptest.NewServer(deviceCodeVendorMux(t, &state))
 	defer vendor.Close()
 	withDeviceCodeVendor(t, vendor)
 
-	startW := doJSON(t, api, http.MethodPost, "/api/v1/providers/openai-chatgpt/sign-in", nil)
+	// newProbeAPI pins the hosted edition, where the sign-in routes never
+	// serve an anonymous caller: the operator is signed in to the instance.
+	startW := doJSONWithUser(t, api, http.MethodPost, "/api/v1/providers/openai-chatgpt/sign-in", nil, "operator@example.com")
 	require.Equal(t, http.StatusOK, startW.Code, startW.Body.String())
 	var startResp gen.SignInStartResponse
 	require.NoError(t, json.Unmarshal(startW.Body.Bytes(), &startResp))
-	deviceCode, err := startResp.AsSignInStartResponseDeviceCode()
-	require.NoError(t, err)
 
-	pollW := doJSON(t, api, http.MethodPost, "/api/v1/providers/openai-chatgpt/sign-in/poll",
-		gen.SignInPollRequest{DeviceAuthId: deviceCode.DeviceAuthId})
+	pollW := doJSONWithUser(t, api, http.MethodPost, "/api/v1/providers/openai-chatgpt/sign-in/poll",
+		gen.SignInPollRequest{DeviceAuthId: startResp.DeviceAuthId}, "operator@example.com")
 	require.Equal(t, http.StatusOK, pollW.Code, pollW.Body.String())
 	var pollResp gen.SignInPollResponse
 	require.NoError(t, json.Unmarshal(pollW.Body.Bytes(), &pollResp))
@@ -55,7 +54,7 @@ func TestSignInPoll_SignedInCreatesUsableProvider(t *testing.T) {
 
 	store := credentials.NewStore(api.credentialsStorePath())
 	require.NoError(t, credentials.Unlock(store))
-	_, err = store.Get(credentials.OAuthEntryName("openai"))
+	_, err := store.Get(credentials.OAuthEntryName("openai"))
 	require.NoError(t, err, "the successful poll must persist one encrypted OAuth entry")
 
 	cfg := api.agentLoop.GetConfig()

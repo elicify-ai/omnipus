@@ -9,7 +9,7 @@ day-partitioned transcript files, and the retention sweep. Interfaces in
 `CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 -run
 '^TestStripedSessionLock_ShardIsolation$' ./pkg/session/`
 
-## Two independent 64-shard lock pools — and a one-directional order
+## Three lock classes: two independent shard pools and a history owner
 
 Two pool CLASSES with separate state, each 64 shards of FNV-32a keyed
 mutexes: the session pool (`unified_lock.go::u4SessionStripedLock`, held by
@@ -27,6 +27,26 @@ wider order (ADR-086) is goalLock(goalID) → sessionLock(sessionID) →
 cacheMu. `unified.go::GetMeta`'s fast path takes `cacheMu` and the shard
 sequentially, not nested — that does not invert the rule.
 
+### Per-session history owner — not another shard pool
+
+The third class is `chatHistoryOwner`, obtained through `historyOwner` for one
+canonical session. `reconcileChatHistoryIndex` holds `owner.mu` across bounded
+reconciliation I/O. It briefly takes the session shard and archive append mutex
+to capture source ends, releases them for content I/O, and takes the shard again
+for root publication. Do not describe this owner as an I/O-free mutex.
+
+| Boundary | Required discipline |
+|---|---|
+| Blocking reconciliation | `owner.mu` precedes the session shard; capture can then take the archive append mutex. The existing shard-to-`cacheMu` order still applies. |
+| Canonical append | `prepareHistoryAppend` uses `TryLock` before the shard. `historyAccepted` and `historyDispositionAccepted` also use `TryLock`, never queueing behind a recoverer; callbacks run after the archive append mutex is released. A skipped derived update remains a bounded suffix, not a failed canonical save. |
+| Reverse nesting | Never acquire `owner.mu` with a blocking lock while holding a session shard. A writer's nonblocking `TryLock` is the deliberate exception, not permission to introduce the reverse blocking order. |
+| Lifecycle shards | These remain a different pool. History reconciliation does not acquire them; no history-owner/lifecycle-shard nesting order is established. Do not introduce such nesting merely because both use session identifiers. |
+| Generation pins | The owner's separate `refsMu` guards pin/retirement bookkeeping. A selected generation stays pinned through tree/content use; close the handle before releasing its pin, including on errors or panic. The release callback returns cleanup errors; surface them rather than hiding them in reselect. Failed retirement stays pending and normal reconciliation retries it, including zero-mutation reads. Reader body I/O holds neither shard nor archive append mutex. |
+
+Sources: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/chat_history_index.go::reconcileChatHistoryIndex`,
+`/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/chat_history_reconcile.go::reconcileHistoryOwned`,
+and `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/chat_history_storage.go::chatHistoryOwner`.
+
 ## One all-shard hold, one sequential parent-then-child protocol
 
 Nothing else may hold two session shards at once.
@@ -41,14 +61,59 @@ Nothing else may hold two session shards at once.
   discipline, not the type system. Regression:
   `TestCreateSessionWithID_NeverHoldsTwoSessionShards`.
 
-## Durability — Save is a no-op; the sweep is the sole deleter
+## Durability — Save is a no-op; the addressed archive is append-only
 
-`jsonl_backend.go::Save` returns nil unconditionally: the wrapped
-`memory.JSONLStore` fsyncs every write, and evicted (skipped) lines MUST
-stay on disk for recall. The retention sweep is the only legitimate
-deleter of transcript content; goal retention runs as a separate pass
-AFTER the shard hold is released (a swappable hook, so pkg/session never
-imports pkg/goal — that would be an import cycle).
+`archive_backend.go::archiveBackend.Save` and `unified_write.go::UnifiedStore.Save`
+return nil unconditionally: every append already fsyncs, and evicted (skipped)
+lines MUST stay on disk for recall.
+
+- `archive_day_store.go::ArchiveDayStore.Append` validates the envelope, refuses
+  one over `memory.EncodedLineBound` (8 MB) before writing anything, then
+  appends under a per-store mutex with `O_APPEND`, newline framing and
+  `f.Sync()`. A failed write or fsync truncates back to the pre-append size so
+  unpublished bytes never linger; a torn final line gets a newline first.
+  `NewArchiveDayStore` refuses an empty session id, `.`, `..` or any id holding a
+  path separator.
+- Backend state (`backend_meta.json`: cursor, anchor, retracted spans, projection)
+  is written to a temp file and renamed by `archiveBackend.saveMetaLocked`; it is
+  NOT fsynced.
+- The ordinal index (`ordinal_index.go`) fsyncs its row log; its offsets table is
+  derived and rebuilt from the rows when it disagrees.
+- `archive_scan.go::ArchiveDayStore.ScanAll` skips a corrupt line without
+  consuming an ordinal, so ordinals never shift under damage.
+- Rollback never shrinks the archive: `archiveBackend.RollbackWindow` records the
+  aborted span as retained-but-excluded (types: `pkg/memory`).
+- The retention sweep (`retention_sweep.go::RetentionSweep`) removes aged-out
+  session directories; goal retention runs as a separate pass AFTER the shard
+  hold is released (a swappable hook, so pkg/session never imports pkg/goal —
+  that would be an import cycle). Rolled-partition expiry has a real caller:
+  `expireArchiveSessions` invokes `archiveBackend.expireSession`, which calls
+  `ArchiveDayStore.SweepExpired` and repairs the model-window cursor. After
+  releasing all session shards, the sweep calls `reconcileExistingChatHistory`
+  even on a zero-removal pass, then records expiry notices and runs goal retention.
+  Sources: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/archive_expiry.go::expireSession`
+  and `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/retention_sweep.go::RetentionSweep`.
+
+## Paged chat history and derived publication
+
+`ReadChatHistoryPage` is the bounded display reader, not a wrapper around a
+lifetime `ReadTranscript`/`ReadTranscriptView` scan. Whole source groups are
+selected at an immutable cut; selected content and dependencies are read after
+capture locks are released. The gateway must supply the real carrier weigher;
+there is no guessed default weight in the session package.
+
+| Invariant | Rule |
+|---|---|
+| One content authority | Canonical append-only archive bytes hold content. The `.chat-history` index is derived, content-free occurrence/correction metadata, not another transcript. |
+| Publication order | Fsync canonical acceptance first, then derived copy-on-write node frames and transaction footer, then publish the checkpoint/root. An index failure must not relabel an accepted canonical save as unsaved. |
+| New identity | Publish the verified empty baseline before making a new session identity readable. Never infer an empty conversation from missing or inconsistent derived state. |
+| Online recovery | Reconcile at most 64 combined archive/disposition/deletion facts from a valid checkpoint; the 65th refuses (`catchup_limit`). Do not retry-walk a larger gap in batches. Derived-index damage (published root/tail) is checked before collection and refuses as `index_inconsistent` whatever the lag. |
+| Demand self-heal (#1470) | Only demand paths (`CheckChatHistoryReadiness`, `readChatHistoryPage` via `reconcileChatHistoryIndexOnDemand`) may rebuild ONE session's index, and only on a pure `catchup_limit`; boot and the retention sweep use the non-healing `reconcileChatHistoryIndex`. `chat_history_heal.go::healChatHistoryOwned` holds `owner.mu`, takes the process-wide `chatHistoryHealSlot`, refuses a source over 32 MiB, builds with the demand options (strict existing-index proof; `source_changed` only on proven source movement) under a detached 30 s context, retires through the runtime owner in the store's path spelling, and proves readiness with one bounded reconcile. Never build a baseline for a missing index or heal any `index_inconsistent` cause. |
+| Retention | Preserve only opaque token/rank tombstones for expired occurrences. Rich generation retirement waits for old reader pins; genuine Windows sharing-busy is not proof that a partition disappeared. |
+| Offline repair | The explicit `PrepareChatHistoryIndex` builder reconstructs the derived index from retained canonical bytes with the same reducer as the online path; the demand self-heal reuses it in-process (with its strict demand options). The standalone repair command that once shipped beside it was removed by founder decision 2026-10-27 (greenfield, no upgrade path). The builder is not an application-startup or ordinary-send fallback and must not invoke the gateway/projector/model to reconstruct the index. |
+
+Sources: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/chat_history_select.go::readChatHistoryPage`
+and `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/squad-1266-green-be/pkg/session/chat_history_storage.go::historyPublish`.
 
 ## Two id namespaces, compile-enforced
 
@@ -56,7 +121,29 @@ imports pkg/goal — that would be an import cycle).
 the ROOT's SessionID and must never resolve store-backed state for anyone
 but the root (this confusion was bugs #576/#577). `CreateSessionWithID`
 refuses a colliding caller-supplied id loudly (FR-096). Scheduled-session
-ids are reserved conventions (`sched-main-<owner>`), not ULIDs.
+ids are ULIDs (`NewScheduledSession`).
+
+A MAIN session's id is COMPUTED, never minted or stored:
+`main_session.go::MainSessionID` joins the pair as
+`main-session-<workspace>+<agent>` — the `+` cannot occur in either validated
+component, so two distinct pairs can never collide on one id. Each component
+keeps its own 128-byte bound; the computed id is capped at 255 UTF-8 bytes
+(the directory-name limit) and above it the store REFUSES with a visible
+error, storing nothing — no hash, truncation or replacement id.
+`unified.go::getOrCreateMainSession` (behind `GetOrCreateMainSession` and
+`GetOrCreateMainSessionOwned`) is the only creator, and it treats a
+read error on that id as the BDD-01.4 refusal, NOT as a cache miss: only a
+genuinely absent record creates. A stored record whose owner, workspace or
+type does not match the pair is refused untouched, never adopted or repaired.
+
+Main owner (a person's username, attribution only — never access control):
+`unified_main_owner.go::GetOrCreateMainSessionOwned` stamps it only in the
+creating write and returns an existing main unchanged (the plain
+`GetOrCreateMainSession` creates ownerless). `AdoptMainSessionOwner` gives an
+ownerless main its first owner as one compare-and-set under the session shard
+plus the meta.json sidecar flock, re-reading meta.json inside that hold, and
+changes ONLY `owner` — meta.json's own `updated_at` and stats.json are kept,
+so adoption is not activity and never re-orders session lists.
 
 ## A meta.json that fails to parse stays invisible
 

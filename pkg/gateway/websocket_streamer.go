@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -93,15 +94,11 @@ func (h *WSHandler) GetStreamer(_ context.Context, channel, chatID, sessionID st
 	if channel != "webchat" {
 		return nil, false
 	}
+	// A missing session id REFUSES (DEL-25): the producing caller (the agent
+	// loop) supplies an explicit sessionID, and there is no chatID-binding
+	// guess — a guessed binding could stream a turn into the currently viewed
+	// replacement chat.
 	sid := sessionID
-	if sid == "" {
-		// Backward-compat fallback for a caller that hasn't yet threaded a
-		// session id through explicitly — resolve from this chatID's own
-		// current binding.
-		h.mu.Lock()
-		sid = h.sessionIDs[chatID]
-		h.mu.Unlock()
-	}
 	if sid == "" {
 		return nil, false
 	}
@@ -112,23 +109,16 @@ func (h *WSHandler) GetStreamer(_ context.Context, channel, chatID, sessionID st
 	// Resolve the active agent for this session so the transcript entry
 	// can be tagged with the correct agent ID (FR-002). Key by sessionID.
 	//
-	// Prefer the handoff override, then fall back to the session's
-	// ActiveAgentID from metadata. Without the fallback, assistant entries
-	// for un-handed-off sessions get written with AgentID="", which means
+	// Use the session's owner (agent_id) from metadata. Without it, assistant
+	// entries get written with AgentID="", which means
 	// HydrateAgentHistoryFromTranscript attributes them to "main" instead
 	// of the real owning agent — so the next turn's LLM call has only
 	// tool_calls/tool_results in its history, no connecting reasoning text,
 	// and the agent re-starts the task from scratch.
 	activeAgentID := ""
-	if aid, ok := h.agentLoop.GetSessionActiveAgent(sid); ok && aid != "" {
-		activeAgentID = aid
-	} else if agentStore != nil {
+	if agentStore != nil {
 		if meta, err := agentStore.GetMeta(sid); err == nil && meta != nil {
-			if meta.ActiveAgentID != "" {
-				activeAgentID = meta.ActiveAgentID
-			} else if meta.AgentID != "" {
-				activeAgentID = meta.AgentID
-			}
+			activeAgentID = meta.AgentID
 		}
 	}
 
@@ -161,9 +151,8 @@ func (h *WSHandler) GetStreamer(_ context.Context, channel, chatID, sessionID st
 // against a session id that does not resolve to a real, store-backed session
 // (ADR-057 FR-001/FR-002/W3, spec BDD-03 row `pkg/gateway/websocket.go:4256`
 // "streamed assistant"). Mirrors pkg/agent/turn.go's transcriptWriteFailures
-// and pkg/tools/handoff.go's handoffTranscriptWriteFailures — each unit that
-// owns a converted call site gets its own package-local counter rather than
-// sharing one across package boundaries. The write itself stays best-effort
+// — each unit that owns a converted call site gets its own package-local
+// counter rather than sharing one across package boundaries. The write itself stays best-effort
 // by design (a failed streamed-transcript record must never fail the turn
 // that already streamed successfully to the client); this counter is the
 // only durable, operator-visible signal that it happened. Exposed via
@@ -358,6 +347,27 @@ func (s *wsStreamer) SetMessageID(messageID string) {
 	s.statsMu.Unlock()
 }
 
+// SetGoalID stamps the goal the producing turn was dispatched under
+// (session-core FR-039 / C-GOAL) that Update/Finalize will attach to their
+// TokenFrame/DoneFrame's goal_id field and to the assistant transcript entry
+// Finalize persists. Called by the agent loop via the inline
+// `interface{ SetGoalID(goalID string) }` (pkg/agent/turn_stream.go's
+// stampStreamerGoalID), mirroring SetTurnID's pattern exactly.
+//
+// Unlike SetTurnID, an EMPTY goalID is a valid, common value — it means "this
+// turn ran under no proven goal" — so, like SetParentSpawnCallID, this setter
+// does NOT no-op on empty; the client must be able to tell an unknown
+// association from a specific goal. Each wsStreamer instance is single-use for
+// one turn, so clearing back to "" never blanks a previously-stamped value in
+// practice.
+var _ agent.GoalIDStreamer = (*wsStreamer)(nil) // M11: compile-time link to turn_stream.go
+
+func (s *wsStreamer) SetGoalID(goalID string) {
+	s.statsMu.Lock()
+	s.goalID = goalID
+	s.statsMu.Unlock()
+}
+
 // SetParentSpawnCallID stamps the delegation-nesting correlation that will be
 // attributed to the transcript entry Finalize writes. Called by the agent
 // loop (via the inline SetParentSpawnCallID interface, mirroring SetTurnID
@@ -397,7 +407,19 @@ func (s *wsStreamer) SuppressTranscriptWrite() {
 func (s *wsStreamer) StreamedContentLen() int {
 	s.statsMu.Lock()
 	defer s.statsMu.Unlock()
-	return s.accumulated.Len()
+	return s.accumulated.Len() + s.publishedAfterCut
+}
+
+// CutoffAtStop freezes the text this streamer will save at the length it
+// holds now (#1534, founder decision 2026-10-31: the saved stopped answer
+// ends where the screen stopped). Called once by the agent loop's Stop claim
+// (pkg/agent/cancel_stop.go::claimCancel) through an inline optional
+// interface. Later Update calls still publish their frames — the browser has
+// already frozen the bubble and discards them — but are no longer saved.
+func (s *wsStreamer) CutoffAtStop() {
+	s.statsMu.Lock()
+	s.stopCut = true
+	s.statsMu.Unlock()
 }
 
 // SetTurnStats is called by the agent loop's finalizeStreamer just before
@@ -424,6 +446,32 @@ func (s *wsStreamer) SetTurnIOStats(promptTokens, completionTokens, cacheReadTok
 	s.statsCacheRead = cacheReadTokens
 	s.statsCacheWrite = cacheWriteTokens
 }
+
+// SetCallAccounting carries producer-owned per-call facts independently of
+// the turn-total stats that the done frame still displays.
+func (s *wsStreamer) SetCallAccounting(entries []session.TranscriptEntry) {
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+	s.callAccounting = append([]session.TranscriptEntry(nil), entries...)
+	s.callAccountingSet = true
+}
+
+var _ agent.CallAccountingStreamer = (*wsStreamer)(nil)
+
+// SetTurnReasoningTokens carries the turn's reasoning sum over every call,
+// including calls whose accounting the agent already persisted mid-turn.
+func (s *wsStreamer) SetTurnReasoningTokens(n *int) {
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+	s.turnReasoning = nil
+	if n != nil {
+		v := *n
+		s.turnReasoning = &v
+	}
+	s.turnReasoningSet = true
+}
+
+var _ agent.TurnReasoningStreamer = (*wsStreamer)(nil)
 
 // SetTurnFailed is called by the agent loop's finalizeStreamer when the turn
 // ended via the engine's error/limit fallback rather than a real model response.
@@ -491,6 +539,9 @@ func (s *wsStreamer) Update(ctx context.Context, content string) error {
 	// producerAgentID for TokenFrame.turn_id/message_id below.
 	turnID := s.turnID
 	messageID := s.messageID
+	// session-core FR-039 / C-GOAL: captured under the same lock as
+	// turn_id/message_id for TokenFrame.goal_id below.
+	goalID := s.goalID
 	// Live-stream ownership gate (see WSHandler.streamOwners' doc comment):
 	// resolved once, lazily, on this streamer's first Update() call, then
 	// reused. A streamer with no turnID (legacy/best-effort caller) or no
@@ -567,9 +618,14 @@ func (s *wsStreamer) Update(ctx context.Context, content string) error {
 
 	// Accumulate this delta for Finalize's transcript write — a shadow
 	// (non-owning) stream's content must still be fully captured even though
-	// it withholds live frames (see the shadow gate above).
+	// it withholds live frames (see the shadow gate above). Past a claimed
+	// Stop (CutoffAtStop) the delta is still published below but not saved.
 	s.statsMu.Lock()
-	s.accumulated.WriteString(content)
+	if s.stopCut {
+		s.publishedAfterCut += len(content)
+	} else {
+		s.accumulated.WriteString(content)
+	}
 	s.statsMu.Unlock()
 
 	if shadow {
@@ -603,6 +659,12 @@ func (s *wsStreamer) Update(ctx context.Context, content string) error {
 	}
 	if messageID != "" {
 		frame.MessageId = &messageID
+	}
+	// session-core FR-039 / C-GOAL: stamp the producing turn's goal so the
+	// bubble joins to its own EXACT keyed goal criteria instead of the
+	// latest-goal scalar. Absent when the turn ran under no proven goal.
+	if goalID != "" {
+		frame.GoalId = &goalID
 	}
 	data, err := json.Marshal(frame)
 	if err != nil {
@@ -642,20 +704,35 @@ type wsStreamerFinalize struct {
 	completionTokensF          int
 	cacheReadF                 int
 	cacheWriteF                int
+	callAccounting             []session.TranscriptEntry
+	callAccountingSet          bool
+	turnReasoning              *int
 	durF                       float64
 	transcriptAlreadyPersisted bool
 	producedModel              string
 	turnFailed                 bool
-	continuationContent        string
-	hasContinuation            bool
-	truncationReason           string
-	producerAgentID            string
-	turnID                     string
-	messageID                  string
-	parentSpawnCallID          string
-	shadow                     bool
+	// persistFailed records the LATE streamed-transcript write failure
+	// (#1178, amendment §4.1): the turn was healthy when prepareFinalize
+	// snapshotted turnFailed, but the terminal AppendTranscriptStrict failed
+	// afterwards. The done frame must report that failure truthfully.
+	persistFailed       bool
+	continuationContent string
+	hasContinuation     bool
+	truncationReason    string
+	producerAgentID     string
+	turnID              string
+	messageID           string
+	parentSpawnCallID   string
+	shadow              bool
 	// accumulated is the streamer's own text, read once under statsMu.
 	accumulated string
+	// stopCut/publishedAfterCut snapshot CutoffAtStop's state (#1534): the
+	// saved text ends at the claimed Stop, but frames past it were published.
+	stopCut           bool
+	publishedAfterCut int
+	// pendingFinalContent is a new terminal outcome, not the already-saved narration.
+	pendingFinalContent string
+	systemNotice        *generated.ReplayMessageFrame
 }
 
 func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
@@ -680,19 +757,47 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 	// T's final transcript entry is in any transcript read taken after the
 	// bind", which is what lets the hub's active-turn projection forget the
 	// turn at done without leaving a hole in a later snapshot.
-	// persistTranscript is best-effort by design (a failed write must never
-	// suppress the done frame the client is waiting on — see
-	// wsTranscriptWriteFailures' doc comment), so its error is returned
-	// AFTER the done still went out, never used to skip it.
+	// persistTranscript is best-effort in one sense only: a failed write must
+	// never suppress the done frame the client is waiting on (see
+	// wsTranscriptWriteFailures' doc comment) and its error is returned AFTER
+	// the done went out. It is NOT a silent path any more (#1178, amendment
+	// §4.1): the failed save emits the existing could-not-save notice once,
+	// the done frame reports TurnFailed, and the error still returns to the
+	// caller.
 	persistErr := wsf.persistTranscript()
+	if persistErr != nil {
+		wsf.persistFailed = true
+		wsf.publishSaveFailureNotice()
+	}
 	wsf.publishDone()
 	return persistErr
+}
+
+// publishSaveFailureNotice shows the existing could-not-save notice exactly
+// once (#1178, amendment §4.1): one ErrorFrame through the session hub, so
+// the bound tab sees it live and a reconnecting tab reads it from the
+// retained journal. No new copy — agent.MessageNotSavedReply is the same
+// fixed text the turn loop shows for a refused save.
+func (wsf *wsStreamerFinalize) publishSaveFailureNotice() {
+	if wsf.shadow {
+		return
+	}
+	h := wsf.s.wsHandler()
+	if h == nil || wsf.s.sessionID == "" {
+		return
+	}
+	sid := wsf.s.sessionID
+	h.hubPublishFrame(wsf.s.sessionID, string(generated.WsFrameTypeError), generated.ErrorFrame{
+		Type:      string(generated.WsFrameTypeError),
+		Message:   agent.MessageNotSavedReply,
+		SessionId: &sid,
+	}, nil)
 }
 
 // publishDone publishes this turn's single done frame through the session
 // hub (numbered, journaled, delivered byte-identically to every bound tab —
 // BE-DESIGN.md §5: done no longer varies per connection now that nothing is
-// ever dropped, so DoneStats.TokensDropped is never set). A shadow stream (a
+// ever dropped). A shadow stream (a
 // delegated child, or a non-owning concurrent turn) publishes nothing: its
 // text was never shown live, and a done would close the OWNING turn's bubble.
 func (wsf *wsStreamerFinalize) publishDone() {
@@ -709,13 +814,20 @@ func (wsf *wsStreamerFinalize) publishDone() {
 		h.flushPendingMessageStatusesAsWorking(wsf.s.sessionID)
 
 		stats := &generated.DoneStats{
-			Tokens:     &wsf.tokensF,
-			Cost:       &wsf.costF,
-			DurationMs: &wsf.durF,
+			Tokens:             &wsf.tokensF,
+			Cost:               &wsf.costF,
+			DurationMs:         &wsf.durF,
+			SessionTokensTotal: h.sessionTokensTotal(wsf.s.sessionID),
+			// Effort levels (FR-058, FR-024): the answering call's effort
+			// record and the display-only turn reasoning sum.
+			Effort:          turnEffortRecord(wsf.callAccounting),
+			ReasoningTokens: wsf.turnReasoning,
 		}
-		if wsf.turnFailed {
-			tf := wsf.turnFailed
-			stats.TurnFailed = &tf
+		// #1178 (amendment §4.1): a late streamed-transcript write failure is
+		// a failed turn even though the turn was healthy before it — the done
+		// frame must say so, live and in the retained journal.
+		if failed := wsf.turnFailed || wsf.persistFailed; failed {
+			stats.TurnFailed = &failed
 		}
 		// ADR-087 D2 (finding #10): mirror the truncation annotation onto the
 		// live done frame too, so a turn cut off while the user is watching
@@ -739,6 +851,13 @@ func (wsf *wsStreamerFinalize) publishDone() {
 			messageID := wsf.messageID
 			frame.MessageId = &messageID
 		}
+		// session-core FR-039 / C-GOAL: spread the producing turn's goal so a
+		// no-stream turn's bubble (created from this frame's message_id, not
+		// from tokens) still joins to the exact keyed goal criteria.
+		if wsf.s.goalID != "" {
+			goalID := wsf.s.goalID
+			frame.GoalId = &goalID
+		}
 		data, err := json.Marshal(frame)
 		if err != nil {
 			slog.Error("ws: marshal done frame failed", "session_id", wsf.s.sessionID, "error", err)
@@ -746,11 +865,27 @@ func (wsf *wsStreamerFinalize) publishDone() {
 			h.hubPublishMetaAlsoTo(wsf.s.sessionID, string(generated.WsFrameTypeDone),
 				hubFrameMeta{kind: hubKindDone, turnID: wsf.turnID}, data, nil)
 		}
+		// Close the model's narration before the distinct system row arrives.
+		wsf.publishSystemNotice()
 	}
-	// Only mark as streamed if we actually sent content. If the LLM failed
-	// before producing any tokens, let the outbound Send path deliver the
-	// error message — otherwise the user sees a stuck "thinking" spinner.
-	if wsf.s.channel != nil && wsf.accumulated != "" {
+	if wsf.s.channel != nil {
+		// Hand the channel this turn's identity BEFORE the markStreamed
+		// decision below, regardless of it: the cases markStreamed skips
+		// (a distinct terminal notice after already-persisted narration; a
+		// turn that streamed no tokens at all) are exactly the ones whose
+		// delivery falls through to Send(), which needs this to stamp its
+		// own frame — see webchatChannel.turnIdentity's doc comment.
+		wsf.s.statsMu.Lock()
+		finalizedID := wsf.s.finalizedMessageID
+		wsf.s.statsMu.Unlock()
+		wsf.s.channel.recordTurnIdentity(wsf.s.chatID, wsf.turnID, finalizedID)
+	}
+	// Suppress Send only when streaming already covered the final outcome.
+	// Earlier narration must not suppress a separate terminal notice; nor
+	// should an empty stream suppress the outbound fallback.
+	// Text published past a claimed Stop (#1534) still counts as streamed.
+	streamedAny := wsf.accumulated != "" || wsf.publishedAfterCut > 0
+	if wsf.s.channel != nil && (wsf.systemNotice != nil || (streamedAny && wsf.pendingFinalContent == "")) {
 		wsf.s.channel.markStreamed(wsf.s.chatID)
 	}
 }
@@ -769,9 +904,19 @@ func (wsf *wsStreamerFinalize) prepareFinalize() {
 	wsf.completionTokensF = wsf.s.statsCompletionTokens
 	wsf.cacheReadF = wsf.s.statsCacheRead
 	wsf.cacheWriteF = wsf.s.statsCacheWrite
+	wsf.callAccounting = append([]session.TranscriptEntry(nil), wsf.s.callAccounting...)
+	wsf.callAccountingSet = wsf.s.callAccountingSet
+	// The agent's turn sum covers every call of the turn; a streamer that was
+	// never handed one (no agent turn behind it) sums the calls it holds.
+	if wsf.s.turnReasoningSet {
+		wsf.turnReasoning = wsf.s.turnReasoning
+	} else {
+		wsf.turnReasoning = turnReasoningSum(wsf.callAccounting)
+	}
 	wsf.durF = float64(wsf.s.statsDuration.Milliseconds())
 	wsf.transcriptAlreadyPersisted = wsf.s.transcriptPersisted
 	wsf.producedModel = wsf.s.producedModel
+	wsf.systemNotice = wsf.s.systemNotice
 	wsf.turnFailed = wsf.s.statsTurnFailed
 	wsf.continuationContent = wsf.s.continuationContent
 	wsf.hasContinuation = wsf.s.hasContinuation
@@ -846,22 +991,37 @@ func (wsf *wsStreamerFinalize) prepareFinalize() {
 	}
 	wsf.shadow = wsf.s.isShadowStream
 	wsf.accumulated = wsf.s.accumulated.String()
+	wsf.stopCut = wsf.s.stopCut
+	wsf.publishedAfterCut = wsf.s.publishedAfterCut
 	wsf.s.statsMu.Unlock()
+
+	// The harness already persisted this system entry. Neither its prose
+	// nor this round's saved narration may be appended as an assistant reply.
+	if wsf.systemNotice != nil {
+		wsf.finalContent = ""
+		wsf.transcriptAlreadyPersisted = true
+		return
+	}
+	// The persisted marker covers this round's narration, not a different
+	// terminal outcome. Neither the current buffer nor a full continuation
+	// answer should be appended or sent twice.
+	if wsf.transcriptAlreadyPersisted && wsf.finalContent != "" &&
+		wsf.finalContent != wsf.accumulated &&
+		(!wsf.hasContinuation || wsf.finalContent != wsf.continuationContent) {
+		wsf.pendingFinalContent = wsf.finalContent
+	}
 }
 
-// persistTranscript records the completed assistant response when the round was not already persisted.
+// persistTranscript records the final response without duplicating saved narration.
 func (wsf *wsStreamerFinalize) persistTranscript() error {
-	// Record the full assistant response to the session transcript — unless the
-	// agent loop already persisted this round's narration via
-	// appendIntermediateAssistantTranscript (#416 gate fix). This happens when
-	// the turn exits via max_tool_iterations exhaustion: the last executed round
-	// is a tool-call round whose streamer (this one) becomes the lastStreamer.
-	// Writing here too would duplicate the assistant bubble on replay. We still
-	// sent the done frame, fan-out, and markStreamed above — only the append is
-	// suppressed.
-	if wsf.s.agentStore != nil && wsf.s.sessionID != "" && !wsf.transcriptAlreadyPersisted {
+	// A tool-call round may already have saved its narration. Keep that
+	// deduplication, but append a distinct terminal outcome after its tools.
+	if wsf.s.agentStore != nil && wsf.s.sessionID != "" &&
+		(!wsf.transcriptAlreadyPersisted || wsf.pendingFinalContent != "") {
 		content := wsf.accumulated
-		if wsf.hasContinuation {
+		if wsf.pendingFinalContent != "" {
+			content = wsf.pendingFinalContent
+		} else if wsf.hasContinuation {
 			// ADR-087 D6.1/§2.8: this streamer is per PROVIDER CALL, not per
 			// turn — its own `accumulated` buffer (and finalContent, which
 			// for a continuation's per-call streamer would also just be the
@@ -869,12 +1029,15 @@ func (wsf *wsStreamerFinalize) persistTranscript() error {
 			// carries the full prefix+suffix answer the live bubble showed;
 			// persist THAT, not the buffer.
 			content = wsf.continuationContent
-		} else if content == "" && wsf.finalContent != "" {
+		} else if content == "" && wsf.finalContent != "" && !wsf.stopCut {
 			// Fallback: when accumulated is empty (every Update() call silently
 			// failed because the client WS was already closed), use the
 			// finalContent the agent loop passed in. Without this fallback,
 			// disconnected mid-stream turns would leave no assistant entry in
 			// transcript.jsonl and the user sees nothing on reconnect/replay.
+			// Not after a claimed Stop (#1534): an empty buffer then means
+			// the screen showed nothing, and finalContent would save text
+			// the user never saw.
 			content = wsf.finalContent
 		}
 		// ADR-087 D2/D4a/D4b: a truncated turn must still get an entry even
@@ -888,7 +1051,7 @@ func (wsf *wsStreamerFinalize) persistTranscript() error {
 		// stamping directly — either silently no-op'd (no entry to find) or,
 		// worse, walked back and mis-stamped an EARLIER same-turn narration
 		// entry as truncated. See truncationReason's own field doc comment.
-		if content != "" || wsf.truncationReason != "" {
+		if content != "" || wsf.truncationReason != "" || len(wsf.callAccounting) > 0 {
 			// #823 BE-DESIGN.md §6.3: persist the final streamed answer under
 			// the SAME id its live token/done frames carried (message_id),
 			// exactly as appendIntermediateAssistantTranscript already does for
@@ -898,9 +1061,21 @@ func (wsf *wsStreamerFinalize) persistTranscript() error {
 			// agent loop never stamped (a bare fixture, the Send fallback)
 			// keeps a fresh id.
 			entryID := wsf.messageID
-			if entryID == "" {
+			// A separate terminal notice must not reuse the saved narration's ID.
+			if entryID == "" || wsf.pendingFinalContent != "" {
 				entryID = uuid.New().String()
 			}
+			// Record the id actually being persisted so publishDone can hand
+			// it to the channel's turnIdentity record (webchat_channel.go),
+			// for a later outbound-fallback Send() to stamp onto its own
+			// frame — see wsStreamer.finalizedMessageID's doc comment.
+			// Matters most for a distinct terminal notice (entryID freshly
+			// minted above), but set unconditionally so the silent/
+			// no-narration fallback case (entryID == wsf.messageID) is
+			// equally covered.
+			wsf.s.statsMu.Lock()
+			wsf.s.finalizedMessageID = entryID
+			wsf.s.statsMu.Unlock()
 			entry := session.TranscriptEntry{
 				ID:      entryID,
 				Role:    "assistant",
@@ -908,7 +1083,12 @@ func (wsf *wsStreamerFinalize) persistTranscript() error {
 				// TurnID (FIX 5c/1): stamped via SetTurnID so a mid-stream
 				// cancel's turn_canceled entry can be correlated with THIS
 				// entry on replay.
-				TurnID:    wsf.turnID,
+				TurnID: wsf.turnID,
+				// GoalID (session-core FR-039 / C-GOAL): stamped via SetGoalID
+				// so the persisted entry carries the SAME goal association its
+				// live TokenFrame/DoneFrame did, and replay/REST join it to the
+				// exact keyed goal criteria. Empty = unknown association.
+				GoalID:    wsf.s.goalID,
 				Content:   content,
 				Timestamp: time.Now().UTC(),
 				Tokens:    int(wsf.tokensF),
@@ -930,6 +1110,9 @@ func (wsf *wsStreamerFinalize) persistTranscript() error {
 				// session.TranscriptEntry.ParentSpawnCallID's doc comment.
 				// Empty (the common case) for a root turn.
 				ParentSpawnCallID: wsf.parentSpawnCallID,
+				// A distinct terminal sentence after already-persisted
+				// narration: marked so replay keeps it a separate message.
+				TerminalOutcome: wsf.pendingFinalContent != "",
 			}
 			// ADR-087 D2/D4a/D4b, WP C: stamp Truncated/TruncationReason in
 			// THIS SAME WRITE — whether content is empty (D4a) or non-empty
@@ -938,10 +1121,24 @@ func (wsf *wsStreamerFinalize) persistTranscript() error {
 			// MarkLastEntryTruncated call after Finalize returns. See
 			// truncationReason's own field doc comment for why the post-hoc
 			// call was the bug.
+			if wsf.callAccountingSet {
+				session.SetEntryCallAccounting(&entry, session.TranscriptEntry{})
+				if len(wsf.callAccounting) > 0 {
+					for _, older := range wsf.callAccounting[:len(wsf.callAccounting)-1] {
+						if err := wsf.s.agentStore.AppendTranscriptStrict(wsf.s.sessionID, older); err != nil {
+							return err
+						}
+					}
+					session.SetEntryCallAccounting(&entry, wsf.callAccounting[len(wsf.callAccounting)-1])
+				}
+			}
 			if wsf.truncationReason != "" {
 				entry.Truncated = true
 				entry.TruncationReason = wsf.truncationReason
 			}
+			// The stored display-only snapshot of the turn's reported
+			// reasoning sum, read back as-is by both history transports.
+			entry.TurnReasoningTokens = wsf.turnReasoning
 			// ADR-057 FR-001/FR-002 (W3): AppendTranscriptStrict refuses loudly
 			// (and creates nothing on disk) when s.sessionID does not resolve to
 			// a real, store-backed session, instead of AppendTranscript's old
@@ -950,9 +1147,15 @@ func (wsf *wsStreamerFinalize) persistTranscript() error {
 			// changes (loud vs. silently minting an orphan session directory) —
 			// so surface it as a counter increment (BDD-03) alongside the
 			// pre-existing WARN.
+			//
+			// #1178 (amendment §4.1): the failure is also RETURNED — a failed
+			// transcript write is a failed save, never a false success. The
+			// counter and WARN stay as operator detail; Finalize turns the
+			// error into the could-not-save notice and a failed done frame.
 			if err := wsf.s.agentStore.AppendTranscriptStrict(wsf.s.sessionID, entry); err != nil {
 				wsTranscriptWriteFailures.Add(1)
 				slog.Warn("ws: could not record streamed assistant message", "session_id", wsf.s.sessionID, "error", err)
+				return err
 			}
 		}
 	}

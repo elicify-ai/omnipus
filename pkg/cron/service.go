@@ -7,8 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -101,6 +102,15 @@ type ScheduledRunner interface {
 	RunScheduled(ctx context.Context, job *CronJob) (string, error)
 }
 
+// ErrRunHandedOff is the opt-in runner outcome for a one-time job whose run
+// goes on after RunScheduled returns (6b U2b: a task run dispatched
+// asynchronously). The engine then records nothing and keeps the persisted
+// Running flag: it is the fire's durable ownership until the runner settles
+// the job itself (RemoveJob) when the run ends, and the evidence
+// interruptedOneTimeFire reads at the next physical boot if the process stops
+// first. No runner but the task-trigger scheduler returns it.
+var ErrRunHandedOff = errors.New("cron: run handed off to the runner")
+
 type CronSchedule struct {
 	Kind    string `json:"kind"`
 	AtMS    *int64 `json:"atMs,omitempty"`
@@ -167,13 +177,50 @@ type CronJob struct {
 	// default-zero for back-compat; empty owners are migrated on load (W-8).
 	AgentID string `json:"agentId,omitempty"`
 	// SessionMode is one of isolated|continue|main (FR-004); default isolated.
+	// It is DERIVED, never chosen (session-core FR-017): by the gateway at
+	// create/update from RunIsolated and the owner, and by the heartbeat
+	// reconciler (main).
 	SessionMode SessionMode `json:"sessionMode,omitempty"`
-	// TimeoutSeconds is the per-schedule run deadline override (FR-003); 0 = use default.
-	TimeoutSeconds int `json:"timeoutSeconds,omitempty"`
+	// RunIsolated forces every run into a fresh independent chat (FR-017); the
+	// one user-facing session choice, kept so a later owner/trigger change
+	// re-derives the mode from it.
+	RunIsolated bool `json:"runIsolated,omitempty"`
+	// The per-schedule run deadline (timeoutSeconds) is retired (issue #1306):
+	// a scheduled run has no time limit. A jobs.json written by an older
+	// release may still carry the key; it is ignored on load and dropped on
+	// the next save.
 	// CreatedBy is the user who created the schedule (W-7 notification ownership).
 	CreatedBy string `json:"createdBy,omitempty"`
 	// SessionID is the stable per-schedule session id for continue mode (W-2).
 	SessionID string `json:"sessionId,omitempty"`
+}
+
+// cloneJob returns a deep copy of job that shares no memory with it: every
+// pointer field (schedule and state times) and the run-history slice get their
+// own allocation. Methods that hand a stored job to a caller return a clone
+// taken under cs.mu, so the caller owns the result: reading it never races with
+// a firing job, and mutating it never changes service state (issue #1621).
+// Keep this in step with the job types above when a pointer, slice or map
+// field is added to CronJob, CronSchedule, CronPayload or CronJobState.
+func cloneJob(job CronJob) CronJob {
+	out := job
+	out.Schedule.AtMS = cloneInt64Ptr(job.Schedule.AtMS)
+	out.Schedule.EveryMS = cloneInt64Ptr(job.Schedule.EveryMS)
+	out.State.NextRunAtMS = cloneInt64Ptr(job.State.NextRunAtMS)
+	out.State.LastRunAtMS = cloneInt64Ptr(job.State.LastRunAtMS)
+	if job.State.History != nil {
+		out.State.History = make([]CronRunRecord, len(job.State.History))
+		copy(out.State.History, job.State.History)
+	}
+	return out
+}
+
+func cloneInt64Ptr(p *int64) *int64 {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
 }
 
 type CronStore struct {
@@ -186,9 +233,18 @@ type CronService struct {
 	store     *CronStore
 	mu        sync.RWMutex
 	running   bool
-	stopChan  chan struct{}
-	wakeChan  chan struct{}
-	gronx     *gronx.Gronx
+	// testHooks are the test-only barrier seams (test_hooks.go); all nil in
+	// production. Guarded by mu.
+	testHooks cronTestHooks
+	// runWindowUsed prevents a physical-boot restore on a service reused after Stop.
+	runWindowUsed bool
+	stopChan      chan struct{}
+	// loopDone is closed by runLoop when it exits (#1450). Created per run
+	// window by startRunWindow; nil when no loop goroutine was started
+	// (startNoLoop) or after Stop has taken it.
+	loopDone chan struct{}
+	wakeChan chan struct{}
+	gronx    *gronx.Gronx
 
 	// clock is the injected time source (W-5). Defaults to realClock.
 	clock Clock
@@ -196,16 +252,25 @@ type CronService struct {
 	// runner is the agent fire path (W-3/runner seam); nil until SetRunner.
 	runner ScheduledRunner
 
-	// defaultAgentID backfills owner-less jobs on load (W-8 migration). Empty
-	// means "no default" → owner-less jobs are skipped, not fired.
-	defaultAgentID string
-
 	// maxConcurrentRuns bounds the parallel autonomous lane (FR-007).
 	maxConcurrentRuns int
 	// laneSem is the semaphore for the lane; cap = maxConcurrentRuns.
 	laneSem chan struct{}
-	// laneWG tracks in-flight lane runs so Stop() can drain them (W-3).
+	// laneWG tracks every in-flight lane run, across run windows, for
+	// WaitForLane (tests).
 	laneWG sync.WaitGroup
+	// laneRuns tracks the lane runs of the current run window only, so Stop()
+	// drains exactly its own window (W-3). A fresh WaitGroup per window keeps a
+	// Start that races a draining Stop from adding to the WaitGroup Stop is
+	// waiting on (#1450). Add happens only under mu while the window is
+	// current; Stop sets it to nil under mu before it waits. nil outside a
+	// run window.
+	laneRuns *sync.WaitGroup
+	// dispatchPending counts, per job, dispatches handed to the lane that
+	// have not finished yet — including the wait for a lane slot, when the
+	// job has no Running flag and no turn (issue #1306, architect R2-A1).
+	// Guarded by mu; see JobDispatchInFlight.
+	dispatchPending map[string]int
 	// laneCtx/laneCancel cancel in-flight runs on shutdown (W-3).
 	laneCtx    context.Context
 	laneCancel context.CancelFunc
@@ -237,7 +302,7 @@ func NewCronService(storePath string) *CronService {
 	cs := &CronService{
 		storePath:         storePath,
 		gronx:             gronx.New(),
-		wakeChan:          make(chan struct{}),
+		wakeChan:          make(chan struct{}, 1),
 		clock:             realClock{},
 		maxConcurrentRuns: defaultMaxConcurrentRuns,
 		retryBackoffMs:    append([]int64(nil), defaultRetryBackoffMs...),
@@ -265,15 +330,6 @@ func (cs *CronService) SetRunner(r ScheduledRunner) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	cs.runner = r
-}
-
-// SetDefaultAgentID supplies the default agent id used to backfill owner-less
-// jobs on load (W-8 migration). If empty, owner-less jobs are skipped on fire.
-func (cs *CronService) SetDefaultAgentID(id string) {
-	cs.mu.Lock()
-	cs.defaultAgentID = id
-	cs.mu.Unlock()
-	cs.migrateOwners()
 }
 
 // SetMaxConcurrentRuns configures the parallel-lane capacity (FR-007). Values
@@ -346,7 +402,35 @@ func (cs *CronService) clockNowUnsafeMS() int64 {
 // times, and initializes the stop/wake channels + lane context. The caller must
 // hold cs.mu. It returns started=true only on a stopped→running transition (so
 // Start knows to launch the runLoop exactly once).
-func (cs *CronService) initRunStateUnsafe() (started bool, err error) {
+func (cs *CronService) initRunStateUnsafe(physicalBoot bool) (started bool, err error) {
+	return cs.initRunStateReplayingUnsafe(physicalBoot, nil)
+}
+
+// BootReplay is what a physical-boot restore does with one interrupted
+// one-time job (see StartAfterPhysicalBootReplaying).
+type BootReplay int
+
+const (
+	// BootReplayDecline clears the dead Running flag and leaves the job
+	// unarmed: a past at-job gets no next run, so it never fires.
+	BootReplayDecline BootReplay = iota
+	// BootReplayRun re-arms the job for its owed run (#1484).
+	BootReplayRun
+	// BootReplayKeep leaves the job exactly as the dead process left it —
+	// Running still set, unarmed — so it is still an interrupted fire at the
+	// next physical boot. For a caller that owes the run but cannot settle it
+	// yet; within this process the persisted Running flag keeps the job from
+	// firing.
+	BootReplayKeep
+)
+
+// initRunStateReplayingUnsafe is initRunStateUnsafe with a physical-boot
+// replay decision per interrupted one-time job. A nil replay runs every
+// interrupted job (the #1484 default).
+func (cs *CronService) initRunStateReplayingUnsafe(physicalBoot bool, replay func(*CronJob) BootReplay) (started bool, err error) {
+	if physicalBoot && cs.runWindowUsed {
+		return false, fmt.Errorf("cron: physical-boot restore requires an unused service instance")
+	}
 	if cs.running {
 		return false, nil
 	}
@@ -354,35 +438,99 @@ func (cs *CronService) initRunStateUnsafe() (started bool, err error) {
 	if err := cs.loadStore(); err != nil {
 		return false, fmt.Errorf("failed to load store: %w", err)
 	}
-	cs.migrateOwnersUnsafe()
+	var interrupted []int
+	if physicalBoot {
+		// The prior process has no live lane. Preserve all schedule/history data;
+		// normal Start/reload deliberately retain the same-process overlap flag.
+		for i := range cs.store.Jobs {
+			job := &cs.store.Jobs[i]
+			if interruptedOneTimeFire(job) {
+				decision := BootReplayRun
+				if replay != nil {
+					decision = replay(job)
+				}
+				switch decision {
+				case BootReplayRun:
+					interrupted = append(interrupted, i)
+				case BootReplayKeep:
+					continue // keep Running: the evidence survives to the next boot
+				}
+			}
+			job.State.Running = false
+		}
+	}
 
 	cs.recomputeNextRuns()
+	// Issue #1484: a one-time job whose run the dead process had started but
+	// never finished is still owed that run; it fires on the first tick.
+	for _, i := range interrupted {
+		job := &cs.store.Jobs[i]
+		at := *job.Schedule.AtMS
+		job.State.NextRunAtMS = &at
+		slog.Warn("cron: one-time job was running when the previous process stopped; running it again",
+			"job_id", job.ID, "job", job.Name)
+	}
 	if err := cs.saveStoreUnsafe(); err != nil {
 		return false, fmt.Errorf("failed to save store: %w", err)
 	}
 
 	cs.stopChan = make(chan struct{})
 	if cs.wakeChan == nil {
-		cs.wakeChan = make(chan struct{})
+		cs.wakeChan = make(chan struct{}, 1)
 	}
 	// Fresh lane context for this run window (a prior Stop canceled the old one).
-	if cs.laneCtx == nil || cs.laneCtx.Err() != nil {
+	if cs.laneCtx == nil || cs.laneCtx.Err() != nil || cs.laneCancel == nil {
 		cs.laneCtx, cs.laneCancel = context.WithCancel(context.Background())
 	}
+	cs.laneRuns = &sync.WaitGroup{}
 	cs.running = true
+	cs.runWindowUsed = true
 	return true, nil
 }
 
 func (cs *CronService) Start() error {
+	return cs.startRunWindow(false, nil)
+}
+
+// StartAfterPhysicalBoot restores only the dead prior process's running flags.
+// Gateway physical boot is its sole production caller. Reload and Stop/Start use
+// Start, so an old lane still unwinding after a bounded drain remains protected.
+func (cs *CronService) StartAfterPhysicalBoot() error {
+	return cs.startRunWindow(true, nil)
+}
+
+// StartAfterPhysicalBootReplaying is StartAfterPhysicalBoot for a store whose
+// jobs are derived from another source of truth: replay decides, per
+// interrupted one-time job, whether it is re-armed for its owed run, declined
+// or kept as interrupted evidence for a later boot. The decisions are applied
+// before the run loop starts, so a declined or kept job can never fire from
+// this restore — not even in the window before the caller reconciles its
+// derived jobs (6b review I3: the task-trigger scheduler stores each
+// recurring occurrence as an at-job, and an interrupted occurrence must not
+// be replayed; re-review N3: an owed run whose task cannot be settled yet is
+// kept, not lost). replay runs under the service lock: it must not call back
+// into this CronService.
+func (cs *CronService) StartAfterPhysicalBootReplaying(replay func(job *CronJob) BootReplay) error {
+	return cs.startRunWindow(true, replay)
+}
+
+func (cs *CronService) startRunWindow(physicalBoot bool, replay func(*CronJob) BootReplay) error {
 	cs.mu.Lock()
-	started, err := cs.initRunStateUnsafe()
+	started, err := cs.initRunStateReplayingUnsafe(physicalBoot, replay)
 	stop := cs.stopChan
+	var done chan struct{}
+	if started {
+		// Created under the same lock as the run window so a concurrent Stop
+		// always sees the channel of the loop it is stopping (#1450).
+		done = make(chan struct{})
+		cs.loopDone = done
+	}
 	cs.mu.Unlock()
 	if err != nil {
 		return err
 	}
 	if started {
-		go cs.runLoop(stop)
+		go cs.runLoop(stop, done)
 	}
 	return nil
 }
@@ -395,13 +543,21 @@ func (cs *CronService) Start() error {
 func (cs *CronService) startNoLoop() error {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
-	_, err := cs.initRunStateUnsafe()
+	_, err := cs.initRunStateUnsafe(false)
 	return err
 }
 
-// Stop cancels the parallel lane context and blocks (bounded) on in-flight runs
-// (W-3 blocking drain). The runLoop is signaled via stopChan; lane goroutines
-// observe the canceled context and are then waited on.
+// Stop signals the runLoop via stopChan and waits for it to exit (#1450), then
+// cancels the parallel lane context and blocks (bounded) on in-flight runs
+// (W-3 blocking drain). Waiting for the loop first guarantees no dispatch from
+// this run window can add to the lane after the drain has begun, and no loop
+// goroutine of this window outlives Stop.
+//
+// The loop wait has no timeout on purpose: runLoop never executes a job itself
+// (RunDueJobs hands every due job to a lane goroutine via dispatch); it only
+// takes cs.mu for short critical sections and writes the store file. Stop
+// releases cs.mu before waiting, so the loop can always finish its current
+// tick and observe the closed stop channel.
 func (cs *CronService) Stop() {
 	cs.mu.Lock()
 	if !cs.running {
@@ -413,9 +569,23 @@ func (cs *CronService) Stop() {
 		close(cs.stopChan)
 		cs.stopChan = nil
 	}
+	loopDone := cs.loopDone
+	cs.loopDone = nil
 	cancel := cs.laneCancel
+	// Detach this window's cancel so a Start that runs while Stop waits for
+	// the loop builds a fresh lane context instead of reusing the one Stop is
+	// about to cancel.
+	cs.laneCancel = nil
+	// Every Add on this window's WaitGroup happened under mu while running was
+	// true, so none can follow this point: waiting on it below is safe.
+	runs := cs.laneRuns
+	cs.laneRuns = nil
 	drainTimeout := cs.stopDrainTimeout
 	cs.mu.Unlock()
+
+	if loopDone != nil {
+		<-loopDone
+	}
 
 	// Cancel in-flight runs, then drain the lane outside the lock so running
 	// goroutines can acquire it to record their outcome.
@@ -427,13 +597,16 @@ func (cs *CronService) Stop() {
 	// stopDrainTimeout so a stuck/uncancellable run cannot hang shutdown forever.
 	// The lane ctx is already canceled above, so proceeding is safe — any
 	// still-running goroutine is tearing down.
+	if runs == nil {
+		return
+	}
 	if drainTimeout <= 0 {
-		cs.laneWG.Wait()
+		runs.Wait()
 		return
 	}
 	done := make(chan struct{})
 	go func() {
-		cs.laneWG.Wait()
+		runs.Wait()
 		close(done)
 	}()
 	timer := time.NewTimer(drainTimeout)
@@ -441,14 +614,13 @@ func (cs *CronService) Stop() {
 	select {
 	case <-done:
 	case <-timer.C:
-		log.Printf(
-			"[cron] Stop(): lane drain timed out after %s — proceeding with in-flight runs still tearing down",
-			drainTimeout,
-		)
+		slog.Warn("cron: Stop() lane drain timed out; proceeding with in-flight runs still tearing down",
+			"timeout", drainTimeout.String())
 	}
 }
 
-func (cs *CronService) runLoop(stopChan chan struct{}) {
+func (cs *CronService) runLoop(stopChan, done chan struct{}) {
+	defer close(done)
 	timer := time.NewTimer(time.Hour)
 	if !timer.Stop() {
 		<-timer.C
@@ -534,17 +706,60 @@ func (cs *CronService) RunDueJobs(now time.Time) {
 			cs.store.Jobs[i].State.NextRunAtMS = nil
 		}
 	}
+	// The same critical section that consumes each due occurrence publishes
+	// its dispatch-pending reservation (tool-parity spec r17 §7.2 TK-30, r12),
+	// so no observer can see a collected occurrence owned by neither its next
+	// run nor JobDispatchInFlight. dispatch's goroutine releases it on every
+	// settle path.
+	for _, jobID := range dueJobIDs {
+		cs.markDispatchPendingUnsafe(jobID)
+	}
 
 	if err := cs.saveStoreUnsafe(); err != nil {
-		log.Printf("[cron] failed to save store: %v", err)
+		slog.Error("cron failed to save store", "job_ids", dueJobIDs, "error", err)
 	}
+
+	// Snapshot this run window and count its dispatches while still holding
+	// the lock that proved running==true, so a concurrent Stop always drains
+	// them and never waits on a WaitGroup that is still being added to.
+	win := laneWindow{ctx: cs.laneCtx, sem: cs.laneSem, runs: cs.laneRuns}
+	cs.laneAddUnsafe(win.runs, len(dueJobIDs))
 
 	cs.mu.Unlock()
 
 	// Dispatch each due job onto the parallel lane.
 	for _, jobID := range dueJobIDs {
-		cs.dispatch(jobID)
+		cs.dispatch(jobID, win)
 	}
+}
+
+// laneWindow is the run-window state a dispatch is bound to: the lane context
+// Stop cancels, the concurrency semaphore and the window's run WaitGroup.
+type laneWindow struct {
+	ctx  context.Context
+	sem  chan struct{}
+	runs *sync.WaitGroup
+}
+
+// laneAddUnsafe counts n lane runs on the global WaitGroup and on the given
+// window's WaitGroup (when non-nil). The caller must hold mu (read or write)
+// and runs must be the current window's laneRuns snapshot taken under it.
+func (cs *CronService) laneAddUnsafe(runs *sync.WaitGroup, n int) {
+	if n <= 0 {
+		return
+	}
+	cs.laneWG.Add(n)
+	if runs != nil {
+		runs.Add(n)
+	}
+}
+
+// laneDone releases one run counted by laneAddUnsafe.
+func (cs *CronService) laneDone(runs *sync.WaitGroup) {
+	if runs != nil {
+		runs.Done()
+	}
+	cs.laneWG.Done()
 }
 
 // WaitForLane blocks until all in-flight lane runs complete. Tests use this to
@@ -557,24 +772,31 @@ func (cs *CronService) WaitForLane() {
 // semaphore (the worker goroutine blocks on acquisition). The overlap guard
 // (FR-008) is checked inside the goroutine once a slot is held so the queue
 // position is preserved for non-overlapping jobs.
-func (cs *CronService) dispatch(jobID string) {
-	cs.mu.RLock()
-	laneCtx := cs.laneCtx
-	sem := cs.laneSem
-	cs.mu.RUnlock()
+// The caller has already counted this run with laneAddUnsafe(win.runs, ...).
+func (cs *CronService) dispatch(jobID string, win laneWindow) {
+	laneCtx := win.ctx
+	sem := win.sem
 	if laneCtx == nil {
 		laneCtx = context.Background()
 	}
 
-	cs.laneWG.Add(1)
+	// The dispatch-pending reservation was published by RunDueJobs in the
+	// collection critical section (its only caller).
 	go func() {
-		defer cs.laneWG.Done()
+		defer cs.laneDone(win.runs)
+		if hook := cs.dispatchEntryHook(); hook != nil {
+			hook(jobID)
+		}
+		// Cleared on every exit: run finished, lane cancelled while queued,
+		// or a panic (deferred calls run while panicking, and the recover
+		// below stops the panic here).
+		defer cs.clearDispatchPending(jobID)
 		// Outer recover (defense-in-depth): executeJobByID has its own recover
 		// that converts a run panic into a recorded error, but a panic in the
 		// slot-acquisition/bookkeeping around it must never crash the gateway.
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("[cron] dispatch goroutine recovered from panic for job %s: %v", jobID, r)
+				slog.Error("cron: dispatch goroutine recovered from panic", "job_id", jobID, "panic", fmt.Sprint(r))
 			}
 		}()
 
@@ -586,6 +808,9 @@ func (cs *CronService) dispatch(jobID string) {
 		}
 		defer func() { <-sem }()
 
+		if hook := cs.beforeRunHook(); hook != nil {
+			hook(jobID)
+		}
 		cs.executeJobByID(laneCtx, jobID)
 	}()
 }
@@ -608,7 +833,7 @@ func (cs *CronService) executeJobByID(ctx context.Context, jobID string) {
 				cs.rescheduleSkippedUnsafe(job)
 				onSkip := cs.onSkip
 				cs.mu.Unlock()
-				log.Printf("[cron] ⤳ job '%s' (id: %s) skipped — previous run still in progress", job.Name, jobID)
+				slog.Warn("cron job skipped: previous run still in progress", "job_id", jobID, "reason", "overlap")
 				if onSkip != nil {
 					onSkip(jobID, "overlap")
 				}
@@ -621,7 +846,7 @@ func (cs *CronService) executeJobByID(ctx context.Context, jobID string) {
 				cs.rescheduleSkippedUnsafe(job)
 				onSkip := cs.onSkip
 				cs.mu.Unlock()
-				log.Printf("[cron] ⚠ job '%s' (id: %s) skipped — no owning agent", job.Name, jobID)
+				slog.Warn("cron job skipped: no owning agent", "job_id", jobID, "reason", "owner-missing")
 				if onSkip != nil {
 					onSkip(jobID, "owner-missing")
 				}
@@ -635,28 +860,25 @@ func (cs *CronService) executeJobByID(ctx context.Context, jobID string) {
 	}
 	if callbackJob != nil {
 		if err := cs.saveStoreUnsafe(); err != nil {
-			log.Printf("[cron] failed to save store: %v", err)
+			slog.Error("cron failed to save store", "job_id", jobID, "error", err)
 		}
 	}
 	cs.mu.Unlock()
 
 	if callbackJob == nil {
-		log.Printf("[cron] job %s not found, skipping", jobID)
+		slog.Warn("cron: job not found, skipping", "job_id", jobID)
 		return
 	}
 
 	// Log job execution start
-	log.Printf("[cron] ▶ executing job '%s' (id: %s, schedule: %s, owner: %s)",
-		callbackJob.Name, jobID, callbackJob.Schedule.Kind, callbackJob.AgentID)
+	slog.Info("cron: executing job", "job", callbackJob.Name, "job_id", jobID,
+		"schedule", callbackJob.Schedule.Kind, "owner", callbackJob.AgentID)
 
-	// Apply a per-run deadline (FR-003) derived from the schedule's timeout.
+	// No per-run deadline (issue #1306): the run ends when it finishes or an
+	// explicit Stop cancels it.
 	runCtx := ctx
 	if runCtx == nil {
 		runCtx = context.Background()
-	}
-	var cancel context.CancelFunc
-	if callbackJob.TimeoutSeconds > 0 {
-		runCtx, cancel = context.WithTimeout(runCtx, time.Duration(callbackJob.TimeoutSeconds)*time.Second)
 	}
 
 	// invokeRun calls the runner with a recover so a panic in a scheduled run
@@ -664,8 +886,10 @@ func (cs *CronService) executeJobByID(ctx context.Context, jobID string) {
 	// returned sessionID may be the stable id the runner chose (continue/main) so
 	// it can be persisted back onto the real job.
 	sessionID, err := invokeRun(runCtx, runner, callbackJob)
-	if cancel != nil {
-		cancel()
+	if errors.Is(err, ErrRunHandedOff) && callbackJob.Schedule.Kind == "at" {
+		// The runner owns the fire past its return (ErrRunHandedOff): keep
+		// Running persisted, record no outcome, compute no next run.
+		return
 	}
 
 	execDuration := cs.now().UnixMilli() - startTime
@@ -674,6 +898,8 @@ func (cs *CronService) executeJobByID(ctx context.Context, jobID string) {
 	// deferred reset that ALWAYS runs, so even an early return (job vanished)
 	// or a panic in the state-update code below leaves no stuck Running=true.
 	cs.mu.Lock()
+	// Completion can happen while runLoop is recalculating its timer.
+	defer cs.notify()
 	defer cs.mu.Unlock()
 	defer cs.clearRunningUnsafe(jobID)
 
@@ -685,7 +911,7 @@ func (cs *CronService) executeJobByID(ctx context.Context, jobID string) {
 		}
 	}
 	if job == nil {
-		log.Printf("[cron] job %s disappeared before state update", jobID)
+		slog.Warn("cron: job disappeared before state update", "job_id", jobID)
 		return
 	}
 
@@ -701,33 +927,28 @@ func (cs *CronService) executeJobByID(ctx context.Context, jobID string) {
 		job.SessionID = sessionID
 	}
 
-	// Classify the run outcome. A deadline-exceeded run is "timeout", not
-	// "error", so the contract `timeout` enum is live (FR-003). A transient
-	// provider error drives backoff-retry scheduling (FR-010).
+	// Classify the run outcome. A transient provider error drives
+	// backoff-retry scheduling (FR-010). There is no "timeout" outcome any
+	// more: a scheduled run has no deadline (issue #1306), so a
+	// context.DeadlineExceeded here can only be a provider request timeout and
+	// is an ordinary error (the `timeout` status survives only in run records
+	// written by older releases).
 	status := "ok"
 	errText := ""
 	transient := false
-	switch {
-	case err == nil:
+	if err == nil {
 		job.State.LastStatus = "ok"
 		job.State.LastError = ""
 		job.State.ConsecutiveFailures = 0
 		job.State.RetryAttempt = 0
-	case errors.Is(err, context.DeadlineExceeded):
-		status = "timeout"
-		errText = err.Error()
-		job.State.LastStatus = "timeout"
-		job.State.LastError = errText
-		job.State.ConsecutiveFailures++
-		log.Printf("[cron] ⏱ job '%s' timed out after %dms: %v", job.Name, execDuration, err)
-	default:
+	} else {
 		status = "error"
 		errText = err.Error()
 		transient = IsTransient(err)
 		job.State.LastStatus = "error"
 		job.State.LastError = errText
 		job.State.ConsecutiveFailures++
-		log.Printf("[cron] ✗ job '%s' failed after %dms: %v", job.Name, execDuration, err)
+		slog.Warn("cron: job failed", "job", job.Name, "duration_ms", execDuration, "error", err)
 	}
 
 	// Append to inline run history, capped at runHistoryCap.
@@ -750,11 +971,11 @@ func (cs *CronService) executeJobByID(ctx context.Context, jobID string) {
 	nextRunStr := cs.scheduleNextRunUnsafe(job, transient)
 
 	if err == nil {
-		log.Printf("[cron] ✓ job '%s' completed in %dms, next run: %s", job.Name, execDuration, nextRunStr)
+		slog.Info("cron: job completed", "job", job.Name, "duration_ms", execDuration, "next_run", nextRunStr)
 	}
 
 	if err := cs.saveStoreUnsafe(); err != nil {
-		log.Printf("[cron] failed to save store: %v", err)
+		slog.Error("cron failed to save store", "job_id", jobID, "error", err)
 	}
 }
 
@@ -770,7 +991,7 @@ func invokeRun(
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("scheduled run panic: %v", r)
-			log.Printf("[cron] ✗ job '%s' (id: %s) panicked: %v", job.Name, job.ID, r)
+			slog.Error("cron: job panicked", "job", job.Name, "job_id", job.ID, "panic", fmt.Sprint(r))
 		}
 	}()
 	if runner != nil {
@@ -788,7 +1009,7 @@ func (cs *CronService) clearRunningUnsafe(jobID string) {
 			if cs.store.Jobs[i].State.Running {
 				cs.store.Jobs[i].State.Running = false
 				if err := cs.saveStoreUnsafe(); err != nil {
-					log.Printf("[cron] failed to persist Running reset: %v", err)
+					slog.Error("cron failed to persist Running reset", "job_id", jobID, "error", err)
 				}
 			}
 			return
@@ -806,8 +1027,9 @@ func (cs *CronService) rescheduleSkippedUnsafe(job *CronJob) {
 	}
 	job.State.NextRunAtMS = cs.computeNextRun(&job.Schedule, cs.clockNowUnsafeMS())
 	if err := cs.saveStoreUnsafe(); err != nil {
-		log.Printf("[cron] failed to persist skip-reschedule: %v", err)
+		slog.Error("cron failed to persist skip-reschedule", "job_id", job.ID, "error", err)
 	}
+	cs.notify()
 }
 
 // scheduleNextRunUnsafe computes and assigns the job's next fire after a run,
@@ -833,8 +1055,8 @@ func (cs *CronService) scheduleNextRunUnsafe(job *CronJob, transient bool) strin
 		next := cs.clockNowUnsafeMS() + offset
 		job.State.NextRunAtMS = &next
 		job.State.RetryAttempt++
-		log.Printf("[cron] ↻ job '%s' transient failure — retry %d scheduled in %dms",
-			job.Name, job.State.RetryAttempt, offset)
+		slog.Info("cron: job transient failure, retry scheduled", "job", job.Name,
+			"retry", job.State.RetryAttempt, "in_ms", offset)
 		return time.UnixMilli(next).Format("2006-01-02 15:04:05") + " (retry)"
 	}
 
@@ -870,14 +1092,14 @@ func (cs *CronService) computeNextRun(schedule *CronSchedule, nowMS int64) *int6
 		now := time.UnixMilli(nowMS)
 		nextTime, err := gronx.NextTickAfter(schedule.Expr, now, false)
 		if err != nil {
-			log.Printf("[cron] failed to compute next run for expr '%s': %v", schedule.Expr, err)
+			slog.Warn("cron: failed to compute next run", "expr", schedule.Expr, "error", err)
 			return nil
 		}
 
 		nextMS := nextTime.UnixMilli()
 		return &nextMS
 	default:
-		log.Printf("[cron] unknown schedule kind '%s'", schedule.Kind)
+		slog.Warn("cron: unknown schedule kind", "kind", schedule.Kind)
 		return nil
 	}
 }
@@ -901,34 +1123,46 @@ func (cs *CronService) recomputeNextRuns() {
 	}
 }
 
-// migrateOwners backfills owner-less jobs with the default agent id, if one was
-// supplied (W-8). Idempotent: only fills empty owners; persists once when it
-// changes anything. Safe to call with the lock not held.
-func (cs *CronService) migrateOwners() {
-	cs.mu.Lock()
-	defer cs.mu.Unlock()
-	cs.migrateOwnersUnsafe()
+// interruptedOneTimeFire reports whether job is a one-time ("at") job whose
+// run had STARTED in a process that is now gone, without its outcome saved.
+// Only meaningful at a physical boot, where every persisted Running flag
+// belongs to a dead process.
+//
+// Issue #1484, the window: RunDueJobs persists the cleared NextRunAtMS before
+// the run, executeJobByID persists Running=true when the run starts, and only
+// the outcome save after the run disables or deletes a one-time job. A
+// process that died in between left the job on disk with no next run; the
+// physical-boot restore cleared Running and the recompute gave a past
+// one-time job no next run, so the job sat in the store and never ran again,
+// with nothing recording that its run never finished.
+//
+// A one-time fire the process missed while it was not running is a
+// different case and stays skipped, as the calendar documentation states
+// ("a missed run is skipped, never replayed"): it never had Running set.
+// Running the interrupted job again is at-least-once — a run that finished
+// but died before its outcome was saved runs a second time.
+func interruptedOneTimeFire(job *CronJob) bool {
+	if !job.State.Running || !job.Enabled || job.Schedule.Kind != "at" || job.Schedule.AtMS == nil {
+		return false
+	}
+	if last := job.State.LastRunAtMS; last != nil && *last >= *job.Schedule.AtMS {
+		return false
+	}
+	return true
 }
 
-// migrateOwnersUnsafe is migrateOwners with the lock already held.
-func (cs *CronService) migrateOwnersUnsafe() {
-	if cs.defaultAgentID == "" || cs.store == nil {
-		return
-	}
-	changed := false
-	for i := range cs.store.Jobs {
-		if cs.store.Jobs[i].AgentID == "" {
-			cs.store.Jobs[i].AgentID = cs.defaultAgentID
-			changed = true
-		}
-	}
-	if changed {
-		log.Printf("[cron] migration: backfilled owner-less jobs with default agent %q", cs.defaultAgentID)
-		if err := cs.saveStoreUnsafe(); err != nil {
-			log.Printf("[cron] failed to persist owner migration: %v", err)
-		}
-	}
-}
+// InterruptedOneTimeFire is the exported form of the physical-boot predicate
+// initRunStateUnsafe applies (#1484): a one-time ("at") job whose run had
+// started in a process that is now gone, without its outcome saved. It is
+// only meaningful while that dead process's Running flags are still on the
+// store — before StartAfterPhysicalBoot clears them.
+//
+// Derived-job schedulers call it on their persisted jobs BEFORE the engine's
+// physical-boot restore, so a crashed fire of a derived one-time trigger can
+// be marked as owed and protected from the boot re-derivation that would
+// otherwise replace the armed job with a not-due one (a past at-job gets no
+// next run) and silently drop the run a second time.
+func InterruptedOneTimeFire(job *CronJob) bool { return interruptedOneTimeFire(job) }
 
 func (cs *CronService) getNextWakeMS() *int64 {
 	var nextWake *int64
@@ -966,6 +1200,11 @@ func (cs *CronService) loadStore() error {
 }
 
 func (cs *CronService) saveStoreUnsafe() error {
+	if hook := cs.testHooks.saveStore; hook != nil {
+		if err := hook(); err != nil {
+			return err
+		}
+	}
 	data, err := json.MarshalIndent(cs.store, "", "  ")
 	if err != nil {
 		return err
@@ -975,64 +1214,20 @@ func (cs *CronService) saveStoreUnsafe() error {
 	return fileutil.WriteFileAtomic(cs.storePath, data, 0o600)
 }
 
-// AddJob creates a schedule. It used to take deliver/channel/to as well; those
-// went with the retired Schedules UI plumbing (ADR-065 spec FR-8) and were
-// left as ignored parameters for a while, which is its own kind of lie about
-// what the function does.
-func (cs *CronService) AddJob(
-	name string,
-	schedule CronSchedule,
-	message string,
-) (*CronJob, error) {
-	cs.mu.Lock()
-	defer cs.mu.Unlock()
-
-	now := cs.clockNowUnsafeMS()
-
-	// One-time tasks (at) should be deleted after execution
-	deleteAfterRun := (schedule.Kind == "at")
-
-	job := CronJob{
-		ID:       generateID(),
-		Name:     name,
-		Enabled:  true,
-		Schedule: schedule,
-		Payload: CronPayload{
-			Kind:    "agent_turn",
-			Message: message,
-		},
-		State: CronJobState{
-			NextRunAtMS: cs.computeNextRun(&schedule, now),
-		},
-		CreatedAtMS:    now,
-		UpdatedAtMS:    now,
-		DeleteAfterRun: deleteAfterRun,
-	}
-
-	cs.store.Jobs = append(cs.store.Jobs, job)
-	if err := cs.saveStoreUnsafe(); err != nil {
-		return nil, err
-	}
-
-	cs.notify()
-
-	return &job, nil
-}
-
 // JobSpec is the full creation spec for AddJobFull. Every #264 field (owner,
 // session mode, timeout, created-by, delivery) is set in one atomic write, so
 // the REST handler avoids the two-write create window (AddJob + UpdateJob) that
 // briefly persists a job with an empty owner.
 type JobSpec struct {
-	Name           string
-	Schedule       CronSchedule
-	Message        string
-	Command        string
-	AgentID        string
-	SessionMode    SessionMode
-	TimeoutSeconds int
-	CreatedBy      string
-	Enabled        *bool // nil → default true
+	Name        string
+	Schedule    CronSchedule
+	Message     string
+	Command     string
+	AgentID     string
+	SessionMode SessionMode
+	RunIsolated bool
+	CreatedBy   string
+	Enabled     *bool // nil → default true
 	// SessionID is the stable id of the eager standing session that the
 	// heartbeat reconciler pre-creates when a member heartbeat is enabled
 	// (FR-007b, A2/F-02). When set, AddJobFull threads it onto the created
@@ -1043,10 +1238,15 @@ type JobSpec struct {
 }
 
 // AddJobFull persists a complete job (including owner/mode/timeout) in a single
-// atomic write. It is the preferred constructor for the #264 REST create path;
-// AddJob is kept for back-compat with the legacy cron tool. Returns a copy of
-// the stored job.
+// atomic write. It is the ONLY creation path (session-core DEL-15: the legacy
+// AddJob and the owner-less backfill are deleted): the job needs an explicit,
+// already-authorized owner (spec.AgentID), and a job without one is refused
+// rather than persisted for a later backfill. Returns a caller-owned deep copy
+// of the stored job.
 func (cs *CronService) AddJobFull(spec JobSpec) (*CronJob, error) {
+	if strings.TrimSpace(spec.AgentID) == "" {
+		return nil, errors.New("cron: a job needs an explicit owner (AgentID); owner-less jobs are not created")
+	}
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
@@ -1084,7 +1284,7 @@ func (cs *CronService) AddJobFull(spec JobSpec) (*CronJob, error) {
 		DeleteAfterRun: spec.Schedule.Kind == "at",
 		AgentID:        spec.AgentID,
 		SessionMode:    mode,
-		TimeoutSeconds: spec.TimeoutSeconds,
+		RunIsolated:    spec.RunIsolated,
 		CreatedBy:      spec.CreatedBy,
 		SessionID:      spec.SessionID,
 	}
@@ -1097,17 +1297,18 @@ func (cs *CronService) AddJobFull(spec JobSpec) (*CronJob, error) {
 		return nil, err
 	}
 	cs.notify()
-	return &job, nil
+	out := cloneJob(job)
+	return &out, nil
 }
 
-// GetJob returns a copy of the job with the given id, or (zero,false) if no
-// such job exists.
+// GetJob returns a caller-owned deep copy of the job with the given id, or
+// (zero,false) if no such job exists.
 func (cs *CronService) GetJob(jobID string) (CronJob, bool) {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 	for i := range cs.store.Jobs {
 		if cs.store.Jobs[i].ID == jobID {
-			return cs.store.Jobs[i], true
+			return cloneJob(cs.store.Jobs[i]), true
 		}
 	}
 	return CronJob{}, false
@@ -1157,15 +1358,23 @@ func (cs *CronService) RunNow(jobID string) (status string, sessionID string, er
 	// "a new run was appended" signal.
 	beforeLen, beforeRec := cs.runStateSnapshot(jobID)
 
-	// Acquire a lane slot (queues when the cap is reached, FR-007).
+	// Acquire a lane slot (queues when the cap is reached, FR-007). The job
+	// counts as dispatched while it waits and runs (JobDispatchInFlight).
+	cs.markDispatchPending(jobID)
+	defer cs.clearDispatchPending(jobID)
 	select {
 	case sem <- struct{}{}:
 	case <-laneCtx.Done():
 		return "skipped", "", nil
 	}
-	cs.laneWG.Add(1)
+	// Count the run under mu against the current window (if any), so a
+	// concurrent Stop either drains it or never sees it (#1450).
+	cs.mu.RLock()
+	runs := cs.laneRuns
+	cs.laneAddUnsafe(runs, 1)
+	cs.mu.RUnlock()
 	func() {
-		defer cs.laneWG.Done()
+		defer cs.laneDone(runs)
 		defer func() { <-sem }()
 		cs.executeJobByID(laneCtx, jobID)
 	}()
@@ -1245,7 +1454,7 @@ func (cs *CronService) removeJobUnsafe(jobID string) bool {
 
 	if removed {
 		if err := cs.saveStoreUnsafe(); err != nil {
-			log.Printf("[cron] failed to save store after remove: %v", err)
+			slog.Error("cron failed to save store after remove", "job_id", jobID, "error", err)
 		}
 	}
 
@@ -1254,6 +1463,8 @@ func (cs *CronService) removeJobUnsafe(jobID string) bool {
 	return removed
 }
 
+// EnableJob sets the job's enabled flag and returns a caller-owned deep copy
+// of the updated job, or nil when no such job exists.
 func (cs *CronService) EnableJob(jobID string, enabled bool) *CronJob {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
@@ -1271,12 +1482,13 @@ func (cs *CronService) EnableJob(jobID string, enabled bool) *CronJob {
 			}
 
 			if err := cs.saveStoreUnsafe(); err != nil {
-				log.Printf("[cron] failed to save store after enable: %v", err)
+				slog.Error("cron failed to save store after enable", "job_id", jobID, "error", err)
 			}
 
 			cs.notify()
 
-			return job
+			out := cloneJob(*job)
+			return &out
 		}
 	}
 
@@ -1287,18 +1499,20 @@ func (cs *CronService) ListJobs(includeDisabled bool) []CronJob {
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 
-	if includeDisabled {
-		return cs.store.Jobs
+	// Caller-owned deep copies taken under the lock (issue #1621): the store's
+	// own slice and pointer fields must never escape it. With includeDisabled
+	// the result keeps the store's nil-versus-empty shape, as before.
+	var out []CronJob
+	if includeDisabled && cs.store.Jobs != nil {
+		out = make([]CronJob, 0, len(cs.store.Jobs))
 	}
-
-	var enabled []CronJob
-	for _, job := range cs.store.Jobs {
-		if job.Enabled {
-			enabled = append(enabled, job)
+	for i := range cs.store.Jobs {
+		if includeDisabled || cs.store.Jobs[i].Enabled {
+			out = append(out, cloneJob(cs.store.Jobs[i]))
 		}
 	}
 
-	return enabled
+	return out
 }
 
 func (cs *CronService) Status() map[string]any {
@@ -1327,4 +1541,51 @@ func generateID() string {
 		return fmt.Sprintf("%d", time.Now().UnixNano())
 	}
 	return hex.EncodeToString(b)
+}
+
+// markDispatchPending records one more dispatch of jobID handed to the lane.
+func (cs *CronService) markDispatchPending(jobID string) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	cs.markDispatchPendingUnsafe(jobID)
+}
+
+// markDispatchPendingUnsafe is markDispatchPending with mu already held.
+func (cs *CronService) markDispatchPendingUnsafe(jobID string) {
+	if cs.dispatchPending == nil {
+		cs.dispatchPending = make(map[string]int)
+	}
+	cs.dispatchPending[jobID]++
+}
+
+// clearDispatchPending releases one dispatch of jobID recorded by
+// markDispatchPending. Every caller defers it, so it runs on a finished run,
+// a lane cancelled while queued, and a panic alike.
+func (cs *CronService) clearDispatchPending(jobID string) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	if cs.dispatchPending[jobID] <= 1 {
+		delete(cs.dispatchPending, jobID)
+		return
+	}
+	cs.dispatchPending[jobID]--
+}
+
+// JobDispatchInFlight reports whether jobID has a dispatch that is queued for
+// a lane slot or running (issue #1306, architect R2-A1). RunDueJobs clears a
+// due job's next fire before the lane wait, and the job has no Running flag
+// and no turn until it gets a slot, so an idle sweep must ask this instead of
+// treating that queued run as idle.
+func (cs *CronService) JobDispatchInFlight(jobID string) bool {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	if cs.dispatchPending[jobID] > 0 {
+		return true
+	}
+	for i := range cs.store.Jobs {
+		if cs.store.Jobs[i].ID == jobID {
+			return cs.store.Jobs[i].State.Running
+		}
+	}
+	return false
 }

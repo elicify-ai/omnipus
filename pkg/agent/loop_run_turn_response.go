@@ -10,11 +10,12 @@ import (
 	"math/rand/v2"
 	"time"
 
-	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/constants"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/steer"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // agentLoopRunTurnResponseCallLLMWithRetries carries the shared state of callLLMWithRetries across its stages.
@@ -22,7 +23,6 @@ type agentLoopRunTurnResponseCallLLMWithRetries struct {
 	rr                           *agentLoopRunTurnResponse
 	maxRetries                   int
 	compactionAttemptedOnTimeout bool
-	contextCompressionFailed     bool
 	tryPDFTextFallback           func() bool
 	synthesizeImageRejection     func(pe *ProviderError, rejectionErr error) bool
 	isTimeoutError               bool
@@ -45,14 +45,32 @@ func (rr *agentLoopRunTurnResponse) callLLMWithRetries() agentLoopRunTurnRespons
 	cr := &agentLoopRunTurnResponseCallLLMWithRetries{rr: rr}
 
 	cr.rr.rq.ri.rf.callLLM = func(messagesForCall []providers.Message, toolDefsForCall []providers.ToolDefinition) (*providers.LLMResponse, error) {
-		return cr.rr.rq.ri.rf.rt.callProvider(messagesForCall, toolDefsForCall)
+		cr.rr.rq.ri.rf.callMessages = messagesForCall
+		cr.rr.rq.ri.rf.providerToolDefs = toolDefsForCall
+		if err := cr.rr.rq.checkpointRequest(true); err != nil {
+			return nil, err
+		}
+		// #1534: a new provider call starts with no pre-Stop text of its
+		// own; a streamed attempt records what it shows (stop_turn_end.go).
+		cr.rr.rq.ri.rf.rt.ts.setStopShown("", false)
+		return cr.rr.rq.ri.rf.rt.callProviderOnce(cr.rr.rq.ri.rf.callMessages, toolDefsForCall)
 	}
 
 	cr.rr.rq.ri.rf.response = nil
 	cr.rr.rq.ri.rf.err = nil
+	// Issue #1435: the image strip-retry is no longer one-shot per TURN.
+	// The guard was hoisted to per-turn (ADR-051 RD2) when the strip was a
+	// last-resort format fallback; the incident showed the flip side — the
+	// oversized image comes back from history on the next iteration, the
+	// guard is already spent, and every later iteration of the turn fails
+	// identically. Reset the IMAGE-class guard at each LLM-call sequence
+	// entry (one sequence per tool-loop iteration): within one sequence the
+	// FR-019 invariant still holds (at most one image strip, no
+	// strip→fail→strip loop), across iterations the retry is available
+	// again. The PDF-class guard keeps its strict per-turn budget.
+	cr.rr.rq.ri.rf.rt.ts.imageRetryDone.Store(false)
 	cr.maxRetries = 2
 	cr.compactionAttemptedOnTimeout = false
-	cr.contextCompressionFailed = false // C3: tracks that compression was tried but returned ok=false
 
 	// tryPDFTextFallback is the provider-agnostic safety net for native-PDF
 	// rejections. pdfCapableModel cannot perfectly track OpenRouter's
@@ -125,6 +143,11 @@ agentLoopRunTurnResponseCallLLMWithRetriesLoop1:
 func (cr *agentLoopRunTurnResponseCallLLMWithRetries) handleAttemptFailure(retry int) agentLoopRunTurnResponseCallLLMWithRetriesFlow {
 	cr.rr.rq.ri.rf.response, cr.rr.rq.ri.rf.err = cr.rr.rq.ri.rf.callLLM(cr.rr.rq.ri.rf.callMessages, cr.rr.rq.ri.rf.providerToolDefs)
 	if cr.rr.rq.ri.rf.err == nil {
+		return agentLoopRunTurnResponseCallLLMWithRetriesBreak
+	}
+	// Permanent route/model faults are not attachment failures. Refuse before
+	// synthesis, strip-retry, or PDF fallback can overwrite the original error.
+	if permanentModelFailure(cr.rr.rq.ri.rf.err) {
 		return agentLoopRunTurnResponseCallLLMWithRetriesBreak
 	}
 	// ADR-087 D3/D9 (main call site): a tool call cut off at the
@@ -225,6 +248,46 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) handleAttemptFailure(retry
 	// the normal ClassifyError → isTimeoutError retry path below.
 	var exhaustedErr *providers.FallbackExhaustedError
 	if errors.As(cr.rr.rq.ri.rf.err, &exhaustedErr) {
+		// Issue #1280: the chain already ran the retry plan (1 call + 5
+		// retries) on its last candidate. Retrying the exhaustion here would
+		// multiply the calls and the wait past the founder's ~1.5 min;
+		// surface the real cause now.
+		if exhaustedRanRetryPlan(exhaustedErr) {
+			return agentLoopRunTurnResponseCallLLMWithRetriesBreak
+		}
+		// F1 interaction (§7.4): the chain's in-place retry is rate-limit-only
+		// (C-8), so a single-candidate chain concludes ANY timeout-class
+		// failure — a real deadline, a GOAWAY, an http2 body-closed drop — as
+		// FallbackExhaustedError after one marked attempt. On release/v0.1.1
+		// this error reached classifyFailure as the RAW transport error and
+		// the loop's inline timeout recovery owned it (FR-019 recall-span
+		// eviction, the retry event, the BoundaryRetryNotice audience
+		// decision, and the timed_out turn classification). Unwrap to the
+		// underlying transport error and let that machinery run exactly as it
+		// would have without the chain. Multi-candidate chains keep the
+		// exhaustion semantics below — the chain DID try every candidate.
+		if len(cr.rr.rq.ri.rf.rt.activeCandidates) == 1 {
+			var lastTimeoutErr error
+			allTimeout := len(exhaustedErr.Attempts) > 0
+			for _, a := range exhaustedErr.Attempts {
+				if a.Skipped {
+					// A cooldown/D14 skip is not a transport timeout; the
+					// exhaustion conclusion did not rest on a real attempt.
+					allTimeout = false
+					break
+				}
+				fe := providers.ClassifyError(a.Error, a.Provider, a.Model)
+				if fe == nil || fe.Reason != providers.FailoverTimeout {
+					allTimeout = false
+					break
+				}
+				lastTimeoutErr = a.Error
+			}
+			if allTimeout && lastTimeoutErr != nil {
+				cr.rr.rq.ri.rf.err = lastTimeoutErr
+				return agentLoopRunTurnResponseCallLLMWithRetriesNext
+			}
+		}
 		// Check whether every failed attempt was a transient stream reset.
 		// Skipped-cooldown entries (Skipped==true) are not counted as
 		// streaming failures; we only need all *attempted* calls to have
@@ -308,6 +371,9 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) classifyFailure() agentLoo
 		activeProviderName = cr.rr.rq.ri.rf.rt.activeCandidates[0].Provider
 	}
 	failErr := providers.ClassifyError(cr.rr.rq.ri.rf.err, activeProviderName, cr.rr.rq.ri.rf.rt.llmModel)
+	if permanentModelFailure(cr.rr.rq.ri.rf.err) {
+		return agentLoopRunTurnResponseCallLLMWithRetriesBreak
+	}
 
 	cr.isTimeoutError = false
 	cr.isContextError = false
@@ -380,9 +446,8 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) retryTimeout(retry int) ag
 			EventKindTurnTimeout,
 			cr.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.timeout"),
 			TurnTimeoutPayload{
-				TimeoutSeconds: cr.rr.rq.ri.rf.rt.ts.agent.TimeoutSeconds,
-				Compacted:      cr.compactionAttemptedOnTimeout,
-				Retried:        retry > 0,
+				Compacted: cr.compactionAttemptedOnTimeout,
+				Retried:   retry > 0,
 			},
 		)
 		// Timeout recovery: compact context if it's heavily loaded, then retry once.
@@ -416,6 +481,10 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) retryTimeout(retry int) ag
 				//  3. ok=false, NothingToTrim=false — TruncateHistory was attempted
 				//     but the window genuinely did not shrink — abandon the retry.
 				compression, ok := cr.rr.rq.ri.rf.rt.al.windowTrim(cr.rr.rq.ri.rf.rt.ts.agent, cr.rr.rq.ri.rf.rt.ts.opts.TranscriptSessionID, cr.rr.rq.ri.rf.rt.ts.sessionKey)
+				if compression.Err != nil {
+					cr.rr.rq.ri.rf.err = compression.Err
+					return agentLoopRunTurnResponseCallLLMWithRetriesBreak
+				}
 				if ok {
 					cr.rr.rq.ri.rf.rt.al.emitEvent(
 						EventKindContextCompress,
@@ -514,16 +583,8 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) retryTimeout(retry int) ag
 		// session's retry notice is never the user's audience.
 		// audienceFor also calls steer.BoundaryObserver.Observe before this
 		// decision is acted on (FR-B-014).
-		retryAudience := cr.rr.rq.ri.rf.rt.al.audienceFor(cr.rr.rq.ri.rf.rt.turnCtx, steer.BoundaryRetryNotice, cr.rr.rq.ri.rf.rt.ts.transcriptSessionID)
-		if retry == 0 && !constants.IsInternalChannel(cr.rr.rq.ri.rf.rt.ts.channel) && retryAudience == steer.AudienceUser {
-			if notifyErr := cr.rr.rq.ri.rf.rt.al.bus.PublishOutbound(cr.rr.rq.ri.rf.rt.turnCtx, bus.OutboundMessage{
-				Channel: cr.rr.rq.ri.rf.rt.ts.channel,
-				ChatID:  cr.rr.rq.ri.rf.rt.ts.chatID,
-				Content: "Retrying — please wait...",
-			}); notifyErr != nil {
-				logger.WarnCF("agent", "Failed to send retry indicator",
-					map[string]any{"channel": cr.rr.rq.ri.rf.rt.ts.channel, "error": notifyErr.Error()})
-			}
+		if retry == 0 {
+			cr.rr.rq.ri.rf.rt.publishRetryNotice()
 		}
 		logger.WarnCF("agent", "Timeout error, retrying after backoff", map[string]any{
 			"error":   cr.rr.rq.ri.rf.err.Error(),
@@ -545,92 +606,51 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) retryTimeout(retry int) ag
 	return agentLoopRunTurnResponseCallLLMWithRetriesNext
 }
 
-// retryContextOverflow compacts and retries a context-overflow failure.
+// retryContextOverflow forces deterministic relief against the exact rejected
+// request, even when estimates fit. No progress means no unchanged resend.
 func (cr *agentLoopRunTurnResponseCallLLMWithRetries) retryContextOverflow(retry int) agentLoopRunTurnResponseCallLLMWithRetriesFlow {
-	if cr.isContextError && retry < cr.maxRetries && !cr.rr.rq.ri.rf.rt.ts.opts.NoHistory {
-		// C3: if a previous compression attempt returned ok=false and we're
-		// still getting context errors, retrying with identical data won't help.
-		// Break to surface the error rather than burning the remaining budget.
-		if cr.contextCompressionFailed {
-			logger.WarnCF("agent", "Context overflow persists after failed compression; aborting retry",
-				map[string]any{"agent_id": cr.rr.rq.ri.rf.rt.ts.agent.ID, "iteration": cr.rr.rq.ri.rf.rt.iteration, "retry": retry})
+	rq := cr.rr.rq
+	rt := rq.ri.rf.rt
+	if !cr.isContextError {
+		return agentLoopRunTurnResponseCallLLMWithRetriesNext
+	}
+	if retry >= cr.maxRetries || rt.ts.opts.NoHistory {
+		return agentLoopRunTurnResponseCallLLMWithRetriesBreak
+	}
+	before := rq.ri.rf.callMessages
+	candidate, progress, reliefErr := rt.al.checkpointWindow(rt.turnCtx, rt.ts, before, rq.ri.rf.providerToolDefs, true)
+	if reliefErr != nil {
+		rq.ri.rf.err = errors.Join(rq.ri.rf.err, reliefErr)
+		return agentLoopRunTurnResponseCallLLMWithRetriesBreak
+	}
+	if !progress {
+		return agentLoopRunTurnResponseCallLLMWithRetriesBreak
+	}
+	rq.ri.messages = retainLiveWindow(rq.ri.messages, candidate)
+	rq.ri.rf.callMessages = candidate
+	retryPayload := LLMRetryPayload{
+		Attempt: retry + 1, MaxRetries: cr.maxRetries,
+		Reason: "context_limit", Error: rq.ri.rf.err.Error(),
+	}
+	overflowAudience := rt.al.audienceFor(rt.turnCtx, steer.BoundaryRetryNotice, rt.ts.transcriptSessionID)
+	if retry == 0 && !constants.IsInternalChannel(rt.ts.channel) && overflowAudience == steer.AudienceUser {
+		frame, noticeErr := rt.ts.recordContextWindowNotice(generated.ContextWindowNotice{
+			Kind:    generated.ContextWindowNoticeKindProviderRetry,
+			Message: "Context window exceeded. Compressing history and retrying...",
+		})
+		if noticeErr != nil && !errors.Is(noticeErr, ErrContextWindowNoticeDisabled) {
+			rq.ri.rf.err = errors.Join(rq.ri.rf.err, noticeErr)
 			return agentLoopRunTurnResponseCallLLMWithRetriesBreak
 		}
-		cr.rr.rq.ri.rf.rt.al.emitEvent(
-			EventKindLLMRetry,
-			cr.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.llm.retry"),
-			LLMRetryPayload{
-				Attempt:    retry + 1,
-				MaxRetries: cr.maxRetries,
-				Reason:     "context_limit",
-				Error:      cr.rr.rq.ri.rf.err.Error(),
-			},
-		)
-		logger.WarnCF(
-			"agent",
-			"Context window error detected, attempting compression",
-			map[string]any{
-				"error": cr.rr.rq.ri.rf.err.Error(),
-				"retry": retry,
-			},
-		)
-
-		// ADR-091 boundary 5 (FR-B-001): a steered
-		// session's retry notice is never the user's audience.
-		// audienceFor also calls steer.BoundaryObserver.Observe before this
-		// decision is acted on (FR-B-014).
-		overflowAudience := cr.rr.rq.ri.rf.rt.al.audienceFor(cr.rr.rq.ri.rf.rt.turnCtx, steer.BoundaryRetryNotice, cr.rr.rq.ri.rf.rt.ts.transcriptSessionID)
-		if retry == 0 && !constants.IsInternalChannel(cr.rr.rq.ri.rf.rt.ts.channel) && overflowAudience == steer.AudienceUser {
-			if notifyErr := cr.rr.rq.ri.rf.rt.al.bus.PublishOutbound(cr.rr.rq.ri.rf.rt.turnCtx, bus.OutboundMessage{
-				Channel: cr.rr.rq.ri.rf.rt.ts.channel,
-				ChatID:  cr.rr.rq.ri.rf.rt.ts.chatID,
-				Content: "Context window exceeded. Compressing history and retrying...",
-			}); notifyErr != nil {
-				logger.WarnCF("agent", "Failed to notify user of context compression",
-					map[string]any{"channel": cr.rr.rq.ri.rf.rt.ts.channel, "error": notifyErr.Error()})
-			}
-		}
-
-		// force: the PROVIDER rejected this request with a context
-		// error, so our own estimate said it fit and was wrong.
-		// Honouring the "already fits" guard here would make the
-		// retry byte-identical to the call that just failed.
-		if compression, ok := cr.rr.rq.ri.rf.rt.al.windowTrimForce(cr.rr.rq.ri.rf.rt.ts.agent, cr.rr.rq.ri.rf.rt.ts.opts.TranscriptSessionID, cr.rr.rq.ri.rf.rt.ts.sessionKey, true); ok {
-			cr.rr.rq.ri.rf.rt.al.emitEvent(
-				EventKindContextCompress,
-				cr.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.context.compress"),
-				ContextCompressPayload{
-					Reason:            ContextCompressReasonRetry,
-					DroppedMessages:   compression.DroppedMessages,
-					RemainingMessages: compression.RemainingMessages,
-				},
-			)
-		} else {
-			// C3: windowTrim returned ok=false (nothing to trim). Mark the
-			// flag so the NEXT retry attempt will break rather than burning more
-			// budget on identical data. We still allow this single retry through
-			// because the provider might succeed without context reduction.
-			cr.contextCompressionFailed = true
-			logger.WarnCF("agent", "Window trim failed during context overflow recovery; will not retry further",
-				map[string]any{"agent_id": cr.rr.rq.ri.rf.rt.ts.agent.ID, "iteration": cr.rr.rq.ri.rf.rt.iteration})
-		}
-
-		// Site-4: post-context-overflow-trim assembly.
-		newHistory := cr.rr.rq.ri.rf.rt.ts.agent.Sessions.GetHistory(cr.rr.rq.ri.rf.rt.ts.sessionKey)
-		cr.rr.rq.ri.messages = cr.rr.rq.ri.rf.rt.al.assembleMessages(cr.rr.rq.ri.rf.rt.turnCtx, cr.rr.rq.ri.rf.rt.ts, newHistory, "", nil, activeSkillNames(cr.rr.rq.ri.rf.rt.ts.agent, cr.rr.rq.ri.rf.rt.ts.opts))
-		cr.rr.continuationChain = nil
-		if cr.rr.rq.ri.rf.rt.ts.continuationUnresolved() {
-			// ADR-087 D6.7: same rebuild-restoration as Site-3 above.
-			cr.rr.continuationChain = continuationChainMessages(cr.rr.rq.ri.rf.rt.ts.continuationAccumulated())
-			cr.rr.rq.ri.messages = append(cr.rr.rq.ri.messages, cr.rr.continuationChain...)
-		}
-		cr.rr.rq.ri.rf.callMessages = cr.rr.rq.ri.messages
-		if cr.rr.rq.ri.gracefulTerminal {
-			cr.rr.rq.ri.rf.callMessages = append(append([]providers.Message(nil), cr.rr.rq.ri.messages...), cr.rr.rq.ri.rf.rt.ts.interruptHintMessage())
-		}
-		return agentLoopRunTurnResponseCallLLMWithRetriesContinue
+		retryPayload.ContextWindowNotice = frame
 	}
-	return agentLoopRunTurnResponseCallLLMWithRetriesNext
+	rt.al.emitEvent(EventKindLLMRetry, rt.ts.eventMeta("runTurn", "turn.llm.retry"), retryPayload)
+	rt.al.emitEvent(EventKindContextCompress, rt.ts.eventMeta("runTurn", "turn.context.compress"), ContextCompressPayload{
+		Reason:            ContextCompressReasonRetry,
+		DroppedMessages:   max(0, len(stripContextReliefNotice(before))-len(stripContextReliefNotice(candidate))),
+		RemainingMessages: len(stripContextReliefNotice(candidate)),
+	})
+	return agentLoopRunTurnResponseCallLLMWithRetriesContinue
 }
 
 // handleProviderResponse handles terminal provider errors and records a successful provider response.
@@ -671,6 +691,7 @@ func (rr *agentLoopRunTurnResponse) handleProviderResponse() agentLoopRunTurnRes
 		if outcomeRelabelApplies(llm.Code, rr.rq.ri.rf.rt.ts.outcomeRelabel) {
 			llm.Code = rr.rq.ri.rf.rt.ts.outcomeRelabel
 			llm.Message = UserMessageForCode(rr.rq.ri.rf.rt.ts.outcomeRelabel)
+			llm.ProviderMessage = false
 		}
 
 		rr.rq.ri.rf.rt.al.emitEvent(
@@ -680,14 +701,18 @@ func (rr *agentLoopRunTurnResponse) handleProviderResponse() agentLoopRunTurnRes
 				Stage: "llm", ChatID: rr.rq.ri.rf.rt.ts.opts.ChatID,
 				Code:          string(llm.Code),
 				Message:       llm.Message,
+				Detail:        llm.Detail,
 				ProviderError: pe,
 				SessionID:     string(rr.rq.ri.rf.rt.ts.routingSessionID),
 			},
 		)
 		// FR-002: persist the translated provider error to the transcript
-		// (write choke point — ADR-051 §RD5). pe threaded through so the
-		// classifier sees status/body, not the stringified err.
-		rr.rq.ri.rf.rt.ts.appendClassifiedError(EventKindError.String(), "runTurn", llm)
+		// through the provider stage — the trusted set entry {"provider",
+		// "error"} preserves the ASSEMBLED §6 sentence verbatim
+		// (MAJ-001/C-13) and persistErrorTranscript flags the entry
+		// (MAJ-104/C-14). pe threaded through so the classifier sees
+		// status/body, not the stringified err.
+		rr.rq.ri.rf.rt.ts.appendClassifiedError(EventKindError.String(), "provider", llm)
 		logger.ErrorCF("agent", "LLM call failed",
 			map[string]any{
 				"agent_id":  rr.rq.ri.rf.rt.ts.agent.ID,
@@ -751,10 +776,8 @@ func (rr *agentLoopRunTurnResponse) handleProviderResponse() agentLoopRunTurnRes
 	//     reported — handled in the no-tool-calls branch below. Silence
 	//     is the defect there, not the malformation.
 	//
-	// ReasoningContent is stripped too: the no-tool-calls branch falls
-	// back to it when Content is empty, so leaving it alone would just
-	// move the leak. Mutating it here is safe — handleReasoning below
-	// receives its own string copy.
+	// ReasoningContent is stripped too, so no downstream consumer of the
+	// private reasoning carrier sees the residue either.
 	rr.orphanMarkup, rr.hasOrphanMarkup = stripOrphanToolCallMarkup(rr.rq.ri.rf.response)
 	if rr.hasOrphanMarkup {
 		logger.WarnCF("agent", "LLM emitted unparseable tool-call markup as text; markup suppressed",
@@ -770,15 +793,12 @@ func (rr *agentLoopRunTurnResponse) handleProviderResponse() agentLoopRunTurnRes
 			})
 	}
 
+	// Reasoning text is never published or logged (effort-levels spec FR-016,
+	// FR-017): the debug line below carries only its length.
 	reasoningContent := rr.rq.ri.rf.response.Reasoning
 	if reasoningContent == "" {
 		reasoningContent = rr.rq.ri.rf.response.ReasoningContent
 	}
-	rr.rq.ri.rf.rt.spawnReasoningPublish(
-		reasoningContent,
-		rr.rq.ri.rf.rt.ts.channel,
-		rr.rq.ri.rf.rt.al.targetReasoningChannelID(rr.rq.ri.rf.rt.ts.channel),
-	)
 	rr.rq.ri.rf.rt.al.emitEvent(
 		EventKindLLMResponse,
 		rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.llm.response"),
@@ -790,13 +810,12 @@ func (rr *agentLoopRunTurnResponse) handleProviderResponse() agentLoopRunTurnRes
 	)
 
 	llmResponseFields := map[string]any{
-		"agent_id":       rr.rq.ri.rf.rt.ts.agent.ID,
-		"iteration":      rr.rq.ri.rf.rt.iteration,
-		"content_chars":  len(rr.rq.ri.rf.response.Content),
-		"tool_calls":     len(rr.rq.ri.rf.response.ToolCalls),
-		"reasoning":      rr.rq.ri.rf.response.Reasoning,
-		"target_channel": rr.rq.ri.rf.rt.al.targetReasoningChannelID(rr.rq.ri.rf.rt.ts.channel),
-		"channel":        rr.rq.ri.rf.rt.ts.channel,
+		"agent_id":        rr.rq.ri.rf.rt.ts.agent.ID,
+		"iteration":       rr.rq.ri.rf.rt.iteration,
+		"content_chars":   len(rr.rq.ri.rf.response.Content),
+		"tool_calls":      len(rr.rq.ri.rf.response.ToolCalls),
+		"reasoning_chars": len([]rune(reasoningContent)),
+		"channel":         rr.rq.ri.rf.rt.ts.channel,
 	}
 	if rr.rq.ri.rf.response.Usage != nil {
 		llmResponseFields["prompt_tokens"] = rr.rq.ri.rf.response.Usage.PromptTokens
@@ -807,59 +826,19 @@ func (rr *agentLoopRunTurnResponse) handleProviderResponse() agentLoopRunTurnRes
 	return agentLoopRunTurnResponseNext
 }
 
-// reasoningPublishCanceledOnEntry reports whether ctx is already canceled,
-// logging when it is — the one path in handleReasoning (loop.go) that
-// silently drops the reasoning trace, so it must at least explain why.
-// Extracted into this sibling file rather than inlined in loop.go, which is
-// pinned at its exact grandfathered line count (scripts/budgets/files.txt)
-// and may only shrink.
-func reasoningPublishCanceledOnEntry(ctx context.Context, channelName string) bool {
-	if ctx.Err() == nil {
-		return false
-	}
-	logger.DebugCF("agent", "Reasoning publish skipped (context already canceled on entry)", map[string]any{
-		"channel": channelName,
-		"error":   ctx.Err().Error(),
-	})
-	return true
-}
-
-// reasoningPublishScheduledHook is a test-only synchronization seam. When
-// non-nil, it runs synchronously on the reasoning-publish goroutine started
-// by spawnReasoningPublish below, immediately after the goroutine starts and
-// before any publish work happens. A test uses it to pin that goroutine at a
-// chosen point in time relative to when the turn itself ends and cancels
-// turnCtx — an ordering otherwise reproducible only by chance under load.
-// Always nil in production; never set outside a test.
-var reasoningPublishScheduledHook func()
-
-// spawnReasoningPublish launches the best-effort reasoning-trace publish for
-// this turn on its own goroutine. Nothing in runTurn waits for it — it is
-// fire-and-forget — and runTurn cancels its own turnCtx via defer
-// (loop.go::runTurn, "defer rz.rc.turnCancel()") as soon as it returns. If
-// the Go scheduler does not run this goroutine until after that
-// cancellation (plausible under load — reproduced deterministically in
-// loop_reasoning_turn_cancel_test.go), handing it turnCtx directly would
-// make handleReasoning observe an already-canceled context on entry and
-// return without publishing: the reasoning trace silently dropped, with no
-// error surfaced anywhere. context.WithoutCancel detaches the goroutine from
-// turnCtx's cancellation (and from its own turn timeout) while
-// handleReasoning's own bounded 5s publish timeout remains the sole
-// lifetime bound, so the goroutine can never leak and the publish attempt
-// is never skipped merely because the turn ended first.
-func (rt *agentLoopRunTurn) spawnReasoningPublish(reasoningContent, channel, channelID string) {
-	detachedCtx := context.WithoutCancel(rt.turnCtx)
-	go func() {
-		if reasoningPublishScheduledHook != nil {
-			reasoningPublishScheduledHook()
-		}
-		rt.al.handleReasoning(detachedCtx, reasoningContent, channel, channelID)
-	}()
-}
-
 // recordToolCalls normalizes and records tool calls before execution begins.
-func (rr *agentLoopRunTurnResponse) recordToolCalls() {
-	rr.rq.ri.rf.rt.al.flushContinuationAccumulator(rr.rq.ri.rf.rt.ts, &rr.continuationChain)
+func (rr *agentLoopRunTurnResponse) recordToolCalls() error {
+	// #1178 (amendment §4.2): a failed continuation flush is a failed turn —
+	// no new tool round is admitted and the following tool-call message is
+	// never installed. The wrap, markTurnFailed, notice event and classified
+	// transcript error happen here (the direct caller gets the truthful
+	// error); dispatchToolCalls recognizes this handled failure and ends the
+	// turn without re-reporting it.
+	if flushErr := rr.rq.ri.rf.rt.al.flushContinuationAccumulator(rr.rq.ri.rf.rt.ts, &rr.continuationChain); flushErr != nil {
+		notSaved := &messageNotSavedError{role: "assistant", cause: flushErr}
+		rr.rq.ri.rf.rt.al.reportSessionSaveFailure(rr.rq.ri.rf.rt.ts, notSaved)
+		return notSaved
+	}
 	if isTruncatedFinishReason(rr.rq.ri.rf.response.FinishReason) {
 		rr.rq.ri.rf.rt.ts.markContinuationPending()
 	} else {
@@ -867,8 +846,16 @@ func (rr *agentLoopRunTurnResponse) recordToolCalls() {
 	}
 
 	rr.normalizedToolCalls = make([]providers.ToolCall, 0, len(rr.rq.ri.rf.response.ToolCalls))
+	rr.argumentRefusals = make([]*tools.ToolResult, 0, len(rr.rq.ri.rf.response.ToolCalls))
+	rr.recordToolArgs = make([]map[string]any, 0, len(rr.rq.ri.rf.response.ToolCalls))
 	for _, tc := range rr.rq.ri.rf.response.ToolCalls {
-		rr.normalizedToolCalls = append(rr.normalizedToolCalls, providers.NormalizeToolCall(tc))
+		// r17 SR-3: the one redaction step. normalizedToolCalls keeps the
+		// real arguments for execution only; recordToolArgs is the copy
+		// every record, log, event and frame of this call carries.
+		call, recorded, refusal := admittedToolCall(rr.rq.ri.rf.rt.ts.agent.Tools, providers.NormalizeToolCall(tc))
+		rr.normalizedToolCalls = append(rr.normalizedToolCalls, call)
+		rr.recordToolArgs = append(rr.recordToolArgs, recorded)
+		rr.argumentRefusals = append(rr.argumentRefusals, refusal)
 	}
 
 	toolNames := make([]string, 0, len(rr.normalizedToolCalls))
@@ -894,9 +881,13 @@ func (rr *agentLoopRunTurnResponse) recordToolCalls() {
 		Role:             "assistant",
 		Content:          rr.rq.ri.rf.response.Content,
 		ReasoningContent: rr.rq.ri.rf.response.ReasoningContent,
+		ThinkingBlocks:   append([]string(nil), rr.rq.ri.rf.response.ThinkingBlocks...),
+		// FR-013: the OpenRouter carrier rides the tool-call message so the
+		// continuation (and every reload) replays it to that route.
+		ReasoningDetails: cloneReasoningDetails(rr.rq.ri.rf.response.ReasoningDetails),
 	}
-	for _, tc := range rr.normalizedToolCalls {
-		argumentsJSON, marshalErr := json.Marshal(tc.Arguments)
+	for i, tc := range rr.normalizedToolCalls {
+		argumentsJSON, marshalErr := json.Marshal(rr.recordToolArgs[i])
 		if marshalErr != nil {
 			logger.WarnCF("agent", "failed to marshal tool call arguments", map[string]any{"tool": tc.Name, "error": marshalErr.Error()})
 			argumentsJSON = []byte("{}")
@@ -942,10 +933,10 @@ func (rr *agentLoopRunTurnResponse) recordToolCalls() {
 			ThoughtSignature: thoughtSignature,
 		})
 	}
-	rr.rq.ri.messages = append(rr.rq.ri.messages, assistantMsg)
-	if !rr.rq.ri.rf.rt.ts.opts.NoHistory {
-		rr.rq.ri.rf.rt.ts.agent.Sessions.AddFullMessage(rr.rq.ri.rf.rt.ts.sessionKey, assistantMsg)
+	if _, err := rr.rq.ri.rf.rt.ts.appendWindowMessage(assistantMsg, windowProducerAssistant); err != nil {
+		return err
 	}
+	rr.rq.ri.messages = append(rr.rq.ri.messages, assistantMsg)
 
 	// Bug #416 fix: persist the narration text the LLM emitted alongside
 	// this round's tool calls. Without this, only the FINAL iteration's text
@@ -955,9 +946,12 @@ func (rr *agentLoopRunTurnResponse) recordToolCalls() {
 	// We write BEFORE the tool_call entries so the transcript order mirrors
 	// the live stream: [text segment N] → [tool_call round N] → …
 	//
-	// Tokens/cost are 0 here — the turn total is attributed to the final
-	// assistant entry only (wsStreamer.Finalize or appendAssistantTranscript).
+	// This entry owns this call's usage, including a no-text accounting entry.
+	// The final reply must not count that usage a second time.
 	rr.rq.ri.rf.rt.ts.appendIntermediateAssistantTranscript(rr.rq.ri.rf.response.Content)
+	if err := rr.rq.ri.rf.rt.ts.callAccountingError(); err != nil {
+		return err
+	}
 	if rr.rq.ri.rf.response.Content != "" {
 		// The narration is now in the transcript. If this round's streamer
 		// ends up being finalized (the turn exits via max_tool_iterations
@@ -969,4 +963,5 @@ func (rr *agentLoopRunTurnResponse) recordToolCalls() {
 	}
 
 	rr.rq.ri.rf.rt.ts.setPhase(TurnPhaseTools)
+	return nil
 }

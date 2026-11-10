@@ -26,7 +26,7 @@ properties:
   session_id:
     type: string
     minLength: 1
-    maxLength: 128
+    maxLength: 255
     description: >-
       The client's chat session id. Under ADR-075 FR-017 it RESOLVES the
       browsing context: the gateway reads THIS session's own workspace_id

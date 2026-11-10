@@ -25,29 +25,6 @@ func (wh *wsHandlerReadLoop) wsSessionError(message string) wsHandlerReadLoopFlo
 	return wsHandlerReadLoopContinue
 }
 
-// handleSessionCloseFrame is FR-023's explicit session close request.
-func (wh *wsHandlerReadLoop) handleSessionCloseFrame(data []byte) wsHandlerReadLoopFlow {
-	var f generated.SessionCloseFrame
-	if err := json.Unmarshal(data, &f); err != nil {
-		slog.Warn("ws: malformed session_close frame", "error", err)
-		return wsHandlerReadLoopContinue
-	}
-	if f.SessionId == "" {
-		return wh.wsSessionError("session_close requires session_id")
-	}
-	if err := validation.EntityID(f.SessionId); err != nil {
-		return wh.wsSessionError("invalid session_id")
-	}
-	wh.h.agentLoop.CloseSession(f.SessionId, "explicit")
-	sid := f.SessionId
-	sendConnGenFrame(wh.wc, string(generated.WsFrameTypeSessionCloseAck), generated.SessionCloseAckFrame{
-		Type:      string(generated.WsFrameTypeSessionCloseAck),
-		SessionId: f.SessionId,
-		Id:        &sid,
-	})
-	return wsHandlerReadLoopNext
-}
-
 // applySessionModeChoice sets sessionID's ADR-092 per-chat Auto-approve
 // modifier — or clears it when autoApprove is nil — and audits the mode
 // change. Shared by handleSessionModeUpdateFrame below (a live chat's
@@ -68,7 +45,7 @@ func (h *WSHandler) applySessionModeChoice(ctx context.Context, agentID, session
 		modes.Set(sessionID, *autoApprove)
 		newMode = shellModeName(*autoApprove)
 	}
-	effective := al.SessionAutoApprove(agentID, sessionID)
+	effective := al.SessionAutoApprove(sessionID)
 	audit.EmitShellModeChange(ctx, al.AuditLogger(), audit.DecisionAllow,
 		newMode, "chat", audit.ShellModeActorOperator, agentID, sessionID, source)
 	return effective
@@ -76,7 +53,7 @@ func (h *WSHandler) applySessionModeChoice(ctx context.Context, agentID, session
 
 // handleSessionModeUpdateFrame applies ADR-092's per-chat Auto-approve
 // modifier (SessionModeUpdateFrame): auto_approve true/false sets it, null
-// clears it so the chat follows the agent and global defaults again. This is
+// clears it so the chat follows the global default again. This is
 // the one scope the contract lets LOOSEN, because a human is present in the
 // chat; it is reachable only from an authenticated browser WebSocket, never
 // from an agent tool. Always acknowledged with session_mode_updated carrying

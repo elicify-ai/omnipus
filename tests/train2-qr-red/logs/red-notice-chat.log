@@ -1,0 +1,322 @@
+Warning: Route file "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/train2-qr-chat/src/routes/authValidation.ts" does not export a Route. This file will not be included in the route tree.
+
+If this file is not intended to be a route, you can exclude it using one of these options:
+  1. Rename the file to "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/train2-qr-chat/src/routes/-authValidation.ts" (prefix with "-")
+  2. Use 'routeFileIgnorePattern' in your config to match this file
+
+Current configuration:
+  routeFileIgnorePrefix: "-"
+  routeFileIgnorePattern: undefined
+Warning: Route file "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/train2-qr-chat/src/routes/authValidation.test.ts" does not export a Route. This file will not be included in the route tree.
+
+If this file is not intended to be a route, you can exclude it using one of these options:
+  1. Rename the file to "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/train2-qr-chat/src/routes/-authValidation.test.ts" (prefix with "-")
+  2. Use 'routeFileIgnorePattern' in your config to match this file
+
+Current configuration:
+  routeFileIgnorePrefix: "-"
+  routeFileIgnorePattern: undefined
+
+ RUN  v4.1.11 /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/train2-qr-chat
+
+ ❯ src/components/skills/WhatsAppNativeNotice.chat.test.tsx (6 tests | 6 failed) 245ms
+     × subscribes with channel_id, active, request_id and session_id; a code frame with THAT request_id renders the QR 84ms
+     × Row 2 — correlation: a code frame for a DIFFERENT request_id does not render in this card 47ms
+     × a timeout frame with this request_id shows the timeout state with Retry; a different request_id does not 71ms
+     × a stopped frame with this request_id renders a stopped state — no spinner, no QR 11ms
+     × after a socket drop and reconnect the subscribe is re-sent with the same request_id and session_id 14ms
+     × closing ONE of two mounted notices keeps the other subscribed; only the last close unsubscribes 13ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 6 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/components/skills/WhatsAppNativeNotice.chat.test.tsx > Row 1 — BDD-8.4: the QR renders in the requesting chat, correlated by request id > subscribes with channel_id, active, request_id and session_id; a code frame with THAT request_id renders the QR
+AssertionError: expected { …(3) } to match object { channel_id: 'whatsapp', …(3) }
+(1 matching property omitted from actual)
+
+- Expected
++ Received
+
+  {
+    "active": true,
+    "channel_id": "whatsapp",
+-   "request_id": "toolcall-aaa",
+-   "session_id": "omnipus-main",
+  }
+
+ ❯ src/components/skills/WhatsAppNativeNotice.chat.test.tsx:104:33
+    102|     // The subscribe frame carries the correlation identity (K10).
+    103|     await waitFor(() => expect(subscribeCalls()).toHaveLength(1))
+    104|     expect(subscribeCalls()[0]).toMatchObject({
+       |                                 ^
+    105|       channel_id: CHANNEL, active: true, request_id: REQ_A, session_id…
+    106|     })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/6]⎯
+
+ FAIL  src/components/skills/WhatsAppNativeNotice.chat.test.tsx > Row 1 — BDD-8.4: the QR renders in the requesting chat, correlated by request id > Row 2 — correlation: a code frame for a DIFFERENT request_id does not render in this card
+Error: [2mexpect([22m[31melement[39m[2m).not.toBeInTheDocument()[22m
+
+[31mexpected document not to contain element, found <div
+  class="rounded-md bg-[var(--color-surface-paper)] p-[var(--space-2-5)]"
+  data-testid="whatsapp-qr"
+>
+  <svg
+    height="184"
+    role="img"
+    viewBox="0 0 21 21"
+    width="184"
+  >
+    <title>
+      WhatsApp pairing QR code
+    </title>
+    <path
+      d="M0,0 h21v21H0z"
+      fill="#FFFFFF"
+      shape-rendering="crispEdges"
+    />
+    <path
+      d="M0 0h7v1H0zM8 0h2v1H8zM14,0 h7v1H14zM0 1h1v1H0zM6 1h1v1H6zM8 1h2v1H8zM11 1h2v1H11zM14 1h1v1H14zM20,1 h1v1H20zM0 2h1v1H0zM2 2h3v1H2zM6 2h1v1H6zM8 2h1v1H8zM10 2h3v1H10zM14 2h1v1H14zM16 2h3v1H16zM20,2 h1v1H20zM0 3h1v1H0zM2 3h3v1H2zM6 3h1v1H6zM8 3h1v1H8zM11 3h1v1H11zM14 3h1v1H14zM16 3h3v1H16zM20,3 h1v1H20zM0 4h1v1H0zM2 4h3v1H2zM6 4h1v1H6zM9 4h1v1H9zM11 4h1v1H11zM14 4h1v1H14zM16 4h3v1H16zM20,4 h1v1H20zM0 5h1v1H0zM6 5h1v1H6zM8 5h1v1H8zM11 5h2v1H11zM14 5h1v1H14zM20,5 h1v1H20zM0 6h7v1H0zM8 6h1v1H8zM10 6h1v1H10zM12 6h1v1H12zM14,6 h7v1H14zM9 7h2v1H9zM12 7h1v1H12zM0 8h2v1H0zM4 8h3v1H4zM12 8h1v1H12zM15 8h1v1H15zM17,8 h4v1H17zM0 9h3v1H0zM5 9h1v1H5zM7 9h1v1H7zM9 9h2v1H9zM13 9h1v1H13zM16 9h1v1H16zM18 9h2v1H18zM1 10h1v1H1zM3 10h4v1H3zM9 10h1v1H9zM13 10h1v1H13zM16 10h1v1H16zM19 10h1v1H19zM0 11h2v1H0zM4 11h2v1H4zM8 11h2v1H8zM13 11h1v1H13zM15 11h1v1H15zM17 11h1v1H17zM19,11 h2v1H19zM1 12h6v1H1zM8 12h6v1H8zM20,12 h1v1H20zM8 13h3v1H8zM15 13h3v1H15zM0 14h7v1H0zM10 14h1v1H10zM14 14h1v1H14zM16 14h1v1H16zM19 14h1v1H19zM0 15h1v1H0zM6 15h1v1H6zM8 15h1v1H8zM10 15h1v1H10zM12 15h2v1H12zM16 15h1v1H16zM19 15h1v1H19zM0 16h1v1H0zM2 16h3v1H2zM6 16h1v1H6zM8 16h2v1H8zM12 16h2v1H12zM16 16h2v1H16zM19,16 h2v1H19zM0 17h1v1H0zM2 17h3v1H2zM6 17h1v1H6zM10 17h2v1H10zM14 17h1v1H14zM16 17h1v1H16zM18 17h1v1H18zM20,17 h1v1H20zM0 18h1v1H0zM2 18h3v1H2zM6 18h1v1H6zM9 18h1v1H9zM13 18h2v1H13zM16 18h2v1H16zM0 19h1v1H0zM6 19h1v1H6zM8 19h1v1H8zM10 19h1v1H10zM16 19h1v1H16zM0 20h7v1H0zM8 20h2v1H8zM11 20h1v1H11zM13 20h1v1H13zM20,20 h1v1H20z"
+      fill="#000000"
+      shape-rendering="crispEdges"
+    />
+  </svg>
+</div> instead[39m
+ ❯ src/components/skills/WhatsAppNativeNotice.chat.test.tsx:116:53
+    114|     apply(pairingFrame('code', 'toolcall-other'))
+    115|
+    116|     expect(screen.queryByTestId('whatsapp-qr')).not.toBeInTheDocument()
+       |                                                     ^
+    117|   })
+    118| })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/6]⎯
+
+ FAIL  src/components/skills/WhatsAppNativeNotice.chat.test.tsx > Row 3 — BDD-8.5: the timeout state, correlated > a timeout frame with this request_id shows the timeout state with Retry; a different request_id does not
+TestingLibraryElementError: Unable to find an element with the text: /pairing timed out/. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"space-y-[var(--space-2)] mt-[var(--space-1)]"[39m
+    [36m>[39m
+      [36m<div[39m
+        [33maria-live[39m=[32m"polite"[39m
+        [33mclass[39m=[32m"rounded-lg border border-[var(--color-border)] text-[var(--color-secondary)] bg-[var(--color-surface-1)] flex flex-col items-center gap-[var(--space-2-5)] p-[var(--space-3)]"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"flex flex-col items-center gap-[var(--space-2-5)]"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex items-center gap-[var(--space-2)] text-[var(--color-muted)]"[39m
+          [36m>[39m
+            [36m<svg[39m
+              [33mfill[39m=[32m"currentColor"[39m
+              [33mheight[39m=[32m"14"[39m
+              [33mviewBox[39m=[32m"0 0 256 256"[39m
+              [33mwidth[39m=[32m"14"[39m
+              [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+            [36m>[39m
+              [36m<path[39m
+                [33md[39m=[32m"M128,24A104,104,0,1,0,232,128,104.11,104.11,0,0,0,128,24Zm0,192a88,88,0,1,1,88-88A88.1,88.1,0,0,1,128,216Zm64-88a8,8,0,0,1-8,8H128a8,8,0,0,1-8-8V72a8,8,0,0,1,16,0v48h48A8,8,0,0,1,192,128Z"[39m
+              [36m/>[39m
+            [36m</svg>[39m
+            [36m<p[39m
+              [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)]"[39m
+            [36m>[39m
+              [0mQR expired — select to get a fresh one.[0m
+            [36m</p>[39m
+          [36m</div>[39m
+          [36m<button[39m
+            [33mclass[39m=[32m"relative inline-flex items-center justify-center whitespace-nowrap font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 border border-[var(--color-border)] bg-transparent text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] h-8 rounded-md px-[var(--space-2-5)] gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)]"[39m
+            [33mdata-action-state[39m=[32m"idle"[39m
+            [33mdata-ds-action[39m=[32m""[39m
+            [33mdata-testid[39m=[32m"whatsapp-retry"[39m
+            [33mtabindex[39m=[32m"0"[39m
+            [33mtype[39m=[32m"button"[39m
+          [36m>[39m
+            [36m<svg[39m
+              [33mfill[39m=[32m"currentColor"[39m
+              [33mheight[39m=[32m"13"[39m
+              [33mviewBox[39m=[32m"0 0 256 256"[39m
+              [33mwidth[39m=[32m"13"[39m
+              [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+            [36m>[39m
+              [36m<path[39m
+                [33md[39m=[32m"M224,48V96a8,8,0,0,1-8,8H168a8,8,0,0,1,0-16h28.69L182.06,73.37a79.56,79.56,0,0,0-56.13-23.43h-.45A79.52,79.52,0,0,0,69.59,72.71,8,8,0,0,1,58.41,61.27a96,96,0,0,1,135,.79L208,76.69V48a8,8,0,0,1,16,0ZM186.41,183.29a80,80,0,0,1-112.47-.66L59.31,168H88a8,8,0,0,0,0-16H40a8,8,0,0,0-8,8v48a8,8,0,0,0,16,0V179.31l14.63,14.63A95.43,95.43,0,0,0,130,222.06h.53a95.36,95.36,0,0,0,67.07-27.33,8,8,0,0,0-11.18-11.44Z"[39m
+              [36m/>[39m
+            [36m</svg>[39m
+            [0mRetry[0m
+          [36m</button>[39m
+        [36m</div>[39m
+      [36m</div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"flex gap-[var(--space-2)] p-[var(--space-2-5)] rounded-md bg-[var(--color-surface-2)] border border-[var(--color-error)]/30"[39m
+      [36m>[39m
+        [36m<svg[39m
+          [33mclass[39m=[32m"text-[var(--color-error)] shrink-0 mt-[var(--space-0-5)]"[39m
+          [33mfill[39m=[32m"currentColor"[39m
+          [33mheight[39m=[32m"14"[39m
+          [33mviewBox[39m=[32m"0 0 256 256"[39m
+          [33mwidth[39m=[32m"14"[39m
+          [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+        [36m>[39m
+          [36m<path[39m
+            [33md[39m=[32m"M236.8,188.09,149.35,36.22h0a24.76,24.76,0,0,0-42.7,0L19.2,188.09a23.51,23.51,0,0,0,0,23.72A24.35,24.35,0,0,0,40.55,224h174.9a24.35,24.35,0,0,0,21.33-12.19A23.51,23.51,0,0,0,236.8,188.09ZM120,104a8,8,0,0,1,16,0v40a8,8,0,0,1-16,0Zm8,88a12,12,0,1,1,12-12A12,12,0,0,1,128,192Z"[39m
+          [36m/>[39m
+        [36m</svg>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"[39m
+        [36m>[39m
+          [0mWhatsApp native mode stores sessions locally. The gateway must keep running for the session to stay active.[0m
+        [36m</p>[39m
+      [36m</div>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+  [36m<span[39m
+    [33maria-atomic[39m=[32m"true"[39m
+    [33mclass[39m=[32m"sr-only"[39m
+    [33mrole[39m=[32m"status"[39m
+  [36m/>[39m
+[36m</body>[39m
+ ❯ Object.getElementError node_modules/@testing-library/dom/dist/config.js:37:19
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:76:38
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:52:17
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:95:19
+ ❯ src/components/skills/WhatsAppNativeNotice.chat.test.tsx:130:19
+    128|     // Matching request_id: the timeout state with Retry renders.
+    129|     apply(pairingFrame('timeout', REQ_A, { message: 'saved but not wor…
+    130|     expect(screen.getByText(/pairing timed out/)).toBeInTheDocument()
+       |                   ^
+    131|     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDoc…
+    132|   })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/6]⎯
+
+ FAIL  src/components/skills/WhatsAppNativeNotice.chat.test.tsx > Row 4 (notice half) — BDD-8.8: a stopped frame shows a stopped state in the chat > a stopped frame with this request_id renders a stopped state — no spinner, no QR
+TestingLibraryElementError: Unable to find an element with the text: /stopped/i. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"space-y-[var(--space-2)] mt-[var(--space-1)]"[39m
+    [36m>[39m
+      [36m<div[39m
+        [33maria-live[39m=[32m"polite"[39m
+        [33mclass[39m=[32m"rounded-lg border border-[var(--color-border)] text-[var(--color-secondary)] bg-[var(--color-surface-1)] flex flex-col items-center gap-[var(--space-2-5)] p-[var(--space-3)]"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"flex items-center gap-[var(--space-2)] text-[var(--color-muted)]"[39m
+        [36m>[39m
+          [36m<svg[39m
+            [33mclass[39m=[32m"animate-spin"[39m
+            [33mfill[39m=[32m"currentColor"[39m
+            [33mheight[39m=[32m"14"[39m
+            [33mviewBox[39m=[32m"0 0 256 256"[39m
+            [33mwidth[39m=[32m"14"[39m
+            [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+          [36m>[39m
+            [36m<path[39m
+              [33md[39m=[32m"M136,32V64a8,8,0,0,1-16,0V32a8,8,0,0,1,16,0Zm37.25,58.75a8,8,0,0,0,5.66-2.35l22.63-22.62a8,8,0,0,0-11.32-11.32L167.6,77.09a8,8,0,0,0,5.65,13.66ZM224,120H192a8,8,0,0,0,0,16h32a8,8,0,0,0,0-16Zm-45.09,47.6a8,8,0,0,0-11.31,11.31l22.62,22.63a8,8,0,0,0,11.32-11.32ZM128,184a8,8,0,0,0-8,8v32a8,8,0,0,0,16,0V192A8,8,0,0,0,128,184ZM77.09,167.6,54.46,190.22a8,8,0,0,0,11.32,11.32L88.4,178.91A8,8,0,0,0,77.09,167.6ZM72,128a8,8,0,0,0-8-8H32a8,8,0,0,0,0,16H64A8,8,0,0,0,72,128ZM65.78,54.46A8,8,0,0,0,54.46,65.78L77.09,88.4A8,8,0,0,0,88.4,77.09Z"[39m
+            [36m/>[39m
+          [36m</svg>[39m
+          [36m<p[39m
+            [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)]"[39m
+          [36m>[39m
+            [0mGenerating your QR code…[0m
+          [36m</p>[39m
+        [36m</div>[39m
+      [36m</div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"flex gap-[var(--space-2)] p-[var(--space-2-5)] rounded-md bg-[var(--color-surface-2)] border border-[var(--color-error)]/30"[39m
+      [36m>[39m
+        [36m<svg[39m
+          [33mclass[39m=[32m"text-[var(--color-error)] shrink-0 mt-[var(--space-0-5)]"[39m
+          [33mfill[39m=[32m"currentColor"[39m
+          [33mheight[39m=[32m"14"[39m
+          [33mviewBox[39m=[32m"0 0 256 256"[39m
+          [33mwidth[39m=[32m"14"[39m
+          [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+        [36m>[39m
+          [36m<path[39m
+            [33md[39m=[32m"M236.8,188.09,149.35,36.22h0a24.76,24.76,0,0,0-42.7,0L19.2,188.09a23.51,23.51,0,0,0,0,23.72A24.35,24.35,0,0,0,40.55,224h174.9a24.35,24.35,0,0,0,21.33-12.19A23.51,23.51,0,0,0,236.8,188.09ZM120,104a8,8,0,0,1,16,0v40a8,8,0,0,1-16,0Zm8,88a12,12,0,1,1,12-12A12,12,0,0,1,128,192Z"[39m
+          [36m/>[39m
+        [36m</svg>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"[39m
+        [36m>[39m
+          [0mWhatsApp native mode stores sessions locally. The gateway must keep running for the session to stay active.[0m
+        [36m</p>[39m
+      [36m</div>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+[36m</body>[39m
+ ❯ Object.getElementError node_modules/@testing-library/dom/dist/config.js:37:19
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:76:38
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:52:17
+ ❯ node_modules/@testing-library/dom/dist/query-helpers.js:95:19
+ ❯ src/components/skills/WhatsAppNativeNotice.chat.test.tsx:140:19
+    138|     apply(pairingFrame('stopped', REQ_A, { message: 'Pairing stopped.'…
+    139|
+    140|     expect(screen.getByText(/stopped/i)).toBeInTheDocument()
+       |                   ^
+    141|     expect(screen.queryByTestId('whatsapp-qr')).not.toBeInTheDocument()
+    142|     // No waiting spinner for a terminal stopped state.
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/6]⎯
+
+ FAIL  src/components/skills/WhatsAppNativeNotice.chat.test.tsx > Row 5 — BDD-8.8: reconnect re-subscribes with the SAME request id > after a socket drop and reconnect the subscribe is re-sent with the same request_id and session_id
+AssertionError: expected { …(3) } to match object { active: true, …(2) }
+(2 matching properties omitted from actual)
+
+- Expected
++ Received
+
+  {
+    "active": true,
+-   "request_id": "toolcall-aaa",
+-   "session_id": "omnipus-main",
+  }
+
+ ❯ src/components/skills/WhatsAppNativeNotice.chat.test.tsx:163:18
+    161|     await waitFor(() => expect(subscribeCalls().length).toBeGreaterTha…
+    162|     const last = subscribeCalls()[subscribeCalls().length - 1]
+    163|     expect(last).toMatchObject({ active: true, request_id: REQ_A, sess…
+       |                  ^
+    164|   })
+    165| })
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/6]⎯
+
+ FAIL  src/components/skills/WhatsAppNativeNotice.chat.test.tsx > Row 6 — two mount sites: ref-counted subscription per channel > closing ONE of two mounted notices keeps the other subscribed; only the last close unsubscribes
+AssertionError: closing one site must NOT unsubscribe while the other is open: expected [ { …(3) } ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   {
++     "active": false,
++     "channel_id": "whatsapp",
++     "type": "whatsapp_pairing_subscribe",
++   },
++ ]
+
+ ❯ src/components/skills/WhatsAppNativeNotice.chat.test.tsx:178:7
+    176|       subscribeCalls().filter((frame) => frame.active === false),
+    177|       'closing one site must NOT unsubscribe while the other is open',
+    178|     ).toEqual([])
+       |       ^
+    179|
+    180|     connectors.unmount()
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/6]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  6 failed (6)
+   Start at  21:39:31
+   Duration  8.34s (transform 513ms, setup 518ms, import 5.51s, tests 245ms, environment 1.69s)
+

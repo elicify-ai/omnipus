@@ -1,10 +1,28 @@
 import '@testing-library/jest-dom'
 import { afterEach } from 'vitest'
-import { cleanup } from '@testing-library/react'
+import { cleanup, configure } from '@testing-library/react'
 import {
   installTestIntersectionObserver,
   resetTestIntersectionObservers,
 } from './intersectionObserver'
+
+// Async-settlement budget for @testing-library's async utils (findBy*/waitFor).
+// nav-load2 dispatch (2026-10-11): the default 1000ms was never configured
+// here, and under machine load ~64-128 the mail panel family (and
+// WorkspaceSettingsTab) failed in shifting subsets with findBy timeouts at the
+// mount chain's first async query (e.g. MailPanel.staleDraftRetry.test.tsx
+// openDuringBackoff's findByRole) while passing in isolation — the #616
+// contention regime (see vite.config.ts's testTimeout comment) re-armed
+// against the unconfigured default. Forced deterministically — no CPU load
+// created: with 700ms injected into every mocked fetch response, the same
+// scenario fails at the 1000ms default and passes every unchanged assertion
+// at 6000ms (receipt nav-load2-mail-repro4-20261011.log: 1 failed / 1 passed,
+// identical oracles). 6000ms is the smallest budget that experiment validates
+// end to end: ~6x the observed 1s bust, orders of magnitude above healthy
+// settlement (tens of ms). Cost is red-feedback latency only — findBy/waitFor
+// return as soon as the element appears, so green-path durations are
+// unchanged. A genuine hang stays bounded by the 30s testTimeout.
+configure({ asyncUtilTimeout: 6000 })
 
 // Captured before any test file can install fake timers, so the flush below
 // always waits on the real clock.

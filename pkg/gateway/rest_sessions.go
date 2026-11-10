@@ -3,14 +3,18 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -18,51 +22,105 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
-
-// jsonSessionDetail writes a response that conforms to the gen.SessionDetail wire
-// shape: { session, messages, agent_removed? }.
-// The domain types (session.UnifiedMeta, session.TranscriptEntry) serialize via
-// their own json tags to JSON layouts that match SessionDetail.yaml / Session.yaml /
-// Message.yaml — we exploit that to avoid a field-by-field copy into gen.SessionDetail.
-// The anonymous struct is not a named wire-format type and therefore does not trigger
-// the check-no-handwritten-wire-types lint rule.
-// jsonSessionDetail serializes a session detail response. The internal
-// session.UnifiedMeta is converted to gen.Session via unifiedMetaToGenSession
-// so that required-but-empty array fields (e.g. partitions) marshal as []
-// rather than null, honoring the Session.yaml contract (zod schema validates
-// type:array, rejecting null and dropping the whole list).
-//
-// Messages stay as []session.TranscriptEntry: the Message.yaml schema only
-// requires {id, timestamp, agent_id}, and every other field uses omitempty
-// in Go — so nil slices/maps are omitted, not emitted as null.
-func jsonSessionDetail(
-	w http.ResponseWriter,
-	meta *session.UnifiedMeta,
-	messages []session.TranscriptEntry,
-	agentRemoved bool,
-) {
-	genSession := unifiedMetaToGenSession(meta)
-	if messages == nil {
-		messages = []session.TranscriptEntry{}
-	}
-	if agentRemoved {
-		jsonOK(w, struct {
-			Session      gen.Session               `json:"session"`
-			Messages     []session.TranscriptEntry `json:"messages"`
-			AgentRemoved bool                      `json:"agent_removed,omitempty"`
-		}{Session: genSession, Messages: messages, AgentRemoved: agentRemoved})
-		return
-	}
-	jsonOK(w, struct {
-		Session  gen.Session               `json:"session"`
-		Messages []session.TranscriptEntry `json:"messages"`
-	}{Session: genSession, Messages: messages})
-}
 
 // --- Sessions ---
 
+// sessionSubRoute is one allowed sub-path under /api/v1/sessions/{id}/.
+// methods is the exhaustive Allow list for that sub-resource. exact requires
+// the whole sub-path to equal name; otherwise name and name + "/" + rest are
+// the same resource.
+type sessionSubRoute struct {
+	name    string
+	exact   bool
+	methods []string
+}
+
+// sessionSubRoutes is the explicit list of sub-paths HandleSessions accepts
+// under /api/v1/sessions/{id}/. Anything else is 404. A listed sub-path used
+// with a method not in methods is 405 with an Allow header. The bare session
+// (/api/v1/sessions/{id}, no sub-path) is not in this list.
+//
+// "messages" (exact) is GET /sessions/{id}/messages. "messages" (nested) is
+// GET /sessions/{id}/messages/{position}; serveSessionHistoryEntry owns the
+// position rules. "tool-results" covers the resource and tool-results/{ref};
+// HandleToolResults owns the ref rules.
+var sessionSubRoutes = []sessionSubRoute{
+	{name: "messages", exact: true, methods: []string{http.MethodGet}},
+	{name: "messages", exact: false, methods: []string{http.MethodGet}},
+	{name: "tool-results", exact: false, methods: []string{http.MethodGet}},
+}
+
+// matchSessionSubRoute returns the allow-list entry for subPath.
+// An exact entry wins over a nested entry of the same name.
+func matchSessionSubRoute(subPath string) (sessionSubRoute, bool) {
+	var nested sessionSubRoute
+	var haveNested bool
+	for _, route := range sessionSubRoutes {
+		if route.exact {
+			if subPath == route.name {
+				return route, true
+			}
+			continue
+		}
+		if (subPath == route.name || strings.HasPrefix(subPath, route.name+"/")) && !haveNested {
+			nested = route
+			haveNested = true
+		}
+	}
+	if haveNested {
+		return nested, true
+	}
+	return sessionSubRoute{}, false
+}
+
+// dispatchSessionSubPath serves /api/v1/sessions/{id}/{subPath}.
+// An unknown sub-path is 404. A known sub-path with the wrong method is 405
+// and sets Allow to the methods that sub-resource accepts. This function
+// never renames or deletes the session.
+func (a *restAPI) dispatchSessionSubPath(w http.ResponseWriter, r *http.Request, sessionID, subPath string) {
+	route, ok := matchSessionSubRoute(subPath)
+	if !ok {
+		jsonErr(w, http.StatusNotFound, "not found")
+		return
+	}
+	allowed := false
+	for _, method := range route.methods {
+		if method == r.Method {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		w.Header().Set("Allow", strings.Join(route.methods, ", "))
+		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	switch {
+	case route.name == "messages" && route.exact:
+		a.getSessionMessages(w, r, sessionID)
+	case route.name == "messages":
+		// The exact entry wins for "messages", so the nested entry always
+		// carries "messages/{position}".
+		a.serveSessionHistoryEntry(w, r, sessionID, strings.TrimPrefix(subPath, "messages/"))
+	case route.name == "tool-results":
+		// Security F1 (#1452): a stored result is readable only while its
+		// session is, under the same access order as the history page (main
+		// eligibility, then session existence) — never by reference alone.
+		if a.readableSessionStore(w, sessionID) == nil {
+			return
+		}
+		// HandleToolResults reads the ref from r.URL.Path itself.
+		a.HandleToolResults(w, r)
+	default:
+		// A listed route with no handler must not fall through onto the session.
+		jsonErr(w, http.StatusNotFound, "not found")
+	}
+}
+
 // HandleSessions routes /api/v1/sessions requests: GET (list/detail/messages/tool-results), POST (create), PUT (rename), DELETE (delete).
+// PUT and DELETE apply only to the bare session. Any sub-path is either a listed sub-resource or 404.
 func (a *restAPI) HandleSessions(w http.ResponseWriter, r *http.Request) {
 	// Extract optional session ID and sub-path from the URL.
 	// Supports: /api/v1/sessions, /api/v1/sessions/{id}, /api/v1/sessions/{id}/messages,
@@ -87,10 +145,11 @@ func (a *restAPI) HandleSessions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Dispatch tool-results sub-resource before the generic method switch so the
-	// full path (including ref) is available to HandleToolResults via r.URL.Path.
-	if strings.HasPrefix(subPath, "tool-results/") || subPath == "tool-results" {
-		a.HandleToolResults(w, r)
+	// A sub-path is never the session itself. Refuse it here so the method
+	// switch below cannot rename or delete the chat, and cannot return the
+	// session detail for an address it does not recognise.
+	if sessionID != "" && subPath != "" {
+		a.dispatchSessionSubPath(w, r, sessionID, subPath)
 		return
 	}
 
@@ -98,8 +157,6 @@ func (a *restAPI) HandleSessions(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		if sessionID == "" {
 			a.listSessions(w, r)
-		} else if subPath == "messages" {
-			a.getSessionMessages(w, r, sessionID)
 		} else {
 			a.getSession(w, r, sessionID)
 		}
@@ -147,33 +204,41 @@ func intPtrIfPositive(n int) *int {
 	return nil
 }
 
-// modelEntry aliases the oapi-codegen-inlined Session.Stats.by_model element so
+// stopNoteEntry aliases the oapi-codegen-inlined Session.stop_note element so
 // it can be referenced by name (Go cannot name the anonymous inline struct).
-type modelEntry = struct { // not-wire-format: alias of the codegen-inlined Session.Stats.by_model element; canonical wire schema is contracts/components/schemas/ModelTokens.yaml, not a new type
-	CacheRead  *int `json:"cache_read,omitempty"`
-	CacheWrite *int `json:"cache_write,omitempty"`
-	In         *int `json:"in,omitempty"`
-	Out        *int `json:"out,omitempty"`
-	Total      int  `json:"total"`
+// Field order/tags must match gen.Session.StopNote exactly (At, BootSeq, By,
+// Cause, Seq) for the two anonymous struct types to be assignment-compatible.
+// BootSeq is declared but deliberately left nil by this package's producers —
+// stamping it belongs to the boot-restart writer (sub-agent control plane
+// ADR D8.3, later E/W3 implementation), not to the REST mapping.
+type stopNoteEntry = struct { // not-wire-format: alias of the codegen-inlined Session.stop_note element; canonical wire schema is contracts/components/schemas/StopNote.yaml, not a new type
+	At      time.Time                `json:"at"`
+	BootSeq *int64                   `json:"boot_seq,omitempty"`
+	By      string                   `json:"by"`
+	Cause   gen.SessionStopNoteCause `json:"cause"`
+	Seq     int64                    `json:"seq"`
 }
 
 // unifiedMetaToGenSession converts a session.UnifiedMeta to the generated gen.Session wire type.
 // The two types have matching JSON field names; this explicit conversion satisfies the Go type checker.
 func unifiedMetaToGenSession(m *session.UnifiedMeta) gen.Session {
-	// Build the optional per-model breakdown for the inline Stats struct.
-	var byModel *map[string]modelEntry
+	stats := gen.SessionStats{
+		Cost: m.Stats.Cost, MessageCount: m.Stats.MessageCount,
+		TokensCacheRead: intPtrIfPositive(m.Stats.TokensCacheRead), TokensCacheWrite: intPtrIfPositive(m.Stats.TokensCacheWrite),
+		TokensIn: m.Stats.TokensIn, TokensOut: m.Stats.TokensOut, TokensTotal: m.Stats.TokensTotal, ToolCalls: m.Stats.ToolCalls,
+		UnpricedTokens: intPtrIfPositive(m.Stats.UnpricedTokens), SubscriptionTokens: intPtrIfPositive(m.Stats.SubscriptionTokens),
+	}
 	if len(m.Stats.ByModel) > 0 {
-		mm := make(map[string]modelEntry, len(m.Stats.ByModel))
-		for model, mt := range m.Stats.ByModel {
-			mm[model] = modelEntry{
-				In:         intPtrIfPositive(mt.In),
-				Out:        intPtrIfPositive(mt.Out),
-				CacheRead:  intPtrIfPositive(mt.CacheRead),
-				CacheWrite: intPtrIfPositive(mt.CacheWrite),
-				Total:      mt.Total,
-			}
+		initOptionalMap(&stats.ByModel)
+		for id, cell := range m.Stats.ByModel {
+			(*stats.ByModel)[id] = toByModelCell(cell)
 		}
-		byModel = &mm
+	}
+	if len(m.Stats.ByProvider) > 0 {
+		initOptionalMap(&stats.ByProvider)
+		for id, cell := range m.Stats.ByProvider {
+			(*stats.ByProvider)[id] = toByModelCell(cell)
+		}
 	}
 
 	s := gen.Session{
@@ -194,33 +259,7 @@ func unifiedMetaToGenSession(m *session.UnifiedMeta) gen.Session {
 			}
 			return m.Partitions
 		}(),
-		Stats: struct {
-			ByModel *map[string]struct {
-				CacheRead  *int `json:"cache_read,omitempty"`
-				CacheWrite *int `json:"cache_write,omitempty"`
-				In         *int `json:"in,omitempty"`
-				Out        *int `json:"out,omitempty"`
-				Total      int  `json:"total"`
-			} `json:"by_model,omitempty"`
-			Cost             float64 `json:"cost"`
-			MessageCount     int     `json:"message_count"`
-			TokensCacheRead  *int    `json:"tokens_cache_read,omitempty"`
-			TokensCacheWrite *int    `json:"tokens_cache_write,omitempty"`
-			TokensIn         int     `json:"tokens_in"`
-			TokensOut        int     `json:"tokens_out"`
-			TokensTotal      int     `json:"tokens_total"`
-			ToolCalls        int     `json:"tool_calls"`
-		}{
-			ByModel:          byModel,
-			Cost:             m.Stats.Cost,
-			MessageCount:     m.Stats.MessageCount,
-			TokensCacheRead:  intPtrIfPositive(m.Stats.TokensCacheRead),
-			TokensCacheWrite: intPtrIfPositive(m.Stats.TokensCacheWrite),
-			TokensIn:         m.Stats.TokensIn,
-			TokensOut:        m.Stats.TokensOut,
-			TokensTotal:      m.Stats.TokensTotal,
-			ToolCalls:        m.Stats.ToolCalls,
-		},
+		Stats: stats,
 	}
 	if m.Model != "" {
 		s.Model = &m.Model
@@ -236,9 +275,6 @@ func unifiedMetaToGenSession(m *session.UnifiedMeta) gen.Session {
 	}
 	if m.LastCompactionSummary != "" {
 		s.LastCompactionSummary = &m.LastCompactionSummary
-	}
-	if m.ActiveAgentID != "" {
-		s.ActiveAgentId = &m.ActiveAgentID
 	}
 	// ADR-057 FR-008/FR-091: present only on a subordinate (delegated child)
 	// session; absent (never empty-string) on a root. A session whose
@@ -260,64 +296,96 @@ func unifiedMetaToGenSession(m *session.UnifiedMeta) gen.Session {
 		}
 		s.CompactionSummaries = &cs
 	}
-	sessionType := gen.SessionType(m.Type)
-	s.Type = &sessionType
+	s.Type = gen.SessionType(m.Type)
 	return s
 }
 
 // computeSessionProtected derives the computed `protected` flag for a session
-// (FR-021/028). A session is protected when:
-//   - its type is "heartbeat", AND
-//   - the workspace it belongs to still has member_configs[agentID].heartbeat.enabled=true
-//     with session_id == this session's ID
+// (session-core U1 / C-MAIN). A main session is protected unconditionally: it
+// is the standing identity of its (workspace, agent) pair, pinned at the top
+// of the Session panel with its delete refused, whether or not the member's
+// heartbeat is enabled — protection is a property of the IDENTITY, not of any
+// configuration toggle (FR-002).
 //
-// For any other session type, returns nil (absent on the wire — field is omitted).
-// Disk reads are bounded: we only load the one workspace identified by session.WorkspaceID.
-func computeSessionProtected(homePath string, m *session.UnifiedMeta) *bool {
-	if m == nil || m.Type != session.SessionTypeHeartbeat || m.WorkspaceID == "" {
+// For any other session type, returns nil (absent on the wire — field is
+// omitted).
+func computeSessionProtected(m *session.UnifiedMeta) *bool {
+	if m == nil || m.Type != session.SessionTypeMain {
 		return nil
 	}
-	ws, err := readWorkspaceFile(homePath, m.WorkspaceID)
-	if err != nil {
-		// MEDIUM-2: distinguish workspace-not-found (deleted) from I/O / corruption.
-		// - Workspace deleted: correct, the session is no longer protected.
-		// - Any other error (corrupt JSON, I/O): fail CLOSED so a transient read
-		//   error never silently unprotects an active heartbeat session.
-		if errors.Is(err, errWorkspaceNotFound) {
-			slog.Debug("computeSessionProtected: workspace not found (deleted)",
-				"workspace_id", m.WorkspaceID, "session_id", m.ID)
-			f := false
-			return &f
-		}
-		slog.Warn("computeSessionProtected: workspace load error (fail closed)",
-			"workspace_id", m.WorkspaceID, "session_id", m.ID, "error", err)
-		t := true
-		return &t
-	}
-	// FIX-4b: require the agent still be on the workspace's CoreTeam. A stale
-	// member_config entry for an off-team agent must not keep its session protected.
-	inCoreTeam := false
-	for _, id := range ws.CoreTeam {
-		if id == m.AgentID {
-			inCoreTeam = true
-			break
-		}
-	}
-	if !inCoreTeam {
-		slog.Debug("computeSessionProtected: agent not in CoreTeam (stale entry)",
-			"workspace_id", m.WorkspaceID, "agent_id", m.AgentID, "session_id", m.ID)
-		f := false
-		return &f
-	}
-	mc, hasMC := ws.MemberConfigs[m.AgentID]
-	if !hasMC || mc.Heartbeat == nil {
-		f := false
-		return &f
-	}
-	// Protected only when the heartbeat is enabled AND the stored session_id
-	// matches this session (not a replaced/rotated session).
-	protected := mc.Heartbeat.Enabled && mc.Heartbeat.SessionID == m.ID
+	protected := true
 	return &protected
+}
+
+// computeSessionLifecycle resolves the optional lifecycle_state, stop_note, and
+// execution wire fields (Session.yaml; sub-agent control plane ADR D4/MAJ-009)
+// for session id from its authoritative LifecycleRecord — the same record
+// session.TransitionSession/lifecycleToUnifiedStatus already consume for the
+// coarse `status` mirror (pkg/session/lifecycle_bridge.go). Degrades to
+// (nil, nil, nil) — all three fields absent — when ls is nil (no lifecycle store
+// wired; most webchat-only installs never mint one) or when id has no
+// LifecycleRecord (the common case for an ordinary chat session), exactly
+// matching Session.yaml's "absent for a session with no lifecycle record"
+// contract. Unexpected read failures also omit the fields, but return an error
+// so each response builder can surface degradation instead of hiding it.
+func computeSessionLifecycle(ls *session.LifecycleStore, id string, currentBootSeq ...uint64) (*gen.SessionLifecycleState, *stopNoteEntry, *gen.SessionExecution, error) {
+	if ls == nil || id == "" {
+		return nil, nil, nil, nil
+	}
+	rec, err := ls.Load(id)
+	if err != nil {
+		if errors.Is(err, session.ErrLifecycleNotFound) {
+			return nil, nil, nil, nil
+		}
+		return nil, nil, nil, fmt.Errorf("read session lifecycle %q: %w", id, err)
+	}
+	state := gen.SessionLifecycleState(session.LifecycleRecordToDisplay(rec, currentBootSeq...))
+	var note *stopNoteEntry
+	// Session.yaml::stop_note: the note of the session's CURRENT stop — the
+	// record is stopped, or carries its current-generation Stop in flight.
+	// StopNote.Seq is the Stop's control-ledger sequence, not a generation
+	// (F13): a resume clears the note (ADR-20260928 D2), and a revived next
+	// generation is no longer stopped, so the state alone decides.
+	if rec.StopNote != nil && (rec.State == session.LifecycleStopped ||
+		(rec.Stop != nil && rec.Stop.Generation == rec.Generation)) {
+		note = &stopNoteEntry{
+			At:    rec.StopNote.At,
+			By:    rec.StopNote.By,
+			Cause: gen.SessionStopNoteCause(rec.StopNote.Cause),
+			Seq:   int64(rec.StopNote.Seq),
+		}
+	}
+	var execution *gen.SessionExecution
+	// Preserve queued/running only within the same record's projected Working
+	// display; a prior-boot root may be Interrupted without a recovery write.
+	if state == gen.SessionLifecycleStateWorking {
+		switch rec.State {
+		case session.LifecycleQueued:
+			v := gen.SessionExecutionQueued
+			execution = &v
+		case session.LifecycleRunning:
+			v := gen.SessionExecutionRunning
+			execution = &v
+		}
+	}
+	return &state, note, execution, nil
+}
+
+// attachSessionRuntimeFields sets lifecycle_state, stop_note, execution, and
+// background_command_count from the same reads the list and the detail GET use.
+// execution preserves queued/running only when the same record projects to
+// working in the current boot; every other projected display omits it.
+// background_command_count is omitted when no process table is wired; a wired
+// table sends 0 when this session owns no running background command. A genuine
+// lifecycle read failure is returned; missing records remain a non-error.
+func attachSessionRuntimeFields(s *gen.Session, ls *session.LifecycleStore, id string, currentBootSeq ...uint64) error {
+	var err error
+	s.LifecycleState, s.StopNote, s.Execution, err = computeSessionLifecycle(ls, id, currentBootSeq...)
+	if sm := tools.GetSharedSessionManager(); sm != nil {
+		n := sm.CountRunningBackgroundCommands(id)
+		s.BackgroundCommandCount = &n
+	}
+	return err
 }
 
 // u18DefaultSessionPageLimit is the page size GET /api/v1/sessions uses when
@@ -385,8 +453,10 @@ func (a *restAPI) listSessions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	page, partialErrs := a.agentLoop.ListAllSessions(limit, offset, parentSessionID, flat)
+	degradation := make([]string, 0, len(partialErrs))
 	for _, pe := range partialErrs {
 		slog.Warn("rest: list sessions: partial error", "error", pe)
+		degradation = append(degradation, sanitizePartialError(pe))
 	}
 
 	// Apply the orthogonal agent_id/type/include_verifier filters over this
@@ -406,18 +476,31 @@ func (a *restAPI) listSessions(w http.ResponseWriter, r *http.Request) {
 		if m.Type == session.SessionTypeVerifier && !includeVerifier {
 			continue
 		}
+		// FR-003: a main is listed only while its pair is entitled to it.
+		// Membership removal hides it here (the stored identity is retained,
+		// not deleted — see mainSessionVisible).
+		if !a.mainSessionVisible(m) {
+			continue
+		}
 		filtered = append(filtered, m)
 	}
+
+	// Resolved once per request (not per row): the lifecycle store feeding
+	// computeSessionLifecycle below (nil when no lifecycle store is wired).
+	lifecycleStore := a.agentLoop.GetSessionLifecycleStore()
 
 	// Always route through unifiedMetaToGenSession so that required array/map
 	// fields (Partitions in particular) marshal as [] not null — Zod on the SPA
 	// rejects null where the contract says type:array and drops the whole list.
 	genSessions := make([]gen.Session, 0, len(filtered))
+	approvals := a.withPendingSecretCards(a.pendingApprovalMains())
 	for _, m := range filtered {
-		s := unifiedMetaToGenSession(m)
-		// FR-021/028: compute the `protected` flag for heartbeat sessions.
-		// Non-heartbeat sessions get nil (field omitted from the wire response).
-		s.Protected = computeSessionProtected(a.homePath, m)
+		s := unifiedMetaToGenSession(a.withDisplayTitle(m))
+		// U11 (FR-047): needs_attention for a main (nil for every other row).
+		stampNeedsAttention(&s, m, approvals)
+		// C-MAIN: compute the `protected` flag. Only a main is protected;
+		// every other session gets nil (field omitted from the wire response).
+		s.Protected = computeSessionProtected(m)
 		// FR-091/FR-097: child_count is resolved from whichever store's
 		// in-memory parent index owns this session — O(1) per row, no disk
 		// read, regardless of listing mode (roots-only, parent_session_id, or
@@ -428,6 +511,15 @@ func (a *restAPI) listSessions(w http.ResponseWriter, r *http.Request) {
 			cc := store.ChildCount(m.ID)
 			s.ChildCount = &cc
 		}
+		// Sub-agent control plane ADR D4/MAJ-009: lifecycle_state/stop_note,
+		// absent when this session has no LifecycleRecord (the common case
+		// for an ordinary chat session).
+		if err := attachSessionRuntimeFields(&s, lifecycleStore, m.ID, a.agentLoop.CurrentBootEpoch()); err != nil {
+			slog.Warn("rest: list sessions: lifecycle read failed", "session_id", m.ID, "error", err)
+			// Keep the row and omit only its unreadable lifecycle fields. This
+			// fixed token exposes no journal path or underlying error details.
+			degradation = append(degradation, "session="+m.ID+": lifecycle_read_unavailable")
+		}
 		genSessions = append(genSessions, s)
 	}
 
@@ -436,20 +528,39 @@ func (a *restAPI) listSessions(w http.ResponseWriter, r *http.Request) {
 		nc := strconv.Itoa(page.NextOffset)
 		resp.NextCursor = &nc
 	}
-	if len(partialErrs) > 0 {
-		// FR-098(c): a store that errored mid-merge still yields a valid page
-		// plus next_cursor — partial_errors composes with paging rather than
-		// halting it.
-		sanitized := make([]string, len(partialErrs))
-		for i, pe := range partialErrs {
-			sanitized[i] = sanitizePartialError(pe)
-		}
-		resp.PartialErrors = &sanitized
+	if len(degradation) > 0 {
+		// FR-098(c), NAV-WAVE1 SF-2: store enumeration and lifecycle-read
+		// failures share the page's degradation channel, not its cursor.
+		resp.PartialErrors = &degradation
 	}
 	jsonOK(w, resp)
 }
 
-func (a *restAPI) getSession(w http.ResponseWriter, _ *http.Request, id string) {
+// jsonSessionStorageError answers a session-storage failure with one fixed,
+// actionable message. The full cause - which can carry filesystem paths, file
+// names and session ids - goes to the error-level server log only, never to the
+// client.
+func jsonSessionStorageError(w http.ResponseWriter, op, sessionID string, err error) {
+	slog.Error("rest: session storage failure", "op", op, "session_id", sessionID, "error", err)
+	jsonErr(w, http.StatusInternalServerError, fmt.Sprintf(
+		"This session could not be %s because session storage failed. "+
+			"Check disk space and permissions, then retry. Details are in the server log.", op))
+}
+
+func (a *restAPI) getSession(w http.ResponseWriter, r *http.Request, id string) {
+	// session-core U1 / BDD-01.4: a main id resolves through its pair's
+	// eligibility, and any refusal (wrong owner, wrong workspace, unreadable
+	// metadata, non-member, Admin outside the default workspace) is a visible
+	// 404 — never a served mismatched record and never a guessed replacement.
+	mainOK, mainErr := a.resolveMainSessionForRead(id, requestUsername(r))
+	if mainErr != nil {
+		jsonErr(w, http.StatusInternalServerError, mainErr.Error())
+		return
+	}
+	if !mainOK {
+		jsonErr(w, http.StatusNotFound, "session not found")
+		return
+	}
 	store := a.resolveSessionStore(id)
 	if store == nil {
 		jsonErr(w, http.StatusNotFound, "session not found")
@@ -457,21 +568,13 @@ func (a *restAPI) getSession(w http.ResponseWriter, _ *http.Request, id string) 
 	}
 	meta, err := store.GetMeta(id)
 	if err != nil {
-		jsonErr(w, http.StatusNotFound, fmt.Sprintf("session not found: %v", err))
+		if errors.Is(err, fs.ErrNotExist) {
+			jsonErr(w, http.StatusNotFound, "session not found")
+			return
+		}
+		jsonSessionStorageError(w, "read", id, err)
 		return
 	}
-	messages, err := store.ReadTranscript(id)
-	if err != nil {
-		slog.Error("rest: could not read transcript", "session_id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read transcript: %v", err))
-		return
-	}
-	// ADR-057 D1/W11 (FR-034/FR-038): a delegated child owns its own real
-	// session (FR-005), so its narration lives in the CHILD's OWN
-	// transcript.jsonl and is simply never present here — the old REST-side
-	// visibility filter helper is deleted, not reapplied (FR-035). This
-	// boundary now returns id's full transcript unfiltered, same as every
-	// other read boundary (FR-035/FR-037/FR-038, BDD-37).
 	// Detect ghost sessions: if the session references an agent that no longer
 	// exists in the current config, surface agent_removed=true so the frontend
 	// can show the read-only "Agent removed" banner (#103).
@@ -487,49 +590,11 @@ func (a *restAPI) getSession(w http.ResponseWriter, _ *http.Request, id string) 
 		}
 		agentRemoved = !found
 	}
-	// Build response matching gen.SessionDetail wire shape:
-	// { session, messages, agent_removed? }
-	// The domain types (session.UnifiedMeta, session.TranscriptEntry) serialize to
-	// the same JSON layout defined in SessionDetail.yaml and Session.yaml/Message.yaml.
-	// Using jsonSessionDetail avoids an import cycle while staying lint-compliant.
-	jsonSessionDetail(w, meta, messages, agentRemoved)
+	a.writePagedSessionDetail(w, r, meta, agentRemoved)
 }
 
-func (a *restAPI) getSessionMessages(w http.ResponseWriter, _ *http.Request, id string) {
-	store := a.resolveSessionStore(id)
-	if store == nil {
-		jsonErr(w, http.StatusNotFound, "session not found")
-		return
-	}
-	messages, err := store.ReadTranscript(id)
-	if err != nil {
-		slog.Error("rest: could not read transcript", "session_id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read transcript: %v", err))
-		return
-	}
-	// ADR-057 D1/W11 (FR-034/FR-038): see getSession's identical note above —
-	// the old delegate-narration visibility filter is deleted outright, not
-	// reapplied; a child's own entries never land in another session's
-	// transcript to begin with under the post-D1 design.
-	// Coerce nil → empty slice so JSON marshals as [] not null. The SPA's
-	// fetchSessionMessages validates via z.array(WireMessageSchema), which
-	// rejects null — a fresh session with no transcript would surface as
-	// "Could not load messages." in the UI.
-	if messages == nil {
-		messages = []session.TranscriptEntry{}
-	}
-	// review r2 RV2: every entry passes through as the raw TranscriptEntry
-	// (unchanged shape) EXCEPT EntryTypeJudgeVerdict, whose Content is a raw
-	// json.Marshal(task.JudgeVerdict) string with no typed field to carry it
-	// on the wire. Before this fix, cold-load rendered an empty/broken verdict
-	// card because Message.verdict was never populated. Parse Content and
-	// attach it as "verdict" (same shape handleTaskVerdicts/toWireJudgeVerdict
-	// produces, rest_tasks.go) so cold-load and live/replay can never disagree.
-	out := make([]any, 0, len(messages))
-	for _, entry := range messages {
-		out = append(out, withWireJudgeVerdict(id, entry))
-	}
-	jsonOK(w, out)
+func (a *restAPI) getSessionMessages(w http.ResponseWriter, r *http.Request, id string) {
+	a.serveSessionHistory(w, r, id)
 }
 
 // withWireJudgeVerdict returns entry unchanged for every entry type except
@@ -590,23 +655,44 @@ func (a *restAPI) renameSession(w http.ResponseWriter, r *http.Request, id strin
 		jsonErr(w, http.StatusBadRequest, "title too long (max 256 characters)")
 		return
 	}
+	if !a.gateMainRead(w, id) { // final-gate M4
+		return
+	}
 	store := a.resolveSessionStore(id)
 	if store == nil {
 		jsonErr(w, http.StatusNotFound, "session not found")
 		return
 	}
+	// A main's title is fixed ("<Agent> - Main Session", derived on read), so a
+	// rename would be accepted and then never shown: refuse it visibly.
+	// The guard needs the record's type, so a record that cannot be read fails
+	// closed (as deleteSession's protection guard does) instead of falling
+	// through to a write on a session whose type is unknown.
+	cur, getErr := store.GetMeta(id)
+	if getErr != nil {
+		jsonSessionStorageError(w, "read", id, getErr)
+		return
+	}
+	if cur.Type == session.SessionTypeMain {
+		jsonErr(w, http.StatusConflict, "a main session's title is fixed")
+		return
+	}
 	if err := store.SetMeta(id, session.MetaPatch{Title: &req.Title}); err != nil {
-		slog.Error("rest: rename session", "session_id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not rename session: %v", err))
+		jsonSessionStorageError(w, "renamed", id, err)
 		return
 	}
 	meta, err := store.GetMeta(id)
 	if err != nil {
-		slog.Error("rest: rename session: get meta after update", "session_id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read updated session: %v", err))
+		jsonSessionStorageError(w, "read", id, err)
 		return
 	}
-	jsonOK(w, unifiedMetaToGenSession(meta))
+	s := unifiedMetaToGenSession(a.withDisplayTitle(meta))
+	if err := attachSessionRuntimeFields(&s, a.agentLoop.GetSessionLifecycleStore(), meta.ID, a.agentLoop.CurrentBootEpoch()); err != nil {
+		slog.Warn("rest: rename session: lifecycle read failed", "session_id", meta.ID, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "session lifecycle unavailable")
+		return
+	}
+	jsonOK(w, s)
 }
 
 // deleteSession handles DELETE /api/v1/sessions/{id}.
@@ -618,21 +704,23 @@ func (a *restAPI) deleteSession(w http.ResponseWriter, r *http.Request, id strin
 		return
 	}
 
-	// FR-014 / US-7: reject deletion of an active heartbeat session with 409.
-	// Load the meta to check the session type before attempting the delete so
-	// we don't make a half-deletion attempt and then fail. The workspace load
-	// is bounded by the session's WorkspaceID (no full scan).
+	// FR-014 / US-7 / C-MAIN: reject deletion of a protected MAIN session with
+	// 409. A main is the standing identity of its (workspace, agent) pair, so
+	// the SPA hides its delete control and this guard refuses it — the stored
+	// identity is retained until normal retention (FR-003). Load the meta
+	// before attempting the delete so we don't make a half-deletion attempt
+	// and then fail.
 	meta, metaErr := store.GetMeta(id)
 	if metaErr != nil {
 		// MEDIUM-1: fail CLOSED on meta-read error — a session whose metadata
-		// cannot be read must not be silently deleted past the heartbeat guard.
+		// cannot be read must not be silently deleted past the protection guard.
 		slog.Error("rest: delete session: could not read session meta",
 			"session_id", id, "error", metaErr)
 		jsonErr(w, http.StatusInternalServerError, "could not verify session protection")
 		return
 	}
-	if meta != nil && meta.Type == session.SessionTypeHeartbeat {
-		if isProtected := computeSessionProtected(a.homePath, meta); isProtected != nil && *isProtected {
+	if meta != nil {
+		if isProtected := computeSessionProtected(meta); isProtected != nil && *isProtected {
 			// C-1 (FR-014): audit the blocked delete before returning 409.
 			if a.auditor != nil {
 				if err := a.auditor.Log(&audit.Entry{
@@ -643,7 +731,7 @@ func (a *restAPI) deleteSession(w http.ResponseWriter, r *http.Request, id strin
 						"session_id":   id,
 						"workspace_id": meta.WorkspaceID,
 						"agent_id":     meta.AgentID,
-						"reason":       "heartbeat enabled",
+						"reason":       "main session is protected",
 					},
 				}); err != nil {
 					slog.Warn("audit write failed", "event", "session.delete.blocked",
@@ -651,60 +739,72 @@ func (a *restAPI) deleteSession(w http.ResponseWriter, r *http.Request, id strin
 				}
 			}
 			jsonErr(w, http.StatusConflict,
-				"cannot delete a protected heartbeat session while its heartbeat is enabled; "+
-					"disable the heartbeat in the workspace settings first")
+				"cannot delete a protected main session: it is the standing session of this "+
+					"workspace member and is kept until normal retention")
 			return
 		}
 	}
 
-	// Deleting a session is also a REST-originated Stop boundary: stamp and
-	// cancel its durable steering subtree before any session data disappears.
-	// A partial cascade aborts deletion instead of reporting success while an
-	// unreadable descendant may still be running. The current OpenAPI delete
-	// response has no cancel-report fields; until a future response
-	// schema publishes one, the error body carries the same one-line partial summary used by
-	// the WebSocket channel and no undocumented wire fields are emitted.
-	report, cascaded := cancelSteeredSubtree(r.Context(), a.agentLoop, id, steer.Principal{
-		Kind: steer.PrincipalKindHuman,
-		ID:   actorUsername(r),
-	})
-	// [Finding 3, ADR-091 fix lane 2] SkippedNewerGeneration also refuses
-	// deletion: a descendant whose live turn had already advanced past the
-	// generation this Stop stamped is STILL RUNNING, exactly the "may still
-	// be running" case this guard exists to catch. That is deliberately a
-	// WIDER condition than the `partial` flag on the cancel_stage frame,
-	// which per WP-D FR-D-001 means "unreachable" alone: a newer generation
-	// taking over is a CORRECT Stop outcome, but it is still a live turn, and
-	// deleting its session data is what this guard refuses. Hence
-	// cancelIncompleteSubtreeSummary, not cancelPartialSummary — the latter
-	// is empty in the skipped-only case and would leave this 500 with no
-	// reason in its body.
-	if cascaded && (len(report.Unreachable) > 0 || len(report.SkippedNewerGeneration) > 0) {
-		summary := cancelIncompleteSubtreeSummary(report)
-		slog.Warn("rest: delete session: Stop cascade incomplete; deletion refused",
-			"session_id", id, "summary", summary,
-			"unreachable", report.Unreachable, "skipped_newer_generation", report.SkippedNewerGeneration)
+	// Deleting a session is also a Stop boundary, through the one session
+	// Stop every other surface uses (polite at once, forced 3 s later), over
+	// the session and its whole helper tree, including a plain chat's live
+	// turn. Deletion then waits for the stopped turns to exit; if anything is
+	// still running (unreachable, taken over by a newer generation, or not
+	// exited after the forced stop) it is refused and nothing is deleted. The
+	// current OpenAPI delete response has no cancel-report fields, so the
+	// error body carries the same one-line summary the WebSocket channel uses.
+	if summary := a.stopBeforeDelete(r, id); summary != "" {
+		slog.Warn("rest: delete session: Stop incomplete; deletion refused",
+			"session_id", id, "summary", summary)
 		jsonErr(w, http.StatusInternalServerError, summary)
 		return
 	}
+	if err := a.removeStoppedSession(store, id); err != nil {
+		jsonSessionStorageError(w, "deleted", id, err)
+		return
+	}
+	jsonOK(w, map[string]bool{"success": true})
+}
 
+// removeStoppedSession deletes a session whose Stop has ALREADY completed, and
+// the references to it: its helper descendants' uploads, the retained
+// external-CLI drivers, and the in-memory media refs. It is the second half of
+// deleteSession, shared with DELETE /sessions/all so the two cannot drift.
+func (a *restAPI) removeStoppedSession(store *session.UnifiedStore, id string) error {
 	// ADR-057 W18b (FR-071/BDD-78): resolve id's full descendant set BEFORE
 	// deleting anything, over the DURABLE lifecycle store — every delegation,
 	// live or not, has a LifecycleRecord (User Story 4), so this walk is
 	// authoritative independent of turn liveness and survives a restart.
-	// Reuses U11's already-tested u11CollectDescendantSessionIDs (same
-	// package, pkg/gateway/websocket.go), which walks U13's SteeringSessionID
-	// index (pkg/session/lifecycle.go) exactly as the cancel/approval-cascade
-	// paths do — this handler does not reimplement the walk. A nil lifecycle
-	// store (no delegation store wired — most webchat-only installs never
-	// mint one) degrades to zero descendants, matching that helper's
-	// documented nil-store behavior.
-	descendantIDs := u11CollectDescendantSessionIDs(a.agentLoop.GetSessionLifecycleStore(), id)
+	// Uses the one shared collector, agent.CollectDescendantSessionIDs, which
+	// walks the SteeringSessionID index (pkg/session/lifecycle.go) exactly as
+	// the cancel/approval-cascade paths do — this handler does not reimplement
+	// the walk. A nil lifecycle store (no delegation store wired — most
+	// webchat-only installs never mint one) degrades to zero descendants. A walk
+	// error is logged: the descendants found before the failure are still
+	// cleaned up, and the log says the set is incomplete.
+	descendantIDs, walkErr := agent.CollectDescendantSessionIDs(a.agentLoop.GetSessionLifecycleStore(), id)
+	if walkErr != nil {
+		slog.Warn("rest: delete session: descendant walk failed partway through — the cleanup set is INCOMPLETE",
+			"session_id", id, "error", walkErr)
+	}
 
 	if err := store.DeleteSession(id); err != nil {
-		slog.Error("rest: delete session", "session_id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not delete session: %v", err))
-		return
+		return err
+	}
+	// Security F1 (#1452): offloaded tool results die with their session and
+	// every deleted descendant, not only at the separate retention sweep.
+	results := newToolResultStore(a.homePath)
+	var resultErr error
+	for _, sid := range append([]string{id}, descendantIDs...) {
+		resultErr = errors.Join(resultErr, results.removeSession(sid))
+	}
+	// N6: the session is gone, so drop any retained external-CLI driver (and its
+	// option/env snapshot) for it and every deleted descendant.
+	if a.agentLoop != nil {
+		a.agentLoop.ForgetExternalRunSession(id)
+		for _, descID := range descendantIDs {
+			a.agentLoop.ForgetExternalRunSession(descID)
+		}
 	}
 
 	// ADR-057 W18b (FR-071): id's OWN <home>/uploads/<id>/ was already
@@ -740,26 +840,7 @@ func (a *restAPI) deleteSession(w http.ResponseWriter, r *http.Request, id strin
 				"session_id", id, "error", err)
 		}
 	}
-
-	jsonOK(w, map[string]bool{"success": true})
-}
-
-// firstChatTargetAgentID returns the ID of the first chat-target agent in the
-// config list, or "" when no such agent is configured. Used as a last-resort
-// fallback after GetDefaultAgent() — mirrors resolveDefaultAgentID in
-// pkg/routing/route.go. Workers are NOT chat targets, so they are skipped here:
-// a last-resort fallback must never land on a worker, which is invoked only via
-// delegation.
-func firstChatTargetAgentID(cfg *config.Config) string {
-	if cfg == nil {
-		return ""
-	}
-	for _, ag := range cfg.Agents.List {
-		if ag.IsChatTarget() {
-			return ag.ID
-		}
-	}
-	return ""
+	return resultErr
 }
 
 // isWorkerAgentID reports whether agentID resolves to a worker agent in the config.
@@ -777,32 +858,36 @@ func isWorkerAgentID(cfg *config.Config, agentID string) bool {
 func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 	var req gen.SessionCreateRequest
 	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
-	if !decodeAndValidate(w, r, "SessionCreateRequest", &req, validateEnabled) {
+	if !decodeAndValidateStrict(w, r, "SessionCreateRequest", &req, validateEnabled) {
 		return
 	}
 
-	agentID := ""
-	if req.AgentId != nil {
-		agentID = *req.AgentId
-	}
+	// omnipus-system-agent FR-122 / K16: a session names its agent; there is
+	// no default agent to fall back to. Checked here, not only by the schema,
+	// so the rule holds with inbound validation off.
+	agentID := strings.TrimSpace(req.AgentId)
 	if agentID == "" {
-		if reg := a.agentLoop.GetRegistry(); reg != nil {
-			if def := reg.GetDefaultAgent(); def != nil {
-				agentID = def.ID
-			}
-		}
-		if agentID == "" {
-			// Fall back to the first chat-target agent (mirrors handleBoardTaskStart /
-			// resolveDefaultAgentID in pkg/routing/route.go).
-			agentID = firstChatTargetAgentID(a.agentLoop.GetConfig())
-		}
+		jsonErr(w, http.StatusBadRequest, agentMustBeNamed)
+		return
+	}
+	// CHECK F01: a case spelling of the system agent is the system agent for
+	// every guard below.
+	agentID = foldSystemAgentID(agentID)
+	// FR-005: Omnipus has exactly one conversation — its main chat in the
+	// default workspace. A second one is refused with that main's id.
+	if msg, _, err := omnipusSecondConversationRefusal(a.agentLoop.GetSessionStore(), a.homePath, agentID); err != nil {
+		jsonServerFailure(w, http.StatusInternalServerError, "could not check Omnipus's conversation", err)
+		return
+	} else if msg != "" {
+		jsonErr(w, http.StatusConflict, msg)
+		return
 	}
 	if err := validateEntityID(agentID); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid agent_id")
 		return
 	}
 	// Validate the agent exists before creating the session.
-	if agentStore := a.agentLoop.GetAgentStore(agentID); agentStore == nil {
+	if _, ok := a.agentLoop.GetRegistry().GetAgent(agentID); !ok {
 		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("agent %q not found", agentID))
 		return
 	}
@@ -815,15 +900,26 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Use the shared session store for new sessions (joined session model).
-	// Fall back to the per-agent store if the shared store is unavailable.
+	// Every session lives in the one shared session store.
 	store := a.agentLoop.GetSessionStore()
 	if store == nil {
-		store = a.agentLoop.GetAgentStore(agentID)
-		if store == nil {
-			jsonErr(w, http.StatusInternalServerError, "session store unavailable")
-			return
-		}
+		jsonErr(w, http.StatusInternalServerError, "session store unavailable")
+		return
+	}
+	// omnipus-system-agent FR-003: Omnipus's chats live in the default
+	// workspace only.
+	reqWorkspaceID := ""
+	if req.WorkspaceId != nil {
+		reqWorkspaceID = *req.WorkspaceId
+	}
+	msg, omnipusFault := omnipusChatRefusal(a.homePath, agentID, reqWorkspaceID)
+	if omnipusFault != nil {
+		jsonServerFailure(w, http.StatusInternalServerError, "could not check where Omnipus's chat may live", omnipusFault)
+		return
+	}
+	if msg != "" {
+		jsonErr(w, http.StatusBadRequest, msg)
+		return
 	}
 
 	var sessionType session.UnifiedSessionType
@@ -879,8 +975,7 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 
 	meta, err := store.NewSession(sessionType, "webchat", agentID)
 	if err != nil {
-		slog.Error("rest: create session", "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not create session: %v", err))
+		jsonSessionStorageError(w, "created", "", err)
 		return
 	}
 	if workspaceID != "" {
@@ -898,11 +993,98 @@ func (a *restAPI) createSessionHTTP(w http.ResponseWriter, r *http.Request) {
 			meta = refreshed
 		}
 	}
-	jsonCreated(w, unifiedMetaToGenSession(meta))
+	s := unifiedMetaToGenSession(a.withDisplayTitle(meta))
+	// A freshly REST-created session rarely has a LifecycleRecord yet (those
+	// are minted by the delegate/task paths, not this handler) — this call
+	// degrades to both fields absent in that common case, same as every
+	// other producer of gen.Session.
+	if err := attachSessionRuntimeFields(&s, a.agentLoop.GetSessionLifecycleStore(), meta.ID, a.agentLoop.CurrentBootEpoch()); err != nil {
+		slog.Warn("rest: create session: lifecycle read failed", "session_id", meta.ID, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "session lifecycle unavailable")
+		return
+	}
+	jsonCreated(w, s)
 }
 
 // resolveSessionStore finds which agent's UnifiedStore owns the given sessionID.
 // Delegates to the shared AgentLoop method.
 func (a *restAPI) resolveSessionStore(sessionID string) *session.UnifiedStore {
 	return a.agentLoop.ResolveSessionStore(sessionID)
+}
+
+// stopBeforeDelete runs the one Stop (tree scope) for a session about to be
+// deleted and waits for its stopped turns to exit. It returns a non-empty
+// summary when the session may still be running, which refuses the delete.
+// stopBeforeDeleteFailedText is the fixed client message when the Stop that
+// precedes a delete could not run. It names no path, file or id.
+const stopBeforeDeleteFailedText = "Stop before delete failed; nothing was deleted. " +
+	"Check that session storage is available and writable, then retry. Details are in the server log."
+
+func (a *restAPI) stopBeforeDelete(r *http.Request, id string) string {
+	return a.stopBeforeDeleteFor(r.Context(), id, actorUsername(r))
+}
+
+// stopBeforeDeleteFor is stopBeforeDelete without a request: the agent-delete
+// cascade (REST and tool) stops an agent's sessions through the same Stop.
+func (a *restAPI) stopBeforeDeleteFor(ctx context.Context, id, actor string) string {
+	if a.agentLoop == nil {
+		return ""
+	}
+	stop := a.agentLoop.StopSession
+	if a.stopSession != nil {
+		stop = a.stopSession
+	}
+	res, err := stop(ctx, agent.StopRequest{
+		SessionID: id,
+		By:        steer.Principal{Kind: steer.PrincipalKindHuman, ID: actor},
+		Channel:   "web",
+		Tree:      true,
+	})
+	if err != nil || res.RootErr != nil {
+		// The full cause (it can carry the lifecycle journal's path, file name
+		// and the session id) goes to the error log only; the client gets one
+		// fixed message and nothing is deleted.
+		slog.Error("rest: delete session: Stop before delete failed; deletion refused",
+			"session_id", id, "error", err, "root_error", res.RootErr)
+		return stopBeforeDeleteFailedText
+	}
+	// A background shell the tree Stop could not kill would outlive its deleted
+	// row (FR-022: tree Stop kills them), so it refuses the delete visibly.
+	if res.BackgroundFailed != 0 {
+		return fmt.Sprintf("Stop before delete could not terminate %d background command(s); nothing was deleted",
+			res.BackgroundFailed)
+	}
+	// Option A: only something still running refuses the delete. A session
+	// whose stop already landed (stopped or terminal record) is not running,
+	// even if a follow-up effect such as its parent notice is still pending.
+	if stillRunning := a.stillRunningAfterStop(res.StillRunning()); len(stillRunning) > 0 {
+		slog.Warn("rest: delete session: sessions still running after Stop; deletion refused",
+			"session_id", id, "still_running", stillRunning)
+		return fmt.Sprintf("%s; %d session(s) still running; nothing was deleted",
+			cancelIncompleteSubtreeSummary(res.Report), len(stillRunning))
+	}
+	ids := append([]string{id}, res.Report.Reached...)
+	if live := a.agentLoop.AwaitStoppedTurns(ctx, ids); len(live) > 0 {
+		slog.Warn("rest: delete session: sessions still running after the forced Stop; deletion refused",
+			"session_id", id, "still_running", live)
+		return fmt.Sprintf("Stop before delete incomplete: %d session(s) still running after the forced stop; nothing was deleted",
+			len(live))
+	}
+	return ""
+}
+
+// stillRunningAfterStop keeps the ids whose record is neither stopped nor
+// terminal (an unreadable record counts as possibly running).
+func (a *restAPI) stillRunningAfterStop(ids []string) []string {
+	lifecycle := a.agentLoop.GetSessionLifecycleStore()
+	var out []string
+	for _, sid := range ids {
+		if lifecycle != nil {
+			if rec, err := lifecycle.Load(sid); err == nil && (rec.Terminal() || rec.State == session.LifecycleStopped) {
+				continue
+			}
+		}
+		out = append(out, sid)
+	}
+	return out
 }

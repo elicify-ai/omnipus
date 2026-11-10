@@ -30,7 +30,7 @@
 //       while both sibling preview surfaces offer one.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, waitFor, within, fireEvent } from '@testing-library/react'
+import { render, waitFor, within, fireEvent, act, cleanup } from '@testing-library/react'
 import type { LibraryEntry } from '@/lib/api'
 
 const h = vi.hoisted(() => ({
@@ -55,7 +55,7 @@ const h = vi.hoisted(() => ({
   destroyBehaviour: 'resolve' as 'resolve' | 'never',
 }))
 
-function makePdfDoc() {
+function makePdfDoc(numPages = 1, pendingPage?: number) {
   const page = {
     getViewport: ({ scale }: { scale: number }) => ({ width: 600 * scale, height: 800 * scale, rotation: 0 }),
     render: () => ({ promise: Promise.resolve(), cancel: () => {} }),
@@ -63,10 +63,10 @@ function makePdfDoc() {
     getAnnotations: () => Promise.resolve([]),
   }
   return {
-    numPages: 1,
-    getPage: () => {
+    numPages,
+    getPage: (n: number) => {
       h.getPageCalls++
-      return h.getPageBehaviour === 'never' ? new Promise(() => {}) : Promise.resolve(page)
+      return h.getPageBehaviour === 'never' || n === pendingPage ? new Promise(() => {}) : Promise.resolve(page)
     },
     annotationStorage: {
       onSetModified: null,
@@ -339,16 +339,32 @@ describe('LibraryPdfPreview — ready means a page is on screen (F3)', () => {
   it('stops the watchdog once a page IS on screen, so a slow LATER page never fails a healthy document', async () => {
     const mod = await import('./LibraryPdfPreview')
     mod.__setPdfFirstPageTimeoutForTests(60)
+    // Own the watchdog clock BEFORE mounting. A real 60 ms deadline races
+    // mountAndOpen's polling against the manually held document promise on a
+    // loaded runner, failing at 'opening the document' before this scenario.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const doc1 = await mountDoc()
+      await act(async () => { await vi.dynamicImportSettled() })
+      expect(h.pendingDocs).toHaveLength(1)
+      await act(async () => { h.pendingDocs[0]!.resolve(makePdfDoc(2, 2)) })
+      // Page 2 really is pending: completing a one-page document would not
+      // exercise the promised slow-LATER-page ordering.
+      expect(h.getPageCalls).toBe(2)
+      expect(within(doc1.container).getByTestId('library-pdf-page')).toHaveAttribute('data-page-number', '1')
+      expect(within(doc1.container).getByTestId('library-pdf-pages').className).not.toContain('hidden')
+      expect(within(doc1.container).queryByTestId('library-pdf-loading')).not.toBeInTheDocument()
+      await act(async () => { await vi.advanceTimersByTimeAsync(150) })
 
-    const doc1 = await mountAndOpen()
-    await new Promise((resolve) => setTimeout(resolve, 150))
-
-    // MUTATION THIS DIES ON: leaving the watchdog running after the first
-    // page renders — every document that took a normal amount of time to
-    // open would then error out 45 seconds later while the reader was
-    // looking at it.
-    expect(within(doc1.container).queryByTestId('library-pdf-error')).not.toBeInTheDocument()
-    expect(within(doc1.container).getByTestId('library-pdf-page')).toBeInTheDocument()
+      // MUTATION THIS DIES ON: leaving the watchdog running after the first
+      // page renders — the still-pending page 2 must not fail a document
+      // whose first page the reader is already looking at.
+      expect(within(doc1.container).queryByTestId('library-pdf-error')).not.toBeInTheDocument()
+      expect(within(doc1.container).getByTestId('library-pdf-page')).toBeInTheDocument()
+    } finally {
+      cleanup()
+      vi.useRealTimers()
+    }
   })
 })
 

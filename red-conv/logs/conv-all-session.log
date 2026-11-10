@@ -1,0 +1,66 @@
+=== RUN   TestSessionCoreConv_PreCutoverSavedChatIsNormalizedAndContinuable
+    sessioncore_conv_behaviour_test.go:64: 
+        	Error Trace:	/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/session-core-red-conv-20261009/pkg/session/sessioncore_conv_behaviour_test.go:64
+        	Error:      	Not equal: 
+        	            	expected: ""
+        	            	actual  : "jim"
+        	            	
+        	            	Diff:
+        	            	--- Expected
+        	            	+++ Actual
+        	            	@@ -1 +1 @@
+        	            	-
+        	            	+jim
+        	Test:       	TestSessionCoreConv_PreCutoverSavedChatIsNormalizedAndContinuable
+        	Messages:   	CONV Identity: the retired active_agent_id must be dropped, not adopted as owner
+    sessioncore_conv_behaviour_test.go:73: 
+        	Error Trace:	/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/session-core-red-conv-20261009/pkg/session/sessioncore_conv_behaviour_test.go:73
+        	Error:      	Not equal: 
+        	            	expected: string("chat")
+        	            	actual  : <nil>(<nil>)
+        	Test:       	TestSessionCoreConv_PreCutoverSavedChatIsNormalizedAndContinuable
+        	Messages:   	CONV Identity: the missing type must be WRITTEN once as chat; DEL-11 then deletes the runtime fallback
+    sessioncore_conv_behaviour_test.go:76: 
+        	Error Trace:	/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/session-core-red-conv-20261009/pkg/session/sessioncore_conv_behaviour_test.go:76
+        	Error:      	Should be false
+        	Test:       	TestSessionCoreConv_PreCutoverSavedChatIsNormalizedAndContinuable
+        	Messages:   	CONV Identity: active_agent_id must be dropped from the converted metadata; got map[active_agent_id:jim agent_id:mia channel:webchat created_at:2026-01-02T03:04:05Z id:chat-legacy-0001 partitions:[] status:active title:Old saved chat updated_at:2026-01-03T03:04:05Z]
+--- FAIL: TestSessionCoreConv_PreCutoverSavedChatIsNormalizedAndContinuable (0.10s)
+=== RUN   TestSessionCoreConv_SecondBootIsIdempotentAndAddsNoSecondIdentity
+    sessioncore_conv_behaviour_test.go:111: 
+        	Error Trace:	/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/session-core-red-conv-20261009/pkg/session/sessioncore_conv_behaviour_test.go:111
+        	Error:      	Not equal: 
+        	            	expected: string("chat")
+        	            	actual  : <nil>(<nil>)
+        	Test:       	TestSessionCoreConv_SecondBootIsIdempotentAndAddsNoSecondIdentity
+        	Messages:   	precondition: the first boot converted the saved chat (this is the RED assertion on current code)
+--- FAIL: TestSessionCoreConv_SecondBootIsIdempotentAndAddsNoSecondIdentity (0.00s)
+=== RUN   TestSessionCoreConv_InterruptedBootRetiresTheCompletedSourceWithoutDuplicating
+    sessioncore_conv_behaviour_test.go:155: 
+        	Error Trace:	/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/session-core-red-conv-20261009/pkg/session/sessioncore_conv_behaviour_test.go:155
+        	Error:      	Should be true
+        	Test:       	TestSessionCoreConv_InterruptedBootRetiresTheCompletedSourceWithoutDuplicating
+        	Messages:   	CONV retry: the next boot must finish the cleanup and retire the completed source; it is still present
+--- FAIL: TestSessionCoreConv_InterruptedBootRetiresTheCompletedSourceWithoutDuplicating (0.01s)
+=== RUN   TestSessionCoreConv_CorruptSavedChatSurfacesVisibleFailureAndRetainsSource
+2026/10/09 09:15:51 ERROR unified_store: load meta cache: session unreadable after retry — excluded until restart dir=chat-corrupt-1 error="unified_store: parse meta.json in \"/var/folders/rw/h_fqz_990kj3pnxsl9qf1v9w0000gn/T/TestSessionCoreConv_CorruptSavedChatSurfacesVisibleFailureAndRet1840938605/001/sessions/chat-corrupt-1\": invalid character 'n' looking for beginning of object key string"
+    sessioncore_conv_behaviour_test.go:180: 
+        	Error Trace:	/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/session-core-red-conv-20261009/pkg/session/sessioncore_conv_behaviour_test.go:180
+        	Error:      	An error is expected but got nil.
+        	Test:       	TestSessionCoreConv_CorruptSavedChatSurfacesVisibleFailureAndRetainsSource
+        	Messages:   	CONV Failure: an unreadable saved chat must surface a visible cutover error, not be skipped-with-success
+--- FAIL: TestSessionCoreConv_CorruptSavedChatSurfacesVisibleFailureAndRetainsSource (0.00s)
+=== RUN   TestSessionCoreConv_FreshInstallIsANoOpWithZeroWrites
+--- PASS: TestSessionCoreConv_FreshInstallIsANoOpWithZeroWrites (0.00s)
+=== RUN   TestSessionCoreConv_ConversionMintsNoMainAndPromotesNoHeartbeat
+--- PASS: TestSessionCoreConv_ConversionMintsNoMainAndPromotesNoHeartbeat (0.01s)
+=== RUN   TestSessionCoreConv_Del09LegacyRuntimeReaderIsAbsent
+    sessioncore_conv_del09_test.go:48: 
+        	Error Trace:	/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/session-core-red-conv-20261009/pkg/session/sessioncore_conv_del09_test.go:48
+        	Error:      	Should be false
+        	Test:       	TestSessionCoreConv_Del09LegacyRuntimeReaderIsAbsent
+        	Messages:   	DEL-09: UnifiedStore.migrateLegacy must be deleted once CONV is the sole legacy reader
+--- FAIL: TestSessionCoreConv_Del09LegacyRuntimeReaderIsAbsent (0.04s)
+FAIL
+FAIL	github.com/elicify-ai/omnipus/pkg/session	2.207s
+FAIL

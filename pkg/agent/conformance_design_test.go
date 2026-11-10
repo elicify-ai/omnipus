@@ -25,9 +25,11 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -329,28 +331,31 @@ func TestConformance_g6_PerChildCeiling_NoisyChildCannotStarveSibling(t *testing
 }
 
 // TestConformance_g7_SessionRoundTrip_WarmQuestionRespondHandback proves the
-// g7 "full round trip" sequence diagram: a mid-run blocking
-// question(wait=true) parks the child with a correlation_id, the parent's
-// respond routes WARM to the same generation (no cold restart), and a clean
-// handback carries result_so_far/artifacts[]/open_questions[] into the parent
-// inbox — the rung-0 evidence surface. The scoped tests prove each EDGE in
-// isolation (question→inbox, steer→queue, handback→inbox); this scenario
-// proves the BIDIRECTIONAL SEQUENCE as one observed path, which is what the g7
-// diagram draws and what no single existing test asserts.
+// g7 "full round trip" sequence diagram: a mid-run question is an ORDINARY
+// message (ADR-20261004 removed the person-question pause — no wait, no
+// needs_input park; the child keeps working, same generation) that durably
+// reaches the parent inbox with a correlation_id, the parent's respond routes
+// WARM into the same child's steering queue (no cold restart, turn not
+// stopped), and a clean handback carries result_so_far/artifacts[]/
+// open_questions[] into the parent inbox — the rung-0 evidence surface. The
+// scoped tests prove each EDGE in isolation (question→inbox, steer→queue,
+// handback→inbox); this scenario proves the BIDIRECTIONAL SEQUENCE as one
+// observed path, which is what the g7 diagram draws and what no single
+// existing test asserts.
 //
 // Drawn path asserted node-by-node:
-//  1. child question(wait=true) → child parks in needs_input with a
-//     correlation_id (same generation — no restart yet), question durable in
-//     the parent inbox.
+//  1. child question → an ORDINARY message (ADR-20261004: no wait, no park)
+//     with a correlation_id (same generation — no restart), durable in the
+//     parent inbox.
 //  2. parent respond(correlation_id) → consumer routes it WARM into the SAME
-//     child's steering queue (generation unchanged — no cold restart; a
-//     restart would mint a new generation via follow_up/Play).
+//     child's steering queue (generation unchanged — no cold restart, no
+//     stop; a restart would mint a new generation via resume).
 //  3. child handback(final) → result_so_far / artifacts[] / open_questions[]
 //     reach the parent inbox (the rung-0 evidence gate surface the Judge
 //     reads).
 //
-// e2e residue: the needs_input→running state flip on the child's resumed turn
-// (the actual tool-boundary resume) is a real-LLM turn-engine concern; here we
+// e2e residue: the resumed-turn consumption of a queued steering message is a
+// real-LLM turn-engine concern; here we
 // prove the CONTROL PLANE routes the round-trip warm with correlation routing
 // and that the handback's evidence fields are durably delivered.
 func TestConformance_g7_SessionRoundTrip_WarmQuestionRespondHandback(t *testing.T) {
@@ -391,7 +396,7 @@ func TestConformance_g7_SessionRoundTrip_WarmQuestionRespondHandback(t *testing.
 
 	// The default agent now carries a LIVE message_parent tool backed by the
 	// real stores — drive the child's upward legs through it.
-	agent := al.GetRegistry().GetDefaultAgent()
+	agent := al.GetRegistry().primaryChatAgentForTest()
 	if agent == nil {
 		t.Fatal("no default agent registered")
 	}
@@ -409,28 +414,38 @@ func TestConformance_g7_SessionRoundTrip_WarmQuestionRespondHandback(t *testing.
 	// SessionID, mirroring pkg/tools/message_parent_test.go's withChildContext.
 	childCtx := tools.WithDelegateSessionID(tools.WithTranscriptSessionID(context.Background(), childSession), childSession)
 
-	// (1) Child → parent: a blocking question parks the child in needs_input
-	// with a correlation_id, same generation, and durably reaches the inbox.
+	// (1) Child → parent: a question is an ORDINARY message — no wait, no
+	// park. The child keeps working in needs-NO-input at the SAME generation,
+	// the question lands durably in the parent inbox with a correlation_id,
+	// and the tool result echoes that id so the parent's respond can reference
+	// it.
 	qRes := mp.Execute(childCtx, map[string]any{
-		"kind": "question", "text": "which spec should I implement against?", "wait": true,
+		"kind": "question", "text": "which spec should I implement against?",
 	})
 	if qRes.IsError {
-		t.Fatalf("(1) question(wait=true) failed: %s", qRes.ForLLM)
+		t.Fatalf("(1) question failed: %s", qRes.ForLLM)
 	}
-	parked, err := ls.Load(childSession)
-	if err != nil {
-		t.Fatalf("(1) load child: %v", err)
+	var qResp generated.MessageParentResponse
+	if unmarshalErr := json.Unmarshal([]byte(qRes.ForLLM), &qResp); unmarshalErr != nil {
+		t.Fatalf("(1) decode message_parent response: %v (body=%s)", unmarshalErr, qRes.ForLLM)
 	}
-	if parked.State != session.LifecycleNeedsInput {
-		t.Fatalf("(1) child state = %q, want needs_input (INV-4/G-6)", parked.State)
+	if qResp.CorrelationId == nil || *qResp.CorrelationId == "" {
+		t.Fatal("(1) expected a non-empty correlation_id on the question response")
 	}
-	if parked.NeedsInput == nil || parked.NeedsInput.CorrelationID == "" {
-		t.Fatal("(1) expected a non-empty correlation_id on the parked needs_input")
+	correlationID := *qResp.CorrelationId
+	asked, loadErr := ls.Load(childSession)
+	if loadErr != nil {
+		t.Fatalf("(1) load child: %v", loadErr)
 	}
-	if parked.Generation != childGen {
-		t.Fatalf("(1) a question park must NOT mint a new generation: got %d, want %d (warm)", parked.Generation, childGen)
+	if asked.State != session.LifecycleRunning {
+		t.Fatalf("(1) child state = %q, want %q — an ordinary question must not park the helper", asked.State, session.LifecycleRunning)
 	}
-	correlationID := parked.NeedsInput.CorrelationID
+	if asked.NeedsInput != nil {
+		t.Fatalf("(1) NeedsInput = %+v, want nil — the person-question pause is removed", asked.NeedsInput)
+	}
+	if asked.Generation != childGen {
+		t.Fatalf("(1) an ordinary question must NOT mint a new generation: got %d, want %d (warm)", asked.Generation, childGen)
+	}
 	waitFor(t, 2*time.Second, func() bool {
 		msgs, _, _, _ := inbox.Drain(parentSession, childSession, "", 10)
 		return len(msgs) == 1
@@ -438,7 +453,8 @@ func TestConformance_g7_SessionRoundTrip_WarmQuestionRespondHandback(t *testing.
 
 	// (2) Parent → child: respond(correlation_id) routes WARM into the SAME
 	// child's steering queue via the bus consumer (deliverParentToChild). The
-	// generation is unchanged — a respond is a warm injection, NOT a restart.
+	// generation is unchanged and the child is not stopped — a respond to a
+	// working helper is a warm injection into its current turn, NOT a restart.
 	var resp generated.SessionMessage
 	if buildErr := resp.FromSessionMessageRespond(generated.SessionMessageRespond{
 		MessageId: "resp-1", SessionId: childSession, CreatedAt: time.Now(),
@@ -711,7 +727,7 @@ func TestConformance_t0_ChatGoal_Design(t *testing.T) {
 	if got := fakeJudge4.callCount(); got != 1 {
 		t.Fatalf("(4) the claim must invoke the Judge exactly once (G-1), got %d", got)
 	}
-	if after4 := goalRecordForSessionOrNil(sid); after4 != nil {
+	if after4 := goalRecordForSessionOrNil(t, sid); after4 != nil {
 		t.Fatalf("(4) a met verdict must clear the goal (done), still ACTIVE: %q", after4.Prompt)
 	}
 
@@ -759,7 +775,7 @@ func TestConformance_t0_ChatGoal_Design(t *testing.T) {
 	if _, ok := pe.VerifierRegistry().Lookup(verifierUnit); ok {
 		t.Fatal("(6) /goal clear must cancel + unregister the in-flight verifier session (FR-037)")
 	}
-	if after6 := goalRecordForSessionOrNil(sid); after6 != nil {
+	if after6 := goalRecordForSessionOrNil(t, sid); after6 != nil {
 		t.Fatalf("(6) /goal clear must clear the goal, still ACTIVE: %q", after6.Prompt)
 	}
 }
@@ -817,7 +833,7 @@ func lintMember(id string, blockedBy, writeSet []string) task.Task {
 func TestConformance_t1_StandaloneTask_Design(t *testing.T) {
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	taskStore := GetTaskStore(al)
-	sessStore := al.GetAgentStore("native-agent")
+	sessStore := al.GetSessionStore()
 	if sessStore == nil {
 		t.Fatal("native-agent session store not available")
 	}
@@ -834,6 +850,7 @@ func TestConformance_t1_StandaloneTask_Design(t *testing.T) {
 	if createErr := taskStore.Create(tk); createErr != nil {
 		t.Fatalf("create task: %v", createErr)
 	}
+	seedTaskGoal(t, tk.ID, "the work is done", "the result is verified")
 
 	// A met-verdict judge answering every criterion it is asked about.
 	judge := &b6ScriptedJudge{metFromCall: 1, reason: "ok"}
@@ -869,7 +886,7 @@ func TestConformance_t1_StandaloneTask_Design(t *testing.T) {
 	if after2.AttemptCount != 0 || after2.Status != task.StatusInProgress {
 		t.Fatalf("(2) attempt_count=%d status=%q, want 0 and in_progress", after2.AttemptCount, after2.Status)
 	}
-	if got := activeGoalForSession(taskSessionID); got == nil || got.Round != 1 {
+	if got := mustActiveGoalForSession(t, taskSessionID); got == nil || got.Round != 1 {
 		t.Fatalf("(2) the goal must have spent exactly one try, got %+v", got)
 	}
 
@@ -1464,7 +1481,7 @@ func TestConformance_g4_ParallelStreamsLint_Design(t *testing.T) {
 // failed, needs_input reconstructability, awaiting-correction exemption, N-15
 // re-baseline); this bootsweep scenario walks the FULL drawn sequence as one
 // observed path: kill -9 mid-plan (persisted non-terminal sessions) → every
-// non-terminal session with no live turn → failed(interrupted) within budget,
+// eligible non-steered task root with no live turn → failed(interrupted),
 // carrying last checkpoint + undelivered messages → session.failed hook fires
 // → plan re-judges/re-dispatches (the awaiting-correction owner is PRESERVED,
 // not swept → no wedge, CRIT-1) → an in-flight goal predating the upgrade is
@@ -1488,36 +1505,50 @@ func TestConformance_g4_ParallelStreamsLint_Design(t *testing.T) {
 // over persisted records) is the real-process gate; this proves the boot-sweep
 // control plane walks the drawn path faithfully.
 //
-// Traces to: ADR-053 §9.1, design diagram §5 (boot sweep)
+// Traces to: ADR-053 §9.1, design diagram §5 (boot sweep), amended by the
+// frozen sub-agent control-plane ADR D8.3: steered records are untouched here
+// and left to SteerBootRecovery; only eligible non-steered records are swept.
 func TestConformance_bootsweep_Design(t *testing.T) {
 	h := newBootSweepHarness(t)
 
-	// (1) kill -9 mid-plan: persist the cross-section of stranded sessions.
-	//     A running session with a checkpoint + undelivered messages.
-	//     ADR-093 D3: a standing root (no SteeredBy edge) is now exempt from
-	//     this sweep, so bs-running/bs-queued are stamped as steered workers
-	//     — the shape D3's own text still calls honest to sweep — to keep
-	//     testing the sweep mechanism itself; bs-owner/bs-stale-goal below
-	//     stay plain roots because their own exemptions ((b) and N-15) must
-	//     still fire for a standing root exactly as for any other record.
+	// (1) The legacy sweep still owns non-steered task roots. Standing chats
+	// are exempt (ADR-093 D3); steered helpers belong to SteerBootRecovery
+	// alone (frozen control-plane ADR D8.3), never this second writer.
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "bs-running", Generation: 1, State: session.LifecycleRunning,
 		WorkspaceID: "ws", AgentID: "agent-1",
 		OwnerScopeKind:        session.OwnerScopeHuman,
-		Origin:                &session.Origin{Kind: session.OriginKindDelegate},
-		SteeredBy:             &session.SteeredBy{SteeringSessionID: "bs-parent", RootSessionID: "bs-parent"},
+		Origin:                &session.Origin{Kind: session.OriginKindTask, TaskID: "bs-task-running"},
 		LastCheckpointRef:     "ckpt-bs",
 		UndeliveredMessageIDs: []string{"bs-msg-1", "bs-msg-2"},
 		CreatedAt:             time.Now().Add(-1 * time.Hour),
 	})
-	// A queued session — also non-terminal, also swept. Same D3 note above.
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "bs-queued", Generation: 1, State: session.LifecycleQueued,
 		WorkspaceID: "ws", AgentID: "agent-1",
 		OwnerScopeKind: session.OwnerScopeHuman,
-		Origin:         &session.Origin{Kind: session.OriginKindDelegate},
-		SteeredBy:      &session.SteeredBy{SteeringSessionID: "bs-parent", RootSessionID: "bs-parent"},
+		Origin:         &session.Origin{Kind: session.OriginKindTask, TaskID: "bs-task-queued"},
 	})
+	steeredBefore := make(map[string]*session.LifecycleRecord)
+	for _, state := range []session.LifecycleState{session.LifecycleRunning, session.LifecycleQueued} {
+		id := "bs-steered-" + string(state)
+		persistLifecycle(t, h.ls, &session.LifecycleRecord{
+			SessionID: id, Generation: 1, State: state,
+			WorkspaceID: "ws", AgentID: "agent-1",
+			OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: "bs-parent",
+			Origin: &session.Origin{Kind: session.OriginKindDelegate},
+			SteeredBy: &session.SteeredBy{
+				SteeringSessionID: "bs-parent", RootSessionID: "bs-parent",
+				ReportingTarget: session.ReportingTarget{SessionID: "bs-parent", Channel: "webchat", ChatID: "bs-parent"},
+			},
+			LastCheckpointRef: "ckpt-steered", UndeliveredMessageIDs: []string{"steered-msg"},
+		})
+		before, err := h.ls.Load(id)
+		if err != nil {
+			t.Fatalf("Load(steered fixture %s): %v", id, err)
+		}
+		steeredBefore[id] = before
+	}
 	// A terminal session — MUST be left alone.
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
 		SessionID: "bs-done", Generation: 1, State: session.LifecycleCompleted,
@@ -1531,9 +1562,13 @@ func TestConformance_bootsweep_Design(t *testing.T) {
 		LastUnmetTerminalSignature: "sig-bs",
 	})
 	persistLifecycle(t, h.ls, &session.LifecycleRecord{
-		SessionID: "bs-owner", Generation: 1, State: session.LifecyclePaused,
+		SessionID: "bs-owner", Generation: 1, State: session.LifecycleStopped,
 		WorkspaceID: "ws", AgentID: "owner",
 		OwnerScopeKind: session.OwnerScopeHuman, OwnsPlanID: "plan-bs",
+		// D2/CRIT-001: same pre-rename `paused` owner fixture as
+		// boot_sweep_test.go's sess-owner; redirect_pause per
+		// delegate_park.go's precedent for this shape.
+		StopNote: &session.StopNote{At: time.Now().UTC(), By: session.StopActorSystem, Seq: 1, Cause: session.StopCauseRedirectPause},
 	})
 	// N-15: an in-flight goal predating the upgrade (stale semantics version).
 	h.pe.currentSemanticsVersionOverride = 3
@@ -1560,13 +1595,32 @@ func TestConformance_bootsweep_Design(t *testing.T) {
 	})
 	res := h.pe.runBootSweep(context.Background())
 
-	if len(res.SweptToFailed) != 2 {
-		t.Fatalf("(2) SweptToFailed = %v, want exactly 2 (running+queued; terminal excluded)", res.SweptToFailed)
+	if len(res.SweptToFailed) != 2 || !containsTaskID(res.SweptToFailed, "bs-running") || !containsTaskID(res.SweptToFailed, "bs-queued") {
+		t.Fatalf("(2) SweptToFailed = %v, want exactly [bs-running bs-queued] (non-steered task roots only; D8.3)", res.SweptToFailed)
 	}
-	if len(failedHooked) != 2 {
-		t.Fatalf("(3) session.failed hook fired %d times, want 2 (→ plan re-judges/re-dispatches)", len(failedHooked))
+	if len(failedHooked) != 2 || !containsTaskID(failedHooked, "bs-running") || !containsTaskID(failedHooked, "bs-queued") {
+		t.Fatalf("(3) session.failed hook targets = %v, want exactly [bs-running bs-queued] (no steered hook; D8.3)", failedHooked)
 	}
-	swept, _ := h.ls.Load("bs-running")
+	for id, before := range steeredBefore {
+		after, err := h.ls.Load(id)
+		if err != nil {
+			t.Fatalf("Load(steered after sweep %s): %v", id, err)
+		}
+		if !reflect.DeepEqual(before, after) {
+			t.Errorf("(2) PlanEngine changed steered %s: before=%+v after=%+v — D8.3 leaves the entire record to SteerBootRecovery", id, before, after)
+		}
+	}
+	swept, loadErr := h.ls.Load("bs-running")
+	if loadErr != nil {
+		t.Fatalf("Load(swept running): %v", loadErr)
+	}
+	queued, queuedErr := h.ls.Load("bs-queued")
+	if queuedErr != nil {
+		t.Fatalf("Load(swept queued): %v", queuedErr)
+	}
+	if queued.State != session.LifecycleFailed || queued.FailedReason != failedReasonInterrupted {
+		t.Errorf("(2) bs-queued state=%q reason=%q, want failed/interrupted", queued.State, queued.FailedReason)
+	}
 	if swept.State != session.LifecycleFailed || swept.FailedReason != failedReasonInterrupted {
 		t.Fatalf("(2) bs-running state=%q reason=%q, want failed/interrupted", swept.State, swept.FailedReason)
 	}
@@ -1585,7 +1639,7 @@ func TestConformance_bootsweep_Design(t *testing.T) {
 		t.Fatalf("(4) CRIT-1: PreservedAwaitingCorrection = %v, want [bs-owner] (no wedge)", res.PreservedAwaitingCorrection)
 	}
 	owner, _ := h.ls.Load("bs-owner")
-	if owner.State != session.LifecyclePaused {
+	if owner.State != session.LifecycleStopped {
 		t.Errorf("(4) CRIT-1: owner swept to %q (must stay paused — exemption b, no wedge)", owner.State)
 	}
 

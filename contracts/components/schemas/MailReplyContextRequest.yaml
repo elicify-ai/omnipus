@@ -1,0 +1,23 @@
+title: MailReplyContextRequest
+description: >
+  Request for one message's reply/quote context (ADR-20261001 "Reply /
+  Reply all context (F5)" row; w3 spec §2.4 — W0 is the single publisher).
+  Session-authenticated message subresource; the source pair/folder/ref is
+  independently authorized. Assembles current-compose state only — never a
+  server draft, never a body cache, never a send.
+type: object
+additionalProperties: false
+required:
+  - mode
+properties:
+  mode:
+    type: string
+    enum:
+      - reply
+      - reply_all
+    description: >
+      reply = sender/Reply-To only (Cc/Bcc start empty). reply_all = To =
+      eligible primary (Reply-To if present, else From); Cc = original To +
+      original Cc minus the mailbox's own address and the primary,
+      deduplicated. The original Bcc is never copied into a reply.
+    example: "reply_all"

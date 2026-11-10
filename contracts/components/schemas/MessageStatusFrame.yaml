@@ -3,9 +3,13 @@ description: >
   Server → client delivery status for one user message. Session-scoped. The
   gateway emits received only after the user transcript entry is durably
   appended, working after the message is successfully admitted to the agent
-  bus, and failed when processing stops before admission. Emitted only for a
-  MessageFrame carrying client_message_id, preserving compatibility with older
-  clients.
+  bus, failed when processing stops before admission, and discarded (with
+  reason stopped_before_delivery) when Stop discards the input before it is
+  delivered into the agent's model input (session-core FR-024), and held after
+  received when an @-recipient request was accepted but the recipient is stopped,
+  so the request waits until it runs again (it is not a failure and not terminal).
+  Emitted only for a MessageFrame carrying client_message_id, preserving
+  compatibility with older clients.
 type: object
 required:
   - type
@@ -20,7 +24,7 @@ properties:
   session_id:
     type: string
     minLength: 1
-    maxLength: 128
+    maxLength: 255
   client_message_id:
     type: string
     minLength: 1
@@ -31,6 +35,16 @@ properties:
       - received
       - working
       - failed
+      - discarded
+      - held
+  reason:
+    type: string
+    enum:
+      - stopped_before_delivery
+    description: >
+      Present only with state=discarded: why the input never reached the agent
+      (session-core FR-024). Stop discards web and channel input that was not yet
+      committed into the agent's model input; the archived message stays.
 
   seq:
     type: integer
@@ -41,7 +55,8 @@ properties:
       increasing and gap-free within the session, assigned by the gateway's per-session
       hub as the single chokepoint through which every session-scoped frame is published.
       Optional: absent on an unsequenced copy of this frame (for example a broadcast
-      delivered to a tab that is not bound to this session) — the client only advances its
-      per-session cursor for frames that carry seq. The client stores the highest seq it
-      has applied per session and sends it back as since_seq on attach_session; frames at
+      delivered to a tab that is not bound to this session) — this seq is dedup state, never itself the resume cursor: the client's cursor is
+      committed only by a completed catch-up (catch_up_complete) and is sent back as
+      since_seq on attach_session (2026-10-26, architect ruling arch-q33 — an earlier
+      sentence here described per-frame cursor advance, which was stale). Frames at
       or below that cursor are ignored, which makes re-delivery idempotent.

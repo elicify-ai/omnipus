@@ -6,18 +6,15 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
-	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
-	"github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -25,33 +22,43 @@ import (
 // --- moved from rest.go tests 2026-09-15 ---
 
 // ---------------------------------------------------------------------------
-// T-G1: DeleteSession_HeartbeatGuard
+// T-G1: DeleteSession_MainGuard
 // ---------------------------------------------------------------------------
 
-// TestDeleteSession_HeartbeatGuard verifies:
-//   - DELETE on a heartbeat session whose workspace heartbeat is ENABLED → 409
-//     AND an audit entry with event="session.delete.blocked" is written (C-1).
-//   - DELETE on a heartbeat session whose workspace heartbeat is DISABLED → 200.
+// TestDeleteSession_MainGuard verifies C-MAIN's protection guard at DELETE:
+//   - DELETE on a MAIN session → 409 AND an audit entry with
+//     event="session.delete.blocked" (C-1).
+//   - DELETE on a non-main session in the same workspace → 200 (control: the
+//     guard keys on the main identity, not on "any session of a workspace").
 //   - DELETE on a normal chat session → 200 (regression).
-func TestDeleteSession_HeartbeatGuard(t *testing.T) {
+//
+// The pre-U1 "disabled heartbeat allows delete" subcase is gone: FR-002 makes
+// protection a property of the identity, so there is no longer a toggle whose
+// state could unprotect a session.
+func TestDeleteSession_MainGuard(t *testing.T) {
 	api, _ := buildHeartbeatTestAPI(t)
 	auditDir := filepath.Join(api.homePath, "system")
 
 	const agentID = "mia"
+	const wsID = "01JXHBTESTWSID0000000001"
 
-	// ── subcase 1: protected heartbeat session ── //
-	t.Run("enabled heartbeat blocks delete and emits audit", func(t *testing.T) {
-		// Create the heartbeat session.
-		meta := createHeartbeatSessionForAgent(t, api.agentLoop, agentID, "01JXHBTESTWSID0000000001")
+	hbWriteWorkspaceRecord(t, api, workspace.Workspace{
+		ID: wsID, Name: "WS", Status: "active", CoreTeam: []string{agentID},
+		CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z",
+	})
 
-		// Write workspace with enabled heartbeat pointing at this session.
-		seedWorkspaceWithHeartbeat(t, api.homePath, agentID, meta.ID)
+	store := api.agentLoop.GetSessionStore()
+	require.NotNil(t, store)
+	mainMeta, err := store.GetOrCreateMainSession(wsID, agentID)
+	require.NoError(t, err)
 
-		w := deleteSessionViaAPI(t, api, meta.ID)
+	// ── subcase 1: the main is protected ── //
+	t.Run("main blocks delete and emits audit", func(t *testing.T) {
+		w := deleteSessionViaAPI(t, api, mainMeta.ID)
 		assert.Equal(t, http.StatusConflict, w.Code,
-			"DELETE protected heartbeat session must return 409; body=%s", w.Body.String())
-		assert.Contains(t, w.Body.String(), "heartbeat",
-			"409 body must mention heartbeat")
+			"DELETE a protected main must return 409; body=%s", w.Body.String())
+		assert.Contains(t, w.Body.String(), "main",
+			"409 body must say why the session is protected")
 
 		// Flush audit log and check for the blocked event.
 		require.NoError(t, api.auditor.Close())
@@ -63,51 +70,36 @@ func TestDeleteSession_HeartbeatGuard(t *testing.T) {
 				assert.Equal(t, audit.DecisionDeny, e["decision"])
 				details, _ := e["details"].(map[string]any)
 				require.NotNil(t, details, "audit entry must have details")
-				assert.Equal(t, meta.ID, details["session_id"])
+				assert.Equal(t, mainMeta.ID, details["session_id"])
 				assert.Equal(t, agentID, details["agent_id"])
-				assert.Equal(t, "heartbeat enabled", details["reason"])
+				assert.Equal(t, "main session is protected", details["reason"])
 			}
 		}
 		assert.True(t, found, "audit entry session.delete.blocked must be written; entries=%v", entries)
 	})
 
-	// ── subcase 2: disabled heartbeat allows delete ── //
-	t.Run("disabled heartbeat allows delete", func(t *testing.T) {
+	// ── subcase 2: a non-main session in the same workspace is deletable ── //
+	t.Run("non-main session is deletable", func(t *testing.T) {
 		api2, _ := buildHeartbeatTestAPI(t)
 		const agent2 = "mia"
-		meta2 := createHeartbeatSessionForAgent(t, api2.agentLoop, agent2, "01JXHBTESTWSID0000000002")
-
-		// Workspace with disabled heartbeat (session_id does NOT match the live one).
-		wsDir2 := filepath.Join(api2.homePath, "workspaces")
-		require.NoError(t, os.MkdirAll(wsDir2, 0o700))
-		wsID2 := "01JXHBTESTWSID0000000002"
-		ws2 := workspace.Workspace{
-			ID: wsID2, Name: "WS2", Status: "active",
-			CoreTeam: []string{agent2},
-			MemberConfigs: map[string]workspace.MemberConfig{
-				agent2: {Heartbeat: &workspace.MemberHeartbeat{
-					Enabled:         false,
-					IntervalMinutes: 10,
-					Body:            "body",
-					SessionID:       meta2.ID,
-				}},
-			},
+		const ws2 = "01JXHBTESTWSID0000000002"
+		hbWriteWorkspaceRecord(t, api2, workspace.Workspace{
+			ID: ws2, Name: "WS2", Status: "active", CoreTeam: []string{agent2},
 			CreatedAt: "2026-01-01T00:00:00Z", UpdatedAt: "2026-01-01T00:00:00Z",
-		}
-		data, err := json.MarshalIndent(ws2, "", "  ")
+		})
+		other, err := api2.agentLoop.GetSessionStore().NewScheduledSession(agent2)
 		require.NoError(t, err)
-		require.NoError(t, os.WriteFile(filepath.Join(wsDir2, wsID2+".json"), data, 0o600))
 
-		w2 := deleteSessionViaAPI(t, api2, meta2.ID)
-		assert.Equal(t, http.StatusOK, w2.Code,
-			"DELETE session with disabled heartbeat must return 200; body=%s", w2.Body.String())
+		w := deleteSessionViaAPI(t, api2, other.ID)
+		assert.Equal(t, http.StatusOK, w.Code,
+			"DELETE a non-main session must return 200; body=%s", w.Body.String())
 	})
 
 	// ── subcase 3: normal chat session always deletable ── //
 	t.Run("normal chat session is deletable", func(t *testing.T) {
 		api3, _ := buildHeartbeatTestAPI(t)
 		const agent3 = "mia"
-		store3 := api3.agentLoop.GetAgentStore(agent3)
+		store3 := api3.agentLoop.GetSessionStore()
 		require.NotNil(t, store3)
 		chatMeta, err := store3.NewSession("chat", "webchat", agent3)
 		require.NoError(t, err)
@@ -133,6 +125,7 @@ func TestGetSessionMessages_ReturnsDelegateChildEntriesUnfiltered(t *testing.T) 
 	require.NotNil(t, store, "shared session store must be available")
 
 	seedParentAndChildTranscript(t, store, sessionID)
+	canonicalBefore := historyMigrationInternalSpawn(t, store, sessionID)
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/sessions/"+sessionID+"/messages", nil)
@@ -141,9 +134,8 @@ func TestGetSessionMessages_ReturnsDelegateChildEntriesUnfiltered(t *testing.T) 
 	require.Equal(t, http.StatusOK, w.Code,
 		"GET /sessions/{id}/messages must return 200; got %d body=%s", w.Code, w.Body.String())
 
-	var entries []session.TranscriptEntry
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries),
-		"response must unmarshal into a list of transcript entries")
+	page := historyMigrationPage(t, sessionID, w.Body.Bytes(), "latest", false, false)
+	entries := page.Entries
 
 	// Positive lower bound (binding rule 4) before asserting anything about
 	// which entries survived: both seeded entries must actually be present.
@@ -153,19 +145,22 @@ func TestGetSessionMessages_ReturnsDelegateChildEntriesUnfiltered(t *testing.T) 
 
 	var sawParent, sawChild bool
 	for _, e := range entries {
-		switch e.ID {
+		switch e.Id {
 		case "parent-msg-1":
 			sawParent = true
 		case "child-msg-1":
 			sawChild = true
-			assert.Equal(t, "delegate-call-1", e.ParentSpawnCallID,
-				"ParentSpawnCallID is retained as provenance (FR-036), not stripped")
-			assert.Contains(t, e.Content, "external-cli permission",
+			// PSC=C retains the exact provenance equality in the separate
+			// internal control above, never as an uncontracted wire property.
+			require.NotNil(t, e.Content)
+			assert.Contains(t, *e.Content, "external-cli permission",
 				"the tagged entry's content must reach the wire unfiltered")
 		}
 	}
 	assert.True(t, sawParent, "the parent entry must still be present")
 	assert.True(t, sawChild, "the ParentSpawnCallID-tagged entry must no longer be withheld")
+	historyMigrationSpawnWire(t, entries, w.Body.Bytes(), "entries")
+	historyMigrationSpawnUnchanged(t, store, sessionID, canonicalBefore)
 }
 
 // TestGetSession_ReturnsDelegateChildEntriesUnfiltered is the inverted REST
@@ -181,6 +176,7 @@ func TestGetSession_ReturnsDelegateChildEntriesUnfiltered(t *testing.T) {
 	require.NotNil(t, store, "shared session store must be available")
 
 	seedParentAndChildTranscript(t, store, sessionID)
+	canonicalBefore := historyMigrationInternalSpawn(t, store, sessionID)
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/sessions/"+sessionID, nil)
@@ -189,30 +185,30 @@ func TestGetSession_ReturnsDelegateChildEntriesUnfiltered(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code,
 		"GET /sessions/{id} must return 200; got %d body=%s", w.Code, w.Body.String())
 
-	var detail struct {
-		Messages []session.TranscriptEntry `json:"messages"`
-	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &detail),
-		"response must unmarshal into a session-detail envelope")
+	detail := historyMigrationDetail(t, sessionID, w.Body.Bytes(), false)
+	entries := *detail.Messages
 
-	require.Len(t, detail.Messages, 2,
+	require.Len(t, entries, 2,
 		"both the parent entry and the ParentSpawnCallID-tagged entry must be "+
 			"present, unfiltered, in the session-detail envelope's messages — "+
-			"got %d entries: %+v", len(detail.Messages), detail.Messages)
+			"got %d entries: %+v", len(entries), entries)
 
 	var sawParent, sawChild bool
-	for _, e := range detail.Messages {
-		switch e.ID {
+	for _, e := range entries {
+		switch e.Id {
 		case "parent-msg-1":
 			sawParent = true
 		case "child-msg-1":
 			sawChild = true
-			assert.Contains(t, e.Content, "external-cli permission",
+			require.NotNil(t, e.Content)
+			assert.Contains(t, *e.Content, "external-cli permission",
 				"the delegate-shaped entry's raw narration must reach the session-detail messages unfiltered")
 		}
 	}
 	assert.True(t, sawParent, "the parent entry must still be present")
 	assert.True(t, sawChild, "the ParentSpawnCallID-tagged entry must no longer be withheld")
+	historyMigrationSpawnWire(t, entries, w.Body.Bytes(), "messages")
+	historyMigrationSpawnUnchanged(t, store, sessionID, canonicalBefore)
 }
 
 // TestGetSessionMessages_JudgeVerdictEntry_PopulatesWireVerdict proves the
@@ -259,8 +255,8 @@ func TestGetSessionMessages_JudgeVerdictEntry_PopulatesWireVerdict(t *testing.T)
 	api.HandleSessions(w, r)
 	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
 
-	var entries []map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries))
+	historyMigrationPage(t, sessionID, w.Body.Bytes(), "latest", false, false)
+	entries := historyMigrationEntryObjects(t, w.Body.Bytes(), "entries")
 
 	var found map[string]any
 	for _, e := range entries {
@@ -313,8 +309,8 @@ func TestGetSessionMessages_JudgeVerdictEntry_MalformedContent_OmitsVerdict(t *t
 	api.HandleSessions(w, r)
 	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
 
-	var entries []map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries))
+	historyMigrationPage(t, sessionID, w.Body.Bytes(), "latest", false, false)
+	entries := historyMigrationEntryObjects(t, w.Body.Bytes(), "entries")
 
 	var found map[string]any
 	for _, e := range entries {
@@ -596,11 +592,7 @@ func TestHandleSessions_RenamePersistence(t *testing.T) {
 	require.Equal(t, http.StatusOK, wGet.Code,
 		"GET after rename must return 200; body=%s", wGet.Body.String())
 
-	var detail struct {
-		Session  session.UnifiedMeta       `json:"session"`
-		Messages []session.TranscriptEntry `json:"messages"`
-	}
-	require.NoError(t, json.Unmarshal(wGet.Body.Bytes(), &detail))
+	detail := historyMigrationDetail(t, sessionID, wGet.Body.Bytes(), false)
 	assert.Equal(t, "Persisted Title", detail.Session.Title,
 		"GET must return the persisted title after rename")
 }
@@ -794,9 +786,8 @@ func TestGetSessionMessages_ToolCallEntries_PassesWireSchema(t *testing.T) {
 		w.Code, w.Body.String())
 
 	// Parse the response and validate every entry against Message.yaml.
-	var entries []map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries),
-		"response must be a JSON array of message objects")
+	historyMigrationPage(t, sessionID, w.Body.Bytes(), "latest", false, false)
+	entries := historyMigrationEntryObjects(t, w.Body.Bytes(), "entries")
 	require.NotEmpty(t, entries, "must have at least one entry seeded")
 
 	schema := loadMessageSchema(t)
@@ -867,9 +858,8 @@ func TestGetSessionMessages_InterruptedToolCall_PassesWireSchema(t *testing.T) {
 		"GET /sessions/{id}/messages must return 200 for a session containing an "+
 			"interrupted delegation; got %d body=%s", w.Code, w.Body.String())
 
-	var entries []map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries),
-		"response must be a JSON array of message objects")
+	historyMigrationPage(t, sessionID, w.Body.Bytes(), "latest", false, false)
+	entries := historyMigrationEntryObjects(t, w.Body.Bytes(), "entries")
 	require.NotEmpty(t, entries, "must have at least one entry seeded")
 
 	// This is the exact assertion that failed pre-fix: the SPA's zod schema
@@ -933,8 +923,8 @@ func TestGetSessionMessages_TurnCanceledEntry_PassesWireSchema(t *testing.T) {
 	api.HandleSessions(w, r)
 	require.Equal(t, http.StatusOK, w.Code)
 
-	var entries []map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries))
+	historyMigrationPage(t, sessionID, w.Body.Bytes(), "latest", false, false)
+	entries := historyMigrationEntryObjects(t, w.Body.Bytes(), "entries")
 
 	schema := loadMessageSchema(t)
 	for i, entry := range entries {
@@ -1003,9 +993,8 @@ func TestGetSessionMessages_TruncatedEntry_PassesWireSchema(t *testing.T) {
 		"GET /sessions/{id}/messages must return 200; got %d body=%s",
 		w.Code, w.Body.String())
 
-	var entries []map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries),
-		"response must be a JSON array of message objects")
+	historyMigrationPage(t, sessionID, w.Body.Bytes(), "latest", false, false)
+	entries := historyMigrationEntryObjects(t, w.Body.Bytes(), "entries")
 	require.NotEmpty(t, entries, "must have at least one entry seeded")
 
 	schema := loadMessageSchema(t)
@@ -1033,13 +1022,11 @@ func TestGetSessionMessages_TruncatedEntry_PassesWireSchema(t *testing.T) {
 	assert.True(t, foundTruncated, "the seeded truncated entry must round-trip through the handler")
 }
 
-// TestGetSession_TranscriptWithCancelledTurn_PassesSessionDetailSchema covers
-// the envelope shape jsonSessionDetail emits — {session, messages,
-// agent_removed?}. The Session.partitions array regression we fixed earlier
-// in this branch landed in this exact envelope; this test pins the second
-// half of the contract (the messages array) against the same shape.
-//
-// Traces to: pkg/gateway/rest.go jsonSessionDetail.
+// TestGetSession_TranscriptWithMixedEntries_PassesSessionDetailSchema preserves
+// the original full envelope/message schema regression through the REAL public
+// paged-detail handler. It also proves available history, exact selected IDs,
+// current default paging fields and exclusion of private canonical provenance.
+// Traces to SessionDetail.yaml and history_page_http.go::writePagedSessionDetail.
 func TestGetSession_TranscriptWithMixedEntries_PassesSessionDetailSchema(t *testing.T) {
 	api, cleanup := newTestRestAPI(t)
 	defer cleanup()
@@ -1057,11 +1044,12 @@ func TestGetSession_TranscriptWithMixedEntries_PassesSessionDetailSchema(t *test
 			AgentID:   "main",
 		},
 		{
-			ID:        "msg_asst_1",
-			Role:      "assistant",
-			Content:   "hi back",
-			Timestamp: time.Date(2026, 5, 21, 4, 20, 1, 0, time.UTC),
-			AgentID:   "main",
+			ID:                "msg_asst_1",
+			Role:              "assistant",
+			Content:           "hi back",
+			Timestamp:         time.Date(2026, 5, 21, 4, 20, 1, 0, time.UTC),
+			AgentID:           "main",
+			ParentSpawnCallID: "private-canonical-psc-canary",
 		},
 		{
 			ID:        "call_001",
@@ -1093,22 +1081,32 @@ func TestGetSession_TranscriptWithMixedEntries_PassesSessionDetailSchema(t *test
 	require.Equal(t, http.StatusOK, w.Code,
 		"GET /sessions/{id} must return 200; got %d body=%s", w.Code, w.Body.String())
 
-	// Validate the envelope against SessionDetail.yaml.
-	thisFile := gatewayTestCallerFile(t)
-	contractsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "contracts", "components", "schemas")
-	loader := newYAMLSchemaLoader(t)
-	compiler := jsonschema.NewCompiler()
-	compiler.UseLoader(loader)
-	schema, err := compiler.Compile("file://" + filepath.Join(contractsDir, "SessionDetail.yaml"))
-	require.NoError(t, err, "must compile SessionDetail.yaml")
-
-	var envelope any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &envelope))
-
-	validationErr := schema.Validate(envelope)
-	assert.NoError(t, validationErr,
-		"jsonSessionDetail envelope must validate against SessionDetail.yaml; "+
-			"body=%s", w.Body.String())
+	// The private provenance must actually exist in saved data for this
+	// omission assertion to have power. It is not a producer-supplied wire field.
+	saved, err := store.ReadTranscript(sessionID)
+	require.NoError(t, err)
+	require.Len(t, saved, 4)
+	require.Equal(t, "private-canonical-psc-canary", saved[1].ParentSpawnCallID)
+	detail := requirePagedSessionDetailWire(t, w.Body.Bytes())
+	require.Equal(t, sessionID, detail.Session.Id)
+	require.Len(t, *detail.Messages, 4)
+	ids := make([]string, 0, len(*detail.Messages))
+	positions := make(map[string]bool)
+	for _, entry := range *detail.Messages {
+		ids = append(ids, entry.Id)
+		require.NotNil(t, entry.HistoryPosition)
+		require.Regexp(t, `^hp1_[A-Za-z0-9_-]{43}$`, *entry.HistoryPosition)
+		require.False(t, positions[*entry.HistoryPosition], "each selected canonical occurrence has its own position")
+		positions[*entry.HistoryPosition] = true
+	}
+	require.Equal(t, []string{"msg_user_1", "msg_asst_1", "call_001", "cancel_001"}, ids)
+	require.EqualValues(t, 3, detail.PageInfo.RowCount, "D4/D16: two prose rows + one logical tool; cancel metadata adds zero")
+	assert.False(t, *detail.HasEarlier)
+	assert.False(t, *detail.HasLater)
+	assert.Nil(t, detail.NextBefore)
+	assert.Nil(t, detail.NextAfter)
+	assert.NotContains(t, w.Body.String(), "parent_spawn_call_id", "private canonical provenance is never a public Message member")
+	assert.NotContains(t, w.Body.String(), "private-canonical-psc-canary")
 }
 
 // TestGetSessions_ScheduledTypeFilter_RoundTrip verifies that a session of type
@@ -1279,6 +1277,204 @@ func TestUnifiedMetaToGenSession_MapsUpdatedAt(t *testing.T) {
 	assert.True(t, s.CreatedAt.Equal(created), "CreatedAt should still map correctly")
 }
 
+// --- Train-3 lifecycle_state / stop_note producer (sub-agent control plane
+// ADR D4/MAJ-009) ---
+
+// doGetSession drives GET /api/v1/sessions/{id} through the real handler and
+// decodes the SessionDetail envelope into a raw map, so a test can assert on
+// the exact wire keys (present vs. absent) rather than a typed struct that
+// would silently default an absent field to its zero value.
+func doGetSession(t *testing.T, api *restAPI, id string) (map[string]any, int) {
+	t.Helper()
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/sessions/"+id, nil)
+	r.URL.Path = "/api/v1/sessions/" + id
+	api.HandleSessions(w, r)
+	var detail map[string]any
+	if w.Code == http.StatusOK {
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &detail), "response body: %s", w.Body.String())
+	}
+	return detail, w.Code
+}
+
+// findSessionRow returns the row (as a raw map) matching id from a
+// sessionPageWire's Sessions slice, or nil if absent.
+func findSessionRow(page sessionPageWire, id string) map[string]any {
+	for _, s := range page.Sessions {
+		if s["id"] == id {
+			return s
+		}
+	}
+	return nil
+}
+
+// TestSessionLifecycle_PopulatesLifecycleStateAndStopNote proves the producer
+// this task adds: a session's REAL LifecycleRecord (state=stopped, with a
+// StopNote whose Seq matches the record's current Generation) is mapped onto
+// the wire lifecycle_state/stop_note fields end-to-end — on BOTH
+// GET /api/v1/sessions (list, rest_sessions.go::listSessions) and
+// GET /api/v1/sessions/{id} (detail, rest_sessions.go::getSession via
+// history_page_http.go::writePagedSessionDetail) — not merely present in the contract/generated types
+// with nothing populating them (Definition of Done: reachable, not just
+// defined).
+func TestSessionLifecycle_PopulatesLifecycleStateAndStopNote(t *testing.T) {
+	api, cleanup := newTestRestAPI(t)
+	defer cleanup()
+
+	sessionID := createTestSession(t, api)
+
+	ls := session.NewLifecycleStore(t.TempDir())
+	api.agentLoop.SetSessionMessagingStores(nil, ls)
+
+	stoppedAt := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	rec := &session.LifecycleRecord{
+		SessionID:      sessionID,
+		State:          session.LifecycleStopped,
+		Generation:     1,
+		OwnerScopeKind: session.OwnerScopeHuman,
+		StopNote: &session.StopNote{
+			At:    stoppedAt,
+			By:    "human:tester-1",
+			Cause: session.StopCauseStop,
+			Seq:   1, // must equal Generation — persistLocked and the handler's gate both require it
+		},
+	}
+	require.NoError(t, ls.Persist(rec), "fixture: persist a stopped lifecycle record")
+
+	// --- GET /api/v1/sessions (list) ---
+	page, code := u18DoListSessions(t, api, "")
+	require.Equal(t, http.StatusOK, code)
+	row := findSessionRow(page, sessionID)
+	require.NotNilf(t, row, "session %q must appear in the list response", sessionID)
+	assert.Equal(t, "stopped", row["lifecycle_state"],
+		"list response must map the real LifecycleRecord.State (stopped) onto lifecycle_state — "+
+			"an unwired producer would leave this key absent instead")
+	stopNote, ok := row["stop_note"].(map[string]any)
+	require.Truef(t, ok, "list response must carry stop_note for a stopped session; got %#v", row["stop_note"])
+	assert.Equal(t, "stop", stopNote["cause"])
+	assert.Equal(t, "human:tester-1", stopNote["by"])
+	assert.EqualValues(t, 1, stopNote["seq"])
+	assert.NotEmpty(t, stopNote["at"])
+
+	// --- GET /api/v1/sessions/{id} (detail) ---
+	detail, code := doGetSession(t, api, sessionID)
+	require.Equal(t, http.StatusOK, code)
+	sessionObj, ok := detail["session"].(map[string]any)
+	require.True(t, ok, "detail response must have a 'session' field")
+	assert.Equal(t, "stopped", sessionObj["lifecycle_state"],
+		"session-detail response must map lifecycle_state exactly like the list response")
+	detailStopNote, ok := sessionObj["stop_note"].(map[string]any)
+	require.Truef(t, ok, "detail response must carry stop_note for a stopped session; got %#v", sessionObj["stop_note"])
+	assert.Equal(t, "stop", detailStopNote["cause"])
+	assert.Equal(t, "human:tester-1", detailStopNote["by"])
+}
+
+// TestSessionLifecycle_NoLifecycleStoreWired_FieldsAbsent proves the
+// nil-safety the brief requires: a session with no LifecycleRecord AT ALL —
+// here, because no lifecycle store is wired — must omit lifecycle_state and
+// stop_note from the wire response (never emit them as null, never panic),
+// exactly matching Session.yaml's "absent for a session with no lifecycle
+// record" contract. newTestRestAPI wires no lifecycle store by default
+// (same fixture assumption rest_adr057_test.go's
+// TestU18DeleteSession_NoLifecycleStore_DegradesToOwnUploadsOnly pins).
+func TestSessionLifecycle_NoLifecycleStoreWired_FieldsAbsent(t *testing.T) {
+	api, cleanup := newTestRestAPI(t)
+	defer cleanup()
+	// The shared harness now installs a REAL lifecycle store, because the
+	// task start path it wires needs one (S1 M9 + qa shared-harness launcher,
+	// 2982c3b38). This test is about the NIL-store path, so it unwires the
+	// store explicitly instead of relying on a harness default that no longer
+	// exists.
+	api.agentLoop.SetSessionMessagingStores(nil, nil)
+	require.Nil(t, api.agentLoop.GetSessionLifecycleStore(), "fixture: no lifecycle store wired by default")
+
+	sessionID := createTestSession(t, api)
+
+	page, code := u18DoListSessions(t, api, "")
+	require.Equal(t, http.StatusOK, code)
+	row := findSessionRow(page, sessionID)
+	require.NotNil(t, row)
+	_, hasState := row["lifecycle_state"]
+	_, hasNote := row["stop_note"]
+	assert.False(t, hasState, "lifecycle_state must be absent (not null) when no lifecycle store is wired; got %#v", row["lifecycle_state"])
+	assert.False(t, hasNote, "stop_note must be absent (not null) when no lifecycle store is wired; got %#v", row["stop_note"])
+
+	detail, code := doGetSession(t, api, sessionID)
+	require.Equal(t, http.StatusOK, code)
+	sessionObj, ok := detail["session"].(map[string]any)
+	require.True(t, ok)
+	_, hasState = sessionObj["lifecycle_state"]
+	_, hasNote = sessionObj["stop_note"]
+	assert.False(t, hasState, "detail response: lifecycle_state must be absent with no lifecycle store wired")
+	assert.False(t, hasNote, "detail response: stop_note must be absent with no lifecycle store wired")
+}
+
+// TestSessionLifecycle_StoreWiredButNoRecordForThisSession covers the OTHER
+// degenerate input computeSessionLifecycle must handle without panicking: a
+// lifecycle store IS wired (so the nil-store shortcut above is not what is
+// being exercised) but THIS session simply never got a LifecycleRecord — the
+// common case for an ordinary webchat session even on an install that also
+// runs delegations with their own lifecycle-tracked sessions.
+func TestSessionLifecycle_StoreWiredButNoRecordForThisSession(t *testing.T) {
+	api, cleanup := newTestRestAPI(t)
+	defer cleanup()
+
+	ls := session.NewLifecycleStore(t.TempDir())
+	api.agentLoop.SetSessionMessagingStores(nil, ls)
+
+	sessionID := createTestSession(t, api) // no LifecycleRecord ever persisted for this id
+
+	page, code := u18DoListSessions(t, api, "")
+	require.Equal(t, http.StatusOK, code)
+	row := findSessionRow(page, sessionID)
+	require.NotNil(t, row)
+	_, hasState := row["lifecycle_state"]
+	_, hasNote := row["stop_note"]
+	assert.False(t, hasState, "lifecycle_state must be absent when a wired store has no record for this session")
+	assert.False(t, hasNote, "stop_note must be absent when a wired store has no record for this session")
+}
+
+// TestSessionLifecycle_NonStoppedState_HidesStaleStopNote proves two things
+// with one fixture: (1) LifecycleStateToDisplay's mapping reaches the wire
+// correctly for a non-terminal state (needs_input -> waiting_for_answer), and
+// (2) a StopNote whose Seq names an EARLIER generation (left behind on the
+// RETAINED record by a since-superseded stop — D2's "landing clears the
+// fence but keeps the note") is correctly hidden: computeSessionLifecycle's
+// Seq == Generation gate must not resurrect stale stop history onto a
+// session that has since moved on to a new generation.
+func TestSessionLifecycle_NonStoppedState_HidesStaleStopNote(t *testing.T) {
+	api, cleanup := newTestRestAPI(t)
+	defer cleanup()
+
+	sessionID := createTestSession(t, api)
+	ls := session.NewLifecycleStore(t.TempDir())
+	api.agentLoop.SetSessionMessagingStores(nil, ls)
+
+	rec := &session.LifecycleRecord{
+		SessionID:      sessionID,
+		State:          session.LifecycleNeedsInput,
+		Generation:     2, // bumped past the generation the stale StopNote names
+		OwnerScopeKind: session.OwnerScopeHuman,
+		NeedsInput:     &session.NeedsInput{CorrelationID: "corr-1"},
+		StopNote: &session.StopNote{
+			At:    time.Now().UTC(),
+			By:    "human:tester-1",
+			Cause: session.StopCauseStop,
+			Seq:   1, // stale: names generation 1, record is now generation 2
+		},
+	}
+	require.NoError(t, ls.Persist(rec), "fixture: persist a needs_input record carrying a stale generation-1 stop_note")
+
+	page, code := u18DoListSessions(t, api, "")
+	require.Equal(t, http.StatusOK, code)
+	row := findSessionRow(page, sessionID)
+	require.NotNil(t, row)
+	assert.Equal(t, "waiting_for_answer", row["lifecycle_state"],
+		"needs_input must map to waiting_for_answer on the wire")
+	_, hasNote := row["stop_note"]
+	assert.False(t, hasNote, "a StopNote naming an EARLIER generation must not surface as stop_note on a record that has since moved on; got %#v", row["stop_note"])
+}
+
 // TestListSessions_ExcludesVerifierByDefault verifies GET /api/v1/sessions
 // (no include_verifier param) omits verifier-type sessions while still
 // returning ordinary chat sessions.
@@ -1431,38 +1627,4 @@ func TestCreateSessionHTTP_RejectsWorker(t *testing.T) {
 	api.createSessionHTTP(w2, r2)
 	require.Equal(t, http.StatusCreated, w2.Code,
 		"a base agent must be able to back a session (control)")
-}
-
-// TestFirstChatTargetAgentID_SkipsWorker verifies RESIDUAL PATH 6: the last-resort
-// fallback never lands on a worker even when the worker appears first in the list.
-// It returns the first chat-target agent instead.
-func TestFirstChatTargetAgentID_SkipsWorker(t *testing.T) {
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			List: []config.AgentConfig{
-				// Worker appears first but must be skipped — workers are never chat targets.
-				{ID: "hans", Type: config.AgentTypeWorker},
-				{ID: "mia"},
-			},
-		},
-	}
-	got := firstChatTargetAgentID(cfg)
-	assert.NotEqual(t, "hans", got, "firstChatTargetAgentID must never return a worker")
-	assert.Equal(t, "mia", got, "firstChatTargetAgentID must return the first chat-target agent")
-}
-
-// TestFirstChatTargetAgentID_AllWorkersReturnsEmpty verifies the degenerate case:
-// when every agent is a worker, the fallback returns "" rather than a
-// worker (the caller then surfaces a "no agent configured" error).
-func TestFirstChatTargetAgentID_AllWorkersReturnsEmpty(t *testing.T) {
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			List: []config.AgentConfig{
-				{ID: "w1", Type: config.AgentTypeWorker},
-				{ID: "w2", Type: config.AgentTypeWorker},
-			},
-		},
-	}
-	assert.Equal(t, "", firstChatTargetAgentID(cfg),
-		"when all agents are workers, the fallback must return empty, never a worker")
 }

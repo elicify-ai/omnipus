@@ -1299,3 +1299,277 @@ describe('ModelSelector — catalog mode search', () => {
     expect(rows[0]).toHaveAttribute('data-model', 'a/one')
   })
 })
+
+// =====================================================================
+// H6 (provider hotfix 2026-10-13) — (provider, model) selection identity.
+//
+// The founder's live instance listed the SAME model id (gpt-6.1-sol) under
+// TWO providers — the custom local proxy row `grok-local` and the
+// subscription row `openai-chatgpt` — and picking it under one showed the
+// check under BOTH, because "chosen" was keyed by the bare model id. With
+// `valueProvider` the check marks the pair; without it the legacy
+// model-id match stands (backward-compat pin below).
+// =====================================================================
+
+/** Two providers serving the same slug — the exact founder-instance shape. */
+const DUAL_PROVIDER_GROUPS: ModelGroup[] = [
+  { providerName: 'grok-local', providerId: 'grok-local', models: ['gpt-6.1-sol', 'grok-4'] },
+  { providerName: 'ChatGPT (subscription)', providerId: 'openai-chatgpt', models: ['gpt-6.1-sol', 'gpt-5.6'] },
+]
+
+/** The per-row chosen marker of the grouped (non-catalog) render path.
+ *  Options only — the trigger button also carries the value text when a
+ *  value is set, and it is not a row. */
+const groupedRowsFor = (model: string) =>
+  screen
+    .getAllByRole('option')
+    .filter((el) => (el.textContent ?? '').includes(model))
+
+describe('ModelSelector — H6 (provider, model) selection identity', () => {
+  it('marks ONLY the picked provider\'s row chosen when two providers serve the same model', () => {
+    render(
+      <ModelSelector
+        models={DUAL_PROVIDER_GROUPS.flatMap((g) => g.models)}
+        value="gpt-6.1-sol"
+        valueProvider="openai-chatgpt"
+        onChange={vi.fn()}
+        providerGroups={DUAL_PROVIDER_GROUPS}
+      />,
+    )
+    const rows = groupedRowsFor('gpt-6.1-sol')
+    expect(rows).toHaveLength(2)
+    // grok-local's row: NOT chosen. openai-chatgpt's row: chosen.
+    expect(rows[0]).not.toHaveAttribute('data-chosen')
+    expect(rows[1]).toHaveAttribute('data-chosen')
+  })
+
+  it('marks the OTHER provider\'s row when the pick was made there (the pair, not the slug, decides)', () => {
+    render(
+      <ModelSelector
+        models={DUAL_PROVIDER_GROUPS.flatMap((g) => g.models)}
+        value="gpt-6.1-sol"
+        valueProvider="grok-local"
+        onChange={vi.fn()}
+        providerGroups={DUAL_PROVIDER_GROUPS}
+      />,
+    )
+    const rows = groupedRowsFor('gpt-6.1-sol')
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).toHaveAttribute('data-chosen')
+    expect(rows[1]).not.toHaveAttribute('data-chosen')
+  })
+
+  it('a model served by only ONE provider stays chosen under that provider', () => {
+    render(
+      <ModelSelector
+        models={DUAL_PROVIDER_GROUPS.flatMap((g) => g.models)}
+        value="gpt-5.6"
+        valueProvider="openai-chatgpt"
+        onChange={vi.fn()}
+        providerGroups={DUAL_PROVIDER_GROUPS}
+      />,
+    )
+    const chosen = screen.getAllByRole('option').filter((el) => el.hasAttribute('data-chosen'))
+    expect(chosen).toHaveLength(1)
+    expect(chosen[0].textContent).toContain('gpt-5.6')
+  })
+
+  it('a valueProvider with no matching row (stale provider) chooses nothing — never the wrong row', () => {
+    render(
+      <ModelSelector
+        models={DUAL_PROVIDER_GROUPS.flatMap((g) => g.models)}
+        value="gpt-6.1-sol"
+        valueProvider="some-removed-provider"
+        onChange={vi.fn()}
+        providerGroups={DUAL_PROVIDER_GROUPS}
+      />,
+    )
+    expect(screen.getAllByRole('option').filter((el) => el.hasAttribute('data-chosen'))).toHaveLength(0)
+  })
+
+  it('BACKWARD COMPAT: without valueProvider the legacy model-id match stands (both rows chosen)', () => {
+    render(
+      <ModelSelector
+        models={DUAL_PROVIDER_GROUPS.flatMap((g) => g.models)}
+        value="gpt-6.1-sol"
+        onChange={vi.fn()}
+        providerGroups={DUAL_PROVIDER_GROUPS}
+      />,
+    )
+    const rows = groupedRowsFor('gpt-6.1-sol')
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).toHaveAttribute('data-chosen')
+    expect(rows[1]).toHaveAttribute('data-chosen')
+  })
+
+  it('picking the shared slug under one provider emits THAT provider in onPairChange', () => {
+    const onChange = vi.fn()
+    const onPairChange = vi.fn()
+    render(
+      <ModelSelector
+        models={DUAL_PROVIDER_GROUPS.flatMap((g) => g.models)}
+        value=""
+        onChange={onChange}
+        onPairChange={onPairChange}
+        providerGroups={DUAL_PROVIDER_GROUPS}
+      />,
+    )
+    // Two rows share the text; click the SECOND (openai-chatgpt's).
+    const rows = screen.getAllByRole('option').filter((el) => (el.textContent ?? '').includes('gpt-6.1-sol'))
+    expect(rows).toHaveLength(2)
+    fireEvent.click(rows[1])
+    expect(onChange).toHaveBeenCalledWith('gpt-6.1-sol')
+    expect(onPairChange).toHaveBeenCalledWith({ model: 'gpt-6.1-sol', provider: 'openai-chatgpt' })
+  })
+
+  it('catalog mode: marks ONLY the picked provider\'s row chosen across two catalog groups', () => {
+    renderCatalog(
+      [
+        { providerId: 'grok-local', providerName: 'grok-local', models: [catalogModel({ id: 'gpt-6.1-sol' })] },
+        { providerId: 'openai-chatgpt', providerName: 'ChatGPT', models: [catalogModel({ id: 'gpt-6.1-sol' })] },
+      ],
+      { value: 'gpt-6.1-sol', valueProvider: 'openai-chatgpt' },
+    )
+    // Render order follows the groups: row 0 = grok-local, row 1 =
+    // openai-chatgpt (both carry data-model="gpt-6.1-sol", so the POSITION
+    // is the only thing that tells them apart).
+    const rows = screen.getAllByRole('option')
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).not.toHaveAttribute('data-chosen')
+    expect(rows[1]).toHaveAttribute('data-chosen')
+  })
+})
+
+// =====================================================================
+// H6 R2 (review round 1) — keyboard identity, catalog emit, no cross-row
+// guess, and the VISIBLE check mark (not just the data-chosen marker).
+// =====================================================================
+
+/** Opacity of the row's check icon — the thing a user actually sees. */
+const rowCheckOpacity = (row: HTMLElement) => {
+  const icon = row.querySelector('svg') as SVGElement | null
+  return icon ? icon.style.opacity : ''
+}
+
+/** cmdk's keydown target (the mocked Popover renders everything inline). */
+const cmdkRoot = () => {
+  const root = document.querySelector('[cmdk-root]') as HTMLElement | null
+  expect(root).not.toBeNull()
+  return root as HTMLElement
+}
+
+describe('ModelSelector — H6 R2 keyboard selection and emitted identity', () => {
+  it('KEYBOARD (grouped): End + Enter selects the LAST duplicate row and emits ITS provider', () => {
+    const onChange = vi.fn()
+    const onPairChange = vi.fn()
+    render(
+      <ModelSelector
+        models={DUAL_PROVIDER_GROUPS.flatMap((g) => g.models)}
+        value=""
+        onChange={onChange}
+        onPairChange={onPairChange}
+        providerGroups={DUAL_PROVIDER_GROUPS}
+      />,
+    )
+    // Render order: grok-local [gpt-6.1-sol, grok-4], then ChatGPT
+    // [gpt-5.6, gpt-6.1-sol]. End focuses the LAST row — openai-chatgpt's
+    // gpt-6.1-sol. Pre-fix both duplicates shared the cmdk value, both went
+    // aria-selected, and Enter dispatched to the FIRST (grok-local).
+    fireEvent.keyDown(cmdkRoot(), { key: 'End' })
+    fireEvent.keyDown(cmdkRoot(), { key: 'Enter' })
+    expect(onChange).toHaveBeenCalledWith('gpt-6.1-sol')
+    expect(onPairChange).toHaveBeenCalledTimes(1)
+    expect(onPairChange).toHaveBeenCalledWith({ model: 'gpt-6.1-sol', provider: 'openai-chatgpt' })
+  })
+
+  it('KEYBOARD (catalog mode): End + Enter selects the second provider\'s duplicate row', () => {
+    const onPairChange = vi.fn()
+    renderCatalog(
+      [
+        { providerId: 'grok-local', providerName: 'grok-local', models: [catalogModel({ id: 'gpt-6.1-sol' })] },
+        { providerId: 'openai-chatgpt', providerName: 'ChatGPT', models: [catalogModel({ id: 'gpt-6.1-sol' })] },
+      ],
+      { onPairChange },
+    )
+    fireEvent.keyDown(cmdkRoot(), { key: 'End' })
+    fireEvent.keyDown(cmdkRoot(), { key: 'Enter' })
+    expect(onPairChange).toHaveBeenCalledTimes(1)
+    expect(onPairChange).toHaveBeenCalledWith({ model: 'gpt-6.1-sol', provider: 'openai-chatgpt' })
+  })
+
+  it('CATALOG: clicking the second duplicate emits THAT provider (exact pair)', () => {
+    const onPairChange = vi.fn()
+    renderCatalog(
+      [
+        { providerId: 'grok-local', providerName: 'grok-local', models: [catalogModel({ id: 'gpt-6.1-sol' })] },
+        { providerId: 'openai-chatgpt', providerName: 'ChatGPT', models: [catalogModel({ id: 'gpt-6.1-sol' })] },
+      ],
+      { onPairChange },
+    )
+    const rows = screen
+      .getAllByRole('option')
+      .filter((el) => (el.textContent ?? '').includes('gpt-6.1-sol'))
+    expect(rows).toHaveLength(2)
+    fireEvent.click(rows[1])
+    expect(onPairChange).toHaveBeenCalledWith({ model: 'gpt-6.1-sol', provider: 'openai-chatgpt' })
+  })
+
+  it('an ID-less group emits an UNRESOLVED provider (""), never another group\'s id', () => {
+    const onPairChange = vi.fn()
+    const mixedGroups: ModelGroup[] = [
+      { providerName: 'grok-local', providerId: 'grok-local', models: ['gpt-6.1-sol'] },
+      { providerName: 'Legacy Provider', models: ['gpt-6.1-sol'] },
+    ]
+    render(
+      <ModelSelector
+        models={['gpt-6.1-sol']}
+        value=""
+        onChange={vi.fn()}
+        onPairChange={onPairChange}
+        providerGroups={mixedGroups}
+      />,
+    )
+    const rows = screen
+      .getAllByRole('option')
+      .filter((el) => (el.textContent ?? '').includes('gpt-6.1-sol'))
+    expect(rows).toHaveLength(2)
+    fireEvent.click(rows[1]) // the ID-less row
+    // Pre-fix the slug scan resolved the FIRST group serving the slug — a
+    // cross-row guess. The row has no provider context: '' (unresolved).
+    expect(onPairChange).toHaveBeenCalledWith({ model: 'gpt-6.1-sol', provider: '' })
+  })
+})
+
+describe('ModelSelector — H6 R2 visible check mark (not only the data-chosen marker)', () => {
+  it('the VISIBLE check is on the picked provider\'s row only (opacity 1 vs 0)', () => {
+    render(
+      <ModelSelector
+        models={DUAL_PROVIDER_GROUPS.flatMap((g) => g.models)}
+        value="gpt-6.1-sol"
+        valueProvider="openai-chatgpt"
+        onChange={vi.fn()}
+        providerGroups={DUAL_PROVIDER_GROUPS}
+      />,
+    )
+    const rows = groupedRowsFor('gpt-6.1-sol')
+    expect(rows).toHaveLength(2)
+    expect(rowCheckOpacity(rows[0])).toBe('0')
+    expect(rowCheckOpacity(rows[1])).toBe('1')
+  })
+
+  it('the visible check MOVES when the pick moves to the other provider', () => {
+    render(
+      <ModelSelector
+        models={DUAL_PROVIDER_GROUPS.flatMap((g) => g.models)}
+        value="gpt-6.1-sol"
+        valueProvider="grok-local"
+        onChange={vi.fn()}
+        providerGroups={DUAL_PROVIDER_GROUPS}
+      />,
+    )
+    const rows = groupedRowsFor('gpt-6.1-sol')
+    expect(rows).toHaveLength(2)
+    expect(rowCheckOpacity(rows[0])).toBe('1')
+    expect(rowCheckOpacity(rows[1])).toBe('0')
+  })
+})

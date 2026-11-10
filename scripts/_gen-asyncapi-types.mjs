@@ -660,11 +660,28 @@ console.log(`Generated ${wsSchemasOutPath} (${wsSchemasOutput.split("\n").length
 // x-user-message-attributions extensions on components.schemas.LLMError.
 //
 // Every check below THROWS. A code with no message, a catalogue entry for a
-// code that is not in the enum, an empty message, or an attribution outside the
-// declared vocabulary aborts codegen instead of shipping a catalogue with a
-// hole in it. The Go emitter (scripts/gen-asyncapi-go/usermessages.go) applies
-// the identical validation to the identical block, so the two halves of the
+// code that is not in the enum, an empty message, an attribution outside the
+// declared vocabulary, or a provider_message template using a slot outside the
+// closed vocabulary aborts codegen instead of shipping a catalogue with a hole
+// in it. The Go emitter (scripts/gen-asyncapi-go/usermessages.go) applies the
+// identical validation to the identical block, so the two halves of the
 // catalogue are exhaustive and consistent by construction rather than by review.
+
+/**
+ * The CLOSED slot vocabulary for provider_message templates (provider-messages
+ * spec §6). Mirrored in scripts/gen-asyncapi-go/usermessages.go — keep the two
+ * sets identical. Codegen aborts on any other slot, so a template can never
+ * silently render a raw "{oops}".
+ */
+const PROVIDER_MESSAGE_SLOTS = new Set([
+  "{provider}",
+  "{model}",
+  "{attempt}",
+  "{max}",
+  "{countdown}",
+  "{answered_model}",
+  "{unavailable_model}",
+])
 
 /**
  * Read and validate the LLMError copy catalogue out of the parsed contract.
@@ -718,7 +735,28 @@ function extractUserMessageCatalogue(allSchemas, schemaName) {
         `${schemaName}.x-user-messages.${code}: attribution "${entry.attribution}" is not in x-user-message-attributions (${attributions.join(", ")})`,
       );
     }
-    entries.push({ code, message: entry.message, attribution: entry.attribution });
+    let providerMessage = "";
+    if (entry.provider_message !== undefined && entry.provider_message !== null) {
+      if (typeof entry.provider_message !== "string" || entry.provider_message.trim() === "") {
+        throw new Error(`${schemaName}.x-user-messages.${code}: provider_message must be a non-empty string when present`);
+      }
+      providerMessage = entry.provider_message;
+      const opens = (providerMessage.match(/\{/g) ?? []).length;
+      const closes = (providerMessage.match(/\}/g) ?? []).length;
+      if (opens !== closes) {
+        throw new Error(
+          `${schemaName}.x-user-messages.${code}: provider_message has unbalanced braces (${opens} open, ${closes} close)`,
+        );
+      }
+      for (const slot of providerMessage.match(/\{[^}]*\}/g) ?? []) {
+        if (!PROVIDER_MESSAGE_SLOTS.has(slot)) {
+          throw new Error(
+            `${schemaName}.x-user-messages.${code}: provider_message uses slot "${slot}" — not in the closed slot vocabulary (${[...PROVIDER_MESSAGE_SLOTS].join(" ")})`,
+          );
+        }
+      }
+    }
+    entries.push({ code, message: entry.message, attribution: entry.attribution, providerMessage });
     seen.add(code);
   }
 
@@ -776,6 +814,17 @@ const messageLines = [
   "/** The fault attribution for each code. Exhaustive by construction. */",
   "export const llmErrorUserAttributions: Record<LLMErrorCode, LLMErrorAttribution> = {",
   ...catalogue.entries.map((e) => `  ${e.code}: ${JSON.stringify(e.attribution)},`),
+  "}",
+  "",
+  "/**",
+  " * The templated variant of the sentence for codes that carry one (the optional",
+  " * `provider_message` sibling in x-user-messages, provider-messages spec §6).",
+  " * A code absent from this map has no template — the catalogue message is the",
+  " * only copy. Slots come from the closed vocabulary enforced by codegen. The",
+  " * Go half is LLMErrorProviderMessages in llm_error_messages.gen.go.",
+  " */",
+  "export const llmErrorProviderMessages: Partial<Record<LLMErrorCode, string>> = {",
+  ...catalogue.entries.filter((e) => e.providerMessage !== "").map((e) => `  ${e.code}: ${JSON.stringify(e.providerMessage)},`),
   "}",
   "",
 ];

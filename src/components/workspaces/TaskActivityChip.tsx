@@ -102,9 +102,10 @@ interface TaskActivityChipProps {
    * a status badge that already says the task is in progress.
    */
   variant?: 'card' | 'panel'
+  plain?: boolean
 }
 
-export function TaskActivityChip({ task, variant = 'card' }: TaskActivityChipProps) {
+export function TaskActivityChip({ task, variant = 'card', plain = false }: TaskActivityChipProps) {
   const queue = useToolApprovalStore((s) => s.queue)
   const waiting = taskAwaitingApproval(task, queue)
   const visible = !waiting && task.status === 'in_progress' && !!task.last_activity_at
@@ -114,7 +115,7 @@ export function TaskActivityChip({ task, variant = 'card' }: TaskActivityChipPro
     const waitingChip = (
       <span
         data-testid="task-awaiting-approval"
-        className="rounded-full px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-medium bg-[var(--color-warning)]/10 text-[color:var(--color-warning)]"
+        className={cn('text-[length:var(--type-caption-size)] text-[color:var(--color-warning)]', !plain && 'rounded-full px-[var(--space-2)] py-[var(--space-0-5)] font-medium bg-[var(--color-warning)]/10')}
       >
         {variant === 'card'
           ? `In progress · waiting for your approval to use ${waiting.toolName}`
@@ -133,10 +134,10 @@ export function TaskActivityChip({ task, variant = 'card' }: TaskActivityChipPro
       data-testid="task-last-activity"
       data-stale={activity.stale ? 'true' : 'false'}
       className={cn(
-        'rounded-full px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-medium',
-        activity.stale
-          ? 'bg-[var(--color-warning)]/10 text-[color:var(--color-warning)]'
-          : 'bg-[var(--color-surface-2)] text-[var(--color-muted)]',
+        'text-[length:var(--type-caption-size)]',
+        !plain && 'rounded-full px-[var(--space-2)] py-[var(--space-0-5)] font-medium',
+        activity.stale ? 'text-[color:var(--color-warning)]' : 'text-[var(--color-muted)]',
+        !plain && (activity.stale ? 'bg-[var(--color-warning)]/10' : 'bg-[var(--color-surface-2)]'),
       )}
     >
       {variant === 'card' ? `In progress · last activity ${activity.age}` : `Last activity ${activity.age}`}

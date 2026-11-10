@@ -90,7 +90,6 @@ func providerDeleteBaseConfig(
 				DefaultModel:      pair,
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
-				DefaultAgentID:    "mia",
 			},
 			List: agents,
 		},

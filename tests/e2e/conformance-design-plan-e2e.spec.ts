@@ -21,7 +21,7 @@
 // another test wrote, in this file or in any sibling — which is precisely what
 // makes splitting the suite across shards sound.
 
-import { expect } from '@playwright/test'
+import { expect, type Page } from '@playwright/test'
 import { test } from './fixtures/plan-cleanup'
 import {
   apiFetch,
@@ -75,15 +75,10 @@ import { blockedMarker } from './fixtures/stub-external-cli'
 // window is not how this system actually behaves, and why sampling the
 // causal condition is the honest way to test the guarantee).
 
-test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → deterministic unmet → F2 hold proven → no wedge', async ({
-  page,
-  createdPlanIds,
-}) => {
-  requireApiKey()
-
-  test.setTimeout(600_000)
-  await startFreshChatWithJim(page)
-
+async function setupT2PlanAndApprove(
+  page: Page,
+  createdPlanIds: string[],
+) {
   // Setup: per-test Main agent (chat-target plan owner) in its own workspace
   // core_team. A fresh agent per test avoids the multi-workspace
   // find_for_agent ambiguity that cancels member turns. `bash: allow` is
@@ -188,13 +183,14 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → deter
     approveRes.ok,
     `t2: POST /plans/{id}/approve failed ${approveRes.status}: ${approveRes.raw}`,
   ).toBe(true)
+  return { planId, workspaceId };
+}
 
-  // IMPORTANT: the plan's hold ("awaiting_supervision") is a SUB-PHASE
-  // of State=running, NOT a top-level state. The 5-value state machine is
-  // draft/approved/running/done/failed; an unmet plan stays State=running
-  // with plan_phase="awaiting_supervision" (Plan.yaml:80, plan.go:190).
-  const HOLD_PHASE = 'awaiting_supervision'
-
+async function runT2HoldStep(
+  page: Page,
+  planId: string,
+  HOLD_PHASE: string,
+): Promise<void> {
   // --- Step 1: MANDATORY — the plan MUST reach the hold ------------------
   // Not conditional. With an immutable, deterministically-unmet DoD this is
   // guaranteed once both members are terminal (empirically verified) — if it
@@ -216,7 +212,14 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → deter
       '("exit 1", expected 0) can never be satisfied, so a round-1 unmet verdict (and the F2 hold it triggers) ' +
       'is deterministic. Not observing it means either the DoD check never ran, or the F2 hold path is broken.',
   ).toBe(true)
+}
 
+async function runT2F2SamplingStep(
+  page: Page,
+  planId: string,
+  workspaceId: string,
+  HOLD_PHASE: string,
+): Promise<void> {
   // --- Step 2: the F2 round-burn proof itself -----------------------------
   // Sample (plan_phase, judge_rounds, supervision.correction_rounds, member
   // terminal signature) at fine granularity while the plan sits at the hold.
@@ -334,7 +337,13 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → deter
         `(${samples[i - 1].judgeRounds} → ${samples[i].judgeRounds}). Trace: ${JSON.stringify(samples)}`,
     ).toBeGreaterThanOrEqual(samples[i - 1].judgeRounds)
   }
+}
 
+async function runT2NoWedgeStep(
+  page: Page,
+  planId: string,
+  HOLD_PHASE: string,
+): Promise<void> {
   // --- Step 3: no wedge — the plan keeps moving after the sampling window -
   // Whatever the sampling window observed, the plan must eventually reach a
   // documented terminus: done (full correction-append→re-judge→done cycle
@@ -382,71 +391,12 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → deter
       `observably still progressing through an active round — observed state="${planState}" phase="${planPhase}". ` +
       'A wedge here means the correction-append → re-judge cycle stalled after the sampling window.',
   ).toBe(true)
-})
+}
 
-// ── Conformance_t3b_TargetedRetryOnlyE2E ─────────────────────────────────────
-//
-// BDD (§9.1 t3, same underlying scenario as Conformance_t3_PlanningReplanningE2E
-// above — see that test's header comment for the full "REAL PATH" mechanism
-// writeup: how a correction is issued exclusively by PlanSupervisor's
-// `plan_correct` tool on an automatic wake, and how it is observed via the
-// adjudication session transcript's committed `plan_correct` tool_calls).
-//
-// Traces to:
-//   - §9.1 t3 "planning & re-planning walks the drawn path" (line ~1181)
-//   - TDD Plan row 44 `Conformance_t3_PlanningReplanningE2E` — this test
-//     proves the TARGETED-RETRY half of that same row. G-11/FR-143 requires
-//     append + SUPERSEDE + TARGETED-RETRY to each WORK and each record a
-//     revision entry — it does not require one scenario to exercise all
-//     three; splitting the proof across two deterministic scenarios still
-//     satisfies it, and satisfies it more honestly than one scenario whose
-//     two halves are not actually independent (see below).
-//
-// WHY THIS IS A SEPARATE TEST, NOT AN ASSERTION ADDED TO t3: t3's plan
-// engineers TWO problems at once (m2 done-but-wrong, m3 failed-transient) so
-// it could assert both SUPERSEDE and TARGETED-RETRY were committed in one
-// run. They are not independent outcomes: `AppendCorrection`
-// (pkg/agent/plan_engine.go:4295) auto-resets EVERY live-round failed member
-// (excludes only frozen/`done` members — `autoResetLiveRoundFailedMembers`,
-// :4902) for BOTH append and supersede; targeted_retry alone resets only its
-// one named member, via its own path inside `buildCorrectionApplyFunc`
-// (:4859). The instant a real PlanSupervisor commits a SUPERSEDE against a
-// done-but-wrong member, every OTHER still-failed member in that plan —
-// however it got there — is swept back to `next` for free. A real run's own
-// recorded reasoning said exactly this about m3: "m3-retry-target (failed)
-// was a transient/flaky failure that was never retried — it will be
-// auto-reset by the supersede and get another attempt under the corrected
-// plan." A well-reasoned supervisor has no motivation to ALSO spend a
-// targeted_retry on a member the engine already reset, so a plan that offers
-// BOTH a supersede target AND a failed-transient member cannot reliably
-// prove targeted_retry fires at all — it proves, at most, that the plan
-// eventually clears.
-//
-// This test removes that confound: the plan below has exactly ONE problem
-// (a member that fails the same way on every run, framed as transient) and structurally
-// NO candidate for supersede — supersede requires an existing `done` member
-// whose outcome is in question
-// (`resolvePlanMember(..., task.StatusDone, ...)`, pkg/tools/plan_correct.go),
-// and the DoD here explicitly states no such member exists and no new work
-// is needed, so append has no motivated use either. TARGETED-RETRY — "reset
-// one failed member," per the tool's own description to the LLM
-// (pkg/tools/plan_correct.go:141/165) — is the one verb whose stated purpose
-// matches the diagnosis, and the only one discoverable here without
-// inventing unmotivated new work. The filler member (m1) reaches `done` on
-// its own trivial check but is never named as a problem by the DoD, so its
-// existence gives the plan no supersede target either.
-test("Conformance_t3b_TargetedRetryOnlyE2E: re-plan applies TARGETED-RETRY as the sole correct verb (no done-but-wrong member exists to trigger supersede's auto-reset masking)", async ({
-  page,
-  createdPlanIds,
-}) => {
-  requireApiKey()
-
-  // 540s observation window + up to 660s for a judge round still in
-  // flight when it closes (see the no-wedge check at the end) + setup and
-  // transcript reads.
-  test.setTimeout(1_320_000)
-  await startFreshChatWithJim(page)
-
+async function setupT3bPlanAndApprove(
+  page: Page,
+  createdPlanIds: string[],
+) {
   // Setup: per-test Main agent (chat-target owner + member assignee) in its
   // own workspace core_team — same rationale as t3's createMainAgent comment.
   const ownerId = await createMainAgent(page, `conformance-t3b-owner-${Date.now()}`, { bash: 'allow' })
@@ -547,9 +497,15 @@ test("Conformance_t3b_TargetedRetryOnlyE2E: re-plan applies TARGETED-RETRY as th
   // Approve + run.
   const approveRes = await apiFetch<{ status: string }>(page, 'POST', `/api/v1/plans/${planId}/approve`, {})
   expect(approveRes.ok, `t3b: POST /plans/{id}/approve failed ${approveRes.status}: ${approveRes.raw}`).toBe(true)
+  return { planId, memberIds };
+}
 
-  const HOLD_PHASE = 'awaiting_supervision'
-
+async function observeT3bAndAssertNoWedge(
+  page: Page,
+  planId: string,
+  memberIds: Record<string, string>,
+  HOLD_PHASE: string,
+): Promise<void> {
   // --- Observe the plan from approval, over its full round budget ---------
   // ONE window, starting at approval, covers what used to be two steps with
   // two deadlines:
@@ -727,4 +683,96 @@ test("Conformance_t3b_TargetedRetryOnlyE2E: re-plan applies TARGETED-RETRY as th
       `longer than the product allows — verdict ${JSON.stringify(verdict)}; last poll ` +
       `state="${lastSample?.state}" phase="${lastSample?.phase}" judge_rounds=${lastSample?.judgeRounds}.`,
   ).toBe(true)
+}
+
+test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → deterministic unmet → F2 hold proven → no wedge', async ({
+  page,
+  createdPlanIds,
+}) => {
+  requireApiKey()
+
+  test.setTimeout(600_000)
+  await startFreshChatWithJim(page)
+
+  const { planId, workspaceId } = await setupT2PlanAndApprove(page, createdPlanIds)
+
+  // IMPORTANT: the plan's hold ("awaiting_supervision") is a SUB-PHASE
+  // of State=running, NOT a top-level state. The 5-value state machine is
+  // draft/approved/running/done/failed; an unmet plan stays State=running
+  // with plan_phase="awaiting_supervision" (Plan.yaml:80, plan.go:190).
+  const HOLD_PHASE = 'awaiting_supervision'
+
+  await runT2HoldStep(page, planId, HOLD_PHASE)
+  await runT2F2SamplingStep(page, planId, workspaceId, HOLD_PHASE)
+  await runT2NoWedgeStep(page, planId, HOLD_PHASE)
+})
+
+// ── Conformance_t3b_TargetedRetryOnlyE2E ─────────────────────────────────────
+//
+// BDD (§9.1 t3, same underlying scenario as Conformance_t3_PlanningReplanningE2E
+// above — see that test's header comment for the full "REAL PATH" mechanism
+// writeup: how a correction is issued exclusively by PlanSupervisor's
+// `plan_correct` tool on an automatic wake, and how it is observed via the
+// adjudication session transcript's committed `plan_correct` tool_calls).
+//
+// Traces to:
+//   - §9.1 t3 "planning & re-planning walks the drawn path" (line ~1181)
+//   - TDD Plan row 44 `Conformance_t3_PlanningReplanningE2E` — this test
+//     proves the TARGETED-RETRY half of that same row. G-11/FR-143 requires
+//     append + SUPERSEDE + TARGETED-RETRY to each WORK and each record a
+//     revision entry — it does not require one scenario to exercise all
+//     three; splitting the proof across two deterministic scenarios still
+//     satisfies it, and satisfies it more honestly than one scenario whose
+//     two halves are not actually independent (see below).
+//
+// WHY THIS IS A SEPARATE TEST, NOT AN ASSERTION ADDED TO t3: t3's plan
+// engineers TWO problems at once (m2 done-but-wrong, m3 failed-transient) so
+// it could assert both SUPERSEDE and TARGETED-RETRY were committed in one
+// run. They are not independent outcomes: `AppendCorrection`
+// (pkg/agent/plan_engine.go:4295) auto-resets EVERY live-round failed member
+// (excludes only frozen/`done` members — `autoResetLiveRoundFailedMembers`,
+// :4902) for BOTH append and supersede; targeted_retry alone resets only its
+// one named member, via its own path inside `buildCorrectionApplyFunc`
+// (:4859). The instant a real PlanSupervisor commits a SUPERSEDE against a
+// done-but-wrong member, every OTHER still-failed member in that plan —
+// however it got there — is swept back to `next` for free. A real run's own
+// recorded reasoning said exactly this about m3: "m3-retry-target (failed)
+// was a transient/flaky failure that was never retried — it will be
+// auto-reset by the supersede and get another attempt under the corrected
+// plan." A well-reasoned supervisor has no motivation to ALSO spend a
+// targeted_retry on a member the engine already reset, so a plan that offers
+// BOTH a supersede target AND a failed-transient member cannot reliably
+// prove targeted_retry fires at all — it proves, at most, that the plan
+// eventually clears.
+//
+// This test removes that confound: the plan below has exactly ONE problem
+// (a member that fails the same way on every run, framed as transient) and structurally
+// NO candidate for supersede — supersede requires an existing `done` member
+// whose outcome is in question
+// (`resolvePlanMember(..., task.StatusDone, ...)`, pkg/tools/plan_correct.go),
+// and the DoD here explicitly states no such member exists and no new work
+// is needed, so append has no motivated use either. TARGETED-RETRY — "reset
+// one failed member," per the tool's own description to the LLM
+// (pkg/tools/plan_correct.go:141/165) — is the one verb whose stated purpose
+// matches the diagnosis, and the only one discoverable here without
+// inventing unmotivated new work. The filler member (m1) reaches `done` on
+// its own trivial check but is never named as a problem by the DoD, so its
+// existence gives the plan no supersede target either.
+test("Conformance_t3b_TargetedRetryOnlyE2E: re-plan applies TARGETED-RETRY as the sole correct verb (no done-but-wrong member exists to trigger supersede's auto-reset masking)", async ({
+  page,
+  createdPlanIds,
+}) => {
+  requireApiKey()
+
+  // 540s observation window + up to 660s for a judge round still in
+  // flight when it closes (see the no-wedge check at the end) + setup and
+  // transcript reads.
+  test.setTimeout(1_320_000)
+  await startFreshChatWithJim(page)
+
+  const { planId, memberIds } = await setupT3bPlanAndApprove(page, createdPlanIds)
+
+  const HOLD_PHASE = 'awaiting_supervision'
+
+  await observeT3bAndAssertNoWedge(page, planId, memberIds, HOLD_PHASE)
 })

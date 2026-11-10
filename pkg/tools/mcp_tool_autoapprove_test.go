@@ -25,7 +25,7 @@ func TestMCPTool_AutoApproveVerdict_T9(t *testing.T) {
 		name        string
 		annotations *mcp.ToolAnnotations
 		wantRun     bool
-		wantClass   string
+		wantClass   AutoVerdictClass
 	}{
 		{
 			name:        "readOnlyHint true runs",

@@ -1,0 +1,35 @@
+/* App-only status adapter: opacity belongs to text, never the icon's ancestors.
+   Primary periods/easing are the very same registered values AgentIcon uses. */
+.agent-status-text {
+  opacity: 1;
+}
+
+[data-agent-status-motion='thinking'] .agent-status-text {
+  animation: agent-status-pulse var(--motion-agent-icon-thinking-duration) var(--motion-easing-in-out) infinite;
+}
+
+[data-agent-status-motion='working'] .agent-status-text {
+  animation: agent-status-pulse var(--motion-agent-icon-working-duration) var(--motion-easing-in-out) infinite;
+}
+
+[data-agent-status-motion='waiting'] .agent-status-text {
+  animation: agent-status-wait var(--motion-agent-icon-waiting-duration) var(--motion-easing-in-out) infinite;
+}
+
+@keyframes agent-status-pulse {
+  0%, 100% { opacity: var(--motion-agent-status-text-minimum-opacity); }
+  50% { opacity: 1; }
+}
+
+/* Match the primary Waiting ink's late pop, not the separate glow flash. */
+@keyframes agent-status-wait {
+  0%, 66%, 84%, 100% { opacity: var(--motion-agent-status-text-minimum-opacity); }
+  74% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce), (forced-colors: active) {
+  [data-agent-status-motion] .agent-status-text {
+    animation: none;
+    opacity: 1;
+  }
+}

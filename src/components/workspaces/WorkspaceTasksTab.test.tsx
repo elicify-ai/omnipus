@@ -173,14 +173,16 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     needs_model: false,
     status: 'active',
     soul: '',
-    color: '#3B82F6',
-    icon: 'MagnifyingGlass',
-    timeout_seconds: 300,
+    color: '#6E8BA8',
     max_tool_iterations: 50,
+    max_tool_iterations_source: 'global',
+    max_tool_iterations_override_ignored: false,
     // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
     memory_enabled: true,
     ...overrides,
     revision: overrides.revision ?? '0'.repeat(64),
+    figure: overrides.figure ?? 'Omnipus',
+    role: overrides.role ?? 'general',
   }
 }
 
@@ -225,7 +227,7 @@ describe('WorkspaceTasksTab — view switcher', () => {
     expect(graph).toHaveAttribute('aria-checked', 'false')
   })
 
-  it('switching to List renders the ListView table and hides the Board-only Agent/Tag filters', async () => {
+  it('switching to List renders the ListView table and keeps the shared Agent/Tag filters', async () => {
     const user = userEvent.setup()
     vi.mocked(fetchTasks).mockResolvedValue([makeTask()])
     renderTab()
@@ -237,10 +239,9 @@ describe('WorkspaceTasksTab — view switcher', () => {
     expect(await screen.findByText('Write report')).toBeInTheDocument()
     // The List table's own column headers only render in list mode.
     expect(screen.getByText('Updated ↓')).toBeInTheDocument()
-    // The List owns per-column filtering, so the toolbar Agent/Tag filters are
-    // Board-only and must be gone here (mirror of the Graph gating below).
-    expect(screen.queryByTestId('tasks-agent-filter')).toBeNull()
-    expect(screen.queryByTestId('tasks-tag-filter')).toBeNull()
+    // T1: the shared toolbar remains visible in List, alongside its column filters.
+    expect(screen.getByTestId('tasks-agent-filter')).toBeVisible()
+    expect(screen.getByTestId('tasks-tag-filter')).toBeVisible()
   })
 
 })
@@ -465,7 +466,7 @@ describe('WorkspaceTasksTab — stale-filter reset', () => {
 // ── Graph view switch (W1 gating fix) ───────────────────────────────────────
 
 describe('WorkspaceTasksTab — Graph view switch', () => {
-  it('switching to Graph renders the Graph tab and hides the owner filter + tag bar', async () => {
+  it('switching to Graph renders the Graph tab and keeps the shared owner/tag filters', async () => {
     const user = userEvent.setup()
     vi.mocked(fetchTasks).mockResolvedValue([makeTask({ id: 't1', tags: ['urgent'] })])
 
@@ -482,9 +483,9 @@ describe('WorkspaceTasksTab — Graph view switch', () => {
     expect(graphButton).toHaveAttribute('aria-checked', 'true')
     expect(boardButton).toHaveAttribute('aria-checked', 'false')
 
-    // Board-only filter controls are gone in Graph view.
-    expect(screen.queryByTestId('tasks-agent-filter')).toBeNull()
-    expect(screen.queryByTestId('tasks-tag-filter')).toBeNull()
+    // T1/T8: Graph shares the same visible toolbar as Board/List.
+    expect(screen.getByTestId('tasks-agent-filter')).toBeVisible()
+    expect(screen.getByTestId('tasks-tag-filter')).toBeVisible()
   })
 })
 

@@ -75,6 +75,11 @@ func FixtureSessionStateFrame_Populated() SessionStateFrame {
 				ToolName:    "bash",
 				AgentId:     "jim",
 				ExpiresInMs: 30000,
+				// Bundle B3 (L1-AMENDMENTS-20261013 §1.3): the reload
+				// snapshot carries the full request.
+				ToolCallId: "tc-1",
+				TurnId:     "turn-1",
+				Args:       map[string]any{"command": "ls -la"},
 			},
 		},
 	}
@@ -105,9 +110,12 @@ func FixtureSessionStateFrame_Edge() SessionStateFrame {
 		UserId:    "user-unicode-🔑",
 		EmittedAt: "2026-05-17T00:00:01Z",
 		PendingApprovals: []SessionStatePendingApproval{
-			{ApprovalId: "ap-1", SessionId: "sess-1", ToolName: "tool.a", AgentId: "jim", ExpiresInMs: 1},
-			{ApprovalId: "ap-2", SessionId: "sess-2", ToolName: "tool.b", AgentId: "ava", ExpiresInMs: 2},
-			{ApprovalId: "ap-3", SessionId: "sess-3", ToolName: "tool.c", AgentId: "rex", ExpiresInMs: 3},
+			{ApprovalId: "ap-1", SessionId: "sess-1", ToolName: "tool.a", AgentId: "jim", ExpiresInMs: 1,
+				ToolCallId: "tc-1", TurnId: "turn-1", Args: map[string]any{}},
+			{ApprovalId: "ap-2", SessionId: "sess-2", ToolName: "tool.b", AgentId: "ava", ExpiresInMs: 2,
+				ToolCallId: "tc-2", TurnId: "turn-2", Args: map[string]any{"path": "notes.md"}},
+			{ApprovalId: "ap-3", SessionId: "sess-3", ToolName: "tool.c", AgentId: "rex", ExpiresInMs: 3,
+				ToolCallId: "tc-3", TurnId: "turn-3", Args: map[string]any{"nested": map[string]any{"n": 1}}},
 		},
 	}
 }
@@ -214,7 +222,6 @@ func FixtureDoneFrame_Populated() DoneFrame {
 	tokens := float64(1234)
 	cost := float64(0.00412)
 	durationMs := float64(3720)
-	tokensDropped := float64(2)
 	framesEmitted := float64(47)
 	orphanCount := float64(0)
 	dupCount := float64(0)
@@ -233,7 +240,6 @@ func FixtureDoneFrame_Populated() DoneFrame {
 			Tokens:                   &tokens,
 			Cost:                     &cost,
 			DurationMs:               &durationMs,
-			TokensDropped:            &tokensDropped,
 			FramesEmitted:            &framesEmitted,
 			OrphanCount:              &orphanCount,
 			DuplicateToolCallIdCount: &dupCount,
@@ -507,23 +513,6 @@ func FixtureRateLimitFrame_ZeroValue() RateLimitFrame {
 	return RateLimitFrame{}
 }
 
-// AgentSwitchedFrame
-
-func FixtureAgentSwitchedFrame_Populated() AgentSwitchedFrame {
-	agentId := "ava"
-	msg := "Switched to Ava for research task"
-	return AgentSwitchedFrame{
-		Type:      "agent_switched",
-		SessionId: "sess-1",
-		AgentId:   &agentId,
-		Message:   &msg,
-	}
-}
-
-func FixtureAgentSwitchedFrame_ZeroValue() AgentSwitchedFrame {
-	return AgentSwitchedFrame{}
-}
-
 // TaskStatusChangedFrame
 
 func FixtureTaskStatusChangedFrame_Populated() TaskStatusChangedFrame {
@@ -586,21 +575,6 @@ func FixtureReplayWarningFrame_ZeroValue() ReplayWarningFrame {
 	return ReplayWarningFrame{}
 }
 
-// SessionCloseAckFrame
-
-func FixtureSessionCloseAckFrame_Populated() SessionCloseAckFrame {
-	id := "close-ack-1"
-	return SessionCloseAckFrame{
-		Type:      "session_close_ack",
-		SessionId: "sess-1",
-		Id:        &id,
-	}
-}
-
-func FixtureSessionCloseAckFrame_ZeroValue() SessionCloseAckFrame {
-	return SessionCloseAckFrame{}
-}
-
 // DevicePairingRequestFrame
 
 func FixtureDevicePairingRequestFrame_Populated() DevicePairingRequestFrame {
@@ -647,40 +621,22 @@ func FixtureOnboardingCompleteResponse_Edge() OnboardingCompleteResponse {
 
 func FixtureSession_Populated() Session {
 	agentId := "jim"
-	activeAgentId := "jim"
 	model := "claude-sonnet-4-6"
 	sessionType := SessionType("chat")
 	partitions := []string{"2026-05-16.jsonl", "2026-05-17.jsonl"}
 	return Session{
-		Id:            "550e8400-e29b-41d4-a716-446655440000",
-		AgentId:       "jim",
-		ActiveAgentId: &activeAgentId,
-		AgentIds:      &[]string{agentId},
-		Title:         "My test session",
-		Status:        "active",
-		CreatedAt:     time.Date(2026, 5, 16, 10, 0, 0, 0, time.UTC),
-		UpdatedAt:     time.Date(2026, 5, 17, 10, 0, 0, 0, time.UTC),
-		Channel:       "webchat",
-		Partitions:    partitions,
-		Model:         &model,
-		Type:          &sessionType,
-		Stats: struct {
-			ByModel *map[string]struct {
-				CacheRead  *int `json:"cache_read,omitempty"`
-				CacheWrite *int `json:"cache_write,omitempty"`
-				In         *int `json:"in,omitempty"`
-				Out        *int `json:"out,omitempty"`
-				Total      int  `json:"total"`
-			} `json:"by_model,omitempty"`
-			Cost             float64 `json:"cost"`
-			MessageCount     int     `json:"message_count"`
-			TokensCacheRead  *int    `json:"tokens_cache_read,omitempty"`
-			TokensCacheWrite *int    `json:"tokens_cache_write,omitempty"`
-			TokensIn         int     `json:"tokens_in"`
-			TokensOut        int     `json:"tokens_out"`
-			TokensTotal      int     `json:"tokens_total"`
-			ToolCalls        int     `json:"tool_calls"`
-		}{
+		Id:         "550e8400-e29b-41d4-a716-446655440000",
+		AgentId:    "jim",
+		AgentIds:   &[]string{agentId},
+		Title:      "My test session",
+		Status:     "active",
+		CreatedAt:  time.Date(2026, 5, 16, 10, 0, 0, 0, time.UTC),
+		UpdatedAt:  time.Date(2026, 5, 17, 10, 0, 0, 0, time.UTC),
+		Channel:    "webchat",
+		Partitions: partitions,
+		Model:      &model,
+		Type:       sessionType,
+		Stats: SessionStats{
 			Cost:         0.0412,
 			MessageCount: 10,
 			TokensIn:     1200,
@@ -710,32 +666,15 @@ func FixtureSession_Edge() Session {
 		UpdatedAt:  time.Date(2026, 1, 1, 0, 0, 1, 0, time.UTC),
 		Channel:    "telegram",
 		Partitions: []string{},
-		Type:       &sessionType,
-		Stats: struct {
-			ByModel *map[string]struct {
-				CacheRead  *int `json:"cache_read,omitempty"`
-				CacheWrite *int `json:"cache_write,omitempty"`
-				In         *int `json:"in,omitempty"`
-				Out        *int `json:"out,omitempty"`
-				Total      int  `json:"total"`
-			} `json:"by_model,omitempty"`
-			Cost             float64 `json:"cost"`
-			MessageCount     int     `json:"message_count"`
-			TokensCacheRead  *int    `json:"tokens_cache_read,omitempty"`
-			TokensCacheWrite *int    `json:"tokens_cache_write,omitempty"`
-			TokensIn         int     `json:"tokens_in"`
-			TokensOut        int     `json:"tokens_out"`
-			TokensTotal      int     `json:"tokens_total"`
-			ToolCalls        int     `json:"tool_calls"`
-		}{},
+		Type:       sessionType,
+		Stats:      SessionStats{},
 	}
 }
 
 // Agent
 
 func FixtureAgent_Populated() Agent {
-	color := "#D4AF37"
-	icon := "Robot"
+	color := AgentColorHash6E8BA8
 	model := "claude-sonnet-4-6"
 	warning := strPtr("Config reload failed after update")
 	return Agent{
@@ -743,15 +682,18 @@ func FixtureAgent_Populated() Agent {
 		Id:                "jim",
 		Name:              "Jim",
 		Type:              AgentTypeCore,
+		Figure:            AgentFigureRobot,
+		Role:              AgentRoleGeneral,
 		Locked:            true,
 		Status:            AgentStatusIdle,
 		Soul:              "You are Jim, a helpful assistant.",
-		TimeoutSeconds:    300,
 		MaxToolIterations: 50,
-		Color:             &color,
-		Icon:              &icon,
-		Model:             &model,
-		Warning:           warning,
+		// #904: 50 is the agent's own value (≤ the global), so source=agent.
+		MaxToolIterationsSource:   MaxToolIterationsSourceAgent,
+		MaxToolIterationsOverride: intPtr(50),
+		Color:                     &color,
+		Model:                     &model,
+		Warning:                   warning,
 	}
 }
 
@@ -761,15 +703,20 @@ func FixtureAgent_ZeroValue() Agent {
 
 func FixtureAgent_Edge() Agent {
 	return Agent{
-		Revision:          repeatStr("a", 64),
-		Id:                "custom-" + repeatStr("y", 36),
-		Name:              "Unicode Agent 🤖",
-		Type:              AgentTypeMain,
-		Locked:            false,
-		Status:            AgentStatusDraft,
-		Soul:              "",
-		TimeoutSeconds:    0,
-		MaxToolIterations: 0,
+		Revision: repeatStr("a", 64),
+		Id:       "custom-" + repeatStr("y", 36),
+		Name:     "Unicode Agent 🤖",
+		Type:     AgentTypeMain,
+		Locked:   false,
+		Status:   AgentStatusDraft,
+		Soul:     "",
+		// #904: the effective limit's lower bound is 1 (Agent.yaml minimum).
+		MaxToolIterations:       1,
+		MaxToolIterationsSource: MaxToolIterationsSourceGlobal,
+		// figure and role are required on the wire. The edge case is the
+		// unicode name and the numeric bounds, not a missing identity.
+		Figure: AgentFigureOmnipus,
+		Role:   AgentRoleGeneral,
 	}
 }
 
@@ -964,7 +911,7 @@ func FixturePingFrame_Edge() PingFrame {
 
 // ── REST response type fixtures ─────────────────────────────────────────────
 //
-// Covers Task, SessionCloseFrame, and related types.
+// Covers Task and related types.
 
 // ── Task ─────────────────────────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/Task.yaml
@@ -1021,10 +968,12 @@ func FixtureTask_Populated() Task {
 		StartedAt:     &startedAt,
 		CompletedAt:   &completedAt,
 	}
+	activeForm := "Drafting the summary section"
 	t.Todos = &[]struct {
-		Status TaskTodosStatus `json:"status"`
-		Text   string          `json:"text"`
-	}{{Text: "Draft the summary section", Status: TaskTodosStatusPending}}
+		ActiveForm *string         `json:"active_form,omitempty"`
+		Status     TaskTodosStatus `json:"status"`
+		Text       string          `json:"text"`
+	}{{Text: "Draft the summary section", Status: TaskTodosStatusPending, ActiveForm: &activeForm}}
 	t.Trigger = &struct {
 		Config Task_Trigger_Config `json:"config"`
 		Type   TaskTriggerType     `json:"type"`
@@ -1096,20 +1045,20 @@ func FixtureTask_Edge() Task {
 		CreatedAt:   createdAt,
 		UpdatedAt:   createdAt,
 	}
-	cron := "0 9 * * MON"
+	rrule, dtstart, tz := "FREQ=WEEKLY;BYDAY=MO", int64(1784624400000), "Europe/Berlin"
 	t.Trigger = &struct {
 		Config Task_Trigger_Config `json:"config"`
 		Type   TaskTriggerType     `json:"type"`
 	}{Type: TaskTriggerType("recurring")}
-	t.Trigger.Config.CronExpr = &cron
+	t.Trigger.Config.Rrule, t.Trigger.Config.DtstartMs, t.Trigger.Config.Tz = &rrule, &dtstart, &tz
 	return t
 }
 
 // FixtureTaskTrigger_Populated — a recurring time trigger.
 func FixtureTaskTrigger_Populated() TaskTrigger {
-	cron := "0 9 * * MON"
+	rrule, dtstart, tz := "FREQ=WEEKLY;BYDAY=MO", int64(1784624400000), "Europe/Berlin"
 	tr := TaskTrigger{Type: TaskTriggerType("recurring")}
-	tr.Config.CronExpr = &cron
+	tr.Config.Rrule, tr.Config.DtstartMs, tr.Config.Tz = &rrule, &dtstart, &tz
 	return tr
 }
 
@@ -1596,30 +1545,6 @@ func FixtureStorageStats_NilWarningsAllowed() StorageStats {
 		MemoryEntryCount:   0,
 		OldestSessionDate:  &oldest,
 		Warnings:           nil, // optional — nil is valid
-	}
-}
-
-// ── SessionCloseFrame ─────────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/SessionCloseFrame.yaml
-
-func FixtureSessionCloseFrame_Populated() SessionCloseFrame {
-	return SessionCloseFrame{
-		Type:      "session_close",
-		SessionId: "sess-550e8400-e29b-41d4-a716-446655440003",
-	}
-}
-
-// FixtureSessionCloseFrame_ZeroValue — Go zero values.
-// Expected: FAIL because type="" (const: session_close), session_id="" (minLength: 1).
-func FixtureSessionCloseFrame_ZeroValue() SessionCloseFrame {
-	return SessionCloseFrame{}
-}
-
-// FixtureSessionCloseFrame_Edge — long session_id (valid).
-func FixtureSessionCloseFrame_Edge() SessionCloseFrame {
-	return SessionCloseFrame{
-		Type:      "session_close",
-		SessionId: "sess-" + repeatStr("c", 60),
 	}
 }
 
@@ -2444,16 +2369,15 @@ func FixturePerformanceSettings_ZeroValue() PerformanceSettings {
 // Field allocation per docs/internal/architecture/agent-types-field-matrix.md:
 //   - Main: full field set (voice included), no executor.
 //   - Subagent: like Main minus voice, no executor (server derives native).
-//   - Subagent3p: ONLY type/name/description/model/provider/color/icon/
-//     rate_limits/soul/executor/timeout_seconds — executor
+//   - Subagent3p: ONLY type/name/description/model/provider/color/
+//     rate_limits/soul/executor — executor
 //     is REQUIRED. All Main/Subagent-only fields (tools_cfg, skills,
 //     fallback_models, model_params, shell_policy, voice,
 //     max_tool_iterations) do not exist as properties on this
 //     variant at all.
 
 func FixtureAgentCreateRequestMain_Populated() AgentCreateRequestMain {
-	color := "#D4AF37"
-	icon := "Robot"
+	color := AgentColorHash6E8BA8
 	model := "claude-sonnet-4-6"
 	deny := AgentCreateRequestMainToolsCfgBuiltinPoliciesDeny
 	description := "Focused research assistant"
@@ -2468,7 +2392,6 @@ func FixtureAgentCreateRequestMain_Populated() AgentCreateRequestMain {
 		Description:       &description,
 		Model:             &model,
 		Color:             &color,
-		Icon:              &icon,
 		Soul:              "You are a focused research assistant.",
 		Skills:            &[]string{"web-research"},
 		MaxToolIterations: &maxToolIterations,
@@ -2518,8 +2441,7 @@ func FixtureAgentCreateRequestMain_InvalidType() AgentCreateRequestMain {
 }
 
 func FixtureAgentCreateRequestSubagent_Populated() AgentCreateRequestSubagent {
-	color := "#4287f5"
-	icon := "Robot"
+	color := AgentColorHash7A8C9E
 	model := "claude-sonnet-4-6"
 	description := "Native delegation-only research worker"
 	deny := AgentCreateRequestSubagentToolsCfgBuiltinPoliciesDeny
@@ -2531,7 +2453,6 @@ func FixtureAgentCreateRequestSubagent_Populated() AgentCreateRequestSubagent {
 		Description:       &description,
 		Model:             &model,
 		Color:             &color,
-		Icon:              &icon,
 		Soul:              "You are a focused research worker invoked only via delegation.",
 		Skills:            &[]string{"web-research"},
 		MaxToolIterations: &maxToolIterations,
@@ -2568,52 +2489,27 @@ func FixtureAgentCreateRequestSubagent_InvalidType() AgentCreateRequestSubagent 
 }
 
 // FixtureAgentCreateRequestSubagent3p_Populated — every field this variant
-// allows: type/name/description/model/provider/color/icon/rate_limits/soul/
-// executor/timeout_seconds. executor is REQUIRED.
+// allows: type/name/description/model/provider/color/executor.
+// executor is REQUIRED.
 func FixtureAgentCreateRequestSubagent3p_Populated() AgentCreateRequestSubagent3p {
-	color := "#f542a7"
-	icon := "Terminal"
+	color := AgentColorHashCDBA96
 	model := "claude-sonnet-4-6"
 	provider := "anthropic"
 	description := "External-CLI delegation-only worker"
-	enabled := true
-	maxCost := 5.0
-	maxCalls := 100
-	maxTools := 60
-	timeoutSeconds := 300
 	cli := ExternalCliToolClaudeCode
-	cliPath := "/usr/local/bin/claude"
-
 	return AgentCreateRequestSubagent3p{
-		Name:           "Claude Code Worker",
-		Type:           AgentCreateRequestSubagent3pTypeSubagent3p,
-		Description:    &description,
-		Model:          &model,
-		Provider:       &provider,
-		Color:          &color,
-		Icon:           &icon,
-		Soul:           "You are a focused worker running on the claude-code CLI.",
-		TimeoutSeconds: &timeoutSeconds,
-		RateLimits: &struct {
-			MaxCostPerDay         *float64 `json:"max_cost_per_day,omitempty"`
-			MaxLlmCallsPerHour    *int     `json:"max_llm_calls_per_hour,omitempty"`
-			MaxToolCallsPerMinute *int     `json:"max_tool_calls_per_minute,omitempty"`
-			UseGlobalDefaults     *bool    `json:"use_global_defaults,omitempty"`
-		}{
-			UseGlobalDefaults:     &enabled,
-			MaxCostPerDay:         &maxCost,
-			MaxLlmCallsPerHour:    &maxCalls,
-			MaxToolCallsPerMinute: &maxTools,
-		},
+		Name:        "Claude Code Worker",
+		Type:        AgentCreateRequestSubagent3pTypeSubagent3p,
+		Description: &description,
+		Model:       &model,
+		Provider:    &provider,
+		Color:       &color,
 		Executor: struct {
-			Cli          *ExternalCliTool                          `json:"cli,omitempty"`
-			CliArgs      *string                                   `json:"cli_args,omitempty"`
-			CliPath      *string                                   `json:"cli_path,omitempty"`
-			EnvOverrides *map[string]string                        `json:"env_overrides,omitempty"`
-			Kind         *AgentCreateRequestSubagent3pExecutorKind `json:"kind,omitempty"`
+			Cli          ExternalCliTool    `json:"cli"`
+			CliArgs      *string            `json:"cli_args,omitempty"`
+			EnvOverrides *map[string]string `json:"env_overrides,omitempty"`
 		}{
-			Cli:     &cli,
-			CliPath: &cliPath,
+			Cli: cli,
 		},
 	}
 }
@@ -2623,20 +2519,15 @@ func FixtureAgentCreateRequestSubagent3p_Populated() AgentCreateRequestSubagent3
 // reject it.
 func FixtureAgentCreateRequestSubagent3p_InvalidType() AgentCreateRequestSubagent3p {
 	cli := ExternalCliToolCodex
-	cliPath := "/usr/local/bin/codex"
 	return AgentCreateRequestSubagent3p{
 		Name: "Bad Type",
 		Type: AgentCreateRequestSubagent3pType("not-a-valid-type"),
-		Soul: "Valid soul content.",
 		Executor: struct {
-			Cli          *ExternalCliTool                          `json:"cli,omitempty"`
-			CliArgs      *string                                   `json:"cli_args,omitempty"`
-			CliPath      *string                                   `json:"cli_path,omitempty"`
-			EnvOverrides *map[string]string                        `json:"env_overrides,omitempty"`
-			Kind         *AgentCreateRequestSubagent3pExecutorKind `json:"kind,omitempty"`
+			Cli          ExternalCliTool    `json:"cli"`
+			CliArgs      *string            `json:"cli_args,omitempty"`
+			EnvOverrides *map[string]string `json:"env_overrides,omitempty"`
 		}{
-			Cli:     &cli,
-			CliPath: &cliPath,
+			Cli: cli,
 		},
 	}
 }
@@ -2661,8 +2552,7 @@ func FixtureAgentCreateRequestSubagent3p_ForbiddenFieldJSON() []byte {
 // Traces to: contracts/components/schemas/AgentUpdateRequest.yaml
 
 func FixtureAgentUpdateRequest_Populated() AgentUpdateRequest {
-	color := "#D4AF37"
-	icon := "Robot"
+	color := AgentColorHash6E8BA8
 	model := "gpt-4o"
 	name := "Renamed Agent"
 	description := "Updated description"
@@ -2672,15 +2562,12 @@ func FixtureAgentUpdateRequest_Populated() AgentUpdateRequest {
 	soul := "You are a helpful assistant."
 	voice := "alloy"
 
-	vDefault := true
 	return AgentUpdateRequest{
 		Revision:    repeatStr("a", 64),
 		Name:        &name,
 		Description: &description,
 		Model:       &model,
 		Color:       &color,
-		Icon:        &icon,
-		Default:     &vDefault,
 		Soul:        &soul,
 		Voice:       &voice,
 		ModelParams: &struct {
@@ -2718,9 +2605,11 @@ func FixtureAgentUpdateRequest_Revision() AgentUpdateRequest {
 // ── ChannelRouting ────────────────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/ChannelRouting.yaml
 
+// FixtureChannelRouting_Populated is the truthful read of an instance that
+// is not bound yet (omnipus-system-agent FR-128, K14): bound false, both ids
+// empty — never an invented destination.
 func FixtureChannelRouting_Populated() ChannelRouting {
-	id := "agent-a"
-	return ChannelRouting{DefaultAgentId: &id}
+	return ChannelRouting{Bound: false, WorkspaceId: "", DefaultAgentId: ""}
 }
 
 // FixtureChannelRouting_Bound returns a fully-bound ChannelRouting (F-12/FR-026):
@@ -2730,9 +2619,16 @@ func FixtureChannelRouting_Bound() ChannelRouting {
 	id := "agent-a"
 	wsID := "my-workspace"
 	return ChannelRouting{
-		WorkspaceId:    &wsID,
-		DefaultAgentId: &id,
+		WorkspaceId:    wsID,
+		DefaultAgentId: id,
+		Bound:          true,
 	}
+}
+
+// FixtureChannelRoutingUpdateRequest_Bound is the only accepted write shape:
+// a nonblank workspace and main agent (omnipus-system-agent FR-127, K14).
+func FixtureChannelRoutingUpdateRequest_Bound() ChannelRoutingUpdateRequest {
+	return ChannelRoutingUpdateRequest{WorkspaceId: "my-workspace", DefaultAgentId: "agent-a"}
 }
 
 // ── CliDetect ─────────────────────────────────────────────────────────────────
@@ -2749,6 +2645,7 @@ func FixtureCliDetect_Populated() CliDetect {
 	return CliDetect{
 		Claude: struct {
 			Installed bool                   `json:"installed"`
+			LinkPath  *string                `json:"link_path,omitempty"`
 			Path      *string                `json:"path,omitempty"`
 			Source    *CliDetectClaudeSource `json:"source,omitempty"`
 		}{
@@ -2758,6 +2655,7 @@ func FixtureCliDetect_Populated() CliDetect {
 		},
 		Codex: struct {
 			Installed bool                  `json:"installed"`
+			LinkPath  *string               `json:"link_path,omitempty"`
 			Path      *string               `json:"path,omitempty"`
 			Source    *CliDetectCodexSource `json:"source,omitempty"`
 		}{
@@ -2765,6 +2663,7 @@ func FixtureCliDetect_Populated() CliDetect {
 		},
 		Opencode: struct {
 			Installed bool                     `json:"installed"`
+			LinkPath  *string                  `json:"link_path,omitempty"`
 			Path      *string                  `json:"path,omitempty"`
 			Source    *CliDetectOpencodeSource `json:"source,omitempty"`
 		}{

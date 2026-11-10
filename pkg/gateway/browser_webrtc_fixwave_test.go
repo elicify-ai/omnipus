@@ -113,7 +113,7 @@ func TestHandleWebRTCOffer_StartFailure_ClearsStickySessionAndAuditsDistinctEven
 	})
 	t.Cleanup(handler.Wait)
 
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := primaryChatAgent(al.GetRegistry())
 	require.NotNil(t, defaultAgent)
 	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
 	require.Equal(t, agent.BrowserResolveOK, outcome)
@@ -220,7 +220,7 @@ func webrtcCapableGateMutate(t *testing.T) func(cfg *config.Config) {
 func TestWebrtcUnavailableReason_PoolAttachedManagerPassesTheGate(t *testing.T) {
 	handler, al, _ := newFixWaveHandlerWithAudit(t, webrtcCapableGateMutate(t))
 	t.Cleanup(handler.Wait)
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := primaryChatAgent(al.GetRegistry())
 	require.NotNil(t, defaultAgent)
 	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
 	require.Equal(t, agent.BrowserResolveOK, outcome)
@@ -318,7 +318,7 @@ func TestHandleWebRTCOffer_IngestTimeout_ClassifiedDistinctlyInAuditAndLogs(t *t
 	}
 	handler, al, auditDir, discovered := newMeasuredFixWaveHandlerWithDiscovery(t, webrtcCapableGateMutate(t))
 	t.Cleanup(handler.Wait)
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := primaryChatAgent(al.GetRegistry())
 	require.NotNil(t, defaultAgent)
 
 	relay := &fakeRelay{viewerOfferErr: fmt.Errorf(
@@ -352,7 +352,7 @@ func TestHandleWebRTCOffer_GenericViewerOfferFailure_StillClassifiedAsError(t *t
 	}
 	handler, al, auditDir, discovered := newMeasuredFixWaveHandlerWithDiscovery(t, webrtcCapableGateMutate(t))
 	t.Cleanup(handler.Wait)
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := primaryChatAgent(al.GetRegistry())
 	require.NotNil(t, defaultAgent)
 
 	relay := &fakeRelay{viewerOfferErr: errors.New("webrtc: viewer offer: set remote description failed")}
@@ -586,7 +586,7 @@ func TestWebrtcUnavailableReason_GateLadder(t *testing.T) {
 		cfg.Tools.Browser.ProfileDir = filepath.Join(t.TempDir(), "browser-profile")
 	})
 	t.Cleanup(handler.Wait)
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := primaryChatAgent(al.GetRegistry())
 	require.NotNil(t, defaultAgent)
 	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
 	require.Equal(t, agent.BrowserResolveOK, outcome)
@@ -628,7 +628,7 @@ func TestWebrtcUnavailableReason_AgreesAcrossBothCallers(t *testing.T) {
 		cfg.Tools.Browser.WebRTCEnabled = false // exercises the "disabled" branch identically in both paths
 	})
 	t.Cleanup(handler.Wait)
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := primaryChatAgent(al.GetRegistry())
 	require.NotNil(t, defaultAgent)
 	mgr, outcome := al.BrowserManagerForAgent(context.Background(), defaultAgent.ID, "")
 	require.Equal(t, agent.BrowserResolveOK, outcome)

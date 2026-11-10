@@ -23,7 +23,7 @@ properties:
     const: browser_webrtc_state
   session_id:
     type: string
-    maxLength: 128
+    maxLength: 255
     description: >-
       Echoes the session_id from the triggering browser_webrtc_offer /
       browser_attach, for client-side correlation only.

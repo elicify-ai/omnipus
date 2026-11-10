@@ -3,7 +3,6 @@
 // These tests exercise the dedicated headless scheduled-run entry point:
 //   - owner-pinned routing (runs the given owner, never the default);
 //   - missing owner is a hard error (no default-agent fallback);
-//   - the sessionActiveAgent handoff map is never read/written/deleted;
 //   - the per-owner session key namespacing (agent:<owner>:session:<id>);
 //   - ask-policy tool calls are auto-denied (never block for approval);
 //   - a canceled (deadline) run returns a context-derived error promptly;
@@ -92,19 +91,6 @@ func (a *autoApproveApprover) RequestApproval(context.Context, PolicyApprovalReq
 	return true, "auto-approved", false
 }
 
-// snapshotHandoffMap returns a stable copy of the sessionActiveAgent map so a
-// test can assert it is unchanged across a scheduled run.
-func snapshotHandoffMap(al *AgentLoop) map[string]string {
-	out := map[string]string{}
-	al.sessionActiveAgent.Range(func(k, v any) bool {
-		ks, _ := k.(string)
-		vs, _ := v.(string)
-		out[ks] = vs
-		return true
-	})
-	return out
-}
-
 // schedTestLoop builds an AgentLoop with a shared session store wired so
 // ResolveSessionStore finds scheduled sessions. The loop-level provider is a
 // plain mockProvider; per-agent providers are supplied by registerAgent.
@@ -141,13 +127,12 @@ func registerAgent(
 	al *AgentLoop,
 	home, id string,
 	provider providers.LLMProvider,
-	isDefault bool,
 ) *AgentInstance {
 	t.Helper()
 	seedTestWorkspaceMembershipForIDs(t, []string{id})
 	cfg := al.cfg
 	ag := NewAgentInstance(
-		&config.AgentConfig{ID: id, Name: id, Default: isDefault},
+		&config.AgentConfig{ID: id, Name: id},
 		&cfg.Agents.Defaults, cfg, provider,
 	)
 	ag.Home = filepath.Join(home, "agents", id)
@@ -155,15 +140,6 @@ func registerAgent(
 	al.registry.mu.Lock()
 	al.registry.agents[id] = ag
 	al.registry.mu.Unlock()
-	if isDefault {
-		// ADR-054 D6.4: AgentConfig.Default is no longer consulted by
-		// GetDefaultAgent — the per-entity flag set above (kept for realism)
-		// is now inert for resolution. SetDefaultAgentOverride is the
-		// settings-singleton equivalent every real caller goes through
-		// (config.Agents.Defaults.DefaultAgentID → AgentLoop wires it via
-		// this same method — see loop.go's ReloadProviderAndConfig).
-		al.registry.SetDefaultAgentOverride(id)
-	}
 	return ag
 }
 
@@ -174,13 +150,10 @@ func TestProcessScheduled_RoutesToOwnerNotDefault(t *testing.T) {
 	al, home := schedTestLoop(t)
 
 	miaProvider := testutil.NewScenario().WithText("mia handled it")
-	registerAgent(t, al, home, "mia", miaProvider, false)
+	registerAgent(t, al, home, "mia", miaProvider)
 
 	maxProvider := &panicProvider{t: t}
-	registerAgent(t, al, home, "max", maxProvider, true) // max is the DEFAULT
-
-	// Sanity: max is the default agent.
-	require.Equal(t, "max", al.GetRegistry().GetDefaultAgent().ID)
+	registerAgent(t, al, home, "max", maxProvider) // another chat agent that must not run
 
 	meta, err := al.GetSessionStore().NewScheduledSession("mia")
 	require.NoError(t, err)
@@ -191,7 +164,7 @@ func TestProcessScheduled_RoutesToOwnerNotDefault(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "mia handled it", reply)
 	assert.Equal(t, 1, miaProvider.CallCount(), "the owner (mia) must run the turn")
-	assert.False(t, maxProvider.called.Load(), "the default agent (max) must NOT be invoked")
+	assert.False(t, maxProvider.called.Load(), "no other agent (max) may be invoked")
 }
 
 // TestProcessScheduled_MissingOwner_NoDefaultFallback asserts that an unknown /
@@ -201,7 +174,7 @@ func TestProcessScheduled_MissingOwner_NoDefaultFallback(t *testing.T) {
 	al, home := schedTestLoop(t)
 
 	defProvider := &panicProvider{t: t}
-	registerAgent(t, al, home, "max", defProvider, true) // default — must not run
+	registerAgent(t, al, home, "max", defProvider) // another chat agent — must not run
 
 	meta, err := al.GetSessionStore().NewScheduledSession("ghost")
 	require.NoError(t, err)
@@ -212,39 +185,7 @@ func TestProcessScheduled_MissingOwner_NoDefaultFallback(t *testing.T) {
 	require.Error(t, err, "missing owner must be a hard error")
 	assert.Contains(t, err.Error(), "owner unavailable")
 	assert.Empty(t, reply)
-	assert.False(t, defProvider.called.Load(), "no default-agent fallback is allowed")
-}
-
-// TestProcessScheduled_DoesNotTouchHandoffMap asserts a scheduled run never
-// reads/writes/deletes the sessionActiveAgent handoff map — a scheduled run must
-// not disturb a human's in-flight agent switch in that session.
-// Traces to: W-1 (J-2), FR-001.
-func TestProcessScheduled_DoesNotTouchHandoffMap(t *testing.T) {
-	al, home := schedTestLoop(t)
-	registerAgent(t, al, home, "mia", testutil.NewScenario().WithText("ok"), false)
-
-	meta, err := al.GetSessionStore().NewScheduledSession("mia")
-	require.NoError(t, err)
-
-	// Seed a human handoff override on the SAME session id, as if a human
-	// switched the active agent to "ray" in this session.
-	handoffKey := "session:" + meta.ID
-	al.sessionActiveAgent.Store(handoffKey, "ray")
-
-	snapshotBefore := snapshotHandoffMap(al)
-
-	_, err = al.ProcessScheduled(
-		context.Background(), "mia", meta.ID, "scheduled work", "scheduled", meta.ID,
-	)
-	require.NoError(t, err)
-
-	snapshotAfter := snapshotHandoffMap(al)
-	assert.Equal(t, snapshotBefore, snapshotAfter,
-		"sessionActiveAgent handoff map must be identical before and after a scheduled run")
-	// The human's override specifically must survive unchanged.
-	v, ok := al.sessionActiveAgent.Load(handoffKey)
-	require.True(t, ok, "human handoff override must not be deleted by a scheduled run")
-	assert.Equal(t, "ray", v)
+	assert.False(t, defProvider.called.Load(), "no other agent may stand in for the missing owner")
 }
 
 // TestProcessScheduled_PerOwnerSessionKey asserts the run uses the per-owner
@@ -253,7 +194,7 @@ func TestProcessScheduled_DoesNotTouchHandoffMap(t *testing.T) {
 // Traces to: W-1 (agentSessionKey namespacing).
 func TestProcessScheduled_PerOwnerSessionKey(t *testing.T) {
 	al, home := schedTestLoop(t)
-	mia := registerAgent(t, al, home, "mia", testutil.NewScenario().WithText("recorded"), false)
+	mia := registerAgent(t, al, home, "mia", testutil.NewScenario().WithText("recorded"))
 
 	meta, err := al.GetSessionStore().NewScheduledSession("mia")
 	require.NoError(t, err)
@@ -282,7 +223,7 @@ func TestProcessScheduled_AskToolAutoDenied(t *testing.T) {
 	prov := testutil.NewScenario().
 		WithToolCall("dangerous_tool", `{}`).
 		WithText("could not use that tool, finishing anyway")
-	mia := registerAgent(t, al, home, "mia", prov, false)
+	mia := registerAgent(t, al, home, "mia", prov)
 
 	stub := &dangerousStubTool{}
 	mia.Tools.Register(stub)
@@ -320,7 +261,7 @@ func TestProcessScheduled_AskToolAutoDenied(t *testing.T) {
 func TestProcessScheduled_CancelledRunReturnsPromptly(t *testing.T) {
 	al, home := schedTestLoop(t)
 	blocker := &blockingProvider{entered: make(chan struct{})}
-	registerAgent(t, al, home, "mia", blocker, false)
+	registerAgent(t, al, home, "mia", blocker)
 
 	meta, err := al.GetSessionStore().NewScheduledSession("mia")
 	require.NoError(t, err)
@@ -441,7 +382,7 @@ func TestProcessScheduled_AskToolAutoDenied_EmitsScheduledAudit(t *testing.T) {
 	prov := testutil.NewScenario().
 		WithToolCall("dangerous_tool", `{}`).
 		WithText("could not use that tool, proceeding without it")
-	mia := registerAgent(t, al, home, "mia", prov, false)
+	mia := registerAgent(t, al, home, "mia", prov)
 
 	stub := &dangerousStubTool{}
 	mia.Tools.Register(stub)

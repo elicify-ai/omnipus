@@ -5,28 +5,26 @@ package agent
 import (
 	"context"
 	"fmt"
-	"math"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // ClaimCancel performs the atomic first-cancel-wins check under cancelMu.
 // Returns true if this call successfully set cancelFired from false→true.
 func (ts *turnState) ClaimCancel() bool {
-	ts.cancelMu.Lock()
-	defer ts.cancelMu.Unlock()
-	if ts.cancelFired.Load() {
-		return false
-	}
-	ts.cancelFired.Store(true)
-	return true
+	return ts.claimCancel(false)
 }
 
 // MarkAbandoned sets the abandoned flag when a controller stops waiting for a
 // turn goroutine that ignored hard abort. Callers include the gateway cancel
 // watchdog and the delegated-turn timeout detach path.
 func (ts *turnState) MarkAbandoned() {
+	// The controller, not the abandoned goroutine, preserves the started
+	// call's terminal display evidence before the late-write fence closes.
+	ts.cancelStartedTool()
+	ts.persistCancelOutcome("hard")
 	ts.abandoned.Store(true)
 }
 
@@ -48,6 +46,31 @@ func (ts *turnState) markTurnFailed() {
 	ts.mu.Lock()
 	ts.turnFailed = true
 	ts.mu.Unlock()
+}
+
+// reportSessionSaveFailure is the shared body of the #1178 / amendment
+// L1-AMENDMENTS-20261013.md §4.2 handling for a failed SessionWriter write on
+// an active turn: markTurnFailed, the existing could-not-save notice event
+// (messageNotSavedReply — no new copy) and the classified transcript error via
+// appendClassifiedError, so the failure survives reload. The caller wraps the
+// store error in *messageNotSavedError and ends the turn through its own
+// existing exit; nothing here ends the turn.
+func (al *AgentLoop) reportSessionSaveFailure(ts *turnState, wrapped error) LLMError {
+	ts.markTurnFailed()
+	llm := TranslateTurnError(wrapped)
+	al.emitEvent(
+		EventKindError,
+		ts.eventMeta("runTurn", "turn.error"),
+		ErrorPayload{
+			Stage: "session_save", ChatID: ts.opts.ChatID,
+			Code: string(llm.Code), Message: llm.Message,
+			SessionID: string(ts.routingSessionID),
+		},
+	)
+	// US-1: persist the save failure to the JSONL transcript so the replay
+	// path re-renders it after reload (see appendErrorTranscript docstring).
+	ts.appendClassifiedError(EventKindError.String(), "runTurn", llm)
+	return llm
 }
 
 func (ts *turnState) clearProviderCancel(_ context.CancelFunc) {
@@ -90,6 +113,7 @@ func (ts *turnState) requestHardAbort() bool {
 	providerCancel := ts.providerCancel
 	ts.mu.Unlock()
 
+	ts.cancelStartedTool()
 	if providerCancel != nil {
 		providerCancel()
 	}
@@ -105,92 +129,70 @@ func (ts *turnState) hardAbortRequested() bool {
 	return ts.hardAbort
 }
 
-// revertEmptiedTranscript puts back the PREVIOUS content_state / result of
-// every transcript tool_call record the D5 pass rewrote during this turn
-// (ADR-066 FR-020/FR-022): the window's projection set has just been rolled
-// back to turn start, so the transcript must stop claiming those results are
-// emptied. Best-effort; idempotent (the list is cleared once applied).
-func (ts *turnState) revertEmptiedTranscript() {
+// revertEmptiedTranscript retracts every projection effect the D5 pass appended
+// during this turn (ADR-066 FR-020/FR-022): the window's projection set has just
+// been rolled back to turn start, so the transcript must stop claiming those
+// results are projected. A retract restores the exact pre-effect value, whatever
+// the number of repeated projections. A failed retract keeps the effects for a
+// later attempt.
+func (ts *turnState) revertEmptiedTranscript() error {
+	// Serialize with the effect-list updates so concurrent restores cannot
+	// retract the same prefix twice.
 	ts.mu.Lock()
-	prev := ts.emptiedTranscriptPrev
-	ts.emptiedTranscriptPrev = nil
-	ts.mu.Unlock()
-	if len(prev) == 0 || ts.transcriptStore == nil || ts.transcriptSessionID == "" {
-		return
+	defer ts.mu.Unlock()
+	effects := append([]session.ArchiveAddress(nil), ts.projectionEffects...)
+	if len(effects) == 0 || ts.transcriptStore == nil || ts.transcriptSessionID == "" {
+		return nil
 	}
-	// Oldest row first: a record emptied twice in one turn (impossible today,
-	// the pass skips already-emptied entries — defensive) must end on its
-	// ORIGINAL state, so later rows are overwritten by earlier ones.
-	for i, j := 0, len(prev)-1; i < j; i, j = i+1, j-1 {
-		prev[i], prev[j] = prev[j], prev[i]
+	if _, err := ts.transcriptStore.RetractToolCallEffects(ts.transcriptSessionID, effects); err != nil {
+		return fmt.Errorf("context rollback: transcript projection restore: %w", err)
 	}
-	if _, err := ts.transcriptStore.UpdateToolCallProjections(ts.transcriptSessionID, prev); err != nil {
-		logger.WarnCF("agent", "abort: transcript content_state revert failed",
-			map[string]any{"session_id": ts.transcriptSessionID, "count": len(prev), "error": err.Error()})
-	}
+	ts.projectionEffects = ts.projectionEffects[len(effects):]
+	return nil
 }
 
 func (ts *turnState) restoreSession(agent *AgentInstance) error {
+	if ts.opts.NoHistory {
+		return nil
+	}
 	ts.mu.RLock()
-	targetLen := ts.initialArchiveLen
-	initialHistLen := ts.initialHistoryLength
+	start, captureErr := ts.initialWindow, ts.windowError
 	ts.mu.RUnlock()
-
-	// Compute the Skip value at turn start.
-	// targetSkip = initialArchiveLen - initialHistoryLength derives the Skip
-	// cursor that was in effect before this turn began. If windowTrim advanced
-	// Skip mid-turn and the turn is now aborting, restoring Skip to this value
-	// ensures GetHistory returns exactly the pre-turn live window (SC-001, SC-010).
-	// Guard: when initialArchiveLen == math.MaxInt (ReadArchive failed at turn
-	// start, rollback is a no-op), pass targetSkip=0 — it is irrelevant because
-	// targetLen=MaxInt means RollbackAppended exits early before touching Skip.
-	targetSkip := 0
-	if targetLen != math.MaxInt {
-		targetSkip = targetLen - initialHistLen
-		if targetSkip < 0 {
-			targetSkip = 0
+	if start == nil {
+		if captureErr != nil {
+			return captureErr
 		}
+		return fmt.Errorf("context rollback: starting window snapshot is missing")
 	}
-
-	// Rollback: truncate the archive back to the line count captured at turn
-	// start AND restore meta.Skip to its turn-start value so mid-turn evictions
-	// are undone. SetHistory is explicitly NOT used here — it would overwrite
-	// the entire JSONL file and reset Skip=0, permanently deleting any evicted
-	// turns that preceded this turn (CRITICAL 1, path 2).
-	//
-	// The third member of the turn-start triple (ADR-066 FR-020) is the
-	// projection set as of turn start (turnState.initialEmptiedSet): every
-	// result this turn emptied is un-emptied in the same write, and entries
-	// whose archive line is ≥ targetLen go with the truncated tail.
-	agent.Sessions.RollbackAppended(ts.sessionKey, targetLen, targetSkip, ts.initialEmptiedSet)
-	ts.revertEmptiedTranscript()
-
-	// M4 mirror: verify the rollback actually took effect. RollbackAppended is
-	// fire-and-forget (no error return). Re-read the archive and confirm the
-	// length dropped to <= targetLen. Skip verification when targetLen is
-	// math.MaxInt (ReadArchive failed at turn start — rollback was a no-op by
-	// design, so there is nothing meaningful to verify).
-	if targetLen != math.MaxInt {
-		if postArchive, readErr := agent.Sessions.ReadArchive(context.Background(), ts.sessionKey); readErr == nil {
-			if len(postArchive) > targetLen {
-				logger.ErrorCF("agent", "restoreSession: rollback did not shrink archive to target",
-					map[string]any{
-						"session_key": ts.sessionKey,
-						"target":      targetLen,
-						"after":       len(postArchive),
-					})
-				return fmt.Errorf(
-					"restoreSession: RollbackAppended did not take effect (archive len %d > target %d)",
-					len(postArchive),
-					targetLen,
-				)
-			}
-		}
-		// If ReadArchive itself fails here, we can't verify — fall through and
-		// let Save() persist whatever state the backend is in. The caller
-		// (interrupt handler) logs the restoreSession error if we return one.
+	store, ok := agent.Sessions.(session.ContextWindowStore)
+	if !ok {
+		return fmt.Errorf("context rollback: session store does not support atomic context checkpoints")
 	}
-
+	// session-core FR-006 / DEL-12: a rollback MUST move view/window metadata
+	// and NEVER rewrite retained bytes. RollbackWindow restores the exact
+	// turn-start cursor, anchor and projection AND records the aborted appended
+	// span as a retained-but-excluded effect — the aborted bytes stay on disk
+	// for recall, while every provider request built from the window omits them
+	// (pkg/memory/window.go::RollbackWindow).
+	if err := store.RollbackWindow(context.Background(), ts.sessionKey, start.Clone()); err != nil {
+		return err
+	}
+	// Re-read so a failed rollback surfaces as a real error instead of
+	// proceeding as if the turn-start window were restored. The archive KEEPS
+	// the aborted bytes (FR-006), so the invariant to verify is the MODEL VIEW:
+	// the window a provider request is built from must hold exactly the
+	// messages visible at turn start, with the aborted span excluded.
+	snap, err := store.WindowView(context.Background(), ts.sessionKey)
+	if err != nil {
+		return fmt.Errorf("context rollback: verify window after rollback: %w", err)
+	}
+	window, _ := snap.History()
+	if len(window) != ts.initialHistoryLength {
+		return fmt.Errorf("context rollback: window holds %d messages after rollback, expected %d", len(window), ts.initialHistoryLength)
+	}
+	if err := ts.revertEmptiedTranscript(); err != nil {
+		return err
+	}
 	return agent.Sessions.Save(ts.sessionKey)
 }
 
@@ -244,21 +246,13 @@ func (ts *turnState) Finish(isHardAbort bool) {
 	// one releases it explicitly, at the site that claimed it — the delegate
 	// front in steer_launcher.go::dispatchSteeredSessionWithReservation's
 	// dispatch goroutine, the task front through the callback handed to
-	// task_executor.go::dispatchLaunchedTask. Finish has no reliable
-	// back-reference to release through (ts.al is unset for every steered
-	// turn), so a drain here reads as the release mechanism while freeing
-	// nothing.
+	// task_executor.go::dispatchLaunchedTask. The loop back-reference is not
+	// an admission reservation: release stays with the site that claimed it.
 	ts.closeOnce.Do(func() {
 		if ch != nil {
 			close(ch)
 		}
 	})
-
-	// If this is a graceful finish (not hard abort), signal to children
-	if !isHardAbort && ts.parentTurnState == nil {
-		// This is a root turn finishing gracefully
-		ts.parentEnded.Store(true)
-	}
 
 	// Cancel the turn context
 	if ts.cancelFunc != nil {
@@ -317,14 +311,6 @@ func (ts *turnState) Finished() chan struct{} {
 		ts.finishedChan = make(chan struct{})
 	}
 	return ts.finishedChan
-}
-
-// IsParentEnded checks if the parent turn has ended
-func (ts *turnState) IsParentEnded() bool {
-	if ts.parentTurnState == nil {
-		return false
-	}
-	return ts.parentTurnState.isFinished.Load()
 }
 
 // IsAlive returns true when the turn has not yet finished. This is the

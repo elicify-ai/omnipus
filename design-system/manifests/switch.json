@@ -78,6 +78,7 @@
       "file": "tests/design-system/browser.spec.ts",
       "test": "Switch [check:switch-browser] browser",
       "story": "Default",
+      "requiredTargets": [{ "selector": "[role=\"switch\"]", "attribute": "role", "value": "switch" }],
       "applicable": true
     },
     {

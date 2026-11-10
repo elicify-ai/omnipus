@@ -1,6 +1,7 @@
 package fspolicy
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -133,6 +134,17 @@ func IsCarveOut(resolvedAbsPath string, policy FSPolicy) bool {
 		return true
 	}
 
+	// #1284 home guard (amendment §2 D1/D4/D5): the named protected inventory
+	// always wins, then default-deny inside $OMNIPUS_HOME with the explicit
+	// allowances and the (D4-narrowed) own-tree exception. Runs BEFORE the
+	// per-root loop so every consumer of this one predicate — ResolvePath,
+	// grep's carveOutFS, the bash command check, the D7 pre-flight — inherits
+	// it. A zero HomeGuard (Home == "") disables the leg and leaves the
+	// pre-#1284 behaviour untouched.
+	if homeGuardDeny(cleanPath, policy) {
+		return true
+	}
+
 	// A hard link whose other end lies inside a DIRECTORY-shaped carve-out.
 	//
 	// Checked here, ahead of the per-root loop, because the loop cannot answer
@@ -162,16 +174,31 @@ func IsCarveOut(resolvedAbsPath string, policy FSPolicy) bool {
 		// THIS SAME root (never when WorkDir is at or above it) AND
 		// cleanPath itself falls within that WorkDir.
 		if policy.WorkDir != "" &&
-			!SameLocationForDeny(cleanWorkDir, cleanRoot) &&
-			CoversForGrant(cleanRoot, cleanWorkDir) &&
-			coversForGrantChain(cleanWorkDir, cleanPath, pathChain, pathChainOK) {
+			ownTreeExempts(cleanWorkDir, cleanRoot, cleanPath, pathChain, pathChainOK) {
 			return false
+		}
+		// Setup roots (FR-006, Omnipus only) are exempt under the SAME
+		// per-root rule as WorkDir: the setup root must be a proper
+		// descendant of this carve-out root and the path must lie within it.
+		for _, setupRoot := range policy.SetupRoots {
+			if ownTreeExempts(filepath.Clean(setupRoot), cleanRoot, cleanPath, pathChain, pathChainOK) {
+				return false
+			}
 		}
 
 		return true
 	}
 
 	return false
+}
+
+// ownTreeExempts is the per-root own-tree exception (BLOCK #2): anchor must be
+// a PROPER descendant of the carve-out root cleanRoot (never at or above it),
+// and cleanPath must lie within anchor.
+func ownTreeExempts(anchor, cleanRoot, cleanPath string, pathChain []os.FileInfo, pathChainOK bool) bool {
+	return !SameLocationForDeny(anchor, cleanRoot) &&
+		CoversForGrant(cleanRoot, anchor) &&
+		coversForGrantChain(anchor, cleanPath, pathChain, pathChainOK)
 }
 
 // isWithinOrEqual reports whether candidate is root itself or lives strictly

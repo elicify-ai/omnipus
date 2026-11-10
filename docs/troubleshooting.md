@@ -9,7 +9,7 @@ A symptom-first fix list for startup failures, unreachable gateways, login and A
 ## How to start diagnosing
 
 1. Open `$OMNIPUS_HOME/logs/gateway_panic.log` (default: `~/.omnipus/logs/`). A startup crash always writes there, even when nothing appears on screen.
-2. Open `$OMNIPUS_HOME/logs/gateway.log` — the running gateway's log stream, and the reason behind most failed requests.
+2. Open `$OMNIPUS_HOME/logs/gateway.log` — the running gateway's log stream, and the reason behind most failed requests. If you set `OMNIPUS_LOG_FILE`, read that file instead; see [choosing the diagnostic log file](operations/debug.md#choosing-the-diagnostic-log-file).
 3. Run `omnipus doctor`, which checks your configuration for known unsafe settings.
 4. Still unexplained? Restart with `omnipus start --debug` — see [debugging](operations/debug.md).
 
@@ -25,7 +25,9 @@ A kernel that is too old for a right Omnipus asks for is different: Omnipus star
 
 ### It exits with "bind: address already in use"
 
-The gateway serves everything — web app, API, and agent-built previews — on a single listener, `gateway.port`, default **5000**. There is no second preview port. If another process holds the port, the gateway retries the bind twice, then exits with a clear boot error; it never falls back to a different port. Check what holds it:
+The gateway serves everything — web app, API, and agent-built previews — on a single listener, `gateway.port`, default **5000**. There is no second preview port. If another process holds the port, the gateway retries the bind twice, then exits with a clear boot error; it never falls back to a different port.
+
+Before returning the final bind error, the gateway runs cleanup for services created during that startup attempt. It requests shutdown of scheduled jobs, the task and mail pollers, task triggers and the plan engine, where present. Cleanup can delay the final error while active work is stopping; the delay is not guaranteed to be short. Some stop requests do not wait for every in-flight operation to finish. The same cleanup runs for errors returned by other steps in this service-startup sequence, skipping services that were not created. Check what holds the port:
 
 ```bash
 lsof -i :5000 | grep LISTEN
@@ -40,6 +42,74 @@ Stop that process, or set another port in `~/.omnipus/config.json` and start aga
 ```
 
 The port is read at startup; a running gateway does not move its listener.
+
+### Stopping the gateway takes a moment
+
+When you stop the gateway normally — Ctrl-C, or SIGTERM from a service manager — Omnipus stops its chat channels and cancels the agent loop. It tries to let tracked work finish writing before tearing down the stores it uses, including background task runs and helper-agent turns. This cleanup also covers a helper turn already being resumed by a redirect as shutdown begins.
+
+Shutdown has several wait budgets, not one 30-second limit. The gateway waits up to 65 seconds for active requests, limited by the time remaining on its 70-second shutdown context. Agent cleanup has separate waits of up to 30 seconds for recaps, task dispatches and helper-agent turns, and up to five seconds for each session worker. These are individual wait budgets, not a guaranteed total stop time. If the gateway's shutdown context expires, it can continue shutdown without waiting for agent cleanup to finish.
+
+When a wait runs out, cleanup continues and the log shows a warning such as `Close: steered-turn drain budget exceeded; proceeding with teardown`. Some work or its final writes may be left unfinished.
+
+## A connection shows a credential error (degraded)
+
+A connector, provider, mailbox, MCP server, or assistant-connector whose stored secret is missing, was deleted, or can no longer be read is shown as degraded — the row's or card's error names the exact credential reference to fix, for example `secret reference MY_BOT_TOKEN is missing from the credential store`. Missing credential references are handled as integration-specific errors. An individual authentication failure is handled the same way when another stored entry decrypts. Every integration using that reference can be affected. Other credential failures—including malformed entry encodings—can stop startup or reject reloads and settings refreshes even if another entry decrypts. More than one integration can depend on the same credential reference. A whole-vault failure is different, as described below. The reason shows where the integration lives: a chat-channel or mailbox row on the **Connectors** screen shows it under its status badge, a provider's row under **Settings → Providers** shows it as the row's error line, and an MCP server's card under **Skills & Tools → MCP Servers** shows it under the status badge. **Doctor** (Settings → Security, Security health) flags degraded chat channels only; for providers, mailboxes and MCP servers, read the reason on their own row or card.
+
+To fix it, re-enter the credential where the row points you — **Connectors** for a chat channel or mailbox, **Settings → Providers** for a model key, the Credential Vault for a raw entry — and save. The connection recovers on the next settings save or restart.
+
+A failure of the whole Credential Vault is different: a locked store, an unreadable or damaged file, or a master key that cannot decrypt any entry stops startup and rejects reloads and settings refreshes. Omnipus checks the store itself even when only MCP servers use its secrets, or no integration currently references them. A rejected update keeps the previous live configuration; a settings write may already have saved the proposed configuration to disk. Fix the store or supply its original master key before retrying. See [Saving a secret fails with "credential store locked"](#saving-a-secret-fails-with-credential-store-locked) below.
+
+A fresh install with no credential-store file and no secret references can still start normally. A missing secret, or an entry that fails authentication while another stored entry can be decrypted, remains scoped to the integrations that depend on it rather than becoming a whole-vault failure.
+
+## What a connection's save message means
+
+When you press **Save** or **Save & Enable** in a connection's settings on the **Connectors** screen, the message you see says what happened to the running connection, not only to the saved settings. Only the first two messages below are success messages; after any other message, **Save & Enable** does not turn the connection on.
+
+| Message | What it means | What to do |
+|---|---|---|
+| `Saved. The connection restarted with the new settings.` | The settings were saved and the connection restarted and is running with them. A second note says a restart was attempted and that other connections and scheduled services may have paused briefly while it ran. | Nothing. |
+| `Saved.` | The settings were saved and, according to Omnipus's records, nothing needed applying: the connection is turned off, or these settings were already applied to it with no failed start, unfinished shutdown or stored token still waiting. It does not confirm that the connection is running or reachable right now. With **Save & Enable**, the enable step shows its own result instead. | Nothing for the settings. If the connection does not answer, check its status on the Connectors screen. |
+| `Saved, but the connection is not running: <reason>.` | The settings were saved and applied, but the connection is not running. The reason comes from the connection, for example a rejected token. On WhatsApp, the reason "the connection to WhatsApp was lost and is being re-established automatically" means a working connection dropped and Omnipus is reconnecting in the background. | Fix the reason and save again. For the WhatsApp reconnecting reason there is nothing to fix; see [While WhatsApp reconnects](connectors/whatsapp_native.md#while-whatsapp-reconnects). |
+| `Saved. The restart was not confirmed yet; check the connection status in a moment.` | The settings were saved, but the restart did not confirm in time. | Check the connection's status on the Connectors screen shortly. |
+| `Saved, but applying the change did not complete: <reason>. Check the connection status before retrying.` | The settings were saved, but applying them to the running connection failed. This message does not mean the old settings are still running. When Omnipus can read the connection's state, a second message follows: `The connection is currently: running.`, `not running.` or `not loaded.` | Check the status, fix the reason, then save again. |
+| `settings saved, but the running configuration could not be refreshed; the connection was not restarted` | The settings are on disk, but the running configuration was not updated and the connection was not restarted. | Save again. The next successful save, or the next configuration reload, loads the saved settings. |
+| `The credential was saved, but the configuration change was not: …` | A token or other secret from this save was stored, then saving the rest failed. Nothing else was applied, and the connection keeps its previous token until it next restarts. A restart picks up the new value only when the saved settings refer to the credential this form writes (the usual case); if they refer to a different stored credential, the new value stays stored but unused. | Save again: a successful save of the same form applies everything. |
+| `could not save config` or another error | Nothing was saved. | Fix the cause shown and save again. |
+
+When **Save & Enable** does go on to turn the connection on, that enable step reports its own result. If the connection does not start, the message is `Saved, but the connection is not running: <reason>.` — the same not-running wording as a save that applied but did not start — and not **Channel configured and enabled**. The turned-on setting stays saved, so the card shows **Disable**, not Enable. Open **Configure**, correct the credential, and select **Save**. Saving again applies the settings to a connector that is still turned on. Or select **Disable** on the card, then **Enable**. On WhatsApp, that message also appears when you select **Save & Enable** on a connection that is already turned on but is reconnecting. There is no credential to correct in that case; see [While WhatsApp reconnects](connectors/whatsapp_native.md#while-whatsapp-reconnects). If the turned-on setting is saved but Omnipus cannot confirm that the connection started in time, the message is `The connector is enabled, but its start could not be confirmed yet.` The turned-on setting stays saved. Check the connector's card rather than treating that as a successful start.
+
+### Saving again with the same values
+
+For an enabled connection, pressing **Save** again without changing anything retries an application of the settings that did not finish. Omnipus decides from its own records of applying and starting the connection, not by testing whether the connection is connected right now. When those records show one of the cases below, it restarts the connection and reports the new result:
+
+- a restart that failed earlier;
+- a start that failed when the gateway started;
+- a shutdown of the previous connection that did not finish;
+- a token you stored through **Configure** that was never applied. Leave the token field blank and save; the stored token is used, and you do not need to type it again. This works when the saved settings select the reference the token was stored under.
+- a connection that could not be built at all, for example because its credential reference could not be resolved. While the cause lasts, each save reports the real failure. Once you fix the cause, the same save builds and starts the connection, again without re-entering a stored token.
+
+When none of these cases is recorded, the save answers `Saved.` without restarting anything, even if the connection has since dropped on its own. `Saved.` therefore does not prove that the connection is running; check its status on the Connectors screen. A WhatsApp connection that is reconnecting in the background also answers `Saved.`, and its card still shows **Enabled**; see [While WhatsApp reconnects](connectors/whatsapp_native.md#while-whatsapp-reconnects).
+
+## The bot ignores someone
+
+A connector whose **Allow From** list is not empty ignores messages from everyone not on the list and sends them no reply. Open the connector's **Configure** panel on the **Connectors** screen. A line `Ignored <count> messages from senders not on the allowed list. Latest: <ids>` means it has ignored such messages since the connector last started; the ids are the latest ignored senders, most recent first. To let that person in, select and copy their id from the line, add it to **Allow From** (separate ids with commas or spaces; on WhatsApp, with commas only), and save. The gateway log also records a newly ignored sender, once, with the message `channel ignored a sender not on the allowed list` and the sender's id — never the message text. A sender is logged again only after 20 other senders have been ignored since. With an empty **Allow From** list, nobody is ignored.
+
+## The agent says a connection is set to "Only answer"
+
+An agent that tries to start a message on a connector set to **Only answer** is refused with a message that ends `The operator can change it in Connectors > <platform> > Configure ("Answer and also start messages"). Nothing was sent.` To allow it, open **Connectors**, open the connector's **Configure** panel, and in **Starting messages** choose **Answer and also start messages**. List the people and groups the agent may message, then press that section's own **Save**. Starting messages works on Discord and Telegram only; see [Starting messages](connectors.md#starting-messages).
+
+## Saving Starting messages is refused or shows a warning
+
+| Message | What it means | What to do |
+|---|---|---|
+| `An earlier change to this connection did not finish applying, so nothing was saved. …` | The connection's saved and running settings differ, because an earlier change was not applied. While they differ, a list save is accepted only if every permission it leaves in place is already granted in both the saved and the running settings. Switching to **Only answer** without adding ids is always accepted. Removing only some ids can still be refused, for example after the connector was bound to a different agent or workspace. | Finish applying the earlier change: any successful save of this connection, or disable and enable it. Then save the list again. |
+| `Discord could not be reached to check <ids>; nothing was saved; try again` | Omnipus could not ask Discord about the new ids in time. It does not mean the ids are wrong. | Check that the connector is connected, wait a moment, and save again. |
+| `Connect the channel first to add Discord ids.` | New Discord ids are checked with Discord, which needs the connector running. | Start the connector, then save again. |
+| `Saved and in force for starting messages. Other settings could not be refreshed: the running configuration could not be reloaded. Check the server log.` | The new list was saved and is already in force. Only other settings of the running configuration could not be refreshed. | Nothing for the list. Check the server log for why the reload failed before relying on other recent changes. |
+
+## An agent-started message never arrived
+
+An agent's started message is reported as `accepted for sending … (delivery not confirmed)`. That only means it was handed over for sending. If sending fails later, or the message is dropped because the connector's queue is full, no notice is posted in the chat; the failure appears only in the gateway log, as `Send failed` or `Outbound queue full, message dropped`. Ordinary replies keep their usual in-chat notices. On Discord, a direct message to a person is refused, and logged the same way, when Discord does not let the bot open the direct message, or does not answer within 5 seconds (for example while rate limiting it). A message that was refused is never sent later.
 
 ## Every request returns 401 Unauthorized
 
@@ -59,11 +129,163 @@ On a fresh install the gateway boots into **limited mode**: it serves the web ap
 
 Finish onboarding to fix it. Open `http://localhost:5000` — on a fresh install every screen leads to the wizard (your name, a password, then a provider and its API key). Without a browser, `omnipus onboard` prompts for provider, key, model, and account.
 
+## A chat turn stops before a finished answer
+
+If a turn fails after text starts streaming, chat shows a failure message in place of the unfinished reply, even with **Verbose chat** off. Enable **Settings → Chat → Verbose chat** before retrying to inspect tool activity and any available technical details. A turn you stop yourself still keeps its partial reply.
+
+A provider can also report an error after it has already started streaming a reply (OpenRouter does this when an upstream model fails). Omnipus discards the partial text, runs no tools, and names the failure by the provider's own error code instead of calling everything a network fault:
+
+| What the provider reported | What you see | Retried? |
+|---|---|---|
+| A temporary fault (server error, overloaded, timeout) | The connection-failure message | Yes, when nothing of the reply was shown yet — see the next section |
+| Rate limit (429) | The rate-limit message | Yes — see the next section |
+| Billing or credit (402) | The billing message | No |
+| Bad or missing key (401, 403) | The provider-rejected-your-key message | No |
+| The request itself was rejected (400, 422) | The provider-rejected message | No |
+| Moderation or content policy | The content-policy message | No |
+| A code Omnipus does not recognise | The generic unknown-failure message | No |
+
+A billing or key error is never retried, because every attempt would be billed and fail the same way. The provider's own error text appears only with **Verbose chat** on.
+
+If the agent reaches its tool-call limit before a final answer, chat keeps the narration and adds a separate limit notice that remains when you reopen the conversation. Closing the originating browser connection does not cancel the turn or redirect that notice to another conversation: terminal delivery retains the conversation's session ID. Conflicting tool names produce the standard “This turn didn’t finish, and we can’t tell why” failure notice rather than silence.
+
+## A helper finished but the open parent chat is blank
+
+Check the parent's current state first. Progress, checkpoints and shared artifacts do not start a parent reply. An intentionally stopped parent retains a helper's result until a legitimate continuation; a parent with an unanswered question card handles the report with your answer rather than starting a separate reply.
+
+A helper's finished result, question, blocker or failure is saved as an event line in the parent chat, independently of whether the parent repeats it. The parent's new reply appears in the open chat as it is written, without a reload. A Judge ending also appears in the parent chat. Saved event lines and the parent's replies remain after reload; the internal continuation input is not displayed as a message from you.
+
+If an expected event or reply is missing, inspect the helper's current state and the gateway's delivery or storage errors before assuming the report was lost. A storage failure can leave an event pending repair, and a failed wake publication remains retryable. Report the parent and helper session IDs and whether reloading reveals the missing event or reply. Do not restart the gateway as a workaround.
+
+## A background result says the agent was not woken
+
+This warning concerns delivery of one notification, not rerunning or undoing the background work. Omnipus tries the handoff up to three times within the caller's existing window: up to five seconds per attempt, with one- and two-second cancellable waits. A caller deadline after an unsuccessful attempt still triggers the warning; intentional cancellation suppresses it and stops later attempts. A notification accepted by the bus is queued, not a guarantee that the receiving agent has executed it.
+
+Check the original conversation and any saved tool result before asking to rerun work. A real tool warning names the tool (or **background tool** if its name is unsafe) and a short tool-call reference. Generic warnings identify only a fixed source, such as a plan update; another path may still have dispatched the agent directly. Send a normal message if you want the agent to continue from the result.
+
+If saving succeeded, the same system line is used live and in reopened history for that session. Only the permitted original platform conversation gets a single best-effort external warning, with no redirect to another chat/account. A full or closed outbound queue can reject it; enqueue acceptance is not network delivery. If history cannot be written, the durable line may be absent, although an allowed live error or origin warning may still be possible. Check disk space, file permissions and session paths before relying on saved history; repairing them does not by itself replay the failed notification.
+
+The gateway's new **Async notification publish failed** records identify actual failed attempt numbers, their retry/final decision, a fixed source and a notice ID; optional tool/session references are shortened digests. They do not contain notification output, command arguments, raw routes or raw error causes. **Async notification origin warning enqueue rejected** separately means the one external enqueue was not accepted; it does not distinguish a full queue from a closed one.
+
+**Async notification secondary warning failed** is an error-level record about the warning itself, not another attempt to wake the agent:
+
+| Stage | Meaning |
+|---|---|
+| `notice_save` | Omnipus could not save the system warning: the save failed, the conversation storage was unavailable, or the notification had no conversation to save it in. |
+| `origin_read` | Omnipus could not read the saved conversation origin to decide whether an external warning was allowed. |
+
+Both stages use `error_class=secondary_warning_failure`, a fixed source and the same `notice_id` as the failed notification's other diagnostics. Only the existing validated tool name and shortened tool/session references may be added. These records contain no raw error cause or type, conversation route, notification content, command arguments, tool output, question or approval text. A refused audience without a read error does not produce this secondary-error record.
+
+Logging does not repair or replay the handoff, prove that the warning was saved or delivered, or guarantee that a configured log sink was enabled and wrote successfully. These are safe notification diagnostics, not a claim that every unrelated log record is content-free. See [Background results](tools.md#background-results).
+
+## A task is refused before work starts
+
+Errors saying the assigned agent's store was not found, or that a task session could not be created, mean Omnipus could not create the task's conversation. A queued dispatch or manual start refuses to hand work to either a native agent or an external command-line agent in that case. It does not consume an execution attempt or add a run-history entry.
+
+Read the returned error and the gateway log. A conversation-creation error keeps the underlying storage cause, such as a path that is not a directory or cannot be written. Resolve that cause, or restore the assigned agent's conversation store, before retrying. Do not create a replacement conversation by hand.
+
+A queued dispatch tries to save **Failed** and verifies the saved status. A new manual start through the web app or `run_task` instead tries to restore the task's previous status. If task storage itself cannot save that change, **In Progress** is not proof that work started; check the error and run history. See [tasks](tasks.md#if-the-task-conversation-cannot-be-created).
+
+This is a pre-start refusal, not a failure after tools or an external command have already acted. It does not imply that a later execution failure undoes those actions.
+
+## A heartbeat or scheduled check-in is skipped
+
+Read the gateway diagnostic log. These cron warnings remain visible at the default **warn** log level and carry the affected `job_id`.
+
+| Warning | Meaning | What to check |
+|---|---|---|
+| `previous run still in progress` (`reason: overlap`) | Omnipus still considers an earlier run in progress and skips this tick rather than starting overlapping work. | Inspect that job's current work and cleanup before retrying it. |
+| `no owning agent` (`reason: owner-missing`) | The job has no owning agent ID, so it cannot run through the agent runner. | Check its agent assignment and workspace heartbeat configuration. |
+| `one-time job was running when the previous process stopped; running it again` | At gateway startup, a one-time schedule of the gateway's own scheduler was found mid-run from the previous process, which stopped before saving the outcome. It runs again once, so it may repeat work the stopped run already did. A one-time time that passed while the gateway was not running is still skipped, not replayed. | Check whether the stopped run already did the work. |
+| `one-time trigger was running when the previous process stopped; running it again at this boot` | The same recovery for a scheduled task's one-time trigger (a task set to run once): the previous process started that run and stopped before saving the outcome, so the next gateway start runs it again once. A one-time time that passed while the gateway was not running is still skipped, not replayed, and a trigger you edited while the gateway was down keeps the edited rule instead. | Check whether the stopped run already did the work. |
+| `scheduled fire was missed while Omnipus was down; recorded, not replayed` | A task's scheduled fire (its next pending occurrence, or a one-time time) came due while the gateway was not running. It is recorded once as a `missed` entry on the task's run history and the Calendar, so the gap is visible; it is never replayed. | Nothing to do — the entry is informational. Re-run the task manually with Run-now if it should catch up. |
+
+Cron's `failed to save store`, `failed to persist skip-reschedule` and `failed to persist Running reset` diagnostics are logged at **ERROR**, with `job_id` (or `job_ids` for a batch) and the underlying storage error. Work may already have happened even though its latest state was not saved. Resolve the disk, permissions or path problem before relying on the saved state after a restart. The error does not undo completed work, and retrying may repeat earlier actions.
+
+## The model provider can't be reached or is busy
+
+When a request to the model provider fails for a reason that usually passes — the connection drops, the name cannot be looked up, the provider is overloaded (429, 503, 529) or it stops in the middle of an answer — Omnipus tries again automatically. It makes up to **5 more attempts**, waiting about **2, 5, 10, 20 and 40 seconds** in between (about a minute and a half in total). When the provider says how long to wait (a `Retry-After` of up to 120 seconds), that wait is used instead.
+
+While it waits, the chat shows a live line from the first failed attempt on, saying what went wrong in plain words — a rate limit ("is rate-limiting requests right now"), a connection problem ("could not be reached"), an overloaded or erroring provider ("is overloaded or returning server errors"), a reply that stopped midway ("stopped responding mid-answer") or a general "ran into a problem" — together with the attempt number ("attempt 2 of 6") and a countdown to the next try. **Stop** ends the wait at once. On a channel such as Telegram you get one "Retrying — please wait..." message. A helper's own chat shows the same line for the helper's requests.
+
+When a retry succeeds, the chat notes that the connection came back and after how many retries.
+
+If the last attempt also fails, the turn ends with the cause in plain words — for example "We couldn't reach the model provider" — and your message stays in the chat, so you can retry or switch models.
+
+What is not retried:
+
+| Failure | What happens |
+|---|---|
+| A wrong or missing key, or no credit (401, 402, 403) | The error appears at once; every retry would fail the same way |
+| The request itself is rejected (unknown model, conversation too long) | The error appears at once |
+| The provider is slow or silent rather than unreachable | Handled by the per-request time limit and the 5-minute silence limit instead, because each such attempt can already take minutes |
+| Part of the reply was already shown when the failure happened | Not retried, so you never see half an answer followed by a second copy |
+
+When the agent has a fallback model, the first model hands over to the fallback at once on a dropped connection or an overload (a rate limit is retried up to 3 times first). The automatic retries above apply to the last model Omnipus can still try.
+
+## The model has gone quiet
+
+A provider can stop sending anything in the middle of a reply. Omnipus waits up to the silence limit before it ends the call — 5 minutes by default, or the `stream_stall_timeout` set for that model; that limit is unchanged. So you can tell a slow answer from a stalled one, the chat shows a calm notice once the model has said nothing for **30 seconds** ("the model hasn't responded for … seconds, still waiting"). When the model is streaming, the notice also says when the silence limit would end the call. The notice disappears as soon as anything arrives again, and **Stop** stays available the whole time.
+
+Anything the provider sends counts as a sign of life, including the model's hidden reasoning and the provider's keep-alive messages, so a model that is thinking without showing text does not trigger the notice. A reply that is not streamed (an agent's fallback model is called that way) counts as silent until it arrives. A wait between automatic retries is shown by the retry line, not as silence.
+
 ## The provider rejects your model requests
+
+A `model_route_unavailable` notice means Omnipus could not set up the named provider/model connection from its saved settings. No request was sent to that pair, and a global-default connection was not substituted. Check the provider's API key or sign-in and endpoint settings before trying again. The notice names the pair; scrubbed setup details are available only live under **Verbose chat**.
+
+For an HTTP 400 rejection, the failure notice distinguishes a wrong model from an otherwise unclassified bad request:
+
+| Notice | Meaning and next step |
+|---|---|
+| `bad_model`, naming the provider and model | The provider specifically reported that the model was not found or is not offered. When the agent has a backup model configured, Omnipus answers from it and a fallback notice names both models; if no backup exists, or every model in the chain is rejected this way, the failure stops the chat turn or task. Choose a model offered by that provider in the agent's settings. |
+| `HTTP 400: Bad Request; format`, naming the provider and model | The provider rejected the request, but did not identify a more specific cause. This does **not** prove the model is unavailable. Enable **Verbose chat** before reproducing it to inspect the available technical detail. |
+
+A confirmed wrong-model error stops all attachment recovery too: removing an image or converting a PDF cannot make a missing model exist. For availability prose, Omnipus reads the clause's **subject** — what is unavailable — rather than searching for the word “model”.
+
+The supported model wording is a simple **model is not available/offered** statement. It can start with **the**, **this** or **a**, include **requested** before **model**, and name a model identifier. It can end with **on/by this provider**. A neutral error prefix can introduce the clause with punctuation, including a colon with no following space. Input-type subjects are different, even when they mention a model:
+
+| Provider wording | How Omnipus treats it |
+|---|---|
+| `The model 'm' is not available.` or `Model 'm' is not offered by this provider.` | Positive model-unavailability evidence: `bad_model`, with no attachment retry. |
+| `This model is not available.`, `The requested model m is not available.` or `A model 'm' is not available.` | The subject is still the model: `bad_model`, with no attachment retry. |
+| `Request rejected:model m is not available.` | The colon introduces a model-subject clause; a missing space after it does not change the classification. |
+| `Model 'm': image input is not available.` or `Model 'm' is not available for image input.` | An image-input restriction, not proof that the model is missing. Existing attachment recovery can still apply. |
+| `Image input for model 'm' is not available.` or `Image input for this model is not available.` | The unavailable subject is image input, even though the sentence mentions a model. Existing image recovery can still apply. |
+| `PDF input for model 'm' is not available.` or `PDF input for this model is not available.` | A PDF-input restriction, not proof that the model is missing. Existing PDF-to-text recovery can still apply. |
+
+This is a limited diagnostic grammar, not a general English interpretation. Unsupported subjects, qualifiers or compound availability messages are not treated as proof of a missing model; existing bad-request classification and eligible attachment recovery remain available. A generic bad-request notice does not prove that the configured model is valid, either. Other specific error classifications keep their existing rules.
+
+A structured `model_not_found` code is authoritative even if its text also mentions attachments, authentication or rate limits.
+
+The same safe explanation is saved in the conversation and remains after reopening it, including when an empty-response retry fails. Helper failure handbacks use translated explanations even for unfamiliar streaming error codes. Raw provider response text is not saved as that explanation. Technical detail is live-only and scrubbed for credentials; turning **Verbose chat** on after delivery or reopening history does not recover discarded detail. Existing attachment recovery, context-length handling, and authentication, billing and rate-limit classifications still take their own paths.
+
+**"Context window exceeded. Compressing history and retrying..."** means the model provider rejected a request as too long. Omnipus first removes injected recall, then removes the oldest eligible whole piece — a complete old step (assistant calls plus all their matching results), or an older assistant reply that made no tool calls, whichever comes first in the conversation; if nothing can leave, it shortens retained tool-result text. It does this even when its own estimate says the request fits. Each retry must contain less retained content: the context retry counter is not reset, and there are at most two such retries after the initial request.
+
+This is an internal retry notice, not a data-loss event: relief changes the model's view, not the admitted archive text. It keeps the original user message and media, instructions, call/result structure and unconsumed steering. If those required parts still do not fit, Omnipus returns the last real provider rejection when no further reduction is possible or the retry limit is reached. It does not stop merely because a local size estimate says the immutable remainder is too large.
+
+A storage or projection error is different. If Omnipus cannot save the window change, it stops with that genuine error instead of sending a request that disagrees with the saved state. See [memory](memory.md#how-long-conversations-stay-in-view) for what can leave the live window and what an aborted turn rolls back.
+
+If the final streamed reply cannot be saved, the live chat shows **"Sorry, I couldn't save your message — please try again later."** and reports a failed turn rather than a successful answer. This failure is visible in normal chat; **Verbose chat** is for technical details. Other conversation-storage failures also stop the affected operation, but their wording depends on the failing path.
+
+A failed write does not prove that the reply or its error notice was saved. The current connection's retained event history can carry the notice, and active-turn handling attempts to record it, but failing storage can prevent that record too. After a reload or restart, inspect the saved history and gateway log rather than assuming the notice must return. Fix disk space, permissions or the path problem before retrying. Work already done outside the conversation is not undone.
+
+The **context-window compression/retry notice** described above — not a failed-save notice — is shown or hidden by **Settings → Chat → Verbose chat**. Live chat, reopened history and conversation replay use that same display setting.
+
+### "This endpoint did not report a context length for this model"
+
+A local or self-hosted model's endpoint did not report how much it can read at once, and no operator override exists. Omnipus refuses to run on a guessed window rather than risk silent overflow. Set the context length explicitly at **Settings → Models → Model overrides → Context length**, then retry.
 
 ### 404 "No endpoints found that support tool use"
 
 The model cannot call tools, and Omnipus sends its tool list with every request, so the request is rejected outright. Small open models often lack tool support. In the model picker, the **Recommended for chat** mark appears only on models that can call tools. Change the default in **Settings → Providers**, or edit `agents.defaults.default_model` in `config.json`.
+
+### "model … is offered by several providers; choose the provider"
+
+You picked a model in the chat's model picker, which sends only the model name, and more than one connected provider offers that name. Omnipus does not pick an account for this switch, and the reply uses the agent's current model. Choose the model together with its provider in the agent's model setting instead, or remove the provider you do not want to use. Pin agents' models to a provider in general: a model saved without one can start on the default provider when its name is ambiguous.
+
+### "The model returned an empty response"
+
+The model sent back no text and no tool call, even after one automatic retry. Omnipus does not switch to a fallback model for this, because an empty answer usually points to a defect rather than an outage. The gateway log has one warning line starting `LLM returned empty response after retry`. It names the provider and model, the finish reason, token counts, and the shape of what came back: stream event types with counts, output item types, status and incomplete reason. It never includes message content. Include that line when you report the problem.
 
 ### 400 "invalid model ID" or a rejected provider
 
@@ -89,6 +311,25 @@ The `model` value reaches the provider exactly as written; on OpenRouter, IDs ca
 
 `api_key_ref` names an entry in the encrypted credential store. Set it without touching files with `omnipus credentials set openrouter_api_key sk-or-v1-...`, or use **Settings → Security → Credential Vault** in the web app.
 
+## Saving a search integration fails with "could not read the current configuration"
+
+Saving a default search provider can require another read of the current configuration to check the automatic DuckDuckGo fallback. If that read fails, the request returns HTTP 500 with this message before saving any key or configuration changes. Restore readable, valid configuration, then retry the save.
+
+## A secret card says "Submission unknown" or "Request unavailable"
+
+If the connection drops after you submit, do not paste the value into chat or submit it automatically again. The card checks the server's saved request state. **Saved** means the vault has the new version; it does not mean the integration has switched to that version or passed a connection check.
+
+| Server state | What to do |
+|---|---|
+| Pending | The value has not been committed. Retry from the card when the connection is working. |
+| Submitted / Saved | Do not enter the value again. The agent's continuation uses the saved reference names. |
+| Cancelled or stopped | Ask for a new card if you still want to provide the secret. |
+| Interrupted / Request unavailable | The gateway restarted before submission, or the request is no longer accessible. Ask for a new card. |
+| Destination changed | Ask for a new card and review its destination before submitting. |
+| Secret saved; continuation not confirmed | Keep the saved reference. Reload the chat; unless you explicitly stopped it, the gateway retries a continuation that has not reached the conversation yet. Do not replace the secret just to restart the conversation. |
+
+A failed vault write leaves the request pending and stores none of the submitted fields. A repeated submit after a successful save returns the existing submitted state instead of overwriting its version.
+
 ## Saving a secret fails with "credential store locked"
 
 The encrypted credential store needs a master key. The gateway looks for one in this order:
@@ -103,29 +344,37 @@ The encrypted credential store needs a master key. The gateway looks for one in 
 
 A fresh install warns you to back up `master.key`. Heed it: losing that file makes every stored credential permanently unreadable, with no recovery. See [Security for users](security.md).
 
-## Credentials stop working after an upgrade
+## Credential-file format or authentication errors
 
-Every stored value is encrypted together with the name it is stored under, so a value cannot be moved from one entry to another and still open. A vault from an earlier release is upgraded to this format automatically, once, the first time the new gateway or any `omnipus` command opens it. You do not need to re-enter anything. The upgrade writes the whole file in one step: if it is interrupted, the old file is left as it was and the next start tries again.
+Every stored value is encrypted together with the name it is stored under, so a value cannot be moved from one entry to another and still open. Normal credential reads require the name-bound, version-2 file format. Unlock can convert a version-1 file before use, but refuses it when `credentials.json.migrated` already records a completed conversion. The conversion authenticates every entry and replaces the whole file atomically. A crash leaves either the original file or a complete converted file, not a mixture. Saving `credentials.json.migrated` is a separate, best-effort step after that replacement. If its write fails, a warning is logged, but conversion and unlocking can still succeed; the success event `credentials.store_migrated` is emitted even when the marker could not be saved. Without the marker, a restored version-1 file can be converted again.
 
-The gateway refuses to start, and changes nothing, in three cases:
+During that format conversion, the gateway refuses to start and leaves the credential file unchanged in these cases:
 
 | Message says | What it means | What to do |
 |---|---|---|
 | "every entry failed" | The master key is not the one the vault was written with | Supply the original master key (`master.key`, `OMNIPUS_MASTER_KEY` or `OMNIPUS_KEY_FILE`) |
-| "N of M entries failed authentication" and names them | Those entries were edited or copied on disk | Remove the named entries from `credentials.json`, restart, then enter them again |
-| "already migrated it once" | An old-format vault appeared after this installation had already been upgraded | If you restored a pre-upgrade backup on purpose, delete `credentials.json.migrated` next to the vault and restart. If you did not, treat the vault as tampered with |
+| "N of M entries failed authentication" and names them | The named entries could not be authenticated | Back up `credentials.json`, remove the named entries, restart, then enter their values again |
+| "already migrated it once" | A version-1 file is present alongside the completed-conversion marker | Remove `credentials.json.migrated` only if you deliberately restored a trusted version-1 backup. Otherwise treat the file as potentially tampered with and investigate it |
 
 To remove an entry by hand: stop the gateway, back up `credentials.json`, open it in a text editor, and delete the named entry (its name and its `nonce` and `ciphertext` lines) from the `credentials` section. Restart the gateway, then enter the value again in **Settings**, **Security**, **Credential Vault**, or with `omnipus credentials set <name> <value>`.
 
-### Going back to an older release, and coming back
+### Restoring a credential backup
 
-A release from before this change cannot read an upgraded vault. If you go back to one anyway, and re-enter credentials there so it writes an old-format vault, the next start of the newer release refuses with "already migrated it once". To recover, delete `credentials.json.migrated` next to the vault and start again. The vault is then upgraded a second time. Only do this when you know the old-format file came from you.
+Restore only a backup whose source you trust, with the master key or passphrase that opens it. A version-1 backup with a completed-conversion marker is refused. If that restore was deliberate, stop the gateway, remove `credentials.json.migrated` next to the vault, and start again to permit conversion. Do not remove the marker to bypass an unexplained file change.
 
-### Windows: two processes upgrading at once
+### Windows: concurrent credential-file conversion
 
-On Windows, Omnipus has no lock between separate processes. If two Omnipus processes (for example the gateway and an `omnipus credentials` command) open the same old-format vault at the same moment, both may run the upgrade. Each writes a complete, valid vault, and the last one written wins. No value is mixed up or swapped. In passphrase mode, the process whose write was replaced holds a key for the overwritten file and fails to read credentials until it is restarted. Start the gateway alone for the first run after upgrading.
+On Windows, separate processes do not share a file lock. If two Omnipus processes (for example the gateway and an `omnipus credentials` command) open the same version-1 file concurrently, both may convert it. Each writes a complete, valid vault, and the last write wins. In passphrase mode, the process whose write was replaced holds a key for the overwritten file and cannot read credentials until it is restarted. Run only one Omnipus process while converting a version-1 credential file.
 
-After the upgrade there is deliberately no fallback that reads an old entry: it would let a value be moved between names again. If one entry fails while the others still work, that entry was edited on disk or copied from another entry. The gateway names the entry at fault in its log. Re-enter it the same way.
+Normal entry reads never fall back to a different encryption format after an authentication failure. The gateway names a failing entry in its log. Inspect the named entry and its key, and re-enter the value through the same credential controls when needed.
+
+## The page shows "Something went wrong loading this page"
+
+A page, panel, or the onboarding wizard could not load or render — for example when a tab still references JavaScript files from an earlier deployment. This is not a sign-in failure and not a reason to restart setup. Press **Reload page** to fetch the current files and try again. If the message keeps returning, open your browser's developer console and copy the error when reporting the problem. Look for `[router] route load/render failed:` or `[app] Uncaught render error:`.
+
+## An agent is missing and a notice says its data is invalid
+
+If one agent's saved data does not match what the web app expects (for example a name longer than 100 characters), that one agent is left out of the agent lists and a notice names it: *One agent's data is invalid and is hidden from the list: <agent id>, field <field> (<reason>).* Every other agent stays usable. Repair the named field through the agent API using its current revision, then refresh the list. Agent records are stored separately from the gateway's global configuration; editing a legacy embedded agent list does not repair them. If the API cannot read or repair the record, report the named agent and field rather than changing unrelated configuration. A response the web app cannot read at all says *The server sent data this page could not read* with the address and field; it does not mean the browser and server versions differ.
 
 ## The web app looks outdated after a source build
 
@@ -137,6 +386,50 @@ grep -c "<your new string>" pkg/gateway/spa/assets/index-*.js
 
 A count of 0 means the copy is stale.
 
+## Mail is busy or cannot refresh
+
+The mail panel can answer with a **busy** notice instead of message data. Omnipus allows two connections per mailbox and eight across the whole application, shared fairly between the panel, your agents' mail tools, and the background new-mail watcher; a request that cannot get a slot inside a few seconds is refused rather than piling on. The notice says which of three things happened: the mailbox is in a **backoff** window after a failed check (the panel's **Retry** click bypasses only this), the **mailbox is busy** (its two slots were taken — wait a moment and retry), or the **server limit** was hit. Backoff clears on its own when the watcher's next attempt succeeds.
+
+Folder lists load 25 messages at a time, up to 200 per view; **Search** runs on your mail server within that same window, so older messages are reachable without loading everything. If a list or message was changed or deleted on the server in the meantime, the panel says so and lets you refresh once rather than showing you stale content.
+
+## Mail cache unavailable
+
+A **cache unavailable** warning on the mail panel means Omnipus could not prove that its private mail metadata storage is protected on this install — for example a disk failure or a permission problem, or a version-control repository in the data directory whose state Omnipus cannot verify. It is deliberately careful: until the proof succeeds, no cached mail metadata is written, and the mailbox keeps working live. The warning never means your mail is unavailable, and it is not asking you to install extra tooling — check disk space and the data directory's permissions first. See [Security for users](security.md#mail-metadata-and-temporary-previews) for what the cache holds.
+
+## Mailbox removal left cleanup pending
+
+Removing a mailbox always removes its configuration and stored password first — the account stops working immediately. Omnipus then erases its cached mail metadata and new-mail watching state. When that erase could not fully finish (a file held open or a disk error), the removal result says **cleanup pending** with a safe reason code and a retry key, instead of claiming success. Nothing of the mailbox remains usable in the meantime. Retry the cleanup with the key — `POST /api/v1/mailboxes/cleanup` with `{"cleanup_intent": "<the retry key>"}` — which also works after the mailbox row is already gone from the settings; the response is truthful again: **removed** when every step has now succeeded, **cleanup pending** with the same key if something still failed. Removing an agent or a workspace runs the same erase for each mailbox it held; files you saved from mail into a workspace are ordinary workspace files and are never touched by this cleanup.
+
+## An agent's main chat says it "could not be prepared"
+
+Opening an agent's main chat (see [Each agent's own chat, per workspace](workspaces.md#each-agents-own-chat-per-workspace)) can answer with this fixed message:
+
+> This agent's main chat could not be prepared because session storage failed. Check disk space and permissions, then retry. Details are in the server log.
+
+It means the agent is entitled to a main chat in that workspace, but Omnipus could not create it, or could not trust the one it found. The message deliberately names no file, folder or id; the full cause is in the gateway log as an error-level line starting `rest: main session could not be prepared on open`, with the `workspace_id`, `agent_id` and the underlying error. (A missing chat for an agent that is *not* on the team, a worker, or Omnipus outside the default workspace is different: that stays a plain "session not found".)
+
+**A workspace can be saved while its main chat is unavailable.** Saving team membership and preparing the chat are separate steps. The workspace-details response includes a safe preparation reason for each failed member instead of a main-chat address. It does not expose filesystem paths or the contents of a damaged saved identity. If a file occupies a location that must be a folder, the reason is:
+
+> The main chat could not be prepared because session storage has a file where a folder is required. Ask the server operator to fix it, then retry.
+
+When this failure prevents the workspace's first conversation agent from opening, Chat shows the server's reason with **Retry**, keeps the message box disabled, and does not say **Your agent is ready**. If no reason is provided, Chat keeps the generic **This chat is unavailable right now** notice instead. It never switches to the next teammate to hide the failure.
+
+The operator must correct the storage layout; **Retry** does not remove or replace the blocking file. Retry reads the same workspace's details and makes one preparation attempt per eligible member. Once storage is repaired, the next read returns the matching main-chat address and no preparation error; Chat opens that main and clears the notice. Sending resumes after the conversation finishes loading. Corrupt, mismatched or unclassified failures keep the fixed generic message above; full diagnostics stay in the server log. A healthy teammate's main chat remains available.
+
+**Why it can happen at startup too.** On every start Omnipus creates the main chats of the default workspace's team (the system agent Omnipus included) and of every saved workspace team. A failure there does not stop the gateway. It is logged at error level — `rest: boot mains: ...`, naming the workspace (and the agent) — and the chat is tried again the next time someone opens it.
+
+**What to do.**
+
+1. Read the error line in the gateway log (see [debugging](operations/debug.md)); it names the workspace and agent and the cause.
+2. If the cause is disk space or permissions on the data directory's `sessions` folder, fix that, then open the chat again. Opening it re-attempts the creation, so no restart is needed: the chat is created, or — if it already existed — the same chat is reused with its history.
+3. If the log says a saved main chat is unreadable or "does not match the pair" (for example its `meta.json` is damaged, or it records a different owner or workspace), Omnipus will not repair, adopt or replace it. An administrator must fix or remove that chat's folder under `sessions/` (its name is `main-session-<workspace>+<agent>`), after which opening the chat creates a fresh one.
+
+Other session reads and writes that hit a storage failure answer in the same way — "This session could not be read / renamed / deleted / created because session storage failed. Check disk space and permissions, then retry. Details are in the server log." — with the cause only in the log.
+
+A sent file that is no longer on record is not a storage failure. The chat opens normally, and the gateway log gets a warning, `replay: skipped file card, media ref unknown to the store`, with the session and the file's reference. When preparing a saved-history page or snapshot, another error while reading a file's record still fails that history read with the message above.
+
+One such error has its own log line. When a sent file's record cannot be checked at startup for a reason other than the file being gone, such as a permission or disk error on its folder, the gateway log gets a warning, `registry: registered file could not be inspected; its ref fails until a restart after the cause is fixed`, with the reference, the path and the cause, followed by `media: failed to load persisted registry`. A saved-history page containing that file then fails with the storage-failure message above; the other file records still load. Fix the permission or disk problem, then restart the gateway so the file can be fetched again by anything that still holds its address. This does not bring the file card back.
+
 ## Two more errors with short fixes
 
 **"priority must be between 1 and 5"** — task priority runs from 1 (highest) to 5 (lowest); 3 is the default, and anything outside the range is rejected.
@@ -147,6 +440,22 @@ A count of 0 means the copy is stale.
 export TMPDIR=/path/to/workspace/tmp
 mkdir -p "$TMPDIR"
 ```
+
+## Attachment and image size limits
+
+Omnipus shrinks images automatically before it sends them to a model, so they fit that model's limits: longest edge, file size, and — for providers that count them — vision-patch budgets such as ChatGPT's limit of 30,000 patches (32×32-pixel tiles) per image. This covers files you attach, images an agent captures itself (for example a full-page `browser_screenshot` of a very long page), and images already stored in the conversation: an oversized image in history is resized again on every send, so one large screenshot can no longer make every following reply on that model fail. When a turn falls back to another model, the image is fitted to that model's limits too.
+
+If the provider still rejects an image for its size, the reply says so — never the generic "unsupported format" message:
+
+| Notice | Meaning and next step |
+|---|---|
+| "An image in this conversation is too large for this model's size limit…" | The provider rejected the image for its size, even after automatic resizing. Send a smaller image — for example capture a viewport screenshot instead of a full-page capture of a very long page — or switch to a model with a larger image limit. Technical detail is available live under **Verbose chat**. |
+
+Things to watch:
+
+- A resized image may be visibly smaller than the capture; the model sees the resized version.
+- Very tall full-page captures are the usual cause of size limits: a 2560-pixel-wide capture of a very long page can need more patches than a model allows even though its file size is modest.
+- When a tool's image cannot be made to fit even after resizing, the tool result carries the exact marker `[attachment unavailable: <filename> (image too large to fit the model's size limits, even after resizing)]` — for example `[attachment unavailable: browser-screenshot.png (image too large to fit the model's size limits, even after resizing)]` — instead of the image. The surrounding tool text is preserved. An older image in the conversation that cannot be made to fit is replaced, for that request only, by `[attachment unavailable: image (too large to fit the model's size limits, even after resizing)]`. An older image whose data is corrupt or truncated (so it cannot even be decoded) and that is also over the size limit is replaced by `[attachment unavailable: image (data unreadable: corrupt or truncated, and over the model's size limits)]` — sending it would only earn a media-too-large rejection on every later iteration, and the marker says the real cause.
 
 ## Limits and things to watch
 

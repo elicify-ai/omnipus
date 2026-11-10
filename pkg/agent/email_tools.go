@@ -1,18 +1,22 @@
 package agent
 
 import (
+	"errors"
 	"log/slog"
 	"os"
 	"sort"
 	"strings"
+	"sync/atomic"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/email"
+	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // registerEmailToolsForAgent registers the M11 email tools (read_inbox,
-// search_email, read_message, send_email, reply) on the given agent
+// search_email, read_message, send_email, reply, create_email_draft — the
+// sixth added by email-mail-view-spec §2.7 point 6) on the given agent
 // UNCONDITIONALLY, like every other builtin. Whether the agent may use them is
 // its tool POLICY; whether it has an inbox to use them ON is data, resolved per
 // turn.
@@ -44,6 +48,74 @@ import (
 // operator could not see or set the permission at all: there was no row.
 // Registering always restores that control without loosening anything, since a
 // denied tool never reaches the model (tools.FilterToolsByPolicy).
+// sharedMailBudget holds the process-wide A8 mail-operation budget the email
+// tools gate their dials through. The gateway installs it BEFORE NewAgentLoop
+// (pkg/gateway/gateway.go::initializeAgentLoop — the same "must run before
+// NewAgentLoop" site as SetWindowCatalog) so it is already present when
+// registerSharedTools registers the email tools at instance construction; a
+// nil pointer means the tools dial ungated (unit tests).
+var sharedMailBudget atomic.Pointer[email.MailBudget]
+
+// SetSharedMailBudget installs the process-wide shared mail budget. One
+// writer per process (gateway boot); the watcher set and the REST handlers
+// resolve the SAME instance themselves via email.SharedMailBudget(stateDir).
+func SetSharedMailBudget(b *email.MailBudget) { sharedMailBudget.Store(b) }
+
+// sharedMailSessions holds the process-wide pooled session manager the
+// email tools' clients borrow IMAP sessions from (w5-integration, MC-1 —
+// the pool analogue of sharedMailBudget). Nil (unit tests) keeps the
+// legacy per-call dial.
+var sharedMailSessions atomic.Pointer[email.MailSessions]
+
+// SetSharedMailSessions installs the process-wide shared session manager.
+// One writer per process (gateway boot, BEFORE NewAgentLoop so the tools
+// capture it at registration — the SetSharedMailBudget ordering rule).
+func SetSharedMailSessions(s *email.MailSessions) { sharedMailSessions.Store(s) }
+
+// MailGenerationResolver returns one pair's non-secret configuration
+// generation (w5-integration owns the construction; this side consumes it
+// as an opaque value, register row 12).
+type MailGenerationResolver func(agentID, workspaceID string) (generation string, err error)
+
+// sharedMailGenerationResolver resolves a pair's generation for the pool's
+// identity scope. One writer (gateway boot); nil keeps clients unscooped —
+// which only unit tests do.
+var sharedMailGenerationResolver atomic.Pointer[MailGenerationResolver]
+
+// SetMailGenerationResolver installs the generation resolver.
+func SetMailGenerationResolver(r MailGenerationResolver) {
+	sharedMailGenerationResolver.Store(&r)
+}
+
+// mailGenerationForPair resolves the pair's generation through the injected
+// resolver. A failure is returned — never swallowed: a client without its
+// generation would pool under the endpoint-only identity and break pair
+// isolation (MC-3), so the caller skips the pair visibly instead.
+func mailGenerationForPair(agentID, workspaceID string) (string, error) {
+	r := sharedMailGenerationResolver.Load()
+	if r == nil {
+		return "", errors.New("email tools: no mail generation resolver installed")
+	}
+	return (*r)(agentID, workspaceID)
+}
+
+// emailToolAccount is the transport account the email tools dial for one
+// mailbox. SignatureHTML rides the account so send_email, reply and
+// create_email_draft append that mailbox's signature through email.Compose.
+func emailToolAccount(mb config.MailboxConfig, password string) email.Account {
+	return email.Account{
+		IMAPHost:      mb.IMAPHost,
+		IMAPPort:      mb.IMAPPort,
+		SMTPHost:      mb.SMTPHost,
+		SMTPPort:      mb.SMTPPort,
+		Username:      mb.Username,
+		Password:      password,
+		SentFolder:    mb.SentFolderName,
+		DraftsFolder:  mb.DraftsFolderName,
+		SignatureHTML: mb.SignatureHTML,
+	}
+}
+
 func registerEmailToolsForAgent(cfg *config.Config, agentID string, agent *AgentInstance) {
 	if cfg == nil || agent == nil {
 		return
@@ -81,23 +153,64 @@ func registerEmailToolsForAgent(cfg *config.Config, agentID string, agent *Agent
 			continue
 		}
 
-		client, err := email.NewClient(email.Account{
-			IMAPHost: mb.IMAPHost,
-			IMAPPort: mb.IMAPPort,
-			SMTPHost: mb.SMTPHost,
-			SMTPPort: mb.SMTPPort,
-			Username: mb.Username,
-			Password: password,
-		})
+		client, err := email.NewClient(emailToolAccount(mb, password))
 		if err != nil {
 			slog.Warn("email tools: mailbox transport construction failed — skipping pair",
 				"agent_id", agentID, "workspace_id", wsID, "error", err)
 			continue
 		}
+		// w5-integration (MC-1, wiring site 4): the tool's client borrows
+		// sessions from THE shared pool under the pair's own identity scope.
+		// A scope-resolution failure skips the pair visibly — an unscooped
+		// client would break pair isolation, so no fallback dial path exists
+		// here once the manager is wired.
+		if s := sharedMailSessions.Load(); s != nil {
+			gen, gerr := mailGenerationForPair(agentID, wsID)
+			if gerr != nil {
+				slog.Warn("email tools: mail pair generation unavailable — skipping pair",
+					"agent_id", agentID, "workspace_id", wsID)
+				continue
+			}
+			client.SetSessionSource(s)
+			client.SetSessionScope(agentID+"/"+wsID, gen)
+		}
 		transports[wsID] = client
 	}
 
 	for _, t := range tools.EmailToolset(transports) {
+		// FR-015: the draft tool's chat_link is derived from the gateway's
+		// canonical public origin — the SAME derivation serve_web's preview
+		// URLs use (middleware.CanonicalGatewayOrigin, FR-022 order: public_url
+		// first, wildcard-bind → ""). Injected via an optional setter so
+		// EmailToolset's signature stays tool-map-only (the RED suite constructs
+		// the toolset from transports alone; origin "" → chat_link null with a
+		// stated reason).
+		if origin := middleware.CanonicalGatewayOrigin(cfg); origin != "" {
+			if setter, ok := t.(interface{ SetChatLinkOrigin(origin string) }); ok {
+				setter.SetChatLinkOrigin(origin)
+			}
+		}
+		// A8 mail-operation budget: injected the same way — an optional
+		// setter at registration, so EmailToolset's construction signature
+		// stays transports-only (the RED suite constructs the toolset from
+		// transports alone). The tools gate their dialing reads through this
+		// shared gate (2-per-account cap + backoff refusal, NO retry bypass
+		// — the tool surface structurally cannot set retry, pinned by
+		// pkg/tools/email_no_retry_param_test.go).
+		if b := sharedMailBudget.Load(); b != nil {
+			if setter, ok := t.(interface {
+				SetMailBudget(b *email.MailBudget, agentID string)
+			}); ok {
+				setter.SetMailBudget(b, agentID)
+			}
+		}
+		// Attachment saves resolve and authorize the current turn's workspace
+		// on every call; never pin one mailbox's destination across turns.
+		if setter, ok := t.(interface {
+			SetTransferServiceFactory(agentID, agentHome string, restrict bool)
+		}); ok {
+			setter.SetTransferServiceFactory(agentID, agent.Home, cfg.Agents.Defaults.RestrictToWorkspace)
+		}
 		// registerSharedTools re-runs during config reload and fast agent
 		// upsert. Replacing this first-party toolset is expected: each fresh
 		// instance carries the current workspace-to-mailbox map. Keep strict

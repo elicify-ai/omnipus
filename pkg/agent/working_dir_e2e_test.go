@@ -88,7 +88,7 @@ func TestRunTurn_MultiMembership_AdvertisementMatchesEnforcement(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	defer al.Close()
-	defaultAgent := al.registry.GetDefaultAgent()
+	defaultAgent := al.registry.primaryChatAgentForTest()
 	if defaultAgent == nil {
 		t.Fatal("expected default agent")
 	}
@@ -108,7 +108,7 @@ func TestRunTurn_MultiMembership_AdvertisementMatchesEnforcement(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	reply, _, err := al.processMessage(ctx, msg)
+	reply, _, err := al.processMessageAsPrimaryForTest(ctx, msg)
 	require.NoError(t, err, "processMessage must succeed")
 	assert.Equal(t, "done", reply)
 

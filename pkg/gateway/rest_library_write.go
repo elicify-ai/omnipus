@@ -358,7 +358,18 @@ func (a *restAPI) handleLibraryEntryDelete(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// #1449 D26, FR-086: the chat copy goes first, the Library file last.
+	removedCopy, copiesOK := a.deleteChatCopies(w, workspaceID, rel)
+	if !copiesOK {
+		return
+	}
 	if err := root.Delete(rel); err != nil {
+		if removedCopy && !errors.Is(err, os.ErrNotExist) {
+			logger.ErrorCF("rest", "library delete: the chat copy is removed but the Library file is not",
+				map[string]any{"workspace_id": workspaceID, "path": rel, "error": err.Error()})
+			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not delete %s completely: try again", path.Base(rel)))
+			return
+		}
 		mapLibraryErr(w, "delete entry", workspaceID, err)
 		return
 	}
@@ -823,7 +834,7 @@ func (a *restAPI) handleLibraryUpload(w http.ResponseWriter, r *http.Request, wo
 			rollback()
 			logger.ErrorCF("rest", "library: upload: create file failed",
 				map[string]any{"workspace_id": workspaceID, "path": destRel, "error": createErr.Error()})
-			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not create file: %v", createErr))
+			jsonServerFailure(w, http.StatusInternalServerError, "could not create file", createErr)
 			return
 		}
 
@@ -837,7 +848,7 @@ func (a *restAPI) handleLibraryUpload(w http.ResponseWriter, r *http.Request, wo
 					map[string]any{"workspace_id": workspaceID, "path": finalRel, "error": rmErr.Error()})
 			}
 			rollback()
-			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("file write failed: %v", copyErr))
+			jsonServerFailure(w, http.StatusInternalServerError, "file write failed", copyErr)
 			return
 		}
 		if written > maxUploadFileSize {
@@ -859,7 +870,15 @@ func (a *restAPI) handleLibraryUpload(w http.ResponseWriter, r *http.Request, wo
 			jsonErr(w, http.StatusInternalServerError, "internal server error")
 			return
 		}
-		resp.Entries = append(resp.Entries, library.EntryFromInfo(finalRel, fi))
+		// The response's entries element IS the contract's LibraryEntry:
+		// LibraryUploadResponse hosts its items over the internal component
+		// ref (see the openapi.yaml components comment), so EntryFromInfo's
+		// generated entry is appended directly — no hand-written mirror
+		// struct, no preview-profile enum conversion. Uploads are ordinary
+		// workspace files today, so preview_profile is nil here; the direct
+		// append still carries it should EntryFromInfo ever set one.
+		entry := library.EntryFromInfo(finalRel, fi)
+		resp.Entries = append(resp.Entries, entry)
 	}
 
 	if len(resp.Entries) == 0 {
@@ -1127,6 +1146,8 @@ func (a *restAPI) handleLibraryRename(w http.ResponseWriter, r *http.Request, wo
 		mapLibraryErr(w, "rename", workspaceID, err)
 		return
 	}
+	// #1449 D26: the chat copy association follows the file.
+	a.followChatCopies(workspaceID, fromRel, toRel)
 	// U-58: renaming a knowledge base's last marker away demotes the folder.
 	a.releaseKnowledgeBaseIfDemoted(root, fromRel)
 	// ADR-067 FR-003d: the granted path has MOVED, so every token naming it —
@@ -1246,6 +1267,14 @@ func (a *restAPI) handleLibraryTransfer(w http.ResponseWriter, r *http.Request, 
 	// hold a live grant either, because both modes refuse an existing
 	// destination (409) and a token can only be minted over a path that exists.
 	if mode == transferModeMove {
+		// #1449 D26: a move inside the workspace keeps the chat copy
+		// association; a move to another workspace drops it (the chat copy
+		// stays where it is). A copy is a new file with none.
+		if sameWorkspace {
+			a.followChatCopies(req.FromWorkspaceId, fromRel, toRel)
+		} else {
+			a.followChatCopies(req.FromWorkspaceId, fromRel, "")
+		}
 		a.revokePreviewTokensForPath(req.FromWorkspaceId, fromRel)
 		// U-58: moving a knowledge base's last marker away demotes the folder
 		// it left.

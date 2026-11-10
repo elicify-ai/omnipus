@@ -33,11 +33,14 @@ func (al *AgentLoop) getAskUserRegistry() tools.AskUserQuestionRegistry {
 // asked everything to stop; the terminal cancelled record persists for the
 // collapsed-card render. A nil registry or empty key is a no-op: a parked
 // set simply stays pending, which is the pre-wiring behavior.
-func (al *AgentLoop) cancelPendingAskForScope(sessionID string) {
+func (al *AgentLoop) cancelPendingAskForScope(sessionID string) error {
 	if sessionID == "" {
-		return
+		return nil
 	}
 	if r := al.getAskUserRegistry(); r != nil {
 		r.CancelOnSessionStop(sessionID)
 	}
+	// The session's pairing is ended by StopSession after this cancel has been
+	// initiated, never here before it (gate r2 CR-T2-R2-02).
+	return al.stopSecretRequests(sessionID)
 }

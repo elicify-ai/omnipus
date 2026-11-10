@@ -10,10 +10,13 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers/common"
+	"github.com/elicify-ai/omnipus/pkg/providers/effortdialect"
+	"github.com/elicify-ai/omnipus/pkg/providers/promptcache"
 	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 )
 
@@ -33,13 +36,29 @@ type (
 type Provider struct {
 	apiKey             string
 	apiBase            string
+	providerID         string // catalog id, including when api_base is overridden
 	maxTokensField     string // Field name for max tokens (e.g., "max_completion_tokens" for o1/glm models)
 	httpClient         *http.Client
 	extraBody          map[string]any // Additional fields to inject into request body
 	streamStallTimeout time.Duration  // streaming silence limit; 0 = common.DefaultStreamStallTimeout
+	// explicitRequestTimeout is the operator's request_timeout (issue #1485);
+	// zero when the shipped default applies. Only an explicit value is a
+	// hard ceiling on a non-streaming call that carries a longer deadline.
+	explicitRequestTimeout time.Duration
+
+	// streamTransportOnce/streamTransport hold the streaming client's
+	// transport: the request client's transport plus a response-header
+	// connection guard (see streamingTransport). Built once so streaming
+	// calls keep sharing a connection pool.
+	streamTransportOnce sync.Once
+	streamTransport     http.RoundTripper
 }
 
 type Option func(*Provider)
+
+func WithProviderID(id string) Option {
+	return func(p *Provider) { p.providerID = id }
+}
 
 const defaultRequestTimeout = common.DefaultRequestTimeout
 
@@ -53,6 +72,7 @@ func WithRequestTimeout(timeout time.Duration) Option {
 	return func(p *Provider) {
 		if timeout > 0 {
 			p.httpClient.Timeout = timeout
+			p.explicitRequestTimeout = timeout
 		}
 	}
 }
@@ -121,9 +141,16 @@ func NewProviderWithMaxTokensFieldAndTimeout(
 func (p *Provider) buildRequestBody(
 	messages []Message, tools []ToolDefinition, model string, options map[string]any,
 ) map[string]any {
+	// Only the OpenRouter route replays the private reasoning_details
+	// carrier (effort-levels spec FR-013, S-33).
+	openRouter := strings.EqualFold(p.providerID, "openrouter")
+	serialize, serializeCached := common.SerializeMessages, common.SerializeCacheMessages
+	if openRouter {
+		serialize, serializeCached = common.SerializeOpenRouterMessages, common.SerializeOpenRouterCacheMessages
+	}
 	requestBody := map[string]any{
 		"model":    model,
-		"messages": common.SerializeMessages(messages),
+		"messages": serialize(messages),
 	}
 
 	// When fallback uses a different provider (e.g. DeepSeek), that provider must not inject web_search_preview.
@@ -161,21 +188,31 @@ func (p *Provider) buildRequestBody(
 		requestBody["seed"] = seed
 	}
 
-	// Prompt caching: pass a stable cache key so OpenAI can bucket requests
-	// with the same key and reuse prefix KV cache across calls.
-	// Prompt caching is only supported by OpenAI-native endpoints.
-	// Non-OpenAI providers reject unknown fields with 422 errors.
-	if cacheKey, ok := options["prompt_cache_key"].(string); ok && cacheKey != "" {
-		if supportsPromptCacheKey(p.apiBase) {
-			requestBody["prompt_cache_key"] = cacheKey
+	transport := p.cacheTransport(model)
+	if transport.SendEphemeralCacheControl {
+		requestBody["messages"] = serializeCached(messages)
+	}
+	if sessionID, _ := options["prompt_cache_key"].(string); sessionID != "" {
+		if transport.SendPromptCacheKey {
+			requestBody["prompt_cache_key"] = sessionID
+		}
+		if transport.SendBodySessionID {
+			requestBody["session_id"] = sessionID
 		}
 	}
 
-	// Merge extra body fields configured per-provider/model.
-	// These are injected last so they take precedence over defaults.
-	for k, v := range p.extraBody {
+	// Effort (effort-levels spec FR-037, FR-037a): the resolved value in its
+	// route's own form; Provider default sends no effort key.
+	fields, sent := effortdialect.EncodeOpenAIChat(p.providerID, model, effortdialect.Requested(options))
+	for k, v := range fields {
 		requestBody[k] = v
 	}
+
+	// Merge extra body fields configured per-provider/model.
+	// These are injected last so they take precedence over defaults; an
+	// extra_body effort key overrides the chosen effort and is reported (S-20).
+	sent = effortdialect.ApplyExtraBody(requestBody, p.extraBody, sent)
+	effortdialect.Report(options, sent)
 
 	return requestBody
 }
@@ -204,11 +241,16 @@ func (p *Provider) Chat(
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	if header := p.cacheTransport(model).SessionHeader; header != "" {
+		if sessionID, _ := options["prompt_cache_key"].(string); sessionID != "" {
+			req.Header.Set(header, sessionID)
+		}
+	}
 	if p.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+p.apiKey)
 	}
 
-	resp, err := p.httpClient.Do(req)
+	resp, err := p.nonStreamingClient(ctx).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
@@ -218,7 +260,7 @@ func (p *Provider) Chat(
 		return nil, common.HandleErrorResponse(resp, p.apiBase)
 	}
 
-	return common.ReadAndParseResponse(resp, p.apiBase)
+	return common.ReadAndParseResponse(resp, p.apiBase, p.providerID)
 }
 
 // ChatStream implements streaming via OpenAI-compatible SSE (stream: true).
@@ -251,15 +293,24 @@ func (p *Provider) ChatStream(
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	if header := p.cacheTransport(model).SessionHeader; header != "" {
+		if sessionID, _ := options["prompt_cache_key"].(string); sessionID != "" {
+			req.Header.Set(header, sessionID)
+		}
+	}
 	req.Header.Set("Accept", "text/event-stream")
 	if p.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+p.apiKey)
 	}
 
 	// Use a client without http.Client.Timeout for streaming — that timeout covers
-	// the entire request lifecycle including body reads, which would kill long streams.
-	// Context cancellation from the caller (turn timeout) provides the safety net.
-	streamClient := &http.Client{Transport: p.httpClient.Transport}
+	// the entire request lifecycle including body reads, which would kill long
+	// streams. There is no turn timeout to fall back on (issue #1306), so the
+	// transport carries a CONNECTION guard instead: the response headers must
+	// arrive within the request timeout (streamingTransport). Once they have
+	// arrived, only the stream-stall watcher below applies — a stream that keeps
+	// delivering is never cut.
+	streamClient := &http.Client{Transport: p.streamingTransport()}
 	//nolint:bodyclose // body is closed via defer resp.Body.Close() below; goroutine also closes to unblock scanner on ctx cancel
 	resp, err := streamClient.Do(req)
 	if err != nil {
@@ -287,7 +338,64 @@ func (p *Provider) ChatStream(
 	watch := common.WatchStreamStall(ctx, func() { _ = resp.Body.Close() }, stall)
 	defer watch.Stop()
 
-	return parseStreamResponse(ctx, resp.Body, onChunk, onProgress, watch)
+	return parseStreamResponse(ctx, resp.Body, onChunk, onProgress, watch, p.providerID)
+}
+
+// ExplicitRequestTimeout implements providers.RequestTimeoutReporter: the
+// operator's request_timeout, or zero when the shipped default applies.
+func (p *Provider) ExplicitRequestTimeout() time.Duration { return p.explicitRequestTimeout }
+
+// nonStreamingClient returns the client for one non-streaming call (issue
+// #1485). The shipped default request timeout must never undercut a longer
+// deadline the caller granted — the fallback chain's size-scaled
+// per-attempt limit — so when no explicit request_timeout is set and ctx
+// carries a deadline beyond the client timeout, the call is bounded by ctx
+// alone (same transport, same pool). An explicit request_timeout, or a call
+// without a longer deadline, keeps the client timeout unchanged.
+func (p *Provider) nonStreamingClient(ctx context.Context) *http.Client {
+	if p.explicitRequestTimeout > 0 || p.httpClient.Timeout <= 0 {
+		return p.httpClient
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok || time.Until(deadline) <= p.httpClient.Timeout {
+		return p.httpClient
+	}
+	c := *p.httpClient
+	c.Timeout = 0
+	return &c
+}
+
+// streamingTransport returns the request client's transport with
+// ResponseHeaderTimeout set to the request timeout (issue #1306 connection
+// guard): a provider that accepts a streaming request but never sends response
+// headers fails with a retryable timeout instead of hanging the turn. It bounds
+// only the wait for headers, never the body. A transport that is not an
+// *http.Transport (a test double) is returned unchanged.
+func (p *Provider) streamingTransport() http.RoundTripper {
+	p.streamTransportOnce.Do(func() {
+		base := p.httpClient.Transport
+		if base == nil {
+			base = http.DefaultTransport
+		}
+		t, ok := base.(*http.Transport)
+		if !ok {
+			p.streamTransport = base
+			return
+		}
+		guarded := t.Clone()
+		guarded.ResponseHeaderTimeout = p.connectionGuardTimeout()
+		p.streamTransport = guarded
+	})
+	return p.streamTransport
+}
+
+// connectionGuardTimeout is the request timeout (request_timeout, default
+// 120 s) reused as the streaming response-header guard.
+func (p *Provider) connectionGuardTimeout() time.Duration {
+	if p.httpClient != nil && p.httpClient.Timeout > 0 {
+		return p.httpClient.Timeout
+	}
+	return defaultRequestTimeout
 }
 
 // parseStreamResponse parses an OpenAI-compatible SSE stream. watch, when
@@ -301,6 +409,7 @@ func parseStreamResponse(
 	onChunk func(accumulated string),
 	onProgress protocoltypes.OnToolCallProgress,
 	watch *common.StreamStallWatch,
+	providerID ...string,
 ) (*LLMResponse, error) {
 	var textContent strings.Builder
 	var finishReason string
@@ -309,14 +418,11 @@ func parseStreamResponse(
 	var totalReasoningBytes int
 
 	// Tool call assembly: OpenAI streams tool calls as incremental deltas
-	type toolAccum struct {
-		id       string
-		name     string
-		argsJSON strings.Builder
-	}
 	activeTools := map[int]*toolAccum{}
+	var details reasoningDetailsAccum
 
 	var malformedChunks int
+	var streamErr *common.StreamProviderError
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024) // 1MB initial, 10MB max
 	for scanner.Scan() {
@@ -347,9 +453,9 @@ func parseStreamResponse(
 					// Reasoning ("thinking") deltas — see
 					// reasoningDeltaBytes for the three spellings. Only
 					// their length is ever used.
-					Reasoning        string                  `json:"reasoning"`
-					ReasoningContent string                  `json:"reasoning_content"`
-					ReasoningDetails []streamReasoningDetail `json:"reasoning_details"`
+					Reasoning        string            `json:"reasoning"`
+					ReasoningContent string            `json:"reasoning_content"`
+					ReasoningDetails []json.RawMessage `json:"reasoning_details"`
 					ToolCalls        []struct {
 						Index    int    `json:"index"`
 						ID       string `json:"id"`
@@ -362,6 +468,13 @@ func parseStreamResponse(
 				FinishReason *string `json:"finish_reason"`
 			} `json:"choices"`
 			Usage *common.OpenAINonStreamUsage `json:"usage"`
+			// Error is OpenRouter's mid-stream error (issue #1278): the 200 is
+			// already committed, so a provider failure arrives as a top-level
+			// error object on a chunk whose finish_reason is "error".
+			Error *struct {
+				Code    json.RawMessage `json:"code"`
+				Message string          `json:"message"`
+			} `json:"error"`
 		}
 
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
@@ -370,7 +483,17 @@ func parseStreamResponse(
 		}
 
 		if chunk.Usage != nil {
-			usage = chunk.Usage.ToUsageInfo()
+			var err error
+			usage, err = chunk.Usage.ToUsageInfo(providerID...)
+			if err != nil {
+				return nil, fmt.Errorf("stream usage: %w", err)
+			}
+		}
+		if chunk.Error != nil && streamErr == nil {
+			streamErr = &common.StreamProviderError{
+				Code:    streamErrorCode(chunk.Error.Code),
+				Message: chunk.Error.Message,
+			}
 		}
 
 		if len(chunk.Choices) == 0 {
@@ -392,8 +515,19 @@ func parseStreamResponse(
 		// its first content or tool-call byte, and ignoring these deltas made
 		// that indistinguishable from a hung call. The reasoning TEXT is not
 		// kept or forwarded — only its byte count reaches the callback.
+		streamDetails := make([]streamReasoningDetail, 0, len(choice.Delta.ReasoningDetails))
+		for _, raw := range choice.Delta.ReasoningDetails {
+			if err := details.add(raw); err != nil {
+				return nil, fmt.Errorf("stream %w", err)
+			}
+			var d streamReasoningDetail
+			if err := json.Unmarshal(raw, &d); err != nil {
+				return nil, fmt.Errorf("stream reasoning_details item: %w", err)
+			}
+			streamDetails = append(streamDetails, d)
+		}
 		if n := reasoningDeltaBytes(
-			choice.Delta.Reasoning, choice.Delta.ReasoningContent, choice.Delta.ReasoningDetails,
+			choice.Delta.Reasoning, choice.Delta.ReasoningContent, streamDetails,
 		); n > 0 {
 			totalReasoningBytes += n
 			protocoltypes.SafeInvoke(onProgress, protocoltypes.ToolCallProgress{
@@ -446,34 +580,70 @@ func parseStreamResponse(
 	}
 
 	if err := scanner.Err(); err != nil {
-		// If the caller's context was canceled or timed out, our own ctx.Done()
-		// watchdog goroutine (ChatStream) closed resp.Body to unblock this scanner
-		// — the resulting "http2: response body closed" is NOT a server-side
-		// connection drop but a cancellation/timeout. Surface the context error so
-		// callers classify it correctly (context.Canceled → clean cancel;
-		// context.DeadlineExceeded → llm_timeout) instead of misreading it as a
-		// transient stream reset and retrying a request the caller already abandoned.
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return nil, ctxErr
-		}
-		// A body-closed read error while the context is still alive is EITHER
-		// our stall monitor aborting a fully silent stream (founder decision
-		// 2026-09-14) or a genuine server-side reset — the same bytes carry
-		// both. Fired() is the only honest discriminator: it is set by our own
-		// monitor just before it closes the body. Only then report the typed
-		// stall error so callers classify it as a retryable provider fault
-		// rather than a transient reset; a server drop keeps its historical
-		// streaming-read-error classification.
-		if watch.Fired() && common.IsBodyClosedStreamError(err) {
-			return nil, common.NewStallError(watch.SilentFor())
-		}
-		return nil, fmt.Errorf("streaming read error: %w", err)
+		return nil, streamScanError(ctx, err, watch)
 	}
 	if malformedChunks > 0 {
 		logger.WarnCF("openai_compat", "skipped malformed SSE chunks", map[string]any{"count": malformedChunks})
 	}
 
-	// Assemble tool calls from accumulated deltas
+	// A provider that ended the response with an error (an error chunk, or the
+	// finish_reason "error" that always accompanies it) did not finish: what
+	// streamed is not an answer and the tool call that was coming never
+	// arrived. Report it - with the usage the failed attempt was billed for -
+	// instead of returning the preamble as a final answer (issue #1278).
+	if streamErr != nil || finishReason == "error" {
+		if streamErr == nil {
+			streamErr = &common.StreamProviderError{Code: "error", Message: "the stream ended with finish_reason \"error\""}
+		}
+		streamErr.Usage = usage
+		logger.WarnCF("openai_compat", "provider ended the stream with an error; the partial response is discarded",
+			map[string]any{
+				"code": streamErr.Code, "message": streamErr.Message,
+				"content_chars": textContent.Len(), "tool_calls_started": len(activeTools),
+				"reasoning_bytes": totalReasoningBytes, "completion_tokens": completionTokens(usage),
+			})
+		return nil, streamErr
+	}
+
+	toolCalls, err := assembleStreamToolCalls(activeTools, finishReason, usage)
+	if err != nil {
+		return nil, err
+	}
+
+	if finishReason == "" {
+		if textContent.Len() > 0 || len(activeTools) > 0 {
+			logger.WarnCF("openai_compat", "stream ended without finish_reason; defaulting to \"unknown\"", nil)
+			finishReason = "unknown"
+		} else {
+			finishReason = "stop"
+		}
+	}
+
+	reasoningDetails, err := details.items()
+	if err != nil {
+		return nil, fmt.Errorf("stream %w", err)
+	}
+
+	return &LLMResponse{
+		Content:          textContent.String(),
+		ToolCalls:        toolCalls,
+		FinishReason:     finishReason,
+		Usage:            usage,
+		ReasoningDetails: reasoningDetails,
+	}, nil
+}
+
+// toolAccum is one tool call being assembled from streamed deltas.
+type toolAccum struct {
+	id       string
+	name     string
+	argsJSON strings.Builder
+}
+
+// assembleStreamToolCalls decodes the tool calls accumulated off an SSE stream,
+// in index order. finishReason and usage are already captured off the stream
+// when it runs, so a refusal can carry them as evidence.
+func assembleStreamToolCalls(activeTools map[int]*toolAccum, finishReason string, usage *UsageInfo) ([]ToolCall, error) {
 	var toolCalls []ToolCall
 	for i := 0; i < len(activeTools); i++ {
 		acc, ok := activeTools[i]
@@ -505,22 +675,33 @@ func parseStreamResponse(
 			Arguments: args,
 		})
 	}
+	return toolCalls, nil
+}
 
-	if finishReason == "" {
-		if textContent.Len() > 0 || len(activeTools) > 0 {
-			logger.WarnCF("openai_compat", "stream ended without finish_reason; defaulting to \"unknown\"", nil)
-			finishReason = "unknown"
-		} else {
-			finishReason = "stop"
-		}
+// streamScanError turns a failed SSE scan into the error the caller should see.
+func streamScanError(ctx context.Context, err error, watch *common.StreamStallWatch) error {
+	// If the caller's context was canceled or timed out, our own ctx.Done()
+	// watchdog goroutine (ChatStream) closed resp.Body to unblock this scanner
+	// — the resulting "http2: response body closed" is NOT a server-side
+	// connection drop but a cancellation/timeout. Surface the context error so
+	// callers classify it correctly (context.Canceled → clean cancel;
+	// context.DeadlineExceeded → llm_timeout) instead of misreading it as a
+	// transient stream reset and retrying a request the caller already abandoned.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
 	}
-
-	return &LLMResponse{
-		Content:      textContent.String(),
-		ToolCalls:    toolCalls,
-		FinishReason: finishReason,
-		Usage:        usage,
-	}, nil
+	// A body-closed read error while the context is still alive is EITHER
+	// our stall monitor aborting a fully silent stream (founder decision
+	// 2026-09-14) or a genuine server-side reset — the same bytes carry
+	// both. Fired() is the only honest discriminator: it is set by our own
+	// monitor just before it closes the body. Only then report the typed
+	// stall error so callers classify it as a retryable provider fault
+	// rather than a transient reset; a server drop keeps its historical
+	// streaming-read-error classification.
+	if watch.Fired() && common.IsBodyClosedStreamError(err) {
+		return common.NewStallError(watch.SilentFor())
+	}
+	return fmt.Errorf("streaming read error: %w", err)
 }
 
 // streamReasoningDetail is one element of OpenRouter's structured
@@ -584,17 +765,23 @@ func isNativeSearchHost(apiBase string) bool {
 	return host == "api.openai.com" || strings.HasSuffix(host, ".openai.azure.com")
 }
 
-// supportsPromptCacheKey reports whether the given API base is known to
-// support the prompt_cache_key request field. Currently only OpenAI's own
-// API and Azure OpenAI support this. All other OpenAI-compatible providers
-// (Mistral, Gemini, DeepSeek, Groq, etc.) reject unknown fields with 422 errors.
+// cacheTransport uses the catalog identity even for an overridden base URL.
+// Legacy direct constructors recognize only the documented OpenAI/Mistral hosts.
+func (p *Provider) cacheTransport(model string) promptcache.CacheTransport {
+	if p.providerID != "" {
+		return promptcache.CacheTransportFor(p.providerID, model)
+	}
+	return promptcache.CacheTransport{SendPromptCacheKey: supportsPromptCacheKey(p.apiBase)}
+}
+
+// supportsPromptCacheKey checks the hostname, never a vendor name in a URL path.
 func supportsPromptCacheKey(apiBase string) bool {
 	u, err := url.Parse(apiBase)
 	if err != nil {
 		return false
 	}
-	host := u.Hostname()
-	return host == "api.openai.com" || strings.HasSuffix(host, ".openai.azure.com")
+	host := strings.ToLower(u.Hostname())
+	return host == "api.openai.com" || host == "api.mistral.ai" || strings.HasSuffix(host, ".openai.azure.com")
 }
 
 // APIBase returns the resolved base URL this provider posts to (ADR-067
@@ -604,4 +791,21 @@ func (p *Provider) APIBase() string {
 		return ""
 	}
 	return p.apiBase
+}
+
+func completionTokens(u *UsageInfo) int {
+	if u == nil {
+		return 0
+	}
+	return u.CompletionTokens
+}
+
+// streamErrorCode is the provider's error code as text. A JSON null (OpenRouter
+// sends one for an upstream failure with no code) is an ABSENT code, not the
+// word "null": the latter classifies as an unknown code and loses the retry.
+func streamErrorCode(raw json.RawMessage) string {
+	if strings.TrimSpace(string(raw)) == "null" {
+		return ""
+	}
+	return strings.Trim(string(raw), `"`)
 }

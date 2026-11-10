@@ -197,6 +197,13 @@ func (al *AgentLoop) deliverSubagentEnd(parentSessionID string, childRec *sessio
 // this is the side-panel status line, R2's "sourced only from that
 // child's own subagent_message/subagent_state frames".
 func (al *AgentLoop) deliverSubagentMessage(parentSessionID string, childRec *session.LifecycleRecord, kind, text string, pct *int) {
+	al.deliverSubagentMessageFrame(parentSessionID, childRec, kind, text, pct, true)
+}
+
+// deliverSubagentMessageFrame is deliverSubagentMessage with an explicit
+// untrusted_origin: child-authored frames pass true; a server-authored frame
+// (kind not_delivered, FR-013) passes false.
+func (al *AgentLoop) deliverSubagentMessageFrame(parentSessionID string, childRec *session.LifecycleRecord, kind, text string, pct *int, untrustedOrigin bool) {
 	if al == nil || parentSessionID == "" || childRec == nil || childRec.Origin == nil || childRec.Origin.CallID == "" {
 		return
 	}
@@ -220,7 +227,7 @@ func (al *AgentLoop) deliverSubagentMessage(parentSessionID string, childRec *se
 		Kind:            kind,
 		CreatedAt:       time.Now().UTC().Format(time.RFC3339),
 		SenderIdentity:  childRec.AgentID,
-		UntrustedOrigin: true,
+		UntrustedOrigin: untrustedOrigin,
 	}
 	if text != "" {
 		frame.Text = &text
@@ -284,9 +291,9 @@ type steeringReceipt struct {
 // this one already reports — the SAME rule is why the steering_receipt
 // (issue #870) rides this existing builder via an added parameter rather
 // than a second SubagentStateFrame builder of its own.
-func (al *AgentLoop) deliverSubagentState(parentSessionID string, childRec *session.LifecycleRecord, state string, receipt *steeringReceipt) {
+func (al *AgentLoop) deliverSubagentState(parentSessionID string, childRec *session.LifecycleRecord, state string, receipt *steeringReceipt) error {
 	if al == nil || parentSessionID == "" || childRec == nil || childRec.Origin == nil || childRec.Origin.CallID == "" {
-		return
+		return nil
 	}
 	originCallID := childRec.Origin.CallID
 	// A follow-up generation (N >= 2) has its own span. The running ping is
@@ -299,6 +306,26 @@ func (al *AgentLoop) deliverSubagentState(parentSessionID string, childRec *sess
 		al.ensureFollowUpSpanStart(parentSessionID, childRec)
 	}
 	id := fmt.Sprintf("%s:%d:state:%s", originCallID, childRec.Generation, state)
+	if receipt == nil && childRec.ExecutionID != nil {
+		// Same-generation Resume has a fresh execution. Its current running
+		// frame must not deduplicate against the stopped-out run's frame.
+		id = fmt.Sprintf("%s:run:%d:%s", id, childRec.ExecutionID.BootSeq, childRec.ExecutionID.RunID)
+	}
+	if receipt == nil && state == string(session.LifecycleStopped) && childRec.StopNote != nil {
+		id = fmt.Sprintf("%s:stop:%d", id, childRec.StopNote.Seq)
+	}
+	if receipt == nil && state == string(session.LifecycleQueued) && childRec.ExecutionID == nil {
+		// A same-generation re-queue after a stop (public steering resume) has
+		// no execution identity yet and its stop note is already cleared, so
+		// without a discriminator it would reuse the launch-time `queued` row's
+		// id and put two rows with one id in the parent transcript, which the
+		// chat cannot render. The landed stop it follows is the discriminator:
+		// the child's control sequence only grows, so each re-queue is unique,
+		// and re-delivering the same re-queue yields the same id.
+		if suffix := al.requeueIDSuffix(childRec); suffix != "" {
+			id += suffix
+		}
+	}
 	if receipt != nil {
 		// A single injected round can carry more than one applied steer
 		// (three queued messages -> three receipts, per issue #870's design
@@ -330,12 +357,39 @@ func (al *AgentLoop) deliverSubagentState(parentSessionID string, childRec *sess
 		// broke `tsc -b --noEmit` (ADR-091 UAT defect 1); do not "fix" this
 		// by making the pointer field non-optional or by touching the
 		// schema.
-		frame.SteeringReceipt = &struct {
-			AppliedAt     string `json:"applied_at"`
-			CorrelationId string `json:"correlation_id"`
+		//
+		// ControlReceipt replaces the former steering_receipt
+		// (sub-agent-control-plane ADR D4/MIN-001/MIN-003). The per-session
+		// control ledger now exists for the STOP verb
+		// (pkg/session/lifecycle_control_ledger_writer.go::AcceptStopControl:
+		// real monotonic per-child Seq, control_id, acceptance instant, and
+		// the landed-stop history the stopped-child notice reads). The STEER
+		// delivery path below is not on the ledger yet — until the steering
+		// queue moves onto it, Seq here is still the documented stand-in,
+		// the child's own generation, and AcceptedAt reuses the delivered
+		// moment (this call site tracks no separate acceptance instant).
+		// Verb/State are constants here because this call site only ever
+		// reports a delivered steer.
+		appliedAt := receipt.appliedAt.UTC().Format(time.RFC3339)
+		frame.ControlReceipt = &struct {
+			AcceptedAt         string   `json:"accepted_at"`
+			AppliedAt          *string  `json:"applied_at,omitempty"`
+			ControlId          string   `json:"control_id"`
+			DeliveredAt        *string  `json:"delivered_at,omitempty"`
+			Reason             *string  `json:"reason,omitempty"`
+			ReleasedControlIds []string `json:"released_control_ids,omitempty"`
+			Seq                int64    `json:"seq"`
+			State              string   `json:"state"`
+			SupersededAt       *string  `json:"superseded_at,omitempty"`
+			SupersededBySeq    *int64   `json:"superseded_by_seq,omitempty"`
+			Verb               string   `json:"verb"`
 		}{
-			AppliedAt:     receipt.appliedAt.UTC().Format(time.RFC3339),
-			CorrelationId: receipt.correlationID,
+			Seq:         int64(childRec.Generation),
+			ControlId:   receipt.correlationID,
+			Verb:        "steer",
+			State:       "delivered",
+			AcceptedAt:  appliedAt,
+			DeliveredAt: &appliedAt,
 		}
 	}
 	if err := al.persistSubagentEntry(parentSessionID, id, session.SystemSubtypeSubagentState, func(e *session.TranscriptEntry) {
@@ -343,13 +397,43 @@ func (al *AgentLoop) deliverSubagentState(parentSessionID string, childRec *sess
 	}); err != nil {
 		logger.WarnCF("agent", "steer: persist subagent_state failed",
 			map[string]any{"parent_session_id": parentSessionID, "state": state, "error": err.Error()})
-		return
+		return err
 	}
 	al.emitEvent(
 		EventKindSubagentState,
 		EventMeta{TracePath: "subagent.state", SessionKey: parentSessionID},
 		SubagentStatePayload{SessionID: parentSessionID, MessageID: id, Frame: frame},
 	)
+	return nil
+}
+
+// requeueIDSuffix names the stop a same-generation re-queue follows: the
+// highest landed-stop sequence of childRec's generation on the control ledger
+// (":resume:<seq>"). It is empty for a child that has never stopped (the
+// launch-time queued row keeps its original id). If the ledger cannot be read
+// the record's own update instant stands in, so a read failure still yields a
+// per-transition id instead of a repeated one.
+func (al *AgentLoop) requeueIDSuffix(childRec *session.LifecycleRecord) string {
+	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		return ""
+	}
+	transitions, err := lifecycle.ListStoppedTransitions(childRec.SessionID)
+	if err != nil {
+		logger.WarnCF("agent", "steer: stop history unreadable for a re-queued state row id - using the record update instant",
+			map[string]any{"child_session_id": childRec.SessionID, "error": err.Error()})
+		return fmt.Sprintf(":resume:t%d", childRec.UpdatedAt.UnixNano())
+	}
+	var seq uint64
+	for _, tr := range transitions {
+		if tr.Generation == childRec.Generation && tr.StopSeq > seq {
+			seq = tr.StopSeq
+		}
+	}
+	if seq == 0 {
+		return ""
+	}
+	return fmt.Sprintf(":resume:%d", seq)
 }
 
 // ensureFollowUpSpanStart persists and emits the subagent_start for a
@@ -468,6 +552,21 @@ func (al *AgentLoop) deliverSteeringReceiptsForInjection(childSessionKey string,
 // missing-goal-record case — Deliver()'s own edge lookup already covers
 // "no steering parent to deliver to" the same way every other Deliver call
 // site in this package does (best-effort, never fails the caller).
+//
+// Q1=A (founder, #984 follow-up): a SESSION-goal owner's MET verdict is
+// delivered with its wake suppressed (UpwardEvent.SuppressWake) — the
+// completion handback is the single parent wake for the whole "met" — and
+// its inbox entry is acknowledged at hand-back time so boot recovery never
+// re-wakes it. See the SuppressWake decision at the Deliver call below.
+// goalVerdictUpwardMessageID is the deterministic inbox id of a goal verdict's
+// upward entry — the delivery (deliverGoalVerdictUpward) and the session-goal
+// met path's hand-back acknowledgement (goal_child_completion.go::
+// ackMetVerdictEntry) both build it from this one function, so the two ids
+// can never drift.
+func goalVerdictUpwardMessageID(goalID string, round int) string {
+	return fmt.Sprintf("%s-verdict-%d", goalID, round)
+}
+
 func (al *AgentLoop) deliverGoalVerdictUpward(ctx context.Context, sessionID string, verdict *task.JudgeVerdict) {
 	if verdict == nil || sessionID == "" {
 		return
@@ -476,7 +575,16 @@ func (al *AgentLoop) deliverGoalVerdictUpward(ctx context.Context, sessionID str
 	if deliverer == nil {
 		return
 	}
-	rec := activeGoalForSession(sessionID)
+	// V6: a goal on a session with no steering edge (a person's own chat)
+	// has nobody above it; its verdict is shown in its own chat only.
+	if !al.hasSteeringEdge(sessionID) {
+		return
+	}
+	rec, readErr := activeGoalForSession(sessionID)
+	if readErr != nil {
+		al.reportGoalReadError(sessionID, "upward goal-verdict delivery", readErr)
+		return
+	}
 	if rec == nil {
 		logger.WarnCF("agent", "goal-status upward delivery skipped — no active goal record bound to this session",
 			map[string]any{"component": "goal", "session_id": sessionID, "verdict_round": verdict.Round})
@@ -500,7 +608,7 @@ func (al *AgentLoop) deliverGoalVerdictUpward(ctx context.Context, sessionID str
 	}
 	if err := sm.FromSessionMessageGoalStatus(generated.SessionMessageGoalStatus{
 		Kind:            generated.SessionMessageGoalStatusKindGoalStatus,
-		MessageId:       fmt.Sprintf("%s-verdict-%d", rec.GoalID, verdict.Round),
+		MessageId:       goalVerdictUpwardMessageID(rec.GoalID, verdict.Round),
 		SessionId:       sessionID,
 		SenderIdentity:  verdict.JudgeAgentID,
 		CreatedAt:       time.Now().UTC(),
@@ -515,7 +623,11 @@ func (al *AgentLoop) deliverGoalVerdictUpward(ctx context.Context, sessionID str
 			map[string]any{"component": "goal", "session_id": sessionID, "goal_id": rec.GoalID, "error": err.Error()})
 		return
 	}
-	event := steer.UpwardEvent{ChildSessionID: sessionID, Outcome: steer.OutcomeGoalVerdict, Message: sm}
+	// PW-D16/PW-D17: met verdicts are saved suppressed. The final hand-back
+	// (or task completion) owns their shared final id and combined input.
+	// Unmet rounds retain their own verdict-round wake identity.
+	suppressWake := verdict.Met
+	event := steer.UpwardEvent{ChildSessionID: sessionID, Outcome: steer.OutcomeGoalVerdict, Message: sm, SuppressWake: suppressWake}
 	delivery, err := deliverer.Deliver(ctx, event)
 	if err != nil {
 		logger.WarnCF("agent", "goal-status upward delivery failed",
@@ -528,4 +640,15 @@ func (al *AgentLoop) deliverGoalVerdictUpward(ctx context.Context, sessionID str
 	// an un-adjudicated child indefinitely — reported, never discarded.
 	parentSessionID, generation := steerDeliveryEdge(al.GetSessionLifecycleStore(), sessionID)
 	reportUndeliveredWake("steer: goal verdict", event, parentSessionID, generation, delivery)
+}
+
+// hasSteeringEdge reports whether sessionID is a steered helper with a
+// parent to report to. A missing or unreadable record has no edge.
+func (al *AgentLoop) hasSteeringEdge(sessionID string) bool {
+	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		return false
+	}
+	rec, err := lifecycle.Load(sessionID)
+	return err == nil && rec != nil && rec.SteeredBy != nil
 }

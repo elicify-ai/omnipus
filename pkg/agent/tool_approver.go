@@ -24,6 +24,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 )
 
@@ -35,6 +36,19 @@ type PolicyApprovalReq struct {
 	AgentID    string
 	SessionID  string
 	TurnID     string
+	// RoomRef names the group chat an approval belongs to (K7): the room's
+	// pre-admission card (FR-251), raised in the RECEIVER's main chat with
+	// the delivery id as request id, and a member's own approval inside a
+	// room-request turn (FR-169). OriginLabel is the server-derived turn
+	// origin (spec §6.18): "for group <name>" for both, "asked by <Agent>"
+	// for a peer request, "while answering <person> on <connection>" for a
+	// channel message; empty for a plain web turn.
+	RoomRef     *generated.RoomRef
+	OriginLabel string
+	// RoomPreAdmission marks the room's pre-admission card itself (FR-251),
+	// as opposed to a member's own approval inside a room-request turn,
+	// which carries RoomRef and the "for group" label as well (FR-169).
+	RoomPreAdmission bool
 }
 
 // PolicyApprover is implemented by the gateway to wire the central approval

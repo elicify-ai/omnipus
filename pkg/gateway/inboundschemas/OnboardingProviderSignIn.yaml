@@ -21,9 +21,9 @@ properties:
     maxLength: 64
     description: >
       Provider id whose catalog row declares `sign_in` in auth_methods
-      (e.g. "codex-cli", "openai-chatgpt", "github-copilot"); any other id
+      (e.g. "openai-chatgpt"); any other id
       is rejected with 400 "provider does not support sign-in".
-    example: codex-cli
+    example: openai-chatgpt
   model:
     type: string
     minLength: 1
@@ -33,6 +33,13 @@ properties:
       from step 3, persisted as agents.defaults.default_model together with
       the provider id.
     example: gpt-5.4
+  reasoning_effort:
+    type: string
+    maxLength: 32
+    description: >
+      Effort for the chosen model (effort-levels spec FR-067), persisted as
+      agents.defaults.default_model.reasoning_effort in the completion's single
+      configuration write, never on the provider row. null is refused.
   endpoint:
     type: string
     description: Optional custom API base URL, persisted as the provider entry's api_base.

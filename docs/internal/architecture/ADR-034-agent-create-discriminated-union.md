@@ -1,5 +1,7 @@
 # ADR-034: Discriminated-union create contract for agents
 
+> **Amendment 2026-10-14 — founder order ([PR #1311](https://github.com/elicify-ai/omnipus/pull/1311), [issue #1306](https://github.com/elicify-ai/omnipus/issues/1306)).** No wall-clock limit ends agent work. The Judge retains its timers but must always conclude visibly with the work result. Decision 6's external-CLI lifetime kill setting is **superseded** by the local note below; the discriminated union and unconditional strict per-variant decoder remain. Sources: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/contracts/components/schemas/AgentCreateRequestSubagent3p.yaml`::properties; `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-wt/no-time-limits-adr/pkg/gateway/rest_agents_create.go`::decodeAgentCreateVariant. Do not re-add `timeout_seconds` while integrating external-agent authoring (#1274).
+
 - **Status:** Accepted (operator-approved 2026-07-03, implemented on `hotfix/v0.1.1`)
 - **Date:** 2026-07-03
 - **Amended: 2026-07-11 (ADR-037) — the `delegation_policy` per-type
@@ -69,6 +71,9 @@ leaks on every surface.
    (a) the forbidden list against the actual update checks and (b) the create
    variant's field set against the forbidden list, so the create/update
    asymmetry cannot drift silently.
+
+> **Amended 2026-10-14 — superseded (founder; PR #1311 / #1306):** Decision 6's **“KEEPS `timeout_seconds`”** below is historical. External agents have no create/edit process-lifetime kill setting; the response field and external-create property are removed. Sending that property to the strict create decoder is an unknown-field 400, not backward-compatible authoring. Lenient loading of an older saved entity is a separate compatibility promise, not permission to send the retired field. The count-cap decision follows its later **Tool iteration limit — one global ceiling, per-agent tightening** amendment; it is not a duration control.
+
 6. **Per-type field decisions** (operator, 2026-07-03): `subagent_3p`
    EXCLUDES `max_tool_iterations` (the external CLI runs its own tool loop)
    and KEEPS `timeout_seconds` (process-level kill for a hung CLI);

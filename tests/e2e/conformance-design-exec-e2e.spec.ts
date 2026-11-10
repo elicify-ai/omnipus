@@ -23,9 +23,13 @@
 // makes splitting the suite across shards sound.
 
 import { expect } from '@playwright/test'
+import { SessionDetail, SessionPage } from '../../src/lib/api/generated/schemas'
 import { test } from './fixtures/plan-cleanup'
 import { GatewayProcess } from './fixtures/gateway-process.js'
+import { e2eAgentModelFields } from './fixtures/e2e-agent-model'
+import { attachStandaloneTaskFailureDiagnostic } from './fixtures/conformance-task-diagnostic'
 import {
+  BASE_URL,
   apiFetch,
   createMainAgent,
   createPlanWithMembers,
@@ -143,11 +147,23 @@ test('Conformance_t1_StandaloneTaskE2E: ▶ Run ladder → done; ■ Stop cancel
   // failed) within the budget. A non-terminal state means the ladder
   // (worker → claim → evidence-gate → attempt → verifier → done) did not
   // complete — the design is not behaving as drawn.
-  expect(
-    TERMINAL_STATES.has(finalStatus),
-    `Task ${taskId} must reach a terminal state within 300s — observed "${finalStatus}". ` +
-      'The ladder (worker → claim → verifier → done) failed to terminate.',
-  ).toBe(true)
+  try {
+    expect(
+      TERMINAL_STATES.has(finalStatus),
+      `Task ${taskId} must reach a terminal state within 300s — observed "${finalStatus}". ` +
+        'The ladder (worker → claim → verifier → done) failed to terminate.',
+    ).toBe(true)
+  } catch (originalFailure) {
+    // Capture the original failure BEFORE fixture teardown Stop changes the
+    // runtime phase. Even an unexpected diagnostic failure cannot replace it.
+    try {
+      await attachStandaloneTaskFailureDiagnostic(page, test.info(), taskId, BASE_URL)
+    } catch {
+      // Diagnostics are best-effort; an unexpected collection or attachment
+      // error must not replace the original failed assertion.
+    }
+    throw originalFailure
+  }
 
   // Differentiation test: a successful ladder ends in "done", a bounced
   // ladder ends in "failed" with a clear reason. Either is a valid
@@ -380,9 +396,9 @@ test('Conformance_g5_ShardAssembleE2E: report-workbook shard+assemble DAG execut
 
 // ── Conformance_bootsweep_E2E ────────────────────────────────────────────────
 //
-// BDD (§9.1 §5 boot sweep): kill -9 mid-plan → non-terminal sessions →
-// failed(interrupted) within N s → plan re-judges/re-dispatches → idle
-// settlement fires again → no wedge (CRIT-1 proof).
+// BDD (§9.1 §5 boot sweep; sub-agent control plane D8): kill -9 mid-plan →
+// task failed(interrupted), child stopped(restart) → plan re-judges/
+// re-dispatches → idle settlement fires again → no wedge (CRIT-1 proof).
 //
 // Traces to:
 //   - §9.1 §5 "boot sweep walks the drawn path" (line ~1216)
@@ -403,10 +419,10 @@ test('Conformance_g5_ShardAssembleE2E: report-workbook shard+assemble DAG execut
 // it a REAL SIGKILL, restarts the SAME binary against the SAME
 // OMNIPUS_HOME/port, and asserts BOTH reconciliation surfaces the design
 // names: the task-level hard reset (`reconcileStuckTasks`,
-// pkg/gateway/rest_tasks.go) to failed(interrupted), and the session-level
-// lifecycle sweep (`runBootSweep`, pkg/agent/boot_sweep.go) to
-// status=interrupted — then polls the plan itself to prove the engine
-// noticed and kept moving (re-judged/re-dispatched), not wedged (CRIT-1).
+// pkg/gateway/rest_tasks.go) to failed(interrupted), and the current child
+// restart recovery (`SteerBootRecovery`, pkg/agent/boot_sweep.go) to
+// stopped with a restart cause — then polls the plan itself to prove the
+// engine noticed and kept moving (re-judged/re-dispatched), not wedged (CRIT-1).
 
 test('Conformance_bootsweep_E2E: kill -9 mid-task → restart → boot sweep reconciles it, plan recovers', async () => {
   requireApiKey()
@@ -424,6 +440,8 @@ test('Conformance_bootsweep_E2E: kill -9 mid-task → restart → boot sweep rec
       type: 'Main',
       name: 'bootsweep-worker',
       soul: 'Conformance e2e worker — follow the task prompt and reply concisely with exactly what is asked.',
+      // Live model plus fallback_models (see createMainAgent).
+      ...e2eAgentModelFields('live'),
     })
     expect(agentRes.ok, `bootsweep: POST /agents failed ${agentRes.status}: ${agentRes.raw}`).toBe(true)
     expect(
@@ -520,6 +538,19 @@ test('Conformance_bootsweep_E2E: kill -9 mid-task → restart → boot sweep rec
         'cannot prove a real in-flight turn was interrupted if dispatch itself never happened.',
     ).not.toBe('')
 
+    // Pin the actual stored child before killing it. A MAIN task run is a
+    // child of its assignee's main (session-core FR-017), not another root.
+    const sessionBefore = await gw.apiFetch<unknown>(
+      'GET',
+      `/api/v1/sessions/${encodeURIComponent(preKillSessionId)}`,
+    )
+    expect(sessionBefore.ok, `bootsweep: GET pre-kill session failed ${sessionBefore.status}: ${sessionBefore.raw}`).toBe(true)
+    const preKillMeta = SessionDetail.parse(sessionBefore.body).session
+    expect(preKillMeta.id).toBe(preKillSessionId)
+    expect(preKillMeta.type).toBe('task')
+    expect(preKillMeta.task_id).toBe(memberId)
+    expect(preKillMeta.parent_session_id ?? '', 'bootsweep: MAIN task must have a real parent').not.toBe('')
+
     // THE KILL. Real SIGKILL against a real OS process, mid-turn — the
     // whole reason this file needed its own isolated GatewayProcess.
     await gw.kill9()
@@ -550,52 +581,40 @@ test('Conformance_bootsweep_E2E: kill -9 mid-task → restart → boot sweep rec
         'just status) so a differently-worded or coincidental failure cannot be mistaken for the sweep.',
     ).toContain('interrupted: gateway restarted while task was running')
 
-    // --- Assertion 2 (session-level): runBootSweep ----------------------
-    // The session this member's turn was running under must have been
-    // reconciled from its non-terminal state to `interrupted` — the
-    // Session wire enum's crash-recovery terminus (contracts/components/
-    // schemas/Session.yaml: active | archived | interrupted).
-    //
-    // ADR-057 U18 (commit 664633b9, "fix(gateway): ADR-057 U18 — read
-    // boundaries + REST pagination/nesting"): GET /api/v1/sessions now
-    // ALWAYS returns the named gen.SessionPage envelope
-    // ({"sessions": [...], "next_cursor"?, "partial_errors"?}), retiring the
-    // old bare-array response this assertion used to assume. That commit
-    // fixed three pkg/gateway tests with the identical bare-array decode
-    // (and a sibling fix landed for tests/integration's
-    // getMostRecentSessionID, commit e5d3a25c), but this e2e assertion was
-    // outside both file lists and was missed — the same cross-package
-    // ownership gap flagged elsewhere in this wave. Without this fix,
-    // `sessionsAfter.body.find` throws ("find is not a function") because
-    // the body is the envelope object, not an array, before this assertion
-    // ever gets to check the reconciled status.
-    const sessionsAfter = await gw.apiFetch<{ sessions: Array<{ id: string; status: string }> }>(
+    // --- Assertion 2 (session-level): restart recovery -----------------
+    // OpenAPI listSessions defaults to roots only. MAIN task runs are real
+    // children, so request flat=true rather than mistake their omission for
+    // a lost/replaced id. The generated parser validates EVERY row's wire
+    // enum as well as the SessionPage envelope — no hand-maintained subset.
+    const sessionsAfter = await gw.apiFetch<unknown>(
       'GET',
-      '/api/v1/sessions',
+      '/api/v1/sessions?flat=true',
     )
-    expect(sessionsAfter.ok, `bootsweep: GET /sessions post-restart failed ${sessionsAfter.status}`).toBe(true)
-    const sessionRows = sessionsAfter.body.sessions ?? []
+    expect(sessionsAfter.ok, `bootsweep: GET /sessions post-restart failed ${sessionsAfter.status}: ${sessionsAfter.raw}`).toBe(true)
+    const sessionPage = SessionPage.parse(sessionsAfter.body)
+    expect(sessionPage.partial_errors, 'bootsweep: session reads must not be degraded after restart').toBeUndefined()
+    const sessionRows = sessionPage.sessions
     const preKillSession = sessionRows.find((s) => s.id === preKillSessionId)
     expect(
       preKillSession,
       `bootsweep: the pre-kill session ${preKillSessionId} must still be present in the session list post-restart ` +
         `(observed ids: ${sessionRows.map((s) => s.id).join(', ')})`,
     ).toBeDefined()
-    expect(
-      preKillSession?.status,
-      `bootsweep: the interrupted session must be reconciled to status="interrupted" — observed "${preKillSession?.status}". ` +
-        'A session left "active" post-restart with no live turn behind it is exactly the wedge the boot sweep exists to close.',
-    ).toBe('interrupted')
+    expect(preKillSession?.parent_session_id).toBe(preKillMeta.parent_session_id)
+    expect(preKillSession?.task_id).toBe(memberId)
+    expect(preKillSession?.workspace_id).toBe(workspaceId)
+    expect(preKillSession?.agent_id).toBe(workerId)
 
-    // Differentiation/no-wedge check across every OTHER session too — none
-    // may sit outside the wire enum (a phantom status the sweep missed).
-    const KNOWN_STATES = new Set(['active', 'archived', 'interrupted'])
-    for (const s of new Set(sessionRows.map((s) => s.status))) {
-      expect(
-        KNOWN_STATES.has(s),
-        `bootsweep: observed session status "${s}" outside the Session wire enum {active, archived, interrupted}.`,
-      ).toBe(true)
-    }
+    // Sub-agent control plane D8: a restart-cut steered child lands a
+    // nonterminal Stop, retaining its cause and remaining usable. Unlike an
+    // ordinary root's Interrupted display, this child's exact display is
+    // Stopped; coarse status stays active. Prove the restart Stop actually
+    // landed and the dead execution is gone, not merely "not in progress".
+    expect(preKillSession?.status).toBe('active')
+    expect(preKillSession?.lifecycle_state).toBe('stopped')
+    expect(preKillSession?.stop_note?.cause).toBe('restart')
+    expect(preKillSession?.stop_note?.by).toBe('restart')
+    expect(preKillSession?.execution).toBeUndefined()
 
     // --- Assertion 3 (plan-level): CRIT-1 "no wedge", the plan recovers -
     // The plan must notice the reconciled member failure and keep moving —

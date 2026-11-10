@@ -780,7 +780,9 @@ test.describe('ADR-067 test 58 — HTML bytes named .pdf, top level, headed Chro
       `HTML bytes typed application/pdf reached the second origin — content-type dispatch did NOT contain them: ${got.join(', ')}`,
     ).toEqual([]);
   });
+});
 
+test.describe('ADR-067 test 58 — HTML bytes named .pdf, top level, headed Chromium', () => {
   /**
    * THE POSITIVE CONTROL §13.1 test 58 requires by name.
    *
@@ -866,7 +868,9 @@ test.describe('ADR-067 test 58 — HTML bytes named .pdf, top level, headed Chro
     // cannot be created by page content.
     expect(browserPdfViewerFrames(page)[0]).toMatch(/^chrome-extension:\/\/[a-p]{32}\//);
   });
+});
 
+test.describe('ADR-067 test 58 — HTML bytes named .pdf, top level, headed Chromium', () => {
   /**
    * The other half of §0's third control, aimed at the PRODUCT rather than at a
    * static origin: the gateway's own genuine PDF.

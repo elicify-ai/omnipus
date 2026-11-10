@@ -1,235 +1,233 @@
-// Omnipus - Ultra-lightweight personal AI agent
-// License: MIT
-// Copyright (c) 2026 Omnipus contributors
-
-// workspace_setup_kickoff_test.go — unit tests for the workspace-setup kickoff
-// turn. The SPA sends a normal `message` frame whose metadata carries
-// `workspace_id` plus `workspace_setup_kickoff: true` on a workspace's first
-// open. handleChatMessage must: record the trigger as a system-role transcript
-// entry (not a user bubble), clear the workspace's setup_pending flag exactly
-// once (idempotency guard), give the session a fixed "Workspace setup" title,
-// build the driving turn instruction SERVER-SIDE from the workspace's own
-// name/description (never the client-supplied content), and otherwise run
-// the turn normally so Ava's greeting streams live.
-//
-// See contracts/asyncapi.yaml metadata.workspace_setup_kickoff and
-// pkg/workspace/workspace.go Workspace.SetupPending.
-
 package gateway
 
 import (
-	"bufio"
 	"encoding/json"
-	"errors"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
-	"github.com/elicify-ai/omnipus/pkg/api/generated"
-	"github.com/elicify-ai/omnipus/pkg/bus"
-	"github.com/elicify-ai/omnipus/pkg/config"
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// writeSetupKickoffWorkspaceRecord writes a minimal on-disk workspace record
-// carrying setup_pending, so workspace.Exists / readWorkspaceFile observe it
-// under home.
-func writeSetupKickoffWorkspaceRecord(t *testing.T, home, id string, setupPending bool) {
-	t.Helper()
-	writeSetupKickoffWorkspaceRecordNamed(t, home, id, setupPending, "", "")
+// FR-047 / OSA-9 W8 / chief Q4 (2026-10-14): client minting is superseded.
+// These are REAL socket/frame tests. No removed handleChatMessage kickoff
+// argument and no fake session-mint or recipient handler is used.
+type l1WU10ClientKickoffCase struct {
+	sessionKind string
+	agentID     string
+	pending     bool
+	missing     bool
+	recipient   bool
+	marker      any
+	malformed   bool
 }
 
-// writeSetupKickoffWorkspaceRecordNamed is writeSetupKickoffWorkspaceRecord
-// plus an explicit name/description, for tests that assert the SERVER-BUILT
-// kickoff instruction (built from the workspace's own name/description, never
-// client-supplied content — see buildWorkspaceKickoffInstruction).
-func writeSetupKickoffWorkspaceRecordNamed(t *testing.T, home, id string, setupPending bool, name, description string) {
+func l1WU10FramesThroughPong(t *testing.T, conn *websocket.Conn, frame gen.MessageFrame) []gen.ErrorFrame {
 	t.Helper()
-	dir := filepath.Join(home, "workspaces")
-	require.NoError(t, os.MkdirAll(dir, 0o755))
-	rec := map[string]any{
-		"id":            id,
-		"name":          name,
-		"description":   description,
-		"is_default":    false,
-		"setup_pending": setupPending,
-		"created_at":    time.Now().UTC().Format(time.RFC3339),
-		"updated_at":    time.Now().UTC().Format(time.RFC3339),
-	}
-	data, err := json.Marshal(rec)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(filepath.Join(dir, id+".json"), data, 0o644))
-}
-
-// drainFrameOfType drains wc.sendCh (non-blocking) and returns the first
-// frame of the given type found, or nil if none arrived. Frames of other
-// types encountered along the way are discarded (not put back).
-func drainFrameOfType(wc *wsConn, frameType string) *replayFrameDecoder {
+	require.NoError(t, conn.WriteJSON(frame))
+	// The application pong is ordered AFTER message handling on the real
+	// read loop: a completion barrier, never a sleep/latency oracle.
+	require.NoError(t, conn.WriteJSON(gen.PingFrame{Type: "ping"}))
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(busDeliveryTimeout)))
+	var frames []gen.ErrorFrame
 	for {
-		select {
-		case raw := <-wc.sendCh:
-			var f replayFrameDecoder
-			if err := json.Unmarshal(raw, &f); err != nil {
-				continue
-			}
-			if f.Type == frameType {
-				fCopy := f
-				return &fCopy
-			}
-		default:
-			return nil
+		_, raw, readErr := conn.ReadMessage()
+		require.NoError(t, readErr, "actual frame handling must reach the ordered pong barrier")
+		var decoded gen.ErrorFrame
+		require.NoError(t, json.Unmarshal(raw, &decoded))
+		if decoded.Type == "pong" {
+			return frames
 		}
+		frames = append(frames, decoded)
 	}
 }
 
-// drainErrorFrame drains wc.sendCh (non-blocking) and returns the first
-// error-type frame found, or nil if none arrived.
-func drainErrorFrame(wc *wsConn) *replayFrameDecoder {
-	return drainFrameOfType(wc, string(generated.WsFrameTypeError))
-}
-
-// assertNoSessionMinted asserts that no session_id was tracked for chatID,
-// i.e. no session was minted (or a minted session was fully rolled back) for
-// a rejected/failed kickoff.
-func assertNoSessionMinted(t *testing.T, handler *WSHandler, chatID string) {
+func l1WU10AssertClientKickoffRefused(t *testing.T, row l1WU10ClientKickoffCase) {
 	t.Helper()
-	handler.mu.Lock()
-	defer handler.mu.Unlock()
-	assert.Empty(t, handler.sessionIDs[chatID], "a rejected/rolled-back kickoff must not leave a tracked session")
-}
-
-// newTestWSHandlerForKickoffAudit is newTestWSHandlerForModelName plus a real
-// audit logger (Sandbox.AuditLog = true) wired to homePath/system/, and
-// handler.home set to the SAME homePath so workspace records
-// (homePath/workspaces/), sessions (homePath/sessions/), and audit
-// (homePath/system/) all live under one root — mirroring how the real
-// gateway wires home == agent-loop homePath. Used by the tests that assert
-// on the workspace.setup_consumed audit entry.
-func newTestWSHandlerForKickoffAudit(t *testing.T, msgBus *bus.MessageBus) (*WSHandler, string) {
-	t.Helper()
-	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
-
-	homePath := t.TempDir()
-	workspaceDir := filepath.Join(homePath, "workspace")
-	require.NoError(t, os.MkdirAll(workspaceDir, 0o700))
-
-	cfg := &config.Config{
-		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080, DevModeBypass: true},
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Home:         workspaceDir,
-				DefaultModel: config.DefaultModel{Model: "test-default-model"},
-				MaxTokens:    4096,
-			},
-		},
-		Sandbox: config.OmnipusSandboxConfig{AuditLog: true},
+	h := newL1WU10SetupHarness(t)
+	const targetID = "01WU10CLIENTKICKOFFTARGET"
+	if !row.missing {
+		require.NoError(t, workspace.SaveRecord(h.api.homePath, workspace.Workspace{
+			ID: targetID, Name: "Client must not start this setup", Status: "active",
+			CoreTeam: []string{"mia"}, SetupPending: row.pending,
+		}))
 	}
-	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
-	handler := newWSHandler(msgBus, al, "")
+	var recordBefore []byte
+	if !row.missing {
+		var readErr error
+		recordBefore, readErr = os.ReadFile(filepath.Join(h.api.homePath, "workspaces", targetID+".json"))
+		require.NoError(t, readErr)
+	}
+	metasBefore, listErr := h.store.ListSessions()
+	require.NoError(t, listErr)
+	transcriptsBefore := make(map[string][]session.TranscriptEntry, len(metasBefore))
+	for _, meta := range metasBefore {
+		entries, transcriptErr := h.store.ReadTranscript(meta.ID)
+		require.NoError(t, transcriptErr)
+		transcriptsBefore[meta.ID] = entries
+	}
+	handler := newWSHandler(h.bus, h.loop, "")
+	handler.home = h.api.homePath
 	t.Cleanup(handler.Wait)
-	handler.home = homePath
-	return handler, homePath
-}
-
-// readAuditRecords scans every *.jsonl file under homePath/system/ and
-// returns every decoded record. Returns nil (not an error) if the system
-// directory doesn't exist yet — a test asserting "no audit record was
-// written" is a valid outcome, not a setup bug.
-func readAuditRecords(t *testing.T, homePath string) []map[string]any {
-	t.Helper()
-	systemDir := filepath.Join(homePath, "system")
-	entries, err := os.ReadDir(systemDir)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		require.NoError(t, err)
-	}
-	var records []map[string]any
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
-			continue
-		}
-		f, err := os.Open(filepath.Join(systemDir, entry.Name()))
-		require.NoError(t, err)
-		scanner := bufio.NewScanner(f)
-		for scanner.Scan() {
-			var rec map[string]any
-			if err := json.Unmarshal(scanner.Bytes(), &rec); err != nil {
-				continue
-			}
-			records = append(records, rec)
-		}
-		require.NoError(t, scanner.Err())
-		require.NoError(t, f.Close())
-	}
-	return records
-}
-
-// findAuditRecordsByEvent filters records down to those whose "event" field
-// matches want.
-func findAuditRecordsByEvent(records []map[string]any, want string) []map[string]any {
-	var out []map[string]any
-	for _, r := range records {
-		if r["event"] == want {
-			out = append(out, r)
-		}
-	}
-	return out
-}
-
-// TestWS_WorkspaceSetupKickoff_MalformedMetadataType_RejectsNotDemotes drives
-// the fix end-to-end through the REAL readLoop dispatch path (not
-// handleChatMessage directly): a message frame whose
-// metadata.workspace_setup_kickoff is the STRING "true" (a plausible
-// client-side JSON-type slip) must be rejected with an error frame — never
-// silently processed as an ordinary chat message (which would have persisted
-// the junk content as a user-authored transcript entry and burned nothing,
-// masking the client bug), and never allowed to reach the consume step.
-func TestWS_WorkspaceSetupKickoff_MalformedMetadataType_RejectsNotDemotes(t *testing.T) {
-	handler, msgBus, _ := newTestWSHandler(t)
-	t.Cleanup(handler.Wait)
-	home := t.TempDir()
-	handler.home = home
-
-	const wsID = "01JXWORKSPACEKICKOFF0000030"
-	writeSetupKickoffWorkspaceRecord(t, home, wsID, true)
-
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
 	conn := dialTestWS(t, srv)
-	t.Cleanup(func() { _ = conn.Close() })
-
+	t.Cleanup(func() { require.NoError(t, conn.Close()) })
 	sendWSAuthFrameDevMode(t, conn)
-
-	frame := map[string]any{
-		"type":    "message",
-		"content": "junk instruction the server must never process as a normal message",
-		"metadata": map[string]any{
-			"workspace_id":            wsID,
-			"workspace_setup_kickoff": "true", // STRING, not boolean — malformed
-		},
+	id := row.agentID
+	if id == "" {
+		id = "mia"
 	}
-	data, err := json.Marshal(frame)
-	require.NoError(t, err)
-	require.NoError(t, conn.WriteMessage(websocket.TextMessage, data))
-
-	resp := readFrameOfType(t, conn, "error", 3*time.Second)
-	assert.Contains(t, resp.Message, "malformed workspace_setup_kickoff metadata")
-
-	select {
-	case msg := <-msgBus.InboundChan():
-		t.Fatalf("a malformed kickoff metadata type must NOT be processed as a normal message, got: %+v", msg)
-	case <-time.After(300 * time.Millisecond):
-		// expected: nothing published, in either kickoff or normal-message form
+	frame := gen.MessageFrame{Type: "message", Content: "client-authored setup text must never become an offer",
+		AgentId: &id, Metadata: map[string]any{"workspace_id": targetID, "workspace_setup_kickoff": row.marker}}
+	switch row.sessionKind {
+	case "omnipus":
+		frame.SessionId = &h.mainID
+	case "mia":
+		frame.SessionId = &h.miaMainID
+	case "unknown":
+		unknown := "unknown-client-session"
+		frame.SessionId = &unknown
 	}
+	if row.recipient {
+		// Successor to the retired recipient-level kickoff refusal row:
+		// the frame seam must refuse BEFORE routing this valid other pair.
+		data, encodeErr := json.Marshal(map[string]any{
+			"type": frame.Type, "content": frame.Content, "agent_id": id, "session_id": frame.SessionId,
+			"metadata": frame.Metadata, "recipient": map[string]any{"agent_id": "omnipus", "workspace_id": h.defaultID},
+		})
+		require.NoError(t, encodeErr)
+		require.NoError(t, json.Unmarshal(data, &frame), "recipient still uses the generated MessageFrame shape, never a handwritten wire struct")
+	}
+	frames := l1WU10FramesThroughPong(t, conn, frame)
+	var errors []gen.ErrorFrame
+	for _, response := range frames {
+		if response.Type == "error" {
+			errors = append(errors, response)
+		}
+		assert.NotEqual(t, "session_started", response.Type, "Q4: no client kickoff may mint a session")
+		assert.NotEqual(t, "user_message", response.Type, "Q4: marker cannot be demoted to an ordinary user write")
+	}
+	assert.Len(t, errors, 1, "Q4: exactly one visible frame-seam refusal, not a silently accepted kickoff")
+	if len(errors) == 1 {
+		if row.malformed {
+			assert.Equal(t, "malformed workspace_setup_kickoff metadata", errors[0].Message)
+		} else {
+			// Binding chief wording, 2026-10-14; do not read an implementation
+			// constant to generate this independently supplied expected value.
+			assert.Equal(t, "workspace setup is started by the server when a workspace is created; a client kickoff is refused", errors[0].Message)
+			assert.Equal(t, frame.SessionId, errors[0].SessionId, "echo a supplied session id; absent/null when none was supplied")
+		}
+	}
+	metasAfter, afterErr := h.store.ListSessions()
+	require.NoError(t, afterErr)
+	assert.Equal(t, metasBefore, metasAfter, "refusal precedes all session work")
+	for _, meta := range metasBefore {
+		entries, transcriptErr := h.store.ReadTranscript(meta.ID)
+		require.NoError(t, transcriptErr)
+		assert.Equal(t, transcriptsBefore[meta.ID], entries, "no main/other-session transcript entry from a client kickoff")
+	}
+	if !row.missing {
+		recordAfter, readErr := os.ReadFile(filepath.Join(h.api.homePath, "workspaces", targetID+".json"))
+		require.NoError(t, readErr)
+		assert.Equal(t, recordBefore, recordAfter, "setup_pending and the entire target record stay untouched")
+	} else {
+		_, statErr := os.Stat(filepath.Join(h.api.homePath, "workspaces", targetID+".json"))
+		assert.ErrorIs(t, statErr, os.ErrNotExist)
+	}
+	h.assertNoFurtherWake(t)
+}
 
-	w, err := readWorkspaceFile(home, wsID)
-	require.NoError(t, err)
-	assert.True(t, w.SetupPending, "malformed metadata must never reach the consume step")
+func TestWS_WorkspaceSetupKickoff_TrueWithoutSession_RefusedBeforeAnyWrites(t *testing.T) {
+	l1WU10AssertClientKickoffRefused(t, l1WU10ClientKickoffCase{pending: true, marker: true})
+}
+
+func TestWS_WorkspaceSetupKickoff_WithSessionID_RefusedBeforeAnyWrites(t *testing.T) {
+	for _, kind := range []string{"omnipus", "mia", "unknown"} {
+		t.Run(kind, func(t *testing.T) {
+			l1WU10AssertClientKickoffRefused(t, l1WU10ClientKickoffCase{sessionKind: kind, pending: true, marker: true})
+		})
+	}
+}
+
+func TestWS_WorkspaceSetupKickoff_ConsumedOrUnknownWorkspaceStillRefusedAtFrame(t *testing.T) {
+	t.Run("consumed", func(t *testing.T) {
+		l1WU10AssertClientKickoffRefused(t, l1WU10ClientKickoffCase{pending: false, marker: true})
+	})
+	t.Run("unknown", func(t *testing.T) {
+		l1WU10AssertClientKickoffRefused(t, l1WU10ClientKickoffCase{missing: true, marker: true})
+	})
+}
+
+func TestWS_WorkspaceSetupKickoff_MalformedAgentStillRefusedAtFrame(t *testing.T) {
+	l1WU10AssertClientKickoffRefused(t, l1WU10ClientKickoffCase{agentID: "../invalid-agent", pending: true, marker: true})
+}
+
+func TestWS_WorkspaceSetupKickoff_RecipientAlsoRefusedBeforeRoutingAndWrites(t *testing.T) {
+	// Successor to the retired "workspace setup kickoff" row in
+	// ws_recipient_refusals_test.go, under the chief's Q4 ruling.
+	l1WU10AssertClientKickoffRefused(t, l1WU10ClientKickoffCase{sessionKind: "mia", pending: true, recipient: true, marker: true})
+}
+
+func TestWS_WorkspaceSetupKickoff_MalformedMetadataType_RejectsNotDemotes(t *testing.T) {
+	for _, row := range []struct {
+		name  string
+		value any
+	}{{"string", "true"}, {"null", nil}, {"number", 1}} {
+		t.Run(row.name, func(t *testing.T) {
+			l1WU10AssertClientKickoffRefused(t, l1WU10ClientKickoffCase{pending: true, marker: row.value, malformed: true})
+		})
+	}
+}
+
+func TestWS_WorkspaceSetupKickoff_FalseOrAbsentRemainsOrdinaryUserMessage(t *testing.T) {
+	for _, explicitFalse := range []bool{false, true} {
+		t.Run(map[bool]string{false: "absent", true: "false"}[explicitFalse], func(t *testing.T) {
+			h := newL1WU10SetupHarness(t)
+			handler := newWSHandler(h.bus, h.loop, "")
+			handler.home = h.api.homePath
+			t.Cleanup(handler.Wait)
+			srv := httptest.NewServer(handler)
+			t.Cleanup(srv.Close)
+			conn := dialTestWS(t, srv)
+			t.Cleanup(func() { require.NoError(t, conn.Close()) })
+			sendWSAuthFrameDevMode(t, conn)
+			id := "mia"
+			frame := gen.MessageFrame{Type: "message", Content: "ordinary user instrument", AgentId: &id, SessionId: &h.miaMainID,
+				Metadata: map[string]any{"workspace_id": h.defaultID}}
+			if explicitFalse {
+				frame.Metadata["workspace_setup_kickoff"] = false
+			}
+			frames := l1WU10FramesThroughPong(t, conn, frame)
+			for _, response := range frames {
+				require.NotEqual(t, "error", response.Type, "false/absent marker must be ordinary, not rejected; a semantic refusal is RED, not a bus timeout")
+			}
+			msg := awaitInboundMessage(t, h.bus, "ordinary false/absent marker control")
+			assert.Equal(t, frame.Content, msg.Content)
+			assert.Equal(t, h.miaMainID, msg.SessionID)
+			// Ordinary chat binding lives on the existing session; the new
+			// setup-owner-wake metadata contract is not imposed on this control.
+			meta, metaErr := h.store.GetMeta(msg.SessionID)
+			require.NoError(t, metaErr)
+			assert.Equal(t, h.defaultID, meta.WorkspaceID)
+			assert.Equal(t, "mia", msg.Metadata["agent_id"])
+			assert.True(t, msg.UserInitiated)
+			assert.True(t, msg.OperatorPrompt)
+			assert.Empty(t, msg.Metadata["owner_wake"])
+			assert.Empty(t, msg.Metadata["workspace_setup_offer"])
+			h.assertNoFurtherWake(t)
+			entries, readErr := h.store.ReadTranscript(h.miaMainID)
+			require.NoError(t, readErr)
+			require.Len(t, entries, 2)
+			assert.Equal(t, "user", entries[1].Role)
+			assert.Equal(t, frame.Content, entries[1].Content)
+		})
+	}
 }

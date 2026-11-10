@@ -350,18 +350,20 @@ func (pe *PlanEngine) promoteInboxMembers(p *plan.Plan, tasks []task.Task) (prom
 	if !p.PermitsMemberDispatch() {
 		return false
 	}
-	next := task.StatusNext
 	for i := range tasks {
 		t := &tasks[i]
 		if t.Status != task.StatusInbox {
 			continue
 		}
-		if _, err := pe.taskStore.Update(t.ID, task.Patch{Status: &next}); err != nil {
+		// r17 TK-30: the store decides on the fresh task state under its lock
+		// and keeps a member whose trigger has not released it waiting.
+		_, promoted, err := pe.taskStore.PromoteInboxIfReleased(t.ID)
+		if err != nil {
 			logger.WarnCF("plan_engine", "promote inbox member to next failed",
 				map[string]any{"plan_id": p.ID, "task_id": t.ID, "error": err.Error()})
 			continue
 		}
-		promotedAny = true
+		promotedAny = promotedAny || promoted
 	}
 	return promotedAny
 }
@@ -491,12 +493,39 @@ func (pe *PlanEngine) dispatchReadyMembers(ctx context.Context, planID string, t
 	// authority is unchanged: the explicit cancel func TaskExecutor stores in
 	// te.running[taskID], which the plan-scoped Stop fan-out drives.
 	dispatchCtx := context.WithoutCancel(ctx)
+
+	// A plan an agent approved carries its initiator; each member is authorized
+	// against it, with the live graph, as it is dispatched (executeTask). A
+	// plan a person approved or played carries none. If the plan cannot be read
+	// the initiator is unknown, so nothing is dispatched.
+	var initiator *task.Initiator
+	if pe.planStore != nil {
+		p, err := pe.planStore.Get(planID)
+		if err != nil {
+			logger.ErrorCF("plan_engine", "plan unreadable at member dispatch; not dispatching",
+				map[string]any{"plan_id": planID, "error": err.Error()})
+			return false
+		}
+		initiator = p.InitiatedBy
+	}
+	initiated, canInitiate := pe.dispatcher.(planInitiatedDispatcher)
 	for i := range tasks {
 		t := &tasks[i]
 		if t.Status != task.StatusNext {
 			continue
 		}
-		if err := pe.dispatcher.executeTaskPlanVerified(dispatchCtx, t.ID); err != nil {
+		var err error
+		switch {
+		case initiator == nil:
+			err = pe.dispatcher.executeTaskPlanVerified(dispatchCtx, t.ID)
+		case !canInitiate:
+			logger.ErrorCF("plan_engine", "dispatcher cannot carry the plan's initiating agent; refusing to dispatch",
+				map[string]any{"plan_id": planID, "task_id": t.ID})
+			continue
+		default:
+			err = initiated.executeTaskPlanInitiated(dispatchCtx, t.ID, initiator)
+		}
+		if err != nil {
 			logger.WarnCF("plan_engine", "member task dispatch failed (will retry)",
 				map[string]any{"plan_id": planID, "task_id": t.ID, "error": err.Error()})
 			continue
@@ -567,9 +596,16 @@ func allMembersTerminal(tasks []task.Task) bool {
 // diagnosed instead of spun on.
 func (pe *PlanEngine) planStallReason(tasks []task.Task, now time.Time) string {
 	stranded := pe.observeStrandedMembers(tasks, now)
+	// r17 TK-30: a member whose only hold is its own live trigger occurrence
+	// (or a chain ending only in such members) is waiting as designed.
+	waiting := pe.newExpectedWaitProbe(tasks, now)
 
 	var blockedIDs, inboxIDs, strandedIDs []string
 	for i := range tasks {
+		if (tasks[i].Status == task.StatusBlocked || tasks[i].Status == task.StatusInbox) &&
+			waiting.expected(&tasks[i]) {
+			continue
+		}
 		switch tasks[i].Status {
 		case task.StatusNext:
 			return "" // something is dispatchable - not stalled
@@ -749,7 +785,10 @@ func (pe *PlanEngine) PlayPlan(ctx context.Context, planID string) (*PlayResult,
 	// (plan.ValidateRestartTransition). This is the same gate the REST
 	// /restart endpoint uses.
 	approved := plan.StateApproved
-	if _, updateErr := pe.planStore.Update(planID, plan.Patch{State: &approved}); updateErr != nil {
+	// A person playing the plan takes over its authority: clear any agent
+	// initiator in the same write, so members dispatch as a person's start.
+	var personStart *task.Initiator
+	if _, updateErr := pe.planStore.Update(planID, plan.Patch{State: &approved, InitiatedBy: &personStart}); updateErr != nil {
 		return nil, fmt.Errorf("plan_engine: PlayPlan: restart transition: %w", updateErr)
 	}
 

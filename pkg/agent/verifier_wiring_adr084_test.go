@@ -427,7 +427,7 @@ func TestDispatchVerifierTurn_RunsAsTheJudgeInItsOwnVerifierSession(t *testing.T
 		t.Fatalf("Register called %d times, want 1", len(spy.registerCalls))
 	}
 	sessionID := spy.registerCalls[0].sessionID
-	store := al.GetAgentStore(string(coreagent.IDJudge))
+	store := al.GetSessionStore()
 	if store == nil {
 		t.Fatal("judge session store not available")
 	}

@@ -112,7 +112,7 @@ This is not caused by this change — it is true in shipped code — but this sp
 
 **[VERIFIED]** A path deny does not stop a daemon-mediated read: `securityd` serviced a keychain query against a denied file for a sandboxed client. `launchctl bootstrap` outside the sandbox exfiltrated a master key perfectly. Both are blocked today only by the preamble's `(deny default)` over `mach-lookup`.
 
-- **FR-10.1** A rendered `open` profile MUST NOT contain any `(allow mach-lookup …)` beyond the mDNSResponder entry.
+- **FR-10.1** A rendered `open` profile MUST NOT contain any `(allow mach-lookup …)` beyond exactly two entries: the mDNSResponder entry and the per-user certificate-trust service `(allow mach-lookup (global-name "com.apple.trustd.agent"))`, each on its own line. Amended 2026-10-26 by founder ruling Q125: Go-built tools (for example `gh`) verify TLS certificates through `com.apple.trustd.agent`; without it they fail with `x509: OSStatus -26276`. Opening this service also exposes trust-settings and certificate-trust reads and cache resets (performance impact only); persistent trust-settings changes need a macOS authorization token with the trust-settings right, which the sandbox provides no way to obtain (from Apple's published source, not verified against macOS 26 binaries). Keychain services (`com.apple.SecurityServer`, `secd`) and the system `com.apple.trustd` stay denied.
 - **FR-10.2** A test MUST assert FR-10.1 against a rendered profile, so a future "make the toolchain work" edit cannot silently delete it.
 
 ### FR-6 — Secret redaction — **DROPPED 2026-08-12 (operator decision)**
@@ -269,7 +269,7 @@ Given filesystem_model is "open"
 | 21 | `open`, write `config.json` | denied | FR-9.1 — sandbox must not be self-disabling |
 | 22 | `open`, read `cli.token` | denied | FR-9.1 — live gateway credential |
 | 23 | `open`, deny path non-existent AND under a symlinked ancestor | denied once created | FR-3.3 × FR-3.4 intersection — where the silent no-op lives |
-| 24 | rendered `open` profile contains `(allow mach-lookup` beyond mDNSResponder | test fails | FR-10.1 |
+| 24 | rendered `open` profile contains any `(allow mach-lookup` line other than exactly the mDNSResponder and `com.apple.trustd.agent` lines (exact-line match) | test fails | FR-10.1 |
 | 25 | `filesystem_model` changed via PUT /api/v1/security/sandbox-config | rejected or restart-required, stated explicitly | no hot-reload for sandbox policy |
 | 26 | dir created after gateway start, read by a later child (Linux) | allowed | FR-4.5a — proves per-spawn enumeration |
 | 27 | `entities/jim.json` written by a child | denied | FR-9 — agent must not edit its own tool policy |

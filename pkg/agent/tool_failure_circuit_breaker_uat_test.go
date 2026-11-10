@@ -194,7 +194,7 @@ func TestRunTurn_OscillationBreaker_RefusesFifthCycle(t *testing.T) {
 	sub := al.SubscribeEvents(64)
 	defer al.UnsubscribeEvents(sub.ID)
 
-	finalContent, err := al.ProcessDirect(context.Background(), "loop please", "test-session-oscillation-breaker")
+	finalContent, err := al.processDirectPrimaryForTest(context.Background(), "loop please", "test-session-oscillation-breaker")
 	require.NoError(t, err)
 	assert.Equal(t, "stopping the loop", finalContent)
 

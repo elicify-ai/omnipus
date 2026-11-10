@@ -20,6 +20,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	providers_pkg "github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
+	providercommon "github.com/elicify-ai/omnipus/pkg/providers/common"
 )
 
 // isSeedTemplateRow reports whether a providers[] entry is a fresh-install
@@ -67,7 +68,6 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPost && strings.HasSuffix(sub, "/sign-in"),
 		r.Method == http.MethodGet && strings.HasSuffix(sub, "/sign-in/status"),
 		r.Method == http.MethodPost && strings.HasSuffix(sub, "/sign-in/poll"),
-		r.Method == http.MethodPost && sub == "openai-chatgpt/sign-in/import",
 		r.Method == http.MethodDelete && strings.HasSuffix(sub, "/sign-in"):
 		a.postProviderSignInHTTP(w, r, sub, path)
 	case r.Method == http.MethodPost && strings.HasSuffix(sub, "/entitlement"):
@@ -150,6 +150,24 @@ func (a *restAPI) listProvidersHTTP(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, providers)
 }
 
+// providerCredentialRefError builds the operator-facing cred error for one
+// provider row's unresolvable api_key_ref, naming the EXACT reference so the
+// row says which secret to fix (#1277, founder decision 2026-10-12) — never
+// the secret value. The classified classes mirror
+// describeCredentialResolutionError; the ref prefix is what that helper's
+// messages lacked.
+func providerCredentialRefError(ref string, err error) string {
+	var entryAuth *credentials.EntryAuthError
+	if errors.As(err, &entryAuth) {
+		return fmt.Sprintf("credential reference %q is unreadable (failed authentication) — re-enter the API key", ref)
+	}
+	var notFound *credentials.NotFoundError
+	if errors.As(err, &notFound) {
+		return fmt.Sprintf("credential reference %q is missing from the credential vault — re-enter the API key", ref)
+	}
+	return fmt.Sprintf("credential reference %q: %s", ref, describeCredentialResolutionError(err))
+}
+
 // providerAggregate is what the GET list collects from the configured provider rows
 // before building the wire rows: first row, user models, resolved keys, credential
 // errors, latest update stamp and auth method per provider, in first-seen order.
@@ -214,23 +232,20 @@ func (a *restAPI) aggregateProviderRows(cfg *config.Config) providerAggregate {
 		if len(m.Models) > 0 {
 			agg.userModels[providerName] = append(agg.userModels[providerName], m.Models...)
 		}
-		// Resolve API key for upstream model fetching.
-		// APIKeyRef is resolved via process environment (set by InjectFromConfig).
-		if _, hasKey := agg.apiKeys[providerName]; !hasKey {
-			resolved := m.APIKey()
-			if resolved == "" && m.APIKeyRef != "" {
-				if v, err := a.resolveCredentialRef(m.APIKeyRef); err != nil {
-					slog.Warn("rest: could not resolve provider credential", "ref", m.APIKeyRef, "error", err)
-					var notFound *credentials.NotFoundError
-					if !errors.As(err, &notFound) {
-						agg.credErrors[providerName] = describeCredentialResolutionError(err)
-					}
-				} else {
-					resolved = v
-				}
-			}
-			if resolved != "" {
-				agg.apiKeys[providerName] = resolved
+		// Resolve API key for upstream model fetching. The credential STORE is
+		// the SOLE authority for a row with an api_key_ref (#1277): the process
+		// environment only ever mirrors the store (InjectFromConfig writes it
+		// from the vault and never unsets), so a stale mirror — a value left
+		// from before the entry was deleted or emptied — must never promote the
+		// row to "connected". A missing or unreadable reference is the row's
+		// cred error, naming the exact ref; an entry that exists but stores an
+		// empty value is "not configured" (disconnected) — not an error state.
+		if _, hasKey := agg.apiKeys[providerName]; !hasKey && m.APIKeyRef != "" {
+			if v, err := a.resolveCredentialRef(m.APIKeyRef); err != nil {
+				slog.Warn("rest: could not resolve provider credential", "ref", m.APIKeyRef, "error", err)
+				agg.credErrors[providerName] = providerCredentialRefError(m.APIKeyRef, err)
+			} else if strings.TrimSpace(v) != "" {
+				agg.apiKeys[providerName] = v
 			}
 		}
 	}
@@ -283,9 +298,7 @@ func (a *restAPI) providerWireRow(ctx context.Context, authed bool, cfg *config.
 	// real status/account_label, using ONLY the cheap local check —
 	// no vendor fan-out for a background list render. Skipped when
 	// unknown-provider already won above (nothing to look up for an
-	// id the catalog does not carry) — cheapSignInRowStatus's own
-	// doc comment covers why github-copilot never pays a premium
-	// request here.
+	// id the catalog does not carry).
 	//
 	// C1: skipped entirely for an ANONYMOUS caller. account_label is
 	// the operator's own vendor account identifier (Provider.yaml:
@@ -303,18 +316,6 @@ func (a *restAPI) providerWireRow(ctx context.Context, authed bool, cfg *config.
 			}
 		}
 	}
-	// ADR-068 FR-009 (T068-15): a `github-copilot` row is backed by
-	// the vendor CLI, not an API key, so the key-derived status above
-	// says nothing useful about it. When the CLI is absent from this
-	// machine the row stays `disconnected` and carries the operator
-	// hint. Whether the operator is SIGNED IN is never computed by
-	// running the CLI here — that check costs a premium request, so
-	// it stays the explicit Check sign-in action's alone. The row
-	// CAN still say signed_in/expired for github-copilot — from the
-	// cached result of the operator's last explicit Check
-	// (copilotRowSignInStatus, never a probe), codex-cli from its
-	// saved login file.
-	copilotHint := copilotRowHint(name)
 	hasEndpointCopy := hasEndpoint
 	// ADR-068 T068-08: the row's auth method comes from the config row
 	// (closed set api_key | sign_in — Validate rejects anything else);
@@ -371,7 +372,6 @@ func (a *restAPI) providerWireRow(ctx context.Context, authed bool, cfg *config.
 			displayCopy := display
 			p.DisplayName = &displayCopy
 		}
-		p.CliKind = providerWireCLIKind(src.row.CLIKind)
 	}
 	if modelFetchWarning != "" {
 		p.Warning = &modelFetchWarning
@@ -390,8 +390,13 @@ func (a *restAPI) providerWireRow(ctx context.Context, authed bool, cfg *config.
 		if credErrMsg, ok := agg.credErrors[name]; ok {
 			p.Status = gen.ProviderStatusError
 			p.Error = &credErrMsg
-		} else if copilotHint != "" {
-			p.Error = &copilotHint
+		} else if agg.authMethod[name] == config.AuthMethodSignIn {
+			// H1: a row saved with sign_in on a provider that cannot sign
+			// in (before the PUT gate existed) never connects — say where
+			// the sign-in really lives instead of a silent "disconnected".
+			if msg := a.misplacedSignInRowMsg(name); msg != "" {
+				p.Error = &msg
+			}
 		}
 	}
 	return p
@@ -446,8 +451,14 @@ type providerPut struct {
 	reqProtocol     string
 	// reqRegion is issue #800's own field (Bedrock region contract): the
 	// per-provider-row selected region, persisted verbatim when non-empty.
-	reqRegion           string
-	isCustomRow         bool
+	reqRegion   string
+	isCustomRow bool
+	// storedIdentity is set only when admission filled an omitted
+	// api_base/protocol from the stored custom row (#1639, ruling B). The
+	// write re-checks that row under configMu and refuses with 409 when it
+	// was removed or changed in between (ruling rule 5).
+	storedIdentity *storedCustomIdentity
+
 	keyChanged          bool
 	putValidationResult providers_pkg.ValidationResult
 	credRefName         string
@@ -463,6 +474,9 @@ func (a *restAPI) putProviderHTTP(w http.ResponseWriter, r *http.Request, sub st
 		return
 	}
 	if !a.providerPutResolveExisting(p) {
+		return
+	}
+	if !a.providerPutCheckEndpoint(p) {
 		return
 	}
 	if !a.providerPutValidateKey(p) {
@@ -542,8 +556,9 @@ func (a *restAPI) providerPutAdmit(w http.ResponseWriter, r *http.Request, sub s
 			return nil, false
 		}
 		if _, ok := a.signInMethodFor(p.providerID); !ok {
-			jsonErrField(w, http.StatusBadRequest,
-				"provider does not support sign-in", "auth_method")
+			// H1: name the row that CAN sign in when the catalog has one
+			// (e.g. OpenAI sign-in lives on ChatGPT (subscription)).
+			jsonErrField(w, http.StatusBadRequest, a.signInRefusalMsg(p.providerID), "auth_method")
 			return nil, false
 		}
 	}
@@ -579,6 +594,12 @@ func (a *restAPI) providerPutAdmit(w http.ResponseWriter, r *http.Request, sub s
 	p.reqRegion = derefStr(p.req.Region)
 	var admitErr error
 	p.isCustomRow, admitErr = providerAdmission(a.providerCatalog, p.providerID, p.reqAPIBase, p.reqProtocol)
+	if errors.Is(admitErr, providers_pkg.ErrUnknownProvider) && a.providerPutFillStoredCustomIdentity(p) {
+		// #1639 (architect ruling B): an existing custom row keeps its
+		// stored base/protocol when the request leaves them out; admit the
+		// combined pair through the same shared rule.
+		p.isCustomRow, admitErr = providerAdmission(a.providerCatalog, p.providerID, p.reqAPIBase, p.reqProtocol)
+	}
 	if admitErr != nil {
 		field := "id"
 		if errors.Is(admitErr, providers_pkg.ErrUnknownProvider) && p.reqAPIBase != "" {
@@ -589,7 +610,190 @@ func (a *restAPI) providerPutAdmit(w http.ResponseWriter, r *http.Request, sub s
 		jsonErrField(w, http.StatusBadRequest, admitErr.Error(), field)
 		return nil, false
 	}
+	// A catalog row speaks only the protocols the catalog lists for it. A
+	// protocol it does not offer is refused before anything is saved, so a
+	// caller cannot relabel a cloud row as a local one (the address check
+	// treats a local row as loopback by definition).
+	if !p.isCustomRow && !catalogOffersProtocol(a.providerCatalog, p.providerID, p.reqProtocol) {
+		jsonErrField(w, http.StatusBadRequest, providerProtocolNotOfferedMsg, "protocol")
+		return nil, false
+	}
+	// Hosted edition: a catalog id keeps the catalog's endpoint. An api_base
+	// on one is refused, not ignored, so the caller learns the save did not
+	// do what was asked; only a host the operator's SSRF allow list names is
+	// accepted (common.CatalogBaseOverrideRefused). Local mode keeps the
+	// documented override (ProviderUpdateRequest.api_base).
+	if !p.isCustomRow && providercommon.CatalogBaseOverrideRefused(p.reqAPIBase) {
+		jsonErrField(w, http.StatusBadRequest,
+			providerCatalogEndpointRefusedMsg, "api_base")
+		return nil, false
+	}
 	return p, true
+}
+
+// usableStoredAPIBase returns a stored row's api_base, or "" when the hosted
+// edition ignores it: a catalog id whose override the operator's SSRF allow
+// list does not name — what a planted row looks like (resolveRow ignores the
+// same base at run time).
+// providerCatalogEndpointRefusedMsg is the 400 for an api_base on a catalog
+// id where the hosted endpoint guard refuses it.
+const providerCatalogEndpointRefusedMsg = "This provider's address can't be changed. " +
+	"To use a different address, add it as a custom provider."
+
+// providerProtocolNotOfferedMsg is the 400 for a protocol the catalog does not
+// list for a built-in provider.
+const providerProtocolNotOfferedMsg = "This provider does not support the connection type that was sent. " +
+	"To use a different type, add it as a custom provider."
+
+// catalogProtocol is the catalog's primary protocol for a built-in provider,
+// or "" when the catalog does not know the id.
+func catalogProtocol(cat *catalog.Catalog, id string) catalog.Protocol {
+	if cat == nil {
+		return ""
+	}
+	if row, ok := cat.Provider(id); ok {
+		return row.Protocol
+	}
+	return ""
+}
+
+// catalogOffersProtocol reports whether a built-in provider may be saved with
+// protocol. An empty protocol, an unknown id and a missing catalog are not
+// refused here: the admission step owns those answers.
+func catalogOffersProtocol(cat *catalog.Catalog, id, protocol string) bool {
+	protocol = strings.TrimSpace(protocol)
+	if protocol == "" || cat == nil {
+		return true
+	}
+	row, ok := cat.Provider(id)
+	if !ok {
+		return true
+	}
+	if row.Protocol == catalog.Protocol(protocol) {
+		return true
+	}
+	for _, e := range row.Protocols {
+		if e.Protocol == catalog.Protocol(protocol) {
+			return true
+		}
+	}
+	return false
+}
+
+func usableStoredAPIBase(providerID, apiBase string, custom bool) string {
+	if !custom && providers_pkg.IsCatalogProvider(providerID) && providercommon.CatalogBaseOverrideRefused(apiBase) {
+		return ""
+	}
+	return apiBase
+}
+
+// providerPutCheckEndpoint runs the SSRF address check on the endpoint this
+// save points the row at — on EVERY write that sets an api_base, with or
+// without a key (the key-change probe below used to be the only check, so a
+// keyless save could repoint a row anywhere), and on hosted on every write
+// whatever its source (request, stored row, catalog), because the hosted
+// guard is on regardless of sandbox.ssrf. No checker (local mode, sandbox.ssrf
+// off) keeps today's behaviour.
+func (a *restAPI) providerPutCheckEndpoint(p *providerPut) bool {
+	checker := a.endpointChecker()
+	if checker == nil {
+		return true
+	}
+	base := p.reqAPIBase
+	if base == "" && providercommon.EndpointGuardActive() {
+		for _, m := range p.cfg.Providers {
+			if m.IsVirtual() || strings.TrimSpace(m.Provider) != p.providerID {
+				continue
+			}
+			base = usableStoredAPIBase(p.providerID, strings.TrimSpace(m.APIBase), m.Custom)
+			break
+		}
+		if base == "" {
+			base = providers_pkg.APIBaseFor(p.providerID)
+		}
+	}
+	if base == "" {
+		return true
+	}
+	// A local row (Ollama, vLLM, a loopback or private custom host) is
+	// loopback by definition. In core, sandbox.ssrf on must not refuse it
+	// here: that is today's behaviour for a keyless save. Only the hosted
+	// guard has no local exception.
+	// A catalog row's protocol is the catalog's, never the caller's.
+	localityProtocol := catalog.Protocol(p.reqProtocol)
+	if !p.isCustomRow {
+		localityProtocol = catalogProtocol(a.providerCatalog, p.providerID)
+	}
+	if !providercommon.EndpointGuardActive() &&
+		catalog.DeriveLocality(p.providerID, localityProtocol, p.isCustomRow, base) == catalog.LocalityLocal {
+		return true
+	}
+	if err := checker.CheckURL(p.r.Context(), base); err != nil {
+		slog.Warn("rest: PUT provider: endpoint refused by the SSRF guard",
+			"provider", p.providerID, "error", err)
+		jsonErr(p.w, http.StatusUnprocessableEntity, endpointRefusalMessage(err))
+		return false
+	}
+	return true
+}
+
+// storedCustomIdentity is the stored custom row's base and protocol that a
+// PUT's admission relied on (#1639, architect ruling B).
+type storedCustomIdentity struct {
+	apiBase  string
+	protocol string
+}
+
+// errProviderRowChanged aborts a fallback-admitted provider write whose
+// stored custom row was removed or changed after admission (ruling rule 5).
+var errProviderRowChanged = errors.New("provider was removed or changed; reload")
+
+// providerPutFillStoredCustomIdentity fills an omitted or empty api_base
+// and/or protocol from the stored row with the same id — only when that row
+// is custom with a non-empty base and a valid custom protocol (ruling B,
+// rules 1, 3 and 4). It reports whether anything was filled; the caller then
+// runs the normal admission on the combined pair. It lives in the gateway
+// PUT only: the onboarding probe and CLI onboard keep needing both fields.
+func (a *restAPI) providerPutFillStoredCustomIdentity(p *providerPut) bool {
+	needBase := strings.TrimSpace(p.reqAPIBase) == ""
+	needProtocol := strings.TrimSpace(p.reqProtocol) == ""
+	if !needBase && !needProtocol {
+		return false
+	}
+	for _, m := range a.agentLoop.GetConfig().Providers {
+		if m.IsVirtual() || strings.TrimSpace(m.Provider) != p.providerID {
+			continue
+		}
+		base := strings.TrimSpace(m.APIBase)
+		if !m.Custom || base == "" || !providers_pkg.IsCustomRowProtocol(m.Protocol) {
+			return false
+		}
+		p.storedIdentity = &storedCustomIdentity{apiBase: base, protocol: strings.TrimSpace(m.Protocol)}
+		if needBase {
+			p.reqAPIBase = base
+		}
+		if needProtocol {
+			p.reqProtocol = p.storedIdentity.protocol
+		}
+		return true
+	}
+	return false
+}
+
+// stillMatches reports whether the persisted provider list still holds the
+// same custom row this save was admitted against (ruling rule 5).
+func (s *storedCustomIdentity) stillMatches(providerList []any, providerID string) bool {
+	for _, entry := range providerList {
+		row, ok := entry.(map[string]any)
+		if !ok || strings.TrimSpace(strVal(row, "provider")) != providerID {
+			continue
+		}
+		custom, _ := row["custom"].(bool)
+		return custom &&
+			strings.TrimSpace(strVal(row, "api_base")) == s.apiBase &&
+			strings.TrimSpace(strVal(row, "protocol")) == s.protocol
+	}
+	return false
 }
 
 // providerPutResolveExisting looks the provider up in the current config and applies first-row defaults.
@@ -658,7 +862,7 @@ func (a *restAPI) providerPutValidateKey(p *providerPut) bool {
 					continue
 				}
 				if strings.TrimSpace(m.Provider) == p.providerID {
-					explicitAPIBase = m.APIBase
+					explicitAPIBase = usableStoredAPIBase(p.providerID, m.APIBase, m.Custom)
 					break
 				}
 			}
@@ -706,28 +910,38 @@ func (a *restAPI) providerPutValidateKey(p *providerPut) bool {
 		}
 
 		// SSRF-check the persisted api_base before any outbound probe.
-		if persistedAPIBase != "" && a.ssrfChecker != nil {
-			if err := a.ssrfChecker.CheckURL(p.r.Context(), persistedAPIBase); err != nil {
+		if checker := a.endpointChecker(); persistedAPIBase != "" && checker != nil {
+			if err := checker.CheckURL(p.r.Context(), persistedAPIBase); err != nil {
 				slog.Warn("rest: PUT provider: SSRF blocked persisted api_base",
 					"provider", p.providerID, "api_base", persistedAPIBase, "error", err)
-				jsonErr(p.w, http.StatusUnprocessableEntity, "provider endpoint not allowed (SSRF guard)")
+				jsonErr(p.w, http.StatusUnprocessableEntity, endpointRefusalMessage(err))
 				return false
 			}
 		}
 		// Run the centralized key validator. SEC-16: RawDetail is server-debug only.
-		p.putValidationResult = providers_pkg.ValidateKey(p.r.Context(), providers_pkg.ValidateInput{
+		var guardRefused bool
+		p.putValidationResult, guardRefused = a.validateKeyNotingRefusal(p.r.Context(), providers_pkg.ValidateInput{
 			ProviderID:   p.providerID,
 			ProviderName: providers_pkg.DisplayName(p.providerID),
 			BaseURL:      persistedAPIBase,
 			APIKey:       *p.req.ApiKey,
 			ProbeModels:  probeModels,
-		}, a.ssrfChk())
+		}, p.isCustomRow)
 		if orig, ok := bedrockModelOriginal[p.putValidationResult.ProbedModel]; ok {
 			p.putValidationResult.ProbedModel = orig
 		}
 		slog.Debug("rest: PUT provider: key validation result",
 			"provider", p.providerID, "outcome", p.putValidationResult.Outcome,
 			"detail", p.putValidationResult.RawDetail)
+		// A custom row whose address the guard refused DURING the key check
+		// (a redirect to, or a dial-time answer of, a blocked address) is
+		// refused like an address refused up front: nothing is stored.
+		if guardRefused {
+			slog.Warn("rest: PUT provider: SSRF guard refused a custom endpoint during the key check",
+				"provider", p.providerID, "outcome", p.putValidationResult.Outcome)
+			jsonErr(p.w, http.StatusUnprocessableEntity, providerEndpointBlockedMsg)
+			return false
+		}
 		if p.putValidationResult.Blocks() {
 			// InvalidKey — reject the save. The key is NOT stored. SEC-16: message is curated.
 			jsonErr(p.w, http.StatusUnprocessableEntity, p.putValidationResult.Message)
@@ -784,6 +998,11 @@ func (a *restAPI) providerPutPersist(p *providerPut) bool {
 	putStampStr := p.putStamp.Format(time.RFC3339)
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 		providerList, _ := m["providers"].([]any)
+		if p.storedIdentity != nil && !p.storedIdentity.stillMatches(providerList, p.providerID) {
+			// Never append or rewrite a row whose identity this save
+			// took from a row that is no longer there (#1639 rule 5).
+			return errProviderRowChanged
+		}
 		updated := false
 		for _, entry := range providerList {
 			model, ok := entry.(map[string]any)
@@ -816,6 +1035,10 @@ func (a *restAPI) providerPutPersist(p *providerPut) bool {
 					model["auth_method"] = string(*p.req.AuthMethod)
 				}
 				applyProviderIdentity(model, p.reqAPIBase, p.reqProtocol, p.reqRegion, p.isCustomRow)
+				if usableStoredAPIBase(p.providerID, strVal(model, "api_base"), p.isCustomRow) == "" {
+					// Hosted: the owner's save clears a planted catalog base.
+					delete(model, "api_base")
+				}
 				updated = true
 				break
 			}
@@ -845,8 +1068,14 @@ func (a *restAPI) providerPutPersist(p *providerPut) bool {
 		}
 		return nil
 	}); err != nil {
+		if errors.Is(err, errProviderRowChanged) {
+			slog.Warn("rest: provider update refused: stored custom row removed or changed during save",
+				"provider", p.providerID)
+			jsonErr(p.w, http.StatusConflict, errProviderRowChanged.Error())
+			return false
+		}
 		slog.Error("rest: save config for provider update", "error", err)
-		jsonErr(p.w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
+		jsonServerFailure(p.w, http.StatusInternalServerError, "could not save config", err)
 		return false
 	}
 	// ADR-067 FR-021 (T067-11): a PUT that CHANGED the key invalidates
@@ -983,7 +1212,7 @@ func (a *restAPI) providerPutRespond(p *providerPut) {
 	jsonOK(p.w, providerResp)
 }
 
-// postProviderSignInHTTP serves the HandleProviders route `r.Method == http.MethodPost && strings.HasSuffix(sub, "/sign-in"), r.Method == http.MethodGet && strings.HasSuffix(sub, "/sign-in/status"), r.Method == http.MethodPost && strings.HasSuffix(sub, "/sign-in/poll"), r.Method == http.MethodPost && sub == "openai-chatgpt/sign-in/import", r.Method == http.MethodDelete && strings.HasSuffix(sub, "/sign-in")`.
+// postProviderSignInHTTP serves the HandleProviders route `r.Method == http.MethodPost && strings.HasSuffix(sub, "/sign-in"), r.Method == http.MethodGet && strings.HasSuffix(sub, "/sign-in/status"), r.Method == http.MethodPost && strings.HasSuffix(sub, "/sign-in/poll"), r.Method == http.MethodDelete && strings.HasSuffix(sub, "/sign-in")`.
 // ADR-068 FR-008/FR-009/FR-044/FR-047/FR-048 (§8b amendment,
 // 2026-08-23; T068-14). FR-050: these five routes are reachable
 // PRE-AUTH only while onboarding is incomplete (mirrors the /test
@@ -1008,20 +1237,6 @@ func (a *restAPI) postProviderSignInHTTP(w http.ResponseWriter, r *http.Request,
 	}
 	a.requireAdminAuthz(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		// github-copilot has its own CLI-status-aware handlers (T067-07/
-		// T068-15): a real state via one bounded Copilot CLI invocation,
-		// cost-aware about premium requests. Routed first so they win
-		// over the generic cli_login path below, which would otherwise
-		// also match github-copilot's routes (signInMethodFor classifies
-		// it cli_login) with only a hardcoded command string and no real
-		// status check.
-		case r.Method == http.MethodPost && sub == copilotProviderID+"/sign-in":
-			a.handleCopilotSignInStart(w, r)
-		case r.Method == http.MethodGet && sub == copilotProviderID+"/sign-in/status":
-			// Rate-limited for the same reason as the generic status
-			// route below — this one spawns a Copilot CLI process per
-			// call (see signInStatusLimiter's doc comment).
-			withRateLimit(signInStatusLimiter, a.handleCopilotSignInStatus)(w, r)
 		case r.Method == http.MethodPost && strings.HasSuffix(sub, "/sign-in/poll"):
 			// FR-044: no explicit rate-limit requirement, but a device-code
 			// dialog polls repeatedly by design — signInPollLimiter is a
@@ -1030,17 +1245,9 @@ func (a *restAPI) postProviderSignInHTTP(w http.ResponseWriter, r *http.Request,
 			withRateLimit(signInPollLimiter, func(w http.ResponseWriter, r *http.Request) {
 				a.handleProviderSignInPoll(w, r, strings.TrimSuffix(sub, "/sign-in/poll"))
 			})(w, r)
-		case r.Method == http.MethodPost && sub == "openai-chatgpt/sign-in/import":
-			// M2: this route was called BARE while its four FR-050
-			// siblings were all wrapped. Every call rewrites the whole
-			// encrypted credentials.json and re-registers every OAuth
-			// value with the sensitive-value replacer — see
-			// signInImportLimiter (rest_auth.go).
-			withRateLimit(signInImportLimiter, a.handleProviderSignInImport)(w, r)
 		case r.Method == http.MethodPost && strings.HasSuffix(sub, "/sign-in"):
-			// FR-008: "rate-limited like the auth endpoints". codex-cli,
-			// openai-chatgpt, and any other sign_in row land here —
-			// github-copilot is already routed above.
+			// FR-008: "rate-limited like the auth endpoints". openai-chatgpt,
+			// and any other sign_in row land here.
 			withRateLimit(signInStartLimiter, func(w http.ResponseWriter, r *http.Request) {
 				a.handleProviderSignInStart(w, r, strings.TrimSuffix(sub, "/sign-in"))
 			})(w, r)
@@ -1055,14 +1262,12 @@ func (a *restAPI) postProviderSignInHTTP(w http.ResponseWriter, r *http.Request,
 			})(w, r)
 		case r.Method == http.MethodDelete && strings.HasSuffix(sub, "/sign-in"):
 			// FR-048 sign-out: harmless no-op (NotFound = success) for a
-			// cli_login provider like github-copilot, which never has a
-			// "<id>_OAUTH" entry to begin with — Omnipus never sees or
-			// stores its credential.
+			// provider id that never wrote a "<id>_OAUTH" entry.
 			//
-			// M2: also previously bare. Not harmless in aggregate — each
-			// call nils the process-wide sensitive-data replacer cache,
-			// so the next scrub pays a full reflection walk of Config
-			// under a write lock. See signInSignOutLimiter (rest_auth.go).
+			// M2: not harmless in aggregate — each call nils the
+			// process-wide sensitive-data replacer cache, so the next scrub
+			// pays a full reflection walk of Config under a write lock. See
+			// signInSignOutLimiter (rest_auth.go).
 			withRateLimit(signInSignOutLimiter, func(w http.ResponseWriter, r *http.Request) {
 				a.handleProviderSignOut(w, r, strings.TrimSuffix(sub, "/sign-in"))
 			})(w, r)
@@ -1120,6 +1325,7 @@ func (a *restAPI) postProviderTestHTTP(w http.ResponseWriter, r *http.Request, s
 	var resolvedAPIKey string
 	var firstModel string
 	var configuredAPIBase string
+	var configuredCustom bool
 	// credResolveErr captures a resolveCredentialRef failure when the provider
 	// entry references an api_key_ref that the credential vault could NOT
 	// resolve. This is distinct from "no key configured" and must surface a
@@ -1139,6 +1345,7 @@ func (a *restAPI) postProviderTestHTTP(w http.ResponseWriter, r *http.Request, s
 			// regional host / self-hosted gateway is probed at the SAME base
 			// the runtime factory will actually use (fix #3).
 			configuredAPIBase = strings.TrimSpace(strVal(modelMap, "api_base"))
+			configuredCustom, _ = modelMap["custom"].(bool)
 			// Check if API key is set: either via api_keys array or api_key_ref
 			// pointing to the encrypted credentials store.
 			apiKeys, _ := modelMap["api_keys"].([]any)
@@ -1191,7 +1398,7 @@ func (a *restAPI) postProviderTestHTTP(w http.ResponseWriter, r *http.Request, s
 	// Resolve the base URL to probe: prefer the entry's configured api_base
 	// (regional host / self-hosted gateway), fall back to the vendor default
 	// (fix #3).
-	baseURL := configuredAPIBase
+	baseURL := usableStoredAPIBase(providerID, configuredAPIBase, configuredCustom)
 	if baseURL == "" {
 		baseURL = providers_pkg.APIBaseFor(providerID)
 	}
@@ -1210,10 +1417,10 @@ func (a *restAPI) postProviderTestHTTP(w http.ResponseWriter, r *http.Request, s
 	// any outbound call (fix #1). The configured api_base is caller-influenced
 	// (set via PUT /providers), so it must be SSRF-checked just like the
 	// onboarding endpoint override.
-	if a.ssrfChecker != nil {
-		if err := a.ssrfChecker.CheckURL(r.Context(), baseURL); err != nil {
+	if checker := a.endpointChecker(); checker != nil {
+		if err := checker.CheckURL(r.Context(), baseURL); err != nil {
 			slog.Warn("rest: provider test: SSRF blocked api_base", "provider", providerID, "error", err)
-			errMsg := "endpoint not allowed"
+			errMsg := endpointRefusalMessage(err)
 			jsonOK(w, gen.OperationResult{Success: false, Error: &errMsg})
 			return
 		}

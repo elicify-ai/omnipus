@@ -9,13 +9,15 @@
 //
 //   - Prompts are compiled into the binary (not stored as SOUL.md on disk)
 //   - Agents are seeded into config.json on first boot via SeedConfig
-//   - Identity fields are locked (name, description, color, icon, prompt)
+//   - Identity fields are locked (name, description, color, prompt)
 //   - Users CAN change model, remove tools, and set heartbeat
 package coreagent
 
 import (
 	"fmt"
 	"log/slog"
+	"strings"
+	"unicode/utf8"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -25,10 +27,16 @@ import (
 type CoreAgentID string
 
 const (
-	IDJim   CoreAgentID = "jim"
-	IDAva   CoreAgentID = "ava"
-	IDMia   CoreAgentID = "mia"
-	IDAdmin CoreAgentID = "admin"
+	IDJim CoreAgentID = "jim"
+	IDMia CoreAgentID = "mia"
+	// IDOmnipus is the one system agent (omnipus-system-agent spec FR-001,
+	// ADR-20261011): a core, locked, chat-target identity that replaces the
+	// retired Ava and Admin roles (FR-008 — their ids are gone, so any
+	// remaining compile-time reference surfaces as a build error). It is an
+	// ordinary hidden member of the default workspace only (FR-003), its turns
+	// root at its own agent home, and it alone holds the cross-workspace
+	// setup authority over workspace folders (FR-006, L1 amendment A8).
+	IDOmnipus CoreAgentID = "omnipus"
 	// IDWorker is the seeded general-purpose sub-agent worker (the worker tier).
 	// It is NOT a base/core agent: it is seeded with Type=worker, carries a native
 	// Executor, is never a chat target, has no heartbeat, and is never the
@@ -119,35 +127,35 @@ type CoreAgent struct {
 	Name        string // Display name (e.g., "Jim")
 	Subtitle    string // Role subtitle (e.g., "General Purpose")
 	Description string // One-line description
-	Color       string // Hex color for avatar (e.g., "#22C55E")
-	Icon        string // Phosphor icon name (e.g., "chat-circle")
+	Figure      string // Mark body: Robot, Man, Woman, Omnipus, or Monogram
+	Role        string // Curated role slug (the badge, not Icon)
+	Color       string // Canonical palette hex
 }
 
-// All returns every seeded agent in display order: the 4 base agents (Mia first,
-// as the default) followed by the general-purpose worker. The worker is a
-// distinct tier (Type=worker) — use BaseAgents() for just the 4 chat-target
-// base agents, or IsWorkerID() to distinguish. Max was retired from the seeded
-// base in Spec-3 (v0.1.0 roster re-cast).
+// All returns every seeded agent in display order: the 3 base agents (Mia first,
+// as the default; then Jim and Omnipus) followed by the specialists and the
+// general-purpose worker. The worker is a distinct tier (Type=worker) — use
+// BaseAgents() for just the chat-target base agents, or IsWorkerID() to
+// distinguish. Max was retired in Spec-3; Ava and Admin were retired by the
+// Omnipus system agent (spec FR-008).
 func All() []*CoreAgent {
 	return []*CoreAgent{
 		Mia(),
 		Jim(),
-		Ava(),
-		Admin(),
+		Omnipus(),
 		Planner(),
 		Researcher(),
 		Worker(),
 	}
 }
 
-// BaseAgents returns only the 4 base (core, chat-target) agents, excluding the
+// BaseAgents returns only the base (core, chat-target) agents, excluding the
 // worker tier. Use this where the worker must NOT be treated as a base agent.
 func BaseAgents() []*CoreAgent {
 	return []*CoreAgent{
 		Mia(),
 		Jim(),
-		Ava(),
-		Admin(),
+		Omnipus(),
 	}
 }
 
@@ -256,7 +264,7 @@ func GetPrompt(id string) string {
 // the same set of strings so existing tooling (CLI, audit log, telemetry) keeps
 // working without an alias layer.
 //
-// The built-in chat roster (Mia / Jim / Ava / Admin) keeps `core` — ResolveType is only
+// The built-in chat roster (Mia / Jim / Omnipus) keeps `core` — ResolveType is only
 // for user-creatable types. Callers handling a built-in must NOT call this.
 func ResolveType(wire generated.AgentType) config.AgentType {
 	switch wire {
@@ -282,21 +290,9 @@ func Jim() *CoreAgent {
 		Subtitle: "Planner & Orchestrator",
 		Description: "Your planning hub — decomposes complex goals into a task DAG, " +
 			"delegates to the right specialists, tracks progress, and drives work to completion.",
-		Color: "#22C55E",
-		Icon:  "graph",
-	}
-}
-
-// Ava returns the Builder core agent.
-func Ava() *CoreAgent {
-	return &CoreAgent{
-		ID:       IDAva,
-		Name:     "Ava",
-		Subtitle: "Builder",
-		Description: "Configures agents, teams and skills, including models, tool permissions and connector assignments. " +
-			"Reviews one combined proposal with you before applying changes and checking the result.",
-		Color: "#D4AF37",
-		Icon:  "wrench",
+		Figure: DefaultFigure,
+		Role:   DefaultRole,
+		Color:  "#4F8A80",
 	}
 }
 
@@ -308,27 +304,80 @@ func Mia() *CoreAgent {
 		Subtitle: "Assistant",
 		Description: "Your friendly everyday assistant — guides you through Omnipus, " +
 			"answers questions, and connects you with the right specialist when needed.",
-		Color: "#3B82F6",
-		Icon:  "lightbulb",
+		Figure: DefaultFigure,
+		Role:   DefaultRole,
+		Color:  "#6E8BA8",
 	}
 }
 
-// Admin returns the chat-capable operator role. Admin configures the harness;
-// it is a core runtime identity, not a hidden system agent.
-func Admin() *CoreAgent {
+// Omnipus returns the system agent (omnipus-system-agent spec FR-001). Its
+// name is reserved (FR-002) and its identity is locked like every built-in.
+//
+// Visible roster colours (All, the set TestCoreAgentMetadataDifferentiation
+// checks) are distinct: Mia Steel blue #6E8BA8, Jim Verdigris #4F8A80, Omnipus
+// Bronze #A97142, Planner Titanium #7A8C9E, Researcher Graphite violet #7B7290,
+// General Purpose Pewter #8E9196. Hidden Judge (Steel blue) and Plan
+// Supervisor (Verdigris) are not in All() and are outside that check.
+//
+// Placeholder identity text until WU-9 wires the prometheus-authored copy
+// (docs/internal/specs/omnipus-wu9-draft/).
+func Omnipus() *CoreAgent {
 	return &CoreAgent{
-		ID: IDAdmin, Name: "Admin", Subtitle: "Operator",
-		Description: "Configures connectors, providers, channels, diagnostics, and document dependencies.",
-		Color:       "#F97316", Icon: "shield",
+		ID:       IDOmnipus,
+		Name:     OmnipusName,
+		Subtitle: "System agent",
+		Description: "Sets up and changes your agents, teams, skills, connectors, providers and channels, " +
+			"with one summary question before any change.",
+		Figure: DefaultFigure,
+		Role:   DefaultRole,
+		Color:  "#A97142",
 	}
+}
+
+// OmnipusName is the system agent's display name. It is reserved: no other
+// agent may be created or renamed to it (trimmed, case-insensitive — FR-002).
+const OmnipusName = "Omnipus"
+
+// ReservedNameRefusal is the exact refusal text every name-write path returns
+// for the reserved name (spec §6.2: 409 on REST, an error result on the agent
+// tools).
+const ReservedNameRefusal = "the name Omnipus is reserved"
+
+// IsReservedAgentName reports whether name, trimmed and compared without
+// letter case, is the system agent's reserved name (FR-002). A similar name
+// such as "Omnipus Helper" is not reserved.
+func IsReservedAgentName(name string) bool {
+	return strings.EqualFold(strings.TrimSpace(name), OmnipusName)
+}
+
+// AgentNameMaxChars is the longest agent display name, in characters —
+// contracts/components/schemas/Agent.yaml::name maxLength. Every write path
+// (REST create/update and the agent tools) refuses a longer name before any
+// write, so a stored agent always satisfies the read schema (#1075).
+const AgentNameMaxChars = 100
+
+// AgentNameTooLongRefusal is the refusal text for a name over the limit.
+var AgentNameTooLongRefusal = fmt.Sprintf("the agent name must be at most %d characters", AgentNameMaxChars)
+
+// AgentNameTooLong reports whether name has more than AgentNameMaxChars
+// characters (Unicode code points, the JSON Schema maxLength unit).
+func AgentNameTooLong(name string) bool {
+	return utf8.RuneCountInString(name) > AgentNameMaxChars
+}
+
+// HasCrossWorkspaceSetupAuthority reports whether the agent holds the
+// cross-workspace setup authority over workspace folders (FR-006, L1
+// amendment A8): only Omnipus. The authority covers workspaces/<any>/work and
+// their mounts; it grants nothing over internal files.
+func HasCrossWorkspaceSetupAuthority(id string) bool {
+	return CoreAgentID(id) == IDOmnipus
 }
 
 // Worker returns the seeded general-purpose sub-agent worker. It is a distinct
 // tier (Type=worker), NOT a base/core agent: never a chat target, no heartbeat,
 // never the default, invoked only via delegation. It carries a native executor
 // (set in SeedConfig) and a leaner tool set focused on getting one delegated
-// task done and reporting back. No switch_agent tool — a worker does not
-// steer conversation.
+// task done and reporting back.
 func Worker() *CoreAgent {
 	return &CoreAgent{
 		ID:       IDWorker,
@@ -336,8 +385,9 @@ func Worker() *CoreAgent {
 		Subtitle: "General Purpose",
 		Description: "General-purpose sub-agent worker — executes one delegated task at a time, " +
 			"does the work, and returns a concise result. Not a chat persona; invoked via delegation.",
-		Color: "#6B7280",
-		Icon:  "robot",
+		Figure: DefaultFigure,
+		Role:   DefaultRole,
+		Color:  "#8E9196",
 	}
 }
 
@@ -352,8 +402,9 @@ func Planner() *CoreAgent {
 		Subtitle: "Planning Specialist",
 		Description: "Builds a structured plan from the goal and available context. " +
 			"Uses permitted delegation to gather additional evidence when needed. Invoked via delegation; not a chat persona.",
-		Color: "#0EA5E9",
-		Icon:  "tree-structure",
+		Figure: DefaultFigure,
+		Role:   DefaultRole,
+		Color:  "#7A8C9E",
 	}
 }
 
@@ -366,7 +417,8 @@ func Researcher() *CoreAgent {
 		Subtitle: "Research Specialist",
 		Description: "Researches external sources — the web and fetched documents — and " +
 			"synthesizes findings with citations. Invoked via delegation; not a chat persona.",
-		Color: "#8B5CF6",
-		Icon:  "books",
+		Figure: DefaultFigure,
+		Role:   DefaultRole,
+		Color:  "#7B7290",
 	}
 }

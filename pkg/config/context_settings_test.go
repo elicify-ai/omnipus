@@ -182,14 +182,14 @@ func TestDefaultConfig_ContextSettings(t *testing.T) {
 	cs := DefaultConfig().Context
 
 	want := ContextSettings{
-		McpResultCap:         62_500,
-		BuiltinSuccessCap:    64_000,
-		BuiltinFailureCap:    10_000,
-		WarnThreshold:        25_000,
-		AbsoluteTriggerChars: 400_000,
-		IngestBoundBytes:     8_000_000,
-		DefaultContextWindow: nil,
-		ModelOverrides:       []ContextModelOverride{},
+		McpResultCap:            62_500,
+		BuiltinSuccessCap:       64_000,
+		BuiltinFailureCap:       10_000,
+		WarnThreshold:           25_000,
+		ToolResultShareFraction: 0.5,
+		IngestBoundBytes:        8_000_000,
+		DefaultContextWindow:    nil,
+		ModelOverrides:          []ContextModelOverride{},
 	}
 	if !reflect.DeepEqual(cs, want) {
 		t.Fatalf("DefaultConfig().Context = %+v, want %+v", cs, want)
@@ -199,14 +199,14 @@ func TestDefaultConfig_ContextSettings(t *testing.T) {
 	// section itself is the single `context` key on Config.
 	typ := reflect.TypeOf(ContextSettings{})
 	wantTags := map[string]string{
-		"McpResultCap":         "mcp_result_cap",
-		"BuiltinSuccessCap":    "builtin_success_cap",
-		"BuiltinFailureCap":    "builtin_failure_cap",
-		"WarnThreshold":        "warn_threshold",
-		"AbsoluteTriggerChars": "absolute_trigger_chars",
-		"IngestBoundBytes":     "ingest_bound_bytes",
-		"DefaultContextWindow": "default_context_window,omitempty",
-		"ModelOverrides":       "model_overrides",
+		"McpResultCap":            "mcp_result_cap",
+		"BuiltinSuccessCap":       "builtin_success_cap",
+		"BuiltinFailureCap":       "builtin_failure_cap",
+		"WarnThreshold":           "warn_threshold",
+		"ToolResultShareFraction": "tool_result_share_fraction",
+		"IngestBoundBytes":        "ingest_bound_bytes",
+		"DefaultContextWindow":    "default_context_window,omitempty",
+		"ModelOverrides":          "model_overrides",
 	}
 	for name, tag := range wantTags {
 		f, ok := typ.FieldByName(name)
@@ -244,7 +244,7 @@ func TestDefaultConfig_ContextSettings(t *testing.T) {
 		t.Errorf("mcp_result_cap = %d, want 150000", got.McpResultCap)
 	}
 	if got.BuiltinSuccessCap != 64_000 || got.BuiltinFailureCap != 10_000 || got.WarnThreshold != 25_000 ||
-		got.AbsoluteTriggerChars != 400_000 || got.IngestBoundBytes != 8_000_000 || got.DefaultContextWindow != nil {
+		got.ToolResultShareFraction != 0.5 || got.IngestBoundBytes != 8_000_000 || got.DefaultContextWindow != nil {
 		t.Errorf("unnamed fields must keep the seed; got %+v", got)
 	}
 	wantOv := []ContextModelOverride{{Provider: "openai", Model: "gpt-5", ContextWindow: 32_768}}

@@ -27,6 +27,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 // stderrTail is a bounded, concurrency-safe ring buffer that retains the most
@@ -101,6 +103,10 @@ func buildChildEnv(callerEnv []string) []string {
 	return out
 }
 
+// fatalDeliveryGrace bounds how long streamParser keeps offering a fatal event
+// to a consumer after the run context is already done (#904 F1).
+const fatalDeliveryGrace = 2 * time.Second
+
 // streamParser is a callback-based NDJSON parser.
 // It reads lines from r, calls parseLine for each non-empty line,
 // and sends the resulting RunEvents to out. It exits when ctx is
@@ -146,7 +152,16 @@ func streamParser(
 			ev.RunID = runID
 		}
 		if ev.Kind == EventKindError && ev.Err != nil && ev.Err.Fatal {
-			emittedFatal = true
+			// A fatal event is often produced right after the driver cancelled
+			// the run (every turn-cap branch calls Cancel() first), so ctx is
+			// already done here. It must not race ctx.Done() (#904 F1).
+			if deliverFatal(ctx, out, ev) {
+				emittedFatal = true
+			}
+			if ctx.Err() != nil {
+				return emittedFatal
+			}
+			continue
 		}
 		select {
 		case out <- ev:
@@ -170,6 +185,37 @@ func streamParser(
 	return emittedFatal
 }
 
+// deliverFatal hands a fatal event to out with priority over cancellation
+// (#904 F1). A plain `select { case out <- ev: case <-ctx.Done(): }` picks at
+// random when both are ready, so a fatal event emitted after the driver's own
+// Cancel() — the turn-cap path in all three drivers — was dropped about half
+// the time. deliverFatal sends immediately when out has room; otherwise it
+// waits for the consumer while the run is live, and for at most
+// fatalDeliveryGrace once ctx is done, so an abandoned consumer cannot leak
+// the parser goroutine. It reports whether the event was delivered.
+func deliverFatal(ctx context.Context, out chan<- RunEvent, ev RunEvent) bool {
+	select {
+	case out <- ev:
+		return true
+	default:
+	}
+	select {
+	case out <- ev:
+		return true
+	case <-ctx.Done():
+	}
+	timer := time.NewTimer(fatalDeliveryGrace)
+	defer timer.Stop()
+	select {
+	case out <- ev:
+		return true
+	case <-timer.C:
+		slog.Warn("runner: fatal event not delivered — consumer did not receive within the grace period",
+			"run_id", ev.RunID, "message", ev.Err.Message, "grace", fatalDeliveryGrace)
+		return false
+	}
+}
+
 // detectCLIVersion runs `<binary> --version` and returns the parsed version
 // string (a clean version token, not the raw output line). On failure it
 // returns ("", err). The caller SHOULD log a warning on unknown versions and
@@ -180,7 +226,20 @@ func streamParser(
 func detectCLIVersion(ctx context.Context, binary string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, binary, "--version").CombinedOutput()
+	cmd := exec.CommandContext(ctx, binary, "--version")
+	// SECURITY (env scrub — u5b finding): this probe execs a CALLER-SUPPLIED
+	// binary (`binary` comes from opts.CLIPath via resolveCLIBinary, or a bare
+	// name like "claude"). Leaving cmd.Env nil makes the child inherit the
+	// ENTIRE gateway environment — OMNIPUS_MASTER_KEY, the bearer token,
+	// FLY_API_TOKEN and every other gateway secret. Apply the SAME env policy
+	// as every other external-CLI runner launch: the runner credential
+	// allowlist (sandbox.ScrubGatewayEnvForRunner), which keeps the CLI's own
+	// credential env (ANTHROPIC_API_KEY, CLAUDE_CONFIG_DIR, CODEX_HOME, …) plus
+	// PATH/HOME so a legit `--version` handshake still resolves and runs, while
+	// stripping gateway-only secrets. Mirrors conntest.probeVersion. Reuse, do
+	// not fork a second env policy.
+	cmd.Env = sandbox.ScrubGatewayEnvForRunner()
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("version check for %q: %w", binary, err)
 	}
@@ -223,6 +282,19 @@ func detectAndPinVersion(
 	slog.Warn(logTag+": unknown CLI version — proceeding with graceful degradation",
 		"binary", binary, "version", ver)
 	return ver, false
+}
+
+// storeNativeID records the CLI-announced native conversation id used by
+// native-conversation resume (FR-043). An empty id is ignored (some events
+// omit it); a non-empty id overwrites the previous capture. The caller holds
+// no lock; this helper takes mu so the parse goroutine and Resume never race.
+func storeNativeID(mu *sync.Mutex, dst *string, id string) {
+	if id == "" {
+		return
+	}
+	mu.Lock()
+	*dst = id
+	mu.Unlock()
 }
 
 // rawJSONField extracts a string field from raw JSON bytes without full

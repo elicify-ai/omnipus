@@ -98,10 +98,10 @@ vi.mock('@/components/providers/SignInDialog', () => ({
     ) : null,
 }))
 
-// ManageSignInDialog and ReSignInDialog (T068-26) are unit-tested in full in
-// their own files — here we only need to assert handleManage() dispatches to
-// the right one with the right target, and that Sign out (surfaced by the
-// stub, same as the real dialog's own button) reaches the shared mutation.
+// ManageSignInDialog (T068-26) is unit-tested in full in its own file — here
+// we only need to assert handleManage() dispatches to the right surface with
+// the right target, and that Sign out (surfaced by the stub, same as the real
+// dialog's own button) reaches the shared mutation.
 vi.mock('@/components/providers/ManageSignInDialog', () => ({
   ManageSignInDialog: ({
     open,
@@ -127,25 +127,6 @@ vi.mock('@/components/providers/ManageSignInDialog', () => ({
         >
           Sign out
         </button>
-      </div>
-    ) : null,
-}))
-
-vi.mock('@/components/providers/ReSignInDialog', () => ({
-  ReSignInDialog: ({
-    open,
-    providerId,
-    providerLabel,
-    cliKind,
-  }: {
-    open: boolean
-    providerId: string
-    providerLabel: string
-    cliKind: string
-  }) =>
-    open ? (
-      <div data-testid="re-sign-in-dialog-stub">
-        {providerLabel} ({providerId}) [{cliKind}]
       </div>
     ) : null,
 }))
@@ -1369,15 +1350,15 @@ describe('ProvidersSection — FR-033 draft-key preservation (US-8)', () => {
 // ---------------------------------------------------------------------------
 // ADR-068 §8b sign-in row states (T068-33 initial signed_in/expired/Sign-out
 // wiring; T068-26 replaces the row copy and action with Manage +
-// ManageSignInDialog / ReSignInDialog). Gated primarily on the registry
-// catalog entry's `auth_methods` (see ProviderRow.tsx's isSignInCapable).
-// `openai-chatgpt` and `codex-cli` are two of the shared fixture's
-// `auth_methods: ["sign_in"]` rows, so these fixtures exercise the catalog
-// signal itself; the configured row's own `auth_method: "sign_in"` field is
-// carried too, which is the fallback isSignInCapable takes for an id absent
-// from the catalog. `codex-cli` also resolves `cli_kind: "codex"` from the
-// shared catalog fixture (providers-catalog.json), which is what routes its
-// `expired` Manage click to ReSignInDialog instead of SignInDialog.
+// ManageSignInDialog). Gated primarily on the registry catalog entry's
+// `auth_methods` (see ProviderRow.tsx's isSignInCapable). `openai-chatgpt`
+// is the shared fixture's one `auth_methods: ["sign_in"]` row (WU-24 removed
+// the retired CLI rows), so these fixtures exercise the catalog signal
+// itself; the configured row's own `auth_method: "sign_in"` field is carried
+// too, which is the fallback isSignInCapable takes for an id absent from the
+// catalog. An `expired` Manage click opens a fresh SignInDialog (device
+// code) — the status-only re-sign-in surface shipped only for the retired
+// CLI rows and was deleted with them (WU-24).
 // ---------------------------------------------------------------------------
 
 const SIGNED_IN_PROVIDER = {
@@ -1401,22 +1382,8 @@ const SIGNED_IN_NO_LABEL_PROVIDER = {
   models: [],
 }
 
-// codex-cli — a `cli_login` row: the shared providers-catalog.json fixture
-// resolves its entry to `protocol: "cli"`, `cli_kind: "codex"`, which is what
-// routes its `expired` Manage click to ReSignInDialog.
-const EXPIRED_PROVIDER = {
-  ...CONFIGURED_BASE,
-  id: 'codex-cli',
-  name: 'codex-cli',
-  display_name: 'codex-cli',
-  status: 'expired',
-  auth_method: 'sign_in',
-  models: [],
-}
-
-// openai-chatgpt — a `device_code` row: its catalog entry carries no
-// `cli_kind`, so its `expired` Manage click falls back to the ordinary
-// SignInDialog (a fresh device-code approval, not a status re-check).
+// openai-chatgpt — a `device_code` row: its `expired` Manage click opens the
+// ordinary SignInDialog (a fresh device-code approval, not a status re-check).
 const EXPIRED_DEVICE_CODE_PROVIDER = {
   ...CONFIGURED_BASE,
   id: 'openai-chatgpt',
@@ -1456,38 +1423,17 @@ describe('ProvidersSection — ADR-068 sign-in row states', () => {
     expect(badge.textContent).not.toContain('·')
   })
 
-  it('an expired cli_login row (codex-cli) shows "Session expired" and Manage opens the re-sign-in dialog, not SignInDialog', async () => {
-    vi.mocked(api.fetchProviders).mockResolvedValue([EXPIRED_PROVIDER] as never)
-    renderSection()
-
-    await waitFor(() => screen.getByTestId('provider-row-codex-cli'))
-    expect(screen.getByTestId('expired-badge-codex-cli')).toHaveTextContent('Session expired')
-    const btn = screen.getByTestId('manage-btn-codex-cli')
-    expect(btn).toHaveTextContent('Manage')
-
-    expect(screen.queryByTestId('re-sign-in-dialog-stub')).not.toBeInTheDocument()
-    fireEvent.click(btn)
-    await waitFor(() => {
-      const dialog = screen.getByTestId('re-sign-in-dialog-stub')
-      expect(dialog).toHaveTextContent('codex-cli')
-      expect(dialog).toHaveTextContent('[codex]')
-    })
-    // No fresh device-code / POST /sign-in flow for an expired cli_login row
-    // (BDD "Expired session routes to re-sign-in", MAJ-006).
-    expect(screen.queryByTestId('sign-in-dialog-stub')).not.toBeInTheDocument()
-  })
-
-  it('an expired device_code row (openai-chatgpt, no cli_kind) falls back to SignInDialog on Manage', async () => {
+  it('an expired device_code row (openai-chatgpt) opens a fresh SignInDialog on Manage', async () => {
     vi.mocked(api.fetchProviders).mockResolvedValue([EXPIRED_DEVICE_CODE_PROVIDER] as never)
     renderSection()
 
     await waitFor(() => screen.getByTestId('provider-row-openai-chatgpt'))
+    expect(screen.getByTestId('expired-badge-openai-chatgpt')).toHaveTextContent('Session expired')
     const btn = screen.getByTestId('manage-btn-openai-chatgpt')
     fireEvent.click(btn)
     await waitFor(() => {
       expect(screen.getByTestId('sign-in-dialog-stub')).toHaveTextContent('openai-chatgpt')
     })
-    expect(screen.queryByTestId('re-sign-in-dialog-stub')).not.toBeInTheDocument()
   })
 
   it('Sign out (via Manage) calls signOutProvider, refetches the provider list, and closes the dialog on success', async () => {
@@ -1646,8 +1592,8 @@ describe('ProvidersSection — Default model card (FR-019)', () => {
   it('renders an em dash for an exempt row reporting context_window 0', async () => {
     vi.mocked(api.fetchProviders).mockResolvedValue([CONNECTED_OPENROUTER] as never)
     vi.mocked(api.getDefaultModel).mockResolvedValue({
-      provider: 'codex-cli',
-      model: 'gpt-5-codex',
+      provider: 'openai-chatgpt',
+      model: 'gpt-5.4',
       context_window: 0,
     } as never)
     renderSection()
@@ -2035,15 +1981,6 @@ describe('ProvidersSection — Check with my account (FR-031)', () => {
     expect(screen.queryByTestId('model-limit-not-entitled-openai-A')).not.toBeInTheDocument()
     expect(screen.queryByTestId('model-limit-not-entitled-openai-B')).not.toBeInTheDocument()
     expect(screen.queryByTestId('model-limit-not-entitled-openai-C')).not.toBeInTheDocument()
-  })
-
-  it('is not offered for a cli-protocol row (409 by construction)', async () => {
-    vi.mocked(api.fetchProviders).mockResolvedValue([
-      { ...ENTITLEMENT_PROVIDER, id: 'codex-cli', name: 'codex-cli', protocol: 'cli' },
-    ] as never)
-    renderSection()
-    await screen.findByTestId('provider-row-codex-cli')
-    expect(screen.queryByTestId('check-entitlement-btn-codex-cli')).not.toBeInTheDocument()
   })
 
   it('is not offered for a custom row (no catalog entry to intersect against)', async () => {

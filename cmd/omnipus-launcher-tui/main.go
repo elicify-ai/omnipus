@@ -14,6 +14,7 @@ import (
 
 	tuicfg "github.com/elicify-ai/omnipus/cmd/omnipus-launcher-tui/config"
 	"github.com/elicify-ai/omnipus/cmd/omnipus-launcher-tui/ui"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 func main() {
@@ -25,6 +26,9 @@ func main() {
 	configDir := filepath.Dir(configPath)
 	if _, err := os.Stat(configDir); errors.Is(err, os.ErrNotExist) {
 		cmd := exec.Command("omnipus", "onboard")
+		// FR-239: the onboard child starts from the closed child allowlist —
+		// the launcher never forwards its own environment wholesale.
+		cmd.Env = sandbox.ScrubGatewayEnv()
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr

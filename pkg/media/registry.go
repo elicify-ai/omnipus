@@ -67,11 +67,19 @@ func registryPath() string {
 // (A fixed "registry.json.tmp" shared by concurrent saves is what produced
 // "invalid character 'e' after top-level value" on load.)
 //
+// A store retired by HandoverTo never writes: its successor owns the file.
+//
 // Lock order is registryMu, then s.mu. Must not be called while holding
 // s.mu: the snapshot takes s.mu.RLock.
 func (s *FileMediaStore) SaveRegistry() {
 	s.registryMu.Lock()
 	defer s.registryMu.Unlock()
+
+	if s.retired {
+		// HandoverTo moved this store's state to its successor, which now owns
+		// registry.json; this store's snapshot is stale by definition.
+		return
+	}
 
 	path := registryPath()
 	if path == "" {
@@ -100,6 +108,9 @@ func (s *FileMediaStore) SaveRegistry() {
 		}
 		rf.Entries[ref] = rec
 	}
+	for ref, failed := range s.failedRefs {
+		rf.Entries[ref] = failed.rec
+	}
 	s.mu.RUnlock()
 
 	data, err := json.Marshal(rf)
@@ -117,8 +128,12 @@ func (s *FileMediaStore) SaveRegistry() {
 
 // LoadRegistry reads the persisted registry from disk and seeds the
 // in-memory maps. Returns nil silently when the file does not exist
-// (fresh install). Entries whose underlying file is missing are dropped
-// so stale refs don't accumulate forever.
+// (fresh install). Entries whose underlying file does not exist are dropped
+// so stale refs don't accumulate forever. An entry whose file cannot be
+// inspected for any other reason (permission, I/O) is not treated as missing:
+// it is kept with its cause (failedRefs), so resolving that ref returns the
+// cause and SaveRegistry keeps the row, every other entry still loads, and
+// the returned error wraps every such cause.
 func (s *FileMediaStore) LoadRegistry() error {
 	path := registryPath()
 	if path == "" {
@@ -143,12 +158,23 @@ func (s *FileMediaStore) LoadRegistry() error {
 
 	loaded := 0
 	dropped := 0
+	var inspectErrs []error
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for ref, rec := range rf.Entries {
 		if _, err := os.Stat(rec.Path); err != nil {
-			dropped++
+			if errors.Is(err, fs.ErrNotExist) {
+				dropped++
+				continue
+			}
+			if s.failedRefs == nil {
+				s.failedRefs = make(map[string]failedRegistryRef)
+			}
+			s.failedRefs[ref] = failedRegistryRef{rec: rec, err: err}
+			inspectErrs = append(inspectErrs, fmt.Errorf("inspect %s: %w", ref, err))
+			logger.WarnCF("media", "registry: registered file could not be inspected; its ref fails until a restart after the cause is fixed",
+				map[string]any{"ref": ref, "path": rec.Path, "error": err.Error()})
 			continue
 		}
 		policy := CleanupPolicy(rec.CleanupPolicy)
@@ -179,7 +205,14 @@ func (s *FileMediaStore) LoadRegistry() error {
 		loaded++
 	}
 
-	logger.InfoCF("media", "registry: loaded persisted refs",
-		map[string]any{"loaded": loaded, "dropped_missing": dropped, "path": path})
+	// Warn, not info (#1439 step 1): this line is the only place that counts
+	// refs the registry DROPPED because their files are gone — the exact
+	// counter a "media ref not found" investigation needs, and invisible at
+	// the default log level while it was info.
+	logger.WarnCF("media", "registry: loaded",
+		map[string]any{"loaded": loaded, "dropped_missing": dropped, "failed_inspect": len(inspectErrs), "path": path})
+	if len(inspectErrs) > 0 {
+		return fmt.Errorf("media registry: %d registered file(s) could not be inspected: %w", len(inspectErrs), errors.Join(inspectErrs...))
+	}
 	return nil
 }

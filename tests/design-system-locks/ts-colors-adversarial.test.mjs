@@ -2421,6 +2421,30 @@ test('R1 permitted: an enumeration-method terminal call on an exported const arr
   assert.ok(findings.some((f) => f.ruleId === 'ts-colors/raw-color' && f.syntax === '#22c55e'))
 })
 
+test('R1 permitted: a const-string dynamic import of another module does not poison an exported palette', () => {
+  const constantsSource = "export const AVATAR_COLORS = ['#22C55E', '#3B82F6']"
+  const source = [
+    "import { AVATAR_COLORS } from './constants'",
+    'export function Picker() {',
+    '  return <div>{AVATAR_COLORS.map((color) => <i key={color} style={{ backgroundColor: color }} />)}</div>',
+    '}',
+  ].join('\n')
+  const unrelatedDynamicImport = [
+    "const MODULE_PATH = '@/components/panel-shell/registry'",
+    'export async function load() { return import(MODULE_PATH) }',
+  ].join('\n')
+  const modules = {
+    [path]: source,
+    'src/components/constants.ts': constantsSource,
+    'src/store/panelShell.registry.test.ts': unrelatedDynamicImport,
+  }
+
+  const findings = scan({ path, source, policy: pass2Policy, modules })
+
+  assert.deepEqual(findings.filter((f) => f.ruleId === 'ts-colors/unsupported'), [])
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/raw-color' && f.syntax === '#22c55e'))
+})
+
 // ── R4 — generated-token-accessor capability: FORBIDDEN controls ───────────
 //
 // Companion to the PERMITTED tests in ts-colors.test.mjs. Each control here

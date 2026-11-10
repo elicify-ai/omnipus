@@ -6,8 +6,11 @@ package agent
 
 // FR-023..FR-030, FR-032, FR-032a: Session-end recap pipeline.
 //
-// CloseSession → runRecap → LLM call → WriteLastSession + AppendRetro + audit.
-// BootstrapRecapPass: on gateway start, re-cap sessions missing LAST_SESSION.md.
+// CloseSession → runRecap → LLM call → WriteCarryForward + AppendRetro + audit.
+// The summary is stored per (agent, workspace) under
+// workspaces/<ws>/.omnipus/carry-forward/<agent>.md (WU-21 / #1197, amendment
+// §3.2); a session with no workspace writes nothing (skipped_no_workspace).
+// BootstrapRecapPass: on gateway start, re-cap sessions missing a retro.
 
 import (
 	"context"
@@ -20,11 +23,12 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
-	"github.com/elicify-ai/omnipus/pkg/utils"
 )
 
 // CloseSession triggers an async session-end recap if AutoRecapEnabled is set
@@ -158,10 +162,11 @@ func (al *AgentLoop) CloseSession(sessionID, trigger string) {
 	//     session's Stats and are invisible to Usage/get_usage. A fan-out of
 	//     N delegations is N uncounted LLM calls.
 	//   - Memory corruption: every delegated child of the SAME agent shares
-	//     that one agent's single last-session.md (pkg/agent/memory.go). N
-	//     concurrent delegations race N recap goroutines to overwrite it —
-	//     the winner is whichever micro sub-task's recap happens to finish
-	//     last, clobbering the recap of the user's actual last real
+	//     that one agent's single summary file (then the agent-wide
+	//     last-session.md; today the (agent, workspace) carry-forward pair
+	//     file). N concurrent delegations race N recap goroutines to overwrite
+	//     it — the winner is whichever micro sub-task's recap happens to
+	//     finish last, clobbering the recap of the user's actual last real
 	//     conversation with that agent.
 	//
 	// Checking store.GetMeta here (rather than trusting the trigger string)
@@ -201,8 +206,17 @@ func (al *AgentLoop) CloseSession(sessionID, trigger string) {
 	// Cancel any outstanding idle ticker for this session.
 	al.cancelIdleTicker(sessionID)
 
+	// FR-036/DEL-08: default-on recap fires only on actual-idle inactivity and
+	// the bootstrap pass. The retired explicit/lazy/session-close triggers (and
+	// any unknown string) must NOT recap — the claim above is still recorded so
+	// the never-recap triggers stay idempotent, but no recap goroutine runs.
+	if !recapTriggerEligible(trigger) {
+		al.auditRecap(sessionID, "", trigger, "skipped_trigger_not_recap_eligible")
+		return
+	}
+
 	// Track the recap goroutine so Close() can drain it before shutdown — its
-	// LAST_SESSION.md / retro writes must not outlive the gateway (#265). Gate
+	// summary / retro writes must not outlive the gateway (#265). Gate
 	// the Add under recapMu against Close()'s drain: once shutdown has begun we
 	// skip scheduling (the session is re-recapped on next start by
 	// BootstrapRecapPass) rather than risk a WaitGroup Add-after-Wait.
@@ -225,22 +239,21 @@ func (al *AgentLoop) CloseSession(sessionID, trigger string) {
 const (
 	recapSubTurnPrefix        = "[SubTurn Result]"
 	recapInterruptHintLiteral = "Interrupt requested. Stop scheduling tools and provide a short final summary."
-	// carryForwardMaxRunes bounds the verbatim recent-context tail the fallback
-	// recap carries forward when summarisation is unavailable (see buildCarryForward).
-	// ~1500 runes is ~19% of the summariser's own input budget (2000 tokens ≈ 8000
-	// runes at this file's ~4-runes-per-token ratio; see runRecap's tokenBudget),
-	// enough to preserve the essential facts a user stated most recently without
-	// bloating last-session.md.
-	carryForwardMaxRunes = 1500
 )
+
+// carryForwardMaxRunes is the shipped default of recap_fallback_context_chars.
+// The recap reads the setting (GetRecapFallbackContextChars); this name only
+// refers to the default the config package owns (FR-074: no recap limit is a
+// code constant here).
+var carryForwardMaxRunes = config.RecapLimitFallbackContextChars.Default
 
 // buildCarryForward returns a compact, verbatim tail of the most recent user
 // turns, for the recap FALLBACK path only.
 //
 // When the summariser LLM is unavailable or degrades (all candidates fail,
 // json_parse_error, no_memory_store), a content-free "Session <id> ended.
-// Turns: N..." stub is worthless for continuity — last-session.md is injected
-// into the next session, so a stub silently drops whatever the user just said
+// Turns: N..." stub is worthless for continuity — the carry-forward summary is
+// injected into the next session, so a stub silently drops whatever the user just said
 // (a stated codename, a decision, a hand-off note). Carrying the recent user
 // turns forward verbatim preserves those facts even without a real summary.
 //
@@ -296,6 +309,23 @@ func filterRecapUserTurns(entries []session.TranscriptEntry) (userTurns []string
 	return userTurns, toolCallCount
 }
 
+// recapCarryForwardWorkspace resolves the workspace a recap persists its
+// summary under, from the session's OWN meta — never from the memory store's
+// mutable shared-room pointer, which any concurrent turn of the same agent may
+// have re-pointed (amendment §3.2(3)). No meta, no store, or no workspace on
+// the session yields "": there is no agent-wide fallback, so the callers skip
+// the write and audit skipped_no_workspace.
+func (al *AgentLoop) recapCarryForwardWorkspace(sessionID string) string {
+	if al.sharedSessionStore == nil {
+		return ""
+	}
+	meta, err := al.sharedSessionStore.GetMeta(sessionID)
+	if err != nil {
+		return ""
+	}
+	return meta.WorkspaceID
+}
+
 // agentLoopRunRecap carries the shared state of runRecap across its stages.
 type agentLoopRunRecap struct {
 	al            *AgentLoop
@@ -306,7 +336,11 @@ type agentLoopRunRecap struct {
 	userTurns     []string
 	toolCallCount int
 	carryForward  string
-	resp          *providers.LLMResponse
+	// workspaceID is the recap run's carry-forward workspace, resolved from the
+	// session's own meta in loadTranscript. "" means the session has no
+	// workspace: the summary is not written anywhere (no agent-wide fallback).
+	workspaceID string
+	resp        *providers.LLMResponse
 }
 
 // runRecap performs the session-end LLM summarisation and persists the result.
@@ -344,268 +378,35 @@ func (rr *agentLoopRunRecap) loadTranscript() bool {
 	rr.agentInst, err = rr.al.AgentForSession(rr.sessionID)
 	if err != nil {
 		// Heuristic fallback: agent deleted or session meta unavailable.
-		rr.al.writeHeuristicFallbackRetro(rr.sessionID, rr.trigger, "agent_deleted", nil)
+		_ = rr.al.writeHeuristicFallbackRetro(rr.sessionID, rr.trigger, "agent_deleted", nil)
 		return true
 	}
 
 	// Read the session transcript from the shared store.
 	store := rr.al.sharedSessionStore
 	if store == nil {
-		rr.al.writeHeuristicFallbackRetro(rr.sessionID, rr.trigger, "no_session_store", rr.agentInst)
+		_ = rr.al.writeHeuristicFallbackRetro(rr.sessionID, rr.trigger, "no_session_store", rr.agentInst)
 		return true
 	}
 
 	rr.entries, err = store.ReadTranscript(rr.sessionID)
 	if err != nil {
-		rr.al.writeHeuristicFallbackRetro(rr.sessionID, rr.trigger, fmt.Sprintf("transcript_read_error: %v", err), rr.agentInst)
+		_ = rr.al.writeHeuristicFallbackRetro(rr.sessionID, rr.trigger, fmt.Sprintf("transcript_read_error: %v", err), rr.agentInst)
 		return true
 	}
 
 	// FR-028: filter to user-role, non-empty, non-SubTurn, non-interrupt-hint messages.
 	rr.userTurns, rr.toolCallCount = filterRecapUserTurns(rr.entries)
 
+	// WU-21: resolve this recap run's carry-forward workspace from the session's
+	// own meta, so the summary lands in that session's workspace regardless of
+	// which workspace the memory store's mutable pointer is on right now.
+	rr.workspaceID = rr.al.recapCarryForwardWorkspace(rr.sessionID)
+
 	// Carry-forward tail for the fallback path: if summarisation fails below,
 	// the recent user turns are preserved verbatim so cross-session continuity
 	// survives a degraded recap (buildCarryForward / writeHeuristicFallbackRetroWithCount).
-	rr.carryForward = buildCarryForward(rr.userTurns, carryForwardMaxRunes)
-	return false
-}
-
-// callCandidates builds the bounded recap request and tries its ordered model candidates within the retry budget.
-func (rr *agentLoopRunRecap) callCandidates() bool {
-	// Build the conversation text, truncate to 2000 tokens (~8000 runes).
-	// FR-030: "truncate oldest" — we keep the tail (most recent turns) because
-	// the recap's value is summarizing what just happened, not what happened
-	// 40 turns ago.
-	const tokenBudget = 2000
-	combined := strings.Join(rr.userTurns, "\n\n")
-	runes := []rune(combined)
-	prefix := ""
-	if len(runes)/4 > tokenBudget {
-		budgetRunes := tokenBudget * 4
-		combined = string(runes[len(runes)-budgetRunes:])
-		prefix = "[history truncated for summarisation]\n\n"
-	}
-	historyText := prefix + combined
-
-	// Resolve primary recap model.
-	// Priority: recap_model config → overall default model → session agent model.
-	// Snapshot the config once (under RLock via GetConfig) so all reads below
-	// see a consistent view of the config even if SwapConfig races.
-	snapCfg := rr.al.GetConfig()
-	recapModel := snapCfg.Agents.Defaults.RecapModel
-	// When no recap model is configured the default (provider, model) pair is
-	// used as-is — pinned to its own provider, never re-resolved (ADR-068).
-	var recapPinnedProvider string
-	if recapModel == "" && !snapCfg.Agents.Defaults.DefaultModel.IsZero() {
-		recapModel = snapCfg.Agents.Defaults.DefaultModel.Model
-		recapPinnedProvider = snapCfg.Agents.Defaults.DefaultModel.Provider
-	}
-	if recapModel == "" {
-		recapModel = rr.agentInst.Model
-	}
-
-	// Build the fallback candidate list: [primaryRecapModel, ...RecapFallbackModels].
-	// Each config.FallbackModel carries its own Provider for cross-provider fallback.
-	//
-	// Resolve the PRIMARY recap model's Provider the same way the agent turn does
-	// (resolveModelRef → the configured provider that owns the credentials). This
-	// is load-bearing: the fallback executor calls stripProviderPrefix(model,
-	// candidate.Provider) before the upstream API call, so a provider-prefixed
-	// model_name (e.g. "openrouter/z-ai/glm-5.2" — the form onboarding writes)
-	// is only reduced to the upstream-valid "z-ai/glm-5.2" when the candidate's
-	// Provider is set. Without it the prefixed model is sent RAW and OpenRouter
-	// rejects it ("... is not a valid model ID"), the recap falls back to a
-	// heuristic stub, and last-session.md loses the real summary. The turn path
-	// resolves Provider; the recap MUST match it.
-	candidates := make([]providers.FallbackCandidate, 0, 1+len(snapCfg.Agents.Defaults.RecapFallbackModels))
-	primaryCandidate := providers.FallbackCandidate{Model: recapModel, Provider: recapPinnedProvider}
-	if recapPinnedProvider == "" {
-		if ref, ok := resolveModelRef(snapCfg, recapModel); ok {
-			primaryCandidate = providers.FallbackCandidate{Model: ref.Model, Provider: ref.Provider}
-		}
-	}
-	candidates = append(candidates, primaryCandidate)
-	for _, fm := range snapCfg.Agents.Defaults.RecapFallbackModels {
-		candidates = append(candidates, providers.FallbackCandidate{Provider: fm.Provider, Model: fm.Model})
-	}
-
-	// Build recap prompt.
-	recapPrompt := `Summarize this conversation in ≤ 150 words. Then list up to 5 wins, up to 5 needs-improvement items, and up to 5 items worth remembering long-term. Respond ONLY with valid JSON: {"recap":"...", "went_well":[...], "needs_improvement":[...], "worth_remembering":[...]}`
-
-	msgs := []providers.Message{
-		{Role: "user", Content: historyText + "\n\n" + recapPrompt},
-	}
-
-	// Cost-guard options (FR-029a): output cap + reasoning hints.
-	//
-	// max_tokens=2048: reasoning models like glm-5.2 on OpenRouter/Fireworks
-	// ignore the reasoning:{enabled:false} hint and always generate an internal
-	// reasoning trace before emitting content. With max_tokens=512 the reasoning
-	// trace itself consumes the entire budget (observed: ~435–566 reasoning tokens)
-	// leaving content=null, which JSON-parses to "" and falls into the
-	// json_parse_error fallback path — the nonce never lands in last-session.md.
-	// Raising to 2048 gives reasoning models ample room: ~500 reasoning + ~500
-	// content = 1000 tokens total, still well within the 2048 cap. The extra
-	// tokens are cheap (one call per session close, paid only when the LLM
-	// actually generates tokens, not just allocated). extended_thinking:false is
-	// kept for Anthropic-style providers that honor it and skip the reasoning
-	// phase entirely when set. reasoning:{enabled:false} is left in the
-	// extra_body because it DOES work on some OpenRouter routes and upstream
-	// providers, and is harmlessly ignored elsewhere.
-	opts := map[string]any{
-		"max_tokens":        2048,
-		"extended_thinking": false,
-		"extra_body": map[string]any{
-			"reasoning": map[string]any{"enabled": false},
-		},
-	}
-
-	// Build a provider pool for the recap candidates so each fallback routes
-	// through its own configured provider (parity with agent turn fallbacks,
-	// FR-007). The agent's own providerPool only contains its turn candidates;
-	// recap candidates are separate config fields and are never included there.
-	// We build a one-off pool here using the same buildProviderPool helper.
-	// The agent id is passed for the FR-016 WARNs only; a recap chain is not
-	// the agent's turn chain, so its primaryUnknown verdict is deliberately
-	// NOT projected onto the instance's needs_provider degrade.
-	recapProviderPool := buildProviderPool(snapCfg, candidates, rr.agentInst.ID).pool
-
-	// resolveRecapProvider mirrors GetProviderForCandidate but consults the
-	// one-off recap pool first, then the agent's turn pool (single-passthrough
-	// case), and finally falls back to the agent's primary provider.
-	resolveRecapProvider := func(candidate providers.FallbackCandidate) providers.LLMProvider {
-		pinned := strings.TrimSpace(candidate.Provider)
-		if pinned != "" && recapProviderPool != nil {
-			if p, ok := recapProviderPool[pinned]; ok && p != nil {
-				return p
-			}
-		}
-		// Single passthrough provider (empty Provider on candidate): use the
-		// agent's primary provider — same as the pre-fix behavior and the
-		// correct path when all recap candidates share the agent's provider.
-		p := rr.agentInst.GetProviderForCandidate(candidate)
-		if p != nil {
-			return p
-		}
-		return rr.agentInst.Provider
-	}
-
-	// Self-bounded overall at 60s. Divide the budget evenly across candidates
-	// so a slow primary cannot exhaust the deadline and leave fallbacks with an
-	// already-expired context. Each candidate gets its own fresh timeout derived
-	// from its share of the overall budget (minimum 10s to avoid starving
-	// fallbacks on short budgets with many candidates).
-	const overallBudget = 60 * time.Second
-	const minPerCandidate = 10 * time.Second
-	numCandidates := len(candidates)
-	if numCandidates == 0 {
-		numCandidates = 1
-	}
-	perCandidateTimeout := overallBudget / time.Duration(numCandidates)
-	if perCandidateTimeout < minPerCandidate {
-		perCandidateTimeout = minPerCandidate
-	}
-
-	// recapDeadline is the hard wall-clock limit for the entire recap attempt.
-	// It is used to guard transient retries so they cannot push individual
-	// candidates past the overall 60 s budget even when many retries are needed.
-	recapDeadline := time.Now().Add(overallBudget)
-
-	// maxTransientRetries is the number of additional attempts made per candidate
-	// when the error is classified as a transient stream reset (http2 body closed,
-	// GOAWAY, connection reset, …). The recap output is collected whole and never
-	// streamed to the user, so a retry on a fresh connection is safe.
-	const maxTransientRetries = 2
-
-	// Attempt the recap against each candidate in order. For each candidate,
-	// retry up to maxTransientRetries times on transient stream-reset errors
-	// before moving to the next fallback candidate.
-	// Non-transient errors (4xx, unauthorized, context-overflow) fall through to
-	// the next candidate immediately — retrying them is not safe or useful.
-
-	var llmErr error
-	for _, candidate := range candidates {
-		p := resolveRecapProvider(candidate)
-		for attempt := 0; attempt <= maxTransientRetries; attempt++ {
-			// Respect the hard overall deadline: don't start an attempt if we're
-			// already past the budget boundary.
-			remaining := time.Until(recapDeadline)
-			if remaining <= 0 {
-				slog.Warn("session_end: recap deadline exceeded, stopping retries",
-					"session_id", rr.sessionID,
-					"agent_id", rr.agentInst.ID,
-					"model", candidate.Model,
-				)
-				break
-			}
-			callTimeout := perCandidateTimeout
-			if callTimeout > remaining {
-				callTimeout = remaining
-			}
-
-			candidateCtx, candidateCancel := context.WithTimeout(context.Background(), callTimeout)
-			r, err := p.Chat(candidateCtx, msgs, nil, candidate.Model, opts)
-			candidateCancel()
-			if err == nil {
-				rr.resp = r
-				llmErr = nil
-				break
-			}
-
-			// Check whether this is a transient stream reset that is safe to retry.
-			if attempt < maxTransientRetries && isTransientStreamError(err) {
-				backoff := time.Duration(1+attempt) * 500 * time.Millisecond
-				slog.Warn("session_end: recap transient stream error, retrying",
-					"session_id", rr.sessionID,
-					"agent_id", rr.agentInst.ID,
-					"model", candidate.Model,
-					"attempt", attempt+1,
-					"max_retries", maxTransientRetries,
-					"backoff_ms", backoff.Milliseconds(),
-					"error", err.Error(),
-				)
-				time.Sleep(backoff)
-				llmErr = err
-				continue
-			}
-
-			// Non-transient error or retries exhausted — move to the next candidate.
-			slog.Warn("session_end: recap candidate failed, trying next",
-				"session_id", rr.sessionID,
-				"agent_id", rr.agentInst.ID,
-				"model", candidate.Model,
-				"attempt", attempt+1,
-				"error", err.Error(),
-			)
-			llmErr = err
-			break
-		}
-		if rr.resp != nil {
-			break
-		}
-	}
-
-	if llmErr != nil {
-		slog.Warn("session_end: llm call failed",
-			"session_id", rr.sessionID,
-			"agent_id", rr.agentInst.ID,
-			"error", llmErr.Error(),
-		)
-		// SF1: emit two distinct audit entries so operators can see both outcomes:
-		// (1) the LLM call failed, (2) the heuristic fallback was written.
-		rr.al.auditRecap(rr.sessionID, rr.agentInst.ID, rr.trigger, "llm_failed:"+classifyLLMError(llmErr))
-		rr.al.writeHeuristicFallbackRetroWithCount(
-			rr.sessionID,
-			rr.trigger,
-			classifyLLMError(llmErr),
-			rr.agentInst,
-			len(rr.entries),
-			rr.toolCallCount,
-			rr.carryForward,
-		)
-		return true
-	}
+	rr.carryForward = buildCarryForward(rr.userTurns, rr.al.GetConfig().Agents.Defaults.GetRecapFallbackContextChars())
 	return false
 }
 
@@ -643,15 +444,15 @@ func (rr *agentLoopRunRecap) persistResponse() {
 
 	if parseErr := json.Unmarshal([]byte(responseText), &parsed); parseErr != nil {
 		// Model returned something that is not the expected JSON envelope.
-		// The raw body can still be useful for debugging recap-prompt regressions,
-		// so log a truncated preview before discarding it and falling back.
+		// The text may be the model's reasoning, which is never logged
+		// (effort-levels FR-041): only its length is.
 		slog.Warn("session_end: recap JSON parse failed",
 			"session_id", rr.sessionID,
 			"agent_id", rr.agentInst.ID,
 			"parse_error", parseErr.Error(),
-			"response_preview", utils.Truncate(responseText, 500),
+			"response_chars", utf8.RuneCountInString(responseText),
 		)
-		rr.al.writeHeuristicFallbackRetroWithCount(
+		_ = rr.al.writeHeuristicFallbackRetroWithCount(
 			rr.sessionID,
 			rr.trigger,
 			"json_parse_error",
@@ -663,10 +464,29 @@ func (rr *agentLoopRunRecap) persistResponse() {
 		return
 	}
 
+	// A JSON object that parses but carries no recap text ({"recap":""}, {}) must
+	// not overwrite the carry-forward summary with nothing: treat it as a degraded recap.
+	if strings.TrimSpace(parsed.Recap) == "" {
+		slog.Warn("session_end: recap is empty",
+			"session_id", rr.sessionID,
+			"agent_id", rr.agentInst.ID,
+		)
+		_ = rr.al.writeHeuristicFallbackRetroWithCount(
+			rr.sessionID,
+			rr.trigger,
+			"empty_recap",
+			rr.agentInst,
+			len(rr.entries),
+			rr.toolCallCount,
+			rr.carryForward,
+		)
+		return
+	}
+
 	// Persist last-session summary.
 	memory := rr.agentInst.ContextBuilder.Memory()
 	if memory == nil {
-		rr.al.writeHeuristicFallbackRetroWithCount(
+		_ = rr.al.writeHeuristicFallbackRetroWithCount(
 			rr.sessionID,
 			rr.trigger,
 			"no_memory_store",
@@ -678,17 +498,32 @@ func (rr *agentLoopRunRecap) persistResponse() {
 		return
 	}
 
-	slog.Info("session_end: writing LAST_SESSION.md",
+	// WU-21 (§3.2(1)): a session with no workspace has no carry-forward target —
+	// there is no agent-wide fallback, so nothing is written (not even the
+	// retro, which would mark a summary as recorded when none exists).
+	if rr.workspaceID == "" {
+		rr.al.auditRecap(rr.sessionID, rr.agentInst.ID, rr.trigger, "skipped_no_workspace")
+		return
+	}
+
+	scope := CarryForwardScope{AgentID: rr.agentInst.ID, WorkspaceID: rr.workspaceID}
+	slog.Info("session_end: writing carry-forward summary",
 		"session_id", rr.sessionID,
 		"agent_id", rr.agentInst.ID,
-		"workspace", rr.agentInst.Home,
+		"workspace_id", rr.workspaceID,
 	)
-	if err := memory.WriteLastSession(parsed.Recap); err != nil {
-		slog.Warn("session_end: failed to write LAST_SESSION.md",
+	if err := memory.WriteCarryForward(scope, formatLastSession(parsed.Recap, parsed.WorthRemembering)); err != nil {
+		// The recap and its worth_remembering facts did not land. File no retro:
+		// it is the marker agentSessionHasRetro reads, so filing it would block
+		// every later recap of this session. The audit outcome names the failed
+		// step only; the error text carries filesystem paths and stays in the log.
+		slog.Warn("session_end: failed to write carry-forward summary",
 			"session_id", rr.sessionID,
 			"agent_id", rr.agentInst.ID,
 			"error", err,
 		)
+		rr.al.auditRecap(rr.sessionID, rr.agentInst.ID, rr.trigger, "write_failed:last_session")
+		return
 	}
 
 	retro := Retro{
@@ -700,11 +535,17 @@ func (rr *agentLoopRunRecap) persistResponse() {
 		NeedsImprovement: parsed.NeedsImprovement,
 	}
 	if err := memory.AppendRetro(rr.sessionID, retro); err != nil {
+		// The workspace's carry-forward file already holds the recap. No retro
+		// was filed, so the session still counts as not recapped and a later
+		// pass retries it (and rewrites the summary). The audit names the failed
+		// step only.
 		slog.Warn("session_end: failed to append retro",
 			"session_id", rr.sessionID,
 			"agent_id", rr.agentInst.ID,
 			"error", err,
 		)
+		rr.al.auditRecap(rr.sessionID, rr.agentInst.ID, rr.trigger, "write_failed:retro")
+		return
 	}
 
 	rr.al.auditRecap(rr.sessionID, rr.agentInst.ID, rr.trigger, "success")
@@ -720,10 +561,34 @@ func (rr *agentLoopRunRecap) persistResponse() {
 	)
 }
 
+// ErrFallbackRecapSkipped is returned by the heuristic fallback when there is
+// no agent or memory store to write to: nothing was recorded.
+var ErrFallbackRecapSkipped = errors.New("session_end: fallback recap skipped")
+
+// formatLastSession returns the text persisted to the (agent, workspace)
+// carry-forward summary on the
+// success path: the free-text recap, then the model's worth_remembering items.
+// The items are persisted because the model may state a user-given fact (a
+// codename, a number) there and leave it out of the free-text recap; persisting
+// only the recap would drop the fact before the next session sees it. Blank
+// items are dropped; with no items the recap is returned exactly as given.
+func formatLastSession(recap string, worthRemembering []string) string {
+	var items []string
+	for _, it := range worthRemembering {
+		if it = strings.TrimSpace(it); it != "" {
+			items = append(items, "- "+it)
+		}
+	}
+	if len(items) == 0 {
+		return recap
+	}
+	return recap + "\n\nWorth remembering:\n" + strings.Join(items, "\n")
+}
+
 // writeHeuristicFallbackRetro writes a fallback retro entry when recap fails
 // without the transcript pre-read available. Prefer the _WithCount variant
 // when the caller has already computed turn + tool-call counts.
-func (al *AgentLoop) writeHeuristicFallbackRetro(sessionID, trigger, fallbackReason string, agentInst *AgentInstance) {
+func (al *AgentLoop) writeHeuristicFallbackRetro(sessionID, trigger, fallbackReason string, agentInst *AgentInstance) error {
 	turnCount, toolCallCount := 0, 0
 	var userTurns []string
 	if agentInst != nil {
@@ -734,14 +599,14 @@ func (al *AgentLoop) writeHeuristicFallbackRetro(sessionID, trigger, fallbackRea
 			}
 		}
 	}
-	al.writeHeuristicFallbackRetroWithCount(
+	return al.writeHeuristicFallbackRetroWithCount(
 		sessionID,
 		trigger,
 		fallbackReason,
 		agentInst,
 		turnCount,
 		toolCallCount,
-		buildCarryForward(userTurns, carryForwardMaxRunes),
+		buildCarryForward(userTurns, al.GetConfig().Agents.Defaults.GetRecapFallbackContextChars()),
 	)
 }
 
@@ -754,12 +619,25 @@ func (al *AgentLoop) writeHeuristicFallbackRetro(sessionID, trigger, fallbackRea
 // When carryForward is non-empty it is appended as a verbatim "Recent context"
 // block so cross-session continuity survives a degraded recap (the status line
 // alone carries no facts — see buildCarryForward).
+//
+// The summary is written to the session's own (agent, workspace) carry-forward
+// pair file, with the workspace resolved from the session's own meta (never
+// the memory store's mutable pointer). It returns the write failure, if any,
+// and in that case records the audit outcome
+// "fallback_write_failed:<reason>:last_session" and files NO retro — a
+// fallback whose summary did not land must not mark the session as recapped
+// (amendment §3.2(3)). With no agent or no memory store nothing is written: it
+// audits "fallback_skipped:<reason>" and returns ErrFallbackRecapSkipped, and
+// a session with no workspace audits "skipped_no_workspace" and returns
+// ErrFallbackRecapSkipped too (there is no agent-wide fallback).
+// The recap goroutine's callers have no one to hand the error to, so they
+// discard it knowing it is already logged and audited here.
 func (al *AgentLoop) writeHeuristicFallbackRetroWithCount(
 	sessionID, trigger, fallbackReason string,
 	agentInst *AgentInstance,
 	turnCount, toolCallCount int,
 	carryForward string,
-) {
+) error {
 	slog.Warn("session_end: recap fallback",
 		"session_id", sessionID,
 		"trigger", trigger,
@@ -767,15 +645,24 @@ func (al *AgentLoop) writeHeuristicFallbackRetroWithCount(
 	)
 
 	if agentInst == nil {
-		// No agent — can't write the retro anywhere.
-		al.auditRecap(sessionID, "", trigger, "fallback:"+fallbackReason)
-		return
+		// No agent — can't write the retro anywhere. Nothing was written, so the
+		// audit trail must not read as a recorded fallback.
+		al.auditRecap(sessionID, "", trigger, "fallback_skipped:"+fallbackReason)
+		return fmt.Errorf("%w: no agent", ErrFallbackRecapSkipped)
 	}
 
 	memory := agentInst.ContextBuilder.Memory()
 	if memory == nil {
-		al.auditRecap(sessionID, agentInst.ID, trigger, "fallback:"+fallbackReason)
-		return
+		al.auditRecap(sessionID, agentInst.ID, trigger, "fallback_skipped:"+fallbackReason)
+		return fmt.Errorf("%w: no memory store", ErrFallbackRecapSkipped)
+	}
+
+	// WU-21 (§3.2(1)): no workspace on the session, no summary anywhere — there
+	// is no agent-wide fallback to fall back to.
+	workspaceID := al.recapCarryForwardWorkspace(sessionID)
+	if workspaceID == "" {
+		al.auditRecap(sessionID, agentInst.ID, trigger, "skipped_no_workspace")
+		return fmt.Errorf("%w: no workspace", ErrFallbackRecapSkipped)
 	}
 
 	recap := fmt.Sprintf("Session %s ended. Turns: %d. Tool calls: %d. Fallback reason: %s.",
@@ -784,17 +671,24 @@ func (al *AgentLoop) writeHeuristicFallbackRetroWithCount(
 		recap += "\n\nRecent context (verbatim — automatic summary unavailable):\n" + cf
 	}
 
-	slog.Info("session_end: fallback: writing LAST_SESSION.md",
+	scope := CarryForwardScope{AgentID: agentInst.ID, WorkspaceID: workspaceID}
+	slog.Info("session_end: fallback: writing carry-forward summary",
 		"session_id", sessionID,
 		"agent_id", agentInst.ID,
-		"workspace", agentInst.Home,
+		"workspace_id", workspaceID,
 		"fallback_reason", fallbackReason,
 	)
-	if err := memory.WriteLastSession(recap); err != nil {
-		slog.Warn("session_end: fallback: failed to write LAST_SESSION.md",
+	if err := memory.WriteCarryForward(scope, recap); err != nil {
+		// The summary did not land: file NO retro (it would mark the session as
+		// recapped and block the retry), and let the audit say exactly which
+		// step failed. The full error text carries filesystem paths and stays
+		// in the WARN log.
+		slog.Warn("session_end: fallback: failed to write carry-forward summary",
 			"session_id", sessionID,
 			"error", err,
 		)
+		al.auditRecap(sessionID, agentInst.ID, trigger, "fallback_write_failed:"+fallbackReason+":last_session")
+		return fmt.Errorf("write carry-forward: %w", err)
 	}
 
 	retro := Retro{
@@ -805,15 +699,22 @@ func (al *AgentLoop) writeHeuristicFallbackRetroWithCount(
 		Recap:          recap,
 	}
 	if err := memory.AppendRetro(sessionID, retro); err != nil {
+		// The workspace's carry-forward file holds the recap, but no retro was
+		// filed, so the session still counts as not recapped and a later pass
+		// retries it (and rewrites the summary). The audit names the failed
+		// step only.
 		slog.Warn("session_end: fallback: failed to append retro",
 			"session_id", sessionID,
 			"error", err,
 		)
+		al.auditRecap(sessionID, agentInst.ID, trigger, "fallback_write_failed:"+fallbackReason+":retro")
+		return fmt.Errorf("append retro: %w", err)
 	}
 
 	al.auditRecap(sessionID, agentInst.ID, trigger, "fallback:"+fallbackReason)
 	// Claim stays for the process lifetime: file-level idempotency via
 	// agentSessionHasRetro prevents duplicate fallback writes.
+	return nil
 }
 
 // auditRecap logs a memory.auto_recap audit event if audit logging is enabled.
@@ -851,11 +752,8 @@ func (al *AgentLoop) AgentForSession(sessionID string) (*AgentInstance, error) {
 		return nil, fmt.Errorf("meta_not_found: %w", err)
 	}
 
-	// Prefer ActiveAgentID (v2 multi-agent) over AgentID (legacy).
-	agentID := meta.ActiveAgentID
-	if agentID == "" {
-		agentID = meta.AgentID
-	}
+	// The session's agent is its immutable owner.
+	agentID := meta.AgentID
 	if agentID == "" {
 		return nil, fmt.Errorf("agent_not_found: session %s has no agent_id in meta", sessionID)
 	}
@@ -971,14 +869,17 @@ func (al *AgentLoop) BootstrapRecapPass(ctx context.Context) {
 
 	maxPerMinute := defaults.GetBootstrapRecapMaxPerMinute()
 
-	// Rate limiter: one slot every (60/maxPerMinute) seconds. Guard against
-	// sub-second intervals on a high max per minute.
+	// Rate limiter: catch-up recaps start at most maxPerMinute per minute and
+	// never closer together than bootstrap_recap_min_spacing_seconds. The
+	// first due session starts at once; each later one waits for its gap.
 	intervalBetweenStarts := time.Duration(float64(time.Minute) / float64(maxPerMinute))
-	if intervalBetweenStarts < time.Second {
-		intervalBetweenStarts = time.Second
+	if minGap := time.Duration(defaults.GetBootstrapRecapMinSpacingSeconds()) * time.Second; intervalBetweenStarts < minGap {
+		intervalBetweenStarts = minGap
 	}
-	ticker := time.NewTicker(intervalBetweenStarts)
-	defer ticker.Stop()
+	// Restart catch-up uses the idle timeout as the age a session must reach
+	// (FD-21).
+	dueAge := time.Duration(defaults.GetIdleTimeoutMinutes()) * time.Minute
+	var lastStart time.Time
 
 	// SF2: counters for the pass-complete summary log.
 	var processed, errored int
@@ -1034,19 +935,24 @@ func (al *AgentLoop) BootstrapRecapPass(ctx context.Context) {
 		}
 
 		age := time.Since(newestTS)
-		if age < 30*time.Minute {
+		if age < dueAge {
 			continue
 		}
 
-		select {
-		case <-ctx.Done():
-			slog.Info("session_end: bootstrap recap pass complete (context canceled)",
-				"processed", processed,
-				"errored", errored,
-			)
-			return
-		case <-ticker.C:
+		if !lastStart.IsZero() {
+			timer := time.NewTimer(time.Until(lastStart.Add(intervalBetweenStarts)))
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				slog.Info("session_end: bootstrap recap pass complete (context canceled)",
+					"processed", processed,
+					"errored", errored,
+				)
+				return
+			case <-timer.C:
+			}
 		}
+		lastStart = time.Now()
 
 		al.CloseSession(sessionID, "bootstrap")
 		processed++

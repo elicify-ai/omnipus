@@ -109,20 +109,6 @@ func TestProcessSession_KillAndRelabel_SpecificStatusSupersedesGenericDone(t *te
 		assert.Equal(t, "timeout", s.GetStatus())
 	})
 
-	t.Run("exited (legacy generic) is also correctable by a specific status", func(t *testing.T) {
-		t.Parallel()
-		s := &ProcessSession{
-			ID:        "sess-4",
-			Status:    StatusExited,
-			PID:       fakeUnusedPIDBase + 2004,
-			StartTime: time.Now().Unix(),
-		}
-
-		err := s.KillAndRelabel(StatusCanceled)
-		require.NoError(t, err)
-		assert.Equal(t, "canceled", s.GetStatus())
-	})
-
 	t.Run("a generic done can never downgrade an already-specific status", func(t *testing.T) {
 		t.Parallel()
 		s := &ProcessSession{
@@ -215,7 +201,7 @@ func TestStatusPriority_EveryIsDoneTerminalStatusRanksAtLeastOne(t *testing.T) {
 	// so this test is grounded in the DOCUMENTED contract, not a mechanism
 	// that would trivially "pass" even if IsDone's switch silently drifted
 	// out of sync with itself.
-	terminal := []SessionStatus{StatusDone, StatusExited, StatusKilled, StatusTimeout, StatusCanceled}
+	terminal := []SessionStatus{StatusDone, StatusKilled, StatusTimeout, StatusCanceled}
 
 	for _, s := range terminal {
 		t.Run(string(s), func(t *testing.T) {

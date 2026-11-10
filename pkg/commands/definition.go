@@ -31,6 +31,12 @@ type Definition struct {
 	SubCommands []SubCommand // optional; when set, Executor routes to sub-command handlers
 	Handler     Handler      // for simple commands without sub-commands
 
+	// ArgumentHint is the placeholder for the argument a web client command
+	// takes (for example "<instruction>"); empty when it takes none. The SPA
+	// intercepts `/<name> <text>` locally only for a client command that
+	// serves a hint (src/hooks/useSlashMenu.ts::resolveClientCommand).
+	ArgumentHint string
+
 	// Surfaces lists the surfaces on which this command is active.
 	// Empty = all surfaces (back-compat default).
 	Surfaces []Surface

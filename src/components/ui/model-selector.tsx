@@ -58,6 +58,20 @@ export interface ModelSelectorProviderFilter {
 interface ModelSelectorProps {
   models: string[]
   value: string
+  /**
+   * H6 (provider hotfix 2026-10-13): the provider id the current `value` was
+   * picked under. When provided, "chosen" is the (provider, model) PAIR —
+   * only the picked provider's row shows the check. Without it, chosen is
+   * the bare model id, so a model served by TWO providers (e.g. a local
+   * proxy row and a subscription row both listing `gpt-6.1-sol`) rendered
+   * as selected under both at once — the founder's live-instance bug.
+   *
+   * `undefined` = the caller has no provider to compare against — legacy
+   * model-id-only match, unchanged. `''` = a provider is known to be absent
+   * and matches no row. A row whose group carries no `providerId` can never
+   * contradict a known `valueProvider` (nothing to compare — legacy match).
+   */
+  valueProvider?: string
   onChange: (model: string) => void  // Named onChange (not onValueChange) since this supports free-text input, not just selection
   placeholder?: string
   disabled?: boolean
@@ -78,7 +92,7 @@ interface ModelSelectorProps {
    * form fields and elements with an explicit tabindex attribute). Every
    * call site historically relied on this being optional and omitted it,
    * which soft-locked keyboard users on Safari at any required Model field
-   * (e.g. agent-creation wizard Step 1). Callers may still override.
+   * (e.g. onboarding's first-agent step). Callers may still override.
    */
   tabIndex?: number
   /** Prefix for each item's data-testid. The full id is `${itemTestIdPrefix}${model}`. */
@@ -181,6 +195,20 @@ interface ModelSelectorProps {
   catalogGroups?: ModelCatalogGroup[]
   /** ADR-068 FR-019 — see `ModelSelectorProviderFilter`. */
   filterProviders?: ModelSelectorProviderFilter
+  /**
+   * #1436: the agent's default model slug. When set, the matching row carries
+   * a visible "Default" chip so the user can see which model is the default
+   * and switch back to it deliberately — independent of which row is
+   * currently chosen. Cosmetic only: it never changes selection or emits.
+   */
+  defaultModel?: string | null
+  /**
+   * #1436: the provider the agent's default model is served under. With it,
+   * the Default chip marks the exact (provider, model) row — a second
+   * provider serving the same slug stays unmarked. Without it, the chip
+   * falls back to marking the slug wherever it appears.
+   */
+  defaultProvider?: string | null
 }
 
 /** One rendered line of catalog mode: a vendor heading or a pickable model. */
@@ -197,7 +225,7 @@ type CatalogRow =
 /** Height used to lay out the virtualised list, in px. Rows are a fixed size. */
 const CATALOG_ROW_HEIGHT = 32
 
-export function ModelSelector({ models, value, onChange, placeholder, disabled, providerGroups, triggerTestId, tabIndex = 0, itemTestIdPrefix, onUnknownModel, onPairChange, showUnresolvedIndicator = true, constrainToCatalog = false, allowFreeTextWhenEmpty = false, emptyCatalogHint, catalogStatus = 'ready', catalogErrorMessage, onRetryCatalog, variant = 'default', open: controlledOpen, onOpenChange: controlledOnOpenChange, label, catalogGroups, filterProviders }: ModelSelectorProps) {
+export function ModelSelector({ models, value, valueProvider, onChange, placeholder, disabled, providerGroups, triggerTestId, tabIndex = 0, itemTestIdPrefix, onUnknownModel, onPairChange, showUnresolvedIndicator = true, constrainToCatalog = false, allowFreeTextWhenEmpty = false, emptyCatalogHint, catalogStatus = 'ready', catalogErrorMessage, onRetryCatalog, variant = 'default', open: controlledOpen, onOpenChange: controlledOnOpenChange, label, catalogGroups, filterProviders, defaultModel, defaultProvider }: ModelSelectorProps) {
   const [internalOpen, setInternalOpen] = React.useState(false)
   const isControlled = controlledOpen !== undefined
   const open = isControlled ? controlledOpen : internalOpen
@@ -652,21 +680,50 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
     : []
   const useGrouped = groupsWithModels.length >= 1
 
-  // O3: resolve the provider routing key for a given model slug by searching
-  // the providerGroups array. Returns the group's `providerId` or empty string.
-  const resolveProviderId = (modelSlug: string): string => {
-    if (catalogMode) {
-      const group = visibleCatalogGroups.find((g) => g.models.some((m) => m.id === modelSlug))
-      return group?.providerId ?? ''
-    }
-    if (!effectiveProviderGroups) return ''
-    const group = effectiveProviderGroups.find((g) => g.models.includes(modelSlug))
-    return group?.providerId ?? ''
-  }
+  // H6 R2 (review round 1): the slug scan REMOVED from the pick path — when
+  // two groups serve the same slug, a scan returns the FIRST one, which is a
+  // cross-row guess, not the clicked row's provider. A row without provider
+  // context now emits '' (unresolved) instead of another row's id.
+  // H6 (provider hotfix 2026-10-13): the "chosen" half of the selection
+  // identity. With `valueProvider` the check marks the (provider, model)
+  // PAIR; without it (`undefined`) the legacy model-id match stands, so a
+  // call site with no provider to compare against is unchanged. A row whose
+  // group carries no `providerId` has nothing to compare and never
+  // contradicts a known `valueProvider`.
+  const matchesValueProvider = (rowProviderId: string | undefined): boolean =>
+    valueProvider === undefined || rowProviderId === undefined || valueProvider === rowProviderId
 
-  const handleSelect = (model: string) => {
+  // #1436: the agent-default mark is pair-scoped like the chosen mark — with
+  // a known default provider, only that provider's row for the slug carries
+  // the chip; without one (legacy flat lists, unresolved agent provider) the
+  // slug is marked wherever it appears.
+  const isAgentDefaultRow = (model: string, rowProviderId: string | undefined): boolean =>
+    !!defaultModel
+    && defaultModel === model
+    && (defaultProvider === undefined || defaultProvider === null || defaultProvider === ''
+      || rowProviderId === undefined
+      || defaultProvider === rowProviderId)
+
+  // The chip itself: same token treatment as the Recommended chip (color-mix
+  // over the accent token — never a raw rgba), uppercase label, no icon.
+  const renderDefaultChip = () => (
+    <span
+      className="ml-[var(--space-2)] shrink-0 rounded border px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider"
+      style={{
+        backgroundColor: 'color-mix(in srgb, var(--color-accent) 15%, transparent)',
+        color: 'var(--color-accent)',
+        borderColor: 'color-mix(in srgb, var(--color-accent) 40%, transparent)',
+      }}
+    >
+      Default
+    </span>
+  )
+
+  // H6 (provider hotfix 2026-10-13): the ROW's providerId is the picked one —
+  // never re-derived from the slug (see the removed scan above).
+  const handleSelect = (model: string, rowProviderId?: string) => {
     onChange(model)
-    onPairChange?.({ model, provider: resolveProviderId(model) })
+    onPairChange?.({ model, provider: rowProviderId ?? '' })
     setOpen(false)
     setQuery('')
   }
@@ -695,12 +752,21 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
   )
 
   const renderCatalogItem = (row: Extract<CatalogRow, { kind: 'model' }>) => {
-    const chosen = value === row.model.id
+    // H6: pair identity — valueProvider narrows the check to the picked
+    // provider's row (see matchesValueProvider).
+    const chosen = value === row.model.id && matchesValueProvider(row.providerId)
     return (
       <CommandItem
         key={row.key}
-        value={row.model.id}
-        onSelect={() => handleSelect(row.model.id)}
+        // H6 R2 (review round 1 — F1): cmdk identifies the keyboard-active row
+        // by its item `value`, so two providers serving the same slug both
+        // went aria-selected and Enter dispatched to the FIRST of them —
+        // keyboard selection emitted the first provider even after the click
+        // path was fixed. The value is the same (provider, model) pair the
+        // check mark uses; the visible text and the emitted model slug are
+        // unchanged (onSelect closes over both).
+        value={`${row.providerId}:${row.model.id}`}
+        onSelect={() => handleSelect(row.model.id, row.providerId)}
         data-model={row.model.id}
         // FR-029: "chosen" is the operator's pick. cmdk's own aria-selected
         // tracks the keyboard cursor, which lands on the first row the moment
@@ -731,6 +797,7 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
             {RECOMMENDED_CHIP_LABEL}
           </span>
         )}
+        {isAgentDefaultRow(row.model.id, row.providerId) && renderDefaultChip()}
       </CommandItem>
     )
   }
@@ -799,7 +866,7 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
           data-unresolved={valueUnresolved || undefined}
           className={
             isGhost
-              ? 'h-7 justify-start gap-[var(--space-1)] rounded-md px-[var(--space-1)] font-[var(--font-weight-regular)] text-[length:var(--type-utility-xs-size)] disabled:cursor-not-allowed hover:bg-[var(--color-surface-2)]'
+              ? 'h-7 w-full min-w-0 justify-start gap-[var(--space-1)] rounded-md px-[var(--space-1)] font-[var(--font-weight-regular)] text-[length:var(--type-utility-xs-size)] disabled:cursor-not-allowed hover:bg-[var(--color-surface-2)]'
               : 'h-10 w-full justify-between gap-[var(--space-2)] rounded-md border px-[var(--space-2-5)] py-[var(--space-2)] font-[var(--font-weight-regular)] text-[length:var(--type-body-compact-size)] disabled:cursor-not-allowed'
           }
           style={
@@ -898,21 +965,37 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
                     key={group.providerName}
                     heading={group.providerName}
                   >
-                    {filteredModels.map((model) => (
-                      <CommandItem
-                        key={model}
-                        value={model}
-                        onSelect={() => handleSelect(model)}
-                        {...(itemTestIdPrefix ? { 'data-testid': `${itemTestIdPrefix}${model}` } : {})}
-                      >
-                        <Check
-                          size={14}
-                          className="mr-[var(--space-2)] shrink-0"
-                          style={{ opacity: value === model ? 1 : 0, color: 'var(--color-accent)' }}
-                        />
-                        <span className="font-mono text-[length:var(--type-utility-xs-size)]">{model}</span>
-                      </CommandItem>
-                    ))}
+                    {filteredModels.map((model) => {
+                      // H6: pair identity — valueProvider narrows the check to
+                      // the picked provider's row (see matchesValueProvider).
+                      // data-chosen: same chosen-marker contract the catalog
+                      // path uses (cmdk's own aria-selected tracks the
+                      // keyboard cursor, never the user's pick).
+                      const chosen = value === model && matchesValueProvider(group.providerId)
+                      return (
+                        <CommandItem
+                          key={model}
+                          // H6 R2 (review round 1 — F1): provider/model-qualified
+                          // cmdk identity — see the catalog path above for why
+                          // the bare slug made keyboard Enter pick the first
+                          // provider's row. providerName (the CommandGroup key)
+                          // stands in when a legacy group carries no providerId,
+                          // keeping values unique across groups.
+                          value={`${group.providerId ?? group.providerName}:${model}`}
+                          onSelect={() => handleSelect(model, group.providerId)}
+                          data-chosen={chosen || undefined}
+                          {...(itemTestIdPrefix ? { 'data-testid': `${itemTestIdPrefix}${model}` } : {})}
+                        >
+                          <Check
+                            size={14}
+                            className="mr-[var(--space-2)] shrink-0"
+                            style={{ opacity: chosen ? 1 : 0, color: 'var(--color-accent)' }}
+                          />
+                          <span className="font-mono text-[length:var(--type-utility-xs-size)]">{model}</span>
+                          {isAgentDefaultRow(model, group.providerId) && renderDefaultChip()}
+                        </CommandItem>
+                      )
+                    })}
                   </CommandGroup>
                 )
               })
@@ -924,21 +1007,34 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
                   : models
                 )
                   .filter(filterModel)
-                  .map((model) => (
-                    <CommandItem
-                      key={model}
-                      value={model}
-                      onSelect={() => handleSelect(model)}
-                      {...(itemTestIdPrefix ? { 'data-testid': `${itemTestIdPrefix}${model}` } : {})}
-                    >
-                      <Check
-                        size={14}
-                        className="mr-[var(--space-2)] shrink-0"
-                        style={{ opacity: value === model ? 1 : 0, color: 'var(--color-accent)' }}
-                      />
-                      <span className="font-mono text-[length:var(--type-utility-xs-size)]">{model}</span>
-                    </CommandItem>
-                  ))}
+                  .map((model) => {
+                    // H6 R2 (review round 1): this branch only renders when
+                    // there are NO non-empty provider groups (≥1 group takes
+                    // the grouped branch above — O3 made grouping always-on),
+                    // so a row here has no provider context on either side:
+                    // matchesValueProvider(undefined) is the legacy model-id
+                    // match, and the emitted provider is '' (unresolved).
+                    // data-chosen: same chosen-marker contract the catalog
+                    // path uses.
+                    const chosen = value === model && matchesValueProvider(undefined)
+                    return (
+                      <CommandItem
+                        key={model}
+                        value={model}
+                        onSelect={() => handleSelect(model)}
+                        data-chosen={chosen || undefined}
+                        {...(itemTestIdPrefix ? { 'data-testid': `${itemTestIdPrefix}${model}` } : {})}
+                      >
+                        <Check
+                          size={14}
+                          className="mr-[var(--space-2)] shrink-0"
+                          style={{ opacity: chosen ? 1 : 0, color: 'var(--color-accent)' }}
+                        />
+                        <span className="font-mono text-[length:var(--type-utility-xs-size)]">{model}</span>
+                        {isAgentDefaultRow(model, undefined) && renderDefaultChip()}
+                      </CommandItem>
+                    )
+                  })}
               </CommandGroup>
             )}
             {queryRaw && !exactMatch && !constrainToCatalog && (

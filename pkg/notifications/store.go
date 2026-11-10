@@ -41,10 +41,14 @@ const (
 // without a trace, so this list and the contract's must be changed together.
 const (
 	TypeScheduleFailed = "schedule_failed"
+	TypeGoalPaused     = "goal_paused"
 	// TypeKnowledgeDrift — ADR-067 FR-038a. The automatic drift check found a
 	// knowledge base's search index out of step with its folder, and the index
 	// is being rebuilt. Raised only when something is actually wrong.
 	TypeKnowledgeDrift = "knowledge_drift"
+	// TypeStopNotice is an operational Stop outcome in the header, never a
+	// terminal chat error or evidence that the current reply has ended.
+	TypeStopNotice = "stop_notice"
 )
 
 // notificationCap is the per-user retention bound (keep the most recent N).

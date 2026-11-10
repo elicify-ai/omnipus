@@ -5,6 +5,7 @@
 package gateway
 
 import (
+	"github.com/elicify-ai/omnipus/pkg/agentmutation"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 )
 
@@ -17,8 +18,8 @@ import (
 // AgentCreateRequestSubagent / AgentCreateRequestSubagent3p
 // (contracts/components/schemas/AgentCreateRequest*.yaml, each
 // additionalProperties: false). AgentCreateRequestSubagent3p structurally has
-// no tools_cfg / skills / fallback_models / model_params /
-// auto_approve_disabled / max_tool_iterations property at all, and createAgent's
+// no tools_cfg / skills / fallback_models / model_params
+// property at all, and createAgent's
 // per-variant decode (decodeAgentCreateVariant) always runs a
 // json.Decoder with DisallowUnknownFields — so a caller who sends one of
 // these fields on a subagent_3p create gets a 400 naming the offending
@@ -36,27 +37,25 @@ import (
 // AgentUpdateRequest property a subagent_3p (External CLI) agent rejects on
 // PUT (400 "subagent_3p agents do not support <field>; this is fixed at
 // create time."). The external runner (claude-code / codex / opencode)
-// manages its own tool loop, isolation, retries, and per-turn budget, so
-// these fields are CLI-owned and cannot be tuned through Omnipus at runtime.
-// auto_approve_disabled (ADR-092) is forbidden for the same reason
-// tools_cfg is: it tightens the per-tool ask/allow/deny resolution the
-// external CLI never goes through — the runner has no ask/allow/deny
-// concept to force Auto off for (ToolsAndPermissions.tsx hides the control
-// for subagent_3p on the same basis).
+// manages its own tool loop, isolation and retries, so these fields are
+// CLI-owned and cannot be tuned through Omnipus at runtime. The per-turn
+// budget is NOT CLI-owned: Omnipus always passes the agent's tool-iteration
+// limit as the CLI's turn cap (see max_tool_iterations below).
+//
+// max_tool_iterations is deliberately NOT here (#904 D14): an external CLI
+// worker follows the same global tool-iteration limit and may lower it for
+// itself on create and on PUT; the effective value is passed to the CLI as
+// its turn cap (external_dispatch.go::prepareRunOptions).
 //
 // This slice is the single source of truth for "does this PUT field make
 // sense on an external-CLI worker" — TestSubagent3pForbiddenFieldsDrift
 // (agent_field_rules_test.go) walks every gen.AgentUpdateRequest field via
 // reflection and asserts membership here matches firstForbiddenSubagent3pField's
 // actual verdict, so adding a field to one without the other fails CI.
-var subagent3pForbiddenUpdateFields = []string{
-	"tools_cfg",
-	"skills",
-	"fallback_models",
-	"model_params",
-	"auto_approve_disabled",
-	"max_tool_iterations",
-}
+//
+// The list itself lives in Table T-AGENT (r17 §7.1,
+// pkg/agentmutation/policy.go::Subagent3pForbiddenUpdateFields).
+var subagent3pForbiddenUpdateFields = agentmutation.Subagent3pForbiddenUpdateFields()
 
 // subagent3pCreateOnlyExemptFields documents wire fields that are present on
 // gen.AgentCreateRequestMain but structurally absent from
@@ -97,12 +96,20 @@ var subagent3pCreateOnlyExemptFields = map[string]string{
 	// subagent_3p's posture through the tools_cfg entry in
 	// subagent3pForbiddenUpdateFields rather than this field's own name.
 	"tool_policy_changes": "create-time-only field; ongoing management is exclusively via PUT /api/v1/agents/{id}/tools",
+	// reasoning_effort is absent from AgentCreateRequestSubagent3p by the
+	// effort-levels spec (external-CLI workers do not call Omnipus
+	// providers). On PUT it is refused for subagent_3p by
+	// agentmutation.ValidateFields with the pinned S-77 sentence
+	// (agentmutation.ExternalCLIEffortRefusal); putting it in
+	// subagent3pForbiddenUpdateFields would replace that sentence with the
+	// generic forbidden-field refusal, which runs first in updateAgent.
+	"reasoning_effort": "refused for subagent_3p by agentmutation.ValidateFields with the S-77 external-CLI refusal",
 }
 
 // firstForbiddenSubagent3pField returns the first forbidden field supplied on
 // an AgentUpdateRequest PUT to a subagent_3p (External CLI) agent, or ("",
 // false) when none are set. Fields NOT in this list — model, provider,
-// timeout_seconds, color, icon, description, name, voice(*),
+// timeout_seconds, color, description, name, voice(*),
 // rate_limits, executor (cli_path/env_overrides/cli_args only — cli is
 // immutable after create, enforced separately), default, updated_at — are
 // valid on a subagent_3p PUT.
@@ -135,11 +142,8 @@ func firstForbiddenSubagent3pField(req *gen.AgentUpdateRequest) (string, bool) {
 	if req.ModelParams != nil {
 		return "model_params", true
 	}
-	if req.AutoApproveDisabled != nil {
-		return "auto_approve_disabled", true
-	}
-	if req.MaxToolIterations != nil {
-		return "max_tool_iterations", true
+	if req.Soul != nil {
+		return "soul", true
 	}
 	return "", false
 }

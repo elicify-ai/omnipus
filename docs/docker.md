@@ -77,7 +77,7 @@ docker build -t omnipus:heavy -f docker/Dockerfile.heavy .
 
 Run it from the repository root, not from `docker/` — the build context must include the whole tree.
 
-Three stages: `node:24-alpine` builds the SPA into `dist/spa/`; `golang:1.26.6-alpine` copies that output into `pkg/gateway/spa/` (satisfying the `//go:embed all:spa` directive) and builds the binary; `node:24-bookworm-slim` is the runtime, which adds Chrome-for-Testing, Python 3, `uv`/`uvx`, `git`, `jq` and the shared libraries Chrome links against.
+Three stages: `node:24-alpine` builds the SPA into `dist/spa/`; `golang:1.27.3-alpine` copies that output into `pkg/gateway/spa/` (satisfying the `//go:embed all:spa` directive) and builds the binary; `node:24-bookworm-slim` is the runtime, which adds Chrome-for-Testing, Python 3, `uv`/`uvx`, `git`, `jq` and the shared libraries Chrome links against.
 
 Both builder stages are pinned to the **build** platform and cross-compile, so a multi-architecture build does not run `npm ci` and `go build` under emulation:
 
@@ -167,13 +167,7 @@ Run from the repo root:
 docker compose -f docker/docker-compose.yml --profile gateway up -d
 ```
 
-The compose file maps `127.0.0.1:5000:5000` and sets `OMNIPUS_GATEWAY_PORT=5000` on the gateway service so the in-container listener matches the host port. It does **not** currently set `OMNIPUS_GATEWAY_HOST`, so add it before the mapping is reachable:
-
-```yaml
-    environment:
-      - OMNIPUS_GATEWAY_PORT=5000
-      - OMNIPUS_GATEWAY_HOST=0.0.0.0
-```
+The compose file maps `127.0.0.1:5000:5000` and sets `OMNIPUS_GATEWAY_PORT=5000` and `OMNIPUS_GATEWAY_HOST=0.0.0.0` on the gateway service, so the in-container listener matches the host port and is reachable through the mapping. A plain `docker compose up` starts nothing, because both services are profile-gated; the `--profile gateway` flag is required.
 
 Check logs:
 
@@ -195,7 +189,7 @@ The `agent` profile runs a single query and exits. The one-shot form is `omnipus
 docker compose -f docker/docker-compose.yml run --rm omnipus-agent mia "What is 2+2?"
 ```
 
-`mia` is the default assistant in the built-in roster (`mia`, `jim`, `ray`, `ava`). Run the container with no arguments to print the roster.
+`mia` is the default assistant in the built-in roster (`mia`, `jim`, `ava`, `admin`). Run the container with no arguments to print the roster.
 
 Two prerequisites, because the one-shot command is a **client** rather than a self-contained run:
 
@@ -244,7 +238,7 @@ Either way, the directory layout is the same:
 | `cli.token` | Plaintext CLI key (0600), used by one-shot `omnipus <agent> "…"` runs |
 | `sessions/` | Day-partitioned JSONL transcripts |
 | `tasks/` | Per-task JSON files |
-| `agents/` | Custom agent definitions (AGENT.md + SOUL.md) |
+| `agents/` | Agent home folders, including `SOUL.md` for custom native agents |
 | `logs/` | `gateway.log`, `gateway_panic.log` |
 
 Mount the entire data directory as a single named volume or bind-mount. Splitting sub-paths into separate mounts is not supported.

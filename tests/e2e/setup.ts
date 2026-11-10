@@ -18,6 +18,7 @@ import { createServer } from 'net';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { onboardViaAPI } from './fixtures/onboard-via-api.js';
 
 // Default binary used when OMNIPUS_BINARY is not set.
 export const DEFAULT_OMNIPUS_BINARY = '/tmp/omnipus-ci';
@@ -72,6 +73,12 @@ export interface StartGatewayOptions {
    * preserving the existing "boot + onboard" contract.
    */
   skipOnboarding?: boolean;
+  /**
+   * Fixture-internal seed for THIS throwaway gateway only, never a production
+   * setting or a mutation of the shared CI gateway. Omitted preserves the
+   * original minimal config exactly. The requested port always wins.
+   */
+  fixtureConfig?: Record<string, unknown>;
 }
 
 /**
@@ -100,10 +107,13 @@ export async function startGateway(opts: StartGatewayOptions): Promise<GatewayHa
   // Create a throwaway OMNIPUS_HOME — unique per startGateway() call.
   const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), `omnipus-e2e-${opts.port}-`));
 
-  // Pre-write config.json with the port.
+  // An optional fixture seed is confined to this new home. Existing callers
+  // still get precisely {version:1,gateway:{port}}; no shared config is read
+  // or changed. The allocated listener port cannot be replaced by the seed.
+  const fixtureConfig = opts.fixtureConfig ?? {};
   fs.writeFileSync(
     path.join(homeDir, 'config.json'),
-    JSON.stringify({ version: 1, gateway: { port: opts.port } }, null, 2),
+    JSON.stringify({ ...fixtureConfig, version: 1, gateway: { ...(fixtureConfig.gateway as Record<string, unknown> | undefined), port: opts.port } }, null, 2),
     { mode: 0o600 },
   );
 
@@ -380,38 +390,19 @@ export async function waitForHealth(
  * Seed an admin via POST /api/v1/onboarding/complete.
  * Idempotent: 409 is treated as success.
  * See pkg/gateway/rest_onboarding.go — endpoint is CSRF-exempt.
+ *
+ * One onboarding path for the whole suite: this delegates to onboardViaAPI,
+ * which onboards the central primary (tests/e2e/e2e-model.json) with the key
+ * for that provider and then seeds the fallback provider and every agent's
+ * fallback_models. There is no placeholder key: onboarding probes the key for
+ * real, so a missing key fails here, naming the env vars to set.
  */
 export async function onboardAdmin(
   baseURL: string,
   username: string,
   password: string,
 ): Promise<void> {
-  const res = await fetch(`${baseURL}/api/v1/onboarding/complete`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      provider: {
-        auth_method: 'api_key',
-        id: 'openrouter',
-        // CI injects OPENROUTER_API_KEY_CI (per-shard via GITHUB_ENV). Local
-        // runs and the Go Tests job use OPENROUTER_API_KEY. Either is a real
-        // key; the placeholder is last so a self-managed gateway (hot-reload)
-        // does not onboard with sk-test-placeholder and get a 400 from
-        // OpenRouter.
-        api_key:
-          process.env.OPENROUTER_API_KEY ??
-          process.env.OPENROUTER_API_KEY_CI ??
-          'sk-test-placeholder',
-        model: 'openai/gpt-4o',
-      },
-      admin: { username, password },
-    }),
-  });
-
-  if (!res.ok && res.status !== 409) {
-    const body = await res.text();
-    throw new Error(`onboardAdmin: onboarding failed ${res.status}: ${body}`);
-  }
+  await onboardViaAPI({ baseURL, username, password });
 }
 
 /**

@@ -36,16 +36,22 @@ function agent(id: string, over: Partial<Agent> = {}): Agent {
     soul: '',
     heartbeat: '',
     instructions: '',
-    timeout_seconds: 60,
     max_tool_iterations: 10,
     heartbeat_enabled: false,
     heartbeat_interval: 0,
+    figure: 'Omnipus',
+    role: 'general',
+    revision: '0'.repeat(64),
+    needs_model: false,
+    max_tool_iterations_source: 'global',
+    max_tool_iterations_override_ignored: false,
+    memory_enabled: true,
     ...over,
   } as Agent
 }
 
 const AGENTS: Agent[] = [
-  agent('mia', { name: 'Mia', default: true, color: '#d4af37', icon: 'Robot' }),
+  agent('mia', { name: 'Mia', color: '#6E8BA8' }),
   agent('jim', { name: 'Jim' }),
   agent('planner', { name: 'Planner', type: 'Subagent' }),
   agent('explorer', { name: 'Explorer', type: 'Subagent' }),
@@ -140,12 +146,11 @@ describe('buildTeamGraphModel', () => {
     ],
   })
 
-  it('renders one node per team agent with name/role/default/worker flags', () => {
+  it('renders one node per team agent with name/role/worker flags', () => {
     const { nodes } = buildTeamGraphModel(s, AGENTS)
     expect(nodes).toHaveLength(3)
     const mia = nodes.find((n) => n.id === 'mia')!
     expect(mia.name).toBe('Mia')
-    expect(mia.isDefault).toBe(true)
     expect(mia.isWorker).toBe(false)
     expect(mia.role).toBe('Main agent')
     const planner = nodes.find((n) => n.id === 'planner')!
@@ -208,7 +213,7 @@ describe('buildTeamGraphModel', () => {
 // "looked absent" even though it always verifies work on this workspace.
 
 describe('buildTeamGraphModel — implicit System agent nodes (Judge, ADR-049 D3)', () => {
-  const JUDGE = agent('judge', { name: 'Judge', type: 'system', color: '#888', icon: 'Scales' })
+  const JUDGE = agent('judge', { name: 'Judge', type: 'system', color: '#8E9196' })
   const AGENTS_WITH_JUDGE = [...AGENTS, JUDGE]
 
   it('renders the System agent as an implicit node even though it is never in state.members', () => {
@@ -301,8 +306,12 @@ describe('validateConnection', () => {
     edges: [{ from: 'mia', to: 'jim', modes: ['direct'] }],
   })
 
-  it('rejects self-edges for roles other than Jim and General Purpose', () => {
-    expect(validateConnection('mia', 'mia', s, WORKER_IDS)).toBe('self-edge')
+  it('treats a first self-edge as an ordinary edge (DESIGN-RULING-delegation-20261009, U5a)', () => {
+    expect(validateConnection('mia', 'mia', s, WORKER_IDS)).toBeNull()
+  })
+  it('rejects a second identical self-edge as a duplicate', () => {
+    const withSelf = { ...s, edges: [...s.edges, { from: 'mia', to: 'mia', modes: ['direct' as const] }] }
+    expect(validateConnection('mia', 'mia', withSelf, WORKER_IDS)).toBe('duplicate')
   })
   it('allows explicit Jim and General Purpose self-edges', () => {
     const eligible = { ...s, members: [...s.members, 'worker'] }
@@ -355,11 +364,11 @@ describe('rejectionMessageForFailedConnection', () => {
     edges: [{ from: 'mia', to: 'jim', modes: ['direct'] }],
   })
 
-  it('surfaces the self-edge message for a rejected self-drag (mia -> mia)', () => {
-    // This is the exact drag the bug report reproduces: a handle dragged back
-    // onto its own node.
-    expect(rejectionMessageForFailedConnection('mia', 'mia', false, s, WORKER_IDS)).toBe(
-      REJECTION_MESSAGE['self-edge'],
+  it('surfaces the duplicate message for a rejected self-drag onto an existing self-edge (mia -> mia)', () => {
+    // A handle dragged back onto its own node, where the self-edge exists.
+    const withSelf = { ...s, edges: [...s.edges, { from: 'mia', to: 'mia', modes: ['direct' as const] }] }
+    expect(rejectionMessageForFailedConnection('mia', 'mia', false, withSelf, WORKER_IDS)).toBe(
+      REJECTION_MESSAGE.duplicate,
     )
   })
 
@@ -528,9 +537,11 @@ describe('addMember / removeMember', () => {
     const s: TeamEditState = state({ members: ['mia'], edges: [] })
     expect(addMember(s, 'mia')).toBe(s)
   })
-  it('refuses Admin and hidden engine agents', () => {
+  // WU-11 GREEN retarget (FR-008): the Admin refusal assert is deleted with
+  // the retired agent — a cached admin id can no longer exist to add; the
+  // hidden-engine refusal rule stays.
+  it('refuses hidden engine agents', () => {
     const s: TeamEditState = state({ members: ['mia'], edges: [] })
-    expect(addMember(s, 'admin')).toBe(s)
     expect(addMember(s, 'judge')).toBe(s)
     expect(addMember(s, 'plansupervisor')).toBe(s)
   })
@@ -642,5 +653,16 @@ describe('editsEqual', () => {
       edges: [{ from: 'mia', to: 'jim', modes: ['direct'], depth: 2 }],
     })
     expect(editsEqual(a, b)).toBe(false)
+  })
+})
+
+// ── Shipped-default pin ───────────────────────────────────────────────────────
+
+// The SPA fallback mirrors the backend's shipped delegation-depth backstop
+// (founder ruling 2026-10-27: default 10). A literal on purpose: a backend
+// default change must be reflected here deliberately, never silently.
+describe('DEFAULT_DEPTH_FALLBACK', () => {
+  it('is the literal 10 — the shipped delegation-depth default', () => {
+    expect(DEFAULT_DEPTH_FALLBACK).toBe(10)
   })
 })

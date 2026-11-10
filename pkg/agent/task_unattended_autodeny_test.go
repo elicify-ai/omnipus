@@ -45,6 +45,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/stretchr/testify/assert"
@@ -116,7 +117,7 @@ func TestProcessTaskDirect_UnattendedAskTool_AutoDeniedAtOnce_ZeroApproverCalls(
 	prov := testutil.NewScenario().
 		WithToolCall("dangerous_tool", `{}`).
 		WithText("could not use that tool, proceeding without it")
-	mia := registerAgent(t, al, home, "mia", prov, false)
+	mia := registerAgent(t, al, home, "mia", prov)
 
 	stub := &dangerousStubTool{}
 	mia.Tools.Register(stub)
@@ -127,8 +128,12 @@ func TestProcessTaskDirect_UnattendedAskTool_AutoDeniedAtOnce_ZeroApproverCalls(
 	approver := &countingApproveApprover{}
 	al.SetToolApprover(approver)
 
+	// Direct-task callers must provision an owned transcript before dispatch;
+	// per-call accounting deliberately refuses nonexistent session IDs.
+	taskSession, err := al.GetSessionStore().NewSession(session.SessionTypeTask, "system", mia.ID)
+	require.NoError(t, err)
 	ctx := tools.WithAutoDenyAsk(context.Background(), true)
-	reply, err := al.processTaskDirect(ctx, "mia", "please use dangerous_tool", "task-sess-d08-1", "task:d08-1")
+	reply, err := al.processTaskDirect(ctx, "mia", "please use dangerous_tool", "task-sess-d08-1", taskSession.ID)
 	require.NoError(t, err, "auto-deny is a loop-level action, not an agent error")
 	assert.Equal(t, "could not use that tool, proceeding without it", reply)
 
@@ -190,7 +195,13 @@ func TestProcessTaskDirect_UnattendedAllowedTool_StillRuns(t *testing.T) {
 	prov := testutil.NewScenario().
 		WithToolCall("dangerous_tool", `{}`).
 		WithText("wrote the report")
-	mia := registerAgent(t, al, home, "mia", prov, false)
+	mia := registerAgent(t, al, home, "mia", prov)
+	sessionStore := al.GetSessionStore()
+	require.NotNil(t, sessionStore, "test setup: executing agent must have a session store")
+	taskSession, err := sessionStore.NewSession(session.SessionTypeTask, "system", mia.ID)
+	require.NoError(t, err)
+	require.NotNil(t, taskSession)
+	require.NotEmpty(t, taskSession.ID)
 
 	stub := &dangerousStubTool{}
 	mia.Tools.Register(stub)
@@ -199,7 +210,7 @@ func TestProcessTaskDirect_UnattendedAllowedTool_StillRuns(t *testing.T) {
 	})
 
 	ctx := tools.WithAutoDenyAsk(context.Background(), true)
-	reply, err := al.processTaskDirect(ctx, "mia", "please use dangerous_tool", "task-sess-d08-2", "task:d08-2")
+	reply, err := al.processTaskDirect(ctx, "mia", "please use dangerous_tool", "task-sess-d08-2", taskSession.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "wrote the report", reply)
 	assert.True(t, stub.wasCalled.Load(),
@@ -226,7 +237,7 @@ func TestProcessDirect_ChatTurn_AskTool_AsksExactlyOnce(t *testing.T) {
 	stub := &dangerousStubTool{}
 	al.RegisterTool(stub)
 
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
+	defaultAgent := al.GetRegistry().primaryChatAgentForTest()
 	require.NotNil(t, defaultAgent, "expected a default agent from the single-entry Agents.List")
 	defaultAgent.StoreToolPolicy(&tools.ToolPolicyCfg{
 		Policies: map[string]config.ToolPolicy{"dangerous_tool": "ask"},
@@ -235,7 +246,7 @@ func TestProcessDirect_ChatTurn_AskTool_AsksExactlyOnce(t *testing.T) {
 	approver := &countingApproveApprover{}
 	al.SetToolApprover(approver)
 
-	reply, err := al.ProcessDirect(context.Background(), "please use dangerous_tool", "chat-turn-d08-session")
+	reply, err := al.processDirectPrimaryForTest(context.Background(), "please use dangerous_tool", "chat-turn-d08-session")
 	require.NoError(t, err)
 	assert.Equal(t, "done", reply)
 	assert.Equal(t, int32(1), approver.calls.Load(),

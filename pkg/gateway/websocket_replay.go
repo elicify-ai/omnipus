@@ -9,10 +9,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
-	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
@@ -33,12 +31,26 @@ type wsHandlerHandleAttachSession struct {
 	store    *session.UnifiedStore
 	res      attachResult
 	failed   bool // the catch-up failed; nothing else of this attach runs
+	// ack is the attach frame's acknowledgement of what was shown (U11); nil
+	// for every attach that does not carry one.
+	ack              *attachAck
+	historyOptions   session.ChatHistoryPageOptions
+	historyRequested *int
+	liveOnly         bool
+}
+
+// attachAck is the acknowledging half of an attach_session frame (FR-047,
+// C-ATTENTION): ack_attention true plus the attention_bound the client was
+// shown. Either alone writes nothing.
+type attachAck struct {
+	Ack   bool
+	Bound *int64
 }
 
 // attachReadTranscript reads a session's history for a snapshot. A var only
 // so a test can make the read fail; never reassigned in production.
-var attachReadTranscript = func(store *session.UnifiedStore, sessionID string) ([]session.TranscriptEntry, error) {
-	return store.ReadTranscript(sessionID)
+var attachReadTranscript = func(store *session.UnifiedStore, sessionID string) (session.TranscriptView, error) {
+	return store.ReadTranscriptView(sessionID)
 }
 
 // attachAfterBindHook, when set, runs right after an attach has bound the
@@ -62,6 +74,8 @@ var attachAfterBindHook func(sessionID string)
 //	                   replay did not cover · catch_up_complete{W}
 //	A7  release hold: every frame published after the bind follows, in order
 //	A8  hydrate the agent's history, re-emit goal status
+//	A9  acknowledge attention: only for an acknowledging attach of a main whose
+//	    A1-A8 all succeeded (attention_ack.go)
 //
 // It runs synchronously in the connection's read loop, so a frame the
 // client sends after attach_session (e.g. a queued offline message) is
@@ -78,8 +92,25 @@ func (h *WSHandler) handleAttachSession(
 	cursor *attachCursor,
 	wc *wsConn,
 ) {
-	wh := &wsHandlerHandleAttachSession{h: h, ctx: ctx, chatID: chatID, attachID: attachID, cursor: cursor, wc: wc}
+	h.handleAttachSessionWithAck(ctx, chatID, attachID, cursor, nil, wc)
+}
+
+// handleAttachSessionWithAck is handleAttachSession plus the optional
+// attention acknowledgement carried by the attach frame (A9, below).
+func (h *WSHandler) handleAttachSessionWithAck(
+	ctx context.Context,
+	chatID string,
+	attachID string,
+	cursor *attachCursor,
+	ack *attachAck,
+	wc *wsConn,
+	rawFrame ...[]byte,
+) {
+	wh := &wsHandlerHandleAttachSession{h: h, ctx: ctx, chatID: chatID, attachID: attachID, cursor: cursor, wc: wc, ack: ack}
 	if !wh.resolveSession() {
+		return
+	}
+	if !wh.validateHistoryAttach(rawFrame) {
 		return
 	}
 	wh.bindHub()
@@ -96,6 +127,9 @@ func (h *WSHandler) handleAttachSession(
 	}
 	wh.wc.releaseHold()
 	wh.resumeLiveSession()
+	if !wh.liveOnly {
+		wh.ackAttention()
+	}
 }
 
 // resolveSession is A1: validate the session id and resolve its store.
@@ -107,11 +141,16 @@ func (wh *wsHandlerHandleAttachSession) resolveSession() bool {
 		})
 		return false
 	}
+	// Final-gate M4: a main the pair is no longer entitled to is not attachable.
+	if !wh.h.mainSessionAllowed(wh.wc, wh.attachID) {
+		return false
+	}
 	wh.store = wh.h.resolveSessionStore(wh.attachID)
 	if wh.store == nil {
 		sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-			Type:    string(generated.WsFrameTypeError),
-			Message: "session not found",
+			Type:      string(generated.WsFrameTypeError),
+			SessionId: &wh.attachID,
+			Message:   "session not found",
 		})
 		return false
 	}
@@ -145,131 +184,33 @@ func (wh *wsHandlerHandleAttachSession) sendIncremental() {
 		"event", "catch_up", "mode", "incremental",
 		"session_id", wh.attachID, "chat_id", wh.chatID,
 		"frames", len(wh.res.Tail), "head", wh.res.Head)
-	wh.direct(wh.h.sessionStateBytes(wh.wc, wh.attachID))
+	state := wh.incrementalHistoryState()
+	wh.liveOnly = state.Status == "unavailable"
+	if !wh.sendHistoryState(state) {
+		return
+	}
 	for _, frame := range wh.res.Tail {
 		if err := wh.wc.directWait(wh.ctx, frame); err != nil {
-			wh.abortCatchUp(err)
+			wh.historyDeliveryFailed(err)
 			return
 		}
 	}
 	wh.sendCatchUpComplete("incremental")
+	if !wh.failed {
+		wh.wc.rememberHistoryState(wh.attachID, state)
+	}
 }
 
 // sendSnapshot is A6's snapshot branch.
 func (wh *wsHandlerHandleAttachSession) sendSnapshot() {
-	logsafeInfo("ws: catch_up",
-		"event", "catch_up", "mode", "snapshot", "reason", wh.res.Reason,
-		"session_id", wh.attachID, "chat_id", wh.chatID, "head", wh.res.Head)
-	// Read the transcript AFTER the bind (§4.2): everything persisted up to
-	// now is in it; whatever was published at or before W but not yet
-	// persisted is in the projection; whatever is published after W is held.
-	// And read it BEFORE session_snapshot (final-review N4): that frame
-	// tells the client to wipe its history for this session, so a read
-	// failure must be answered while the client's current view is intact.
-	entries, err := attachReadTranscript(wh.store, wh.attachID)
-	if err != nil {
-		logsafeWarn("ws: attach_session: could not read transcript", "session_id", wh.attachID, "error", err)
-		wh.failCatchUp("could not read session transcript")
-		return
-	}
-	bootID := wh.h.hubs.bootID
-	reason := wh.res.Reason
-	wh.directFrame(generated.SessionSnapshotFrame{
-		Type:      string(generated.WsFrameTypeSessionSnapshot),
-		SessionId: wh.attachID,
-		Seq:       int64(wh.res.Head),
-		BootId:    &bootID,
-		Reason:    &reason,
-	})
-	// AFTER the snapshot frame (which wipes the client's history for this
-	// session), so the wipe can never erase pending approvals, the active
-	// turn or goal state (§4.6, review finding 2).
-	wh.direct(wh.h.sessionStateBytes(wh.wc, wh.attachID))
-
-	emitted, ok := wh.replayTranscript(entries)
-	if !ok {
-		return
-	}
-	for _, frame := range projectionFrames(wh.attachID, wh.res.Proj, emitted) {
-		if err := wh.wc.directWait(wh.ctx, frame); err != nil {
-			wh.abortCatchUp(err)
-			return
-		}
-	}
-	wh.sendCatchUpComplete("snapshot")
-}
-
-// replayTranscript streams the persisted transcript to the connection
-// (unsequenced), recording every message id, tool call id and span id it
-// emitted so the projection filter can skip items the replay already
-// covers. Returns false when the attach was aborted.
-func (wh *wsHandlerHandleAttachSession) replayTranscript(entries []session.TranscriptEntry) (map[string]bool, bool) {
-	rs := computeReplayStats(entries)
-	logsafeInfo("ws: replay_start",
-		"event", "replay_start",
-		"session_id", wh.attachID,
-		"entry_count_loaded", len(entries),
-		"tool_call_count_loaded", rs.toolCallCount,
-		"span_count_detected", rs.spanCount,
-		"orphan_count", rs.orphanCount,
-		"duplicate_tool_call_id_count", rs.duplicateToolCallIDCount,
-		"truncated_result_count", rs.truncatedResultCount,
-	)
-	started := time.Now()
-	emitted := make(map[string]bool)
-	send := wsEmitFunc(wh.ctx, wh.wc)
-	emit := func(f any) error {
-		recordEmittedIDs(emitted, f)
-		return send(f)
-	}
-	var mediaStore media.MediaStore
-	if wh.h.agentLoop != nil {
-		mediaStore = wh.h.agentLoop.GetMediaStore()
-	}
-	// ADR-091 Finding 1 fix: real sub-turn liveness for a delegate call whose
-	// placeholder ack has not yet been corrected no longer needs wiring in
-	// from here — streamReplay derives it from the transcript's own persisted
-	// subagent_start/subagent_end entries (buildPersistedSubagentSpanIndexes
-	// in replay.go). agent.AgentLoop.IsSubTurnActiveForSpawnCall was deleted.
-	//
-	// askuserquestion-tool-spec v3 §0.6: the session's terminal
-	// AskUserQuestion record, so the collapsed card is reconstructed.
-	terminalAsk := loadTerminalAskRecord(wh.store, wh.attachID)
-	// A nil pointer stored in an interface is not a nil interface, and
-	// LifecycleStore.Load panics on a nil receiver. Leave the interface
-	// nil when there is no store.
-	var lifecycle lifecycleRecordLoader
-	if wh.h.agentLoop != nil {
-		if store := wh.h.agentLoop.GetSessionLifecycleStore(); store != nil {
-			lifecycle = store
-		}
-	}
-	framesEmitted, err := streamReplay(wh.ctx, wh.attachID, entries, rs, emit, mediaStore, wh.h.toolStore, terminalAsk, lifecycle)
-	durationMS := time.Since(started).Milliseconds()
-	if err != nil {
-		logsafeWarn("ws: replay_aborted",
-			"event", "replay_aborted",
-			"session_id", wh.attachID,
-			"frames_emitted", framesEmitted,
-			"duration_ms", durationMS,
-			"error", err,
-		)
-		wh.abortCatchUp(err)
-		return nil, false
-	}
-	logsafeInfo("ws: replay_end",
-		"event", "replay_end",
-		"session_id", wh.attachID,
-		"frames_emitted", framesEmitted,
-		"duration_ms", durationMS,
-		"orphan_count", rs.orphanCount,
-		"duplicate_tool_call_id_count", rs.duplicateToolCallIDCount,
-		"truncated_result_count", rs.truncatedResultCount,
-	)
-	return emitted, true
+	wh.sendPreparedHistorySnapshot()
 }
 
 // recordEmittedIDs adds the ids a replayed frame carries to emitted.
+// emittedResultKey is the emitted-set key of a tool call's RESULT, kept
+// separate from the call id that records its start.
+func emittedResultKey(callID string) string { return "result\x00" + callID }
+
 func recordEmittedIDs(emitted map[string]bool, f any) {
 	switch v := f.(type) {
 	case generated.ReplayMessageFrame:
@@ -279,12 +220,16 @@ func recordEmittedIDs(emitted map[string]bool, f any) {
 	case generated.ToolCallStartFrame:
 		emitted[v.CallId] = true
 	case generated.ToolCallResultFrame:
-		emitted[v.CallId] = true
+		// A start is not result coverage (D4): record the terminal result
+		// under its own key so the live projection can still deliver it.
+		emitted[emittedResultKey(v.CallId)] = true
 	case generated.SubagentStartFrame:
 		emitted[v.SpanId] = true
 	case generated.SubagentEndFrame:
 		emitted[v.SpanId] = true
 	case generated.GoalOutcomeFrame:
+		emitted[v.MessageId] = true
+	case generated.HelperEventFrame:
 		emitted[v.MessageId] = true
 	}
 }
@@ -336,23 +281,13 @@ func (wh *wsHandlerHandleAttachSession) failCatchUp(message string) {
 // session becomes W, and the held live frames (seq > W) follow.
 func (wh *wsHandlerHandleAttachSession) sendCatchUpComplete(mode string) {
 	bootID := wh.h.hubs.bootID
-	wh.directFrame(generated.CatchUpCompleteFrame{
+	wh.sendHistoryFrame(generated.CatchUpCompleteFrame{
 		Type:      string(generated.WsFrameTypeCatchUpComplete),
 		SessionId: wh.attachID,
 		Seq:       int64(wh.res.Head),
 		BootId:    &bootID,
 		Mode:      mode,
 	})
-}
-
-func (wh *wsHandlerHandleAttachSession) direct(frame []byte) {
-	if frame != nil {
-		wh.wc.direct(frame)
-	}
-}
-
-func (wh *wsHandlerHandleAttachSession) directFrame(frame any) {
-	sendConnGenFrameDirect(wh.wc, frame)
 }
 
 // sendConnGenFrameDirect marshals frame and queues it on wc bypassing hold
@@ -366,27 +301,10 @@ func sendConnGenFrameDirect(wc *wsConn, frame any) {
 	wc.direct(data)
 }
 
-// resumeLiveSession is A8: hydrate the agent's history and re-emit goal
-// status for the attached session.
+// resumeLiveSession is A8: re-emit goal status for the attached session. The
+// model window is the addressed archive itself (session-core U2 DEL-12), so
+// nothing is rebuilt from the transcript on attach.
 func (wh *wsHandlerHandleAttachSession) resumeLiveSession() {
-	// Hydrate the per-agent session.SessionStore from the transcript so the
-	// next LLM turn sees the prior conversation. ADR-066 D5.5 (FR-045): only
-	// an EMPTY agent archive is hydrated — an archive with ≥ 1 line is the
-	// live record of the session.
-	if wh.h.agentLoop.AgentArchiveNonEmpty(wh.attachID) {
-		logsafeDebug("ws: attach_session: agent archive non-empty; hydration skipped",
-			"session_id", wh.attachID)
-	} else if err := wh.h.agentLoop.HydrateAgentHistoryFromTranscript(wh.attachID); err != nil {
-		logsafeWarn("ws: attach_session: hydrate agent history failed",
-			"session_id", wh.attachID, "error", err)
-		sidCopy := wh.attachID
-		sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-			Type:      string(generated.WsFrameTypeError),
-			SessionId: &sidCopy,
-			Message:   "could not restore conversation context — agent may not remember earlier turns",
-		})
-	}
-
 	// Item 14 (review-round-1, ADR-088): goal_status is a pure live push —
 	// never a replayable transcript entry — so re-emit it for the attached
 	// session; this connection is already bound and receives it like any

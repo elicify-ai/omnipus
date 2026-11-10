@@ -3,7 +3,8 @@
 // Copyright (c) 2026 Omnipus contributors
 
 // Tests for ADR-053 §5.1's corrected delegate action set
-// (inbox/inbox_ack/steer/respond/cancel/follow_up/peek) plus the illegal
+// (inbox/inbox_ack/steer/respond/stop_all/resume/redirect/peek — ADR-20261004
+// renamed follow_up→resume and cancel→stop_all with no alias) plus the illegal
 // launch-flag-combo and curated-context-snapshot-cap rejections at `run`.
 // pkg/tools/delegate_test.go's existing TestDelegate* suite already proves
 // run/status regression (unchanged); this file covers only the NEW surface.
@@ -21,6 +22,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/providers"
@@ -83,7 +86,9 @@ func newADR053TestTool(t *testing.T) (*DelegateTool, *session.LifecycleStore, *s
 // session_id from the generated response payload.
 func runAndExtractSessionID(t *testing.T, tool *DelegateTool, ctx context.Context, task string) string {
 	t.Helper()
-	result := tool.Execute(ctx, map[string]any{"task": task})
+	// Delegation always names an explicit target (settled design); the caller's
+	// own id is the natural target for these launch-path fixtures.
+	result := tool.Execute(ctx, map[string]any{"task": task, "agent_id": ToolAgentID(ctx)})
 	if result.IsError {
 		t.Fatalf("run failed: %s", result.ForLLM)
 	}
@@ -106,6 +111,7 @@ func TestDelegateTool_Run_SnapshotOverCap_Rejected(t *testing.T) {
 	}
 	result := tool.Execute(context.Background(), map[string]any{
 		"task":     "do something",
+		"agent_id": "worker",
 		"snapshot": map[string]any{"references": refs},
 	})
 	if !result.IsError {
@@ -178,7 +184,10 @@ func TestDelegateTool_Steer_RateAndBodyCaps(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}
-	tool.SetSteerCaps(6, 16*1024)
+	// Rate cap 6/min; the body cap is left at the product default
+	// (session.DefaultSteerBodyBytes, C-LIMIT 65,536 B — ADR-053 §Contract
+	// Surface "Caps"), which is what the body half below exercises.
+	tool.SetSteerCaps(6, session.DefaultSteerBodyBytes)
 
 	for i := 0; i < 6; i++ {
 		result := tool.Execute(ctx, map[string]any{"action": "steer", "session_id": "child-caps", "text": "hint"})
@@ -199,10 +208,15 @@ func TestDelegateTool_Steer_RateAndBodyCaps(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}
-	big := strings.Repeat("x", 17*1024)
+	// The body cap is session.DefaultSteerBodyBytes (C-LIMIT 65,536 B), derived
+	// here from the constant rather than hardcoded: one byte over the cap must
+	// be rejected, one byte under must not. (The old literal was 17 KiB — well
+	// UNDER the real 64 KiB cap, so it could never trip the check.)
+	big := strings.Repeat("x", session.DefaultSteerBodyBytes+1)
 	result := tool2.Execute(ctx, map[string]any{"action": "steer", "session_id": "child-body", "text": big})
 	if !result.IsError {
-		t.Fatal("expected an over-cap steer body to be rejected")
+		t.Fatalf("expected a %d-byte steer body (one over the %d-byte cap) to be rejected",
+			session.DefaultSteerBodyBytes+1, session.DefaultSteerBodyBytes)
 	}
 }
 
@@ -290,23 +304,22 @@ func TestDelegateTool_Steer_RejectsExternalCLI(t *testing.T) {
 	}
 }
 
-func TestDelegateTool_Respond_ParksThenResumes(t *testing.T) {
-	tool, lc, inbox, _ := newADR053TestTool(t)
+// TestDelegateTool_Respond_WorkingChild_QueuesWithoutStopping is the
+// ADR-20261004 locked-decision-5 rule at this boundary: the parent's answer to
+// a WORKING helper is an ordinary steering message. It lands in the child's
+// steering queue (applied at the child's next tool boundary), never stops the
+// child's live turn, never parks it, and never dispatches a second session.
+func TestDelegateTool_Respond_WorkingChild_QueuesWithoutStopping(t *testing.T) {
+	tool, lc, inbox, steer := newADR053TestTool(t)
+	seedOpenQuestion(t, inbox, "parent-1", "child-z", "corr-1")
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 
 	if err := lc.Persist(&session.LifecycleRecord{
-		SessionID: "child-z", Generation: 1, State: session.LifecycleNeedsInput,
+		SessionID: "child-z", Generation: 1, State: session.LifecycleRunning,
 		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
 		WorkspaceID: "ws-1", AgentID: "worker",
-		NeedsInput: &session.NeedsInput{CorrelationID: "corr-1", TTLDeadline: time.Now().Add(time.Hour)},
 	}); err != nil {
 		t.Fatalf("seed lifecycle record failed: %v", err)
-	}
-	// Seed the question the respond will answer with a self_ok authority so
-	// the fail-closed authority check (MAJOR-2) can positively verify it.
-	if _, err := inbox.Append("parent-1", questionMsgForDelegateTest(t, "child-z", "q-1", "corr-1",
-		generated.SessionMessageQuestionAuthoritySelfOk)); err != nil {
-		t.Fatalf("seed question message failed: %v", err)
 	}
 
 	result := tool.Execute(ctx, map[string]any{
@@ -315,34 +328,52 @@ func TestDelegateTool_Respond_ParksThenResumes(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("respond failed: %s", result.ForLLM)
 	}
+	msg, scope := steer.last()
+	if msg.Content != "yes, go ahead" {
+		t.Errorf("steering sink content = %q, want the raw answer text (an ordinary message, not a parked-record replay)", msg.Content)
+	}
+	if scope != "child-z" {
+		t.Errorf("steering sink scope = %q, want the child's own scope", scope)
+	}
 	rec, err := lc.Load("child-z")
 	if err != nil {
 		t.Fatalf("Load after respond failed: %v", err)
 	}
-	if rec.State != session.LifecycleRunning {
-		t.Errorf("state after launcher dispatch = %q, want %q", rec.State, session.LifecycleRunning)
+	if rec.State != session.LifecycleRunning || rec.Generation != 1 {
+		t.Errorf("state/generation after respond = (%s, %d), want the helper untouched (running, 1) — a mid-turn answer must not stop or restart the turn",
+			rec.State, rec.Generation)
 	}
 	if rec.NeedsInput != nil {
-		t.Error("NeedsInput should be cleared after respond")
+		t.Error("a question no longer parks the helper: NeedsInput must stay nil (ADR-20261004 removed the person-question pause)")
 	}
 }
 
-func TestDelegateTool_Respond_WrongCorrelationRejected(t *testing.T) {
-	tool, lc, _, _ := newADR053TestTool(t)
+// TestDelegateTool_Respond_UnmatchedCorrelation_IsRefused is the founder
+// decision of 2026-10-07 (#1213), which REVERSES the ADR-20261004 rule this
+// test used to pin ("correlation_id is address metadata, never a check; an
+// unmatched id must still be delivered"). respond now resolves the id against
+// the child's open questions and refuses an unknown one — the old behaviour
+// told a parent it had unblocked a child when it had not. The refusal text and
+// the already-answered case are covered in delegate_respond_correlation_test.go.
+// FLAGGED FOR qa-lead CHECK: expectation changed by founder decision.
+func TestDelegateTool_Respond_UnmatchedCorrelation_IsRefused(t *testing.T) {
+	tool, lc, _, steer := newADR053TestTool(t)
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	if err := lc.Persist(&session.LifecycleRecord{
-		SessionID: "child-w", Generation: 1, State: session.LifecycleNeedsInput,
+		SessionID: "child-w", Generation: 1, State: session.LifecycleRunning,
 		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
 		WorkspaceID: "ws-1", AgentID: "worker",
-		NeedsInput: &session.NeedsInput{CorrelationID: "corr-real", TTLDeadline: time.Now().Add(time.Hour)},
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}
 	result := tool.Execute(ctx, map[string]any{
 		"action": "respond", "session_id": "child-w", "correlation_id": "corr-WRONG", "text": "x",
 	})
-	if !result.IsError {
-		t.Fatal("expected respond with a mismatched correlation_id to be rejected")
+	if !result.IsError || !strings.Contains(result.ForLLM, "unknown_correlation_id") {
+		t.Fatalf("respond with an unmatched correlation_id must be refused as unknown_correlation_id, got: %s", result.ForLLM)
+	}
+	if msg, _ := steer.last(); msg.Content != "" {
+		t.Errorf("a refused respond delivered %q", msg.Content)
 	}
 }
 
@@ -350,16 +381,14 @@ func TestDelegateTool_Respond_WrongCorrelationRejected(t *testing.T) {
 // producer-side parent-of gate covers the respond action: a session that is
 // NOT the recorded parent of the target child cannot respond to it. This is
 // the steer/response counterpart of TestDelegateTool_Steer_RejectsCrossOwnerAccess
-// — verifyCallerOwnsSession (delegate.go) runs BEFORE the needs_input/
-// correlation/authority checks, so a non-parent is rejected up front regardless
-// of whether it guessed a valid correlation_id.
+// — verifyCallerPrincipal (delegate.go) runs before any delivery, so ownership
+// survives the ADR-20261004 removal of the question-authority check.
 func TestDelegateTool_Respond_RejectsCrossOwnerAccess(t *testing.T) {
 	tool, lc, _, _ := newADR053TestTool(t)
 	if err := lc.Persist(&session.LifecycleRecord{
-		SessionID: "child-co", Generation: 1, State: session.LifecycleNeedsInput,
+		SessionID: "child-co", Generation: 1, State: session.LifecycleRunning,
 		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-A", RootSessionID: "parent-A"},
 		WorkspaceID: "ws-1", AgentID: "worker",
-		NeedsInput: &session.NeedsInput{CorrelationID: "corr-co", TTLDeadline: time.Now().Add(time.Hour)},
 	}); err != nil {
 		t.Fatalf("seed lifecycle record failed: %v", err)
 	}
@@ -379,7 +408,52 @@ func TestDelegateTool_Respond_RejectsCrossOwnerAccess(t *testing.T) {
 	}
 }
 
-func TestDelegateTool_Cancel_SoftThenHardBackstop(t *testing.T) {
+// stopAllReplyFor is the one reply text stop_all gives (founder one-stop
+// decision, 2026-10-05; team-lead ruling). The old cooperative / hard / dropped
+// -queued wordings are superseded: there is one stop, so there is one reply.
+func stopAllReplyFor(sessionID string) string {
+	return "Stop requested for session " + sessionID + " and its helpers; " +
+		"they will show as stopped once their running work has shut down."
+}
+
+// stopHookRecorder is the single stop hook the tool calls. It records every
+// call and, like the real owner, lands nothing synchronously.
+type stopHookRecorder struct {
+	mu    sync.Mutex
+	calls []stopHookCall
+}
+
+type stopHookCall struct {
+	sessionID string
+	by        steer.Principal
+	hint      string
+}
+
+func (r *stopHookRecorder) hook(reached ...string) func(string, steer.Principal, string) ([]string, error) {
+	return func(sessionID string, by steer.Principal, hint string) ([]string, error) {
+		r.mu.Lock()
+		r.calls = append(r.calls, stopHookCall{sessionID: sessionID, by: by, hint: hint})
+		r.mu.Unlock()
+		if len(reached) == 0 {
+			return []string{sessionID}, nil
+		}
+		return reached, nil
+	}
+}
+
+func (r *stopHookRecorder) snapshot() []stopHookCall {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]stopHookCall(nil), r.calls...)
+}
+
+// TestDelegateTool_StopAll_CallsTheOneStopHookOnce_NoToolSideBackstop pins the
+// agent entry of the unified stop: stop_all asks the ONE stop hook exactly
+// once, with the verified caller as the recorded principal, answers with the
+// single reply text, and the tool itself never lands a state or fires a second
+// (grace/backstop) call afterwards -- the 3 s forced stop belongs to the one
+// stop method, not to a tool-side timer.
+func TestDelegateTool_StopAll_CallsTheOneStopHookOnce_NoToolSideBackstop(t *testing.T) {
 	tool, lc, _, _ := newADR053TestTool(t)
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	if err := lc.Persist(&session.LifecycleRecord{
@@ -389,107 +463,158 @@ func TestDelegateTool_Cancel_SoftThenHardBackstop(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}
+	before, err := lc.Load("child-cancel")
+	if err != nil {
+		t.Fatalf("load before: %v", err)
+	}
 
-	var softCalled, hardCalled bool
-	var mu sync.Mutex
-	tool.SetCancelHooks(
-		func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
-			mu.Lock()
-			softCalled = true
-			mu.Unlock()
-			return []string{"child-cancel"}, nil
-		},
-		func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
-			mu.Lock()
-			hardCalled = true
-			mu.Unlock()
-			return []string{"child-cancel"}, nil
-		},
-	)
-	tool.SetCancelGrace(20 * time.Millisecond)
+	rec := &stopHookRecorder{}
+	// TARGET API (the implementer provides it): the delegate tool has exactly
+	// ONE stop hook; SetCancelHooks(soft, hard) and SetCancelGrace are gone.
+	tool.SetStopHook(rec.hook())
 
-	result := tool.Execute(ctx, map[string]any{"action": "cancel", "session_id": "child-cancel"})
+	result := tool.Execute(ctx, map[string]any{"action": "stop_all", "session_id": "child-cancel"})
 	if result.IsError {
-		t.Fatalf("cancel failed: %s", result.ForLLM)
+		t.Fatalf("stop_all failed: %s", result.ForLLM)
 	}
-	mu.Lock()
-	sc := softCalled
-	mu.Unlock()
-	if !sc {
-		t.Fatal("expected the soft-cancel hook to be called immediately")
+	if want := stopAllReplyFor("child-cancel"); result.ForLLM != want {
+		t.Errorf("stop_all reply = %q, want exactly %q", result.ForLLM, want)
+	}
+	calls := rec.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("stop hook called %d times immediately, want exactly 1", len(calls))
+	}
+	if calls[0].sessionID != "child-cancel" {
+		t.Errorf("stop hook asked to stop %q, want %q", calls[0].sessionID, "child-cancel")
+	}
+	// Principal recorded as today: the verified calling agent session.
+	if want := (steer.Principal{Kind: steer.PrincipalKindAgent, ID: "parent-1"}); calls[0].by != want {
+		t.Errorf("stop hook principal = %+v, want %+v", calls[0].by, want)
 	}
 
-	// The session never reaches terminal on its own in this test, so the
-	// hard backstop MUST fire after the grace window.
-	//
-	// Wait for the PERSISTED cancelled state, not for the hook flag. The flag
-	// flips inside cancelHard, but that is not the backstop goroutine's last
-	// act -- pkg/tools/delegate_run.go's backstop calls transitionLifecycle
-	// AFTER cancelHard returns, and that WRITES to the lifecycle store rooted
-	// at t.TempDir(). Returning on the flag let the test body finish with that
-	// write still in flight, and Go's TempDir cleanup then raced it:
-	//
-	//	TempDir RemoveAll cleanup: unlinkat /tmp/TestDelegateTool_Cancel_SoftThenHardBackstop.../001: directory not empty
-	//
-	// Observed on CI run 36137133540, job "Tests", release/v0.1.1 @ d81bcb1ec.
-	// Waiting on the persisted state is race-free because it IS the goroutine's
-	// final act, and it is a strictly stronger oracle: it asserts the backstop's
-	// EFFECT on the record rather than merely that a hook was entered.
-	deadline := time.Now().Add(2 * time.Second)
-	var sawHook bool
-	for time.Now().Before(deadline) {
-		mu.Lock()
-		sawHook = hardCalled
-		mu.Unlock()
-		if sawHook {
-			if rec, err := lc.Load("child-cancel"); err == nil && rec.State == session.LifecycleCancelled {
-				return
-			}
-		}
-		time.Sleep(5 * time.Millisecond)
+	// The unified timeline's forced stop is 3 s; outlive it. A tool-side
+	// backstop timer (the retired 5 s grace goroutine, or any replacement)
+	// would show up as a second hook call or a tool-written state.
+	time.Sleep(3500 * time.Millisecond)
+	if n := len(rec.snapshot()); n != 1 {
+		t.Errorf("stop hook called %d times after 3.5s, want still 1 -- the tool must not run its own backstop", n)
 	}
-	if sawHook {
-		t.Fatal("the hard-cancel backstop hook fired but the session was never persisted as cancelled")
+	after, err := lc.Load("child-cancel")
+	if err != nil {
+		t.Fatalf("load after: %v", err)
 	}
-	t.Fatal("expected the hard-cancel backstop to fire after the grace window elapsed")
+	if after.State != before.State || after.Stop != nil || after.StopNote != nil {
+		t.Errorf("the tool changed the lifecycle record itself: before=%+v after=%+v -- only the owning execution lands a stop", before, after)
+	}
 }
 
-func TestDelegateTool_Cancel_Hard_SkipsGrace(t *testing.T) {
+// TestDelegateTool_StopAll_QueuedSessionToolWritesNothing: a stop reaching a
+// still-queued session gets the same single reply and the tool lands nothing
+// itself (the retired tool-side queued-drop writer). The owner lands it; the
+// real queued behaviour is pinned in pkg/agent
+// (TestDelegateCancel_QueuedSubagentIsDroppedAndNeverStarts).
+func TestDelegateTool_StopAll_QueuedSessionToolWritesNothing(t *testing.T) {
 	tool, lc, _, _ := newADR053TestTool(t)
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	if err := lc.Persist(&session.LifecycleRecord{
-		SessionID: "child-hard", Generation: 1, State: session.LifecycleRunning,
+		SessionID: "child-queued", Generation: 1, State: session.LifecycleQueued,
 		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
 		WorkspaceID: "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}
+	rec := &stopHookRecorder{}
+	tool.SetStopHook(rec.hook())
 
-	var hardCalled bool
-	tool.SetCancelHooks(
-		func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
-			t.Fatal("soft hook must not be called for hard=true")
-			return nil, nil
-		},
-		func(sessionID string, _ steer.Principal, hint string) ([]string, error) {
-			hardCalled = true
-			return []string{"child-hard"}, nil
-		},
-	)
-
-	result := tool.Execute(ctx, map[string]any{"action": "cancel", "session_id": "child-hard", "hard": true})
+	result := tool.Execute(ctx, map[string]any{"action": "stop_all", "session_id": "child-queued"})
 	if result.IsError {
-		t.Fatalf("cancel(hard) failed: %s", result.ForLLM)
+		t.Fatalf("stop_all on a queued session failed: %s", result.ForLLM)
 	}
-	if !hardCalled {
-		t.Fatal("expected the hard-cancel hook to be called immediately for hard=true")
+	if want := stopAllReplyFor("child-queued"); result.ForLLM != want {
+		t.Errorf("stop_all reply = %q, want exactly %q", result.ForLLM, want)
 	}
-	rec, err := lc.Load("child-hard")
+	got, err := lc.Load("child-queued")
 	if err != nil {
-		t.Fatalf("Load failed: %v", err)
+		t.Fatalf("load: %v", err)
 	}
-	if rec.State != session.LifecycleCancelled {
-		t.Errorf("state = %q, want %q", rec.State, session.LifecycleCancelled)
+	if got.State != session.LifecycleQueued || got.StopNote != nil || got.Stop != nil {
+		t.Errorf("the tool wrote the queued record itself: %+v -- the owning stop lands it, never the tool", got)
+	}
+}
+
+// TestDelegateTool_StopAll_HookErrorIsVisible: a failing stop is a visible
+// error to the calling agent, never a quiet success.
+func TestDelegateTool_StopAll_HookErrorIsVisible(t *testing.T) {
+	tool, lc, _, _ := newADR053TestTool(t)
+	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
+	if err := lc.Persist(&session.LifecycleRecord{
+		SessionID: "child-fail", Generation: 1, State: session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
+		WorkspaceID: "ws-1", AgentID: "worker",
+	}); err != nil {
+		t.Fatalf("seed failed: %v", err)
+	}
+	tool.SetStopHook(func(string, steer.Principal, string) ([]string, error) {
+		return nil, errors.New("partial cascade: unreachable 1 (grand-1: unreadable record)")
+	})
+	result := tool.Execute(ctx, map[string]any{"action": "stop_all", "session_id": "child-fail"})
+	if !result.IsError {
+		t.Fatalf("a failed stop was reported as success: %q", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "unreachable 1 (grand-1: unreadable record)") {
+		t.Errorf("the error must carry the cascade failure detail, got %q", result.ForLLM)
+	}
+}
+
+// TestDelegateTool_StopAll_RejectsHardArgument: the agent-only `hard` option is
+// removed (one stop mechanism). A call carrying it fails the tool's existing
+// schema validation as an unexpected property, before any hook runs, and the
+// published schema no longer declares the property. The positive control
+// proves the same call without `hard` reaches the hook, so the rejection is
+// about the argument, not about the fixture.
+func TestDelegateTool_StopAll_RejectsHardArgument(t *testing.T) {
+	for _, hard := range []bool{true, false} {
+		tool, lc, _, _ := newADR053TestTool(t)
+		ctx := WithTranscriptSessionID(context.Background(), "parent-1")
+		if err := lc.Persist(&session.LifecycleRecord{
+			SessionID: "child-hard", Generation: 1, State: session.LifecycleRunning,
+			OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
+			WorkspaceID: "ws-1", AgentID: "worker",
+		}); err != nil {
+			t.Fatalf("seed failed: %v", err)
+		}
+		rec := &stopHookRecorder{}
+		tool.SetStopHook(rec.hook())
+		reg := NewToolRegistry()
+		reg.Register(tool)
+
+		props, _ := tool.Parameters()["properties"].(map[string]any)
+		if _, declared := props["hard"]; declared {
+			t.Errorf("hard=%v: the delegate schema still declares a `hard` property", hard)
+		}
+
+		result := reg.ExecuteWithContext(ctx, "delegate",
+			map[string]any{"action": "stop_all", "session_id": "child-hard", "hard": hard}, "", "", nil)
+		if result == nil || !result.IsError {
+			t.Fatalf("hard=%v: stop_all carrying `hard` was accepted: %+v", hard, result)
+		}
+		if !strings.Contains(result.ForLLM, `invalid arguments for tool "delegate"`) ||
+			!strings.Contains(result.ForLLM, `unexpected property "hard"`) {
+			t.Errorf("hard=%v: want the schema-validation rejection naming the unexpected property, got %q", hard, result.ForLLM)
+		}
+		if n := len(rec.snapshot()); n != 0 {
+			t.Errorf("hard=%v: the stop hook ran %d time(s) for a rejected call", hard, n)
+		}
+
+		// Positive control: same call minus `hard` is accepted and stops once.
+		ok := reg.ExecuteWithContext(ctx, "delegate",
+			map[string]any{"action": "stop_all", "session_id": "child-hard"}, "", "", nil)
+		if ok == nil || ok.IsError {
+			t.Fatalf("hard=%v control: stop_all without `hard` failed: %+v", hard, ok)
+		}
+		if n := len(rec.snapshot()); n != 1 {
+			t.Errorf("hard=%v control: the stop hook ran %d times, want 1", hard, n)
+		}
 	}
 }
 
@@ -578,8 +703,13 @@ func TestDelegateTool_Peek_NoLifecycleSideEffect(t *testing.T) {
 	}
 }
 
-func TestDelegateTool_FollowUp_RequiresTerminalSession(t *testing.T) {
-	tool, lc, _, _ := newADR053TestTool(t)
+// TestDelegateTool_Resume_WorkingSession_IsNonErrorNothingStarted pins locked
+// decision 4's working row: a resume names only stopped and done/failed
+// recipients. A working helper has nothing to resume — the answer is a
+// NON-ERROR pointing at steer (an error here drives orchestrating agents into
+// retry loops, the RC-3 amplification shape).
+func TestDelegateTool_Resume_WorkingSession_IsNonErrorNothingStarted(t *testing.T) {
+	tool, lc, _, steer := newADR053TestTool(t)
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-notdone", Generation: 1, State: session.LifecycleRunning,
@@ -588,44 +718,85 @@ func TestDelegateTool_FollowUp_RequiresTerminalSession(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}
-	result := tool.Execute(ctx, map[string]any{"action": "follow_up", "session_id": "child-notdone"})
-	if !result.IsError {
-		t.Fatal("expected follow_up on a non-terminal session to be rejected")
+	result := tool.Execute(ctx, map[string]any{"action": "resume", "session_id": "child-notdone"})
+	if result.IsError {
+		t.Fatalf("resume on a working helper must be a non-error no-op, got: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "already running") {
+		t.Errorf("resume on a working helper must say it is already running, got: %s", result.ForLLM)
+	}
+	if msg, _ := steer.last(); msg.Content != "" {
+		t.Errorf("resume must not enqueue anything into the steering sink, got %q", msg.Content)
 	}
 }
 
-func TestDelegateTool_FollowUp_NativeReusesSessionID(t *testing.T) {
-	tool, lc, _, _ := newADR053TestTool(t)
-	wireFollowUpTestLauncher(tool)
-	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
-	if err := lc.Persist(&session.LifecycleRecord{
-		SessionID: "child-done", Generation: 1, State: session.LifecycleCompleted,
-		OwnerScopeKind: session.OwnerScopeHuman,
-		SteeredBy:      &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
-		WorkspaceID:    "ws-1", AgentID: "worker",
-		Is3P: false,
-	}); err != nil {
-		t.Fatalf("seed failed: %v", err)
-	}
+// TestDelegateTool_Resume_NativeStoppedAndFinished_RevivesViaSink pins the
+// native resume contract at this boundary (locked decision 4): BOTH recipient
+// shapes go through the steering sink's ReviveStoppedSession — a stopped
+// helper continues on the same conversation and generation, a done/failed one
+// starts its next round — and the optional text rides along as the newest
+// input. The generation mint itself is the agent-side reviver's job; the
+// tool's launcher must never fire for a native resume.
+func TestDelegateTool_Resume_NativeStoppedAndFinished_RevivesViaSink(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		state    session.LifecycleState
+		wantText string
+	}{
+		{
+			name:     "stopped helper continues on the same conversation",
+			state:    session.LifecycleStopped,
+			wantText: "resumed on the same conversation and generation",
+		},
+		{
+			name:     "finished helper starts its next round",
+			state:    session.LifecycleCompleted,
+			wantText: "a next round has been started",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tool, lc, _, _ := newADR053TestTool(t)
+			frs := &fakeReviverSink{}
+			tool.SetSteeringSink(frs)
+			ctx := WithTranscriptSessionID(context.Background(), "parent-1")
+			seed := &session.LifecycleRecord{
+				SessionID: "child-resume-" + string(tc.state), Generation: 1, State: tc.state,
+				OwnerScopeKind: session.OwnerScopeHuman,
+				SteeredBy:      &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
+				WorkspaceID:    "ws-1", AgentID: "worker",
+				Is3P: false,
+			}
+			if tc.state == session.LifecycleStopped {
+				// persistLocked requires a StopNote on every stopped landing
+				// (D2/CRIT-001) — the exact shape SteerCanceller leaves behind.
+				seed.StopNote = &session.StopNote{
+					At: time.Now().UTC(), By: "human:dan", Seq: 1, Cause: session.StopCauseStop,
+				}
+			}
+			if err := lc.Persist(seed); err != nil {
+				t.Fatalf("seed failed: %v", err)
+			}
 
-	result := tool.Execute(ctx, map[string]any{
-		"action": "follow_up", "session_id": "child-done", "task": "one more thing",
-	})
-	if result.IsError {
-		t.Fatalf("follow_up failed: %s", result.ForLLM)
-	}
-
-	// The new generation must be persisted under the SAME session_id
-	// (native warm resume — D5/L-3).
-	rec, err := lc.Load("child-done")
-	if err != nil {
-		t.Fatalf("Load failed: %v", err)
-	}
-	if rec.Generation != 2 {
-		t.Errorf("Generation = %d, want 2", rec.Generation)
-	}
-	if rec.ResumedFrom != "child-done" {
-		t.Errorf("ResumedFrom = %q, want %q", rec.ResumedFrom, "child-done")
+			result := tool.Execute(ctx, map[string]any{
+				"action": "resume", "session_id": seed.SessionID, "text": "carry on from here",
+			})
+			if result.IsError {
+				t.Fatalf("resume failed: %s", result.ForLLM)
+			}
+			revived, sessionID, instruction, delivered := frs.snapshot()
+			if !revived {
+				t.Fatalf("native resume must revive through the steering sink's ReviveStoppedSession (delivered=%d via the plain queue instead)", delivered)
+			}
+			if sessionID != seed.SessionID {
+				t.Errorf("ReviveStoppedSession session = %q, want %q (the SAME conversation)", sessionID, seed.SessionID)
+			}
+			if instruction != "carry on from here" {
+				t.Errorf("ReviveStoppedSession instruction = %q, want the resume text carried through verbatim", instruction)
+			}
+			if !strings.Contains(result.ForLLM, tc.wantText) {
+				t.Errorf("resume result = %q, want it to say %q", result.ForLLM, tc.wantText)
+			}
+		})
 	}
 }
 
@@ -645,36 +816,16 @@ func progressMsgForDelegateTest(t *testing.T, sessionID, messageID string) gener
 	return sm
 }
 
-// questionMsgForDelegateTest builds a SessionMessage of kind=question with the
-// given authority tag — used to seed an inbox for respond-action fail-closed
-// authority tests (MAJOR-2).
-func questionMsgForDelegateTest(
-	t *testing.T, sessionID, messageID, correlationID string,
-	authority generated.SessionMessageQuestionAuthority,
-) generated.SessionMessage {
-	t.Helper()
-	var sm generated.SessionMessage
-	if err := sm.FromSessionMessageQuestion(generated.SessionMessageQuestion{
-		MessageId:      messageID,
-		SessionId:      sessionID,
-		CorrelationId:  correlationID,
-		CreatedAt:      time.Now(),
-		Depth:          1,
-		Direction:      generated.SessionMessageQuestionDirectionChildToParent,
-		Kind:           generated.SessionMessageQuestionKindQuestion,
-		SenderIdentity: "child",
-		Text:           "can I proceed?",
-		Authority:      &authority,
-		Wait:           true,
-	}); err != nil {
-		t.Fatalf("FromSessionMessageQuestion failed: %v", err)
-	}
-	return sm
-}
+// questionMsgForDelegateTest was deleted with the person-question pause
+// (ADR-20261004): the generated SessionMessageQuestion no longer carries
+// wait/authority fields, and no respond-path test needs a seeded question any
+// more — an answer is an ordinary steering message, verified by no inbox
+// state.
 
 // failingDrainInbox implements DelegateInboxStore; its Drain always returns an
-// error, used to prove respond's authority check is fail-closed on a Drain
-// error (MAJOR-2) rather than silently skipping.
+// error. It now proves the ADR-20261004 ordinary-message rule from the negative
+// side: respond never consults the parent inbox at all (the question-authority
+// check it used to feed is deleted), so a broken inbox cannot block an answer.
 type failingDrainInbox struct{}
 
 func (failingDrainInbox) Drain(string, string, string, int) ([]generated.SessionMessage, string, bool, error) {
@@ -695,11 +846,11 @@ func (failingDrainInbox) Peek(string, string) (*session.PeekSnapshot, error) {
 	return &session.PeekSnapshot{}, nil
 }
 
-// MAJOR-1: cancel MUST be denied (not executed) when the lifecycle Load
+// MAJOR-1: stop_all MUST be denied (not executed) when the lifecycle Load
 // errors — the caller-ownership check can no longer be skipped by an induced
-// read error (cross-tenant DoS). Previously cancel fell through to
+// read error (cross-tenant DoS). Previously the stop fell through to
 // cancelHard/cancelSoft on ANY Load error.
-func TestDelegateTool_Cancel_DeniedOnLifecycleLoadError(t *testing.T) {
+func TestDelegateTool_StopAll_DeniedOnLifecycleLoadError(t *testing.T) {
 	tool, lc, _, _ := newADR053TestTool(t)
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 
@@ -718,209 +869,92 @@ func TestDelegateTool_Cancel_DeniedOnLifecycleLoadError(t *testing.T) {
 	}
 
 	cancelCalled := false
-	tool.SetCancelHooks(
-		func(string, steer.Principal, string) ([]string, error) { cancelCalled = true; return nil, nil },
-		func(string, steer.Principal, string) ([]string, error) { cancelCalled = true; return nil, nil },
-	)
+	tool.SetStopHook(func(string, steer.Principal, string) ([]string, error) { cancelCalled = true; return nil, nil })
 
-	result := tool.Execute(ctx, map[string]any{"action": "cancel", "session_id": "child-corrupt", "hard": true})
+	result := tool.Execute(ctx, map[string]any{"action": "stop_all", "session_id": "child-corrupt"})
 	if !result.IsError {
-		t.Fatal("expected cancel to be DENIED on a lifecycle Load error, got success (fail-open regression)")
+		t.Fatal("expected stop_all to be DENIED on a lifecycle Load error, got success (fail-open regression)")
 	}
 	if cancelCalled {
-		t.Fatal("cancel hook was called despite the Load error — the cancel must NOT proceed")
+		t.Fatal("stop hook was called despite the Load error — the stop must NOT proceed")
 	}
 }
 
-// MAJOR-1: cancel MUST be denied when the lifecycle store is not configured
+// MAJOR-1: stop_all MUST be denied when the lifecycle store is not configured
 // at all (can't verify ownership without it).
-func TestDelegateTool_Cancel_DeniedWhenLifecycleUnconfigured(t *testing.T) {
+func TestDelegateTool_StopAll_DeniedWhenLifecycleUnconfigured(t *testing.T) {
 	tool := NewDelegateTool("test-model", 0, 0)
 	tool.SetDelegationDenyCheckerBackground(func(ctx context.Context, targetAgentID string) *DelegationDenial { return nil })
-	tool.SetCancelHooks(
-		func(string, steer.Principal, string) ([]string, error) {
-			t.Fatal("soft hook must not fire")
-			return nil, nil
-		},
-		func(string, steer.Principal, string) ([]string, error) {
-			t.Fatal("hard hook must not fire")
-			return nil, nil
-		},
-	)
-	result := tool.Execute(context.Background(), map[string]any{"action": "cancel", "session_id": "any", "hard": true})
+	tool.SetStopHook(func(string, steer.Principal, string) ([]string, error) {
+		t.Fatal("stop hook must not fire")
+		return nil, nil
+	})
+	result := tool.Execute(context.Background(), map[string]any{"action": "stop_all", "session_id": "any"})
 	if !result.IsError {
-		t.Fatal("expected cancel to be DENIED when no lifecycle store is configured, got success (fail-open)")
+		t.Fatal("expected stop_all to be DENIED when no lifecycle store is configured, got success (fail-open)")
 	}
 }
 
-// MAJOR-2: respond MUST be denied when the inbox Drain errors — the
-// owner_required authority check can no longer be skipped by a Drain error.
-func TestDelegateTool_Respond_DeniedOnInboxDrainError(t *testing.T) {
-	tool, lc, _, _ := newADR053TestTool(t)
+// TestDelegateTool_Respond_RefusesWhenTheInboxCannotVerify: since the founder
+// decision of 2026-10-07 (#1213) respond resolves correlation_id against the
+// inbox, so an inbox that cannot do so (here a fake lacking the lookup) makes
+// respond fail closed and visibly — it never delivers an unverifiable answer.
+// This REPLACES the old DoesNotConsultTheInbox expectation; FLAGGED FOR
+// qa-lead CHECK.
+func TestDelegateTool_Respond_RefusesWhenTheInboxCannotVerify(t *testing.T) {
+	tool, lc, _, steer := newADR053TestTool(t)
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	if err := lc.Persist(&session.LifecycleRecord{
-		SessionID: "child-drain-err", Generation: 1, State: session.LifecycleNeedsInput,
+		SessionID: "child-drain-err", Generation: 1, State: session.LifecycleRunning,
 		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
 		WorkspaceID: "ws-1", AgentID: "worker",
-		NeedsInput: &session.NeedsInput{CorrelationID: "corr-1", TTLDeadline: time.Now().Add(time.Hour)},
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}
-	// Swap in an inbox whose Drain always errors — simulates a corrupt
-	// tail / I/O failure on the durable inbox. The fail-open bug would have
-	// let the respond proceed (skipping the authority check); fail-closed
-	// MUST deny it.
 	tool.SetMessageInbox(failingDrainInbox{})
 
 	result := tool.Execute(ctx, map[string]any{
 		"action": "respond", "session_id": "child-drain-err", "correlation_id": "corr-1", "text": "x",
 	})
-	if !result.IsError {
-		t.Fatal("expected respond to be DENIED on an inbox Drain error, got success (fail-open regression)")
+	if !result.IsError || !strings.Contains(result.ForLLM, "cannot verify correlation_id") {
+		t.Fatalf("respond must fail closed when the inbox cannot verify, got: %s", result.ForLLM)
 	}
-	// The record must still be parked at needs_input (not resumed).
-	rec, err := lc.Load("child-drain-err")
-	if err != nil {
-		t.Fatalf("Load failed: %v", err)
-	}
-	if rec.State != session.LifecycleNeedsInput {
-		t.Errorf("state after denied respond = %q, want still %q (must not resume)", rec.State, session.LifecycleNeedsInput)
+	if msg, _ := steer.last(); msg.Content != "" {
+		t.Errorf("an unverifiable answer was delivered: %q", msg.Content)
 	}
 }
 
-// MAJOR-2: an owner_required question MUST NOT be answerable by respond even
-// if the parent inbox_ack'd it first. Previously Drain("",0) excluded acked
-// messages, so the owner_required check silently passed on an acked question.
-// Fail-closed now denies it (the question can't be positively verified safe).
-func TestDelegateTool_Respond_OwnerRequiredDeniedEvenWhenAcked(t *testing.T) {
+// TestDelegateTool_Respond_OpenQuestionNeedsNoOwnerAuthority keeps the part
+// of ADR-20261004 locked decision 6 that stands: there is no owner-only
+// question and no authority state — an open question is answered by any
+// authorized caller and the helper is left untouched (running, same
+// generation). Only the correlation_id check is new (founder 2026-10-07,
+// #1213). Replaces HasNoQuestionAuthorityGate, whose empty-inbox success is
+// now refused; FLAGGED FOR qa-lead CHECK.
+func TestDelegateTool_Respond_OpenQuestionNeedsNoOwnerAuthority(t *testing.T) {
 	tool, lc, inbox, _ := newADR053TestTool(t)
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	if err := lc.Persist(&session.LifecycleRecord{
-		SessionID: "child-owner", Generation: 1, State: session.LifecycleNeedsInput,
+		SessionID: "child-owner", Generation: 1, State: session.LifecycleRunning,
 		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
 		WorkspaceID: "ws-1", AgentID: "worker",
-		NeedsInput: &session.NeedsInput{CorrelationID: "corr-owner", TTLDeadline: time.Now().Add(time.Hour)},
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}
-	// Seed an owner_required question, then ACK it — the exact sequence that
-	// used to bypass the authority check (Drain excludes acked messages).
-	if _, err := inbox.Append("parent-1", questionMsgForDelegateTest(t, "child-owner", "q-owner",
-		"corr-owner", generated.SessionMessageQuestionAuthorityOwnerRequired)); err != nil {
-		t.Fatalf("seed owner_required question failed: %v", err)
-	}
-	if err := inbox.Ack("parent-1", []string{"q-owner"}); err != nil {
-		t.Fatalf("ack failed: %v", err)
-	}
+	seedOpenQuestion(t, inbox, "parent-1", "child-owner", "corr-owner")
 
 	result := tool.Execute(ctx, map[string]any{
 		"action": "respond", "session_id": "child-owner", "correlation_id": "corr-owner", "text": "x",
 	})
-	if !result.IsError {
-		t.Fatal("expected respond on an acked owner_required question to be DENIED, got success (fail-open regression)")
+	if result.IsError {
+		t.Fatalf("respond to an open question must not be gated on any authority state, got: %s", result.ForLLM)
 	}
 	rec, err := lc.Load("child-owner")
 	if err != nil {
 		t.Fatalf("Load failed: %v", err)
 	}
-	if rec.State != session.LifecycleNeedsInput {
-		t.Errorf("state after denied respond = %q, want still %q (owner_required must not resume)", rec.State, session.LifecycleNeedsInput)
-	}
-}
-
-// MAJOR-2 regression: a self_ok question that IS present in the drain (not
-// acked) MUST still be answerable — the fail-closed change must not break the
-// legitimate happy path.
-func TestDelegateTool_Respond_SelfOkQuestionAllowedWhenNotAcked(t *testing.T) {
-	tool, lc, inbox, _ := newADR053TestTool(t)
-	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
-	if err := lc.Persist(&session.LifecycleRecord{
-		SessionID: "child-selfok", Generation: 1, State: session.LifecycleNeedsInput,
-		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
-		WorkspaceID: "ws-1", AgentID: "worker",
-		NeedsInput: &session.NeedsInput{CorrelationID: "corr-selfok", TTLDeadline: time.Now().Add(time.Hour)},
-	}); err != nil {
-		t.Fatalf("seed failed: %v", err)
-	}
-	if _, err := inbox.Append("parent-1", questionMsgForDelegateTest(t, "child-selfok", "q-selfok",
-		"corr-selfok", generated.SessionMessageQuestionAuthoritySelfOk)); err != nil {
-		t.Fatalf("seed self_ok question failed: %v", err)
-	}
-
-	result := tool.Execute(ctx, map[string]any{
-		"action": "respond", "session_id": "child-selfok", "correlation_id": "corr-selfok", "text": "go",
-	})
-	if result.IsError {
-		t.Fatalf("respond on a present, unacked self_ok question should succeed, got: %s", result.ForLLM)
-	}
-}
-
-// TestDelegateTool_Respond_3P_OriginalNotLeftRunning proves Correctness-MAJOR-2:
-// for a 3P child, respond spawns a NEW corrective session (spawnCorrective-
-// FollowUp) and must NOT flip the ORIGINAL record to `running` (which would
-// leave a live-turn-less record the Phase-2 boot sweep re-classifies
-// failed(interrupted), corrupting the terminal record). The original is
-// instead marked terminal `cancelled` (superseded by corrective re-dispatch).
-func TestDelegateTool_Respond_3P_OriginalNotLeftRunning(t *testing.T) {
-	tool, lc, inbox, _ := newADR053TestTool(t)
-	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
-
-	if err := lc.Persist(&session.LifecycleRecord{
-		SessionID: "child-3p-resp", Generation: 1, State: session.LifecycleNeedsInput,
-		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1", RootSessionID: "parent-1"},
-		WorkspaceID: "ws-1", AgentID: "worker-3p",
-		Is3P:       true,
-		NeedsInput: &session.NeedsInput{CorrelationID: "corr-3p", TTLDeadline: time.Now().Add(time.Hour)},
-	}); err != nil {
-		t.Fatalf("seed failed: %v", err)
-	}
-	if _, err := inbox.Append("parent-1", questionMsgForDelegateTest(t, "child-3p-resp", "q-3p", "corr-3p",
-		generated.SessionMessageQuestionAuthoritySelfOk)); err != nil {
-		t.Fatalf("seed question failed: %v", err)
-	}
-
-	result := tool.Execute(ctx, map[string]any{
-		"action": "respond", "session_id": "child-3p-resp", "correlation_id": "corr-3p", "text": "go",
-	})
-	if result.IsError {
-		t.Fatalf("3P respond failed: %s", result.ForLLM)
-	}
-
-	// The ORIGINAL session must NOT be at running. It must be terminal
-	// `cancelled` (superseded) — never a live-turn-less running record.
-	orig, err := lc.Load("child-3p-resp")
-	if err != nil {
-		t.Fatalf("Load original: %v", err)
-	}
-	if orig.State == session.LifecycleRunning {
-		t.Fatalf("ORIGINAL 3P session left at running with no live turn — Phase-2 boot sweep would " +
-			"re-classify it failed(interrupted), corrupting the terminal record (Correctness-MAJOR-2)")
-	}
-	if orig.State != session.LifecycleCancelled {
-		t.Errorf("original state = %q, want %q (superseded by corrective re-dispatch)", orig.State, session.LifecycleCancelled)
-	}
-	if !orig.Terminal() {
-		t.Errorf("original state %q is not terminal — it must be terminal so it is never re-classified", orig.State)
-	}
-	if orig.FailedReason == "" {
-		t.Error("expected a non-empty FailedReason recording the supersession")
-	}
-
-	// A NEW corrective session must exist, linked back via ResumedFrom, on a
-	// DIFFERENT session_id (3P cold respawn, D5).
-	all, err := lc.List(session.LifecycleFilter{})
-	if err != nil {
-		t.Fatalf("List: %v", err)
-	}
-	var successor *session.LifecycleRecord
-	for i := range all {
-		if all[i].ResumedFrom == "child-3p-resp" && all[i].SessionID != "child-3p-resp" {
-			successor = &all[i]
-			break
-		}
-	}
-	if successor == nil {
-		t.Fatal("expected a NEW corrective session (ResumedFrom=child-3p-resp, different id) to be spawned")
+	if rec.State != session.LifecycleRunning || rec.Generation != 1 {
+		t.Errorf("state/generation after respond = (%s, %d), want the helper untouched (running, 1)", rec.State, rec.Generation)
 	}
 }
 
@@ -998,5 +1032,36 @@ func TestDelegateTool_Peek_DeniedOnLifecycleLoadError(t *testing.T) {
 	}
 	if strings.Contains(result.ForLLM, "peek-leak") {
 		t.Errorf("peek leaked inbox content despite the Load error: %s", result.ForLLM)
+	}
+}
+
+// TestDelegateStopAllContract_HasNoHardProperty: contract-first (Hard
+// Constraint 8). The wire contract for the delegate stop_all action must stop
+// advertising the removed agent-only `hard` option (founder one-stop decision,
+// 2026-10-05) -- it declares additionalProperties:false, so a client generated
+// from a contract that still lists `hard` would keep sending a field the tool
+// now rejects. Oracle: the decision file, read through the contract YAML.
+func TestDelegateStopAllContract_HasNoHardProperty(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "contracts", "components", "schemas", "DelegateStopAllAction.yaml"))
+	if err != nil {
+		t.Fatalf("read the stop_all contract: %v", err)
+	}
+	var doc struct {
+		Properties map[string]any `yaml:"properties"`
+	}
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parse the stop_all contract: %v", err)
+	}
+	if len(doc.Properties) == 0 {
+		t.Fatalf("instrument: the contract parsed with no properties (action/session_id expected)")
+	}
+	if _, ok := doc.Properties["session_id"]; !ok {
+		t.Fatalf("instrument: the contract parsed without session_id; the parse is not reading the schema")
+	}
+	if _, stillThere := doc.Properties["hard"]; stillThere {
+		t.Errorf("DelegateStopAllAction still declares a `hard` property; the agent-only hard option is removed")
+	}
+	if strings.Contains(string(raw), "cancel_grace") {
+		t.Errorf("DelegateStopAllAction still documents session_messaging.cancel_grace; the setting is removed")
 	}
 }

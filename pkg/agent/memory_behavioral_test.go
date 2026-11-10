@@ -189,46 +189,11 @@ func TestMemoryStore_SearchEntries_LiteralSubstring(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// TestMemoryStore_WriteLastSession_OverwritesAtomically
-// Traces to: room topology (last-session.md per room)
-// ---------------------------------------------------------------------------
-
-func TestMemoryStore_WriteLastSession_OverwritesAtomically(t *testing.T) {
-	dir := t.TempDir()
-	home := t.TempDir()
-	ms := NewMemoryStore(dir, home)
-	t.Cleanup(ms.Close)
-
-	if err := ms.WriteLastSession("initial content"); err != nil {
-		t.Fatalf("WriteLastSession initial: %v", err)
-	}
-
-	newContent := "## Updated last session\nThis overwrites the previous content."
-	if err := ms.WriteLastSession(newContent); err != nil {
-		t.Fatalf("WriteLastSession overwrite: %v", err)
-	}
-
-	got, err := ms.ReadLastSession()
-	if err != nil {
-		t.Fatalf("ReadLastSession: %v", err)
-	}
-	if got != newContent {
-		t.Errorf("ReadLastSession got %q, want %q", got, newContent)
-	}
-	if strings.Contains(got, "initial content") {
-		t.Error("last-session.md still contains old content after overwrite")
-	}
-
-	differentContent := "## Session 2\nA different session."
-	if err := ms.WriteLastSession(differentContent); err != nil {
-		t.Fatalf("WriteLastSession differentContent: %v", err)
-	}
-	got2, _ := ms.ReadLastSession()
-	if got2 == got {
-		t.Error("WriteLastSession: two different writes produced the same read")
-	}
-}
+// TestMemoryStore_WriteLastSession_OverwritesAtomically was retired with the
+// removed agent-wide last-session API (WU-21 / #1197, amendment §3.2(7)); its
+// atomic-overwrite coverage lives on in
+// TestWU21_CarryForwardAPIExactLocationScopeAndMode (replacement read +
+// atomic_read_snapshots subtest) against the workspace-scoped pair file.
 
 // ---------------------------------------------------------------------------
 // TestMemoryStore_AppendRetro_ValidatesSessionID
@@ -366,34 +331,28 @@ func TestMemoryStore_SweepRetros_Deletes30DayOld(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// TestMemoryStore_GetMemoryContext_ContainsBothSections
-// Traces to: FR-7.3 (GetMemoryContext used by system prompt)
-// ---------------------------------------------------------------------------
-
-func TestMemoryStore_GetMemoryContext_ContainsBothSections(t *testing.T) {
-	dir := t.TempDir()
+// Successor to TestMemoryStore_GetMemoryContext_ContainsBothSections: its live
+// long-term heading/content assertions remain; §3.2(4)/(7) retires only the
+// agent-wide Last Session API and block, not long-term-memory output.
+func TestMemoryStore_GetMemoryContext_LongTermSectionOnly(t *testing.T) {
 	home := t.TempDir()
-	ms := NewMemoryStore(dir, home)
+	t.Setenv("HOME", home)
+	t.Setenv("OMNIPUS_HOME", home)
+	ms := NewMemoryStore(t.TempDir(), home)
 	t.Cleanup(ms.Close)
-
-	if err := ms.WriteLastSession("## Last session\nWe shipped the rooms."); err != nil {
-		t.Fatalf("WriteLastSession: %v", err)
+	const note = "rooms keystone shipped"
+	if err := ms.AppendLongTerm(note, "key_decision"); err != nil {
+		t.Fatalf("long-term note control could not be saved: %v", err)
 	}
-	if err := ms.AppendLongTerm("rooms keystone shipped", "key_decision"); err != nil {
-		t.Fatalf("AppendLongTerm: %v", err)
+	context := ms.GetMemoryContext()
+	if count := strings.Count(context, "## Long-term memory\n"); count != 1 {
+		t.Errorf("§3.2(4): long-term section count=%d want 1", count)
 	}
-
-	ctx := ms.GetMemoryContext()
-
-	if !strings.Contains(ctx, "## Last Session") {
-		t.Errorf("GetMemoryContext missing '## Last Session'; got:\n%s", truncateStr2(ctx, 300))
+	if count := strings.Count(context, note); count != 1 {
+		t.Errorf("long-term note %q count=%d want 1", note, count)
 	}
-	if !strings.Contains(ctx, "## Long-term memory") {
-		t.Errorf("GetMemoryContext missing '## Long-term memory'; got:\n%s", truncateStr2(ctx, 300))
-	}
-	if !strings.Contains(ctx, "rooms keystone shipped") {
-		t.Errorf("GetMemoryContext missing expected content; got:\n%s", ctx)
+	if strings.Contains(context, "## Last Session") {
+		t.Error("§3.2(4): generic memory still includes a Last Session heading")
 	}
 }
 
@@ -420,15 +379,4 @@ func TestMemoryStore_AppendLongTerm_MaxRune4096(t *testing.T) {
 	if err := ms.AppendLongTerm(content4097, "reference"); err == nil {
 		t.Error("AppendLongTerm at 4097 runes should fail, got nil")
 	}
-}
-
-// ---------------------------------------------------------------------------
-// helpers
-// ---------------------------------------------------------------------------
-
-func truncateStr2(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…"
 }

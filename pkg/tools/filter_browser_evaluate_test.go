@@ -57,8 +57,9 @@ func seededAgentPolicyCfg(t *testing.T, cfg *config.Config, agentID string) *Too
 	return nil
 }
 
-// ADR-090 permits browser evaluation for Mia, Jim and Ava, while Admin
-// remains excluded even though the global browser switch is enabled.
+// ADR-090 permits browser evaluation for Mia and Jim, while Omnipus (no
+// browser tools in its omnipus-system-agent §6.5 supporting set) remains
+// excluded even though the global browser switch is enabled.
 func TestFilterToolsByPolicy_EnforcesADR090BrowserEvaluateRoles(t *testing.T) {
 	cfg := config.DefaultConfig()
 	if !coreagent.SeedConfig(cfg) {
@@ -75,7 +76,7 @@ func TestFilterToolsByPolicy_EnforcesADR090BrowserEvaluateRoles(t *testing.T) {
 		makeScopedTool("browser_navigate", ScopeCore),
 	}
 
-	for _, id := range []coreagent.CoreAgentID{coreagent.IDAdmin} {
+	for _, id := range []coreagent.CoreAgentID{coreagent.IDOmnipus} {
 		polCfg := seededAgentPolicyCfg(t, cfg, string(id))
 		kept, policies := FilterToolsByPolicy(toolSet, "core", polCfg)
 		for _, tool := range kept {
@@ -91,7 +92,7 @@ func TestFilterToolsByPolicy_EnforcesADR090BrowserEvaluateRoles(t *testing.T) {
 	// Positive controls. Without them this file passes against a build where
 	// FilterToolsByPolicy returns nothing at all, which is a broken filter
 	// rather than a safe posture.
-	for _, id := range []coreagent.CoreAgentID{coreagent.IDMia, coreagent.IDJim, coreagent.IDAva} {
+	for _, id := range []coreagent.CoreAgentID{coreagent.IDMia, coreagent.IDJim} {
 		polCfg := seededAgentPolicyCfg(t, cfg, string(id))
 		kept, policies := FilterToolsByPolicy(toolSet, "core", polCfg)
 		var seesEvaluate bool

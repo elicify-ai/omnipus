@@ -1,0 +1,5 @@
+
+> @omnipus/ui@0.1.0 typecheck
+> tsc -b --noEmit
+
+exit=0

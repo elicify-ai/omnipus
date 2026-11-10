@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 
@@ -217,7 +216,7 @@ func forgetRosterBaseline(homePath string) {
 // for that sentinel. pkg/config/defaults.go seeds that global floor "allow"
 // for bash, write_file, edit_file, delegate, send_email, and more. So a
 // wiped roster silently promotes ALL routed traffic (via
-// AgentRegistry.GetDefaultAgent's fallback ladder) to an unrestricted
+// the former default-agent fallback ladder) to an unrestricted
 // agent — and repairAndValidateToolPolicyCoverage (this file), which walks
 // cfg.Agents.List to find coverage gaps, finds ZERO agents to check and
 // vacuously PASSES an empty roster, so the existing coverage gate does not
@@ -335,17 +334,24 @@ func persistSeededCoreAgents(homePath string, agents []config.AgentConfig) error
 		switch {
 		case getErr == nil:
 			// Record exists and parsed fine — re-enforce identity fields.
-			if _, updateErr := store.Update(seeded.ID, func(existing *config.AgentConfig) error {
+			updated, updateErr := store.Update(seeded.ID, func(existing *config.AgentConfig) error {
 				*existing = seeded
 				return nil
-			}); updateErr != nil {
+			})
+			if updateErr != nil {
 				return fmt.Errorf("gateway: failed to persist seeded core agent %q: %w", seeded.ID, updateErr)
 			}
+			// The store rewrites skill_grants from the installed skills on
+			// every persist (§5.13a); carry what it saved into the live
+			// roster, or the start-up binding step finds the record already
+			// bound and leaves the in-memory agent stale.
+			agents[i].SkillGrants = updated.SkillGrants
 		case errors.Is(getErr, entity.ErrNotFound):
 			// No record on disk yet — create it.
 			if createErr := store.Create(seeded.ID, &seeded); createErr != nil {
 				return fmt.Errorf("gateway: failed to persist seeded core agent %q: %w", seeded.ID, createErr)
 			}
+			agents[i].SkillGrants = seeded.SkillGrants
 		default:
 			// Get failed for a reason OTHER than "not found" — most commonly a
 			// corrupt/unparseable record. Skip re-seeding this one agent rather
@@ -358,41 +364,10 @@ func persistSeededCoreAgents(homePath string, agents []config.AgentConfig) error
 	return nil
 }
 
-// persistFreshInstallDefaultAgentID writes agents.defaults.default_agent_id
-// into config.json's raw JSON map, preserving every other key exactly as-is —
-// unlike config.SaveConfig, which round-trips the whole typed Config struct
-// and can clobber SecureString-backed API keys (CLAUDE.md hard rule: "NEVER
-// use config.SaveConfig() — it corrupts API keys"). Mirrors
-// pkg/gateway/rest.go's updateConfigJSONLocked/ensureMap read-modify-write
-// convention. Called exactly once, at boot, immediately after
-// coreagent.SeedConfig sets this field in memory on a genuinely fresh
-// install (SeedConfig itself performs no file I/O by design) — see the call
-// site's doc comment for why this durability step cannot live inside
-// SeedConfig or persistSeededCoreAgents.
-func persistFreshInstallDefaultAgentID(configPath, agentID string) error {
-	raw, err := os.ReadFile(configPath)
-	if err != nil {
-		return fmt.Errorf("read config: %w", err)
-	}
-	var m map[string]any
-	if unmarshalErr := json.Unmarshal(raw, &m); unmarshalErr != nil {
-		return fmt.Errorf("parse config: %w", unmarshalErr)
-	}
-	ensureMap(m, "agents", "defaults")["default_agent_id"] = agentID
-	out, err := json.MarshalIndent(m, "", "  ")
-	if err != nil {
-		return fmt.Errorf("serialize config: %w", err)
-	}
-	if err := fileutil.WriteFileAtomic(configPath, out, 0o600); err != nil {
-		return fmt.Errorf("write config: %w", err)
-	}
-	return nil
-}
-
 // persistSeededSkillGrants durably records config.seeded_skill_grants (the
 // ADR-074 D4 one-shot migration markers coreagent.SeedConfig checks) into
 // config.json's raw JSON map, preserving every other key exactly as-is — the
-// same read-modify-write convention as persistFreshInstallDefaultAgentID
+// same read-modify-write convention as rest.go's updateConfigJSONLocked
 // above, and for the same reason: SeedConfig is a pure config-struct mutation
 // with zero filesystem side effects, so without this step the marker lives
 // only in THIS process's in-memory cfg and the migration would re-run on
@@ -453,64 +428,4 @@ func persistConfigMarkerList(configPath, key string, markers []string) error {
 		return fmt.Errorf("write config: %w", err)
 	}
 	return nil
-}
-
-// deleteOrphanedDefineDoneDir deletes the orphaned define-done/ skill
-// directory left behind by the ADR-080 D-SKILL define-goal rename — but
-// ONLY when the replacement define-goal/ directory is verifiably present on
-// disk (fix-wave finding #1, operator-ratified 2026-09-07 Q3). The
-// migration marker (SkillsMigrationDefineGoalRename) alone is NOT
-// sufficient evidence the rename actually landed: skills.SeedDefaults can
-// fail (disk full, permissions, a corrupt embed) after the marker was
-// already recorded in SeededSkillGrants, and deleting define-done/ on the
-// marker's say-so alone would leave a fresh boot with NEITHER directory on
-// disk — loadDefineGoalSkillContent silently returns "" in that state, and
-// every `/goal` compile silently loses its quality bar with no observable
-// signal at compile time.
-//
-// The safe order is: marker present -> define-goal/ verifiably present ->
-// ONLY THEN delete define-done/. Any other combination fails SAFE (not
-// open): define-done/ is left untouched and the reason is returned so the
-// caller can WARN. Returns deleted=true only when define-done/ was actually
-// removed by THIS call; a repeat call after a successful deletion (or when
-// the marker is absent, or define-done/ was never there) is a clean, silent
-// no-op (deleted=false, err=nil) — idempotent by the directories' own
-// on-disk state, never a second marker.
-func deleteOrphanedDefineDoneDir(skillsGlobalDir string, markers []string) (deleted bool, err error) {
-	renamed := false
-	for _, m := range markers {
-		if m == coreagent.SkillsMigrationDefineGoalRename {
-			renamed = true
-			break
-		}
-	}
-	if !renamed {
-		// A pre-ADR-080 install that has not yet run the rename never
-		// reaches this branch — its define-done/ stays untouched until its
-		// own boot actually rewrites its allowlists.
-		return false, nil
-	}
-
-	defineGoalDir := filepath.Join(skillsGlobalDir, "define-goal")
-	if _, statErr := os.Stat(defineGoalDir); statErr != nil {
-		if errors.Is(statErr, os.ErrNotExist) {
-			return false, fmt.Errorf(
-				"replacement define-goal/ skill directory not found at %s (SeedDefaults may have failed) "+
-					"— preserving define-done/ rather than deleting it", defineGoalDir)
-		}
-		return false, fmt.Errorf("could not stat replacement define-goal skill directory %s: %w", defineGoalDir, statErr)
-	}
-
-	orphanedDir := filepath.Join(skillsGlobalDir, "define-done")
-	if _, statErr := os.Stat(orphanedDir); statErr != nil {
-		if errors.Is(statErr, os.ErrNotExist) {
-			return false, nil // already deleted (or never existed) — clean no-op
-		}
-		return false, fmt.Errorf("could not stat orphaned define-done skill directory %s: %w", orphanedDir, statErr)
-	}
-
-	if rmErr := os.RemoveAll(orphanedDir); rmErr != nil {
-		return false, fmt.Errorf("could not delete orphaned define-done skill directory %s: %w", orphanedDir, rmErr)
-	}
-	return true, nil
 }

@@ -3,7 +3,7 @@
 // Copyright (c) 2026 Omnipus contributors
 
 // lifecycle_bridge.go is the SINGLE MEDIATOR that transitions BOTH session
-// stores jointly: the durable LifecycleRecord (the 8-state S2 authority the
+// stores jointly: the durable LifecycleRecord (the 6-state S2 authority the
 // boot sweep reconciles) first, then the UnifiedMeta (the 3-status
 // chat-transcript metadata GET /api/v1/sessions and the SPA actually read) as
 // a best-effort mirror.
@@ -19,7 +19,10 @@
 // never pair them incorrectly again: every transition funnels through here.
 package session
 
-import "log/slog"
+import (
+	"log/slog"
+	"time"
+)
 
 // LifecycleMutator is the minimal lifecycle-store surface TransitionSession
 // needs: just the atomic Mutate RMW. *LifecycleStore satisfies it directly,
@@ -47,25 +50,115 @@ func lifecycleMutatorIsNil(ls LifecycleMutator) bool {
 	return false
 }
 
-// lifecycleToUnifiedStatus is the CANONICAL mapping from a terminal
-// LifecycleState to the UnifiedMeta SessionStatus that mirrors it. It is the
-// single authority — no other site in the codebase may hand-roll this mapping.
-// Returns (zero, false) for non-terminal lifecycle states: a non-terminal
-// transition must NOT touch UnifiedMeta (the chat session stays Active).
+// lifecycleToUnifiedStatus is the CANONICAL mapping from a LifecycleState
+// to the UnifiedMeta SessionStatus that mirrors it. It is the single authority
+// — no other site in the codebase may hand-roll this mapping. Sub-agent
+// control plane ADR D4/MAJ-009: genuine `failed` mirrors to StatusFailed;
+// `stopped` (and waiting/working) stay coarse-active, so it joins
+// queued/running/needs_input in the no-mirror bucket below — exact helper
+// display now lives on Session.lifecycle_state (SessionLifecycleState), not
+// on this coarse status. StatusInterrupted is never returned here: only the
+// boot sweep writes it (pkg/agent/boot_sweep.go::reconcileUnifiedMetaStatus).
 //
-//   - LifecycleCompleted  → StatusArchived
-//   - LifecycleFailed     → StatusInterrupted
-//   - LifecycleCancelled  → StatusInterrupted
-//   - LifecycleTimedOut   → StatusInterrupted
-//   - Queued/Running/NeedsInput/Paused → (no mirror; chat stays Active)
+//   - LifecycleCompleted → StatusArchived
+//   - LifecycleFailed    → StatusFailed
+//   - LifecycleStopped/Queued/Running/NeedsInput → (no mirror; chat stays Active)
 func lifecycleToUnifiedStatus(to LifecycleState) (SessionStatus, bool) {
 	switch to {
 	case LifecycleCompleted:
 		return StatusArchived, true
-	case LifecycleFailed, LifecycleCancelled, LifecycleTimedOut:
-		return StatusInterrupted, true
-	default: // LifecycleQueued, LifecycleRunning, LifecycleNeedsInput, LifecyclePaused
+	case LifecycleFailed:
+		return StatusFailed, true
+	default: // LifecycleStopped, LifecycleQueued, LifecycleRunning, LifecycleNeedsInput
 		return "", false
+	}
+}
+
+// LifecycleDisplayState is the domain mirror of the wire
+// Session.yaml::lifecycle_state enum (SessionLifecycleState in
+// pkg/api/generated) — the "exact helper-state display" referenced by
+// lifecycleToUnifiedStatus's own doc comment above. Its six string values
+// are chosen to equal the generated wire enum's values byte-for-byte, so a
+// plain string cast (gen.SessionLifecycleState(string(d))) at the REST
+// boundary is always schema-valid — the same mirroring contract
+// TestOwnerScopeKind_MirrorsWireEnum pins for OwnerScopeKind, enforced here
+// by TestLifecycleDisplayState_MirrorsWireEnum.
+type LifecycleDisplayState string
+
+const (
+	LifecycleDisplayWorking          LifecycleDisplayState = "working"
+	LifecycleDisplayWaitingForAnswer LifecycleDisplayState = "waiting_for_answer"
+	LifecycleDisplayDone             LifecycleDisplayState = "done"
+	LifecycleDisplayFailed           LifecycleDisplayState = "failed"
+	LifecycleDisplayStopped          LifecycleDisplayState = "stopped"
+	// LifecycleDisplayInterrupted is a session a gateway restart cut off
+	// (founder ruling 2026-10-06: a session does not fail because of a
+	// restart). It is not a 7th LifecycleState: it is the display of a
+	// legacy `failed` record whose FailedReason is FailedReasonInterrupted,
+	// or a root's nonterminal `stopped` record whose StopNote cause is restart.
+	LifecycleDisplayInterrupted LifecycleDisplayState = "interrupted"
+)
+
+// FailedReasonInterrupted is the LifecycleRecord.FailedReason the boot sweep
+// writes for a session a restart cut off (failed(interrupted), FR-118).
+const FailedReasonInterrupted = "interrupted"
+
+// LifecycleRecordIsRestartInterrupted recognises the saved restart outcome:
+// a legacy failed(interrupted) record, or a root stopped by restart. A steered
+// helper retains its existing Stopped display; a human Stop is never Interrupted.
+// REST and agent-tool readers share this predicate.
+func LifecycleRecordIsRestartInterrupted(rec *LifecycleRecord) bool {
+	return (rec.State == LifecycleFailed && rec.FailedReason == FailedReasonInterrupted) ||
+		(rec.State == LifecycleStopped && rec.SteeredBy == nil &&
+			rec.StopNote != nil && rec.StopNote.Cause == StopCauseRestart)
+}
+
+// LifecycleRecordToDisplay projects a whole record, including its restart
+// cause. A restart-cut root shows Interrupted without failing the conversation;
+// genuine failure and human Stop still show Failed and Stopped. Callers holding
+// the record must use this, not LifecycleStateToDisplay alone, and should pass
+// the current process epoch when available to recognise unlanded dead runs.
+func LifecycleRecordToDisplay(rec *LifecycleRecord, currentBootSeq ...uint64) LifecycleDisplayState {
+	if LifecycleRecordIsRestartInterrupted(rec) {
+		return LifecycleDisplayInterrupted
+	}
+	// A prior-boot root execution cannot still be working in this process,
+	// even if its recovery write failed or boot returned before scanning it.
+	// This is a read-only projection, not a synthetic stop/failure landing.
+	if len(currentBootSeq) > 0 && currentBootSeq[0] != 0 && rec.SteeredBy == nil &&
+		rec.ExecutionID != nil && rec.ExecutionID.BootSeq < currentBootSeq[0] &&
+		(rec.State == LifecycleRunning || rec.State == LifecycleQueued ||
+			(rec.State == LifecycleNeedsInput && LifecycleRecordIsStandingRoot(rec))) {
+		return LifecycleDisplayInterrupted
+	}
+	return LifecycleStateToDisplay(rec.State)
+}
+
+// LifecycleStateToDisplay is the CANONICAL mapping from a LifecycleRecord's
+// 6-value LifecycleState to the Session.yaml::lifecycle_state
+// display enum — no other site may hand-roll this collapse (same "single
+// authority" rule as lifecycleToUnifiedStatus above). Per Session.yaml's own
+// field doc: `queued`/`running` both collapse to `working`, `needs_input`
+// maps to `waiting_for_answer`, `completed` maps to `done`, and `failed`/
+// `stopped` pass through unchanged.
+func LifecycleStateToDisplay(s LifecycleState) LifecycleDisplayState {
+	switch s {
+	case LifecycleQueued, LifecycleRunning:
+		return LifecycleDisplayWorking
+	case LifecycleNeedsInput:
+		return LifecycleDisplayWaitingForAnswer
+	case LifecycleCompleted:
+		return LifecycleDisplayDone
+	case LifecycleFailed:
+		return LifecycleDisplayFailed
+	case LifecycleStopped:
+		return LifecycleDisplayStopped
+	default:
+		// Unreached for any record that passed validateLifecycleRecordForPersist
+		// (IsValidLifecycleState gates every write), but fall back to the
+		// broadest, least-alarming bucket rather than emitting an unknown
+		// wire-enum string a Zod-validated SPA response would otherwise reject.
+		return LifecycleDisplayWorking
 	}
 }
 
@@ -75,9 +168,9 @@ func lifecycleToUnifiedStatus(to LifecycleState) (SessionStatus, bool) {
 //     store's own atomic Mutate RMW so two concurrent transitions on the same
 //     session_id serialize (Correctness-MAJOR-3 / S4 INV-3: cancel-vs-complete
 //     race).
-//  2. Mirrors the transition onto UnifiedMeta (best-effort) for terminal
-//     states, via the canonical lifecycleToUnifiedStatus mapping. Non-terminal
-//     states skip the mirror (chat stays Active).
+//  2. Mirrors completed/failed/stopped onto UnifiedMeta (best-effort), via
+//     the canonical lifecycleToUnifiedStatus mapping. Other states skip the
+//     mirror (chat stays Active).
 //
 // Parameters:
 //   - ls: the durable lifecycle store (any LifecycleMutator — *LifecycleStore
@@ -93,6 +186,19 @@ func lifecycleToUnifiedStatus(to LifecycleState) (SessionStatus, bool) {
 //   - to: the target LifecycleState.
 //   - reason: the FailedReason (set on the record for ANY state, but only
 //     REQUIRED — enforced by persistLocked — when to == LifecycleFailed).
+//   - note: the StopNote to land when to == LifecycleStopped (D2/D6).
+//     Ignored for every other target state. A non-nil note always WINS —
+//     pass one whenever this call is itself the stop event (a fresh human
+//     Stop, a fresh cascade stamp synthesized by the caller, ...). Pass nil
+//     when a prior write (typically steer_cancel.go's stampStop, part of
+//     the SAME stop event) already landed the note on this generation —
+//     TransitionSession then RETAINS whatever rec.StopNote already holds,
+//     matching D2's "landing clears the fence but keeps the note." Seq is
+//     always re-stamped from the record's OWN current generation at write
+//     time, never taken from note.Seq (see StopNote's own doc comment).
+//     persistLocked rejects the write outright if to == LifecycleStopped
+//     and neither a passed-in note nor an existing rec.StopNote is present
+//     — a loud failure instead of a silently wrong or missing cause.
 //
 // Return value: the error from the LifecycleRecord Mutate, if any (including
 // ErrLifecycleNotFound when no record exists for sid, and
@@ -103,7 +209,7 @@ func lifecycleToUnifiedStatus(to LifecycleState) (SessionStatus, bool) {
 // (never rolled back; the durable record is the authority and the boot sweep
 // reconciles). Callers that treat ErrLifecycleNotFound as expected (e.g. a
 // chat session with no lifecycle record) should silence it with errors.Is.
-func TransitionSession(ls LifecycleMutator, us *UnifiedStore, sid string, to LifecycleState, reason string) error {
+func TransitionSession(ls LifecycleMutator, us *UnifiedStore, sid string, to LifecycleState, reason string, note *StopNote) error {
 	// 1. LifecycleRecord (authoritative).
 	//
 	// lifecycleMutatorIsNil guards against BOTH a nil interface and a nil
@@ -123,6 +229,26 @@ func TransitionSession(ls LifecycleMutator, us *UnifiedStore, sid string, to Lif
 			if to != LifecycleNeedsInput {
 				rec.NeedsInput = nil
 			}
+			if to == LifecycleStopped {
+				if rec.Stop != nil && rec.Stop.Generation == rec.Generation {
+					rec.Stop = nil
+				}
+				if note != nil {
+					stamped := *note
+					stamped.Seq = uint64(rec.Generation)
+					rec.StopNote = &stamped
+				}
+				// A restart stop must not move LastActivityAt up to the boot
+				// or supersession instant. Other stops end real work.
+				if rec.StopNote == nil || rec.StopNote.Cause != StopCauseRestart {
+					rec.NoteRealActivity(time.Now().UTC())
+				}
+				// note == nil: retain whatever rec.StopNote already holds (a
+				// prior write in the same stop event already landed it); if
+				// nothing ever did, persistLocked's own stopped-requires-note
+				// invariant rejects this write rather than stranding the
+				// record silently mislabeled.
+			}
 			return nil
 		})
 		// lifecycleErr is returned to the caller (who logs it appropriately),
@@ -130,13 +256,13 @@ func TransitionSession(ls LifecycleMutator, us *UnifiedStore, sid string, to Lif
 		// comment.
 	}
 
-	// 2. UnifiedMeta mirror (best-effort, terminal states only).
+	// 2. UnifiedMeta mirror (best-effort, completed/failed/stopped).
 	if us == nil {
 		return lifecycleErr
 	}
 	mapped, ok := lifecycleToUnifiedStatus(to)
 	if !ok {
-		// Non-terminal state: chat stays Active — no SetMeta needed.
+		// No mirrored status: chat stays Active — no SetMeta needed.
 		return lifecycleErr
 	}
 	if err := us.SetMeta(sid, MetaPatch{Status: &mapped}); err != nil {

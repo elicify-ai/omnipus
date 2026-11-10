@@ -90,9 +90,8 @@ func ToolDelegateSessionID(ctx context.Context) string {
 // the durable record on every later action — ADR-091 deleted the in-process
 // DelegateTaskState this classification used to be stamped on.
 //
-// Satisfied by *agent.AgentRegistry; defined as an interface here (mirroring
-// AgentRegistryReader in handoff.go) to avoid an import cycle
-// (tools -> agent -> tools).
+// Satisfied by *agent.AgentRegistry; defined as an interface here to avoid
+// an import cycle (tools -> agent -> tools).
 type DelegateAgentRegistry interface {
 	// IsExternalCLI reports whether agentID resolves to dispatch kind
 	// "external-cli" (subagent_3p). Returns false (native) for an unknown or
@@ -102,9 +101,8 @@ type DelegateAgentRegistry interface {
 
 // DelegateSessionStore is the subset of *session.UnifiedStore DelegateTool
 // needs to read back a running native task's own transcript entries for
-// action:"status" (W2). Defined as an interface (mirroring
-// HandoffSessionStore in handoff.go) to decouple from the concrete store
-// type.
+// action:"status" (W2). Defined as an interface to decouple from the
+// concrete store type.
 type DelegateSessionStore interface {
 	// ReadTranscript returns all transcript entries for the session.
 	ReadTranscript(sessionID string) ([]session.TranscriptEntry, error)
@@ -183,8 +181,7 @@ type DelegateTool struct {
 	// getAgentRegistry, when set, resolves the live agent registry used to
 	// classify a delegation target as native or external-CLI at
 	// task-creation time (W2). Called at task-creation time (not
-	// construction time) so hot reloads are reflected automatically,
-	// mirroring NewHandoffTool's getRegistry closure pattern. A nil/unset
+	// construction time) so hot reloads are reflected automatically. A nil/unset
 	// resolver leaves every task's Is3P at its zero value (false — treated
 	// as native), matching the pre-W2 behavior for anyone who doesn't wire
 	// it (e.g. this file's existing unit tests).
@@ -206,7 +203,7 @@ type DelegateTool struct {
 
 	// sessionManager, when set via SetSessionManager, is the shared
 	// *SessionManager (pkg/tools/session.go — same package, no interface
-	// indirection needed) executeCancel uses to kill a cancelled child's
+	// indirection needed) executeStopAll uses to kill a stopped child's
 	// OWN background bash/exec shells (ADR-057 FR-028/BDD-29): "delegate
 	// action=cancel MUST kill that child's background shells (today no such
 	// call exists on that path)". This is deliberately independent of, and
@@ -214,10 +211,10 @@ type DelegateTool struct {
 	// (pkg/agent/cancel.go's resolveBackgroundKillSessionIDs loop over
 	// hooks.KillBackgroundSessions) — that path fires on a chat-wide Stop
 	// click and walks the FULL descendant subtree; this one fires on a
-	// delegate(action="cancel") tool call targeting exactly one child
+	// delegate(action="stop_all") tool call targeting exactly one child
 	// session (BDD-29's scope is "that child's" shells, not its subtree,
 	// matching ScopeSelfOnly's own single-target semantics — see
-	// SetCancelHooks' doc comment). Reuses the SAME KillAllForSessions
+	// SetStopHook's doc comment). Reuses the SAME KillAllForSessions
 	// primitive U16 exposes rather than re-deriving a second, parallel
 	// descendant walk. A nil sessionManager (SetSessionManager never
 	// called) is a silent no-op, matching every other optional capability
@@ -257,26 +254,20 @@ type DelegateTool struct {
 	// steering-queue scope (generalizes pkg/agent/steering.go's existing
 	// mechanism — see DelegateSteeringSink's doc comment).
 	steering DelegateSteeringSink
-	// cancelSoft/cancelHard hold closures over ADR-091's durable Stop
-	// cascade, AgentLoop.cancelDelegatedSubtree (pkg/agent/
-	// steer_delegate_cancel.go), wired in
-	// pkg/agent/session_messaging_wire.go. Injected to avoid a
-	// tools<->agent import cycle, matching every other AgentLoop capability
-	// this tool consumes via a setter (SetSpawner, etc.).
-	//
-	// They return every session id the stop REACHED — the named session plus
-	// every descendant found through the durable parent-child edge — and an
-	// empty slice when it reached nothing, which is the miss signal
-	// executeCancel uses to detect its TOCTOU window. They previously
-	// wrapped the live-turn interrupt pair (Interrupt/InterruptSessionHard),
-	// which reached nothing at all for a session whose turn had not started
-	// and missed a running child's own grandchildren; see SetCancelHooks.
-	cancelSoft func(sessionKey string, by steer.Principal, hint string) ([]string, error)
-	cancelHard func(sessionKey string, by steer.Principal, hint string) ([]string, error)
-	// cancelGrace is the cooperative-stop grace window before the hard
-	// RequestCancel backstop fires (session_messaging.cancel_grace,
-	// FR-195). Defaults to defaultCancelGrace.
-	cancelGrace time.Duration
+	// stop is the ONE session Stop (founder decision 2026-10-05), the same
+	// method a person's Stop all uses: AgentLoop.StopDelegatedTree, wired in
+	// pkg/agent/session_messaging_wire.go. Injected to avoid a tools<->agent
+	// import cycle. It returns every session id the stop REACHED; an empty
+	// slice is the miss signal executeStopAll uses for its TOCTOU window.
+	stop func(sessionKey string, by steer.Principal, hint string) ([]string, error)
+	// finalRead marks a helper's final hand-back as received by its direct
+	// parent when a delegate status or inbox poll showed it, so the
+	// hand-back wake does not deliver the same result a second time (D5:
+	// exactly once). Wired to the agent loop's consumed-marker writer in
+	// pkg/agent/session_messaging_wire.go.
+	// It reports whether the final had already been received before (by
+	// its hand-back wake or an earlier poll).
+	finalRead func(parentSessionID, agentID, messageID string) (alreadyReceived bool, err error)
 
 	// sessionMessagingEnabled, when set via SetSessionMessagingEnabled, is the
 	// live-read FR-196 kill switch (session_messaging.enabled) for the SYNC
@@ -292,21 +283,6 @@ type DelegateTool struct {
 	// configuration bug, not a permission grant.
 	sessionMessagingEnabled func() bool
 	sessionMessagingWired   atomic.Bool
-
-	// requireParentAgentID is WRITE-ONLY on this type: SetRequireParentAgentID
-	// assigns it and nothing reads it. It used to back the FR-015 fail-closed
-	// parent-agent-id guard in this tool's own lifecycle-mint block; ADR-091
-	// moved that mint onto the launcher, and the guard now lives — and reads
-	// the same key directly — at
-	// pkg/agent/steer_launcher.go::SteerLauncher.Launch, which calls
-	// config.DelegateToolConfig.EffectiveRequireParentAgentID() itself. The
-	// resolver that was this field's only consumer has been deleted.
-	//
-	// The field and SetRequireParentAgentID survive ONLY because
-	// pkg/agent/loop_wire.go still calls the setter; all three must be
-	// deleted in one change by whoever owns loop_wire.go. Do not build
-	// anything new on this field — read the config key directly instead.
-	requireParentAgentID func() bool
 
 	// steerRateMu/steerRateWindows back the steer/respond rate cap (ADR-053
 	// §Contract Surface "Caps": 6/min, 16 KiB — session_messaging.steer_rate/
@@ -345,7 +321,6 @@ var _ JobSessionResolver = (*DelegateTool)(nil)
 // outside this lane's ownership — drop them.
 func NewDelegateTool(_ string, _ int, _ float64) *DelegateTool {
 	return &DelegateTool{
-		cancelGrace:      defaultCancelGrace,
 		now:              time.Now,
 		steerRateWindows: make(map[string][]time.Time),
 		steerRatePerMin:  session.DefaultSteerRatePerMinute,
@@ -416,72 +391,45 @@ func (t *DelegateTool) sessionMessagingPlaneEnabled() bool {
 	return t.sessionMessagingEnabled()
 }
 
-// SetRequireParentAgentID stores a reader for
-// tools.delegate.require_parent_agent_id (R2-MAJ-015) that this tool no
-// longer consults — see the requireParentAgentID field doc. The FR-015
-// guard it used to feed now reads the key itself at
-// pkg/agent/steer_launcher.go::SteerLauncher.Launch. Retained only so
-// pkg/agent/loop_wire.go keeps compiling; delete both together.
-func (t *DelegateTool) SetRequireParentAgentID(fn func() bool) {
-	t.requireParentAgentID = fn
-}
-
 // isSessionMessagingAction reports whether a delegate action touches the
 // session-messaging plane (the FR-196 kill-switch surface). run/status spawn /
 // query delegation and are intentionally NOT gated. Kept as a helper so the
 // guard and its action set have one source of truth.
 func isSessionMessagingAction(action string) bool {
 	switch action {
-	case "inbox", "inbox_ack", "steer", "respond", "cancel", "follow_up", "peek":
+	case "inbox", "inbox_ack", "steer", "respond", "stop_all", "clear_goal", "resume", "redirect", "peek":
 		return true
 	}
 	return false
 }
 
-// SetCancelHooks installs the soft (cooperative) and hard (immediate) stop
-// functions. Each returns the session ids the stop actually REACHED, which is
-// how executeCancel tells "I stopped something" from "there was nothing to
-// stop".
+// SetStopHook installs the one Stop (stop_all). It returns the session ids
+// the stop actually REACHED, which is how executeStopAll tells "I stopped
+// something" from "there was nothing to stop". An unwired hook makes stop_all
+// a visible error; the tool never falls back to writing state itself.
 //
-// The canonical wiring (pkg/agent/session_messaging_wire.go) is a pair of
-// closures over `AgentLoop.cancelDelegatedSubtree`, ADR-091's durable Stop
-// cascade — the same one a human's Stop uses. Read that function's doc
-// comment before changing this: the live-turn interrupt pair
-// (Interrupt/InterruptSessionHard with ScopeSubtree) that used to be wired
-// here could not stop a QUEUED worker at all and, after the sub-turn path was
-// deleted, no longer reached a running worker's own grandchildren either.
-// Neither failure was visible to the compiler or to this signature, so do not
-// "simplify" the wiring back to a turn-registry interrupt.
+// The canonical wiring (pkg/agent/session_messaging_wire.go) is
+// AgentLoop.StopDelegatedTree: the durable cascade over the parent-child
+// edge, polite stop at once, forced stop 3 s later, landing only by each
+// selected execution's owner.
 //
 // `by` is the principal the stop is recorded against — it lands on the
-// durable Stop marker (session.Stop.By, I-1) and is what the UI and the audit
-// trail show as who stopped the session. executeCancel derives it from
+// durable Stop marker and note and is what the UI and the audit trail show
+// as who stopped the session. executeStopAll derives it from
 // verifyCallerPrincipal, never manufactures it.
 //
 // WARNING — the hook MUST be invoked with the delegate's sessionKey
 // (== delegateSessionID, the caller-facing id this tool returns from run and
-// accepts on every subsequent cancel/steer/respond/peek), NEVER the parent
-// chat's transcriptSessionID/routingSessionID. The two id spaces are
-// deliberately distinct for a delegated child (see
-// turnState.routingSessionID's own doc comment, pkg/agent/turn.go — the
-// ROUTING id, not the transcript id, is what a chat-wide Stop cascades via)
-// — sessionKey is the unique per-delegation address, unrelated to either.
-// executeCancel passes its session_id argument here verbatim — that
-// argument IS the delegateSessionID by contract.
-func (t *DelegateTool) SetCancelHooks(
-	soft func(sessionKey string, by steer.Principal, hint string) ([]string, error),
-	hard func(sessionKey string, by steer.Principal, hint string) ([]string, error),
-) {
-	t.cancelSoft = soft
-	t.cancelHard = hard
+// accepts on every subsequent stop_all/steer/respond/peek), NEVER the parent
+// chat's transcriptSessionID/routingSessionID.
+func (t *DelegateTool) SetStopHook(stop func(sessionKey string, by steer.Principal, hint string) ([]string, error)) {
+	t.stop = stop
 }
 
-// SetCancelGrace overrides the default cooperative-stop grace window
-// (session_messaging.cancel_grace, FR-195).
-func (t *DelegateTool) SetCancelGrace(d time.Duration) {
-	if d > 0 {
-		t.cancelGrace = d
-	}
+// SetFinalReadHook installs the writer that records a polled final hand-back
+// as received (see the finalRead field).
+func (t *DelegateTool) SetFinalReadHook(finalRead func(parentSessionID, agentID, messageID string) (bool, error)) {
+	t.finalRead = finalRead
 }
 
 // SetClock overrides the tool's time source for deterministic tests.
@@ -515,11 +463,6 @@ type DelegateSteeringSink interface {
 	EnqueueSteeringMessage(scope, agentID string, msg providers.Message, correlationID string) (string, error)
 }
 
-// defaultCancelGrace is the cooperative-stop grace window before the hard
-// RequestCancel backstop fires when SetCancelGrace is never called
-// (session_messaging.cancel_grace default, FR-195).
-const defaultCancelGrace = 5 * time.Second
-
 // SetAgentRegistry installs the live agent-registry lookup (W2) DelegateTool
 // uses at task-creation time to classify a delegation target as native or
 // external-CLI (persisted as session.LifecycleRecord.Is3P). getRegistry is called at
@@ -545,10 +488,10 @@ func (t *DelegateTool) SetProgressReader(reader DelegateProgressReader) {
 	t.progressReader = reader
 }
 
-// SetSessionManager installs the shared *SessionManager executeCancel uses
+// SetSessionManager installs the shared *SessionManager executeStopAll uses
 // to kill a cancelled child's own background shells (FR-028/BDD-29). See
 // the sessionManager field doc. A nil sessionManager (never called) leaves
-// action="cancel" behaving exactly as before this fix — a silent no-op on
+// action="stop_all" behaving exactly as before this fix — a silent no-op on
 // this specific side effect, matching every other optional capability.
 func (t *DelegateTool) SetSessionManager(sm *SessionManager) {
 	t.sessionManager = sm
@@ -559,7 +502,7 @@ func (t *DelegateTool) SetSessionManager(sm *SessionManager) {
 // SetOwnershipWalkMaxDepth is never called. pkg/tools cannot reference
 // pkg/agent's own safety-backstop delegation-depth default directly, so this
 // is a same-valued, independently-declared constant.
-const defaultOwnershipWalkMaxDepth = 3
+const defaultOwnershipWalkMaxDepth = 10
 
 // SetOwnershipWalkMaxDepth overrides the ancestor-chain walk's depth bound
 // (FR-039). Zero/negative values fall back to defaultOwnershipWalkMaxDepth.
@@ -623,24 +566,58 @@ func (t *DelegateTool) Description() string {
 		"calls get no overlap check. Delegate directly for a single self-contained piece of work. " +
 		"action=\"run\" (default) launches a session. It returns at once with the child's session_id " +
 		"and whether it is running or queued (with its place in line). You get a message when the " +
-		"child finishes, asks a question, or hits a problem. Check on it with delegate status, " +
-		"redirect it with delegate steer, stop it with delegate cancel. A delegation is " +
-		"force-cancelled after timeout_seconds (default 1800s / 30 min) if it has not finished by then. " +
+		"child finishes, asks a question, or hits a problem. Rely on these messages instead of polling: " +
+		"do other useful work, or end your turn stating what you are waiting for. Use status for a " +
+		"specific current-state check, redirect to change its instruction, or stop_all to stop it and " +
+		"its helpers. Consecutive status/peek/inbox reads of the same child without new information " +
+		"trigger warnings and can stop your turn, even when you alternate actions. " +
+		"A run has two modes. Without a goal (the default) the helper is done when it returns a non-empty " +
+		"final answer and none of its own helpers are still running; an empty answer is a failure. With a " +
+		"goal — pass criteria and dod together, one without the other is refused — the helper works toward " +
+		"them and claims completion with goal_claim (a met claim requires one-line evidence), the Judge " +
+		"checks the claim, and the verdict reaches " +
+		"you with the helper's completion message; clear_goal removes the goal later. Set a goal for " +
+		"multi-step work or work you must verify before relying on it; leave it off for a quick lookup or " +
+		"a single action. A helper never inherits your goal or criteria, and it cannot set a goal for " +
+		"itself: only criteria and dod on this call give it one. " +
 		"action=\"status\" checks on a previously-delegated session by its session_id — the only way " +
 		"to address a child; use list_jobs to see everything you have outstanding. " +
 		"action=\"inbox\" drains messages the child has pushed back to you (progress/" +
 		"checkpoint/artifact/blocker/question/handback); action=\"inbox_ack\" acknowledges " +
-		"them. action=\"steer\" injects an instruction at the child's next tool boundary " +
-		"(NOT available for a delegation running on an external CLI, subagent_3p: " +
-		"claude-code/codex/opencode — use respond or follow_up instead); " +
-		"action=\"respond\" answers a child's open question by correlation_id — " +
-		"always available for a delegation you started. " +
-		"action=\"cancel\" stops a child (cooperatively by default; hard=true bypasses " +
-		"the grace window). " +
-		"action=\"follow_up\" warm-resumes a finished child with additional instructions. " +
+		"them. action=\"steer\" injects an instruction into the child: at its next tool boundary for a " +
+		"native worker, or — for a worker running on an external CLI (subagent_3p: claude-code/codex/opencode) " +
+		"— by interrupting the subprocess and continuing the same CLI conversation. It needs " +
+		"a CLI run in flight: for a child with none (stopped, finished, not yet started, or after a " +
+		"gateway restart) the external steer is refused as not_steerable. It never revives the child " +
+		"and never starts a fresh conversation; use resume for that. " +
+		"action=\"respond\" answers one open question of the child, identified by its correlation_id " +
+		"(an unknown or already-answered id is refused). A native child receives the answer as an " +
+		"ordinary message. For a live external CLI child (subagent_3p) the answer is delivered into its " +
+		"running CLI conversation by interrupting the subprocess; for a stopped or finished one it goes " +
+		"through the same revival as resume, with the same conditions. An external CLI child cannot call message_parent, so it " +
+		"cannot raise a question that way. " +
+		"action=\"stop_all\" stops that child and every helper under it. action=\"redirect\" stops the helper's current turn, " +
+		"then resumes it with the new instruction; this does not mark the helper failed or end its goal. " +
+		delegateClearGoalDescription +
+		"action=\"resume\" continues a stopped child on the same conversation, or starts its next " +
+		"round when it is done or failed; optional text adds instructions. On a child that is " +
+		"still running resume does nothing and sends no text (use steer). For a worker running on an external CLI (subagent_3p) " +
+		"it depends on two facts, not on whether the worker is stopped or finished: has its CLI " +
+		"conversation started, and does this gateway still retain it? If it started and is still " +
+		"retained, resume continues that same conversation. If it started and is no longer retained " +
+		"(released when its episode ended, or the gateway restarted), resume is refused — start a " +
+		"new delegation instead. If it never started (stopped before its CLI ever ran), resume runs " +
+		"it for the first time. Resume never creates a new session. " +
+		"action=\"redirect\" replaces the child's current turn with the new instruction — text is " +
+		"required (refused as not_steerable for an external CLI child: it has no steerable turn to " +
+		"replace; use steer to instruct one with a CLI run in flight, stop_all to stop it, or resume under the " +
+		"conditions above; otherwise start a new delegation). " +
 		"action=\"peek\" reads a child's latest checkpoint/progress without side effects. " +
-		"Optionally provide agent_id to target a specific agent from your delegation " +
-		"allowlist; omit it to run a generic subagent under your own agent."
+		"action=\"result\" returns a finished child's final result again — use it when the hand-back " +
+		"was already delivered and you need its full text; status does not repeat a delivered result. " +
+		"action=\"run\" requires agent_id — the specific agent to delegate to, which must be in " +
+		"your delegation allowlist. There is no default target and no implicit substitution of " +
+		"your own id: a caller delegating to itself passes its own agent_id explicitly."
 }
 
 func (t *DelegateTool) Scope() ToolScope { return ScopeCore }
@@ -684,6 +661,12 @@ func delegateCriterionItemSchema() map[string]any {
 				"enum":        []string{"boolean", "quantitative", "artifact"},
 				"description": "How this criterion is scored. Optional, defaults to boolean.",
 			},
+			"provenance": map[string]any{
+				"type": "string",
+				"enum": []string{"stated", "workspace", "floor", "inferred"},
+				"description": "Optional authority layer, the same field set_goal uses on its dod items " +
+					"(stated, workspace, floor, inferred). Kept on the helper's goal; omit it if unsure.",
+			},
 		},
 		"required": []string{"text"},
 	}
@@ -696,8 +679,7 @@ func (t *DelegateTool) Parameters() map[string]any {
 			"task": map[string]any{
 				"type": "string",
 				"description": "The task for the subagent to complete. Required when action is \"run\" (the " +
-					"default). DEPRECATED alias for \"text\" under action=\"follow_up\" — \"text\" wins when " +
-					"both are present.",
+					"default).",
 			},
 			"label": map[string]any{
 				"type":        "string",
@@ -705,37 +687,43 @@ func (t *DelegateTool) Parameters() map[string]any {
 			},
 			"agent_id": map[string]any{
 				"type": "string",
-				"description": "Optional: the id of a specific agent to delegate to (must be in your " +
-					"delegation allowlist). Omit to run a generic subagent under your own agent.",
+				"description": "Required for action=\"run\": the id of the specific agent to delegate " +
+					"to (must be in your delegation allowlist). There is no default target and no " +
+					"implicit substitution — a caller delegating to itself passes its own agent_id " +
+					"explicitly.",
 			},
 			"action": map[string]any{
 				"type": "string",
-				"enum": []string{"run", "status", "inbox", "inbox_ack", "steer", "respond", "cancel", "follow_up", "peek"},
-				"description": "\"run\" (default) delegates a new task. \"status\" checks progress. \"inbox\" " +
+				"enum": []string{"run", "status", "result", "inbox", "inbox_ack", "steer", "respond", "stop_all", "clear_goal", "resume", "redirect", "peek"},
+				"description": "\"run\" (default) delegates a new task. \"status\" checks progress. \"result\" " +
+					"reads a finished child's final result again, even after it was delivered. \"inbox\" " +
 					"drains child->parent messages. \"inbox_ack\" acknowledges them. \"steer\" injects an " +
-					"instruction. \"respond\" answers an open question. \"cancel\" stops a child. " +
-					"\"follow_up\" warm-resumes a finished child. \"peek\" reads latest checkpoint/progress.",
+					"instruction. \"respond\" answers one of the child's open questions. \"stop_all\" stops the " +
+					"child and every helper under it. \"resume\" continues a stopped child or starts its " +
+					"next round. \"redirect\" replaces the child's current turn with a new instruction. " +
+					"\"peek\" reads latest checkpoint/progress." +
+					delegateClearGoalActionDescription,
 			},
 			"session_id": map[string]any{
 				"type": "string",
 				"description": "The durable child session to target — the only way to address a " +
-					"child. Required for status/inbox/inbox_ack/steer/respond/cancel/follow_up/peek.",
+					"child. Required for status/result/inbox/inbox_ack/steer/respond/stop_all/resume/redirect/peek." +
+					delegateClearGoalSessionIDDescription,
 			},
 			"criteria": map[string]any{
 				"type":  "array",
 				"items": delegateCriterionItemSchema(),
-				"description": "Optional (action=\"run\" only), together with dod: acceptance criteria for " +
-					"this delegation — the outcome-specific checks. Supplying criteria without dod (or dod " +
-					"without criteria) is refused: a goal always has both. Set one for multi-step work or " +
-					"work you must verify before relying on it; leave it off for a quick lookup or a single " +
-					"action.",
+				"description": "Optional (action=\"run\" only), always together with dod: acceptance criteria " +
+					"for this delegation — the outcome-specific checks the helper's completion claim is " +
+					"judged against. Supplying both gives the helper a goal; leave both off to run it without " +
+					"one (see the two modes in the tool description).",
 			},
 			"dod": map[string]any{
 				"type":  "array",
 				"items": delegateCriterionItemSchema(),
-				"description": "Optional (action=\"run\" only), together with criteria: Definition of Done " +
-					"for this delegation — generic standing quality gates, distinct from criteria and never " +
-					"mixed into it (same shape as criteria).",
+				"description": "Optional (action=\"run\" only), always together with criteria: Definition of " +
+					"Done for this delegation — generic standing quality gates, distinct from criteria and " +
+					"never mixed into it (same shape as criteria).",
 			},
 			"snapshot": map[string]any{
 				"type": "object",
@@ -764,10 +752,6 @@ func (t *DelegateTool) Parameters() map[string]any {
 					"a skill by name inside \"task\" does not have this effect — it is only a hopeful hint " +
 					"the target's own judgement may or may not act on.",
 			},
-			"timeout_seconds": map[string]any{
-				"type":        "integer",
-				"description": "Optional (action=\"run\" only): max seconds before this delegation is force-cancelled. 0 = default (30 min).",
-			},
 			"critical": map[string]any{
 				"type":        "boolean",
 				"description": "Optional (action=\"run\" only): continue running after the parent finishes gracefully.",
@@ -786,18 +770,12 @@ func (t *DelegateTool) Parameters() map[string]any {
 				"description": "Optional (action=\"inbox\" only): maximum messages to return.",
 			},
 			"text": map[string]any{
-				"type": "string",
-				"description": "Required for action=\"steer\"/\"respond\"/\"follow_up\": the instruction/answer/" +
-					"new-instruction text (for follow_up, \"task\" is accepted as a deprecated alias).",
+				"type":        "string",
+				"description": "Required for action=\"steer\", \"respond\" and \"redirect\": the instruction or answer text. Optional for \"resume\": additional instructions.",
 			},
 			"correlation_id": map[string]any{
 				"type":        "string",
 				"description": "Required for action=\"respond\" (optional for \"steer\"): the open question this answers.",
-			},
-			"hard": map[string]any{
-				"type": "boolean",
-				"description": "Optional (action=\"cancel\" only, default false): false is a cooperative soft " +
-					"cancel with grace; true bypasses the grace window immediately.",
 			},
 		},
 		// Nothing is unconditionally required at the schema level — requiredness
@@ -812,12 +790,11 @@ func (t *DelegateTool) Parameters() map[string]any {
 // and dispatch have returned, so there is no later completion for a callback
 // to report. The AsyncCallback that used to be threaded in here reached four
 // levels down (executeRun -> launchAndDispatch, executeRespond /
-// executeFollowUp -> spawnCorrectiveFollowUp) and was discarded, unread, at
+// executeResume) and was discarded, unread, at
 // every one of those leaves — a callback the registry could hand over but
 // that could never fire. The remaining `nil` arguments below are the last
 // trace of it; the `AsyncCallback` parameters on delegate_run.go,
-// delegate_park.go and delegate_followup.go go with them, and those three
-// files are outside this lane's ownership.
+// delegate_respond.go and delegate_followup.go go with them.
 func (t *DelegateTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
 	return t.execute(ctx, args)
 }
@@ -854,15 +831,21 @@ func (t *DelegateTool) execute(ctx context.Context, args map[string]any) *ToolRe
 		return t.executeSteer(ctx, args)
 	case "respond":
 		return t.executeRespond(ctx, args, nil)
-	case "cancel":
-		return t.executeCancel(ctx, args)
-	case "follow_up":
-		return t.executeFollowUp(ctx, args, nil)
+	case "stop_all":
+		return t.executeStopAll(ctx, args)
+	case "clear_goal":
+		return t.executeClearGoal(ctx, args)
+	case "resume":
+		return t.executeResume(ctx, args, nil)
+	case "redirect":
+		return t.executeRedirect(ctx, args)
 	case "peek":
 		return t.executePeek(ctx, args)
+	case "result":
+		return t.executeResult(ctx, args)
 	default:
 		return ErrorResult(fmt.Sprintf(
-			"invalid action %q: must be one of run, status, inbox, inbox_ack, steer, respond, cancel, follow_up, peek",
+			"invalid action %q: must be one of run, status, result, inbox, inbox_ack, steer, respond, stop_all, clear_goal, resume, redirect, peek",
 			action,
 		))
 	}

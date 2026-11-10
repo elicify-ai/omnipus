@@ -6,6 +6,7 @@ package knowledgefind
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -1421,6 +1422,16 @@ func (fd *findRecordsState) streamCandidates() (generated.VaultFindResponse, err
 					group3(propindex.BoundSurvivors), group3(propindex.BoundSurvivors)),
 				candidateCapRemedy), fd.err)
 			return refusalResponse(generated.VaultFindRequest{}, fd.echo, ref), ref
+		}
+		// A query that was cancelled or timed out is not an index fault, and
+		// telling the caller to run check_integrity would send them to diagnose
+		// a healthy index. It is returned as a plain error wrapping the context
+		// error — not a refusal, because nothing was refused — with no rows.
+		if errors.Is(fd.err, context.Canceled) {
+			return generated.VaultFindResponse{}, fmt.Errorf("knowledge_find was cancelled before it finished: %w", fd.err)
+		}
+		if errors.Is(fd.err, context.DeadlineExceeded) {
+			return generated.VaultFindResponse{}, fmt.Errorf("knowledge_find timed out before it finished: %w", fd.err)
 		}
 		ref := refuse(problem(generated.RecordProblemCodeIndexUnavailable,
 			fmt.Sprintf("the properties index could not stream candidates: %v", fd.err),

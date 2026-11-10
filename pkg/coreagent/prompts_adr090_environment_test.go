@@ -25,8 +25,8 @@ func TestPrompt_MiaRequestsDocumentDependenciesHerself(t *testing.T) {
 	if strings.Contains(prompt, "dependencies to Admin") {
 		t.Fatalf("mia prompt must not route missing document dependencies to Admin: %s", prompt)
 	}
-	if !strings.Contains(prompt, "tool:switch_agent") {
-		t.Fatalf("mia persona unchanged: switch_agent must remain for project handoff: %s", prompt)
+	if strings.Contains(prompt, "switch_agent") {
+		t.Fatalf("mia prompt must not name the deleted switch_agent tool (session-core DEL-07): %s", prompt)
 	}
 	// GENERIC INSTALL (current decision): Mia supplies the installation
 	// command or script herself; the retired structured-dependency request
@@ -44,8 +44,9 @@ func TestPrompt_JimDoesNotHandDocumentDependenciesToAdmin(t *testing.T) {
 	if strings.Contains(prompt, "Hand missing document dependencies to Admin") {
 		t.Fatalf("jim prompt must drop the Admin handoff instruction: %s", prompt)
 	}
-	if !strings.Contains(prompt, "notool:environment_setup") {
-		t.Fatalf("jim prompt must mark environment_setup as a tool he does not hold: %s", prompt)
+	// SPEC.md Table: Jim has environment_setup Ask; advertise tool availability without weakening the no-Admin handoff check.
+	if strings.Contains(prompt, "notool:environment_setup") || !strings.Contains(prompt, "tool:environment_setup") {
+		t.Fatalf("jim prompt must advertise Ask-gated environment_setup, not the obsolete notool marker: %s", prompt)
 	}
 }
 
@@ -68,18 +69,5 @@ func TestPrompt_WorkerRequestsSetupItself(t *testing.T) {
 	}
 	if strings.Contains(prompt, "ecosystem") {
 		t.Fatalf("worker prompt must not carry the retired structured-dependency wording: %s", prompt)
-	}
-}
-
-func TestPrompt_AdminKeepsConnectorRoleWithoutDocumentInstallDuty(t *testing.T) {
-	prompt := GetPrompt("admin")
-	if strings.Contains(prompt, "Install missing document prerequisites") {
-		t.Fatalf("admin prompt must drop the document prerequisite install instruction: %s", prompt)
-	}
-	if !strings.Contains(prompt, "connector") {
-		t.Fatalf("admin persona unchanged: connector role must remain: %s", prompt)
-	}
-	if !strings.Contains(prompt, "tool:environment_setup") {
-		t.Fatalf("admin prompt must name environment_setup for explicit cross-workspace setup requests: %s", prompt)
 	}
 }

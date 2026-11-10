@@ -5,13 +5,11 @@
  * jsdom has no real WebRTC implementation (see BrowserLiveView.webrtcSink.test.tsx's
  * own note on this), so every test here injects a fake `RTCPeerConnection`
  * via the `pcFactory` constructor option rather than touching the real
- * global. Uses REAL timers with short, explicitly-configured
- * answerTimeoutMs/disconnectedGraceMs/retryDelayMs values (rather than
- * vi.useFakeTimers()) because `_beginOffer` chains several awaited
- * Promise-returning fake methods (createOffer/setLocalDescription) ahead of
- * each timer — interleaving fake timers with that microtask chain is a
- * known footgun; real timers with generous margins are simpler and no less
- * deterministic for delays this small.
+ * global. Most cases use real timers with short, explicitly-configured
+ * answerTimeoutMs/disconnectedGraceMs/retryDelayMs values. Ordering-sensitive
+ * retry/deadline cases control the clock with vi.advanceTimersByTimeAsync(),
+ * which also settles `_beginOffer`'s awaited createOffer/setLocalDescription
+ * promises before asserting on the next deadline.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -680,45 +678,79 @@ describe('BrowserWebRTCSession — hasConnectedOnce + extended first-attempt ans
 
 describe('BrowserWebRTCSession — single automatic retry', () => {
   it('retries exactly once after a fallback, then stops retrying until start() is called again', async () => {
+    vi.useFakeTimers()
     const pcs: FakePc[] = []
     const pcFactory = () => {
       const pc = makeFakePc()
+      // This case tests retry timing, not ICE gathering: each offer can
+      // finish once its async setup has settled on the controlled clock.
+      pc.iceGatheringState = 'complete'
       pcs.push(pc)
       return asRTCPeerConnection(pc)
     }
     const onFallback = vi.fn()
-    // Well-separated windows so a real-timer check-in falls unambiguously
-    // either "after the answer timeout but before the retry" or "after the
-    // retry" — answerTimeoutMs=15, retryDelayMs=80 (retry fires at ~95ms
-    // after the offer is sent). Both attempts here happen before the machine
-    // has ever connected, so firstAnswerTimeoutMs (not answerTimeoutMs) is
-    // what actually governs both — set to the same 15ms (fix-wave, MED).
-    const machine = new BrowserWebRTCSession({ pcFactory, answerTimeoutMs: 15, firstAnswerTimeoutMs: 15, retryDelayMs: 80 })
+    const sendOffer = vi.fn()
+    // The shipped default is five retries. This SINGLE-retry scenario must
+    // request one explicitly; the old real-time check merely ran just before
+    // the default budget's second retry, and failed when scheduling ran late.
+    // Both attempts are cold, so firstAnswerTimeoutMs governs their 15 ms
+    // answer deadline; the first retry delay remains 80 ms.
+    const machine = new BrowserWebRTCSession({ pcFactory, answerTimeoutMs: 15, firstAnswerTimeoutMs: 15, retryDelayMs: 80, maxRetries: 1 })
     machine.onFallback(onFallback)
 
-    machine.start(vi.fn())
-    await driveToOfferSent(pcs[0])
-    // Never answered — falls back on the answer timeout (~15ms), well
-    // before the ~95ms retry point.
-    await wait(45)
-    expect(onFallback).toHaveBeenCalledTimes(1)
-    expect(pcs).toHaveLength(1)
+    try {
+      machine.start(sendOffer)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(sendOffer).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(14)
+      expect(onFallback).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(onFallback).toHaveBeenCalledTimes(1)
+      expect(pcs).toHaveLength(1)
+      expect(pcs[0].close).toHaveBeenCalledTimes(1)
 
-    // The single automatic retry fires ~80ms after THAT fallback — wait
-    // well past it (from t=45ms to t=45+90=135ms, past the ~95ms mark).
-    await wait(90)
-    expect(pcs).toHaveLength(2)
+      await vi.advanceTimersByTimeAsync(79)
+      expect(pcs).toHaveLength(1)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(pcs).toHaveLength(2)
+      expect(sendOffer).toHaveBeenCalledTimes(2)
 
-    // That retry also gets no answer — falls back again on its own 15ms
-    // answer timeout...
-    await driveToOfferSent(pcs[1])
-    await wait(45)
-    expect(onFallback).toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(14)
+      expect(onFallback).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(onFallback).toHaveBeenCalledTimes(2)
+      expect(pcs[1].close).toHaveBeenCalledTimes(1)
+      expect(onFallback.mock.calls).toEqual([['answer-timeout'], ['answer-timeout']])
 
-    // ...but no THIRD pc is ever automatically created, even well past
-    // where another retry would have fired had the budget not been spent.
-    await wait(120)
-    expect(pcs).toHaveLength(2)
+      // Keep the original no-third-peer assertion, then go far past the
+      // 160 ms second-retry window (80 * 2). Checking only 120 ms after the
+      // second fallback could pass even if the one-retry guard was broken.
+      await vi.advanceTimersByTimeAsync(120)
+      expect(pcs).toHaveLength(2)
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(pcs).toHaveLength(2)
+      expect(onFallback).toHaveBeenCalledTimes(2)
+      expect(sendOffer).toHaveBeenCalledTimes(2)
+      expect(vi.getTimerCount()).toBe(0)
+
+      // Only a fresh start re-arms the exhausted single-retry budget.
+      machine.start(sendOffer)
+      expect(pcs).toHaveLength(3)
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(15)
+      expect(onFallback).toHaveBeenCalledTimes(3)
+      await vi.advanceTimersByTimeAsync(80)
+      expect(pcs).toHaveLength(4)
+      expect(sendOffer).toHaveBeenCalledTimes(4)
+      await vi.advanceTimersByTimeAsync(15)
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(onFallback).toHaveBeenCalledTimes(4)
+      expect(pcs).toHaveLength(4)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      machine.stop()
+      vi.useRealTimers()
+    }
   })
 
   it('a fresh start() after an explicit stop() re-arms the one-shot retry budget', async () => {

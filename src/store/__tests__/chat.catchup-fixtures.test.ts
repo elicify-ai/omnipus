@@ -10,17 +10,20 @@
 // `1889e1aa5`, SQUAD-REPORT-BEA.md's "Opus pass") — not hand-derived. Each
 // file's `tabs[]` holds every frame (both directions) one simulated
 // connection saw, in order, plus `note` events marking what the test did
-// between frames (drop, reload, chat switch). This driver only feeds the
-// `server→client` frames into handleFrame — the `client→server` frames
-// (attach_session, message) describe what the SPA itself sends, which the
-// dedicated session.attach-cursor.test.ts / ws.reattach.test.ts already
-// cover directly.
+// between frames (drop, reload, chat switch). The plain driver feeds server
+// frames directly. The recorded-context driver executes selection/attach/switch
+// through the real session actions and WsConnection, and calls the same inactive
+// history cleanup as ChatThread. Message-send/cursor construction itself remains
+// covered by the dedicated transport suites.
 
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { useChatStore } from '../chat/store'
+import { __resetFinishedTurnIdsForTests } from '../chat/frames'
 import { useSessionStore } from '../session'
 import { useConnectionStore } from '../connection'
-import type { WsReceiveFrame } from '@/lib/ws'
+import type { ServerFrame } from '@/lib/ws'
+import { AttachSessionFrame as AttachSchema } from '@/lib/api/generated/ws-schemas'
+import { historyTransport } from '../../../tests/chat-history-paging/transport'
 import f1 from '../__fixtures__/catchup/F1.json'
 import f2 from '../__fixtures__/catchup/F2.json'
 import f3 from '../__fixtures__/catchup/F3.json'
@@ -49,7 +52,7 @@ interface Fixture {
 
 /** A step in ONE simulated tab's real-time lifetime: either a frame to feed
  * into handleFrame, or a disconnect side effect to actually EXECUTE. */
-type DriveStep = { kind: 'frame'; frame: WsReceiveFrame } | { kind: 'disconnect' }
+type DriveStep = { kind: 'frame'; frame: ServerFrame } | { kind: 'disconnect' }
 
 /** Real-browser regression (orchestrator + Opus review round 2, "TEST
  * QUALITY"): a prior pass of this driver only ever fed server→client frames
@@ -67,7 +70,7 @@ function allSteps(fixture: Fixture): DriveStep[] {
   for (const tab of fixture.tabs) {
     for (const event of tab.events) {
       if (event.dir === 'server→client' && event.frame) {
-        steps.push({ kind: 'frame', frame: event.frame as unknown as WsReceiveFrame })
+        steps.push({ kind: 'frame', frame: event.frame as unknown as ServerFrame })
       } else if (event.dir === 'note' && /connection (dropped|lost)/i.test(event.note ?? '')) {
         steps.push({ kind: 'disconnect' })
       }
@@ -79,15 +82,15 @@ function allSteps(fixture: Fixture): DriveStep[] {
 /** Every server→client frame across ALL tabs, in file order — kept for the
  * scenarios (F5's per-tab split, F6/F7) that drive frames directly rather
  * than through `driveSteps`. */
-function allServerFrames(fixture: Fixture): WsReceiveFrame[] {
+function allServerFrames(fixture: Fixture): ServerFrame[] {
   return allSteps(fixture)
-    .filter((s): s is { kind: 'frame'; frame: WsReceiveFrame } => s.kind === 'frame')
+    .filter((s): s is { kind: 'frame'; frame: ServerFrame } => s.kind === 'frame')
     .map((s) => s.frame)
 }
 
 /** Drives ONE fresh store instance through every server→client frame in
  * `frames`, in order. */
-function driveFrames(frames: WsReceiveFrame[]): void {
+function driveFrames(frames: ServerFrame[]): void {
   useChatStore.setState({ sessionsById: {} } as never)
   for (const frame of frames) {
     useChatStore.getState().handleFrame(frame)
@@ -126,9 +129,46 @@ function userMessages(sessionId: string) {
   return b.messageOrder.map((id) => b.messagesById[id]).filter((m) => m.role === 'user')
 }
 
-beforeEach(() => {
-  useSessionStore.setState({ activeSessionId: null })
-  useChatStore.setState({ sessionsById: {} } as never)
+let recordedTransport: ReturnType<typeof historyTransport> | undefined
+
+/** A new recorded tab owns its selection, client attach and real WS buffer.
+ * The plain frame driver remains for F4's intentional warm-cache overlap. */
+function driveRecordedContext(events: FixtureEvent[]): void {
+  resetSimulatedBrowserRuntime()
+  recordedTransport = historyTransport()
+  for (const event of events) {
+    if (event.dir === 'client→server' && event.frame?.type === 'attach_session') {
+      const request = AttachSchema.parse(event.frame)
+      if (!request.ack_attention) {
+        const previous = useSessionStore.getState().activeSessionId
+        useSessionStore.getState().setActiveSession(request.session_id)
+        // Execute ChatThread's real inactive cleanup at the recorded switch;
+        // do not clear arrays by hand or erase a still-running A execution.
+        if (previous && previous !== request.session_id) useChatStore.getState().releaseSessionHistory(previous)
+        useChatStore.getState().setReplaying(true)
+      }
+      if (!recordedTransport.connection.send(request)) throw new Error('Recorded attach was not sent by the real test transport')
+    } else if (event.dir === 'server→client' && event.frame) {
+      recordedTransport.deliver(event.frame as unknown as ServerFrame)
+    }
+  }
+}
+
+function resetSimulatedBrowserRuntime(): void {
+  // Independent recordings deliberately reuse sess-1/turn-1. A production
+  // reconnect must KEEP this anti-zombie tracker; a new simulated browser must
+  // not inherit it or foreground/session/connection state from an earlier case.
+  __resetFinishedTurnIdsForTests()
+  useSessionStore.setState(useSessionStore.getInitialState(), true)
+  useConnectionStore.setState(useConnectionStore.getInitialState(), true)
+  useChatStore.setState(useChatStore.getInitialState(), true)
+}
+
+beforeEach(resetSimulatedBrowserRuntime)
+afterEach(() => {
+  recordedTransport?.connection.disconnect()
+  recordedTransport = undefined
+  vi.unstubAllGlobals()
 })
 
 describe('F1 — live turn, one tab, no reconnect (baseline shape)', () => {
@@ -217,13 +257,13 @@ describe('F5 — two tabs on one chat', () => {
     const SID = 'sess-1'
 
     const framesFor = (tab: FixtureTab) =>
-      tab.events.filter((e) => e.dir === 'server→client' && e.frame).map((e) => e.frame as unknown as WsReceiveFrame)
+      tab.events.filter((e) => e.dir === 'server→client' && e.frame).map((e) => e.frame as unknown as ServerFrame)
 
     driveFrames(framesFor(tabA))
     const tabAContent = assistantMessages(SID).map((m) => m.content)
     const tabACursor = bucket(SID)?.cursor
 
-    driveFrames(framesFor(tabB))
+    driveRecordedContext(tabB.events)
     const tabBContent = assistantMessages(SID).map((m) => m.content)
     const tabBCursor = bucket(SID)?.cursor
 
@@ -236,7 +276,7 @@ describe('F5 — two tabs on one chat', () => {
 describe('F6 — switch to another chat while the answer finishes, then switch back', () => {
   it('the original chat reassembles into ONE bubble across the switch-away, and the other chat is never touched by it', () => {
     const fixture = f6 as Fixture
-    driveFrames(allServerFrames(fixture))
+    driveRecordedContext(fixture.tabs.flatMap((tab) => tab.events))
     const SID_A = 'sess-1'
     const SID_B = 'sess-2'
 
@@ -245,9 +285,14 @@ describe('F6 — switch to another chat while the answer finishes, then switch b
     expect(asstA).toHaveLength(1) // never split by the switch-away/back
     expect(bucket(SID_A)?.isStreaming).toBe(false)
 
-    // The other chat's own snapshot/replay never touched session A's bucket.
+    // Team-lead D9 ruling: returning A→B→A releases B's inactive settled
+    // bodies/reader/tail, not A's still-running execution. The former >0
+    // retention oracle contradicted spec D9's explicit release requirement.
     const bB = bucket(SID_B)!
-    expect(bB.messageOrder.length).toBeGreaterThan(0)
+    expect(bB.messageOrder).toEqual([])
+    expect(bB.messagesById).toEqual({})
+    expect(bB.history.readerPositions).toEqual([])
+    expect(bB.history.tailEntries).toEqual([])
     expect(assistantMessages(SID_A).map((m) => m.content)).toEqual(fixture.expect.assistant_messages)
   })
 })
@@ -255,7 +300,9 @@ describe('F6 — switch to another chat while the answer finishes, then switch b
 describe('F7 — gateway restart: the cursor\'s boot id no longer matches', () => {
   it('boot_mismatch forces a snapshot; no turn is left announced as active', () => {
     const fixture = f7 as Fixture
-    driveFrames(allServerFrames(fixture))
+    // This recording has no session_started: its client attach is the actual
+    // selected/reloaded-chat context and must precede the snapshot.
+    driveRecordedContext(fixture.tabs.flatMap((tab) => tab.events))
     const SID = 'sess-1'
 
     expect(bucket(SID)?.activeTurnId).toBeNull()
@@ -315,14 +362,14 @@ describe('F8 — message typed while offline', () => {
 
     // First question/answer — hand-fed, matching F8's own recording; not
     // what this test is about.
-    useChatStore.getState().handleFrame({ type: 'session_state', session_id: SID, user_id: 'u1', pending_approvals: [], emitted_at: '2026-09-24T00:00:00Z' } as WsReceiveFrame)
-    useChatStore.getState().handleFrame({ type: 'session_started', session_id: SID, agent_id: 'mia', seq: 1, boot_id: 'boot-1' } as WsReceiveFrame)
-    useChatStore.getState().handleFrame({ type: 'user_message', session_id: SID, id: 'id-1', client_message_id: 'client-1', content: 'first question', timestamp: '2026-09-24T00:00:00Z', seq: 2 } as WsReceiveFrame)
-    useChatStore.getState().handleFrame({ type: 'message_status', session_id: SID, client_message_id: 'client-1', state: 'received', seq: 3 } as WsReceiveFrame)
-    useChatStore.getState().handleFrame({ type: 'message_status', session_id: SID, client_message_id: 'client-1', state: 'working', seq: 4 } as WsReceiveFrame)
-    useChatStore.getState().handleFrame({ type: 'token', session_id: SID, content: 'First ', message_id: 'msg-1', seq: 5 } as WsReceiveFrame)
-    useChatStore.getState().handleFrame({ type: 'token', session_id: SID, content: 'answer.', message_id: 'msg-1', seq: 6 } as WsReceiveFrame)
-    useChatStore.getState().handleFrame({ type: 'done', session_id: SID, message_id: 'msg-1', seq: 7, stats: { tokens: 2, cost: 0.01 } } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({ type: 'session_state', session_id: SID, user_id: 'u1', pending_approvals: [], emitted_at: '2026-09-24T00:00:00Z' } as ServerFrame)
+    useChatStore.getState().handleFrame({ type: 'session_started', session_id: SID, agent_id: 'mia', seq: 1, boot_id: 'boot-1' } as ServerFrame)
+    useChatStore.getState().handleFrame({ type: 'user_message', session_id: SID, id: 'id-1', client_message_id: 'client-1', content: 'first question', timestamp: '2026-09-24T00:00:00Z', seq: 2 } as ServerFrame)
+    useChatStore.getState().handleFrame({ type: 'message_status', session_id: SID, client_message_id: 'client-1', state: 'received', seq: 3 } as ServerFrame)
+    useChatStore.getState().handleFrame({ type: 'message_status', session_id: SID, client_message_id: 'client-1', state: 'working', seq: 4 } as ServerFrame)
+    useChatStore.getState().handleFrame({ type: 'token', session_id: SID, content: 'First ', message_id: 'msg-1', seq: 5 } as ServerFrame)
+    useChatStore.getState().handleFrame({ type: 'token', session_id: SID, content: 'answer.', message_id: 'msg-1', seq: 6 } as ServerFrame)
+    useChatStore.getState().handleFrame({ type: 'done', session_id: SID, message_id: 'msg-1', seq: 7, stats: { tokens: 2, cost: 0.01 } } as ServerFrame)
 
     // Connection lost — the user types the second question OFFLINE. The
     // REAL sendMessage() queues it (isConnected is false), same as
@@ -338,8 +385,8 @@ describe('F8 — message typed while offline', () => {
     // gateway round-trip would.
     const sent: { client_message_id?: string; content?: string }[] = []
     useConnectionStore.setState({ connection: { send: (f: unknown) => { sent.push(f as never); return true }, close: () => {}, isConnected: true }, isConnected: true } as never)
-    useChatStore.getState().handleFrame({ type: 'session_state', session_id: SID, user_id: 'u1', pending_approvals: [], emitted_at: '2026-09-24T00:00:10Z' } as WsReceiveFrame)
-    useChatStore.getState().handleFrame({ type: 'catch_up_complete', session_id: SID, seq: 7, boot_id: 'boot-1', mode: 'incremental' } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({ type: 'session_state', session_id: SID, user_id: 'u1', pending_approvals: [], emitted_at: '2026-09-24T00:00:10Z' } as ServerFrame)
+    useChatStore.getState().handleFrame({ type: 'catch_up_complete', session_id: SID, seq: 7, boot_id: 'boot-1', mode: 'incremental' } as ServerFrame)
     useChatStore.getState().drainOutboundQueue()
 
     const queuedFrame = sent.find((f) => f.content === 'second question')
@@ -351,12 +398,12 @@ describe('F8 — message typed while offline', () => {
     expect(bucket(SID)?.messagesById[cmid]?.deliveryStatus).toBe('sending')
 
     // The server's echo resolves it in place — pending_bubble_resolved.
-    useChatStore.getState().handleFrame({ type: 'user_message', session_id: SID, id: 'id-2', client_message_id: cmid, content: 'second question', timestamp: '2026-09-24T00:00:11Z', seq: 8 } as WsReceiveFrame)
-    useChatStore.getState().handleFrame({ type: 'message_status', session_id: SID, client_message_id: cmid, state: 'received', seq: 9 } as WsReceiveFrame)
-    useChatStore.getState().handleFrame({ type: 'message_status', session_id: SID, client_message_id: cmid, state: 'working', seq: 10 } as WsReceiveFrame)
-    useChatStore.getState().handleFrame({ type: 'token', session_id: SID, content: 'Second ', message_id: 'msg-2', seq: 11 } as WsReceiveFrame)
-    useChatStore.getState().handleFrame({ type: 'token', session_id: SID, content: 'answer.', message_id: 'msg-2', seq: 12 } as WsReceiveFrame)
-    useChatStore.getState().handleFrame({ type: 'done', session_id: SID, message_id: 'msg-2', seq: 13, stats: { tokens: 2, cost: 0.01 } } as WsReceiveFrame)
+    useChatStore.getState().handleFrame({ type: 'user_message', session_id: SID, id: 'id-2', client_message_id: cmid, content: 'second question', timestamp: '2026-09-24T00:00:11Z', seq: 8 } as ServerFrame)
+    useChatStore.getState().handleFrame({ type: 'message_status', session_id: SID, client_message_id: cmid, state: 'received', seq: 9 } as ServerFrame)
+    useChatStore.getState().handleFrame({ type: 'message_status', session_id: SID, client_message_id: cmid, state: 'working', seq: 10 } as ServerFrame)
+    useChatStore.getState().handleFrame({ type: 'token', session_id: SID, content: 'Second ', message_id: 'msg-2', seq: 11 } as ServerFrame)
+    useChatStore.getState().handleFrame({ type: 'token', session_id: SID, content: 'answer.', message_id: 'msg-2', seq: 12 } as ServerFrame)
+    useChatStore.getState().handleFrame({ type: 'done', session_id: SID, message_id: 'msg-2', seq: 13, stats: { tokens: 2, cost: 0.01 } } as ServerFrame)
 
     const users = userMessages(SID)
     expect(users.map((m) => m.content)).toEqual((f8 as Fixture).expect.user_messages)

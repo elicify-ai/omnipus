@@ -121,7 +121,6 @@ func TestValidateConfigKey_NamedEscalationsRefused(t *testing.T) {
 		{"tools.web.proxy", "route all outbound web traffic through a chosen proxy"},
 		{"tools.skills.marketplaces", "repoint the skill supply chain"},
 		{"agents.list", "rewrite the agent roster"},
-		{"agents.list.0.auto_approve_disabled", "loosen its own per-agent Auto-approve override via generic config (agents.list is blocked wholesale; the agent store's own update_agent path is the only legitimate writer, and that field is off-only/tighten-only by construction)"},
 		{"security.anything", "reserved security section"},
 		{"workspace_path", "repoint the workspace confinement anchor"},
 	}
@@ -149,7 +148,6 @@ func TestValidateConfigKey_LegitimateKeysStillAccepted(t *testing.T) {
 		"tools.read_file.max_read_file_size",
 		"tools.web.brave.max_results",
 		"tools.manifest.compressed",
-		"tools.delegate.require_parent_agent_id",
 		"channels.discord.enabled",
 	}
 	for _, key := range allowed {

@@ -2,14 +2,12 @@ import { useEffect, useCallback, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate } from '@tanstack/react-router'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  Robot,
   PlugsConnected,
   PuzzlePiece,
   Buildings,
   ChartBar,
   Gear,
-  PushPin,
-  PushPinSlash,
+  PushPinSimple,
   SignOut,
   Plus,
   Tray,
@@ -21,20 +19,21 @@ import {
   UserCircle,
   Files,
   FolderOpen,
-  Shield,
 } from '@phosphor-icons/react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { useSidebarStore, SIDEBAR_PIN_BREAKPOINT } from '@/store/sidebar'
+import { useSidebarStore, isSidebarOverlayOpen, SIDEBAR_PIN_BREAKPOINT } from '@/store/sidebar'
 import { useAuthStore } from '@/store/auth'
 import { useUiStore } from '@/store/ui'
+import { leaveGateThen } from '@/components/panel-shell/leaveGate'
 import { useNotificationsStore } from '@/store/notifications'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { fetchWorkspaces, createWorkspace, workspacesQueryKeys, fetchSessions, fetchAgents, logout } from '@/lib/api'
+import { activeWorkspacesQueryOptions } from '@/lib/workspaceQueries'
 import { logError } from '@/lib/telemetry'
-import type { Workspace, Session } from '@/lib/api'
-import { useSessionStore } from '@/store/session'
-import { useSelectSession } from '@/components/chat/useSelectSession'
-import { SessionTree, SessionExpandToggle, useSessionForest, type SessionTreeFlatRow } from '@/components/sessions/SessionTree'
+import type { Workspace } from '@/lib/api'
+import { WorkspaceAgentList } from './sidebar/WorkspaceAgentList'
+import { OmnipusEntry } from './sidebar/OmnipusEntry'
+import type { RosterState } from './sidebar/workspaceRoster'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -45,7 +44,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
-import { cn } from '@/lib/utils'
+import { cn, isEditableEventTarget } from '@/lib/utils'
 import { Wordmark } from '@/components/shared/Wordmark'
 import { GodModeSidebarPill } from './GodModeIndicators'
 
@@ -55,9 +54,9 @@ import { GodModeSidebarPill } from './GodModeIndicators'
 // two meaning different things under the same label).
 // (Per-workspace work — chat, tasks, calendar, team — lives inside the
 // workspace tabs, not the sidebar.)
+// No "Agents" entry (omnipus-system-agent FR-108): there is no Agents screen;
+// a workspace's Team is the home of its agents.
 const ASSET_ITEMS = [
-  { to: '/admin/chat', label: 'Admin chat', Icon: Shield },
-  { to: '/agents', label: 'Agents', Icon: Robot },
   { to: '/skills', label: 'Skills & Tools', Icon: PuzzlePiece },
   { to: '/connectors', label: 'Connectors', Icon: PlugsConnected },
 ] as const
@@ -71,7 +70,7 @@ const SIDEBAR_FOCUSABLE_SELECTOR =
 
 // US-5: Sidebar — overlay default, pin option, Framer Motion, Zustand
 export function Sidebar() {
-  const { isOpen, isPinned, close, toggle, togglePin } = useSidebarStore()
+  const { isOpen, isPinned, close, open, pin, unpin, hide } = useSidebarStore()
   const location = useLocation()
   const navigate = useNavigate()
   const { activeWorkspaceId, setActiveWorkspaceId } = useWorkspacesStore()
@@ -162,9 +161,14 @@ export function Sidebar() {
   }, [navigate, queryClient])
 
   // Workspaces query — refetch every 30s
-  const { data: projects = [], isLoading: projectsLoading, isError: projectsError } = useQuery({
-    queryKey: workspacesQueryKeys.list({ status: 'active' }),
-    queryFn: () => fetchWorkspaces({ status: 'active' }),
+  const {
+    data: projects = [],
+    isLoading: projectsLoading,
+    isError: projectsError,
+    isSuccess: projectsSuccess,
+    isPaused: projectsPaused,
+  } = useQuery({
+    ...activeWorkspacesQueryOptions,
     staleTime: 30_000,
     refetchInterval: 30_000,
   })
@@ -189,28 +193,23 @@ export function Sidebar() {
   // includeVerifier opt-in exists on the signature (UsageScreen uses it)
   // but is intentionally omitted here, so this stays the excluded default
   // by construction — do not add it.
-  const { data: allSessions = [], isError: sessionsError } = useQuery({
+  const { data: allSessions = [], isError: sessionsError, data: sessionsData } = useQuery({
     queryKey: ['sessions'],
     queryFn: () => fetchSessions(),
     staleTime: 15_000,
+    // done can precede the server's lifecycle commit; frames alone cannot
+    // keep a mounted row fresh after that last signal.
+    refetchInterval: isVisible ? 15_000 : false,
   })
-  const { data: agents = [] } = useQuery({
+  const agentsQuery = useQuery({
     queryKey: ['agents'],
     queryFn: fetchAgents,
     staleTime: 30_000,
   })
-
-  // Currently-active session — for the sidebar's simplified title-only rows.
-  const activeSessionId = useSessionStore((s) => s.activeSessionId)
-
-  // Reusable session-selection logic (attach WS + navigate + close sidebar).
-  const selectSession = useSelectSession({
-    agents,
-    workspaces: projects,
-    onClose: () => {
-      if (!effectivelyPinned) close()
-    },
-  })
+  const agents = agentsQuery.data ?? []
+  const rosterState: RosterState = agentsQuery.isError
+    ? (agentsQuery.data ? 'failed-stale-cache' : 'failed-no-cache')
+    : 'fresh'
 
   // Workspace accordion expansion state. Seeded with the active workspace so
   // the one the user is already in opens without an extra click; the lazy
@@ -267,20 +266,56 @@ export function Sidebar() {
     ...visibleUnpinned,
   ]
 
-  // US-5: Cmd+B / Ctrl+B keyboard shortcut + Escape to close
+  // Cmd+B / Ctrl+B follows the same Show action as the header hamburger and
+  // the Hide action the keyboard still owns. Flipping only isOpen does
+  // nothing visible on a docked wide window. When the sidebar is on screen,
+  // the shortcut hides it and forgets the dock. When it is hidden, the
+  // shortcut shows it — open() on any width; showing never pins (founder
+  // decision, sidebar hotfix: pinning is the in-sidebar control's click).
+  // The shortcut belongs to the global gesture only outside editor
+  // surfaces — a rich-text editor (Tiptap in the Mail draft editor + Mail
+  // compose dialog, AssistantUI's composer, etc.) owns its own keymap
+  // (Mod-b = bold, Mod-i = italic, Mod-k = link, ...) and must not lose
+  // keystrokes to it. Only the Mod+B branch checks editable targets;
+  // Escape still closes the overlay from a focused editor or any other
+  // control, and does not forget a saved dock.
   const handleKeydown = useCallback(
     (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'b') {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'b' && !isEditableEventTarget(e.target)) {
         e.preventDefault()
-        toggle()
+        if (isVisible) hide()
+        else open()
       }
-      // Escape closes the overlay sidebar; the pinned sidebar is never closed by Escape.
-      // When viewport < 1024px pin is ignored, so treat isPinned as false there.
-      if (e.key === 'Escape' && isOpen && !effectivelyPinned) {
+      // Escape closes the overlay — but only when no dismissable layer
+      // inside the sidebar has already consumed the key. Radix's
+      // DismissableLayer (the row's ⋯ menu, the profile menu, dialogs,
+      // popovers) handles Escape from a document-level CAPTURE keydown:
+      // the topmost layer closes and calls event.preventDefault() BEFORE
+      // this window-level bubble listener sees the key, so a
+      // defaultPrevented Escape means "a layer above this sidebar just
+      // dismissed" and the overlay must stay open. Closing here too would
+      // animate the whole sidebar out under an Escape that was only ever
+      // meant to dismiss the menu (CI job 114998058497, sidebar-agent-row-menu
+      // e2e D8). Same pattern as panel-shell/panelEscape.ts
+      // (shouldClosePanelOnEscape). With nothing else open, no layer
+      // preventDefaults, and Escape closes the overlay as before. A docked
+      // wide sidebar is not an overlay, so Escape leaves it; below 1024px a
+      // saved dock is not on screen, and close() drops the overlay without
+      // clearing that dock.
+      //
+      // R3 N6: the "overlay is open" half of the condition is the SHARED
+      // isSidebarOverlayOpen predicate, not this component's render state —
+      // useCancelState's global cancel handler stands down on the very same
+      // predicate, so the two Escape owners read one source of truth and
+      // cannot disagree about who owns a keypress (the handler must never
+      // cancel a streaming turn while this overlay is the top surface).
+      // With the cancel handler standing down, the Escape arrives here NOT
+      // defaultPrevented, and only the sidebar closes.
+      if (e.key === 'Escape' && !e.defaultPrevented && isSidebarOverlayOpen()) {
         close()
       }
     },
-    [toggle, close, isOpen, effectivelyPinned]
+    [isVisible, hide, open, close]
   )
 
   // Track when the viewport crosses the pin breakpoint.
@@ -378,16 +413,20 @@ export function Sidebar() {
         >
           <MagnifyingGlass size={16} />
         </IconButton>
-        {/* Pin toggle — icon-only in the brand row (not a full-width bottom button) */}
+        {/* Pin toggle — icon-only in the brand row, where the old pin lived.
+            Wide windows only (below 1024px the sidebar is always an overlay).
+            Showing the sidebar — hamburger or Cmd/Ctrl+B — never pins; this
+            is the only keep-open control. Unpin leaves the sidebar open so a
+            following click outside closes it. */}
         {canPin && (
           <IconButton
-            onClick={togglePin}
+            onClick={() => (isPinned ? unpin() : pin())}
             aria-label={isPinned ? 'Unpin sidebar' : 'Pin sidebar'}
             aria-pressed={isPinned}
             title={isPinned ? 'Unpin sidebar' : 'Pin sidebar'}
             className="h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
           >
-            {isPinned ? <PushPinSlash size={16} /> : <PushPin size={16} />}
+            <PushPinSimple size={16} weight={isPinned ? 'fill' : 'regular'} />
           </IconButton>
         )}
       </div>
@@ -397,6 +436,19 @@ export function Sidebar() {
           end of the sidebar scroll drags the page itself up, leaving a gap at
           the bottom (the shell is fixed-position; the page should never move). */}
       <div className="flex-1 overflow-y-auto overscroll-contain py-[var(--space-2-5)]">
+        {/* omnipus-system-agent FR-100/FR-101 (F:D15): the fixed Omnipus
+            entry ABOVE the workspaces — one conversation, reachable from
+            every workspace, opened without switching the active one. */}
+        <OmnipusEntry
+          workspaces={projects}
+          workspacesLoading={projectsLoading}
+          agents={agents}
+          sessions={allSessions}
+          sessionsStatus={sessionsError ? (sessionsData ? 'stale' : 'failed') : 'fresh'}
+          onOpened={() => {
+            if (!effectivelyPinned) close()
+          }}
+        />
         {/* Workspaces section. The old hidden `/`-to-filter input is removed —
             undiscoverable (no visual hint, focus-dependent) and a subset of
             what the search modal does; workspace lookup lives there now. */}
@@ -430,6 +482,12 @@ export function Sidebar() {
                     e.preventDefault()
                     commitCreateWorkspace()
                   } else if (e.key === 'Escape') {
+                    // The field consumes its own Escape: preventDefault marks
+                    // the key handled so the sidebar's window-level Escape
+                    // handler (handleKeydown) stands down and the overlay
+                    // stays open — cancelling the name must not also throw
+                    // the whole sidebar away.
+                    e.preventDefault()
                     setCreatingWorkspace(false)
                     setNewWorkspaceName('')
                   }
@@ -455,18 +513,39 @@ export function Sidebar() {
             </div>
           )}
 
-          {/* Error state (Fix 6) */}
-          {projectsError && (
+          {/* Failed or offline workspace loading uses the same status row. */}
+          {(projectsError || projectsPaused) && (
             <div className="px-[var(--space-3)] py-[var(--space-1)] flex items-center gap-[var(--space-1)]">
-              <WarningCircle size={14} className="text-[var(--color-error)] flex-shrink-0" />
-              <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] flex-1">Could not load workspaces</span>
-              <IconButton
-                onClick={() => queryClient.invalidateQueries({ queryKey: workspacesQueryKeys.list() })}
-                aria-label="Retry loading workspaces"
-                className="h-auto w-auto rounded p-[var(--space-0-5)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]"
-              >
-                <ArrowClockwise size={12} />
-              </IconButton>
+              <WarningCircle size={14} className={cn(
+                'flex-shrink-0',
+                projectsPaused ? 'text-[var(--color-muted)]' : 'text-[var(--color-error)]',
+              )} />
+              <span className={cn(
+                'text-[length:var(--type-utility-xs-size)] flex-1',
+                projectsPaused ? 'text-[var(--color-muted)]' : 'text-[var(--color-error)]',
+              )}>
+                {projectsPaused
+                  ? 'Offline — workspaces will load when you reconnect.'
+                  : 'Could not load workspaces'}
+              </span>
+              {!projectsPaused && (
+                <IconButton
+                  onClick={() => Promise.all([
+                    queryClient.invalidateQueries({
+                      queryKey: workspacesQueryKeys.list({ status: 'active' }),
+                      exact: true,
+                    }),
+                    queryClient.invalidateQueries({
+                      queryKey: workspacesQueryKeys.list({ status: 'archived' }),
+                      exact: true,
+                    }),
+                  ])}
+                  aria-label="Retry loading workspaces"
+                  className="h-auto w-auto rounded p-[var(--space-0-5)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]"
+                >
+                  <ArrowClockwise size={12} />
+                </IconButton>
+              )}
             </div>
           )}
 
@@ -484,7 +563,7 @@ export function Sidebar() {
           )}
 
           {/* Empty state */}
-          {!projectsLoading && !projectsError && projects.length === 0 && (
+          {projectsSuccess && !projectsPaused && projects.length === 0 && (
             <div className="px-[var(--space-3)] py-[var(--space-1)]">
               <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">No workspaces yet — </span>
               <Button
@@ -497,140 +576,26 @@ export function Sidebar() {
             </div>
           )}
 
-          {/* Workspace list — accordion: click name navigates, click chevron expands sessions */}
-          {!projectsLoading && visibleProjects
-            .map((project) => {
-            const isActive = activeWorkspaceId === project.id
-            const isExpanded = expandedWorkspaceIds.has(project.id)
-            // ADR-057 FR-093 (US-19, operator decision 1 — NESTED UNDER
-            // PARENT, not the `verifier` hidden-with-a-flag precedent): the
-            // `maxVisible` budget below MUST be spent on ROOT sessions only,
-            // so a wide delegation fan-out (e.g. 24 children) can never evict
-            // the parent chat itself. Delegate children (`parent_session_id`
-            // set) are never top-level rows — they render nested under their
-            // real parent via WorkspaceSessionTree below, fetched on expand.
-            //
-            // `allSessions` (fetchSessions() with no opts, above) already IS
-            // the server's roots-only page — FR-091's orphan clause
-            // (pkg/agent/loop.go's u9FilterSessionHierarchy) returns a
-            // session as a root when it has no parent OR its declared parent
-            // no longer resolves, and it does NOT null out that stale
-            // `parent_session_id` field on the wire. A prior version of this
-            // filter re-checked `!s.parent_session_id` here as a defensive
-            // measure, which actively broke that orphan promotion: an
-            // orphaned session (parent deleted) still carries its old
-            // parent_session_id, so it was silently re-excluded from every
-            // workspace — permanently invisible even though the server
-            // correctly classified it as a root. Trust the server contract
-            // instead of re-deriving root-ness from a field that doesn't
-            // reliably indicate it once a parent can be deleted.
-            const workspaceSessions = allSessions
-              .filter((s) => s.workspace_id === project.id)
-              .sort((a, b) => {
-                // Heartbeat sessions on top, then recent-first
-                if (a.type === 'heartbeat' && b.type !== 'heartbeat') return -1
-                if (b.type === 'heartbeat' && a.type !== 'heartbeat') return 1
-                return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
-              })
-            const maxVisible = 9
-            const visibleSessions = workspaceSessions.slice(0, maxVisible)
-            return (
-              <div key={project.id}>
-                <div
-                  className={cn(
-                    'flex items-center gap-[var(--space-2)] w-full px-[var(--space-3)] py-[var(--space-2)] mx-0 text-[length:var(--type-body-compact-size)] transition-colors text-left',
-                    isActive
-                      ? 'text-[var(--color-accent)] font-medium'
-                      : 'text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]'
-                  )}
-                >
-                  <Button
-                    variant="ghost"
-                    onClick={() => {
-                      setActiveWorkspaceId(project.id)
-                      navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: project.id } })
-                      if (!effectivelyPinned) close()
-                    }}
-                    aria-current={isActive ? 'page' : undefined}
-                    className={cn(
-                      'h-auto flex-1 min-w-0 justify-start gap-[var(--space-2)] p-0 text-left font-[var(--font-weight-regular)] hover:bg-transparent',
-                      isActive
-                        ? 'text-[var(--color-accent)] font-medium hover:text-[var(--color-accent)]'
-                        : 'text-[var(--color-secondary)] hover:text-[var(--color-secondary)]',
-                    )}
-                  >
-                    {/* One icon for every workspace (icon-consistency pass,
-                        2026-09-07: Buildings, the same glyph every other
-                        surface — Library virtual root, workspace tab bar —
-                        now uses for "workspace"); the ACTIVE workspace keeps
-                        its icon too — gold + text styling mark it, not a
-                        pulsing dot swap. */}
-                    <Buildings
-                      size={14}
-                      weight={isActive ? 'fill' : 'regular'}
-                      className={cn('flex-shrink-0', isActive ? 'text-[var(--color-accent)]' : 'text-[var(--color-muted)]')}
-                    />
-                    <span className="flex-1 truncate">{project.name}</span>
-                  </Button>
-                  <IconButton
-                    onClick={(e) => { e.stopPropagation(); toggleWorkspaceExpansion(project.id) }}
-                    aria-expanded={isExpanded}
-                    aria-label={isExpanded ? `Collapse ${project.name} sessions` : `Expand ${project.name} sessions`}
-                    className="h-auto w-auto shrink-0 rounded p-[var(--space-1)] -m-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
-                  >
-                    {isExpanded ? <CaretDown size={12} /> : <CaretRight size={12} />}
-                  </IconButton>
-                </div>
-                {isExpanded && (
-                  /* Hierarchy via a connector rail (border-l) instead of deep
-                     pl-8 indentation — communicates "children of the workspace"
-                     by connectedness while reclaiming ~14px of row width. */
-                  <div className="pb-[var(--space-1)] ml-[var(--space-3)] border-l border-[var(--color-border)]">
-                    <Button
-                      variant="ghost"
-                      onClick={() => {
-                        setActiveWorkspaceId(project.id)
-                        useSessionStore.getState().startNewSession()
-                        navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: project.id } })
-                        if (!effectivelyPinned) close()
-                      }}
-                      className="h-auto w-full justify-start gap-[var(--space-2)] pl-[var(--space-2-5)] pr-[var(--space-3)] py-[var(--space-1)] font-[var(--font-weight-regular)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)]"
-                    >
-                      <Plus size={12} /> New chat
-                    </Button>
-                    {sessionsError ? (
-                      <p className="pl-[var(--space-2-5)] pr-[var(--space-3)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-error)]">Could not load sessions</p>
-                    ) : workspaceSessions.length === 0 ? (
-                      <p className="pl-[var(--space-2-5)] pr-[var(--space-3)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] opacity-60">No sessions yet</p>
-                    ) : (
-                      // Pure navigation rows — manage lives behind "More…".
-                      // ADR-057 US-19/FR-093: renders a TREE, not a flat list
-                      // — a root session with delegated children (child_count
-                      // > 0) gets an expand chevron; its children are fetched
-                      // a page at a time only once the user expands it
-                      // (WorkspaceSessionTree -> useSessionForest), never
-                      // loaded or counted against maxVisible up front.
-                      <WorkspaceSessionTree
-                        rootSessions={visibleSessions}
-                        activeSessionId={activeSessionId}
-                        selectSession={selectSession}
-                      />
-                    )}
-                    {/* Always the last entry — opens the session search pre-filtered to this workspace */}
-                    {workspaceSessions.length > 0 && (
-                      <Button
-                        variant="ghost"
-                        onClick={() => useUiStore.getState().openSearchModal(project.id)}
-                        className="h-auto w-full justify-start gap-[var(--space-1)] pl-[var(--space-2-5)] pr-[var(--space-3)] py-[var(--space-1)] font-[var(--font-weight-regular)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-transparent"
-                      >
-                        More…
-                      </Button>
-                    )}
-                  </div>
-                )}
-              </div>
-            )
-          })}
+          {/* Workspace list — name opens the workspace; chevron toggles the attention cue. Agent rows replace the old session accordion. */}
+          {!projectsLoading && (
+            <WorkspaceAgentList
+              projects={visibleProjects}
+              expandedIds={expandedWorkspaceIds}
+              activeId={activeWorkspaceId}
+              agents={agents}
+              rosterState={rosterState}
+              sessions={allSessions}
+              onToggle={toggleWorkspaceExpansion}
+              onOpen={(project) => {
+                setActiveWorkspaceId(project.id)
+                navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: project.id } })
+                if (!effectivelyPinned) close()
+              }}
+              onOverlayClose={() => {
+                if (!effectivelyPinned) close()
+              }}
+            />
+          )}
 
           {/* Show more / less toggle */}
           {!projectsLoading && hasMore && (
@@ -736,13 +701,19 @@ export function Sidebar() {
         {/* Library — NOT a route Link like the items above: it opens the
             docked LibraryPanel (mounted once in AppShell) at the virtual
             root, same as clicking a workspace opens it scoped (D-3). The
-            /_app/library ROUTE exists only for the panel's pop-out button. */}
+            /_app/library route remains available for standalone links. */}
         <Button
           variant="ghost"
           data-testid="sidebar-library-button"
+          data-panel-trigger="library"
           aria-label="Library"
           onClick={() => {
-            useUiStore.getState().openLibraryPanel()
+            // CRIT-001: opening Library REPLACES whatever panel is open
+            // (SP-7), so the outgoing panel's leave gate runs first. Virtual
+            // root scope (no workspaceId → the `app` width/identity bucket).
+            leaveGateThen(useUiStore.getState().activePanel?.id ?? null, () => {
+              useUiStore.getState().openPanel('library', {})
+            })
             if (!effectivelyPinned) close()
           }}
           className="h-auto justify-start gap-[var(--space-2-5)] w-[calc(100%-16px)] px-[var(--space-3)] py-[var(--space-2)] mx-[var(--space-2)] rounded-lg font-[var(--font-weight-regular)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
@@ -894,151 +865,6 @@ export function Sidebar() {
           />
         )}
       </AnimatePresence>
-    </>
-  )
-}
-
-// ── ADR-057 US-19/W16f: the workspace accordion's session TREE ───────────────
-//
-// Root sessions (already filtered + sorted + maxVisible-sliced by the
-// caller) rendered as a forest: a session with delegated children
-// (`child_count > 0`) gets an expand chevron; its children are fetched a
-// page at a time — never up front — only once the user expands it
-// (`useSessionForest`, SessionTree.tsx). Not virtualized: the sidebar's
-// visible-root budget already bounds the DOM (≤ 9 roots), unlike SearchModal
-// (FR-094), which can render far more nodes and virtualizes.
-function WorkspaceSessionTree({
-  rootSessions,
-  activeSessionId,
-  selectSession,
-}: {
-  rootSessions: Session[]
-  activeSessionId: string | null
-  selectSession: (session: Session) => void
-}) {
-  const {
-    tree,
-    expandedIds,
-    toggleExpand,
-    isLoadingChildren,
-    isErrorChildren,
-    hasMoreChildren,
-    loadMoreChildren,
-  } = useSessionForest(rootSessions)
-
-  return (
-    <SessionTree
-      nodes={tree}
-      expandedIds={expandedIds}
-      renderRow={(row) => (
-        <SidebarSessionRow
-          row={row}
-          isActive={row.node.session.id === activeSessionId}
-          isLoading={isLoadingChildren(row.node.session.id)}
-          isError={isErrorChildren(row.node.session.id)}
-          hasMore={hasMoreChildren(row.node.session.id)}
-          onToggleExpand={() => toggleExpand(row.node.session.id)}
-          onLoadMore={() => loadMoreChildren(row.node.session.id)}
-          onSelect={() => selectSession(row.node.session)}
-        />
-      )}
-    />
-  )
-}
-
-function SidebarSessionRow({
-  row,
-  isActive,
-  isLoading,
-  isError,
-  hasMore,
-  onToggleExpand,
-  onLoadMore,
-  onSelect,
-}: {
-  row: SessionTreeFlatRow
-  isActive: boolean
-  isLoading: boolean
-  isError: boolean
-  /** True iff this node's children are loaded but the server has more (child_count > loaded count). */
-  hasMore: boolean
-  onToggleExpand: () => void
-  onLoadMore: () => void
-  onSelect: () => void
-}) {
-  const { node, depth, hasChildren, isExpanded, childrenEmpty } = row
-  const session = node.session
-  const title = session.title || 'Untitled'
-  // Base 12px is --space-2-5 (already on the registered token scale). The
-  // legacy per-level step was 14px, a 14px-root Tailwind value D10 maps to
-  // the nearest closed-scale step, 16px (--space-3) -- see
-  // docs/internal/design/evidence/c1-execution-record.md's tree-indent row.
-  return (
-    <>
-      <div className="flex items-center pr-[var(--space-3)]" style={{ '--sidebar-indent-depth': depth, paddingLeft: 'calc(var(--space-2-5) + var(--sidebar-indent-depth) * var(--space-3))' } as import('react').CSSProperties}>
-        {hasChildren ? (
-          <SessionExpandToggle
-            expanded={isExpanded}
-            onToggle={onToggleExpand}
-            loading={isLoading}
-            error={isError}
-            expandLabel={`Expand ${title} delegated sessions`}
-            collapseLabel={`Collapse ${title} delegated sessions`}
-          />
-        ) : (
-          <span className="w-[var(--space-3)] shrink-0" aria-hidden="true" />
-        )}
-        <Button
-          variant="ghost"
-          onClick={onSelect}
-          aria-current={isActive ? 'page' : undefined}
-          className={cn(
-            'h-auto flex-1 min-w-0 justify-start gap-[var(--space-1)] py-[var(--space-1)] pl-[var(--space-1)] font-[var(--font-weight-regular)] text-[length:var(--type-caption-size)] text-left',
-            isActive
-              ? 'text-[var(--color-accent)] font-medium hover:bg-transparent hover:text-[var(--color-accent)]'
-              : 'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]'
-          )}
-        >
-          {isActive && <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] flex-shrink-0" />}
-          <span className="flex-1 truncate">{title}</span>
-          {session.type === 'heartbeat' && (
-            <span className="text-[length:var(--type-caption-size)] uppercase tracking-wider text-[var(--color-muted)] flex-shrink-0">HB</span>
-          )}
-          {hasChildren && (
-            <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] flex-shrink-0" aria-hidden="true">
-              {session.child_count}
-            </span>
-          )}
-        </Button>
-      </div>
-      {/* childrenEmpty: expanded, fetched, and the fetch came back with zero
-          rows despite child_count > 0 — a stale/incorrect server count must
-          not render as an open toggle with nothing beneath it and no
-          explanation. */}
-      {childrenEmpty && (
-        <p
-          className="py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] opacity-70"
-          style={{ '--sidebar-indent-depth': depth, paddingLeft: 'calc(var(--space-2-5) + var(--sidebar-indent-depth) * var(--space-3) + var(--space-3))' } as import('react').CSSProperties}
-        >
-          No delegated sessions found
-        </p>
-      )}
-      {/* hasMore: this node has additional children pages beyond what's
-          currently loaded (ADR-057 FR-092 continued paging) — the
-          child_count badge above can report a total larger than what's
-          rendered; this is the explicit "load the rest" affordance rather
-          than silently capping the fan-out at one page. */}
-      {isExpanded && hasMore && (
-        <Button
-          variant="link"
-          onClick={onLoadMore}
-          disabled={isLoading}
-          style={{ '--sidebar-indent-depth': depth, paddingLeft: 'calc(var(--space-2-5) + var(--sidebar-indent-depth) * var(--space-3) + var(--space-3))' } as import('react').CSSProperties}
-          className="h-auto gap-[var(--space-1)] pl-0 py-[var(--space-1)] pr-[var(--space-3)] font-[var(--font-weight-regular)] text-[length:var(--type-caption-size)] disabled:no-underline"
-        >
-          {isLoading ? 'Loading…' : 'Load more'}
-        </Button>
-      )}
     </>
   )
 }

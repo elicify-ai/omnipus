@@ -37,7 +37,6 @@ Add this to `config.json`:
         "enabled": true,
         "text": ["Thinking...", "Processing...", "Typing..."]
       },
-      "reasoning_channel_id": "",
       "message_format": "richtext",
       "crypto_database_path": "",
       "crypto_passphrase_ref": "matrix_crypto_passphrase"
@@ -59,7 +58,6 @@ Credentials (`access_token_ref`, `crypto_passphrase_ref`) are resolved from the 
 | `allow_from` | []string | No | User allowlist (Matrix user IDs). Empty means all senders are allowed. |
 | `group_trigger` | object | No | Group-chat trigger rules — `mention_only` (bool) and/or `prefixes` ([]string). |
 | `placeholder` | object | No | Placeholder message config (see below). |
-| `reasoning_channel_id` | string | No | Room ID to route reasoning/thinking output to a separate conversation. |
 | `message_format` | string | No | Output format: `"richtext"` (default) renders markdown as HTML; `"plain"` sends plain text. |
 | `crypto_database_path` | string | No | Directory for the E2EE SQLite database. Defaults to `~/.omnipus/workspace/matrix` when empty. |
 | `crypto_passphrase_ref` | string | No | Credential store key for the E2EE session pickle passphrase. Must not change once set. Leave empty to disable E2EE. |
@@ -70,6 +68,25 @@ Credentials (`access_token_ref`, `crypto_passphrase_ref`) are resolved from the 
 |---|---|---|
 | `enabled` | bool | Send a placeholder message before the final reply. Default: `false`. |
 | `text` | string or []string | Placeholder text. Multiple values: one is chosen at random. Default: `"Thinking..."`. |
+
+## Markdown in rich-text replies
+
+With `message_format: "richtext"`, when a quote line (`>`) follows a list item and has fewer than four leading spaces, it now appears as a separate quotation outside the list, even without a blank line between them. For example, this quote is outside the list:
+
+```markdown
+1. A list item
+  > A separate quotation
+```
+
+To keep a quotation inside a list item, add a blank line after the item text and indent `>` by four spaces:
+
+```markdown
+1. A list item
+
+    > A quotation inside the item
+```
+
+To place a quotation after the list instead, use a blank line and leave `>` unindented. `message_format: "plain"` sends the text without Markdown formatting.
 
 ## Setup
 
@@ -98,3 +115,7 @@ Credentials (`access_token_ref`, `crypto_passphrase_ref`) are resolved from the 
 - Placeholder message with in-place edit on final reply (`MessageEditor`)
 - Auto-join invited rooms (`join_on_invite`)
 - End-to-end encryption via `goolm` + `cryptohelper` (opt-in via `crypto_passphrase_ref`)
+
+## Starting messages
+
+Starting messages is not supported yet on this platform; the agent only answers. See [Starting messages](../connectors.md#starting-messages).

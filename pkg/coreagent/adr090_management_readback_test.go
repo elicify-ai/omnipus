@@ -22,12 +22,10 @@ func TestADR090_ManagementReadbackRealCatalogReachability(t *testing.T) {
 		t.Run(agent.ID, func(t *testing.T) {
 			require.NotNil(t, agent.Tools)
 			_, policies := tools.FilterToolsByPolicy(systools.AllTools(nil), string(agent.Type), &tools.ToolPolicyCfg{GlobalPolicies: global, Policies: agent.Tools.Builtin.Policies})
-			for _, name := range []string{"get_agent", "get_agent_tools"} {
-				if agent.ID == "ava" {
-					require.Equal(t, "allow", policies[name], "Ava must actually reach %s", name)
-				} else {
-					require.Empty(t, policies[name], "%s must not silently inherit management readback", agent.ID)
-				}
+			for _, name := range []string{"get_agent"} {
+				// SPEC.md Table (r17 7.12: get_agent is the one reader): get_agent is Allow for Main and Worker; excluded Omnipus keeps its existing Allow.
+				// r17 FR-143: every agent reaches get_agent, Judge and Plan Supervisor included.
+				require.Equal(t, "allow", policies[name], "%s must actually reach %s", agent.ID, name)
 			}
 		})
 	}
@@ -44,12 +42,14 @@ func TestADR090_ApprovedSupportingGroups(t *testing.T) {
 		roles   map[string]bool
 		verdict string
 	}{
-		{"browser", []string{"browser_navigate", "browser_click", "browser_type", "browser_screenshot", "browser_get_text", "browser_wait", "browser_evaluate", "browser_list_tabs", "browser_switch_tab", "browser_close_tab", "browser_open_tab", "browser_select_option", "browser_press_key", "browser_hover", "browser_snapshot", "browser_handle_dialog", "browser_handover"}, map[string]bool{"mia": true, "jim": true, "ava": true}, "allow"},
-		{"browser-upload", []string{"browser_upload_file"}, map[string]bool{"mia": true, "jim": true, "ava": true}, "ask"},
-		{"email-read", []string{"read_inbox", "search_email", "read_message"}, map[string]bool{"mia": true, "jim": true, "ava": true, "planner": true, "researcher": true, "worker": true}, "allow"},
-		{"email-send", []string{"send_email", "reply"}, map[string]bool{"mia": true, "jim": true, "ava": true, "planner": true, "researcher": true, "worker": true}, "ask"},
-		{"memory", []string{"remember", "recall_memory", "recall_conversation"}, map[string]bool{"mia": true, "jim": true, "ava": true, "admin": true, "planner": true, "researcher": true, "worker": true}, "allow"},
-		{"web", []string{"search_web", "fetch_url"}, map[string]bool{"mia": true, "jim": true, "ava": true, "planner": true, "researcher": true, "worker": true}, "allow"},
+		// SPEC.md Table: all browser_* tools are Allow for ordinary Main/Worker roles; excluded system roles remain Deny.
+		{"browser", []string{"browser_navigate", "browser_click", "browser_type", "browser_screenshot", "browser_get_text", "browser_wait", "browser_evaluate", "browser_list_tabs", "browser_switch_tab", "browser_close_tab", "browser_open_tab", "browser_select_option", "browser_press_key", "browser_hover", "browser_snapshot", "browser_handle_dialog", "browser_handover"}, map[string]bool{"mia": true, "jim": true, "planner": true, "researcher": true, "worker": true}, "allow"},
+		// SPEC.md Table: browser_upload_file is the Ask exception in both columns.
+		{"browser-upload", []string{"browser_upload_file"}, map[string]bool{"mia": true, "jim": true, "planner": true, "researcher": true, "worker": true}, "ask"},
+		{"email-read", []string{"read_inbox", "search_email", "read_message"}, map[string]bool{"mia": true, "jim": true, "planner": true, "researcher": true, "worker": true}, "allow"},
+		{"email-send", []string{"send_email", "reply"}, map[string]bool{"mia": true, "jim": true, "planner": true, "researcher": true, "worker": true}, "ask"},
+		{"memory", []string{"remember", "recall_memory", "recall_conversation"}, map[string]bool{"mia": true, "jim": true, "omnipus": true, "planner": true, "researcher": true, "worker": true}, "allow"},
+		{"web", []string{"search_web", "fetch_url"}, map[string]bool{"mia": true, "jim": true, "omnipus": true, "planner": true, "researcher": true, "worker": true}, "allow"},
 	} {
 		for _, agent := range cfg.Agents.List {
 			for _, name := range group.names {

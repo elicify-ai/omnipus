@@ -1,20 +1,25 @@
-import { createContext, useContext, useEffect } from 'react'
+import { createContext, useContext, useEffect, useRef, type ReactNode } from 'react'
 import { Outlet, useNavigate, useLocation } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { List } from '@phosphor-icons/react'
 import { fetchWorkspaces, workspacesQueryKeys } from '@/lib/api'
 import type { Workspace } from '@/lib/api'
 import { useWorkspacesStore } from '@/store/workspacesStore'
-import { useSidebarStore } from '@/store/sidebar'
 import { useSessionStore } from '@/store/session'
-import { useWorkspaceSetupKickoff } from '@/hooks/useWorkspaceSetupKickoff'
+import { useUiStore } from '@/store/ui'
+import { useConnectionStore } from '@/store/connection'
 import { clearLibraryAttachments } from '@/lib/library-attachment'
+import { resolveWorkspaceSwitch } from '@/components/panel-shell/workspaceSwitch'
+import { getPanelDefinition } from '@/components/panel-shell/registry'
+import { isWorkspaceScopedPanel } from '@/components/panel-shell/types'
+import type { WorkspacePanelContext } from '@/components/panel-shell/types'
 import { ChatControls } from '@/components/chat/ChatControls'
+import { ChatHeaderSlot, roomIdOfPath } from '@/components/chat/ChatHeaderSlot'
 import { QueryErrorState } from '@/components/shared/QueryErrorState'
 import { Button } from '@/components/ui/button'
-import { IconButton } from '@/components/ui/icon-button'
+import { SidebarShowButton } from '@/components/layout/SidebarShowButton'
 import { Card } from '@/components/ui/card'
 import { WorkspaceTabBar, resolveActiveSegment } from './WorkspaceTabBar'
+import { activeWorkspacesQueryOptions } from '@/lib/workspaceQueries'
 
 // React context carrying the resolved workspace to every tab.
 const WorkspaceContext = createContext<Workspace | null>(null)
@@ -26,6 +31,23 @@ export function useActiveWorkspace(): Workspace {
     throw new Error('useActiveWorkspace must be used within a WorkspaceTabContainer')
   }
   return ws
+}
+
+/** Binds a workspace as the active one for children that read
+ *  `useActiveWorkspace()`, WITHOUT the workspace route shell — the side
+ *  panel's TeamPanel resolves the workspace itself (fetchWorkspace by the
+ *  panel context's workspaceId) and mounts WorkspaceTeamTab, which is
+ *  written against the context, under this provider for both its docked and
+ *  full-screen presentations. The route container above stays the only
+ *  writer during normal workspace navigation. */
+export function WorkspaceContextProvider({
+  workspace,
+  children,
+}: {
+  workspace: Workspace
+  children: ReactNode
+}) {
+  return <WorkspaceContext.Provider value={workspace}>{children}</WorkspaceContext.Provider>
 }
 
 interface WorkspaceTabContainerProps {
@@ -45,9 +67,10 @@ interface WorkspaceTabContainerProps {
  */
 export function WorkspaceTabContainer({ workspaceId }: WorkspaceTabContainerProps) {
   const navigate = useNavigate()
+  const location = useLocation()
   const { activeWorkspaceId, setActiveWorkspaceId, setActivePlanId } = useWorkspacesStore()
-  const toggle = useSidebarStore((s) => s.toggle)
   const enterWorkspaceChat = useSessionStore((s) => s.enterWorkspaceChat)
+  const previousRouteWorkspaceRef = useRef(workspaceId)
 
   const {
     data: workspaces = [],
@@ -55,10 +78,24 @@ export function WorkspaceTabContainer({ workspaceId }: WorkspaceTabContainerProp
     isLoading: workspacesLoading,
     refetch: refetchWorkspaces,
   } = useQuery({
-    queryKey: workspacesQueryKeys.list({ status: 'active' }),
-    queryFn: () => fetchWorkspaces({ status: 'active' }),
+    ...activeWorkspacesQueryOptions,
     staleTime: 30_000,
   })
+
+  // #1632: browser "online" is not this socket. React Query therefore does not
+  // refetch when the gateway socket comes back, and this shell stayed on the
+  // error until Retry. One refetch on a down-to-up edge, and only while the
+  // list is still in error: subscribe to the boolean so a repeat connected
+  // notification or any other store write does not start another request, and
+  // a screen that already loaded is left mounted (no loader flash).
+  const isConnected = useConnectionStore((s) => s.isConnected)
+  const wasConnectedRef = useRef(isConnected)
+  useEffect(() => {
+    const wasConnected = wasConnectedRef.current
+    wasConnectedRef.current = isConnected
+    if (wasConnected || !isConnected || !workspacesError) return
+    void refetchWorkspaces()
+  }, [isConnected, workspacesError, refetchWorkspaces])
 
   // Resolve 'inbox' alias to the real default workspace id.
   useEffect(() => {
@@ -74,6 +111,63 @@ export function WorkspaceTabContainer({ workspaceId }: WorkspaceTabContainerProp
     }
   }, [workspaceId, workspaces, navigate])
 
+  // SP-29: preserve or re-target the open panel when the route changes
+  // workspaces. The router blocker owns pre-navigation cancellation; this
+  // call site applies the panel-specific state move after an allowed switch.
+  useEffect(() => {
+    const previousWorkspaceId = previousRouteWorkspaceRef.current
+    previousRouteWorkspaceRef.current = workspaceId
+    if (
+      !previousWorkspaceId ||
+      previousWorkspaceId === 'inbox' ||
+      !workspaceId ||
+      workspaceId === 'inbox' ||
+      previousWorkspaceId === workspaceId
+    ) {
+      return
+    }
+
+    // A named panel in the incoming URL is an adoption, not an ordinary
+    // workspace switch. Leave its mailbox decision to usePanelDeepLink: moving
+    // Mail here first could make that hook mistake a bare link for an already
+    // adopted panel and keep the previous workspace's mailbox.
+    if (typeof location.search.panel === 'string') return
+
+    const activePanel = useUiStore.getState().activePanel
+    if (!activePanel) return
+    const openedWorkspaceId =
+      activePanel.context.workspaceId === previousWorkspaceId
+        ? previousWorkspaceId
+        : undefined
+
+    void resolveWorkspaceSwitch({
+      panelId: activePanel.id,
+      openedWorkspaceId,
+      nextWorkspaceId: workspaceId,
+      beforeLeave: openedWorkspaceId ? getPanelDefinition(activePanel.id)?.beforeLeave : undefined,
+    }).then((decision) => {
+      if (previousRouteWorkspaceRef.current !== workspaceId) return
+      if (decision.action === 'cancel') {
+        void navigate({
+          to: '/workspaces/$workspaceId/chat',
+          params: { workspaceId: previousWorkspaceId },
+          replace: true,
+        })
+        return
+      }
+      if (decision.action !== 'follow') return
+
+      const latest = useUiStore.getState().activePanel
+      if (latest !== activePanel) return
+      if (!isWorkspaceScopedPanel(activePanel.id)) return
+      const context = activePanel.context as WorkspacePanelContext
+      useUiStore.getState().openPanel(activePanel.id, {
+        ...context,
+        workspaceId: decision.workspaceId,
+      })
+    })
+  }, [workspaceId, navigate, location.search.panel])
+
   // Bind the active workspace from the route.
   useEffect(() => {
     if (workspaceId && workspaceId !== 'inbox' && activeWorkspaceId !== workspaceId) {
@@ -87,16 +181,51 @@ export function WorkspaceTabContainer({ workspaceId }: WorkspaceTabContainerProp
     setActivePlanId(null)
   }, [workspaceId, setActivePlanId])
 
-  // Bug 1 fix: manage session lifecycle at the workspace level.
-  // Fires only on workspaceId change — tab switches don't re-run this.
+  // ADR-051 Rev 4 (Slice H): drop any staged library attachments when the
+  // active workspace changes — their media://workspace/<ws>/<id> refs are
+  // scoped to the previous workspace and must not leak into the new one.
+  // Keyed on the workspace only: a session directive appearing in the address
+  // (#1437) re-runs the entry effect below but must NOT drop staged
+  // attachments — the workspace has not changed.
   useEffect(() => {
     if (!workspaceId || workspaceId === 'inbox') return
-    // ADR-051 Rev 4 (Slice H): drop any staged library attachments when the
-    // active workspace changes — their media://workspace/<ws>/<id> refs are
-    // scoped to the previous workspace and must not leak into the new one.
     clearLibraryAttachments()
+  }, [workspaceId])
+
+  // Bug 1 fix: manage session lifecycle at the workspace level.
+  // Fires only on workspaceId change — tab switches don't re-run this.
+  //
+  // #1437: a chat address that names its session (`?open=<id>`, written by
+  // the /sessions/{id} deep-link redirect) drives the entry — the linked chat
+  // wins over the workspace's remembered pointer, so a reload of the address
+  // lands back in exactly that chat even when another tab has since changed
+  // what this browser last remembered here. The directive is acted on only
+  // while it is present: when the address drops it (New chat clears the
+  // active session and the chat route's address sync follows), this effect
+  // must NOT re-resolve — that would yank the fresh composer back to the
+  // remembered chat. The ref below makes that disappearance a no-op while
+  // keeping plain workspace entry (and a later workspace change) untouched.
+  const linkedSessionId =
+    typeof location.search.open === 'string' ? location.search.open : undefined
+  const prevRunHadDirectiveRef = useRef(false)
+  useEffect(() => {
+    if (!workspaceId || workspaceId === 'inbox') return
+    if (linkedSessionId && linkedSessionId !== '__pending') {
+      prevRunHadDirectiveRef.current = true
+      enterWorkspaceChat(workspaceId, { linkedSessionId })
+      return
+    }
+    if (prevRunHadDirectiveRef.current) {
+      // The directive just left the address (New chat) — the fresh composer
+      // is the state the user chose; do not re-resolve over it. (A no-op
+      // re-entry against an already-attached chat is harmless — execute()
+      // early-returns — but a New chat's fresh composer must not be
+      // re-resolved back to the remembered chat.)
+      prevRunHadDirectiveRef.current = false
+      return
+    }
     enterWorkspaceChat(workspaceId)
-  }, [workspaceId, enterWorkspaceChat])
+  }, [workspaceId, linkedSessionId, enterWorkspaceChat])
 
   // Fall back to archived workspace list for direct-URL access.
   const { data: archivedWorkspaces = [], isLoading: archivedLoading } = useQuery({
@@ -109,14 +238,6 @@ export function WorkspaceTabContainer({ workspaceId }: WorkspaceTabContainerProp
   const workspace =
     workspaces.find((w) => w.id === workspaceId) ??
     archivedWorkspaces.find((w) => w.id === workspaceId)
-
-  // Auto-triggers the workspace-setup interview on first open.
-  // Called unconditionally (before the early returns below) so hook order
-  // stays stable across renders regardless of loading/error state — the
-  // hook itself no-ops until `workspace` resolves and `setup_pending` is
-  // true. Fires regardless of which tab is active, matching enterWorkspaceChat
-  // above (chat state lives in the store, not the currently-mounted tab).
-  useWorkspaceSetupKickoff(workspace)
 
   if (workspaceId === 'inbox') return null
 
@@ -139,20 +260,21 @@ export function WorkspaceTabContainer({ workspaceId }: WorkspaceTabContainerProp
   }
 
   return (
-    <WorkspaceTabContainerView workspace={workspace} toggle={toggle} />
+    <WorkspaceTabContainerView workspace={workspace} />
   )
 }
 
 /** Inner view — extracted so useLocation can run unconditionally. */
 function WorkspaceTabContainerView({
   workspace,
-  toggle,
 }: {
   workspace: Workspace
-  toggle: () => void
 }) {
   const location = useLocation()
   const activeSegment = resolveActiveSegment(location.pathname, workspace.id)
+  // #1449 FR-065 / ADR A9.4: "Open browser" acts on the remembered SESSION;
+  // a group page is not that session, so the control is not offered there.
+  const onRoomPage = roomIdOfPath(location.pathname, workspace.id) !== null
 
   return (
     <WorkspaceContext.Provider value={workspace}>
@@ -160,8 +282,12 @@ function WorkspaceTabContainerView({
         {/* Top bar — semantic <header> (banner landmark) for accessible
             landmark navigation, reachable via both getByRole('banner') and a
             `header` CSS selector. @container enables container-query variants
-            on children (used by ChatControls' "Open browser" label and by
-            WorkspaceTabBar's own full-strip/dropdown breakpoint).
+            on children (used by ChatControls' "Open browser" label).
+            WorkspaceTabBar measures the remaining flex slot instead of
+            using a fixed container breakpoint. data-header-line marks this
+            row as the line it measures against: the chat title in the slot
+            at the right end is room the strip may take back
+            (useWorkspaceHeaderMode).
             No secondary breadcrumb row: the tab strip already names the
             workspace + active view, so a second chrome line was redundant and
             broke the flat 44px shell alignment.
@@ -173,27 +299,33 @@ function WorkspaceTabContainerView({
           role="banner"
           className="@container flex items-center h-chrome-header min-h-chrome-header bg-[var(--color-surface-0)] flex-shrink-0"
           data-testid="workspace-top-bar"
+          data-header-line=""
         >
-          <IconButton
-            id="sidebar-hamburger"
-            onClick={toggle}
-            aria-label="Toggle navigation sidebar"
-            data-testid="workspace-hamburger"
-            variant="ghost"
+          <SidebarShowButton
+            testId="workspace-hamburger"
             className="h-chrome-header min-h-chrome-header w-11 rounded-none text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex-shrink-0"
-          >
-            <List size={20} />
-          </IconButton>
+          />
 
-          {/* The workspace name renders INSIDE WorkspaceTabBar as the first
-              tablist item (→ settings) — one menu component, no stray button. */}
+          {/* The measured strip owns the flexible space. The sidebar launcher
+              and browser controls keep their natural width at every mode. */}
           <WorkspaceTabBar workspaceId={workspace.id} workspaceName={workspace.name} />
 
-          {activeSegment === 'chat' && (
-            <div className="flex-1 min-w-0 flex @6xl:justify-end px-[var(--space-2-5)]" data-testid="workspace-chat-controls">
+          {activeSegment === 'chat' && !onRoomPage && (
+            <div className="flex shrink-0 items-center justify-end px-[var(--space-2-5)]" data-testid="workspace-chat-controls">
               <ChatControls />
             </div>
           )}
+
+          {/* #1449 D13 (founder 2026-10-28): the chat's own chrome sits at
+              the right end of THIS header line — the same line as the
+              workspace strip, which stays where it is on the left. No new
+              row, no bar, no border, no background: the slot carries the
+              chat label / helper breadcrumb and the chat controls (today
+              "Add participant"; the group chat's Participants button plugs
+              into the same slot later). On a room page the slot stays
+              empty — the room owns its own chrome until the group work
+              lands. */}
+          {activeSegment === 'chat' && <ChatHeaderSlot workspaceId={workspace.id} />}
         </header>
 
         {/* Tab content */}
@@ -208,8 +340,7 @@ function WorkspaceTabContainerView({
 function WorkspaceNotFoundState() {
   const navigate = useNavigate()
   const { data: workspaces = [] } = useQuery({
-    queryKey: workspacesQueryKeys.list({ status: 'active' }),
-    queryFn: () => fetchWorkspaces({ status: 'active' }),
+    ...activeWorkspacesQueryOptions,
     staleTime: 30_000,
   })
 

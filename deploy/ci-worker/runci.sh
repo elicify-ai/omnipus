@@ -5,15 +5,40 @@
 #   all-no-e2e = `all` minus go-race/e2e, with setup (npm ci + verify-contracts) done once and
 #   the remaining checks fanned out over three parallel groups — see run_all_no_e2e.
 # Requires env GIT_REMOTE (authenticated clone URL), set as a Fly secret.
-#   The `e2e` gate additionally requires OPENROUTER_API_KEY (Fly secret) — set on ci-omnipus-1 via
-#   `fly secrets set OPENROUTER_API_KEY=<value> --app ci-omnipus-1`.
+#   The `e2e` gate additionally requires MINIMAX_API_KEY (the PRIMARY model key) and
+#   OPENROUTER_API_KEY (the FALLBACK model key), both Fly secrets on ci-omnipus-1
+#   (`fly secrets set NAME=<value> --app ci-omnipus-1`). The models themselves are named only
+#   in tests/e2e/e2e-model.json, read through the checkout's scripts/e2e-model.sh.
 #   Optional for faster sharded e2e: OPENROUTER_API_KEY_B / OPENROUTER_API_KEY_C give the
-#   concurrent LLM shards their own rate-limit windows; unset ⇒ they fall back to the primary
-#   key (the run still works, just at single-key parallelism). See run_e2e below.
+#   concurrent LLM shards their own fallback rate-limit windows; unset ⇒ they fall back to
+#   OPENROUTER_API_KEY. See run_e2e below.
 set -uo pipefail
+# Trailer when the run is killed by a signal (2026-10-18, lint@d52b70bdc: the
+# console session's server side tore the run down mid-write — every process
+# died at 13:59:26Z, no guest OOM in dmesg, no flyd event — and the log simply
+# stopped, so the dispatcher could not tell "killed" from "still going").
+# These traps write an explicit KILLED line (through the RUNLOG tee once it is
+# up, otherwise to the console capture) and then exit, preserving death-by-
+# signal semantics: HUP=129, INT=130, TERM=143. No RESULT line is written —
+# a run killed mid-gate HAS no verdict, and ci-cluster.sh treats a missing
+# RESULT as an incomplete run and says so explicitly.
+# Limits, stated honestly: a SIGKILL (guest OOM killer) cannot be trapped —
+# nothing runs on SIGKILL — and a signal delivered to runci.sh ALONE while a
+# foreground gate child runs is acted on only after that child exits. The
+# guaranteed net for both is the dispatcher's liveness watchdog
+# (ci-cluster.sh::dispatch_tier), which ends the tier with an explicit
+# STALLED/DIED verdict when the remote gate process is gone without a RESULT.
+trap 'echo "RUNCI: KILLED by signal HUP — no verdict written; gate state at death is unknown"; exit 129' HUP
+trap 'echo "RUNCI: KILLED by signal INT — no verdict written; gate state at death is unknown"; exit 130' INT
+trap 'echo "RUNCI: KILLED by signal TERM — no verdict written; gate state at death is unknown"; exit 143' TERM
 
 REF="${1:-HEAD}"
 GATE="${2:-all}"
+# Dispatcher-assigned attempt identity (ci-cluster.sh passes a unique id per
+# dispatched invocation). Echoed into the run log so evidence recovered or
+# collected later can be bound to THIS invocation, never to an older run of the
+# same gate and commit. Empty when run by hand.
+ATTEMPT="${3:-}"
 REPO_DIR=/cache/omnipus   # on the persistent volume → clone survives stop/start
 
 # --- per-run log on the persistent volume ---------------------------------
@@ -31,17 +56,30 @@ REPO_DIR=/cache/omnipus   # on the persistent volume → clone survives stop/sta
 # older ones allow an A/B comparison). ci-cluster.sh's collection phase copies
 # this file off BEFORE stopping the machine; the `RUNLOG:` line below is what
 # it parses to find the exact path on the machine.
+# RUNCI_AS_CI=1 marks the re-exec'd non-root child (see "Run the test gates as a
+# non-root user" below): the root parent already tee'd the run, took the lock and
+# synced the checkout, and its stdout/stderr and lock descriptor are inherited.
+if [ -z "${RUNCI_AS_CI:-}" ]; then
 RUNLOG_DIR=/cache/logs
 mkdir -p "$RUNLOG_DIR" || { echo "cannot create $RUNLOG_DIR — no persistent run log possible"; exit 2; }
 safe_ref="$(printf '%s' "$REF" | tr -c 'A-Za-z0-9._-' '-')"
-RUNLOG="$RUNLOG_DIR/${GATE}@${safe_ref}-$(date -u +%Y%m%dT%H%M%SZ).log"
+# The name carries the attempt id and this process id and the file is created
+# with noclobber, never appended to: two invocations in the same UTC second can
+# no longer share one file, so a log can never hold an earlier run's verdict
+# next to a later run's identity (ci-cluster.sh also rejects any log holding
+# more than one ATTEMPT identity).
+safe_attempt="$(printf '%s' "${ATTEMPT:-manual}" | tr -c 'A-Za-z0-9._-' '-')"
+RUNLOG="$RUNLOG_DIR/${GATE}@${safe_ref}-$(date -u +%Y%m%dT%H%M%SZ)-${safe_attempt}-$$.log"
 # Prune BEFORE the tee opens the new file: keep the newest 2 existing logs for
 # THIS gate (today's file becomes the 3rd). `@` separates gate from ref — gate
 # names contain `-` (go-test), so a `-` there would make `go-*` also match
 # go-test's logs. xargs -r is GNU-only; this script runs on the Linux worker.
 ( cd "$RUNLOG_DIR" && ls -t "${GATE}@"*.log 2>/dev/null | tail -n +3 | xargs -r rm -f -- ) || true
-exec > >(tee -a "$RUNLOG") 2>&1
+( set -C; : > "$RUNLOG" ) || { echo "cannot create a new run log $RUNLOG (already exists?)"; exit 2; }
+exec > >(tee "$RUNLOG") 2>&1
 echo "RUNLOG: $RUNLOG"
+echo "ATTEMPT: ${ATTEMPT:-none}"
+fi
 
 # --- whole-run mutex ------------------------------------------------------
 # This worker is SHARED: every operator/session drives the same machine, and a
@@ -62,6 +100,7 @@ echo "RUNLOG: $RUNLOG"
 # per-run path scoping (tests/e2e/setup.ts hardcodes /tmp/omnipus-ci).
 # FD 9 is held for the lifetime of this process; the lock releases on exit.
 _LOCKFILE=/tmp/runci.lock
+if [ -z "${RUNCI_AS_CI:-}" ]; then
 exec 9>"$_LOCKFILE" || { echo "cannot open $_LOCKFILE"; exit 2; }
 if ! flock -n 9; then
   echo "another runci.sh is already running on this worker (lock: $_LOCKFILE):"
@@ -75,7 +114,62 @@ if ! flock -n 9; then
   fi
 fi
 echo "worker lock acquired (pid $$)"
+fi
 TAGS="goolm,stdjson"
+# WU-23 Landlock kernel-receipt tests are EXCLUDED on this worker, explicitly.
+#
+# The receipt suite (pkg/sandbox/wu23_landlock_linux_test.go,
+# wu23_agenthome_creation_linux_test.go, wu23_r1_runtime_inventory_linux_test.go
+# and pkg/tools/wu23_god_spawns_linux_test.go) needs a REAL Landlock kernel:
+# its shared helper wu23KernelCommand fatals
+#   "BLOCKED: real Landlock unavailable — D8 requires a non-skip Linux receipt"
+# the moment NewLinuxBackend() fails, and Fly's Firecracker VMs run a kernel
+# without a usable Landlock (worker log 2026-10-18: "Landlock not available.
+# Using application-level enforcement. backend=fallback
+# kernel_version=6.12.105-fly"). Amendment D8 (L1-AMENDMENTS-20261013.md
+# §2.2 D8) rules "the Fly cluster is not accepted as kernel evidence", so on
+# this worker those tests could never go green — an always-red gate is an
+# instrument that proves nothing and hides every OTHER real failure.
+#
+# This script is the FLY WORKER's gate runner and runs nowhere else (GitHub's
+# pr.yml never invokes it), so the exclusion below is Fly-only by
+# construction. GitHub's Linux runners DO provide Landlock and still run and
+# pass every receipt test there — GitHub CI stays the receipt authority, and
+# this is a deliberate, DOCUMENTED divergence of what the two surfaces
+# measure (see deploy/ci-worker/CLAUDE.md trap 9).
+#
+# Never a silent skip:
+#   * run_gotest/run_gorace print the NOT RUN ON FLY line below in the gate
+#     output, which ci-cluster.sh collects; and
+#   * -skip OMITTS the matched tests from the go test output entirely (no
+#     `--- SKIP` line is printed — verified on go 1.27; without -v the log
+#     shows only the package's `ok` line). So no `--- PASS` line ever exists
+#     for them and no verdict in this script can count them as passed (the
+#     only pass-counting anywhere is records-no-sqlite's floor, a different
+#     gate whose tests do not match this pattern). The NOT RUN ON FLY line is
+#     the log's only marker that these tests were left out — keep it.
+#
+# The pattern is LEFT-anchored on the WU-23 prefix and requires "Landlock"
+# somewhere in the name — verified against the full repo test inventory to
+# match EXACTLY the eight receipt tests (the six TestWU23_Landlock* tests in
+# pkg/sandbox, TestWU23_GodModeNativeSpawns_Landlock in pkg/tools and
+# TestWU23R1_RuntimeAllowRootsNeverReopenInventory_Landlock). A right anchor
+# would be WRONG here: it would miss the six TestWU23_Landlock* names, which
+# do not END in "Landlock". The other 14 Landlock-named tests
+# (TestLandlock_*, TestLandlockRightsForABI_*, TestAccessToLandlockRights_*,
+# TestSandboxBackend_LandlockFallbackChain, …) do not start with TestWU23,
+# do NOT match, and still run here.
+# All four `go test` invocations in run_gotest/run_gorace carry the flag —
+# the contended run AND the flake filter's isolated re-run: without it there,
+# a re-run of any package containing a receipt test would fail on the BLOCKED
+# fatal and stamp the package "REAL FAILURE (failed twice)", silently undoing
+# the skip.
+WU23_LANDLOCK_SKIP='^TestWU23.*Landlock'
+# Printed by run_gotest/run_gorace so the exclusion is visible in the gate
+# output, never a silent skip.
+note_landlock_skip() {
+  echo "NOT RUN ON FLY: WU-23 Landlock receipt tests (no Landlock in Fly VMs; GitHub Linux CI is the authority, amendment §2.2 D8)"
+}
 export PATH=/usr/local/go/bin:/cache/go/bin:$PATH
 export HOME="${HOME:-/root}"   # non-login SSH shell has no HOME; gen-contracts.sh uses set -u
 
@@ -103,6 +197,15 @@ log() { printf '\n\033[1;36m=== %s ===\033[0m\n' "$*"; }
 rc=0; step() { local name="$1"; shift; log "$name"; "$@"; local e=$?; printf '\033[1m%s -> exit %d\033[0m\n' "$name" "$e"; [ $e -ne 0 ] && rc=1; return 0; }
 
 # --- sync repo ---
+# The checkout is owned by the non-root `ci` user after a run (ci_prepare), so root's
+# own git must be told that is fine - otherwise the next run's fetch dies with
+# "detected dubious ownership". Idempotent.
+if [ -z "${RUNCI_AS_CI:-}" ] && ! git config --global --get-all safe.directory 2>/dev/null | grep -qx '\*'; then
+  git config --global --add safe.directory '*'
+fi
+if [ -n "${RUNCI_AS_CI:-}" ]; then
+  cd "$REPO_DIR" || exit 2     # the root parent already fetched and checked out
+else
 if [ ! -d "$REPO_DIR/.git" ]; then
   log "clone"; git clone "${GIT_REMOTE:?GIT_REMOTE not set}" "$REPO_DIR" || exit 2
 fi
@@ -118,7 +221,92 @@ TARGET="$(git rev-parse --verify --quiet "origin/$REF^{commit}" || git rev-parse
 [ -z "$TARGET" ] && { echo "cannot resolve ref $REF"; exit 2; }
 git checkout -f "$TARGET" || exit 2
 git reset --hard "$TARGET" --quiet || true
+# `checkout -f` + `reset --hard` leave UNTRACKED files behind, and this checkout
+# is persistent: files an older revision's tests wrote into the tree (the gateway
+# entities/agents/*.lock) survive for ever, and the package TestMain guard
+# ("a test wrote into the package directory") then blames the CURRENT run for
+# them. `git clean -fdx` makes every run start from exactly the committed tree.
+# Excluded because they are expensive and safe to keep: node_modules (npm ci's
+# output; runci still checks it against package-lock.json). The Go/npm/Playwright
+# caches live outside the tree (/cache/go-build, /cache/go, /cache/npm).
+git clean -fdxq -e node_modules || echo "WARNING: git clean failed - stale untracked files may remain in the checkout"
 echo "HEAD: $(git rev-parse --short HEAD) $(git log -1 --format='%s')"
+fi
+
+# --- worker hygiene (root, once per run, before any gate) ----------------------------------
+
+# Disk pressure: the Go build cache grows until /cache is full, and a full /cache
+# fails gates with "no space left on device", which reads as a code failure and is
+# not one (2026-10-11: a go-build died on a 100% full /cache holding a 12.6 GB
+# build cache). At or above 85% the cache is cleared (it is only a cache; the next
+# build is slower, never wrong) and the run says so.
+disk_pressure_check() {
+  local pct
+  pct="$(df --output=pcent /cache 2>/dev/null | tail -1 | tr -dc '0-9')"
+  [ -n "$pct" ] || { echo "disk check: cannot read /cache usage"; return 0; }
+  if [ "$pct" -ge 85 ]; then
+    echo "DISK PRESSURE: /cache is at ${pct}% (threshold 85%) - clearing the Go build cache and test temp residue"
+    GOCACHE=/cache/go-build go clean -cache 2>&1 | tail -3
+    rm -rf /cache/tmp/Test* 2>/dev/null
+    echo "disk pressure: /cache is now at $(df --output=pcent /cache | tail -1 | tr -dc '0-9')%"
+  else
+    echo "disk check: /cache at ${pct}% (threshold 85%)"
+  fi
+}
+
+# The document-runtime probe (pkg/documentruntime.ProbeArgv) runs `python -m ...`;
+# the Debian image ships neither, so pkg/agent TestNewAgentInstanceWiresDocumentRuntime...
+# got "command exited with code 127" instead of the structured incomplete-dependency
+# report it asserts. GitHub's runners have `python`. Installed here (idempotent, root,
+# survives for the machine's lifetime) and in the Dockerfile for new images.
+ensure_python() {
+  if command -v python >/dev/null 2>&1; then return 0; fi
+  echo "python not found on the worker - installing python3 + python-is-python3 (the document-runtime probe needs 'python')"
+  DEBIAN_FRONTEND=noninteractive apt-get update -qq >/dev/null 2>&1 || true
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3 python-is-python3 >/dev/null 2>&1 \
+    || echo "WARNING: could not install python; document-runtime tests will see exit 127 (environment, not code)"
+}
+
+# --- Run the test gates as a non-root user --------------------------------------------------
+#
+# The Fly machine's SSH shell is root, and many tests induce a failure with file
+# permissions (a read-only dir, an unreadable file); root bypasses every one of them,
+# so they cannot pass: 44 entries of the 2026-10-11 full run were exactly that
+# ("BLOCKED: runner bypasses write permissions", "tests must not run as root"). GitHub
+# CI runs as a normal user, so this worker measured something GitHub does not. Every
+# gate except e2e/all (Xvfb, browsers, ports) is therefore re-exec'd as the `ci`
+# user after the root-only work above (lock, log tee, checkout, hygiene): the child
+# inherits stdout and the held lock descriptor, skips those steps (RUNCI_AS_CI=1),
+# and runs the SAME gate code. Files it creates are owned by ci, so nothing root-owned
+# is left behind in the caches or the checkout for the next run to trip over.
+CI_USER=ci
+ci_prepare() {
+  id -u "$CI_USER" >/dev/null 2>&1 || useradd -m -s /bin/bash "$CI_USER" || return 1
+  mkdir -p /cache/tmp /cache/go /cache/go-build /cache/npm
+  local d
+  for d in "$REPO_DIR" /cache/go /cache/go-build /cache/npm /cache/tmp; do
+    # Incremental: only entries not already ci's (the first run after the change
+    # pays once; later runs touch only what root created in between).
+    find "$d" ! -user "$CI_USER" -exec chown -h "$CI_USER:$CI_USER" {} + 2>/dev/null || true
+  done
+  printf '[safe]\n\tdirectory = *\n' > "/home/$CI_USER/.gitconfig"
+  chown "$CI_USER:$CI_USER" "/home/$CI_USER/.gitconfig"
+}
+
+if [ -z "${RUNCI_AS_CI:-}" ]; then
+  disk_pressure_check
+  ensure_python
+  case "$GATE" in
+    e2e|all) echo "gate $GATE stays root (browsers, Xvfb, shard ports); the Go/node test gates run as '$CI_USER'" ;;
+    *)
+      if [ "$(id -u)" = 0 ]; then
+        ci_prepare || { echo "cannot prepare the non-root test user '$CI_USER'"; exit 2; }
+        echo "re-exec as non-root user '$CI_USER' (uid $(id -u "$CI_USER"))"
+        exec runuser -u "$CI_USER" -- env RUNCI_AS_CI=1 HOME="/home/$CI_USER" "PATH=$PATH" bash "$0" "$REF" "$GATE" "$ATTEMPT"
+      fi
+      ;;
+  esac
+fi
 
 # Go's //go:embed all:spa needs pkg/gateway/spa/ non-empty. For compile/unit gates a stub is enough
 # (the real SPA is only needed to produce a servable binary → the embed-build gate).
@@ -129,6 +317,16 @@ ensure_spa_stub() {
   fi
 }
 run_spaembed() { npm run build && rm -rf pkg/gateway/spa && cp -r dist/spa pkg/gateway/spa; }
+
+# Checkout cleanup removes ignored build/tools on every gate invocation. Rebuild
+# the real native prerequisites in the consuming gate, before any gateway test.
+# The helper pins CGO_ENABLED=0/tags for these fixture-only binaries; race test
+# consumers keep their own CGO_ENABLED=1 and -race settings unchanged.
+prepare_chat_history_fixture_tools() {
+  python3 -I deploy/ci-worker/chat-history-ci.py fixtures || return 1
+  export OMNIPUS_CHAT_HISTORY_FIXTURE_BINARY="$REPO_DIR/build/tools/chat-history-fixture.test"
+  export OMNIPUS_CHAT_HISTORY_SEED_BINARY="$REPO_DIR/build/tools/chat-history-seed"
+}
 
 # gofmt's OWN exit code is read before anything counts lines.
 #
@@ -171,7 +369,7 @@ run_govet()    { ensure_spa_stub; CGO_ENABLED=0 go vet -tags "$TAGS" ./...; }
 # golangci-lint with CGO_ENABLED=0 (so //go:build !cgo test helpers compile) and the
 # canonical build tags. Pinned to the version pr.yml uses. Installed once to the
 # persistent /cache/go/bin (already on PATH) so it survives stop/start.
-GOLANGCI_VERSION=v2.10.1
+GOLANGCI_VERSION=v2.15.0
 run_lint() {
   ensure_spa_stub
   # The size-budget guards discovered by scripts/guards.sh below need the
@@ -260,6 +458,8 @@ run_lint() {
 # is proved by the CGO_ENABLED=0 build/test gates, not by this one.
 run_gorace() {
   ensure_spa_stub
+  prepare_chat_history_fixture_tools || return 1
+  note_landlock_skip
   local out
   # CI=true is REQUIRED here, and is the single thing that makes this gate
   # predict GitHub's. GitHub Actions always sets CI, so pkg/tools/browser's
@@ -313,7 +513,7 @@ run_gorace() {
     return 1
   fi
   out=$(CI=true GOMAXPROCS=4 CGO_ENABLED=1 go test -race -tags "$TAGS" -count=1 -p 2 -timeout 2700s \
-    "${race_pkgs[@]}" 2>&1)
+    -skip "$WU23_LANDLOCK_SKIP" "${race_pkgs[@]}" 2>&1)
   local code=$?
   echo "$out"
   # Checked BEFORE the exit-code short-circuit, for the same reason pr.yml and
@@ -357,9 +557,24 @@ run_gorace() {
     echo "$out" | grep -aoE '^\s*--- FAIL: [A-Za-z0-9_/]+' | awk '{print $3}' | sort -u | sed 's/^/    /'
     return 1
   fi
+  # GUARD FAILURE is TestMain's hygiene token. It exits 1 with a package FAIL
+  # line and no --- FAIL line, which is the hang shape this filter exists to
+  # excuse. Never retry it. The classifier ships in the checkout: a ref that
+  # predates it does not print the token, so a missing file keeps the old path.
+  if [[ -f scripts/ci-flake-classify.sh ]]; then
+    # shellcheck source=scripts/ci-flake-classify.sh
+    source scripts/ci-flake-classify.sh || return 1
+    if ci_log_has_guard_failure "$out"; then
+      echo ""
+      echo "=== GUARD FAILURE detected — a test-hygiene guard is never excused by an isolated re-run ==="
+      echo "REAL FAILURE (guard failure detected — never excused)"
+      return 1
+    fi
+  fi
   # No race and no assertion failure — now the ordinary short-circuit applies.
   # What reaches the flake filter below is exclusively the hang/contention
-  # signature: a bare `FAIL <pkg>` summary with no `--- FAIL` line anywhere.
+  # signature: a bare `FAIL <pkg>` summary with no `--- FAIL` line and no
+  # GUARD FAILURE token anywhere.
   [ $code -eq 0 ] && return 0
 
   # Flake filter — ALSO copied from pr.yml's race step, and required for
@@ -401,7 +616,9 @@ run_gorace() {
     # re-run must measure the SAME thing, or a package that only "fails" here
     # because it launched a real Chrome would be re-run without one and
     # stamped a flake — or vice versa.
-    if CI=true CGO_ENABLED=1 go test -race -tags "$TAGS" -count=1 -timeout 2700s -p 1 "$p" >"$TMPDIR/rr_race_$(echo "$p" | tr '/' '_').log" 2>&1 \
+    # -skip here too (same reason as run_gotest's isolated re-run): the
+    # re-run must measure the same thing as the contended run above.
+    if CI=true CGO_ENABLED=1 go test -race -tags "$TAGS" -count=1 -timeout 2700s -p 1 -skip "$WU23_LANDLOCK_SKIP" "$p" >"$TMPDIR/rr_race_$(echo "$p" | tr '/' '_').log" 2>&1 \
        && ! grep -aq "DATA RACE" "$TMPDIR/rr_race_$(echo "$p" | tr '/' '_').log"; then
       # Excused — but say WHAT was excused. After the `--- FAIL` carve-out
       # above, reaching this point means the contended run produced a bare
@@ -426,6 +643,8 @@ run_gorace() {
 
 run_gotest() {
   ensure_spa_stub
+  prepare_chat_history_fixture_tools || return 1
+  note_landlock_skip
   # CI=true for the same reason run_gorace sets it: this gate exists to predict
   # GitHub's "Tests" job, and GitHub always sets CI. After #615 converted
   # pkg/tools/browser's real-Chrome tests to the package's own skipIfNoBrowser(t)
@@ -453,7 +672,7 @@ run_gotest() {
   # innocent test with nothing to do with the real timing. 2700s matches
   # run_gorace's 45-minute package budget so a loaded shared worker measures
   # the same finite ceiling as GitHub CI.
-  local out; out=$(CI=true GOMAXPROCS=4 CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -timeout 2700s -p 2 ./... 2>&1)
+  local out; out=$(CI=true GOMAXPROCS=4 CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -timeout 2700s -p 2 -skip "$WU23_LANDLOCK_SKIP" ./... 2>&1)
   local code=$?
   echo "$out"
   # DATA RACE carve-out — checked BEFORE the exit-code short-circuit, because a
@@ -513,9 +732,24 @@ run_gotest() {
     echo "$out" | grep -aA 12 -E '^\s*--- FAIL' | head -120
     return 1
   fi
+  # GUARD FAILURE is TestMain's hygiene token. It exits 1 with a package FAIL
+  # line and no --- FAIL line, which is the hang shape this filter exists to
+  # excuse. Never retry it. The classifier ships in the checkout: a ref that
+  # predates it does not print the token, so a missing file keeps the old path.
+  if [[ -f scripts/ci-flake-classify.sh ]]; then
+    # shellcheck source=scripts/ci-flake-classify.sh
+    source scripts/ci-flake-classify.sh || return 1
+    if ci_log_has_guard_failure "$out"; then
+      echo ""
+      echo "=== GUARD FAILURE detected — a test-hygiene guard is never excused by an isolated re-run ==="
+      echo "REAL FAILURE (guard failure detected — never excused)"
+      return 1
+    fi
+  fi
   # No race and no assertion failure — now the ordinary short-circuit applies.
   # What reaches the flake filter below is exclusively the hang/contention
-  # signature: a bare `FAIL <pkg>` summary with no `--- FAIL` line anywhere.
+  # signature: a bare `FAIL <pkg>` summary with no `--- FAIL` line and no
+  # GUARD FAILURE token anywhere.
   [ $code -eq 0 ] && return 0
   local failed; failed=$(echo "$out" | grep -aE '^FAIL[[:space:]]' | awk '{print $2}' | grep -a '/' | sort -u)
   [ -z "$failed" ] && return $code
@@ -541,7 +775,11 @@ run_gotest() {
     # uncontended) is just as exposed to go test's 10m-per-binary default,
     # and this IS the exact re-run that would otherwise stamp such a package
     # a REAL FAILURE on a timeout artifact rather than a genuine repeat.
-    if CI=true CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -timeout 2700s -p 1 "$p" >"$TMPDIR/rr.log" 2>&1; then
+    # -skip here too: the isolated re-run measures the same thing as the
+    # contended run, or a receipt test's BLOCKED fatal would stamp a flaky
+    # package "REAL FAILURE (failed contended AND isolated)" and silently
+    # undo the exclusion.
+    if CI=true CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -timeout 2700s -p 1 -skip "$WU23_LANDLOCK_SKIP" "$p" >"$TMPDIR/rr.log" 2>&1; then
       # Excused — but say WHAT was excused. Reaching this point means the
       # contended run produced a bare `FAIL <pkg>` with no named test failure,
       # i.e. the hang/timeout signature, and the package passed alone.
@@ -667,9 +905,11 @@ run_contracts(){ make verify-contracts; }
 # writes — a per-gateway constraint, not a global one). This replaces the old single
 # sequential run (~3 h with real-LLM latency) with ~one-slowest-shard wall-clock.
 #
-# Per-shard OpenRouter keys (runner-agnostic — identical on this Fly worker via Fly
-# secrets or on a GitHub-hosted / external self-hosted runner via Actions secrets):
-#   OPENROUTER_API_KEY    (slot a, REQUIRED — the primary key)
+# Model keys (runner-agnostic — identical on this Fly worker via Fly secrets or on a
+# GitHub-hosted / external self-hosted runner via Actions secrets):
+#   MINIMAX_API_KEY       (REQUIRED — the primary model key; one key for every shard)
+# Per-shard OpenRouter keys — the FALLBACK model key:
+#   OPENROUTER_API_KEY    (slot a, REQUIRED)
 #   OPENROUTER_API_KEY_B  (slot b, OPTIONAL → falls back to slot a when unset)
 #   OPENROUTER_API_KEY_C  (slot c, OPTIONAL → falls back to slot a when unset)
 # Pinning each concurrent LLM shard to its own key keeps them off one shared rate-limit
@@ -762,6 +1002,12 @@ _e2e_build() {
   # CGO=0 matches the runtime build path. /tmp/omnipus-ci is hardcoded by tests/e2e/setup.ts.
   log "e2e: build gateway binary"
   CGO_ENABLED=0 go build -tags "$TAGS" -o /tmp/omnipus-ci ./cmd/omnipus/ || return 1
+
+  # Once per candidate, before any shard fan-out. The official fixture driver
+  # is a session test executable, never a product test endpoint or copied engine.
+  prepare_chat_history_fixture_tools || return 1
+  export OMNIPUS_CHAT_HISTORY_MEASUREMENT_RECEIPT="$REPO_DIR/build/tools/chat-history-measurements.log"
+  python3 -I deploy/ci-worker/chat-history-ci.py measurement --receipt "$OMNIPUS_CHAT_HISTORY_MEASUREMENT_RECEIPT" || return 1
 
   # Force the chromium revision the installed @playwright/test expects (the caret range in
   # package.json may resolve past the image-baked revision). Cached after the first run;
@@ -897,35 +1143,68 @@ _e2e_run_shard() {
   rm -rf "$home"; mkdir -p "$home"
 
   # Canonical e2e config with THIS shard's port. Each shard has its own credentials.json
-  # under $home, so the shared api_key_ref name ("OPENROUTER_API_KEY") resolves to this
-  # shard's key value (seeded next). See pr.yml "Seed gateway config" for the rationale
-  # behind dev_mode_bypass / audit_log.
+  # under $home, so the shared api_key_ref names resolve to this shard's key values
+  # (seeded next; the fallback row's name gets this shard's OpenRouter slot key). See
+  # pr.yml "Seed gateway config" for the rationale behind dev_mode_bypass / audit_log.
+  #
+  # The models are centralized in tests/e2e/e2e-model.json (the guard
+  # scripts/check-no-hardcoded-e2e-model.sh fails any hardcoded model or provider id in
+  # live config), read once per run by _e2e_resolve_models, fail-closed.
   #
   # C1 fix (ADR-067 FR-034): providers[] rows are keyed by the EXACT (provider, model)
-  # pair — `provider` is the catalog id ("openrouter"), `model` is the BARE catalog
-  # model id ("z-ai/glm-5.2"). The old "<protocol>/<model>" prefix-splitting migration
+  # pair — `provider` is the catalog id, `model` is the bare
+  # catalog model id exactly as stored in tests/e2e/e2e-model.json. The old
+  # "<protocol>/<model>" prefix-splitting migration
   # was deleted deliberately (it silently mis-routed vendors), so a row with an empty
   # `provider` now fails ModelConfig.Validate ("provider is required") instead of being
   # guessed. agents.defaults.default_model is the (provider, model) pair — the retired
   # model_name alias is gone (ADR-068 CRIT-001).
-  cat > "$home/config.json" <<EOF
+  #
+  # The models were read ONCE for the run by _e2e_resolve_models (run_e2e): the primary
+  # and fallback pairs of tests/e2e/e2e-model.json, the job-start route, and whether the
+  # checkout still carries the legacy {"model": ...} file. Each shard seeds from them.
+  local onboard_id onboard_model onboard_key
+  if [ "$E2E_LEGACY" = 1 ]; then
+    # A ref cut before the MiniMax switch: one openrouter row, exactly the old seed.
+    cat > "$home/config.json" <<EOF
 {
   "version": 1,
   "gateway": { "port": $port, "dev_mode_bypass": true },
   "sandbox": { "audit_log": true, "tool_policies": { "spawn": "allow" } },
-  "agents": { "defaults": { "default_model": { "provider": "openrouter", "model": "z-ai/glm-5.2" }, "auto_recap_enabled": true } },
+  "agents": { "defaults": { "default_model": { "provider": "openrouter", "model": "${E2E_P_MODEL}" }, "auto_recap_enabled": true } },
   "providers": [
     {
       "provider": "openrouter",
-      "model": "z-ai/glm-5.3-flash",
+      "model": "${E2E_P_MODEL}",
       "api_base": "https://openrouter.ai/api/v1",
       "api_key_ref": "OPENROUTER_API_KEY"
     }
   ]
 }
 EOF
-
-  OMNIPUS_HOME="$home" /tmp/omnipus-ci credentials set OPENROUTER_API_KEY "$key" >/dev/null || return 1
+    OMNIPUS_HOME="$home" /tmp/omnipus-ci credentials set OPENROUTER_API_KEY "$key" >/dev/null || return 1
+    onboard_id=openrouter onboard_model="$E2E_P_MODEL" onboard_key="$key"
+  else
+    # The two-row CI seed (primary + fallback rows, default_model = the primary, or the
+    # fallback after a failed job-start check) from the shared template.
+    bash scripts/e2e-model.sh seed-config "$port" --route "$E2E_ROUTE" > "$home/config.json" \
+      || { echo "[$name] scripts/e2e-model.sh seed-config failed" >&2; return 1; }
+    # Credentials: the primary row's api_key_ref gets the primary secret of the same name
+    # (MINIMAX_API_KEY); the fallback row's gets this shard's OpenRouter slot key.
+    local primary_key="${!E2E_P_KEYREF:-}"
+    if [ -n "$primary_key" ]; then
+      OMNIPUS_HOME="$home" /tmp/omnipus-ci credentials set "$E2E_P_KEYREF" "$primary_key" >/dev/null || return 1
+    elif [ "$E2E_ROUTE" != fallback ]; then
+      echo "[$name] the primary key $E2E_P_KEYREF is not set" >&2
+      return 1
+    fi
+    OMNIPUS_HOME="$home" /tmp/omnipus-ci credentials set "$E2E_F_KEYREF" "$key" >/dev/null || return 1
+    if [ "$E2E_ROUTE" = fallback ]; then
+      onboard_id="$E2E_F_PROVIDER" onboard_model="$E2E_F_MODEL" onboard_key="$key"
+    else
+      onboard_id="$E2E_P_PROVIDER" onboard_model="$E2E_P_MODEL" onboard_key="$primary_key"
+    fi
+  fi
 
   # ADR-082 D1 deleted the ADR-045 orphan-foreground-turn watchdog in full —
   # the old OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS=20 override no longer
@@ -952,13 +1231,24 @@ EOF
 
   # Onboarding must pass the REAL key — the handler appends a second provider entry the
   # agent's model lookup then picks; a placeholder would 401 every LLM call.
-  jq -n --arg key "$key" \
-    '{provider:{auth_method:"api_key",id:"openrouter",api_key:$key,model:"z-ai/glm-5.3-flash"},admin:{username:"admin",password:"admin123"}}' \
+  jq -n --arg id "$onboard_id" --arg key "$onboard_key" --arg model "$onboard_model" \
+    '{provider:{auth_method:"api_key",id:$id,api_key:$key,model:$model},admin:{username:"admin",password:"admin123"}}' \
     | curl -sf -X POST "http://localhost:$port/api/v1/onboarding/complete" \
-        -H 'Content-Type: application/json' -d @- >/dev/null \
+        -H 'Content-Type: application/json' -d @- >"$home/onboard.json" \
     || { echo "[$name] onboarding failed" >&2; cat "$logf" >&2; return 1; }
 
+  # The product falls back per agent only (issue #1340): every agent gets the fallback
+  # pair in its fallback_models. Not on a legacy ref (no fallback) and not when the job
+  # already runs on the fallback.
+  if [ "$E2E_LEGACY" != 1 ] && [ "$E2E_ROUTE" != fallback ]; then
+    local onboard_tok
+    onboard_tok="$(jq -r '.token // empty' "$home/onboard.json" 2>/dev/null)"
+    bash scripts/e2e-model.sh seed-agent-fallbacks "http://localhost:$port" "${onboard_tok:-dev-mode-bypass}" \
+      || { echo "[$name] seeding the agent fallbacks failed" >&2; cat "$logf" >&2; return 1; }
+  fi
+
   log "e2e[$name]: run specs${specs:+ ($specs)}"
+  local primary_secret="${MINIMAX_API_KEY:-}"
   # Per-shard OMNIPUS_AUTH_FILE + OMNIPUS_SKIP_MANIFEST_PATH keep global-setup's session
   # cookie (tests/e2e/global-setup.ts) and global-teardown's manifest (global-teardown.ts)
   # off the shared default paths. The manifest is placed INSIDE the shard's own results dir
@@ -994,12 +1284,102 @@ EOF
   OMNIPUS_SKIP_MANIFEST_PATH="$E2E_DIR/e2e-$name-results/skip-manifest.json" \
   OPENROUTER_API_KEY="$key" \
   OPENROUTER_API_KEY_CI="$key" \
+  MINIMAX_API_KEY="$primary_secret" \
+  MINIMAX_API_KEY_CI="$primary_secret" \
+  OMNIPUS_E2E_PRIMARY_PROVIDER="$E2E_OVERRIDE_PROVIDER" \
+  OMNIPUS_E2E_PRIMARY_MODEL="$E2E_OVERRIDE_MODEL" \
     npx playwright test $specs $pwargs
+  local pw_rc=$?
+  # Mid-run fallback: the job-start check only saw the primary at the start. Count the
+  # product's fallback notes in this shard's transcripts so a primary that failed DURING
+  # the tests is visible (::warning:: in the log; this shard's llm-route copy no longer
+  # says "primary").
+  if [ "$E2E_LEGACY" != 1 ] && [ -f "$E2E_DIR/llm-route.json" ]; then
+    cp "$E2E_DIR/llm-route.json" "$E2E_DIR/llm-route-$name.json" 2>/dev/null || true
+    bash scripts/e2e-model.sh note-fallbacks "$home/sessions" --route-out "$E2E_DIR/llm-route-$name.json" \
+      || echo "[$name] WARNING: could not count mid-run fallback notes" >&2
+  fi
+  return "$pw_rc"
+}
+
+# _e2e_resolve_models reads tests/e2e/e2e-model.json ONCE for the run (the checkout is the
+# same for every shard) and runs the job-start check. Sets the globals the shards read:
+#   E2E_P_PROVIDER E2E_P_MODEL E2E_P_KEYREF E2E_F_PROVIDER E2E_F_MODEL E2E_F_KEYREF
+#   E2E_LEGACY            1 = the checkout predates the MiniMax switch (legacy file)
+#   E2E_ROUTE             primary | fallback (the job-start check's verdict)
+#   E2E_OVERRIDE_PROVIDER / E2E_OVERRIDE_MODEL  the fallback pair after a failed check
+#                         (exported to Playwright as OMNIPUS_E2E_PRIMARY_*), else empty
+#
+# A checkout WITH scripts/e2e-model.sh is read through it (`env --legacy-ok`). This runner
+# is shared across refs, so a checkout cut before the switch — no script, and the legacy
+# {"model": ...} file — is read inline as an openrouter primary with NO fallback and a
+# WARN. Remove that branch once no in-flight branch predates the switch.
+_e2e_resolve_models() {
+  E2E_P_PROVIDER="" E2E_P_MODEL="" E2E_P_KEYREF="" E2E_F_PROVIDER="" E2E_F_MODEL="" E2E_F_KEYREF=""
+  E2E_LEGACY=0 E2E_ROUTE=primary E2E_OVERRIDE_PROVIDER="" E2E_OVERRIDE_MODEL=""
+  if [ -f scripts/e2e-model.sh ]; then
+    local lines k v
+    lines="$(bash scripts/e2e-model.sh env --legacy-ok)" || {
+      echo "e2e: tests/e2e/e2e-model.json failed scripts/e2e-model.sh's shape check (above)" >&2
+      return 1
+    }
+    while IFS='=' read -r k v; do
+      case "$k" in
+        E2E_PRIMARY_PROVIDER) E2E_P_PROVIDER="$v" ;;
+        E2E_PRIMARY_MODEL) E2E_P_MODEL="$v" ;;
+        E2E_PRIMARY_KEYREF) E2E_P_KEYREF="$v" ;;
+        E2E_FALLBACK_PROVIDER) E2E_F_PROVIDER="$v" ;;
+        E2E_FALLBACK_MODEL) E2E_F_MODEL="$v" ;;
+        E2E_FALLBACK_KEYREF) E2E_F_KEYREF="$v" ;;
+      esac
+    done <<<"$lines"
+  else
+    # --- legacy e2e model read (fail-closed) >>>
+    # jq fails (file missing / unreadable / invalid JSON) → the checkout predates the
+    # central file; jq succeeds but the trimmed .model is empty → present-but-empty.
+    local jq_rc=0 jq_err_file jq_msg
+    jq_err_file="$(mktemp "${TMPDIR:-/tmp}/runci-e2e-model-jq.XXXXXX")" || { echo "e2e: tests/e2e/e2e-model.json: mktemp failed — cannot read the e2e model id fail-closed" >&2; return 1; }
+    E2E_P_MODEL="$(jq -r '.model // empty | gsub("^\\s+|\\s+$";"")' tests/e2e/e2e-model.json 2>"$jq_err_file")" || jq_rc=$?
+    jq_msg="$(tr '\n' ' ' <"$jq_err_file")"
+    rm -f "$jq_err_file"
+    if [ "$jq_rc" -ne 0 ]; then
+      echo "e2e: tests/e2e/e2e-model.json: missing or unreadable/invalid JSON (jq exit $jq_rc: $jq_msg) — the checkout at $(git -C . rev-parse --short HEAD 2>/dev/null || echo '?') predates the central e2e model file" >&2
+      return 1
+    fi
+    if [ -z "$E2E_P_MODEL" ]; then
+      echo "e2e: tests/e2e/e2e-model.json: no scripts/e2e-model.sh and no legacy .model — edit that file to set the e2e models" >&2
+      return 1
+    fi
+    echo "e2e: WARN — this checkout has no scripts/e2e-model.sh; reading the legacy tests/e2e/e2e-model.json as an openrouter primary with NO fallback" >&2
+    E2E_P_PROVIDER=openrouter E2E_P_KEYREF=OPENROUTER_API_KEY
+    # <<< legacy e2e model read (fail-closed)
+  fi
+  if [ -z "$E2E_F_PROVIDER" ]; then
+    E2E_LEGACY=1
+    log "e2e: legacy model file — primary $E2E_P_PROVIDER/$E2E_P_MODEL, no fallback, no job-start check"
+    return 0
+  fi
+
+  # The job-start check: one 1-token call to the primary. Prints LLM_ROUTE=primary|fallback;
+  # the ::warning:: on a fallback names the status and error type only, never a key.
+  local route
+  route="$(bash scripts/e2e-model.sh preflight --strict --route-out "$E2E_DIR/llm-route.json")" || {
+    echo "e2e: the job-start check of the primary failed (above) — a rejected key or an unexpected answer is not an outage, so the run does not fall back" >&2
+    return 1
+  }
+  E2E_ROUTE="${route#LLM_ROUTE=}"
+  if [ "$E2E_ROUTE" = fallback ]; then
+    E2E_OVERRIDE_PROVIDER="$E2E_F_PROVIDER" E2E_OVERRIDE_MODEL="$E2E_F_MODEL"
+    log "e2e: LLM: fallback — the whole run uses $E2E_F_PROVIDER/$E2E_F_MODEL (see $E2E_DIR/llm-route.json)"
+  else
+    log "e2e: LLM: primary $E2E_P_PROVIDER/$E2E_P_MODEL (fallback $E2E_F_PROVIDER/$E2E_F_MODEL per agent)"
+  fi
 }
 
 run_e2e() {
   local KEY_A KEY_B KEY_C
-  KEY_A="${OPENROUTER_API_KEY:?e2e gate requires OPENROUTER_API_KEY Fly secret}"
+  : "${MINIMAX_API_KEY:?e2e gate requires MINIMAX_API_KEY Fly secret (the primary model key)}"
+  KEY_A="${OPENROUTER_API_KEY:?e2e gate requires OPENROUTER_API_KEY Fly secret (the fallback model key)}"
   KEY_B="${OPENROUTER_API_KEY_B:-$KEY_A}"
   KEY_C="${OPENROUTER_API_KEY_C:-$KEY_A}"
 
@@ -1079,6 +1459,7 @@ run_e2e() {
   trap '[ -n "${_XVFB_PID:-}" ] && kill "$_XVFB_PID" 2>/dev/null || true' RETURN
 
   _e2e_build || return 1
+  _e2e_resolve_models || return 1
 
   # Targeted / opt-out path: the OLD single-gateway flow (keeps the HTML report; no
   # artifact-path isolation needed since only one gateway runs).

@@ -105,6 +105,7 @@ type delegateStatusMessageEnvelope struct {
 	ResultSoFar string    `json:"result_so_far"`
 	Condition   string    `json:"condition"`
 	Note        string    `json:"note"`
+	Paths       []string  `json:"paths"` // artifact only: shown when it carries no note (#1011)
 }
 
 func (t *DelegateTool) executeDurableStatus(ctx context.Context, sessionID string) *ToolResult {
@@ -119,13 +120,13 @@ func (t *DelegateTool) executeDurableStatus(ctx context.Context, sessionID strin
 		return ErrorResult(fmt.Sprintf("No subagent found with session ID: %s", sessionID))
 	}
 
-	state := string(rec.State)
+	state := delegateStateName(rec)
 	// extra is the G1-fix trailing annotation (live tool-call-argument
 	// progress plus recent transcript activity) for a running child — see
 	// delegateStatusExtra's own doc comment. Computed once and appended to
 	// whichever of the return points below fires; "" for every non-running
 	// state, so it is a no-op append there.
-	extra := t.delegateStatusExtra(rec, sessionID)
+	extra := t.delegateStatusExtra(rec, sessionID) + t.notDeliveredClause(rec)
 	if t.inbox == nil {
 		return NewToolResult(fmt.Sprintf("%s, no message yet, started %s ago", state, formatDelegateStatusAge(t.now().Sub(rec.CreatedAt))) + extra)
 	}
@@ -155,8 +156,62 @@ func (t *DelegateTool) executeDurableStatus(ctx context.Context, sessionID strin
 	if err := json.Unmarshal(raw, &envelope); err != nil {
 		return ErrorResult(fmt.Sprintf("delegate: status: decode latest inbox entry: %v", err))
 	}
-	line := firstNonBlank(envelope.Text, envelope.Summary, envelope.ResultSoFar, envelope.Condition, envelope.Note, envelope.Kind)
-	return NewToolResult(fmt.Sprintf("%s, %s, %s ago", state, line, formatDelegateStatusAge(t.now().Sub(envelope.CreatedAt))) + extra)
+	line := firstNonBlank(envelope.Text, envelope.Summary, envelope.ResultSoFar, envelope.Condition, envelope.Note, strings.Join(envelope.Paths, ", "), envelope.Kind)
+	already, note := t.recordFinalsRead(ctx, rec, []generated.SessionMessage{*latest})
+	if already {
+		// A5: the final already reached this parent (its hand-back wake or
+		// an earlier poll); status does not hand the same result over again.
+		line = "final already delivered"
+	}
+	text := fmt.Sprintf("%s, %s, %s ago", state, line, formatDelegateStatusAge(t.now().Sub(envelope.CreatedAt))) + extra
+	return NewToolResult(text + note)
+}
+
+// recordFinalsRead marks each helper final (and stopped-child notice, V7)
+// among msgs as received when the caller is the helper's direct parent (the
+// wake's recipient), so the wake does not hand the same message over again
+// (D5). already reports
+// that a final among msgs had been received before this read (A5). The note
+// is set when that record could not be written: the result may then reach
+// the parent a second time, and the parent is told so.
+func (t *DelegateTool) recordFinalsRead(ctx context.Context, rec *session.LifecycleRecord, msgs []generated.SessionMessage) (already bool, note string) {
+	parentID := rec.SteeringSessionID()
+	if t.finalRead == nil || parentID == "" || callerOwnerKey(ctx) != parentID {
+		return false, ""
+	}
+	finalPrefix := rec.SessionID + ":"
+	// V7: a stopped-child notice the parent read through this poll is
+	// consumed the same way, so its own wake starts no second parent turn.
+	noticePrefix := "stopped-notice:" + parentID + ":" + rec.SessionID + ":"
+	var failures []string
+	for _, msg := range msgs {
+		raw, err := json.Marshal(msg)
+		if err != nil {
+			failures = append(failures, err.Error())
+			continue
+		}
+		var id struct {
+			MessageID string `json:"message_id"`
+		}
+		if decodeErr := json.Unmarshal(raw, &id); decodeErr != nil {
+			failures = append(failures, decodeErr.Error())
+			continue
+		}
+		isFinal := strings.HasPrefix(id.MessageID, finalPrefix) && strings.HasSuffix(id.MessageID, ":final")
+		if !isFinal && !strings.HasPrefix(id.MessageID, noticePrefix) {
+			continue
+		}
+		received, err := t.finalRead(parentID, ToolAgentID(ctx), id.MessageID)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", id.MessageID, err))
+			continue
+		}
+		already = already || (isFinal && received)
+	}
+	if len(failures) == 0 {
+		return already, ""
+	}
+	return already, fmt.Sprintf(" (could not record that this result was received, so it may be handed over again: %s)", strings.Join(failures, "; "))
 }
 
 func firstNonBlank(values ...string) string {
@@ -196,13 +251,40 @@ const maxStatusActivityLines = 5
 // own doc comment for why no live snapshot is attempted for these.
 const delegate3PStatusNote = "  note:   external agent — no live progress; results on completion"
 
+// delegateNoActivityStatusNote is the action:"status" annotation for a running
+// native session that has neither a live progress snapshot nor any persisted
+// transcript activity (#614). That silence has two causes the status reader
+// cannot tell apart — the child is genuinely quiet, or this deployment cannot
+// report progress at all (a non-streaming provider such as Azure, Bedrock or
+// anthropic_messages, or an agent routed through fallback candidates) — and
+// reading it as "hung" got healthy workers killed. Saying so explicitly is the
+// minimum fix; it does not give those providers progress reporting.
+const delegateNoActivityStatusNote = "  note:   no live tool-call activity recorded (this does not mean the child is stalled)"
+
+// delegateStatusUnavailableNote is the annotation when the activity source
+// itself could not be consulted (no session store, no spawn call id to key on,
+// or a transcript read error). That is a different statement from "nothing was
+// recorded": it must NOT claim the child is not stalled, because the status
+// reader simply does not know.
+const delegateStatusUnavailableNote = "  note:   status data unavailable (recent activity could not be read); this says nothing about whether the child is progressing"
+
+// statusElapsedSuffix renders how long the child has been running when its
+// record carries a creation time, so a long-quiet child is visible as such.
+func (t *DelegateTool) statusElapsedSuffix(rec *session.LifecycleRecord) string {
+	if rec == nil || rec.CreatedAt.IsZero() {
+		return ""
+	}
+	return "; running for " + formatDelegateStatusAge(t.now().Sub(rec.CreatedAt))
+}
+
 // delegateStatusExtra computes action:"status"'s trailing annotation for the
 // child addressed by sessionID, whose own durable record is rec (W2, G1).
 // Only a running session gets anything:
 //   - a native session gets up to maxStatusActivityLines of its own recent
 //     transcript activity (recentActivityLines), plus live tool-call-argument
-//     progress when a progress reader is wired, or "" if neither has
-//     anything yet;
+//     progress when a progress reader is wired, or delegateNoActivityStatusNote
+//     when neither has anything (quiet and cannot-report look identical, so
+//     the status says so instead of saying nothing — #614);
 //   - an external-CLI (Is3P) session gets the fixed delegate3PStatusNote
 //     instead of any attempted snapshot (batch/report-on-completion by
 //     design).
@@ -248,10 +330,13 @@ func (t *DelegateTool) delegateStatusExtra(rec *session.LifecycleRecord, session
 	if rec.Origin != nil {
 		spawnCallID = rec.Origin.CallID
 	}
-	lines := t.recentActivityLines(sessionID, spawnCallID, maxStatusActivityLines)
+	lines, readable := t.recentActivityLines(sessionID, spawnCallID, maxStatusActivityLines)
 	if len(lines) == 0 {
 		if sb.Len() == 0 {
-			return ""
+			if !readable {
+				return "\n" + delegateStatusUnavailableNote + t.statusElapsedSuffix(rec)
+			}
+			return "\n" + delegateNoActivityStatusNote + t.statusElapsedSuffix(rec)
 		}
 		return "\n" + sb.String()
 	}
@@ -336,15 +421,19 @@ const maxStatusActivityLineRunes = 120
 // empty activity path must leave a trace an operator can find, not degrade
 // silently into the exact same "nothing available" shape as an unwired
 // store or a transcript-read error.
-func (t *DelegateTool) recentActivityLines(sessionID, spawnCallID string, maxLines int) []string {
+//
+// The second return value is false when the activity source could not be
+// consulted at all (no store, no id to key on, or a read error) — distinct from
+// a clean read that found nothing (true, no lines).
+func (t *DelegateTool) recentActivityLines(sessionID, spawnCallID string, maxLines int) ([]string, bool) {
 	if t.sessionStore == nil || sessionID == "" || spawnCallID == "" {
-		return nil
+		return nil, false
 	}
 	entries, err := t.sessionStore.ReadTranscript(sessionID)
 	if err != nil {
 		slog.Warn("delegate: status snapshot: failed to read transcript",
 			"session_id", sessionID, "error", err)
-		return nil
+		return nil, false
 	}
 
 	var lines []string
@@ -365,14 +454,14 @@ func (t *DelegateTool) recentActivityLines(sessionID, spawnCallID string, maxLin
 	if len(lines) == 0 {
 		slog.Info("delegate: status snapshot: no recent activity found for this task yet",
 			"session_id", sessionID, "spawn_call_id", spawnCallID)
-		return nil
+		return nil, true
 	}
 	// Entries are in chronological (append) order — keep only the most
 	// recent `maxLines`, preserving chronological order within that window.
 	if len(lines) > maxLines {
 		lines = lines[len(lines)-maxLines:]
 	}
-	return lines
+	return lines, true
 }
 
 func (t *DelegateTool) executeInbox(ctx context.Context, args map[string]any) *ToolResult {
@@ -395,7 +484,7 @@ func (t *DelegateTool) executeInbox(ctx context.Context, args map[string]any) *T
 	// Previously the ownership check only ran when Load SUCCEEDED, so any
 	// Load error skipped it and the inbox was drained regardless. Now deny
 	// when the lifecycle store is unconfigured OR when Load errors, mirroring
-	// executeCancel/executeSteer/executeRespond/executeFollowUp's posture
+	// executeStopAll/executeSteer/executeRespond/executeResume's posture
 	// (the rest of ADR-053's fail-closed contract — see delegate.go:1808).
 	if t.lifecycle == nil {
 		return ErrorResult("delegate: no lifecycle store configured")
@@ -429,14 +518,14 @@ func (t *DelegateTool) executeInbox(ctx context.Context, args map[string]any) *T
 	// authorized-ancestor case FR-039 exists to permit — the ownerKey
 	// variable above and its own presence check remain (a caller must still
 	// have SOME resolvable session identity to reach this far at all), but
-	// the store key must be the target's own SteeringSessionID. executeRespond
-	// already uses this correct key (see its own Drain call).
+	// the store key must be the target's own SteeringSessionID. (executeRespond
+	// no longer reads the inbox at all: respond is an ordinary steering message.)
 	msgs, nextCursor, hasMore, derr := t.inbox.Drain(rec.SteeringSessionID(), sessionID, sinceCursor, maxMessages)
 	if derr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: inbox: %v", derr)).WithError(derr)
 	}
 
-	resp := generated.DelegateInboxResponse{Messages: msgs, HasMore: hasMore}
+	resp := generated.DelegateInboxResponse{Messages: msgs, HasMore: hasMore, NotDelivered: rec.NotDelivered}
 	if nextCursor != "" {
 		resp.NextCursor = &nextCursor
 	}
@@ -444,7 +533,8 @@ func (t *DelegateTool) executeInbox(ctx context.Context, args map[string]any) *T
 	if merr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: inbox: encode response: %v", merr))
 	}
-	return NewToolResult(string(payload))
+	_, note := t.recordFinalsRead(ctx, rec, msgs)
+	return NewToolResult(string(payload) + note)
 }
 
 func (t *DelegateTool) executeInboxAck(ctx context.Context, args map[string]any) *ToolResult {
@@ -547,7 +637,7 @@ func (t *DelegateTool) executePeek(ctx context.Context, args map[string]any) *To
 	if verr := t.verifyCallerOwnsSession(ctx, rec); verr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: peek: %v", verr))
 	}
-	state := string(rec.State)
+	state := delegateStateName(rec)
 
 	// MEDIUM-2 (14-reviewer sign-off): key the Peek by rec.SteeringSessionID(),
 	// not the calling ownerKey — see executeInbox's identical fix above for
@@ -577,4 +667,28 @@ func (t *DelegateTool) executePeek(ctx context.Context, args map[string]any) *To
 		return NewToolResult(fmt.Sprintf("session %s: state=%s", sessionID, state))
 	}
 	return NewToolResult(string(payload))
+}
+
+// delegateStateName is the state word delegate status and peek show an agent
+// for rec: the lifecycle state, except that a session a restart cut off
+// (failed with failed_reason "interrupted") reads "interrupted" — never
+// "failed" (founder rule 2026-10-06: a session does not fail because of a
+// restart). A genuine failure still reads "failed".
+func delegateStateName(rec *session.LifecycleRecord) string {
+	if session.LifecycleRecordIsRestartInterrupted(rec) {
+		return string(generated.DelegatePeekResponseStateInterrupted)
+	}
+	return string(rec.State)
+}
+
+// notDeliveredClause is the status-text clause for reports this child sent that
+// the parent's inbox refused at a cap (FR-013, #1211 D2): the count and the last
+// refusal, never the refused content. Empty when nothing was ever refused.
+func (t *DelegateTool) notDeliveredClause(rec *session.LifecycleRecord) string {
+	if rec == nil || rec.NotDelivered == nil {
+		return ""
+	}
+	nd := rec.NotDelivered
+	return fmt.Sprintf("; %d report(s) not delivered (last: %s, %s ago)",
+		nd.Count, nd.LastReason, formatDelegateStatusAge(t.now().Sub(nd.LastAt)))
 }

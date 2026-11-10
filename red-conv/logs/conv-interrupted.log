@@ -1,0 +1,10 @@
+=== RUN   TestSessionCoreConv_InterruptedBootRetiresTheCompletedSourceWithoutDuplicating
+    sessioncore_conv_behaviour_test.go:151: 
+        	Error Trace:	/Users/danielpiatkowski/AI-Agent-Workspace/omnipus-worktrees/session-core-red-conv-20261009/pkg/session/sessioncore_conv_behaviour_test.go:151
+        	Error:      	Should be true
+        	Test:       	TestSessionCoreConv_InterruptedBootRetiresTheCompletedSourceWithoutDuplicating
+        	Messages:   	CONV retry: the next boot must finish the cleanup and retire the completed source; it is still present
+--- FAIL: TestSessionCoreConv_InterruptedBootRetiresTheCompletedSourceWithoutDuplicating (0.02s)
+FAIL
+FAIL	github.com/elicify-ai/omnipus/pkg/session	2.289s
+FAIL

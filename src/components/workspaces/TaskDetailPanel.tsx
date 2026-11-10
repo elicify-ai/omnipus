@@ -5,7 +5,6 @@ import {
   fetchAgents,
   buildTaskAssigneeItems,
   fetchSubtasks,
-  fetchWorkspaces,
   fetchTasks,
   fetchPlans,
   fetchTaskEvidence,
@@ -17,7 +16,6 @@ import {
   runTaskNow,
   isApiError,
   getErrorMessage,
-  workspacesQueryKeys,
   tasksQueryKeys,
   plansQueryKeys,
   taskEvidenceQueryKeys,
@@ -80,6 +78,7 @@ import {
   isScheduledTrigger,
   scheduledTriggerSummary,
 } from '@/components/workspaces/taskFormFields'
+import { activeWorkspacesQueryOptions } from '@/lib/workspaceQueries'
 
 // ── Status config ──────────────────────────────────────────────────────────────
 // STATUS_OPTIONS lives in taskStatusConfig.ts — single source of truth shared
@@ -217,8 +216,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
   const { teamIds, isLoading: teamLoading, isError: teamError } = useWorkspaceTeamIds(task?.workspace_id)
 
   const { data: workspaces = [] } = useQuery({
-    queryKey: workspacesQueryKeys.list({ status: 'active' }),
-    queryFn: () => fetchWorkspaces({ status: 'active' }),
+    ...activeWorkspacesQueryOptions,
     staleTime: 30_000,
   })
 

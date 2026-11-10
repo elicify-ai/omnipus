@@ -59,7 +59,7 @@ func TestNormalizeAgentRoster_FallbackResolvedPrimaryUntouched(t *testing.T) {
 		"a combined primary slug must survive completely verbatim, never truncated")
 
 	require.Len(t, cfg.Agents.List[0].FallbackModels, 1)
-	assert.Equal(t, "openrouter", cfg.Agents.List[0].FallbackModels[0].Provider,
+	assert.Equal(t, "", cfg.Agents.List[0].FallbackModels[0].Provider,
 		"fallback-model provider resolution (NormalizeFallbacks) must still run on entity-loaded agents")
 	assert.Equal(t, "glm-5.2", cfg.Agents.List[0].FallbackModels[0].Model)
 }

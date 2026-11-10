@@ -154,6 +154,28 @@ func ListMemoryIDs(memoriesDir string) ([]string, error) {
 // hide every other memory) but is logged at WARN so the failure is observable
 // rather than silently swallowed (M7).
 func ScanMemories(memoriesDir string) ([]MemoryFile, error) {
+	files, err := ScanMemoriesWithErrors(memoriesDir)
+	var partial *PartialReadError
+	if errors.As(err, &partial) {
+		// This API deliberately remains tolerant for dedup/diagnostic callers.
+		// Recall and index construction use the error-preserving API below.
+		return files, nil
+	}
+	return files, err
+}
+
+// PartialReadError accompanies readable notes when another note failed to read
+// or parse. Partial identifies the same internal error across tool interfaces
+// without introducing a dependency from pkg/tools back into memory storage.
+type PartialReadError struct{ Err error }
+
+func (e *PartialReadError) Error() string { return "saved-note results are partial: " + e.Err.Error() }
+func (e *PartialReadError) Unwrap() error { return e.Err }
+func (e *PartialReadError) Partial() bool { return true }
+
+// ScanMemoriesWithErrors retains healthy files AND reports non-absence file
+// failures. Only confirmed deletion during the scan is an expected omission.
+func ScanMemoriesWithErrors(memoriesDir string) ([]MemoryFile, error) {
 	entries, err := os.ReadDir(memoriesDir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -162,6 +184,7 @@ func ScanMemories(memoriesDir string) ([]MemoryFile, error) {
 		return nil, fmt.Errorf("memrooms: scan memories: %w", err)
 	}
 	var out []MemoryFile
+	var failures []error
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
 			continue
@@ -169,17 +192,25 @@ func ScanMemories(memoriesDir string) ([]MemoryFile, error) {
 		path := filepath.Join(memoriesDir, e.Name())
 		data, err := os.ReadFile(path)
 		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
 			logger.WarnCF("memrooms", "ScanMemories: skipping unreadable memory file",
 				map[string]any{"path": path, "error": err.Error()})
+			failures = append(failures, fmt.Errorf("read saved note %q: %w", path, err))
 			continue
 		}
 		mf, err := parseMemoryFile(string(data))
 		if err != nil {
 			logger.WarnCF("memrooms", "ScanMemories: skipping unparseable memory file",
 				map[string]any{"path": path, "error": err.Error()})
+			failures = append(failures, fmt.Errorf("parse saved note %q: %w", path, err))
 			continue
 		}
 		out = append(out, mf)
+	}
+	if len(failures) > 0 {
+		return out, &PartialReadError{Err: errors.Join(failures...)}
 	}
 	return out, nil
 }
@@ -189,12 +220,13 @@ func ScanMemories(memoriesDir string) ([]MemoryFile, error) {
 // body text. Returns results in filesystem-order (deterministic, not ranked).
 // This is the v0.1.0 scan-based recall (bleve FTS is a separate dependent unit).
 func SearchMemories(memoriesDir, query string) ([]MemoryFile, error) {
-	all, err := ScanMemories(memoriesDir)
-	if err != nil {
+	all, err := ScanMemoriesWithErrors(memoriesDir)
+	var partial *PartialReadError
+	if err != nil && !errors.As(err, &partial) {
 		return nil, err
 	}
 	if query == "" {
-		return all, nil
+		return all, err
 	}
 	lq := strings.ToLower(query)
 	var out []MemoryFile
@@ -203,7 +235,7 @@ func SearchMemories(memoriesDir, query string) ([]MemoryFile, error) {
 			out = append(out, mf)
 		}
 	}
-	return out, nil
+	return out, err
 }
 
 // memoryMatchesQuery returns true when mf contains the query substring.

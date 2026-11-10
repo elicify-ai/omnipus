@@ -59,7 +59,7 @@ func TestSessionWorker_ContinuationTargetBuildFailure_NoticesWithoutTouchingQueu
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
 			},
-			// Zero agents registered: registry.GetDefaultAgent() returns nil, so
+			// Zero agents registered: no agent resolves, so
 			// resolveMessageRoute's final fallback (loop_inbound.go ~line
 			// 483-497) returns a genuine, non-sentinel
 			// "no agent available for route" error for an ordinary message —

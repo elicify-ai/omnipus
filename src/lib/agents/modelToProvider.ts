@@ -63,3 +63,29 @@ export function buildModelToProvider(providers: Provider[]): ModelToProviderResu
 export function useModelToProvider(providers: Provider[]): ModelToProviderResult {
   return useMemo(() => buildModelToProvider(providers), [providers])
 }
+
+/**
+ * H6 R2 (review round 1 — F3): the DISPLAY counterpart of `lookup` for values
+ * whose provider was never recorded (a transcript seed, a pre-O3 agent row).
+ *
+ * Unlike `lookup`'s deliberate first-wins, this resolves a provider ONLY when
+ * EXACTLY ONE usable provider advertises the model: two providers serving the
+ * same slug make list order a guess, not evidence — the picker then shows NO
+ * chosen row (the honest "provider unknown" state) instead of inventing a
+ * selection. Zero providers → '' as well.
+ *
+ * Not a wire helper — display only (`valueProvider`), never sent anywhere.
+ */
+export function resolveUniqueModelProvider(providers: Provider[], model: string): string {
+  const slug = model.trim()
+  if (!slug) return ''
+  let found: string | null = null
+  for (const p of providers) {
+    const id = p.id ?? ''
+    if (!id) continue
+    if (!(p.models ?? []).includes(slug)) continue
+    if (found !== null && found !== id) return '' // two providers serve it — ambiguous
+    found = id
+  }
+  return found ?? ''
+}

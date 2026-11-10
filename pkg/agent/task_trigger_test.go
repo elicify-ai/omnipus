@@ -29,8 +29,67 @@ type triggerFakeClock struct {
 }
 
 func newTriggerFakeClock() *triggerFakeClock {
-	// Start 24h in the future so cron runLoop timer sleeps a long time.
-	return &triggerFakeClock{t: time.Now().Add(24 * time.Hour)}
+	return &triggerFakeClock{t: triggerFakeClockStart(time.Now())}
+}
+
+// triggerFakeClockStart is the fake clock's start for a real wall-clock `wall`:
+// 24h ahead so the cron runLoop timer sleeps a long time, but never later than
+// 22:00 UTC of the NEXT calendar day.
+//
+// Why the cap: run records are day-filed by the REAL wall clock
+// (task.Store.RecordSkippedOccurrence / appendRunRecord use time.Now), while
+// Store.RunsInRange floors its day-file scan at the queried occurrence's UTC
+// day minus one. Occurrences here are armed on the fake clock, a day ahead of
+// real time. Within a few minutes of 00:00 UTC, real+24h+1min lands two
+// calendar days ahead, the record's day file falls below that floor, and
+// RunsInRange reports 0 runs (CI run 37703450387, which ran 23:52-23:59 UTC).
+// The cap keeps every occurrence the tests arm within one calendar day of the
+// real clock at any time of day.
+func triggerFakeClockStart(wall time.Time) time.Time {
+	start := wall.Add(24 * time.Hour)
+	y, m, d := wall.UTC().Date()
+	limit := time.Date(y, m, d+1, 22, 0, 0, 0, time.UTC)
+	if start.After(limit) {
+		return limit
+	}
+	return start
+}
+
+// TestTriggerFakeClockStart_KeepsOccurrencesWithinRunsInRangeFloor pins the
+// instrument invariant the overlap-guard tests rely on: for every real time of
+// day (notably the minutes before 00:00 UTC), an occurrence armed a few minutes
+// after the fake clock's start must sit on the real clock's UTC day or the next
+// one, so that day(occurrence)-1 <= day(real) — the day file the real-clock
+// run record lands in is then never below RunsInRange's scan floor.
+func TestTriggerFakeClockStart_KeepsOccurrencesWithinRunsInRangeFloor(t *testing.T) {
+	day := func(ts time.Time) time.Time {
+		y, m, d := ts.UTC().Date()
+		return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
+	}
+	for _, hhmmss := range []string{"00:00:30", "12:00:00", "21:59:59", "23:55:00", "23:58:50", "23:59:59"} {
+		wall, err := time.Parse("2006-01-02 15:04:05", "2026-10-07 "+hhmmss)
+		if err != nil {
+			t.Fatalf("parse %q: %v", hhmmss, err)
+		}
+		start := triggerFakeClockStart(wall)
+		if ahead := start.Sub(wall); ahead < 20*time.Hour {
+			t.Errorf("real=%s: fake clock only %v ahead; the cron timer needs a long sleep", hhmmss, ahead)
+		}
+		occurrence := start.Add(10 * time.Minute) // dtstart (+1m) plus the tests' Advance(2m), with slack
+		floor := day(occurrence).AddDate(0, 0, -1)
+		if day(wall).Before(floor) {
+			t.Errorf("real=%s: occurrence %s is on day %s, floor %s is after the real day %s — "+
+				"RunsInRange would miss the record", hhmmss, occurrence.Format(time.RFC3339),
+				day(occurrence).Format("2006-01-02"), floor.Format("2006-01-02"), day(wall).Format("2006-01-02"))
+		}
+	}
+	// Negative control: the uncapped real+24h start DOES violate the invariant
+	// just before midnight, so the loop above could have failed.
+	late, _ := time.Parse("2006-01-02 15:04:05", "2026-10-07 23:58:50")
+	occ := late.Add(24*time.Hour + 10*time.Minute)
+	if !day(late).Before(day(occ).AddDate(0, 0, -1)) {
+		t.Fatalf("negative control broken: uncapped start no longer violates the floor at 23:58:50")
+	}
 }
 
 func (c *triggerFakeClock) Now() time.Time {
@@ -181,56 +240,13 @@ func TestTriggerOnce_FiresExactlyOnce(t *testing.T) {
 	}
 }
 
-// TestTriggerEvery_FiresRepeatedly verifies that an "every" trigger fires on
-// each clock advance past the interval, producing one dispatch per interval.
-func TestTriggerEvery_FiresRepeatedly(t *testing.T) {
-	sched, store, clk, rec := newTriggerSchedulerForTest(t)
-
-	const intervalMs = int64(60_000) // 1 minute
-	tsk := makeTask(t, store, "agent-b", &task.Trigger{
-		Type:   task.TriggerEvery,
-		Config: task.TriggerConfig{EveryMs: int64P(intervalMs)},
-	})
-	sched.OnTaskUpserted(tsk)
-
-	// First fire: advance past the first interval.
-	clk.Advance(2 * time.Minute)
-	sched.RunDueJobs(clk.Now())
-	sched.WaitForLane()
-
-	if n := len(rec.calls()); n != 1 {
-		t.Fatalf("after first interval: expected 1 dispatch, got %d", n)
-	}
-
-	// Second fire: advance past the second interval.
-	// After the first fire, cron recomputes NextRunAtMS = prevFireTime + intervalMs.
-	// Advance another interval so the second fire is due.
-	clk.Advance(2 * time.Minute)
-	sched.RunDueJobs(clk.Now())
-	sched.WaitForLane()
-
-	if n := len(rec.calls()); n != 2 {
-		t.Fatalf("after second interval: expected 2 dispatches, got %d", n)
-	}
-	// Both dispatches must be for the same task ID.
-	for i, id := range rec.calls() {
-		if id != tsk.ID {
-			t.Errorf("dispatch[%d]: got task ID %q, want %q", i, id, tsk.ID)
-		}
-	}
-}
-
 // TestTriggerOverlapGuard verifies that when the task is already in_progress
 // (SpawnReset returns ErrAlreadyRunning), RunScheduled performs a benign skip:
 // no dispatch, no error, and the cron job continues (not removed).
 func TestTriggerOverlapGuard(t *testing.T) {
 	sched, store, clk, rec := newTriggerSchedulerForTest(t)
 
-	const intervalMs = int64(60_000)
-	tsk := makeTask(t, store, "agent-c", &task.Trigger{
-		Type:   task.TriggerEvery,
-		Config: task.TriggerConfig{EveryMs: int64P(intervalMs)},
-	})
+	tsk := makeRruleTask(t, store, "agent-c", "FREQ=DAILY;COUNT=3", secondAligned(clk.Now().Add(time.Minute)), "UTC")
 	sched.OnTaskUpserted(tsk)
 
 	// Manually set the task to in_progress to simulate an in-flight run.
@@ -268,12 +284,8 @@ func TestTriggerOverlapGuard(t *testing.T) {
 func TestTriggerHeartbeatNotRegistered(t *testing.T) {
 	sched, store, clk, rec := newTriggerSchedulerForTest(t)
 
-	const intervalMs = int64(60_000)
 	surf := task.SurfaceHeartbeat
-	tsk := makeTask(t, store, "agent-d", &task.Trigger{
-		Type:   task.TriggerEvery,
-		Config: task.TriggerConfig{EveryMs: int64P(intervalMs)},
-	})
+	tsk := makeRruleTask(t, store, "agent-d", "FREQ=DAILY;COUNT=3", secondAligned(clk.Now().Add(time.Minute)), "UTC")
 	// Patch the surface to heartbeat after creation.
 	updated, err := store.Update(tsk.ID, task.Patch{Surface: &surf})
 	if err != nil {
@@ -349,24 +361,18 @@ func TestTriggerReconcile_RegistersExistingTasks(t *testing.T) {
 		Type:   task.TriggerOnce,
 		Config: task.TriggerConfig{AtMs: int64P(fireAt)},
 	})
-	t2 := makeTask(t, store, "agent-x", &task.Trigger{
-		Type:   task.TriggerEvery,
-		Config: task.TriggerConfig{EveryMs: int64P(int64(60_000))},
-	})
+	t2 := makeRruleTask(t, store, "agent-x", "FREQ=DAILY;COUNT=3", fireAt, "UTC")
 	// A manual-trigger task — must NOT be registered.
 	t3 := makeTask(t, store, "agent-x", &task.Trigger{
 		Type:   task.TriggerManual,
 		Config: task.TriggerConfig{},
 	})
-	// A terminal `every` (REPEATING) task — MUST still be registered: a
+	// A terminal `recurring` (REPEATING) task — MUST still be registered: a
 	// per-run done/failed status does not end a repeating series (this is
-	// the "recurring/every task fires once then dies" bug this fix
+	// the "recurring task fires once then dies" bug this fix
 	// addresses — see OnTaskUpserted's doc comment). Transition
 	// next→in_progress→done.
-	t4 := makeTask(t, store, "agent-x", &task.Trigger{
-		Type:   task.TriggerEvery,
-		Config: task.TriggerConfig{EveryMs: int64P(int64(60_000))},
-	})
+	t4 := makeRruleTask(t, store, "agent-x", "FREQ=DAILY;COUNT=3", fireAt, "UTC")
 	inProgStatus := task.StatusInProgress
 	if _, err := store.Update(t4.ID, task.Patch{Status: &inProgStatus}); err != nil {
 		t.Fatalf("store.Update in_progress: %v", err)
@@ -461,88 +467,5 @@ func TestTriggerTerminalTask_JobRemoved(t *testing.T) {
 
 	if len(sched.cs.ListJobs(true)) != 0 {
 		t.Errorf("expected 0 jobs after task reached terminal status, got %d", len(sched.cs.ListJobs(true)))
-	}
-}
-
-// TestTriggerEvery_NoDriftOnSlowCompletion is the regression test for C1a (the
-// 7-reviewer gate finding on commit 1b3d4b3d): an `every` task's next fire
-// must stay anchored to the CRON ENGINE's own fire-time computation
-// (pkg/cron/service.go's scheduleNextRunUnsafe, which runs immediately after
-// RunScheduled returns — i.e. essentially at fire time, since dispatch is
-// fire-and-forget) and must NOT be re-anchored to the async run's LATER
-// completion time.
-//
-// Before FIX 1: OnTaskUpserted's terminal-repeating path called
-// replaceJobLocked unconditionally on every completion notification —
-// including for `every`, whose triggerToCronSchedule mapping carries no
-// anchor (Kind:"every", EveryMS only) — so AddJobFull computed a brand new
-// NextRunAtMS as (registration time)+everyMs, i.e. (completion time)+everyMs,
-// silently clobbering the engine's own fire-time-anchored value. A task whose
-// run takes T seconds would drift its next fire T seconds later EVERY cycle,
-// compounding indefinitely.
-//
-// This test simulates exactly that: fire the trigger, let the engine
-// self-perpetuate the job, advance the clock 30s (simulating a slow run),
-// then simulate that run's completion notification landing via
-// OnTaskUpserted(done). Before FIX 1 this test FAILS (NextRunAtMS drifts by
-// 30s and the job ID changes); after FIX 1 it PASSES (both are unchanged —
-// the completion notification is a true no-op).
-func TestTriggerEvery_NoDriftOnSlowCompletion(t *testing.T) {
-	sched, store, clk, rec := newTriggerSchedulerForTest(t)
-
-	const intervalMs = int64(60_000) // 1 minute
-	tsk := makeTask(t, store, "agent-drift", &task.Trigger{
-		Type:   task.TriggerEvery,
-		Config: task.TriggerConfig{EveryMs: int64P(intervalMs)},
-	})
-	sched.OnTaskUpserted(tsk)
-
-	// Fire the trigger. The clock does not move again until after WaitForLane
-	// returns, so the engine's own scheduleNextRunUnsafe (called synchronously
-	// inside executeJobByID, right after the fire-and-forget dispatch returns)
-	// anchors NextRunAtMS at fireTime + intervalMs.
-	clk.Advance(2 * time.Minute)
-	fireTime := clk.Now()
-	sched.RunDueJobs(fireTime)
-	sched.WaitForLane()
-
-	if n := len(rec.calls()); n != 1 {
-		t.Fatalf("expected 1 dispatch, got %d", n)
-	}
-
-	jobsAfterFire := jobsForTask(sched, tsk.ID)
-	if len(jobsAfterFire) != 1 || jobsAfterFire[0].State.NextRunAtMS == nil {
-		t.Fatalf("expected exactly 1 armed job with a NextRunAtMS after the fire, got %+v", jobsAfterFire)
-	}
-	wantNext := fireTime.UnixMilli() + intervalMs
-	if got := *jobsAfterFire[0].State.NextRunAtMS; got != wantNext {
-		t.Fatalf("engine-anchored NextRunAtMS after fire = %d, want %d (fireTime + intervalMs)", got, wantNext)
-	}
-
-	// Simulate a SLOW run: 30s of wall-clock time pass (well under the 60s
-	// interval, so the engine's own next-run has not yet been superseded by
-	// another fire) before the async run's completion notification lands.
-	clk.Advance(30 * time.Second)
-
-	doneStatus := task.StatusDone
-	completed, err := store.Update(tsk.ID, task.Patch{Status: &doneStatus})
-	if err != nil {
-		t.Fatalf("store.Update to done: %v", err)
-	}
-	sched.OnTaskUpserted(completed)
-
-	jobsAfterCompletion := jobsForTask(sched, tsk.ID)
-	if len(jobsAfterCompletion) != 1 || jobsAfterCompletion[0].State.NextRunAtMS == nil {
-		t.Fatalf("expected exactly 1 armed job with a NextRunAtMS after completion, got %+v", jobsAfterCompletion)
-	}
-	if got := *jobsAfterCompletion[0].State.NextRunAtMS; got != wantNext {
-		t.Fatalf("REGRESSION (C1a, every-drift): NextRunAtMS after completion = %d, want %d "+
-			"(unchanged from the engine's fire-time anchor) — the slow run injected a %dms drift",
-			got, wantNext, got-wantNext)
-	}
-	if jobsAfterCompletion[0].ID != jobsAfterFire[0].ID {
-		t.Errorf("job ID changed after completion (%q -> %q); the completion notification must be a "+
-			"true no-op, not a replace that happened to compute the same value",
-			jobsAfterFire[0].ID, jobsAfterCompletion[0].ID)
 	}
 }

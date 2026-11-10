@@ -13,8 +13,10 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -93,16 +95,32 @@ type channelWorker struct {
 	done       chan struct{}
 	mediaDone  chan struct{}
 	limiter    *rate.Limiter
+	// gen is the dispatch generation (Manager.dispatchGen) the worker's
+	// goroutines run on. A reload joins only workers of the generation it
+	// cancelled, never one started on its own new context during its
+	// unlocked handoff (gate r3 CR-T2-R3-01).
+	gen uint64
 }
 
 // ChannelInitError records an enabled channel that failed to construct.
 // Name is the registry identifier (e.g. "whatsapp_native") as passed to
 // recordChannelFailure; Channel is the human-readable display name
 // (e.g. "WhatsApp Native"). Both are populated on every failure.
+//
+// CredentialScoped marks a failure whose plausible cause is that one of the
+// instance's configured credential references did not resolve into the secret
+// bundle (#1277, founder decision 2026-10-12): at least one of the refs
+// credentials.CredentialRefs declares is absent from the bundle the factory
+// was handed. Such a failure is recorded and surfaced (FailedChannels, the
+// Settings degraded overlay, doctor) but does NOT abort boot or roll a reload
+// back — only the affected integration is down, exactly like a provider whose
+// api_key_ref is missing. Failures with the flag false keep the historical
+// boot-fatal semantics (a constructor bug, an unregistered factory).
 type ChannelInitError struct {
-	Name    string // registry id, e.g. "whatsapp_native"
-	Channel string // human-readable display name, e.g. "WhatsApp Native"
-	Err     error
+	Name             string // registry id, e.g. "whatsapp_native"
+	Channel          string // human-readable display name, e.g. "WhatsApp Native"
+	Err              error
+	CredentialScoped bool // #1277: at least one configured ref is missing from the bundle
 }
 
 func (e *ChannelInitError) Error() string {
@@ -112,25 +130,49 @@ func (e *ChannelInitError) Error() string {
 func (e *ChannelInitError) Unwrap() error { return e.Err }
 
 type Manager struct {
-	channels          map[string]Channel
-	workers           map[string]*channelWorker
-	bus               *bus.MessageBus
-	config            *config.Config
-	secrets           credentials.SecretBundle // resolved plaintext secrets; never written to env
-	mediaStore        media.MediaStore
-	dispatchTask      *asyncTask
-	dispatchCtx       context.Context // stored so RegisterChannel can spin up workers after Start
-	mux               *dynamicServeMux
-	httpServer        *http.Server
-	mu                sync.RWMutex
-	placeholders      sync.Map           // "channel:chatID" → placeholderEntry
-	typingStops       sync.Map           // "channel:chatID" → typingEntry
-	reactionUndos     sync.Map           // "channel:chatID" → reactionEntry
-	streamActive      sync.Map           // "channel:chatID" → streamEntry (set when streamer.Finalize sent the message)
-	channelHashes     map[string]string  // channel name → config hash
+	channels map[string]Channel
+	workers  map[string]*channelWorker
+	bus      *bus.MessageBus
+	config   *config.Config
+	// liveCfg mirrors config for lock-free reads from workers (see liveConfig).
+	liveCfg atomic.Pointer[config.Config]
+	// policySource is the live policy source of the dispatch and dequeue
+	// start checks (FR-044, SetPolicySource); read lock-free.
+	policySource atomic.Pointer[func() *config.Config]
+	// Test-only observation points (manager_test_hooks.go); nil in production.
+	beforeDequeueStartHook    atomic.Pointer[func(msg bus.OutboundMessage)]
+	reloadWriteLockHook       atomic.Pointer[func(stage string)]
+	workerJoinHook            atomic.Pointer[func(instance, phase string)]
+	workerJoinObservationHook atomic.Pointer[func(WorkerJoinObservation)]
+	// returnRefusalObserver is told about answers the return-route check refused.
+	returnRefusalObserver atomic.Pointer[ReturnRefusalObserver]
+	secrets               credentials.SecretBundle // resolved plaintext secrets; never written to env
+	mediaStore            media.MediaStore
+	dispatchTask          *asyncTask
+	dispatchCtx           context.Context // stored so RegisterChannel can spin up workers after Start
+	dispatchGen           uint64          // increments with every new dispatchCtx; tags its workers
+	mux                   *dynamicServeMux
+	httpServer            *http.Server
+	mu                    sync.RWMutex
+	placeholders          sync.Map          // "channel:chatID" → placeholderEntry
+	typingStops           sync.Map          // "channel:chatID" → typingEntry
+	reactionUndos         sync.Map          // "channel:chatID" → reactionEntry
+	streamActive          sync.Map          // "channel:chatID" → streamEntry (set when streamer.Finalize sent the message)
+	channelHashes         map[string]string // channel name → config hash
+	resourceConfigOrders  map[string]uint64 // originating snapshot carried by each constructed resource
+	// pendingDisposals pins failed cleanup across reloads until that exact
+	// resource stops. It is independent of config hashes and restart intents.
+	pendingDisposals map[string]Channel
+	// credSigs mirrors channelHashes with a credential-availability signature
+	// per enabled instance (#1277): which of the instance's configured refs
+	// were present in the bundle when the hash was committed. Reload diffs it
+	// so a secret that disappears (deleted, unreadable) or reappears
+	// re-initializes exactly that instance even though its config bytes did
+	// not change.
+	credSigs          map[string]string
 	streamFallback    bus.StreamDelegate // optional fallback for channels not in m.channels (e.g., webchat WebSocket)
 	failedChannels    []ChannelInitError // enabled channels that failed to start
-	cancelInterceptor CancelInterceptor  // set after construction via SetCancelInterceptor; may be nil
+	cancelInterceptor CancelRequester    // set after construction via SetCancelInterceptor; may be nil
 
 	// steerAudience is ADR-091 I-5's injected steer.AudienceResolver
 	// (injected into every package that hosts a
@@ -146,6 +188,27 @@ type Manager struct {
 	// implements PairingObservable so linked-device pairing updates (QR/status)
 	// reach the SPA (#283). channelID is the channel name (e.g. "whatsapp_native").
 	pairingObserver func(channelID string, status PairingStatus, qr, message string)
+	// pairingAttemptObserver receives attempt-carrying pairing progress from
+	// PairingAttemptObservable channels (gate r3 M8).
+	pairingAttemptObserver func(channelID, attemptID string, status PairingStatus, qr, message string)
+	// pairingAttempts is the manager-owned pairing-attempt store (gate r3).
+	// It is reached without m.mu: a pairing observer reads it from inside a
+	// channel's Start, which runs under m.mu.
+	pairingAttempts atomic.Pointer[PairingAttempts]
+	// forcedRestarts names instances the next reload restarts even with an
+	// unchanged configuration (RequestRestart), each with the pairing attempt
+	// it restarts for ("" for none): a restart for an attempt that is no
+	// longer ready is dropped (gate r4 R4-A01).
+	forcedRestarts map[string]pairingRestartIntent
+	// startErrors keeps each channel's last Start failure (cleared when it
+	// starts), so an approved connect can name the cause (gate r2 T2-SF-10).
+	startErrors map[string]error
+	// applied is the pending-application marker state (FR-050 leg 5;
+	// manager_applied.go). It has its own lock.
+	applied applicationMarkers
+	// reloadHandoffHook is a test seam (gate r3 CR-T2-R3-01): it runs while a
+	// reload waits for the old dispatchers with m.mu released. Nil in production.
+	reloadHandoffHook func()
 }
 
 // SetPairingObserver registers a callback to receive linked-device pairing
@@ -160,6 +223,22 @@ func (m *Manager) SetPairingObserver(fn func(channelID string, status PairingSta
 			chName := name
 			obs.SetPairingObserver(func(status PairingStatus, qr, message string) {
 				fn(chName, status, qr, message)
+			})
+		}
+	}
+	m.mu.Unlock()
+}
+
+// SetPairingAttemptObserver registers the attempt-carrying pairing callback
+// and propagates it to channels already initialized (gate r3 M8).
+func (m *Manager) SetPairingAttemptObserver(fn func(channelID, attemptID string, status PairingStatus, qr, message string)) {
+	m.mu.Lock()
+	m.pairingAttemptObserver = fn
+	for name, ch := range m.channels {
+		if obs, ok := ch.(PairingAttemptObservable); ok {
+			chName := name
+			obs.SetPairingAttemptObserver(func(attemptID string, status PairingStatus, qr, message string) {
+				fn(chName, attemptID, status, qr, message)
 			})
 		}
 	}
@@ -295,6 +374,11 @@ func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMess
 				if deleter, ok := ch.(MessageDeleter); ok {
 					deleter.DeleteMessage(ctx, msg.ChatID, entry.id) // best effort
 				} else if editor, ok := ch.(MessageEditor); ok {
+					// F10: a content-carrying edit is a delivery - re-check the
+					// captured route AFTER the cleanup callbacks above ran.
+					if !m.refuseReturnRoute(m.liveConfig(), msg, "edit") {
+						return true // refused: nothing is delivered, Send is skipped too
+					}
 					editor.EditMessage(ctx, msg.ChatID, entry.id, msg.Content) // fallback
 				}
 			}
@@ -306,6 +390,11 @@ func (m *Manager) preSend(ctx context.Context, name string, msg bus.OutboundMess
 	if v, loaded := m.placeholders.LoadAndDelete(key); loaded {
 		if entry, ok := v.(placeholderEntry); ok && entry.id != "" {
 			if editor, ok := ch.(MessageEditor); ok {
+				// F10: re-check the captured route immediately before the edit,
+				// after the cleanup callbacks (typing stop, reaction undo) ran.
+				if !m.refuseReturnRoute(m.liveConfig(), msg, "edit") {
+					return true // refused: nothing is delivered, Send is skipped too
+				}
 				if err := editor.EditMessage(ctx, msg.ChatID, entry.id, msg.Content); err == nil {
 					return true // edited successfully, skip Send
 				} else {
@@ -377,6 +466,7 @@ func NewManager(
 		mediaStore:    store,
 		channelHashes: make(map[string]string),
 	}
+	m.liveCfg.Store(cfg)
 
 	// Register as streaming delegate so the agent loop can obtain streamers
 	messageBus.SetStreamDelegate(m)
@@ -387,6 +477,9 @@ func NewManager(
 
 	// Store initial config hashes for all channels
 	m.channelHashes = toChannelHashes(cfg)
+	// #1277: and the initial credential-availability signatures, so a reload
+	// can tell a secret-set change from an unchanged config.
+	m.credSigs = credentialSignatures(cfg, secrets)
 
 	return m, nil
 }
@@ -416,16 +509,16 @@ func (m *Manager) SetStreamFallback(d bus.StreamDelegate) {
 	m.streamFallback = d
 }
 
-// SetCancelInterceptor registers the CancelInterceptor (typically the agent
+// SetCancelInterceptor registers the CancelRequester (typically the agent
 // loop) so that Tier B text-parsing channels can fire /cancel. Must be called
 // after the Manager is constructed and before channels receive messages.
 // It is safe to call multiple times (last write wins).
-func (m *Manager) SetCancelInterceptor(ci CancelInterceptor) {
+func (m *Manager) SetCancelInterceptor(ci CancelRequester) {
 	m.mu.Lock()
 	m.cancelInterceptor = ci
 	// Propagate to all channels already initialized.
 	for _, ch := range m.channels {
-		if setter, ok := ch.(interface{ SetCancelInterceptor(ci CancelInterceptor) }); ok {
+		if setter, ok := ch.(interface{ SetCancelInterceptor(ci CancelRequester) }); ok {
 			setter.SetCancelInterceptor(ci)
 		}
 	}
@@ -567,10 +660,17 @@ func (s *finalizeHookStreamer) Cancel(ctx context.Context) {
 // It is passed through to the factory so the factory can select the right
 // config entry (ADR-029 Gate 0). It returns an error if the factory is not
 // registered or construction fails.
+// errFactoryNotRegistered marks the failure initChannel returns when no
+// factory is registered for the channel type — a build/registration mismatch,
+// never a credential problem: no factory code ran, so the #1277
+// credential-scoped classification must not apply (such a failure stays
+// boot-fatal, like every non-credential construction failure).
+var errFactoryNotRegistered = errors.New("factory not registered")
+
 func (m *Manager) initChannel(name, instanceID, displayName string) error {
 	f, ok := getFactory(name)
 	if !ok {
-		return fmt.Errorf("factory not registered for channel %q", displayName)
+		return fmt.Errorf("factory not registered for channel %q: %w", displayName, errFactoryNotRegistered)
 	}
 	logger.DebugCF("channels", "Attempting to initialize channel", map[string]any{
 		"channel":    displayName,
@@ -598,10 +698,10 @@ func (m *Manager) initChannel(name, instanceID, displayName string) error {
 	if setter, ok := ch.(interface{ SetOwner(ch Channel) }); ok {
 		setter.SetOwner(ch)
 	}
-	// Inject CancelInterceptor if one has been registered (may be nil at init time;
+	// Inject CancelRequester if one has been registered (may be nil at init time;
 	// SetCancelInterceptor propagates to all channels when called later).
 	if m.cancelInterceptor != nil {
-		if setter, ok := ch.(interface{ SetCancelInterceptor(ci CancelInterceptor) }); ok {
+		if setter, ok := ch.(interface{ SetCancelInterceptor(ci CancelRequester) }); ok {
 			setter.SetCancelInterceptor(m.cancelInterceptor)
 		}
 	}
@@ -615,6 +715,7 @@ func (m *Manager) initChannel(name, instanceID, displayName string) error {
 			})
 		}
 	}
+	m.wirePairingAttemptsLocked(instanceID, ch)
 	// Stamp the trusted instance key onto the channel so every inbound message
 	// carries the correct InstanceID (FR-020 / FR-021). The key is always the
 	// config-map instanceID, never derived from message content.
@@ -625,7 +726,14 @@ func (m *Manager) initChannel(name, instanceID, displayName string) error {
 	// because "whatsapp.eu" and "whatsapp.us" occupy distinct slots. For
 	// legacy single-instance the instanceID equals the type name, so the
 	// behavior is unchanged (e.g. "telegram" → m.channels["telegram"]).
+	order := m.PairingAttempts().LockChannel(instanceID)
+	if !order.MatchesConfig(m.config) {
+		order.Unlock()
+		return nil // construction lost to a newer exact config write; never publish it
+	}
 	m.channels[instanceID] = ch
+	m.recordResourceConfigOrder(instanceID, m.config)
+	order.Unlock()
 	logger.InfoCF("channels", "Channel enabled successfully", map[string]any{
 		"channel":    displayName,
 		"instanceID": instanceID,
@@ -675,11 +783,45 @@ func warnMisconfigured(displayName, missing string) {
 
 // recordChannelFailure records a failed enabled-channel init and logs it.
 func (m *Manager) recordChannelFailure(name, displayName string, err error) {
-	m.failedChannels = append(m.failedChannels, ChannelInitError{Name: name, Channel: displayName, Err: err})
-	logger.ErrorCF("channels", "Enabled channel failed to initialize", map[string]any{
-		"channel": displayName,
-		"error":   err.Error(),
+	m.recordChannelFailureScoped(name, displayName, err, false)
+}
+
+// recordChannelFailureScoped records a failed enabled-channel init, logging it
+// and — when credentialScoped is set (#1277) — saying plainly that only this
+// integration is down and naming the class of cause, so the log line an
+// operator greps for matches the degraded-not-fatal behaviour.
+func (m *Manager) recordChannelFailureScoped(name, displayName string, err error, credentialScoped bool) {
+	m.failedChannels = append(m.failedChannels, ChannelInitError{
+		Name:             name,
+		Channel:          displayName,
+		Err:              err,
+		CredentialScoped: credentialScoped,
 	})
+	logger.ErrorCF("channels", "Enabled channel failed to initialize", map[string]any{
+		"channel":           displayName,
+		"error":             err.Error(),
+		"credential_scoped": credentialScoped,
+	})
+}
+
+// instanceCredentialRefMissing reports whether any credential reference the
+// instance configures is absent (or empty) in the supplied secret bundle —
+// the signature of the one-integration missing/unreadable-secret failure
+// #1277 scopes. The bundle, not the store, is the right witness: it is exactly
+// what the factory was handed, and a factory that found its refs present in
+// it did not fail for a missing secret. An instance that configures no refs
+// at all is never credential-scoped — its failures keep the historical
+// boot-fatal semantics.
+func instanceCredentialRefMissing(inst config.ChannelInstanceConfig, secrets credentials.SecretBundle) bool {
+	for _, ref := range inst.CredentialRefs() {
+		if strings.TrimSpace(ref) == "" {
+			continue
+		}
+		if secrets.GetString(ref) == "" {
+			return true
+		}
+	}
+	return false
 }
 
 // FailedChannels returns a copy of the list of enabled channels that failed to
@@ -691,6 +833,17 @@ func (m *Manager) FailedChannels() []ChannelInitError {
 	out := make([]ChannelInitError, len(m.failedChannels))
 	copy(out, m.failedChannels)
 	return out
+}
+
+// managerHasFailureFor reports whether the failed list already carries an
+// entry recorded under the given instance id.
+func managerHasFailureFor(failed []ChannelInitError, name string) bool {
+	for i := range failed {
+		if failed[i].Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // channelTypeToFactory maps a channel instance type to the factory name
@@ -748,7 +901,9 @@ func (m *Manager) initChannels(channels map[string]config.ChannelInstanceConfig)
 				)
 				// Record under instanceID (not factoryName) so degraded status
 				// refers to the operator-visible config key.
-				m.recordChannelFailure(instanceID, "WhatsApp Native", wrapped)
+				m.recordChannelFailureScoped(instanceID, "WhatsApp Native", wrapped,
+					instanceCredentialRefMissing(inst, m.secrets) &&
+						!errors.Is(err, errFactoryNotRegistered))
 			}
 			continue
 		}
@@ -767,7 +922,16 @@ func (m *Manager) initChannels(channels map[string]config.ChannelInstanceConfig)
 
 		// initChannel keys m.channels by instanceID (FR-015 / WS-B resolved).
 		if err := m.initChannel(factoryName, instanceID, displayName); err != nil {
-			m.recordChannelFailure(instanceID, displayName, err)
+			// #1277 (founder decision 2026-10-12): a failure whose configured
+			// credential reference is missing from the bundle is one
+			// integration's missing/unreadable secret — recorded and surfaced,
+			// never boot-fatal. The classification runs against the same
+			// bundle the factory just failed under (m.secrets). An unregistered
+			// factory is a build/registration mismatch, not a credential
+			// problem, and keeps the historical fatal semantics.
+			scoped := instanceCredentialRefMissing(inst, m.secrets) &&
+				!errors.Is(err, errFactoryNotRegistered)
+			m.recordChannelFailureScoped(instanceID, displayName, err, scoped)
 		}
 	}
 
@@ -813,11 +977,17 @@ func isNonFatalChannelName(name string) bool {
 // bootFatalError returns a joined error for the subset of failed channels whose
 // failure is boot-fatal, or nil if every failure is non-fatal (or there were
 // none). Non-fatal failures remain recorded in FailedChannels for degraded
-// status; they simply do not abort boot.
+// status; they simply do not abort boot. Non-fatal classes: the legacy
+// build-variant names (isNonFatalChannelName) and — since #1277 (founder
+// decision 2026-10-12) — failures flagged CredentialScoped, the
+// one-integration missing/unreadable-secret class.
 func bootFatalError(failed []ChannelInitError) error {
 	joinedErrs := make([]error, 0, len(failed))
 	for i := range failed {
 		if isNonFatalChannelName(failed[i].Name) {
+			continue
+		}
+		if failed[i].CredentialScoped {
 			continue
 		}
 		joinedErrs = append(joinedErrs, &failed[i])
@@ -995,6 +1165,7 @@ func (m *Manager) newDispatchContext(ctx context.Context) (context.Context, cont
 	dispatchCtx, cancel := context.WithCancel(ctx)
 	m.dispatchTask = &asyncTask{cancel: cancel}
 	m.dispatchCtx = dispatchCtx
+	m.dispatchGen++
 	return dispatchCtx, cancel
 }
 
@@ -1043,19 +1214,24 @@ func (m *Manager) StartAll(ctx context.Context) error {
 		logger.InfoCF("channels", "Starting channel", map[string]any{
 			"channel": name,
 		})
-		if err := channel.Start(ctx); err != nil {
+		// The gateway's boot start: a pairing a restart cut off is reported
+		// interrupted, never silently resumed (founder ruling 2026-10-21).
+		if err := channel.Start(WithPairingStart(ctx, "", true)); err != nil {
 			logger.ErrorCF("channels", "Failed to start channel", map[string]any{
 				"channel": name,
 				"error":   err.Error(),
 			})
+			m.noteStartLocked(name, err)
 			continue
 		}
+		m.noteStartLocked(name, nil)
 		// Lazily create worker only after channel starts successfully. Rate
 		// limiting is keyed by channel TYPE, not instance ID (name here is the
 		// instanceID under N-per-type instancing) — resolve the type so a second
 		// instance of a rate-limited type doesn't silently fall back to
 		// defaultRateLimit.
 		w := newChannelWorker(m.channelTypeForRateLimit(name), channel)
+		w.gen = m.dispatchGen
 		m.workers[name] = w
 		// Snapshot m.config while still holding m.mu.Lock() (see runWorker's doc
 		// comment for why runWorker must never read m.config itself).
@@ -1121,11 +1297,15 @@ func (m *Manager) StartAll(ctx context.Context) error {
 			cancel()
 			return fmt.Errorf("channels: bind shared HTTP server at %s: %w", m.httpServer.Addr, bindErr)
 		}
+		// Capture the server: StopAll may nil m.httpServer (after Shutdown)
+		// before this goroutine is scheduled; Serve on a shut-down server
+		// returns http.ErrServerClosed, which is handled below.
+		srv := m.httpServer
 		go func() {
 			logger.InfoCF("channels", "Shared HTTP server listening", map[string]any{
-				"addr": m.httpServer.Addr,
+				"addr": srv.Addr,
 			})
-			if err := m.httpServer.Serve(ln); err != nil &&
+			if err := srv.Serve(ln); err != nil &&
 				!errors.Is(err, http.ErrServerClosed) &&
 				!errors.Is(err, net.ErrClosed) {
 				// Log at Error and return — do NOT call os.Exit here.
@@ -1457,13 +1637,39 @@ func (m *Manager) sendWithRetry(
 		return
 	}
 
+	// Final egress binding check (C-REPLY): before the placeholder edit and
+	// again before every attempt below. Nothing is sent on refusal, and no
+	// failure notice is posted to the chat (that would be a guessed send).
+	if !m.refuseReturnRoute(m.liveConfig(), msg, "pre-send") {
+		return
+	}
+	// FR-044 dequeue start check, lock-free, before preSend. A start never
+	// enters preSend's reply bookkeeping (T-11, S-85): it always goes to Send.
+	isStart := msg.Operation == bus.OperationStart
+	if isStart {
+		m.observeBeforeDequeueStart(msg)
+		if !m.startMayProceed(msg, w.ch, startStageDequeue) {
+			return
+		}
+	}
+
 	// Pre-send: stop typing and try to edit placeholder
-	if m.preSend(ctx, name, msg, w.ch) {
+	if !isStart && m.preSend(ctx, name, msg, w.ch) {
 		return // placeholder was edited successfully, skip Send
 	}
 
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
+		// F2: the captured route is re-checked immediately before EVERY actual
+		// Send - the first one included, which can follow a failed placeholder
+		// edit that gave a rebind the time to happen.
+		boundary := "send"
+		if attempt > 0 {
+			boundary = "retry"
+		}
+		if !m.refuseReturnRoute(m.liveConfig(), msg, boundary) {
+			return
+		}
 		lastErr = w.ch.Send(ctx, msg)
 		if lastErr == nil {
 			return
@@ -1512,7 +1718,9 @@ func (m *Manager) sendWithRetry(
 	// fallback that itself fails to send does not recurse into a notice storm. The
 	// publish is non-blocking (see notifyDrop) to avoid stalling the worker when
 	// the bus is saturated.
-	if !isNotice {
+	// FR-048 (S-87): no fallback is derived from a start; it would post as
+	// unrestricted system traffic. The error log above is the signal.
+	if !isNotice && !isStart {
 		m.notifyDrop(name, msg.ChatID, "[message delivery failed]")
 	}
 }
@@ -1614,8 +1822,9 @@ func (m *Manager) enqueueOutbound(ctx context.Context, w *channelWorker, msg bus
 		logger.ErrorCF("channels", "Outbound queue full, message dropped",
 			map[string]any{"channel": msg.Channel, "chat_id": msg.ChatID})
 		// Don't re-notify if a drop notice itself got dropped (avoids
-		// an amplification loop).
-		if !strings.HasPrefix(msg.Content, dropNoticePrefix) {
+		// an amplification loop). FR-048 (S-86): no notice is derived from a
+		// dropped start either.
+		if !strings.HasPrefix(msg.Content, dropNoticePrefix) && msg.Operation != bus.OperationStart {
 			m.notifyDrop(msg.Channel, msg.ChatID, "[message dropped: channel is overloaded, please retry]")
 		}
 		return true
@@ -1638,7 +1847,12 @@ func (m *Manager) dispatchOutbound(ctx context.Context) {
 			// refusal, which would have killed outbound messaging on EVERY
 			// channel, permanently, on the first refused send. Skip the
 			// message; keep the loop alive.
-			if !allowAgentOriginatedSend(m.configSnapshot(), msg) {
+			if !m.authorizeOutbound(msg) {
+				return true
+			}
+			// FR-044 dispatch start check, on the worker this loop resolved;
+			// a refusal skips the message and keeps the loop alive too.
+			if msg.Operation == bus.OperationStart && !m.startMayProceed(msg, w.ch, startStageDispatch) {
 				return true
 			}
 			return m.enqueueOutbound(ctx, w, msg)
@@ -1648,6 +1862,21 @@ func (m *Manager) dispatchOutbound(ctx context.Context) {
 		"Unknown channel for outbound message",
 		"Channel has no active worker, skipping message",
 	)
+}
+
+// authorizeOutbound is the dispatch-time authorization of one outbound message
+// (true = hand it to the worker). A message carrying a captured return route is
+// authorized by checkReturnRoute - the instance must still belong to the owner
+// captured at admission - and NOT by the ordinary ownership check: the author of
+// a captured return is the answering guest, who by design does not own the
+// connector (F6). Every other agent-originated message keeps the ownership
+// check unchanged. bus.ReturnRoute is set only by the server's reply path
+// (pkg/agent replyViaConnector), never by a tool argument.
+func (m *Manager) authorizeOutbound(msg bus.OutboundMessage) bool {
+	if msg.Return != nil {
+		return m.refuseReturnRoute(m.configSnapshot(), msg, "dispatch")
+	}
+	return allowAgentOriginatedSend(m.configSnapshot(), msg)
 }
 
 func (m *Manager) dispatchOutboundMedia(ctx context.Context) {
@@ -1851,6 +2080,101 @@ func (m *Manager) evictStale(now time.Time) {
 	})
 }
 
+// notifyPairingLocked reports one pairing event of attemptID through the
+// attempt observer, for a pairing the manager itself ended.
+func (m *Manager) notifyPairingLocked(name, attemptID string, status PairingStatus, message string) {
+	if m.pairingAttemptObserver != nil {
+		m.pairingAttemptObserver(name, attemptID, status, "", message)
+	}
+}
+
+// RequestRestart asks the next reload to restart name even when its
+// configuration is unchanged, so an admitted pairing start (a chat Retry, or
+// connect_channel for a connector stopped in place) gets a fresh platform
+// start through the serialized reload lifecycle — never a start published
+// beside it (gate r3 M4, M10). An unknown or disabled name is ignored.
+// attemptID binds the restart to that admitted pairing attempt: when a Stop,
+// disable or delete revoked it before the reload ran, the restart is dropped,
+// so a revoked admission never restarts anything (gate r4 R4-A01). An empty
+// attemptID requests an unconditional restart (no pairing involved).
+func (m *Manager) RequestRestart(name, attemptID string, snapshots ...*config.Config) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cfg := m.config
+	if len(snapshots) > 0 {
+		cfg = snapshots[0]
+	}
+	order := m.PairingAttempts().LockChannel(name)
+	defer order.Unlock()
+	intent, accepted := order.restartIntent(attemptID, cfg)
+	if !accepted {
+		return
+	}
+	if m.forcedRestarts == nil {
+		m.forcedRestarts = make(map[string]pairingRestartIntent)
+	}
+	if previous, exists := m.forcedRestarts[name]; !exists || previous.generation <= intent.generation {
+		m.forcedRestarts[name] = intent
+	}
+}
+
+// LastStartError returns name's most recent Start failure, or nil once it
+// started (gate r2 T2-SF-10: the cause behind "saved but not working").
+func (m *Manager) LastStartError(name string) error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.startErrors[name]
+}
+
+// noteStartLocked records name's Start result. Caller holds m.mu.
+func (m *Manager) noteStartLocked(name string, err error) {
+	if err == nil {
+		delete(m.startErrors, name)
+		return
+	}
+	if m.startErrors == nil {
+		m.startErrors = make(map[string]error)
+	}
+	m.startErrors[name] = err
+}
+
+// PairingAttempts returns the manager-owned pairing-attempt store, creating it
+// on first use. It takes no manager lock, so a pairing observer may call it
+// from inside a channel's Start (which runs under m.mu) — the store has its
+// own lock and never calls out under it.
+func (m *Manager) PairingAttempts() *PairingAttempts {
+	if store := m.pairingAttempts.Load(); store != nil {
+		return store
+	}
+	m.pairingAttempts.CompareAndSwap(nil, NewPairingAttempts())
+	return m.pairingAttempts.Load()
+}
+
+// wirePairingAttemptsLocked hands an attempt-aware channel the store and its
+// attempt observer. Caller holds m.mu.
+func (m *Manager) wirePairingAttemptsLocked(instanceID string, ch Channel) {
+	if m.pairingAttemptObserver != nil {
+		if obs, ok := ch.(PairingAttemptObservable); ok {
+			fn := m.pairingAttemptObserver
+			obs.SetPairingAttemptObserver(func(attemptID string, status PairingStatus, qr, message string) {
+				fn(instanceID, attemptID, status, qr, message)
+			})
+		}
+	}
+	if aware, ok := ch.(PairingAttemptAware); ok {
+		aware.SetPairingAttempts(m.PairingAttempts(), instanceID)
+	}
+}
+
+// ChannelRevision returns name's configuration revision in cfg (its config
+// hash): what a pairing admission binds to and its start must match (M14).
+// It is the adapter-view hash (FR-015): an outbound-only change does not move
+// it. The user-facing FR-088 conflict token, which includes outbound, is
+// config.ChannelConfigRevision.
+func ChannelRevision(cfg *config.Config, name string) string {
+	return toChannelHashes(cfg)[name]
+}
+
 func (m *Manager) GetChannel(name string) (Channel, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -1891,6 +2215,8 @@ type managerReload struct {
 	secrets     credentials.SecretBundle
 	oldConfig   *config.Config
 	oldSecrets  credentials.SecretBundle
+	oldCredSigs map[string]string
+	credSigs    map[string]string
 	list        map[string]string
 	added       []string
 	removed     []string
@@ -1898,7 +2224,16 @@ type managerReload struct {
 	dispatchCtx context.Context
 	cancel      context.CancelFunc
 	deferFuncs  []func()
-	cc          map[string]config.ChannelInstanceConfig
+	// removedInstances carries the stale instance pointer of every removed
+	// channel until restartExisting's deferred unregister actually deletes it
+	// (#1277 — see removeChannels/startAdded).
+	removedInstances map[string]Channel
+	cc               map[string]config.ChannelInstanceConfig
+	startCleanupErr  error
+	// captureVersion is the credential-write version stamped before secrets
+	// were resolved (FR-050 (ii)); it bounds which markers a completed
+	// rebuild may acknowledge.
+	captureVersion uint64
 }
 
 // Reload applies configuration changes to the channel manager. It compares
@@ -1906,36 +2241,97 @@ type managerReload struct {
 // stopped, added channels are initialized and started, and existing (unchanged)
 // channel workers are restarted on a fresh context to ensure continued routing.
 func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets credentials.SecretBundle) error {
-	mr := &managerReload{m: m, ctx: ctx, cfg: cfg, secrets: secrets}
+	return m.ReloadCaptured(ctx, cfg, secrets, NoCredentialCapture)
+}
+
+// ReloadCaptured is Reload for a bundle whose credential capture was stamped
+// with CredentialWriteVersion before it was resolved: a rebuilt adapter that
+// starts acknowledges only the pending-application markers that capture
+// includes (FR-050 (iii)).
+func (m *Manager) ReloadCaptured(ctx context.Context, cfg *config.Config, secrets credentials.SecretBundle, captureVersion uint64) error {
+	mr := &managerReload{m: m, ctx: ctx, cfg: cfg, secrets: secrets, captureVersion: captureVersion}
 
 	mr.m.mu.Lock()
 	defer mr.m.mu.Unlock()
+	mr.m.observeReloadWriteLock(reloadLockAcquired)
 
+	if !mr.publishConfigSnapshot() {
+		return nil // obsolete continuation; the coalesced current reload owns the effect
+	}
 	mr.prepareDispatch()
 
 	mr.quiesceDispatch()
 
 	mr.removeChannels()
+	// An unfinished captured resource cannot be overwritten by construction of
+	// its replacement. Retain the old hash/order until a later Stop succeeds.
+	mr.added = slices.DeleteFunc(mr.added, func(id string) bool { return mr.m.pendingDisposals[id] != nil })
 	if r0, stop := mr.initializeAdded(); stop {
-		return r0
+		return errors.Join(mr.startCleanupErr, r0)
 	}
 	mr.startAdded()
 
 	return mr.restartExisting()
 }
 
-// prepareDispatch saves rollback state, installs the new configuration, and refreshes the dispatch context.
+// prepareDispatch computes this published snapshot's diff and refreshes dispatch.
+// publishConfigSnapshot already guarded the config/rollback-state publication.
 func (mr *managerReload) prepareDispatch() {
-	// Save old config and secrets so we can revert on error.
-	mr.oldConfig = mr.m.config
-	mr.oldSecrets = mr.m.secrets
-
-	// Update config and secrets early: initChannel uses m.config and m.secrets via factory call.
-	mr.m.config = mr.cfg
-	mr.m.secrets = mr.secrets
-
 	mr.list = toChannelHashes(mr.cfg)
 	mr.added, mr.removed = compareChannels(mr.m.channelHashes, mr.list)
+	mr.addGenerationRestarts()
+	// #1277 (founder decision 2026-10-12): a config-hash-identical instance
+	// whose credential availability changed — its secret was deleted from the
+	// vault, became unreadable, or was restored — must still be re-initialized,
+	// or a deleted credential would keep the old channel instance running on
+	// its stale in-process secret forever. Force the same removed+added pair a
+	// config change produces so removeChannels stops the stale instance and
+	// initializeAdded re-attempts the factory against the new bundle.
+	// Stage availability; only commit it with the applied resource hash.
+	mr.credSigs = credentialSignatures(mr.cfg, mr.secrets)
+	for id, sig := range mr.credSigs {
+		if _, stillEnabled := mr.list[id]; !stillEnabled {
+			continue
+		}
+		if oldSig, ok := mr.oldCredSigs[id]; !ok || oldSig == sig {
+			continue
+		}
+		if !slices.Contains(mr.added, id) {
+			mr.added = append(mr.added, id)
+			mr.removed = append(mr.removed, id)
+		}
+	}
+	// Explicit restarts (RequestRestart): an admitted pairing start for a
+	// connector whose configuration did not change. The same removed+added
+	// pair stops the current instance and starts a fresh one, consuming the
+	// admission's token on this serialized path (gate r3 M4, M10).
+	for id, intent := range mr.m.forcedRestarts {
+		order := mr.m.PairingAttempts().LockChannel(id)
+		if !order.MatchesConfig(mr.cfg) {
+			order.Unlock()
+			continue // this snapshot must not consume a later accepted restart
+		}
+		_, enabled := mr.list[id]
+		_, known := mr.m.channelHashes[id]
+		if order.acceptsRestart(intent, mr.cfg) && enabled && known && !slices.Contains(mr.added, id) {
+			mr.added = append(mr.added, id)
+			mr.removed = append(mr.removed, id)
+		}
+		delete(mr.m.forcedRestarts, id)
+		order.Unlock()
+	}
+
+	// Failed teardown belongs to the captured resource, not the reason that
+	// first selected its restart. Retry even when settings/credentials are now
+	// identical or an unconditional restart intent has already been consumed.
+	for id := range mr.m.pendingDisposals {
+		if !slices.Contains(mr.removed, id) {
+			mr.removed = append(mr.removed, id)
+		}
+		if _, enabled := mr.list[id]; enabled && !slices.Contains(mr.added, id) {
+			mr.added = append(mr.added, id)
+		}
+	}
 
 	// Fix 16: cancel the existing dispatcher before creating a new one to prevent context leak.
 	//
@@ -1997,9 +2393,14 @@ func (mr *managerReload) quiesceDispatch() {
 	// during this window, but none of those readers combine config with the
 	// channel set, so that transient mismatch is not observable as a bug.
 	if mr.oldTask != nil {
+		hook := mr.m.reloadHandoffHook
 		mr.m.mu.Unlock()
+		if hook != nil {
+			hook()
+		}
 		mr.oldTask.wg.Wait() // OLD dispatchers have EXITED; nothing can send on a removed channel's queue now
 		mr.m.mu.Lock()
+		mr.m.observeReloadWriteLock(reloadLockReacquired)
 	}
 }
 
@@ -2007,10 +2408,27 @@ func (mr *managerReload) quiesceDispatch() {
 func (mr *managerReload) removeChannels() {
 	// Fix 14 (removed loop): capture loop variable with a local copy to avoid Go closure capture bug.
 	mr.deferFuncs = make([]func(), 0, len(mr.removed)+len(mr.added))
+	mr.removedInstances = make(map[string]Channel, len(mr.removed))
 	for _, name := range mr.removed {
 		n := name // local copy — prevents closure from capturing the loop variable
-		// Stop all channels
+		// Select the exact resource at the guarded dispatch effect. Never look
+		// it up again after releasing this guard for native teardown.
+		order := mr.m.PairingAttempts().LockChannel(n)
+		if !order.MatchesConfig(mr.cfg) {
+			order.Unlock()
+			continue
+		}
 		channel := mr.m.channels[n]
+		if pending := mr.m.pendingDisposals[n]; pending != nil {
+			channel = pending // retry the captured object, never a successor by name
+		}
+		order.Unlock()
+		// #1277: remember the stale instance pointer. The unregister is
+		// deferred to restartExisting, so until then m.channels[n] still
+		// holds it; startAdded must not mistake it for an instance THIS
+		// pass constructed when the same instance is also in added
+		// (a credential-signature-forced re-attempt whose factory failed).
+		mr.removedInstances[n] = channel
 		// Defense-in-depth: a "removed" name that never resolved to a registered
 		// channel (e.g. it failed to construct on a prior boot/reload) leaves
 		// m.channels[n] nil. Calling Stop would panic and crash the gateway. Skip the
@@ -2019,8 +2437,9 @@ func (mr *managerReload) removeChannels() {
 			logger.WarnCF("channels", "Skipping stop for unregistered channel", map[string]any{
 				"channel": n,
 			})
+			staleWorker := mr.m.workers[n]
 			mr.deferFuncs = append(mr.deferFuncs, func() {
-				mr.m.unregisterChannelLocked(n)
+				mr.m.unregisterInstanceLocked(n, nil, staleWorker)
 			})
 			continue
 		}
@@ -2032,9 +2451,22 @@ func (mr *managerReload) removeChannels() {
 				"channel": n,
 				"error":   err.Error(),
 			})
+			mr.retainFailedDisposal(n, channel, err)
+			continue // unfinished cleanup must not schedule unregister
+		}
+		if mr.m.pendingDisposals[n] == channel {
+			delete(mr.m.pendingDisposals, n)
+		}
+		// Tear down exactly the instance and worker being removed. When the
+		// same name is also added (a forced or credential-driven restart),
+		// startAdded has already published the new instance and worker under
+		// that name; they must survive this deferred removal (gate r3 M10).
+		oldWorker := mr.m.workers[n]
+		if oldWorker != nil && oldWorker.ch != channel {
+			oldWorker = nil // the successor worker does not belong to this disposal
 		}
 		mr.deferFuncs = append(mr.deferFuncs, func() {
-			mr.m.unregisterChannelLocked(n)
+			mr.m.unregisterInstanceLocked(n, channel, oldWorker)
 		})
 	}
 }
@@ -2048,7 +2480,9 @@ func (mr *managerReload) initializeAdded() (error, bool) {
 	if err != nil {
 		logger.ErrorC("channels", fmt.Sprintf("toChannelConfig error: %v", err))
 		mr.m.config = mr.oldConfig
+		mr.m.liveCfg.Store(mr.oldConfig)
 		mr.m.secrets = mr.oldSecrets
+		mr.m.credSigs = mr.oldCredSigs
 		mr.cancel()
 		return err, true
 	}
@@ -2104,7 +2538,9 @@ func (mr *managerReload) initializeAdded() (error, bool) {
 	if err != nil {
 		logger.ErrorC("channels", fmt.Sprintf("initChannels error: %v", err))
 		mr.m.config = mr.oldConfig
+		mr.m.liveCfg.Store(mr.oldConfig)
 		mr.m.secrets = mr.oldSecrets
+		mr.m.credSigs = mr.oldCredSigs
 		mr.m.failedChannels = oldFailed
 		mr.cancel()
 		return err, true
@@ -2124,6 +2560,16 @@ func (mr *managerReload) startAdded() {
 		// is nil. Calling Start on it would panic and crash the entire gateway. Record
 		// a degraded failure, drop the hash so the channel is re-attempted on the next
 		// reload, and continue — a single missing channel must NEVER take down the bus.
+		//
+		// #1277: the same guard covers the stale case — when n was ALSO removed
+		// this reload, m.channels[n] still holds the OLD (stopped) instance
+		// because the unregister is deferred to restartExisting. A pointer
+		// match with the removed instance means this pass's factory FAILED to
+		// construct a replacement, and starting the stale instance here would
+		// resurrect the removed credential's channel.
+		if stale, wasRemoved := mr.removedInstances[n]; wasRemoved && channel == stale {
+			channel = nil
+		}
 		if channel == nil {
 			// Give a specific, actionable reason when this is the ordinary,
 			// well-understood case of an enabled channel that simply hasn't
@@ -2153,40 +2599,59 @@ func (mr *managerReload) startAdded() {
 					}
 				}
 			}
-			mr.m.recordChannelFailure(n, n, reason)
+			// initChannels already recorded the specific factory failure when
+			// construction errored for this instance (the same reason this
+			// channel is nil). Appending the generic not-registered reason on
+			// top would double-count the instance in FailedChannels — #1277's
+			// RED pack pins exactly one failure entry per degraded connection —
+			// and would bury the actionable cause under boilerplate. Record the
+			// generic reason only when no failure for this instance exists yet
+			// (the genuine mismatch/skip case, e.g. the prerequisite-check skip).
+			if !managerHasFailureFor(mr.m.failedChannels, n) {
+				mr.m.recordChannelFailure(n, n, reason)
+			}
 			delete(mr.list, n)
 			continue
 		}
 		logger.InfoCF("channels", "Starting channel", map[string]any{
 			"channel": n,
 		})
-		if err := channel.Start(mr.ctx); err != nil {
+		// An admitted pairing start for n (ready, at this revision) is
+		// consumed by this start only (gate r3 M2, M14).
+		// Only an attempt committed at this reload's own revision starts; any
+		// other is left to the reload built for it (gate r5 R5-A05).
+		token, stamp, current := mr.m.PairingAttempts().ReadyForSnapshot(n, mr.cfg)
+		if !current {
+			delete(mr.list, n)
+			continue
+		}
+		if err := channel.Start(WithPairingStart(mr.ctx, token, false, stamp)); err != nil {
 			logger.ErrorCF("channels", "Failed to start channel", map[string]any{
 				"channel": n,
 				"error":   err.Error(),
 			})
-			// Fix 35: don't commit the hash for channels that failed to start.
-			delete(mr.list, n)
+			if token != "" && mr.m.PairingAttempts().Release(n, token, PairingOutcomeStartFailed) {
+				// The admitted pairing ended before its start: its chat (or
+				// Connectors) is told why, never left waiting for a code
+				// (gate r4 T2-SF-16).
+				mr.m.notifyPairingLocked(n, token, PairingStatusError, PairingStartFailureMessage(err))
+			}
+			mr.recordStartFailure(n, channel, err)
 			continue
 		}
-		// Lazily create worker only after channel starts successfully. Resolve
-		// TYPE from instance ID for rate limiting (see channelTypeForRateLimit).
-		w := newChannelWorker(mr.m.channelTypeForRateLimit(n), channel)
-		mr.m.workers[n] = w
-		// Snapshot m.config (already the NEW cfg, assigned above) while still
-		// holding m.mu.Lock() — see runWorker's doc comment.
-		go mr.m.runWorker(mr.dispatchCtx, n, w, mr.m.config)
-		go mr.m.runMediaWorker(mr.dispatchCtx, n, w)
-		mr.deferFuncs = append(mr.deferFuncs, func() {
-			mr.m.registerChannelLocked(n, channel)
-		})
+		if token != "" {
+			// The start ran without activating a pairing for its admission
+			// (the channel needed none): close it, so it can never start late.
+			mr.m.PairingAttempts().Release(n, token, PairingOutcomeNoPairing)
+		}
+		mr.publishStartedWorker(n, channel)
 	}
 }
 
 // restartExisting commits channel hashes and restarts dispatchers and unchanged-channel workers.
 func (mr *managerReload) restartExisting() error {
 	// Commit hashes only for successfully started channels.
-	mr.m.channelHashes = mr.list
+	mr.commitAppliedHashes()
 
 	// Restart the bus dispatchers + TTL janitor against the new dispatchCtx so
 	// outbound routing and stale-entry eviction resume after the old context was
@@ -2207,19 +2672,19 @@ func (mr *managerReload) restartExisting() error {
 		addedSet[n] = struct{}{}
 	}
 	for name, w := range mr.m.workers {
+		if pending := mr.m.pendingDisposals[name]; pending != nil && pending == w.ch {
+			continue // do not resume dispatch over unfinished captured cleanup
+		}
 		if _, isNew := addedSet[name]; isNew {
 			continue // already started above
 		}
-		// Wait for old goroutines to finish (they were canceled above).
-		<-w.done
-		<-w.mediaDone
-		// Reset done channels so the new goroutines can close them cleanly.
-		w.done = make(chan struct{})
-		w.mediaDone = make(chan struct{})
-		// Snapshot m.config (already the NEW cfg) while still holding
-		// m.mu.Lock() — see runWorker's doc comment.
-		go mr.m.runWorker(mr.dispatchCtx, name, w, mr.m.config)
-		go mr.m.runMediaWorker(mr.dispatchCtx, name, w)
+		if w.gen == mr.m.dispatchGen {
+			// Started on this reload's own live context during the unlocked
+			// handoff (RegisterChannel): it belongs to the new generation and
+			// must not be joined as if it were cancelled.
+			continue
+		}
+		mr.restartDrainedWorker(name, w)
 	}
 
 	// Execute the register/unregister mutations while STILL holding m.mu.
@@ -2241,19 +2706,21 @@ func (mr *managerReload) restartExisting() error {
 	for _, f := range mr.deferFuncs {
 		f()
 	}
-	return nil
+	return mr.startCleanupErr
 }
 
 func (m *Manager) RegisterChannel(name string, channel Channel) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.registerChannelLocked(name, channel)
+	m.wirePairingAttemptsLocked(name, channel)
 
 	// Spin up a worker so SendMessage/SendMedia can route to this channel.
 	// Without a worker, synchronous delivery (e.g., media frames) fails with
 	// "channel has no active worker".
 	if _, hasWorker := m.workers[name]; !hasWorker && m.dispatchCtx != nil {
 		w := newChannelWorker(m.channelTypeForRateLimit(name), channel)
+		w.gen = m.dispatchGen
 		m.workers[name] = w
 		// Snapshot m.config while still holding m.mu.Lock() — see runWorker's
 		// doc comment.
@@ -2274,6 +2741,28 @@ func (m *Manager) UnregisterChannel(name string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.unregisterChannelLocked(name)
+}
+
+// unregisterInstanceLocked removes one specific channel instance and its
+// worker: the HTTP handlers of oldCh, oldW's queues, and the map entries only
+// while they still point at them, so a replacement published under the same
+// name is untouched. Caller must hold m.mu.
+func (m *Manager) unregisterInstanceLocked(name string, oldCh Channel, oldW *channelWorker) {
+	if oldCh != nil && m.mux != nil {
+		m.unregisterChannelHTTPHandler(name, oldCh)
+	}
+	if oldW != nil {
+		close(oldW.queue)
+		<-oldW.done
+		close(oldW.mediaQueue)
+		<-oldW.mediaDone
+	}
+	if m.workers[name] == oldW {
+		delete(m.workers, name)
+	}
+	if m.channels[name] == oldCh {
+		delete(m.channels, name)
+	}
 }
 
 // unregisterChannelLocked unregisters a channel. Caller must hold m.mu.

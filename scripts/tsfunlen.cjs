@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // tsfunlen: list every TS/TSX function-like node under src/, and every
-// MJS/JS/CJS function-like node under scripts/ and tests/, whose line span
+// MJS/JS/CJS function-like node under scripts/ (and TS/TSX/MJS/JS/CJS under
+// tests/), whose line span
 // exceeds a threshold, for the function-size budget gate
 // (scripts/check-function-budget.sh). Companion to scripts/funlen (Go).
 //
@@ -17,6 +18,24 @@
 // Counted node kinds: FunctionDeclaration, MethodDeclaration,
 // FunctionExpression, ArrowFunction, ConstructorDeclaration, GetAccessor,
 // SetAccessor.
+//
+// Line count is code lines only (founder decision 2026-11-07, option C).
+// The span is still from the signature to the closing brace, but a line
+// counts only when a non-comment token covers a non-whitespace character
+// on it. Blank lines and comment-only lines do not. See
+// docs/internal/architecture/draft-module-map.md, "Function length is code
+// lines only".
+//
+// A function may carry a directive in the // comment block immediately
+// above it (no blank line between that block and the function):
+//
+//   // budget:exception <one-line reason>
+//   //budget:exception <one-line reason>
+//
+// Both spellings are accepted in TS, TSX, JS, MJS and CJS. An empty reason
+// is reported so the gate can fail it. React components ignore the
+// directive (the gate does; this scanner still reports it). The directive
+// sits outside the span, so it is not itself a counted line.
 //
 // Anonymous callbacks count (docs/internal/architecture/draft-module-map.md,
 // "How we enforce it"): the body passed to useEffect/create/produce/
@@ -35,10 +54,12 @@
 // in size-budget-grandfather-2026-09-15.md (name-starts-uppercase alone),
 // so a handful of entries there are expected to move between the two kinds.
 //
-// Output mirrors scripts/funlen: `lines<TAB>file:line<TAB>name<TAB>kind`,
-// split into "## Production" and "## Tests" sections, longest first. Lines
-// starting with "#" are commentary; the gate only trusts lines that start
-// with a digit followed by a tab.
+// Output mirrors scripts/funlen:
+// `lines<TAB>file:line<TAB>name<TAB>kind<TAB>exception`,
+// split into "## Production" and "## Tests" sections, longest first. The
+// exception column is `0` (none), `1` (directive present, reason empty), or
+// `2` plus the reason. Lines starting with "#" are commentary; the gate only
+// trusts lines that start with a digit followed by a tab.
 //
 // Usage: node scripts/tsfunlen.cjs [--root .] [--limit 120] [--ts-module <path>]
 //
@@ -92,13 +113,15 @@ function isTestPath(rel) {
 }
 
 // SOURCE_ROOTS: each { dir, extensions } pair is walked independently and
-// unioned. src/ scans TS/TSX only; scripts/ and tests/ scan MJS/JS/CJS
-// only (never TS/TSX there — tests/e2e's TS/TSX, if any, stays out of
-// scope). The three dirs never overlap, so no file is ever walked twice.
+// unioned. src/ scans TS/TSX only; scripts/ scans MJS/JS/CJS only; tests/
+// scans TS/TSX AND MJS/JS/CJS (the size-budget ruling applies to test code
+// too, and tests/e2e is TypeScript — a 317-line e2e describe slipped past this
+// scanner while tests/ was JS-only). The three dirs never overlap, so no file
+// is ever walked twice.
 const SOURCE_ROOTS = [
   { dir: 'src', extensions: ['.ts', '.tsx'] },
   { dir: 'scripts', extensions: ['.mjs', '.js', '.cjs'] },
-  { dir: 'tests', extensions: ['.mjs', '.js', '.cjs'] },
+  { dir: 'tests', extensions: ['.ts', '.tsx', '.mjs', '.js', '.cjs'] },
 ];
 
 // walkSourceFiles collects every file matching SOURCE_ROOTS under <root>,
@@ -226,24 +249,211 @@ function classifyKind(ts, sf, isTsx, fn, target) {
   return hasJsxReturn(ts, fn) ? 'component' : 'function';
 }
 
-// scanFile parses one TS/TSX file and returns every counted function-like
-// node whose line span exceeds `limit`, plus the total count seen.
+// lfLines numbers physical lines the way scripts/funlen does: by LF only. The
+// TypeScript parser's own line table also breaks at a bare CR, U+2028 and U+2029,
+// which would give one source line two coordinates; this table is used for every
+// line number below so the Go and TS counts agree. It answers the two calls the
+// scanner makes on a SourceFile.
+function lfLines(text) {
+  const starts = [0];
+  for (let i = text.indexOf('\n'); i >= 0; i = text.indexOf('\n', i + 1)) starts.push(i + 1);
+  return {
+    getLineAndCharacterOfPosition(pos) {
+      let lo = 0;
+      let hi = starts.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1;
+        if (starts[mid] <= pos) lo = mid;
+        else hi = mid - 1;
+      }
+      return { line: lo, character: pos - starts[lo] };
+    },
+    getPositionOfLineAndCharacter(line) {
+      return starts[line];
+    },
+  };
+}
+
+// analyzeSource walks the parsed tree's leaf tokens (so template tails, regular
+// expressions and JSX text are tokenised with the parser's own context, which a
+// context-free scanner cannot do) and returns:
+//   codeLines     0-based physical lines holding a non-whitespace character of a
+//                 real token. Comments and blank lines are not tokens, so they do
+//                 not count; a blank line inside a multi-line string stays blank.
+//   firstOnLine   0-based line -> start offset of the first token touching it, or
+//                 -1 when that token began on an earlier line (a string tail).
+//   lineComments  0-based line -> {text, only} for every real `//` comment found
+//                 between tokens; `only` is true when nothing but whitespace
+//                 precedes it on its line. Text that merely looks like a comment
+//                 inside a string or template never appears here.
+function analyzeSource(ts, sf, text) {
+  const lf = lfLines(text);
+  const codeLines = new Set();
+  const firstOnLine = new Map();
+  const lineComments = new Map();
+  let lastEnd = 0;
+  const isJsDoc = (n) => n.kind >= ts.SyntaxKind.FirstJSDocNode && n.kind <= ts.SyntaxKind.LastJSDocNode;
+  const visit = (n) => {
+    if (isJsDoc(n)) return;
+    const kids = n.getChildren(sf);
+    if (kids.length > 0) {
+      for (const k of kids) visit(k);
+      return;
+    }
+    if (n.kind === ts.SyntaxKind.EndOfFileToken) return;
+    const start = n.kind === ts.SyntaxKind.JsxText ? n.pos : n.getStart(sf);
+    const end = n.end;
+    if (!(end > start) || start < lastEnd) return;
+    collectGapComments(lf, text, lineComments, lastEnd, start);
+    markTokenLines(lf, text, codeLines, firstOnLine, start, end);
+    lastEnd = end;
+  };
+  visit(sf);
+  collectGapComments(lf, text, lineComments, lastEnd, text.length);
+  return { codeLines, firstOnLine, lineComments, lf };
+}
+
+// collectGapComments parses the pure trivia text[from,to) between two tokens:
+// whitespace, newlines, // comments and /* */ comments are the only things there.
+function collectGapComments(lf, text, lineComments, from, to) {
+  let i = from;
+  while (i < to) {
+    const c = text[i];
+    if (c === '/' && text[i + 1] === '/') {
+      let e = text.indexOf('\n', i);
+      if (e < 0 || e > to) e = to;
+      const line = lf.getLineAndCharacterOfPosition(i).line;
+      const lineStart = lf.getPositionOfLineAndCharacter(line, 0);
+      lineComments.set(line, {
+        text: trimBlank(text.slice(i, e)),
+        only: !hasNonSpace(text, lineStart, i),
+      });
+      i = e;
+    } else if (c === '/' && text[i + 1] === '*') {
+      const e = text.indexOf('*/', i + 2);
+      i = e < 0 || e + 2 > to ? to : e + 2;
+    } else if (c === '#' && text[i + 1] === '!' && i === 0) {
+      const e = text.indexOf('\n', i);
+      i = e < 0 || e > to ? to : e;
+    } else {
+      i++;
+    }
+  }
+}
+
+function markTokenLines(lf, text, lines, firstOnLine, start, end) {
+  let i = start;
+  while (i < end) {
+    let lineEnd = text.indexOf('\n', i);
+    if (lineEnd < 0 || lineEnd > end) lineEnd = end;
+    if (hasNonSpace(text, i, lineEnd)) {
+      const line = lf.getLineAndCharacterOfPosition(i).line;
+      lines.add(line);
+      if (!firstOnLine.has(line)) firstOnLine.set(line, i === start ? start : -1);
+    }
+    if (lineEnd >= end) break;
+    i = lineEnd + 1;
+  }
+}
+
+// Blank-line whitespace, one explicit set shared with scripts/funlen/main.go (keep
+// the two in step; scripts/check-function-budget-selfcheck.sh runs every member
+// through both). It is exactly the Unicode White_Space property:
+//   U+0009-U+000D, U+0020, U+0085, U+00A0, U+1680, U+2000-U+200A,
+//   U+2028, U+2029, U+202F, U+205F, U+3000
+// U+FEFF (byte order mark), U+200B (zero width space) and U+180E (Mongolian vowel
+// separator) are not White_Space: they count as code. JavaScript's own \s is not
+// used because it includes U+FEFF and omits U+0085.
+const BLANK_CLASS = '\\t-\\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000';
+const NON_SPACE = new RegExp('[^' + BLANK_CLASS + ']');
+const BLANK_EDGES = new RegExp('^[' + BLANK_CLASS + ']+|[' + BLANK_CLASS + ']+$', 'g');
+// trimBlank trims with the same set, so a reason made only of blank-set characters
+// is empty in both scanners (JavaScript's own trim() keeps U+0085, Go's strips it).
+function trimBlank(str) {
+  return str.replace(BLANK_EDGES, '');
+}
+function hasNonSpace(text, start, end) {
+  return NON_SPACE.test(text.slice(start, end));
+}
+
+// countCodeLines counts 1-based inclusive [startLine, endLine] against a
+// 0-based set from analyzeSource.
+function countCodeLines(codeLines, startLine, endLine) {
+  let n = 0;
+  for (let l = startLine; l <= endLine; l++) {
+    if (codeLines.has(l - 1)) n++;
+  }
+  return n;
+}
+
+const NONE = { kind: 0, reason: '' };
+const BUDGET_DIRECTIVE = new RegExp('^//[' + BLANK_CLASS + ']*budget:exception(?:[' + BLANK_CLASS + '](.*))?$', 's');
+
+// exceptionAbove returns {kind: 0 none, 1 empty reason, 2 reason, reason}.
+// The directive must be a real // comment (analyzeSource only records those) in
+// the comment-only block that ends on the line immediately above the function's
+// start line (1-based), and the function (or an enclosing node that starts the
+// same statement) must be the first token on its own line, so a marker can never
+// reach a function through a string tail or another statement. A blank or
+// non-comment line ends the block.
+function exceptionAbove(ts, info, claimed, fn, sf, startLine) {
+  for (let l = startLine - 2; l >= 0; l--) {
+    const c = info.lineComments.get(l);
+    if (!c || !c.only) break;
+    const m = BUDGET_DIRECTIVE.exec(c.text);
+    if (!m) continue;
+    if (!firstTokenBelongsTo(ts, info, fn, sf, startLine - 1)) return NONE;
+    // One marker, one function: the first (outermost) function that attaches on
+    // this line takes it; a function nested on the same line gets nothing.
+    if (claimed.has(startLine)) return NONE;
+    claimed.add(startLine);
+    const reason = trimBlank(m[1] || '');
+    return reason === '' ? { kind: 1, reason: '' } : { kind: 2, reason };
+  }
+  return NONE;
+}
+
+// firstTokenBelongsTo: the first token on line0 starts the function itself or an
+// enclosing node (e.g. `describe('x', () => {` starts the call that holds the
+// arrow). Which of several functions on that line gets the marker is decided by
+// the claim in exceptionAbove: the outermost one, so a nested helper never does.
+function firstTokenBelongsTo(ts, info, fn, sf, line0) {
+  const first = info.firstOnLine.get(line0);
+  if (first === undefined || first < 0) return false;
+  for (let n = fn; n && n.kind !== ts.SyntaxKind.SourceFile; n = n.parent) {
+    if (n.getStart(sf) === first) return true;
+  }
+  return false;
+}
+
+function formatException(exc) {
+  if (exc.kind === 0) return '0';
+  if (exc.kind === 1) return '1';
+  return '2' + String(exc.reason).replace(/[\t\r\n]/g, ' ');
+}
+
+// scanFile parses one TS/TSX/JS file and returns every counted function-like
+// node whose code-line count exceeds `limit` (or that carries an exception
+// directive), plus the total count seen.
 function scanFile(ts, file, limit) {
   const isTsx = file.abs.endsWith('.tsx');
   const src = fs.readFileSync(file.abs, 'utf8');
   const sf = ts.createSourceFile(file.abs, src, ts.ScriptTarget.Latest, true);
+  const info = analyzeSource(ts, sf, src);
+  const claimed = new Set();
   const rows = [];
   let total = 0;
   const visit = (n) => {
     if (isFunctionLikeNode(ts, n) && n.body) {
       total++;
-      const start = sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
-      const end = sf.getLineAndCharacterOfPosition(n.getEnd()).line + 1;
-      const lines = end - start + 1;
-      if (lines > limit) {
+      const start = info.lf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
+      const end = info.lf.getLineAndCharacterOfPosition(n.getEnd()).line + 1;
+      const lines = countCodeLines(info.codeLines, start, end);
+      const exc = exceptionAbove(ts, info, claimed, n, sf, start);
+      if (lines > limit || exc.kind !== 0) {
         const { name, target } = resolveName(ts, sf, n);
         const kind = classifyKind(ts, sf, isTsx, n, target);
-        rows.push({ file: file.rel, name, kind, start, lines });
+        rows.push({ file: file.rel, name, kind, start, lines, exc });
       }
     }
     ts.forEachChild(n, visit);
@@ -269,17 +479,19 @@ function scanRepo(ts, root, limit) {
 
 function printSection(title, rows) {
   console.log(`## ${title}`);
-  console.log('lines\tfile:line\tname\tkind');
-  for (const r of rows) console.log(`${r.lines}\t${r.file}:${r.start}\t${r.name}\t${r.kind}`);
+  console.log('lines\tfile:line\tname\tkind\texception');
+  for (const r of rows) {
+    console.log(`${r.lines}\t${r.file}:${r.start}\t${r.name}\t${r.kind}\t${formatException(r.exc)}`);
+  }
 }
 
 function printReport(rows, totalProd, totalTest, limit) {
   rows.sort((a, b) => b.lines - a.lines);
   const prod = rows.filter((r) => !r.test);
   const test = rows.filter((r) => r.test);
-  console.log(`# TS/TSX functions longer than ${limit} lines under src/ (span incl. signature and closing brace)`);
+  console.log(`# TS/TSX/JS functions over ${limit} code lines (blank and comment-only lines excluded)`);
   console.log(`# scanned: ${totalProd} production funcs, ${totalTest} test funcs`);
-  console.log(`# over limit: ${prod.length} production, ${test.length} test\n`);
+  console.log(`# reported: ${prod.length} production, ${test.length} test (over the limit, or carrying an exception directive)\n`);
   printSection('Production', prod);
   console.log('');
   printSection('Tests', test);

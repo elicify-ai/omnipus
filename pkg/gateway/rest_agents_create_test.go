@@ -436,35 +436,31 @@ func TestCreateAgent_ExecutorPersistsAndEchoes(t *testing.T) {
 	assert.Nil(t, exec, "Main agents must not persist an executor block")
 }
 
-// TestCreateAgent_InvalidExecutor_400 proves the validator rejects bad executors
-// on subagent_3p creates. A Main agent with an external executor is coerced to
-// native instead of rejected (covered by TestCreateAgent_Main_CoercesExternalExecutorWithWarning).
+// r17 contract reconciliation: program paths are Settings-owned; kind is derived and CLI is immutable.
 func TestCreateAgent_InvalidExecutor_400(t *testing.T) {
-	cases := []struct {
-		name string
-		body string
+	for _, tc := range []struct {
+		name     string
+		executor map[string]any
 	}{
-		{
-			"subagent_3p external-cli with no cli",
-			`{"name":"X","type":"subagent_3p","description":"d","executor":{"kind":"external-cli","cli_path":"/usr/local/bin/codex"},"soul":"s"}`,
-		},
-		{
-			"subagent_3p external-cli with no cli_path",
-			`{"name":"X","type":"subagent_3p","description":"d","executor":{"kind":"external-cli","cli":"codex"},"soul":"s"}`,
-		},
-		{
-			"subagent_3p external-cli with empty cli_path",
-			`{"name":"X","type":"subagent_3p","description":"d","executor":{"kind":"external-cli","cli":"codex","cli_path":"  "},"soul":"s"}`,
-		},
-	}
-	for _, tc := range cases {
+		{"omitted cli", map[string]any{}},
+		{"empty cli", map[string]any{"cli": ""}},
+		{"unknown cli", map[string]any{"cli": "not-a-cli"}},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
-			api := buildExecutorTestAPI(t)
+			api := newTestRestAPIWithValidation(t)
+			body, err := json.Marshal(map[string]any{"name": "X", "type": "subagent_3p", "description": "d", "executor": tc.executor})
+			require.NoError(t, err)
 			w := httptest.NewRecorder()
-			r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(tc.body))
-			r.Header.Set("Content-Type", "application/json")
-			api.HandleAgents(w, r)
-			assert.Equal(t, http.StatusBadRequest, w.Code, "want 400; body: %s", w.Body.String())
+			r := withAdminRole(httptest.NewRequest(http.MethodPost, "/api/v1/agents", bytes.NewReader(body)))
+			api.createAgent(w, r)
+			require.Equal(t, http.StatusBadRequest, w.Code, "invalid cli enum: %s", w.Body.String())
+			assert.Contains(t, w.Body.String(), "AgentCreateRequestSubagent3p", "r17 §3.4: use the generated request-schema refusal")
+			records, skipped, err := agentstore.New(api.homePath).List()
+			assert.Empty(t, skipped, "refusal must not corrupt an entity")
+			require.NoError(t, err)
+			for _, record := range records {
+				assert.NotEqual(t, "X", record.Name, "invalid create wrote an agent")
+			}
 		})
 	}
 }
@@ -537,19 +533,19 @@ func TestCreateAgent_Subagent3p_ForbiddenFields_ValidationEnabled(t *testing.T) 
 	}{
 		{
 			"tools_cfg",
-			`{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"},"tools_cfg":{"builtin":{"default_policy":"deny"}}}`,
+			`{"name":"X","type":"subagent_3p","description":"d","executor":{"cli":"codex"},"tools_cfg":{"builtin":{"default_policy":"deny"}}}`,
 		},
 		{
 			"skills",
-			`{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"},"skills":["summarize"]}`,
+			`{"name":"X","type":"subagent_3p","description":"d","executor":{"cli":"codex"},"skills":["summarize"]}`,
 		},
 		{
 			"fallback_models",
-			`{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"},"fallback_models":[{"model":"m","provider":"p"}]}`,
+			`{"name":"X","type":"subagent_3p","description":"d","executor":{"cli":"codex"},"fallback_models":[{"model":"m","provider":"p"}]}`,
 		},
 		{
 			"model_params",
-			`{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"},"model_params":{"temperature":0.5}}`,
+			`{"name":"X","type":"subagent_3p","description":"d","executor":{"cli":"codex"},"model_params":{"temperature":0.5}}`,
 		},
 	}
 	for _, tc := range cases {
@@ -576,7 +572,7 @@ func TestCreateAgent_Subagent3p_ForbiddenFields_ValidationEnabled(t *testing.T) 
 // cfg.Gateway.ValidateInbound being turned on.
 func TestCreateAgent_Subagent3p_ForbiddenFields_RejectedUnconditionally(t *testing.T) {
 	api := buildExecutorTestAPI(t)
-	body := `{"name":"DroppedFields","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"},"tools_cfg":{"builtin":{"default_policy":"deny"}},"skills":["summarize"]}`
+	body := `{"name":"DroppedFields","type":"subagent_3p","description":"d","executor":{"cli":"codex"},"tools_cfg":{"builtin":{"default_policy":"deny"}},"skills":["summarize"]}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
@@ -601,7 +597,7 @@ func TestCreateAgent_Subagent3p_ForbiddenFieldFixture_RejectedByDefault(t *testi
 	api := buildExecutorTestAPI(t)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents",
-		bytes.NewReader(gen.FixtureAgentCreateRequestSubagent3p_ForbiddenFieldJSON()))
+		bytes.NewReader(t8CurrentForbiddenCreateFixture(t)))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 	require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
@@ -640,7 +636,7 @@ func TestCreateAgent_SteeringModeFieldRetiredFromWire(t *testing.T) {
 // including subagent_3p — before the field itself was retired).
 func TestCreateAgent_Subagent3p_DelegationPolicyRejected(t *testing.T) {
 	api := buildExecutorTestAPI(t)
-	body := `{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"},"delegation_policy":{"to":[{"kind":"local","id":"*"}],"modes":["task"],"depth":1}}`
+	body := `{"name":"X","type":"subagent_3p","description":"d","executor":{"cli":"codex"},"delegation_policy":{"to":[{"kind":"local","id":"*"}],"modes":["task"],"depth":1}}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
@@ -731,65 +727,56 @@ func TestCreateAgent_FastUpsertFailure_FallsBackAndSucceedsSilently(t *testing.T
 	require.True(t, ok, "the new agent must be resolvable in the registry after the full-reload fallback succeeds")
 }
 
-// TestCreateAgent_Subagent3p_CliPathRequired verifies that cli_path is required
-// on POST create for subagent_3p agents. Spec §9.2: "POST subagent_3p,
-// cli:claude-code, no cli_path → 400 — cli_path is required".
-func TestCreateAgent_Subagent3p_CliPathRequired(t *testing.T) {
-	api := buildExecutorTestAPI(t)
-
-	cases := []struct {
-		name string
-		body string
-	}{
-		{
-			"missing cli_path",
-			`{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"claude-code"}}`,
-		},
-		{
-			"empty cli_path",
-			`{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"claude-code","cli_path":""}}`,
-		},
-		{
-			"whitespace cli_path",
-			`{"name":"X","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"claude-code","cli_path":"   "}}`,
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
+// r17 §3.9/§3.11: every supplied agent cli_path is refused, including empty;
+// omission is accepted in TestCreateAgent_Subagent3p_WithoutCliPath_Succeeds.
+func TestCreateAgent_Subagent3p_CliPathRefused(t *testing.T) {
+	for _, path := range []string{"", "   ", "/usr/local/bin/claude"} {
+		t.Run("path="+path, func(t *testing.T) {
+			api := buildExecutorTestAPI(t)
+			body, err := json.Marshal(map[string]any{"name": "X", "type": "subagent_3p", "description": "d", "executor": map[string]any{"cli": "claude-code", "cli_path": path}})
+			require.NoError(t, err)
 			w := httptest.NewRecorder()
-			r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(tc.body))
-			r.Header.Set("Content-Type", "application/json")
-			api.HandleAgents(w, r)
-			assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
-			assert.Contains(t, w.Body.String(), "cli_path is required",
-				"error must mention cli_path is required; body: %s", w.Body.String())
+			api.HandleAgents(w, httptest.NewRequest(http.MethodPost, "/api/v1/agents", bytes.NewReader(body)))
+			require.Equal(t, http.StatusBadRequest, w.Code, "r17 §3.11: %s", w.Body.String())
+			var out map[string]any
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &out))
+			assert.Equal(t, "executor.cli_path", out["field"])
+			assert.Equal(t, "cli_path cannot be set on an agent. The program for the chosen CLI is set by a person in Settings → Third-party agents.", out["error"])
+			records, skipped, err := agentstore.New(api.homePath).List()
+			assert.Empty(t, skipped, "refusal must not corrupt an entity")
+			require.NoError(t, err)
+			for _, record := range records {
+				assert.NotEqual(t, "X", record.Name, "refused path created an agent")
+			}
 		})
 	}
 }
 
-// TestCreateAgent_Subagent3p_WithCliPath_Succeeds verifies the happy path: a
-// subagent_3p created with cli + cli_path succeeds and the cli_path is
-// persisted. Spec §9.2 acceptance: "POST subagent_3p, cli:claude-code,
-// cli_path:/usr/local/bin/claude → 201".
-func TestCreateAgent_Subagent3p_WithCliPath_Succeeds(t *testing.T) {
+// r17 contract reconciliation: program paths are Settings-owned; kind is derived and CLI is immutable.
+func TestCreateAgent_Subagent3p_WithoutCliPath_Succeeds(t *testing.T) {
 	api := buildExecutorTestAPI(t)
-
-	body := `{"name":"CliPathOK","type":"subagent_3p","description":"d","soul":"s","executor":{"kind":"external-cli","cli":"claude-code","cli_path":"/usr/local/bin/claude"}}`
+	body := `{"name":"CliPathOK","type":"subagent_3p","description":"d","executor":{"cli":"claude-code"}}`
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
-	r.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(w, r)
-
-	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
+	api.HandleAgents(w, httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body)))
+	require.Equal(t, http.StatusCreated, w.Code, "r17 §3.8 creation without Settings succeeds: %s", w.Body.String())
 	created := decodeAgentResp(t, w.Body.Bytes())
-	require.NotNil(t, created.Executor, "response must include executor")
-	require.NotNil(t, created.Executor.CliPath, "response executor must include cli_path")
-	assert.Equal(t, "/usr/local/bin/claude", *created.Executor.CliPath)
-
-	// Verify persistence.
+	require.NotNil(t, created.Executor)
+	require.NotNil(t, created.Executor.Cli)
+	assert.Equal(t, gen.ExternalCliToolClaudeCode, *created.Executor.Cli)
 	exec := agentExecutorFromStore(t, api.homePath, created.Id)
 	require.NotNil(t, exec)
-	assert.Equal(t, "/usr/local/bin/claude", exec.CLIPath)
+	assert.Equal(t, "claude-code", exec.CLI)
+	assert.Empty(t, exec.CLIPath, "program path is Settings-owned, never agent-owned")
+	// r17 §3.8: REST returns Agent with ExecutorConfig's read model;
+	// create_agent's top-level result fields are a different contract (K-9).
+	assert.Nil(t, created.Executor.EffectiveCliPath, "unset Settings path is absent from the read model")
+	require.NotNil(t, created.Executor.ProgramWarning, "REST create must explain why the new worker cannot run")
+	const warning = "This agent cannot run: no program path is set for Claude Code. A person can set it in Settings → Third-party agents → Claude Code."
+	assert.Equal(t, warning, *created.Executor.ProgramWarning)
+	var out map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &out))
+	assert.NotContains(t, out, "runnable", "runnable is not a REST Agent property")
+	assert.NotContains(t, out, "program_warning", "the REST warning belongs inside executor")
 }
 
 // TestCreateAgent_WorkerVoiceFieldRejected proves the unconditional
@@ -839,7 +826,7 @@ func TestCreateAgent_ImmediateSessionCreate_NoRace(t *testing.T) {
 
 	// No sleep here — this is the exact sequence the bug report reproduced via
 	// curl (create, then immediately use).
-	sessBody, err := json.Marshal(gen.SessionCreateRequest{AgentId: &created.Id})
+	sessBody, err := json.Marshal(gen.SessionCreateRequest{AgentId: created.Id})
 	require.NoError(t, err)
 	sw := httptest.NewRecorder()
 	sr := httptest.NewRequest(http.MethodPost, "/api/v1/sessions", bytes.NewReader(sessBody))
@@ -851,43 +838,6 @@ func TestCreateAgent_ImmediateSessionCreate_NoRace(t *testing.T) {
 			"the new agent must be resolvable via the runtime registry the instant createAgent "+
 			"responds 201, not up to ~reloadDelay later: %s",
 		sw.Code, sw.Body.String())
-}
-
-// TestCreateAgent_RejectsReservedDefaultName verifies createAgent 400s on a
-// name of "default", case-insensitively.
-func TestCreateAgent_RejectsReservedDefaultName(t *testing.T) {
-	for _, name := range []string{"default", "Default", "DEFAULT", "  default  "} {
-		t.Run("name="+name, func(t *testing.T) {
-			api := buildExecutorTestAPI(t)
-
-			body := `{"name":"` + name + `","type":"Main","soul":"s"}`
-			w := httptest.NewRecorder()
-			r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
-			r.Header.Set("Content-Type", "application/json")
-			api.HandleAgents(w, r)
-
-			require.Equal(t, http.StatusBadRequest, w.Code,
-				"create with reserved name %q must be rejected 400, got body: %s", name, w.Body.String())
-			assert.Contains(t, w.Body.String(), "reserved",
-				"error body must explain the name is reserved")
-		})
-	}
-}
-
-// TestCreateAgent_AllowsNonReservedNameContainingDefault verifies the check
-// is an exact match (after trim/case-fold), not a substring match — a name
-// like "Default Assistant" must NOT be rejected.
-func TestCreateAgent_AllowsNonReservedNameContainingDefault(t *testing.T) {
-	api := buildExecutorTestAPI(t)
-
-	body := `{"name":"Default Assistant","type":"Main","soul":"s"}`
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
-	r.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(w, r)
-
-	require.Equal(t, http.StatusCreated, w.Code,
-		"a name merely containing \"default\" as a substring must be allowed, got body: %s", w.Body.String())
 }
 
 // TestCreateAgent_TypeOmitted_Rejected is the W1 behavior-change guard: the
@@ -958,10 +908,8 @@ func TestCreateAgent_TypeWorker_PersistsAndEchoes(t *testing.T) {
 	// default general-purpose worker is locked by coreagent.SeedConfig, but
 	// that path is not the REST create path.
 	assert.False(t, created.Locked, "newly-created worker must not be locked")
-	assert.False(t, created.Default != nil && *created.Default,
-		"newly-created worker must not be the default")
 
-	// Persisted to config.json with type=worker and no default flag.
+	// Persisted with type=worker.
 	entry := findTypeTestAgentInStore(t, api.homePath, "My Worker")
 	require.NotNil(t, entry, "worker must be persisted")
 	assert.Equal(t, config.AgentTypeWorker, entry.Type)
@@ -982,7 +930,7 @@ func TestCreateAgent_TypeSubagent3p_ExternalExecutorPersists(t *testing.T) {
 		http.MethodPost,
 		"/api/v1/agents",
 		strings.NewReader(
-			`{"name":"Worker External","type":"subagent_3p","description":"external-cli worker","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"},"soul":"external-cli-soul"}`,
+			`{"name":"Worker External","type":"subagent_3p","description":"external-cli worker","executor":{"cli":"codex"}}`,
 		),
 	)
 	r.Header.Set("Content-Type", "application/json")
@@ -1335,16 +1283,17 @@ func TestCreateAgent_ValidateInbound_SubagentWithExecutorRejected(t *testing.T) 
 	assert.Contains(t, resp["error"], "AgentCreateRequestSubagent")
 }
 
-// TestCreateAgent_ValidateInbound_Subagent3pMaxToolIterationsRejected asserts
-// that a subagent_3p create carrying `max_tool_iterations` is rejected 400 at
-// the schema gate when ValidateInbound is enabled: AgentCreateRequestSubagent3p
-// has no max_tool_iterations property (the field matrix's "exclude" decision
-// for this variant — the external CLI runs its own turn loop, so Omnipus
-// cannot cap its per-turn tool-call budget).
-func TestCreateAgent_ValidateInbound_Subagent3pMaxToolIterationsRejected(t *testing.T) {
+// TestCreateAgent_ValidateInbound_Subagent3pMaxToolIterationsAccepted — #904
+// D14 inverts the old "excluded for subagent_3p" field-matrix decision:
+// AgentCreateRequestSubagent3p now carries max_tool_iterations (1–1000,
+// optional), so a subagent_3p create with a value within the global is
+// accepted under inbound validation and the value is kept as the worker's
+// own limit (spec Scenario "External-CLI worker created with its own limit").
+func TestCreateAgent_ValidateInbound_Subagent3pMaxToolIterationsAccepted(t *testing.T) {
+	mtiUnsetEnv(t)
 	api := newTestRestAPIWithValidation(t)
 
-	body := `{"type":"subagent_3p","name":"Bad 3p","soul":"s","executor":{"cli":"codex","cli_path":"/usr/local/bin/codex"},"max_tool_iterations":50}`
+	body := `{"type":"subagent_3p","name":"Lim 3p","description":"external worker","executor":{"cli":"codex"},"max_tool_iterations":50}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", bytes.NewBufferString(body))
 	r.Header.Set("Content-Type", "application/json")
@@ -1352,10 +1301,12 @@ func TestCreateAgent_ValidateInbound_Subagent3pMaxToolIterationsRejected(t *test
 
 	api.createAgent(w, r)
 
-	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
-	var resp map[string]string
+	require.Equal(t, http.StatusCreated, w.Code, "body: %s", w.Body.String())
+	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Contains(t, resp["error"], "AgentCreateRequestSubagent3p")
+	assert.EqualValues(t, 50, resp["max_tool_iterations_override"])
+	assert.EqualValues(t, 50, resp["max_tool_iterations"])
+	assert.Equal(t, "agent", resp["max_tool_iterations_source"])
 }
 
 // --- Fix #5: validateSkillIDs fail-open when no skills are installed ---
@@ -1457,8 +1408,7 @@ func TestCreateAgent_WithToolsCfg(t *testing.T) {
 		"type": "Main",
 		"description": "A researcher",
 		"soul": "Research Bot soul",
-		"color": "#22C55E",
-		"icon": "magnifying-glass",
+		"color": "#4F8A80",
 		"tools_cfg": {
 			"builtin": {
 				"policies": ` + mustPolicyJSON(t, reqPolicies) + `
@@ -1493,8 +1443,7 @@ func TestCreateAgent_WithToolsCfg(t *testing.T) {
 	store := agentstore.New(tmpDir)
 	savedAgent, err := store.Get(resp.ID)
 	require.NoError(t, err, "created agent must exist as a real entity-store record")
-	assert.Equal(t, "#22C55E", savedAgent.Color)
-	assert.Equal(t, "magnifying-glass", savedAgent.Icon)
+	assert.Equal(t, "#4F8A80", savedAgent.Color)
 	require.NotNil(t, savedAgent.Tools, "tools config must be persisted")
 	policies := savedAgent.Tools.Builtin.Policies
 	// The caller's explicit allow entries win...

@@ -60,6 +60,7 @@
       "file": "tests/design-system/browser.spec.ts",
       "test": "Avatar [check:avatar-browser] browser",
       "story": "Default",
+      "requiredTargets": [{ "selector": "[data-testid=\"avatar\"]", "text": "DP" }],
       "applicable": true
     },
     {

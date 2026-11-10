@@ -16,8 +16,10 @@ import {
   CircleNotch,
   PlugsConnected,
   Clock,
+  Copy,
 } from '@phosphor-icons/react'
-import { SkeletonList, EmptyState, ErrorState } from '@/components/shared/ListStates'
+import { SkeletonList, ErrorState } from '@/components/shared/ListStates'
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia } from '@/components/ui/empty'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -36,11 +38,13 @@ import {
   isApiError,
   skillLastInvoked,
   type McpServer,
+  type Skill,
   type ToolRegistryEntry,
 } from '@/lib/api'
 import { ConfigurationSaveError } from '@/lib/api/configuration'
 import { useUiStore } from '@/store/ui'
 import { SkillBrowser } from '@/components/skills/SkillBrowser'
+import { SkillCopyDialog } from '@/components/skills/SkillCopyDialog'
 import { McpServerModal } from '@/components/skills/McpServerModal'
 import { ScreenHeader } from '@/components/layout/ScreenHeader'
 import { CATEGORY_LABELS } from '@/lib/toolCategories'
@@ -54,6 +58,7 @@ export function SkillsScreen() {
   const [mcpModalOpen, setMcpModalOpen] = useState(false)
   const [mcpEditTarget, setMcpEditTarget] = useState<McpServer | null>(null)
   const [confirmDeleteSkill, setConfirmDeleteSkill] = useState<{ id: string; name: string } | null>(null)
+  const [copySource, setCopySource] = useState<Skill | null>(null)
   const [confirmDeleteMcp, setConfirmDeleteMcp] = useState<string | null>(null)
   const [expandedMcp, setExpandedMcp] = useState<string | null>(null)
   const [testingMcp, setTestingMcp] = useState<string | null>(null)
@@ -227,12 +232,17 @@ export function SkillsScreen() {
                       )}
                       {skill.source === 'builtin' && (
                         <Badge variant="secondary" className="text-[length:var(--type-caption-size)]">
-                          Built-in
+                          Built-in · read-only
                         </Badge>
                       )}
                       {(skill.source === 'global' || skill.source === 'workspace') && (
                         <Badge variant="secondary" className="text-[length:var(--type-caption-size)]">
                           Community
+                        </Badge>
+                      )}
+                      {skill.has_local_changes && (
+                        <Badge variant="warning" className="text-[length:var(--type-caption-size)]">
+                          Changed locally
                         </Badge>
                       )}
                       {skill.verified && (
@@ -273,18 +283,32 @@ export function SkillsScreen() {
                       )}
                     </div>
                   </div>
-                  {skill.source !== 'builtin' && (
-                    <IconButton
+                  <div className="flex items-center gap-[var(--space-1)] shrink-0">
+                    {/* r15 §8.6: every row can be copied; a built-in is read-only,
+                        so its copy is how a person gets an editable version. */}
+                    <Button
                       type="button"
                       size="sm"
-                      variant="ghost"
-                      onClick={() => setConfirmDeleteSkill({ id: skill.id, name: skill.name })}
-                      className="h-auto w-auto p-[var(--space-1)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)] transition-colors shrink-0"
-                      aria-label={`Remove ${skill.name}`}
+                      variant="outline"
+                      className="gap-[var(--space-1)]"
+                      onClick={() => setCopySource(skill)}
+                      aria-label={`Make a copy of ${skill.name}`}
                     >
-                      <Trash size={14} />
-                    </IconButton>
-                  )}
+                      <Copy size={13} /> Make a copy
+                    </Button>
+                    {skill.source !== 'builtin' && (
+                      <IconButton
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setConfirmDeleteSkill({ id: skill.id, name: skill.name })}
+                        className="h-auto w-auto p-[var(--space-1)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)] transition-colors shrink-0"
+                        aria-label={`Remove ${skill.name}`}
+                      >
+                        <Trash size={14} />
+                      </IconButton>
+                    )}
+                  </div>
                 </Card>
               ))}
             </div>
@@ -304,7 +328,12 @@ export function SkillsScreen() {
           ) : mcpLoading ? (
             <SkeletonList />
           ) : mcpServers.length === 0 ? (
-            <EmptyState icon={<HardDrives size={40} weight="thin" />} message="No MCP servers connected." />
+            <Empty>
+              <EmptyHeader>
+                <EmptyMedia variant="icon"><HardDrives className="size-[var(--icon-size-prominent)]" /></EmptyMedia>
+                <EmptyDescription>No MCP servers connected.</EmptyDescription>
+              </EmptyHeader>
+            </Empty>
           ) : (
             <div className="space-y-[var(--space-2)]">
               {mcpServers.map((server) => {
@@ -326,6 +355,19 @@ export function SkillsScreen() {
                             {server.status}
                           </Badge>
                         </div>
+                        {/* #1277 — an errored server states why, on its own
+                            card: status_reason names the exact cause (e.g.
+                            the missing secret reference). Mirrors the
+                            ConnectorsScreen channel/mailbox degraded_reason
+                            line, without its truncate — the reason is the
+                            diagnostic the operator must read in full.
+                            Present only when status is "error"; never shown
+                            on a healthy card. */}
+                        {server.status === 'error' && server.status_reason && (
+                          <p className="mt-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+                            {server.status_reason}
+                          </p>
+                        )}
                       </div>
                       <div className="flex items-center gap-[var(--space-2)] shrink-0">
                         <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
@@ -421,7 +463,12 @@ export function SkillsScreen() {
           ) : toolsLoading ? (
             <SkeletonList />
           ) : tools.length === 0 ? (
-            <EmptyState icon={<Wrench size={40} weight="thin" />} message="No tools available." />
+            <Empty>
+              <EmptyHeader>
+                <EmptyMedia variant="icon"><Wrench className="size-[var(--icon-size-prominent)]" /></EmptyMedia>
+                <EmptyDescription>No tools available.</EmptyDescription>
+              </EmptyHeader>
+            </Empty>
           ) : (
             <ToolsOverview tools={tools} />
           )}
@@ -430,6 +477,13 @@ export function SkillsScreen() {
 
       {/* Skill browser modal */}
       <SkillBrowser open={skillBrowserOpen} onOpenChange={setSkillBrowserOpen} />
+
+      {/* Make a copy of a skill (r15 §8.6) */}
+      <SkillCopyDialog
+        source={copySource}
+        skills={skills}
+        onOpenChange={(open) => { if (!open) setCopySource(null) }}
+      />
 
       {/* MCP server add/edit modal */}
       <McpServerModal
@@ -554,10 +608,12 @@ function ToolsOverview({ tools }: { tools: ToolRegistryEntry[] }) {
       </p>
 
       {categories.length === 0 ? (
-        <EmptyState
-          icon={<Wrench size={40} weight="thin" />}
-          message="No tools available."
-        />
+        <Empty>
+              <EmptyHeader>
+                <EmptyMedia variant="icon"><Wrench className="size-[var(--icon-size-prominent)]" /></EmptyMedia>
+                <EmptyDescription>No tools available.</EmptyDescription>
+              </EmptyHeader>
+            </Empty>
       ) : (
         <div className="space-y-[var(--space-2)]">
           {categories.map((cat) => {

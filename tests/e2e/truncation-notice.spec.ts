@@ -19,7 +19,7 @@
  */
 
 import { expect } from '@playwright/test'
-import { test } from './fixtures/console-errors'
+import { test } from './fixtures/canonical-history'
 import { seedAndOpenSession } from './fixtures/session-setup'
 
 test(

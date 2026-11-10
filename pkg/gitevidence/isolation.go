@@ -21,6 +21,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 // Rung identifies a tier of the isolation ladder (FR-154/FR-157): the
@@ -243,6 +244,10 @@ func openSystemGitWorktree(baseDir, targetDir string) (*IsolatedCheckout, error)
 	// path), never raw agent input; this is engine-internal orchestration
 	// exec, not the agent-facing tool surface (see package doc Scope).
 	cmd := exec.CommandContext(ctx, "git", "-C", baseDir, "worktree", "add", "--detach", targetDir)
+	// FR-239: engine-internal git plumbing starts from the closed child
+	// allowlist (PATH/HOME locate git and its global config); the raw gateway
+	// environment is never inherited.
+	cmd.Env = sandbox.ScrubGatewayEnv()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("gitevidence: git worktree add %s: %w (%s)", targetDir, err, strings.TrimSpace(string(out)))
@@ -255,6 +260,7 @@ func openSystemGitWorktree(baseDir, targetDir string) (*IsolatedCheckout, error)
 			defer cancel()
 			// #nosec G204 -- see the openSystemGitWorktree exec above.
 			rmCmd := exec.CommandContext(ctx, "git", "-C", baseDir, "worktree", "remove", "--force", targetDir)
+			rmCmd.Env = sandbox.ScrubGatewayEnv()
 			if out, rmErr := rmCmd.CombinedOutput(); rmErr != nil {
 				return fmt.Errorf("gitevidence: git worktree remove %s: %w (%s)", targetDir, rmErr, strings.TrimSpace(string(out)))
 			}
@@ -394,16 +400,7 @@ func isFullHexHash(s string) bool {
 func restoreTreeAtCommit(ic *IsolatedCheckout, baseDir, hash string) error {
 	switch ic.Rung {
 	case RungSystemGitWorktree:
-		ctx, cancel := context.WithTimeout(context.Background(), isolationCmdTimeout)
-		defer cancel()
-		// #nosec G204 -- ic.Dir is an engine-controlled isolation-checkout
-		// path and hash is a validated 40-char hex commit id (see the
-		// openSystemGitWorktree exec comment for the exec-policy scope).
-		cmd := exec.CommandContext(ctx, "git", "-C", ic.Dir, "checkout", "--detach", hash)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("gitevidence: git checkout --detach %s in worktree %s: %w (%s)", hash, ic.Dir, err, strings.TrimSpace(string(out)))
-		}
-		return nil
+		return restoreWorktreeAtCommit(ic, hash)
 	case RungGoGitClone:
 		repo, err := git.PlainOpen(ic.Dir)
 		if err != nil {
@@ -419,6 +416,25 @@ func restoreTreeAtCommit(ic *IsolatedCheckout, baseDir, hash string) error {
 	default:
 		return fmt.Errorf("gitevidence: cannot restore commit %s on %s", hash, ic.Rung)
 	}
+}
+
+// restoreWorktreeAtCommit detaches a system-git worktree checkout onto hash.
+// It is a separate function (not inline in restoreTreeAtCommit's switch) so
+// the exec constructor and its child-environment assignment sit in one block.
+func restoreWorktreeAtCommit(ic *IsolatedCheckout, hash string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), isolationCmdTimeout)
+	defer cancel()
+	// #nosec G204 -- ic.Dir is an engine-controlled isolation-checkout
+	// path and hash is a validated 40-char hex commit id (see the
+	// openSystemGitWorktree exec comment for the exec-policy scope).
+	cmd := exec.CommandContext(ctx, "git", "-C", ic.Dir, "checkout", "--detach", hash)
+	// FR-239: engine-internal git plumbing starts from the closed child
+	// allowlist; the raw gateway environment is never inherited.
+	cmd.Env = sandbox.ScrubGatewayEnv()
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("gitevidence: git checkout --detach %s in worktree %s: %w (%s)", hash, ic.Dir, err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // checkoutHash switches an already-open repo's working tree to hash (used
@@ -507,6 +523,7 @@ func RemoveIsolatedCheckout(baseDir, targetDir string) error {
 			// #nosec G204 -- engine-controlled paths, same scope as the
 			// openSystemGitWorktree exec above.
 			rmCmd := exec.CommandContext(ctx, "git", "-C", baseDir, "worktree", "remove", "--force", targetDir)
+			rmCmd.Env = sandbox.ScrubGatewayEnv()
 			if out, err := rmCmd.CombinedOutput(); err != nil {
 				// Not fatal: targetDir may not be a registered worktree
 				// (clone/subdir rung, or already half-removed). Log at
@@ -516,6 +533,7 @@ func RemoveIsolatedCheckout(baseDir, targetDir string) error {
 				})
 			}
 			pruneCmd := exec.CommandContext(ctx, "git", "-C", baseDir, "worktree", "prune")
+			pruneCmd.Env = sandbox.ScrubGatewayEnv()
 			if out, err := pruneCmd.CombinedOutput(); err != nil {
 				logger.DebugCF("gitevidence", "worktree prune during isolated-checkout teardown", map[string]any{
 					"base_dir": baseDir, "error": err.Error(), "output": strings.TrimSpace(string(out)),

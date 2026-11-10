@@ -30,6 +30,7 @@ import { ChatImage } from './ChatImage'
 import { MermaidDiagram } from './mermaid-renderer'
 import { rewriteLegacyURL, resolveEffectivePreview } from '@/lib/preview-url'
 import { isSafeHref } from '@/lib/url-safe'
+import { mailDeepLinkTarget, openMailDeepLink } from '@/components/workspaces/mail/mailDeepLink'
 import { PHOSPHOR_EMOJI_ICONS } from '@/lib/phosphor-emoji-icons'
 
 type EffectivePreview = ReturnType<typeof resolveEffectivePreview>
@@ -87,6 +88,26 @@ export function createLinkRenderer(effectivePreview: EffectivePreview) {
         </span>
       )
     }
+    // Mail deep links (§17): a chat_link whose hash carries the SPA mail
+    // path navigates IN PLACE — it opens the Mail panel on that message
+    // instead of a new browser tab. Everything else keeps the new-tab
+    // behavior (isSafeHref already gated the scheme).
+    if (mailDeepLinkTarget(rewritten) !== null) {
+      return (
+        <a
+          tabIndex={0}
+          href={rewritten}
+          data-testid="markdown-link"
+          onClick={(e) => {
+            e.preventDefault()
+            openMailDeepLink(rewritten)
+          }}
+          className="text-[var(--color-accent)] underline underline-offset-2 hover:opacity-80 transition-opacity"
+        >
+          {children}
+        </a>
+      )
+    }
     return (
       <a tabIndex={0}
         href={rewritten}
@@ -119,6 +140,15 @@ export function codeText(node: ReactNode): string {
   if (typeof node === 'string') return node
   if (Array.isArray(node)) return node.map(codeText).join('')
   return ''
+}
+
+// clipboardCode is the text a code block's Copy control puts on the clipboard.
+// Markdown delivers a fenced block with the fence's own line break at the end
+// ("echo hi\n"); that break belongs to the fence, not to the code, so it is
+// dropped (#1449 S-02: the clipboard holds exactly `echo hi`). Only that one
+// break goes: blank lines the author wrote inside the fence are kept.
+export function clipboardCode(code: string): string {
+  return code.endsWith('\n') ? code.slice(0, -1) : code
 }
 
 export interface FenceInfo {

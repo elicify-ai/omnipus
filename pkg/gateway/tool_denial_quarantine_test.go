@@ -165,7 +165,7 @@ func TestRunTurn_QuarantineAfterFirstPermanentDenial_NoFurtherRegistryRoundTrip(
 	al.SetToolApprover(newPolicyApproverAdapter(reg, &WSHandler{}))
 
 	start := time.Now()
-	finalContent, err := al.ProcessDirect(context.Background(), "please run bash three times", "sess-w6-quarantine")
+	finalContent, err := al.ProcessDirectAs(context.Background(), agentID, "please run bash three times", "sess-w6-quarantine")
 	elapsed := time.Since(start)
 
 	// The turn must NOT abort — 3 denials is far under the budget of 10, and

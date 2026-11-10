@@ -118,7 +118,7 @@ func TestRunTurn_SilentExitsNowTyped(t *testing.T) {
 			al := mustNewAgentLoop(t, cfg, msgBus, provider)
 			t.Cleanup(al.Close)
 
-			agent := al.GetRegistry().GetDefaultAgent()
+			agent := al.GetRegistry().primaryChatAgentForTest()
 			require.NotNil(t, agent)
 
 			sub := al.SubscribeEvents(64)
@@ -131,7 +131,10 @@ func TestRunTurn_SilentExitsNowTyped(t *testing.T) {
 			sessionID := meta.ID
 
 			_, err = al.runAgentLoop(context.Background(), agent, processOptions{
-				SessionKey:          "typed-exit-" + tc.name,
+				// The archive refuses a session id carrying a path separator
+				// (NewArchiveDayStore: "the session id must be a single path
+				// element"), and a subtest name like "outer/cancel" carries one.
+				SessionKey:          "typed-exit-" + strings.ReplaceAll(tc.name, "/", "-"),
 				Channel:             "web",
 				ChatID:              sessionID,
 				UserMessage:         "hello",

@@ -1,6 +1,9 @@
 name: Cross-Platform
 
-# Required blocking matrix: Linux amd64 + arm64, and macOS arm64.
+# Required blocking matrix: Linux amd64 + arm64. macOS is OFF.
+# macOS arm64 leg removed 2026-10-13 (founder: GitHub billing problem on macOS runners).
+# To turn it back on, restore the `os: macos-latest` / `arch: arm64` matrix entry and the
+# NODE_OPTIONS heap pin in "Build SPA" (a 7 GB macOS runner needs --max-old-space-size=4096).
 #
 # WINDOWS IS NOT IN THIS MATRIX, and until 2026-08-22 this comment said it was
 # "covered by cross-platform-extra.yml (informational only)" — a file that has
@@ -14,6 +17,12 @@ name: Cross-Platform
 #     windows/amd64 on Linux. It does not compile or run Windows test files.
 #   * This workflow's `windows-daemon-tests` job runs pkg/daemon tests on a
 #     windows-latest runner, including daemon_windows_test.go.
+#   * This workflow's `windows-tools-tests` job runs ONLY the #920 read-boundary
+#     Windows path tests in pkg/tools (TestReadBoundary_Windows, subtests
+#     W1-W8, readboundary_windows_test.go) on a windows-latest runner, and
+#     fails unless all eight subtests report PASS
+#     (read-boundary-consistency-spec.md FR-031, founder decision D12). The
+#     rest of pkg/tools does not run on Windows.
 #   * Makefile → `make vet-windows` can type-check the full module and its test
 #     files for windows/amd64, but no workflow calls it today.
 #
@@ -23,14 +32,15 @@ name: Cross-Platform
 
 on:
   pull_request:
+    branches: [main, release/v0.1.1]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
     paths:
       - '**.go'
       - 'go.mod'
       - 'go.sum'
       - '.github/workflows/cross-platform.yml'
   push:
-    branches: [main]
-  workflow_dispatch:
+    branches: [main, release/v0.1.1]
 
 jobs:
   matrix:
@@ -44,11 +54,9 @@ jobs:
           # https://github.blog/2024-10-31-arm64-on-github-actions-powering-faster-more-efficient-build-systems/
           - os: ubuntu-24.04-arm
             arch: arm64
-          - os: macos-latest
-            arch: arm64
 
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 45
 
     env:
       CGO_ENABLED: "0"
@@ -76,11 +84,40 @@ jobs:
         shell: bash
         run: go build -tags goolm,stdjson ./...
 
+      - name: Prepare native history fixture tools
+        shell: bash
+        run: python3 -I deploy/ci-worker/chat-history-ci.py fixtures
+
       - name: Test
         # Platform-gated tests skip cleanly via pkg/testutil.SkipIfNotLinux et al.
         # The suite runs on all combinations to catch build-time breakage.
+        #
+        # #1184, calibrated 2026-10-04. The hang was disproven and these budgets
+        # are calibrated to measurement — do not tighten them back. The goroutine
+        # dump at the old deadline showed no blocked operation: 62 idle selects
+        # and 9 channel receives (normal background workers), nothing deadlocked.
+        # The one real defect was a test instrument, fixed in b7b48144a: its
+        # memory meter forced a full runtime.GC on a 2ms tick (4,664 collections
+        # to measure one bound); that subtest went 103.92s → 4.24s. Measured on
+        # real macOS/ARM runners: pkg/agent 566s and 610s on identical code
+        # (runners vary ~50%), 541.7s after the instrument fix inside this job;
+        # pkg/gateway 579.763s of test time alone and 602.0s under full-suite
+        # contention, so it missed the 10m per-package cap from contention, not
+        # from being stuck; every other package finished in under 95s. This step
+        # is `go test -short ./...`: 127 packages sharing 3 macOS cores. One
+        # verification run was cancelled at the 20-minute job limit. -timeout
+        # 20m is the per-test-binary deadline (~2× the 602s worst case; a genuine
+        # hang still trips it). The job's timeout-minutes is 45 so the SPA build,
+        # the Go build, and those two packages fit under one ceiling.
+        #
+        # 2026-10-29: pkg/gateway alone now runs about 20 minutes on the 4-core
+        # ubuntu runners (release b7d4483c9: amd64 hit the 20m deadline, arm64
+        # passed just under it; the previous release run passed). The package
+        # grew; nothing was stuck. -timeout is raised to 30m while the slow
+        # tests are identified and cut (founder 2026-10-29: find out why they
+        # are slow). A real hang still trips it; the job limit stays 45.
         shell: bash
-        run: go test -tags goolm,stdjson -short -timeout 10m ./...
+        run: go test -tags goolm,stdjson -short -timeout 30m ./...
 
       - name: Smoke boot + /health
         # Run the compiled binary once with --allow-empty on the local runner
@@ -214,3 +251,59 @@ jobs:
 
       - name: Run pkg/daemon tests
         run: go test -tags goolm,stdjson -count=1 -p 1 ./pkg/daemon/
+
+  # #920 (docs/internal/specs/read-boundary-consistency-spec.md FR-031, founder
+  # decision D12): the DS-4 Windows path cases (drive, forward-slash drive, UNC,
+  # backslash-relative, mount shorthand with `\`, `..\`, drive-relative,
+  # volume root) must execute on a REAL Windows runner. They cannot run in
+  # `windows-compile`: that job runs on ubuntu-latest, where the
+  # `_windows_test.go` filename constraint excludes the file, so `-run` would
+  # match nothing and exit 0 — a false green. The step below therefore proves
+  # the tests ran: exit code captured without a pipe, "no tests to run" is a
+  # failure, and each of the eight `--- PASS: TestReadBoundary_Windows/W<n>`
+  # lines must be present (a SKIP counts as missing). pkg/tools does not import
+  # pkg/gateway, so no SPA embed placeholder is needed. The rest of the Windows
+  # suite stays on #113.
+  windows-tools-tests:
+    name: Windows read-boundary tests (#920)
+    runs-on: windows-latest
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run the #920 Windows path tests (DS-4 W1-W8)
+        shell: bash
+        run: |
+          set -uo pipefail
+          log="$RUNNER_TEMP/readboundary-windows.log"
+          if go test -tags goolm,stdjson -count=1 -p 1 -v -run '^TestReadBoundary_Windows$' ./pkg/tools/ > "$log" 2>&1; then
+            status=0
+          else
+            status=$?
+          fi
+          cat "$log"
+          if [ "$status" -ne 0 ]; then
+            echo "::error::go test exited $status" >&2
+            exit 1
+          fi
+          if grep -q "no tests to run" "$log"; then
+            echo "::error::TestReadBoundary_Windows did not run (no tests to run) — refusing a false green" >&2
+            exit 1
+          fi
+          missing=0
+          for n in 1 2 3 4 5 6 7 8; do
+            if ! grep -q -- "--- PASS: TestReadBoundary_Windows/W$n " "$log"; then
+              echo "::error::missing '--- PASS: TestReadBoundary_Windows/W$n' (a SKIP or FAIL counts as missing)" >&2
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+          echo "all eight DS-4 subtests passed on Windows"

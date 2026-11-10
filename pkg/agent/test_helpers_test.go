@@ -6,6 +6,7 @@ package agent
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"os"
@@ -14,12 +15,15 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/routing"
+	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/thirdpartycli"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
@@ -115,11 +119,57 @@ func mustNewAgentLoop(
 	t.Helper()
 	ensureTestIsolatedAgentHome(t, cfg)
 	ensureTestWorkspaceMembership(t, cfg)
+	ensureTestThirdPartyPrograms(cfg)
 	al, err := NewAgentLoop(cfg, msgBus, provider)
 	if err != nil {
 		t.Fatalf("NewAgentLoop: %v", err)
 	}
+	// The U5a launch gate (steer_launcher.go::startingRemainingDepth) consults
+	// the resolved (default) workspace's delegation graph for the caller→target
+	// edge of every launch whose steering session has an identified owner. These
+	// fixtures predate that gate and declare no graph, so seed the default
+	// workspace's mesh here — the single choke point every shared loop harness
+	// (newTestAgentLoop, newSteerAL, newGoalLoopTestLoop, newDelegateDispatchLoop,
+	// …) passes through. Idempotent and non-clobbering: a test that seeded its
+	// own graph first (seedWorkspaceGraph) is left untouched.
+	seedDefaultDelegationGraphForLoop(t, al)
+	// Issue #1280: the fallback chain's retry plan waits 2-40 s between
+	// calls (about 77 s for an outage that outlasts it). Tests that script a
+	// persistent provider failure must not sleep through it; the waits
+	// return at once (still honouring a cancelled ctx). A test that needs
+	// the requested waits installs its own recorder over this.
+	if al.fallback != nil {
+		al.fallback = al.fallback.WithRetryWait(func(ctx context.Context, _ time.Duration) error { return ctx.Err() })
+	}
 	return al
+}
+
+// installTestSessionLauncher wires the SAME task start path production wires at
+// gateway boot: the session stores, a genuine boot epoch and the real
+// SteerLauncher on the task executor.
+//
+// S1 M9 (978c232bc) deleted the launcher-less task start path and
+// TaskExecutor.StartTaskNow now REFUSES without a launcher
+// ("no session launcher is installed"). A fixture that never installs one
+// therefore fails on the refusal rather than on the behaviour under test.
+// This is the single choke point every shared loop harness in this package
+// passes through.
+//
+// The epoch is minted only when the loop has none, so a fixture that minted
+// its own (or asserts on epoch behaviour) keeps exactly what it set.
+func installTestSessionLauncher(t *testing.T, al *AgentLoop) {
+	t.Helper()
+	home := config.OmnipusHomeDir()
+	lifecycle := session.NewLifecycleStore(filepath.Join(home, "session_lifecycle"))
+	al.SetSessionMessagingStores(
+		session.NewMessageInboxStore(filepath.Join(home, "session_messages")), lifecycle)
+	if al.bootEpochFor() == 0 {
+		mintGenuineBootEpochForLoop(t, al)
+	}
+	if te := GetTaskExecutor(al); te != nil {
+		te.SetLifecycleStore(lifecycle)
+		te.SetSessionLauncher(NewSteerLauncher(al))
+	}
 }
 
 // ensureTestIsolatedAgentHome gives cfg its own private, per-test home
@@ -200,6 +250,10 @@ var testHarnessWorkspaceMu sync.Mutex
 type testHarnessWorkspaceRecord struct {
 	ID       string   `json:"id"`
 	CoreTeam []string `json:"core_team"`
+	// IsDefault is round-tripped (the read-merge-write above unmarshals into
+	// this struct) so seedDefaultDelegationGraph's is_default flag survives a
+	// later membership re-seed for another test's newly-registered agents.
+	IsDefault bool `json:"is_default,omitempty"`
 }
 
 // ensureTestWorkspaceMembership makes every agent ID testHarnessAgentIDs(cfg)
@@ -534,4 +588,45 @@ func captureDefaultSlog(t *testing.T, level slog.Level) *raceFreeLogBuffer {
 	slog.SetDefault(slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: level})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 	return buf
+}
+
+// provisionTestWorkspace writes a real workspace record whose core team holds
+// agentIDs, at the current omnipusHome(). Restart resume (PW-SEC-01) only
+// continues saved work in a workspace that exists and still holds the agent,
+// so a fixture that relies on resume must name a real workspace rather than an
+// arbitrary id.
+func provisionTestWorkspace(t *testing.T, workspaceID string, agentIDs ...string) {
+	t.Helper()
+	dir := filepath.Join(omnipusHome(), "workspaces")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("provisionTestWorkspace: mkdir: %v", err)
+	}
+	data, err := json.Marshal(testHarnessWorkspaceRecord{ID: workspaceID, CoreTeam: agentIDs})
+	if err != nil {
+		t.Fatalf("provisionTestWorkspace: marshal: %v", err)
+	}
+	if err := fileutil.WriteFileAtomic(filepath.Join(dir, workspaceID+".json"), data, 0o644); err != nil {
+		t.Fatalf("provisionTestWorkspace: write: %v", err)
+	}
+}
+
+// testProgramPath is an existing executable that passes the third-party
+// program checks (r17 §3.5): not world-writable, in a directory that is not
+// world-writable, and outside OMNIPUS_HOME. Runs are driven by a fake runner,
+// so the file is only validated, never launched.
+const testProgramPath = "/usr/bin/true"
+
+// ensureTestThirdPartyPrograms saves a valid program path for every CLI in
+// cfg's Settings -> Third-party agents rows, because r17 area 4 removed the
+// per-agent cli_path and an external run is refused without a saved path.
+// A test that already declares its own rows keeps them.
+func ensureTestThirdPartyPrograms(cfg *config.Config) {
+	if cfg == nil || cfg.Sandbox.ThirdPartyAgents != nil {
+		return
+	}
+	rows := map[string]config.ThirdPartyCLIConfig{}
+	for _, cli := range thirdpartycli.CLIs {
+		rows[cli] = config.ThirdPartyCLIConfig{Path: testProgramPath}
+	}
+	cfg.Sandbox.ThirdPartyAgents = &config.ThirdPartyAgentsConfig{CLIs: rows}
 }
