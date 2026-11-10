@@ -442,6 +442,11 @@ func historyValidateIndexTail(t *chatHistoryIndexTree, cp historyCheckpoint, dis
 	for off < info.Size() {
 		frame, next, readErr := t.readFrame(off, info.Size())
 		if errors.Is(readErr, io.ErrUnexpectedEOF) {
+			// Only a provable torn write is discarded; a damaged header that
+			// merely looks incomplete is framed damage and refuses (#1523).
+			if tornErr := t.proveTornFrame(off, info.Size()); tornErr != nil {
+				return historyCheckpoint{}, false, tornErr
+			}
 			if !discard {
 				return historyCheckpoint{}, false, nil
 			}

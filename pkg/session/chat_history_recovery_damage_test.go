@@ -2,6 +2,8 @@ package session
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"os"
 	"path/filepath"
@@ -85,6 +87,128 @@ func TestChatHistoryRecovery_TornUnpublishedTailVersusFramedDamage(t *testing.T)
 			require.Equal(t, canonical, partitionBytes(t, s, sid), "canonical bytes never trimmed by derived recovery")
 		})
 	}
+}
+
+// #1523: a damaged frame LENGTH in an unpublished derived tail is framed
+// damage, not a torn tail. The captured failing case flipped byte 5 of a frame
+// header (length byte 1, value 0x00) with ^0x7f: the declared size grew by
+// 0x7f0000, past the end of the file but under the frame bound, so the reader
+// saw io.ErrUnexpectedEOF and trimmed a complete, checksummed transaction.
+// Each case alters one exact byte located by an independent header walk; the
+// torn controls prove a genuinely incomplete final frame is still redone.
+func TestChatHistoryRecovery_DamagedFrameLengthIsNotTornTail(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		refused bool
+	}{
+		{"first_node_length_byte1", true},
+		{"commit_length_byte1", true},
+		{"commit_length_past_eof_low_bytes", true},
+		{"partial_header_damaged_magic", true},
+		{"torn_commit_body_damaged_json", true},
+		{"torn_partial_header_control", false},
+		{"torn_commit_body_control", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, sid, full, prior, body := historyUnpublishedTailFixture(t)
+			frames := historyWalkFrameStarts(t, body, prior)
+			require.GreaterOrEqual(t, len(frames), 2, "real writer appends node frames and one commit footer")
+			commit := frames[len(frames)-1]
+			switch tc.name {
+			case "first_node_length_byte1":
+				require.Zero(t, body[frames[0]+5], "captured failing byte value")
+				body[frames[0]+5] ^= 0x7f
+			case "commit_length_byte1":
+				require.Zero(t, body[commit+5], "captured failing byte value")
+				body[commit+5] ^= 0x7f
+			case "commit_length_past_eof_low_bytes":
+				// Declared size one byte past the physical end: the smallest
+				// over-long length, still read as incomplete before the fix.
+				size := binary.BigEndian.Uint32(body[commit+4 : commit+8])
+				binary.BigEndian.PutUint32(body[commit+4:commit+8], size+1)
+			case "partial_header_damaged_magic":
+				body = body[:commit+20]
+				body[commit+1] ^= 0x7f
+			case "torn_commit_body_damaged_json":
+				// Incomplete body whose bytes no compact writer prefix holds.
+				body = body[:len(body)-1]
+				require.Equal(t, byte('{'), body[commit+40])
+				body[commit+40] ^= 0x7f
+			case "torn_partial_header_control":
+				body = body[:commit+20]
+			case "torn_commit_body_control":
+				body = body[:len(body)-1]
+			}
+			require.NoError(t, os.WriteFile(full, body, 0o600))
+			canonical := partitionBytes(t, s, sid)
+			_, err := s.reconcileChatHistoryIndex(context.Background(), sid)
+			if tc.refused {
+				require.ErrorIs(t, err, ErrChatHistoryUnavailable, "framed corruption is not a trim-and-forget tail")
+				var unavailable *ChatHistoryUnavailableError
+				require.ErrorAs(t, err, &unavailable)
+				require.Equal(t, "index_inconsistent", unavailable.Reason)
+				after, readErr := os.ReadFile(full)
+				require.NoError(t, readErr)
+				require.Equal(t, body, after, "damaged derived bytes stay on disk for diagnosis")
+			} else {
+				require.NoError(t, err, "a genuinely torn unpublished final frame is redone")
+				require.Equal(t, []string{"base-000001", "durable-damage-fixture"}, historyIDs(historyRead(t, s, sid, historyOptions(40))))
+			}
+			require.Equal(t, canonical, partitionBytes(t, s, sid), "canonical bytes never trimmed by derived recovery")
+		})
+	}
+}
+
+// historyUnpublishedTailFixture crashes the real writer at mutation_written
+// and returns the one derived file that grew, its published end and its bytes.
+func historyUnpublishedTailFixture(t *testing.T) (*UnifiedStore, string, string, int, []byte) {
+	t.Helper()
+	s, sid := newEffectsSession(t)
+	historyRows(t, s, sid, "base", 1)
+	historyState(t, s, sid)
+	root := historyIndexDir(s, sid)
+	before := historyTree(t, root)
+	captured := map[string]historyFileFact{}
+	old := chatHistoryPublicationHook
+	t.Cleanup(func() { chatHistoryPublicationHook = old })
+	chatHistoryPublicationHook = func(e chatHistoryPublicationEvent) error {
+		if e.SessionID == sid && e.Point == "mutation_written" {
+			captured = historyTree(t, root)
+			return errors.New("crash after actual derived mutation write")
+		}
+		return nil
+	}
+	_, err := s.AppendTranscriptAddressed(sid, TranscriptEntry{ID: "durable-damage-fixture", Role: "user", Content: "saved", AgentID: "mia"})
+	require.NoError(t, err)
+	chatHistoryPublicationHook = old
+	var grown []string
+	for path, after := range captured {
+		prior := before[path].Bytes
+		if len(after.Bytes) > len(prior) && strings.HasPrefix(after.Bytes, prior) && filepath.Base(path) != "FORMAT" && filepath.Base(path) != "checkpoint.json" {
+			grown = append(grown, path)
+		}
+	}
+	require.Len(t, grown, 1, "exactly one actual derived generation file grows")
+	return s, sid, filepath.Join(root, grown[0]), len(before[grown[0]].Bytes), []byte(captured[grown[0]].Bytes)
+}
+
+// historyWalkFrameStarts is an independent instrument for the CHI1 layout read
+// in chat_history_tree.go: 4-byte magic, 4-byte big-endian length, 32-byte
+// SHA-256, body. It requires every appended frame to be complete and intact.
+func historyWalkFrameStarts(t *testing.T, body []byte, start int) []int {
+	t.Helper()
+	var starts []int
+	for off := start; off < len(body); {
+		require.GreaterOrEqual(t, len(body)-off, 40)
+		require.Equal(t, "CHI1", string(body[off:off+4]))
+		next := off + 40 + int(binary.BigEndian.Uint32(body[off+4:off+8]))
+		require.LessOrEqual(t, next, len(body))
+		sum := sha256.Sum256(body[off+40 : next])
+		require.Equal(t, sum[:], body[off+8:off+40])
+		starts = append(starts, off)
+		off = next
+	}
+	return starts
 }
 
 func TestChatHistoryRecovery_PrivateModelRefAdvancesCoverageNotRows(t *testing.T) {

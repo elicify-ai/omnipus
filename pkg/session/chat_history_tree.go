@@ -4,6 +4,7 @@ package session
 // only locations and projection references. A checkpoint names one root and a
 // durable byte end; appending a new path never changes a reader's old root.
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -120,6 +121,48 @@ func (t *chatHistoryIndexTree) readFrame(off, end int64) (historyFrame, int64, e
 		return v, off, errors.New("invalid history index frame variant")
 	}
 	return v, off + historyFrameHeader + size, nil
+}
+
+// proveTornFrame decides whether the incomplete frame at off (readFrame
+// returned io.ErrUnexpectedEOF) is a torn write or framed damage (#1523). A
+// torn write leaves a strict prefix of one encoded frame: its header bytes are
+// a prefix of the "CHI1" magic, and its body bytes are a prefix of one compact
+// JSON object that closes on its final byte. A damaged length that points past
+// the end of the file leaves an available body that already holds a complete
+// JSON value (or bytes no writer prefix can contain): that is framed damage.
+func (t *chatHistoryIndexTree) proveTornFrame(off, end int64) error {
+	avail := end - off
+	if avail < historyFrameHeader {
+		n := min(avail, 4)
+		magic := make([]byte, n)
+		read, err := t.file.ReadAt(magic, off)
+		historyIndexBytes(t.ctx, int64(read))
+		if err != nil {
+			return err
+		}
+		if string(magic) != "CHI1"[:n] {
+			return errors.New("damaged history index frame magic")
+		}
+		return nil
+	}
+	// readFrame already checked the magic and the frame bound, so the declared
+	// size exceeds avail-historyFrameHeader and the read below stays bounded.
+	body := make([]byte, avail-historyFrameHeader)
+	read, err := t.file.ReadAt(body, off+historyFrameHeader)
+	historyIndexBytes(t.ctx, int64(read))
+	if err != nil {
+		return err
+	}
+	var v json.RawMessage
+	err = json.NewDecoder(bytes.NewReader(body)).Decode(&v)
+	switch {
+	case err == nil:
+		return errors.New("history index frame length exceeds its encoded body")
+	case errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF):
+		return nil
+	default:
+		return fmt.Errorf("damaged history index frame body: %w", err)
+	}
 }
 
 func (t *chatHistoryIndexTree) node(ref int64) (historyNode, error) {
