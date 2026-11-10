@@ -38,11 +38,12 @@ import (
 // -----------------------------------------------------------------------------
 
 func t8ValidAgent() []string {
-	// §7.12.1: the 29 selectable names of AgentDetail (identity id+revision
+	// §7.12.1: the 30 selectable names of AgentDetail (29 from T8 plus the
+	// effort feature's reasoning_effort, effort-levels spec FR-071; identity id+revision
 	// and metadata excluded).
 	return []string{
 		"name", "description", "type", "locked", "figure", "role", "color", "voice",
-		"model", "provider", "fallback_models", "model_chain", "model_params",
+		"model", "provider", "reasoning_effort", "fallback_models", "model_chain", "model_params",
 		"max_tool_iterations", "context_window_override", "memory_enabled",
 		"soul", "agent_md", "skills", "stale_skill_grants", "tool_permissions", "stored_overrides",
 		"connectors", "executor", "runnable", "program_warning",
