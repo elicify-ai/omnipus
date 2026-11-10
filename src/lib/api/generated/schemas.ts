@@ -1891,7 +1891,6 @@ type ExecutorDefaults = {
 type ExecutorCommandPreviewRequest = {
   cli: ExternalCliTool;
   model?: string | undefined;
-  cli_path?: string | undefined;
   cli_args?: string | undefined;
   max_tool_iterations?: number | undefined;
 };
@@ -1899,7 +1898,6 @@ type ExecutorSmokeTestRequest = {
   cli: ExternalCliTool;
   agent_id?: string | undefined;
   model?: string | undefined;
-  cli_path?: string | undefined;
   cli_args?: string | undefined;
 };
 type ChannelEntry = {
@@ -5053,7 +5051,6 @@ export const ExecutorCommandPreviewRequest: z.ZodType<ExecutorCommandPreviewRequ
   z.object({
     cli: ExternalCliTool,
     model: z.string().max(256).optional(),
-    cli_path: z.string().max(4096).optional(),
     cli_args: z.string().max(4096).optional(),
     max_tool_iterations: z.number().int().gte(1).lte(1000).optional(),
   });
@@ -5070,7 +5067,6 @@ export const ExecutorSmokeTestRequest: z.ZodType<ExecutorSmokeTestRequest> =
     cli: ExternalCliTool,
     agent_id: z.string().max(128).optional(),
     model: z.string().max(256).optional(),
-    cli_path: z.string().max(4096).optional(),
     cli_args: z.string().max(4096).optional(),
   });
 export const ExecutorSmokeTestResponse = z.object({
@@ -7840,6 +7836,7 @@ export const CliValidateResponse = z.object({
     "handshake-failed",
     "unauthenticated",
     "unknown-cli",
+    "path-not-allowed",
   ]),
   resolved_path: z.string().nullish(),
   version: z.string().nullish(),
@@ -9138,7 +9135,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "get",
     path: "/agents/:id",
     alias: "getAgent",
-    description: `Returns the full agent configuration including soul and heartbeat. Core (locked) agents return empty soul (compiled-in prompt not exposed).
+    description: `Returns the full agent configuration including soul and heartbeat. Core (locked) agents return empty soul (compiled-in prompt not exposed). Update (PUT) and delete (DELETE) apply only to the bare /agents/{id} address, with no sub-path. Unknown sub-paths, including undeclared descendants of known ones (a malformed mailboxes address is the exception, below), return 404, never agent detail. Known sub-paths are sessions, activity-runs, runner/test, tools, mailboxes/{workspaceId} and dependencies; a method a sub-path does not serve (OPTIONS preflight aside) returns 405 with an Allow header listing the methods it serves, without updating or deleting the agent. A malformed mailboxes address returns 400 for every method (OPTIONS preflight aside).
 `,
     requestFormat: "json",
     parameters: [
@@ -9171,7 +9168,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "put",
     path: "/agents/:id",
     alias: "updateAgent",
-    description: `Applies changed editable fields with a required revision. Protected or invalid fields and stale revisions reject without writes. Successful saves report live activation separately; partial storage failures report actual state.
+    description: `Applies changed editable fields with a required revision. Protected or invalid fields and stale revisions reject without writes. Successful saves report live activation separately; partial storage failures report actual state. Update applies only to PUT /agents/{id}, with no sub-path. PUT on a known sub-path that does not serve PUT returns 405 with an Allow header; an unknown sub-path returns 404. Neither refusal updates or deletes the agent.
 `,
     requestFormat: "json",
     parameters: [
@@ -9231,7 +9228,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "delete",
     path: "/agents/:id",
     alias: "deleteAgent",
-    description: `Removes a custom (non-core, non-system) agent from config.json and reloads the live config. Built-in core/system agents (locked) and the &#x60;omnipus-system&#x60; agent CANNOT be deleted (403, code &#x60;agent_locked&#x60;). Deleting an agent removes its entity and applicable SOUL bytes but preserves unrelated files in the agent home. Audited (severity INFO, event &#x60;agent.delete&#x60;).
+    description: `Removes a custom (non-core, non-system) agent from config.json and reloads the live config. Built-in core/system agents (locked) and the &#x60;omnipus-system&#x60; agent CANNOT be deleted (403, code &#x60;agent_locked&#x60;). Deleting an agent removes its entity and applicable SOUL bytes but preserves unrelated files in the agent home. Audited (severity INFO, event &#x60;agent.delete&#x60;). Delete applies only to DELETE /agents/{id}, with no sub-path. DELETE on a known sub-path that does not serve DELETE returns 405 with an Allow header; an unknown sub-path returns 404. Neither refusal updates or deletes the agent.
 `,
     requestFormat: "json",
     parameters: [
@@ -9318,6 +9315,12 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: ErrorResponse,
       },
       {
+        status: 405,
+        description: `This sub-path accepts GET only. Any other method returns 405 with response header Allow: GET, except OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted.
+`,
+        schema: ErrorResponse,
+      },
+      {
         status: 500,
         description: `Internal server error.`,
         schema: ErrorResponse,
@@ -9360,6 +9363,12 @@ Includes session_start events from all agent stores and task lifecycle events.
         description: `Resource not found.`,
         schema: ErrorResponse,
       },
+      {
+        status: 405,
+        description: `This sub-path accepts GET only. Any other method returns 405 with response header Allow: GET, except OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted.
+`,
+        schema: ErrorResponse,
+      },
     ],
   },
   {
@@ -9391,6 +9400,12 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 404,
         description: `Agent not found, or no mailbox configured for the agent in this workspace.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 405,
+        description: `This address accepts GET, PUT and DELETE only. Any other method returns 405 with response header Allow: GET, PUT, DELETE. The exception is OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted.
+`,
         schema: ErrorResponse,
       },
       {
@@ -9442,6 +9457,12 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: ErrorResponse,
       },
       {
+        status: 405,
+        description: `This address accepts GET, PUT and DELETE only. Any other method returns 405 with response header Allow: GET, PUT, DELETE. The exception is OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted.
+`,
+        schema: ErrorResponse,
+      },
+      {
         status: 500,
         description: `Internal server error.`,
         schema: ErrorResponse,
@@ -9480,6 +9501,12 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: ErrorResponse,
       },
       {
+        status: 405,
+        description: `This address accepts GET, PUT and DELETE only. Any other method returns 405 with response header Allow: GET, PUT, DELETE. The exception is OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted.
+`,
+        schema: ErrorResponse,
+      },
+      {
         status: 500,
         description: `Internal server error.`,
         schema: ErrorResponse,
@@ -9490,7 +9517,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "post",
     path: "/agents/:id/runner/test",
     alias: "testAgentRunner",
-    description: `Connection/health check for the agent&#x27;s configured external-CLI runner (Spec-4 FR-4.2). Validates the CLI binary is present, runs, and is authenticated WITHOUT running real work (no tokens spent). Returns distinct reasons for missing-binary vs unauthenticated. Fails with reason &quot;not-external-cli&quot; when the agent&#x27;s executor is native/remote-a2a (no runner to test).
+    description: `Connection/health check for the agent&#x27;s configured external-CLI runner (Spec-4 FR-4.2). Validates the program a person saved in Settings -&gt; Third-party agents, checked as at real dispatch, runs and is authenticated WITHOUT running real work (no tokens spent). With no saved program, or one that fails the checks, nothing is started and the response is ok false, reason missing-binary, message the text a run would be refused with; a program on $PATH or a stored cli_path is never used. Returns distinct reasons for missing-binary vs unauthenticated. Fails with reason &quot;not-external-cli&quot; when the agent&#x27;s executor is native/remote-a2a (no runner to test).
 `,
     requestFormat: "json",
     parameters: [
@@ -9515,6 +9542,12 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 404,
         description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 405,
+        description: `This sub-path accepts POST only. Any other method returns 405 with response header Allow: POST, except OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted.
+`,
         schema: ErrorResponse,
       },
       {
@@ -9548,6 +9581,12 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 405,
+        description: `This sub-path accepts GET only. Any other method returns 405 with response header Allow: GET, except OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted.
+`,
         schema: ErrorResponse,
       },
       {
@@ -9586,6 +9625,12 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 404,
         description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 405,
+        description: `This sub-path accepts GET and PUT only. Any other method returns 405 with response header Allow: GET, PUT. The exception is OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted.
+`,
         schema: ErrorResponse,
       },
       {
@@ -9638,6 +9683,12 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: ErrorResponse,
       },
       {
+        status: 405,
+        description: `This sub-path accepts GET and PUT only. Any other method returns 405 with response header Allow: GET, PUT. The exception is OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted.
+`,
+        schema: ErrorResponse,
+      },
+      {
         status: 409,
         description: `Revision or inherited global policy changed; no writes occurred.`,
         schema: z.void(),
@@ -9675,7 +9726,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "post",
     path: "/agents/executor-preview",
     alias: "postAgentsExecutorPreview",
-    description: `Stateless, agent-agnostic: computes the REAL argv each driver would build for the given cli/model/cli_path/cli_args/max_tool_iterations by calling the same buildArgs() logic used at real dispatch time (pkg/agent/runner/driver_{claude,codex,opencode}.go), not a hand-maintained description like GET /agents/executor-defaults. Any cli_args token the safety filter (argsafety.go) would strip is excluded from the previewed argv and reported in dropped_args instead of being silently dropped, so the operator sees it before saving. Works from the create wizard (no agent id exists yet) and from an existing agent&#x27;s edit form alike — mirrors POST /system/cli-validate&#x27;s stateless, body-driven shape. No subprocess is spawned.
+    description: `Stateless, agent-agnostic: computes the REAL argv each driver would build for the given cli/model/cli_args/max_tool_iterations by calling the same buildArgs() logic used at real dispatch time (pkg/agent/runner/driver_{claude,codex,opencode}.go), not a hand-maintained description like GET /agents/executor-defaults. Any cli_args token the safety filter (argsafety.go) would strip is excluded from the previewed argv and reported in dropped_args instead of being silently dropped, so the operator sees it before saving. Needs no existing agent id — mirrors POST /system/cli-validate&#x27;s stateless, body-driven shape; the web app uses it for the command preview on an existing external worker&#x27;s Runtime tab. No subprocess is spawned. The program is the path a person saved in Settings -&gt; Third-party agents: with none saved, or one that fails the program checks, the route refuses with 400 and the text a run would be refused with, never falling back to a program on $PATH. The argv ends with the person&#x27;s saved standard parameters, as a real run&#x27;s does.
 `,
     requestFormat: "json",
     parameters: [
@@ -9703,7 +9754,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "post",
     path: "/agents/executor-smoke-test",
     alias: "postAgentsExecutorSmokeTest",
-    description: `Runs a real, bounded test turn (a trivial arithmetic prompt) through the SAME driver.Run() dispatch path a genuine subagent_3p delegation uses, in a dedicated ephemeral workspace — not the zero-token POST /agents/{id}/runner/test (binary-present → version handshake → credential-file-presence only). This spawns a real, authenticated subprocess and costs real model usage, bounded by a short timeout and a small turn cap. An explicit operator action only — never triggered automatically. Applies its own dedicated, more conservative rate limiter and per-caller in-flight cap, mirroring the pattern POST /system/cli-validate uses but independently tuned since this endpoint spends real tokens and holds a real subprocess (5/min and 1 concurrent run per caller, vs. cli-validate&#x27;s 20/min and 2), and emits one audit event {cli, resolved binary, ok} per call, since — like cli-validate — it spawns a caller-influenced binary/path. Body-driven and agent-agnostic; works from the create wizard and an existing agent&#x27;s edit form alike.
+    description: `Runs a real, bounded test turn (a trivial arithmetic prompt) through the SAME driver.Run() dispatch path a genuine subagent_3p delegation uses, in the selected agent&#x27;s resolved home folder, using its workspace&#x27;s project-work folder instead when workspace lookup and folder preparation succeed, or in a disposable scratch folder when no saved agent is identified — not the zero-token POST /agents/{id}/runner/test (binary-present → version handshake → credential-file-presence only). This spawns a real, authenticated subprocess and costs real model usage, bounded by a short timeout and a small turn cap. An explicit operator action only — never triggered automatically. Applies its own dedicated, more conservative rate limiter and per-caller in-flight cap, mirroring the pattern POST /system/cli-validate uses but independently tuned since this endpoint spends real tokens and holds a real subprocess (5/min and 1 concurrent run per caller, vs. cli-validate&#x27;s 20/min and 2), and emits one audit event {cli, resolved binary, ok} per call. The run applies the person&#x27;s saved standard parameters; the audit event then adds them, through the sensitive-data filter while tools.filter_sensitive_data is on, with the preset-use note. The program is the path a person saved in Settings -&gt; Third-party agents, checked as at real dispatch: with none saved, or one that fails the checks, nothing is spawned and the body is ok false with the text a run would be refused with, never falling back to a program on $PATH. Body-driven; needs no existing agent id. In the web app, Send a test message is on an existing external worker&#x27;s Runtime tab.
 `,
     requestFormat: "json",
     parameters: [
@@ -15250,7 +15301,7 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
     method: "get",
     path: "/sessions/:id",
     alias: "getSession",
-    description: `Returns authorized session metadata and required history_state. When history is available, messages and canonical page_info/continuation describe the bounded latest page (limit 40, min_rows 20), never the complete lifetime. This endpoint accepts no paging selectors. When history is unavailable after the bounded known-prefix recovery attempt, return metadata-only SessionDetail with history_state.status&#x3D;unavailable, omitting messages, page_info and every continuation field. This is not successful empty history or a missing session; routing and authorized live attach remain usable. Authentication, session-ID syntax and addressed-session eligibility/existence precede history access. No lifetime rebuild, preparation state or 503 path.
+    description: `Returns authorized session metadata and required history_state. When history is available, messages and canonical page_info/continuation describe the bounded latest page (limit 40, min_rows 20), never the complete lifetime. This endpoint accepts no paging selectors. When history is unavailable after the bounded known-prefix recovery attempt, return metadata-only SessionDetail with history_state.status&#x3D;unavailable, omitting messages, page_info and every continuation field. This is not successful empty history or a missing session; routing and authorized live attach remain usable. Authentication, session-ID syntax and addressed-session eligibility/existence precede history access. No lifetime rebuild, preparation state or 503 path. Session detail, rename (PUT) and delete (DELETE) apply only to the bare /sessions/{id} address, with no sub-path. Unknown sub-paths return 404, never session detail. Known sub-paths are messages and tool-results, including their descendants; non-GET methods (OPTIONS preflight aside) return 405 with Allow: GET without renaming or deleting the session. GET messages/{history_position} is getSessionHistoryEntry, which validates the position itself.
 `,
     requestFormat: "json",
     parameters: [
@@ -15288,7 +15339,8 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
     method: "put",
     path: "/sessions/:id",
     alias: "renameSession",
-    description: `Updates the session title. Returns the updated session metadata.`,
+    description: `Updates the session title. Returns the updated session metadata. Rename applies only to PUT /sessions/{id}, with no sub-path. PUT on a known sub-path (messages or tool-results, including descendants) returns 405 with Allow: GET; an unknown sub-path returns 404. Neither refusal renames or deletes the session.
+`,
     requestFormat: "json",
     parameters: [
       {
@@ -15330,7 +15382,7 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
     method: "delete",
     path: "/sessions/:id",
     alias: "deleteSession",
-    description: `Permanently removes the session directory including transcript and context. Returns {&quot;success&quot;: true} on success.
+    description: `Permanently removes the session directory including transcript and context. Returns {&quot;success&quot;: true} on success. Delete applies only to DELETE /sessions/{id}, with no sub-path. DELETE on a known sub-path (messages or tool-results, including descendants) returns 405 with Allow: GET; an unknown sub-path returns 404. Neither refusal renames or deletes the session.
 `,
     requestFormat: "json",
     parameters: [
@@ -15377,7 +15429,7 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
     method: "get",
     path: "/sessions/:id/messages",
     alias: "getSessionMessages",
-    description: `Returns SessionHistoryResponse, not a bare array. Select nearest whole source groups and emit ascending acceptance order. With no selectors, read the latest segment since the newest exact /clear marker. before/after are exclusive same-session history positions, not message IDs or live sequence cursors. Older reads stop at the first clear marker; before that marker explicitly crosses into one preceding segment without changing model context. Paired window_start/window_end delimit a closed already-displayed interval for window_refresh; optional before continues backward inside it, never from the current live tail. No message-neighborhood or ID-based lookup is provided. Authenticate, validate session-ID syntax and resolve addressed-session eligibility/existence/access first; then validate limit, min_rows, selector syntax/combinations; then resolve positions/range in that same session; then read the index/page. Unknown/foreign well-formed positions return 404 before range order checks. Known expired positions remain valid order boundaries. Parse raw query encoding and multiplicity: malformed percent escapes, repeated values, blanks and null-like values are errors, never silently dropped or trimmed. Numeric inputs are one digits-only decimal integer (leading zeroes permitted), never clamped; signs, whitespace, fractions, exponents and overflow reject. Unknown keys enable no additional mode. has_earlier/has_later and next_before/next_after reflect actual eligible retained lookahead in the read domain (only the closed interval for window_refresh). Cursors exist iff the respective flag is true and equal the first/last selected position. Empty and exactly-full terminal pages have no phantom continuation. Page metadata replaces X-Has-Earlier-Messages as the paging authority. The shared projector meters the larger prepared REST/history-WS encoding under a server-owned 4194304-byte soft budget; whole groups and advisory min_rows take precedence. At least one whole eligible group remains. True end, clear, range or 100-source-group cap can underfill; the soft budget alone cannot underfill the floor. An individual group&#x27;s drawn weight may exceed the row target or 100. A hard 8388608-byte page selection ceiling (page_info.byte_ceiling, stop_reason byte_ceiling) may stop below min_rows; the first group is always whole. Tool results over 51,200 encoded bytes are shown as a HistoryResultPreview and ordinary message text over 65,536 UTF-8 bytes as a preview with content_original_size_bytes; getSessionHistoryEntry returns the full occurrence (chat-history paging spec, &quot;Amendment 2026-10-27 (founder, #1452 D2)&quot;). No lifetime read/rebuild, 503/preparing state or full-history fallback.
+    description: `Returns SessionHistoryResponse, not a bare array. Select nearest whole source groups and emit ascending acceptance order. With no selectors, read the latest segment since the newest exact /clear marker. before/after are exclusive same-session history positions, not message IDs or live sequence cursors. Older reads stop at the first clear marker; before that marker explicitly crosses into one preceding segment without changing model context. Paired window_start/window_end delimit a closed already-displayed interval for window_refresh; optional before continues backward inside it, never from the current live tail. No message-neighborhood or ID-based lookup is provided. Authenticate, validate session-ID syntax and resolve addressed-session eligibility/existence/access first; then validate limit, min_rows, selector syntax/combinations; then resolve positions/range in that same session; then read the index/page. Unknown/foreign well-formed positions return 404 before range order checks. Known expired positions remain valid order boundaries. Parse raw query encoding and multiplicity: malformed percent escapes, repeated values, blanks and null-like values are errors, never silently dropped or trimmed. Numeric inputs are one digits-only decimal integer (leading zeroes permitted), never clamped; signs, whitespace, fractions, exponents and overflow reject. Unknown keys enable no additional mode. has_earlier/has_later and next_before/next_after reflect actual eligible retained lookahead in the read domain (only the closed interval for window_refresh). Cursors exist iff the respective flag is true and equal the first/last selected position. Empty and exactly-full terminal pages have no phantom continuation. Page metadata replaces X-Has-Earlier-Messages as the paging authority. The shared projector meters the larger prepared REST/history-WS encoding under a server-owned 4194304-byte soft budget; whole groups and advisory min_rows take precedence. At least one whole eligible group remains. True end, clear, range or 100-source-group cap can underfill; the soft budget alone cannot underfill the floor. An individual group&#x27;s drawn weight may exceed the row target or 100. A hard 8388608-byte page selection ceiling (page_info.byte_ceiling, stop_reason byte_ceiling) may stop below min_rows; the first group is always whole. Tool results over 51,200 encoded bytes are shown as a HistoryResultPreview and ordinary message text over 65,536 UTF-8 bytes as a preview with content_original_size_bytes; getSessionHistoryEntry returns the full occurrence (chat-history paging spec, &quot;Amendment 2026-10-27 (founder, #1452 D2)&quot;). No lifetime read/rebuild, 503/preparing state or full-history fallback. This sub-path accepts GET only. Other methods (OPTIONS preflight aside) return 405 with Allow: GET without renaming or deleting the session; those operations require the bare /sessions/{id} address. Nested messages/... paths are the getSessionHistoryEntry address: GET there validates the position, and other methods (OPTIONS preflight aside) return 405 with Allow: GET.
 `,
     requestFormat: "json",
     parameters: [
@@ -15457,6 +15509,12 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
         schema: ErrorResponse,
       },
       {
+        status: 405,
+        description: `This sub-path accepts GET only. Any other method returns 405 with response header Allow: GET, except OPTIONS, the browser preflight request, which the gateway answers before the sessions handler runs. The session is not renamed or deleted.
+`,
+        schema: ErrorResponse,
+      },
+      {
         status: 500,
         description: `Required index unavailable after the bounded reconciliation check: ErrorResponse.error is exactly &quot;This conversation&#x27;s history could not be loaded.&quot; A valid known prefix with at most 64 combined pending archive/disposition/confirmed rolled-expiry mutations can reconcile once; a missing/incompatible baseline, inconsistency or 65+ gap cannot seed a partial index or batch-walk history. Other required storage/projection failures retain the fixed redacted session-storage error. Prior view and authorized live controls remain usable; no success/empty partial history, 503 or preparing progress.
 `,
@@ -15468,7 +15526,7 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
     method: "get",
     path: "/sessions/:id/messages/:history_position",
     alias: "getSessionHistoryEntry",
-    description: `Returns the full public projection of exactly one saved history occurrence, addressed by the same opaque same-session history_position a history page carries (chat-history paging spec, &quot;Amendment 2026-10-27 (founder, #1452 D2)&quot;, A2.1/A2.2). It is the same reduction as the page reader after tool-call effects, cancellation and disposition, with display shortening off, at the server&#x27;s current read cut: the response never carries a HistoryResultPreview marker and never carries content_original_size_bytes. It never returns the private archive envelope or a pre-correction value, and the read writes nothing (archive, positions, index, tool_results/ and model context are unchanged). It is a position-addressed read, not a UI navigation destination, an around selector or a message-ID resolver. Authorization is identical to getSessionMessages and is applied in the same order before any position work: the registered auth wrapper (valid cookie, configured user bearer or CLI bearer; invalid or revoked credentials refused), session-ID syntax, main-session eligibility, then session existence/metadata. No new per-user ownership rule is introduced. Refusal checks run in this precedence order: 401, 400 invalid session ID, 404 &quot;session not found&quot;, 400 &quot;invalid history position&quot;, 404 &quot;history position not found&quot;, 410 &quot;history entry expired&quot;. This order does not override the storage-primary rule shared with getSessionMessages: a cleanup storage failure combined with cancellation, an unknown position or any selector error is the sanitized storage 500, never 404 or 410.
+    description: `Returns the full public projection of exactly one saved history occurrence, addressed by the same opaque same-session history_position a history page carries (chat-history paging spec, &quot;Amendment 2026-10-27 (founder, #1452 D2)&quot;, A2.1/A2.2). It is the same reduction as the page reader after tool-call effects, cancellation and disposition, with display shortening off, at the server&#x27;s current read cut: the response never carries a HistoryResultPreview marker and never carries content_original_size_bytes. It never returns the private archive envelope or a pre-correction value, and the read writes nothing (archive, positions, index, tool_results/ and model context are unchanged). It is a position-addressed read, not a UI navigation destination, an around selector or a message-ID resolver. Authorization is identical to getSessionMessages and is applied in the same order before any position work: the registered auth wrapper (valid cookie, configured user bearer or CLI bearer; invalid or revoked credentials refused), session-ID syntax, main-session eligibility, then session existence/metadata. No new per-user ownership rule is introduced. Refusal checks run in this precedence order: 401, 400 invalid session ID, 404 &quot;session not found&quot;, 400 &quot;invalid history position&quot;, 404 &quot;history position not found&quot;, 410 &quot;history entry expired&quot;. This order does not override the storage-primary rule shared with getSessionMessages: a cleanup storage failure combined with cancellation, an unknown position or any selector error is the sanitized storage 500, never 404 or 410. This sub-path accepts GET only. Other methods (OPTIONS preflight aside) return 405 with Allow: GET without renaming or deleting the session; those operations require the bare /sessions/{id} address.
 `,
     requestFormat: "json",
     parameters: [
@@ -15507,6 +15565,12 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
         schema: ErrorResponse,
       },
       {
+        status: 405,
+        description: `This sub-path accepts GET only. Any other method returns 405 with response header Allow: GET, except OPTIONS, the browser preflight request, which the gateway answers before the sessions handler runs. The session is not renamed or deleted.
+`,
+        schema: ErrorResponse,
+      },
+      {
         status: 410,
         description: `ErrorResponse.error is exactly &quot;history entry expired&quot;: a same-session position proven expired by its retention tombstone, including a sweep during the read. No content and no other metadata. A corrupt or missing index is never reported as expiry; it is the 500 below.
 `,
@@ -15524,7 +15588,7 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
     method: "get",
     path: "/sessions/:session_id/tool-results/:ref",
     alias: "getToolResult",
-    description: `Returns the full JSON body of a tool result that was emitted as a ToolResultRef sentinel on the WebSocket. The result is scoped to the session that produced it — a ref from session A cannot be fetched under session B&#x27;s path. The SPA fetches this lazily when the user expands a clamped tool call, keeping main-thread memory bounded during high-volume agent activity.
+    description: `Returns the full JSON body of a tool result that was emitted as a ToolResultRef sentinel on the WebSocket. The result is scoped to the session that produced it — a ref from session A cannot be fetched under session B&#x27;s path. The SPA fetches this lazily when the user expands a clamped tool call, keeping main-thread memory bounded during high-volume agent activity. This sub-path accepts GET only. Other methods (OPTIONS preflight aside) return 405 with Allow: GET without renaming or deleting the session; those operations require the bare /sessions/{id} address. The tool-results prefix and its descendants are known sub-paths; the read handler still validates the path and ref and answers 400 for a malformed one (for example a missing ref), so a known prefix alone does not guarantee a successful GET.
 `,
     requestFormat: "json",
     parameters: [
@@ -15549,6 +15613,12 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
       {
         status: 404,
         description: `Resource not found.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 405,
+        description: `This sub-path accepts GET only. Any other method returns 405 with response header Allow: GET, except OPTIONS, the browser preflight request, which the gateway answers before the sessions handler runs. The session is not renamed or deleted.
+`,
         schema: ErrorResponse,
       },
       {
@@ -15692,7 +15762,7 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
     method: "put",
     path: "/settings/third-party-agents",
     alias: "updateThirdPartyAgentSettings",
-    description: `Replaces the whole section in one call (a CLI key absent from &#x60;clis&#x60; is saved as {path: &quot;&quot;, preset_args: &quot;&quot;}). Every row is validated before anything is written, in the order claude-code, codex, opencode, path before preset_args; the first failing row and field is returned as 400 (code cli_path_invalid or cli_preset_invalid, field clis.&lt;cli&gt;.path or clis.&lt;cli&gt;.preset_args, details.cli, details.check, details.at for paths) and nothing is written, valid rows included. An unknown CLI key or field gets the request-schema 400. No revision and no 409: the last save wins. Signed-in person only (RequirePersonSession): no session 401, an agent or tool token 403; no password step.
+    description: `Replaces the whole section in one call (a CLI key absent from &#x60;clis&#x60; is saved as {path: &quot;&quot;, preset_args: &quot;&quot;}). Every row is validated before anything is written, in the order claude-code, codex, opencode, path before preset_args; the first failing row and field is returned as 400 (code cli_path_invalid or cli_preset_invalid, field clis.&lt;cli&gt;.path or clis.&lt;cli&gt;.preset_args, details.cli, details.check; never the path, which goes to the server log only) and nothing is written, valid rows included. An unknown CLI key or field gets the request-schema 400. No revision and no 409: the last save wins. Signed-in person only (RequirePersonSession): no session 401, an agent or tool token 403; no password step. A 500 with code saved_not_refreshed means the write reached disk and the change is audited, but the running settings could not be refreshed; saving again applies it.
 `,
     requestFormat: "json",
     parameters: [
@@ -15717,6 +15787,11 @@ Invalid, empty, duplicated, overflowing or out-of-range limit returns exactly 40
       {
         status: 403,
         description: `Insufficient permissions or CSRF validation failed.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
         schema: ErrorResponse,
       },
     ],
@@ -16084,7 +16159,7 @@ Polled by the SPA StatusBar every 15 seconds.
     method: "get",
     path: "/system/cli-detect",
     alias: "getHostCliDetect",
-    description: `Reports, per external-CLI runner (claude-code/codex/opencode), whether the gateway process can locate its binary — searching $PATH first, then a curated per-OS well-known-install-location list — and returns the resolved absolute path plus which strategy found it. Read-only, idempotent, and unaudited (no subprocess spawned). The SPA roster uses this to grey-out CLIs the host cannot run, and the create wizard / edit form use the returned path to prefill executor.cli_path. Pure Go probe (no shell-out).
+    description: `Reports, per external-CLI runner (claude-code/codex/opencode), whether the gateway process can locate its binary — searching $PATH first, then a curated per-OS well-known-install-location list — and returns the resolved absolute path plus which strategy found it. Read-only, idempotent, and unaudited (no subprocess spawned). The web app does not call this endpoint: Settings -&gt; Third-party agents receives the same detection result inside its own settings view and uses it to pre-fill a Program path that is not saved yet. Pure Go probe (no shell-out).
 `,
     requestFormat: "json",
     response: CliDetect,
@@ -16100,7 +16175,7 @@ Polled by the SPA StatusBar every 15 seconds.
     method: "post",
     path: "/system/cli-validate",
     alias: "postSystemCliValidate",
-    description: `Stateless, create-time validation for an external-executor CLI: confirms the binary at cli_path actually runs and reports a version, before the operator saves the subagent_3p agent. Reuses runner.TestConnectionWithPath verbatim (the same handshake as POST /agents/{id}/runner/test) — the only requirement is that the binary runs and returns a valid version-shaped response; no per-CLI identity/name match is performed. Gated withAuth at create-parity (the same authorization as createAgent). Rejects a target that is not a regular, executable file before spawning it (classified &quot;missing-binary&quot;, no spawn attempt). Applies a dedicated rate limiter and a small per-caller in-flight concurrency cap, and emits one audit event {cli, resolved_path, reason} per call — validation spawns a caller-supplied path, unlike the unaudited cli-detect probe.
+    description: `Stateless check of a caller-supplied external CLI program, used by Check CLI in Settings -&gt; Third-party agents: confirms the binary at cli_path actually runs and reports a version. It saves neither settings nor an agent. The version handshake (the same as POST /agents/{id}/runner/test) runs on the checked pathname with no second lookup — the only requirement is that the binary runs and returns a valid version-shaped response; no per-CLI identity/name match is performed. A signed-in person only (T11, RequirePersonSession): CLI-token, development-bypass and user-less requests get 403 before the body is read. Before anything starts, the shared program-file check (thirdpartycli.CheckProgramPath against the folders agents can write to) must accept cli_path: an absolute path whose final file, every link and every link&#x27;s folder lie outside the Omnipus home, agent homes, workspaces, mounts, the extra folders the sandbox lets agents write and the per-user temporary folder (unless it is the shared /tmp), under any spelling the volume treats as the same folder, and whose final file is a regular file (executable for the gateway user on Linux/macOS). When the list of those folders cannot be read in full, the candidate is refused with the check location_unverifiable. Ownership and writability of the program are the operator&#x27;s responsibility and are not checked. A refusal is classified &quot;path-not-allowed&quot; and nothing is spawned; an accepted candidate launches exactly the checked resolved file. An empty or whitespace-only cli_path is &quot;missing-binary&quot;; any other cli_path is checked exactly as given, surrounding whitespace included. Applies a dedicated rate limiter and a small per-caller in-flight concurrency cap, and emits one audit event {cli, resolved_path, reason} per call — validation spawns a caller-supplied path, unlike the unaudited cli-detect probe.
 `,
     requestFormat: "json",
     parameters: [
@@ -16120,6 +16195,12 @@ Polled by the SPA StatusBar every 15 seconds.
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 403,
+        description: `The caller is not a signed-in person: the request authenticated with the CLI token or the legacy environment token, the gateway is in development-bypass mode, or no configured user account is attached. Refused before the body is read; nothing is started. The ErrorResponse &#x60;code&#x60; is &quot;person_session_required&quot;, which tells this refusal apart from other 403s such as a CSRF failure.
+`,
         schema: ErrorResponse,
       },
       {

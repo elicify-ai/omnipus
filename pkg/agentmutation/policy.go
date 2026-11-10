@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/thirdpartycli"
 )
 
 type ErrorCode string
@@ -77,6 +78,18 @@ type FieldDescriptor struct {
 
 var describedFields = []string{"name", "description", "figure", "role", "color", "soul", "skills", "mcp_servers", "tool_policy_changes", "model", "provider", "fallback_models", "reasoning_effort", "context_window_override", "model_params", "max_tool_iterations", "memory_enabled", "voice", "type"}
 
+// Executor descriptors, named and worded as the Agent contract's
+// editable_fields description states them. The runtime fields are editable on
+// an external-CLI worker only; the fixed fields are never editable on any
+// agent (the program path and its parameters are set in Settings).
+var executorRuntimeFields = []string{"executor.env_overrides", "executor.env_overrides_remove", "executor.cli_args"}
+
+var executorFixedFields = []FieldDescriptor{
+	{Name: "executor.cli", Reason: "Locked after create; create a new agent to switch CLIs."},
+	{Name: "executor.effective_cli_path", Reason: "Set in Settings -> Third-party agents."},
+	{Name: "executor.kind", Reason: "Derived from the agent type."},
+}
+
 // metadataFileFields are the agent metadata files the update_agent tool writes
 // beside SOUL.md (#1064). They are described separately because the REST
 // agent update does not take them.
@@ -103,7 +116,7 @@ func FieldDescriptors(agent config.AgentConfig) []FieldDescriptor {
 }
 
 func describeFields(agent config.AgentConfig, validate func(config.AgentConfig, []string) error) []FieldDescriptor {
-	out := make([]FieldDescriptor, 0, len(describedFields))
+	out := make([]FieldDescriptor, 0, len(describedFields)+len(executorRuntimeFields)+len(executorFixedFields))
 	for _, field := range describedFields {
 		err := validate(agent, []string{field})
 		descriptor := FieldDescriptor{Name: field, Editable: err == nil}
@@ -112,7 +125,28 @@ func describeFields(agent config.AgentConfig, validate func(config.AgentConfig, 
 		}
 		out = append(out, descriptor)
 	}
-	return out
+	return append(out, executorDescriptors(agent, validate)...)
+}
+
+// executorDescriptors reports the executor descriptors for agent. The runtime
+// fields are written as "executor" (the REST update and update_agent refuse
+// them on any agent that is not an external-CLI worker, with the same text
+// the contract gives); on an external-CLI worker they follow that field's
+// ordinary validation.
+func executorDescriptors(agent config.AgentConfig, validate func(config.AgentConfig, []string) error) []FieldDescriptor {
+	runtime := FieldDescriptor{Editable: true}
+	if !agent.IsExternalCLIWorker() {
+		runtime = FieldDescriptor{Reason: thirdpartycli.NativeRuntimeRefusalText}
+	} else if err := validate(agent, []string{"executor"}); err != nil {
+		runtime = FieldDescriptor{Reason: err.Error()}
+	}
+	out := make([]FieldDescriptor, 0, len(executorRuntimeFields)+len(executorFixedFields))
+	for _, name := range executorRuntimeFields {
+		descriptor := runtime
+		descriptor.Name = name
+		out = append(out, descriptor)
+	}
+	return append(out, executorFixedFields...)
 }
 
 // ValidateFields validates a write to supplied agent fields: the ADR-090

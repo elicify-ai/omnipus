@@ -49,6 +49,16 @@ type StreamingCapable interface {
 	BeginStream(ctx context.Context, chatID string) (Streamer, error)
 }
 
+// NotRunningReasoner — channels that know why they are not running right now,
+// beyond a failed start (for example a lost connection the channel is
+// re-establishing on its own). Manager.Availability reports a non-empty
+// NotRunningReason ahead of the last start error and the shared "not started".
+// The text is a plain sentence fragment a person reads: callers embed it
+// after a colon or in parentheses, so no capital and no final full stop.
+type NotRunningReasoner interface {
+	NotRunningReason() string
+}
+
 // Streamer is defined in pkg/bus to avoid circular imports.
 // This alias keeps channel implementations using channels.Streamer unchanged.
 type Streamer = bus.Streamer

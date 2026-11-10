@@ -504,7 +504,7 @@ func decodePolicyPatch(raw any) (agentmutation.ToolPolicyChanges, error) {
 // happen) but is WRONG here: on the fast-path-success branch the live
 // in-memory registry is already up-to-date and NOTHING is pending, so calling
 // WaitForReloadFunc would kick off a brand-new, unnecessary full reload cycle
-// (channels/cron/plan-engine/schedulers all restart — up to ~60s under load,
+// (channels/cron/schedulers all restart — up to ~60s under load,
 // the exact mechanism issue #571 exists to avoid) just to wait for it. The
 // round-3 version of this comment (commit 500beb747) claimed the wait "is a
 // no-op in that case but a real block in the queued-reload case" — that

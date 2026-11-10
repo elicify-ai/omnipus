@@ -4,7 +4,7 @@ go 1.27.3
 
 require (
 	github.com/BurntSushi/toml v1.6.0
-	github.com/adhocore/gronx v1.19.6
+	github.com/adhocore/gronx v1.20.4
 	github.com/anthropics/anthropic-sdk-go v1.48.0
 	github.com/aymerick/douceur v0.2.0
 	github.com/blevesearch/bleve/v2 v2.6.1
@@ -17,7 +17,7 @@ require (
 	github.com/coder/websocket v1.8.15
 	github.com/emersion/go-imap/v2 v2.0.0-beta.8
 	github.com/emersion/go-message v0.18.2
-	github.com/ergochat/irc-go v0.6.0
+	github.com/ergochat/irc-go v0.7.0
 	github.com/gdamore/tcell/v2 v2.13.10
 	github.com/go-git/go-git/v5 v5.19.2
 	github.com/go-json-experiment/json v0.0.0-20260214004413-d219187c3433
@@ -28,7 +28,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/grafana/regexp v0.0.0-20250905093917-f7b3be9d1853
 	github.com/h2non/filetype v1.1.3
-	github.com/larksuite/oapi-sdk-go/v3 v3.9.4
+	github.com/larksuite/oapi-sdk-go/v3 v3.12.0
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
 	github.com/mdp/qrterminal/v3 v3.2.1
 	github.com/microcosm-cc/bluemonday v1.0.27
@@ -54,7 +54,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/srwiley/oksvg v0.0.0-20221011165216-be6e8873101c
 	github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef
-	github.com/stretchr/testify v1.11.1
+	github.com/stretchr/testify v1.12.1
 	github.com/teambition/rrule-go v1.8.2
 	github.com/tencent-connect/botgo v0.2.1
 	github.com/yuin/goldmark v1.8.6
@@ -113,7 +113,6 @@ require (
 	github.com/cloudflare/circl v1.6.3 // indirect
 	github.com/cloudwego/base64x v0.1.6 // indirect
 	github.com/cyphar/filepath-securejoin v0.6.1 // indirect
-	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/elliotchance/orderedmap/v3 v3.1.0 // indirect
 	github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6 // indirect
@@ -157,7 +156,6 @@ require (
 	github.com/pion/stun/v3 v3.1.6 // indirect
 	github.com/pion/transport/v4 v4.0.2 // indirect
 	github.com/pjbgf/sha1cd v0.6.0 // indirect
-	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/segmentio/asm v1.1.3 // indirect
@@ -178,6 +176,7 @@ require (
 	github.com/xanzy/ssh-agent v0.3.3 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	go.etcd.io/bbolt v1.4.0 // indirect
+	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.2 // indirect
 	golang.org/x/arch v0.24.0 // indirect
 	golang.org/x/exp v0.0.0-20260611194520-c48552f49976 // indirect

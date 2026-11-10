@@ -18,6 +18,10 @@
 // Distinguishing missing-binary from unauthed is a hard requirement (US-6): the
 // two have different remedies (install vs `login`), so they MUST NOT collapse
 // into one generic failure.
+//
+// ConnectionTestResult.Message reaches the client, so it is fixed text per
+// reason (founder Q48 A, Q50 A): a program path, the program's output and
+// operating-system errors go to the server log only.
 
 package runner
 
@@ -25,9 +29,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -158,32 +164,69 @@ func TestConnectionWithPath(ctx context.Context, cli, cliPath string) Connection
 	}
 
 	// Resolve which binary to validate: the configured cli_path wins, else the
-	// CLI's default name. resolveCLIBinary trims and applies the same precedence
-	// the drivers use to build the actual exec target, so Test validates exactly
-	// what a real run would exec.
+	// CLI's default name. resolveCLIBinary applies the same precedence the
+	// drivers use to build the actual exec target. A program that already
+	// passed the shared check is tested with TestConnectionCheckedFile instead.
 	target := resolveCLIBinary(cliPath, spec.binary)
 
 	// 1. Binary present? An absolute/relative path is honored as-is by LookPath
 	//    (it stats the path directly); a bare name is resolved via $PATH.
 	binPath, err := exec.LookPath(target)
 	if err != nil {
+		slog.Warn("connection test: the CLI binary was not found", "cli", cli, "path", target, "error", err)
 		return ConnectionTestResult{
 			OK:     false,
 			Reason: ReasonMissingBinary,
 			Message: fmt.Sprintf(
-				"[%s] %q CLI not found at %q: install %s / fix cli_path and ensure it is executable on PATH",
-				ReasonMissingBinary, cli, target, spec.binary,
+				"[%s] %q CLI not found: install %s / fix cli_path and ensure it is executable on PATH",
+				ReasonMissingBinary, cli, spec.binary,
 			),
 		}
 	}
 
+	return testConnectionBinary(ctx, cli, spec, binPath)
+}
+
+// TestConnectionCheckedFile is the connection test for a program file that a
+// caller has already checked (T11: thirdpartycli.CheckProgramPath). It runs exactly
+// checkedFile — the same bytes, with no whitespace trimming and no PATH or
+// executable-extension lookup — so the file that starts is the file that was
+// checked (code review R2-C1: trimming a checked "name " could select a
+// different sibling "name"). checkedFile must be absolute.
+func TestConnectionCheckedFile(ctx context.Context, cli, checkedFile string) ConnectionTestResult {
+	spec, ok := supportedCLIs[cli]
+	if !ok {
+		return ConnectionTestResult{
+			OK:     false,
+			Reason: ReasonUnknownCLI,
+			Message: fmt.Sprintf(
+				"[%s] unknown external CLI %q (supported: %s)",
+				ReasonUnknownCLI, cli, strings.Join(SupportedCLIs(), ", "),
+			),
+		}
+	}
+	if !filepath.IsAbs(checkedFile) {
+		slog.Warn("connection test: the checked program path is not absolute", "cli", cli, "path", checkedFile)
+		return ConnectionTestResult{
+			OK:      false,
+			Reason:  ReasonMissingBinary,
+			Message: fmt.Sprintf("[%s] %q checked program path is not absolute", ReasonMissingBinary, cli),
+		}
+	}
+	return testConnectionBinary(ctx, cli, spec, checkedFile)
+}
+
+// testConnectionBinary is the handshake and credential step shared by both
+// connection tests, on an already-selected binary path.
+func testConnectionBinary(ctx context.Context, cli string, spec cliSpec, binPath string) ConnectionTestResult {
 	// 2. Handshake — run `<binary> --version`, no real work, no tokens.
 	version, hErr := probeVersion(ctx, binPath, spec.versionArgs)
 	if hErr != nil {
+		slog.Warn("connection test: the version handshake failed", "cli", cli, "path", binPath, "error", hErr)
 		return ConnectionTestResult{
 			OK:      false,
 			Reason:  ReasonHandshakeFailed,
-			Message: fmt.Sprintf("[%s] %q version handshake failed: %v", ReasonHandshakeFailed, cli, hErr),
+			Message: fmt.Sprintf("[%s] %q version handshake failed. Details are in the server log.", ReasonHandshakeFailed, cli),
 		}
 	}
 
@@ -193,8 +236,8 @@ func TestConnectionWithPath(ctx context.Context, cli, cliPath string) Connection
 			OK:     false,
 			Reason: ReasonUnauthenticated,
 			Message: fmt.Sprintf(
-				"[%s] %q is installed (v%s) but not authenticated: %s",
-				ReasonUnauthenticated, cli, version, spec.loginHint,
+				"[%s] %q is installed but not authenticated: %s",
+				ReasonUnauthenticated, cli, spec.loginHint,
 			),
 			CLIVersion: version,
 		}
@@ -203,7 +246,7 @@ func TestConnectionWithPath(ctx context.Context, cli, cliPath string) Connection
 	return ConnectionTestResult{
 		OK:         true,
 		Reason:     ReasonOK,
-		Message:    fmt.Sprintf("%q ready: binary %s present, v%s, authenticated", cli, binPath, version),
+		Message:    fmt.Sprintf("%q ready: binary present, authenticated", cli),
 		CLIVersion: version,
 	}
 }
@@ -252,23 +295,25 @@ func probeVersion(ctx context.Context, binPath string, args []string) (string, e
 	return v, nil
 }
 
+// versionToken is a dotted number with an optional pre-release or build suffix
+// ("1.2.3", "10.20.30-rc", "1.2.3+build", "1.2.3rc1"). A file name with a digit
+// and a dot ("report-2026.txt", "1.2.txt") does not match.
+var versionToken = regexp.MustCompile(`^[0-9]+(\.[0-9]+)+(?:[-+][0-9A-Za-z.+-]*|[a-z]+[0-9]*)?$`)
+
 // extractVersion pulls a version-looking token out of `--version` output.
 // CLIs print things like "claude 1.2.3", "codex-cli 0.4.0", "opencode v0.1.7".
-// We return the first token that contains a digit and a dot, stripped of a
-// leading 'v'. If none matches, return the whole first line (still a valid
-// handshake signal — the binary ran).
+// It returns the first version-shaped token on the first line, without
+// surrounding punctuation or a leading 'v'. With none it returns "", never the
+// program's output (founder Q59 A): that output is not a version and would
+// otherwise reach the client as one.
 func extractVersion(text string) string {
-	if text == "" {
-		return ""
-	}
-	line := firstLine(text)
-	for _, tok := range strings.Fields(line) {
-		t := strings.TrimPrefix(tok, "v")
-		if strings.ContainsAny(t, "0123456789") && strings.Contains(t, ".") {
+	for _, tok := range strings.Fields(firstLine(text)) {
+		t := strings.TrimPrefix(strings.Trim(tok, "(),;:"), "v")
+		if versionToken.MatchString(t) {
 			return t
 		}
 	}
-	return line
+	return ""
 }
 
 func firstLine(s string) string {

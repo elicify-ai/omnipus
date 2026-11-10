@@ -92,10 +92,9 @@ afterEach(() => {
 // browser, which resolves it against the page origin. jsdom's test
 // environment has no such origin for the global `fetch`: it's Node's real
 // (undici) implementation, which throws `TypeError: Failed to parse URL
-// from /api/v1/...` for a relative input. Some mounted components fire a
-// fetch-backed hook unconditionally on mount (e.g. useCliDetect, used by
-// AgentProfile/Step1Identity for subagent_3p agents) without every test
-// mocking it — that's fine, application code already catches the failure
+// from /api/v1/...` for a relative input. Some mounted components start
+// fetch-backed queries on mount without every test mocking them — that's
+// fine, application code already catches the failure
 // (performRequest's try/catch around `await fetch(...)` converts it to a
 // handled ApiError). The problem is TIMING: undici's real URL-parsing path
 // takes several internal microtask hops before the rejection settles, and
