@@ -1,6 +1,6 @@
 /**
- * C04 oracle: T11 FR-8 / U-5 and ExecutorConfigUpdate.yaml, not the save
- * implementation. READ executor fields and masked values are never a WRITE
+ * C04 oracle: T11 FR-8 / U-5, Agent.editable_fields and the executor WRITE
+ * contract, not the implementation. READ fields and masks are never a WRITE
  * payload. The real form, editors, hooks and autosave remain under test;
  * routing context and API transport are the only mocked boundaries.
  */
@@ -73,7 +73,15 @@ function externalWorker(cli: NonNullable<Agent['executor']>['cli'] = 'codex'): A
     max_tool_iterations_override_ignored: false,
     figure: 'Omnipus',
     role: 'general',
-    editable_fields: [{ name: 'executor', editable: true }, { name: 'name', editable: true }],
+    editable_fields: [
+      { name: 'executor.env_overrides', editable: true },
+      { name: 'executor.env_overrides_remove', editable: true },
+      { name: 'executor.cli_args', editable: true },
+      { name: 'executor.cli', editable: false, reason: 'Locked after create; create a new agent to switch CLIs.' },
+      { name: 'executor.effective_cli_path', editable: false, reason: 'Set in Settings -> Third-party agents.' },
+      { name: 'executor.kind', editable: false, reason: 'Derived from the agent type.' },
+      { name: 'name', editable: true },
+    ],
     executor: {
       kind: 'external-cli',
       cli,
@@ -230,7 +238,14 @@ describe('C04 Runtime uses the executor WRITE contract (T11 FR-8 / U-5)', () => 
     const agent: Agent = {
       ...externalWorker(), type: 'Subagent', needs_model: true,
       executor: { kind: 'native' },
-      editable_fields: [{ name: 'executor', editable: false, reason: 'Only external-CLI workers have a runtime environment.' }],
+      editable_fields: [
+        { name: 'executor.env_overrides', editable: false, reason: 'Only external-CLI workers have a runtime environment.' },
+        { name: 'executor.env_overrides_remove', editable: false, reason: 'Only external-CLI workers have a runtime environment.' },
+        { name: 'executor.cli_args', editable: false, reason: 'Only external-CLI workers have a runtime environment.' },
+        { name: 'executor.cli', editable: false, reason: 'Locked after create; create a new agent to switch CLIs.' },
+        { name: 'executor.effective_cli_path', editable: false, reason: 'Set in Settings -> Third-party agents.' },
+        { name: 'executor.kind', editable: false, reason: 'Derived from the agent type.' },
+      ],
     }
     vi.mocked(fetchAgent).mockResolvedValue(agent)
     const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
