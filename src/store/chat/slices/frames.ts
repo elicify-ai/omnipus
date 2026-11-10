@@ -633,7 +633,7 @@ function joinTurnBubble(draft: SessionChatState, turnBubbleId: string, messageId
 function applyKeyedToken(draft: SessionChatState, sid: string, frame: TokenFrameType): void {
   if (isTokenAfterStop(sid, frame)) return
   const bubbleId = resolveTokenBubbleByMessageId(draft, frame)
-  if (bubbleId) recordAppliedToken(sid, bubbleId, frame)
+  if (bubbleId) recordAppliedToken(draft, bubbleId, frame)
 }
 
 /** Returns the bubble the token was applied to, or null when it was discarded. */

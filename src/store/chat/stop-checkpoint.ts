@@ -16,23 +16,13 @@
 
 import type { CancelFrame, TokenFrame } from '@/lib/api/generated/asyncapi-types'
 import { pendingCancelAckSids } from './runtime-state'
-import type { ChatMessage } from './types'
+import type { ChatMessage, SessionChatState } from './types'
 
 export type CancelShown = NonNullable<CancelFrame['shown']>
 
-interface AppliedRecord {
-  /** Last wire message_id whose token was applied to this bubble. */
-  messageId: string
-  /** turn_id carried by that token, when it had one. */
-  turnId?: string
-  /** Applied code points per wire message_id of this bubble. */
-  codePoints: Map<string, number>
-}
-
-// Per session, per bubble id. Only the most recent bubbles of a session can
-// still be streaming, so older records are evicted to keep this bounded.
-const MAX_BUBBLES_PER_SESSION = 8
-const appliedBySession = new Map<string, Map<string, AppliedRecord>>()
+// Only the most recent bubbles of a session can still be streaming, so older
+// counters are dropped to keep the bucket field bounded.
+const MAX_COUNTED_BUBBLES = 8
 
 function countCodePoints(text: string): number {
   // A surrogate pair is one code point; a lone surrogate counts as one, the
@@ -49,37 +39,26 @@ function countCodePoints(text: string): number {
   return n
 }
 
-/** Record a token frame (with a message_id) that was just applied to `bubbleId`. */
-export function recordAppliedToken(sid: string, bubbleId: string, frame: TokenFrame): void {
+/** Record, on the bucket draft, a keyed token that was just applied to `bubbleId`. */
+export function recordAppliedToken(draft: SessionChatState, bubbleId: string, frame: TokenFrame): void {
   if (!frame.message_id) return
-  let bubbles = appliedBySession.get(sid)
-  if (!bubbles) {
-    bubbles = new Map()
-    appliedBySession.set(sid, bubbles)
+  const counters = { ...(draft.appliedTokenPoints ?? {}) }
+  const previous = counters[bubbleId]
+  delete counters[bubbleId] // re-insert as the most recent
+  const before = frame.replace ? 0 : (previous?.codePoints[frame.message_id] ?? 0)
+  counters[bubbleId] = {
+    messageId: frame.message_id,
+    ...((frame.turn_id ?? previous?.turnId) ? { turnId: frame.turn_id ?? previous?.turnId } : {}),
+    codePoints: { ...(previous?.codePoints ?? {}), [frame.message_id]: before + countCodePoints(frame.content) },
   }
-  const record = bubbles.get(bubbleId) ?? { messageId: frame.message_id, codePoints: new Map<string, number>() }
-  bubbles.delete(bubbleId) // re-insert as most recent
-  bubbles.set(bubbleId, record)
-  const added = countCodePoints(frame.content)
-  const before = frame.replace ? 0 : (record.codePoints.get(frame.message_id) ?? 0)
-  record.codePoints.set(frame.message_id, before + added)
-  record.messageId = frame.message_id
-  record.turnId = frame.turn_id ?? record.turnId
-  if (bubbles.size > MAX_BUBBLES_PER_SESSION) {
-    const oldest = bubbles.keys().next().value
-    if (oldest !== undefined) bubbles.delete(oldest)
-  }
-}
-
-/** Forget every applied-token record of a session (tests and session teardown). */
-export function forgetAppliedTokens(sid?: string): void {
-  if (sid === undefined) appliedBySession.clear()
-  else appliedBySession.delete(sid)
+  const ids = Object.keys(counters)
+  for (const old of ids.slice(0, Math.max(0, ids.length - MAX_COUNTED_BUBBLES))) delete counters[old]
+  draft.appliedTokenPoints = counters
 }
 
 /**
- * The checkpoint for a bubble that is being frozen by Stop, read in the same
- * synchronous step as the freeze.
+ * The checkpoint for a bubble that is being frozen by Stop, read from the
+ * same bucket in the same synchronous step as the freeze.
  *
  * - Tokens with a message_id were applied: that id, its token turn and count.
  * - Nothing applied and no text (an empty placeholder): `{code_points: 0}`,
@@ -89,18 +68,18 @@ export function forgetAppliedTokens(sid?: string): void {
  *
  * `bubble` is undefined when the freeze had to create a new placeholder.
  */
-export function shownCheckpointFor(sid: string, bubble: ChatMessage | undefined, knownTurnId: string | null | undefined): CancelShown | undefined {
-  const record = bubble ? appliedBySession.get(sid)?.get(bubble.id) : undefined
+export function shownCheckpointFor(bucket: SessionChatState, bubble: ChatMessage | undefined): CancelShown | undefined {
+  const record = bubble ? bucket.appliedTokenPoints?.[bubble.id] : undefined
   if (record) {
     const turnId = record.turnId ?? bubble?.turnId
     return {
       message_id: record.messageId,
       ...(turnId ? { turn_id: turnId } : {}),
-      code_points: record.codePoints.get(record.messageId) ?? 0,
+      code_points: record.codePoints[record.messageId] ?? 0,
     }
   }
   if (bubble?.content) return undefined
-  const turnId = bubble?.turnId ?? knownTurnId ?? undefined
+  const turnId = bubble?.turnId ?? bucket.activeTurnId ?? undefined
   return { ...(turnId ? { turn_id: turnId } : {}), code_points: 0 }
 }
 

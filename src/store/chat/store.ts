@@ -528,7 +528,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
         const candidate = findOpenAssistantMessageId(b.messageOrder, b.messagesById)
         const lastMsgId = b.history.viewMode === 'historical' && candidate && !b.messagesById[candidate]?.isStreaming ? null : candidate
         frozen = lastMsgId ? b.messagesById[lastMsgId] : undefined
-        if (sid) shown = shownCheckpointFor(sid, frozen, b.activeTurnId)
+        shown = shownCheckpointFor(b, frozen)
         if (!lastMsgId) {
           // FR-21 / T21–T23: No assistant message exists yet (cancel fired between
           // session_started and the first token frame). The server may still send
