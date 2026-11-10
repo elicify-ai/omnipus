@@ -658,7 +658,7 @@ describe('TaskDetailPanel — worker-type agents are offered as assignees', () =
       workspace_id: 'ws-test',
       edges: [],
       team: ['mia', 'ext'],
-      default_depth: 3,
+      default_depth: 10,
     } as never)
 
     renderPanel(taskWithPrompt)
@@ -794,7 +794,7 @@ describe('TaskDetailPanel — assignee picker is workspace-team-scoped (Fix B)',
       workspace_id: 'ws-test',
       edges: [],
       team: ['mia'],
-      default_depth: 3,
+      default_depth: 10,
     } as never)
 
     renderPanel(taskWithPrompt)
@@ -856,7 +856,7 @@ describe('TaskDetailPanel — assignee picker is workspace-team-scoped (Fix B)',
     expect(agentTrigger).toBeDisabled()
 
     // Resolve so the pending promise doesn't leak into the next test.
-    resolveDelegation({ workspace_id: 'ws-test', edges: [], team: ['mia'], default_depth: 3 })
+    resolveDelegation({ workspace_id: 'ws-test', edges: [], team: ['mia'], default_depth: 10 })
     await waitFor(() => expect(agentTrigger).not.toBeDisabled())
 
     delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
@@ -886,7 +886,7 @@ describe('TaskDetailPanel — assignee picker is workspace-team-scoped (Fix B)',
       workspace_id: 'ws-test',
       edges: [],
       team: ['mia'],
-      default_depth: 3,
+      default_depth: 10,
     } as never)
 
     renderPanel(taskWithPrompt)
@@ -916,7 +916,7 @@ describe('TaskDetailPanel — assignee picker is workspace-team-scoped (Fix B)',
       workspace_id: 'ws-test',
       edges: [],
       team: ['mia'],
-      default_depth: 3,
+      default_depth: 10,
     } as never)
 
     renderPanel(legacyTask)
@@ -986,7 +986,7 @@ describe('TaskDetailPanel — workspace-less task disables the assignee picker (
       workspace_id: 'ws-test',
       edges: [],
       team: ['mia'],
-      default_depth: 3,
+      default_depth: 10,
     } as never)
 
     renderPanel(taskWithPrompt)

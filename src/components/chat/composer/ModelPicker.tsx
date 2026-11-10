@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ModelSelector } from '@/components/ui/model-selector'
 import { useChatStore } from '@/store/chat'
@@ -9,6 +9,8 @@ import { isProviderUsable } from '@/lib/providerStatus'
 import { resolveUniqueModelProvider } from '@/lib/agents/modelToProvider'
 import { readSessionModelChoice, writeSessionModelChoice, warnModelChoiceStorageFailure } from '@/store/chat/model-choice'
 import { cn } from '@/lib/utils'
+import { ComposerEffortChip, useComposerEffort } from './ComposerEffortChip'
+import { saveChatChoice } from '@/lib/effort/chatEffortChoice'
 
 /**
  * ModelPicker — the per-message model selector + its data wiring.
@@ -37,6 +39,7 @@ export function ModelPicker({
   // made under — the (provider, model) selection identity. null = seeded.
   const nextModelProvider = useChatStore((s) => s.nextModelProvider)
   const setNextModel = useChatStore((s) => s.setNextModel)
+  const setNextEffort = useChatStore((s) => s.setNextEffort)
   const addToast = useUiStore((s) => s.addToast)
   const modelSelectorOpen = useUiStore((s) => s.modelSelectorOpen)
   const setModelSelectorOpen = useUiStore((s) => s.setModelSelectorOpen)
@@ -171,8 +174,13 @@ export function ModelPicker({
     warnModelChoiceStorageFailure(failure)
     if (storedChoice) {
       setNextModel(storedChoice.model, storedChoice.provider)
+      // Effort levels FR-055: the chat's effort lives with the model choice.
+      setNextEffort(storedChoice.effort ?? '', storedChoice.effortByCommand === true)
       return
     }
+    // A conversation with no stored choice starts Not set (S-41: another
+    // conversation's /effort value never carries over).
+    setNextEffort('', false)
     // H6 R2 (review round 1 — F3): the seed's provider depends on its SOURCE.
     // An agent-default seed carries the agent's own provider (the Agent
     // response has the field — dropping it made the display guess a
@@ -183,7 +191,7 @@ export function ModelPicker({
       transcriptLastModel ?? activeAgentModel ?? null,
       transcriptLastModel ? null : activeAgentProvider,
     )
-  }, [activeSessionId, activeAgentId, transcriptLastModel, activeAgentModel, activeAgentProvider, setNextModel])
+  }, [activeSessionId, activeAgentId, transcriptLastModel, activeAgentModel, activeAgentProvider, setNextModel, setNextEffort])
 
   function onPickerChange(model: string) {
     // provider clears here (omitted second arg → null); a grouped pick's
@@ -200,6 +208,7 @@ export function ModelPicker({
     // transcript/agent-default seed applies again.
     warnModelChoiceStorageFailure(writeSessionModelChoice(activeSessionId, model ? { model, provider: null } : null))
     if (model === '') {
+      setNextEffort('', false)
       addToast({ message: 'Reverted to agent default for next message', variant: 'default' })
     }
   }
@@ -211,16 +220,42 @@ export function ModelPicker({
   // The wire carries model only today (`metadata.model_name`); see the
   // nextModelProvider store comment for the field this becomes if the
   // contract gains `metadata.provider`.
-  function onPickerPairChange(pair: { model: string; provider: string }) {
+  // Effort levels FR-047/FR-055: every pick goes through the shared
+  // model-and-effort switch (map, note or the blocked step); this commits the
+  // chosen pair once the switch completes. The effort is set right after and
+  // saved with the pair by saveChatChoice.
+  const commitPair = useCallback((pair: { model: string; provider: string }) => {
     if (!pair.model) return
-    setNextModel(pair.model, pair.provider, 'user')
-    // #1436: the grouped pick's (provider, model) pair is the recorded
-    // identity — restoring it lands the check on exactly the row it was
-    // chosen under, even when the slug is served by more than one provider.
-    warnModelChoiceStorageFailure(writeSessionModelChoice(activeSessionId, { model: pair.model, provider: pair.provider }))
+    modelSelectionSource.current = 'user'
+    setNextModel(pair.model, pair.provider || null, 'user')
+  }, [setNextModel])
+
+  const activeAgent = agents.find((a) => a.id === activeAgentId)
+  const displayProvider = nextModelProvider ?? resolveUniqueModelProvider(usableProviders, nextModel ?? '')
+  const effort = useComposerEffort({
+    agent: activeAgent,
+    model: nextModel ?? '',
+    provider: displayProvider ?? '',
+    commitPair: (pair) => {
+      commitPair(pair)
+      // #1436: the grouped pick's (provider, model) pair is the recorded
+      // identity — restoring it lands the check on exactly the row it was
+      // chosen under, even when the slug is served by more than one provider.
+      queueMicrotask(() => saveChatChoice(activeSessionId))
+    },
+  })
+
+  function onSelectorChange(model: string) {
+    // An empty pick hands the chat back to auto-follow (no switch to map).
+    if (model === '') {
+      onPickerChange('')
+      return
+    }
+    effort.switcher.selectorHandlers.onChange(model)
   }
 
   return (
+    <>
     <div
       className={cn(
         // No pointer-coarse min-height: the 44px floor on this WRAPPER (while
@@ -238,9 +273,9 @@ export function ModelPicker({
         // agent-default seed's carried provider); a provider-less seed
         // resolves a row only when exactly one provider serves the slug —
         // ambiguous seeds show NO chosen row instead of a first-listed guess.
-        valueProvider={nextModelProvider ?? resolveUniqueModelProvider(usableProviders, nextModel ?? '')}
-        onChange={onPickerChange}
-        onPairChange={onPickerPairChange}
+        valueProvider={displayProvider}
+        onChange={onSelectorChange}
+        onPairChange={effort.switcher.selectorHandlers.onPairChange}
         // #1436: mark the agent's default row so the user can see which model
         // is the default and switch back to it deliberately. The mark follows
         // the (provider, model) pair, not the bare slug.
@@ -257,5 +292,15 @@ export function ModelPicker({
         tabIndex={tabIndex}
       />
     </div>
+    {/* Effort chip: same tab slot as the model button, next in DOM order. */}
+    <ComposerEffortChip
+      effort={effort}
+      model={nextModel ?? ''}
+      provider={displayProvider ?? ''}
+      disabled={disabled}
+      tabIndex={tabIndex}
+      onSaved={() => saveChatChoice(activeSessionId)}
+    />
+    </>
   )
 }

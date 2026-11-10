@@ -20,6 +20,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { ModelSelector } from '@/components/ui/model-selector'
+import { QuietEffortLine } from '@/components/ui/model-effort-picker'
 import type { ModelCatalogGroup } from '@/lib/providerModelGroups'
 import { probeProvider, completeOnboardingTransaction } from '@/lib/api'
 import { isApiError } from '@/lib/api-error'
@@ -351,6 +352,9 @@ function OnboardingWizard() {
   // FR-029: no model is pre-selected, ever. This starts empty and only the
   // operator's own pick fills it.
   const [selectedModel, setSelectedModel] = useState('')
+  // Effort levels US-11 AS3 / FR-067: the first default's effort, stored by
+  // the completion transaction itself ('' = Provider default, field omitted).
+  const [selectedEffort, setSelectedEffort] = useState('')
   const [probeStatus, setProbeStatus] = useState<TestStatus>('idle')
   const [probeError, setProbeError] = useState('')
   // The model the LAST successful probe actually exercised (FR-036's
@@ -512,6 +516,8 @@ function OnboardingWizard() {
   // explicit *Check connection* button runs the probe.
   const handleSelectModel = (model: string, autoProbe: boolean) => {
     setSelectedModel(model)
+    // Effort levels FR-067: an effort belongs to the model it was chosen for.
+    setSelectedEffort('')
     resetProbe()
     if (autoProbe && model.trim()) void runProbe(model)
   }
@@ -582,6 +588,7 @@ function OnboardingWizard() {
               auth_method: 'sign_in',
               id: selection.providerId,
               model: selectedModel,
+              ...(selectedEffort ? { reasoning_effort: selectedEffort } : {}),
               ...(selection.apiBase ? { endpoint: selection.apiBase } : {}),
             }
           : {
@@ -589,6 +596,7 @@ function OnboardingWizard() {
               id: selection.providerId,
               api_key: selection.apiKey,
               model: selectedModel,
+              ...(selectedEffort ? { reasoning_effort: selectedEffort } : {}),
               ...(selection.apiBase ? { endpoint: selection.apiBase } : {}),
               ...(selection.awsRegion ? { region: selection.awsRegion } : {}),
               // #1700: only the Custom endpoint path sets `protocol`; with it the
@@ -825,6 +833,8 @@ function OnboardingWizard() {
                 onChangeProvider={handleChangeProvider}
                 selectedModel={selectedModel}
                 onSelectModel={handleSelectModel}
+                selectedEffort={selectedEffort}
+                onSelectEffort={setSelectedEffort}
                 probeStatus={probeStatus}
                 probeError={probeError}
                 probedModel={probedModel}
@@ -1344,6 +1354,8 @@ function ProviderStep({
   onChangeProvider,
   selectedModel,
   onSelectModel,
+  selectedEffort,
+  onSelectEffort,
   probeStatus,
   probeError,
   probedModel,
@@ -1365,6 +1377,8 @@ function ProviderStep({
   onChangeProvider: () => void
   selectedModel: string
   onSelectModel: (model: string, autoProbe: boolean) => void
+  selectedEffort: string
+  onSelectEffort: (effort: string) => void
   probeStatus: TestStatus
   probeError: string
   probedModel: string
@@ -1547,6 +1561,13 @@ function ProviderStep({
                 ? 'Your first agent starts on this model. You can change it later.'
                 : 'Enter the model slug for this provider (e.g. MiniMax-M2.7)'}
             </p>
+            <QuietEffortLine
+              scope="onboarding"
+              catalog={catalog}
+              value={{ provider: selection.providerId, model: selectedModel, effort: selectedEffort }}
+              onChange={onSelectEffort}
+              data-testid="onboarding-effort"
+            />
           </div>
 
           {/* ── The probe of the chosen auth method ──────────────────────── */}

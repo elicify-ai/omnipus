@@ -25,6 +25,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/providers/effortdialect"
 )
 
 // ServedFrom is the gateway envelope's origin marker (FR-017): which
@@ -195,6 +197,39 @@ type modelJSON struct {
 	Status            Status     `json:"status"`
 	Disputed          bool       `json:"disputed,omitempty"`
 	InferenceProfiles []string   `json:"inference_profiles,omitempty"`
+	// Reasoning is the served reasoning capability (CatalogModelReasoning):
+	// the levels and switch the route can encode (FR-049). Absent when the
+	// model does not reason.
+	Reasoning *reasoningJSON `json:"reasoning,omitempty"`
+}
+
+// reasoningJSON is the served CatalogModelReasoning object; levels is never
+// null.
+type reasoningJSON struct {
+	Levels []string `json:"levels"`
+	Switch bool     `json:"switch"`
+}
+
+// servedReasoning filters a model's published reasoning controls through the
+// effort encoder table for the provider's route (FR-049).
+func servedReasoning(p *Provider, m *Model) *reasoningJSON {
+	if m.Reasoning == nil {
+		return nil
+	}
+	route := effortdialect.RouteFor(p.ID, string(p.Protocol), m.ID)
+	levels, sw := effortdialect.FilterServed(m.Reasoning.Levels, m.Reasoning.Switch, route)
+	return &reasoningJSON{Levels: levels, Switch: sw}
+}
+
+// ServedReasoning returns the served reasoning capability of a resolved
+// model: the levels and switch its route can encode (FR-049). ok is false
+// when the model has no catalog row or does not reason.
+func (h Handle) ServedReasoning() (levels []string, sw bool, ok bool) {
+	if h.m == nil || h.m.Reasoning == nil || h.p == nil {
+		return nil, false, false
+	}
+	r := servedReasoning(h.p, h.m)
+	return r.Levels, r.Switch, true
 }
 
 // buildServed serialises doc into the envelope with the given origin
@@ -267,6 +302,7 @@ func providerToJSON(p *Provider, gate SignInGate) providerJSON {
 			Status:            m.Status,
 			Disputed:          m.Disputed,
 			InferenceProfiles: m.InferenceProfiles,
+			Reasoning:         servedReasoning(p, m),
 		})
 	}
 	if len(p.Protocols) > 0 {
