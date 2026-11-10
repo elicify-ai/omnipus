@@ -31,6 +31,7 @@ import { useConnectionStore } from '@/store/connection'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useUiStore } from '@/store/ui'
 import { DEFAULT, MIA, OMNIPUS, OMNIPUS_MAIN, SALES, SALES_MAIN, delegation, session, workspace } from '../../../tests/omnipus-l1-ui-red/fixtures'
+import { PROVIDERS_CATALOG } from '@/test/fixtures/providersCatalog'
 
 const screens = import.meta.glob<{ OmnipusChatScreen: ComponentType }>('../chat/OmnipusChatScreen.tsx')
 const EMPTY = workspace('research', { core_team: [], member_configs: {}, setup_pending: true })
@@ -123,6 +124,8 @@ beforeEach(() => {
         kernel_level: false, policy_applied: false, seccomp_enabled: false, bind_ports_count: 0 })
       if (url.pathname === '/api/v1/state') return response(APP_STATE)
       if (url.pathname === '/api/v1/gateway/god-mode') return response({ enabled: false, supported: true, available: true, persisted: false })
+      // The composer's effort chip reads the served levels (effort-levels FR-019).
+      if (url.pathname === '/api/v1/providers/catalog') return response(PROVIDERS_CATALOG)
     }
     unexpected.push(`${method} ${path}`)
     throw new Error(`Unspecified setup-offer HTTP edge: ${method} ${path}`)

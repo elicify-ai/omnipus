@@ -7,8 +7,9 @@ description: >
   result, and the size bound may cut long fields. absent_fields and
   truncated_fields are result metadata, never selectable through `fields`.
   A new-agent preview (get_agent with new_agent_type) returns AgentPreview
-  instead. Extension point: the effort fields of the effort feature are
-  added here when that feature lands.
+  instead. Effort (effort-levels spec FR-071): reasoning_effort is the
+  primary's stored effort, each fallback_models entry carries its own, and
+  each model_chain entry lists effort_options.
 type: object
 additionalProperties: false
 required:
@@ -41,6 +42,17 @@ properties:
   provider:
     type: string
     description: The stored primary provider key ("" when not pinned).
+  reasoning_effort:
+    type: string
+    maxLength: 32
+    nullable: true
+    readOnly: true
+    description: >
+      The primary model's stored effort as written ("high",
+      "provider_default", "on", "off"), never the resolved value. null when
+      Not set (stored "") or when it does not apply (subagent_3p external-CLI
+      workers). Effort-levels spec FR-071, S-76.
+    example: "high"
   fallback_models:
     type: array
     items:

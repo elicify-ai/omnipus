@@ -26,6 +26,13 @@ const STORAGE_KEY = 'omnipus.sessionModelChoice.v1'
 export interface SessionModelChoice { // not-wire-format: browser-local UI preference; never sent to the gateway
   model: string
   provider: string | null
+  /**
+   * Effort levels FR-055: the chat's effort for this pair, kept with the
+   * model choice (same lifetime). Absent or '' = Not set.
+   */
+  effort?: string
+  /** The effort was set by `/effort` in this conversation (S-41). */
+  effortByCommand?: boolean
 }
 
 type ChoiceMap = Record<string, SessionModelChoice>
@@ -68,6 +75,8 @@ function isChoice(value: unknown): value is SessionModelChoice {
   const choice = value as Partial<SessionModelChoice>
   return typeof choice.model === 'string' && choice.model.trim() !== ''
     && (choice.provider === null || (typeof choice.provider === 'string' && choice.provider.trim() !== ''))
+    && (choice.effort === undefined || (typeof choice.effort === 'string' && choice.effort.length <= 32))
+    && (choice.effortByCommand === undefined || typeof choice.effortByCommand === 'boolean')
 }
 
 function readAll(): ChoiceRead {

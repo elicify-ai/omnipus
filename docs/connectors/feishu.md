@@ -25,8 +25,7 @@ Feishu (international name: Lark) is a ByteDance enterprise collaboration platfo
         "enabled": false,
         "text": []
       },
-      "random_reaction_emoji": [],
-      "reasoning_channel_id": ""
+      "random_reaction_emoji": []
     }
   }
 }
@@ -46,7 +45,6 @@ Feishu (international name: Lark) is a ByteDance enterprise collaboration platfo
 | `placeholder.enabled` | bool | No | Send a placeholder card while the agent is thinking |
 | `placeholder.text` | array | No | Candidate placeholder texts (chosen randomly); default is `"Thinking..."` |
 | `random_reaction_emoji` | array | No | Emoji types to add as reactions while processing; default is `"Pin"` when empty |
-| `reasoning_channel_id` | string | No | Chat ID that receives reasoning/thought output from a secondary agent |
 
 ## Setup
 
