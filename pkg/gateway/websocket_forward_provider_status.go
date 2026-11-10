@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
@@ -17,6 +18,9 @@ import (
 func (h *WSHandler) hubProviderStatus(evt agent.Event) {
 	p, ok := evt.Payload.(agent.ProviderStatusPayload)
 	if !ok {
+		// Issue #1664 B11: a dropped notice is never silent.
+		logsafeWarn("ws: provider_status dropped: unexpected payload type",
+			"payload_type", fmt.Sprintf("%T", evt.Payload), "turn_id", evt.Meta.TurnID, "session_key", evt.Meta.SessionKey)
 		return
 	}
 	sid := p.SessionID
@@ -24,6 +28,9 @@ func (h *WSHandler) hubProviderStatus(evt agent.Event) {
 		sid = h.hubResolveSessionIDForChat(evt.Meta.SessionKey)
 	}
 	if sid == "" {
+		// Issue #1664 B12: named fields only — never provider text.
+		logsafeWarn("ws: provider_status dropped: no session for chat",
+			"state", p.State, "turn_id", evt.Meta.TurnID, "session_key", evt.Meta.SessionKey)
 		return
 	}
 	frame := generated.ProviderStatusFrame{
@@ -39,6 +46,12 @@ func (h *WSHandler) hubProviderStatus(evt agent.Event) {
 		if !p.StallAt.IsZero() {
 			stall := p.StallAt.Format(time.RFC3339Nano)
 			frame.StallAt = &stall
+		}
+		// Issue #1664 B3: "attempt N of M", when the loop counts the call.
+		if p.Attempt > 0 && p.MaxAttempts > 0 {
+			attempt, maxAttempts := p.Attempt, p.MaxAttempts
+			frame.Attempt = &attempt
+			frame.MaxAttempts = &maxAttempts
 		}
 	}
 	if p.State == agent.ProviderStatusRecovered && p.Retries > 0 {

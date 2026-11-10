@@ -1051,9 +1051,10 @@ type ProviderFallbackNote struct {
 	UnavailableModel *string             `json:"unavailable_model,omitempty"`
 }
 
-// ProviderRetryFrame — Server → client (provider-messages spec §7.1 item 3). Announces an automatic provider rate-limit retry inside the turn's fallback-chain execution — the candidate about to be re-called, when it will be called (retry_at), and which attempt of max_attempts this is (C-8). C-2 (the #711 closure constraint) — built from NAMED FIELDS ONLY, never an `error` field or raw provider text; the countdown is computed from retry_at and sent_at client-side (C-11). Keep in sync by hand with contracts/components/schemas/ProviderRetryFrame.yaml.
+// ProviderRetryFrame — Server → client (provider-messages spec §7.1 item 3). Announces an automatic provider retry inside the turn's fallback-chain execution, or (issue #1664) the agent loop's own retry of a call that sent no response — the candidate about to be re-called, when it will be called (retry_at), and which attempt of max_attempts this is (C-8). C-2 (the #711 closure constraint) — built from NAMED FIELDS ONLY, never an `error` field or raw provider text; the countdown is computed from retry_at and sent_at client-side (C-11). Keep in sync by hand with contracts/components/schemas/ProviderRetryFrame.yaml.
 type ProviderRetryFrame struct {
-	Attempt           int    `json:"attempt"`
+	Attempt int `json:"attempt"`
+	// The classified provider condition that triggered the retry: the fallback chain's retry causes (rate_limited and the #1280 causes), `no_response` or `empty_reply` (issue #1664, the agent loop's own retry). Plain string, not an enum.
 	ErrorCode         string `json:"error_code"`
 	MaxAttempts       int    `json:"max_attempts"`
 	Model             string `json:"model"`
@@ -1068,10 +1069,14 @@ type ProviderRetryFrame struct {
 	Type      string `json:"type"`
 }
 
-// ProviderStatusFrame — Server → client (issues #1478 and #1280). The state of the model-provider call a running turn is waiting on: `waiting` (nothing has arrived since silent_since; the silence limit ends the call at stall_at when known), `responding` (data arrives again, or the call returned, after a `waiting` notice), `recovered` (the call succeeded after `retries` automatic retries). Named fields only, never provider text. Keep in sync by hand with contracts/components/schemas/ProviderStatusFrame.yaml.
+// ProviderStatusFrame — Server → client (issues #1478 and #1280). The state of the model-provider call a running turn is waiting on: `waiting` (nothing has arrived since silent_since; this attempt ends at stall_at when known — the request timeout before the first response byte, the silence limit after it — and attempt/max_attempts count the agent loop's calls, issue #1664), `responding` (data arrives again, or the call returned, after a `waiting` notice), `recovered` (the call succeeded after `retries` automatic retries). Named fields only, never provider text. Keep in sync by hand with contracts/components/schemas/ProviderStatusFrame.yaml.
 type ProviderStatusFrame struct {
-	Retries *int   `json:"retries,omitempty"`
-	SentAt  string `json:"sent_at"`
+	// State `waiting` only, when known — the 1-based number of the agent loop's provider call (issue #1664). Sent together with max_attempts.
+	Attempt *int `json:"attempt,omitempty"`
+	// State `waiting` only, when known — the total provider calls the agent loop makes before the turn ends with an error (today 3).
+	MaxAttempts *int   `json:"max_attempts,omitempty"`
+	Retries     *int   `json:"retries,omitempty"`
+	SentAt      string `json:"sent_at"`
 	// Per-session sequence number of this frame (#823 catch-up redesign). Optional: absent on an unsequenced copy. Keep in sync by hand with contracts/components/schemas/ProviderStatusFrame.yaml.
 	Seq         *int64  `json:"seq,omitempty"`
 	SessionId   string  `json:"session_id"`

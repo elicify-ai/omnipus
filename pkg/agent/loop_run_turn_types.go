@@ -35,6 +35,12 @@ type agentLoopRunTurn struct {
 	// providerSilence is the current provider round's silence watch (issue
 	// #1478); nil between rounds. Owned by the turn goroutine.
 	providerSilence *providerSilenceWatch
+	// providerAttempt / providerMaxAttempts number the provider call the
+	// response stage's timeout recovery is making (issue #1664: "attempt N
+	// of 3" on the waiting notice); 0 = not counted. Owned by the turn
+	// goroutine.
+	providerAttempt     int
+	providerMaxAttempts int
 	// A streaming-capable provider already tried this channel. Do not retry
 	// a declined factory merely to finalize the plain fallback response.
 	streamerLookupDeclined bool

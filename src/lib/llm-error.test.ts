@@ -46,6 +46,9 @@ const ALL_CODES: LLMErrorCode[] = [
   'network',
   // Founder decision 2026-09-14: a streaming call aborted for total silence.
   'provider_stalled',
+  // Issue #1664 B8/B10 (founder Q3 A, 2026-11-07): a clean empty stream is a
+  // typed failure, not a success; this is its used-up-turn verdict.
+  'provider_empty_reply',
   'content_policy',
   'context_too_long',
   'tool_args',

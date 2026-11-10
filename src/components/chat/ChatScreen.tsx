@@ -1861,6 +1861,8 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
                 sentAt={providerStatusEvent.sentAt}
                 receivedAt={providerStatusEvent.receivedAt}
                 stallAt={providerStatusEvent.stallAt}
+                attempt={providerStatusEvent.attempt}
+                maxAttempts={providerStatusEvent.maxAttempts}
               />
             </div>
           )}

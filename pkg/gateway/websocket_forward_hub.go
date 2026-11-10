@@ -73,7 +73,7 @@ func (h *WSHandler) hubSyncTap(evt agent.Event) {
 	case agent.EventKindLoopStatusChanged:
 		h.hubLoopStatusChanged(evt)
 	case agent.EventKindLLMRetry:
-		h.hubContextWindowNotice(evt)
+		h.hubLLMRetry(evt)
 	case agent.EventKindProviderRetry:
 		h.hubProviderRetry(evt)
 	case agent.EventKindProviderStatus:
@@ -435,7 +435,7 @@ func (h *WSHandler) hubProviderRetry(evt agent.Event) {
 		// frame strings match what a decoder of the marshaled payload sees.
 		SentAt:            p.SentAt.Format(time.RFC3339Nano),
 		RetryAt:           p.RetryAt.Format(time.RFC3339Nano),
-		RetryAfterSeconds: int(p.RetryAt.Sub(p.SentAt).Seconds()),
+		RetryAfterSeconds: retryAfterSeconds(p.SentAt, p.RetryAt),
 		Attempt:           p.Attempt,
 		MaxAttempts:       p.MaxAttempts,
 		ErrorCode:         providerRetryErrorCode(p.Reason),
@@ -460,13 +460,29 @@ func (h *WSHandler) hubProviderRetry(evt agent.Event) {
 }
 
 // providerRetryErrorCode maps the retry payload's reason to the frame's
-// error_code (Finding 3): "rate_limit" → "rate_limited"; any other reason
-// passes through unchanged (presence-only oracle — no other mapping pinned).
+// error_code (Finding 3): "rate_limit" → "rate_limited"; the agent loop's
+// timeout retry "timeout" → "no_response" (issue #1664 B5: the call sent no
+// response in time); any other reason ("empty_reply" included) passes
+// through unchanged.
 func providerRetryErrorCode(reason string) string {
-	if reason == "rate_limit" {
+	switch reason {
+	case "rate_limit":
 		return "rate_limited"
+	case "timeout":
+		return "no_response"
 	}
 	return reason
+}
+
+// retryAfterSeconds is the frame's whole-second wait, at least 1 (the
+// contract's minimum): the loop's timeout backoff can be under a second
+// (500 ms floor), which truncation would send as 0.
+func retryAfterSeconds(sentAt, retryAt time.Time) int {
+	secs := int(retryAt.Sub(sentAt).Seconds())
+	if secs < 1 {
+		return 1
+	}
+	return secs
 }
 
 // hubProviderFallback forwards the fallback-answered event as one
