@@ -454,6 +454,28 @@ describe('provider_status — waiting shows the notice, responding clears it, re
     expect(ev?.turnId).toBe('turn-1664-b3')
   })
 
+  it('waiting advances from attempt 1 through attempts 2 and 3 of 3 from successive generated frames (issue #1664 R3-10)', () => {
+    for (const attempt of [1, 2, 3]) {
+      const frame: ProviderStatusFrame = {
+        type: 'provider_status',
+        session_id: SID,
+        turn_id: 'turn-1664-later-attempts',
+        state: 'waiting',
+        sent_at: '2026-09-27T00:00:40Z',
+        silent_since: '2026-09-27T00:00:10Z',
+        stall_at: '2026-09-27T00:00:17Z',
+        attempt,
+        max_attempts: 3,
+        seq: attempt,
+      }
+      useChatStore.getState().handleFrame(frame)
+      const ev = bucket().providerStatusEvent
+      expect(ev?.attempt, `waiting frame ${attempt} must replace the preceding count`).toBe(attempt)
+      expect(ev?.maxAttempts).toBe(3)
+      expect(ev?.turnId).toBe('turn-1664-later-attempts')
+    }
+  })
+
   it('responding clears the waiting notice', () => {
     useChatStore.getState().handleFrame(
       providerStatusFrame({ seq: 1, state: 'waiting', silentSince: '2026-09-27T00:00:10Z' }),

@@ -228,13 +228,14 @@ func TestIssue1664_B6_Pin_ThreeAttemptsEndInTurnTimedOut(t *testing.T) {
 	require.Len(t, issue1664RetryEvents(h), 2, "one retry line per retry (2), never one per attempt")
 }
 
-// B7 (pin, passes today): a Stop during the silent wait ends the round with
-// no further attempt and no retry line. The Stop lands mid-call; the
-// hardAbortRequested guard at the top of the loop's timeout recovery
-// (loop_run_turn_response.go::retryTimeout) breaks before the TurnTimeout
-// and LLMRetry events are emitted — that guard is what this pin exercises.
-// The turn-level turn_canceled outcome of a hard stop is covered by
-// hard_abort_finish_method_test.go
+// B7 (pin, passes today): a hard abort during the silent wait ends the round
+// with no further attempt and no retry line. CHECK R3-3 corrected the earlier
+// coverage claim: the fallback chain normalizes the canceled context to
+// context.Canceled, which classifyFailure treats as non-retryable. This pin
+// does NOT establish coverage of either hard-abort guard. The Round 5 tests
+// HardAbortWithChainEndsAborted and HardAbortRawTimeoutAnnouncesNoRetry pin
+// those separate boundaries. The turn-level turn_canceled outcome is covered
+// by hard_abort_finish_method_test.go
 // (TestRunTurn_HardAbortViaInterruptSessionHard_RecordsCancelMethodHard).
 func TestIssue1664_B7_Pin_StopDuringSilentWaitMakesNoFurtherAttempt(t *testing.T) {
 	issue1478ShortSilence(t)
@@ -244,7 +245,7 @@ func TestIssue1664_B7_Pin_StopDuringSilentWaitMakesNoFurtherAttempt(t *testing.T
 			if holder.h != nil {
 				holder.h.ts.requestHardAbort() // the Stop arrives mid-call
 			}
-			return nil, context.DeadlineExceeded // timeout-class: only the guard can stop the retry
+			return nil, context.DeadlineExceeded // the chain normalizes the hard-aborted context to context.Canceled
 		}
 		return nil, context.DeadlineExceeded
 	}}

@@ -83,11 +83,28 @@ describe('ProviderWaitingIndicator — the attempt clause (issue #1664 B4, found
     expect(visible.className).not.toContain('truncate')
     expect(visible.className).not.toContain('line-clamp')
     expect(visible.className).not.toContain('ellipsis')
+    // R3-9: reuse the retry-line sibling's broad class guard; jsdom does
+    // not apply Tailwind, so computed styles alone cannot see F06.
+    expect(visible.className).not.toMatch(
+      /truncate|text-ellipsis|ellipsis|whitespace-nowrap|overflow-hidden|text-overflow/,
+    )
+    expect(visible.className.split(/\s+/)).toContain('break-words')
     const style = getComputedStyle(visible)
     expect(style.textOverflow).not.toBe('ellipsis')
     expect(style.whiteSpace).not.toBe('nowrap')
     expect(visible.textContent).toContain(`If nothing arrives by ${expectedStallTime()}`)
     expect(visible.textContent).toContain('(attempt 1 of 3)')
+  })
+
+  it('on the middle attempt only this attempt ends: "this attempt ends (attempt 2 of 3)"', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(SENT_AT)
+    const { container } = renderWaiting(attemptProps(2, 3))
+    const full = `The model hasn't responded for 45s — still waiting. If nothing arrives by ${expectedStallTime()}, this attempt ends (attempt 2 of 3).`
+    const { live, visible } = waitingSurfaces(container)
+    expect(visible.textContent).toBe(full)
+    expect(live.textContent).toBe(full)
+    expect(visible).toBeVisible()
   })
 
   it('on the last attempt the whole call ends: "the call ends (attempt 3 of 3)"', () => {
@@ -105,12 +122,15 @@ describe('ProviderWaitingIndicator — the attempt clause (issue #1664 B4, found
     vi.setSystemTime(SENT_AT)
     for (const [attempt, maxAttempts] of [
       [1, 3],
+      [2, 3],
       [3, 3],
     ] as const) {
       const { container } = renderWaiting(attemptProps(attempt, maxAttempts))
       const { live, visible } = waitingSurfaces(container)
       expect(visible.textContent).not.toContain('contact support')
       expect(live.textContent).not.toContain('contact support')
+      expect(visible.textContent).not.toMatch(/contact\s+support/i)
+      expect(live.textContent).not.toMatch(/contact\s+support/i)
     }
   })
 })

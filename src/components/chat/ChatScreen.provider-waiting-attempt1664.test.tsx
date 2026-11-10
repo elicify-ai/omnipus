@@ -19,7 +19,7 @@ import * as React from 'react'
 import { useChatStore } from '@/store/chat'
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
-import type { ProviderStatusFrame } from '@/lib/api/generated/asyncapi-types'
+import type { ProviderRetryFrame, ProviderStatusFrame, SessionStateFrame } from '@/lib/api/generated/asyncapi-types'
 
 vi.mock('@assistant-ui/react', async () => (await import('@/test/assistantUiMock')).createAssistantUiMock())
 
@@ -85,7 +85,7 @@ const SENT_AT = '2026-11-08T14:00:40.000Z'
 const SILENT_SINCE = '2026-11-08T14:00:30.000Z'
 const STALL_AT = '2026-11-08T14:00:37.000Z'
 
-function waitingFrame(): ProviderStatusFrame {
+function waitingFrame(attempt = 1): ProviderStatusFrame {
   return {
     type: 'provider_status',
     session_id: SID,
@@ -94,9 +94,9 @@ function waitingFrame(): ProviderStatusFrame {
     sent_at: SENT_AT,
     silent_since: SILENT_SINCE,
     stall_at: STALL_AT,
-    attempt: 1,
+    attempt,
     max_attempts: 3,
-    seq: 1,
+    seq: attempt,
   }
 }
 
@@ -122,6 +122,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  vi.useRealTimers()
 })
 
 describe('ChatScreen — the waiting notice shows the frame attempt through the real store (issue #1664 B3, CHECK F2)', () => {
@@ -145,5 +146,83 @@ describe('ChatScreen — the waiting notice shows the frame attempt through the 
     const visible = indicator!.querySelector('span:not([aria-hidden])')
     expect(visible?.textContent).toContain(`If nothing arrives by ${expectedStallTime()}`)
     expect(visible?.textContent).toContain('(attempt 1 of 3)')
+  })
+
+  it('updates the real waiting line for attempts 2 and 3 of 3 from later frames', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(SENT_AT))
+    // Seed the live turn through its real frame. A foreground-only busy flag
+    // is reset by the next bucket update and would hide later waiting frames.
+    const liveTurn: SessionStateFrame = {
+      type: 'session_state',
+      session_id: SID,
+      user_id: 'test-user-1664',
+      pending_approvals: [],
+      emitted_at: SENT_AT,
+      active_turn: { turn_id: 'turn-1664-screen', agent_id: 'agent-1', started_at: SILENT_SINCE },
+    }
+    act(() => {
+      useChatStore.getState().handleFrame(liveTurn)
+      useChatStore.getState().handleFrame(waitingFrame())
+      useChatStore.setState({ isStreaming: true })
+    })
+    expect(useChatStore.getState().sessionsById[SID]?.isStreaming).toBe(true)
+    const { container } = render(<ChatScreen />)
+
+    for (const [attempt, ending] of [[2, 'this attempt ends'], [3, 'the call ends']] as const) {
+      act(() => {
+        useChatStore.getState().handleFrame(waitingFrame(attempt))
+      })
+      const stored = useChatStore.getState().sessionsById[SID]?.providerStatusEvent
+      expect(stored?.attempt).toBe(attempt)
+      expect(stored?.maxAttempts).toBe(3)
+      const indicator = container.querySelector('[data-testid="provider-waiting-indicator"]')
+      expect(indicator, `attempt ${attempt} waiting notice must render`).not.toBeNull()
+      const visible = indicator!.querySelector('span:not([aria-hidden])')
+      const live = indicator!.querySelector('[role="status"]')
+      const full = `The model hasn't responded for 10s — still waiting. If nothing arrives by ${expectedStallTime()}, ${ending} (attempt ${attempt} of 3).`
+      expect(visible?.textContent).toBe(full)
+      expect(live?.textContent).toBe(full)
+      expect(visible).toBeVisible()
+    }
+  })
+
+  it.each([
+    ['no_response', 'did not start answering in time'],
+    ['empty_reply', 'sent an empty reply'],
+  ] as const)('hands the model rather than the provider to the real %s retry line', (errorCode, clause) => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(SENT_AT))
+    const frame: ProviderRetryFrame = {
+      type: 'provider_retry',
+      session_id: SID,
+      turn_id: 'turn-1664-retry-screen',
+      provider: 'OpenRouter',
+      model: 'model-a',
+      sent_at: SENT_AT,
+      retry_at: new Date(Date.parse(SENT_AT) + 2_000).toISOString(),
+      retry_after_seconds: 2,
+      attempt: 2,
+      max_attempts: 3,
+      error_code: errorCode,
+      seq: 1,
+    }
+    expect(frame.provider).not.toBe(frame.model)
+    act(() => {
+      useChatStore.getState().handleFrame(frame)
+      useChatStore.setState({ isStreaming: true })
+    })
+    const stored = useChatStore.getState().sessionsById[SID]?.providerRetryEvent
+    expect(stored?.provider).toBe('OpenRouter')
+    expect(stored?.model).toBe('model-a')
+    const { container } = render(<ChatScreen />)
+    const indicator = container.querySelector('[data-testid="provider-retry-indicator"]')
+    expect(indicator, 'the actual retry indicator must render in ChatScreen').not.toBeNull()
+    const visible = indicator!.querySelector('span:not([aria-hidden])')
+    const live = indicator!.querySelector('[role="status"]')
+    const full = `model-a ${clause}. Retrying automatically in 0:02 (attempt 2 of 3).`
+    expect(visible?.textContent).toBe(full)
+    expect(live?.textContent).toBe(full)
+    expect(visible).toBeVisible()
   })
 })
