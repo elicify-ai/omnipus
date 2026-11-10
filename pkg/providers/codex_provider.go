@@ -10,8 +10,10 @@ import (
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
+	"github.com/openai/openai-go/v3/shared"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/providers/effortdialect"
 	orc "github.com/elicify-ai/omnipus/pkg/providers/openai_responses_common"
 )
 
@@ -356,5 +358,29 @@ func buildCodexParams(
 		params.Tools = orc.TranslateTools(tools, enableWebSearch)
 	}
 
+	// Effort (effort-levels spec S-17, S-89): reasoning {effort} levels only.
+	// No output-token limit is ever sent on this route (TD-2).
+	effortdialect.Report(options, applyCodexEffort(&params, model, effortdialect.Requested(options)))
+
 	return params
+}
+
+// applyCodexEffort places a resolved effort level on the Responses body and
+// returns what was sent. The ChatGPT-login route encodes levels only: a
+// switch value (on/off) is not sendable and nothing is sent (not_supported).
+func applyCodexEffort(params *responses.ResponseNewParams, model, v string) effortdialect.Sent {
+	if v == "" {
+		return effortdialect.Sent{}
+	}
+	r := effortdialect.Route{
+		Protocol:    effortdialect.ProtocolOpenAIResponses,
+		ProviderID:  "openai-chatgpt",
+		ModelFamily: effortdialect.FamilyOf(effortdialect.ProtocolOpenAIResponses, model),
+	}
+	enc, ok := effortdialect.Default().EncodingFor(r)
+	if !ok || !enc.Levels || effortdialect.IsSwitchValue(v) {
+		return effortdialect.Sent{Reason: effortdialect.ReasonNotSupported}
+	}
+	params.Reasoning = shared.ReasoningParam{Effort: shared.ReasoningEffort(v)}
+	return effortdialect.Sent{Value: v}
 }

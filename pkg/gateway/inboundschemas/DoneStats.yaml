@@ -87,3 +87,19 @@ properties:
       user canceled the turn mid-stream) or "max_output_tokens" (the
       provider's output-token limit cut the answer off before it finished).
       Absent on a normal turn.
+  effort:
+    $ref: './EffortRecord.yaml'
+    description: >
+      Effort levels spec (FR-058). The answering candidate's effort record.
+      Absent when nothing was chosen and nothing was sent. Live-turn field:
+      the replay-terminating done frame omits it.
+  reasoning_tokens:
+    type: integer
+    minimum: 0
+    description: >
+      Effort levels spec (FR-024). Display-only turn sum of the reasoning-token
+      counts reported by this turn's provider calls (a subset of output tokens,
+      never booked into any statistic). Absent = no call reported a count;
+      0 = reported zero. Live-turn field: the replay-terminating done frame
+      omits it.
+    example: 120

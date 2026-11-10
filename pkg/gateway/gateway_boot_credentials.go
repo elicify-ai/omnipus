@@ -27,6 +27,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	providercommon "github.com/elicify-ai/omnipus/pkg/providers/common"
 )
 
 func (p *startupBlockedProvider) Chat(
@@ -830,6 +831,23 @@ func createStartupProvider(
 	cfg *config.Config,
 	allowEmptyStartup bool,
 ) (providers.LLMProvider, string, error) {
+	// Hosted edition: the provider endpoint guard honours the operator's SSRF
+	// allow list, the same pair the agent loop's checker merges. Installed
+	// here because this runs at boot and on every reload, before any provider
+	// client of that config is built.
+	providercommon.SetEndpointAllowlist(append(
+		append([]string(nil), cfg.Sandbox.SSRF.AllowInternal...), cfg.Sandbox.EgressAllowCIDRs...))
+	// Hosted edition: a row written before the endpoint guard existed may
+	// carry an api_base on a catalog id that the run-time builder refuses
+	// (providers.PlantedEndpointError). Each one is named in the log. When
+	// one backs the default model the gateway starts in limited mode and
+	// answers every turn with the refusal, rather than failing to boot.
+	if reason, blocked := plantedCatalogRowsBlockDefault(cfg); blocked {
+		logger.WarnCF("gateway", "Gateway started with a refused default provider", map[string]any{
+			"limited_mode": true,
+		})
+		return &startupBlockedProvider{reason: reason}, "", nil
+	}
 	if cfg.Agents.Defaults.DefaultModel.IsZero() && allowEmptyStartup {
 		reason := "no default model configured; gateway started in limited mode"
 		fmt.Printf("⚠ Warning: %s\n", reason)
@@ -858,6 +876,71 @@ func createStartupProvider(
 	}
 
 	return providers.CreateProvider(cfg)
+}
+
+// plantedCatalogRowsBlockDefault logs, by provider id only, every row whose
+// stored api_base on a catalog id the hosted endpoint guard refuses, and
+// reports the person-facing refusal when the row the default model pair
+// resolves to is such a row. Outside the hosted edition nothing is refused.
+func plantedCatalogRowsBlockDefault(cfg *config.Config) (string, bool) {
+	planted := false
+	for _, m := range cfg.Providers {
+		if m == nil {
+			continue
+		}
+		id := strings.TrimSpace(m.Provider)
+		if !providers.IsCatalogProvider(id) || !providercommon.CatalogBaseOverrideRefused(m.APIBase) {
+			continue
+		}
+		planted = true
+		slog.Warn("gateway: a saved provider address will not be used until the owner saves the provider again",
+			"provider", id)
+	}
+	if !planted {
+		return "", false
+	}
+	if row, ok := defaultPairRows(cfg); ok {
+		for _, m := range row {
+			id := strings.TrimSpace(m.Provider)
+			if providers.IsCatalogProvider(id) && providercommon.CatalogBaseOverrideRefused(m.APIBase) {
+				return (&providers.PlantedEndpointError{ProviderID: id}).Error(), true
+			}
+		}
+	}
+	return "", false
+}
+
+// defaultPairRows returns the providers[] rows the boot path may build the
+// default model from, using the resolution providers.CreateProvider uses
+// (providers.ResolveDefaultModelRow), whose clone keeps the row's api_base.
+// When rows carry the exact pair, the resolver round-robins over them, so all
+// of them are returned and the resolver is not called (calling it would
+// advance the shared round-robin counter); otherwise the one row it resolves
+// to is returned.
+func defaultPairRows(cfg *config.Config) ([]*config.ModelConfig, bool) {
+	pair := cfg.Agents.Defaults.DefaultModel
+	if pair.IsZero() {
+		return nil, false
+	}
+	wantProvider := strings.TrimSpace(pair.Provider)
+	wantModel := strings.TrimSpace(pair.Model)
+	if wantProvider == "" || wantModel == "" {
+		return nil, false
+	}
+	var exact []*config.ModelConfig
+	for _, m := range cfg.Providers {
+		if m != nil && strings.TrimSpace(m.Provider) == wantProvider && strings.TrimSpace(m.Model) == wantModel {
+			exact = append(exact, m)
+		}
+	}
+	if len(exact) > 0 {
+		return exact, true
+	}
+	row, ok := providers.ResolveDefaultModelRow(cfg, providers.ProviderCatalog(), wantProvider, wantModel)
+	if !ok {
+		return nil, false
+	}
+	return []*config.ModelConfig{row}, true
 }
 
 // defaultModelCredentialBlocked reports whether EVERY providers[] entry backing
