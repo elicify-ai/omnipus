@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/thirdpartycli"
 )
 
 type ErrorCode string
@@ -62,7 +63,7 @@ type FieldDescriptor struct {
 	Reason   string
 }
 
-var describedFields = []string{"name", "description", "figure", "role", "color", "soul", "skills", "mcp_servers", "tool_policy_changes", "model", "provider", "fallback_models", "context_window_override", "model_params", "max_tool_iterations", "memory_enabled", "voice", "type"}
+var describedFields = []string{"name", "description", "figure", "role", "color", "soul", "skills", "mcp_servers", "tool_policy_changes", "model", "provider", "fallback_models", "context_window_override", "model_params", "max_tool_iterations", "memory_enabled", "voice", "type", "executor"}
 
 // metadataFileFields are the agent metadata files the update_agent tool writes
 // beside SOUL.md (#1064). They are described separately because the REST
@@ -93,6 +94,9 @@ func describeFields(agent config.AgentConfig, validate func(config.AgentConfig, 
 	out := make([]FieldDescriptor, 0, len(describedFields))
 	for _, field := range describedFields {
 		err := validate(agent, []string{field})
+		if err == nil {
+			err = runtimeFieldRefusal(agent, field)
+		}
 		descriptor := FieldDescriptor{Name: field, Editable: err == nil}
 		if err != nil {
 			descriptor.Reason = err.Error()
@@ -100,6 +104,18 @@ func describeFields(agent config.AgentConfig, validate func(config.AgentConfig, 
 		out = append(out, descriptor)
 	}
 	return out
+}
+
+// runtimeFieldRefusal refuses describing executor as editable on an agent
+// that is not an external-CLI worker. Its writable parts (env_overrides,
+// env_overrides_remove, cli_args) are refused on a native agent by the REST
+// update and update_agent with the same text, so the descriptor says what
+// those writes do. The program path and parameters are never part of it.
+func runtimeFieldRefusal(agent config.AgentConfig, field string) error {
+	if field != "executor" || agent.IsExternalCLIWorker() {
+		return nil
+	}
+	return &FieldError{Code: InvalidInput, Fields: []string{field}, Reason: thirdpartycli.NativeRuntimeRefusalText}
 }
 
 // ValidateFields validates a write to supplied agent fields: the ADR-090
