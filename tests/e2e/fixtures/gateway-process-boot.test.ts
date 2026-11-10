@@ -218,13 +218,38 @@ function bootLines(text: string, marker: string): { port: string; pid: string; h
   }))
 }
 
-async function startError(opts: Parameters<typeof GatewayProcess.start>[0]): Promise<Error> {
-  const err = await GatewayProcess.start(opts).then(
-    () => undefined,
+async function startError(
+  opts: Parameters<typeof GatewayProcess.start>[0],
+  GP: typeof GatewayProcess = GatewayProcess,
+): Promise<Error> {
+  let started: GatewayProcess | undefined
+  const err = await GP.start(opts).then(
+    (gw) => {
+      started = gw
+      return undefined
+    },
     (e: unknown) => e as Error,
   )
+  // An unexpectedly healthy gateway is stopped before the assertion fails,
+  // so a failing case never leaves a process or home behind.
+  if (started) await started.stop()
   expect(err, 'start() must fail').toBeInstanceOf(Error)
   return err as Error
+}
+
+/**
+ * GatewayProcess loaded afresh with the central model pair from the file:
+ * OMNIPUS_E2E_PRIMARY_PROVIDER / OMNIPUS_E2E_PRIMARY_MODEL (a CI job moved
+ * onto the fallback pair) are cleared first. e2e-model.ts reads them once at
+ * load, so the module graph is reloaded. The caller restores the variables
+ * with vi.unstubAllEnvs().
+ */
+async function gatewayProcessWithFilePair(): Promise<typeof GatewayProcess> {
+  vi.stubEnv('OMNIPUS_E2E_PRIMARY_PROVIDER', '')
+  vi.stubEnv('OMNIPUS_E2E_PRIMARY_MODEL', '')
+  vi.resetModules()
+  const fresh = await import('./gateway-process.js')
+  return fresh.GatewayProcess
 }
 
 /** Everything a reporter can print of an error: message, stack, every
@@ -300,7 +325,7 @@ describe('GatewayProcess boot failure: fails the test with the proven cause', ()
     expect(err.message).toContain('did not start within')
     expect(pids(state)).toHaveLength(1)
     expect(isAlive(pids(state)[0]), 'the silent boot has exited').toBe(false)
-    const home = /OMNIPUS_HOME (\S+)/.exec(err.message)?.[1]
+    const home = /OMNIPUS_HOME ([^,\s)]+)/.exec(err.message)?.[1]
     expect(home, 'the error names the home').toBeTruthy()
     expect(fs.existsSync(home as string), 'its home is removed').toBe(false)
   }, 60_000)
@@ -544,13 +569,14 @@ describe('GatewayProcess boot failure: no secret in anything it emits', () => {
     vi.stubEnv('MINIMAX_API_KEY_CI', primary)
     vi.stubEnv('OPENROUTER_API_KEY_CI', fallback)
     try {
+      const GP = await gatewayProcessWithFilePair()
       const state = newState('onboard-echo')
       // No apiBase: the real onboardViaAPI path with the CI key variables.
       const err = await startError({
         binary: fake,
         healthTimeoutMs: 1_000,
         env: { FAKE_MARKER: 'oe', FAKE_MODE: 'onboard-echo', FAKE_STATE: state },
-      })
+      }, GP)
       expect(err.message).toContain('onboarding/complete returned 400')
       expect(err.message, 'the echoed request is reported, scrubbed').toContain('api_key')
       expect(emitted(err)).not.toContain(primary)
@@ -582,12 +608,15 @@ describe('GatewayProcess boot failure: no secret in anything it emits', () => {
         vi.stubEnv('MINIMAX_API_KEY_CI', `${pad}${pad}${primary}${pad}${pad}`)
         vi.stubEnv('OPENROUTER_API_KEY_CI', `${pad}${pad}${fallback}${pad}${pad}`)
         try {
+          // The file pair: with the fallback pair as primary, onboarding
+          // skips the fallback seeding this case exercises.
+          const GP = await gatewayProcessWithFilePair()
           const state = newState(`${mode}-${padName}`)
           const err = await startError({
             binary: fake,
             healthTimeoutMs: 1_000,
             env: { FAKE_MARKER: 'pad', FAKE_MODE: mode, FAKE_STATE: state },
-          })
+          }, GP)
           expect(err.message, 'the provider refusal is reported').toContain('provider refused ')
           expect(emitted(err)).not.toContain(primary)
           expect(emitted(err)).not.toContain(fallback)
@@ -608,5 +637,75 @@ describe('GatewayProcess boot failure: no secret in anything it emits', () => {
     })
     expect(err.message).toContain('onboarding failed 400')
     expect(err.message.length, 'the whole error stays under 512 Ki characters').toBeLessThan(512 * 1024)
+  }, 60_000)
+  // An unpaired UTF-16 surrogate is a valid JavaScript string but cannot be
+  // URL-encoded: building its secret forms must not throw past cleanup.
+  const SURROGATE = 'canary-surrogate-\uD800-7a41' // gitleaks:allow
+
+  it('a malformed-Unicode secret on a boot failure: still reported, the child exited and its home is gone', async () => {
+    const marker = `SURR-BOOT-${process.pid}`
+    const state = newState('surrogate-boot')
+    const err = await startError({
+      binary: fake,
+      apiBase: 'http://127.0.0.1:9',
+      healthTimeoutMs: 1_000,
+      env: { FAKE_MARKER: marker, FAKE_MODE: 'never-listen', FAKE_STATE: state, FAKE_SURROGATE_TOKEN: SURROGATE },
+    })
+    expect(err.message).toContain('/health never returned 200')
+    expect(bootLines(err.message, marker), 'the report is complete').toHaveLength(1)
+    await expectOneBootGone(state, err.message, marker)
+  }, 60_000)
+
+  it('a malformed-Unicode secret on an onboarding/login failure: still reported, the child exited and its home is gone', async () => {
+    const marker = `SURR-LOGIN-${process.pid}`
+    const state = newState('surrogate-login')
+    const err = await startError({
+      binary: fake,
+      apiBase: 'http://127.0.0.1:9',
+      healthTimeoutMs: 1_000,
+      env: { FAKE_MARKER: marker, FAKE_MODE: 'login-fails', FAKE_STATE: state, FAKE_SURROGATE_TOKEN: SURROGATE },
+    })
+    expect(err.message).toContain('login failed 500')
+    await expectOneBootGone(state, err.message, marker)
+  }, 60_000)
+
+  it('a report that cannot be built at all: cleanup still runs and the failure says so', async () => {
+    const marker = `REPORT-THROWS-${process.pid}`
+    const state = newState('report-throws')
+    vi.spyOn(GatewayProcess.prototype as unknown as { bootFailureReport: () => string }, 'bootFailureReport').mockImplementation(() => {
+      throw new Error('report canary: formatting broke')
+    })
+    const err = await startError({
+      binary: fake,
+      apiBase: 'http://127.0.0.1:9',
+      healthTimeoutMs: 1_000,
+      env: { FAKE_MARKER: marker, FAKE_MODE: 'never-listen', FAKE_STATE: state },
+    })
+    expect(err.message).toContain('boot failed')
+    expect(err.message).toContain('report canary: formatting broke')
+    expect(pids(state)).toHaveLength(1)
+    expect(isAlive(pids(state)[0]), 'the child exited').toBe(false)
+    const home = /OMNIPUS_HOME ([^,\s)]+)/.exec(err.message)?.[1]
+    expect(home, 'the failure names the home').toBeTruthy()
+    expect(fs.existsSync(home as string), 'its home is removed').toBe(false)
+  }, 60_000)
+
+  it('an onboarding failure whose message cannot be scrubbed: cleanup still runs and the failure says so', async () => {
+    const marker = `SCRUB-THROWS-${process.pid}`
+    const state = newState('scrub-throws')
+    vi.spyOn(GatewayProcess.prototype as unknown as { scrub: () => string }, 'scrub').mockImplementation(() => {
+      throw new Error('scrub canary: scrubbing broke')
+    })
+    const err = await startError({
+      binary: fake,
+      apiBase: 'http://127.0.0.1:9',
+      healthTimeoutMs: 1_000,
+      env: { FAKE_MARKER: marker, FAKE_MODE: 'login-fails', FAKE_STATE: state },
+    })
+    expect(err.message).toContain('onboarding/login failed')
+    expect(err.message).toContain('scrub canary: scrubbing broke')
+    expect(err.message, 'the unscrubbable original is withheld').not.toContain('login broken on purpose')
+    expect(pids(state)).toHaveLength(1)
+    expect(isAlive(pids(state)[0]), 'the child exited').toBe(false)
   }, 60_000)
 })

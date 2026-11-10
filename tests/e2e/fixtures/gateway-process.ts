@@ -162,6 +162,17 @@ const SECRET_ENV_NAME = /KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL/i;
  * redacted on its own (it would be an ordinary word or a bracket). */
 const SECRET_LINE_MIN = 4;
 
+/** `v` URL-encoded, or nothing when it cannot be: encodeURIComponent throws
+ * on an unpaired UTF-16 surrogate, which a JavaScript option value may hold
+ * (such a value cannot appear URL-encoded in output either). */
+function urlEncoded(v: string): string[] {
+  try {
+    return [encodeURIComponent(v)];
+  } catch {
+    return [];
+  }
+}
+
 /** The forms a known secret may take in output: as is and trimmed of
  * surrounding whitespace (spaces, tabs, CR, LF: e2e-model-keys.ts::
  * lookupModelKey trims a key before it is sent), each JSON-escaped (once and
@@ -173,7 +184,7 @@ const SECRET_LINE_MIN = 4;
 function secretForms(value: string): string[] {
   const forms = (v: string) => {
     const json = JSON.stringify(v).slice(1, -1);
-    return [v, json, JSON.stringify(json).slice(1, -1), encodeURIComponent(v)];
+    return [v, json, JSON.stringify(json).slice(1, -1), ...urlEncoded(v)];
   };
   const multiline = /[\r\n]/.test(value);
   const lines = multiline
@@ -322,6 +333,30 @@ export class GatewayProcess {
   }
 
   /**
+   * The failure text when a report could not be built (scrubbing or
+   * formatting threw): it names the failure and why, and withholds the
+   * original message and output, which could not be scrubbed. Never throws,
+   * so cleanup always runs after it.
+   */
+  private unreportable(what: string, formatErr: unknown): string {
+    const why = formatErr instanceof Error ? `${formatErr.name}: ${formatErr.message}` : String(formatErr);
+    return (
+      `GatewayProcess ${what} failed (port ${this.port}, OMNIPUS_HOME ${this.homeDir}, binary ${this.binary}), ` +
+      `but its report could not be built (${why}); the original message and the gateway output are ` +
+      'withheld because they could not be scrubbed'
+    );
+  }
+
+  /** bootFailureReport(), or unreportable() if building it throws. */
+  private safeFailureReport(err: unknown, what: string): string {
+    try {
+      return this.bootFailureReport(err, what);
+    } catch (formatErr) {
+      return this.unreportable(what, formatErr);
+    }
+  }
+
+  /**
    * stop() after a failure, keeping that failure if cleanup fails too: the
    * returned text is `failure` plus the (scrubbed) cleanup error, or
    * undefined when stop() succeeded.
@@ -331,7 +366,11 @@ export class GatewayProcess {
     try {
       await this.stop();
     } catch (stopErr) {
-      cleanup = this.scrub(stopErr instanceof Error ? stopErr.message : String(stopErr));
+      try {
+        cleanup = this.scrub(stopErr instanceof Error ? stopErr.message : String(stopErr));
+      } catch {
+        cleanup = '(the cleanup error is withheld: it could not be scrubbed)';
+      }
     }
     return cleanup === undefined ? undefined : `${failure}\n--- cleanup after that failure also failed ---\n${cleanup}`;
   }
@@ -383,7 +422,7 @@ export class GatewayProcess {
     } catch (err) {
       // The report reads the panic log, so it is built before stop()
       // deletes the home.
-      bootFailure = gw.bootFailureReport(err, 'boot');
+      bootFailure = gw.safeFailureReport(err, 'boot');
     }
     if (bootFailure !== undefined) {
       console.error(bootFailure);
@@ -399,10 +438,16 @@ export class GatewayProcess {
     try {
       await gw.onboardAndLogin();
     } catch (err) {
-      const failure = capMessage(
-        gw.scrub(`GatewayProcess onboarding/login failed: ${err instanceof Error ? err.message : String(err)}`),
-        'the rest of the response is not reported',
-      );
+      let failure: string;
+      try {
+        failure = capMessage(
+          gw.scrub(`GatewayProcess onboarding/login failed: ${err instanceof Error ? err.message : String(err)}`),
+          'the rest of the response is not reported',
+        );
+      } catch (formatErr) {
+        // Cleanup below runs whatever happened while formatting.
+        failure = gw.unreportable('onboarding/login', formatErr);
+      }
       bootFailure = (await gw.stopAfterFailure(failure)) ?? failure;
     }
     if (bootFailure !== undefined) throw new Error(bootFailure);
@@ -715,7 +760,7 @@ export class GatewayProcess {
       await this.spawnProcess(opts.env);
       await waitForHealth(this.baseURL, 15_000, this.proc ?? undefined);
     } catch (err) {
-      failure = this.bootFailureReport(err, 'restart');
+      failure = this.safeFailureReport(err, 'restart');
     }
     if (failure !== undefined) throw new Error(failure);
     if (opts.relogin ?? true) {
