@@ -109,6 +109,7 @@ func (a *restAPI) handleKnowledgeRecordSchema(w http.ResponseWriter, r *http.Req
 			})
 			continue
 		}
+		names := newCollectionFileNames(col.Root)
 		for _, typeName := range set.Types() {
 			if seen[typeName] {
 				continue
@@ -126,11 +127,11 @@ func (a *restAPI) handleKnowledgeRecordSchema(w http.ResponseWriter, r *http.Req
 					map[string]any{"workspace_id": workspaceID, "collection": col.Name, "type": typeName})
 				continue
 			}
-			out.Types = append(out.Types, recordTypeWire(sc))
+			out.Types = append(out.Types, recordTypeWire(sc, names))
 		}
 		if report != nil {
 			for _, rej := range report.Rejections {
-				out.Problems = append(out.Problems, schemaRejectionProblem(rej))
+				out.Problems = append(out.Problems, schemaRejectionProblem(names.schemaRejection(rej)))
 			}
 		}
 	}
@@ -138,8 +139,9 @@ func (a *restAPI) handleKnowledgeRecordSchema(w http.ResponseWriter, r *http.Req
 	jsonOK(w, out)
 }
 
-// recordTypeWire renders one loaded *records.Schema as a RecordType.
-func recordTypeWire(sc *records.Schema) gen.RecordType {
+// recordTypeWire renders one loaded *records.Schema as a RecordType, naming
+// its schema file relative to the collection root, as the contract says.
+func recordTypeWire(sc *records.Schema, names collectionFileNames) gen.RecordType {
 	rt := gen.RecordType{
 		SchemaVersion: sc.SchemaVersion,
 		Type:          sc.Type,
@@ -154,7 +156,7 @@ func recordTypeWire(sc *records.Schema) gen.RecordType {
 		rt.IdentityPrefix = &prefix
 	}
 	if sc.SourcePath != "" {
-		src := sc.SourcePath
+		src := names.name(sc.SourcePath)
 		rt.SourcePath = &src
 	}
 	for _, name := range sc.PropertyOrder {
