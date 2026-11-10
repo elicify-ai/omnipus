@@ -1246,8 +1246,8 @@ func revokeUserToken(userMap map[string]any, presentedToken, presentedID string)
 // waits for IsReloadPending() to clear before reporting confirmed=false.
 //
 // This was 5 SECONDS, and that was a release blocker in its own right. A reload
-// stops and restarts every channel, cron, the plan engine, the task/loop
-// schedulers and the provider, then rebuilds the whole AgentRegistry. On an
+// stops and restarts every channel, cron, the task/loop schedulers and the
+// provider, then rebuilds the whole AgentRegistry. On an
 // idle gateway that is milliseconds; under real load (a busy plan engine, live
 // LLM turns — the llm-conformance e2e shard) it is TENS OF SECONDS. Every
 // reload that overran 5s hit the silent-nil return in triggerReloadAndWait, so

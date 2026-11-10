@@ -1280,11 +1280,17 @@ func (stg *setupAndStartServicesState) startPlanEngine() (*services, bool, error
 			}
 			return len(active), nil
 		})
+		// Read the scheduler ONCE through the AgentLoop's locked accessor, not
+		// stg.runningServices.LoopScheduler: a config reload keeps this engine
+		// running (#1725) while restartSchedulersAndDrains reassigns that
+		// field without a lock, and SetLoopScheduler is the swap's
+		// synchronised publication point.
 		planEngine.RegisterActiveCounter("loop", func() (int, error) {
-			if stg.runningServices.LoopScheduler == nil {
+			ls := stg.agentLoop.LoopScheduler()
+			if ls == nil {
 				return 0, nil
 			}
-			return len(stg.runningServices.LoopScheduler.ListEnabledJobs()), nil
+			return len(ls.ListEnabledJobs()), nil
 		})
 		if startErr := planEngine.Start(context.Background()); startErr != nil {
 			return nil, true, fmt.Errorf("error starting plan engine: %w", startErr)

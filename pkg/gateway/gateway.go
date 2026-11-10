@@ -1576,7 +1576,7 @@ func (rc *runContextWithOptions) wireSystemTools() {
 		// — on the fast-path-success branch (UpsertAgentFastFunc updated the
 		// live registry inline, nothing queued) this returns immediately,
 		// where WaitForReloadFunc above would unconditionally kick off a
-		// fresh, unnecessary full reload cycle (channels/cron/plan-engine/
+		// fresh, unnecessary full reload cycle (channels/cron/
 		// scheduler restart cascade, the exact ~60s-under-load mechanism
 		// issue #571 exists to avoid). On the fallback-reload branch (the
 		// closure above fell back to rc.reloadTrigger()), beginReload has
@@ -1589,7 +1589,7 @@ func (rc *runContextWithOptions) wireSystemTools() {
 		// fastAgentUpsert so system.agent.create/update (an agent creating or
 		// updating another agent) gets the same fast-path publish REST
 		// already has, instead of triggering the full restartServices
-		// cascade (channels/cron/plan-engine/schedulers) on every call. Defers
+		// cascade (channels/cron/schedulers) on every call. Defers
 		// to an already in-flight full reload rather than racing it, exactly
 		// like fastAgentUpsert's own IsReloadPending check; any fast-path
 		// failure falls back to the full reload trigger so the caller here

@@ -903,8 +903,10 @@ func (rs *restartServicesState) restartSchedulersAndDrains() (error, bool) {
 
 	// Restart the /loop scheduler on a fresh dedicated CronService (ADR-049
 	// D6/D7). The previous instance was already Stop()'d in
-	// stopAndCleanupServices(isReload) — mirrors the task trigger restart
-	// immediately above.
+	// stopAndCleanupServices(isReload); unlike the task trigger and the plan
+	// engine above, it is reconstructed on every reload. SetLoopScheduler
+	// publishes the new instance under the AgentLoop's lock, which is where
+	// the live plan engine's "loop" active counter reads it.
 	{
 		loopSchedStorePath := filepath.Join(rs.homePath, "loops", "jobs.json")
 		rs.runningServices.LoopScheduler = agent.NewLoopScheduler(loopSchedStorePath, rs.al)
