@@ -19,4 +19,6 @@ func SetEntryCallAccounting(entry *TranscriptEntry, call TranscriptEntry) {
 	entry.CacheWriteTokens = call.CacheWriteTokens
 	entry.CacheWrite5mTokens = call.CacheWrite5mTokens
 	entry.CacheWrite1hTokens = call.CacheWrite1hTokens
+	entry.ReasoningTokens = call.ReasoningTokens
+	entry.Effort = call.Effort
 }

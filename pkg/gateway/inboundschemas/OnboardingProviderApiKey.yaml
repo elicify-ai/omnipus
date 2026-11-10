@@ -39,6 +39,13 @@ properties:
       step 3, persisted as agents.defaults.default_model together with the
       provider id.
     example: claude-sonnet-4-6
+  reasoning_effort:
+    type: string
+    maxLength: 32
+    description: >
+      Effort for the chosen model (effort-levels spec FR-067), persisted as
+      agents.defaults.default_model.reasoning_effort in the completion's single
+      configuration write, never on the provider row. null is refused.
   endpoint:
     type: string
     description: >

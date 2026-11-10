@@ -38,7 +38,9 @@ func TestDelegationDepthCeiling_InvalidFailsClosed(t *testing.T) {
 		map[string]bool{"jim": true, "ava": true}, ceiling)
 	assert.Contains(t, msg, "exceeds the maximum allowed depth")
 
-	// Controls: unset keeps the default 3, an explicit value is honoured.
-	assert.Equal(t, 3, delegationDepthCeiling(&config.Config{}))
+	// Controls: unset resolves the shipped default 10 (founder ruling
+	// 2026-10-27; the one-time migration of stored 3s is founder decision
+	// 2026-11-08, Q8 B), an explicit value is honoured.
+	assert.Equal(t, 10, delegationDepthCeiling(&config.Config{}))
 	assert.Equal(t, 5, delegationDepthCeiling(&config.Config{Performance: config.PerformanceConfig{MaxDelegationDepth: 5}}))
 }

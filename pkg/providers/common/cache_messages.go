@@ -4,7 +4,17 @@ package common
 // before the volatile tail. It operates on freshly serialized values, never the
 // stored history. OpenAI-compatible hosts call this only on an allow-listed row.
 func SerializeCacheMessages(messages []Message) []any {
-	out := SerializeMessages(messages)
+	return markCacheMessages(SerializeMessages(messages), messages)
+}
+
+// SerializeOpenRouterCacheMessages is SerializeCacheMessages over
+// SerializeOpenRouterMessages: the OpenRouter route's cache-marked body with
+// the private reasoning_details carrier (FR-013).
+func SerializeOpenRouterCacheMessages(messages []Message) []any {
+	return markCacheMessages(SerializeOpenRouterMessages(messages), messages)
+}
+
+func markCacheMessages(out []any, messages []Message) []any {
 	i := len(out) - 1
 	if len(messages) > 0 && messages[len(messages)-1].Volatile {
 		i--
@@ -24,6 +34,9 @@ func SerializeCacheMessages(messages []Message) []any {
 		}
 		if m.ReasoningContent != "" {
 			message["reasoning_content"] = m.ReasoningContent
+		}
+		if len(m.ReasoningDetails) > 0 {
+			message["reasoning_details"] = m.ReasoningDetails
 		}
 	case map[string]any:
 		message = m

@@ -25,8 +25,7 @@ Omnipus connects to LINE Official Accounts via the [LINE Messaging API](https://
       "placeholder": {
         "enabled": false,
         "text": []
-      },
-      "reasoning_channel_id": ""
+      }
     }
   }
 }
@@ -42,7 +41,6 @@ Omnipus connects to LINE Official Accounts via the [LINE Messaging API](https://
 | `group_trigger` | object | No | Controls when the bot responds in group/multi-person chats. `mention_only: true` restricts responses to @-mentions; `prefixes` lists trigger prefixes. |
 | `typing` | object | No | `enabled: true` sends a LINE loading animation while the bot is processing. |
 | `placeholder` | object | No | `enabled: true` posts a placeholder message immediately; the bot edits it with the final reply. `text` is a list of placeholder strings (chosen randomly). |
-| `reasoning_channel_id` | string | No | Chat ID where extended reasoning traces are sent separately. |
 
 ## Setup
 

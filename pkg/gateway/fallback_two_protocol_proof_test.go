@@ -24,11 +24,13 @@ import (
 //
 // Two local HTTP stubs stand in for the providers. Stub A speaks the failure
 // half of an Anthropic messages call (the status codes below). Stub B speaks
-// a non-streaming OpenAI chat completion and is the only place the token
-// exists. A multi-candidate fallback chain calls plain Chat, never ChatStream
-// (pkg/agent/loop_run_turn.go callProviderOnce, the len != 1 branch;
-// pkg/agent/loop_run_turn_attempt.go header). The gateway, the provider
-// clients and the transcript are real. This is not a mock of the agent.
+// an OpenAI chat completion and is the only place the token exists. Since
+// effort-levels S-88/S-95 every fallback candidate runs the same attempt body
+// as a single candidate, so it streams when the channel has a streamer
+// (pkg/agent/loop_run_turn_attempt.go header); stub B therefore answers in
+// the shape the request asks for: SSE when "stream" is true, a plain
+// completion otherwise. The gateway, the provider clients and the transcript
+// are real. This is not a mock of the agent.
 
 const (
 	proofPrimaryModel  = "MiniMax-M3.1-Flash-Preview"
@@ -98,10 +100,18 @@ func anthropicError(status int, retryAfter, errType, message string) http.Handle
 	}
 }
 
-// openAIChatCompletion answers plain Chat. ParseResponse reads
-// choices[0].message.content (pkg/providers/common/common.go). An SSE body
-// is not that shape, so a streaming stub can never satisfy the fallback call.
+// openAIChatCompletion answers both OpenAI chat shapes with the same token:
+// plain Chat reads choices[0].message.content (pkg/providers/common/common.go)
+// and ChatStream reads choices[0].delta.content from SSE data lines
+// (pkg/providers/openai_compat/provider.go::parseStreamResponse). The
+// request's own "stream" flag picks the shape, so whichever path the agent
+// takes, the answer carries the token only this stub returns.
 func openAIChatCompletion(token string) http.HandlerFunc {
+	usage := map[string]any{
+		"prompt_tokens":     1,
+		"completion_tokens": 1,
+		"total_tokens":      2,
+	}
 	body, err := json.Marshal(map[string]any{
 		"id":     "x",
 		"object": "chat.completion",
@@ -115,18 +125,44 @@ func openAIChatCompletion(token string) http.HandlerFunc {
 				"finish_reason": "stop",
 			},
 		},
-		"usage": map[string]any{
-			"prompt_tokens":     1,
-			"completion_tokens": 1,
-			"total_tokens":      2,
-		},
+		"usage": usage,
 	})
 	if err != nil {
 		panic(err)
 	}
-	return func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(body)
+	var sse strings.Builder
+	for _, chunk := range []map[string]any{
+		{
+			"id": "x", "object": "chat.completion.chunk",
+			"choices": []any{map[string]any{
+				"index":         0,
+				"delta":         map[string]any{"role": "assistant", "content": token},
+				"finish_reason": "stop",
+			}},
+		},
+		{"id": "x", "object": "chat.completion.chunk", "choices": []any{}, "usage": usage},
+	} {
+		raw, err := json.Marshal(chunk)
+		if err != nil {
+			panic(err)
+		}
+		sse.WriteString("data: " + string(raw) + "\n\n")
+	}
+	sse.WriteString("data: [DONE]\n\n")
+	streamBody := []byte(sse.String())
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Stream bool `json:"stream"`
+		}
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &req)
+		if !req.Stream {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(body)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write(streamBody)
 	}
 }
 

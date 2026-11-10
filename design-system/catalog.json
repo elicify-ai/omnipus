@@ -504,6 +504,25 @@
       "publicTypes": []
     },
     {
+      "source": "src/components/ui/model-effort-picker.tsx",
+      "classification": "domain",
+      "exports": [
+        "EffortValue",
+        "EffortChangeMeta",
+        "EffortScope",
+        "ModelEffortPickerProps",
+        "MUTED_EFFORT_TEXT",
+        "ModelEffortPicker",
+        "EffortControlProps",
+        "RECAP_OFF_NOT_SENDABLE_TEXT",
+        "EffortControl",
+        "QuietEffortLineProps",
+        "QuietEffortLine"
+      ],
+      "publicExports": [],
+      "publicTypes": []
+    },
+    {
       "source": "src/components/ui/model-selector.tsx",
       "classification": "domain",
       "exports": [

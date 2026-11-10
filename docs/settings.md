@@ -281,7 +281,18 @@ How much work one agent can hand to another is bounded in two ways: a Performanc
 `performance.max_delegation_depth` caps how many levels a delegation chain may form. An agent delegates a worker, the worker delegates again, and each further hop is one more level. A chain that asks for one level more than the cap is refused with a named error — the extra work never starts, rather than starting and being cut off part-way.
 
 - A workspace **Team** edge can set a tighter depth for a particular agent pair. When both a global value and an edge value exist, the smaller one wins.
-- With nothing set, the code still caps a chain at **three** levels.
+- With nothing set, the code still caps a chain at **ten** levels.
+- The depth caps how deep a chain of delegations can go, not how many helpers one agent may start — a ten-level chain can still start many helpers.
+
+**Upgrading from the old default of 3.** If a workspace was saved while the default was still 3, the first start after upgrading raises each stored edge depth of 3 to the new default **10**, once, and writes one summary line to the log (`one-time delegation depth default migration`). A depth of 3 set on a workspace after it was raised is a deliberate choice and is kept until you change it. This upgrade is usually complete after that first start, but not always:
+
+- **A workspace that could not be saved is retried.** If Omnipus can read a workspace's delegation settings but cannot save the raised value (for example, because of a file permission problem), the log shows an error and Omnipus still starts. Once you fix the cause, the next start raises only the workspaces that were not raised yet.
+- **A workspace that could not be read at the first start is never raised.** If its delegation settings were unreadable or damaged at that start, Omnipus leaves them exactly as they are and counts them in `records_skipped` in the summary line; when it finds the damage while raising a workspace, it also logs a warning naming it (`record skipped permanently`). Later starts do not try again.
+- **A workspace interrupted by a crash is left at its old value on purpose.** If Omnipus stopped during the moment it was raising one workspace, the next start cannot tell whether that 3 is the old default or a 3 you set afterwards. It keeps the 3 and logs a warning naming the workspace (`an interrupted record still holds depth 3`). It never raises it later.
+
+**What to do.** If the summary line shows `records_skipped` above 0, or the log shows either warning, open each affected workspace's **Team** tab, check the delegation depths, and set the depth you want. A depth you set yourself is never changed by the upgrade. When it is unclear which workspace is affected, check every workspace's Team tab for depths of 3.
+
+The protection that makes the upgrade run only once when two Omnipus instances start on the same data folder at the same time works on Linux and macOS only, not on Windows.
 
 ### How many agents run at once
 

@@ -268,7 +268,7 @@ test.beforeEach(async ({ page }) => {
 // never consulted) — no badge of either kind can ever render, so the old 90s
 // badge wait could only ever time out. The refusal SURFACE is the designed
 // narrator: the delegation event line. (A self-target would NOT refuse: the
-// seeded self-edge at ADR-090 FR-006 depth 3 makes a depth-capped self-fork
+// seeded self-edge at ADR-090 FR-006 depth 10 makes a depth-capped self-fork
 // legal — the refusal under test needs a target OFF researcher's only edge.)
 // ────────────────────────────────────────────────────────────────────────────────
 test(

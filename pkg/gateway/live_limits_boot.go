@@ -118,6 +118,14 @@ func primeUnknownWindows(al windowReloader) {
 	}
 }
 
+// primeUnknownWindowsFn is the primer pass the boot WaitGroup goroutine runs
+// (gateway.go::initializeAgentLoop). It is a variable only so the
+// writer-lifecycle test can hold the pass mid-flight and prove the boot
+// drain's join waits for it — the pass is otherwise unobservable from
+// outside the goroutine, which is exactly the gap the primer WaitGroup
+// mutant exploits. Production always uses the real primeUnknownWindows.
+var primeUnknownWindowsFn = primeUnknownWindows
+
 // providerCredential resolves provider's API key from its configured
 // api_key_ref, or "" when there is none.
 func providerCredential(src configSource, store *credentials.Store, provider string) string {

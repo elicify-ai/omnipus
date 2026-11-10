@@ -458,6 +458,21 @@ func (s *wsStreamer) SetCallAccounting(entries []session.TranscriptEntry) {
 
 var _ agent.CallAccountingStreamer = (*wsStreamer)(nil)
 
+// SetTurnReasoningTokens carries the turn's reasoning sum over every call,
+// including calls whose accounting the agent already persisted mid-turn.
+func (s *wsStreamer) SetTurnReasoningTokens(n *int) {
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
+	s.turnReasoning = nil
+	if n != nil {
+		v := *n
+		s.turnReasoning = &v
+	}
+	s.turnReasoningSet = true
+}
+
+var _ agent.TurnReasoningStreamer = (*wsStreamer)(nil)
+
 // SetTurnFailed is called by the agent loop's finalizeStreamer when the turn
 // ended via the engine's error/limit fallback rather than a real model response.
 // Conditions that set the flag: (1) LLM returned empty after retries and the
@@ -691,6 +706,7 @@ type wsStreamerFinalize struct {
 	cacheWriteF                int
 	callAccounting             []session.TranscriptEntry
 	callAccountingSet          bool
+	turnReasoning              *int
 	durF                       float64
 	transcriptAlreadyPersisted bool
 	producedModel              string
@@ -802,6 +818,10 @@ func (wsf *wsStreamerFinalize) publishDone() {
 			Cost:               &wsf.costF,
 			DurationMs:         &wsf.durF,
 			SessionTokensTotal: h.sessionTokensTotal(wsf.s.sessionID),
+			// Effort levels (FR-058, FR-024): the answering call's effort
+			// record and the display-only turn reasoning sum.
+			Effort:          turnEffortRecord(wsf.callAccounting),
+			ReasoningTokens: wsf.turnReasoning,
 		}
 		// #1178 (amendment §4.1): a late streamed-transcript write failure is
 		// a failed turn even though the turn was healthy before it — the done
@@ -886,6 +906,13 @@ func (wsf *wsStreamerFinalize) prepareFinalize() {
 	wsf.cacheWriteF = wsf.s.statsCacheWrite
 	wsf.callAccounting = append([]session.TranscriptEntry(nil), wsf.s.callAccounting...)
 	wsf.callAccountingSet = wsf.s.callAccountingSet
+	// The agent's turn sum covers every call of the turn; a streamer that was
+	// never handed one (no agent turn behind it) sums the calls it holds.
+	if wsf.s.turnReasoningSet {
+		wsf.turnReasoning = wsf.s.turnReasoning
+	} else {
+		wsf.turnReasoning = turnReasoningSum(wsf.callAccounting)
+	}
 	wsf.durF = float64(wsf.s.statsDuration.Milliseconds())
 	wsf.transcriptAlreadyPersisted = wsf.s.transcriptPersisted
 	wsf.producedModel = wsf.s.producedModel
@@ -1109,6 +1136,9 @@ func (wsf *wsStreamerFinalize) persistTranscript() error {
 				entry.Truncated = true
 				entry.TruncationReason = wsf.truncationReason
 			}
+			// The stored display-only snapshot of the turn's reported
+			// reasoning sum, read back as-is by both history transports.
+			entry.TurnReasoningTokens = wsf.turnReasoning
 			// ADR-057 FR-001/FR-002 (W3): AppendTranscriptStrict refuses loudly
 			// (and creates nothing on disk) when s.sessionID does not resolve to
 			// a real, store-backed session, instead of AppendTranscript's old

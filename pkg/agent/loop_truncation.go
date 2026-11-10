@@ -236,8 +236,8 @@ type truncationSuccessVerdict struct {
 // answer-so-far (D6.7's "re-appended exactly once").
 //
 // The response's own CONTENT is read from response.Content deliberately, NOT
-// from the caller's `responseContent` local: that local carries the
-// ReasoningContent substitution the empty-response path applies, so passing
+// from the caller's `responseContent` local: that local once carried a
+// ReasoningContent substitution (removed by effort-levels FR-018), and passing
 // it fed a reasoning-only truncated response's chain-of-thought into the
 // accumulator, echoed it back to the model under "Continue from exactly
 // where it stopped", and persisted it as the answer. A reasoning-only

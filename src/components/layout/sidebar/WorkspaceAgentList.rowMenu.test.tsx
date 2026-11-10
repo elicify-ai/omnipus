@@ -199,7 +199,7 @@ function chatSession(id: string, agentId: string): Session {
 }
 
 function delegation(edges: WorkspaceDelegation['edges']): WorkspaceDelegation {
-  return { revision: REV, workspace_id: WS, edges, default_depth: 3 }
+  return { revision: REV, workspace_id: WS, edges, default_depth: 10 }
 }
 
 let invalidateSpy: ReturnType<typeof vi.spyOn>

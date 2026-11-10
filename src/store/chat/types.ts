@@ -1100,6 +1100,17 @@ export interface ChatStore extends HistorySlice {
    * choice is eligible to travel with a new chat's pending first message.
    */
   setNextModel: (model: string | null, provider?: string | null, source?: 'user') => void
+  /**
+   * Effort levels FR-055: the chat's effort for the next message, kept with
+   * the per-chat model choice (same lifetime, SessionModelChoice.effort).
+   * '' = Not set (the agent's setting applies). Sent as
+   * `metadata.reasoning_effort` when set.
+   */
+  nextEffort: string
+  /** The value was set by `/effort` in this conversation (gold dot, "set for this conversation", S-41). */
+  nextEffortByCommand: boolean
+  /** Set the chat's effort. source='user' records it with the explicit choice so a new chat's first send keeps it. */
+  setNextEffort: (effort: string, byCommand: boolean, source?: 'user') => void
 
   // ── Actions that operate on the foreground session ───────────────────────────
   setReplaying: (value: boolean) => void
@@ -1196,6 +1207,9 @@ export interface ChatStore extends HistorySlice {
   //   into the outbound message frame so the agent sees the attachment (#254).
   // opts.attachments: optional MediaAttachment[] rendered inline on the
   //   optimistic user bubble (display only — not sent on the wire).
+  // opts.provider / opts.reasoning_effort: effort levels FR-045/FR-055 — the
+  //   picked pair's provider and the chat's effort, sent with model_name as
+  //   metadata.provider / metadata.reasoning_effort.
   // opts.model_name: optional model slug for THIS turn only (Phase 1, FR-010).
   //   The composer model selector writes the picker's value here; sendMessage
   //   forwards it as `metadata.model_name` in the WS message frame. The
@@ -1206,7 +1220,7 @@ export interface ChatStore extends HistorySlice {
    * button attaches to its message into Omnipus's main (W1 create an agent,
    * W18 set up a team, for a named workspace). Never an instruction.
    */
-  sendMessage: (content: string, opts?: { mediaRefs?: string[]; attachments?: MediaAttachment[]; model_name?: string; clientMessageId?: string; queuedAt?: string; workflowStart?: WorkflowStart }) => void
+  sendMessage: (content: string, opts?: { mediaRefs?: string[]; attachments?: MediaAttachment[]; model_name?: string; provider?: string; reasoning_effort?: string; clientMessageId?: string; queuedAt?: string; workflowStart?: WorkflowStart }) => void
   /**
    * Review finding 17 — "Try again" on a failed user message used to call
    * `sendMessage(content)` with a brand-new id, which left the FAILED

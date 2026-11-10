@@ -7,13 +7,14 @@ package agent
 
 // expanded_thinking_replay_test.go — CR-02 RED pack (prompt caching).
 //
-// Spec oracle (independent of the implementation): with a manual thinking
-// level configured and the first reply carrying signed thinking plus
+// Spec oracle (independent of the implementation): with native effort Low
+// configured and the first reply carrying signed thinking plus
 // redacted-thinking blocks, the provider's tool-turn contract requires the
 // continuation request's assistant turn to begin with the SAME complete,
 // unmodified thinking and redacted-thinking blocks, before the tool-use
 // block. Sources: Anthropic "Thinking — preserving thinking blocks" and
-// "Extended thinking — turn structure in manual mode", as cited in
+// "Extended thinking — turn structure", plus effort-levels FR-012 / FR-037a
+// (adaptive thinking and output_config.effort, no manual budget), as cited in
 // /Users/danielpiatkowski/AI-Agent-Workspace/omnipus-scratch/l1/caching-gate/code-reviewer.md
 // (CR-02). A plain reasoning-text field is NOT sufficient: signatures and
 // redacted blobs are opaque provider bytes that must survive the round trip
@@ -54,6 +55,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -241,16 +243,17 @@ func newExpandedThinkingFixture(t *testing.T, streamed bool) *expandedThinkingFi
 	httpSrv := httptest.NewServer(http.HandlerFunc(server.handler))
 	t.Cleanup(httpSrv.Close)
 
-	// The dispatch requirement: the provider under test is created by the
-	// REAL factory from a config row, so the official adapter's
-	// SupportsThinking()==true is what arms the thinking_level option flow.
-	provider, modelID, err := providers.CreateProviderFromConfig(&config.ModelConfig{
+	// Effort is catalog-driven now. Declare the external capability data and
+	// keep the real catalog parser, request mapper and native adapter running.
+	installExpandedThinkingCatalog(t)
+	row := &config.ModelConfig{
 		Provider:       "anthropic",
 		Model:          expandedThinkingModel,
 		APIBase:        httpSrv.URL, // unrelated local endpoint; row stays anthropic-protocol
 		APIKeyRef:      expandedThinkingAPIKeyRef,
 		RequestTimeout: 30,
-	})
+	}
+	provider, modelID, err := providers.CreateProviderFromConfig(row)
 	if err != nil {
 		t.Fatalf("fixture: CreateProviderFromConfig: %v", err)
 	}
@@ -264,19 +267,28 @@ func newExpandedThinkingFixture(t *testing.T, streamed bool) *expandedThinkingFi
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
 	cfg := &config.Config{}
+	cfg.Providers = []*config.ModelConfig{row}
 	cfg.Agents.Defaults.Home = filepath.Join(home, "workspace")
 	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Provider: "anthropic", Model: expandedThinkingModel}
-	cfg.Agents.Defaults.MaxTokens = 8192 // comfortably above any low thinking budget
+	cfg.Agents.Defaults.MaxTokens = 8192 // output cap remains independent of adaptive effort
 	cfg.Agents.Defaults.MaxToolIterations = 5
+	// The fake native HTTP peer has no live context-limit discovery endpoint.
+	// Configure its window at the real agent-config boundary, rather than
+	// forcing a computed runtime window or bypassing the unknown-window guard.
+	window := 128000
+	cfg.Agents.List = []config.AgentConfig{{ID: "mia", Name: "mia", Home: filepath.Join(home, "agents", "mia"), ContextWindowOverride: &window}}
 	msgBus := bus.NewMessageBus()
 	t.Cleanup(func() { msgBus.Close() })
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	t.Cleanup(al.Close)
 
-	ag := registerAgent(t, al, home, "mia", provider)
+	ag, found := al.GetRegistry().GetAgent("mia")
+	if !found {
+		t.Fatal("native replay fixture agent was not registered by the real constructor")
+	}
 	ag.mu.Lock()
 	ag.Candidates = []providers.FallbackCandidate{{Provider: "anthropic", Model: expandedThinkingModel}}
-	ag.ThinkingLevel = ThinkingLow
+	ag.PrimaryEffort = "low" // thinking_level was removed (effort-levels FR-056); effort replaces it
 	ag.mu.Unlock()
 	ag.StoreProviderPool(map[string]providers.LLMProvider{"anthropic": provider})
 
@@ -297,32 +309,48 @@ func newExpandedThinkingFixture(t *testing.T, streamed bool) *expandedThinkingFi
 	return &expandedThinkingFixture{al: al, server: server, tool: tool, session: meta.ID}
 }
 
-// expandedThinkingRequireEnabledThinking pins the premise both calls must
-// satisfy for the provider contract to govern: the request is a manual
-// thinking request (thinking enabled, positive budget below max_tokens).
-// Expected values come from the thinking_level option contract
-// (prepareLLMRequest -> applyThinkingConfig), not from observed output.
+func installExpandedThinkingCatalog(t *testing.T) {
+	t.Helper()
+	previous := providers.ProviderCatalog()
+	fixture := fmt.Sprintf(`{
+		"schema_version":"2.0.0", "version":"v2026.10.31", "updated_at":"2026-10-31T00:00:00Z", "source":"native replay fixture",
+		"default_resize_limits":{"long_edge_px":2048,"max_bytes":10485760},
+		"providers":[{"id":"anthropic","name":"Anthropic","company":"Anthropic","api":"https://api.anthropic.com",
+			"protocol":"anthropic","tier":"popular","auth_methods":["api_key"],"aliases":[],
+			"models":[{"id":%q,"name":%q,"context_window":128000,"max_output_tokens":8192,
+				"input_modalities":["text"],"tool_call":true,"status":"active",
+				"reasoning":{"levels":["low","medium","high"],"switch":true}}]}]
+	}`, expandedThinkingModel, expandedThinkingModel)
+	declared, err := catalog.NewCatalog([]byte(fixture))
+	if err != nil {
+		t.Fatalf("native replay capability fixture: %v", err)
+	}
+	providers.SetCatalog(declared)
+	t.Cleanup(func() { providers.SetCatalog(previous) })
+}
+
+// FR-012 / FR-037a supersede manual budgets. This fixture has native signed
+// blocks on its tool call, so FR-014's missing-own-block guard does not apply:
+// both requests carry exactly adaptive thinking plus configured Low effort,
+// without display or temperature. Signed/redacted replay assertions stay exact.
 func expandedThinkingRequireEnabledThinking(t *testing.T, body map[string]any, label string) {
 	t.Helper()
 	rawThinking, ok := body["thinking"].(map[string]any)
-	if !ok {
-		t.Fatalf("[%s] request carries no thinking parameter; the manual-thinking "+
-			"continuation contract does not even apply, so this fixture cannot prove "+
-			"block preservation. Fix the fixture, not the assertion. body=%v", label, body)
+	if !ok || len(rawThinking) != 1 || rawThinking["type"] != "adaptive" {
+		t.Fatalf("[%s] thinking = %v, want exactly {type: adaptive}, no budget or display", label, body["thinking"])
 	}
-	if rawThinking["type"] != "enabled" {
-		t.Fatalf("[%s] thinking.type = %v, want \"enabled\"", label, rawThinking["type"])
+	output, ok := body["output_config"].(map[string]any)
+	if !ok || len(output) != 1 || output["effort"] != "low" {
+		t.Fatalf("[%s] output_config = %v, want exactly {effort: low}", label, body["output_config"])
 	}
-	budget, ok := rawThinking["budget_tokens"].(float64)
-	if !ok || budget <= 0 {
-		t.Fatalf("[%s] thinking.budget_tokens = %v, want a positive number", label, rawThinking["budget_tokens"])
+	if _, present := body["temperature"]; present {
+		t.Fatalf("[%s] temperature must be absent while native thinking is on", label)
 	}
-	maxTokens, ok := body["max_tokens"].(float64)
-	if !ok || maxTokens <= 0 {
-		t.Fatalf("[%s] max_tokens = %v, want a positive number", label, body["max_tokens"])
+	if _, present := body["display"]; present {
+		t.Fatalf("[%s] no display option is sent (FR-012)", label)
 	}
-	if budget >= maxTokens {
-		t.Fatalf("[%s] thinking.budget_tokens %v is not < max_tokens %v", label, budget, maxTokens)
+	if maxTokens, ok := body["max_tokens"].(float64); !ok || maxTokens != 8192 {
+		t.Fatalf("[%s] max_tokens = %v, want configured 8192", label, body["max_tokens"])
 	}
 }
 
@@ -384,6 +412,7 @@ func runExpandedThinkingReplay(t *testing.T, fx *expandedThinkingFixture) map[st
 	if got := fx.tool.runCount.Load(); got != 1 {
 		t.Fatalf("fixture tool executed %d times, want exactly 1", got)
 	}
+	expandedThinkingRequireEnabledThinking(t, fx.server.bodies[0], "initial request")
 	return fx.server.bodies[1]
 }
 
@@ -394,9 +423,8 @@ func runExpandedThinkingReplay(t *testing.T, fx *expandedThinkingFixture) map[st
 func TestExpandedThinking_SignedBlocksReplayOnToolContinuation_Plain(t *testing.T) {
 	fx := newExpandedThinkingFixture(t, false)
 
-	// Premise on the FIRST call too: thinking_level reached the provider, so
-	// both requests are manual-thinking requests and the preservation contract
-	// governs the continuation.
+	// No request is fabricated before the turn. runExpandedThinkingReplay
+	// verifies the native Low/adaptive premise on the first captured call too.
 	fx.server.mu.Lock()
 	if len(fx.server.bodies) != 0 {
 		fx.server.mu.Unlock()

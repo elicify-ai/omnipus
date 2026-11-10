@@ -18,6 +18,9 @@ func fallbackModelsParameters() map[string]any {
 		"items": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"model", "provider"}, "properties": map[string]any{
 			"model":    map[string]any{"type": "string", "minLength": 1, "maxLength": 256},
 			"provider": map[string]any{"type": "string", "minLength": 1, "maxLength": 64},
+			// This fallback's own effort (effort-levels spec FR-048); never
+			// inherited from the primary.
+			"reasoning_effort": effortParameter(),
 		}},
 	}
 }
@@ -40,8 +43,8 @@ func applyFallbackModels(a *config.AgentConfig, raw any) error {
 			return invalid("each entry must be a model/provider object")
 		}
 		for key := range fields {
-			if key != "model" && key != "provider" {
-				return invalid("entries accept only model and provider")
+			if key != "model" && key != "provider" && key != "reasoning_effort" {
+				return invalid("entries accept only model, provider and reasoning_effort")
 			}
 		}
 		model, ok := fields["model"].(string)
@@ -61,7 +64,16 @@ func applyFallbackModels(a *config.AgentConfig, raw any) error {
 		if utf8.RuneCountInString(provider) > 64 {
 			return invalid("provider must be a string of at most 64 characters")
 		}
-		chain = append(chain, config.FallbackModel{Model: model, Provider: provider})
+		entry := config.FallbackModel{Model: model, Provider: provider}
+		if rawEffort, present := fields["reasoning_effort"]; present {
+			effort, err := checkToolEffort("fallback_models", rawEffort,
+				agentEffortPair{provider: strings.TrimSpace(provider), model: strings.TrimSpace(model)})
+			if err != nil {
+				return err
+			}
+			entry.ReasoningEffort = effort
+		}
+		chain = append(chain, entry)
 	}
 	a.FallbackModels = chain
 	// The legacy field is not the routing chain. Clear it when replacing the

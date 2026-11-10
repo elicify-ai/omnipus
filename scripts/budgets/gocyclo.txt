@@ -147,7 +147,6 @@ pkg/tools/browser/webrtc/ingest.go	Session.attachIngestTrack	32
 pkg/tools/browser/webrtc/ingest_preparation_integration_test.go	TestIngestPreparationBoundsRetiredNativeCandidates	32
 pkg/tools/browser/webrtc/viewer_preparation_test.go	TestViewerPreparationBoundsCanceledNativeWorkers	32
 pkg/agent/conformance_design_test.go	TestConformance_t3_PlanningReplanning_Design	31
-pkg/agent/loop_test.go	TestHandleReasoning	31
 pkg/agent/session_end_behavioral_test.go	TestRunRecap_HappyPath_PersistsLastSessionAndRetro	31
 pkg/filegrep/bounds_test.go	TestFileGrep_BoundsMatrix	31
 pkg/gitevidence/commit.go	Repo.Commit	31

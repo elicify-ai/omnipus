@@ -32,8 +32,8 @@ import (
 
 // scriptedProvider is a mockProvider with a predetermined Chat response and
 // call-count observation. Exercises the session-end code path without a real
-// LLM. Records the last request so tests can assert recap-option hygiene
-// (max_tokens=512, extended_thinking=false, extra_body.reasoning.enabled=false).
+// LLM. Records the last request so tests can assert the recap's output cap
+// and the effort-levels FR-070 removal of obsolete hardcoded Off options.
 type scriptedProvider struct {
 	mu           sync.Mutex
 	responseBody string
@@ -71,8 +71,9 @@ func (s *scriptedProvider) GetDefaultModel() string { return "scripted-model" }
 // a transcript is written, CloseSession is invoked, and after the recap
 // goroutine completes the MemoryStore must contain the workspace's
 // carry-forward summary + a retro.
-// Also pins FR-029a cost-guard opts (max_tokens=512, extended_thinking=false,
-// extra_body.reasoning.enabled=false) onto the Chat request.
+// Also preserves the output-cap cost guard (2,048 default) and migrates its
+// obsolete Off hints to FD-19 / FR-070: no hardcoded extended_thinking or
+// extra_body. This unoffered fixture model has no sendable Off capability.
 func TestRunRecap_HappyPath_PersistsLastSessionAndRetro(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
@@ -151,29 +152,20 @@ func TestRunRecap_HappyPath_PersistsLastSessionAndRetro(t *testing.T) {
 		t.Errorf("carry-forward summary missing recap content; got:\n%s", lastSessionBytes)
 	}
 
-	// FR-029a: recap Chat call must set max_tokens=2048, extended_thinking=false,
-	// and extra_body.reasoning.enabled=false. max_tokens=2048 gives reasoning
-	// models (e.g. glm-5.2 on OpenRouter/Fireworks) enough budget to generate
-	// both the reasoning trace and the JSON content — the old 512-token cap was
-	// consumed entirely by reasoning (~500 tokens), leaving content=null.
+	// FD-19 / FR-070 retain the 2,048 default output cap, but remove both
+	// hardcoded Off hints. Off for this unoffered model sends no effort key;
+	// the whole options map must contain only the cap. Actual per-route Off
+	// encoding is covered by TestT_C5_S71_RecapDefaultOffPerRoute.
 	script.mu.Lock()
 	defer script.mu.Unlock()
 	if script.callCount != 1 {
 		t.Errorf("scripted Chat calls = %d, want 1", script.callCount)
 	}
-	if mt, _ := script.lastOpts["max_tokens"].(int); mt != 2048 {
-		t.Errorf("opts.max_tokens = %v, want 2048", script.lastOpts["max_tokens"])
+	if mt, ok := script.lastOpts["max_tokens"].(int); !ok || mt != 2048 {
+		t.Errorf("opts.max_tokens = %v, want integer 2048", script.lastOpts["max_tokens"])
 	}
-	if et, _ := script.lastOpts["extended_thinking"].(bool); et {
-		t.Error("opts.extended_thinking must be false")
-	}
-	eb, _ := script.lastOpts["extra_body"].(map[string]any)
-	if eb == nil {
-		t.Fatal("opts.extra_body missing")
-	}
-	reasoning, _ := eb["reasoning"].(map[string]any)
-	if reasoning == nil || reasoning["enabled"] != false {
-		t.Errorf("opts.extra_body.reasoning.enabled must be false; got %v", eb)
+	if len(script.lastOpts) != 1 {
+		t.Errorf("recap options = %v, want exactly {max_tokens: 2048}; FR-070 removes hardcoded Off hints", script.lastOpts)
 	}
 	if script.lastModel != "claude-haiku-3" {
 		t.Errorf("recap model = %q, want claude-haiku-3 (recap_model config)", script.lastModel)

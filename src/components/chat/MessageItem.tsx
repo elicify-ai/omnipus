@@ -3,7 +3,7 @@ import type { Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { User } from '@phosphor-icons/react'
 import { ToolCallBadge } from './ToolCallBadge'
-import { ModelFooter } from './ModelFooter'
+import { ModelFooter, TurnEffortNote } from './ModelFooter'
 import { AgentMark } from '@/components/agents/AgentMark'
 import type { ChatMessage, PositionedToolCall } from '@/store/chat'
 import { useChatStore } from '@/store/chat'
@@ -265,8 +265,9 @@ export function MessageItem({ message }: MessageItemProps) {
           {message.status === 'error' && (
             <span className="text-[length:var(--type-caption-size)] text-[var(--color-error)]">Error</span>
           )}
-          {message.role === 'assistant' && <ModelFooter model={message.model} />}
+          {message.role === 'assistant' && <ModelFooter model={message.model} effort={message.effort} turnReasoningTokens={message.turnReasoningTokens} />}
         </div>
+        {message.role === 'assistant' && <TurnEffortNote effort={message.effort} />}
 
         {/* ADR-051 — verbose-only "Technical details" disclosure for typed
             LLM errors. Mounted when: the bubble is in error status, a typed

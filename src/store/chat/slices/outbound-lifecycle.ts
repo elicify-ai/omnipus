@@ -62,6 +62,25 @@ function refuseAgentlessNewChat(agentId: string | null | undefined, where: strin
   return true
 }
 
+/** Merge model_name + workspace_id into a single `metadata` object so the
+ * two payload build sites of sendMessage stay in sync. The frame omits
+ * `metadata` entirely when no field is present (an empty object would be
+ * sent otherwise, which the server treats the same but is noise on the
+ * wire). Effort levels FR-045/FR-055: the picked pair's provider and the
+ * chat's effort travel with the model name. */
+function buildMetadataFrame(
+  modelName: string,
+  opts: { provider?: string; reasoning_effort?: string } | undefined,
+  workspaceId: string,
+): { metadata?: NonNullable<MessageFrame['metadata']> } {
+  const metadata: NonNullable<MessageFrame['metadata']> = {}
+  if (modelName.length > 0) metadata.model_name = modelName
+  if (modelName.length > 0 && opts?.provider) metadata.provider = opts.provider
+  if (modelName.length > 0 && opts?.reasoning_effort) metadata.reasoning_effort = opts.reasoning_effort
+  if (workspaceId.length > 0) metadata.workspace_id = workspaceId
+  return Object.keys(metadata).length > 0 ? { metadata } : {}
+}
+
 /** Resolves the client-generated correlation id + queued timestamp for a
  * send, defaulting both when the caller (a fresh sendMessage call, not a
  * queue replay) didn't supply them. */
@@ -516,14 +535,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       // K8 (FR-012): target data naming the workflow a screen button started.
       const workflowStartFrame = opts?.workflowStart ? { workflow_start: opts.workflowStart } : {}
 
-      // Merge model_name + workspace_id into a single `metadata` object so the
-      // two payload build sites below stay in sync. The frame omits `metadata`
-      // entirely when neither field is present (an empty object would be sent
-      // otherwise, which the server treats the same but is noise on the wire).
-      const metadata: NonNullable<MessageFrame['metadata']> = {}
-      if (modelName.length > 0) metadata.model_name = modelName
-      if (workspaceId.length > 0) metadata.workspace_id = workspaceId
-      const metadataFrame = Object.keys(metadata).length > 0 ? { metadata } : {}
+      const metadataFrame = buildMetadataFrame(modelName, opts, workspaceId)
       const { connection, isConnected } = useConnectionStore.getState()
       const { isStreaming } = get()
       // Composer guard: a '__pending' sentinel with no in-flight

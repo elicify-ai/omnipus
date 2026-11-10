@@ -655,3 +655,14 @@ describe('editsEqual', () => {
     expect(editsEqual(a, b)).toBe(false)
   })
 })
+
+// ── Shipped-default pin ───────────────────────────────────────────────────────
+
+// The SPA fallback mirrors the backend's shipped delegation-depth backstop
+// (founder ruling 2026-10-27: default 10). A literal on purpose: a backend
+// default change must be reflected here deliberately, never silently.
+describe('DEFAULT_DEPTH_FALLBACK', () => {
+  it('is the literal 10 — the shipped delegation-depth default', () => {
+    expect(DEFAULT_DEPTH_FALLBACK).toBe(10)
+  })
+})

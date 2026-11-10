@@ -57,14 +57,16 @@ func parseSetupKickoffMetadata(metadata map[string]any) (setupKickoff bool, malf
 
 // wsHandlerHandleChatMessage carries the shared state of handleChatMessage across its stages.
 type wsHandlerHandleChatMessage struct {
-	h               *WSHandler
-	ctx             context.Context
-	chatID          string
-	frameSessionID  string
-	content         string
-	agentID         string
-	mediaRefs       []string
-	modelName       string
+	h              *WSHandler
+	ctx            context.Context
+	chatID         string
+	frameSessionID string
+	content        string
+	agentID        string
+	mediaRefs      []string
+	modelName      string
+	// choice is the frame's per-turn provider and effort (S-15, S-75).
+	choice          frameEffortChoice
 	workspaceID     string
 	clientMessageID string
 	// autoApprove is MessageFrame.auto_approve (ADR-092, contracts/asyncapi.yaml):
@@ -175,6 +177,27 @@ func (h *WSHandler) handleChatMessageToRecipient(
 	recipient *addressing.Pair,
 	wc *wsConn,
 ) {
+	h.handleChatMessageWithChoice(ctx, chatID, frameSessionID, content, agentID, mediaRefs, modelName,
+		frameEffortChoice{}, workspaceID, clientMessageID, autoApprove, recipient, wc)
+}
+
+// handleChatMessageWithChoice is handleChatMessageToRecipient carrying the
+// frame's validated per-turn provider and effort.
+func (h *WSHandler) handleChatMessageWithChoice(
+	ctx context.Context,
+	chatID string,
+	frameSessionID string,
+	content string,
+	agentID string,
+	mediaRefs []string,
+	modelName string,
+	choice frameEffortChoice,
+	workspaceID string,
+	clientMessageID string,
+	autoApprove *bool,
+	recipient *addressing.Pair,
+	wc *wsConn,
+) {
 	// Schema validation is optional, but the client-id bound is not. Reject
 	// before resolution, persistence, or the deferred status/cache cleanup.
 	if utf8.RuneCountInString(clientMessageID) > maxClientMessageIDChars {
@@ -202,7 +225,7 @@ func (h *WSHandler) handleChatMessageToRecipient(
 			return
 		}
 	}
-	hcm := &wsHandlerHandleChatMessage{h: h, ctx: ctx, chatID: chatID, frameSessionID: frameSessionID, content: content, agentID: agentID, mediaRefs: mediaRefs, modelName: modelName, workspaceID: workspaceID, clientMessageID: clientMessageID, autoApprove: autoApprove, recipient: recipient, recipientAskApproved: recipientAskApproved, wc: wc}
+	hcm := &wsHandlerHandleChatMessage{h: h, ctx: ctx, chatID: chatID, frameSessionID: frameSessionID, content: content, agentID: agentID, mediaRefs: mediaRefs, modelName: modelName, choice: choice, workspaceID: workspaceID, clientMessageID: clientMessageID, autoApprove: autoApprove, recipient: recipient, recipientAskApproved: recipientAskApproved, wc: wc}
 	hcm.firstMessage = frameSessionID == "" &&
 		(clientMessageID != "" || agent.UserMessageChars(content) <= h.agentLoop.UserMessageBound())
 	defer func() {
@@ -1115,6 +1138,7 @@ func (hcm *wsHandlerHandleChatMessage) buildInboundMessage() {
 		}
 		hcm.msg.Metadata["model_name"] = trimmedModel
 	}
+	hcm.choice.apply(&hcm.msg.Metadata)
 }
 
 // buildTranscriptAttachments resolves each accepted media ref into a

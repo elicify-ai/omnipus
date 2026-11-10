@@ -23,7 +23,8 @@ var agentUpdateArgNames = map[string]struct{}{
 	"model": {}, "provider": {}, "fallback_models": {}, "color": {},
 	"figure": {}, "role": {}, // visual identity (#1303); protection per ADR-090 in ValidateFields
 	"max_tool_iterations": {}, "skills": {},
-	"memory_enabled": {}, "voice": {},
+	"reasoning_effort": {}, // primary-model effort (effort-levels spec FR-048)
+	"memory_enabled":   {}, "voice": {},
 	"context_window_override": {}, "model_params": {},
 	"agent_md": {}, // AGENT.md (#1064), written beside the record
 	// r17 §3.9 ExecutorConfigUpdate: external-CLI worker settings only.
@@ -52,6 +53,7 @@ var agentCreateArgNames = map[string]struct{}{
 	"name": {}, "description": {}, "soul": {}, "model": {}, "color": {},
 	"figure": {}, "role": {}, // visual identity (#1303); defaults resolved in validate
 	"agent_type": {}, "cli": {}, "env_overrides": {}, "cli_args": {}, "provider": {}, "fallback_models": {},
+	"reasoning_effort":    {}, // primary-model effort (effort-levels spec FR-048)
 	"max_tool_iterations": {}, "skills": {}, "mcp_servers": {},
 	"tool_policy_changes": {}, "memory_enabled": {}, "voice": {},
 	"context_window_override": {}, "model_params": {},
@@ -127,6 +129,9 @@ func applyIdentityAndModelArgs(a *config.AgentConfig, args map[string]any, defau
 	if err := applyVisualIdentityArgs(a, args); err != nil {
 		return err
 	}
+	// The primary pair before this write: a model change without an effort
+	// maps the stored effort onto the new pair (S-58).
+	effortPairBefore := primaryEffortPair(a, defaults)
 	if err := applyOptionalString(args, "model", func(v string) error {
 		if a.Model == nil {
 			a.Model = &config.AgentModelConfig{}
@@ -149,6 +154,9 @@ func applyIdentityAndModelArgs(a *config.AgentConfig, args map[string]any, defau
 		if err := applyFallbackModels(a, raw); err != nil {
 			return err
 		}
+	}
+	if err := applyPrimaryEffortArg(a, args, effortPairBefore, defaults); err != nil {
+		return err
 	}
 	if raw, present := args["max_tool_iterations"]; present {
 		return applyMaxToolIterationsArg(a, raw, defaults)

@@ -14,6 +14,7 @@ import type {
   ClientFrame, RoomDeliveryState, RoomEntry, RoomSnapshotFrame, ServerFrame,
 } from '@/lib/api/generated/asyncapi-types'
 import { makeAgent } from '@/test/factories'
+import { PROVIDERS_CATALOG } from '@/test/fixtures/providersCatalog'
 import { queryClient } from '@/lib/queryClient'
 import { parseFrameSafe, WsConnection } from '@/lib/ws'
 import { useChatStore } from '@/store/chat'
@@ -136,6 +137,13 @@ export interface ObservedRequest {
 
 type Handler = (request: ObservedRequest) => Response | Promise<Response>
 
+// The raw GET /config body the composer's effort chip reads: no default-model
+// effort, so an agent riding the default model inherits "Not set".
+export const effortConfig = {
+  gateway: { host: '127.0.0.1', port: 8080 },
+  agents: { defaults: {} },
+}
+
 export function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
 }
@@ -171,6 +179,11 @@ export class Network {
     this.respond('GET', `/api/v1/rooms/${ROOM_ID}`, () => json(this.currentRoom))
     this.respond('POST', `/api/v1/rooms/${ROOM_ID}/messages`, () => new Response(null, { status: 202 }))
     this.respond('GET', '/api/v1/auth/validate', () => json({ valid: true }))
+    // The composer's effort chip (effort-levels FR-019, FR-047) reads the
+    // providers catalog for the served levels, and the configuration when
+    // the agent rides the default model (its inherited effort). Exact routes.
+    this.respond('GET', '/api/v1/providers/catalog', () => json(PROVIDERS_CATALOG))
+    this.respond('GET', '/api/v1/config', () => json(effortConfig))
     vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => this.fetch(input, init))
   }
 

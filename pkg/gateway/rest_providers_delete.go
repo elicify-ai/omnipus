@@ -107,6 +107,11 @@ func (a *restAPI) deleteProvider(w http.ResponseWriter, r *http.Request, provide
 		jsonErr(w, http.StatusBadRequest, "could not read request body")
 		return
 	}
+	// new_default.reasoning_effort is checked before the strict decode so
+	// null and over-length values get the spec sentences (FR-060, S-94).
+	if refuseInvalidEffortBody(w, raw) {
+		return
+	}
 	if len(bytes.TrimSpace(raw)) > 0 {
 		dec := json.NewDecoder(bytes.NewReader(raw))
 		dec.DisallowUnknownFields()
@@ -163,15 +168,36 @@ func (a *restAPI) providerDeleteStoreUsable() error {
 
 // restAPIRunProviderDelete carries the shared state of runProviderDelete across its stages.
 type restAPIRunProviderDelete struct {
-	a              *restAPI
-	r              *http.Request
-	providerID     string
-	newDefault     *gen.DefaultModelUpdateRequest
-	dependents     []gen.ProviderDependent
-	oldPair        config.DefaultModel
+	a          *restAPI
+	r          *http.Request
+	providerID string
+	newDefault *gen.DefaultModelUpdateRequest
+	dependents []gen.ProviderDependent
+	oldPair    config.DefaultModel
+	// newEffort is the effort stored with new_default (S-62).
+	newEffort      string
 	defaultChanged bool
 	credRef        string
 	oauthRef       string
+}
+
+// checkNewDefault is runProviderDelete's guard for a provider that backs the
+// default model: new_default is required and valid, and its effort is
+// resolved (S-62) into rd.newEffort. A non-zero status is the refusal.
+func (rd *restAPIRunProviderDelete) checkNewDefault(cfg *config.Config) (status int, errMsg, errField string) {
+	if rd.newDefault == nil {
+		return http.StatusConflict, "provider backs the default model; supply new_default", ""
+	}
+	if st, msg, field := rd.a.validateProviderDeleteNewDefault(cfg, rd.providerID, rd.newDefault); st != 0 {
+		return st, msg, field
+	}
+	effort, refusal := rd.a.defaultModelEffort(cfg.Agents.Defaults.DefaultModel,
+		strings.TrimSpace(rd.newDefault.Provider), strings.TrimSpace(rd.newDefault.Model), rd.newDefault.ReasoningEffort)
+	if refusal != "" {
+		return http.StatusBadRequest, refusal, "new_default.reasoning_effort"
+	}
+	rd.newEffort = effort
+	return 0, "", ""
 }
 
 // runProviderDelete recomputes the deletion facts and runs steps 0-4 under
@@ -199,11 +225,7 @@ func (a *restAPI) runProviderDelete(
 	backsDefault := providerBacksDefault(cfg, rd.providerID)
 
 	if backsDefault {
-		if rd.newDefault == nil {
-			return nil, http.StatusConflict,
-				"provider backs the default model; supply new_default", ""
-		}
-		if st, msg, field := rd.a.validateProviderDeleteNewDefault(cfg, rd.providerID, rd.newDefault); st != 0 {
+		if st, msg, field := rd.checkNewDefault(cfg); st != 0 {
 			return nil, st, msg, field
 		}
 	}
@@ -226,7 +248,11 @@ func (a *restAPI) runProviderDelete(
 		ndModel := strings.TrimSpace(rd.newDefault.Model)
 		if err := rd.a.updateConfigJSONLocked(func(m map[string]any) error {
 			defaults := ensureMap(m, "agents", "defaults")
-			defaults["default_model"] = map[string]any{"provider": ndProvider, "model": ndModel}
+			dm := map[string]any{"provider": ndProvider, "model": ndModel}
+			if rd.newEffort != "" {
+				dm["reasoning_effort"] = rd.newEffort
+			}
+			defaults["default_model"] = dm
 			return nil
 		}); err != nil {
 			slog.Error("rest: provider delete: new_default write failed",
@@ -390,8 +416,9 @@ func (a *restAPI) runProviderDelete(
 	}
 	if rd.defaultChanged {
 		resp.NewDefault = &gen.DefaultModelUpdateRequest{
-			Provider: strings.TrimSpace(rd.newDefault.Provider),
-			Model:    strings.TrimSpace(rd.newDefault.Model),
+			Provider:        strings.TrimSpace(rd.newDefault.Provider),
+			Model:           strings.TrimSpace(rd.newDefault.Model),
+			ReasoningEffort: wireEffort(rd.newEffort),
 		}
 	}
 	return resp, http.StatusOK, "", ""

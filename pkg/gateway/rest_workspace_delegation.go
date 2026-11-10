@@ -33,13 +33,13 @@ import (
 // (rest_workspaces.go, x2). Also consumed by defaultWorkspaceDelegationEdges
 // for the ADR-090 FR-006 self-edge pin: a lowered ceiling must clamp a
 // fresh jim→jim / worker→worker depth so Validate cannot drop the edge.
-const delegationDepthCeilingFallback = 3
+const delegationDepthCeilingFallback = 10
 
 var workspaceSaveDelegationFn = workspace.SaveDelegation
 
 // delegationDepthCeiling returns the effective maximum delegation chain depth a
 // caller may request. It uses performance.max_delegation_depth when set (> 0),
-// otherwise the shared default of 3. An invalid (negative) value fails closed: 0, which rejects every positive edge depth, with an ERROR naming the config key.
+// otherwise the shared default of 10. An invalid (negative) value fails closed: 0, which rejects every positive edge depth, with an ERROR naming the config key.
 func delegationDepthCeiling(cfg *config.Config) int {
 	if cfg != nil {
 		depth, valid := config.ConfiguredMaxDelegationDepth(cfg.Performance, "gateway workspace delegation edge validation")

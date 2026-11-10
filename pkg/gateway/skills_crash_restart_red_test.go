@@ -62,6 +62,10 @@ func crashBoot(t *testing.T, home string, transport ...providers.LLMProvider) (*
 		t.Cleanup(rc.liveLimits.Close)
 		t.Cleanup(func() { agent.SetLiveWindowLookup(nil) })
 	}
+	// TempDir-cleanup family (#1644/#1695): this test drives the same
+	// initializeAgentLoop path that starts the boot-stage writer goroutines;
+	// register the join (LIFO: runs before the TempDir removal).
+	stopBootWritersOnCleanup(t, rc)
 	require.NoError(t, err)
 	require.False(t, stop)
 	inst, ok := rc.agentLoop.GetRegistry().GetAgent("agent-a")

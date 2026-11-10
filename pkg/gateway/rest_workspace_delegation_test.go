@@ -66,7 +66,21 @@ func loadStoredDelegationEdges(t *testing.T, home, id string) []storedDelegation
 // with real entity records via agentstore.Create — the in-memory
 // cfg.Agents.List construction below (required for mustAgentLoop/registry
 // construction) is unchanged.
+//
+// The harness uses an EXPLICIT operator cap of 3 (performance.max_delegation_depth=3):
+// every test calling buildWorkspaceDelegationTestAPI exercises the configured-cap
+// path, never the shipped default. Tests for the shipped default call
+// buildWorkspaceDelegationTestAPIWithPerf(t, 0) — the config deliberately left
+// unset — so the handlers resolve the shipped default themselves.
 func buildWorkspaceDelegationTestAPI(t *testing.T) (*restAPI, string) {
+	t.Helper()
+	return buildWorkspaceDelegationTestAPIWithPerf(t, 3)
+}
+
+// buildWorkspaceDelegationTestAPIWithPerf is the shared builder; a positive
+// maxDelegationDepth simulates an explicit operator cap, 0 leaves
+// performance.max_delegation_depth UNSET.
+func buildWorkspaceDelegationTestAPIWithPerf(t *testing.T, maxDelegationDepth int) (*restAPI, string) {
 	t.Helper()
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 
@@ -85,7 +99,9 @@ func buildWorkspaceDelegationTestAPI(t *testing.T) (*restAPI, string) {
 			},
 		},
 	}
-	cfg.Performance.MaxDelegationDepth = 3
+	if maxDelegationDepth > 0 {
+		cfg.Performance.MaxDelegationDepth = maxDelegationDepth
+	}
 
 	// Real entity records (ADR-054) — see the doc comment above for why this
 	// replaces the old dead on-disk config.json splice. Nothing in this
@@ -162,7 +178,9 @@ func TestWorkspaceDelegation_GetEmpty(t *testing.T) {
 	require.NotNil(t, d.Team, "team must reflect core_team")
 	assert.ElementsMatch(t, []string{"jim", "ava", "ray", "planner"}, *d.Team)
 	// default_depth is the already-computed delegationDepthCeiling(cfg) — the
-	// test fixture sets subturn.max_depth=3, so that's the exposed value.
+	// fixture's EXPLICIT performance.max_delegation_depth=3, so that's the
+	// exposed value (the unset-config shipped default 10 is covered by
+	// TestWorkspaceDelegation_GetDefaultDepth_UnsetConfigShipsTen).
 	assert.Equal(t, 3, d.DefaultDepth, "default_depth must expose the resolved depth ceiling")
 }
 
@@ -190,6 +208,8 @@ func TestWorkspaceDelegation_PutAndRoundTrip(t *testing.T) {
 	assert.Equal(t, 2, *got.Edges[0].Depth)
 	require.NotNil(t, got.Edges[0].Modes)
 	assert.Len(t, *got.Edges[0].Modes, 2)
+	// Fixture cap is the explicit 3 (configured-cap path; the unset-config
+	// default is covered by TestWorkspaceDelegation_PutRoundTrip_UnsetConfigShipsTen).
 	assert.Equal(t, 3, got.DefaultDepth, "default_depth must be present on the PUT response too")
 
 	// Persisted to the delegation store (never the workspace record).
@@ -776,7 +796,7 @@ func TestDefaultWorkspaceDelegationEdges_MatchesCoreagentSeed(t *testing.T) {
 		if shippedExcluded[id] {
 			continue
 		}
-		d := 3 // FreshSelfDelegationMaxDepth, ceiling unset
+		d := 10 // FreshSelfDelegationMaxDepth, ceiling unset
 		if id == "omnipus" {
 			d = 1 // omnipus-system-agent §6.2: Omnipus's self-row depth is exactly 1
 		}
@@ -857,37 +877,37 @@ func TestDefaultWorkspaceDelegationEdges_MatchesCoreagentSeed(t *testing.T) {
 	}
 }
 
-// TestDefaultWorkspaceDelegationEdges_SelfEdgesPinDepthAtCeilingOr3 is the
-// FR-006 self-edge depth pin (spec review finding F3): "Fresh self-edges
-// explicitly set max_depth 3 (or the lower configured ceiling)." A fresh
+// TestDefaultWorkspaceDelegationEdges_SelfEdgesPinDepthAtCeilingOrDefault is
+// the FR-006 self-edge depth pin (spec review finding F3): "Fresh self-edges
+// explicitly set max_depth 10 (or the lower configured ceiling)." A fresh
 // jim→jim / worker→worker seed edge must carry an EXPLICIT depth of
-// min(3, effective global ceiling) — never nil (inherit). The nil form only
-// matches the spec while the global cap is <= 3; an operator who raises
-// agents.defaults.subturn.max_depth to 5 must not also widen a fresh
-// self-edge's helper chain to 5.
+// min(10, effective global ceiling) — never nil (inherit). The nil form only
+// matches the spec while the global cap is <= 10; an operator who raises
+// performance.max_delegation_depth to 15 must not also widen a fresh
+// self-edge's helper chain to 15.
 //
 // Oracle: the expected depths below are derived from the FR-006 sentence, not
-// from the implementation — 3 by default, the lower configured ceiling when
-// the operator set one below 3, and still 3 (never the higher ceiling) when
+// from the implementation — 10 by default, the lower configured ceiling when
+// the operator set one below 10, and still 10 (never the higher ceiling) when
 // the operator raises it.
 //
 // The non-self assertions are the other half of the same FR: only SELF edges
 // are pinned. Jim's staff edges (→worker, →planner, →researcher) keep
 // inheriting the global cap (nil depth), and Planner's policy-wide seed depth
-// of 2 keeps copying verbatim — pinning the whole Jim role to 3 would violate
+// of 2 keeps copying verbatim — pinning the whole Jim role to 10 would violate
 // both (see TestSeedDelegationPolicies_SelfRolesDoNotPinRoleWideDepth in
 // pkg/coreagent for the seed-source guard).
-func TestDefaultWorkspaceDelegationEdges_SelfEdgesPinDepthAtCeilingOr3(t *testing.T) {
+func TestDefaultWorkspaceDelegationEdges_SelfEdgesPinDepthAtCeilingOrDefault(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name          string
-		configured    int // agents.defaults.subturn.max_depth; 0 = unset (effective ceiling 3)
+		configured    int // performance.max_delegation_depth; 0 = unset (effective ceiling 10)
 		wantSelfDepth int
 	}{
-		{"ceiling unset pins 3 (default fallback)", 0, 3},
-		{"ceiling 2 lower than 3 clamps to 2", 2, 2},
-		{"ceiling 3 equal to the pin pins 3", 3, 3},
-		{"ceiling 5 higher than 3 still pins 3 (F3 scenario)", 5, 3},
+		{"ceiling unset pins 10 (default fallback)", 0, 10},
+		{"ceiling 2 lower than 10 clamps to 2", 2, 2},
+		{"ceiling 10 equal to the pin pins 10", 10, 10},
+		{"ceiling 15 higher than 10 still pins 10 (F3 scenario)", 15, 10},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -913,7 +933,7 @@ func TestDefaultWorkspaceDelegationEdges_SelfEdgesPinDepthAtCeilingOr3(t *testin
 				require.NotNil(t, e.Depth,
 					"fresh self-edge %s must carry an EXPLICIT depth (FR-006), got nil (inherit)", pair)
 				assert.Equal(t, tc.wantSelfDepth, *e.Depth,
-					"fresh self-edge %s depth: want min(3, ceiling)=%d", pair, tc.wantSelfDepth)
+					"fresh self-edge %s depth: want min(10, ceiling)=%d", pair, tc.wantSelfDepth)
 				assert.ElementsMatch(t,
 					[]workspace.DelegationMode{workspace.ModeTask, workspace.ModeDirect}, e.Modes,
 					"self-edge %s must retain the seeded modes, collapsed to [task, direct]", pair)
@@ -958,13 +978,13 @@ func TestDefaultWorkspaceSeeder_SelfEdgesPersistExplicitDepth(t *testing.T) {
 		byPair[e.FromAgent+"->"+e.ToAgent] = e
 	}
 
-	// Fresh self-edges persisted with the explicit default pin of 3
-	// (ceiling unset on a fresh config → fallback 3).
+	// Fresh self-edges persisted with the explicit default pin of 10
+	// (ceiling unset on a fresh config → fallback 10).
 	for _, pair := range []string{"jim->jim", "worker->worker"} {
 		e, ok := byPair[pair]
 		require.True(t, ok, "expected seeded self-edge %s in the delegation store", pair)
 		require.NotNil(t, e.Depth, "persisted self-edge %s must carry an explicit depth (FR-006)", pair)
-		assert.Equal(t, 3, *e.Depth, "persisted self-edge %s depth with default ceiling", pair)
+		assert.Equal(t, 10, *e.Depth, "persisted self-edge %s depth with default ceiling", pair)
 	}
 
 	// Jim→Worker survives alongside the self edges, unpinned.
@@ -1025,6 +1045,7 @@ func TestWorkspaceDelegation_Depth0AndEmptyModes_RoundTrip(t *testing.T) {
 
 	got := decodeDelegation(t, getDelegation(t, api, id).Body.Bytes())
 	require.Len(t, got.Edges, 2)
+	// Fixture cap is the explicit 3 (configured-cap path).
 	assert.Equal(t, 3, got.DefaultDepth,
 		"default_depth is exposed regardless of whether any edge sets its own depth")
 

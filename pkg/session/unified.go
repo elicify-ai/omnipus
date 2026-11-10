@@ -91,7 +91,10 @@ func IsValidSessionType(t UnifiedSessionType) bool {
 type MetaPatch struct {
 	Title  *string
 	Status *SessionStatus
-	TaskID *string
+	// ReasoningEffort patches the conversation effort override (/effort);
+	// an empty string clears it (effort-levels spec FR-039).
+	ReasoningEffort *string
+	TaskID          *string
 	// Owner stamps the authenticated user who created the session.
 	// Only written when non-nil; empty string is a valid value (clears ownership).
 	Owner *string

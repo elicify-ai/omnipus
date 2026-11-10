@@ -3,7 +3,7 @@ import { CheckCircle, CircleNotch, Warning } from '@phosphor-icons/react'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-export type SaveState = 'idle' | 'saving' | 'saved' | 'error'
+export type SaveState = 'idle' | 'saving' | 'saved' | 'error' | 'unsaved'
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
@@ -24,6 +24,17 @@ export function SaveStatus({
       >
         <CircleNotch size={12} className="animate-spin" />
         Saving…
+      </span>
+    )
+  }
+
+  if (state === 'unsaved') {
+    return (
+      <span
+        className="inline-flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
+        aria-live="polite"
+      >
+        Unsaved changes
       </span>
     )
   }

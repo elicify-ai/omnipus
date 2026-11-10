@@ -23,11 +23,12 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
-	"github.com/elicify-ai/omnipus/pkg/utils"
 )
 
 // CloseSession triggers an async session-end recap if AutoRecapEnabled is set
@@ -238,14 +239,13 @@ func (al *AgentLoop) CloseSession(sessionID, trigger string) {
 const (
 	recapSubTurnPrefix        = "[SubTurn Result]"
 	recapInterruptHintLiteral = "Interrupt requested. Stop scheduling tools and provide a short final summary."
-	// carryForwardMaxRunes bounds the verbatim recent-context tail the fallback
-	// recap carries forward when summarisation is unavailable (see buildCarryForward).
-	// ~1500 runes is ~19% of the summariser's own input budget (2000 tokens ≈ 8000
-	// runes at this file's ~4-runes-per-token ratio; see runRecap's tokenBudget),
-	// enough to preserve the essential facts a user stated most recently without
-	// bloating the carry-forward summary.
-	carryForwardMaxRunes = 1500
 )
+
+// carryForwardMaxRunes is the shipped default of recap_fallback_context_chars.
+// The recap reads the setting (GetRecapFallbackContextChars); this name only
+// refers to the default the config package owns (FR-074: no recap limit is a
+// code constant here).
+var carryForwardMaxRunes = config.RecapLimitFallbackContextChars.Default
 
 // buildCarryForward returns a compact, verbatim tail of the most recent user
 // turns, for the recap FALLBACK path only.
@@ -406,245 +406,7 @@ func (rr *agentLoopRunRecap) loadTranscript() bool {
 	// Carry-forward tail for the fallback path: if summarisation fails below,
 	// the recent user turns are preserved verbatim so cross-session continuity
 	// survives a degraded recap (buildCarryForward / writeHeuristicFallbackRetroWithCount).
-	rr.carryForward = buildCarryForward(rr.userTurns, carryForwardMaxRunes)
-	return false
-}
-
-// callCandidates builds the bounded recap request and tries its ordered model candidates within the retry budget.
-func (rr *agentLoopRunRecap) callCandidates() bool {
-	// Build the conversation text, truncate to 2000 tokens (~8000 runes).
-	// FR-030: "truncate oldest" — we keep the tail (most recent turns) because
-	// the recap's value is summarizing what just happened, not what happened
-	// 40 turns ago.
-	const tokenBudget = 2000
-	combined := strings.Join(rr.userTurns, "\n\n")
-	runes := []rune(combined)
-	prefix := ""
-	if len(runes)/4 > tokenBudget {
-		budgetRunes := tokenBudget * 4
-		combined = string(runes[len(runes)-budgetRunes:])
-		prefix = "[history truncated for summarisation]\n\n"
-	}
-	historyText := prefix + combined
-
-	// Resolve primary recap model.
-	// Priority: recap_model config → overall default model → session agent model.
-	// Snapshot the config once (under RLock via GetConfig) so all reads below
-	// see a consistent view of the config even if SwapConfig races.
-	snapCfg := rr.al.GetConfig()
-	recapModel := snapCfg.Agents.Defaults.RecapModel
-	// When no recap model is configured the default (provider, model) pair is
-	// used as-is — pinned to its own provider, never re-resolved (ADR-068).
-	var recapPinnedProvider string
-	if recapModel == "" && !snapCfg.Agents.Defaults.DefaultModel.IsZero() {
-		recapModel = snapCfg.Agents.Defaults.DefaultModel.Model
-		recapPinnedProvider = snapCfg.Agents.Defaults.DefaultModel.Provider
-	}
-	if recapModel == "" {
-		recapModel = rr.agentInst.Model
-	}
-
-	// Build the fallback candidate list: [primaryRecapModel, ...RecapFallbackModels].
-	// Each config.FallbackModel carries its own Provider for cross-provider fallback.
-	//
-	// Resolve the PRIMARY recap model's Provider the same way the agent turn does
-	// (resolveModelRef → the configured provider that owns the credentials). This
-	// is load-bearing: the fallback executor calls stripProviderPrefix(model,
-	// candidate.Provider) before the upstream API call, so a provider-prefixed
-	// model_name (e.g. "openrouter/z-ai/glm-5.2" — the form onboarding writes)
-	// is only reduced to the upstream-valid "z-ai/glm-5.2" when the candidate's
-	// Provider is set. Without it the prefixed model is sent RAW and OpenRouter
-	// rejects it ("... is not a valid model ID"), the recap falls back to a
-	// heuristic stub, and the carry-forward summary loses the real summary. The turn path
-	// resolves Provider; the recap MUST match it.
-	candidates := make([]providers.FallbackCandidate, 0, 1+len(snapCfg.Agents.Defaults.RecapFallbackModels))
-	primaryCandidate := providers.FallbackCandidate{Model: recapModel, Provider: recapPinnedProvider}
-	if recapPinnedProvider == "" {
-		if ref, ok := resolveModelRef(snapCfg, recapModel); ok {
-			primaryCandidate = providers.FallbackCandidate{Model: ref.Model, Provider: ref.Provider}
-		}
-	}
-	candidates = append(candidates, primaryCandidate)
-	for _, fm := range snapCfg.Agents.Defaults.RecapFallbackModels {
-		candidates = append(candidates, providers.FallbackCandidate{Provider: fm.Provider, Model: fm.Model})
-	}
-
-	// Build recap prompt.
-	recapPrompt := `Summarize this conversation in ≤ 150 words. Then list up to 5 wins, up to 5 needs-improvement items, and up to 5 items worth remembering long-term. Respond ONLY with valid JSON: {"recap":"...", "went_well":[...], "needs_improvement":[...], "worth_remembering":[...]}`
-
-	msgs := []providers.Message{
-		{Role: "user", Content: historyText + "\n\n" + recapPrompt},
-	}
-
-	// Cost-guard options (FR-029a): output cap + reasoning hints.
-	//
-	// max_tokens=2048: reasoning models like glm-5.2 on OpenRouter/Fireworks
-	// ignore the reasoning:{enabled:false} hint and always generate an internal
-	// reasoning trace before emitting content. With max_tokens=512 the reasoning
-	// trace itself consumes the entire budget (observed: ~435–566 reasoning tokens)
-	// leaving content=null, which JSON-parses to "" and falls into the
-	// json_parse_error fallback path — the nonce never lands in the carry-forward summary.
-	// Raising to 2048 gives reasoning models ample room: ~500 reasoning + ~500
-	// content = 1000 tokens total, still well within the 2048 cap. The extra
-	// tokens are cheap (one call per session close, paid only when the LLM
-	// actually generates tokens, not just allocated). extended_thinking:false is
-	// kept for Anthropic-style providers that honor it and skip the reasoning
-	// phase entirely when set. reasoning:{enabled:false} is left in the
-	// extra_body because it DOES work on some OpenRouter routes and upstream
-	// providers, and is harmlessly ignored elsewhere.
-	opts := map[string]any{
-		"max_tokens":        2048,
-		"extended_thinking": false,
-		"extra_body": map[string]any{
-			"reasoning": map[string]any{"enabled": false},
-		},
-	}
-
-	// Build a provider pool for the recap candidates so each fallback routes
-	// through its own configured provider (parity with agent turn fallbacks,
-	// FR-007). The agent's own providerPool only contains its turn candidates;
-	// recap candidates are separate config fields and are never included there.
-	// We build a one-off pool here using the same buildProviderPool helper.
-	// The agent id is passed for the FR-016 WARNs only; a recap chain is not
-	// the agent's turn chain, so its primaryUnknown verdict is deliberately
-	// NOT projected onto the instance's needs_provider degrade.
-	recapProviderPool := buildProviderPool(snapCfg, candidates, rr.agentInst.ID).pool
-
-	// resolveRecapProvider mirrors GetProviderForCandidate but consults the
-	// one-off recap pool first, then the agent's turn pool (single-passthrough
-	// case), and finally falls back to the agent's primary provider.
-	resolveRecapProvider := func(candidate providers.FallbackCandidate) providers.LLMProvider {
-		pinned := strings.TrimSpace(candidate.Provider)
-		if pinned != "" && recapProviderPool != nil {
-			if p, ok := recapProviderPool[pinned]; ok && p != nil {
-				return p
-			}
-		}
-		// Single passthrough provider (empty Provider on candidate): use the
-		// agent's primary provider — same as the pre-fix behavior and the
-		// correct path when all recap candidates share the agent's provider.
-		p := rr.agentInst.GetProviderForCandidate(candidate)
-		if p != nil {
-			return p
-		}
-		return rr.agentInst.Provider
-	}
-
-	// Self-bounded overall at 60s. Divide the budget evenly across candidates
-	// so a slow primary cannot exhaust the deadline and leave fallbacks with an
-	// already-expired context. Each candidate gets its own fresh timeout derived
-	// from its share of the overall budget (minimum 10s to avoid starving
-	// fallbacks on short budgets with many candidates).
-	const overallBudget = 60 * time.Second
-	const minPerCandidate = 10 * time.Second
-	numCandidates := len(candidates)
-	if numCandidates == 0 {
-		numCandidates = 1
-	}
-	perCandidateTimeout := overallBudget / time.Duration(numCandidates)
-	if perCandidateTimeout < minPerCandidate {
-		perCandidateTimeout = minPerCandidate
-	}
-
-	// recapDeadline is the hard wall-clock limit for the entire recap attempt.
-	// It is used to guard transient retries so they cannot push individual
-	// candidates past the overall 60 s budget even when many retries are needed.
-	recapDeadline := time.Now().Add(overallBudget)
-
-	// maxTransientRetries is the number of additional attempts made per candidate
-	// when the error is classified as a transient stream reset (http2 body closed,
-	// GOAWAY, connection reset, …). The recap output is collected whole and never
-	// streamed to the user, so a retry on a fresh connection is safe.
-	const maxTransientRetries = 2
-
-	// Attempt the recap against each candidate in order. For each candidate,
-	// retry up to maxTransientRetries times on transient stream-reset errors
-	// before moving to the next fallback candidate.
-	// Non-transient errors (4xx, unauthorized, context-overflow) fall through to
-	// the next candidate immediately — retrying them is not safe or useful.
-
-	var llmErr error
-	for _, candidate := range candidates {
-		p := resolveRecapProvider(candidate)
-		for attempt := 0; attempt <= maxTransientRetries; attempt++ {
-			// Respect the hard overall deadline: don't start an attempt if we're
-			// already past the budget boundary.
-			remaining := time.Until(recapDeadline)
-			if remaining <= 0 {
-				slog.Warn("session_end: recap deadline exceeded, stopping retries",
-					"session_id", rr.sessionID,
-					"agent_id", rr.agentInst.ID,
-					"model", candidate.Model,
-				)
-				break
-			}
-			callTimeout := perCandidateTimeout
-			if callTimeout > remaining {
-				callTimeout = remaining
-			}
-
-			candidateCtx, candidateCancel := context.WithTimeout(context.Background(), callTimeout)
-			r, err := p.Chat(candidateCtx, msgs, nil, candidate.Model, opts)
-			candidateCancel()
-			if err == nil {
-				rr.resp = r
-				llmErr = nil
-				break
-			}
-
-			// Check whether this is a transient stream reset that is safe to retry.
-			if attempt < maxTransientRetries && isTransientStreamError(err) {
-				backoff := time.Duration(1+attempt) * 500 * time.Millisecond
-				slog.Warn("session_end: recap transient stream error, retrying",
-					"session_id", rr.sessionID,
-					"agent_id", rr.agentInst.ID,
-					"model", candidate.Model,
-					"attempt", attempt+1,
-					"max_retries", maxTransientRetries,
-					"backoff_ms", backoff.Milliseconds(),
-					"error", err.Error(),
-				)
-				time.Sleep(backoff)
-				llmErr = err
-				continue
-			}
-
-			// Non-transient error or retries exhausted — move to the next candidate.
-			slog.Warn("session_end: recap candidate failed, trying next",
-				"session_id", rr.sessionID,
-				"agent_id", rr.agentInst.ID,
-				"model", candidate.Model,
-				"attempt", attempt+1,
-				"error", err.Error(),
-			)
-			llmErr = err
-			break
-		}
-		if rr.resp != nil {
-			break
-		}
-	}
-
-	if llmErr != nil {
-		slog.Warn("session_end: llm call failed",
-			"session_id", rr.sessionID,
-			"agent_id", rr.agentInst.ID,
-			"error", llmErr.Error(),
-		)
-		// SF1: emit two distinct audit entries so operators can see both outcomes:
-		// (1) the LLM call failed, (2) the heuristic fallback was written.
-		rr.al.auditRecap(rr.sessionID, rr.agentInst.ID, rr.trigger, "llm_failed:"+classifyLLMError(llmErr))
-		_ = rr.al.writeHeuristicFallbackRetroWithCount(
-			rr.sessionID,
-			rr.trigger,
-			classifyLLMError(llmErr),
-			rr.agentInst,
-			len(rr.entries),
-			rr.toolCallCount,
-			rr.carryForward,
-		)
-		return true
-	}
+	rr.carryForward = buildCarryForward(rr.userTurns, rr.al.GetConfig().Agents.Defaults.GetRecapFallbackContextChars())
 	return false
 }
 
@@ -682,13 +444,13 @@ func (rr *agentLoopRunRecap) persistResponse() {
 
 	if parseErr := json.Unmarshal([]byte(responseText), &parsed); parseErr != nil {
 		// Model returned something that is not the expected JSON envelope.
-		// The raw body can still be useful for debugging recap-prompt regressions,
-		// so log a truncated preview before discarding it and falling back.
+		// The text may be the model's reasoning, which is never logged
+		// (effort-levels FR-041): only its length is.
 		slog.Warn("session_end: recap JSON parse failed",
 			"session_id", rr.sessionID,
 			"agent_id", rr.agentInst.ID,
 			"parse_error", parseErr.Error(),
-			"response_preview", utils.Truncate(responseText, 500),
+			"response_chars", utf8.RuneCountInString(responseText),
 		)
 		_ = rr.al.writeHeuristicFallbackRetroWithCount(
 			rr.sessionID,
@@ -844,7 +606,7 @@ func (al *AgentLoop) writeHeuristicFallbackRetro(sessionID, trigger, fallbackRea
 		agentInst,
 		turnCount,
 		toolCallCount,
-		buildCarryForward(userTurns, carryForwardMaxRunes),
+		buildCarryForward(userTurns, al.GetConfig().Agents.Defaults.GetRecapFallbackContextChars()),
 	)
 }
 
@@ -1107,14 +869,17 @@ func (al *AgentLoop) BootstrapRecapPass(ctx context.Context) {
 
 	maxPerMinute := defaults.GetBootstrapRecapMaxPerMinute()
 
-	// Rate limiter: one slot every (60/maxPerMinute) seconds. Guard against
-	// sub-second intervals on a high max per minute.
+	// Rate limiter: catch-up recaps start at most maxPerMinute per minute and
+	// never closer together than bootstrap_recap_min_spacing_seconds. The
+	// first due session starts at once; each later one waits for its gap.
 	intervalBetweenStarts := time.Duration(float64(time.Minute) / float64(maxPerMinute))
-	if intervalBetweenStarts < time.Second {
-		intervalBetweenStarts = time.Second
+	if minGap := time.Duration(defaults.GetBootstrapRecapMinSpacingSeconds()) * time.Second; intervalBetweenStarts < minGap {
+		intervalBetweenStarts = minGap
 	}
-	ticker := time.NewTicker(intervalBetweenStarts)
-	defer ticker.Stop()
+	// Restart catch-up uses the idle timeout as the age a session must reach
+	// (FD-21).
+	dueAge := time.Duration(defaults.GetIdleTimeoutMinutes()) * time.Minute
+	var lastStart time.Time
 
 	// SF2: counters for the pass-complete summary log.
 	var processed, errored int
@@ -1170,19 +935,24 @@ func (al *AgentLoop) BootstrapRecapPass(ctx context.Context) {
 		}
 
 		age := time.Since(newestTS)
-		if age < 30*time.Minute {
+		if age < dueAge {
 			continue
 		}
 
-		select {
-		case <-ctx.Done():
-			slog.Info("session_end: bootstrap recap pass complete (context canceled)",
-				"processed", processed,
-				"errored", errored,
-			)
-			return
-		case <-ticker.C:
+		if !lastStart.IsZero() {
+			timer := time.NewTimer(time.Until(lastStart.Add(intervalBetweenStarts)))
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				slog.Info("session_end: bootstrap recap pass complete (context canceled)",
+					"processed", processed,
+					"errored", errored,
+				)
+				return
+			case <-timer.C:
+			}
 		}
+		lastStart = time.Now()
 
 		al.CloseSession(sessionID, "bootstrap")
 		processed++

@@ -60,6 +60,10 @@ type ModelPayload struct {
 	// projections. JSON strings preserve their bytes without re-marshalling.
 	ThinkingBlocks []string `json:"thinking_blocks,omitempty"`
 
+	// ReasoningDetails is the private OpenRouter reasoning carrier
+	// (effort-levels spec FR-013), each item stored as the provider sent it.
+	ReasoningDetails []json.RawMessage `json:"reasoning_details,omitempty"`
+
 	// SystemParts preserves Message.SystemParts / ContentBlock order and each
 	// block's CacheControl value. Only messages already belonging to stored
 	// model history use this codec — fresh pinned prompts and request-only
@@ -162,6 +166,7 @@ func EncodeModelPayload(msg providers.Message) (ModelPayload, error) {
 		Content:          msg.Content,
 		ReasoningContent: msg.ReasoningContent,
 		ThinkingBlocks:   append([]string(nil), msg.ThinkingBlocks...),
+		ReasoningDetails: cloneRawItems(msg.ReasoningDetails),
 		ToolCallID:       msg.ToolCallID,
 	}
 	if msg.Media != nil {
@@ -184,6 +189,19 @@ func EncodeModelPayload(msg providers.Message) (ModelPayload, error) {
 		}
 	}
 	return out, nil
+}
+
+// cloneRawItems deep-copies raw JSON items so a stored payload never aliases
+// a live message's bytes. nil stays nil.
+func cloneRawItems(items []json.RawMessage) []json.RawMessage {
+	if items == nil {
+		return nil
+	}
+	out := make([]json.RawMessage, len(items))
+	for i, it := range items {
+		out[i] = append(json.RawMessage(nil), it...)
+	}
+	return out
 }
 
 func encodeContentBlock(p providers.ContentBlock) ModelContentBlock {
@@ -232,6 +250,7 @@ func DecodeModelPayload(p ModelPayload) (providers.Message, error) {
 		Content:          p.Content,
 		ReasoningContent: p.ReasoningContent,
 		ThinkingBlocks:   append([]string(nil), p.ThinkingBlocks...),
+		ReasoningDetails: cloneRawItems(p.ReasoningDetails),
 		ToolCallID:       p.ToolCallID,
 	}
 	if p.Media != nil {

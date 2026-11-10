@@ -83,6 +83,7 @@ func suppliedRESTAgentFields(req *gen.AgentUpdateRequest) []string {
 	add(req.Model != nil, "model")
 	add(req.Provider != nil, "provider")
 	add(req.FallbackModels != nil, "fallback_models")
+	add(req.ReasoningEffort != nil, "reasoning_effort")
 	add(req.ContextWindowOverride != nil, "context_window_override")
 	add(req.ModelParams != nil, "model_params")
 	add(req.MaxToolIterations != nil, "max_tool_iterations")
@@ -220,6 +221,11 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 	// own text and field before the schema validator or the strict decoder
 	// could answer with a generic unknown-property message.
 	if refuseForbiddenExecutorFields(uf.w, uf.rawBody, "kind", "cli", "cli_path") {
+		return true
+	}
+	// Effort members (primary and fallbacks) are checked on the raw body in
+	// both validation modes, before any decode or write (FR-060, S-94).
+	if refuseInvalidEffortBody(uf.w, uf.rawBody) {
 		return true
 	}
 	validateEnabled := uf.cfg.Gateway.ValidateInbound
@@ -968,6 +974,10 @@ func (ru *restAPIUpdateAgent) persistAgent(m map[string]any) error {
 		if errors.Is(updateErr, agentstore.ErrInvalidRevision) {
 			return fmt.Errorf("invalid revision: %w", updateErr)
 		}
+		var refusal *requestRefusalError
+		if errors.As(updateErr, &refusal) {
+			return refusal
+		}
 		// r17 FR-132 (#1295, D-10): a field error found inside the mutation
 		// (the tool-policy name rule) is a 400 naming the field; nothing was
 		// written. Only a real storage failure stays a 500.
@@ -988,7 +998,12 @@ func (rp *restAPIUpdateAgentPersistAgent) updateRecord(agentRec *config.AgentCon
 	// MutateState checks the reviewed revision under the entity lock before
 	// applying these fields. UpdatedAt is display metadata, never a precondition.
 	storedModelBefore, storedFallbacksBefore := agentModelIdentity(agentRec)
+	providerBefore, modelBefore := agentPrimaryPair(agentRec)
+	effortBefore := agentRec.ReasoningEffort
 	rp.updateIdentityAndModel(agentRec)
+	if err := rp.updateEffort(agentRec, providerBefore, modelBefore); err != nil {
+		return err
+	}
 	rp.updatePresentationAndFallbacks(agentRec)
 	rp.updateToolsConfig(agentRec)
 	if err := rp.updateMCPServers(agentRec); err != nil {
@@ -1002,8 +1017,11 @@ func (rp *restAPIUpdateAgentPersistAgent) updateRecord(agentRec *config.AgentCon
 	// Refresh the display timestamp with sub-second precision;
 	// the frontend compares it as an ordinal when incorporating autosaves.
 	storedModelAfter, storedFallbacksAfter := agentModelIdentity(agentRec)
+	// The primary effort is read when the agent instance is built, so an
+	// effort change rebuilds it like a model change (FR-029).
 	rp.ru.modelIdentityChanged = !sameAgentModelIdentity(
-		storedModelBefore, storedFallbacksBefore, storedModelAfter, storedFallbacksAfter)
+		storedModelBefore, storedFallbacksBefore, storedModelAfter, storedFallbacksAfter) ||
+		effortBefore != agentRec.ReasoningEffort
 	agentRec.UpdatedAt = &rp.ru.now
 	return nil
 }
@@ -1110,20 +1128,23 @@ func (rp *restAPIUpdateAgentPersistAgent) updatePresentationAndFallbacks(agentRe
 		agentRec.MemoryEnabled = rp.ru.req.MemoryEnabled
 	}
 	if rp.ru.req.FallbackModels != nil {
-		agentRec.FallbackModels = fallbackModelsFromWire(*rp.ru.req.FallbackModels)
+		agentRec.FallbackModels = fallbackModelsFromWire(*rp.ru.req.FallbackModels, agentRec.FallbackModels)
 	}
 }
 
 // fallbackModelsFromWire converts validated wire fallback entries to the
 // stored form, in order (REST create and update share it, r17 §7.5 AG-03).
-func fallbackModelsFromWire(entries []gen.FallbackModel) config.FallbackModelSlice {
+// Each entry keeps its sent effort; an entry sent without one keeps the
+// effort stored for the same pair in stored (effort-levels FR-048). Create
+// passes nil: there is nothing stored yet.
+func fallbackModelsFromWire(entries []gen.FallbackModel, stored config.FallbackModelSlice) config.FallbackModelSlice {
 	fbs := make(config.FallbackModelSlice, 0, len(entries))
 	for _, fm := range entries {
 		provider := ""
 		if fm.Provider != nil {
 			provider = *fm.Provider
 		}
-		fbs = append(fbs, config.FallbackModel{Model: fm.Model, Provider: provider})
+		fbs = append(fbs, fallbackWithEffort(fm.Model, provider, fm.ReasoningEffort, stored))
 	}
 	return fbs
 }

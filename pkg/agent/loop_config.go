@@ -303,7 +303,7 @@ func (al *AgentLoop) MutateConfig(fn func(*config.Config) error) error {
 }
 
 // ApplyAgentModel switches a live agent instance to a new primary model in
-// place — rebuilding its provider, candidate chain, and thinking level under
+// place — rebuilding its provider and candidate chain under
 // the instance lock WITHOUT recreating the instance. This preserves the agent's
 // in-memory conversation state and avoids a config hot-reload that would drop
 // the WebSocket (#73). The new model must already be persisted to config (the
@@ -311,6 +311,16 @@ func (al *AgentLoop) MutateConfig(fn func(*config.Config) error) error {
 // previous primary model. Shared by the switch_model tool and the
 // PUT /api/v1/agents/{id} model-change path.
 func (al *AgentLoop) ApplyAgentModel(agentID, model string) (string, error) {
+	return al.ApplyAgentModelPair(agentID, "", model)
+}
+
+// ApplyAgentModelPair is ApplyAgentModel for an exact (provider, model) pair
+// (effort-levels S-15): a nonblank provider pins the primary candidate to that
+// configured row instead of resolving the bare model name, so two providers
+// offering the same model name never route to the wrong one. A blank provider
+// is exactly ApplyAgentModel.
+func (al *AgentLoop) ApplyAgentModelPair(agentID, provider, model string) (string, error) {
+	provider = strings.TrimSpace(provider)
 	model = strings.TrimSpace(model)
 	if model == "" {
 		return "", fmt.Errorf("model is required")
@@ -324,7 +334,7 @@ func (al *AgentLoop) ApplyAgentModel(agentID, model string) (string, error) {
 	cfg := al.cfg
 	al.mu.RUnlock()
 
-	modelCfg, err := resolvedModelConfig(cfg, model, agent.Home)
+	modelCfg, err := ResolveModelPairCfg(cfg, provider, model, agent.Home)
 	if err != nil {
 		return "", err
 	}
@@ -332,7 +342,7 @@ func (al *AgentLoop) ApplyAgentModel(agentID, model string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to initialize model %q: %w", model, err)
 	}
-	nextCandidates := resolveModelCandidatesForAgent(cfg, cfg.Agents.Defaults.DefaultModel.Provider, modelCfg.Model, agent)
+	nextCandidates := switchCandidates(cfg, provider, modelCfg.Model, agent)
 	if len(nextCandidates) == 0 {
 		return "", fmt.Errorf("model %q did not resolve to any provider candidates", model)
 	}
@@ -357,7 +367,6 @@ func (al *AgentLoop) ApplyAgentModel(agentID, model string) (string, error) {
 	agent.Model = model
 	agent.Provider = nextProvider
 	agent.Candidates = nextCandidates
-	agent.ThinkingLevel = parseThinkingLevel(modelCfg.ThinkingLevel)
 	agent.applyWindowResolutionLocked(window)
 	// From the CONFIGURED max_tokens, never from the current (possibly
 	// already-clamped) field: the clamp only lowers, so re-feeding its own

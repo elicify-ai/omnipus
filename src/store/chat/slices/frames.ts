@@ -1645,6 +1645,14 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                     m.truncated = true
                     m.truncationReason = doneTruncationReason
                   }
+                  // Effort levels FR-058 / FR-036: the answering candidate's
+                  // record and the turn's reported thinking sum ride the live
+                  // done frame; stamped on the bubble the turn finished on, so
+                  // the live note and tooltip equal what a reload shows.
+                  if (id === lastMsgId && m.role === 'assistant') {
+                    if (doneStats?.effort) m.effort = doneStats.effort
+                    if (doneStats?.reasoning_tokens !== undefined) m.turnReasoningTokens = doneStats.reasoning_tokens
+                  }
                 }
                 // Bake any pending tool calls into the last assistant message so
                 // VirtualAssistantMessageRow can render them from message.tool_calls.

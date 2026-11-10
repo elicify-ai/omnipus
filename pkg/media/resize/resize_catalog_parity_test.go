@@ -25,7 +25,8 @@
 // their vendor-specific budgets when the registry snapshot replaced the seed.
 // The test fails if that count moves in either direction, so the next snapshot
 // bump has to be looked at by a person. The JSON is the historical DS-6 baseline;
-// the three reviewed v2026.10.15.1 source updates below leave its seed_* data intact.
+// the reviewed source updates below (three for v2026.10.15.1, six Mistral pdf
+// rows for v2026.11.7.3) leave its seed_* data intact.
 package resize_test
 
 import (
@@ -115,6 +116,31 @@ func TestMediaResize_BudgetsUnchangedForSeedModels(t *testing.T) {
 		}
 	}
 	require.Equal(t, 3, updated, "all three reviewed catalog updates must match a historical seed row")
+
+	// Audited source change for catalog v2026.11.7.3 (reviewed 2026-11-07 against
+	// the upstream files, not copied from the resolver under test): models.dev
+	// f6be65983aa0ea5d0b8ab6e19ab78109d41e7547 lists input = ["text",
+	// "image/png", "image/jpeg", "image/webp", "image/gif", "application/pdf"]
+	// in providers/mistral/models/{mistral-large-latest, mistral-large-2512,
+	// mistral-medium-latest, mistral-small-latest, ministral-3b-latest,
+	// ministral-8b-latest}.toml. At fd71c96978099f48352a7f9d77f5320c6e5e274b the
+	// five files that stated an input listed only text and image (medium stated
+	// none). PDF input returns to what the retired seed already carried; the
+	// rows stay "corrected" and no count moves. Resize limits are unchanged.
+	const pdfCorrectionSource = "models.dev@f6be65983aa0ea5d0b8ab6e19ab78109d41e7547 (catalog v2026.11.7.3)"
+	updatedPDF := 0
+	for i := range ds.Rows {
+		row := &ds.Rows[i]
+		switch row.Provider + "/" + row.Model {
+		case "mistral/mistral-large-latest", "mistral/mistral-large-2512", "mistral/mistral-medium-latest",
+			"mistral/mistral-small-latest", "mistral/ministral-3b-latest", "mistral/ministral-8b-latest":
+			require.Equal(t, "corrected", row.Divergence, "row %s: the pdf update applies to a corrected row", row.Provider+"/"+row.Model)
+			row.ExpectedInputModalities = []string{"image", "pdf", "text"}
+			row.CorrectionSource = pdfCorrectionSource
+			updatedPDF++
+		}
+	}
+	require.Equal(t, 6, updatedPDF, "all six reviewed Mistral pdf updates must match a historical seed row")
 
 	cat, err := catalog.NewCatalog(catalog.EmbeddedSnapshot)
 	require.NoError(t, err, "the embedded snapshot must parse")

@@ -137,9 +137,14 @@ type Runtime struct {
 	GetEnabledChannels func() []string
 	GetActiveTurn      func() any // Returning any to avoid circular dependency with agent package
 	SwitchModel        func(value string) (oldModel string, err error)
-	SwitchChannel      func(value string) error
-	ClearHistory       func() error
-	ReloadConfig       func() error
+	// GetEffortState and SetConversationEffort back /effort: the serving
+	// model's capability and the conversation's own value, written to the
+	// conversation only ("" clears it), never to the agent (FR-023).
+	GetEffortState        func() (EffortState, error)
+	SetConversationEffort func(value string) error
+	SwitchChannel         func(value string) error
+	ClearHistory          func() error
+	ReloadConfig          func() error
 	// SessionID returns the session key for the current request context. Used by
 	// handlers that need to address a specific session (e.g., /cancel).
 	SessionID func() string

@@ -70,7 +70,7 @@ async function resolveWorkspaceId(page: Page): Promise<string> {
  *
  * Mirrors waitForTurnFullyDone() from chat.spec.ts / memory-remember-recall.spec.ts /
  * recap-continuity.spec.ts (shared harness pattern, not extracted to a fixture —
- * see those files for the same copy). Root cause: the prompt below asks the
+ * see those files for the same copy). Root cause: the prompt in test (a) asks the
  * model for TWO sequential tool calls (browser_navigate, then browser_screenshot).
  * Each individual LLM completion segment can end with done:true — including the
  * one right after browser_navigate, BEFORE browser_screenshot has even been
@@ -82,16 +82,31 @@ async function resolveWorkspaceId(page: Page): Promise<string> {
  * budget starts from that early point instead of from real turn completion,
  * silently eating into the time the central e2e model (tests/e2e/e2e-model.json) has
  * to finish the second tool call.
+ *
+ * `followUpCeilingMs` is how long a follow-up LLM call (stop button visible
+ * again) may run before this guard gives up waiting. Default 180s — the same
+ * ceiling as test (a)'s own count assertion, kept for the two-browser-tool-call
+ * flow. Test (b) passes 60s explicitly as a POLICY ALLOWANCE, not a measured
+ * latency: its follow-up call is expected to be a single short reply after ONE
+ * forced send_file call, and 60s matches the count assertion that precedes the
+ * guard. No successful run of test (b) exists in the CI evidence (see the
+ * budget comment in test (b)), so no successful follow-up latency has been
+ * observed for it. The guard remains advisory (its catch below); the delivery
+ * assertions after it are what actually fail on missing content.
  */
-async function waitForTurnFullyDone(page: Page, gapMs = 8_000): Promise<void> {
+async function waitForTurnFullyDone(page: Page, gapMs = 8_000, followUpCeilingMs = 180_000): Promise<void> {
   const stopBtn = page.locator('[data-testid="stop-btn"]');
   try {
     // If the stop button reappears within gapMs, a follow-up LLM call is in progress.
     await expect(stopBtn).toBeVisible({ timeout: gapMs });
     // Stop button appeared — wait for it to vanish (follow-up LLM call done).
-    await expect(stopBtn).not.toBeVisible({ timeout: 180_000 });
+    await expect(stopBtn).not.toBeVisible({ timeout: followUpCeilingMs });
   } catch {
-    // Stop button did not reappear within gapMs — the turn is fully done.
+    // ADVISORY ONLY (inherited catch, not completion proof): this runs when
+    // the stop button did not reappear within gapMs (the usual meaning: no
+    // follow-up call) OR when the follow-up call's disappearance wait expired
+    // (the turn may STILL be running). It deliberately does not decide
+    // anything; the delivery assertions that follow are the oracle.
   }
 }
 
@@ -200,7 +215,42 @@ test(
   // detection returns for a plain-text file — so this is robust even if
   // magic-byte detection is inconclusive for text.
   async ({ page }) => {
-    test.setTimeout(120_000);
+    // Outer budget for this test. See the evidence and allowance table below.
+    //
+    // WHAT THE CI EVIDENCE DOES AND DOES NOT SHOW (shard llm-light,
+    // pw-results.json of release/v0.1.1 runs 42252059326, 42334402301 and
+    // 42366141699, three runs, 12 attempts of THIS test): attempt durations
+    // 22.3/25.5/62.8/63.2s, 21.5/21.1/62.5/62.4s and 27.1/21.1/62.4/20.6s.
+    // ALL 12 FAILED, inside inner budgets (the 15s download-link assertion or
+    // the 60s count assertion); none reached the old 120s outer budget, and no
+    // attempt PASSED. A failed wait is a lower bound on how long we waited
+    // without success, not an upper bound on successful latency, so these
+    // numbers establish NO latency ceiling for this test: the successful
+    // latency of (b) is UNKNOWN. (Test (a), a different flow, passed in 27-35s
+    // in the same runs; it is not evidence for (b).)
+    //
+    // So the 240s below is NOT empirically justified and is not claimed to fix
+    // the failures. It is a policy budget that exists for one reason: the
+    // waitForTurnFullyDone leg added below lengthens the sum of this test's own
+    // inner timeouts, and test.setTimeout is a hard governor that must not cut
+    // an inner wait short. The sum uses allowances, not measurements:
+    //   Sidebar agent selection + input visibility ..................... ~35s (allowance)
+    //   assistantMessages toHaveCount ceiling ........................... 60s (enforced)
+    //   waitForTurnFullyDone: gapMs(8s) + follow-up ceiling(60s) ........ 68s (enforced)
+    //   downloadLink toBeVisible ceiling ................................ 15s (enforced)
+    //   download event + path + read-back ............................... ~20s (allowance, no explicit timeout)
+    //   a11y scan ......................................................... 10s (allowance, no explicit timeout)
+    // Sum of those allowances: 35 + 60 + 68 + 15 + 20 + 10 = 208s, plus ~15%
+    // scheduling margin = 240s (2.0x the old 120s). The 5267bd455 raise to 360s
+    // only mirrored the guard's inherited 180s follow-up ceiling, which is why
+    // the guard's ceiling is now passed explicitly. Why the link never appeared
+    // is SUSPECTED (the mid-turn blip race the guard addresses), not
+    // established: the gateway log has no send_file error, which does not
+    // distinguish "never called" from "called without an error being logged".
+    // That 12 of 12 attempts failed, including attempts that failed at the
+    // 60s count assertion before this guard runs, argues AGAINST a pure
+    // latency explanation and is not resolved by this change.
+    test.setTimeout(240_000);
 
     // Seed a real fixture file directly on disk inside the workspace's work/
     // directory (the ADR-046 P1 filesystem re-root every CoreTeam agent's
@@ -236,6 +286,29 @@ test(
     await input.press('Enter');
 
     await expect(assistantMessages(page)).toHaveCount(countBefore + 1, { timeout: 60_000 });
+
+    // Guard against the premature-"complete" race described at the top of
+    // waitForTurnFullyDone above — the SAME instrument gap test (a) already
+    // fixed. The count assertion reads data-status, and the first LLM
+    // completion segment of this turn CAN end (done:true) before send_file
+    // has run, so `toHaveCount(countBefore + 1)` can resolve on that blip
+    // while the tool call is still ahead of the model. SUSPECTED, not
+    // established for the incident below: without this wait, the
+    // download-link assertion's 15s budget would start from such a blip and
+    // expire before send_file lands — a failure that looks like a missing
+    // media frame but would really be a mid-turn snapshot. If the model never
+    // calls send_file, this wait ends with no follow-up call observed and the
+    // link assertion still fails below — the guard cannot turn a real
+    // non-compliance into a pass, it only stops measuring from the wrong
+    // moment. (CI run 42252059326, shard llm-light — measured: attempts 1-2
+    // failed at 22.3s/25.5s, at that 15s link budget, with no send_file error
+    // in the gateway log; missing logs do not distinguish "never called" from
+    // "called cleanly", so the blip mechanism remains a hypothesis.) The
+    // explicit 60s follow-up ceiling is a policy allowance, not a measured
+    // latency (no successful run of this test exists in the evidence) — see
+    // the budget comment above; the heavier two-tool-call test (a) keeps the
+    // function default.
+    await waitForTurnFullyDone(page, 8_000, 60_000);
 
     // Structural assertion: the non-image branch of InlineMedia renders an
     // <a download="..."> link (ChatScreen.tsx:378-386), never an <img>, for

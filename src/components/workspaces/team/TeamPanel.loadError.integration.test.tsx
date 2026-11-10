@@ -50,7 +50,7 @@ const WORKSPACE: Workspace = {
 }
 const DELEGATION: WorkspaceDelegation = {
   workspace_id: WORKSPACE_ID, revision: WORKSPACE.revision,
-  team: [MEMBER.id], edges: [], default_depth: 3,
+  team: [MEMBER.id], edges: [], default_depth: 10,
 }
 const SIGNED_IN: AppState = {
   onboarding_complete: true,

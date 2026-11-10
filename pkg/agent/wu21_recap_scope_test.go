@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/memrooms"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -56,7 +57,12 @@ func wu21New(t *testing.T) wu21Fixture {
 			t.Errorf("close audit: %v", err)
 		}
 	})
-	al := &AgentLoop{sharedSessionStore: store, auditLogger: log, registry: &AgentRegistry{agents: map[string]*AgentInstance{"self": ag}}}
+	// cfg is the same zero-value config the sibling recap fixtures pass to
+	// mustNewAgentLoop (session_end_smoke_test.go and kin): its Agents.Defaults
+	// getters carry the production defaults the recap path always reads
+	// (session_end.go::loadTranscript reads GetRecapFallbackContextChars), and
+	// production never runs with a nil config.
+	al := &AgentLoop{cfg: &config.Config{}, sharedSessionStore: store, auditLogger: log, registry: &AgentRegistry{agents: map[string]*AgentInstance{"self": ag}}}
 	return wu21Fixture{home: home, agentHome: agHome, auditDir: auditDir, al: al, ag: ag, store: store}
 }
 

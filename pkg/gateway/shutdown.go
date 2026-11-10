@@ -242,6 +242,25 @@ type shutdownBackgroundStops struct {
 	liveLimits    func()
 	catalogCancel func()
 	catalogDone   <-chan struct{}
+	// bootBackground cancels (bootBackgroundDone joins) the boot-stage
+	// browser cache-trim schedule, managed-Chromium preprovision download
+	// and unknown-window primer started by initializeAgentLoop and attached
+	// to services by startServices. The preprovision download writes
+	// browser/chromium/*.zip.part-* under homePath and used to outlive every
+	// shutdown drain — the TempDir-cleanup family (#1644/#1695).
+	bootBackground     func()
+	bootBackgroundDone <-chan struct{}
+	// orphanGCCancel cancels the media-library orphan-GC goroutine and
+	// orphanGCDone joins it. The goroutine's FIRST act is the one-time
+	// association repair under workspaces/ (#1598) — synchronous and
+	// uncancelable, which the join covers; the cancel stops the tick loop
+	// after it. The goroutine's context is a child of the gateway ctx, but
+	// both drains must carry their own cancel: on a partial-boot abort or a
+	// test harness teardown the parent ctx stays live, and a join-only wait
+	// would hold the drain until its budget expired while the goroutine kept
+	// running (CHECK 1 finding F2, 2026-11-08).
+	orphanGCCancel context.CancelFunc
+	orphanGCDone   <-chan struct{}
 }
 
 // backgroundStopsOf collects the running services' background stops.
@@ -264,6 +283,12 @@ func backgroundStopsOf(rs *services) shutdownBackgroundStops {
 	}
 	s.catalogCancel = rs.catalogRefreshCancel
 	s.catalogDone = rs.catalogRefreshDone
+	if rs.bootBackgroundCancel != nil {
+		s.bootBackground = rs.bootBackgroundCancel
+		s.bootBackgroundDone = rs.bootBackgroundDone
+	}
+	s.orphanGCCancel = rs.orphanGCCancel
+	s.orphanGCDone = rs.orphanGCDone
 	return s
 }
 
@@ -337,6 +362,25 @@ func stopBackgroundWriters(ctx context.Context, s shutdownBackgroundStops) {
 		case <-ctx.Done():
 			slog.Warn("shutdown: catalog refresh loop did not exit within the shutdown budget; continuing")
 		}
+	}
+	// TempDir-cleanup family (#1644/#1695): the boot-stage browser writers
+	// (cache-trim schedule, managed-Chromium preprovision download) and the
+	// media orphan-GC goroutine (workspaces/ association repair) used to
+	// outlive RunContext entirely — the preprovision download was measured
+	// still growing its .part-* file seconds after every drain had run.
+	// Cancel-and-join them here, bounded, the same way the catalog loop
+	// above is joined.
+	if s.bootBackground != nil {
+		s.bootBackground()
+	}
+	if s.bootBackgroundDone != nil {
+		waitBootBackgroundDone(ctx, s.bootBackgroundDone, "boot browser/preprovision goroutines")
+	}
+	if s.orphanGCCancel != nil {
+		s.orphanGCCancel()
+	}
+	if s.orphanGCDone != nil {
+		waitBootBackgroundDone(ctx, s.orphanGCDone, "media library orphan-GC goroutine")
 	}
 }
 

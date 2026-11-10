@@ -566,11 +566,11 @@ func TestWorkspaceCreate_SeedsDelegationEdgesForNewMembers(t *testing.T) {
 	if findEdge(edges, "worker", "worker") == nil {
 		t.Error("expected General Purpose self edge")
 	}
-	if d, ok := edgeDepthInt(findEdge(edges, "jim", "jim")); !ok || d != 3 {
-		t.Errorf("jim→jim: FR-006 requires explicit depth 3 on a fresh self-edge, present=%v value=%d", ok, d)
+	if d, ok := edgeDepthInt(findEdge(edges, "jim", "jim")); !ok || d != 10 {
+		t.Errorf("jim→jim: FR-006 requires explicit depth 10 on a fresh self-edge, present=%v value=%d", ok, d)
 	}
-	if d, ok := edgeDepthInt(findEdge(edges, "worker", "worker")); !ok || d != 3 {
-		t.Errorf("worker→worker: FR-006 requires explicit depth 3 on a fresh self-edge, present=%v value=%d", ok, d)
+	if d, ok := edgeDepthInt(findEdge(edges, "worker", "worker")); !ok || d != 10 {
+		t.Errorf("worker→worker: FR-006 requires explicit depth 10 on a fresh self-edge, present=%v value=%d", ok, d)
 	}
 	if e := findEdge(edges, "jim", "worker"); e != nil {
 		if _, hasDepth := e["depth"]; hasDepth {
@@ -617,19 +617,19 @@ func TestWorkspaceCreate_NoCoreTeam_NoDelegationSeeded(t *testing.T) {
 	}
 }
 
-// TestWorkspaceCreate_SelfEdgesPinDepthAtCeilingOr3 is the tool-path FR-006
-// matrix: create_workspace seeds jim→jim and worker→worker at min(3,
-// effective ceiling). Non-self Jim edges stay unpinned. Expected depths
-// come from the spec sentence, not from observed output.
-func TestWorkspaceCreate_SelfEdgesPinDepthAtCeilingOr3(t *testing.T) {
+// TestWorkspaceCreate_SelfEdgesPinDepthAtCeilingOrDefault is the tool-path
+// FR-006 matrix: create_workspace seeds jim→jim and worker→worker at
+// min(10, effective ceiling). Non-self Jim edges stay unpinned. Expected
+// depths come from the spec sentence, not from observed output.
+func TestWorkspaceCreate_SelfEdgesPinDepthAtCeilingOrDefault(t *testing.T) {
 	cases := []struct {
 		name     string
 		maxDepth int
 		want     int
 	}{
-		{"unset ceiling pins 3", 0, 3},
+		{"unset ceiling pins 10", 0, 10},
 		{"ceiling 2 clamps to 2", 2, 2},
-		{"ceiling 5 still pins 3", 5, 3},
+		{"ceiling 15 above the pin still pins 10", 15, 10},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -696,7 +696,7 @@ func TestWorkspaceCreate_ExplicitSelfEdgeIsNotDepthPinned(t *testing.T) {
 
 // TestWorkspaceUpdate_SelfEdgesPinDepthAndPreserveUserAuthored covers the
 // update_workspace seed path: a newly added Worker self-edge is pinned at
-// min(3, ceiling), while a user-authored Jim self-edge already on disk
+// min(10, ceiling), while a user-authored Jim self-edge already on disk
 // keeps its written depth (no migration).
 func TestWorkspaceUpdate_SelfEdgesPinDepthAndPreserveUserAuthored(t *testing.T) {
 	cases := []struct {
@@ -706,7 +706,7 @@ func TestWorkspaceUpdate_SelfEdgesPinDepthAndPreserveUserAuthored(t *testing.T) 
 		id        string
 	}{
 		{"ceiling 2 clamps a newly seeded worker self-edge to 2", 2, 2, "01KW60SELFDEPTH00000000002"},
-		{"ceiling 5 still pins a newly seeded worker self-edge to 3", 5, 3, "01KW60SELFDEPTH00000000005"},
+		{"ceiling 15 above the pin still pins a newly seeded worker self-edge to 10", 15, 10, "01KW60SELFDEPTH00000000005"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1234,13 +1234,13 @@ func TestWorkspaceUpdate_SeedsDelegationEdgesForNewMembers(t *testing.T) {
 			}
 		}
 	}
-	// FR-006: fresh self-edges pin 3 when the ceiling is unset
-	// (DefaultConfig leaves SubTurn.MaxDepth at 0 → fallback 3).
-	if d, ok := edgeDepthInt(jimSelf); !ok || d != 3 {
-		t.Errorf("jim→jim: FR-006 requires explicit depth 3 on a fresh self-edge, present=%v value=%d", ok, d)
+	// FR-006: fresh self-edges pin 10 when the ceiling is unset
+	// (DefaultConfig leaves performance.max_delegation_depth at 0 → fallback 10).
+	if d, ok := edgeDepthInt(jimSelf); !ok || d != 10 {
+		t.Errorf("jim→jim: FR-006 requires explicit depth 10 on a fresh self-edge, present=%v value=%d", ok, d)
 	}
-	if d, ok := edgeDepthInt(workerSelf); !ok || d != 3 {
-		t.Errorf("worker→worker: FR-006 requires explicit depth 3 on a fresh self-edge, present=%v value=%d", ok, d)
+	if d, ok := edgeDepthInt(workerSelf); !ok || d != 10 {
+		t.Errorf("worker→worker: FR-006 requires explicit depth 10 on a fresh self-edge, present=%v value=%d", ok, d)
 	}
 	if _, hasDepth := jimWorker["depth"]; hasDepth {
 		t.Errorf("jim→worker: depth should be absent (non-self seed inherits the global cap), got %v", jimWorker["depth"])

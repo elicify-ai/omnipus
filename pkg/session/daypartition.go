@@ -119,18 +119,22 @@ type AttentionMark struct {
 
 // SessionMeta is the meta.json file per Appendix E §E.5.1.
 type SessionMeta struct {
-	ID          string        `json:"id"`
-	AgentID     string        `json:"agent_id"`
-	Title       string        `json:"title,omitempty"`
-	Status      SessionStatus `json:"status"` // StatusActive | StatusArchived | StatusInterrupted
-	CreatedAt   time.Time     `json:"created_at"`
-	UpdatedAt   time.Time     `json:"updated_at"`
-	Model       string        `json:"model,omitempty"`
-	Provider    string        `json:"provider,omitempty"`
-	Stats       SessionStats  `json:"stats"`
-	WorkspaceID string        `json:"workspace_id,omitempty"`
-	TaskID      string        `json:"task_id,omitempty"`
-	Channel     string        `json:"channel"`
+	ID        string        `json:"id"`
+	AgentID   string        `json:"agent_id"`
+	Title     string        `json:"title,omitempty"`
+	Status    SessionStatus `json:"status"` // StatusActive | StatusArchived | StatusInterrupted
+	CreatedAt time.Time     `json:"created_at"`
+	UpdatedAt time.Time     `json:"updated_at"`
+	Model     string        `json:"model,omitempty"`
+	Provider  string        `json:"provider,omitempty"`
+	// ReasoningEffort is the conversation's own effort override set by the
+	// /effort command (effort-levels spec FR-039). "" (absent) = Not set:
+	// the agent's setting applies. Never written by a model change.
+	ReasoningEffort string       `json:"reasoning_effort,omitempty"`
+	Stats           SessionStats `json:"stats"`
+	WorkspaceID     string       `json:"workspace_id,omitempty"`
+	TaskID          string       `json:"task_id,omitempty"`
+	Channel         string       `json:"channel"`
 	// InstanceID is the channel INSTANCE this session belongs to — the key in
 	// cfg.Channels, e.g. "whatsapp.eu", not the bare type "whatsapp".
 	//
@@ -267,6 +271,10 @@ type ModelTokens struct {
 	CacheRead  int `json:"cache_read"`
 	CacheWrite int `json:"cache_write"`
 	Total      int `json:"total"`
+	// Reasoning is the sum of the reported reasoning-token counts of the
+	// entries in this cell (effort-levels spec FR-024/FR-036): a subset of
+	// Out, never added to Total; nil when no entry reported a count.
+	Reasoning *int `json:"reasoning,omitempty"`
 	// CacheHitRatio is cache_read / (in + cache_read + cache_write) when that
 	// denominator is greater than zero, and nil when it is zero. Not filled yet.
 	CacheHitRatio *float64 `json:"cache_hit_ratio,omitempty"`
@@ -411,6 +419,18 @@ type TranscriptEntry struct {
 	// the provider reported them. CacheWriteTokens stays the sum of the two.
 	CacheWrite5mTokens int `json:"cache_write_5m_tokens,omitempty"`
 	CacheWrite1hTokens int `json:"cache_write_1h_tokens,omitempty"`
+
+	// ReasoningTokens is this call's reported reasoning-token count
+	// (effort-levels spec FR-024): a subset of CompletionTokens, nil when the
+	// provider reported none, 0 when it reported zero. Booked per call.
+	ReasoningTokens *int `json:"reasoning_tokens,omitempty"`
+	// TurnReasoningTokens is the display-only snapshot of the turn's reported
+	// reasoning-token sum, stored on the answering entry (FR-024). Never read
+	// by any statistic.
+	TurnReasoningTokens *int `json:"turn_reasoning_tokens,omitempty"`
+	// Effort is the per-turn effort record of the answering call (FR-058).
+	// Never carries reasoning text.
+	Effort *generated.EffortRecord `json:"effort,omitempty"`
 
 	// For compaction entries.
 	MessagesCompacted int `json:"messages_compacted,omitempty"`
