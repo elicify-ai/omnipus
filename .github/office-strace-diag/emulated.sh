@@ -2,17 +2,17 @@
 # DIAGNOSTIC ONLY. The product's LibreOffice start (same executable, flags,
 # environment, call-folder layout, exit-81 restart) under a re-created
 # converter Landlock ruleset, plus the named extra /tmp rights, traced.
-# usage: emulated.sh <log dir> <none|sock|sock+remove>
+# usage: emulated.sh <log dir> <none|sock|sock+remove> <tag> [extra landlock_run rules...]
 set -uo pipefail
-logs="${1:?log dir}"; tmp="${2:?tmp rights}"; office="${OMNIPUS_TEST_OFFICE_ROOT:?}"; here="$(cd "$(dirname "$0")" && pwd)"
-tag="emulated-${tmp/+/-}"
+logs="${1:?log dir}"; tmp="${2:?tmp rights}"; tagarg="${3:?tag}"; shift 3; extra=("$@"); office="${OMNIPUS_TEST_OFFICE_ROOT:?}"; here="$(cd "$(dirname "$0")" && pwd)"
+tag="emulated-$tagarg"
 call="$(mktemp -d "$RUNNER_TEMP/$tag-call.XXXXXX")"
 mkdir -p "$call"/{in,out,home,tmp,profile/user}
 python3 -I "$here/make_xlsx.py" "$call/in/document.xlsx"
 rules=(--rx "$office")
 for d in /lib /lib64 /usr/lib /usr/lib64 /etc/ld.so.cache; do [ -e "$d" ] && rules+=(--rx "$d"); done
 for d in /usr/share/fonts /usr/local/share/fonts /etc/fonts; do [ -e "$d" ] && rules+=(--ro "$d"); done
-rules+=(--rw "$call" --tmp "$tmp")
+rules+=(--rw "$call" --tmp "$tmp" "${extra[@]}")
 out="$logs/$tag.txt"
 { echo "call=$call"; echo "rules: ${rules[*]}"; echo "pipes before: $(find /tmp /var/tmp -maxdepth 1 -name 'OSL_PIPE*' | tr '\n' ' ')"; } > "$out"
 for attempt in 1 2; do
@@ -28,6 +28,7 @@ for attempt in 1 2; do
   [ "$code" = 81 ] || break
 done
 echo "pipes after: $(find /tmp /var/tmp -maxdepth 1 -name 'OSL_PIPE*' | tr '\n' ' ')" >> "$out"
+echo "stdout/stderr of the last start:" >> "$out"; grep -v "^landlock_run: rule" "$logs/$tag-start$attempt.out" | tail -5 >> "$out"
 cat "$out"
 for f in "$logs/$tag"-start*.strace; do echo "-- denied in $f:"; grep -E '= -1 E(ACCES|PERM|XDEV|ROFS)' "$f" | cut -c1-300 | head -60; done
 # leave /tmp clean for the next variant, but record what we removed

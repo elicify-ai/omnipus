@@ -69,17 +69,19 @@ jobs:
             cat /etc/os-release | head -2
           } | tee "$LOGS/host.txt"
 
-      - name: Emulated converter ruleset - control (no extra rights), /tmp make-sock, /tmp make-sock + remove-file
-        # Run 42793021593 already traced the real confined tests, the
-        # unconfined start and the stale-socket cases; this run re-creates the
-        # converter ruleset outside Omnipus to find every denial AFTER the
-        # socket bind, which the real run never reaches.
+      - name: Emulated converter ruleset - candidate extra rights, narrowest first
+        # Runs 42793021593 and 42793839583 established: the real confined
+        # start fails at the /tmp socket bind; with /tmp make-sock added it
+        # aborts on the next refusal (/dev/urandom). This run adds rights in
+        # steps to find the set with which the conversion completes, and
+        # whether the socket is removed on a normal exit.
         run: |
           set +e
-          for v in none sock sock+remove; do
-            echo "===== variant $v"
-            bash .github/office-strace-diag/emulated.sh "$LOGS" "$v"
-          done
+          bash .github/office-strace-diag/emulated.sh "$LOGS" sock A-sock-urandom --ro /dev/urandom
+          bash .github/office-strace-diag/emulated.sh "$LOGS" sock+remove B-sockrm-urandom --ro /dev/urandom
+          bash .github/office-strace-diag/emulated.sh "$LOGS" sock+remove C-sockrm-urandom-passwd --ro /dev/urandom --ro /etc/passwd --ro /etc/nsswitch.conf
+          bash .github/office-strace-diag/emulated.sh "$LOGS" sock+remove D-superset --ro /dev/urandom --ro /etc --rx /usr/bin \
+            --ro /usr/share --ro /var/cache/fontconfig --ro /proc --ro /sys/devices/system/cpu --rw /dev/null --ro /var/tmp
           exit 0
 
       - name: Upload the traces
