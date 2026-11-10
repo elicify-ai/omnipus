@@ -469,18 +469,18 @@ export interface paths {
         };
         /**
          * Get a single agent configuration
-         * @description Returns the full agent configuration including soul and heartbeat. Core (locked) agents return empty soul (compiled-in prompt not exposed).
+         * @description Returns the full agent configuration including soul and heartbeat. Core (locked) agents return empty soul (compiled-in prompt not exposed). Update (PUT) and delete (DELETE) apply only to the bare /agents/{id} address, with no sub-path. Unknown sub-paths, including undeclared descendants of known ones (a malformed mailboxes address is the exception, below), return 404, never agent detail. Known sub-paths are sessions, activity-runs, runner/test, tools, mailboxes/{workspaceId} and dependencies; a method a sub-path does not serve (OPTIONS preflight aside) returns 405 with an Allow header listing the methods it serves, without updating or deleting the agent. A malformed mailboxes address returns 400 for every method (OPTIONS preflight aside).
          */
         get: operations["getAgent"];
         /**
          * Update agent configuration
-         * @description Applies changed editable fields with a required revision. Protected or invalid fields and stale revisions reject without writes. Successful saves report live activation separately; partial storage failures report actual state.
+         * @description Applies changed editable fields with a required revision. Protected or invalid fields and stale revisions reject without writes. Successful saves report live activation separately; partial storage failures report actual state. Update applies only to PUT /agents/{id}, with no sub-path. PUT on a known sub-path that does not serve PUT returns 405 with an Allow header; an unknown sub-path returns 404. Neither refusal updates or deletes the agent.
          */
         put: operations["updateAgent"];
         post?: never;
         /**
          * Delete a custom agent
-         * @description Removes a custom (non-core, non-system) agent from config.json and reloads the live config. Built-in core/system agents (locked) and the `omnipus-system` agent CANNOT be deleted (403, code `agent_locked`). Deleting an agent removes its entity and applicable SOUL bytes but preserves unrelated files in the agent home. Audited (severity INFO, event `agent.delete`).
+         * @description Removes a custom (non-core, non-system) agent from config.json and reloads the live config. Built-in core/system agents (locked) and the `omnipus-system` agent CANNOT be deleted (403, code `agent_locked`). Deleting an agent removes its entity and applicable SOUL bytes but preserves unrelated files in the agent home. Audited (severity INFO, event `agent.delete`). Delete applies only to DELETE /agents/{id}, with no sub-path. DELETE on a known sub-path that does not serve DELETE returns 405 with an Allow header; an unknown sub-path returns 404. Neither refusal updates or deletes the agent.
          */
         delete: operations["deleteAgent"];
         options?: never;
@@ -20725,6 +20725,17 @@ export interface operations {
             };
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
+            /** @description This sub-path accepts GET only. Any other method returns 405 with response header Allow: GET, except OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted. */
+            405: {
+                headers: {
+                    /** @description Methods this sub-path accepts. For sessions this is GET. */
+                    Allow?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             500: components["responses"]["500InternalServerError"];
         };
     };
@@ -20757,6 +20768,17 @@ export interface operations {
             };
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
+            /** @description This sub-path accepts GET only. Any other method returns 405 with response header Allow: GET, except OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted. */
+            405: {
+                headers: {
+                    /** @description Methods this sub-path accepts. For activity-runs this is GET. */
+                    Allow?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             500: components["responses"]["500InternalServerError"];
         };
     };
@@ -20787,6 +20809,17 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
+            /** @description This sub-path accepts GET and PUT only. Any other method returns 405 with response header Allow: GET, PUT. The exception is OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted. */
+            405: {
+                headers: {
+                    /** @description Methods this sub-path accepts. For tools this is GET, PUT. */
+                    Allow?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             500: components["responses"]["500InternalServerError"];
         };
     };
@@ -20830,6 +20863,17 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             403: components["responses"]["403Forbidden"];
             404: components["responses"]["404NotFound"];
+            /** @description This sub-path accepts GET and PUT only. Any other method returns 405 with response header Allow: GET, PUT. The exception is OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted. */
+            405: {
+                headers: {
+                    /** @description Methods this sub-path accepts. For tools this is GET, PUT. */
+                    Allow?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description Revision or inherited global policy changed; no writes occurred. */
             409: {
                 headers: {
@@ -20884,6 +20928,17 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
+            /** @description This sub-path accepts POST only. Any other method returns 405 with response header Allow: POST, except OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted. */
+            405: {
+                headers: {
+                    /** @description Methods this sub-path accepts. For runner/test this is POST. */
+                    Allow?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             500: components["responses"]["500InternalServerError"];
         };
     };
@@ -22749,6 +22804,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description This address accepts GET, PUT and DELETE only. Any other method returns 405 with response header Allow: GET, PUT, DELETE. The exception is OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted. */
+            405: {
+                headers: {
+                    /** @description Methods this address accepts. */
+                    Allow?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             500: components["responses"]["500InternalServerError"];
         };
     };
@@ -22804,6 +22870,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description This address accepts GET, PUT and DELETE only. Any other method returns 405 with response header Allow: GET, PUT, DELETE. The exception is OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted. */
+            405: {
+                headers: {
+                    /** @description Methods this address accepts. */
+                    Allow?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             500: components["responses"]["500InternalServerError"];
         };
     };
@@ -22840,6 +22917,17 @@ export interface operations {
             /** @description Agent not found, or no mailbox configured for the agent in this workspace. */
             404: {
                 headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description This address accepts GET, PUT and DELETE only. Any other method returns 405 with response header Allow: GET, PUT, DELETE. The exception is OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted. */
+            405: {
+                headers: {
+                    /** @description Methods this address accepts. */
+                    Allow?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -28841,6 +28929,17 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
+            /** @description This sub-path accepts GET only. Any other method returns 405 with response header Allow: GET, except OPTIONS, the browser preflight request, which the gateway answers before the agents handler runs. The agent is not updated or deleted. */
+            405: {
+                headers: {
+                    /** @description Methods this sub-path accepts. For dependencies this is GET. */
+                    Allow?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
         };
     };
     listWorkspaceRooms: {
