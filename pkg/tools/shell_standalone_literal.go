@@ -39,7 +39,8 @@
 // otherwise hide a shell reading its script from a pipe.
 //
 // Any `<<` withholds the rule too, except in the one whole-command here-document
-// form `PROGRAM <<'MARKER'` (founder ruling Q11 A, isPlainHereDocument), whose
+// form `PROGRAM <<'MARKER'`, or `PROGRAM - <<'MARKER'` (founder ruling Q11 A,
+// amended by founder ruling Q73 A; isPlainHereDocument), whose
 // text is data to the launching shell, so none of the scan above applies to it.
 //
 // The guard still reads command text only; this rule does not make it a

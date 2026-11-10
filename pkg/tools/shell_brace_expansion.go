@@ -10,12 +10,13 @@
 //     `env bash -c` are covered), and the arguments of `eval`. These names are
 //     recognised in any letter case, by recognisedProgram alone.
 //
-// Here-documents (Q11 A): exactly one form keeps the rule, the whole command
-// being a plain program that is not a recognised shell or eval name and one
-// plain single-quoted marker
-// (isPlainHereDocument). Any other `<<`, wherever it appears in any text
-// scanned here, withholds the rule. There is deliberately no scanner for where
-// other forms end: comments, arithmetic, delimiter quoting and line joining
+// Here-documents (Q11 A, amended by founder ruling Q73 A): exactly one form
+// keeps the rule, the whole command being a plain program that is not a
+// recognised shell or eval name, optionally one literal "-" argument, and one
+// plain single-quoted marker (isPlainHereDocument). Any other `<<`, wherever
+// it appears in any text scanned here, withholds the rule. There is
+// deliberately no scanner for where other forms end: comments, arithmetic,
+// delimiter quoting and line joining
 // each made such a scanner read live shell text as document data.
 //
 // When the scan cannot be sure where a nested shell's script is, it answers
@@ -65,15 +66,19 @@ func commandMayBraceExpand(cmd string) bool {
 }
 
 // isPlainHereDocument reports whether cmd is the one here-document form that
-// keeps the rule (founder ruling Q11 A), compared byte for byte with no
-// normalisation. cmd must be the text the shell receives (executeRun trims the
-// command once, before both this check and the run):
+// keeps the rule (founder ruling Q11 A, amended by founder ruling Q73 A),
+// compared byte for byte with no normalisation. cmd must be the text the shell
+// receives (executeRun trims the command once, before both this check and the
+// run):
 //
-//	PROGRAM <<'MARKER'
+//	PROGRAM <<'MARKER'        or        PROGRAM - <<'MARKER'
 //	text
 //	MARKER
 //
-// PROGRAM and MARKER are plain words and PROGRAM is not a shell or eval. Lines
+// PROGRAM and MARKER are plain words and PROGRAM is not a shell or eval. The
+// only argument allowed is one literal "-" (the usual way to tell a program to
+// read its script from standard input): one space and one hyphen directly
+// before the ` <<'`. The shell does not expand a lone hyphen. Lines
 // end at LF only, so a CR makes a line differ from the marker exactly as it
 // does for the shell. The first line equal to the marker must be the last line
 // of the command: the shell ends the document there, so anything after it
@@ -86,7 +91,15 @@ func isPlainHereDocument(cmd string) bool {
 		return false
 	}
 	program, word, ok := strings.Cut(header, " <<'")
-	if !ok || !isPlainWord(program) || isShellOrEval(program) {
+	if !ok {
+		return false
+	}
+	// Q73 A: at most one literal " -"; a second one, or any other argument,
+	// leaves a word that is not plain.
+	if p, dash := strings.CutSuffix(program, " -"); dash {
+		program = p
+	}
+	if !isPlainWord(program) || isShellOrEval(program) {
 		return false
 	}
 	marker, ok := strings.CutSuffix(word, "'")
