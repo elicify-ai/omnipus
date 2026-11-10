@@ -385,7 +385,7 @@ describe('GatewayProcess boot failure: fails the test with the proven cause', ()
   }, 60_000)
 })
 
-describe('GatewayProcess boot failure: no secret in anything it emits', () => {
+describe('GatewayProcess boot failure: no secret in anything it emits: error graph, value forms, tail window', () => {
   it('a crash before the port announcement: the whole error graph (causes included) is scrubbed', async () => {
     const canary = 'canary-cause-graph-6b1d0e9f4a2c' // gitleaks:allow
     const marker = `CAUSE-${process.pid}`
@@ -454,6 +454,9 @@ describe('GatewayProcess boot failure: no secret in anything it emits', () => {
     }
   }, 60_000)
 
+})
+
+describe('GatewayProcess boot failure: no secret in anything it emits: multi-line, compound-name and restart secrets', () => {
   const ML_SECRET = 'mlcanary-one-AAAAAAAAAAAAAAAAAAAA\nmlcanary-two-BBBBBBBBBBBBBBBBBBBB\nmlcanary-three-CCCCCCCCCCCCCCCCCC' // gitleaks:allow
 
   it('a three-line secret whose first line is cut by the reported tail window is scrubbed, every line', async () => {
@@ -548,6 +551,9 @@ describe('GatewayProcess boot failure: no secret in anything it emits', () => {
     expect(emitted(err)).not.toContain(middle)
   }, 60_000)
 
+})
+
+describe('GatewayProcess boot failure: no secret in anything it emits: onboarding, provider keys and size', () => {
   it('a login failure whose response carries a secret: the error is scrubbed (cleanup succeeded)', async () => {
     const canary = 'canary-login-body-27fe90c4' // gitleaks:allow
     const state = newState('login-echo')
@@ -638,6 +644,9 @@ describe('GatewayProcess boot failure: no secret in anything it emits', () => {
     expect(err.message).toContain('onboarding failed 400')
     expect(err.message.length, 'the whole error stays under 512 Ki characters').toBeLessThan(512 * 1024)
   }, 60_000)
+})
+
+describe('GatewayProcess boot failure: no secret in anything it emits: malformed values and report failures', () => {
   // An unpaired UTF-16 surrogate is a valid JavaScript string but cannot be
   // URL-encoded: building its secret forms must not throw past cleanup.
   const SURROGATE = 'canary-surrogate-\uD800-7a41' // gitleaks:allow
