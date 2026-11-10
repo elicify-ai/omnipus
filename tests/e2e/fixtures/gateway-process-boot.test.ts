@@ -47,9 +47,19 @@ const panicLog = (text) => {
 }
 const serve = (health) => http.createServer((req, res) => {
   if (req.url === '/health') { res.writeHead(health); res.end('x'); return }
-  if (req.url === '/api/v1/onboarding/complete') { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{}'); return }
+  if (req.url === '/api/v1/onboarding/complete') {
+    if (mode === 'onboard-echo') {
+      // A 400 that echoes the request (it carries the provider key).
+      let body = ''
+      req.on('data', (c) => { body += c })
+      req.on('end', () => { res.writeHead(400); res.end('bad request: ' + body) })
+      return
+    }
+    res.writeHead(200, { 'content-type': 'application/json' }); res.end('{}'); return
+  }
   if (req.url === '/api/v1/auth/login') {
     if (mode === 'login-fails') { res.writeHead(500); res.end('login broken on purpose'); return }
+    if (mode === 'login-echo-secret') { res.writeHead(500); res.end('denied for ' + env.FAKE_LOGIN_TOKEN); return }
     res.writeHead(200, { 'content-type': 'application/json', 'set-cookie': 'csrf=fake-csrf; Path=/' })
     res.end('{}')
     return
@@ -97,7 +107,13 @@ if (mode === 'silent-ignore-term') {
     process.stdout.write('bare ' + env[name] + ' end\\n')
   }
   if (env.FAKE_PRINT_LINE2) process.stdout.write('line2 ' + env[env.FAKE_PRINT_LINE2].split('\\n')[1] + ' end\\n')
+  if (env.FAKE_PRINT_TRIMMED) process.stdout.write('trimmed ' + env[env.FAKE_PRINT_TRIMMED].trim() + ' end\\n')
   process.exit(6)
+} else if (mode === 'huge-exit') {
+  // Megabytes of output, no announcement, then a crash.
+  const chunk = ('noise ' + 'n'.repeat(993) + '\\n').repeat(100)
+  for (let i = 0; i < 20; i++) process.stdout.write(chunk)
+  process.stdout.write('last words of the huge boot\\n', () => process.exit(8))
 } else if (mode === 'restart-chain' && boot >= 2) {
   // Boot 2 (first restart) prints its secret and is healthy; boot 3 (second
   // restart) prints its own and crashes.
@@ -119,7 +135,7 @@ if (mode === 'silent-ignore-term') {
     process.exit(2)
   }
   if (mode === 'listen-503-ignore-term') { ignoreTerm(); serve(503) }
-  else if (mode === 'login-fails' || mode === 'restart-leak' || mode === 'restart-chain') serve(200)
+  else if (['login-fails', 'login-echo-secret', 'onboard-echo', 'restart-leak', 'restart-chain'].includes(mode)) serve(200)
   else setInterval(() => {}, 1000) // alive, never listening
   if (mode !== 'listen-503-ignore-term') process.on('SIGTERM', () => process.exit(0))
 }
@@ -363,7 +379,7 @@ describe('GatewayProcess boot failure: no secret in anything it emits', () => {
     expect(emitted(err)).not.toContain('canary-json-58e2')
   }, 60_000)
 
-  it('a known secret cut by the start of the panic-log read window is scrubbed', async () => {
+  it('a known secret cut by the start of the reported panic-log tail (REPORT_TAIL_BYTES) is scrubbed', async () => {
     const err = await startError({ binary: fake, apiBase: 'http://127.0.0.1:9', healthTimeoutMs: 1_000, env: leakEnv(newState('edge'), {}) })
     expect(err.message).toContain('gateway_panic.log')
     expect(err.message, 'the panic tail itself is there').toContain('ffff')
@@ -463,5 +479,78 @@ describe('GatewayProcess boot failure: no secret in anything it emits', () => {
     } finally {
       await gw.stop()
     }
+  }, 60_000)
+  it('a credential ending in CRLF, logged with the line break trimmed, is scrubbed', async () => {
+    const canary = 'crlf-canary-value-9d04b2' // gitleaks:allow
+    const err = await startError({
+      binary: fake,
+      apiBase: 'http://127.0.0.1:9',
+      healthTimeoutMs: 1_000,
+      env: { FAKE_MARKER: 'crlf', FAKE_MODE: 'bare-print', FAKE_STATE: newState('crlf'), FAKE_CRLF_TOKEN: `${canary}\r\n`, FAKE_PRINT_TRIMMED: 'FAKE_CRLF_TOKEN' },
+    })
+    expect(err.message).toContain('trimmed ')
+    expect(emitted(err)).not.toContain(canary)
+  }, 60_000)
+
+  it('the one long line of a multi-line value with short other lines, printed alone, is scrubbed', async () => {
+    const middle = 'r4-long-ml-d110e9ff-canary' // gitleaks:allow
+    const err = await startError({
+      binary: fake,
+      apiBase: 'http://127.0.0.1:9',
+      healthTimeoutMs: 1_000,
+      env: { FAKE_MARKER: 'ml1', FAKE_MODE: 'bare-print', FAKE_STATE: newState('ml-one'), FAKE_ML_SECRET: `x\n${middle}\nz`, FAKE_PRINT_LINE2: 'FAKE_ML_SECRET' },
+    })
+    expect(err.message).toContain('line2 ')
+    expect(emitted(err)).not.toContain(middle)
+  }, 60_000)
+
+  it('a login failure whose response carries a secret: the error is scrubbed (cleanup succeeded)', async () => {
+    const canary = 'canary-login-body-27fe90c4' // gitleaks:allow
+    const state = newState('login-echo')
+    const err = await startError({
+      binary: fake,
+      apiBase: 'http://127.0.0.1:9',
+      healthTimeoutMs: 1_000,
+      env: { FAKE_MARKER: 'le', FAKE_MODE: 'login-echo-secret', FAKE_STATE: state, FAKE_LOGIN_TOKEN: canary },
+    })
+    expect(err.message).toContain('login failed 500')
+    expect(err.message).toContain('denied for ')
+    expect(emitted(err)).not.toContain(canary)
+    expect(isAlive(pids(state)[0]), 'cleanup succeeded').toBe(false)
+  }, 60_000)
+
+  it('a live onboarding failure echoing the CI provider keys: the error is scrubbed (cleanup succeeded)', async () => {
+    const primary = 'canary-minimax-ci-key-6a02d9e1' // gitleaks:allow
+    const fallback = 'canary-openrouter-ci-key-b37c58f0' // gitleaks:allow
+    vi.stubEnv('MINIMAX_API_KEY_CI', primary)
+    vi.stubEnv('OPENROUTER_API_KEY_CI', fallback)
+    try {
+      const state = newState('onboard-echo')
+      // No apiBase: the real onboardViaAPI path with the CI key variables.
+      const err = await startError({
+        binary: fake,
+        healthTimeoutMs: 1_000,
+        env: { FAKE_MARKER: 'oe', FAKE_MODE: 'onboard-echo', FAKE_STATE: state },
+      })
+      expect(err.message).toContain('onboarding/complete returned 400')
+      expect(err.message, 'the echoed request is reported, scrubbed').toContain('api_key')
+      expect(emitted(err)).not.toContain(primary)
+      expect(emitted(err)).not.toContain(fallback)
+      expect(isAlive(pids(state)[0]), 'cleanup succeeded').toBe(false)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  }, 60_000)
+
+  it('megabytes of boot output: the error stays bounded and still names the cause', async () => {
+    const err = await startError({
+      binary: fake,
+      apiBase: 'http://127.0.0.1:9',
+      healthTimeoutMs: 1_000,
+      env: { FAKE_MARKER: 'huge', FAKE_MODE: 'huge-exit', FAKE_STATE: newState('huge') },
+    })
+    expect(err.message).toMatch(/code 8/)
+    expect(err.message, 'the output tail is still reported').toContain('last words of the huge boot')
+    expect(err.message.length, 'the whole error stays under 512 Ki characters').toBeLessThan(512 * 1024)
   }, 60_000)
 })

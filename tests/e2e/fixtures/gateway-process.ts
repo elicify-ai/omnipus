@@ -114,6 +114,9 @@ export const PANIC_LOG_READ_BYTES = 1024 * 1024;
 /** At most this many characters of each tail (output, panic log) are
  * reported; the cut is made after scrubbing and drops the partial line. */
 export const REPORT_TAIL_BYTES = 64 * 1024;
+/** At most this many characters of the failure message itself (a startup
+ * error carries the gateway's whole output); cut after scrubbing. */
+const REPORT_MESSAGE_MAX = 256 * 1024;
 /** How long stop() waits after SIGTERM before SIGKILL, and after SIGKILL. */
 const STOP_GRACE_MS = 10_000;
 const KILL_WAIT_MS = 10_000;
@@ -149,16 +152,21 @@ const SECRET_ENV_NAME = /KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL/i;
 const SECRET_LINE_MIN = 4;
 
 /** The forms a known secret may take in output: as is, JSON-escaped (once
- * and twice, e.g. a JSON string logged inside JSON) and URL-encoded, plus
- * every non-trivial line of a multi-line secret on its own (a cut or a
- * line-by-line log can show a single line without the rest). */
+ * and twice, e.g. a JSON string logged inside JSON) and URL-encoded, plus,
+ * when the ORIGINAL value contains a line break (a trailing CR/LF counts),
+ * every component line of at least SECRET_LINE_MIN characters on its own,
+ * even if only one qualifies (a log can show one line, or the value without
+ * its trailing line break). */
 function secretForms(value: string): string[] {
   const forms = (v: string) => {
     const json = JSON.stringify(v).slice(1, -1);
     return [v, json, JSON.stringify(json).slice(1, -1), encodeURIComponent(v)];
   };
-  const lines = value.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length >= SECRET_LINE_MIN);
-  return [...new Set([...forms(value), ...(lines.length > 1 ? lines.flatMap(forms) : [])])];
+  const multiline = /[\r\n]/.test(value);
+  const lines = multiline
+    ? value.split(/\r?\n|\r/).map((l) => l.trim()).filter((l) => l.length >= SECRET_LINE_MIN)
+    : [];
+  return [...new Set([...forms(value), ...lines.flatMap(forms)])];
 }
 
 /**
@@ -284,7 +292,14 @@ export class GatewayProcess {
   /** A boot failure plus this gateway's own output and panic-log tails,
    * secrets scrubbed: the cause, not a guess. */
   private bootFailureReport(err: unknown, what: string): string {
-    const message = this.scrub(err instanceof Error ? err.message : String(err));
+    let message = this.scrub(err instanceof Error ? err.message : String(err));
+    if (message.length > REPORT_MESSAGE_MAX) {
+      // Cut after scrubbing, so the cut cannot split a secret out of
+      // recognition; the output tail follows below anyway.
+      message =
+        `${message.slice(0, REPORT_MESSAGE_MAX)}\n` +
+        `[... ${message.length - REPORT_MESSAGE_MAX} more characters cut; see the output tail below ...]`;
+    }
     const output = reportTail(this.scrub(this.output), OUTPUT_TAIL_LINES, this.outputCut);
     return (
       `GatewayProcess ${what} failed (port ${this.port}, OMNIPUS_HOME ${this.homeDir}, binary ${this.binary}): ${message}\n` +
@@ -369,13 +384,13 @@ export class GatewayProcess {
     // A failed onboarding (a missing key, a refused probe) must not leave
     // the process running or its temp OMNIPUS_HOME behind either. If that
     // cleanup fails too, the error keeps both (scrubbed, no raw cause).
+    // The error is always rebuilt from scrubbed text (the raw one can carry
+    // a response body or a provider key), with or without a cleanup failure.
     try {
       await gw.onboardAndLogin();
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      const both = await gw.stopAfterFailure(gw.scrub(`GatewayProcess onboarding/login failed: ${message}`));
-      if (both === undefined) throw err;
-      bootFailure = both;
+      const failure = gw.scrub(`GatewayProcess onboarding/login failed: ${err instanceof Error ? err.message : String(err)}`);
+      bootFailure = (await gw.stopAfterFailure(failure)) ?? failure;
     }
     if (bootFailure !== undefined) throw new Error(bootFailure);
     return gw;
