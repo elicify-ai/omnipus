@@ -4,13 +4,15 @@
 
 // Package thirdpartycli owns the person-set program path and standard
 // parameters of the three external CLIs (Settings -> Third-party agents):
-// the one exported path check every caller uses (the Settings save, every
-// spawn, the connection check, the smoke test and the command preview) and
-// the exact refusal texts (tool-parity spec r17 §3.5, §3.6, §3.11).
+// the one exported path check every caller uses (the Settings save,
+// cli-validate, every spawn, the connection check, the smoke test and the
+// command preview) and the exact refusal texts (tool-parity spec r17 §3.5,
+// §3.6, §3.11; T11 spec §3.2, founder Q28 A).
 package thirdpartycli
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 	"unicode/utf8"
 )
@@ -38,7 +40,7 @@ const (
 	CheckNotRegularFile        = "not_regular_file"
 	CheckNotExecutable         = "not_executable"
 	CheckAgentWritableLocation = "agent_writable_location"
-	CheckWritableByOthers      = "writable_by_others"
+	CheckLocationUnverifiable  = "location_unverifiable"
 	CheckWindowsExtension      = "windows_extension"
 	CheckWindowsShortName      = "windows_short_name"
 	CheckWindowsStream         = "windows_stream"
@@ -55,11 +57,23 @@ var pathReasons = map[string]string{
 	CheckNotRegularFile:        "it is not a regular file",
 	CheckNotExecutable:         "it is not executable for the Omnipus user",
 	CheckAgentWritableLocation: "it is inside a folder agents can write to",
-	CheckWritableByOthers:      "it, or the folder holding it, can be changed by any user",
-	CheckWindowsExtension:      "it must end in .exe, .com, .cmd or .bat",
+	CheckLocationUnverifiable:  locationUnverifiableReason,
+	CheckWindowsExtension:      "it must end in .exe, .cmd or .bat",
 	CheckWindowsShortName:      "short (8.3) names are not accepted; use the full name",
 	CheckWindowsStream:         "alternate data streams are not accepted",
 }
+
+// locationUnverifiableReason names the real cause of a location_unverifiable
+// refusal (founder Q37 A): the list of folders agents can write to was
+// incomplete — a blank data folder, a workspace listing or mount record that
+// could not be read, an unsafe workspace id, or a listed folder that could
+// not be examined — not the program. The server log names the exact cause.
+const (
+	locationUnverifiableCause  = "the list of folders agents can write to could not be read in full"
+	locationUnverifiableLog    = "Details are in the server log"
+	locationUnverifiableReason = locationUnverifiableCause + ", so this location cannot be checked. " +
+		locationUnverifiableLog
+)
 
 // presetReasons is the `<reason>` of the cli_preset_invalid sentence.
 var presetReasons = map[string]string{
@@ -112,12 +126,20 @@ type CheckError struct {
 	Detail string
 }
 
-// Error implements error with the operator-facing summary.
+// Error implements error with the operator-facing summary. It carries the
+// path, so it belongs in the server log and never in a client text; a client
+// gets ClientSummary.
 func (e *CheckError) Error() string {
 	if e.At == "" {
-		return fmt.Sprintf("%s: check %s failed", e.CLI, e.Check)
+		return e.ClientSummary()
 	}
-	return fmt.Sprintf("%s: check %s failed at %s", e.CLI, e.Check, e.At)
+	return e.ClientSummary() + " at " + e.At
+}
+
+// ClientSummary is the failed check without any path (founder Q48 A): the
+// program and the check class only, safe to send to a client.
+func (e *CheckError) ClientSummary() string {
+	return fmt.Sprintf("%s: check %s failed", e.CLI, e.Check)
 }
 
 // IsPresetCheck reports whether the error came from ValidatePreset.
@@ -144,10 +166,21 @@ func NoPathText(cli string) string {
 }
 
 // CheckFailedText is the run refusal when the saved path fails its checks
-// (r17 §3.11 CheckFailed).
+// (r17 §3.11 CheckFailed). The text reaches browsers, tool results and chat
+// transcripts, so it names only the program and the check class (founder Q48
+// A). at, the path element that failed, is logged here, so no caller can build
+// the refusal without the server log recording where the check failed.
 func CheckFailedText(cli, check, at string) string {
+	slog.Warn("third-party program check: the program is refused", "cli", cli, "check", check, "path", at)
+	if check == CheckLocationUnverifiable {
+		// Moving or fixing the program would not help, so this refusal names
+		// the real cause instead of "does not pass its checks".
+		return "This agent cannot run: the location of the program set for " + DisplayName(cli) +
+			" in Settings → Third-party agents cannot be checked (" + check + ") because " +
+			locationUnverifiableCause + ". " + locationUnverifiableLog + "."
+	}
 	return "This agent cannot run: the program set for " + DisplayName(cli) +
-		" in Settings → Third-party agents does not pass its checks (" + check + " at " + at +
+		" in Settings → Third-party agents does not pass its checks (" + check +
 		"). A person can fix it there."
 }
 

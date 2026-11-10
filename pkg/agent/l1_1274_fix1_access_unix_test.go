@@ -50,13 +50,15 @@ func TestL11274SavedProgramRespectsCurrentUserExecuteAccess(t *testing.T) {
 				t.Errorf("0601 program must report runnable=false with the not_executable check, got %s", result.ForLLM)
 			}
 			fake, _ := l11274DriverSeam(t, f)
+			logs := t11Q48CaptureRefusalLogs(t)
 			refused := l11274DelegateAndReadRefusal(t, f, id, "must not run a 0601 program")
-			if !strings.Contains(refused, "not_executable") || !l11274ReasonNamesPath(refused, path) {
-				t.Errorf("run refusal must name the failed check and the saved path %q, got %q", path, refused)
+			if !strings.Contains(refused, "not_executable") || l11274ReasonNamesPath(refused, path) {
+				t.Errorf("Q48: run refusal must name the failed check but omit the saved path %q, got %q", path, refused)
 			}
 			if got := len(fake.RecordedRunOpts()); got != 0 {
 				t.Errorf("a refused run reached the driver %d times, want 0", got)
 			}
+			t11Q48AssertServerOnlyPath(t, logs, refused, "not_executable", path)
 		})
 	}
 }

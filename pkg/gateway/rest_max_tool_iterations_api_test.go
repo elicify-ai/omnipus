@@ -398,6 +398,7 @@ func TestMaxToolIterations_Subagent3pPutAccepted(t *testing.T) {
 // the resolver's effective value.
 func TestMaxToolIterations_ExecutorPreview(t *testing.T) {
 	api := newLimitAPI(t, 200)
+	t11bSavedProgram(t, api, "claude-code")
 	preview := func(body string) *httptest.ResponseRecorder {
 		w := httptest.NewRecorder()
 		api.postAgentsExecutorPreview(w,
