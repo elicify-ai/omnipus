@@ -198,7 +198,7 @@ func Test1534Shown_PersistTranscriptNoDuplicateNarration(t *testing.T) {
 	s.SuppressTranscriptWrite()
 	require.NoError(t, s.Update(context.Background(), prior.Content))
 	s.CutoffAtStop()
-	stop1534SetLimit(t, s, 0)
+	stop1534SetLimit(t, s, 3)
 	require.NoError(t, s.Finalize(context.Background(), "new terminal tail"))
 	entries := stopParityAssistantEntries(t, store, sid)
 	require.Len(t, entries, 1, "Stop must not derive pendingFinalContent or create a second entry (§2)")
