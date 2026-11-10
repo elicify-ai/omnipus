@@ -1,0 +1,852 @@
+{
+  "purpose": "Round-2 author RED repair handoff, not independent CHECK or feature acceptance",
+  "generated_at_utc": "2026-11-01T02:06:51.886764+00:00",
+  "worktree": "/workspace/wt-effort",
+  "branch": "landing/effort",
+  "pre_repair_head": "1d53b345c9775ec27ad6f1b3b85a542240d2d2fd",
+  "specification": "/workspace/omnipus-coordination/designs-20261029/effort-levels-spec-r10.md",
+  "independent_input": "/workspace/omnipus-coordination/designs-20261029/effort-red-check-report-2.md",
+  "qualifications": [
+    "Commands are indexed from saved raw logs; this generator does not run any test.",
+    "All heavy executions were serial foreground through plain heavy. Automatic wrapper local-slot fallback is disclosed; no manual --local.",
+    "Every new/changed behavioral test is observed RED for a specified missing behavior. Helper controls are instrument PINs, not behavioral GREEN or production mutation proof.",
+    "Assertions behind missing command/chip/stream prerequisites are unreached, not counted as executed acceptance.",
+    "S-02 drives the real session-worker outbound owner, not connector intake/admission; the all-destination observation is bounded to the existing 10-second test budget.",
+    "S-88 accounting test forces two real adapter HTTP calls explicitly; it does not prove automatic streaming fallback, live done or answering snapshots.",
+    "S-88/S-95 gateway workflows remain loud BLOCKED because multi-candidate callProviderOnce calls p.Chat instead of runProviderAttempt.",
+    "Typecheck exit 2, design scanner exit 1 and nonzero test exits remain red; no production repair or suppression.",
+    "Current-source fingerprints are measured at handoff, not captured at run time; round-1 fingerprints remain frozen historical evidence.",
+    "No whole suite, UAT, production mutation, feature delivery, independent CHECK, push or landing is claimed.",
+    "GREEN, scratch-clone mutations and proof-of-failability completion are deferred to independent CHECK."
+  ],
+  "counts": {
+    "authoritative_heavy_commands": 10,
+    "go_top_level": 15,
+    "go_pass_controls": 4,
+    "go_pass_existing_controls": 3,
+    "go_pass_oracle_instrument": 1,
+    "go_oracle_instrument_subcases": 9,
+    "go_fail_including_blocked": 11,
+    "go_blocked_full_workflows": 2,
+    "vitest_cases": 13,
+    "vitest_fail": 13,
+    "vitest_new_s60_cases": 3
+  },
+  "current_source_fingerprints": [
+    {
+      "file": "/workspace/wt-effort/pkg/agent/effort_red_conversation_test.go",
+      "sha256": "3991ea196cae6066daa50c59cba7d438e628879e6c534ff18c2efed231f7b7cd",
+      "measurement": "handoff_only"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/agent/effort_red_request_rejection_test.go",
+      "sha256": "5223c054789e1a899064c04761b042ac1a54670a9e491579c47bbfce199a981c",
+      "measurement": "handoff_only"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/agent/effort_red_state_records_test.go",
+      "sha256": "7696ccac87d1f8f73d5ebead32188eed18c7c1b4543a80df1f466e34ef99ddf3",
+      "measurement": "handoff_only"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/agent/effort_red_usage_test.go",
+      "sha256": "2232d9253599545618a7c091cec435bd02f8a590600e675d4458853b854ca8ef",
+      "measurement": "handoff_only"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/agent/effort_red_messenger_containment_test.go",
+      "sha256": "33069d26e880d5662fe79e59dbf4db79344a4ab1591f0429c399880abdcdd207",
+      "measurement": "handoff_only"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/agent/effort_red_openrouter_oracle_test.go",
+      "sha256": "86556496ebdf537c7e81e50a78ed1e0df8eeafe6b4238422cea37eecc7d6fb18",
+      "measurement": "handoff_only"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/gateway/effort_red_multimodel_test.go",
+      "sha256": "8f47c82d36bb455f7a1c262ba70b0f9c1aa141ed298f7559f66142566d53ac99",
+      "measurement": "handoff_only"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/gateway/effort_red_production_paging_test.go",
+      "sha256": "dfe1c310723f5bfe9b0024988de997be595c8ae0255ba5366515550e64daf955",
+      "measurement": "handoff_only"
+    },
+    {
+      "file": "/workspace/wt-effort/pkg/sysagent/tools/effort_red_model_change_test.go",
+      "sha256": "0fb69a530fe8303aeb39f20d7f63bf81ba3ea5fda09f1b3f810d8832a06812bb",
+      "measurement": "handoff_only"
+    },
+    {
+      "file": "/workspace/wt-effort/src/components/settings/effort-red-recap-limits.test.tsx",
+      "sha256": "ac8dd2e6325b5d10dffed0e73b344b363fa326bf593e7b7eb3c62e7b664fc45f",
+      "measurement": "handoff_only"
+    }
+  ],
+  "input_fingerprints": [
+    {
+      "file": "/workspace/omnipus-coordination/designs-20261029/effort-levels-spec-r10.md",
+      "sha256": "547fc3a6c521debf8f9c4a362f9b6e3c26dfaeb3c283348c00c7785c47b9839b"
+    },
+    {
+      "file": "/workspace/omnipus-coordination/designs-20261029/effort-red-check-report-2.md",
+      "sha256": "8bebb91b81eca80cb7bb6269f5713d77857022d8be2cc036383cbe1fb9b72484"
+    }
+  ],
+  "authoritative_go_results": [
+    {
+      "name": "TestT_TL58_ModelChangeWithoutEffortPreservesOffOrRefusesAtomically",
+      "result": "FAIL",
+      "source": "/workspace/wt-effort/pkg/sysagent/tools/effort_red_model_change_test.go"
+    },
+    {
+      "name": "TestT_CMD_S37_S38_S39_RealConversationScopeServingModelAndRestart",
+      "result": "FAIL",
+      "source": "/workspace/wt-effort/pkg/agent/effort_red_conversation_test.go"
+    },
+    {
+      "name": "TestT_S2_S87_InheritedHighChangedToOffAtRuntime",
+      "result": "FAIL",
+      "source": "/workspace/wt-effort/pkg/agent/effort_red_conversation_test.go"
+    },
+    {
+      "name": "TestT_C2_S02_LegacyChannelAndEnvNeverDeliverReasoningToAnyDestination",
+      "result": "FAIL",
+      "source": "/workspace/wt-effort/pkg/agent/effort_red_messenger_containment_test.go"
+    },
+    {
+      "name": "TestT_Instrument_OpenRouterLevelOracleRejectsForeignEncodings",
+      "result": "PASS",
+      "source": "/workspace/wt-effort/pkg/agent/effort_red_openrouter_oracle_test.go"
+    },
+    {
+      "name": "TestT_L8_S97_RealCandidateOrderAndHeuristicOutcomes",
+      "result": "FAIL",
+      "source": "/workspace/wt-effort/pkg/agent/effort_red_recap_timing_workflow_test.go"
+    },
+    {
+      "name": "TestT_S2_S52_UnsetFallbackSendsNothing",
+      "result": "PASS",
+      "source": "/workspace/wt-effort/pkg/agent/effort_red_request_rejection_test.go"
+    },
+    {
+      "name": "TestT_S2_S53_FallbackUsesOwnSetting",
+      "result": "FAIL",
+      "source": "/workspace/wt-effort/pkg/agent/effort_red_request_rejection_test.go"
+    },
+    {
+      "name": "TestT_S2_S51_DefaultModelEffortUsed",
+      "result": "FAIL",
+      "source": "/workspace/wt-effort/pkg/agent/effort_red_request_rejection_test.go"
+    },
+    {
+      "name": "TestT_R0_S19_ProviderDefaultSendsNothing",
+      "result": "PASS",
+      "source": "/workspace/wt-effort/pkg/agent/effort_red_request_rejection_test.go"
+    },
+    {
+      "name": "TestT_S3_S48_S49_CatalogRefreshPreservesStoredChoice",
+      "result": "FAIL",
+      "source": "/workspace/wt-effort/pkg/agent/effort_red_state_records_test.go"
+    },
+    {
+      "name": "TestT_U1_S44_UnreportedReasoningStaysAbsent",
+      "result": "PASS",
+      "source": "/workspace/wt-effort/pkg/agent/effort_red_usage_test.go"
+    },
+    {
+      "name": "TestT_U1_S88_FailedAttemptKeepsItsCount",
+      "result": "FAIL",
+      "source": "/workspace/wt-effort/pkg/agent/effort_red_usage_test.go"
+    },
+    {
+      "name": "TestT_GW_S88_RealFailedStreamFallbackLaterZeroAndHistory",
+      "result": "FAIL",
+      "source": "/workspace/wt-effort/pkg/gateway/effort_red_multimodel_test.go"
+    },
+    {
+      "name": "TestT_GW_S95_ProductionThreeTurnsOlderRefreshAndContributorCut",
+      "result": "FAIL",
+      "source": "/workspace/wt-effort/pkg/gateway/effort_red_production_paging_test.go"
+    }
+  ],
+  "executions": [
+    {
+      "id": "fix2-tools-final",
+      "classification": "authoritative",
+      "command_as_saved": "/usr/local/bin/heavy env CGO_ENABLED=0 go test -tags goolm,stdjson -p 1 -count=1 -v -run ^TestT_TL58_ModelChangeWithoutEffortPreservesOffOrRefusesAtomically$ ./pkg/sysagent/tools/",
+      "argv": [
+        "/usr/local/bin/heavy",
+        "env",
+        "CGO_ENABLED=0",
+        "go",
+        "test",
+        "-tags",
+        "goolm,stdjson",
+        "-p",
+        "1",
+        "-count=1",
+        "-v",
+        "-run",
+        "^TestT_TL58_ModelChangeWithoutEffortPreservesOffOrRefusesAtomically$",
+        "./pkg/sysagent/tools/"
+      ],
+      "raw_exit": 1,
+      "log": "/workspace/logs/effort-red/fix2-tools-final.log",
+      "log_sha256": "50da854099fc3c5f2cca79122386f03d1806fc7142a08fd96ae9a1849b154723",
+      "summary": "S-58: both model-only tool subcases fail on dropped Off / forbidden accepted mutation.",
+      "go_top_level_results": [
+        {
+          "name": "TestT_TL58_ModelChangeWithoutEffortPreservesOffOrRefusesAtomically",
+          "result": "FAIL",
+          "source": "/workspace/wt-effort/pkg/sysagent/tools/effort_red_model_change_test.go"
+        }
+      ],
+      "go_subcase_results": [
+        {
+          "name": "TestT_TL58_ModelChangeWithoutEffortPreservesOffOrRefusesAtomically/target_offered_none_preserves_off",
+          "result": "FAIL"
+        },
+        {
+          "name": "TestT_TL58_ModelChangeWithoutEffortPreservesOffOrRefusesAtomically/target_without_off_refuses_whole_update",
+          "result": "FAIL"
+        }
+      ],
+      "runner_fallback_disclosed": true,
+      "go_run_pattern": "^TestT_TL58_ModelChangeWithoutEffortPreservesOffOrRefusesAtomically$"
+    },
+    {
+      "id": "fix2-agent-final",
+      "classification": "authoritative",
+      "command_as_saved": "/usr/local/bin/heavy env CGO_ENABLED=0 go test -tags goolm,stdjson -p 1 -count=1 -v -run \\^\\(TestT_Instrument_OpenRouterLevelOracleRejectsForeignEncodings\\|TestT_S2_S53_FallbackUsesOwnSetting\\|TestT_S2_S51_DefaultModelEffortUsed\\|TestT_S3_S48_S49_CatalogRefreshPreservesStoredChoice\\|TestT_CMD_S37_S38_S39_RealConversationScopeServingModelAndRestart\\|TestT_S2_S87_InheritedHighChangedToOffAtRuntime\\|TestT_C2_S02_LegacyChannelAndEnvNeverDeliverReasoningToAnyDestination\\|TestT_U1_S88_FailedAttemptKeepsItsCount\\|TestT_L8_S97_RealCandidateOrderAndHeuristicOutcomes\\|TestT_S2_S52_UnsetFallbackSendsNothing\\|TestT_R0_S19_ProviderDefaultSendsNothing\\|TestT_U1_S44_UnreportedReasoningStaysAbsent\\)\\$ ./pkg/agent/",
+      "argv": [
+        "/usr/local/bin/heavy",
+        "env",
+        "CGO_ENABLED=0",
+        "go",
+        "test",
+        "-tags",
+        "goolm,stdjson",
+        "-p",
+        "1",
+        "-count=1",
+        "-v",
+        "-run",
+        "^(TestT_Instrument_OpenRouterLevelOracleRejectsForeignEncodings|TestT_S2_S53_FallbackUsesOwnSetting|TestT_S2_S51_DefaultModelEffortUsed|TestT_S3_S48_S49_CatalogRefreshPreservesStoredChoice|TestT_CMD_S37_S38_S39_RealConversationScopeServingModelAndRestart|TestT_S2_S87_InheritedHighChangedToOffAtRuntime|TestT_C2_S02_LegacyChannelAndEnvNeverDeliverReasoningToAnyDestination|TestT_U1_S88_FailedAttemptKeepsItsCount|TestT_L8_S97_RealCandidateOrderAndHeuristicOutcomes|TestT_S2_S52_UnsetFallbackSendsNothing|TestT_R0_S19_ProviderDefaultSendsNothing|TestT_U1_S44_UnreportedReasoningStaysAbsent)$",
+        "./pkg/agent/"
+      ],
+      "raw_exit": 1,
+      "log": "/workspace/logs/effort-red/fix2-agent-final.log",
+      "log_sha256": "493231fa7325808fe29655be5f011e5073e460a925e70824e5764dd8052a0421",
+      "summary": "8 behavioral failures, 3 existing controls PASS, 1 oracle instrument PIN PASS (9 subcases).",
+      "go_top_level_results": [
+        {
+          "name": "TestT_CMD_S37_S38_S39_RealConversationScopeServingModelAndRestart",
+          "result": "FAIL",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_conversation_test.go"
+        },
+        {
+          "name": "TestT_S2_S87_InheritedHighChangedToOffAtRuntime",
+          "result": "FAIL",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_conversation_test.go"
+        },
+        {
+          "name": "TestT_C2_S02_LegacyChannelAndEnvNeverDeliverReasoningToAnyDestination",
+          "result": "FAIL",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_messenger_containment_test.go"
+        },
+        {
+          "name": "TestT_Instrument_OpenRouterLevelOracleRejectsForeignEncodings",
+          "result": "PASS",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_openrouter_oracle_test.go"
+        },
+        {
+          "name": "TestT_L8_S97_RealCandidateOrderAndHeuristicOutcomes",
+          "result": "FAIL",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_recap_timing_workflow_test.go"
+        },
+        {
+          "name": "TestT_S2_S52_UnsetFallbackSendsNothing",
+          "result": "PASS",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_request_rejection_test.go"
+        },
+        {
+          "name": "TestT_S2_S53_FallbackUsesOwnSetting",
+          "result": "FAIL",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_request_rejection_test.go"
+        },
+        {
+          "name": "TestT_S2_S51_DefaultModelEffortUsed",
+          "result": "FAIL",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_request_rejection_test.go"
+        },
+        {
+          "name": "TestT_R0_S19_ProviderDefaultSendsNothing",
+          "result": "PASS",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_request_rejection_test.go"
+        },
+        {
+          "name": "TestT_S3_S48_S49_CatalogRefreshPreservesStoredChoice",
+          "result": "FAIL",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_state_records_test.go"
+        },
+        {
+          "name": "TestT_U1_S44_UnreportedReasoningStaysAbsent",
+          "result": "PASS",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_usage_test.go"
+        },
+        {
+          "name": "TestT_U1_S88_FailedAttemptKeepsItsCount",
+          "result": "FAIL",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_usage_test.go"
+        }
+      ],
+      "go_subcase_results": [
+        {
+          "name": "TestT_Instrument_OpenRouterLevelOracleRejectsForeignEncodings/exact_nested",
+          "result": "PASS"
+        },
+        {
+          "name": "TestT_Instrument_OpenRouterLevelOracleRejectsForeignEncodings/flat_only",
+          "result": "PASS"
+        },
+        {
+          "name": "TestT_Instrument_OpenRouterLevelOracleRejectsForeignEncodings/wrong_level",
+          "result": "PASS"
+        },
+        {
+          "name": "TestT_Instrument_OpenRouterLevelOracleRejectsForeignEncodings/contradictory_enabled",
+          "result": "PASS"
+        },
+        {
+          "name": "TestT_Instrument_OpenRouterLevelOracleRejectsForeignEncodings/nested_plus_flat",
+          "result": "PASS"
+        },
+        {
+          "name": "TestT_Instrument_OpenRouterLevelOracleRejectsForeignEncodings/foreign_thinking",
+          "result": "PASS"
+        },
+        {
+          "name": "TestT_Instrument_OpenRouterLevelOracleRejectsForeignEncodings/foreign_output_config",
+          "result": "PASS"
+        },
+        {
+          "name": "TestT_Instrument_OpenRouterLevelOracleRejectsForeignEncodings/foreign_bedrock",
+          "result": "PASS"
+        },
+        {
+          "name": "TestT_Instrument_OpenRouterLevelOracleRejectsForeignEncodings/retired_recap_key",
+          "result": "PASS"
+        },
+        {
+          "name": "TestT_L8_S97_RealCandidateOrderAndHeuristicOutcomes/cross",
+          "result": "FAIL"
+        },
+        {
+          "name": "TestT_L8_S97_RealCandidateOrderAndHeuristicOutcomes/fits",
+          "result": "FAIL"
+        },
+        {
+          "name": "TestT_L8_S97_RealCandidateOrderAndHeuristicOutcomes/hang",
+          "result": "FAIL"
+        },
+        {
+          "name": "TestT_L8_S97_RealCandidateOrderAndHeuristicOutcomes/nontransient",
+          "result": "FAIL"
+        },
+        {
+          "name": "TestT_L8_S97_RealCandidateOrderAndHeuristicOutcomes/resets_then_hang",
+          "result": "FAIL"
+        },
+        {
+          "name": "TestT_L8_S97_RealCandidateOrderAndHeuristicOutcomes/allocation",
+          "result": "FAIL"
+        },
+        {
+          "name": "TestT_S3_S48_S49_CatalogRefreshPreservesStoredChoice/off",
+          "result": "FAIL"
+        },
+        {
+          "name": "TestT_S3_S48_S49_CatalogRefreshPreservesStoredChoice/max",
+          "result": "FAIL"
+        }
+      ],
+      "runner_fallback_disclosed": true,
+      "go_run_pattern": "^(TestT_Instrument_OpenRouterLevelOracleRejectsForeignEncodings|TestT_S2_S53_FallbackUsesOwnSetting|TestT_S2_S51_DefaultModelEffortUsed|TestT_S3_S48_S49_CatalogRefreshPreservesStoredChoice|TestT_CMD_S37_S38_S39_RealConversationScopeServingModelAndRestart|TestT_S2_S87_InheritedHighChangedToOffAtRuntime|TestT_C2_S02_LegacyChannelAndEnvNeverDeliverReasoningToAnyDestination|TestT_U1_S88_FailedAttemptKeepsItsCount|TestT_L8_S97_RealCandidateOrderAndHeuristicOutcomes|TestT_S2_S52_UnsetFallbackSendsNothing|TestT_R0_S19_ProviderDefaultSendsNothing|TestT_U1_S44_UnreportedReasoningStaysAbsent)$"
+    },
+    {
+      "id": "fix2-gateway-blocks",
+      "classification": "authoritative",
+      "command_as_saved": "/usr/local/bin/heavy env CGO_ENABLED=0 go test -tags goolm,stdjson -p 1 -count=1 -v -run \\^\\(TestT_GW_S88_RealFailedStreamFallbackLaterZeroAndHistory\\|TestT_GW_S95_ProductionThreeTurnsOlderRefreshAndContributorCut\\)\\$ ./pkg/gateway/",
+      "argv": [
+        "/usr/local/bin/heavy",
+        "env",
+        "CGO_ENABLED=0",
+        "go",
+        "test",
+        "-tags",
+        "goolm,stdjson",
+        "-p",
+        "1",
+        "-count=1",
+        "-v",
+        "-run",
+        "^(TestT_GW_S88_RealFailedStreamFallbackLaterZeroAndHistory|TestT_GW_S95_ProductionThreeTurnsOlderRefreshAndContributorCut)$",
+        "./pkg/gateway/"
+      ],
+      "raw_exit": 1,
+      "log": "/workspace/logs/effort-red/fix2-gateway-blocks.log",
+      "log_sha256": "b33cab1b69ed780b8eef76a860d697214ee4cc3e87e79c63123d27a9cf689d91",
+      "summary": "2 BLOCKED multi-candidate streaming prerequisites; later workflow assertions unreached.",
+      "go_top_level_results": [
+        {
+          "name": "TestT_GW_S88_RealFailedStreamFallbackLaterZeroAndHistory",
+          "result": "FAIL",
+          "source": "/workspace/wt-effort/pkg/gateway/effort_red_multimodel_test.go"
+        },
+        {
+          "name": "TestT_GW_S95_ProductionThreeTurnsOlderRefreshAndContributorCut",
+          "result": "FAIL",
+          "source": "/workspace/wt-effort/pkg/gateway/effort_red_production_paging_test.go"
+        }
+      ],
+      "go_subcase_results": [],
+      "runner_fallback_disclosed": true,
+      "go_run_pattern": "^(TestT_GW_S88_RealFailedStreamFallbackLaterZeroAndHistory|TestT_GW_S95_ProductionThreeTurnsOlderRefreshAndContributorCut)$"
+    },
+    {
+      "id": "fix2-memory",
+      "classification": "authoritative",
+      "command_as_saved": "/usr/local/bin/heavy npx vitest run src/components/settings/effort-red-recap-limits.test.tsx",
+      "argv": [
+        "/usr/local/bin/heavy",
+        "npx",
+        "vitest",
+        "run",
+        "src/components/settings/effort-red-recap-limits.test.tsx"
+      ],
+      "raw_exit": 1,
+      "log": "/workspace/logs/effort-red/fix2-memory.log",
+      "log_sha256": "e91dcd4d15c0f03ddf3c7b6bc56dcf6d0ec984296de48bb38452a20434ba970e",
+      "summary": "13 executed failures: 3 new S-60 and 10 existing S-82/S-93 cases.",
+      "go_top_level_results": [],
+      "go_subcase_results": [],
+      "runner_fallback_disclosed": true,
+      "vitest_results": [
+        {
+          "name": "S-60: the exact Off recommendation appears once for model plus fallback",
+          "result": "FAIL"
+        },
+        {
+          "name": "S-60: absent effort starts Off per slot; model/chip, fallback/chip, recommendation, collapsed limits follow in order",
+          "result": "FAIL"
+        },
+        {
+          "name": "S-60: explicit Off effort starts Off per slot; model/chip, fallback/chip, recommendation, collapsed limits follow in order",
+          "result": "FAIL"
+        },
+        {
+          "name": "S-82: collapsed by default with \"all at defaults\"; opening shows ten fields in two groups",
+          "result": "FAIL"
+        },
+        {
+          "name": "S-82: every recap-limit input carries the spec range as min and max",
+          "result": "FAIL"
+        },
+        {
+          "name": "S-82: an out-of-range Summary length shows the exact FormError, blocks Save and holds focus",
+          "result": "FAIL"
+        },
+        {
+          "name": "S-82: 200 is accepted (\"1 changed\"); Reset restores the defaults without saving; Save stores them",
+          "result": "FAIL"
+        },
+        {
+          "name": "S-82: a saved non-default reads \"1 changed\" clean; typing the default over it reads \"all at defaults\" dirty",
+          "result": "FAIL"
+        },
+        {
+          "name": "S-93: drafting limits sends no request, reads \"2 changed\" and keeps Save blocked by the invalid draft",
+          "result": "FAIL"
+        },
+        {
+          "name": "S-93: switching the recap model autosaves a slot-only body and keeps the drafts, counters and blocked Save",
+          "result": "FAIL"
+        },
+        {
+          "name": "S-93: a deferred Save keeps the later 250 edit; counters move independently; the second Save persists 250",
+          "result": "FAIL"
+        },
+        {
+          "name": "S-93: a failed Save keeps the draft and shows the save error",
+          "result": "FAIL"
+        },
+        {
+          "name": "S-93: held fallback autosave serializes the next write as [A-prime, B-prime], never stale [A, B-prime]",
+          "result": "FAIL"
+        }
+      ]
+    },
+    {
+      "id": "fix2-go-vet",
+      "classification": "authoritative",
+      "command_as_saved": "/usr/local/bin/heavy env CGO_ENABLED=0 go vet -tags goolm,stdjson -p 1 ./pkg/agent/ ./pkg/gateway/ ./pkg/sysagent/tools/",
+      "argv": [
+        "/usr/local/bin/heavy",
+        "env",
+        "CGO_ENABLED=0",
+        "go",
+        "vet",
+        "-tags",
+        "goolm,stdjson",
+        "-p",
+        "1",
+        "./pkg/agent/",
+        "./pkg/gateway/",
+        "./pkg/sysagent/tools/"
+      ],
+      "raw_exit": 0,
+      "log": "/workspace/logs/effort-red/fix2-go-vet.log",
+      "log_sha256": "4e54c62f289f6f2f1f29aed295fddd60ed5c00eb4d350fa51729a239f8d6ae6c",
+      "summary": "Targeted agent, gateway, sysagent/tools vet only.",
+      "go_top_level_results": [],
+      "go_subcase_results": [],
+      "runner_fallback_disclosed": true
+    },
+    {
+      "id": "fix2-eslint",
+      "classification": "authoritative",
+      "command_as_saved": "/usr/local/bin/heavy npx eslint src/components/settings/effort-red-recap-limits.test.tsx",
+      "argv": [
+        "/usr/local/bin/heavy",
+        "npx",
+        "eslint",
+        "src/components/settings/effort-red-recap-limits.test.tsx"
+      ],
+      "raw_exit": 0,
+      "log": "/workspace/logs/effort-red/fix2-eslint.log",
+      "log_sha256": "c579ead7dcf58911d2c8266ce6cc9df200631f812d1871d6e7315eeed44cdc2e",
+      "summary": "Touched Memory test file only.",
+      "go_top_level_results": [],
+      "go_subcase_results": [],
+      "runner_fallback_disclosed": true
+    },
+    {
+      "id": "fix2-typecheck",
+      "classification": "authoritative",
+      "command_as_saved": "/usr/local/bin/heavy env NODE_OPTIONS=--max-old-space-size=4096 npm run typecheck",
+      "argv": [
+        "/usr/local/bin/heavy",
+        "env",
+        "NODE_OPTIONS=--max-old-space-size=4096",
+        "npm",
+        "run",
+        "typecheck"
+      ],
+      "raw_exit": 2,
+      "log": "/workspace/logs/effort-red/fix2-typecheck.log",
+      "log_sha256": "b615f2f40330b02bfa630da9c8a6dbee19be7ba9f4f8b8cf9d66ed743824fb21",
+      "summary": "Production scaffold unused served / target parameters; no test diagnostic.",
+      "go_top_level_results": [],
+      "go_subcase_results": [],
+      "runner_fallback_disclosed": true
+    },
+    {
+      "id": "fix2-design-system",
+      "classification": "authoritative",
+      "command_as_saved": "/usr/local/bin/heavy npm run lint:design-system-locks",
+      "argv": [
+        "/usr/local/bin/heavy",
+        "npm",
+        "run",
+        "lint:design-system-locks"
+      ],
+      "raw_exit": 1,
+      "log": "/workspace/logs/effort-red/fix2-design-system.log",
+      "log_sha256": "e800a0352e17ecbc71eeef8f85a926188aeb4f516c73e625d445d7e362048dc3",
+      "summary": "Unpublished effort picker test import; no exception added.",
+      "go_top_level_results": [],
+      "go_subcase_results": [],
+      "runner_fallback_disclosed": true
+    },
+    {
+      "id": "fix2-function-budget",
+      "classification": "authoritative",
+      "command_as_saved": "/usr/local/bin/heavy bash scripts/check-function-budget.sh",
+      "argv": [
+        "/usr/local/bin/heavy",
+        "bash",
+        "scripts/check-function-budget.sh"
+      ],
+      "raw_exit": 0,
+      "log": "/workspace/logs/effort-red/fix2-function-budget.log",
+      "log_sha256": "330b468bf596951fb9b4e7a5dcd6b6d055c5cb36c58533ce38567d9014393a73",
+      "summary": "Budget gate passed with warnings retained.",
+      "go_top_level_results": [],
+      "go_subcase_results": [],
+      "runner_fallback_disclosed": true
+    },
+    {
+      "id": "fix2-file-budget",
+      "classification": "authoritative",
+      "command_as_saved": "/usr/local/bin/heavy bash scripts/check-file-budget.sh",
+      "argv": [
+        "/usr/local/bin/heavy",
+        "bash",
+        "scripts/check-file-budget.sh"
+      ],
+      "raw_exit": 0,
+      "log": "/workspace/logs/effort-red/fix2-file-budget.log",
+      "log_sha256": "031b342fd8a0e76c90bcc3346eb8aef62a4a940c7bc322249d11c81e21150c63",
+      "summary": "Budget gate passed with warnings retained.",
+      "go_top_level_results": [],
+      "go_subcase_results": [],
+      "runner_fallback_disclosed": true
+    },
+    {
+      "id": "fix2-tools-s58",
+      "classification": "diagnostic_superseded",
+      "command_as_saved": "/usr/local/bin/heavy env CGO_ENABLED=0 go test -tags goolm,stdjson -p 1 -count=1 -v -run ^TestT_TL58_ModelChangeWithoutEffortPreservesOffOrRefusesAtomically$ ./pkg/sysagent/tools/",
+      "argv": [
+        "/usr/local/bin/heavy",
+        "env",
+        "CGO_ENABLED=0",
+        "go",
+        "test",
+        "-tags",
+        "goolm,stdjson",
+        "-p",
+        "1",
+        "-count=1",
+        "-v",
+        "-run",
+        "^TestT_TL58_ModelChangeWithoutEffortPreservesOffOrRefusesAtomically$",
+        "./pkg/sysagent/tools/"
+      ],
+      "raw_exit": 1,
+      "log": "/workspace/logs/effort-red/fix2-tools-s58.log",
+      "log_sha256": "c7e171cf0a5065412aaf78c4c145a0786ccafdb73a3c744ffb2dad3a19b82878",
+      "summary": "Initial S-58 fixture used flat input shape against nested persisted entity; corrected before final run.",
+      "go_top_level_results": [
+        {
+          "name": "TestT_TL58_ModelChangeWithoutEffortPreservesOffOrRefusesAtomically",
+          "result": "FAIL",
+          "source": "/workspace/wt-effort/pkg/sysagent/tools/effort_red_model_change_test.go"
+        }
+      ],
+      "go_subcase_results": [
+        {
+          "name": "TestT_TL58_ModelChangeWithoutEffortPreservesOffOrRefusesAtomically/target_offered_none_preserves_off",
+          "result": "FAIL"
+        },
+        {
+          "name": "TestT_TL58_ModelChangeWithoutEffortPreservesOffOrRefusesAtomically/target_without_off_refuses_whole_update",
+          "result": "FAIL"
+        }
+      ],
+      "runner_fallback_disclosed": true,
+      "go_run_pattern": "^TestT_TL58_ModelChangeWithoutEffortPreservesOffOrRefusesAtomically$"
+    },
+    {
+      "id": "fix2-agent",
+      "classification": "diagnostic_superseded",
+      "command_as_saved": "/usr/local/bin/heavy env CGO_ENABLED=0 go test -tags goolm,stdjson -p 1 -count=1 -v -run \\^\\(TestT_Instrument_OpenRouterLevelOracleRejectsForeignEncodings\\|TestT_S2_S53_FallbackUsesOwnSetting\\|TestT_S2_S51_DefaultModelEffortUsed\\|TestT_S3_S48_S49_CatalogRefreshPreservesStoredChoice\\|TestT_CMD_S37_S38_S39_RealConversationScopeServingModelAndRestart\\|TestT_S2_S87_InheritedHighChangedToOffAtRuntime\\|TestT_C2_S02_LegacyChannelAndEnvNeverDeliverReasoningToAnyDestination\\|TestT_U1_S88_FailedAttemptKeepsItsCount\\|TestT_L8_S97_RealCandidateOrderAndHeuristicOutcomes\\|TestT_S2_S52_UnsetFallbackSendsNothing\\|TestT_R0_S19_ProviderDefaultSendsNothing\\|TestT_U1_S44_UnreportedReasoningStaysAbsent\\)\\$ ./pkg/agent/",
+      "argv": [
+        "/usr/local/bin/heavy",
+        "env",
+        "CGO_ENABLED=0",
+        "go",
+        "test",
+        "-tags",
+        "goolm,stdjson",
+        "-p",
+        "1",
+        "-count=1",
+        "-v",
+        "-run",
+        "^(TestT_Instrument_OpenRouterLevelOracleRejectsForeignEncodings|TestT_S2_S53_FallbackUsesOwnSetting|TestT_S2_S51_DefaultModelEffortUsed|TestT_S3_S48_S49_CatalogRefreshPreservesStoredChoice|TestT_CMD_S37_S38_S39_RealConversationScopeServingModelAndRestart|TestT_S2_S87_InheritedHighChangedToOffAtRuntime|TestT_C2_S02_LegacyChannelAndEnvNeverDeliverReasoningToAnyDestination|TestT_U1_S88_FailedAttemptKeepsItsCount|TestT_L8_S97_RealCandidateOrderAndHeuristicOutcomes|TestT_S2_S52_UnsetFallbackSendsNothing|TestT_R0_S19_ProviderDefaultSendsNothing|TestT_U1_S44_UnreportedReasoningStaysAbsent)$",
+        "./pkg/agent/"
+      ],
+      "raw_exit": 1,
+      "log": "/workspace/logs/effort-red/fix2-agent.log",
+      "log_sha256": "da7e23fba9c3c45f4d92e8f6bb44c9121a1467cb08d1fc67f48fbffddcd46f19",
+      "summary": "Initial S-02 fixture returned text without ordinary reply publication; corrected before final run.",
+      "go_top_level_results": [
+        {
+          "name": "TestT_CMD_S37_S38_S39_RealConversationScopeServingModelAndRestart",
+          "result": "FAIL",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_conversation_test.go"
+        },
+        {
+          "name": "TestT_S2_S87_InheritedHighChangedToOffAtRuntime",
+          "result": "FAIL",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_conversation_test.go"
+        },
+        {
+          "name": "TestT_C2_S02_LegacyChannelAndEnvNeverDeliverReasoningToAnyDestination",
+          "result": "FAIL",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_messenger_containment_test.go"
+        },
+        {
+          "name": "TestT_Instrument_OpenRouterLevelOracleRejectsForeignEncodings",
+          "result": "PASS",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_openrouter_oracle_test.go"
+        },
+        {
+          "name": "TestT_L8_S97_RealCandidateOrderAndHeuristicOutcomes",
+          "result": "FAIL",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_recap_timing_workflow_test.go"
+        },
+        {
+          "name": "TestT_S2_S52_UnsetFallbackSendsNothing",
+          "result": "PASS",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_request_rejection_test.go"
+        },
+        {
+          "name": "TestT_S2_S53_FallbackUsesOwnSetting",
+          "result": "FAIL",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_request_rejection_test.go"
+        },
+        {
+          "name": "TestT_S2_S51_DefaultModelEffortUsed",
+          "result": "FAIL",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_request_rejection_test.go"
+        },
+        {
+          "name": "TestT_R0_S19_ProviderDefaultSendsNothing",
+          "result": "PASS",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_request_rejection_test.go"
+        },
+        {
+          "name": "TestT_S3_S48_S49_CatalogRefreshPreservesStoredChoice",
+          "result": "FAIL",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_state_records_test.go"
+        },
+        {
+          "name": "TestT_U1_S44_UnreportedReasoningStaysAbsent",
+          "result": "PASS",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_usage_test.go"
+        },
+        {
+          "name": "TestT_U1_S88_FailedAttemptKeepsItsCount",
+          "result": "FAIL",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_usage_test.go"
+        }
+      ],
+      "go_subcase_results": [
+        {
+          "name": "TestT_Instrument_OpenRouterLevelOracleRejectsForeignEncodings/exact_nested",
+          "result": "PASS"
+        },
+        {
+          "name": "TestT_Instrument_OpenRouterLevelOracleRejectsForeignEncodings/flat_only",
+          "result": "PASS"
+        },
+        {
+          "name": "TestT_Instrument_OpenRouterLevelOracleRejectsForeignEncodings/wrong_level",
+          "result": "PASS"
+        },
+        {
+          "name": "TestT_Instrument_OpenRouterLevelOracleRejectsForeignEncodings/contradictory_enabled",
+          "result": "PASS"
+        },
+        {
+          "name": "TestT_Instrument_OpenRouterLevelOracleRejectsForeignEncodings/nested_plus_flat",
+          "result": "PASS"
+        },
+        {
+          "name": "TestT_Instrument_OpenRouterLevelOracleRejectsForeignEncodings/foreign_thinking",
+          "result": "PASS"
+        },
+        {
+          "name": "TestT_Instrument_OpenRouterLevelOracleRejectsForeignEncodings/foreign_output_config",
+          "result": "PASS"
+        },
+        {
+          "name": "TestT_Instrument_OpenRouterLevelOracleRejectsForeignEncodings/foreign_bedrock",
+          "result": "PASS"
+        },
+        {
+          "name": "TestT_Instrument_OpenRouterLevelOracleRejectsForeignEncodings/retired_recap_key",
+          "result": "PASS"
+        },
+        {
+          "name": "TestT_L8_S97_RealCandidateOrderAndHeuristicOutcomes/cross",
+          "result": "FAIL"
+        },
+        {
+          "name": "TestT_L8_S97_RealCandidateOrderAndHeuristicOutcomes/fits",
+          "result": "FAIL"
+        },
+        {
+          "name": "TestT_L8_S97_RealCandidateOrderAndHeuristicOutcomes/hang",
+          "result": "FAIL"
+        },
+        {
+          "name": "TestT_L8_S97_RealCandidateOrderAndHeuristicOutcomes/nontransient",
+          "result": "FAIL"
+        },
+        {
+          "name": "TestT_L8_S97_RealCandidateOrderAndHeuristicOutcomes/resets_then_hang",
+          "result": "FAIL"
+        },
+        {
+          "name": "TestT_L8_S97_RealCandidateOrderAndHeuristicOutcomes/allocation",
+          "result": "FAIL"
+        },
+        {
+          "name": "TestT_S3_S48_S49_CatalogRefreshPreservesStoredChoice/off",
+          "result": "FAIL"
+        },
+        {
+          "name": "TestT_S3_S48_S49_CatalogRefreshPreservesStoredChoice/max",
+          "result": "FAIL"
+        }
+      ],
+      "runner_fallback_disclosed": true,
+      "go_run_pattern": "^(TestT_Instrument_OpenRouterLevelOracleRejectsForeignEncodings|TestT_S2_S53_FallbackUsesOwnSetting|TestT_S2_S51_DefaultModelEffortUsed|TestT_S3_S48_S49_CatalogRefreshPreservesStoredChoice|TestT_CMD_S37_S38_S39_RealConversationScopeServingModelAndRestart|TestT_S2_S87_InheritedHighChangedToOffAtRuntime|TestT_C2_S02_LegacyChannelAndEnvNeverDeliverReasoningToAnyDestination|TestT_U1_S88_FailedAttemptKeepsItsCount|TestT_L8_S97_RealCandidateOrderAndHeuristicOutcomes|TestT_S2_S52_UnsetFallbackSendsNothing|TestT_R0_S19_ProviderDefaultSendsNothing|TestT_U1_S44_UnreportedReasoningStaysAbsent)$"
+    },
+    {
+      "id": "fix2-messenger-final",
+      "classification": "isolated_confirmation",
+      "command_as_saved": "/usr/local/bin/heavy env CGO_ENABLED=0 go test -tags goolm,stdjson -p 1 -count=1 -v -run ^TestT_C2_S02_LegacyChannelAndEnvNeverDeliverReasoningToAnyDestination$ ./pkg/agent/",
+      "argv": [
+        "/usr/local/bin/heavy",
+        "env",
+        "CGO_ENABLED=0",
+        "go",
+        "test",
+        "-tags",
+        "goolm,stdjson",
+        "-p",
+        "1",
+        "-count=1",
+        "-v",
+        "-run",
+        "^TestT_C2_S02_LegacyChannelAndEnvNeverDeliverReasoningToAnyDestination$",
+        "./pkg/agent/"
+      ],
+      "raw_exit": 1,
+      "log": "/workspace/logs/effort-red/fix2-messenger-final.log",
+      "log_sha256": "3973f6867f93beb233e82b8d1b3b26848b63ac7ddc1ee603f33fb8b7575ac656",
+      "summary": "Corrected final S-02 fixture: normal answer plus reasoning leak; counted only in final combined agent receipt.",
+      "go_top_level_results": [
+        {
+          "name": "TestT_C2_S02_LegacyChannelAndEnvNeverDeliverReasoningToAnyDestination",
+          "result": "FAIL",
+          "source": "/workspace/wt-effort/pkg/agent/effort_red_messenger_containment_test.go"
+        }
+      ],
+      "go_subcase_results": [],
+      "runner_fallback_disclosed": true,
+      "go_run_pattern": "^TestT_C2_S02_LegacyChannelAndEnvNeverDeliverReasoningToAnyDestination$"
+    }
+  ],
+  "impact_evidence": {
+    "caller_sweeps": "/workspace/logs/effort-red/fix2-impact.log",
+    "sha256": "6237c2f048db04dff47048585961f5ebc5d8a2c15a3e4443a4a38213d981a24c",
+    "tool_discovery": "No matching deferred tools found: gitnexus detect_changes impact",
+    "certainty": "Inferred; caller and diff sweep, not a graph result"
+  }
+}

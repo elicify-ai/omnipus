@@ -53,6 +53,7 @@ import { useUiStore } from '@/store/ui'
 import { useSessionStore } from '@/store/session'
 import { useChatAgents } from '@/hooks/useChatAgents'
 import { logDiagnostic } from '@/lib/telemetry'
+import { runWebEffortCommand } from '@/lib/effort/chatEffortChoice'
 
 // ── Slash/skill/agent palette item shape ────────────────────────────────────
 
@@ -462,6 +463,14 @@ function runClientSlashCommand(name: string, argument: string, deps: ClientComma
     // web-only client action; opens the chat model selector, not the
     // server agent default.
     useUiStore.getState().setModelSelectorOpen(true)
+    return true
+  }
+
+  if (name === 'effort') {
+    // Effort levels FR-023 / S-41: web /effort is handled here (delivery
+    // client, like /model): it sets this conversation's effort shown on the
+    // composer chip, replies locally and sends nothing to the server.
+    runWebEffortCommand(argument, appendMessage)
     return true
   }
 
