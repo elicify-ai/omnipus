@@ -37,11 +37,7 @@ func TestT11Resolver_AbsoluteTargetResetsAncestorIdentities(t *testing.T) {
 		require.NoError(t, statErr, "SETUP: read physical ancestor %s", path)
 		wantReverse = append(wantReverse, info)
 	}
-	walk, present := any(resolveChain).(func(string, string, []forbiddenRoot) (string, []os.FileInfo, int, error))
-	if !present {
-		t.Fatal("BLOCKED: identity-returning resolveChain not implemented — required by the Q72 absolute-target cache coverage brief")
-	}
-	got, identities, hops, walkErr := walk("codex", entered, nil)
+	got, identities, hops, walkErr := resolveChain("codex", entered, nil)
 	require.NoError(t, walkErr)
 	assert.Equal(t, want, got, "an absolute target replaces the source walk")
 	assert.Equal(t, 1, hops, "exactly one real symlink was created")

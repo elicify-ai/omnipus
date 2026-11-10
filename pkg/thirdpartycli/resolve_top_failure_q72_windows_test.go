@@ -28,19 +28,9 @@ func TestT11Resolver_FailedFilesystemTopReadIsAnError(t *testing.T) {
 	var controlPathError *os.PathError
 	require.ErrorAs(t, controlErr, &controlPathError, "instrument: the actual filesystem-top read fails")
 	entered := filepath.Join(top, "t11-top-probe", "codex.exe")
-	var inside bool
-	var checkErr error
-	// Bind the same real function on the candidate (two arguments) and the
-	// commissioned 28a355b20 refactor (cached identities added). No result or
-	// expected value changes between versions; an unknown signature is loud.
-	switch check := any(insideAny).(type) {
-	case func(string, []os.FileInfo, []forbiddenRoot) (bool, error):
-		inside, checkErr = check(entered, nil, nil)
-	case func(string, []forbiddenRoot) (bool, error):
-		inside, checkErr = check(entered, nil)
-	default:
-		t.Fatal("BLOCKED: insideAny test binding is unavailable — required by the Q72 filesystem-top coverage brief")
-	}
+	// Bind the current identity-aware function directly. The obsolete
+	// two-argument compatibility branch is not part of this landed contract.
+	inside, checkErr := insideAny(entered, nil, nil)
 	assert.False(t, inside, "a failed top read cannot claim membership")
 	var pathError *os.PathError
 	require.ErrorAs(t, checkErr, &pathError, "Q72: propagate the real failed top read, never false,nil")
