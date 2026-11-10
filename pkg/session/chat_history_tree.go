@@ -125,44 +125,112 @@ func (t *chatHistoryIndexTree) readFrame(off, end int64) (historyFrame, int64, e
 
 // proveTornFrame decides whether the incomplete frame at off (readFrame
 // returned io.ErrUnexpectedEOF) is a torn write or framed damage (#1523). A
-// torn write leaves a strict prefix of one encoded frame: its header bytes are
-// a prefix of the "CHI1" magic, and its body bytes are a prefix of one compact
-// JSON object that closes on its final byte. A damaged length that points past
-// the end of the file leaves an available body that already holds a complete
-// JSON value (or bytes no writer prefix can contain): that is framed damage.
+// torn write leaves a literal prefix of one encoded frame, so every byte that
+// is present must still fit the writer's format: a prefix of the "CHI1" magic,
+// a size field that is (or can still become) 1..historyFrameBound, and a body
+// that is a prefix of one compact JSON object starting at body byte 0 and able
+// to close within the declared size. Bytes that rule out every writer frame
+// are framed damage. Damage that still leaves a possible writer prefix cannot
+// be told apart from an interrupted write and is not claimed here.
 func (t *chatHistoryIndexTree) proveTornFrame(off, end int64) error {
 	avail := end - off
-	if avail < historyFrameHeader {
-		n := min(avail, 4)
-		magic := make([]byte, n)
-		read, err := t.file.ReadAt(magic, off)
-		historyIndexBytes(t.ctx, int64(read))
-		if err != nil {
-			return err
-		}
-		if string(magic) != "CHI1"[:n] {
-			return errors.New("damaged history index frame magic")
-		}
-		return nil
-	}
-	// readFrame already checked the magic and the frame bound, so the declared
-	// size exceeds avail-historyFrameHeader and the read below stays bounded.
-	body := make([]byte, avail-historyFrameHeader)
-	read, err := t.file.ReadAt(body, off+historyFrameHeader)
+	header := make([]byte, min(avail, historyFrameHeader))
+	read, err := t.file.ReadAt(header, off)
 	historyIndexBytes(t.ctx, int64(read))
 	if err != nil {
 		return err
 	}
+	if err = historyTornHeader(header); err != nil {
+		return err
+	}
+	if avail < historyFrameHeader {
+		return nil
+	}
+	// readFrame already checked the magic and the frame bound, so the declared
+	// size exceeds avail-historyFrameHeader and the read below stays bounded.
+	size := int64(binary.BigEndian.Uint32(header[4:8]))
+	body := make([]byte, avail-historyFrameHeader)
+	read, err = t.file.ReadAt(body, off+historyFrameHeader)
+	historyIndexBytes(t.ctx, int64(read))
+	if err != nil {
+		return err
+	}
+	return historyTornBody(body, size)
+}
+
+// historyTornHeader refuses header bytes no writer header starts with: a
+// damaged magic, a complete size of 0 or over the bound, or a partial size
+// whose smallest completion (missing bytes zero) is already over the bound.
+func historyTornHeader(h []byte) error {
+	n := min(len(h), 4)
+	if string(h[:n]) != "CHI1"[:n] {
+		return errors.New("damaged history index frame magic")
+	}
+	if len(h) <= 4 {
+		return nil
+	}
+	var size [4]byte
+	present := copy(size[:], h[4:min(len(h), 8)])
+	least := int64(binary.BigEndian.Uint32(size[:]))
+	if least > historyFrameBound || (present == 4 && least == 0) {
+		return errors.New("invalid history index frame length in incomplete frame")
+	}
+	return nil
+}
+
+// historyTornBody refuses an incomplete body that is not a prefix of the
+// writer's compact JSON object, or that cannot close within size bytes. An
+// empty body (the cut right after a complete header) is a writer prefix.
+func historyTornBody(body []byte, size int64) error {
+	if len(body) == 0 {
+		return nil
+	}
+	if body[0] != '{' {
+		return errors.New("history index frame body is not a JSON object")
+	}
 	var v json.RawMessage
-	err = json.NewDecoder(bytes.NewReader(body)).Decode(&v)
+	err := json.NewDecoder(bytes.NewReader(body)).Decode(&v)
 	switch {
 	case err == nil:
 		return errors.New("history index frame length exceeds its encoded body")
-	case errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF):
-		return nil
-	default:
+	case !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF):
 		return fmt.Errorf("damaged history index frame body: %w", err)
 	}
+	if int64(len(body))+historyJSONCloseBytes(body) > size {
+		return errors.New("history index frame body cannot close within its length")
+	}
+	return nil
+}
+
+// historyJSONCloseBytes is a lower bound on the bytes any completion of a
+// syntactically valid JSON prefix still needs: an escaped character and a
+// closing quote for an open string, plus one bracket per open container. A
+// lower bound never refuses a genuine prefix; it only catches provable overrun.
+func historyJSONCloseBytes(prefix []byte) int64 {
+	var need int64
+	inString, escaped := false, false
+	for _, c := range prefix {
+		switch {
+		case escaped:
+			escaped = false
+		case inString && c == '\\':
+			escaped = true
+		case c == '"':
+			inString = !inString
+		case inString:
+		case c == '{' || c == '[':
+			need++
+		case c == '}' || c == ']':
+			need--
+		}
+	}
+	if inString {
+		need++
+	}
+	if escaped {
+		need++
+	}
+	return need
 }
 
 func (t *chatHistoryIndexTree) node(ref int64) (historyNode, error) {
