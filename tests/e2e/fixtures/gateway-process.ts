@@ -115,8 +115,19 @@ export const PANIC_LOG_READ_BYTES = 1024 * 1024;
  * reported; the cut is made after scrubbing and drops the partial line. */
 export const REPORT_TAIL_BYTES = 64 * 1024;
 /** At most this many characters of the failure message itself (a startup
- * error carries the gateway's whole output); cut after scrubbing. */
+ * error carries the gateway's whole output, an onboarding error a whole
+ * response body); cut after scrubbing. */
 const REPORT_MESSAGE_MAX = 256 * 1024;
+
+/** `scrubbed` cut to REPORT_MESSAGE_MAX characters. Only ever called on
+ * scrubbed text, so the cut cannot split a secret out of recognition. */
+function capMessage(scrubbed: string, rest: string): string {
+  if (scrubbed.length <= REPORT_MESSAGE_MAX) return scrubbed;
+  return (
+    `${scrubbed.slice(0, REPORT_MESSAGE_MAX)}\n` +
+    `[... ${scrubbed.length - REPORT_MESSAGE_MAX} more characters cut; ${rest} ...]`
+  );
+}
 /** How long stop() waits after SIGTERM before SIGKILL, and after SIGKILL. */
 const STOP_GRACE_MS = 10_000;
 const KILL_WAIT_MS = 10_000;
@@ -151,12 +162,14 @@ const SECRET_ENV_NAME = /KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL/i;
  * redacted on its own (it would be an ordinary word or a bracket). */
 const SECRET_LINE_MIN = 4;
 
-/** The forms a known secret may take in output: as is, JSON-escaped (once
- * and twice, e.g. a JSON string logged inside JSON) and URL-encoded, plus,
- * when the ORIGINAL value contains a line break (a trailing CR/LF counts),
- * every component line of at least SECRET_LINE_MIN characters on its own,
- * even if only one qualifies (a log can show one line, or the value without
- * its trailing line break). */
+/** The forms a known secret may take in output: as is and trimmed of
+ * surrounding whitespace (spaces, tabs, CR, LF: e2e-model-keys.ts::
+ * lookupModelKey trims a key before it is sent), each JSON-escaped (once and
+ * twice, e.g. a JSON string logged inside JSON) and URL-encoded, plus, when
+ * the ORIGINAL value contains a line break (a trailing CR/LF counts), every
+ * component line of at least SECRET_LINE_MIN characters on its own, even if
+ * only one qualifies (a log can show one line, or the value without its
+ * trailing line break). */
 function secretForms(value: string): string[] {
   const forms = (v: string) => {
     const json = JSON.stringify(v).slice(1, -1);
@@ -166,7 +179,8 @@ function secretForms(value: string): string[] {
   const lines = multiline
     ? value.split(/\r?\n|\r/).map((l) => l.trim()).filter((l) => l.length >= SECRET_LINE_MIN)
     : [];
-  return [...new Set([...forms(value), ...lines.flatMap(forms)])];
+  const trimmed = value.trim();
+  return [...new Set([...forms(value), ...(trimmed ? forms(trimmed) : []), ...lines.flatMap(forms)])];
 }
 
 /**
@@ -292,14 +306,10 @@ export class GatewayProcess {
   /** A boot failure plus this gateway's own output and panic-log tails,
    * secrets scrubbed: the cause, not a guess. */
   private bootFailureReport(err: unknown, what: string): string {
-    let message = this.scrub(err instanceof Error ? err.message : String(err));
-    if (message.length > REPORT_MESSAGE_MAX) {
-      // Cut after scrubbing, so the cut cannot split a secret out of
-      // recognition; the output tail follows below anyway.
-      message =
-        `${message.slice(0, REPORT_MESSAGE_MAX)}\n` +
-        `[... ${message.length - REPORT_MESSAGE_MAX} more characters cut; see the output tail below ...]`;
-    }
+    const message = capMessage(
+      this.scrub(err instanceof Error ? err.message : String(err)),
+      'see the output tail below',
+    );
     const output = reportTail(this.scrub(this.output), OUTPUT_TAIL_LINES, this.outputCut);
     return (
       `GatewayProcess ${what} failed (port ${this.port}, OMNIPUS_HOME ${this.homeDir}, binary ${this.binary}): ${message}\n` +
@@ -389,7 +399,10 @@ export class GatewayProcess {
     try {
       await gw.onboardAndLogin();
     } catch (err) {
-      const failure = gw.scrub(`GatewayProcess onboarding/login failed: ${err instanceof Error ? err.message : String(err)}`);
+      const failure = capMessage(
+        gw.scrub(`GatewayProcess onboarding/login failed: ${err instanceof Error ? err.message : String(err)}`),
+        'the rest of the response is not reported',
+      );
       bootFailure = (await gw.stopAfterFailure(failure)) ?? failure;
     }
     if (bootFailure !== undefined) throw new Error(bootFailure);

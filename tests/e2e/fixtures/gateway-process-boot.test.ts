@@ -45,8 +45,27 @@ const panicLog = (text) => {
   fs.mkdirSync(path.join(home, 'logs'), { recursive: true })
   fs.appendFileSync(path.join(home, 'logs', 'gateway_panic.log'), text)
 }
+const readBody = (req, cb) => { let b = ''; req.on('data', (c) => { b += c }); req.on('end', () => cb(b)) }
 const serve = (health) => http.createServer((req, res) => {
   if (req.url === '/health') { res.writeHead(health); res.end('x'); return }
+  if (req.url === '/api/v1/onboarding/complete' && mode === 'onboard-refuse-bare') {
+    // The provider refuses the key it was sent, echoing it bare.
+    readBody(req, (b) => { res.writeHead(500); res.end('provider refused ' + JSON.parse(b).provider.api_key + ' terminal') })
+    return
+  }
+  if (req.url === '/api/v1/onboarding/complete' && mode === 'onboard-huge') {
+    readBody(req, () => { res.writeHead(400); res.end('x'.repeat(2 * 1024 * 1024)) })
+    return
+  }
+  if (mode === 'fallback-refuse-bare') {
+    // Onboarding and re-auth succeed; saving the fallback key fails, echoing it bare.
+    if (req.url === '/api/v1/onboarding/complete') { readBody(req, () => { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"token":"fake-onboard-token"}') }); return }
+    if (req.url === '/api/v1/auth/reauth') { readBody(req, () => { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"token":"fake-reauth-token"}') }); return }
+    if (req.method === 'PUT' && req.url.startsWith('/api/v1/providers/')) {
+      readBody(req, (b) => { res.writeHead(500); res.end('provider refused ' + JSON.parse(b).api_key + ' terminal') })
+      return
+    }
+  }
   if (req.url === '/api/v1/onboarding/complete') {
     if (mode === 'onboard-echo') {
       // A 400 that echoes the request (it carries the provider key).
@@ -135,7 +154,7 @@ if (mode === 'silent-ignore-term') {
     process.exit(2)
   }
   if (mode === 'listen-503-ignore-term') { ignoreTerm(); serve(503) }
-  else if (['login-fails', 'login-echo-secret', 'onboard-echo', 'restart-leak', 'restart-chain'].includes(mode)) serve(200)
+  else if (['login-fails', 'login-echo-secret', 'onboard-echo', 'onboard-refuse-bare', 'onboard-huge', 'fallback-refuse-bare', 'restart-leak', 'restart-chain'].includes(mode)) serve(200)
   else setInterval(() => {}, 1000) // alive, never listening
   if (mode !== 'listen-503-ignore-term') process.on('SIGTERM', () => process.exit(0))
 }
@@ -551,6 +570,43 @@ describe('GatewayProcess boot failure: no secret in anything it emits', () => {
     })
     expect(err.message).toMatch(/code 8/)
     expect(err.message, 'the output tail is still reported').toContain('last words of the huge boot')
+    expect(err.message.length, 'the whole error stays under 512 Ki characters').toBeLessThan(512 * 1024)
+  }, 60_000)
+  // lookupModelKey trims the env value before it is sent, so a padded key
+  // reaches the wire (and an echoing error) without its padding.
+  for (const [pad, padName] of [[' ', 'spaces'], ['\t', 'tabs']] as const) {
+    for (const [mode, where] of [['onboard-refuse-bare', 'primary key (onboarding)'], ['fallback-refuse-bare', 'fallback key (provider PUT)']] as const) {
+      it(`a ${where} padded with ${padName} in the env, echoed bare after trimming, is scrubbed`, async () => {
+        const primary = `canary-primary-${padName}-0c5e7a19` // gitleaks:allow
+        const fallback = `canary-fallback-${padName}-93d4b6e2` // gitleaks:allow
+        vi.stubEnv('MINIMAX_API_KEY_CI', `${pad}${pad}${primary}${pad}${pad}`)
+        vi.stubEnv('OPENROUTER_API_KEY_CI', `${pad}${pad}${fallback}${pad}${pad}`)
+        try {
+          const state = newState(`${mode}-${padName}`)
+          const err = await startError({
+            binary: fake,
+            healthTimeoutMs: 1_000,
+            env: { FAKE_MARKER: 'pad', FAKE_MODE: mode, FAKE_STATE: state },
+          })
+          expect(err.message, 'the provider refusal is reported').toContain('provider refused ')
+          expect(emitted(err)).not.toContain(primary)
+          expect(emitted(err)).not.toContain(fallback)
+          expect(isAlive(pids(state)[0]), 'cleanup succeeded').toBe(false)
+        } finally {
+          vi.unstubAllEnvs()
+        }
+      }, 60_000)
+    }
+  }
+
+  it('a huge onboarding error response: the error stays bounded', async () => {
+    const err = await startError({
+      binary: fake,
+      apiBase: 'http://127.0.0.1:9',
+      healthTimeoutMs: 1_000,
+      env: { FAKE_MARKER: 'oh', FAKE_MODE: 'onboard-huge', FAKE_STATE: newState('onboard-huge') },
+    })
+    expect(err.message).toContain('onboarding failed 400')
     expect(err.message.length, 'the whole error stays under 512 Ki characters').toBeLessThan(512 * 1024)
   }, 60_000)
 })
