@@ -2091,7 +2091,11 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               <ExecutorSelector
                 value={executor}
                 agentId={resolvedAgentId}
-                disabled={!isFieldEditable('executor')}
+                // The selector changes executor.kind / executor.cli; the
+                // contract's descriptors (Agent.yaml editable_fields) never
+                // make either editable (T11 spec, E17), so it follows
+                // executor.kind.
+                disabled={!isFieldEditable('executor.kind')}
                 onChange={(next) => { markDirty(); setExecutor(next) }}
               />
             </section>
