@@ -29,6 +29,7 @@ import { applyMessageArray, bakeOwnedCallsAtSteerClose, bakeToolCallsByOwner, st
 import type { ChatMessage, ChatStore, MediaAttachment, PositionedToolCall, SessionChatState } from '../types'
 import { getPendingFirstSend, startOrdinaryFirstSend } from '../first-send'
 import { discardHistoryStaging } from '../history'
+import { settleAllCancelAcks } from '../stop-checkpoint'
 
 /** Accepted sends request a fresh current window; failures never move a reader. */
 function followAcceptedHistorySend(get: () => ChatStore, sid: string): void {
@@ -889,7 +890,8 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       // answer did finish. The one idle case that still shows "Stopping..." is `/stop`
       // (cancelUnconditional): by design, the founder's second-Stop tree rule needs
       // its first press to arm the confirmation window even on an idle parent chat.
-      if (targetIsStreaming) get().markLastMessageInterrupted(sessionId)
+      // #1534: the freeze returns what the screen showed of the frozen answer.
+      const shown = targetIsStreaming ? get().markLastMessageInterrupted(sessionId) : undefined
       // A plain Stop supersedes any pending redirect: its turn_canceled is a
       // stop, and must keep "(interrupted)".
       if (targetSid) pendingRedirectSids.delete(targetSid)
@@ -937,10 +939,14 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
         // server must never cascade — and keeps the frame byte-identical to
         // the pre-stop-all shape. Only the confirmed tree stop passes
         // 'tree' (server dispatches on scope before cancelSteeredSubtree;
-        // never up or sideways — ADR D7).
-        const cancelFrame: CancelFrame = scope
-          ? { type: 'cancel', session_id: targetSid, scope }
-          : { type: 'cancel', session_id: targetSid }
+        // never up or sideways — ADR D7). #1534: `shown` rides only a
+        // session Stop that froze an answer; the confirming tree press omits
+        // it (the first press already carried it, and the first claim wins).
+        const cancelFrame: CancelFrame = {
+          type: 'cancel', session_id: targetSid,
+          ...(scope ? { scope } : {}),
+          ...(shown && scope !== 'tree' ? { shown } : {}),
+        }
         const sent = connection.send(cancelFrame)
         if (!sent) {
           delivered = false
@@ -985,7 +991,7 @@ export function createOutboundLifecycleSlice({ set, get, getActiveSid, withBucke
       // F-S3: a socket drop means no more terminal frames are coming for any
       // outstanding cancel — stale entries here would otherwise persist across
       // reconnects and could misattribute an unrelated later frame.
-      pendingCancelAckSids.clear()
+      settleAllCancelAcks()
       pendingRedirectSids.clear()
       clearCatchUpSideChannelsOnDisconnect()
       // S6: a socket drop means no more frames — done, error, or otherwise —

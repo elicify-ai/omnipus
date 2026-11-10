@@ -25,6 +25,7 @@ import { applyHistoryPageToBucket } from './history-merge'
 import { advanceHistoryEntryGenerations } from '@/lib/historyEntryReads'
 import { mergeRecordedSessionTokens } from './session-usage'
 import { currentHistoryState, liveProjectionBucket, withLiveHistoryBucket } from './history-live'
+import { armStopGuard, shownCheckpointFor, type CancelShown } from './stop-checkpoint'
 
 // HIGH-2: consecutive unknown frame counter. Reset on any known-good frame.
 // On threshold (5), promotes to a user-visible warning toast.
@@ -508,6 +509,10 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
     markLastMessageInterrupted: (sessionId) => {
       const sid = sessionId ?? getActiveSid()
+      // #1534: the checkpoint is read from the very bubble this call freezes,
+      // in the same synchronous step (stop-checkpoint.ts).
+      let shown: CancelShown | undefined
+      let frozen: ChatMessage | undefined
       withLiveHistoryBucket(withBucket, sid, (b) => {
         // ADR-070 §2.7 (grill-spec round 2, NEW-001): a bare
         // findLastAssistantMessageId scan would resolve to an already-closed
@@ -522,6 +527,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
         // broader, not the branch itself.
         const candidate = findOpenAssistantMessageId(b.messageOrder, b.messagesById)
         const lastMsgId = b.history.viewMode === 'historical' && candidate && !b.messagesById[candidate]?.isStreaming ? null : candidate
+        frozen = lastMsgId ? b.messagesById[lastMsgId] : undefined
+        shown = shownCheckpointFor(b, frozen)
         if (!lastMsgId) {
           // FR-21 / T21–T23: No assistant message exists yet (cancel fired between
           // session_started and the first token frame). The server may still send
@@ -599,9 +606,10 @@ export const useChatStore = create<ChatStore>((set, get) => {
       // site, where a message can land in a bucket other than the one
       // `getActiveSid()` currently names (e.g. a race in test scaffolding).
       // Skip it whenever the caller named a specific target.
+      if (sid) armStopGuard(sid, shown, frozen)
       if (sessionId !== undefined) {
         maybeDrainNext()
-        return
+        return shown
       }
       // If no streaming assistant message was found in the active bucket, search
       // all buckets. This handles scenarios where a message was appended to a
@@ -645,6 +653,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
       }
       // This turn is over (interrupted) — send the next drained message, if any.
       maybeDrainNext()
+      return shown
     },
 
     startToolCall: (callId, tool, params) => {
