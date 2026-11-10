@@ -33,6 +33,13 @@ properties:
       from step 3, persisted as agents.defaults.default_model together with
       the provider id.
     example: gpt-5.4
+  reasoning_effort:
+    type: string
+    maxLength: 32
+    description: >
+      Effort for the chosen model (effort-levels spec FR-067), persisted as
+      agents.defaults.default_model.reasoning_effort in the completion's single
+      configuration write, never on the provider row. null is refused.
   endpoint:
     type: string
     description: Optional custom API base URL, persisted as the provider entry's api_base.

@@ -112,6 +112,11 @@ func (a *restAPI) putDefaultModel(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "could not read request body")
 		return
 	}
+	// Effort is checked before the strict decode so null and over-length
+	// values get the spec sentences (FR-060, S-94).
+	if refuseInvalidEffortBody(w, raw) {
+		return
+	}
 	var req gen.DefaultModelUpdateRequest
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
@@ -173,12 +178,21 @@ func (a *restAPI) putDefaultModel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	oldPair := cfg.Agents.Defaults.DefaultModel
+	effort, refusal := a.defaultModelEffort(oldPair, providerID, model, req.ReasoningEffort)
+	if refusal != "" {
+		jsonErrField(w, http.StatusBadRequest, refusal, "reasoning_effort")
+		return
+	}
 
 	// Persist under the config lock (safeUpdateConfigJSON takes configMu and
 	// refreshes the in-memory config on success).
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 		defaults := ensureMap(m, "agents", "defaults")
-		defaults["default_model"] = map[string]any{"provider": providerID, "model": model}
+		dm := map[string]any{"provider": providerID, "model": model}
+		if effort != "" {
+			dm["reasoning_effort"] = effort
+		}
+		defaults["default_model"] = dm
 		return nil
 	}); err != nil {
 		if writeRequestRefusal(w, err) {
@@ -272,7 +286,7 @@ func (a *restAPI) providerConfiguredAndUsable(cfg *config.Config, id string) boo
 // context_window 0 with window_source absent; a local row nobody can size
 // sets window_unknown true (X-08).
 func defaultModelResponse(cfg *config.Config, pair config.DefaultModel) gen.DefaultModel {
-	out := gen.DefaultModel{Provider: pair.Provider, Model: pair.Model}
+	out := gen.DefaultModel{Provider: pair.Provider, Model: pair.Model, ReasoningEffort: wireEffort(pair.ReasoningEffort)}
 	// H4: a legacy provider-less pair is keyed by the provider it runs on.
 	windowProvider, windowModel := agent.RuntimeWindowPair(cfg, pair.Provider, pair.Model)
 	res := agent.ResolveWindow(cfg, windowProvider, windowModel, "")
@@ -292,4 +306,19 @@ func defaultModelResponse(cfg *config.Config, pair config.DefaultModel) gen.Defa
 		}
 	}
 	return out
+}
+
+// defaultModelEffort is the effort stored with a default-model write
+// (FR-067): a sent value as written (never catalog checked); omitted on the
+// unchanged pair keeps the stored value; omitted on a changed pair maps the
+// stored value onto the new pair (S-58 rule), refusing when the new model
+// cannot turn reasoning off.
+func (a *restAPI) defaultModelEffort(old config.DefaultModel, provider, model string, sent *string) (string, string) {
+	if sent != nil {
+		return *sent, ""
+	}
+	if old.Provider == provider && old.Model == model {
+		return old.ReasoningEffort, ""
+	}
+	return mapEffortOnModelChange(a.effortCatalog(), old.ReasoningEffort, provider, model)
 }

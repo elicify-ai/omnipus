@@ -29,6 +29,7 @@ func BuiltinDefinitions() []Definition {
 		// Canonical commands — visible on their respective surfaces.
 		helpCommand(),
 		modelCommand(),
+		effortCommand(),
 		clearCommand(),
 		cancelCommand(),
 		stopCommand(),

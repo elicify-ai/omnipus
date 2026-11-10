@@ -14,7 +14,10 @@ package gateway
 // config.json via safeUpdateConfigJSON (no SaveConfig — keys are preserved).
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -63,11 +66,13 @@ func (a *restAPI) getMemorySettings(w http.ResponseWriter, _ *http.Request) {
 	wireFallbacks := make([]gen.FallbackModel, 0, len(d.RecapFallbackModels))
 	for _, fm := range d.RecapFallbackModels {
 		wireFallbacks = append(wireFallbacks, gen.FallbackModel{
-			Model:    fm.Model,
-			Provider: &fm.Provider,
+			Model:           fm.Model,
+			Provider:        &fm.Provider,
+			ReasoningEffort: wireEffort(fm.ReasoningEffort),
 		})
 	}
 	resp.RecapFallbackModels = &wireFallbacks
+	applyRecapSettingsRead(&resp, &d)
 	jsonOK(w, resp)
 }
 
@@ -76,18 +81,37 @@ func (a *restAPI) getMemorySettings(w http.ResponseWriter, _ *http.Request) {
 // left unchanged (merge semantics).
 func (a *restAPI) putMemorySettings(w http.ResponseWriter, r *http.Request) {
 	var req gen.UpdateMemorySettingsJSONRequestBody
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "could not read request body")
+		return
+	}
+	// Effort members are checked on the raw body in both validation modes,
+	// before any decode or write (FR-060, S-94).
+	if refuseInvalidEffortBody(w, raw) {
+		return
+	}
+	// The ranged keys are checked before schema validation too, so the
+	// refusal names the key in both validation modes (S-81). A body that
+	// does not decode is left to decodeAndValidate's own refusal.
+	var ranged gen.MemorySettings
+	if json.Unmarshal(raw, &ranged) == nil {
+		if msg := recapLimitRefusal(&ranged); msg != "" {
+			jsonErr(w, http.StatusBadRequest, msg)
+			return
+		}
+	}
+	r.Body = io.NopCloser(bytes.NewReader(raw))
 	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
-	if !decodeAndValidate(w, r, "UpdateMemorySettingsJSONRequestBody", &req, validateEnabled) {
+	// The embedded inbound mirror carries this body as MemorySettings (the
+	// request body is the same schema).
+	if !decodeAndValidate(w, r, "MemorySettings", &req, validateEnabled) {
 		return
 	}
 
-	// Validate values before touching disk.
-	if req.BootstrapRecapMaxPerMinute != nil && *req.BootstrapRecapMaxPerMinute < 0 {
-		jsonErr(w, http.StatusBadRequest, "bootstrap_recap_max_per_minute must be ≥ 0")
-		return
-	}
-	if req.IdleTimeoutMinutes != nil && *req.IdleTimeoutMinutes < 0 {
-		jsonErr(w, http.StatusBadRequest, "idle_timeout_minutes must be ≥ 0")
+	// Validate values before touching disk: every ranged key (FR-074, S-81).
+	if msg := recapLimitRefusal(&req); msg != "" {
+		jsonErr(w, http.StatusBadRequest, msg)
 		return
 	}
 	if req.SessionDays != nil && *req.SessionDays < 0 {
@@ -107,6 +131,7 @@ func (a *restAPI) putMemorySettings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	storedFallbacks := a.agentLoop.GetConfig().Agents.Defaults.RecapFallbackModels
 	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 		// agents.defaults section.
 		agents, _ := m["agents"].(map[string]any)
@@ -139,13 +164,19 @@ func (a *restAPI) putMemorySettings(w http.ResponseWriter, r *http.Request) {
 			raw := make([]map[string]any, 0, len(*req.RecapFallbackModels))
 			for _, fm := range *req.RecapFallbackModels {
 				entry := map[string]any{"model": fm.Model}
+				provider := ""
 				if fm.Provider != nil && *fm.Provider != "" {
-					entry["provider"] = *fm.Provider
+					provider = *fm.Provider
+					entry["provider"] = provider
+				}
+				if e := fallbackWithEffort(fm.Model, provider, fm.ReasoningEffort, storedFallbacks).ReasoningEffort; e != "" {
+					entry["reasoning_effort"] = e
 				}
 				raw = append(raw, entry)
 			}
 			defaults["recap_fallback_models"] = raw
 		}
+		writeRecapSettings(defaults, &req)
 
 		// storage.retention section. The canonical layout is top-level
 		// "storage" → "retention" (config.OmnipusStorageConfig, json:"storage").

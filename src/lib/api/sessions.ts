@@ -401,6 +401,18 @@ export interface AssistantMessage extends MessageBase { // not-wire-format: SPA-
    * snapshot replay alike.
    */
   historySpanFrame?: HistorySpanFrame
+  /**
+   * Effort levels FR-058: the answering candidate's effort record (wire
+   * `Message.effort` / `ReplayMessageFrame.effort` / live `DoneStats.effort`),
+   * forwarded unchanged. The per-turn note is a pure function of it.
+   */
+  effort?: WireMessage['effort']
+  /**
+   * Effort levels FR-024/FR-036: the turn's reported thinking-token sum
+   * (wire `turn_reasoning_tokens`; live `DoneStats.reasoning_tokens`).
+   * Absent = not reported; 0 = reported zero.
+   */
+  turnReasoningTokens?: number
 }
 
 export interface SystemMessage extends MessageBase { // not-wire-format: SPA-internal system/banner message.
@@ -565,6 +577,10 @@ interface RawMessage { // not-wire-format: adapter alias over the generated Mess
    * this field existed predates it and was always a cancel).
    */
   truncation_reason?: TruncationReason
+  /** Effort levels FR-058: the answering candidate's stored effort record. */
+  effort?: WireMessage['effort']
+  /** Effort levels FR-036: the turn's stored thinking-token snapshot (absent = not reported). */
+  turn_reasoning_tokens?: WireMessage['turn_reasoning_tokens']
   /**
    * Goal outcome line — present on a `type: system, system_subtype:
    * goal_outcome` entry (contracts/components/schemas/GoalOutcome.yaml).
@@ -836,6 +852,9 @@ function rawToMessage(raw: RawMessage): Message {
     ...(raw.reply_to_message_id ? { replyToMessageId: raw.reply_to_message_id } : {}),
     ...(raw.reply_to_participant ? { replyToParticipant: raw.reply_to_participant } : {}),
     ...(raw.room_ref ? { roomRef: raw.room_ref } : {}),
+    // Effort levels FR-058 / FR-036: the stored record and thinking snapshot, unchanged.
+    ...(raw.effort ? { effort: raw.effort } : {}),
+    ...(raw.turn_reasoning_tokens !== undefined ? { turnReasoningTokens: raw.turn_reasoning_tokens } : {}),
     ...boundary,
   } satisfies AssistantMessage
 }

@@ -6462,6 +6462,10 @@
       "lane": 5
     },
     {
+      "source": "src/components/agents/AgentFallbackModels.tsx",
+      "lane": 5
+    },
+    {
       "source": "src/components/agents/ToolIterationLimitField.tsx",
       "lane": 5
     },
@@ -6815,6 +6819,10 @@
     },
     {
       "source": "src/components/chat/composer/ModelPicker.tsx",
+      "lane": 3
+    },
+    {
+      "source": "src/components/chat/composer/ComposerEffortChip.tsx",
       "lane": 3
     },
     {
@@ -7607,6 +7615,18 @@
     },
     {
       "source": "src/components/settings/MemorySection.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/settings/RecapLimitsArea.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/settings/RecapModelSlot.tsx",
+      "lane": 6
+    },
+    {
+      "source": "src/components/settings/recapLimits.ts",
       "lane": 6
     },
     {

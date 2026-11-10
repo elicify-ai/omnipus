@@ -96,6 +96,14 @@ type modelDTO struct {
 	Disputed          bool       `json:"disputed"`
 	InferenceProfiles []string   `json:"inference_profiles"`
 	Cost              *ModelCost `json:"cost,omitempty"`
+	// Reasoning is the upstream reasoning object; unknown members (such as
+	// budget metadata) are ignored.
+	Reasoning *reasoningDTO `json:"reasoning,omitempty"`
+}
+
+type reasoningDTO struct {
+	Levels []string `json:"levels"`
+	Switch bool     `json:"switch"`
 }
 
 // invalid builds a rejection naming path.
@@ -518,6 +526,13 @@ func parseModel(path string, dto *modelDTO) (Model, error) {
 	if err != nil {
 		return Model{}, err
 	}
+	// A model with no reasoning object does not reason: Reasoning stays nil.
+	var reasoning *ModelReasoning
+	if dto.Reasoning != nil {
+		if reasoning, err = parseReasoning(path+".reasoning", dto.Reasoning); err != nil {
+			return Model{}, err
+		}
+	}
 	return Model{
 		ID:                dto.ID,
 		Name:              dto.Name,
@@ -530,7 +545,31 @@ func parseModel(path string, dto *modelDTO) (Model, error) {
 		Disputed:          dto.Disputed,
 		InferenceProfiles: profiles,
 		Cost:              dto.Cost,
+		Reasoning:         reasoning,
 	}, nil
+}
+
+// parseReasoning validates a model's reasoning object: each level is a
+// non-empty name of at most 32 characters, listed once, kept in published
+// order. The caller handles an absent object (the model does not reason).
+func parseReasoning(path string, dto *reasoningDTO) (*ModelReasoning, error) {
+	levels := make([]string, 0, len(dto.Levels))
+	seen := make(map[string]bool, len(dto.Levels))
+	for i, l := range dto.Levels {
+		p := path + ".levels[" + strconv.Itoa(i) + "]"
+		if l == "" {
+			return nil, invalid(p, "must be non-empty")
+		}
+		if len([]rune(l)) > 32 {
+			return nil, invalid(p, "must be at most 32 characters")
+		}
+		if seen[l] {
+			return nil, invalid(p, "%q is listed twice", l)
+		}
+		seen[l] = true
+		levels = append(levels, l)
+	}
+	return &ModelReasoning{Levels: levels, Switch: dto.Switch}, nil
 }
 
 // validateAPIURL is FR-033: an absolute URL with a non-empty host, no

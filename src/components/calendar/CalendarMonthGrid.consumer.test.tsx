@@ -68,7 +68,7 @@ function installHttpEdge(seed: Task[] = [], refuseCreate = false) {
   const creates: ReturnType<typeof TaskCreateSchema.parse>[] = []
   const detailReads: string[] = []
   const delegation: WorkspaceDelegation = {
-    revision: '0'.repeat(64), workspace_id: WORKSPACE, edges: [], default_depth: 3, team: ['mia'],
+    revision: '0'.repeat(64), workspace_id: WORKSPACE, edges: [], default_depth: 10, team: ['mia'],
   }
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const raw = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url

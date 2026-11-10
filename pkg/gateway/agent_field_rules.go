@@ -96,6 +96,14 @@ var subagent3pCreateOnlyExemptFields = map[string]string{
 	// subagent_3p's posture through the tools_cfg entry in
 	// subagent3pForbiddenUpdateFields rather than this field's own name.
 	"tool_policy_changes": "create-time-only field; ongoing management is exclusively via PUT /api/v1/agents/{id}/tools",
+	// reasoning_effort is absent from AgentCreateRequestSubagent3p by the
+	// effort-levels spec (external-CLI workers do not call Omnipus
+	// providers). On PUT it is refused for subagent_3p by
+	// agentmutation.ValidateFields with the pinned S-77 sentence
+	// (agentmutation.ExternalCLIEffortRefusal); putting it in
+	// subagent3pForbiddenUpdateFields would replace that sentence with the
+	// generic forbidden-field refusal, which runs first in updateAgent.
+	"reasoning_effort": "refused for subagent_3p by agentmutation.ValidateFields with the S-77 external-CLI refusal",
 }
 
 // firstForbiddenSubagent3pField returns the first forbidden field supplied on

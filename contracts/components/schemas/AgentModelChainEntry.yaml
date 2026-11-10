@@ -6,7 +6,7 @@ description: >
   fallback selection), never guessed: a value that is not known is null.
 type: object
 additionalProperties: false
-required: [position, model, provider, provider_configured, model_offered, accepts_images]
+required: [position, model, provider, provider_configured, model_offered, accepts_images, effort_options]
 properties:
   position:
     type: string
@@ -36,6 +36,21 @@ properties:
     nullable: true
     description: The resolved model's image-input capability; null when not known.
     example: false
+  effort_options:
+    type: array
+    nullable: true
+    items:
+      type: string
+    description: >
+      The effort values update_agent accepts for this entry's pair, in order
+      (effort-levels spec FR-065, D8): "provider_default", then the levels as
+      the catalog publishes them, then "off" and "on" for a switch-only model
+      ("off" only when the model also has levels without "none"). A primary
+      that rides the default model lists "" (Not set) first.
+      ["provider_default"] when the model reasons but nothing can be sent;
+      null when the catalog has no row for the pair, the model does not
+      reason, or the agent is an external-CLI worker.
+    example: ["provider_default", "low", "high"]
   warning:
     type: string
     description: >

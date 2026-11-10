@@ -1773,6 +1773,35 @@ components:
             "This conversation's history could not be loaded."
             Other required storage/projection failures retain the fixed redacted session-storage
             error behavior in D11. Not a turn-ending ErrorFrame.
+    EffortRecord:
+      title: EffortRecord
+      description: >
+        Effort levels spec (FR-058). The per-turn effort record of the answering
+        candidate. Keep in sync by hand with
+        contracts/components/schemas/EffortRecord.yaml. Never carries reasoning
+        text or signature material.
+      type: object
+      additionalProperties: false
+      properties:
+        chosen:
+          type: string
+          maxLength: 32
+        sent:
+          type: string
+          maxLength: 32
+        reason:
+          type: string
+          enum:
+          - mapped
+          - not_supported
+          - continuation
+          - rejected
+          - rejected_earlier
+          - extra_body
+        provider:
+          type: string
+        model:
+          type: string
     RoomRef:
       title: RoomRef
       description: >
@@ -2925,6 +2954,25 @@ components:
 
                 '
               example: z-ai/glm-5-turbo
+            provider:
+              type: string
+              minLength: 1
+              maxLength: 64
+              description: 'Effort levels spec (FR-051). Provider id of the chosen (provider, model) pair. When present
+                the turn is routed to the exact pair; when absent today''s name resolution applies. An over-length or
+                wrongly-typed value is dropped on the existing malformed-frame path.
+
+                '
+              example: openrouter
+            reasoning_effort:
+              type: string
+              minLength: 1
+              maxLength: 32
+              description: 'Effort levels spec (FR-051). The chat''s per-conversation effort value, mapped against the
+                pair that serves the turn. No refusal path.
+
+                '
+              example: high
             workspace_id:
               type: string
               minLength: 1
@@ -3382,6 +3430,21 @@ components:
             frame: narrows why truncated is true — "cancelled" (the user canceled the turn
             mid-stream) or "max_output_tokens" (the provider's output-token limit cut the
             answer off before it finished). Absent on a normal turn.
+        effort:
+          $ref: '#/components/schemas/EffortRecord'
+          description: >
+            Effort levels spec (FR-058). The answering candidate's effort record.
+            Absent when nothing was chosen and nothing was sent. Live-turn field:
+            the replay-terminating done frame omits it.
+        reasoning_tokens:
+          type: integer
+          minimum: 0
+          description: >
+            Effort levels spec (FR-024). Display-only turn sum of the reasoning-token
+            counts reported by this turn's provider calls (a subset of output tokens,
+            never booked into any statistic). Absent = no call reported a count;
+            0 = reported zero. Live-turn field: the replay-terminating done frame
+            omits it.
     DoneFrame:
       title: DoneFrame
       description: >
@@ -5180,6 +5243,20 @@ components:
             such boundary, so the SPA must start a new message for this frame instead
             of merging it into the preceding same-turn assistant entry. Absent on
             every other frame, including entries written before this field existed.
+        effort:
+          $ref: '#/components/schemas/EffortRecord'
+          description: >
+            Effort levels spec (FR-058). Copied from this entry's own stored effort
+            record (answering assistant entries only). Absent when the entry has none.
+            Keep in sync by hand with contracts/components/schemas/ReplayMessageFrame.yaml.
+        turn_reasoning_tokens:
+          type: integer
+          minimum: 0
+          description: >
+            Effort levels spec (FR-024). The stored display-only snapshot of the
+            turn's reported reasoning-token sum, copied from the answering entry;
+            never summed at read time. Absent = no call of the turn reported a
+            count; 0 = reported zero.
     ReplayErrorFrame:
       title: ReplayErrorFrame
       description: 'Server → client. Replay of a system-error transcript entry (Phase 1B, FR-014). Emitted by the replay path

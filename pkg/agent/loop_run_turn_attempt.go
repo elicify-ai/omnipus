@@ -1,10 +1,11 @@
 // loop_run_turn_attempt.go — ONE provider attempt for callProviderOnce
 // (§7.4 D3 migration, gate finding F1). Extracted so the plain path and the
-// single-candidate fallback-chain closure run the SAME body: inspection-image
-// attach, then streaming when the provider supports it and a streamer exists
-// for the channel, plain Chat otherwise. The multi-candidate chain closure
-// stays non-streaming p.Chat — streaming a fallback candidate was never
-// designed, and that path must stay byte-identical to pre-F1.
+// fallback-chain closure (one candidate or several) run the SAME body:
+// inspection-image attach, then streaming when the provider supports it and a
+// streamer exists for the channel, plain Chat otherwise. Several candidates
+// stream too (effort-levels S-88/S-95, which need the primary's streamed
+// usage); the chain ends instead of falling back once an attempt showed bytes
+// (C-10 across candidates, pkg/providers/fallback.go).
 //
 // streamed is the C-10 counter the fallback chain consults through its
 // ctx-carried StreamedBytesCheck: the caller resets it at attempt entry and
@@ -35,6 +36,7 @@ func (rt *agentLoopRunTurn) runProviderAttempt(
 	messagesForCall []providers.Message,
 	toolDefsForCall []providers.ToolDefinition,
 	streamed *atomic.Int64,
+	opts map[string]any,
 ) (response *providers.LLMResponse, err error) {
 	defer func() { rt.accountProviderAttempt(providerName, model, response, err) }()
 	var imageErr error
@@ -128,7 +130,7 @@ func (rt *agentLoopRunTurn) runProviderAttempt(
 			// entry identical — and both clean. See
 			// providers.StreamTextFilter.
 			var streamFilter providers.StreamTextFilter
-			resp, streamErr := sp.ChatStream(ctx, messagesForCall, toolDefsForCall, model, rt.llmOpts, func(accumulated string) {
+			resp, streamErr := sp.ChatStream(ctx, messagesForCall, toolDefsForCall, model, opts, func(accumulated string) {
 				// B4: if the turn has been abandoned (stuck-goroutine detach),
 				// suppress further frame emits so a zombie goroutine cannot
 				// push frames to disconnected clients.
@@ -202,5 +204,5 @@ func (rt *agentLoopRunTurn) runProviderAttempt(
 	}
 	rt.ts.setLastProducedModel(model)
 	rt.ts.setLastProducedProvider(providerName)
-	return p.Chat(ctx, messagesForCall, toolDefsForCall, model, rt.llmOpts)
+	return p.Chat(ctx, messagesForCall, toolDefsForCall, model, opts)
 }

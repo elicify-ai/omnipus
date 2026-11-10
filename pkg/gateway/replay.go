@@ -907,6 +907,10 @@ func (sr *streamReplayState) buildEntryMessage(entry session.TranscriptEntry) {
 		agentIDCopy := entry.AgentID
 		sr.msgFrame.AgentId = &agentIDCopy
 	}
+	// Effort levels (FR-058, FR-024): the entry's own stored record and turn
+	// reasoning snapshot, copied unchanged (REST Message carries the same).
+	sr.msgFrame.Effort = entry.Effort
+	sr.msgFrame.TurnReasoningTokens = entry.TurnReasoningTokens
 	// FR-027: a guest reply names the admitted request it answers, the same
 	// value the live frames carry.
 	if entry.ReplyToMessageID != "" {

@@ -237,6 +237,19 @@ func TestBuildDelegationContext_GlobalDepthSet(t *testing.T) {
 	}
 }
 
+// TestBuildDelegationContext_ShipsDefaultBackstopTen covers the UNSET-config
+// path beside GlobalDepthSet's explicit-cap case: the resolved shipped
+// default must render as the literal 10. The expected number is a literal on
+// purpose — a moved defaultMaxSubTurnDepth changes what
+// resolveEffectiveDelegationDepth(nil, 0) feeds the renderer and fails here.
+func TestBuildDelegationContext_ShipsDefaultBackstopTen(t *testing.T) {
+	targets := []delegationTarget{makeTarget("ava", nil, nil)}
+	got := buildDelegationContext(targets, resolveEffectiveDelegationDepth(nil, 0), 0)
+	if !strings.Contains(got, "max chain depth: 10") {
+		t.Errorf("unset config must render the shipped default '10'; got:\n%s", got)
+	}
+}
+
 func TestBuildDelegationContext_BackgroundModeOnly(t *testing.T) {
 	targets := []delegationTarget{
 		makeTarget("ava", []config.DelegationMode{config.DelegationModeBackground}, nil),

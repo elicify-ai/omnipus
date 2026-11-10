@@ -24,6 +24,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers/common"
+	"github.com/elicify-ai/omnipus/pkg/providers/effortdialect"
 	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 )
 
@@ -51,6 +52,7 @@ type Provider struct {
 	region         string
 	httpClient     *http.Client
 	requestTimeout time.Duration
+	baseModels     map[string]string // runtime model id -> catalog base id
 }
 
 // Option configures the Bedrock provider.
@@ -61,6 +63,19 @@ type providerConfig struct {
 	baseEndpoint   string
 	httpClient     *http.Client
 	requestTimeout time.Duration
+	baseModels     map[string]string
+}
+
+// WithBaseModel records the catalog base model id behind a runtime model id
+// (an inference profile id or ARN), so effort is encoded for the base
+// family, never guessed from the profile id (effort-levels spec S-17).
+func WithBaseModel(runtimeID, baseID string) Option {
+	return func(c *providerConfig) {
+		if c.baseModels == nil {
+			c.baseModels = make(map[string]string)
+		}
+		c.baseModels[strings.TrimSpace(runtimeID)] = strings.TrimSpace(baseID)
+	}
 }
 
 // WithRegion selects the regional Bedrock Runtime endpoint.
@@ -121,6 +136,7 @@ func NewProvider(apiKey string, opts ...Option) (*Provider, error) {
 		region:         pc.region,
 		httpClient:     pc.httpClient,
 		requestTimeout: pc.requestTimeout,
+		baseModels:     pc.baseModels,
 	}, nil
 }
 
@@ -185,11 +201,11 @@ func (p *Provider) Chat(
 		defer cancel()
 	}
 
-	payload, err := json.Marshal(buildConverseRequest(messages, tools, options))
+	payload, err := json.Marshal(buildConverseRequestFor(messages, tools, p.baseModel(model), options))
 	if err != nil {
 		return nil, fmt.Errorf("bedrock converse request: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.converseURL(model), bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.converseURL(p.runtimeModel(model)), bytes.NewReader(payload))
 	if err != nil {
 		return nil, fmt.Errorf("bedrock converse request: %w", err)
 	}
@@ -217,6 +233,30 @@ func (p *Provider) Chat(
 		return nil, fmt.Errorf("bedrock converse response: %w", err)
 	}
 	return parseResponse(&output)
+}
+
+// baseModel returns the catalog base model id for a runtime model id.
+// runtimeModel returns the runtime id the factory resolved for a catalog base
+// id (an inference profile, possibly an opaque ARN), so a request addressed
+// by the base id still reaches the resolved runtime id.
+func (p *Provider) runtimeModel(model string) string {
+	m := strings.TrimSpace(model)
+	if _, isRuntime := p.baseModels[m]; isRuntime {
+		return m
+	}
+	for runtime, base := range p.baseModels {
+		if base == m {
+			return runtime
+		}
+	}
+	return m
+}
+
+func (p *Provider) baseModel(model string) string {
+	if base, ok := p.baseModels[strings.TrimSpace(model)]; ok && base != "" {
+		return base
+	}
+	return model
 }
 
 func (p *Provider) converseURL(model string) string {
@@ -259,6 +299,9 @@ type converseRequest struct {
 	System          []systemContentBlock `json:"system,omitempty"`
 	InferenceConfig *inferenceConfig     `json:"inferenceConfig,omitempty"`
 	ToolConfig      *toolConfiguration   `json:"toolConfig,omitempty"`
+	// AdditionalModelRequestFields carries model-family request fields such as
+	// effort (effort-levels spec S-17).
+	AdditionalModelRequestFields map[string]any `json:"additionalModelRequestFields,omitempty"`
 }
 
 type bedrockMessage struct {
@@ -333,8 +376,19 @@ type inferenceConfig struct {
 }
 
 func buildConverseRequest(messages []Message, tools []ToolDefinition, options map[string]any) converseRequest {
+	return buildConverseRequestFor(messages, tools, "", options)
+}
+
+// buildConverseRequestFor builds the Converse body; baseModel is the catalog
+// base model id that selects the effort encoding family.
+func buildConverseRequestFor(messages []Message, tools []ToolDefinition, baseModel string, options map[string]any) converseRequest {
 	converted, system := convertMessages(messages)
 	request := converseRequest{Messages: converted, System: system}
+	fields, sent := effortdialect.EncodeBedrock(baseModel, effortdialect.Requested(options), currentLoopHasToolCall(messages))
+	if len(fields) > 0 {
+		request.AdditionalModelRequestFields = fields
+	}
+	effortdialect.Report(options, sent)
 	if maxTokens, ok := common.AsInt(options["max_tokens"]); ok && maxTokens > 0 {
 		if maxTokens > math.MaxInt32 {
 			maxTokens = math.MaxInt32
@@ -385,6 +439,27 @@ func convertMessages(messages []Message) ([]bedrockMessage, []systemContentBlock
 		}
 	}
 	return converted, system
+}
+
+// currentLoopHasToolCall reports whether the current tool loop (the messages
+// after the last real user message) holds an assistant tool call. The
+// request-only volatile note the loop appends after history is not a user
+// turn and does not end the loop.
+func currentLoopHasToolCall(messages []Message) bool {
+	start := 0
+	for i := len(messages) - 1; i >= 0; i-- {
+		m := messages[i]
+		if m.Role == "user" && m.ToolCallID == "" && !m.Volatile {
+			start = i + 1
+			break
+		}
+	}
+	for _, m := range messages[start:] {
+		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func isToolResult(msg Message) bool {

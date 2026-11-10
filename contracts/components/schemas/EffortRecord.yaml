@@ -1,0 +1,47 @@
+title: EffortRecord
+description: >
+  Effort levels spec (effort-levels-spec-r10, FR-058). The per-turn effort
+  record of the answering candidate: what was chosen, what the final request
+  body actually carried, and why the two differ. One record per answering
+  candidate, on the live done frame and on the answering transcript entry;
+  both history transports project the stored record unchanged. A note is
+  shown only when `sent` differs from `chosen`. Never carries reasoning text
+  or signature material (FR-043).
+type: object
+additionalProperties: false
+properties:
+  chosen:
+    type: string
+    maxLength: 32
+    description: >
+      The resolved setting for the answering candidate, as stored (for example
+      "high", "off", "on", "provider_default"). Absent when nothing was chosen.
+    example: "medium"
+  sent:
+    type: string
+    maxLength: 32
+    description: >
+      The effort value actually present in the final serialised request body,
+      after mapping, guards and extra_body. Absent when nothing was sent.
+    example: "low"
+  reason:
+    type: string
+    enum:
+      - mapped
+      - not_supported
+      - continuation
+      - rejected
+      - rejected_earlier
+      - extra_body
+    description: >
+      Why `sent` differs from `chosen`. Absent when the chosen value was sent
+      as chosen.
+    example: "mapped"
+  provider:
+    type: string
+    description: The answering candidate's provider id.
+    example: "openrouter"
+  model:
+    type: string
+    description: The answering candidate's model id.
+    example: "deepseek/deepseek-v4.1-flash"

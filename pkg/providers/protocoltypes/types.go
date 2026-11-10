@@ -1,5 +1,7 @@
 package protocoltypes
 
+import "encoding/json"
+
 type ToolCall struct {
 	ID               string         `json:"id"`
 	Type             string         `json:"type,omitempty"`
@@ -25,13 +27,17 @@ type FunctionCall struct {
 }
 
 type LLMResponse struct {
-	Content          string            `json:"content"`
-	ReasoningContent string            `json:"reasoning_content,omitempty"`
-	ToolCalls        []ToolCall        `json:"tool_calls,omitempty"`
-	FinishReason     string            `json:"finish_reason"`
-	Usage            *UsageInfo        `json:"usage,omitempty"`
-	Reasoning        string            `json:"reasoning"`
-	ReasoningDetails []ReasoningDetail `json:"reasoning_details"`
+	Content          string     `json:"content"`
+	ReasoningContent string     `json:"reasoning_content,omitempty"`
+	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
+	FinishReason     string     `json:"finish_reason"`
+	Usage            *UsageInfo `json:"usage,omitempty"`
+	Reasoning        string     `json:"reasoning"`
+	// ReasoningDetails is OpenRouter's structured reasoning carrier, kept
+	// losslessly (every item byte-for-byte, opaque payloads and identity
+	// fields included) for replay to OpenRouter only (effort-levels spec
+	// FR-013). Private: never serialised on any public projection.
+	ReasoningDetails []ReasoningDetail `json:"-"`
 	// ThinkingBlocks carries opaque signed provider blocks for model replay,
 	// separate from display reasoning and every public wire projection.
 	ThinkingBlocks []string `json:"-"`
@@ -60,12 +66,11 @@ type ResponseDiagnostics struct { // not-wire-format: in-process log summary onl
 	IncompleteReason string
 }
 
-type ReasoningDetail struct {
-	Format string `json:"format"`
-	Index  int    `json:"index"`
-	Type   string `json:"type"`
-	Text   string `json:"text"`
-}
+// ReasoningDetail is one OpenRouter reasoning_details item as the provider
+// sent it. It is kept as raw JSON so unknown vendor fields, opaque payloads
+// (data), identity fields (id, format, index) and signatures survive
+// unchanged (effort-levels spec FR-013, S-30).
+type ReasoningDetail = json.RawMessage
 
 // UsageInfo records token counts for one LLM call.
 //
@@ -98,6 +103,11 @@ type UsageInfo struct {
 	// CacheWrite1hTokens is the 1-hour write count when the provider
 	// reported the split. 0 when it did not.
 	CacheWrite1hTokens int `json:"cache_write_1h_tokens,omitempty"`
+	// ReasoningTokens is the reported reasoning-token count of this call
+	// (effort-levels spec FR-024): a subset of CompletionTokens, never added
+	// to any total. nil when the provider reported no count; a reported zero
+	// is 0.
+	ReasoningTokens *int `json:"reasoning_tokens,omitempty"`
 }
 
 // CacheControl marks a content block for LLM-side prefix caching.
@@ -120,15 +130,19 @@ type ContentBlock struct {
 type Message struct {
 	// Volatile marks the single request-only note after history. Adapters never
 	// serialize this flag and put cache boundaries before it.
-	Volatile         bool           `json:"-"`
-	Role             string         `json:"role"`
-	Content          string         `json:"content"`
-	Media            []string       `json:"media,omitempty"`
-	ReasoningContent string         `json:"reasoning_content,omitempty"`
-	ThinkingBlocks   []string       `json:"-"`                      // opaque signed blocks; private model history only
-	SystemParts      []ContentBlock `json:"system_parts,omitempty"` // structured system blocks for cache-aware adapters
-	ToolCalls        []ToolCall     `json:"tool_calls,omitempty"`
-	ToolCallID       string         `json:"tool_call_id,omitempty"`
+	Volatile         bool     `json:"-"`
+	Role             string   `json:"role"`
+	Content          string   `json:"content"`
+	Media            []string `json:"media,omitempty"`
+	ReasoningContent string   `json:"reasoning_content,omitempty"`
+	ThinkingBlocks   []string `json:"-"` // opaque signed blocks; private model history only
+	// ReasoningDetails is the private OpenRouter reasoning carrier of an
+	// assistant message (FR-013): replayed only to the OpenRouter route,
+	// never to another provider and never on a default marshal.
+	ReasoningDetails []ReasoningDetail `json:"-"`
+	SystemParts      []ContentBlock    `json:"system_parts,omitempty"` // structured system blocks for cache-aware adapters
+	ToolCalls        []ToolCall        `json:"tool_calls,omitempty"`
+	ToolCallID       string            `json:"tool_call_id,omitempty"`
 }
 
 type ToolDefinition struct {
